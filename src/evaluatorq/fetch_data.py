@@ -22,11 +22,14 @@ def setup_orq_client(api_key: str) -> "Orq":
         ModuleNotFoundError: If orq_ai_sdk is not installed
         Exception: If client setup fails
     """
+    import os
+
     try:
         # lazy import for orq integration
         from orq_ai_sdk import Orq
 
-        client = Orq(api_key=api_key)
+        server_url = os.environ.get("ORQ_BASE_URL", "https://my.orq.ai")
+        client = Orq(api_key=api_key, server_url=server_url)
         return client
     except ModuleNotFoundError as e:
         raise Exception(
