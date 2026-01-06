@@ -39,7 +39,9 @@ class DataPoint(BaseModel):
     """
 
     inputs: dict[str, Any]
-    expected_output: Output | None = None
+    expected_output: Output | None = Field(
+        default=None, serialization_alias="expectedOutput"
+    )
 
 
 class DataPointResult(BaseModel):

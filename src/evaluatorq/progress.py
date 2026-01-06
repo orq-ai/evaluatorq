@@ -18,6 +18,7 @@ class Phase(str, Enum):
     """Progress phases"""
 
     INITIALIZING = "initializing"
+    FETCHING = "fetching"
     PROCESSING = "processing"
     EVALUATING = "evaluating"
     COMPLETED = "completed"
@@ -60,6 +61,15 @@ class ProgressService:
 
         if self.state.phase == Phase.INITIALIZING:
             text = text.append("Initializing evaluation...", style="cyan")
+
+        elif self.state.phase == Phase.FETCHING:
+            if self.state.total_data_points > 0:
+                text = text.append(
+                    f"Fetching dataset... ({self.state.total_data_points} datapoints loaded)",
+                    style="yellow",
+                )
+            else:
+                text = text.append("Fetching dataset...", style="yellow")
 
         elif self.state.phase == Phase.PROCESSING:
             text = text.append(
