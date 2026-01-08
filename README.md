@@ -9,6 +9,9 @@ An evaluation framework library for Python that provides a flexible way to run p
 - **Type-safe**: Fully typed with Python type hints and Pydantic models with runtime validation
 - **Rich Terminal UI**: Beautiful progress indicators and result tables powered by Rich
 - **Orq Platform Integration**: Seamlessly fetch and evaluate datasets from Orq AI (optional)
+- **OpenTelemetry Tracing**: Built-in observability with automatic span creation for jobs and evaluators
+- **Pass/Fail Tracking**: Evaluators can return pass/fail status for CI/CD integration
+- **Built-in Evaluators**: Common evaluators like `string_contains_evaluator` included
 
 ## 📥 Installation
 
@@ -26,6 +29,16 @@ If you want to use the Orq platform integration:
 
 ```bash
 pip install orq-ai-sdk
+# or
+pip install evaluatorq[orq]
+```
+
+For OpenTelemetry tracing (optional):
+
+```bash
+pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http opentelemetry-semantic-conventions
+# or
+pip install evaluatorq[otel]
 ```
 
 ## 🚀 Quick Start
@@ -86,7 +99,7 @@ if __name__ == "__main__":
 
 ```python
 import asyncio
-from evaluatorq import evaluatorq, job, DataPoint, EvaluationResult
+from evaluatorq import evaluatorq, job, DataPoint, DatasetIdInput
 
 @job("processor")
 async def processor(data: DataPoint, row: int):
@@ -108,13 +121,13 @@ async def accuracy_scorer(params):
     else:
         explanation = "Low accuracy match"
 
-    return EvaluationResult(value=score, explanation=explanation)
+    return {"value": score, "explanation": explanation}
 
 async def main():
     # Requires ORQ_API_KEY environment variable
     await evaluatorq(
         "dataset-evaluation",
-        data={"dataset_id": "your-dataset-id"},  # From Orq platform
+        data=DatasetIdInput(dataset_id="your-dataset-id"),  # From Orq platform
         jobs=[processor],
         evaluators=[
             {
@@ -186,11 +199,82 @@ uppercase_job = job("uppercase", lambda data, row: data.inputs["text"].upper())
 word_count_job = job("word-count", lambda data, row: len(data.inputs["text"].split()))
 ```
 
-**Manual pattern (not recommended):**
+#### Deployment Helper
+
+Easily invoke Orq deployments within your evaluation jobs:
+
 ```python
-# Without decorator - requires manual wrapper every time
-async def process_text(data: DataPoint, row: int):
-    return {"name": "text-processor", "output": {"result": data.inputs["text"].upper()}}
+from evaluatorq import evaluatorq, job, invoke, deployment, DatasetIdInput
+
+# Simple one-liner with invoke()
+@job("summarizer")
+async def summarize_job(data, row):
+    text = data.inputs["text"]
+    return await invoke("my-deployment", inputs={"text": text})
+
+# Full response with deployment()
+@job("analyzer")
+async def analyze_job(data, row):
+    response = await deployment(
+        "my-deployment",
+        inputs={"text": data.inputs["text"]},
+        metadata={"source": "evaluatorq"},
+    )
+    print("Raw:", response.raw)
+    return response.content
+
+# Chat-style with messages
+@job("chatbot")
+async def chat_job(data, row):
+    return await invoke(
+        "chatbot",
+        messages=[{"role": "user", "content": data.inputs["question"]}],
+    )
+
+# Thread tracking for conversations
+@job("assistant")
+async def conversation_job(data, row):
+    return await invoke(
+        "assistant",
+        inputs={"query": data.inputs["query"]},
+        thread={"id": "conversation-123"},
+    )
+```
+
+The `invoke()` function returns the text content directly, while `deployment()` returns an object with both `content` and `raw` response for more control.
+
+#### Built-in Evaluators
+
+Use the included evaluators for common use cases:
+
+```python
+from evaluatorq import evaluatorq, job, string_contains_evaluator, DatasetIdInput
+
+@job("country-lookup")
+async def country_lookup_job(data, row):
+    country = data.inputs["country"]
+    return await invoke("country-capitals", inputs={"country": country})
+
+await evaluatorq(
+    "country-unit-test",
+    data=DatasetIdInput(dataset_id="your-dataset-id"),
+    jobs=[country_lookup_job],
+    evaluators=[string_contains_evaluator()],  # Checks if output contains expected_output
+    parallelism=6,
+)
+```
+
+Available built-in evaluators:
+
+- **`string_contains_evaluator()`** - Checks if output contains expected_output (case-insensitive by default)
+- **`exact_match_evaluator()`** - Checks if output exactly matches expected_output
+
+```python
+# Case-sensitive matching
+strict_evaluator = string_contains_evaluator(case_insensitive=False)
+
+# Custom name
+my_evaluator = string_contains_evaluator(name="my-contains-check")
 ```
 
 #### Automatic Error Handling
@@ -272,7 +356,12 @@ for result in results:
 
 ### Environment Variables
 
-- `ORQ_API_KEY`: API key for Orq platform integration (required for dataset access and sending results)
+- `ORQ_API_KEY`: API key for Orq platform integration (required for dataset access and sending results). Also enables automatic OTEL tracing to Orq.
+- `ORQ_BASE_URL`: Base URL for Orq platform (default: `https://my.orq.ai`)
+- `OTEL_EXPORTER_OTLP_ENDPOINT`: Custom OpenTelemetry collector endpoint (overrides default Orq endpoint)
+- `OTEL_EXPORTER_OTLP_HEADERS`: Headers for OTEL exporter (format: `key1=value1,key2=value2`)
+- `ORQ_DISABLE_TRACING`: Set to `1` or `true` to disable automatic tracing
+- `ORQ_DEBUG`: Enable debug logging for tracing setup
 
 ### Evaluation Parameters
 
@@ -356,6 +445,70 @@ The Orq platform provides:
 - Performance metrics
 - Historical comparisons
 
+## 🔍 OpenTelemetry Tracing
+
+Evaluatorq automatically creates OpenTelemetry spans for observability into your evaluation runs.
+
+### Span Hierarchy
+
+```
+orq.job (independent root per job execution)
+└── orq.evaluation (child span per evaluator)
+```
+
+### Auto-Enable with Orq
+
+When `ORQ_API_KEY` is set, traces are automatically sent to the Orq platform:
+
+```bash
+ORQ_API_KEY=your-api-key python my_eval.py
+```
+
+### Custom OTEL Endpoint
+
+Send traces to any OpenTelemetry-compatible backend:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=https://your-collector:4318 \
+OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer token" \
+python my_eval.py
+```
+
+### Disable Tracing
+
+If you want to disable tracing even when `ORQ_API_KEY` is set:
+
+```bash
+ORQ_DISABLE_TRACING=1 python my_eval.py
+```
+
+## ✅ Pass/Fail Tracking
+
+Evaluators can return a `pass_` field to indicate pass/fail status:
+
+```python
+async def quality_scorer(params):
+    """Quality check evaluator with pass/fail."""
+    output = params["output"]
+    score = calculate_quality(output)
+
+    return {
+        "value": score,
+        "pass_": score >= 0.8,  # Pass if meets threshold
+        "explanation": f"Quality score: {score}",
+    }
+```
+
+**CI/CD Integration:** When any evaluator returns `pass_: False`, the process exits with code 1. This enables fail-fast behavior in CI/CD pipelines.
+
+**Pass Rate Display:** The summary table shows pass rate when evaluators use the `pass_` field:
+
+```
+┌──────────────────────┬─────────────────┐
+│ Pass Rate            │ 75% (3/4)       │
+└──────────────────────┴─────────────────┘
+```
+
 ## 📚 API Reference
 
 ### `evaluatorq(name, params?, *, data?, jobs?, evaluators?, parallelism?, print_results?, description?) -> EvaluatorqResult`
@@ -414,6 +567,7 @@ class EvaluationResult(BaseModel):
     """Result from an evaluator."""
     value: str | float | bool
     explanation: str | None = None
+    pass_: bool | None = None  # Optional pass/fail indicator for CI/CD integration
 
 class EvaluatorScore(BaseModel):
     """Score from an evaluator for a job output."""
@@ -468,6 +622,44 @@ class Evaluator(TypedDict):
     """Evaluator configuration."""
     name: str
     scorer: Scorer
+
+# Deployment helper types
+@dataclass
+class DeploymentResponse:
+    """Response from a deployment invocation."""
+    content: str  # Text content of the response
+    raw: Any      # Raw API response
+
+# Invoke deployment and get text content
+async def invoke(
+    key: str,
+    inputs: dict[str, Any] | None = None,
+    context: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+    thread: dict[str, Any] | None = None,  # Must include 'id' key
+    messages: list[dict[str, str]] | None = None,
+) -> str: ...
+
+# Invoke deployment and get full response
+async def deployment(
+    key: str,
+    inputs: dict[str, Any] | None = None,
+    context: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+    thread: dict[str, Any] | None = None,  # Must include 'id' key
+    messages: list[dict[str, str]] | None = None,
+) -> DeploymentResponse: ...
+
+# Built-in evaluators
+def string_contains_evaluator(
+    case_insensitive: bool = True,
+    name: str = "string-contains",
+) -> Evaluator: ...
+
+def exact_match_evaluator(
+    case_insensitive: bool = False,
+    name: str = "exact-match",
+) -> Evaluator: ...
 ```
 
 ## 🛠️ Development
@@ -477,11 +669,11 @@ class Evaluator(TypedDict):
 uv sync
 
 # Run type checking
-pyright
+uv run basedpyright
 
 # Format code
-ruff format
+uv run ruff format
 
 # Lint code
-ruff check
+uv run ruff check
 ```

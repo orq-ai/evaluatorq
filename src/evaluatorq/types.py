@@ -11,6 +11,7 @@ Output = str | int | float | bool | dict[str, Any] | None
 class EvaluationResult(BaseModel):
     value: str | float | bool
     explanation: str | None = None
+    pass_: bool | None = Field(default=None, serialization_alias="pass")
 
 
 class EvaluatorScore(BaseModel):

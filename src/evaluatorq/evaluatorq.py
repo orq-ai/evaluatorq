@@ -9,6 +9,14 @@ from .processings import process_data_point
 from .progress import Phase, ProgressService, with_progress
 from .send_results import send_results_to_orq
 from .table_display import display_results_table
+from .tracing import (
+    TracingContext,
+    capture_parent_context,
+    flush_tracing,
+    generate_run_id,
+    init_tracing_if_needed,
+    shutdown_tracing,
+)
 from .types import (
     DataPoint,
     DatasetIdInput,
@@ -17,6 +25,26 @@ from .types import (
     EvaluatorqResult,
     Job,
 )
+
+
+def check_pass_failures(results: EvaluatorqResult) -> bool:
+    """
+    Check if any evaluator returned pass_=False.
+
+    Args:
+        results: The evaluation results to check
+
+    Returns:
+        True if any evaluator failed (pass_=False), False otherwise
+    """
+    for data_point_result in results:
+        if data_point_result.job_results:
+            for job_result in data_point_result.job_results:
+                if job_result.evaluator_scores:
+                    for evaluator_score in job_result.evaluator_scores:
+                        if evaluator_score.score.pass_ is False:
+                            return True
+    return False
 
 
 async def evaluatorq(
@@ -92,6 +120,18 @@ async def evaluatorq(
     print_results = validated.print_results
     description = validated.description
 
+    # Initialize tracing if OTEL is configured
+    tracing_enabled = await init_tracing_if_needed()
+    parent_context = await capture_parent_context() if tracing_enabled else None
+    tracing_context: TracingContext | None = None
+    if tracing_enabled:
+        tracing_context = TracingContext(
+            run_id=generate_run_id(),
+            run_name=name,
+            enabled=True,
+            parent_context=parent_context,
+        )
+
     orq_api_key = os.environ.get("ORQ_API_KEY")
 
     start_time = datetime.now(timezone.utc)
@@ -138,6 +178,7 @@ async def evaluatorq(
                         evaluators_list,
                         parallelism,
                         None,  # Don't pass progress in streaming mode - use polling instead
+                        tracing_context,
                     )
                     progress_ref["processed"] += 1
                     return result
@@ -232,6 +273,7 @@ async def evaluatorq(
                         evaluators_list,
                         parallelism,
                         progress,
+                        tracing_context,
                     )
 
             tasks = [
@@ -268,5 +310,18 @@ async def evaluatorq(
             start_time,
             datetime.now(timezone.utc),
         )
+
+    # Shutdown tracing gracefully
+    if tracing_enabled:
+        await flush_tracing()
+        await asyncio.sleep(2)  # Give additional time for network operations
+        await shutdown_tracing()
+
+    # Check for pass failures and exit if any
+    has_failures = check_pass_failures(results)
+    if has_failures:
+        import sys
+
+        sys.exit(1)
 
     return results

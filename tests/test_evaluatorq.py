@@ -18,7 +18,7 @@ SAMPLE_TEXTS = [
 
 async def text_analyzer(data: DataPoint, _row: int):
     """Simple text analysis job."""
-    text = str(data.inputs["text"])  # pyright: ignore[reportAny]
+    text = str(data.inputs["text"])
     await asyncio.sleep(0.001)
 
     words = text.split()
@@ -38,7 +38,7 @@ async def length_check_scorer(params: ScorerParameter) -> EvaluationResult:
     if not isinstance(output, dict) or "length" not in output:
         return EvaluationResult(value="N/A", explanation="Not applicable")
 
-    passes = bool(output["length"] > 20)  # pyright: ignore[reportAny]
+    passes = bool(output["length"] > 20)
     return EvaluationResult(
         value=1 if passes else 0,
         explanation="Text length is sufficient" if passes else "Text too short",

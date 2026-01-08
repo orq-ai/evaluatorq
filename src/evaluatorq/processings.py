@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import Awaitable
 from inspect import isawaitable
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from .job_helper import JobError
 from .progress import Phase, ProgressService
@@ -17,6 +17,9 @@ from .types import (
     ScorerParameter,
 )
 
+if TYPE_CHECKING:
+    from .tracing.context import TracingContext
+
 
 async def process_data_point(
     data_promise: DataPoint | Awaitable[DataPoint],
@@ -25,6 +28,7 @@ async def process_data_point(
     evaluators: list[Evaluator] | None,
     parallelism: int,
     progress_service: ProgressService | None = None,
+    tracing_context: "TracingContext | None" = None,
 ) -> list[DataPointResult]:
     """
     Process a single data point through all jobs and evaluators.
@@ -36,6 +40,7 @@ async def process_data_point(
         evaluators: List of evaluators to run on job outputs
         parallelism: Number of jobs to run in parallel
         progress_service: Optional progress tracking service
+        tracing_context: Optional tracing context for OTEL spans
 
     Returns:
         List containing a single DataPointResult with job results and evaluator scores
@@ -59,7 +64,12 @@ async def process_data_point(
         async def run_job_with_semaphore(job: Job) -> JobResult:
             async with semaphore:
                 return await process_job(
-                    job, data_point, row_index, evaluators, progress_service
+                    job,
+                    data_point,
+                    row_index,
+                    evaluators,
+                    progress_service,
+                    tracing_context,
                 )
 
         # Execute all jobs with controlled parallelism
@@ -93,6 +103,7 @@ async def process_job(
     row_index: int,
     evaluators: list[Evaluator] | None = None,
     progress_service: ProgressService | None = None,
+    tracing_context: "TracingContext | None" = None,
 ) -> JobResult:
     """
     Process a single job and optionally run evaluators on its output.
@@ -103,72 +114,94 @@ async def process_job(
         row_index: Index of the data point
         evaluators: List of evaluators to run on the job output
         progress_service: Optional progress tracking service
+        tracing_context: Optional tracing context for OTEL spans
 
     Returns:
         JobResult containing job output and evaluator scores
     """
+    # Import tracing utilities lazily to avoid import errors when OTEL is not installed
+    from .tracing.spans import (
+        JobSpanOptions,
+        set_job_name_attribute,
+        with_job_span,
+    )
+
     job_name = "job"  # Default name
     output: Output = None
     error: str | None = None
 
-    try:
-        # Execute the job
-        result = await job(data_point, row_index)
-        job_name = cast(str, result["name"])
-        output = cast(Output, result["output"])
-
-        # Update progress with current job name
-        if progress_service:
-            await progress_service.update_progress(current_job=job_name)
-
-    except JobError as e:
-        # Extract job name from JobError
-        job_name = e.job_name
-        error = str(e.original_error)
-
-        # Return early with error if job failed
-        return JobResult(
-            job_name=job_name,
-            output=None,
-            error=error,
-            evaluator_scores=[],
+    # Wrap the job execution in a span if tracing is enabled
+    async with with_job_span(
+        JobSpanOptions(
+            run_id=tracing_context.run_id if tracing_context else "",
+            row_index=row_index,
+            parent_context=tracing_context.parent_context if tracing_context else None,
         )
-    except Exception as e:
-        error = str(e)
+    ) as job_span:
+        try:
+            # Execute the job
+            result = await job(data_point, row_index)
+            job_name = cast(str, result["name"])
+            output = cast(Output, result["output"])
 
-        # Return early with error if job failed
-        return JobResult(
-            job_name=job_name,
-            output=None,
-            error=error,
-            evaluator_scores=[],
-        )
+            # Set job name on span after execution
+            set_job_name_attribute(job_span, job_name)
 
-    # Process evaluators if any and job was successful
-    evaluator_scores: list[EvaluatorScore] = []
+            # Update progress with current job name
+            if progress_service:
+                await progress_service.update_progress(current_job=job_name)
 
-    if evaluators:
-        # Update phase to evaluating
-        if progress_service:
-            await progress_service.update_progress(phase=Phase.EVALUATING)
+        except JobError as e:
+            # Extract job name from JobError
+            job_name = e.job_name
+            error = str(e.original_error)
+            set_job_name_attribute(job_span, job_name)
 
-        # Run all evaluators concurrently (unbounded concurrency)
-        # Using create_task for better event loop scheduling
-        tasks = [
-            asyncio.create_task(
-                process_evaluator(evaluator, data_point, output, progress_service)
+            # Return early with error if job failed
+            return JobResult(
+                job_name=job_name,
+                output=None,
+                error=error,
+                evaluator_scores=[],
             )
-            for evaluator in evaluators
-        ]
+        except Exception as e:
+            error = str(e)
 
-        evaluator_scores = await asyncio.gather(*tasks)
+            # Return early with error if job failed
+            return JobResult(
+                job_name=job_name,
+                output=None,
+                error=error,
+                evaluator_scores=[],
+            )
 
-    return JobResult(
-        job_name=job_name,
-        output=output,
-        error=None,
-        evaluator_scores=evaluator_scores,
-    )
+        # Process evaluators if any and job was successful
+        evaluator_scores: list[EvaluatorScore] = []
+
+        if evaluators:
+            # Update phase to evaluating
+            if progress_service:
+                await progress_service.update_progress(phase=Phase.EVALUATING)
+
+            # Run all evaluators concurrently (unbounded concurrency)
+            # Using create_task for better event loop scheduling
+            tasks = [
+                asyncio.create_task(
+                    process_evaluator(
+                        evaluator, data_point, output, progress_service, tracing_context
+                    )
+                )
+                for evaluator in evaluators
+            ]
+
+            evaluator_scores = await asyncio.gather(*tasks)
+
+        return JobResult(
+            job_name=job_name,
+            output=output,
+            error=None,
+            evaluator_scores=evaluator_scores,
+        )
 
 
 async def process_evaluator(
@@ -176,6 +209,7 @@ async def process_evaluator(
     data_point: DataPoint,
     output: Output,
     progress_service: ProgressService | None = None,
+    tracing_context: "TracingContext | None" = None,
 ) -> EvaluatorScore:
     """
     Process a single evaluator.
@@ -185,41 +219,64 @@ async def process_evaluator(
         data_point: The original data point
         output: The job output to evaluate
         progress_service: Optional progress tracking service
+        tracing_context: Optional tracing context for OTEL spans
 
     Returns:
         EvaluatorScore with the evaluation result or error
     """
+    # Import tracing utilities lazily to avoid import errors when OTEL is not installed
+    from .tracing.spans import (
+        EvaluationSpanOptions,
+        set_evaluation_attributes,
+        with_evaluation_span,
+    )
+
     evaluator_name = evaluator["name"]
 
-    try:
-        # Update current evaluator in progress
-        if progress_service:
-            await progress_service.update_progress(current_evaluator=evaluator_name)
-
-        # Execute the scorer
-        scorer_param: ScorerParameter = {
-            "data": data_point,
-            "output": output,
-        }
-
-        result = await evaluator["scorer"](scorer_param)
-
-        # Convert dict to EvaluationResult if needed
-        if isinstance(result, dict):
-            score = EvaluationResult.model_validate(result)
-        else:
-            score = result
-
-        return EvaluatorScore(
+    # Wrap the evaluator execution in a span if tracing is enabled
+    async with with_evaluation_span(
+        EvaluationSpanOptions(
+            run_id=tracing_context.run_id if tracing_context else "",
             evaluator_name=evaluator_name,
-            score=score,
-            error=None,
         )
+    ) as eval_span:
+        try:
+            # Update current evaluator in progress
+            if progress_service:
+                await progress_service.update_progress(current_evaluator=evaluator_name)
 
-    except Exception as error:
-        # Return error result with empty score
-        return EvaluatorScore(
-            evaluator_name=evaluator_name,
-            score=EvaluationResult(value=""),
-            error=str(error),
-        )
+            # Execute the scorer
+            scorer_param: ScorerParameter = {
+                "data": data_point,
+                "output": output,
+            }
+
+            result = await evaluator["scorer"](scorer_param)
+
+            # Convert dict to EvaluationResult if needed
+            if isinstance(result, dict):
+                score = EvaluationResult.model_validate(result)
+            else:
+                score = result
+
+            # Set evaluation attributes on span
+            set_evaluation_attributes(
+                eval_span,
+                score.value,
+                score.explanation,
+                score.pass_,
+            )
+
+            return EvaluatorScore(
+                evaluator_name=evaluator_name,
+                score=score,
+                error=None,
+            )
+
+        except Exception as error:
+            # Return error result with empty score
+            return EvaluatorScore(
+                evaluator_name=evaluator_name,
+                score=EvaluationResult(value=""),
+                error=str(error),
+            )
