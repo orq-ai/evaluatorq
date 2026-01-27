@@ -54,7 +54,7 @@ def setup_orq_client(api_key: str) -> "Orq":
 
 
 async def fetch_dataset_batches(
-    orq_client: "Orq", dataset_id: str
+    orq_client: "Orq", dataset_id: str, *, include_messages: bool = False
 ) -> AsyncGenerator[DataPointBatch, None]:
     """
     Fetch dataset from Orq platform in batches, yielding each batch as it arrives.
@@ -91,9 +91,17 @@ async def fetch_dataset_batches(
             # Convert datapoints for this batch
             batch_datapoints: list[DataPoint] = []
             for point in response.data:
+                inputs = dict(point.inputs) if point.inputs is not None else {}
+                if include_messages:
+                    if "messages" in inputs:
+                        raise ValueError(
+                            "include_messages is enabled but the datapoint inputs already contain a 'messages' key. Remove 'messages' from inputs or disable include_messages."
+                        )
+                    if getattr(point, "messages", None):
+                        inputs["messages"] = point.messages
                 batch_datapoints.append(
                     DataPoint(
-                        inputs=point.inputs if point.inputs is not None else {},
+                        inputs=inputs,
                         expected_output=point.expected_output,
                     )
                 )
@@ -123,7 +131,7 @@ async def fetch_dataset_batches(
 
 
 async def fetch_dataset_as_datapoints(
-    orq_client: "Orq", dataset_id: str
+    orq_client: "Orq", dataset_id: str, *, include_messages: bool = False
 ) -> list[DataPoint]:
     """
     Fetch all dataset datapoints at once (legacy function).
@@ -137,6 +145,8 @@ async def fetch_dataset_as_datapoints(
         List of DataPoint objects with inputs and expected_output
     """
     all_datapoints: list[DataPoint] = []
-    async for batch in fetch_dataset_batches(orq_client, dataset_id):
+    async for batch in fetch_dataset_batches(
+        orq_client, dataset_id, include_messages=include_messages
+    ):
         all_datapoints.extend(batch.datapoints)
     return all_datapoints

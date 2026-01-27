@@ -85,6 +85,7 @@ class DatasetIdInput(BaseModel):
     """Input for fetching a dataset from Orq platform."""
 
     dataset_id: str
+    include_messages: bool = False
 
 
 class EvaluatorParams(BaseModel):
