@@ -1,5 +1,6 @@
 """Fetch data from Orq platform."""
 
+import os
 from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING
 
@@ -32,8 +33,6 @@ def setup_orq_client(api_key: str) -> "Orq":
         ModuleNotFoundError: If orq_ai_sdk is not installed
         Exception: If client setup fails
     """
-    import os
-
     try:
         # lazy import for orq integration
         from orq_ai_sdk import Orq

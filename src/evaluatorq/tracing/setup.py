@@ -135,7 +135,10 @@ async def init_tracing_if_needed() -> bool:
         from urllib.parse import urlparse
 
         parsed_endpoint = urlparse(traces_endpoint)
-        is_orq_domain = parsed_endpoint.netloc.endswith(".orq.ai") or parsed_endpoint.netloc == "orq.ai"
+        is_orq_domain = (
+            parsed_endpoint.netloc.endswith(".orq.ai")
+            or parsed_endpoint.netloc == "orq.ai"
+        )
         if api_key and is_orq_domain:
             headers["Authorization"] = f"Bearer {api_key}"
 
