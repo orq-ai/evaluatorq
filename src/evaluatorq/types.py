@@ -100,6 +100,8 @@ class EvaluatorParams(BaseModel):
         parallelism: Number of jobs to run in parallel. Defaults to 1 (sequential).
         print_results: Whether to print results table to console. Defaults to True.
         description: Optional description for the evaluation run.
+        path: Optional path (e.g. "MyProject/MyFolder") to place the experiment
+              in a specific project and folder on the Orq platform.
     """
 
     model_config: ConfigDict = {"arbitrary_types_allowed": True}
@@ -110,3 +112,4 @@ class EvaluatorParams(BaseModel):
     parallelism: int = Field(default=1, ge=1)
     print_results: bool = Field(default=True)
     description: str | None = None
+    path: str | None = None

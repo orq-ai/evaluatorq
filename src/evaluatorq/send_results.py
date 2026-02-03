@@ -20,6 +20,7 @@ class SendResultsPayload(BaseModel):
     ended_at: str = Field(serialization_alias="_endedAt")
     evaluation_duration: int = Field(serialization_alias="_evaluationDuration")
     dataset_id: str | None = Field(default=None, serialization_alias="datasetId")
+    path: str | None = Field(default=None)
     results: list[DataPointResult]
 
 
@@ -42,6 +43,7 @@ async def send_results_to_orq(
     results: EvaluatorqResult,
     start_time: datetime,
     end_time: datetime,
+    path: str | None = None,
 ) -> None:
     """
     Send evaluation results to Orq platform.
@@ -54,6 +56,8 @@ async def send_results_to_orq(
         results: The evaluation results to send
         start_time: When the evaluation started
         end_time: When the evaluation ended
+        path: Optional path (e.g. "MyProject/MyFolder") to place the experiment
+              in a specific project and folder on the Orq platform.
     """
     try:
         # Calculate duration in milliseconds
@@ -67,6 +71,7 @@ async def send_results_to_orq(
             ended_at=end_time.isoformat(),
             evaluation_duration=duration_ms,
             dataset_id=dataset_id,
+            path=path,
             results=results,
         )
 
