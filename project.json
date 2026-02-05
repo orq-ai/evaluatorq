@@ -13,6 +13,7 @@
     "build": {
       "executor": "nx:run-commands",
       "dependsOn": ["install"],
+      "inputs": ["production", "{projectRoot}/pyproject.toml"],
       "options": {
         "cwd": "packages/evaluatorq-py",
         "command": "uv build"
