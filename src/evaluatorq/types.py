@@ -8,8 +8,16 @@ Output = str | int | float | bool | dict[str, Any] | None
 """Output type alias"""
 
 
+EvaluationResultCellValue = str | int | float | dict[str, "str | float | dict[str, str | float]"]
+
+
+class EvaluationResultCell(BaseModel):
+    type: str
+    value: dict[str, EvaluationResultCellValue]
+
+
 class EvaluationResult(BaseModel):
-    value: str | float | bool
+    value: str | int | float | bool | EvaluationResultCell
     explanation: str | None = None
     pass_: bool | None = Field(default=None, serialization_alias="pass")
 

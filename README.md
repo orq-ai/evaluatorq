@@ -321,6 +321,103 @@ await evaluatorq(
 )
 ```
 
+#### Structured Evaluation Results
+
+Evaluators can return structured, multi-dimensional metrics using `EvaluationResultCell`. This is useful for metrics like BERT scores, ROUGE-N scores, or any evaluation that produces multiple sub-scores.
+
+##### Multi-criteria Rubric
+
+Return multiple quality sub-scores in a single evaluator:
+
+```python
+from evaluatorq import evaluatorq, job, DataPoint, EvaluationResult, EvaluationResultCell
+
+@job("echo")
+async def echo_job(data: DataPoint, row: int):
+    return data.inputs["text"]
+
+async def rubric_scorer(params):
+    text = str(params["output"])
+    return EvaluationResult(
+        value=EvaluationResultCell(
+            type="rubric",
+            value={
+                "relevance": min(len(text) / 100, 1),
+                "coherence": 0.9 if "." in text else 0.4,
+                "fluency": 0.85 if len(text.split()) > 5 else 0.5,
+            },
+        ),
+        explanation="Multi-criteria quality rubric",
+    )
+
+await evaluatorq(
+    "structured-rubric",
+    data=[
+        DataPoint(inputs={"text": "The quick brown fox jumps over the lazy dog."}),
+        DataPoint(inputs={"text": "Hi"}),
+    ],
+    jobs=[echo_job],
+    evaluators=[{"name": "rubric", "scorer": rubric_scorer}],
+)
+```
+
+##### Sentiment Distribution
+
+Break down sentiment across categories:
+
+```python
+async def sentiment_scorer(params):
+    text = str(params["output"]).lower()
+    positive_words = ["good", "great", "excellent", "happy", "love"]
+    negative_words = ["bad", "terrible", "awful", "sad", "hate"]
+    pos_count = sum(1 for w in positive_words if w in text)
+    neg_count = sum(1 for w in negative_words if w in text)
+    total = max(pos_count + neg_count, 1)
+
+    return EvaluationResult(
+        value=EvaluationResultCell(
+            type="sentiment",
+            value={
+                "positive": pos_count / total,
+                "negative": neg_count / total,
+                "neutral": 1 - (pos_count + neg_count) / total,
+            },
+        ),
+        explanation="Sentiment distribution across categories",
+    )
+```
+
+##### Safety Scores with Pass/Fail
+
+Combine structured scores with pass/fail tracking for CI/CD:
+
+```python
+async def safety_scorer(params):
+    text = str(params["output"]).lower()
+    categories = {
+        "hate_speech": 0.8 if "hate" in text else 0.1,
+        "violence": 0.7 if ("kill" in text or "fight" in text) else 0.05,
+        "profanity": 0.5 if "damn" in text else 0.02,
+    }
+
+    return EvaluationResult(
+        value=EvaluationResultCell(
+            type="safety",
+            value=categories,
+        ),
+        pass_=all(score < 0.5 for score in categories.values()),
+        explanation="Content safety severity scores per category",
+    )
+```
+
+See the runnable Python examples in the `examples/` directory:
+
+- [`structured_rubric_eval.py`](examples/structured_rubric_eval.py) - Multi-criteria quality rubric
+- [`structured_sentiment_eval.py`](examples/structured_sentiment_eval.py) - Sentiment distribution breakdown
+- [`structured_safety_eval.py`](examples/structured_safety_eval.py) - Safety scores with pass/fail tracking
+
+> **Note:** Structured results display as `[structured]` in the terminal summary table but are preserved in full when sent to the Orq platform and OpenTelemetry spans.
+
 #### Controlling Parallelism
 
 ```python
@@ -563,9 +660,16 @@ class DataPoint(BaseModel):
     inputs: dict[str, Any]
     expected_output: Output | None = None
 
+EvaluationResultCellValue = str | float | dict[str, "str | float | dict[str, str | float]"]
+
+class EvaluationResultCell(BaseModel):
+    """Structured evaluation result with multi-dimensional metrics."""
+    type: str
+    value: dict[str, EvaluationResultCellValue]
+
 class EvaluationResult(BaseModel):
     """Result from an evaluator."""
-    value: str | float | bool
+    value: str | float | bool | EvaluationResultCell
     explanation: str | None = None
     pass_: bool | None = None  # Optional pass/fail indicator for CI/CD integration
 
@@ -616,7 +720,7 @@ class ScorerParameter(TypedDict):
     data: DataPoint
     output: Output
 
-Scorer = Callable[[ScorerParameter], Awaitable[EvaluationResult]]
+Scorer = Callable[[ScorerParameter], Awaitable[EvaluationResult | dict[str, Any]]]
 
 class Evaluator(TypedDict):
     """Evaluator configuration."""

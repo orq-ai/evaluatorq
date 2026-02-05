@@ -9,10 +9,10 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from .types import EvaluatorqResult
+from .types import EvaluationResultCell, EvaluatorqResult
 
-ScoreValue = float | bool | str
-"""Score value type - can be numeric, boolean, or string"""
+ScoreValue = float | bool | str | EvaluationResultCell
+"""Score value type - can be numeric, boolean, string or EvaluationResultCell"""
 
 ScoresByEvaluatorAndJob = dict[str, dict[str, list[ScoreValue]]]
 """Mapping of evaluator_name -> job_name -> list of score values"""
@@ -68,9 +68,7 @@ def create_summary_display(results: EvaluatorqResult) -> Table:
     table.add_row("Failed Jobs", Text(str(failed_jobs), style=failed_jobs_style))
 
     # Success rate with color coding
-    if failed_jobs == 0:
-        rate_style = "green"
-    elif success_rate >= 80:
+    if success_rate >= 80:
         rate_style = "green"
     elif success_rate >= 50:
         rate_style = "yellow"
@@ -138,7 +136,11 @@ def calculate_evaluator_averages(
             else:
                 first_score = scores[0]
 
-                if isinstance(first_score, bool):
+                if isinstance(first_score, EvaluationResultCell):
+                    # Structured result cell, show placeholder
+                    evaluator_averages[job_name] = ("[structured]", "dim")
+
+                elif isinstance(first_score, bool):
                     # Calculate pass rate for boolean scores
                     pass_count = sum(1 for s in scores if s is True)
                     pass_rate = (pass_count / len(scores)) * 100
@@ -154,7 +156,7 @@ def calculate_evaluator_averages(
 
                 elif isinstance(first_score, (int, float)):
                     # Calculate average for numeric scores
-                    avg = sum(float(s) for s in scores) / len(scores)
+                    avg = sum(float(s) for s in scores if isinstance(s, (int, float))) / len(scores)
                     evaluator_averages[job_name] = (f"{avg:.2f}", "yellow")
 
                 else:

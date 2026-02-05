@@ -7,8 +7,9 @@ Span hierarchy:
       ├── [User's instrumented code becomes child spans]
       └── orq.evaluation (per evaluator - child of its job)
 """
-
 from __future__ import annotations
+
+import json
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -16,6 +17,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .setup import get_tracer
+from ..types import EvaluationResultCell
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -149,7 +151,7 @@ async def with_evaluation_span(
 
 def set_evaluation_attributes(
     span: "Span | None",
-    score: str | int | float | bool,
+    score: str | int | float | bool | dict[str, Any] | EvaluationResultCell,
     explanation: str | None = None,
     pass_: bool | None = None,
 ) -> None:
@@ -165,7 +167,10 @@ def set_evaluation_attributes(
     if span is None:
         return
 
-    span.set_attribute("orq.score", str(score))
+    span.set_attribute(
+        "orq.score",
+        json.dumps(score.model_dump()) if isinstance(score, EvaluationResultCell) else json.dumps(score) if isinstance(score, dict) else str(score),
+    )
     if explanation is not None:
         span.set_attribute("orq.explanation", explanation)
     if pass_ is not None:
