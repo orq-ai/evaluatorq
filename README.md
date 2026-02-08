@@ -12,6 +12,7 @@ An evaluation framework library for Python that provides a flexible way to run p
 - **OpenTelemetry Tracing**: Built-in observability with automatic span creation for jobs and evaluators
 - **Pass/Fail Tracking**: Evaluators can return pass/fail status for CI/CD integration
 - **Built-in Evaluators**: Common evaluators like `string_contains_evaluator` included
+- **Integrations**: Langchain and Langgraph agents integration
 
 ## 📥 Installation
 
@@ -39,6 +40,14 @@ For OpenTelemetry tracing (optional):
 pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http opentelemetry-semantic-conventions
 # or
 pip install evaluatorq[otel]
+```
+
+For LangChain/LangGraph integration:
+
+```bash
+pip install langchain 
+# or
+pip install evaluatorq[langchain]
 ```
 
 ## 🚀 Quick Start
@@ -605,6 +614,26 @@ async def quality_scorer(params):
 │ Pass Rate            │ 75% (3/4)       │
 └──────────────────────┴─────────────────┘
 ```
+
+## 🔗 LangChain Integration
+
+Evaluatorq provides integration with LangChain and LangGraph agents, converting their outputs to the OpenResponses format for standardized evaluation.
+
+### Overview
+
+The LangChain integration allows you to:
+- Wrap LangChain agents created with `create_agent()` for use in evaluatorq jobs
+- Wrap LangGraph compiled graphs for stateful agent evaluation
+- Automatically convert agent outputs to OpenResponses format
+- Evaluate agent behavior using standard evaluatorq evaluators
+
+### Examples
+
+Complete examples are available in the examples folder:
+
+- **LangChain Agent**: [`examples/lib/integrations/langchain_integration_example.py`](./examples/lib/integrations/langchain_integration_example.py)
+- **LangGraph Agent**: [`examples/lib/integrations/langgraph_integration_example.py`](./examples/lib/integrations/langgraph_integration_example.py)
+
 
 ## 📚 API Reference
 

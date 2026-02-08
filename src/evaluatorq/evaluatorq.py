@@ -19,6 +19,7 @@ from .tracing import (
 )
 from .types import (
     DataPoint,
+    DataPointInput,
     DatasetIdInput,
     Evaluator,
     EvaluatorParams,
@@ -51,7 +52,7 @@ async def evaluatorq(
     name: str,
     params: EvaluatorParams | dict[str, Any] | None = None,
     *,
-    data: DatasetIdInput | Sequence[Awaitable[DataPoint] | DataPoint] | None = None,
+    data: DatasetIdInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None = None,
     jobs: list[Job] | None = None,
     evaluators: list[Evaluator] | None = None,
     parallelism: int = 1,

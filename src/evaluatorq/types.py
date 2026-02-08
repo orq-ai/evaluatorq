@@ -1,10 +1,12 @@
 from collections.abc import Awaitable, Sequence
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
 
-Output = str | int | float | bool | dict[str, Any] | None
+from evaluatorq.openresponses import ResponseResourceDict
+
+Output = str | int | float | bool | ResponseResourceDict | dict[str, Any] | None
 """Output type alias"""
 
 
@@ -37,6 +39,18 @@ class JobResult(BaseModel):
     )
 
 
+class _DataPointDictRequired(TypedDict):
+    """Required fields for DataPointDict."""
+
+    inputs: dict[str, Any]
+
+
+class DataPointDict(_DataPointDictRequired, total=False):
+    """Dict representation of a DataPoint for type checking."""
+
+    expected_output: Output | None
+
+
 class DataPoint(BaseModel):
     """
     A data point for evaluation.
@@ -51,6 +65,10 @@ class DataPoint(BaseModel):
     expected_output: Output | None = Field(
         default=None, serialization_alias="expectedOutput"
     )
+
+
+DataPointInput = DataPoint | DataPointDict
+"""Type alias for DataPoint that accepts both model instances and dicts."""
 
 
 class DataPointResult(BaseModel):
@@ -77,6 +95,12 @@ Job = Callable[[DataPoint, int], Awaitable[dict[str, Any]]]
 
 
 class ScorerParameter(TypedDict):
+    """Parameters passed to a scorer function  
+    Args:
+        data: The data point being evaluated.
+        output: The output produced by the job for the data point.
+    """
+
     data: DataPoint
     output: Output
 
@@ -112,9 +136,9 @@ class EvaluatorParams(BaseModel):
               in a specific project and folder on the Orq platform.
     """
 
-    model_config: ConfigDict = {"arbitrary_types_allowed": True}
+    model_config: ClassVar[ConfigDict] = {"arbitrary_types_allowed": True}
 
-    data: DatasetIdInput | Sequence[Awaitable[DataPoint] | DataPoint]
+    data: DatasetIdInput | Sequence[Awaitable[DataPoint] | DataPointInput]
     jobs: list[Job]
     evaluators: list[Evaluator] | None = None
     parallelism: int = Field(default=1, ge=1)
