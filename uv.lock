@@ -240,7 +240,7 @@ requires-dist = [
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'otel'", specifier = ">=1.20.0" },
     { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.20.0" },
     { name = "opentelemetry-semantic-conventions", marker = "extra == 'otel'", specifier = ">=0.41b0" },
-    { name = "orq-ai-sdk", marker = "extra == 'orq'", specifier = ">=3.13.16" },
+    { name = "orq-ai-sdk", marker = "extra == 'orq'", specifier = ">=4.2.18" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "rich", specifier = ">=14.2.0" },
 ]
@@ -256,7 +256,7 @@ dev = [
     { name = "opentelemetry-api", specifier = ">=1.20.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.20.0" },
     { name = "opentelemetry-sdk", specifier = ">=1.20.0" },
-    { name = "orq-ai-sdk", specifier = ">=3.13.16" },
+    { name = "orq-ai-sdk", specifier = ">=4.2.18" },
     { name = "pytest", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", specifier = ">=1.2.0" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
@@ -871,7 +871,7 @@ wheels = [
 
 [[package]]
 name = "orq-ai-sdk"
-version = "3.14.24"
+version = "4.2.18"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpcore" },
@@ -879,9 +879,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/27/41/fe48e08469229be3880dfb6575cacf82a172208fdff58a9f9b19e60996b1/orq_ai_sdk-3.14.24.tar.gz", hash = "sha256:4001c93607c5b2351d051998deff0bc2d8694adf2a617a04cd3d12a096ae108e", size = 364716, upload-time = "2025-11-06T12:45:36.112Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6d/30/f5fed8a3029e272fba3fdfc7c09f4ae791d389c828e8b3a63433f239d642/orq_ai_sdk-4.2.18.tar.gz", hash = "sha256:1bc1e23d867047f033171e0443d408a8ff182e0bfe578be0508f58856308d449", size = 628402, upload-time = "2026-02-03T08:57:22.788Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/bb/26/40b73236ab6a3225375f170979d0e73df9258ed5ab7aff314a161f733630/orq_ai_sdk-3.14.24-py3-none-any.whl", hash = "sha256:3fb7e5a850adb335f3732a22e6f438d9d04961953f8f165f38f2fa5faddc6b0d", size = 473772, upload-time = "2025-11-06T12:45:33.231Z" },
+    { url = "https://files.pythonhosted.org/packages/36/8c/ec7223b3ddf1af8297fc23613be4b2cae0aa97be4362c43be1288666df82/orq_ai_sdk-4.2.18-py3-none-any.whl", hash = "sha256:cb7f97afb94b1fba82ca114a2187cae78ce1765b44ab40dcb67cdf435be2938b", size = 789069, upload-time = "2026-02-03T08:57:24.646Z" },
 ]
 
 [[package]]
