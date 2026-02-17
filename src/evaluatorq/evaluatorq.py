@@ -267,7 +267,7 @@ async def evaluatorq(
             )
 
             # Process data points with controlled concurrency
-            data_point_semaphore = asyncio.Semaphore(max(1, parallelism // len(jobs)))
+            data_point_semaphore = asyncio.Semaphore(parallelism)
 
             async def process_with_semaphore(
                 index: int, data_promise: Awaitable[DataPoint] | DataPoint

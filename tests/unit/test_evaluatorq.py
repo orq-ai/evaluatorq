@@ -107,6 +107,47 @@ async def test_evaluatorq_with_parallelism():
 
 
 @pytest.mark.asyncio
+async def test_evaluatorq_parallelism_limit():
+    """Test that concurrent data points never exceed the parallelism value."""
+    parallelism = 3
+    data_points = generate_test_data(20)
+
+    concurrent_count = 0
+    max_concurrent = 0
+    lock = asyncio.Lock()
+
+    async def tracking_job(data: DataPoint, _row: int):
+        nonlocal concurrent_count, max_concurrent
+        async with lock:
+            concurrent_count += 1
+            if concurrent_count > max_concurrent:
+                max_concurrent = concurrent_count
+
+        await asyncio.sleep(0.05)
+
+        async with lock:
+            concurrent_count -= 1
+
+        text = str(data.inputs["text"])
+        return {"name": "tracking-job", "output": {"length": len(text)}}
+
+    results = await evaluatorq(
+        "test-concurrency-limit",
+        data=data_points,
+        jobs=[tracking_job],
+        evaluators=[],
+        parallelism=parallelism,
+        print_results=False,
+    )
+
+    assert results is not None
+    assert len(results) == 20
+    assert max_concurrent <= parallelism, (
+        f"Max concurrent data points ({max_concurrent}) exceeded parallelism ({parallelism})"
+    )
+
+
+@pytest.mark.asyncio
 async def test_evaluatorq_stress():
     """Stress test with larger dataset."""
     data_points = generate_test_data(300)
