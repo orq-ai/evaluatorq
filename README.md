@@ -13,6 +13,7 @@ An evaluation framework library for Python that provides a flexible way to run p
 - **Pass/Fail Tracking**: Evaluators can return pass/fail status for CI/CD integration
 - **Built-in Evaluators**: Common evaluators like `string_contains_evaluator` included
 - **Integrations**: Langchain and Langgraph agents integration
+- **[Red Teaming](src/evaluatorq/redteam/README.md)**: Adaptive OWASP-mapped adversarial security testing for AI agents
 
 ## 📥 Installation
 
