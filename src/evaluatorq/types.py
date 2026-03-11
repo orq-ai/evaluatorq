@@ -19,9 +19,11 @@ class EvaluationResultCell(BaseModel):
 
 
 class EvaluationResult(BaseModel):
+    model_config: ClassVar[ConfigDict] = {"populate_by_name": True}
+
     value: str | int | float | bool | EvaluationResultCell
     explanation: str | None = None
-    pass_: bool | None = Field(default=None, serialization_alias="pass")
+    pass_: bool | None = Field(default=None, alias="pass")
 
 
 class EvaluatorScore(BaseModel):
@@ -131,17 +133,21 @@ class EvaluatorParams(BaseModel):
         evaluators: The evaluators to use. If not provided, only jobs will run.
         parallelism: Number of jobs to run in parallel. Defaults to 1 (sequential).
         print_results: Whether to print results table to console. Defaults to True.
+                       Also accepts "print" as an alias.
         description: Optional description for the evaluation run.
         path: Optional path (e.g. "MyProject/MyFolder") to place the experiment
               in a specific project and folder on the Orq platform.
     """
 
-    model_config: ClassVar[ConfigDict] = {"arbitrary_types_allowed": True}
+    model_config: ClassVar[ConfigDict] = {
+        "arbitrary_types_allowed": True,
+        "populate_by_name": True,
+    }
 
     data: DatasetIdInput | Sequence[Awaitable[DataPoint] | DataPointInput]
     jobs: list[Job]
     evaluators: list[Evaluator] | None = None
     parallelism: int = Field(default=1, ge=1)
-    print_results: bool = Field(default=True)
+    print_results: bool = Field(default=True, validation_alias="print")
     description: str | None = None
     path: str | None = None

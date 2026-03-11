@@ -87,6 +87,7 @@ class ResponseResourceDict(TypedDict, total=False):
     model: str
     previous_response_id: str | None
     instructions: str | None
+    input: list[dict[str, Any]]
     output: list[dict[str, Any]]
     error: dict[str, Any] | None
     tools: list[dict[str, Any]]

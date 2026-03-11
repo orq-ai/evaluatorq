@@ -27,11 +27,11 @@ def make_result():
         evaluator_scores = [
             EvaluatorScore(
                 evaluator_name=s["evaluator_name"],
-                score=EvaluationResult(
-                    value=s["value"],
-                    explanation=s.get("explanation"),
-                    pass_=s.get("pass_"),
-                ),
+                score=EvaluationResult.model_validate({
+                    "value": s["value"],
+                    "explanation": s.get("explanation"),
+                    "pass": s.get("pass_"),
+                }),
                 error=s.get("error"),
             )
             for s in scores

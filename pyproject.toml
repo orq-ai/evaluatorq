@@ -71,6 +71,7 @@ dev = [
   "opentelemetry-sdk>=1.20.0",
   "opentelemetry-exporter-otlp-proto-http>=1.20.0",
   "langchain-core>=0.3.0",
+  "langchain-openai>=0.3.0",
   "langgraph>=0.2.0",
   "loguru",
 ]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from evaluatorq.types import DataPoint
@@ -26,11 +27,37 @@ def _extract_schema_parameters(
     return schema_obj.model_json_schema()
 
 
+def _normalize_message(msg: Any) -> dict[str, Any]:
+    """Convert an Orq SDK message object or dict to a plain dict."""
+    if isinstance(msg, dict):
+        return msg
+    # Pydantic BaseModel (Orq SDK message types)
+    if hasattr(msg, "model_dump"):
+        return msg.model_dump(exclude_none=True)
+    # Fallback: duck-type role + content
+    return {"role": getattr(msg, "role", "user"), "content": getattr(msg, "content", "")}
+
+
+def _extract_messages_from_data(
+    data: DataPoint,
+) -> list[dict[str, Any]] | None:
+    """Safely extract messages from a DataPoint.
+
+    Returns None when data.inputs["messages"] is missing, not a list, or empty.
+    Each message is normalized to a plain dict to handle Orq SDK Pydantic models.
+    """
+    messages = data.inputs.get("messages")
+    if not isinstance(messages, list) or len(messages) == 0:
+        return None
+    return [_normalize_message(m) for m in messages]
+
+
 def wrap_langchain_agent(
     agent: CompiledStateGraph[Any, Any, Any, Any],
     *,
     name: str = "agent",
     prompt_key: str = "prompt",
+    instructions: str | Callable[[DataPoint], str] | None = None,
     tools: list[dict[str, Any]] | None = None,
 ) -> Any:
     """
@@ -45,72 +72,58 @@ def wrap_langchain_agent(
         agent: A LangChain agent or runnable with an invoke() method.
         name: The name of the job (defaults to "agent").
         prompt_key: The key in data.inputs to use as the prompt (defaults to "prompt").
+        instructions: System instructions to prepend to the messages sent to the agent.
+            Can be a static string or a callable that receives the data point and returns
+            the instructions.
         tools: Optional list of tool definitions for the OpenResponses output.
 
     Returns:
         An async function compatible with evaluatorq's Job type.
-
-    Example:
-        ```python
-        from langchain_openai import ChatOpenAI
-        from langchain.agents import create_agent
-        from langchain_core.tools import tool
-        from evaluatorq import evaluatorq
-        from evaluatorq.integrations.langchain import wrap_langchain_agent
-
-        @tool
-        def weather(location: str) -> dict:
-            \"\"\"Get the weather in a location.\"\"\"
-            return {"location": location, "temperature": 72}
-
-        model = ChatOpenAI(model="gpt-4o")
-        agent = create_agent(model, tools=[weather])
-
-        result = await evaluatorq("weather-agent-eval", {
-            "data": [
-                {"inputs": {"prompt": "What is the weather in SF?"}},
-            ],
-            "jobs": [wrap_langchain_agent(agent)],
-            "evaluators": [
-                {
-                    "name": "response-quality",
-                    "scorer": async def score(params):
-                        result = params["output"]
-                        # Access OpenResponses format
-                        output_items = result.get("output", [])
-                        has_message = any(
-                            item.get("type") == "message"
-                            for item in output_items
-                        )
-                        return {
-                            "value": 1 if has_message else 0,
-                            "explanation": "Agent produced a response",
-                        }
-                },
-            ],
-        })
-        ```
     """
 
     async def job(data: DataPoint, _row: int) -> dict[str, Any]:
+        input_messages = _extract_messages_from_data(data)
+        has_messages = input_messages is not None
         prompt = data.inputs.get(prompt_key)
+        has_prompt = isinstance(prompt, str) and bool(prompt)
 
-        if not isinstance(prompt, str):
+        if instructions is not None:
+            # Resolve instructions (static string or dynamic callable)
+            resolved = instructions(data) if callable(instructions) else instructions
+            system_message: dict[str, str] = {"role": "system", "content": resolved}
+
+            if has_messages and has_prompt:
+                messages = [system_message, *input_messages, {"role": "user", "content": prompt}]
+            elif has_prompt:
+                messages = [system_message, {"role": "user", "content": prompt}]
+            elif has_messages:
+                messages = [system_message, *input_messages]
+            else:
+                raise ValueError(
+                    f"Expected data.inputs.messages (list) or data.inputs.{prompt_key} (str), but neither was provided"
+                )
+        elif has_messages and has_prompt:
+            messages = [*input_messages, {"role": "user", "content": prompt}]
+        elif has_prompt:
+            messages = [{"role": "user", "content": prompt}]
+        elif has_messages:
+            messages = list(input_messages)
+        else:
             raise ValueError(
-                f"Expected data.inputs.{prompt_key} to be a string, got {type(prompt).__name__}"
+                f"Expected data.inputs.messages (list) or data.inputs.{prompt_key} (str), but neither was provided"
             )
 
         # Invoke the LangChain agent
-        result = agent.invoke({"messages": [{"role": "user", "content": prompt}]})
+        result = agent.invoke({"messages": messages})
 
         # Extract messages from result
-        messages: list[BaseMessage] = result.get("messages", [])
+        result_messages: list[BaseMessage] = result.get("messages", [])
 
         # Get tools from agent if not provided explicitly
         resolved_tools = tools if tools is not None else extract_tools_from_agent(agent)
 
         # Convert to OpenResponses format
-        open_responses_output = convert_to_open_responses(messages, resolved_tools)
+        open_responses_output = convert_to_open_responses(result_messages, resolved_tools)
 
         return {
             "name": name,

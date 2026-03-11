@@ -293,7 +293,7 @@ def create_dynamic_evaluator(
         return EvaluationResult(
             value=value,
             explanation=eval_result.explanation,
-            pass_=eval_result.passed,
+            **{"pass": eval_result.passed},
         )
 
     return {'name': 'owasp-dynamic-security', 'scorer': scorer}

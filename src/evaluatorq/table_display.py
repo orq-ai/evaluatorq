@@ -274,7 +274,7 @@ async def display_results_table(results: EvaluatorqResult) -> None:
         console.print()
 
     # Show tip
-    console.print("[dim]💡 Tip: Use print=False to get raw JSON results.[/dim]")
+    console.print("[dim]💡 Tip: Use print_results=False to get raw JSON results.[/dim]")
     console.print()
 
     # Success message (shown after table, matching TypeScript)

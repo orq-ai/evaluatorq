@@ -11,7 +11,7 @@ from typing import Any
 
 from evaluatorq import DataPoint, evaluatorq, job
 
-from .evals import max_length_validator
+from ..utils.evals import max_length_validator
 
 
 # Define a reusable job for text analysis
