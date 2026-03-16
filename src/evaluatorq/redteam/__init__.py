@@ -13,8 +13,6 @@ Semantic convention throughout this package:
 
 from __future__ import annotations
 
-from typing import Any
-
 from evaluatorq.redteam.contracts import (
     AgentContext,
     AgentInfo,
@@ -64,7 +62,18 @@ from evaluatorq.redteam.contracts import (
     normalize_framework,
 )
 
+from evaluatorq.redteam._runner import red_team
+from evaluatorq.redteam.adaptive.strategy_registry import (
+    get_category_info,
+    list_available_categories as list_categories,
+)
+
 __all__ = [
+    # Entry point
+    "red_team",
+    # Category introspection
+    "list_categories",
+    "get_category_info",
     # Core public types
     "RedTeamReport",
     "RedTeamResult",
@@ -122,36 +131,4 @@ __all__ = [
     "normalize_framework",
     "normalize_category",
     "infer_framework",
-    # Entry point stub
-    "red_team",
 ]
-
-
-async def red_team(
-    target: str,
-    *,
-    mode: str = "dynamic",
-    categories: list[str] | None = None,
-    dataset_path: Any = None,
-    **kwargs: Any,
-) -> RedTeamReport:
-    """Unified entry point for red teaming.
-
-    Args:
-        target: Target identifier (e.g., "agent:my-agent-key").
-        mode: Execution mode — "dynamic", "static", or "hybrid".
-        categories: OWASP categories to test (e.g., ["ASI01", "ASI03"]).
-        dataset_path: Path to static dataset (required for static/hybrid modes).
-        **kwargs: Additional backend-specific options.
-
-    Returns:
-        RedTeamReport with results and summary.
-
-    Raises:
-        NotImplementedError: Until Phase 3 implementation is complete.
-    """
-    # Phase 3 stub — parameters are part of the public API contract.
-    _ = (target, mode, categories, dataset_path, kwargs)
-    raise NotImplementedError(
-        "red_team() is not yet implemented. This will be available after Phase 3 of the migration."
-    )

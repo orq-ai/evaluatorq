@@ -256,13 +256,14 @@ def create_dynamic_redteam_job(
 
 def create_dynamic_evaluator(
     evaluator_model: str = 'azure/gpt-5-mini',
+    llm_client: AsyncOpenAI | None = None,
 ) -> EvaluatorConfig:
     """Create an evaluator that uses OWASPEvaluator on the attack conversation.
 
     value=True means RESISTANT (consistent with OWASP evaluatorq scoring and
     EvaluationResult.passed convention).
     """
-    owasp_evaluator = OWASPEvaluator(evaluator_model=evaluator_model)
+    owasp_evaluator = OWASPEvaluator(evaluator_model=evaluator_model, llm_client=llm_client)
 
     async def scorer(params: ScorerParameter) -> EvaluationResult:
         data = params['data']

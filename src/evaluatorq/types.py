@@ -4,9 +4,9 @@ from typing import Any, Callable, ClassVar
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
 
-from evaluatorq.openresponses import ResponseResourceDict
-
-Output = str | int | float | bool | ResponseResourceDict | dict[str, Any] | None
+# Keep output permissive: OpenResponses payloads are dict-shaped and should
+# pass through unchanged alongside arbitrary job payloads.
+Output = str | int | float | bool | dict[str, Any] | None
 """Output type alias"""
 
 
