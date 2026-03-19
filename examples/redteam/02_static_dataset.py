@@ -31,7 +31,7 @@ async def main() -> None:
         "llm:gpt-5-mini",
         backend="openai",
         mode="static",
-        dataset_path="tests/redteam/fixtures/static_e2e_dataset.json",
+        dataset="tests/redteam/fixtures/static_e2e_dataset.json",
         parallelism=3,
         target_config=TargetConfig(
             system_prompt=(

@@ -21,7 +21,7 @@ async def main() -> None:
         "llm:gpt-5-mini",
         backend="openai",
         mode="hybrid",
-        dataset_path="tests/redteam/fixtures/static_e2e_dataset.json",
+        dataset="tests/redteam/fixtures/static_e2e_dataset.json",
         # Cap datapoints to keep the run short
         max_dynamic_datapoints=3,
         max_static_datapoints=3,

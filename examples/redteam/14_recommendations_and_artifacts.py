@@ -52,9 +52,10 @@ async def main() -> None:
     if report.focus_area_recommendations:
         print("\nRecommendations:")
         for rec in report.focus_area_recommendations:
-            print(f"\n  [{rec.priority}] {rec.focus_area}")
-            print(f"  Risk:   {rec.risk_description}")
-            print(f"  Action: {rec.recommended_action}")
+            print(f"\n  [{rec.category}] {rec.category_name} (risk score: {rec.risk_score:.2f})")
+            print(f"  Patterns: {rec.patterns_observed}")
+            for r in rec.recommendations:
+                print(f"  - {r}")
     else:
         print("\nNo recommendations generated (all attacks resisted).")
 
