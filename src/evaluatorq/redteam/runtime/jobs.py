@@ -8,10 +8,9 @@ from evaluatorq import DataPoint, Job, job
 from loguru import logger
 
 from evaluatorq.redteam.backends.registry import create_async_llm_client
-from pydantic import ValidationError
-
 from evaluatorq.redteam.contracts import Message, TokenUsage
-from evaluatorq.redteam.runtime.orq_agent_job import create_orq_platform_agent_job
+from evaluatorq.redteam.exceptions import CredentialError
+from evaluatorq.redteam.runtime.orq_agent_job import _sanitize_job_name, create_orq_platform_agent_job
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -22,6 +21,7 @@ def create_model_job(
     deployment_key: str | None = None,
     agent_key: str | None = None,
     llm_client: AsyncOpenAI | None = None,
+    system_prompt: str | None = None,
 ) -> Job:
     """Create an evaluatorq job for router model, deployment, or ORQ agent.
 
@@ -40,6 +40,8 @@ def create_model_job(
         return create_orq_platform_agent_job(agent_key)
 
     if deployment_key:
+        safe_key = _sanitize_job_name(deployment_key)
+
         try:
             from orq_ai_sdk import Orq
         except ImportError as e:
@@ -51,19 +53,29 @@ def create_model_job(
 
         import os
 
-        deployment_client = Orq(api_key=os.environ.get('ORQ_API_KEY', ''))
+        api_key = os.environ.get('ORQ_API_KEY')
+        if not api_key:
+            raise CredentialError('ORQ_API_KEY environment variable is not set')
+        deployment_client = Orq(api_key=api_key)
 
-        @job('model-under-test')
+        @job(f'redteam:static:{safe_key}')
         async def deployment_job(data: DataPoint, _row: int) -> dict[str, Any]:
+            """Invoke the ORQ deployment and return the response with token usage."""
             messages = _build_messages(data)
             completion = await deployment_client.deployments.invoke_async(
                 key=deployment_key,
                 messages=messages,  # pyright: ignore[reportArgumentType]
             )
 
+            # Advance the global progress bar for static attacks.
+            from evaluatorq.redteam.adaptive.orchestrator import _get_active_progress
+            _active_progress = _get_active_progress()
+            if _active_progress is not None:
+                await _active_progress.finish_attack(None)
+
             return {
                 'response': _extract_deployment_content(completion),
-                'token_usage': _extract_usage_from_deployment_completion(completion),
+                'token_usage': TokenUsage.from_completion(completion),
             }
 
         return deployment_job
@@ -72,12 +84,16 @@ def create_model_job(
         msg = "Provide one of: 'model', 'deployment_key', or 'agent_key'"
         raise ValueError(msg)
 
-    resolved_client = llm_client or create_async_llm_client()
+    safe_model = _sanitize_job_name(model)
 
-    @job('model-under-test')
+    @job(f'redteam:static:{safe_model}')
     async def router_job(data: DataPoint, _row: int) -> dict[str, Any]:
+        """Call the router model and return the response with token usage and finish reason."""
         messages = _build_messages(data)
-        response = await resolved_client.chat.completions.create(
+        if system_prompt:
+            messages = [{'role': 'system', 'content': system_prompt}] + messages
+        client = llm_client or create_async_llm_client()
+        response = await client.chat.completions.create(
             model=model,
             messages=messages,  # pyright: ignore[reportArgumentType]
         )
@@ -87,11 +103,17 @@ def create_model_job(
             finish_reason = response.choices[0].finish_reason
             logger.warning(
                 f'Empty router response for {sample_id}: '
-                + f'content={response.choices[0].message.content}, finish_reason={finish_reason}'
+                f'content={response.choices[0].message.content}, finish_reason={finish_reason}'
             )
+        # Advance the global progress bar for static attacks.
+        from evaluatorq.redteam.adaptive.orchestrator import _get_active_progress
+        _active_progress = _get_active_progress()
+        if _active_progress is not None:
+            await _active_progress.finish_attack(None)
+
         return {
             'response': content,
-            'token_usage': _extract_usage_from_chat_completion(response),
+            'token_usage': TokenUsage.from_completion(response),
             'finish_reason': response.choices[0].finish_reason,
         }
 
@@ -109,9 +131,11 @@ def _build_messages(data: DataPoint) -> list[dict[str, Any]]:
             try:
                 parsed = Message.model_validate(raw)
                 messages.append(parsed.model_dump(mode='json', exclude_none=True))
-            except (ValidationError, TypeError):
+            except Exception as e:
+                logger.debug(f'Message validation failed, using raw dict: {e}')
                 messages.append(dict(raw))
             continue
+        logger.warning(f'Unexpected message type {type(raw).__name__} in DataPoint, coercing to string: {str(raw)[:100]}')
         messages.append({'role': 'user', 'content': str(raw)})
     return messages
 
@@ -120,10 +144,12 @@ def _extract_deployment_content(completion: object) -> str:
     """Extract text content from an ORQ deployment response."""
     choices = getattr(completion, 'choices', None)
     if not choices:
+        logger.warning(f'Deployment returned no choices: {type(completion).__name__}')
         return ''
 
     message = getattr(choices[0], 'message', None)
     if not message:
+        logger.warning('Deployment choice has no message')
         return ''
 
     msg_content = getattr(message, 'content', None)
@@ -133,6 +159,7 @@ def _extract_deployment_content(completion: object) -> str:
         return '\n'.join(
             str(getattr(part, 'text', '')) for part in msg_content if getattr(part, 'type', None) == 'text'
         )
+    logger.warning(f'Unexpected content type in deployment response: {type(msg_content).__name__}')
     return ''
 
 
@@ -144,25 +171,16 @@ def _safe_int(value: Any) -> int:
         return 0
 
 
-def _extract_usage_from_chat_completion(response: Any) -> TokenUsage | None:
-    """Extract token usage from OpenAI-compatible completion responses."""
-    usage = getattr(response, 'usage', None)
-    if usage is None:
+def _normalize_usage(raw_usage: Any) -> TokenUsage | None:
+    """Normalize usage payloads to TokenUsage."""
+    if isinstance(raw_usage, TokenUsage):
+        return raw_usage
+    if not isinstance(raw_usage, dict):
         return None
 
-    prompt = _safe_int(getattr(usage, 'prompt_tokens', 0))
-    completion = _safe_int(getattr(usage, 'completion_tokens', 0))
-    total = _safe_int(getattr(usage, 'total_tokens', prompt + completion))
+    prompt = _safe_int(raw_usage.get('prompt_tokens', raw_usage.get('prompt', 0)))
+    completion = _safe_int(raw_usage.get('completion_tokens', raw_usage.get('completion', 0)))
+    total = _safe_int(raw_usage.get('total_tokens', raw_usage.get('total', prompt + completion)))
     return TokenUsage(prompt_tokens=prompt, completion_tokens=completion, total_tokens=total)
 
 
-def _extract_usage_from_deployment_completion(completion: Any) -> TokenUsage | None:
-    """Best-effort extraction of usage from ORQ deployment completion objects."""
-    usage = getattr(completion, 'usage', None)
-    if usage is None:
-        return None
-
-    prompt = _safe_int(getattr(usage, 'prompt_tokens', 0))
-    completion_tokens = _safe_int(getattr(usage, 'completion_tokens', 0))
-    total = _safe_int(getattr(usage, 'total_tokens', prompt + completion_tokens))
-    return TokenUsage(prompt_tokens=prompt, completion_tokens=completion_tokens, total_tokens=total)

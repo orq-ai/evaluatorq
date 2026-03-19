@@ -59,6 +59,8 @@ async def evaluatorq(
     print_results: bool = True,
     description: str | None = None,
     path: str | None = None,
+    _exit_on_failure: bool = True,
+    _send_results: bool = True,
 ) -> EvaluatorqResult:
     """
     Run an evaluation with the given parameters.
@@ -307,7 +309,7 @@ async def evaluatorq(
         await display_results_table(results)
 
     # Upload results to Orq platform if API key is available
-    if orq_api_key:
+    if orq_api_key and _send_results:
         _ = await send_results_to_orq(
             orq_api_key,
             name,
@@ -327,7 +329,7 @@ async def evaluatorq(
 
     # Check for pass failures and exit if any
     has_failures = check_pass_failures(results)
-    if has_failures:
+    if has_failures and _exit_on_failure:
         import sys
 
         sys.exit(1)

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = [ "src/evaluatorq" ]
-include = [ "src/evaluatorq/py.typed" ]
+include = [ "src/evaluatorq/py.typed", "src/evaluatorq/**/*.css" ]
 
 [tool.hatch.build.targets.sdist]
 exclude = [ "examples/", ".venv/", "tests/" ]
@@ -16,12 +16,13 @@ norecursedirs = [ ".venv", "dist", "*.egg-info" ]
 markers = [
   "integration: marks tests as integration tests (require ORQ_API_KEY in .env)",
 ]
+timeout = 120
 
 [tool.basedpyright]
-exclude = ["examples", ".venv"]
+exclude = ["examples", ".venv", "src/evaluatorq/redteam/ui"]
 reportIncompatibleVariableOverride = "none"
 reportExplicitAny = "none"
-reportMissingImports = "warning"
+reportMissingImports = "none"
 reportAny = "none"
 reportUnknownMemberType = "none"
 reportUnknownArgumentType = "none"
@@ -29,6 +30,21 @@ reportUnknownVariableType = "none"
 reportUnknownParameterType = "none"
 reportMissingTypeStubs = "none"
 reportUnusedCallResult = "none"
+reportUnannotatedClassAttribute = "none"
+reportPrivateUsage = "none"
+reportImplicitStringConcatenation = "none"
+reportUnusedImport = "none"
+reportDeprecated = "none"
+reportUnusedVariable = "none"
+reportMissingParameterType = "none"
+reportUnusedParameter = "none"
+reportUnreachable = "none"
+reportImportCycles = "none"
+reportImplicitOverride = "none"
+reportUnusedFunction = "none"
+reportUntypedFunctionDecorator = "none"
+reportUnnecessaryIsInstance = "none"
+reportUnnecessaryTypeIgnoreComment = "none"
 
 [project]
 name = "evaluatorq"
@@ -36,13 +52,17 @@ version = "1.2.0-rc.3"
 description = "An evaluation framework library for Python that provides a flexible way to run parallel evaluations and optionally integrate with the Orq AI platform."
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = [ "pydantic>=2.0", "httpx>=0.28.1", "rich>=14.2.0" ]
+dependencies = [
+ "pydantic>=2.0",
+ "httpx>=0.28.1",
+ "rich>=14.2.0",
+]
 
   [project.license]
   text = "MIT"
 
   [project.optional-dependencies]
-  orq = [ "orq-ai-sdk>=4.2.18" ]
+  orq = [ "orq-ai-sdk>=4.4.7" ]
   otel = [
     "opentelemetry-api>=1.20.0",
     "opentelemetry-sdk>=1.20.0",
@@ -50,8 +70,15 @@ dependencies = [ "pydantic>=2.0", "httpx>=0.28.1", "rich>=14.2.0" ]
     "opentelemetry-semantic-conventions>=0.41b0"
   ]
   langchain = ["langchain>=1.0.0, <2.0.0"]
-  redteam = ["openai>=1.0.0", "loguru>=0.6.0"]
+  redteam = ["openai>=1.0.0,<3.0.0", "loguru>=0.6.0", "typer>=0.12.0", "python-dotenv>=1.0.0", "huggingface-hub>=0.20.0"]
+  ui = ["streamlit>=1.30.0", "plotly>=5.18.0"]
+  export = ["kaleido>=0.2.1"]
+  all = ["evaluatorq[orq,otel,langchain,redteam,ui,export]"]
 
+
+  [project.scripts]
+  evaluatorq = "evaluatorq.cli:main"
+  eq = "evaluatorq.cli:main"
 
   [project.urls]
   Homepage = "https://github.com/orq-ai/orqkit"
@@ -64,7 +91,7 @@ dev = [
   "pytest-asyncio>=1.2.0",
   "basedpyright>=1.21.0",
   "ruff>=0.14.3",
-  "orq-ai-sdk>=4.2.18",
+  "orq-ai-sdk>=4.4.7",
   "anthropic>=0.75.0",
   "openai>=1.0.0",
   "opentelemetry-api>=1.20.0",
@@ -74,4 +101,8 @@ dev = [
   "langchain-openai>=0.3.0",
   "langgraph>=0.2.0",
   "loguru",
+  "typer>=0.12.0",
+  "python-dotenv>=1.0.0",
+  "pytest-cov>=7.0.0",
+  "watchdog>=4.0.0",
 ]

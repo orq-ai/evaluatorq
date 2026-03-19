@@ -10,17 +10,17 @@ Semantic convention:
 
 import sys
 from datetime import datetime
-from typing import Any, ClassVar, Literal
+from typing import Any, Literal, TypedDict
 
 if sys.version_info >= (3, 11):
-    from enum import StrEnum  # pyright: ignore[reportUnreachable]
+    from enum import StrEnum
 else:
     from enum import Enum
 
     class StrEnum(str, Enum):  # type: ignore[no-redef]
         """String enum compatible with Python 3.10."""
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -36,26 +36,59 @@ class TurnType(StrEnum):
 
 
 class AttackTechnique(StrEnum):
-    """Specific attack techniques used in red teaming attacks."""
+    """Known attack techniques used in red teaming attacks.
 
+    This enum tracks *known* techniques for internal validation and reporting.
+    External datasets may contain additional values — use
+    :func:`is_known_attack_technique` to check membership without failing.
+    """
+
+    # Injection
     INDIRECT_INJECTION = 'indirect-injection'
     DIRECT_INJECTION = 'direct-injection'
     DAN = 'DAN'
+    AUTODAN = 'autodan'
+    DEVELOPER_MODE = 'developer-mode'
+    # Privilege / access
     CREDENTIAL_CACHING = 'credential-caching'
     PRIVILEGE_ESCALATION = 'privilege-escalation'
     CONFUSED_DEPUTY = 'confused-deputy'
+    EXCESSIVE_AGENCY = 'excessive-agency'
+    PLUGIN_ABUSE = 'plugin-abuse'
+    # Infrastructure
     RCE_EXPLOIT = 'rce-exploit'
+    SUPPLY_CHAIN = 'supply-chain'
+    RESOURCE_EXHAUSTION = 'resource-exhaustion'
+    # Social / manipulation
     MESSAGE_SPOOFING = 'message-spoofing'
     SOCIAL_ENGINEERING = 'social-engineering'
+    EMOTIONAL_MANIPULATION = 'emotional-manipulation'
+    # Evasion / obfuscation
+    PAYLOAD_SPLITTING = 'payload-splitting'
+    ALTERNATIVE_ENCODING = 'alternative-encoding'
+    UNICODE_OBFUSCATION = 'unicode-obfuscation'
+    # Data extraction
+    MODEL_EXTRACTION = 'model-extraction'
+    PII_EXTRACTION = 'pii-extraction'
+    PII_INPUT = 'pii-input'
+    SYSTEM_PROMPT_EXTRACTION = 'system-prompt-extraction'
+    # Agent / tool
     TOOL_ABUSE = 'tool-abuse'
-    SUPPLY_CHAIN = 'supply-chain'
     CONTEXT_POISONING = 'context-poisoning'
     CASCADE_TRIGGER = 'cascade-trigger'
     BOUNDARY_VIOLATION = 'boundary-violation'
 
 
+def is_known_attack_technique(value: str) -> bool:
+    """Check whether *value* is a known :class:`AttackTechnique` member."""
+    return value in AttackTechnique.__members__.values()
+
+
 class DeliveryMethod(StrEnum):
-    """Jailbreak and delivery techniques."""
+    """Known jailbreak and delivery techniques.
+
+    See :class:`AttackTechnique` — the same open-set policy applies.
+    """
 
     # Persona/Role-play
     DAN = 'DAN'
@@ -78,6 +111,12 @@ class DeliveryMethod(StrEnum):
     CODE_ASSISTANCE = 'code-assistance'
     # Tool/Agent-based
     TOOL_RESPONSE = 'tool-response'
+    WORD_SUBSTITUTION = 'word-substitution'
+
+
+def is_known_delivery_method(value: str) -> bool:
+    """Check whether *value* is a known :class:`DeliveryMethod` member."""
+    return value in DeliveryMethod.__members__.values()
 
 
 class Severity(StrEnum):
@@ -89,11 +128,28 @@ class Severity(StrEnum):
     CRITICAL = 'critical'
 
 
-class Scope(StrEnum):
-    """Attack target scope."""
-
-    MODEL = 'model'  # Targets LLM itself (jailbreaks, prompt injection)
-    APPLICATION = 'application'  # Targets agent system (tools, memory, workflows)
+SEVERITY_DEFINITIONS: dict[str, str] = {
+    'critical': (
+        'Attacks that, if successful, could lead to complete system compromise, '
+        'unauthorized access to sensitive data, or execution of arbitrary actions '
+        'with full privileges. Immediate remediation required.'
+    ),
+    'high': (
+        'Attacks that could cause significant harm such as partial data exfiltration, '
+        'privilege escalation, or bypassing critical safety guardrails. '
+        'Should be prioritized for remediation.'
+    ),
+    'medium': (
+        'Attacks that could lead to moderate impact such as information leakage of '
+        'non-sensitive data, minor policy violations, or degraded safety behavior. '
+        'Should be addressed in normal development cycles.'
+    ),
+    'low': (
+        'Attacks with limited impact such as minor guideline deviations, '
+        'edge-case behaviors, or cosmetic safety issues. '
+        'Address as time permits or during routine hardening.'
+    ),
+}
 
 
 class Framework(StrEnum):
@@ -107,7 +163,50 @@ class Framework(StrEnum):
     FAIRNESS = 'FAIRNESS'
     GDPR = 'GDPR'
     AI_ACT = 'AI-ACT'
-    UNKNOWN = 'unknown'
+
+
+class VulnerabilityDomain(StrEnum):
+    """Where in the stack the vulnerability fix belongs.
+
+    - AGENT: orchestration layer (tools, memory, workflows, permissions)
+    - MODEL: LLM inference layer (prompts, guardrails, output filters)
+    - DATA: data/retrieval layer (training data, embeddings, RAG)
+    """
+
+    AGENT = 'agent'
+    MODEL = 'model'
+    DATA = 'data'
+
+
+class Vulnerability(StrEnum):
+    """Atomic vulnerability identifiers.
+
+    Each value is a stable, framework-agnostic ID. Framework-specific codes
+    (OWASP ASI01, LLM01, etc.) are mapped via the vulnerability registry.
+    """
+
+    # Agentic security (maps to OWASP ASI)
+    GOAL_HIJACKING = 'goal_hijacking'
+    TOOL_MISUSE = 'tool_misuse'
+    IDENTITY_PRIVILEGE_ABUSE = 'identity_privilege_abuse'
+    SUPPLY_CHAIN = 'supply_chain'
+    CODE_EXECUTION = 'code_execution'
+    MEMORY_POISONING = 'memory_poisoning'
+    INTER_AGENT_COMMS = 'inter_agent_comms'
+    CASCADING_FAILURES = 'cascading_failures'
+    TRUST_EXPLOITATION = 'trust_exploitation'
+    ROGUE_AGENTS = 'rogue_agents'
+
+    # LLM security (maps to OWASP LLM Top 10)
+    PROMPT_INJECTION = 'prompt_injection'
+    SENSITIVE_INFO_DISCLOSURE = 'sensitive_info_disclosure'
+    DATA_POISONING = 'data_poisoning'
+    IMPROPER_OUTPUT = 'improper_output'
+    EXCESSIVE_AGENCY = 'excessive_agency'
+    SYSTEM_PROMPT_LEAKAGE = 'system_prompt_leakage'
+    VECTOR_EMBEDDING_WEAKNESS = 'vector_embedding_weakness'
+    MISINFORMATION = 'misinformation'
+    UNBOUNDED_CONSUMPTION = 'unbounded_consumption'
 
 
 class Pipeline(StrEnum):
@@ -115,7 +214,40 @@ class Pipeline(StrEnum):
 
     STATIC = 'static'
     DYNAMIC = 'dynamic'
-    MIXED = 'mixed'
+    HYBRID = 'hybrid'
+
+
+class PipelineStage(StrEnum):
+    """Pipeline stage identifiers used in hook callbacks."""
+
+    CONTEXT_RETRIEVAL = 'context_retrieval'
+    DATAPOINT_GENERATION = 'datapoint_generation'
+    ATTACK_EXECUTION = 'attack_execution'
+    REPORT_GENERATION = 'report_generation'
+    CLEANUP = 'cleanup'
+    TARGET_START = 'target_start'
+    TARGET_COMPLETE = 'target_complete'
+
+
+class AgentCapability(StrEnum):
+    """Capability tags for agent resources.
+
+    Moved from ``capability_classifier.py`` so that ``AttackStrategy`` and other
+    contract models can reference it without introducing a circular import.
+    """
+
+    CODE_EXECUTION = 'code_execution'
+    SHELL_ACCESS = 'shell_access'
+    FILE_SYSTEM = 'file_system'
+    DATABASE = 'database'
+    WEB_REQUEST = 'web_request'
+    MEMORY_READ = 'memory_read'
+    MEMORY_WRITE = 'memory_write'
+    KNOWLEDGE_RETRIEVAL = 'knowledge_retrieval'
+    EMAIL = 'email'
+    MESSAGING = 'messaging'
+    PAYMENT = 'payment'
+    USER_DATA = 'user_data'
 
 
 # ---------------------------------------------------------------------------
@@ -151,21 +283,21 @@ def normalize_category(category: str) -> str:
     return category.removeprefix('OWASP-')
 
 
-def infer_framework(category: str) -> Framework:
+def infer_framework(category: str) -> str:
     """Infer OWASP framework from category code.
 
     Args:
         category: Category code (e.g., 'ASI01', 'LLM07', 'OWASP-ASI01')
 
     Returns:
-        Framework enum value.
+        'OWASP-ASI' or 'OWASP-LLM'
     """
     normalized = normalize_category(category)
     if normalized.startswith('ASI'):
-        return Framework.OWASP_ASI
+        return 'OWASP-ASI'
     if normalized.startswith('LLM'):
-        return Framework.OWASP_LLM
-    return Framework.UNKNOWN
+        return 'OWASP-LLM'
+    return 'unknown'
 
 
 # ---------------------------------------------------------------------------
@@ -218,12 +350,13 @@ class RedTeamInput(BaseModel):
     """Input metadata for a red teaming attack sample."""
 
     id: str = Field(min_length=1, description='Unique sample identifier')
-    category: str = Field(description='Attack category (framework-specific)')
-    attack_technique: AttackTechnique = Field(description='Specific attack technique used')
-    delivery_method: DeliveryMethod = Field(description='Jailbreak/delivery technique used')
+    vulnerability: str = Field(default='', description='Vulnerability identifier (primary key in new format)')
+    category: str = Field(default='', description='Attack category (framework-specific) — kept for backwards compat')
+    attack_technique: str = Field(default='', description='Specific attack technique used')
+    delivery_method: str = Field(default='', description='Jailbreak/delivery technique used')
     severity: Severity = Field(description='Attack severity level')
-    scope: Scope = Field(description='Attack target scope')
-    framework: Framework = Field(description='Security framework identifier')
+    vulnerability_domain: VulnerabilityDomain = Field(description='Vulnerability domain (where the fix belongs)')
+    framework: Framework = Field(default=Framework.OWASP_AGENTIC, description='Security framework identifier')
     evaluator_id: str = Field(default='', description='Evaluator identifier (optional)')
     evaluator_name: str = Field(default='', description='Evaluator name (optional)')
     turn_type: TurnType = Field(description='Conversation turn type')
@@ -233,12 +366,78 @@ class RedTeamInput(BaseModel):
         description='Additional metadata that does not fit standard fields (e.g., AgentDojo-specific context)',
     )
 
+    @model_validator(mode='before')
+    @classmethod
+    def _migrate_scope_to_vulnerability_domain(cls, data: Any) -> Any:
+        """Migrate legacy ``scope`` field to ``vulnerability_domain``.
+
+        Accepts the old ``scope`` key in input data and maps it:
+        ``application`` → ``agent``, ``model`` → ``model``.
+        """
+        if isinstance(data, dict) and 'scope' in data and 'vulnerability_domain' not in data:
+            scope_val = data.pop('scope')
+            mapping = {'application': 'agent', 'model': 'model'}
+            data['vulnerability_domain'] = mapping.get(scope_val, scope_val)
+        return data
+
+    @model_validator(mode='before')
+    @classmethod
+    def _cross_resolve_vulnerability_and_category(cls, data: Any) -> Any:
+        """Cross-resolve vulnerability ↔ category so either field can be omitted."""
+        if not isinstance(data, dict):
+            return data
+        from evaluatorq.redteam.vulnerability_registry import resolve_category_safe
+        has_vuln = bool(data.get('vulnerability'))
+        has_cat = bool(data.get('category'))
+        if has_vuln and not has_cat:
+            # Derive category from vulnerability via the registry
+            from evaluatorq.redteam.contracts import Vulnerability as _Vuln
+            try:
+                vuln_enum = _Vuln(data['vulnerability'])
+                from evaluatorq.redteam.vulnerability_registry import get_primary_category
+                data['category'] = get_primary_category(vuln_enum)
+            except ValueError:
+                data['category'] = data['vulnerability']
+        elif has_cat and not has_vuln:
+            vuln = resolve_category_safe(data['category'])
+            if vuln is not None:
+                data['vulnerability'] = vuln.value
+        return data
+
     @field_validator('framework', mode='before')
     @classmethod
     def _normalize_framework(cls, value: Any) -> Any:
+        """Normalize framework string aliases to canonical Framework enum values."""
         if isinstance(value, str):
             return normalize_framework(value)
         return value
+
+    @model_validator(mode='after')
+    def _require_vulnerability_or_category(self) -> 'RedTeamInput':
+        """Ensure at least one of vulnerability or category is populated."""
+        if not self.vulnerability and not self.category:
+            raise ValueError('RedTeamInput requires at least one of vulnerability or category')
+        return self
+
+
+# ---------------------------------------------------------------------------
+# Dataset validation models
+# ---------------------------------------------------------------------------
+
+
+class RedTeamSample(BaseModel):
+    """Complete red teaming sample in ORQ dataset format."""
+
+    input: RedTeamInput = Field(description='Attack metadata for this sample')
+    messages: list[Message] = Field(min_length=1, description='Attack conversation history')
+
+
+class StaticDataset(BaseModel):
+    """Top-level schema for static red teaming dataset files."""
+
+    model_config = ConfigDict(extra='ignore')
+
+    samples: list[RedTeamSample] = Field(min_length=1, description='Attack samples')
 
 
 # ---------------------------------------------------------------------------
@@ -271,13 +470,25 @@ class KnowledgeBaseInfo(BaseModel):
     description: str | None = Field(default=None, description='Knowledge base description')
 
 
+class TargetConfig(BaseModel):
+    """Backend-agnostic target configuration.
+
+    Passed opaquely through the runner to backends/factories.
+    """
+
+    system_prompt: str | None = Field(
+        default=None,
+        description="System prompt for the target model/agent",
+    )
+
+
 class AgentContext(BaseModel):
     """Extended agent information for context-aware attacks.
 
-    Retrieved from ORQ API via orq_client.agents.retrieve().
+    Describes the target agent's configuration and capabilities.
     """
 
-    key: str = Field(description='ORQ agent key')
+    key: str = Field(description='Agent identifier key')
     display_name: str | None = Field(default=None, description='Agent display name')
     description: str | None = Field(default=None, description='Agent description')
     system_prompt: str | None = Field(default=None, description='Agent system prompt (used by deployments)')
@@ -336,35 +547,112 @@ class PipelineLLMConfig(BaseModel):
 
     # Step 1: Capability classification — deterministic analysis of agent tools
     capability_classification_max_tokens: int = 4000
-    capability_classification_temperature: float = 0.0
+    capability_classification_temperature: float = 1.0
 
     # Step 2: Strategy generation — creative but structured strategy/objective creation
     strategy_generation_max_tokens: int = 4000
-    strategy_generation_temperature: float = 0.7
+    strategy_generation_temperature: float = 1.0
 
     # Step 3: Tool adaptation — deterministic rewrite of prompts to target specific tools
     tool_adaptation_max_tokens: int = 4000
-    tool_adaptation_temperature: float = 0.0
+    tool_adaptation_temperature: float = 1.0
 
     # Step 4: Adversarial prompt generation — creative attack message crafting
     adversarial_max_tokens: int = 4000
-    adversarial_temperature: float = 0.8
+    adversarial_temperature: float = 1.0
 
     # Target agent timeout (ms) for ORQ SDK calls
     target_agent_timeout_ms: int = 120_000
+
+    # Adversarial LLM call timeout (ms) — separate from target agent timeout
+    llm_call_timeout_ms: int = 60_000
+
+    # Overall cleanup timeout (ms) — best-effort, should never block the pipeline
+    cleanup_timeout_ms: int = 60_000
 
     # Logging level for the red teaming pipeline
     log_level: str = 'INFO'
 
     @property
     def retry_config(self) -> dict[str, Any]:
-        """ORQ retry config dict for ``extra_body``."""
+        """ORQ retry config dict for ``extra_body``.
+
+        Returns an empty dict when using the OpenAI API directly (the
+        ``retry`` parameter is ORQ-specific and rejected by OpenAI).
+        """
+        import os
+        if os.getenv('OPENAI_API_KEY') or not os.getenv('ORQ_API_KEY'):
+            return {}
         return {'retry': {'count': self.retry_count, 'on_codes': self.retry_on_codes}}
 
 
 # Module-level default instance used across the pipeline.
 # Import this in other modules; tests can monkeypatch or pass overrides.
 PIPELINE_CONFIG = PipelineLLMConfig()
+
+# Default model used across the red teaming pipeline for adversarial generation
+# and evaluation. Uses the OpenAI model name directly (works with both the
+# openai and orq backends — the orq backend accepts this format as-is).
+DEFAULT_PIPELINE_MODEL: str = 'gpt-5-mini'
+
+
+class RedTeamConfig(BaseModel):
+    """Top-level configuration for the red teaming pipeline.
+
+    Centralizes backend routing, model resolution, and LLM call settings
+    into a single object.  When ``backend="auto"`` (the default), the
+    backend is inferred from the target prefix and available credentials:
+
+    * ``agent:`` / ``deployment:`` targets → ``orq``
+    * ``llm:`` targets → ``openai`` (or ``orq`` if only ``ORQ_API_KEY`` is set)
+
+    Models are automatically prefixed (e.g. ``"openai/gpt-5-mini"``) when
+    routing through the orq router so callers never have to think about it.
+    """
+
+    # --- Backend / routing ---------------------------------------------------
+    backend: Literal['auto', 'openai', 'orq'] = 'auto'
+
+    # --- Models --------------------------------------------------------------
+    attack_model: str = DEFAULT_PIPELINE_MODEL
+    evaluator_model: str = DEFAULT_PIPELINE_MODEL
+
+    # --- LLM call tuning (sub-config) ----------------------------------------
+    llm: PipelineLLMConfig = Field(default_factory=PipelineLLMConfig)
+
+    # --- Extra kwargs forwarded to every chat.completions.create() call ------
+    llm_kwargs: dict[str, Any] = Field(default_factory=dict)
+
+    def resolve_backend(self, targets: list[str]) -> str:
+        """Return the concrete backend name (``"orq"`` or ``"openai"``)."""
+        if self.backend != 'auto':
+            return self.backend
+        orq_prefixes = ('agent:', 'deployment:')
+        has_orq_target = any(
+            any(t.startswith(p) for p in orq_prefixes) or ':' not in t
+            for t in targets
+        )
+        return 'orq' if has_orq_target else 'openai'
+
+    def resolve_model(self, model: str, *, uses_orq_router: bool) -> str:
+        """Add a provider prefix when the model goes through the orq router.
+
+        If the model already contains a ``/`` (e.g. ``"openai/gpt-5-mini"``)
+        it is returned unchanged.
+        """
+        if uses_orq_router and '/' not in model:
+            return f'openai/{model}'
+        return model
+
+    @property
+    def uses_orq_router(self) -> bool:
+        """True when the LLM client will route through the orq router.
+
+        This is the case when no custom ``llm_client`` / ``OPENAI_API_KEY``
+        is set and ``ORQ_API_KEY`` is available.
+        """
+        import os
+        return not os.getenv('OPENAI_API_KEY') and bool(os.getenv('ORQ_API_KEY'))
 
 
 # ---------------------------------------------------------------------------
@@ -406,17 +694,39 @@ OWASP_CATEGORY_NAMES: dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
+# Vulnerability definition model
+# ---------------------------------------------------------------------------
+
+
+class VulnerabilityDef(BaseModel):
+    """Definition of a vulnerability with metadata and framework mappings."""
+
+    id: Vulnerability
+    name: str = Field(description='Human-readable name, e.g. "Agent Goal Hijacking"')
+    domain: VulnerabilityDomain
+    description: str = ''
+    default_attack_technique: AttackTechnique
+    framework_mappings: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description='Framework -> category codes, e.g. {"OWASP-ASI": ["ASI01"]}',
+    )
+
+
+# ---------------------------------------------------------------------------
 # Attack strategy model
 # ---------------------------------------------------------------------------
 
 
 class AttackStrategy(BaseModel):
-    """Defines a specific attack strategy for an OWASP category.
+    """Defines a specific attack strategy for a vulnerability.
 
     Strategies can be hardcoded or generated based on agent context.
     """
 
-    category: str = Field(description='OWASP category code (e.g., ASI01, LLM01)')
+    model_config = ConfigDict(frozen=True)
+
+    vulnerability: Vulnerability | None = Field(default=None, description='Primary vulnerability identifier')
+    category: str = Field(description='OWASP category code (e.g., ASI01, LLM01) — kept for backwards compat')
     name: str = Field(description='Strategy identifier (e.g., indirect_injection_via_email)')
     description: str = Field(description='Human-readable description of the attack')
     attack_technique: AttackTechnique = Field(description='Primary attack technique')
@@ -426,7 +736,7 @@ class AttackStrategy(BaseModel):
 
     # Context requirements for filtering
     requires_tools: bool = Field(default=False, description='Requires agent to have tools')
-    required_capabilities: list[str] = Field(
+    required_capabilities: list[AgentCapability] = Field(
         default_factory=list,
         description='Capability tags required for this strategy (any match = eligible)',
     )
@@ -452,8 +762,34 @@ class TokenUsage(BaseModel):
     total_tokens: int = Field(default=0, description='Total tokens used')
     prompt_tokens: int = Field(default=0, description='Prompt/input tokens')
     completion_tokens: int = Field(default=0, description='Completion/output tokens')
-    total_cost_usd: float = Field(default=0.0, description='Total cost in USD')
     calls: int = Field(default=0, description='Number of LLM API calls')
+
+    @classmethod
+    def from_completion(cls, response: Any) -> 'TokenUsage | None':
+        """Extract token usage from an OpenAI-compatible completion response."""
+        usage = getattr(response, 'usage', None)
+        if usage is None:
+            return None
+        prompt = int(getattr(usage, 'prompt_tokens', 0) or 0)
+        completion = int(getattr(usage, 'completion_tokens', 0) or 0)
+        total = int(getattr(usage, 'total_tokens', prompt + completion) or 0)
+        return cls(prompt_tokens=prompt, completion_tokens=completion, total_tokens=total, calls=1)
+
+
+# ---------------------------------------------------------------------------
+# Error info model
+# ---------------------------------------------------------------------------
+
+
+class ErrorInfo(BaseModel):
+    """Structured error information for attack/evaluation results."""
+
+    message: str
+    error_type: str
+    stage: str | None = None
+    code: str | None = None
+    details: dict[str, Any] | None = None
+    turn: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -489,20 +825,52 @@ class OrchestratorResult(BaseModel):
         default_factory=list, description='Turn numbers where adversarial LLM hit max_tokens'
     )
 
+    @property
+    def error_info(self) -> 'ErrorInfo | None':
+        """Structured view of the flat error fields."""
+        if self.error is None:
+            return None
+        return ErrorInfo(
+            message=self.error,
+            error_type=self.error_type or 'unknown',
+            stage=self.error_stage,
+            code=self.error_code,
+            details=self.error_details,
+            turn=self.error_turn,
+        )
 
-class EvaluationResult(BaseModel):
-    """Result from OWASP evaluator.
+
+class AttackOutput(OrchestratorResult):
+    """Typed output from a dynamic red team attack job.
+
+    Extends OrchestratorResult with category and vulnerability fields
+    that are merged in during job execution.
+    """
+
+    category: str = ''
+    vulnerability: str = ''
+
+
+class AttackEvaluationResult(BaseModel):
+    """Result from OWASP evaluator for a single attack.
 
     Semantic convention:
         passed=True  → RESISTANT (attack failed)
         passed=False → VULNERABLE (attack succeeded)
+
+    .. note:: Named ``AttackEvaluationResult`` to avoid collision with the root
+       ``evaluatorq.EvaluationResult`` which is used for generic evaluator scores.
     """
 
-    passed: bool | None = Field(default=None, description='True=RESISTANT (attack failed), False=VULNERABLE (attack succeeded), None=error/unevaluated')
+    passed: bool | None = Field(description='True=RESISTANT (attack failed), False=VULNERABLE (attack succeeded), None=error/unevaluated')
     explanation: str = Field(description='Evaluator explanation')
     evaluator_id: str = Field(description='Evaluator identifier used')
     token_usage: TokenUsage | None = Field(default=None, description='Token usage and cost for this evaluation call')
     raw_output: dict[str, Any] | None = Field(default=None, description='Raw evaluator output')
+
+
+# Backwards-compatible alias
+EvaluationResult = AttackEvaluationResult
 
 
 # ---------------------------------------------------------------------------
@@ -517,13 +885,16 @@ class AttackInfo(BaseModel):
     """
 
     id: str = Field(description="Unique identifier (e.g., 'OWASP-ASI01-0153' or 'ASI01-role_confusion-001')")
-    category: str = Field(description="Short-form category code (e.g., 'ASI01', 'LLM01')")
+    vulnerability: str = Field(default='', description='Vulnerability identifier (primary key in new format)')
+    category: str = Field(description="Short-form category code (e.g., 'ASI01', 'LLM01') — kept for backwards compat")
     framework: Framework = Field(description="OWASP framework ('OWASP-ASI' or 'OWASP-LLM')")
     attack_technique: AttackTechnique
     delivery_methods: list[DeliveryMethod] = Field(description='Delivery methods (always a list)')
     turn_type: TurnType
     severity: Severity
-    scope: Scope | None = Field(default=None, description='Attack target scope (null for dynamic)')
+    vulnerability_domain: VulnerabilityDomain | None = Field(
+        default=None, description='Vulnerability domain (null for dynamic attacks without a fixed domain)'
+    )
     source: str = Field(
         description="Origin: 'AgentDojo', 'orq_generated', 'hardcoded_strategy', 'llm_generated_strategy'"
     )
@@ -533,9 +904,24 @@ class AttackInfo(BaseModel):
     evaluator_name: str | None = None
     additional_metadata: dict[str, Any] | None = None
 
+    @model_validator(mode='before')
+    @classmethod
+    def _migrate_scope_to_vulnerability_domain(cls, data: Any) -> Any:
+        """Migrate legacy ``scope`` field to ``vulnerability_domain``.
+
+        Accepts the old ``scope`` key in input data and maps it:
+        ``application`` → ``agent``, ``model`` → ``model``.
+        """
+        if isinstance(data, dict) and 'scope' in data and 'vulnerability_domain' not in data:
+            scope_val = data.pop('scope')
+            mapping = {'application': 'agent', 'model': 'model'}
+            data['vulnerability_domain'] = mapping.get(scope_val, scope_val)
+        return data
+
     @field_validator('framework', mode='before')
     @classmethod
     def _normalize_framework(cls, value: Any) -> Any:
+        """Normalize framework string aliases to canonical Framework enum values."""
         if isinstance(value, str):
             return normalize_framework(value)
         return value
@@ -577,7 +963,7 @@ class EvaluationPayload(BaseModel):
 class JobOutputPayload(BaseModel):
     """Normalized evaluatorq job output payload."""
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra='allow')
+    model_config = ConfigDict(extra='allow')
 
     conversation: list[Message] = Field(default_factory=list)
     final_response: str | None = None
@@ -615,6 +1001,7 @@ class ExecutionDetails(BaseModel):
     """Execution metadata (dynamic pipeline only)."""
 
     turns: int = 1
+    max_turns: int | None = None
     duration_seconds: float | None = None
     objective_achieved: bool | None = Field(
         default=None,
@@ -647,6 +1034,35 @@ class RedTeamResult(BaseModel):
     error_code: str | None = None
     error_details: dict[str, Any] | None = None
 
+    @property
+    def error_info(self) -> 'ErrorInfo | None':
+        """Structured view of the flat error fields."""
+        if self.error is None:
+            return None
+        return ErrorInfo(
+            message=self.error,
+            error_type=self.error_type or 'unknown',
+            stage=self.error_stage,
+            code=self.error_code,
+            details=self.error_details,
+        )
+
+
+class VulnerabilitySummary(BaseModel):
+    """Per-vulnerability summary statistics."""
+
+    vulnerability: str
+    vulnerability_name: str
+    domain: str
+    total_attacks: int
+    vulnerabilities_found: int
+    resistance_rate: float = Field(ge=0.0, le=1.0)
+    strategies_used: list[str] = Field(default_factory=list)
+    framework_categories: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description='Framework -> category codes this vulnerability maps to',
+    )
+
 
 class CategorySummary(BaseModel):
     """Per-category summary statistics."""
@@ -654,11 +1070,51 @@ class CategorySummary(BaseModel):
     category: str
     category_name: str
     total_attacks: int
+    evaluated_attacks: int = 0
+    unevaluated_attacks: int = 0
+    evaluation_coverage: float = Field(default=0.0, ge=0.0, le=1.0)
     total_conversations: int = 0
     total_turns: int = 0
     vulnerabilities_found: int
-    resistance_rate: float
+    vulnerability_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    resistance_rate: float = Field(ge=0.0, le=1.0)
+    total_errors: int = 0
     strategies_used: list[str] = Field(default_factory=list)
+
+
+class DimensionSummary(BaseModel):
+    """Base class for per-dimension summary statistics."""
+
+    total_attacks: int = 0
+    vulnerabilities_found: int = 0
+    resistance_rate: float = Field(default=1.0, ge=0.0, le=1.0)
+    vulnerability_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class TechniqueSummary(DimensionSummary):
+    """Per-technique summary statistics."""
+
+
+class SeveritySummary(DimensionSummary):
+    """Per-severity summary statistics."""
+
+
+class DeliveryMethodSummary(DimensionSummary):
+    """Per-delivery-method summary statistics."""
+
+
+class TurnTypeSummary(DimensionSummary):
+    """Per-turn-type (single vs multi) summary statistics."""
+
+    average_turns: float = 0.0
+
+
+class DomainSummary(DimensionSummary):
+    """Per-domain (agent / model / data) summary statistics."""
+
+
+class FrameworkSummary(DimensionSummary):
+    """Per-framework summary statistics (useful for mixed reports)."""
 
 
 class ReportSummary(BaseModel):
@@ -667,15 +1123,39 @@ class ReportSummary(BaseModel):
     total_attacks: int = 0
     evaluated_attacks: int = 0
     unevaluated_attacks: int = 0
-    evaluation_coverage: float = 0.0
+    evaluation_coverage: float = Field(default=0.0, ge=0.0, le=1.0)
     total_conversations: int = 0
     total_turns: int = 0
+    average_turns_per_attack: float = 0.0
     vulnerabilities_found: int = 0
-    resistance_rate: float = 1.0
+    vulnerability_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    resistance_rate: float = Field(default=1.0, ge=0.0, le=1.0)
     total_errors: int = 0
     errors_by_type: dict[str, int] = Field(default_factory=dict, description='Error counts grouped by type')
+    token_usage_total: TokenUsage | None = Field(default=None, description='Aggregated token usage across all results')
+    by_vulnerability: dict[str, VulnerabilitySummary] = Field(default_factory=dict)
     by_category: dict[str, CategorySummary] = Field(default_factory=dict)
-    by_technique: dict[str, int] = Field(default_factory=dict)
+    by_technique: dict[str, TechniqueSummary] = Field(default_factory=dict)
+    by_severity: dict[str, SeveritySummary] = Field(default_factory=dict)
+    by_delivery_method: dict[str, DeliveryMethodSummary] = Field(default_factory=dict)
+    by_turn_type: dict[str, TurnTypeSummary] = Field(default_factory=dict)
+    by_domain: dict[str, DomainSummary] = Field(default_factory=dict)
+    by_framework: dict[str, FrameworkSummary] = Field(default_factory=dict)
+    datapoint_breakdown: dict[str, int] | None = Field(
+        default=None,
+        description='Datapoint counts by source: static, template_dynamic, generated_dynamic (hybrid runs only)',
+    )
+
+
+class FocusAreaRecommendation(BaseModel):
+    """LLM-generated actionable recommendation for a focus area."""
+
+    category: str = Field(description='OWASP category code (e.g. ASI01, LLM07)')
+    category_name: str = Field(description='Human-readable category name')
+    risk_score: float = Field(description='Risk score used for ranking')
+    traces_analyzed: int = Field(description='Number of failed traces analyzed')
+    recommendations: list[str] = Field(description='Actionable bullet-point recommendations')
+    patterns_observed: str = Field(description='Brief summary of patterns the LLM spotted in traces')
 
 
 class RedTeamReport(BaseModel):
@@ -684,7 +1164,7 @@ class RedTeamReport(BaseModel):
     version: str = '2.0.0'
     created_at: datetime
     description: str | None = None
-    pipeline: Pipeline = Field(description="'static', 'dynamic', or 'mixed'")
+    pipeline: Pipeline = Field(description="'static', 'dynamic', or 'hybrid'")
     framework: Framework | None = None
 
     categories_tested: list[str]
@@ -692,17 +1172,33 @@ class RedTeamReport(BaseModel):
     total_results: int
 
     agent_context: AgentContext | None = None
+    agent_contexts: dict[str, AgentContext] = Field(default_factory=dict, description='Per-agent context keyed by agent key')
 
     results: list[RedTeamResult]
 
     summary: ReportSummary
 
+    focus_area_recommendations: list[FocusAreaRecommendation] | None = Field(
+        default=None,
+        description='LLM-generated actionable recommendations for top risk areas (populated when generate_recommendations=True)',
+    )
+
     token_usage_summary: TokenUsage | None = None
     duration_seconds: float | None = None
+    pipeline_warnings: list[str] = Field(default_factory=list)
+
+    @field_validator('pipeline', mode='before')
+    @classmethod
+    def _normalize_pipeline(cls, value: Any) -> Any:
+        """Normalize legacy 'mixed' pipeline value to 'hybrid'."""
+        if value == 'mixed':
+            return 'hybrid'
+        return value
 
     @field_validator('framework', mode='before')
     @classmethod
     def _normalize_framework(cls, value: Any) -> Any:
+        """Normalize framework string aliases to canonical Framework enum values."""
         if isinstance(value, str):
             return normalize_framework(value)
         return value
@@ -716,7 +1212,7 @@ class RedTeamReport(BaseModel):
 class EvaluatedRowBase(BaseModel):
     """Common row shape for evaluated JSONL outputs."""
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra='allow')
+    model_config = ConfigDict(extra='allow')
 
     input: RedTeamInput
     messages: list[Message] = Field(default_factory=list)
@@ -746,9 +1242,10 @@ class AttackEvaluationRow(BaseModel):
 class DynamicAttackResultRow(BaseModel):
     """Serialized staged dynamic attack result row."""
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(validate_assignment=True)
+    model_config = ConfigDict(validate_assignment=True)
 
     id: str | None = None
+    vulnerability: str = ''
     category: str = 'unknown'
     strategy: AttackStrategy | None = None
     objective: str | None = None
@@ -801,7 +1298,7 @@ class DynamicErrorAnalysisRow(BaseModel):
 class DynamicRunMetadata(BaseModel):
     """Run metadata block persisted in staged summaries."""
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra='allow')
+    model_config = ConfigDict(extra='allow')
 
     mode: str | None = None
     target: str | None = None
@@ -809,7 +1306,8 @@ class DynamicRunMetadata(BaseModel):
     attack_model: str | None = None
     evaluator_model: str | None = None
     categories_tested: list[str] | None = None
-    max_datapoints: int | None = None
+    max_dynamic_datapoints: int | None = None
+    max_static_datapoints: int | None = None
     max_turns: int | None = None
     max_per_category: int | None = None
     generated_strategy_count: int | None = None
@@ -821,7 +1319,7 @@ class DynamicRunMetadata(BaseModel):
 class StrategySelectionRow(BaseModel):
     """Per-category strategy selection details persisted in staged outputs."""
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra='allow')
+    model_config = ConfigDict(extra='allow')
 
     count: int = 0
     strategies: list[AttackStrategy] = Field(default_factory=list)
@@ -856,13 +1354,20 @@ class DynamicSummaryReportRow(BaseModel):
 class DatasetInferenceRow(BaseModel):
     """Inference output row persisted by dataset mode."""
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra='allow')
+    model_config = ConfigDict(extra='allow')
 
     response: str | None = None
     agent_type: str
     agent_model: str
     error: str | None = None
     error_type: str | None = None
+
+
+class EvaluatorConfig(TypedDict):
+    """Minimal evaluatorq evaluator contract."""
+
+    name: str
+    scorer: Any
 
 
 class ReportSnapshot(BaseModel):

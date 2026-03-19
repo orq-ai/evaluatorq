@@ -9,17 +9,38 @@ want to be backend-agnostic.
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 from typing import TYPE_CHECKING, Any
 
-import httpx
 from loguru import logger
 
-try:
+from evaluatorq.redteam.backends.registry import ORQ_DEFAULT_BASE_URL
+from evaluatorq.redteam.exceptions import CredentialError
+
+if TYPE_CHECKING:
     from orq_ai_sdk import Orq
-    from orq_shared.config import get_config  # pyright: ignore[reportMissingImports]
+
+try:
+    from orq_ai_sdk import Orq as _Orq
+    _orq_cls: Any = _Orq
 except ImportError:
-    Orq = None  # type: ignore[assignment,misc]
-    get_config = None  # type: ignore[assignment]
+    _orq_cls = None
+
+
+def _get_orq_api_key() -> str:
+    """Read ORQ_API_KEY from environment."""
+    key = os.environ.get('ORQ_API_KEY', '')
+    if not key:
+        msg = 'ORQ_API_KEY environment variable is not set'
+        raise CredentialError(msg)
+    return key
+
+
+def _get_orq_server_url() -> str:
+    """Read ORQ_BASE_URL from environment and strip /v2/router for SDK use."""
+    url = os.environ.get('ORQ_BASE_URL', ORQ_DEFAULT_BASE_URL)
+    return url.rstrip('/').removesuffix('/v2/router')
 
 from evaluatorq.redteam.backends.base import extract_provider_error_code, extract_status_code
 from evaluatorq.redteam.contracts import (
@@ -30,10 +51,9 @@ from evaluatorq.redteam.contracts import (
     TokenUsage,
     ToolInfo,
 )
+from evaluatorq.redteam.tracing import record_token_usage, set_span_attrs, with_llm_span, with_redteam_span
 
 if TYPE_CHECKING:
-    from orq_ai_sdk import Orq as OrqClient
-
     from evaluatorq.redteam.backends.base import AgentTarget
 
 
@@ -46,137 +66,175 @@ class ORQAgentTarget:
     def __init__(
         self,
         agent_key: str,
-        orq_client: OrqClient,
+        orq_client: Any,
         memory_entity_id: str | None = None,
+        model: str | None = None,
     ):
-        self.agent_key: str = agent_key
-        self.orq_client: OrqClient = orq_client
-        self.memory_entity_id: str | None = memory_entity_id
+        """Initialize the ORQ agent target with client and configuration."""
+        self.agent_key = agent_key
+        self.orq_client = orq_client
+        self.memory_entity_id = memory_entity_id
+        self.model = model
         self._task_id: str | None = None
         self._last_token_usage: TokenUsage | None = None
 
     async def send_prompt(self, prompt: str) -> str:
         """Send a prompt to the ORQ agent."""
-        try:
-            kwargs: dict[str, Any] = {
-                'agent_key': self.agent_key,
-                'message': {'role': 'user', 'parts': [{'kind': 'text', 'text': prompt}]},
-                'task_id': self._task_id,
-                'background': False,
-            }
-            if self.memory_entity_id:
-                kwargs['memory'] = {'entity_id': self.memory_entity_id}
+        async with with_redteam_span(
+            f"agent {self.agent_key}",
+            {
+                "orq.redteam.llm_purpose": "target",
+                "gen_ai.system": "orq",
+                "gen_ai.request.model": self.model or self.agent_key,
+                "gen_ai.input.messages": json.dumps(
+                    [{"role": "user", "content": prompt[:2000]}],
+                    ensure_ascii=False,
+                ),
+            },
+        ) as span:
+            try:
+                kwargs: dict[str, Any] = {
+                    'agent_key': self.agent_key,
+                    'message': {'role': 'user', 'parts': [{'kind': 'text', 'text': prompt}]},
+                    'background': False,
+                }
+                if self._task_id is not None:
+                    kwargs['task_id'] = self._task_id
+                if self.memory_entity_id:
+                    kwargs['memory'] = {'entity_id': self.memory_entity_id}
 
-            response = await asyncio.to_thread(self.orq_client.agents.responses.create, **kwargs)
+                response = await asyncio.to_thread(self.orq_client.agents.responses.create, **kwargs)
 
-            resp_task_id = getattr(response, 'task_id', None)
-            if resp_task_id:
-                self._task_id = resp_task_id
+                if response.task_id:
+                    self._task_id = response.task_id
 
-            total_prompt_tokens = 0
-            total_completion_tokens = 0
-            total_tokens = 0
-            total_calls = 0
+                total_prompt_tokens = 0
+                total_completion_tokens = 0
+                total_tokens = 0
+                total_calls = 0
 
-            def _accumulate_usage(resp: object) -> None:
-                nonlocal total_prompt_tokens, total_completion_tokens, total_tokens, total_calls
-                usage = getattr(resp, 'usage', None)
-                if usage is None:
-                    return
-                prompt_tokens = int(getattr(usage, 'prompt_tokens', 0) or 0)
-                completion_tokens = int(getattr(usage, 'completion_tokens', 0) or 0)
-                total = int(getattr(usage, 'total_tokens', prompt_tokens + completion_tokens) or 0)
-                total_prompt_tokens += prompt_tokens
-                total_completion_tokens += completion_tokens
-                total_tokens += total
-                total_calls += 1
+                def _accumulate_usage(resp: object) -> None:
+                    """Accumulate token usage from a response into running totals."""
+                    nonlocal total_prompt_tokens, total_completion_tokens, total_tokens, total_calls
+                    usage = getattr(resp, 'usage', None)
+                    if usage is None:
+                        return
+                    prompt_tokens = int(getattr(usage, 'prompt_tokens', 0) or 0)
+                    completion_tokens = int(getattr(usage, 'completion_tokens', 0) or 0)
+                    raw_total = getattr(usage, 'total_tokens', None)
+                    total = int(raw_total) if raw_total else (prompt_tokens + completion_tokens)
+                    total_prompt_tokens += prompt_tokens
+                    total_completion_tokens += completion_tokens
+                    total_tokens += total
+                    total_calls += 1
 
-            def _extract_text(resp: object) -> str:
-                output = getattr(resp, 'output', None) or []
-                for item in output:
-                    parts = getattr(item, 'parts', None) or []
-                    for part in parts:
-                        if getattr(part, 'kind', None) == 'text':
-                            text = getattr(part, 'text', None)
-                            if isinstance(text, str) and text.strip():
-                                return text
-                return ''
+                def _extract_text(resp: object) -> str:
+                    """Extract the first non-empty text part from an agent response."""
+                    output = getattr(resp, 'output', None) or []
+                    for item in output:
+                        parts = getattr(item, 'parts', None) or []
+                        for part in parts:
+                            if getattr(part, 'kind', None) == 'text':
+                                text = getattr(part, 'text', None)
+                                if isinstance(text, str) and text.strip():
+                                    return text
+                    return ''
 
-            def _pending_tool_call_ids(resp: object) -> list[str]:
-                pending = getattr(resp, 'pending_tool_calls', None) or []
-                ids: list[str] = []
-                for call in pending:
-                    call_id = getattr(call, 'id', None)
-                    if not call_id and isinstance(call, dict):
-                        call_id = call.get('id')
-                    if isinstance(call_id, str) and call_id.strip():
-                        ids.append(call_id)
-                return ids
+                def _pending_tool_call_ids(resp: object) -> list[str]:
+                    """Return IDs of pending tool calls from a response."""
+                    pending = getattr(resp, 'pending_tool_calls', None) or []
+                    ids: list[str] = []
+                    for call in pending:
+                        call_id = getattr(call, 'id', None)
+                        if not call_id and isinstance(call, dict):
+                            call_id = call.get('id')
+                        if isinstance(call_id, str) and call_id.strip():
+                            ids.append(call_id)
+                    return ids
 
-            _accumulate_usage(response)
-            text_response = _extract_text(response)
-
-            # Some agent tool flows require client-provided tool_result parts.
-            # Continue the same task with synthetic tool results so the thread can progress.
-            max_tool_continuations = 5
-            pending_ids = _pending_tool_call_ids(response)
-            continuation_count = 0
-            while pending_ids and continuation_count < max_tool_continuations:
-                continuation_count += 1
-                logger.debug(
-                    f'{self.agent_key}: resolving {len(pending_ids)} pending tool call(s) via synthetic tool_result (step {continuation_count}/{max_tool_continuations})'
-                )
-
-                tool_parts = [
-                    {
-                        'kind': 'tool_result',
-                        'tool_call_id': tool_call_id,
-                        'result': {
-                            'ok': False,
-                            'error': 'Tool execution unavailable in red-teaming harness',
-                        },
-                    }
-                    for tool_call_id in pending_ids
-                ]
-                response = await asyncio.to_thread(
-                    self.orq_client.agents.responses.create,
-                    agent_key=self.agent_key,
-                    message={'role': 'tool', 'parts': tool_parts},
-                    task_id=self._task_id,
-                    background=False,
-                )
-                resp_task_id = getattr(response, 'task_id', None)
-                if resp_task_id:
-                    self._task_id = resp_task_id
                 _accumulate_usage(response)
-                extracted = _extract_text(response)
-                if extracted:
-                    text_response = extracted
+                text_response = _extract_text(response)
+
+                # Some agent tool flows require client-provided tool_result parts.
+                # Continue the same task with synthetic tool results so the thread can progress.
+                max_tool_continuations = 5
                 pending_ids = _pending_tool_call_ids(response)
+                continuation_count = 0
+                while pending_ids and continuation_count < max_tool_continuations:
+                    continuation_count += 1
+                    logger.debug(
+                        f'{self.agent_key}: resolving {len(pending_ids)} pending tool call(s) '
+                        f'via synthetic tool_result (step {continuation_count}/{max_tool_continuations})'
+                    )
 
-            if pending_ids:
-                raise RuntimeError(
-                    f'Unresolved pending tool calls after {max_tool_continuations} continuations: {pending_ids}'
-                )
+                    tool_parts = [
+                        {
+                            'kind': 'tool_result',
+                            'tool_call_id': tool_call_id,
+                            'result': {
+                                'ok': False,
+                                'error': 'Tool execution unavailable in red-teaming harness',
+                            },
+                        }
+                        for tool_call_id in pending_ids
+                    ]
+                    response = await asyncio.to_thread(
+                        self.orq_client.agents.responses.create,
+                        agent_key=self.agent_key,
+                        message={'role': 'tool', 'parts': tool_parts},
+                        task_id=self._task_id,
+                        background=False,
+                    )
+                    if response.task_id:
+                        self._task_id = response.task_id
+                    _accumulate_usage(response)
+                    extracted = _extract_text(response)
+                    if extracted:
+                        text_response = extracted
+                    pending_ids = _pending_tool_call_ids(response)
 
-            if total_calls > 0:
-                self._last_token_usage = TokenUsage(
-                    prompt_tokens=total_prompt_tokens,
-                    completion_tokens=total_completion_tokens,
-                    total_tokens=total_tokens,
-                    calls=total_calls,
-                )
-            else:
-                self._last_token_usage = None
+                if pending_ids:
+                    raise RuntimeError(
+                        f'Unresolved pending tool calls after {max_tool_continuations} continuations ({len(pending_ids)} remaining)'
+                    )
 
-            if text_response:
-                return text_response
+                if total_calls > 0:
+                    self._last_token_usage = TokenUsage(
+                        prompt_tokens=total_prompt_tokens,
+                        completion_tokens=total_completion_tokens,
+                        total_tokens=total_tokens,
+                        calls=total_calls,
+                    )
+                else:
+                    self._last_token_usage = None
 
-            return ''
+                # Record token usage on the agent span
+                if self._last_token_usage is not None:
+                    record_token_usage(
+                        span,
+                        prompt_tokens=total_prompt_tokens,
+                        completion_tokens=total_completion_tokens,
+                        total_tokens=total_tokens,
+                        calls=total_calls,
+                    )
 
-        except Exception as e:
-            logger.error(f'ORQ agent call failed: {e}')
-            raise
+                # Extract response model if available from the ORQ API response
+                response_model = getattr(response, 'model', None)
+                if response_model:
+                    set_span_attrs(span, {"gen_ai.response.model": str(response_model)})
+
+                result_text = text_response or ''
+                set_span_attrs(span, {
+                    "gen_ai.output.messages": json.dumps(
+                        [{"role": "assistant", "content": result_text[:2000]}],
+                        ensure_ascii=False,
+                    ),
+                })
+                return result_text
+
+            except Exception as e:
+                logger.error(f'ORQ agent call failed: {e}')
+                raise
 
     def reset_conversation(self) -> None:
         """Reset conversation state for a new attack."""
@@ -189,16 +247,30 @@ class ORQAgentTarget:
         self._last_token_usage = None
         return usage
 
+    def clone(self) -> "ORQAgentTarget":
+        """Create a fresh target instance with the same config but isolated state.
+
+        Used by parallel job runners to ensure each worker has its own
+        ``_task_id`` and ``_last_token_usage`` rather than sharing state.
+        """
+        return ORQAgentTarget(
+            agent_key=self.agent_key,
+            orq_client=self.orq_client,
+            memory_entity_id=self.memory_entity_id,
+            model=self.model,
+        )
+
 
 class ORQContextProvider:
     """Retrieves agent context from the ORQ API."""
 
-    def __init__(self, orq_client: OrqClient):
-        self.orq_client: OrqClient = orq_client
+    def __init__(self, orq_client: Any):
+        """Initialize the context provider with an ORQ SDK client."""
+        self.orq_client = orq_client
 
     async def get_agent_context(self, agent_key: str) -> AgentContext:
         """Retrieve full agent context from ORQ API."""
-        logger.info(f'Retrieving agent context for: {agent_key}')
+        logger.debug(f'Retrieving agent context for: {agent_key}')
 
         agent_data = await asyncio.to_thread(
             self.orq_client.agents.retrieve,
@@ -225,22 +297,16 @@ class ORQContextProvider:
 
         raw_ms_ids: list[str] = []
         if hasattr(agent_data, 'memory_stores') and agent_data.memory_stores:
-            raw_ms_ids = [ms if isinstance(ms, str) else getattr(ms, 'key', str(ms)) for ms in agent_data.memory_stores]  # pyright: ignore[reportUnnecessaryIsInstance]
+            raw_ms_ids = [ms if isinstance(ms, str) else getattr(ms, 'key', str(ms)) for ms in agent_data.memory_stores]
 
         # Enrich knowledge bases and memory stores concurrently
-        security = getattr(self.orq_client, 'sdk_configuration', None)
-        security = getattr(security, 'security', None) if security else None
-        api_key: str = getattr(security, 'api_key', '') if security else ''
-        config = get_config() if get_config is not None else None
-        server_url = config.orq_server_url if config else 'https://api.orq.ai'
-
         enrichment_tasks: list[Any] = [self._enrich_knowledge_base(kb_id) for kb_id in raw_kb_ids]
-        enrichment_tasks.extend(self._enrich_memory_store(api_key, server_url, ms_id) for ms_id in raw_ms_ids)
+        enrichment_tasks.extend(self._enrich_memory_store(ms_id) for ms_id in raw_ms_ids)
 
-        enriched_results: list[Any] = list(await asyncio.gather(*enrichment_tasks)) if enrichment_tasks else []
+        enriched_results = await asyncio.gather(*enrichment_tasks) if enrichment_tasks else []
 
-        knowledge_bases: list[KnowledgeBaseInfo] = [r for r in enriched_results if isinstance(r, KnowledgeBaseInfo)]
-        memory_stores: list[MemoryStoreInfo] = [r for r in enriched_results if isinstance(r, MemoryStoreInfo)]
+        knowledge_bases = [r for r in enriched_results if isinstance(r, KnowledgeBaseInfo)]
+        memory_stores = [r for r in enriched_results if isinstance(r, MemoryStoreInfo)]
 
         model_raw = getattr(agent_data, 'model', None)
         model_id = getattr(model_raw, 'id', None) if model_raw is not None else None
@@ -257,8 +323,9 @@ class ORQContextProvider:
             model=model_id,
         )
 
-        logger.info(
-            f'Retrieved context: {len(tools)} tools, {len(memory_stores)} memory stores, {len(knowledge_bases)} knowledge bases'
+        logger.debug(
+            f'Retrieved context: {len(tools)} tools, {len(memory_stores)} memory stores, '
+            f'{len(knowledge_bases)} knowledge bases'
         )
 
         return context
@@ -274,56 +341,43 @@ class ORQContextProvider:
                 description=getattr(kb, 'description', None) or None,
             )
         except Exception as e:
-            logger.warning(f'Failed to enrich knowledge base {kb_id}: {e}')
+            logger.warning(f'Failed to enrich knowledge base {kb_id}: {e} — attack strategies will use limited context')
             return KnowledgeBaseInfo(id=kb_id)
 
-    async def _enrich_memory_store(self, api_key: str, server_url: str, ms_id: str) -> MemoryStoreInfo:
-        """Retrieve full memory store details from ORQ API."""
+    async def _enrich_memory_store(self, ms_key: str) -> MemoryStoreInfo:
+        """Retrieve full memory store details via ORQ SDK."""
         try:
-            async with httpx.AsyncClient() as client:
-                r = await client.get(
-                    f'{server_url}/v2/memory-stores/{ms_id}',
-                    headers={'Authorization': f'Bearer {api_key}'},
-                    timeout=10,
-                )
-                r.raise_for_status()
-                data = r.json()
-                return MemoryStoreInfo(
-                    id=ms_id,
-                    key=data.get('key'),
-                    description=data.get('description') or None,
-                )
+            ms = await asyncio.to_thread(
+                self.orq_client.memory_stores.retrieve,
+                memory_store_key=ms_key,
+            )
+            return MemoryStoreInfo(
+                id=getattr(ms, 'id', ms_key),
+                key=getattr(ms, 'key', ms_key),
+                description=getattr(ms, 'description', None) or None,
+            )
         except Exception as e:
-            logger.warning(f'Failed to enrich memory store {ms_id}: {e}')
-            return MemoryStoreInfo(id=ms_id)
-
-
-def _require_orq_sdk() -> None:
-    """Raise a clear error if the ORQ SDK is not installed."""
-    if Orq is None or get_config is None:
-        raise RuntimeError(
-            "ORQ SDK not installed. Install with: pip install 'evaluatorq[orq]'"
-        )
+            logger.warning(f'Failed to enrich memory store {ms_key}: {e} — attack strategies will use limited context')
+            return MemoryStoreInfo(id=ms_key)
 
 
 class ORQTargetFactory:
     """Creates ORQAgentTarget instances, one per job."""
 
-    def __init__(self, orq_client: OrqClient | None = None):
-        self._orq_client: OrqClient
+    def __init__(self, orq_client: Any = None, model: str | None = None):
+        """Initialize the factory, creating an ORQ client from environment if none is provided."""
         if orq_client is not None:
             self._orq_client = orq_client
         else:
-            _require_orq_sdk()
-            # After _require_orq_sdk(), Orq and get_config are guaranteed non-None.
-            assert get_config is not None
-            assert Orq is not None
-            config = get_config()
-            self._orq_client = Orq(
-                api_key=config.orq_api_key,
-                server_url=config.orq_server_url,
+            if _orq_cls is None:
+                msg = "ORQ backend requires the orq-ai-sdk package. Install with: pip install evaluatorq[orq]"
+                raise ImportError(msg)
+            self._orq_client = _orq_cls(
+                api_key=_get_orq_api_key(),
+                server_url=_get_orq_server_url(),
                 timeout_ms=PIPELINE_CONFIG.target_agent_timeout_ms,
             )
+        self._model = model
 
     def create_target(self, agent_key: str, memory_entity_id: str | None = None) -> AgentTarget:
         """Create a new ORQAgentTarget for the given agent key."""
@@ -331,63 +385,56 @@ class ORQTargetFactory:
             agent_key=agent_key,
             orq_client=self._orq_client,
             memory_entity_id=memory_entity_id,
+            model=self._model,
         )
 
 
 class ORQMemoryCleanup:
-    """Cleans up memory entities created during red teaming via ORQ API."""
+    """Cleans up memory entities created during red teaming via ORQ SDK."""
 
-    def __init__(self) -> None:
-        _require_orq_sdk()
-        # After _require_orq_sdk(), get_config is guaranteed non-None.
-        assert get_config is not None
-        config = get_config()
-        self._api_key: str = config.orq_api_key
-        self._server_url: str = config.orq_server_url
+    def __init__(self, orq_client: Any = None):
+        """Initialize the cleanup handler, creating an ORQ client from environment if none is provided."""
+        if orq_client is not None:
+            self._orq_client = orq_client
+        else:
+            if _orq_cls is None:
+                msg = "ORQ backend requires the orq-ai-sdk package. Install with: pip install evaluatorq[orq]"
+                raise ImportError(msg)
+            self._orq_client = _orq_cls(
+                api_key=_get_orq_api_key(),
+                server_url=_get_orq_server_url(),
+                timeout_ms=PIPELINE_CONFIG.target_agent_timeout_ms,
+            )
 
     async def cleanup_memory(self, agent_context: AgentContext, entity_ids: list[str]) -> None:
         """Delete memory entities for each memory store x entity_id combination."""
-        headers = {'Authorization': f'Bearer {self._api_key}'}
-        failed = 0
-        total = 0
+        for ms in agent_context.memory_stores:
+            if not ms.key:
+                logger.warning(f'Memory store {ms.id} has no key, skipping cleanup')
+                continue
+            for entity_id in entity_ids:
+                try:
+                    await asyncio.to_thread(
+                        self._orq_client.memory_stores.delete_memory,
+                        memory_store_key=ms.key,
+                        memory_entity_id=entity_id,
+                    )
+                    logger.debug(f'Deleted memory entity {entity_id} from store {ms.key}')
+                except Exception as e:
+                    if extract_status_code(e) == 404:
+                        continue
+                    logger.warning(f'Failed to cleanup memory entity {entity_id} from {ms.key}: {e}')
 
-        async with httpx.AsyncClient(timeout=10) as client:
-            for ms in agent_context.memory_stores:
-                if not ms.key:
-                    logger.warning(f'Memory store {ms.id} has no key, skipping cleanup')
-                    continue
-                for entity_id in entity_ids:
-                    total += 1
-                    url = f'{self._server_url}/v2/memory-stores/{ms.key}/memories/{entity_id}'
-                    try:
-                        r = await client.delete(url, headers=headers)
-                        if r.status_code == 204:
-                            logger.debug(f'Deleted memory entity {entity_id} from store {ms.key}')
-                        elif r.status_code == 404:
-                            logger.debug(f'Memory entity {entity_id} not found in store {ms.key}')
-                        else:
-                            failed += 1
-                            logger.warning(f'Memory cleanup for {ms.key}/{entity_id} returned {r.status_code}')
-                    except Exception as e:
-                        failed += 1
-                        logger.warning(f'Failed to cleanup memory entity {entity_id} from {ms.key}: {e}')
-
-        if failed == total and total > 0:
-            logger.error(f'Memory cleanup failed: all {failed} operations failed')
-        elif failed > 0:
-            logger.warning(
-                f'Memory cleanup partially failed: {failed}/{total} operations failed ({len(entity_ids)} entities across {len(agent_context.memory_stores)} stores)'
-            )
-        else:
-            logger.info(
-                f'Memory cleanup complete ({len(entity_ids)} entities across {len(agent_context.memory_stores)} stores)'
-            )
+        logger.debug(
+            f'Memory cleanup complete ({len(entity_ids)} entities across {len(agent_context.memory_stores)} stores)'
+        )
 
 
 class ORQErrorMapper:
     """Normalize ORQ SDK/HTTP failures into runtime error taxonomy."""
 
     def map_error(self, exc: Exception) -> tuple[str, str]:
+        """Map an exception to a (error_code, error_message) tuple."""
         name = type(exc).__name__.lower()
         text = str(exc).lower()
         status_code = extract_status_code(exc)
@@ -407,7 +454,7 @@ class ORQErrorMapper:
 
 
 def create_orq_backend(
-    orq_client: OrqClient | None = None,
+    orq_client: Any = None,
 ) -> tuple[ORQTargetFactory, ORQContextProvider, ORQMemoryCleanup]:
     """Convenience function returning all three ORQ backend components.
 
@@ -419,19 +466,17 @@ def create_orq_backend(
         Tuple of (target_factory, context_provider, memory_cleanup)
     """
     if orq_client is None:
-        _require_orq_sdk()
-        # After _require_orq_sdk(), Orq and get_config are guaranteed non-None.
-        assert get_config is not None
-        assert Orq is not None
-        config = get_config()
-        orq_client = Orq(
-            api_key=config.orq_api_key,
-            server_url=config.orq_server_url,
+        if _orq_cls is None:
+            msg = "ORQ backend requires the orq-ai-sdk package. Install with: pip install evaluatorq[orq]"
+            raise ImportError(msg)
+        orq_client = _orq_cls(
+            api_key=_get_orq_api_key(),
+            server_url=_get_orq_server_url(),
             timeout_ms=PIPELINE_CONFIG.target_agent_timeout_ms,
         )
 
     return (
         ORQTargetFactory(orq_client),
         ORQContextProvider(orq_client),
-        ORQMemoryCleanup(),
+        ORQMemoryCleanup(orq_client),
     )

@@ -1,7 +1,7 @@
 """Unit tests for strategy registry and selection."""
 
-from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities, AgentCapability
-from evaluatorq.redteam.contracts import AgentContext, MemoryStoreInfo, ToolInfo, TurnType
+from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities
+from evaluatorq.redteam.contracts import AgentCapability, AgentContext, MemoryStoreInfo, ToolInfo, TurnType
 from evaluatorq.redteam.adaptive.strategy_registry import (
     STRATEGY_REGISTRY,
     get_category_info,

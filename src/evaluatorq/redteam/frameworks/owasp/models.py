@@ -6,14 +6,14 @@ import sys
 from typing import Any
 
 if sys.version_info >= (3, 11):
-    from enum import StrEnum  # pyright: ignore[reportUnreachable]
+    from enum import StrEnum
 else:
     from enum import Enum
 
     class StrEnum(str, Enum):  # type: ignore[no-redef]
         """Polyfill for Python <3.11."""
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class OWASPCategory(StrEnum):

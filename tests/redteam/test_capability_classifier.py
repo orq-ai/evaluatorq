@@ -6,13 +6,12 @@ import pytest
 
 from evaluatorq.redteam.adaptive.capability_classifier import (
     AgentCapabilities,
-    AgentCapability,
     ResourceCapabilityInference,
     ToolCapabilities,
     ToolCapabilitiesResponse,
     classify_agent_capabilities,
 )
-from evaluatorq.redteam.contracts import AgentContext, KnowledgeBaseInfo, MemoryStoreInfo, ToolInfo
+from evaluatorq.redteam.contracts import AgentCapability, AgentContext, KnowledgeBaseInfo, MemoryStoreInfo, ToolInfo
 
 
 def _mock_resource_response(
@@ -64,7 +63,7 @@ class TestAgentCapabilities:
         """Test empty capabilities."""
         caps = AgentCapabilities(capabilities={})
         assert caps.all_capabilities() == set()
-        assert not caps.has_any(['code_execution'])
+        assert not caps.has_any([AgentCapability.CODE_EXECUTION])
 
     def test_all_capabilities(self):
         """Test all_capabilities returns flat set."""
@@ -83,7 +82,7 @@ class TestAgentCapabilities:
                 'python': [AgentCapability.CODE_EXECUTION],
             }
         )
-        assert caps.has_any(['code_execution', 'shell_access'])
+        assert caps.has_any([AgentCapability.CODE_EXECUTION, AgentCapability.SHELL_ACCESS])
 
     def test_has_any_no_match(self):
         """Test has_any with no matching capability."""
@@ -92,7 +91,7 @@ class TestAgentCapabilities:
                 'search': [AgentCapability.WEB_REQUEST],
             }
         )
-        assert not caps.has_any(['code_execution', 'shell_access'])
+        assert not caps.has_any([AgentCapability.CODE_EXECUTION, AgentCapability.SHELL_ACCESS])
 
 
 class TestClassifyAgentCapabilities:
@@ -223,7 +222,7 @@ class TestClassifyAgentCapabilities:
 
         result = await classify_agent_capabilities(context, mock_client)
 
-        assert result.has_any(['database'])
-        assert result.has_any(['memory_read'])
-        assert result.has_any(['knowledge_retrieval'])
-        assert not result.has_any(['code_execution'])
+        assert result.has_any([AgentCapability.DATABASE])
+        assert result.has_any([AgentCapability.MEMORY_READ])
+        assert result.has_any([AgentCapability.KNOWLEDGE_RETRIEVAL])
+        assert not result.has_any([AgentCapability.CODE_EXECUTION])

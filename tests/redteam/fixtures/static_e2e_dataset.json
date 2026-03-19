@@ -7,7 +7,7 @@
         "attack_technique": "direct-injection",
         "delivery_method": "direct-request",
         "severity": "high",
-        "scope": "application",
+        "vulnerability_domain": "agent",
         "framework": "OWASP-ASI",
         "turn_type": "single",
         "source": "local_e2e_fixture"
@@ -26,7 +26,7 @@
         "attack_technique": "direct-injection",
         "delivery_method": "direct-request",
         "severity": "high",
-        "scope": "application",
+        "vulnerability_domain": "agent",
         "framework": "OWASP-LLM",
         "turn_type": "single",
         "source": "local_e2e_fixture"
@@ -42,10 +42,10 @@
       "input": {
         "id": "e2e-asi05-001",
         "category": "ASI05",
-        "attack_technique": "code-interpreter",
+        "attack_technique": "rce-exploit",
         "delivery_method": "direct-request",
         "severity": "medium",
-        "scope": "application",
+        "vulnerability_domain": "agent",
         "framework": "OWASP-ASI",
         "turn_type": "single",
         "source": "local_e2e_fixture"

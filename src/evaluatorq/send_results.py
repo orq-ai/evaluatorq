@@ -1,6 +1,7 @@
 """Send evaluation results to Orq platform."""
 
 import os
+import re
 from datetime import datetime
 
 import httpx
@@ -75,12 +76,33 @@ async def send_results_to_orq(
             results=results,
         )
 
-        # Get base URL from environment or use default
-        base_url = os.getenv("ORQ_BASE_URL", "https://api.orq.ai")
+        # Get base URL from environment or use default.
+        # ORQ_BASE_URL is typically the frontend URL (e.g. https://my.orq.ai)
+        # but the API lives on api.*.  Transform my. → api. to match the TS
+        # tracing setup convention (packages/evaluatorq/src/lib/tracing/setup.ts).
+        raw_url = os.getenv("ORQ_BASE_URL", "https://api.orq.ai").rstrip("/")
+        base_url = re.sub(r"^(https?://)my\.", r"\1api.", raw_url)
         orq_debug = os.getenv("ORQ_DEBUG", "false").lower() == "true"
 
-        # Serialize with aliases for API field names
+        # Serialize with aliases, stripping None on optional fields (the API
+        # rejects null for ``error``, ``explanation``, etc.) but keeping
+        # ``output`` even when None (the API requires it to be present).
         payload_dict = payload.model_dump(mode="json", exclude_none=True, by_alias=True)
+
+        # Restore fields stripped by exclude_none.  The API schema marks
+        # ``error`` and ``explanation`` as optional strings — they may be
+        # absent, but must never be ``null``.  Defensive: ensure they are
+        # empty strings rather than absent, in case any code path leaks a
+        # ``null`` through nested dicts that exclude_none cannot reach.
+        # ``output`` is required (nullable) so it must always be present.
+        for result in payload_dict.get("results", []):
+            for jr in result.get("jobResults") or []:
+                jr.setdefault("output", None)
+                jr.setdefault("error", "")
+                for es in jr.get("evaluatorScores") or []:
+                    if "score" in es:
+                        es["score"].setdefault("explanation", "")
+                    es.setdefault("error", "")
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
@@ -100,8 +122,8 @@ async def send_results_to_orq(
                     f"\n⚠️  Warning: Could not send results to Orq platform ({response.status_code} {response.reason_phrase})"
                 )
 
-                # Only show detailed error in verbose mode or specific error cases
-                if orq_debug or response.status_code >= 500:
+                # Show detailed error for client errors (4xx) and server errors (5xx)
+                if orq_debug or response.status_code >= 400:
                     print(f"   Details: {error_text}")
 
                 return  # Return early but don't raise

@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from loguru import logger
+from openai.types.chat import ChatCompletionMessageParam
 
 from evaluatorq.redteam.backends.base import extract_provider_error_code, extract_status_code
-from evaluatorq.redteam.contracts import AgentContext
+from evaluatorq.redteam.contracts import AgentContext, TokenUsage
+from evaluatorq.redteam.tracing import record_llm_response, with_llm_span
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
-    from openai.types.chat import ChatCompletionMessageParam
 
 
 class OpenAIModelTarget:
@@ -23,28 +24,57 @@ class OpenAIModelTarget:
         client: AsyncOpenAI,
         system_prompt: str | None = None,
     ):
-        self.model_id: str = model_id
-        self.client: AsyncOpenAI = client
-        self.system_prompt: str = system_prompt or 'You are a helpful assistant.'
-        self._messages: list[dict[str, str]] = [
-            {'role': 'system', 'content': self.system_prompt},
-        ]
+        """Initialize the target with a model ID, async client, and optional system prompt."""
+        self.model_id = model_id
+        self.client = client
+        self.system_prompt = system_prompt or 'You are a helpful assistant.'
+        self._last_token_usage: TokenUsage | None = None
 
     async def send_prompt(self, prompt: str) -> str:
-        self._messages.append({'role': 'user', 'content': prompt})
-        response = await self.client.chat.completions.create(
+        """Send a prompt to the OpenAI model and return its response."""
+        messages: list[ChatCompletionMessageParam] = [
+            {'role': 'system', 'content': self.system_prompt},
+            {'role': 'user', 'content': prompt},
+        ]
+        async with with_llm_span(
             model=self.model_id,
-            messages=cast('list[ChatCompletionMessageParam]', self._messages),
-        )
-        content = response.choices[0].message.content or ''
-        self._messages.append({'role': 'assistant', 'content': content})
+            input_messages=messages,
+            attributes={"orq.redteam.llm_purpose": "target"},
+        ) as span:
+            response = await self.client.chat.completions.create(
+                model=self.model_id,
+                messages=messages,
+            )
+            content = response.choices[0].message.content or ''
+            record_llm_response(span, response, output_content=content)
+
+            # Store usage for consume_last_token_usage()
+            usage = getattr(response, 'usage', None)
+            if usage is not None:
+                _prompt = int(getattr(usage, 'prompt_tokens', 0) or 0)
+                _completion = int(getattr(usage, 'completion_tokens', 0) or 0)
+                _raw_total = getattr(usage, 'total_tokens', None)
+                _total = int(_raw_total) if _raw_total else (_prompt + _completion)
+                self._last_token_usage = TokenUsage(
+                    prompt_tokens=_prompt,
+                    completion_tokens=_completion,
+                    total_tokens=_total,
+                    calls=1,
+                )
+            else:
+                self._last_token_usage = None
+
         return content
 
+    def consume_last_token_usage(self) -> TokenUsage | None:
+        """Return and clear usage from last call."""
+        usage = self._last_token_usage
+        self._last_token_usage = None
+        return usage
+
     def reset_conversation(self) -> None:
-        """Reset conversation history, keeping only the system prompt."""
-        self._messages = [
-            {'role': 'system', 'content': self.system_prompt},
-        ]
+        """Stateless adapter; nothing to reset."""
+        return
 
     def clone(self) -> OpenAIModelTarget:
         """Create a fresh target instance for parallel job safety."""
@@ -61,12 +91,18 @@ class OpenAIContextProvider:
     There is no tool/memory/KB metadata in raw model mode.
     """
 
+    def __init__(self, system_prompt: str | None = None):
+        """Initialize the context provider with an optional system prompt override."""
+        self._system_prompt = system_prompt
+
     async def get_agent_context(self, agent_key: str) -> AgentContext:
-        logger.info(f'Using OpenAI model target context for model={agent_key}')
+        """Return agent context for the specified OpenAI model."""
+        logger.debug(f'Using OpenAI model target context for model={agent_key}')
         return AgentContext(
             key=agent_key,
             display_name=agent_key,
             description='OpenAI model target',
+            system_prompt=self._system_prompt,
             tools=[],
             memory_stores=[],
             knowledge_bases=[],
@@ -77,18 +113,22 @@ class OpenAIContextProvider:
 class OpenAITargetFactory:
     """Factory creating OpenAI model targets."""
 
-    def __init__(self, client: AsyncOpenAI):
-        self._client: AsyncOpenAI = client
+    def __init__(self, client: AsyncOpenAI, system_prompt: str | None = None):
+        """Initialize the factory with a shared async OpenAI client and optional system prompt."""
+        self._client = client
+        self._system_prompt = system_prompt
 
     def create_target(self, agent_key: str, memory_entity_id: str | None = None) -> OpenAIModelTarget:
+        """Create a new OpenAI model target instance."""
         _ = memory_entity_id  # OpenAI model target does not support memory entity routing.
-        return OpenAIModelTarget(model_id=agent_key, client=self._client)
+        return OpenAIModelTarget(model_id=agent_key, client=self._client, system_prompt=self._system_prompt)
 
 
 class NoopMemoryCleanup:
     """No-op cleanup for backends without managed memory stores."""
 
     async def cleanup_memory(self, agent_context: AgentContext, entity_ids: list[str]) -> None:
+        """No-op cleanup since OpenAI backend does not manage memory stores."""
         _ = (agent_context, entity_ids)
         logger.debug('Skipping memory cleanup: backend has no managed memory API')
 
@@ -97,6 +137,7 @@ class OpenAIErrorMapper:
     """Normalize OpenAI exceptions into runtime error taxonomy."""
 
     def map_error(self, exc: Exception) -> tuple[str, str]:
+        """Map an OpenAI exception to a normalized error code and message tuple."""
         name = type(exc).__name__.lower()
         status_code = extract_status_code(exc)
         provider_code = extract_provider_error_code(exc)

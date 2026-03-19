@@ -1,6 +1,5 @@
 """Unit tests for attack prompt generation."""
 
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -186,7 +185,7 @@ class TestGenerateObjective:
         assert 'injected instructions' in objective
 
 
-def _make_strategy(**overrides: Any) -> AttackStrategy:
+def _make_strategy(**overrides: object) -> AttackStrategy:
     """Helper to create a strategy with defaults."""
     defaults = {
         'category': 'ASI05',
@@ -197,8 +196,7 @@ def _make_strategy(**overrides: Any) -> AttackStrategy:
         'turn_type': TurnType.SINGLE,
         'objective_template': 'Test',
     }
-    merged: dict[str, Any] = {**defaults, **overrides}
-    return AttackStrategy(**merged)
+    return AttackStrategy(**(defaults | overrides))  # pyright: ignore[reportArgumentType]
 
 
 def _mock_llm_client(analysis: ToolAnalysis) -> AsyncMock:

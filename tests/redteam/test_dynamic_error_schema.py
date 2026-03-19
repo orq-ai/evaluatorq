@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 from types import SimpleNamespace
+from typing import Any
 
 from evaluatorq.redteam.contracts import AgentContext
 from evaluatorq.redteam.reports.converters import (
-    _coerce_job_output_payload,  # pyright: ignore[reportPrivateUsage]
+    _coerce_job_output_payload,
     dynamic_evaluatorq_results_to_report,
 )
 

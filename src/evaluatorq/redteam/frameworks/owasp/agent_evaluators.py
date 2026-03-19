@@ -28,8 +28,7 @@ from evaluatorq.redteam.frameworks.owasp.models import (
     LlmEvaluatorOutputFormat,
 )
 
-# Default model for all OWASP evaluators
-DEFAULT_EVALUATOR_MODEL = 'azure/gpt-5-mini'
+from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL as DEFAULT_EVALUATOR_MODEL
 
 
 def get_asi01_goal_hijacking_evaluator(model_id: str | None = None) -> LlmEvaluatorEntity:

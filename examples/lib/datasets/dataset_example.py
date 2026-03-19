@@ -8,6 +8,7 @@ This example shows how to:
 """
 
 import asyncio
+import os
 import re
 from typing import Any
 
@@ -146,7 +147,7 @@ async def main():
         "dataset-evaluation",
         {
             "data": {
-                "dataset_id": "01KAX39A6Z7KZ72TH9QMDB5SNJ",
+                "dataset_id": os.environ.get("DATASET_ID", "YOUR_DATASET_ID"),
             },
             "jobs": [text_analyzer, text_normalizer],
             "evaluators": [

@@ -68,9 +68,9 @@ def _get_otlp_endpoint() -> str | None:
     if os.environ.get("ORQ_API_KEY"):
         base_url = os.environ.get("ORQ_BASE_URL")
         if base_url:
-            # Use the base URL as-is, just append the OTEL path
-            # Strip trailing slash if present to avoid double slashes
-            base_url = base_url.rstrip("/")
+            # Transform my.*.orq.ai → api.*.orq.ai (matches TS tracing setup)
+            import re
+            base_url = re.sub(r"^(https?://)my\.", r"\1api.", base_url.rstrip("/"))
             return f"{base_url}/v2/otel"
         # Default to production endpoint
         return "https://api.orq.ai/v2/otel"

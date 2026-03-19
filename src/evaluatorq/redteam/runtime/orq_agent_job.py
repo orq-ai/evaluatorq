@@ -8,9 +8,13 @@ from typing import Any
 from evaluatorq import DataPoint, Job, job
 from loguru import logger
 
-from pydantic import ValidationError
-
 from evaluatorq.redteam.contracts import Message
+from evaluatorq.redteam.exceptions import CredentialError
+
+
+def _sanitize_job_name(value: str) -> str:
+    """Sanitize a value for use in job names (alphanumeric, dash, underscore)."""
+    return ''.join(ch if ch.isalnum() or ch in {'-', '_'} else '-' for ch in value).strip('-') or 'unknown'
 
 
 def create_orq_platform_agent_job(agent_key: str) -> Job:
@@ -21,25 +25,30 @@ def create_orq_platform_agent_job(agent_key: str) -> Job:
 
     Requires the ``orq-ai-sdk`` optional dependency.
     """
+    safe_key = _sanitize_job_name(agent_key)
 
-    try:
-        from orq_ai_sdk import Orq
-        from orq_ai_sdk.models import A2AMessage, CreateAgentResponseRequestMemory, TextPart
-    except ImportError as e:
-        msg = (
-            'ORQ platform agent jobs require the orq-ai-sdk package. '
-            'Install it with: pip install evaluatorq[orq]'
-        )
-        raise ImportError(msg) from e
-
-    import os
-
-    agent_client = Orq(api_key=os.environ.get('ORQ_API_KEY', ''))
-
-    @job('agent')
+    @job(f'redteam:static:{safe_key}')
     async def platform_agent_job(data: DataPoint, _row: int) -> str:
         messages = list(data.inputs.get('messages', []))
         sample_id = data.inputs.get('id') or str(uuid.uuid4())
+
+        try:
+            from orq_ai_sdk.models import A2AMessage, CreateAgentResponseRequestMemory, TextPart
+        except ImportError as e:
+            msg = (
+                'ORQ platform agent jobs require the orq-ai-sdk package. '
+                'Install it with: pip install evaluatorq[orq]'
+            )
+            raise ImportError(msg) from e
+
+        import os
+
+        from orq_ai_sdk import Orq
+
+        api_key = os.environ.get('ORQ_API_KEY')
+        if not api_key:
+            raise CredentialError('ORQ_API_KEY environment variable is not set')
+        client = Orq(api_key=api_key)
         task_id: str | None = None
         result_text = ''
         user_turns = 0
@@ -69,10 +78,10 @@ def create_orq_platform_agent_job(agent_key: str) -> Job:
             if task_id is not None:
                 kwargs['task_id'] = task_id
 
-            response = await agent_client.agents.responses.create_async(**kwargs)
-            response_task_id = getattr(response, 'task_id', None)
-            if response_task_id:
-                task_id = response_task_id
+            response = await client.agents.responses.create_async(**kwargs)
+            _task_id = getattr(response, 'task_id', None)
+            if _task_id:
+                task_id = _task_id
             result_text = _extract_agent_response_text(response)
 
         if user_turns == 0:
@@ -81,7 +90,7 @@ def create_orq_platform_agent_job(agent_key: str) -> Job:
 
         logger.debug(
             f'Platform agent response for {sample_id}: turns={user_turns}, '
-            + f'len={len(result_text)}, repr={result_text[:200]!r}'
+            f'len={len(result_text)}, repr={result_text[:200]!r}'
         )
         if not result_text:
             logger.warning(f'Empty platform agent response for {sample_id}')
@@ -106,7 +115,8 @@ def _normalize_message(message: Any) -> Message | dict[str, Any]:
     if isinstance(message, dict):
         try:
             return Message.model_validate(message)
-        except (ValidationError, TypeError):
+        except Exception as e:
+            logger.debug(f'Message validation failed, using raw dict: {e}')
             return message
     return {'role': 'user', 'content': str(message)}
 

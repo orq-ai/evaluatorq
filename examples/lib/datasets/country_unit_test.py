@@ -17,6 +17,7 @@ Usage:
 """
 
 import asyncio
+import os
 
 from evaluatorq import (
     DataPoint,
@@ -27,8 +28,8 @@ from evaluatorq import (
     string_contains_evaluator,
 )
 
-DATASET_ID = "01KE9KKAB119PGHXBXJX9D7DCT"
-DEPLOYMENT_KEY = "unit_test_countries"
+DATASET_ID = os.environ.get("DATASET_ID", "YOUR_DATASET_ID")
+DEPLOYMENT_KEY = os.environ.get("DEPLOYMENT_KEY", "unit_test_countries")
 
 
 @job("country-lookup")

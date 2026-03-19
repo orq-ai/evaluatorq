@@ -2,7 +2,7 @@
 
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
@@ -52,7 +52,7 @@ def _make_static_sample(
             'attack_technique': 'indirect-injection',
             'delivery_method': 'direct-request',
             'severity': 'medium',
-            'scope': 'application',
+            'vulnerability_domain': 'agent',
             'framework': 'OWASP-AGENTIC',
             'turn_type': 'single',
             'source': 'AgentDojo',
@@ -94,16 +94,16 @@ class TestNormalizeCategory:
 
 class TestInferFramework:
     def test_asi_category(self):
-        assert infer_framework('ASI01') == Framework.OWASP_ASI
+        assert infer_framework('ASI01') == 'OWASP-ASI'
 
     def test_llm_category(self):
-        assert infer_framework('LLM07') == Framework.OWASP_LLM
+        assert infer_framework('LLM07') == 'OWASP-LLM'
 
     def test_asi_with_prefix(self):
-        assert infer_framework('OWASP-ASI05') == Framework.OWASP_ASI
+        assert infer_framework('OWASP-ASI05') == 'OWASP-ASI'
 
     def test_unknown(self):
-        assert infer_framework('CUSTOM01') == Framework.UNKNOWN
+        assert infer_framework('CUSTOM01') == 'unknown'
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +152,7 @@ class TestModelSerialization:
                 source='hardcoded_strategy',
             ),
             agent=AgentInfo(key='test_agent', model='azure/gpt-5-mini'),
-            messages=[Message(role='user', content='test')],
+            messages=cast(list[Message], [{'role': 'user', 'content': 'test'}]),
             response='I refuse.',
             evaluation=UnifiedEvaluationResult(passed=True, explanation='OK', evaluator_id='ASI01'),
             vulnerable=False,
@@ -282,7 +282,7 @@ class TestNewOutputModelValidation:
                 'delivery_method': 'direct-request',
                 'turn_type': 'single',
                 'severity': 'medium',
-                'scope': 'application',
+                'vulnerability_domain': 'agent',
                 'framework': 'OWASP-ASI',
                 'source': 'test',
             },

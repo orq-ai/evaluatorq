@@ -1,5 +1,6 @@
 """Unit tests for the multi-turn orchestrator."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -271,3 +272,141 @@ class TestAdversarialSystemPrompt:
         )
         assert "Test the agent's defenses" in formatted
         assert 'Helper Bot' in formatted
+
+
+def _make_strategy(**overrides: object) -> AttackStrategy:
+    """Helper to create a strategy with sensible defaults."""
+    defaults: dict[str, object] = {
+        'category': 'ASI01',
+        'name': 'test',
+        'description': 'Test attack',
+        'attack_technique': AttackTechnique.INDIRECT_INJECTION,
+        'delivery_methods': [DeliveryMethod.CRESCENDO],
+        'turn_type': TurnType.MULTI,
+        'objective_template': 'Test objective',
+    }
+    defaults.update(overrides)
+    return AttackStrategy(**defaults)  # pyright: ignore[reportArgumentType]
+
+
+class TestTimeoutHandling:
+    """Tests for timeout enforcement in the orchestrator."""
+
+    @pytest.mark.asyncio
+    async def test_target_timeout_maps_to_error_fields(self):
+        """Timeout from target.send_prompt() is caught and mapped correctly."""
+        mock_llm = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = 'Attack prompt'
+        mock_response.choices[0].finish_reason = 'stop'
+        mock_llm.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        mock_target = AsyncMock()
+        # First call times out, second also times out → consecutive abort
+        mock_target.send_prompt = AsyncMock(side_effect=asyncio.TimeoutError)
+
+        orchestrator = MultiTurnOrchestrator(llm_client=mock_llm, model='azure/gpt-5-mini')
+
+        result = await orchestrator.run_attack(
+            target=mock_target,
+            strategy=_make_strategy(),
+            objective='Test',
+            agent_context=AgentContext(key='test_agent'),
+            max_turns=3,
+        )
+
+        assert result.error_type == 'target_error'
+        assert result.error_code == 'target.timeout'
+        assert result.error_stage == 'target_call'
+        assert result.error_details is not None
+        assert 'timeout_ms' in result.error_details
+
+    @pytest.mark.asyncio
+    async def test_single_target_timeout_continues_attack(self):
+        """A single target timeout does not abort — only consecutive timeouts do."""
+        mock_llm = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = 'Attack prompt'
+        mock_response.choices[0].finish_reason = 'stop'
+        mock_llm.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        mock_target = AsyncMock()
+        # First call times out, second succeeds
+        mock_target.send_prompt = AsyncMock(
+            side_effect=[asyncio.TimeoutError, 'Agent response']
+        )
+
+        orchestrator = MultiTurnOrchestrator(llm_client=mock_llm, model='azure/gpt-5-mini')
+
+        result = await orchestrator.run_attack(
+            target=mock_target,
+            strategy=_make_strategy(),
+            objective='Test',
+            agent_context=AgentContext(key='test_agent'),
+            max_turns=2,
+        )
+
+        # Attack should complete without a fatal error
+        assert result.error_type is None
+        assert result.turns == 2
+
+    @pytest.mark.asyncio
+    async def test_adversarial_llm_timeout_maps_to_error_fields(self):
+        """Timeout from adversarial LLM is caught and mapped correctly."""
+        mock_llm = AsyncMock()
+        mock_llm.chat.completions.create = AsyncMock(side_effect=asyncio.TimeoutError)
+
+        mock_target = AsyncMock()
+        orchestrator = MultiTurnOrchestrator(llm_client=mock_llm, model='azure/gpt-5-mini')
+
+        result = await orchestrator.run_attack(
+            target=mock_target,
+            strategy=_make_strategy(),
+            objective='Test',
+            agent_context=AgentContext(key='test_agent'),
+            max_turns=3,
+        )
+
+        assert result.error_type == 'llm_error'
+        assert result.error_code == 'adversarial.timeout'
+        assert result.error_stage == 'adversarial_generation'
+        assert result.error_details is not None
+        assert 'timeout_ms' in result.error_details
+
+    @pytest.mark.asyncio
+    async def test_generate_single_prompt_llm_timeout(self):
+        """Timeout in generate_single_prompt propagates as asyncio.TimeoutError."""
+        mock_llm = AsyncMock()
+        mock_llm.chat.completions.create = AsyncMock(side_effect=asyncio.TimeoutError)
+
+        orchestrator = MultiTurnOrchestrator(llm_client=mock_llm, model='azure/gpt-5-mini')
+
+        with pytest.raises(asyncio.TimeoutError):
+            await orchestrator.generate_single_prompt(
+                strategy=_make_strategy(),
+                objective='Test',
+                agent_context=AgentContext(key='test_agent'),
+            )
+
+
+class TestCleanupTimeout:
+    """Tests for cleanup timeout handling."""
+
+    @pytest.mark.asyncio
+    async def test_cleanup_timeout_logs_warning_and_returns(self):
+        """Cleanup timeout should log a warning but not raise."""
+        from evaluatorq.redteam.adaptive.pipeline import cleanup_memory_entities
+
+        mock_cleanup = AsyncMock()
+        mock_cleanup.cleanup_memory = AsyncMock(side_effect=asyncio.TimeoutError)
+
+        context = AgentContext(key='test_agent')
+
+        # Should not raise
+        await cleanup_memory_entities(
+            agent_context=context,
+            entity_ids=['entity-1', 'entity-2'],
+            memory_cleanup=mock_cleanup,
+        )

@@ -13,7 +13,7 @@ import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from evaluatorq.redteam import red_team
 from evaluatorq.redteam.contracts import RedTeamReport
@@ -37,7 +37,7 @@ def _make_chat_completion(content: str, *, prompt_tokens: int, completion_tokens
 
 
 class _CompletionsAPI:
-    async def create(self, *, _model: str, messages: list[dict[str, Any]], **_: Any) -> Any:
+    async def create(self, *, model: str, messages: list[dict[str, Any]], **_: Any) -> Any:
         system_content = str(messages[0].get('content', '')) if messages else ''
         user_content = str(messages[-1].get('content', '')) if messages else ''
 
@@ -76,8 +76,6 @@ class _CompletionsAPI:
 
 class DeterministicAsyncOpenAI:
     """Minimal OpenAI-compatible async client used for local E2E runs."""
-
-    chat: SimpleNamespace
 
     def __init__(self) -> None:
         self.chat = SimpleNamespace(completions=_CompletionsAPI())
@@ -138,7 +136,8 @@ async def _run(args: argparse.Namespace) -> int:
         print(f'Dataset path does not exist: {dataset_path}', file=sys.stderr)
         return 2
 
-    llm_client: Any = None if args.live_client else DeterministicAsyncOpenAI()
+    from openai import AsyncOpenAI
+    llm_client: AsyncOpenAI | None = None if args.live_client else cast(AsyncOpenAI, cast(object, DeterministicAsyncOpenAI()))
 
     report = await red_team(
         args.target,
@@ -146,9 +145,9 @@ async def _run(args: argparse.Namespace) -> int:
         categories=args.categories,
         evaluator_model=args.evaluator_model,
         parallelism=args.parallelism,
-        max_datapoints=args.max_datapoints,
+        max_static_datapoints=args.max_static_datapoints,
         backend=args.backend,
-        dataset_path=str(dataset_path),
+        dataset=str(dataset_path),
         llm_client=llm_client,
         description='Local static red-team E2E smoke test',
     )
@@ -156,9 +155,9 @@ async def _run(args: argparse.Namespace) -> int:
     errors = _validate_report(report)
     print(
         f"E2E run finished: total_results={report.total_results}, "
-        + f"vulnerabilities={report.summary.vulnerabilities_found}, "
-        + f"resistance_rate={report.summary.resistance_rate:.2f}, "
-        + f"categories={','.join(sorted(set(report.categories_tested)))}"
+        f"vulnerabilities={report.summary.vulnerabilities_found}, "
+        f"resistance_rate={report.summary.resistance_rate:.2f}, "
+        f"categories={','.join(sorted(set(report.categories_tested)))}"
     )
 
     if args.print_json:
@@ -188,7 +187,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument('--backend', default='openai', choices=['openai', 'orq'])
     parser.add_argument('--parallelism', type=int, default=2)
-    parser.add_argument('--max-datapoints', type=int, default=None)
+    parser.add_argument('--max-static-datapoints', type=int, default=None)
     parser.add_argument('--evaluator-model', default='e2e-local-evaluator')
     parser.add_argument(
         '--categories',

@@ -6,41 +6,22 @@ while memory and knowledge capabilities are inferred from explicit
 agent configuration (memory tools / knowledge bases).
 """
 
-import sys
-
-if sys.version_info >= (3, 11):
-    from enum import StrEnum  # pyright: ignore[reportUnreachable]
-else:
-    from enum import Enum
-
-    class StrEnum(str, Enum):  # type: ignore[no-redef]
-        """String enum compatible with Python 3.10."""
-
-        pass
-
+from typing import Any
 
 from loguru import logger
-from openai import AsyncOpenAI
+from openai import APIConnectionError, APIStatusError, AsyncOpenAI
+from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel, Field
 
-from evaluatorq.redteam.contracts import PIPELINE_CONFIG, AgentContext
+from evaluatorq.redteam.utils import safe_substitute
 
-
-class AgentCapability(StrEnum):
-    """Capability tags for agent resources."""
-
-    CODE_EXECUTION = 'code_execution'
-    SHELL_ACCESS = 'shell_access'
-    FILE_SYSTEM = 'file_system'
-    DATABASE = 'database'
-    WEB_REQUEST = 'web_request'
-    MEMORY_READ = 'memory_read'
-    MEMORY_WRITE = 'memory_write'
-    KNOWLEDGE_RETRIEVAL = 'knowledge_retrieval'
-    EMAIL = 'email'
-    MESSAGING = 'messaging'
-    PAYMENT = 'payment'
-    USER_DATA = 'user_data'
+from evaluatorq.redteam.contracts import (
+    DEFAULT_PIPELINE_MODEL,
+    PIPELINE_CONFIG,
+    AgentCapability,
+    AgentContext,
+)
+from evaluatorq.redteam.tracing import record_llm_response, with_llm_span
 
 
 class ToolCapabilities(BaseModel):
@@ -71,6 +52,10 @@ class AgentCapabilities(BaseModel):
         default_factory=dict,
         description='Mapping of tool/resource name to capability tags',
     )
+    classification_failed: bool = Field(
+        default=False,
+        description='True when tool classification failed; strategies are included optimistically',
+    )
 
     def all_capabilities(self) -> set[str]:
         """Get the flat set of all capability tag values."""
@@ -79,10 +64,10 @@ class AgentCapabilities(BaseModel):
             result.update(c.value for c in caps)
         return result
 
-    def has_any(self, required: list[str]) -> bool:
+    def has_any(self, required: list[AgentCapability]) -> bool:
         """Check if agent has any of the required capabilities."""
         agent_caps = self.all_capabilities()
-        return any(cap in agent_caps for cap in required)
+        return any(cap.value in agent_caps for cap in required)
 
 
 TOOL_CLASSIFICATION_PROMPT = """You are classifying an AI agent's tools into capability categories for security analysis.
@@ -131,7 +116,8 @@ Inference rules:
 async def classify_agent_capabilities(
     agent_context: AgentContext,
     llm_client: AsyncOpenAI,
-    model: str = 'azure/gpt-5-mini',
+    model: str = DEFAULT_PIPELINE_MODEL,
+    llm_kwargs: dict[str, Any] | None = None,
 ) -> AgentCapabilities:
     """Classify agent tools and resources into capability tags.
 
@@ -150,7 +136,7 @@ async def classify_agent_capabilities(
     capabilities: dict[str, list[AgentCapability]] = {}
 
     # Infer high-level memory/knowledge capabilities with an LLM step.
-    resource_caps = await _infer_resource_capabilities(agent_context, llm_client, model)
+    resource_caps = await _infer_resource_capabilities(agent_context, llm_client, model, llm_kwargs)
 
     # Explicit resource config remains a strong signal.
     if agent_context.memory_stores:
@@ -172,47 +158,65 @@ async def classify_agent_capabilities(
             capabilities['knowledge:inferred'] = [AgentCapability.KNOWLEDGE_RETRIEVAL]
 
     # Classify tools via LLM
+    classification_failed = False
     if agent_context.tools:
-        tool_caps = await _classify_tools(agent_context, llm_client, model)
+        tool_caps, _classify_ok = await _classify_tools(agent_context, llm_client, model, llm_kwargs)
+        classification_failed = not _classify_ok
         capabilities.update(tool_caps)
 
     all_caps = set()
     for caps in capabilities.values():
         all_caps.update(c.value for c in caps)
-    logger.info(
+    logger.debug(
         f'Classified agent capabilities: {len(capabilities)} resources, {len(all_caps)} unique capabilities: {sorted(all_caps)}'
     )
 
-    return AgentCapabilities(capabilities=capabilities)
+    return AgentCapabilities(capabilities=capabilities, classification_failed=classification_failed)
 
 
 async def _infer_resource_capabilities(
     agent_context: AgentContext,
     llm_client: AsyncOpenAI,
     model: str,
+    llm_kwargs: dict[str, Any] | None = None,
 ) -> ResourceCapabilityInference:
     """Infer memory/knowledge capabilities with structured LLM output."""
     tool_list = '\n'.join(f'- {t.name}: {t.description or "No description"}' for t in agent_context.tools) or '- none'
-    prompt = RESOURCE_CAPABILITY_PROMPT.format(
-        has_memory_stores=bool(agent_context.memory_stores),
-        has_knowledge_bases=bool(agent_context.knowledge_bases),
-        tool_list=tool_list,
-    )
+    prompt = safe_substitute(RESOURCE_CAPABILITY_PROMPT, {
+        '{has_memory_stores}': str(bool(agent_context.memory_stores)),
+        '{has_knowledge_bases}': str(bool(agent_context.knowledge_bases)),
+        '{tool_list}': tool_list,
+    })
     try:
-        response = await llm_client.chat.completions.parse(
+        infer_messages: list[ChatCompletionMessageParam] = [{'role': 'user', 'content': prompt}]
+        async with with_llm_span(
             model=model,
-            messages=[{'role': 'user', 'content': prompt}],
-            response_format=ResourceCapabilityInference,
-            temperature=0.0,
-            max_tokens=600,
-            extra_body=PIPELINE_CONFIG.retry_config,
-        )
-        parsed = response.choices[0].message.parsed
-        if parsed is None:
-            raise ValueError('Resource capability inference returned no parsed content')
-        return parsed
+            temperature=PIPELINE_CONFIG.capability_classification_temperature,
+            max_tokens=PIPELINE_CONFIG.capability_classification_max_tokens,
+            input_messages=infer_messages,
+            attributes={"orq.redteam.llm_purpose": "infer_resources"},
+        ) as res_span:
+            response = await llm_client.chat.completions.parse(
+                model=model,
+                messages=infer_messages,
+                response_format=ResourceCapabilityInference,
+                temperature=PIPELINE_CONFIG.capability_classification_temperature,
+                max_completion_tokens=PIPELINE_CONFIG.capability_classification_max_tokens,
+                extra_body=PIPELINE_CONFIG.retry_config,
+                **(llm_kwargs or {}),
+            )
+            parsed = response.choices[0].message.parsed
+            record_llm_response(
+                res_span, response,
+                output_content=getattr(response.choices[0].message, 'content', None),
+            )
+            if parsed is None:
+                raise ValueError('Resource capability inference returned no parsed content')
+            return parsed
+    except (APIConnectionError, APIStatusError):
+        raise
     except Exception as e:
-        logger.warning(f'Resource capability inference failed, using explicit-resource fallback: {e}')
+        logger.error(f'Capability inference failed, falling back to explicit resource check: {e}')
         return ResourceCapabilityInference(
             memory_read=bool(agent_context.memory_stores),
             memory_write=bool(agent_context.memory_stores),
@@ -224,46 +228,61 @@ async def _classify_tools(
     agent_context: AgentContext,
     llm_client: AsyncOpenAI,
     model: str,
-) -> dict[str, list[AgentCapability]]:
+    llm_kwargs: dict[str, Any] | None = None,
+) -> tuple[dict[str, list[AgentCapability]], bool]:
     """Classify tools via LLM call.
 
-    Args:
-        agent_context: Agent context with tools
-        llm_client: LLM client
-        model: Model to use
-
     Returns:
-        Dict mapping tool name to capability tags
+        Tuple of (capabilities dict, success bool). success=False when
+        classification failed due to an exception.
     """
     tool_list = '\n'.join(f'- {t.name}: {t.description or "No description"}' for t in agent_context.tools)
 
-    prompt = TOOL_CLASSIFICATION_PROMPT.format(tool_list=tool_list)
+    prompt = safe_substitute(TOOL_CLASSIFICATION_PROMPT, {'{tool_list}': tool_list})
 
     valid_values = {c.value for c in AgentCapability}
 
     try:
-        response = await llm_client.chat.completions.parse(
+        classify_messages: list[ChatCompletionMessageParam] = [{'role': 'user', 'content': prompt}]
+        async with with_llm_span(
             model=model,
-            messages=[{'role': 'user', 'content': prompt}],
-            response_format=ToolCapabilitiesResponse,
             temperature=PIPELINE_CONFIG.capability_classification_temperature,
             max_tokens=PIPELINE_CONFIG.capability_classification_max_tokens,
-            extra_body=PIPELINE_CONFIG.retry_config,
-        )
+            input_messages=classify_messages,
+            attributes={
+                "orq.redteam.llm_purpose": "classify_tools",
+                "orq.redteam.num_tools": len(agent_context.tools),
+            },
+        ) as cls_span:
+            response = await llm_client.chat.completions.parse(
+                model=model,
+                messages=classify_messages,
+                response_format=ToolCapabilitiesResponse,
+                temperature=PIPELINE_CONFIG.capability_classification_temperature,
+                max_completion_tokens=PIPELINE_CONFIG.capability_classification_max_tokens,
+                extra_body=PIPELINE_CONFIG.retry_config,
+                **(llm_kwargs or {}),
+            )
+            record_llm_response(
+                cls_span, response,
+                output_content=getattr(response.choices[0].message, 'content', None),
+            )
 
-        result = response.choices[0].message.parsed
-        if result is None:
-            raise ValueError('Tool classification returned no parsed content')
+            result = response.choices[0].message.parsed
+            if result is None:
+                raise ValueError('Tool classification returned no parsed content')
 
-        capabilities: dict[str, list[AgentCapability]] = {}
-        for tool_result in result.tools:
-            valid_caps = [AgentCapability(c) for c in tool_result.capabilities if c in valid_values]
-            if valid_caps:
-                capabilities[tool_result.tool_name] = valid_caps
+            capabilities: dict[str, list[AgentCapability]] = {}
+            for tool_result in result.tools:
+                valid_caps = [AgentCapability(c) for c in tool_result.capabilities if c in valid_values]
+                if valid_caps:
+                    capabilities[tool_result.tool_name] = valid_caps
 
-        logger.debug(f'LLM classified {len(capabilities)}/{len(agent_context.tools)} tools with capabilities')
-        return capabilities
+            logger.debug(f'LLM classified {len(capabilities)}/{len(agent_context.tools)} tools with capabilities')
+            return capabilities, True
 
+    except (APIConnectionError, APIStatusError):
+        raise
     except Exception as e:
-        logger.warning(f'Tool capability classification failed, returning empty: {e}')
-        return {}
+        logger.error(f'Tool classification failed, strategies will be included optimistically: {e}')
+        return {}, False

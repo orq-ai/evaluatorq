@@ -96,3 +96,125 @@ class TestSendResultsSerialization:
         payload = serialize(build_results(0.5, error="eval failed"))
         eval_score = payload["results"][0]["jobResults"][0]["evaluatorScores"][0]
         assert eval_score["error"] == "eval failed"
+
+
+def serialize_with_fixup(results: list[DataPointResult]) -> dict[str, Any]:
+    """Serialize results the same way send_results does, including the post-serialization fixup."""
+
+    class Payload(BaseModel):
+        results: list[DataPointResult]
+
+    payload_dict = Payload(results=results).model_dump(mode="json", exclude_none=True, by_alias=True)
+
+    for result in payload_dict.get("results", []):
+        for jr in result.get("jobResults") or []:
+            jr.setdefault("output", None)
+            jr.setdefault("error", "")
+            for es in jr.get("evaluatorScores") or []:
+                if "score" in es:
+                    es["score"].setdefault("explanation", "")
+                es.setdefault("error", "")
+
+    return payload_dict
+
+
+class TestSendResultsDefaults:
+    """Tests for the post-serialization fixup that ensures required fields are present."""
+
+    def test_null_output_preserved_after_fixup(self):
+        # output=None is stripped by exclude_none; the fixup must restore it as None
+        results = [
+            DataPointResult(
+                data_point=DataPoint(inputs={"text": "hello"}),
+                job_results=[
+                    JobResult(
+                        job_name="job1",
+                        output=None,
+                        evaluator_scores=[
+                            EvaluatorScore(
+                                evaluator_name="eval1",
+                                score=EvaluationResult(value=0.5),
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ]
+        payload = serialize_with_fixup(results)
+        jr = payload["results"][0]["jobResults"][0]
+        assert "output" in jr
+        assert jr["output"] is None
+
+    def test_null_error_becomes_empty_string(self):
+        # error=None on JobResult is stripped by exclude_none; the fixup must restore it as ""
+        results = [
+            DataPointResult(
+                data_point=DataPoint(inputs={"text": "hello"}),
+                job_results=[
+                    JobResult(
+                        job_name="job1",
+                        output="result",
+                        error=None,
+                        evaluator_scores=[
+                            EvaluatorScore(
+                                evaluator_name="eval1",
+                                score=EvaluationResult(value=0.5),
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ]
+        payload = serialize_with_fixup(results)
+        jr = payload["results"][0]["jobResults"][0]
+        assert "error" in jr
+        assert jr["error"] == ""
+
+    def test_null_explanation_becomes_empty_string(self):
+        # explanation=None on EvaluationResult is stripped by exclude_none; fixup must restore it as ""
+        results = [
+            DataPointResult(
+                data_point=DataPoint(inputs={"text": "hello"}),
+                job_results=[
+                    JobResult(
+                        job_name="job1",
+                        output="result",
+                        evaluator_scores=[
+                            EvaluatorScore(
+                                evaluator_name="eval1",
+                                score=EvaluationResult(value=0.5, explanation=None),
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ]
+        payload = serialize_with_fixup(results)
+        score = payload["results"][0]["jobResults"][0]["evaluatorScores"][0]["score"]
+        assert "explanation" in score
+        assert score["explanation"] == ""
+
+    def test_null_evaluator_score_error_becomes_empty_string(self):
+        # error=None on EvaluatorScore is stripped by exclude_none; fixup must restore it as ""
+        results = [
+            DataPointResult(
+                data_point=DataPoint(inputs={"text": "hello"}),
+                job_results=[
+                    JobResult(
+                        job_name="job1",
+                        output="result",
+                        evaluator_scores=[
+                            EvaluatorScore(
+                                evaluator_name="eval1",
+                                score=EvaluationResult(value=0.5),
+                                error=None,
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ]
+        payload = serialize_with_fixup(results)
+        es = payload["results"][0]["jobResults"][0]["evaluatorScores"][0]
+        assert "error" in es
+        assert es["error"] == ""
