@@ -14,12 +14,12 @@ testpaths = [ "tests" ]
 python_files = [ "test_*.py", "*_test.py" ]
 norecursedirs = [ ".venv", "dist", "*.egg-info" ]
 markers = [
-  "integration: marks tests as integration tests (require ORQ_API_KEY in .env)",
+  "integration: marks tests as integration tests (require ORQ_API_KEY in .env)"
 ]
 timeout = 120
 
 [tool.basedpyright]
-exclude = ["examples", ".venv", "src/evaluatorq/redteam/ui"]
+exclude = [ "examples", ".venv", "src/evaluatorq/redteam/ui" ]
 reportIncompatibleVariableOverride = "none"
 reportExplicitAny = "none"
 reportMissingImports = "none"
@@ -48,15 +48,11 @@ reportUnnecessaryTypeIgnoreComment = "none"
 
 [project]
 name = "evaluatorq"
-version = "1.2.0-rc.3"
+version = "1.2.1"
 description = "An evaluation framework library for Python that provides a flexible way to run parallel evaluations and optionally integrate with the Orq AI platform."
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = [
- "pydantic>=2.0",
- "httpx>=0.28.1",
- "rich>=14.2.0",
-]
+dependencies = [ "pydantic>=2.0", "httpx>=0.28.1", "rich>=14.2.0" ]
 
   [project.license]
   text = "MIT"
@@ -64,17 +60,22 @@ dependencies = [
   [project.optional-dependencies]
   orq = [ "orq-ai-sdk>=4.4.7" ]
   otel = [
-    "opentelemetry-api>=1.20.0",
-    "opentelemetry-sdk>=1.20.0",
-    "opentelemetry-exporter-otlp-proto-http>=1.20.0",
-    "opentelemetry-semantic-conventions>=0.41b0"
-  ]
-  langchain = ["langchain>=1.0.0, <2.0.0"]
-  redteam = ["openai>=1.0.0,<3.0.0", "loguru>=0.6.0", "typer>=0.12.0", "python-dotenv>=1.0.0", "huggingface-hub>=0.20.0"]
-  ui = ["streamlit>=1.30.0", "plotly>=5.18.0"]
-  export = ["kaleido>=0.2.1"]
-  all = ["evaluatorq[orq,otel,langchain,redteam,ui,export]"]
-
+  "opentelemetry-api>=1.20.0",
+  "opentelemetry-sdk>=1.20.0",
+  "opentelemetry-exporter-otlp-proto-http>=1.20.0",
+  "opentelemetry-semantic-conventions>=0.41b0"
+]
+  langchain = [ "langchain>=1.0.0, <2.0.0" ]
+  redteam = [
+  "openai>=1.0.0,<3.0.0",
+  "loguru>=0.6.0",
+  "typer>=0.12.0",
+  "python-dotenv>=1.0.0",
+  "huggingface-hub>=0.20.0"
+]
+  ui = [ "streamlit>=1.30.0", "plotly>=5.18.0" ]
+  export = [ "kaleido>=0.2.1" ]
+  all = [ "evaluatorq[orq,otel,langchain,redteam,ui,export]" ]
 
   [project.scripts]
   evaluatorq = "evaluatorq.cli:main"
@@ -104,5 +105,5 @@ dev = [
   "typer>=0.12.0",
   "python-dotenv>=1.0.0",
   "pytest-cov>=7.0.0",
-  "watchdog>=4.0.0",
+  "watchdog>=4.0.0"
 ]
