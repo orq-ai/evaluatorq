@@ -48,7 +48,7 @@ reportUnnecessaryTypeIgnoreComment = "none"
 
 [project]
 name = "evaluatorq"
-version = "1.2.1"
+version = "1.2.2"
 description = "An evaluation framework library for Python that provides a flexible way to run parallel evaluations and optionally integrate with the Orq AI platform."
 readme = "README.md"
 requires-python = ">=3.10"
