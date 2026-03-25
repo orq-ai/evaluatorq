@@ -40,7 +40,7 @@ async def main() -> None:
         raise RuntimeError("Set OPENAI_API_KEY or ORQ_API_KEY in your environment")
     using_openai = bool(os.environ.get("OPENAI_API_KEY"))
     base_url = os.environ.get("OPENAI_BASE_URL") or (
-        "https://api.openai.com/v1" if using_openai else "https://my.orq.ai/v2/router"
+        "https://api.openai.com/v1" if using_openai else os.environ.get("ORQ_BASE_URL", "https://my.orq.ai/v2/router")
     )
     client = AsyncOpenAI(api_key=api_key, base_url=base_url)
 

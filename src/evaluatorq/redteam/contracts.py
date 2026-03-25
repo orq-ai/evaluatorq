@@ -197,12 +197,14 @@ class Vulnerability(StrEnum):
     TRUST_EXPLOITATION = 'trust_exploitation'
     ROGUE_AGENTS = 'rogue_agents'
 
+    # Agent security (maps to OWASP LLM Top 10 LLM06)
+    EXCESSIVE_AGENCY = 'excessive_agency'
+
     # LLM security (maps to OWASP LLM Top 10)
     PROMPT_INJECTION = 'prompt_injection'
     SENSITIVE_INFO_DISCLOSURE = 'sensitive_info_disclosure'
     DATA_POISONING = 'data_poisoning'
     IMPROPER_OUTPUT = 'improper_output'
-    EXCESSIVE_AGENCY = 'excessive_agency'
     SYSTEM_PROMPT_LEAKAGE = 'system_prompt_leakage'
     VECTOR_EMBEDDING_WEAKNESS = 'vector_embedding_weakness'
     MISINFORMATION = 'misinformation'
