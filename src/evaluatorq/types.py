@@ -1,7 +1,8 @@
+import json
 from collections.abc import Awaitable, Sequence
 from typing import Any, Callable, ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 from typing_extensions import TypedDict
 
 # Keep output permissive: OpenResponses payloads are dict-shaped and should
@@ -10,7 +11,9 @@ Output = str | int | float | bool | dict[str, Any] | None
 """Output type alias"""
 
 
-EvaluationResultCellValue = str | int | float | dict[str, "str | float | dict[str, str | float]"]
+EvaluationResultCellValue = (
+    str | int | float | dict[str, str | float | dict[str, str | float]]
+)
 
 
 class EvaluationResultCell(BaseModel):
@@ -18,12 +21,33 @@ class EvaluationResultCell(BaseModel):
     value: dict[str, EvaluationResultCellValue]
 
 
+def _is_evaluation_result_cell_dict(value: dict[str, Any]) -> bool:
+    return isinstance(value.get("type"), str) and isinstance(value.get("value"), dict)
+
+
+def _json_default(obj: Any) -> Any:
+    """Fallback for json.dumps: convert Pydantic models to dicts, else str."""
+    if isinstance(obj, BaseModel):
+        return obj.model_dump(mode="json")
+    return str(obj)
+
+
 class EvaluationResult(BaseModel):
     model_config: ClassVar[ConfigDict] = {"populate_by_name": True}
 
-    value: str | int | float | bool | EvaluationResultCell
+    value: str | int | float | bool | EvaluationResultCell | dict[str, Any]
     explanation: str | None = None
     pass_: bool | None = Field(default=None, alias="pass")
+
+    @field_serializer("value", when_used="json")
+    def serialize_value(
+        self,
+        value: str | int | float | bool | EvaluationResultCell | dict[str, Any],
+    ) -> Any:
+        if isinstance(value, dict) and not _is_evaluation_result_cell_dict(value):
+            return json.dumps(value, default=_json_default)
+
+        return value
 
 
 class EvaluatorScore(BaseModel):
@@ -34,11 +58,18 @@ class EvaluatorScore(BaseModel):
 
 class JobResult(BaseModel):
     job_name: str = Field(serialization_alias="jobName")
-    output: Output
+    output: Output = Field(union_mode="left_to_right")
     error: str | None = None
     evaluator_scores: list[EvaluatorScore] | None = Field(
         default=None, serialization_alias="evaluatorScores"
     )
+
+    @field_serializer("output", when_used="json")
+    def serialize_output(self, output: Output) -> Any:
+        if isinstance(output, dict) and output.get("object") != "response":
+            return json.dumps(output, default=_json_default)
+
+        return output
 
 
 class _DataPointDictRequired(TypedDict):
@@ -97,7 +128,7 @@ Job = Callable[[DataPoint, int], Awaitable[dict[str, Any]]]
 
 
 class ScorerParameter(TypedDict):
-    """Parameters passed to a scorer function  
+    """Parameters passed to a scorer function
     Args:
         data: The data point being evaluated.
         output: The output produced by the job for the data point.

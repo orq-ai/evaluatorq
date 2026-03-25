@@ -2,7 +2,7 @@
 
 import shutil
 from collections import defaultdict
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from rich import box
 from rich.console import Console
@@ -11,8 +11,8 @@ from rich.text import Text
 
 from .types import EvaluationResultCell, EvaluatorqResult
 
-ScoreValue = float | bool | str | EvaluationResultCell
-"""Score value type - can be numeric, boolean, string or EvaluationResultCell"""
+ScoreValue = float | bool | str | EvaluationResultCell | dict[str, Any]
+"""Score value type - can be numeric, boolean, string, EvaluationResultCell or dict"""
 
 ScoresByEvaluatorAndJob = dict[str, dict[str, list[ScoreValue]]]
 """Mapping of evaluator_name -> job_name -> list of score values"""
@@ -158,6 +158,10 @@ def calculate_evaluator_averages(
                     # Calculate average for numeric scores
                     avg = sum(float(s) for s in scores if isinstance(s, (int, float))) / len(scores)
                     evaluator_averages[job_name] = (f"{avg:.2f}", "yellow")
+
+                elif isinstance(first_score, dict):
+                    # For dict scores, show placeholder
+                    evaluator_averages[job_name] = ("[dict]", "dim")
 
                 else:
                     # For strings, show placeholder

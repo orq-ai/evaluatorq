@@ -1,5 +1,6 @@
 """Tests for send_results serialization behavior."""
 
+import json
 from collections.abc import Callable
 from typing import Any
 
@@ -21,8 +22,9 @@ def build_results():
     """Factory fixture that creates a single DataPointResult with given score and error."""
 
     def _build(
-        score_value: float | bool | str | EvaluationResultCell,
+        score_value: float | bool | str | EvaluationResultCell | dict[str, Any],
         error: str | None = None,
+        output: Any = "result",
     ) -> list[DataPointResult]:
         return [
             DataPointResult(
@@ -30,7 +32,7 @@ def build_results():
                 job_results=[
                     JobResult(
                         job_name="job1",
-                        output="result",
+                        output=output,
                         evaluator_scores=[
                             EvaluatorScore(
                                 evaluator_name="eval1",
@@ -91,6 +93,55 @@ class TestSendResultsSerialization:
             "type": "bert_score",
             "value": {"precision": 0.9, "recall": 0.8, "f1": 0.85},
         }
+
+    def test_stringifies_arbitrary_object_score_values(self, build_results: Callable[..., list[DataPointResult]]):
+        payload = serialize(build_results({"reason": "too long", "tokens": 120}))
+        score = extract_score(payload)
+        assert score["value"] == '{"reason": "too long", "tokens": 120}'
+
+    def test_stringifies_object_job_outputs(self, build_results: Callable[..., list[DataPointResult]]):
+        payload = serialize(
+            build_results(
+                0.9,
+                output={"answer": "hello", "confidence": 0.9},
+            )
+        )
+        output = payload["results"][0]["jobResults"][0]["output"]
+        assert output == '{"answer": "hello", "confidence": 0.9}'
+
+    def test_keeps_evaluation_result_cell_score_value_unchanged_in_serialization(
+        self, build_results: Callable[..., list[DataPointResult]]
+    ):
+        cell = EvaluationResultCell(
+            type="bert_score",
+            value={"precision": 0.9, "recall": 0.8, "f1": 0.85},
+        )
+        payload = serialize(build_results(cell))
+        score = extract_score(payload)
+        assert score["value"] == {
+            "type": "bert_score",
+            "value": {"precision": 0.9, "recall": 0.8, "f1": 0.85},
+        }
+
+    def test_stringifies_dict_output_with_nested_pydantic_model(self, build_results: Callable[..., list[DataPointResult]]):
+        from evaluatorq.redteam.contracts import TokenUsage
+
+        usage = TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15, calls=1)
+        payload = serialize(
+            build_results(0.9, output={"response": "hello", "token_usage": usage})
+        )
+        output = payload["results"][0]["jobResults"][0]["output"]
+        assert isinstance(output, str)
+        parsed = json.loads(output)
+        assert parsed["response"] == "hello"
+        assert parsed["token_usage"]["prompt_tokens"] == 10
+        assert parsed["token_usage"]["total_tokens"] == 15
+
+    def test_preserves_response_resource_output_as_is(self, build_results: Callable[..., list[DataPointResult]]):
+        response_resource = {"object": "response", "id": "resp_123", "model": "gpt-4"}
+        payload = serialize(build_results(0.9, output=response_resource))
+        output = payload["results"][0]["jobResults"][0]["output"]
+        assert output == response_resource
 
     def test_serializes_error_strings(self, build_results: Callable[..., list[DataPointResult]]):
         payload = serialize(build_results(0.5, error="eval failed"))
