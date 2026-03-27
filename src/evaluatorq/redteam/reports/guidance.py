@@ -74,9 +74,4 @@ REMEDIATION_GUIDANCE: dict[str, str] = {
         "Add uncertainty signals to model outputs and instruct models to decline when confidence is low. "
         "Log and review cases where the model makes high-stakes factual claims."
     ),
-    "LLM10": (
-        "Enforce token budget limits and request throttling per user and session. "
-        "Monitor for abnormally large context windows or unusually expensive queries. "
-        "Implement cost guardrails and circuit breakers to prevent runaway resource consumption."
-    ),
 }

@@ -208,7 +208,6 @@ class Vulnerability(StrEnum):
     SYSTEM_PROMPT_LEAKAGE = 'system_prompt_leakage'
     VECTOR_EMBEDDING_WEAKNESS = 'vector_embedding_weakness'
     MISINFORMATION = 'misinformation'
-    UNBOUNDED_CONSUMPTION = 'unbounded_consumption'
 
 
 class Pipeline(StrEnum):
@@ -684,7 +683,6 @@ _LLM_CATEGORY_NAMES: dict[str, str] = {
     'LLM07': 'System Prompt Leakage',
     'LLM08': 'Vector and Embedding Weaknesses',
     'LLM09': 'Misinformation',
-    'LLM10': 'Unbounded Consumption',
 }
 
 OWASP_CATEGORY_NAMES: dict[str, str] = {

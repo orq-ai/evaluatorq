@@ -26,7 +26,7 @@ report = await red_team("llm:gpt-5-mini", categories=["LLM01", "ASI01"])
 
 ### Supported vulnerabilities
 
-19 vulnerability types across three domains:
+18 vulnerability types across three domains:
 
 | Domain | Vulnerability | Description |
 |--------|--------------|-------------|
@@ -46,7 +46,6 @@ report = await red_team("llm:gpt-5-mini", categories=["LLM01", "ASI01"])
 | **Model** | `improper_output` | Produce harmful or unvalidated output |
 | **Model** | `system_prompt_leakage` | Leak the system prompt contents |
 | **Model** | `misinformation` | Generate false or misleading information |
-| **Model** | `unbounded_consumption` | Exhaust resources via unbounded requests |
 | **Data** | `data_poisoning` | Corrupt training data or model weights |
 | **Data** | `vector_embedding_weakness` | Exploit vector/embedding retrieval |
 
@@ -57,7 +56,7 @@ Vulnerabilities map to industry security frameworks via `framework_mappings`:
 | Framework | Categories | Description |
 |-----------|-----------|-------------|
 | **OWASP ASI** | ASI01–ASI10 | Agentic Security Initiative — agent-layer risks |
-| **OWASP LLM Top 10** | LLM01–LLM10 | LLM-layer risks (prompt injection, data leakage, etc.) |
+| **OWASP LLM Top 10** | LLM01–LLM09 | LLM-layer risks (prompt injection, data leakage, etc.) |
 
 Some vulnerabilities map to multiple frameworks (e.g. `supply_chain` → ASI04 + LLM03).
 
@@ -88,7 +87,7 @@ redteam/
 │   └── registry.py           #   Backend resolution + LLM client factory
 ├── frameworks/               # Framework-specific strategy libraries
 │   ├── owasp_asi.py          #   ASI01–ASI10 attack strategies
-│   ├── owasp_llm.py          #   LLM01–LLM10 attack strategies
+│   ├── owasp_llm.py          #   LLM01–LLM09 attack strategies
 │   └── owasp/                #   Evaluator prompts and bridge
 ├── reports/                  # Report generation and export
 │   ├── converters.py         #   Result → RedTeamReport conversion

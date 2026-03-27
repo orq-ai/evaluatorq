@@ -1,6 +1,6 @@
 """OWASP LLM Top 10 attack strategies.
 
-Hardcoded strategies for LLM01-LLM10. Only categories with evaluators
+Hardcoded strategies for LLM01-LLM09. Only categories with evaluators
 are fully implemented:
 - LLM01: Prompt Injection
 - LLM02: Sensitive Information Disclosure

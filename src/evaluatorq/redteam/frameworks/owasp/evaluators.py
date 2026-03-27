@@ -19,6 +19,7 @@ Excluded ASI categories (require live system testing):
 
 Excluded LLM categories:
 - LLM03: Supply Chain — excluded (infrastructure-level, no dataset samples)
+- LLM10: Unbounded Consumption — excluded (resource exhaustion, not testable via prompt-based red teaming)
 """
 
 from collections.abc import Callable
@@ -44,7 +45,6 @@ from evaluatorq.redteam.frameworks.owasp.llm_evaluators import (
     get_llm07_system_prompt_leakage_evaluator,
     get_llm08_vector_embedding_weaknesses_evaluator,
     get_llm09_misinformation_evaluator,
-    get_llm10_unbounded_consumption_evaluator,
 )
 
 # Type alias for evaluator getter functions
@@ -69,7 +69,6 @@ _LLM_REGISTRY: dict[str, EvaluatorGetter] = {
     'LLM07': get_llm07_system_prompt_leakage_evaluator,
     'LLM08': get_llm08_vector_embedding_weaknesses_evaluator,
     'LLM09': get_llm09_misinformation_evaluator,
-    'LLM10': get_llm10_unbounded_consumption_evaluator,
 }
 
 # Unified registry supporting 'ASI01', 'OWASP-ASI01', 'LLM01', 'OWASP-LLM01' formats
@@ -202,6 +201,6 @@ def list_available_categories() -> list[str]:
     """List all available OWASP category codes.
 
     Returns:
-        List of category codes (ASI01-ASI10, LLM01-LLM10)
+        List of category codes (ASI01-ASI10, LLM01-LLM09)
     """
     return list(OWASP_EVALUATOR_REGISTRY.keys())
