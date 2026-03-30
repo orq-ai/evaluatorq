@@ -23,9 +23,9 @@ from .conftest import (
 def _dynamic_patches(mock_backend_bundle: BackendBundle):
     """Patch lazy imports used by _run_dynamic and _run_hybrid."""
     with (
-        patch("evaluatorq.redteam.backends.registry.resolve_backend", return_value=mock_backend_bundle),
-        patch("evaluatorq.tracing.setup.init_tracing_if_needed", return_value=None),
-        patch("evaluatorq.tracing.context.capture_parent_context", return_value=None),
+        patch("evaluatorq.redteam.runner.resolve_backend", return_value=mock_backend_bundle),
+        patch("evaluatorq.redteam.runner.init_tracing_if_needed", return_value=None),
+        patch("evaluatorq.redteam.runner.capture_parent_context", return_value=None),
     ):
         yield
 

@@ -28,6 +28,7 @@ from evaluatorq.redteam.contracts import (
     TokenUsage,
 )
 from evaluatorq.redteam.tracing import record_llm_response, set_span_attrs, with_llm_span, with_redteam_span
+from evaluatorq.redteam.utils import safe_substitute, xml_escape
 
 _ui_console = Console(stderr=True)
 _PROGRESS_LABEL_MAX_LEN = 52
@@ -242,8 +243,6 @@ def _build_adversarial_system_prompt(
     memory_str = (
         ', '.join(m.key or m.id for m in agent_context.memory_stores) if agent_context.memory_stores else 'None'
     )
-
-    from evaluatorq.redteam.utils import safe_substitute
 
     prompt = safe_substitute(ADVERSARIAL_SYSTEM_PROMPT, {
         '{objective}': objective,
@@ -693,7 +692,6 @@ class MultiTurnOrchestrator:
 
                     # Feed agent response (including errors) to adversarial LLM so it can adapt.
                     # Delimit the untrusted target response so the adversarial LLM treats it as data, not instructions.
-                    from evaluatorq.redteam.utils import xml_escape
                     sanitized_response = f'<target_response>\n{xml_escape(agent_response)}\n</target_response>'
                     analysis_prompt = ADVERSARIAL_ANALYSIS_PROMPT.replace('{response}', sanitized_response)
                     adversarial_messages.append({'role': 'user', 'content': analysis_prompt})

@@ -16,6 +16,7 @@ from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, OWASP_CATEGORY_
 from evaluatorq.redteam.contracts import PIPELINE_CONFIG, AgentCapability, AgentContext, AttackStrategy
 from evaluatorq.redteam.contracts import AttackTechnique, DeliveryMethod, Severity, TurnType, Vulnerability
 from evaluatorq.redteam.tracing import record_llm_response, with_llm_span
+from evaluatorq.redteam.utils import safe_substitute
 from evaluatorq.redteam.vulnerability_registry import (
     VULNERABILITY_DEFS,
     get_primary_category,
@@ -109,8 +110,6 @@ def _build_objective_prompt(
     # Single-pass substitution prevents cascading expansion from agent metadata
     # containing placeholder strings. {count} is left as a late-bound placeholder
     # for callers to fill per LLM call.
-    from evaluatorq.redteam.utils import safe_substitute
-
     prompt = safe_substitute(OBJECTIVE_GENERATION_PROMPT, {
         '{agent_name}': agent_context.display_name or agent_context.key,
         '{agent_description}': agent_context.description or 'An AI assistant',

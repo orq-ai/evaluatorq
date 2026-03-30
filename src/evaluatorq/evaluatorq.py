@@ -1,5 +1,6 @@
 import asyncio
 import os
+import sys
 from collections.abc import Awaitable, Sequence
 from datetime import datetime, timezone
 from typing import Any, cast
@@ -330,8 +331,6 @@ async def evaluatorq(
     # Check for pass failures and exit if any
     has_failures = check_pass_failures(results)
     if has_failures and _exit_on_failure:
-        import sys
-
         sys.exit(1)
 
     return results

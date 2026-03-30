@@ -13,6 +13,8 @@ Flow:
 from __future__ import annotations
 
 import asyncio
+import time
+import traceback
 import uuid
 from typing import TYPE_CHECKING, Any, cast
 
@@ -24,8 +26,8 @@ from evaluatorq.redteam.backends.base import DefaultErrorMapper
 from evaluatorq.redteam.backends.registry import create_async_llm_client, resolve_backend
 from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, PIPELINE_CONFIG, AttackOutput, AttackStrategy, EvaluatorConfig, Message, OrchestratorResult, TokenUsage, Vulnerability
-from evaluatorq.redteam.vulnerability_registry import get_primary_category, resolve_category_safe
-from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator
+from evaluatorq.redteam.vulnerability_registry import get_primary_category, resolve_category_safe, resolve_vulnerabilities
+from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator, _get_active_progress
 from evaluatorq.redteam.adaptive.strategy_planner import plan_strategies_for_categories, plan_strategies_for_vulnerabilities
 from evaluatorq.redteam.contracts import TurnType
 from evaluatorq.redteam.tracing import set_span_attrs, with_redteam_span
@@ -167,8 +169,6 @@ async def generate_dynamic_datapoints(
         Tuple of (datapoints, filtering_metadata) where filtering_metadata contains
         per-category counts of all/applicable/generated/filtered strategies.
     """
-    from evaluatorq.redteam.vulnerability_registry import resolve_vulnerabilities
-
     # Try resolving all categories to vulnerabilities for the primary path
     try:
         resolved_vulnerabilities = resolve_vulnerabilities(categories)
@@ -290,9 +290,6 @@ def create_dynamic_redteam_job(
     @job(job_name)
     async def dynamic_job(data: DataPoint, _row: int) -> dict[str, Any]:
         """Execute a single red-team attack for the given datapoint and return the serialized result."""
-        import time
-        import traceback
-
         inputs = dict(data.inputs)
         strategy = AttackStrategy.model_validate(inputs['strategy'])
         objective = str(inputs['objective'])
@@ -409,7 +406,6 @@ def create_dynamic_redteam_job(
 
                 # Advance the global progress bar for template single-turn attacks
                 # (multi-turn attacks are tracked by run_attack in the orchestrator).
-                from evaluatorq.redteam.adaptive.orchestrator import _get_active_progress
                 _active_progress = _get_active_progress()
                 if _active_progress is not None:
                     await _active_progress.finish_attack(None)

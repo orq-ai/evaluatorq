@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from openai.types.chat import ChatCompletionMessageParam
 
 from evaluatorq.redteam.backends.base import extract_provider_error_code, extract_status_code
-from evaluatorq.redteam.contracts import AgentContext, TokenUsage
+from evaluatorq.redteam.contracts import AgentContext, TargetKind, TokenUsage
 from evaluatorq.redteam.tracing import record_llm_response, with_llm_span
 
 if TYPE_CHECKING:
@@ -76,13 +76,43 @@ class OpenAIModelTarget:
         """Stateless adapter; nothing to reset."""
         return
 
-    def clone(self) -> OpenAIModelTarget:
+    def clone(self, memory_entity_id: str | None = None) -> OpenAIModelTarget:
         """Create a fresh target instance for parallel job safety."""
+        _ = memory_entity_id  # OpenAI models have no server-side memory.
         return OpenAIModelTarget(
             model_id=self.model_id,
             client=self.client,
             system_prompt=self.system_prompt,
         )
+
+    target_kind: TargetKind = TargetKind.OPENAI
+    """Used by the runner to populate report metadata correctly."""
+
+    @property
+    def name(self) -> str:
+        """Return the model ID as the target name."""
+        return self.model_id
+
+    async def get_agent_context(self) -> AgentContext:
+        """Return a minimal agent context for this model target."""
+        return AgentContext(
+            key=self.model_id,
+            display_name=self.model_id,
+            description='OpenAI model target',
+            model=self.model_id,
+        )
+
+    def create_target(self, agent_key: str, memory_entity_id: str | None = None) -> OpenAIModelTarget:
+        """Create a new OpenAI model target for the given model ID."""
+        return OpenAIModelTarget(
+            model_id=agent_key,
+            client=self.client,
+            system_prompt=self.system_prompt,
+        )
+
+    def map_error(self, exc: Exception) -> tuple[str, str]:
+        """Map an OpenAI exception to a normalized error code and message tuple."""
+        return OpenAIErrorMapper().map_error(exc)
 
 
 class OpenAIContextProvider:
@@ -124,15 +154,6 @@ class OpenAITargetFactory:
         return OpenAIModelTarget(model_id=agent_key, client=self._client, system_prompt=self._system_prompt)
 
 
-class NoopMemoryCleanup:
-    """No-op cleanup for backends without managed memory stores."""
-
-    async def cleanup_memory(self, agent_context: AgentContext, entity_ids: list[str]) -> None:
-        """No-op cleanup since OpenAI backend does not manage memory stores."""
-        _ = (agent_context, entity_ids)
-        logger.debug('Skipping memory cleanup: backend has no managed memory API')
-
-
 class OpenAIErrorMapper:
     """Normalize OpenAI exceptions into runtime error taxonomy."""
 
@@ -153,3 +174,10 @@ class OpenAIErrorMapper:
         if 'timeout' in name:
             return 'openai.timeout', f'{type(exc).__name__}: {exc}'
         return 'openai.unknown', f'{type(exc).__name__}: {exc}'
+
+
+def create_openai_target(model_id: str, client: Any = None) -> OpenAIModelTarget:
+    """Create an OpenAIModelTarget from environment config."""
+    from evaluatorq.redteam.backends.registry import create_async_llm_client
+    resolved = client or create_async_llm_client()
+    return OpenAIModelTarget(model_id=model_id, client=resolved)

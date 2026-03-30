@@ -8,6 +8,7 @@ Semantic convention:
     ``passed=False`` → the agent is VULNERABLE (attack succeeded)
 """
 
+import os
 import sys
 from datetime import datetime
 from typing import Any, Literal, TypedDict
@@ -210,6 +211,36 @@ class Vulnerability(StrEnum):
     MISINFORMATION = 'misinformation'
 
 
+class TargetKind(StrEnum):
+    """Kind of target being red-teamed.
+
+    String-parseable kinds (usable in ``"kind:value"`` target strings):
+        AGENT       — ORQ agent target (``"agent:my-bot"``, or bare ``"my-bot"``)
+        LLM         — model via configured LLM backend (``"llm:gpt-4o"``)
+        OPENAI      — model via direct OpenAI backend (``"openai:gpt-4o"``)
+        DEPLOYMENT  — ORQ deployment target (``"deployment:my-deployment"``)
+
+    Programmatic-only kinds (assigned automatically, not valid in target strings):
+        CUSTOM      — user-provided AgentTarget object passed directly
+    """
+
+    AGENT = 'agent'
+    LLM = 'llm'
+    OPENAI = 'openai'
+    DEPLOYMENT = 'deployment'
+    CUSTOM = 'custom'
+
+    @property
+    def is_model(self) -> bool:
+        """Return True if this target kind represents a model (not an agent)."""
+        return self in (TargetKind.LLM, TargetKind.OPENAI)
+
+    @property
+    def is_string_parseable(self) -> bool:
+        """Return True if this kind can appear in ``"kind:value"`` target strings."""
+        return self is not TargetKind.CUSTOM
+
+
 class Pipeline(StrEnum):
     """Supported unified report pipeline identifiers."""
 
@@ -387,15 +418,16 @@ class RedTeamInput(BaseModel):
         """Cross-resolve vulnerability ↔ category so either field can be omitted."""
         if not isinstance(data, dict):
             return data
-        from evaluatorq.redteam.vulnerability_registry import resolve_category_safe
+        # Lazy import: vulnerability_registry imports enums from this module at
+        # the top level, so importing it here avoids a circular import at class
+        # definition time.  By the time this validator runs (instance creation)
+        # both modules are fully initialised.
+        from evaluatorq.redteam.vulnerability_registry import get_primary_category, resolve_category_safe
         has_vuln = bool(data.get('vulnerability'))
         has_cat = bool(data.get('category'))
         if has_vuln and not has_cat:
-            # Derive category from vulnerability via the registry
-            from evaluatorq.redteam.contracts import Vulnerability as _Vuln
             try:
-                vuln_enum = _Vuln(data['vulnerability'])
-                from evaluatorq.redteam.vulnerability_registry import get_primary_category
+                vuln_enum = Vulnerability(data['vulnerability'])
                 data['category'] = get_primary_category(vuln_enum)
             except ValueError:
                 data['category'] = data['vulnerability']
@@ -563,7 +595,7 @@ class PipelineLLMConfig(BaseModel):
     adversarial_temperature: float = 1.0
 
     # Target agent timeout (ms) for ORQ SDK calls
-    target_agent_timeout_ms: int = 120_000
+    target_agent_timeout_ms: int = 240_000
 
     # Adversarial LLM call timeout (ms) — separate from target agent timeout
     llm_call_timeout_ms: int = 60_000
@@ -581,7 +613,6 @@ class PipelineLLMConfig(BaseModel):
         Returns an empty dict when using the OpenAI API directly (the
         ``retry`` parameter is ORQ-specific and rejected by OpenAI).
         """
-        import os
         if os.getenv('OPENAI_API_KEY') or not os.getenv('ORQ_API_KEY'):
             return {}
         return {'retry': {'count': self.retry_count, 'on_codes': self.retry_on_codes}}
@@ -652,7 +683,6 @@ class RedTeamConfig(BaseModel):
         This is the case when no custom ``llm_client`` / ``OPENAI_API_KEY``
         is set and ``ORQ_API_KEY`` is available.
         """
-        import os
         return not os.getenv('OPENAI_API_KEY') and bool(os.getenv('ORQ_API_KEY'))
 
 

@@ -10,8 +10,8 @@ from loguru import logger
 
 from evaluatorq.redteam.backends.base import BackendBundle
 from evaluatorq.redteam.exceptions import BackendError, CredentialError
+from evaluatorq.redteam.backends.base import NoopMemoryCleanup
 from evaluatorq.redteam.backends.openai import (
-    NoopMemoryCleanup,
     OpenAIContextProvider,
     OpenAIErrorMapper,
     OpenAITargetFactory,

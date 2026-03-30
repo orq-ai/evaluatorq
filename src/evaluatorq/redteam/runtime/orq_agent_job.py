@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from typing import Any
 
@@ -40,8 +41,6 @@ def create_orq_platform_agent_job(agent_key: str) -> Job:
                 'Install it with: pip install evaluatorq[orq]'
             )
             raise ImportError(msg) from e
-
-        import os
 
         from orq_ai_sdk import Orq
 

@@ -28,6 +28,7 @@ Section kinds:
 
 from __future__ import annotations
 
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -385,8 +386,6 @@ def _build_error_analysis_section(report: RedTeamReport) -> ReportSection:
 
 def _build_attack_heatmap_section(report: RedTeamReport) -> ReportSection:
     """Build vulnerability × technique attack success rate data for heatmap rendering."""
-    from collections import defaultdict
-
     # Accumulate counts: vulnerability -> technique -> {vuln, total}
     matrix: dict[str, dict[str, dict[str, int]]] = defaultdict(
         lambda: defaultdict(lambda: {"vulnerable": 0, "total": 0})
@@ -449,8 +448,6 @@ def _build_agent_comparison_section(report: RedTeamReport) -> ReportSection:
     - ``heatmap``: ``{vulnerabilities, agents, z_matrix}`` ready for direct table
       rendering (row-major, rows=vulnerabilities, cols=agents).
     """
-    from collections import defaultdict
-
     agents = list(report.tested_agents)
 
     # Group results by agent key
@@ -554,8 +551,6 @@ def _build_agent_disagreements_section(report: RedTeamReport) -> ReportSection:
     where at least two agents produced *different* verdicts, one entry is
     emitted containing the attack metadata and per-agent verdict + response.
     """
-    from collections import defaultdict
-
     agents = list(report.tested_agents)
 
     # Map: attack_id -> agent_key -> RedTeamResult
@@ -748,8 +743,6 @@ def _build_turn_depth_analysis_section(report: RedTeamReport) -> ReportSection |
     Only includes results where ``result.execution.turns > 1``.
     Returns ``None`` when there are no multi-turn results.
     """
-    from collections import defaultdict
-
     depth_counts: dict[int, dict[str, int]] = defaultdict(lambda: {"total": 0, "vulnerable": 0})
 
     for result in report.results:
@@ -789,8 +782,6 @@ def _build_token_usage_section(report: RedTeamReport) -> ReportSection | None:
 
     Returns ``None`` when no token usage data is present in the report.
     """
-    from collections import defaultdict
-
     # Prefer the canonical summary field; fall back to the legacy field
     overall = report.summary.token_usage_total or report.token_usage_summary
 
@@ -849,8 +840,6 @@ def _build_source_distribution_section(report: RedTeamReport) -> ReportSection |
     Returns ``None`` when there are fewer than two distinct sources (a single
     source gives no distribution to visualise).
     """
-    from collections import Counter
-
     source_counts: Counter[str] = Counter(r.attack.source for r in report.results)
 
     if len(source_counts) < 2:

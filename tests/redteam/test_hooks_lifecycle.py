@@ -59,7 +59,7 @@ class SpyHooks:
         self.received_confirm_payload = payload
         return self.confirm_result
 
-    def on_complete(self, report: RedTeamReport, *, output_dir: str | None = None) -> None:
+    def on_complete(self, report: RedTeamReport, *, output_dir: str | None = None, auto_save_path: str | None = None) -> None:
         self.calls.append(("on_complete", report, output_dir))
         self.received_complete_report = report
         self.received_complete_output_dir = output_dir

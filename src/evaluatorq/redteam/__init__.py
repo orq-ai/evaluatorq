@@ -102,6 +102,17 @@ from evaluatorq.redteam.vulnerability_registry import (
 )
 from evaluatorq.redteam.exceptions import BackendError, CancelledError, CredentialError, RedTeamError
 from evaluatorq.redteam.backends.registry import register_backend
+from evaluatorq.redteam.backends.base import (
+    AgentTarget,
+    DirectTargetFactory,
+    SupportsAgentContext,
+    SupportsClone,
+    SupportsErrorMapping,
+    SupportsMemoryCleanup,
+    SupportsTargetFactory,
+    SupportsTokenUsage,
+    is_agent_target,
+)
 from evaluatorq.redteam.hooks import (
     ConfirmPayload,
     DefaultHooks,
@@ -196,4 +207,14 @@ __all__ = [
     "CancelledError",
     # Backend extension
     "register_backend",
+    # Target protocols
+    "AgentTarget",
+    "SupportsClone",
+    "SupportsTokenUsage",
+    "SupportsAgentContext",
+    "SupportsTargetFactory",
+    "SupportsMemoryCleanup",
+    "SupportsErrorMapping",
+    "DirectTargetFactory",
+    "is_agent_target",
 ]

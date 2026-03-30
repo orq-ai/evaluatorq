@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -303,12 +304,12 @@ def run(
 
 
     target_config = TargetConfig(system_prompt=system_prompt) if system_prompt else None
-    targets = target if len(target) > 1 else target[0]
+    targets: list[str] | str = target if len(target) > 1 else target[0]
 
     try:
         report = asyncio.run(
             red_team(
-                target=targets,
+                target=targets,  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
                 name=name,
                 mode=mode,
                 categories=categories,
@@ -381,8 +382,6 @@ def ui(
     ] = "localhost",
 ) -> None:
     """Launch the interactive Streamlit dashboard for a red team report."""
-    import subprocess
-
     from evaluatorq.redteam.runner import get_runs_dir
 
     if report_path is None or latest:

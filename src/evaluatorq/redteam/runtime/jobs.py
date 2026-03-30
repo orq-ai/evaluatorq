@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq import DataPoint, Job, job
 from loguru import logger
 
+from evaluatorq.redteam.adaptive.orchestrator import _get_active_progress
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import Message, TokenUsage
 from evaluatorq.redteam.exceptions import CredentialError
@@ -51,8 +53,6 @@ def create_model_job(
             )
             raise ImportError(msg) from e
 
-        import os
-
         api_key = os.environ.get('ORQ_API_KEY')
         if not api_key:
             raise CredentialError('ORQ_API_KEY environment variable is not set')
@@ -68,7 +68,6 @@ def create_model_job(
             )
 
             # Advance the global progress bar for static attacks.
-            from evaluatorq.redteam.adaptive.orchestrator import _get_active_progress
             _active_progress = _get_active_progress()
             if _active_progress is not None:
                 await _active_progress.finish_attack(None)
@@ -106,7 +105,6 @@ def create_model_job(
                 f'content={response.choices[0].message.content}, finish_reason={finish_reason}'
             )
         # Advance the global progress bar for static attacks.
-        from evaluatorq.redteam.adaptive.orchestrator import _get_active_progress
         _active_progress = _get_active_progress()
         if _active_progress is not None:
             await _active_progress.finish_attack(None)

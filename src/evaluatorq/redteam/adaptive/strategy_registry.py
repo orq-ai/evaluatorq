@@ -16,8 +16,9 @@ from loguru import logger
 
 from evaluatorq.redteam.frameworks.owasp_asi import ASI_STRATEGIES
 from evaluatorq.redteam.frameworks.owasp_llm import LLM_STRATEGIES
-from evaluatorq.redteam.contracts import AgentCapability, AgentContext, AttackStrategy, Vulnerability  # noqa: TC001
-from evaluatorq.redteam.vulnerability_registry import CATEGORY_TO_VULNERABILITY
+from evaluatorq.redteam.frameworks.owasp.evaluators import OWASP_EVALUATOR_REGISTRY
+from evaluatorq.redteam.contracts import OWASP_CATEGORY_NAMES, AgentCapability, AgentContext, AttackStrategy, TurnType, Vulnerability  # noqa: TC001
+from evaluatorq.redteam.vulnerability_registry import CATEGORY_TO_VULNERABILITY, VULNERABILITY_DEFS
 
 if TYPE_CHECKING:
     from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities
@@ -221,8 +222,6 @@ def list_available_categories() -> list[str]:
     Returns:
         List of category codes (without OWASP- prefix)
     """
-    from evaluatorq.redteam.frameworks.owasp.evaluators import OWASP_EVALUATOR_REGISTRY
-
     strategy_cats = {k for k in STRATEGY_REGISTRY if not k.startswith('OWASP-')}
     evaluator_cats = {k for k in OWASP_EVALUATOR_REGISTRY if not k.startswith('OWASP-')}
     return sorted(strategy_cats | evaluator_cats)
@@ -240,10 +239,6 @@ def get_category_info() -> dict[str, dict[str, Any]]:
         - vulnerability: Vulnerability enum value (or None if unmapped)
         - vulnerability_name: Human-readable vulnerability name (or None if unmapped)
     """
-    from evaluatorq.redteam.contracts import OWASP_CATEGORY_NAMES
-    from evaluatorq.redteam.contracts import TurnType
-    from evaluatorq.redteam.vulnerability_registry import VULNERABILITY_DEFS
-
     info: dict[str, dict[str, Any]] = {}
     for category in list_available_categories():
         strategies = get_strategies_for_category(category)

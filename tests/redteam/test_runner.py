@@ -8,7 +8,7 @@ import pytest
 
 from evaluatorq.redteam import get_category_info, list_categories, red_team
 from evaluatorq.redteam.contracts import Pipeline, RedTeamReport, ReportSummary
-from evaluatorq.redteam.runner import _parse_target
+from evaluatorq.redteam.runner import _deduplicate_target_labels, _parse_target
 
 
 def _make_report(target: str = "agent:test", **kwargs) -> RedTeamReport:
@@ -58,6 +58,62 @@ class TestParseTarget:
         kind, value = _parse_target('openai:org/gpt-4o:latest')
         assert kind == 'openai'
         assert value == 'org/gpt-4o:latest'
+
+
+class _FakeTarget:
+    """Minimal agent target stub for label dedup tests."""
+    def __init__(self, name: str | None = None):
+        self._name = name
+
+    @property
+    def name(self) -> str | None:
+        return self._name
+
+
+class TestDeduplicateTargetLabels:
+    """Tests for _deduplicate_target_labels()."""
+
+    def test_no_targets(self):
+        labels, label_map = _deduplicate_target_labels([], [])
+        assert labels == []
+        assert label_map == {}
+
+    def test_string_targets_only(self):
+        labels, label_map = _deduplicate_target_labels(["agent:a", "agent:b"], [])
+        assert labels == ["agent:a", "agent:b"]
+        assert label_map == {}
+
+    def test_agent_targets_with_unique_names(self):
+        t1 = _FakeTarget("bot-a")
+        t2 = _FakeTarget("bot-b")
+        labels, label_map = _deduplicate_target_labels([], [t1, t2])
+        assert labels == ["bot-a", "bot-b"]
+        assert label_map[id(t1)] == "bot-a"
+        assert label_map[id(t2)] == "bot-b"
+
+    def test_duplicate_agent_target_names_get_suffixed(self):
+        t1 = _FakeTarget("my-bot")
+        t2 = _FakeTarget("my-bot")
+        t3 = _FakeTarget("my-bot")
+        labels, label_map = _deduplicate_target_labels([], [t1, t2, t3])
+        assert labels == ["my-bot", "my-bot-1", "my-bot-2"]
+
+    def test_agent_target_collides_with_string_target(self):
+        t1 = _FakeTarget("agent:foo")
+        labels, label_map = _deduplicate_target_labels(["agent:foo"], [t1])
+        assert labels == ["agent:foo", "agent:foo-1"]
+        assert label_map[id(t1)] == "agent:foo-1"
+
+    def test_fallback_to_class_name_when_no_name(self):
+        t1 = _FakeTarget(None)
+        labels, label_map = _deduplicate_target_labels([], [t1])
+        assert labels == ["_FakeTarget"]
+
+    def test_mixed_string_and_agent_targets(self):
+        t1 = _FakeTarget("bot-a")
+        t2 = _FakeTarget("bot-a")
+        labels, _ = _deduplicate_target_labels(["agent:x", "bot-a"], [t1, t2])
+        assert labels == ["agent:x", "bot-a", "bot-a-1", "bot-a-2"]
 
 
 class TestListCategories:
@@ -328,3 +384,67 @@ class TestRedTeamMultiTarget:
             result = await red_team('agent:test')
             assert result is mock_report
             mock_pipeline.assert_awaited_once()
+
+
+class TestRedTeamWithAgentTarget:
+    """Tests for passing AgentTarget objects directly to red_team()."""
+
+    @pytest.mark.asyncio
+    async def test_agent_target_dispatches_to_dynamic(self):
+        from unittest.mock import AsyncMock, patch
+
+        class MockTarget:
+            async def send_prompt(self, prompt: str) -> str:
+                return 'response'
+
+            def reset_conversation(self) -> None:
+                pass
+
+        mock_report = _make_report()
+        with patch(
+            'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
+            new_callable=AsyncMock,
+            return_value=mock_report,
+        ) as mock_dyn:
+            result = await red_team(MockTarget())
+            assert result is mock_report
+            mock_dyn.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_agent_target_list_dispatches(self):
+        from unittest.mock import AsyncMock, patch
+
+        class MockTarget:
+            async def send_prompt(self, prompt: str) -> str:
+                return 'response'
+
+            def reset_conversation(self) -> None:
+                pass
+
+        mock_report = _make_report()
+        with patch(
+            'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
+            new_callable=AsyncMock,
+            return_value=mock_report,
+        ):
+            result = await red_team([MockTarget(), 'agent:test'])
+            assert result is mock_report
+
+    @pytest.mark.asyncio
+    async def test_invalid_target_type_raises(self):
+        """Passing an object that does not implement AgentTarget protocol raises TypeError."""
+        with pytest.raises(TypeError, match='Invalid target type'):
+            await red_team(42)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+
+    @pytest.mark.asyncio
+    async def test_invalid_item_in_list_raises(self):
+        """Passing an invalid item inside a list raises TypeError."""
+        class MockTarget:
+            async def send_prompt(self, prompt: str) -> str:
+                return 'response'
+
+            def reset_conversation(self) -> None:
+                pass
+
+        with pytest.raises(TypeError, match='Invalid target type'):
+            await red_team([MockTarget(), 42])  # type: ignore[list-item, arg-type]  # pyright: ignore[reportArgumentType]

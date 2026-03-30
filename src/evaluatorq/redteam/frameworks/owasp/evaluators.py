@@ -27,7 +27,7 @@ from typing import TypedDict
 
 from evaluatorq.redteam.contracts import OWASP_CATEGORY_NAMES, Vulnerability
 from evaluatorq.redteam.frameworks.owasp.models import LlmEvaluatorEntity
-from evaluatorq.redteam.vulnerability_registry import CATEGORY_TO_VULNERABILITY, resolve_category_safe
+from evaluatorq.redteam.vulnerability_registry import CANONICAL_EVALUATOR_METADATA, CATEGORY_TO_VULNERABILITY, resolve_category_safe
 
 from evaluatorq.redteam.frameworks.owasp.agent_evaluators import (
     get_asi01_goal_hijacking_evaluator,
@@ -176,7 +176,6 @@ def get_evaluator_for_vulnerability(
 
 def get_evaluator_metadata_for_vulnerability(vuln: Vulnerability) -> EvaluatorMetadata | None:
     """Return evaluator metadata for a vulnerability."""
-    from evaluatorq.redteam.vulnerability_registry import CANONICAL_EVALUATOR_METADATA
     mapped = CANONICAL_EVALUATOR_METADATA.get(vuln)
     if mapped:
         return {'evaluator_id': mapped['evaluator_id'], 'evaluator_name': mapped['evaluator_name']}
