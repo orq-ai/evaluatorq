@@ -31,6 +31,7 @@ class JobSpanOptions:
     row_index: int
     job_name: str | None = None
     parent_context: Any | None = None
+    trace_type: str = "evaluatorq"
 
 
 @dataclass
@@ -73,6 +74,7 @@ async def with_job_span(
         parent_ctx = options.parent_context or otel_context.get_current()
 
         attributes: dict[str, Any] = {
+            "orq.trace_type": options.trace_type,
             "orq.run_id": options.run_id,
             "orq.row_index": options.row_index,
         }

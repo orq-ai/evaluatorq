@@ -1011,6 +1011,7 @@ async def _run_dynamic_or_hybrid(
     async with with_redteam_span(
         "orq.redteam.pipeline",
         attributes={
+            "orq.trace_type": "evaluatorq",
             "orq.redteam.targets": ", ".join(all_target_labels),
             "orq.redteam.mode": mode,
             "orq.redteam.backend": backend,
@@ -1473,6 +1474,7 @@ async def _run_dynamic_or_hybrid(
                     print_results=False,
                     _exit_on_failure=False,
                     _send_results=False,
+                    _trace_type="evaluatorq",
                     description=description or f'{mode.capitalize()} red teaming ({len(all_target_labels)} targets)',
                 )
             except (asyncio.CancelledError, KeyboardInterrupt):
@@ -1828,6 +1830,7 @@ async def _run_static(
         print_results=False,
         _exit_on_failure=False,
         _send_results=False,
+        _trace_type="evaluatorq",
         description=description or f'Static red teaming ({len(targets)} targets)',
     )
 

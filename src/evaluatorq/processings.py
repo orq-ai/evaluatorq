@@ -136,6 +136,7 @@ async def process_job(
             run_id=tracing_context.run_id if tracing_context else "",
             row_index=row_index,
             parent_context=tracing_context.parent_context if tracing_context else None,
+            trace_type=tracing_context.trace_type if tracing_context else "evaluatorq",
         )
     ) as job_span:
         try:

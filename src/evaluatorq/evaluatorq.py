@@ -62,6 +62,7 @@ async def evaluatorq(
     path: str | None = None,
     _exit_on_failure: bool = True,
     _send_results: bool = True,
+    _trace_type: str = "evaluatorq",
 ) -> EvaluatorqResult:
     """
     Run an evaluation with the given parameters.
@@ -139,6 +140,7 @@ async def evaluatorq(
             run_name=name,
             enabled=True,
             parent_context=parent_context,
+            trace_type=_trace_type,
         )
 
     orq_api_key = os.environ.get("ORQ_API_KEY")
