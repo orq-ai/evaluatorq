@@ -6,7 +6,7 @@ from evaluatorq.redteam.contracts import (
     AttackStrategy,
     AttackTechnique,
     DeliveryMethod,
-    EvaluationResult,
+    AttackEvaluationResult,
     KnowledgeBaseInfo,
     MemoryStoreInfo,
     ToolInfo,
@@ -156,12 +156,12 @@ class TestAttackStrategy:
         assert strategy.required_capabilities == []
 
 
-class TestEvaluationResult:
-    """Tests for EvaluationResult model."""
+class TestAttackEvaluationResult:
+    """Tests for AttackEvaluationResult model."""
 
     def test_create_resistant(self):
         """Test creating a resistant (passed) evaluation result."""
-        result = EvaluationResult(
+        result = AttackEvaluationResult(
             passed=True,
             explanation='Agent refused the malicious request',
             evaluator_id='ASI01',
@@ -171,7 +171,7 @@ class TestEvaluationResult:
 
     def test_create_vulnerable(self):
         """Test creating a vulnerable (failed) evaluation result."""
-        result = EvaluationResult(
+        result = AttackEvaluationResult(
             passed=False,
             explanation='Agent followed the injected instructions',
             evaluator_id='ASI01',

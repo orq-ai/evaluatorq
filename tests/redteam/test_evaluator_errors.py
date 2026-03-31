@@ -18,7 +18,7 @@ import httpx
 import pytest
 from openai import APIConnectionError, APIStatusError
 
-from evaluatorq.redteam.contracts import EvaluationResult, Vulnerability
+from evaluatorq.redteam.contracts import AttackEvaluationResult, Vulnerability
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +73,7 @@ class TestRunEvaluatorErrorPaths:
     @pytest.mark.asyncio
     async def test_invalid_json_returns_inconclusive_result(self):
         """When the LLM returns malformed JSON, _run_evaluator() must catch the
-        parse error and return an inconclusive EvaluationResult (passed=None)
+        parse error and return an inconclusive AttackEvaluationResult (passed=None)
         instead of propagating the exception."""
         from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 
@@ -88,7 +88,7 @@ class TestRunEvaluatorErrorPaths:
                 response="agent response",
             )
 
-        assert isinstance(result, EvaluationResult)
+        assert isinstance(result, AttackEvaluationResult)
         assert result.passed is None
         assert result.evaluator_id == "goal_hijacking"
         assert "error" in (result.raw_output or {})
@@ -157,7 +157,7 @@ class TestRunEvaluatorErrorPaths:
     async def test_empty_llm_content_returns_inconclusive_result(self):
         """When the LLM returns None (empty) content, the code falls back to
         '{}' and Pydantic validation fails.  The exception handler must catch
-        that and return an inconclusive EvaluationResult rather than crashing."""
+        that and return an inconclusive AttackEvaluationResult rather than crashing."""
         from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 
         # content=None triggers the `or '{}'` fallback, which is valid JSON
@@ -173,7 +173,7 @@ class TestRunEvaluatorErrorPaths:
                 response="agent response",
             )
 
-        assert isinstance(result, EvaluationResult)
+        assert isinstance(result, AttackEvaluationResult)
         assert result.passed is None
         assert result.evaluator_id == "goal_hijacking"
 
@@ -185,7 +185,7 @@ class TestRunEvaluatorErrorPaths:
     async def test_evaluate_unknown_category_returns_inconclusive_result(self):
         """When the category is not found in the vulnerability registry AND
         get_evaluator_for_category() also returns None, evaluate() must return
-        an inconclusive EvaluationResult with passed=None."""
+        an inconclusive AttackEvaluationResult with passed=None."""
         from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 
         mock_client = AsyncMock()
@@ -208,7 +208,7 @@ class TestRunEvaluatorErrorPaths:
                 response="agent response",
             )
 
-        assert isinstance(result, EvaluationResult)
+        assert isinstance(result, AttackEvaluationResult)
         assert result.passed is None
         assert result.evaluator_id == "none"
         assert "UNKNOWN-CATEGORY-99" in result.explanation
@@ -217,7 +217,7 @@ class TestRunEvaluatorErrorPaths:
     async def test_evaluate_resolve_category_safe_fallback_delegates_to_category_lookup(self):
         """When resolve_category_safe() returns None but get_evaluator_for_category()
         finds an evaluator, evaluate() must invoke the evaluator via _run_evaluator()
-        and return a proper EvaluationResult."""
+        and return a proper AttackEvaluationResult."""
         from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 
         # Build a mock evaluator entity with a minimal prompt attribute.
@@ -249,7 +249,7 @@ class TestRunEvaluatorErrorPaths:
                 response="sensitive data leaked",
             )
 
-        assert isinstance(result, EvaluationResult)
+        assert isinstance(result, AttackEvaluationResult)
         # passed=False means VULNERABLE
         assert result.passed is False
         assert result.evaluator_id == "CUSTOM01"
@@ -280,6 +280,6 @@ class TestRunEvaluatorErrorPaths:
                 response="I cannot help with that.",
             )
 
-        assert isinstance(result, EvaluationResult)
+        assert isinstance(result, AttackEvaluationResult)
         assert result.passed is True
         assert result.evaluator_id == "goal_hijacking"

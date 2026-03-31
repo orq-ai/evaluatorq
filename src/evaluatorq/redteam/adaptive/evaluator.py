@@ -13,7 +13,7 @@ from openai.types.chat import ChatCompletionMessageParam
 
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category, get_evaluator_for_vulnerability
-from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, EvaluationResult, TokenUsage, Vulnerability
+from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, AttackEvaluationResult, TokenUsage, Vulnerability
 from evaluatorq.redteam.tracing import record_llm_response, with_llm_span
 from evaluatorq.redteam.vulnerability_registry import resolve_category_safe
 
@@ -50,7 +50,7 @@ class OWASPEvaluator:
         vuln: Vulnerability,
         messages: list[dict[str, Any]] | list[Message],
         response: str,
-    ) -> EvaluationResult:
+    ) -> AttackEvaluationResult:
         """Evaluate an agent response for a specific vulnerability.
 
         This is the preferred path when a Vulnerability enum is already known —
@@ -60,7 +60,7 @@ class OWASPEvaluator:
         evaluator = get_evaluator_for_vulnerability(vuln, model_id=self.evaluator_model)
         if evaluator is None:
             logger.warning(f'No evaluator found for vulnerability {vuln.value}')
-            return EvaluationResult(
+            return AttackEvaluationResult(
                 passed=None,
                 explanation=f'No evaluator available for vulnerability {vuln.value}',
                 evaluator_id='none',
@@ -83,7 +83,7 @@ class OWASPEvaluator:
         category: str,
         messages: list[dict[str, Any]] | list[Message],
         response: str,
-    ) -> EvaluationResult:
+    ) -> AttackEvaluationResult:
         """Evaluate an agent response for vulnerability.
 
         Resolves the category to a Vulnerability enum when possible and delegates
@@ -100,7 +100,7 @@ class OWASPEvaluator:
         evaluator = get_evaluator_for_category(category, model_id=self.evaluator_model)
         if evaluator is None:
             logger.warning(f'No evaluator found for category {category}')
-            return EvaluationResult(
+            return AttackEvaluationResult(
                 passed=None,
                 explanation=f'No evaluator available for category {category}',
                 evaluator_id='none',
@@ -126,7 +126,7 @@ class OWASPEvaluator:
         messages: list[dict[str, Any]] | list[Message],
         response: str,
         span_attributes: dict[str, str],
-    ) -> EvaluationResult:
+    ) -> AttackEvaluationResult:
         """Execute an evaluator entity against a conversation and return a typed result."""
         try:
             prompt = evaluator.prompt
@@ -165,7 +165,7 @@ class OWASPEvaluator:
 
             parsed = EvaluatorResponsePayload.model_validate_json(raw_content)
 
-            return EvaluationResult(
+            return AttackEvaluationResult(
                 passed=parsed.value,
                 explanation=parsed.explanation,
                 evaluator_id=evaluator_id,
@@ -180,7 +180,7 @@ class OWASPEvaluator:
             raise
         except Exception as e:
             logger.error(f'Evaluation failed for {evaluator_id}, result will be inconclusive: {e}')
-            return EvaluationResult(
+            return AttackEvaluationResult(
                 passed=None,
                 explanation=f'Evaluation error: {e}',
                 evaluator_id=evaluator_id,
@@ -195,7 +195,7 @@ async def evaluate_attack(
     evaluator_model: str = DEFAULT_PIPELINE_MODEL,
     *,
     vulnerability: Vulnerability | None = None,
-) -> EvaluationResult:
+) -> AttackEvaluationResult:
     """Convenience function to evaluate a single attack.
 
     When vulnerability is provided, uses the vulnerability-first path directly,

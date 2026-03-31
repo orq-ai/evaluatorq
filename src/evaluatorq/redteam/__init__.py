@@ -47,7 +47,6 @@ from evaluatorq.redteam.contracts import (
     ErrorInfo,
     EvaluationPayload,
     AttackEvaluationResult,
-    EvaluationResult,  # backwards-compatible alias
     ExecutionDetails,
     FocusAreaRecommendation,
     Framework,
@@ -173,7 +172,6 @@ __all__ = [
     # Result models
     "OrchestratorResult",
     "AttackEvaluationResult",
-    "EvaluationResult",  # backwards-compatible alias
     "UnifiedEvaluationResult",
     "EvaluationPayload",
     "JobOutputPayload",
@@ -218,3 +216,21 @@ __all__ = [
     "DirectTargetFactory",
     "is_agent_target",
 ]
+
+
+_deprecated_warned: set[str] = set()
+
+
+def __getattr__(name: str):
+    if name == "EvaluationResult":
+        if name not in _deprecated_warned:
+            import warnings
+            _deprecated_warned.add(name)
+            warnings.warn(
+                "EvaluationResult is deprecated in evaluatorq.redteam. "
+                "Use AttackEvaluationResult instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return AttackEvaluationResult
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

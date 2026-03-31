@@ -212,33 +212,18 @@ class Vulnerability(StrEnum):
 
 
 class TargetKind(StrEnum):
-    """Kind of target being red-teamed.
-
-    String-parseable kinds (usable in ``"kind:value"`` target strings):
-        AGENT       — ORQ agent target (``"agent:my-bot"``, or bare ``"my-bot"``)
-        LLM         — model via configured LLM backend (``"llm:gpt-4o"``)
-        OPENAI      — model via direct OpenAI backend (``"openai:gpt-4o"``)
-        DEPLOYMENT  — ORQ deployment target (``"deployment:my-deployment"``)
-
-    Programmatic-only kinds (assigned automatically, not valid in target strings):
-        CUSTOM      — user-provided AgentTarget object passed directly
-    """
+    """Kind of target being red-teamed."""
 
     AGENT = 'agent'
     LLM = 'llm'
     OPENAI = 'openai'
     DEPLOYMENT = 'deployment'
-    CUSTOM = 'custom'
+    DIRECT = 'direct'
 
     @property
     def is_model(self) -> bool:
         """Return True if this target kind represents a model (not an agent)."""
         return self in (TargetKind.LLM, TargetKind.OPENAI)
-
-    @property
-    def is_string_parseable(self) -> bool:
-        """Return True if this kind can appear in ``"kind:value"`` target strings."""
-        return self is not TargetKind.CUSTOM
 
 
 class Pipeline(StrEnum):
@@ -899,9 +884,6 @@ class AttackEvaluationResult(BaseModel):
     raw_output: dict[str, Any] | None = Field(default=None, description='Raw evaluator output')
 
 
-# Backwards-compatible alias
-EvaluationResult = AttackEvaluationResult
-
 
 # ---------------------------------------------------------------------------
 # Result and report models
@@ -1410,3 +1392,21 @@ class ReportSnapshot(BaseModel):
     resistance_rate: float
     vulnerabilities_found: int
     top_techniques: dict[str, int] = Field(default_factory=dict)
+
+
+_deprecated_warned: set[str] = set()
+
+
+def __getattr__(name: str):
+    if name == "EvaluationResult":
+        if name not in _deprecated_warned:
+            import warnings
+            _deprecated_warned.add(name)
+            warnings.warn(
+                "EvaluationResult is deprecated in evaluatorq.redteam.contracts. "
+                "Use AttackEvaluationResult instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return AttackEvaluationResult
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
