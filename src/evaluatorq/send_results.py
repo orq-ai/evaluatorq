@@ -1,7 +1,6 @@
 """Send evaluation results to Orq platform."""
 
 import os
-import re
 from datetime import datetime
 
 import httpx
@@ -77,11 +76,7 @@ async def send_results_to_orq(
         )
 
         # Get base URL from environment or use default.
-        # ORQ_BASE_URL is typically the frontend URL (e.g. https://my.orq.ai)
-        # but the API lives on api.*.  Transform my. → api. to match the TS
-        # tracing setup convention (packages/evaluatorq/src/lib/tracing/setup.ts).
-        raw_url = os.getenv("ORQ_BASE_URL", "https://api.orq.ai").rstrip("/")
-        base_url = re.sub(r"^(https?://)my\.", r"\1api.", raw_url)
+        base_url = os.getenv("ORQ_BASE_URL", "https://api.orq.ai").rstrip("/")
         orq_debug = os.getenv("ORQ_DEBUG", "false").lower() == "true"
 
         # Serialize with aliases, stripping None on optional fields (the API
