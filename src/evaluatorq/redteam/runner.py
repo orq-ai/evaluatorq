@@ -47,7 +47,7 @@ from evaluatorq.redteam.backends.base import (
     is_agent_target,
 )
 from evaluatorq.redteam.backends.registry import create_async_llm_client, resolve_backend
-from evaluatorq.redteam.contracts import AgentContext, DEFAULT_PIPELINE_MODEL, Pipeline, PipelineStage, RedTeamConfig, RedTeamReport, TargetConfig, TargetKind, Vulnerability, normalize_category
+from evaluatorq.redteam.contracts import AgentContext, DEFAULT_PIPELINE_MODEL, PIPELINE_CONFIG, Pipeline, PipelineStage, RedTeamConfig, RedTeamReport, TargetConfig, TargetKind, Vulnerability, normalize_category
 from evaluatorq.redteam.exceptions import CancelledError, CredentialError
 from evaluatorq.redteam.hooks import ConfirmPayload, DefaultHooks, PipelineHooks
 from evaluatorq.redteam.reports.recommendations import generate_focus_area_recommendations
@@ -656,6 +656,8 @@ def _create_job_for_target(
     fallback to model) and returns the appropriate
     :func:`~evaluatorq.redteam.runtime.jobs.create_model_job` result.
 
+    Uses ``PIPELINE_CONFIG.target_max_tokens`` for the response token limit.
+
     Args:
         target:        Full target string, e.g. ``"agent:my-key"`` or
                        ``"llm:openai/gpt-4o"``.
@@ -667,10 +669,11 @@ def _create_job_for_target(
         A job callable as returned by ``create_model_job``.
     """
     kind, value = _parse_target(target)
+    common = dict(llm_client=llm_client, system_prompt=system_prompt, max_tokens=PIPELINE_CONFIG.target_max_tokens)
     if kind == 'agent':
-        return create_model_job(agent_key=value, llm_client=llm_client, system_prompt=system_prompt)
+        return create_model_job(agent_key=value, **common)
     elif kind == 'deployment':
-        return create_model_job(deployment_key=value, llm_client=llm_client, system_prompt=system_prompt)
+        return create_model_job(deployment_key=value, **common)
     elif kind in ('llm', 'openai'):
         has_orq = bool(os.environ.get('ORQ_API_KEY'))
         has_openai = bool(os.environ.get('OPENAI_API_KEY'))
@@ -683,9 +686,9 @@ def _create_job_for_target(
                 f"No API key found for llm target '{value}'. "
                 "Set ORQ_API_KEY (for Orq proxy) or OPENAI_API_KEY (for direct OpenAI)."
             )
-        return create_model_job(model=value, llm_client=llm_client, system_prompt=system_prompt)
+        return create_model_job(model=value, **common)
     else:
-        return create_model_job(model=value, llm_client=llm_client, system_prompt=system_prompt)
+        return create_model_job(model=value, **common)
 
 
 # ---------------------------------------------------------------------------

@@ -564,20 +564,23 @@ class PipelineLLMConfig(BaseModel):
     retry_on_codes: list[int] = Field(default=[429, 500, 502, 503, 504])
 
     # Step 1: Capability classification — deterministic analysis of agent tools
-    capability_classification_max_tokens: int = 4000
+    capability_classification_max_tokens: int = 5000
     capability_classification_temperature: float = 1.0
 
     # Step 2: Strategy generation — creative but structured strategy/objective creation
-    strategy_generation_max_tokens: int = 4000
+    strategy_generation_max_tokens: int = 5000
     strategy_generation_temperature: float = 1.0
 
     # Step 3: Tool adaptation — deterministic rewrite of prompts to target specific tools
-    tool_adaptation_max_tokens: int = 4000
+    tool_adaptation_max_tokens: int = 5000
     tool_adaptation_temperature: float = 1.0
 
     # Step 4: Adversarial prompt generation — creative attack message crafting
-    adversarial_max_tokens: int = 4000
+    adversarial_max_tokens: int = 5000
     adversarial_temperature: float = 1.0
+
+    # Target model max_tokens for static/hybrid model job responses
+    target_max_tokens: int = 5000
 
     # Target agent timeout (ms) for ORQ SDK calls
     target_agent_timeout_ms: int = 240_000
