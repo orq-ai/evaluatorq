@@ -73,9 +73,10 @@ dependencies = [ "pydantic>=2.0", "httpx>=0.28.1", "rich>=14.2.0" ]
   "python-dotenv>=1.0.0",
   "huggingface-hub>=0.20.0"
 ]
+  simulation = [ "openai>=1.0.0,<3.0.0", "orq-ai-sdk>=4.4.7" ]
   ui = [ "streamlit>=1.30.0", "plotly>=5.18.0" ]
   export = [ "kaleido>=0.2.1" ]
-  all = [ "evaluatorq[orq,otel,langchain,redteam,ui,export]" ]
+  all = [ "evaluatorq[orq,otel,langchain,redteam,simulation,ui,export]" ]
 
   [project.scripts]
   evaluatorq = "evaluatorq.cli:main"

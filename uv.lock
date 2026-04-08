@@ -440,6 +440,9 @@ redteam = [
     { name = "python-dotenv" },
     { name = "typer" },
 ]
+simulation = [
+    { name = "openai" },
+]
 ui = [
     { name = "plotly" },
     { name = "streamlit" },
@@ -469,13 +472,14 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "evaluatorq", extras = ["orq", "otel", "langchain", "redteam", "ui", "export"], marker = "extra == 'all'" },
+    { name = "evaluatorq", extras = ["orq", "otel", "langchain", "redteam", "simulation", "ui", "export"], marker = "extra == 'all'" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "huggingface-hub", marker = "extra == 'redteam'", specifier = ">=0.20.0" },
     { name = "kaleido", marker = "extra == 'export'", specifier = ">=0.2.1" },
     { name = "langchain", marker = "extra == 'langchain'", specifier = ">=1.0.0,<2.0.0" },
     { name = "loguru", marker = "extra == 'redteam'", specifier = ">=0.6.0" },
     { name = "openai", marker = "extra == 'redteam'", specifier = ">=1.0.0,<3.0.0" },
+    { name = "openai", marker = "extra == 'simulation'", specifier = ">=1.0.0,<3.0.0" },
     { name = "opentelemetry-api", marker = "extra == 'otel'", specifier = ">=1.20.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'otel'", specifier = ">=1.20.0" },
     { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.20.0" },
@@ -488,7 +492,7 @@ requires-dist = [
     { name = "streamlit", marker = "extra == 'ui'", specifier = ">=1.30.0" },
     { name = "typer", marker = "extra == 'redteam'", specifier = ">=0.12.0" },
 ]
-provides-extras = ["orq", "otel", "langchain", "redteam", "ui", "export", "all"]
+provides-extras = ["orq", "otel", "langchain", "redteam", "simulation", "ui", "export", "all"]
 
 [package.metadata.requires-dev]
 dev = [
