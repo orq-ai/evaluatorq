@@ -14,7 +14,7 @@ from evaluatorq.simulation.utils.prompt_builders import (
     build_scenario_user_context,
     generate_datapoint,
 )
-from evaluatorq.simulation.utils.sanitize import delimit
+from evaluatorq.common.sanitize import delimit
 
 __all__ = [
     "build_datapoint_system_prompt",

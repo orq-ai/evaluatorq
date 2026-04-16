@@ -13,7 +13,7 @@ from typing import Any
 
 from evaluatorq.simulation.agents.base import AgentConfig, BaseAgent, LLMResult
 from evaluatorq.simulation.types import ChatMessage, Criterion, Judgment
-from evaluatorq.simulation.utils.sanitize import delimit
+from evaluatorq.common.sanitize import delimit
 
 logger = logging.getLogger(__name__)
 

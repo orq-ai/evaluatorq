@@ -10,7 +10,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from evaluatorq.simulation.types import DEFAULT_MODEL, CommunicationStyle, Persona
-from evaluatorq.simulation.utils.sanitize import delimit
+from evaluatorq.common.sanitize import delimit
 from evaluatorq.simulation.utils.structured_output import generate_structured
 
 logger = logging.getLogger(__name__)

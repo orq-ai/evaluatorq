@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import re
-import xml.sax.saxutils
+
+from evaluatorq.common.sanitize import xml_escape
+
+# Re-export for backwards compatibility
+__all__ = ["safe_substitute", "xml_escape"]
 
 
 def safe_substitute(template: str, replacements: dict[str, str]) -> str:
@@ -23,8 +27,3 @@ def safe_substitute(template: str, replacements: dict[str, str]) -> str:
         return template
     pattern = re.compile('|'.join(re.escape(k) for k in replacements))
     return pattern.sub(lambda m: replacements[m.group(0)], template)
-
-
-def xml_escape(text: str) -> str:
-    """Escape text for safe embedding inside XML tags."""
-    return xml.sax.saxutils.escape(text)

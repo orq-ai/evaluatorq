@@ -17,7 +17,7 @@ from evaluatorq.simulation.types import (
     Scenario,
     ConversationStrategy,
 )
-from evaluatorq.simulation.utils.sanitize import delimit
+from evaluatorq.common.sanitize import delimit
 
 # ---------------------------------------------------------------------------
 # Emotion instructions (local to prompt builders)

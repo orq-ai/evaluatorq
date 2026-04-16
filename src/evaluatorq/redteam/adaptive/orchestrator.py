@@ -28,7 +28,8 @@ from evaluatorq.redteam.contracts import (
     TokenUsage,
 )
 from evaluatorq.redteam.tracing import record_llm_response, set_span_attrs, with_llm_span, with_redteam_span
-from evaluatorq.redteam.utils import safe_substitute, xml_escape
+from evaluatorq.common.sanitize import xml_escape
+from evaluatorq.redteam.utils import safe_substitute
 
 _ui_console = Console(stderr=True)
 _PROGRESS_LABEL_MAX_LEN = 52
@@ -691,7 +692,8 @@ class MultiTurnOrchestrator:
                     adversarial_messages.append({'role': 'assistant', 'content': attack_prompt})
 
                     # Feed agent response (including errors) to adversarial LLM so it can adapt.
-                    # Delimit the untrusted target response so the adversarial LLM treats it as data, not instructions.
+                    # Use xml_escape (not delimit) — the target response is attacker-controlled
+                    # agent output, so ALL angle brackets must be neutralized.
                     sanitized_response = f'<target_response>\n{xml_escape(agent_response)}\n</target_response>'
                     analysis_prompt = ADVERSARIAL_ANALYSIS_PROMPT.replace('{response}', sanitized_response)
                     adversarial_messages.append({'role': 'user', 'content': analysis_prompt})

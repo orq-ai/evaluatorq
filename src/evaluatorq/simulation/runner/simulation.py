@@ -187,14 +187,11 @@ class SimulationRunner:
         first_message: str | None = None,
     ) -> SimulationResult:
         """Run a single simulation. Never throws -- returns error SimulationResult on failure."""
-        stored_system_prompt: str | None = None
-
         # Resolve datapoint
         if datapoint:
             persona = datapoint.persona
             scenario = datapoint.scenario
             first_message = first_message or (datapoint.first_message or None)
-            stored_system_prompt = datapoint.user_system_prompt or None
         elif not persona or not scenario:
             return _error_result(
                 "Must provide either datapoint or both persona and scenario",
@@ -208,7 +205,7 @@ class SimulationRunner:
         get_total_usage: Callable[[], TokenUsage] | None = None
 
         try:
-            system_prompt = stored_system_prompt or build_datapoint_system_prompt(
+            system_prompt = build_datapoint_system_prompt(
                 persona, scenario
             )  # type: ignore[arg-type]
             client = self._get_shared_client()
@@ -331,7 +328,7 @@ class SimulationRunner:
             )
 
         except Exception as e:
-            logger.error("SimulationRunner.run() failed: %s", e)
+            logger.error("SimulationRunner.run() failed: %s", e, exc_info=True)
             error_msg = str(e)
             try:
                 usage = (

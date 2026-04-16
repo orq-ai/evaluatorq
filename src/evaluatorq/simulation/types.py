@@ -347,4 +347,6 @@ class Datapoint(BaseModel):
     persona: Persona
     scenario: Scenario
     user_system_prompt: str
+    """Cached/serialized system prompt. Used for export only — the runner
+    always rebuilds from persona + scenario via ``build_datapoint_system_prompt``."""
     first_message: str
