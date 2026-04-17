@@ -586,7 +586,7 @@ class PipelineLLMConfig(BaseModel):
     target_agent_timeout_ms: int = 240_000
 
     # Adversarial LLM call timeout (ms) — separate from target agent timeout
-    llm_call_timeout_ms: int = 60_000
+    llm_call_timeout_ms: int = 90_000
 
     # Overall cleanup timeout (ms) — best-effort, should never block the pipeline
     cleanup_timeout_ms: int = 60_000

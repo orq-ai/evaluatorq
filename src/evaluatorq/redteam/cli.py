@@ -208,7 +208,7 @@ def run(
     parallelism: Annotated[
         int,
         typer.Option(help="Maximum concurrent evaluatorq jobs."),
-    ] = 5,
+    ] = 10,
     generated_strategy_count: Annotated[
         int,
         typer.Option(help="Number of strategies to generate per category."),

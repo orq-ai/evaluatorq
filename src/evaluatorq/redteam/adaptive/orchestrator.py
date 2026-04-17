@@ -426,6 +426,7 @@ class MultiTurnOrchestrator:
         error_details: dict[str, Any] | None = None
         error_turn: int | None = None
         consecutive_agent_errors = 0
+        consecutive_adversarial_timeouts = 0
         truncation_warnings: list[int] = []  # turns where finish_reason=length
 
         progress = _get_active_progress()
@@ -496,20 +497,30 @@ class MultiTurnOrchestrator:
                                 attack_prompt = attack_response.choices[0].message.content or ''
                                 record_llm_response(adv_span, attack_response, output_content=attack_prompt)
                     except asyncio.TimeoutError:
-                        error = f'Adversarial LLM timed out after {llm_timeout_s:.0f}s'
-                        error_type = 'llm_error'
-                        error_stage = 'adversarial_generation'
-                        error_code = 'adversarial.timeout'
-                        error_details = {
-                            'timeout_ms': PIPELINE_CONFIG.llm_call_timeout_ms,
-                        }
-                        error_turn = turn + 1
-                        logger.warning(f'Adversarial LLM timed out for {strategy.name} on turn {turn + 1}')
+                        consecutive_adversarial_timeouts += 1
+                        logger.warning(
+                            f'Adversarial LLM timed out for {strategy.name} on turn {turn + 1} '
+                            f'({consecutive_adversarial_timeouts} consecutive)'
+                        )
                         set_span_attrs(turn_span, {
-                            "orq.redteam.error_type": error_type,
+                            "orq.redteam.error_type": "llm_error",
                             "orq.redteam.finish_reason": "adversarial_timeout",
                         })
-                        break
+                        if consecutive_adversarial_timeouts >= 2:
+                            error = (
+                                f'Adversarial LLM timed out {consecutive_adversarial_timeouts} consecutive turns '
+                                f'after {llm_timeout_s:.0f}s each'
+                            )
+                            error_type = 'llm_error'
+                            error_stage = 'adversarial_generation'
+                            error_code = 'adversarial.timeout'
+                            error_details = {
+                                'timeout_ms': PIPELINE_CONFIG.llm_call_timeout_ms,
+                                'consecutive_timeouts': consecutive_adversarial_timeouts,
+                            }
+                            error_turn = turn + 1
+                            break
+                        continue
                     except Exception as e:
                         error = f'Adversarial LLM exception: {e}'
                         error_type = 'llm_error'
@@ -526,6 +537,9 @@ class MultiTurnOrchestrator:
                             "orq.redteam.finish_reason": "adversarial_error",
                         })
                         break
+
+                    # Reset adversarial timeout counter on a successful LLM call
+                    consecutive_adversarial_timeouts = 0
 
                     # Extract finish_reason for diagnostics
                     choice = attack_response.choices[0] if attack_response.choices else None
@@ -715,6 +729,12 @@ class MultiTurnOrchestrator:
         finally:
             if progress is not None:
                 await progress.finish_attack(task_id)
+
+        if consecutive_adversarial_timeouts > 0 and error is None:
+            logger.warning(
+                f'Conversation for {strategy.name} ended with {consecutive_adversarial_timeouts} '
+                'unresolved adversarial timeout(s) — last turn was dropped silently'
+            )
 
         duration = time.time() - start_time
         logger.debug(

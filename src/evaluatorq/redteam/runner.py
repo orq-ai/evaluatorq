@@ -279,7 +279,7 @@ async def red_team(
     max_per_category: int | None = None,
     attack_model: str = DEFAULT_PIPELINE_MODEL,
     evaluator_model: str = DEFAULT_PIPELINE_MODEL,
-    parallelism: int = 5,
+    parallelism: int = 10,
     generate_strategies: bool = True,
     generated_strategy_count: int = 2,
     max_dynamic_datapoints: int | None = None,
