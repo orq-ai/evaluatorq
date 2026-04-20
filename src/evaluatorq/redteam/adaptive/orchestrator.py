@@ -732,9 +732,16 @@ class MultiTurnOrchestrator:
 
         if consecutive_adversarial_timeouts > 0 and error is None:
             logger.warning(
-                f'Conversation for {strategy.name} ended with {consecutive_adversarial_timeouts} '
-                'unresolved adversarial timeout(s) — last turn was dropped silently'
+                f'Conversation for {strategy.name} ended with an unresolved adversarial timeout '
+                '— the last turn was dropped silently'
             )
+            if not conversation:
+                timeout_s = PIPELINE_CONFIG.llm_call_timeout_ms / 1000.0
+                error = f'Adversarial LLM timed out after {timeout_s:.0f}s with no turns completed'
+                error_type = 'llm_error'
+                error_stage = 'adversarial_generation'
+                error_code = 'adversarial.timeout'
+                error_details = {'timeout_ms': PIPELINE_CONFIG.llm_call_timeout_ms}
 
         duration = time.time() - start_time
         logger.debug(
