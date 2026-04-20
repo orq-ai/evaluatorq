@@ -39,6 +39,7 @@ reportUnusedVariable = "none"
 reportMissingParameterType = "none"
 reportUnusedParameter = "none"
 reportUnreachable = "none"
+reportUnsupportedDunderAll = "none"
 reportImportCycles = "none"
 reportImplicitOverride = "none"
 reportUnusedFunction = "none"
@@ -66,6 +67,8 @@ dependencies = [ "pydantic>=2.0", "httpx>=0.28.1", "rich>=14.2.0" ]
   "opentelemetry-semantic-conventions>=0.41b0"
 ]
   langchain = [ "langchain>=1.0.0, <2.0.0" ]
+  langgraph = [ "langgraph>=0.2.0" ]
+  openai-agents = [ "openai-agents>=0.1.0" ]
   redteam = [
   "openai>=1.0.0,<3.0.0",
   "loguru>=0.6.0",
@@ -76,7 +79,7 @@ dependencies = [ "pydantic>=2.0", "httpx>=0.28.1", "rich>=14.2.0" ]
   simulation = [ "openai>=1.0.0,<3.0.0", "orq-ai-sdk>=4.4.7" ]
   ui = [ "streamlit>=1.30.0", "plotly>=5.18.0" ]
   export = [ "kaleido>=0.2.1" ]
-  all = [ "evaluatorq[orq,otel,langchain,redteam,simulation,ui,export]" ]
+  all = [ "evaluatorq[orq,otel,langchain,langgraph,openai-agents,redteam,simulation,ui,export]" ]
 
   [project.scripts]
   evaluatorq = "evaluatorq.cli:main"
@@ -106,5 +109,6 @@ dev = [
   "typer>=0.12.0",
   "python-dotenv>=1.0.0",
   "pytest-cov>=7.0.0",
-  "watchdog>=4.0.0"
+  "watchdog>=4.0.0",
+  "openai-agents>=0.1.0"
 ]

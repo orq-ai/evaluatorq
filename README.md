@@ -12,7 +12,7 @@ An evaluation framework library for Python that provides a flexible way to run p
 - **OpenTelemetry Tracing**: Built-in observability with automatic span creation for jobs and evaluators
 - **Pass/Fail Tracking**: Evaluators can return pass/fail status for CI/CD integration
 - **Built-in Evaluators**: Common evaluators like `string_contains_evaluator` included
-- **Integrations**: Langchain and Langgraph agents integration
+- **Integrations**: LangChain, LangGraph, OpenAI Agents SDK, and custom callable support
 - **[Red Teaming](src/evaluatorq/redteam/README.md)**: Adaptive OWASP-mapped adversarial security testing for AI agents
 
 ## 📖 Table of Contents
@@ -21,6 +21,7 @@ An evaluation framework library for Python that provides a flexible way to run p
 - [Getting Started](#-getting-started)
 - [Quick Start](#-quick-start)
 - [Integrations](#-langchain-integration)
+- [Red Teaming External Frameworks](#-red-teaming-external-agent-frameworks)
 - [Configuration](#-configuration)
 - [Orq Platform Integration](#-orq-platform-integration)
 - [OpenTelemetry Tracing](#-opentelemetry-tracing)
@@ -736,6 +737,126 @@ Complete examples are available in the examples folder:
 - **LangGraph Research Agent (advanced)**: [`langgraph_research_eval.py`](examples/lib/integrations/langchain/langgraph_research_eval.py) — Dataset-driven research agent with dynamic `instructions` and multi-criteria evaluators
 
 > **Tip:** Pass the `instructions` parameter to `wrap_langchain_agent` for dynamic system prompts — no need to write a custom job function.
+
+## 🔴 Red Teaming External Agent Frameworks
+
+Evaluatorq supports red teaming agents built with external frameworks. Each integration wraps your agent into a target that the red teaming pipeline can attack.
+
+### Installation
+
+```bash
+# LangGraph
+pip install evaluatorq[langgraph]
+
+# OpenAI Agents SDK
+pip install evaluatorq[openai-agents]
+
+# All extras
+pip install evaluatorq[all]
+```
+
+### LangGraph
+
+Wrap any compiled LangGraph state graph as a red teaming target. The graph must use `MessagesState` (or a state with a `messages` key).
+
+```python
+from langgraph.prebuilt import create_react_agent
+from evaluatorq.integrations.langgraph_integration import LangGraphTarget
+from evaluatorq.redteam import red_team
+
+# Create your LangGraph agent
+graph = create_react_agent(model, tools=[...])
+
+# Wrap it as a red teaming target
+target = LangGraphTarget(graph)
+
+# Run red teaming
+report = await red_team(target=target)
+```
+
+Conversation state is managed via LangGraph thread IDs — each attack gets a fresh thread, and `clone()` creates independent copies for parallel attacks.
+
+Pass extra LangGraph config (e.g., recursion limits) via the `config` parameter:
+
+```python
+target = LangGraphTarget(graph, config={"recursion_limit": 50})
+```
+
+### LangChain Agents
+
+LangChain agents are covered by the integrations above — no separate target is needed:
+
+- **Agents built with `create_react_agent` or `StateGraph`** (the [recommended approach](https://python.langchain.com/docs/concepts/agents/)) run on LangGraph under the hood → use `LangGraphTarget` directly.
+- **Custom chains or legacy `AgentExecutor`** → wrap with `CallableTarget`:
+
+```python
+from evaluatorq.integrations.callable_integration import CallableTarget
+
+# Any LangChain chain or AgentExecutor
+async def run_chain(prompt: str) -> str:
+    result = await chain.ainvoke({"input": prompt})
+    return result["output"]
+
+target = CallableTarget(run_chain)
+```
+
+### OpenAI Agents SDK
+
+Wrap an OpenAI Agents SDK `Agent` as a red teaming target.
+
+```python
+from agents import Agent
+from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget
+from evaluatorq.redteam import red_team
+
+# Create your agent
+agent = Agent(name="my-agent", instructions="You are a helpful assistant.")
+
+# Wrap it as a red teaming target
+target = OpenAIAgentTarget(agent)
+
+# Run red teaming
+report = await red_team(target=target)
+```
+
+Conversation history is managed automatically — each attack starts with a clean history, and `clone()` creates copies with empty state.
+
+Pass extra `Runner.run()` kwargs via `run_kwargs`:
+
+```python
+target = OpenAIAgentTarget(agent, run_kwargs={"max_turns": 10})
+```
+
+### Custom Callable (Escape Hatch)
+
+For frameworks without a dedicated integration, wrap any function that takes a prompt and returns a response:
+
+```python
+from evaluatorq.integrations.callable_integration import CallableTarget
+from evaluatorq.redteam import red_team
+
+# Async function
+async def my_agent(prompt: str) -> str:
+    result = await some_framework.run(prompt)
+    return result.text
+
+target = CallableTarget(my_agent)
+
+# With state management
+history = []
+
+async def stateful_agent(prompt: str) -> str:
+    history.append({"role": "user", "content": prompt})
+    response = await my_llm.chat(history)
+    history.append({"role": "assistant", "content": response})
+    return response
+
+target = CallableTarget(stateful_agent, reset_fn=lambda: history.clear())
+
+report = await red_team(target=target)
+```
+
+Sync functions are also supported — they are automatically run in a thread to avoid blocking the event loop.
 
 ## 📚 API Reference
 
