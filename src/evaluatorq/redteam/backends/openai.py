@@ -18,6 +18,9 @@ if TYPE_CHECKING:
 class OpenAIModelTarget:
     """Target adapter that treats ``agent_key`` as an OpenAI model identifier."""
 
+    memory_entity_id: str | None = None
+    """OpenAI models are stateless — no server-side memory to isolate."""
+
     def __init__(
         self,
         model_id: str,
@@ -76,9 +79,8 @@ class OpenAIModelTarget:
         """Stateless adapter; nothing to reset."""
         return
 
-    def clone(self, memory_entity_id: str | None = None) -> OpenAIModelTarget:
+    def clone(self) -> OpenAIModelTarget:
         """Create a fresh target instance for parallel job safety."""
-        _ = memory_entity_id  # OpenAI models have no server-side memory.
         return OpenAIModelTarget(
             model_id=self.model_id,
             client=self.client,
@@ -102,7 +104,7 @@ class OpenAIModelTarget:
             model=self.model_id,
         )
 
-    def create_target(self, agent_key: str, memory_entity_id: str | None = None) -> OpenAIModelTarget:
+    def create_target(self, agent_key: str) -> OpenAIModelTarget:
         """Create a new OpenAI model target for the given model ID."""
         return OpenAIModelTarget(
             model_id=agent_key,
@@ -148,9 +150,8 @@ class OpenAITargetFactory:
         self._client = client
         self._system_prompt = system_prompt
 
-    def create_target(self, agent_key: str, memory_entity_id: str | None = None) -> OpenAIModelTarget:
+    def create_target(self, agent_key: str) -> OpenAIModelTarget:
         """Create a new OpenAI model target instance."""
-        _ = memory_entity_id  # OpenAI model target does not support memory entity routing.
         return OpenAIModelTarget(model_id=agent_key, client=self._client, system_prompt=self._system_prompt)
 
 

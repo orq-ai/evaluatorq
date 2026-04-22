@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import uuid
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -71,10 +72,18 @@ class ORQAgentTarget:
         memory_entity_id: str | None = None,
         model: str | None = None,
     ):
-        """Initialize the ORQ agent target with client and configuration."""
+        """Initialize the ORQ agent target with client and configuration.
+
+        ORQ agents can have server-side memory stores attached. Every target
+        instance owns a ``memory_entity_id`` so parallel jobs stay isolated;
+        if not provided, one is generated. The pipeline reads this attribute
+        after construction to track entities for cleanup.
+        """
         self.agent_key = agent_key
         self.orq_client = orq_client
-        self.memory_entity_id = memory_entity_id
+        self.memory_entity_id: str | None = (
+            memory_entity_id if memory_entity_id is not None else f"red-team-{uuid.uuid4().hex[:12]}"
+        )
         self.model = model
         self._task_id: str | None = None
         self._last_token_usage: TokenUsage | None = None
@@ -248,20 +257,16 @@ class ORQAgentTarget:
         self._last_token_usage = None
         return usage
 
-    def clone(self, memory_entity_id: str | None = None) -> "ORQAgentTarget":
-        """Create a fresh target instance with the same config but isolated state.
+    def clone(self) -> "ORQAgentTarget":
+        """Create a fresh target instance with isolated state.
 
-        Used by parallel job runners to ensure each worker has its own
-        ``_task_id`` and ``_last_token_usage`` rather than sharing state.
-
-        Args:
-            memory_entity_id: Optional override for memory entity isolation.
-                When *None*, inherits from the source instance.
+        Each clone gets its own ``memory_entity_id`` (auto-generated in
+        ``__init__``), own ``_task_id``, and own ``_last_token_usage`` so
+        parallel jobs never share server-side memory or conversation state.
         """
         return ORQAgentTarget(
             agent_key=self.agent_key,
             orq_client=self.orq_client,
-            memory_entity_id=memory_entity_id if memory_entity_id is not None else self.memory_entity_id,
             model=self.model,
         )
 
@@ -279,12 +284,15 @@ class ORQAgentTarget:
         return await ORQContextProvider(self.orq_client).get_agent_context(self.agent_key)
 
     # -- SupportsTargetFactory --
-    def create_target(self, agent_key: str, memory_entity_id: str | None = None) -> "ORQAgentTarget":
-        """Create a new ORQAgentTarget for the given agent key."""
+    def create_target(self, agent_key: str) -> "ORQAgentTarget":
+        """Create a new ORQAgentTarget for the given agent key.
+
+        The new target generates its own ``memory_entity_id``; callers can
+        read it via the attribute after construction.
+        """
         return ORQAgentTarget(
             agent_key=agent_key,
             orq_client=self.orq_client,
-            memory_entity_id=memory_entity_id,
             model=self.model,
         )
 
@@ -417,12 +425,15 @@ class ORQTargetFactory:
             )
         self._model = model
 
-    def create_target(self, agent_key: str, memory_entity_id: str | None = None) -> AgentTarget:
-        """Create a new ORQAgentTarget for the given agent key."""
+    def create_target(self, agent_key: str) -> AgentTarget:
+        """Create a new ORQAgentTarget for the given agent key.
+
+        The new target generates its own ``memory_entity_id``; callers can
+        read it via the attribute after construction.
+        """
         return ORQAgentTarget(
             agent_key=agent_key,
             orq_client=self._orq_client,
-            memory_entity_id=memory_entity_id,
             model=self._model,
         )
 

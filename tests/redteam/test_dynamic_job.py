@@ -102,11 +102,12 @@ def _make_datapoint(
     return DataPoint(inputs=inputs)
 
 
-def _make_target() -> MagicMock:
+def _make_target(memory_entity_id: str | None = None) -> MagicMock:
     target = MagicMock()
     target.send_prompt = AsyncMock(return_value="Safe response from agent.")
     target.reset_conversation = MagicMock()
     target.consume_last_token_usage = MagicMock(return_value=None)
+    target.memory_entity_id = memory_entity_id
     return target
 
 
@@ -880,16 +881,16 @@ class TestRuntimeErrorsProduceErrorOutput:
 
 
 class TestMemoryEntityIdGeneration:
-    """When agent_context.has_memory is True, a fresh unique entity ID is generated per job."""
+    """Targets own their memory_entity_id; the pipeline reads and tracks it."""
 
     @pytest.mark.asyncio
     @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
     @patch(_PATCH_SET_SPAN_ATTRS)
     @patch(_PATCH_ATTACK_SPAN_ATTRS)
-    async def test_memory_entity_id_generated_when_has_memory(
+    async def test_target_owned_memory_entity_id_tracked_in_list(
         self, _attrs, _set_attrs, _span
     ):
-        """A fresh red-team-... ID is generated when agent_context.has_memory is True."""
+        """When the target exposes a memory_entity_id, it is appended to the tracking list."""
         from evaluatorq.redteam.adaptive.pipeline import create_dynamic_redteam_job
 
         strategy = _make_strategy(turn_type=TurnType.MULTI, prompt_template=None)
@@ -897,25 +898,9 @@ class TestMemoryEntityIdGeneration:
         datapoint = _make_datapoint(strategy=strategy)
         orch_result = _make_orchestrator_result()
 
-        # Use a side_effect function to capture the memory_entity_id without
-        # relying on call_args introspection (which triggers a Python 3.10 mock warning).
-        # Return a simple object (not a MagicMock with AsyncMock attrs) so we don't
-        # generate unawaited-coroutine warnings on GC in CPython 3.10.
-        captured: list[str | None] = []
-
-        class _SimpleTarget:
-            def reset_conversation(self) -> None:
-                pass
-
-            async def send_prompt(self, prompt: str) -> str:
-                return "agent response"
-
-        def _create_target(agent_key: str, memory_entity_id: str | None = None):
-            captured.append(memory_entity_id)
-            return _SimpleTarget()
-
-        factory = MagicMock()
-        factory.create_target = MagicMock(side_effect=_create_target)
+        target = _make_target(memory_entity_id="red-team-abc123def456")
+        factory = _make_target_factory(target)
+        tracking_ids: list[str] = []
 
         with patch(f"{_PIPELINE_MOD}.MultiTurnOrchestrator") as MockOrchestrator:
             mock_orch_instance = MagicMock()
@@ -927,34 +912,31 @@ class TestMemoryEntityIdGeneration:
                     agent_key="test-agent",
                     agent_context=agent_context,
                     target_factory=factory,
+                    memory_entity_ids=tracking_ids,
                 )
                 await _call_dynamic_job(job_fn, datapoint)
 
-        assert len(captured) == 1
-        memory_entity_id = captured[0]
-        assert memory_entity_id is not None
-        assert memory_entity_id.startswith("red-team-")
+        assert tracking_ids == ["red-team-abc123def456"]
 
     @pytest.mark.asyncio
     @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
     @patch(_PATCH_SET_SPAN_ATTRS)
     @patch(_PATCH_ATTACK_SPAN_ATTRS)
-    async def test_each_job_invocation_gets_unique_memory_entity_id(
+    async def test_each_job_invocation_tracks_its_targets_id(
         self, _attrs, _set_attrs, _span
     ):
-        """Two separate job invocations get different memory_entity_id values."""
+        """Two separate job invocations track the distinct IDs each target exposes."""
         from evaluatorq.redteam.adaptive.pipeline import create_dynamic_redteam_job
 
         strategy = _make_strategy(turn_type=TurnType.MULTI, prompt_template=None)
         agent_context = _make_agent_context(has_memory=True)
         orch_result = _make_orchestrator_result()
+        tracking_ids: list[str] = []
 
-        collected_ids: list[str] = []
+        ids_iter = iter(["red-team-aaaaaaaaaaaa", "red-team-bbbbbbbbbbbb"])
 
-        def tracking_factory_create(agent_key: str, memory_entity_id: str | None = None):
-            if memory_entity_id:
-                collected_ids.append(memory_entity_id)
-            return _make_target()
+        def tracking_factory_create(agent_key: str):
+            return _make_target(memory_entity_id=next(ids_iter))
 
         factory = MagicMock()
         factory.create_target = MagicMock(side_effect=tracking_factory_create)
@@ -969,30 +951,28 @@ class TestMemoryEntityIdGeneration:
                     agent_key="test-agent",
                     agent_context=agent_context,
                     target_factory=factory,
+                    memory_entity_ids=tracking_ids,
                 )
                 datapoint = _make_datapoint(strategy=strategy)
                 await _call_dynamic_job(job_fn, datapoint)
                 await _call_dynamic_job(job_fn, datapoint)
 
-        assert len(collected_ids) == 2
-        assert collected_ids[0] != collected_ids[1], (
-            "Each job invocation must produce a unique memory entity ID"
-        )
+        assert tracking_ids == ["red-team-aaaaaaaaaaaa", "red-team-bbbbbbbbbbbb"]
 
     @pytest.mark.asyncio
     @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
     @patch(_PATCH_SET_SPAN_ATTRS)
     @patch(_PATCH_ATTACK_SPAN_ATTRS)
-    async def test_memory_entity_id_appended_to_tracking_list(
+    async def test_stateless_target_not_tracked(
         self, _attrs, _set_attrs, _span
     ):
-        """When memory_entity_ids list is provided, generated IDs are appended."""
+        """A target with memory_entity_id=None is not added to the tracking list."""
         from evaluatorq.redteam.adaptive.pipeline import create_dynamic_redteam_job
 
         strategy = _make_strategy(turn_type=TurnType.MULTI, prompt_template=None)
-        target = _make_target()
+        target = _make_target(memory_entity_id=None)
         factory = _make_target_factory(target)
-        agent_context = _make_agent_context(has_memory=True)
+        agent_context = _make_agent_context(has_memory=False)
         datapoint = _make_datapoint(strategy=strategy)
         orch_result = _make_orchestrator_result()
         tracking_ids: list[str] = []
@@ -1010,97 +990,5 @@ class TestMemoryEntityIdGeneration:
                     memory_entity_ids=tracking_ids,
                 )
                 await _call_dynamic_job(job_fn, datapoint)
-                await _call_dynamic_job(job_fn, datapoint)
 
-        assert len(tracking_ids) == 2
-        for entity_id in tracking_ids:
-            assert entity_id.startswith("red-team-")
-        assert tracking_ids[0] != tracking_ids[1]
-
-    @pytest.mark.asyncio
-    @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
-    @patch(_PATCH_SET_SPAN_ATTRS)
-    @patch(_PATCH_ATTACK_SPAN_ATTRS)
-    async def test_no_memory_entity_id_generated_when_no_memory(
-        self, _attrs, _set_attrs, _span
-    ):
-        """When agent_context.has_memory is False, memory_entity_id is taken from datapoint."""
-        from evaluatorq.redteam.adaptive.pipeline import create_dynamic_redteam_job
-
-        strategy = _make_strategy(turn_type=TurnType.MULTI, prompt_template=None)
-        target = _make_target()
-        factory = _make_target_factory(target)
-        agent_context = _make_agent_context(has_memory=False)
-        # Provide a specific memory_entity_id in the datapoint (should be used as-is)
-        datapoint = _make_datapoint(
-            strategy=strategy, memory_entity_id="preset-entity-id-123"
-        )
-        orch_result = _make_orchestrator_result()
-        tracking_ids: list[str] = []
-
-        with patch(f"{_PIPELINE_MOD}.MultiTurnOrchestrator") as MockOrchestrator:
-            mock_orch_instance = MagicMock()
-            mock_orch_instance.run_attack = AsyncMock(return_value=orch_result)
-            MockOrchestrator.return_value = mock_orch_instance
-
-            with patch(f"{_PIPELINE_MOD}.create_async_llm_client", return_value=MagicMock()):
-                job_fn = create_dynamic_redteam_job(
-                    agent_key="test-agent",
-                    agent_context=agent_context,
-                    target_factory=factory,
-                    memory_entity_ids=tracking_ids,
-                )
-                await _call_dynamic_job(job_fn, datapoint)
-
-        # No tracking IDs added (has_memory is False)
-        assert len(tracking_ids) == 0
-
-        # Target created with the preset entity ID from the datapoint
-        create_call = factory.create_target.call_args
-        passed_id = create_call[1].get("memory_entity_id") or (
-            create_call[0][1] if len(create_call[0]) > 1 else None
-        )
-        assert passed_id == "preset-entity-id-123"
-
-    @pytest.mark.asyncio
-    @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
-    @patch(_PATCH_SET_SPAN_ATTRS)
-    @patch(_PATCH_ATTACK_SPAN_ATTRS)
-    async def test_memory_entity_id_format_matches_pattern(
-        self, _attrs, _set_attrs, _span
-    ):
-        """Generated memory entity IDs follow the 'red-team-<12 hex chars>' format."""
-        from evaluatorq.redteam.adaptive.pipeline import create_dynamic_redteam_job
-
-        strategy = _make_strategy(turn_type=TurnType.MULTI, prompt_template=None)
-        agent_context = _make_agent_context(has_memory=True)
-        orch_result = _make_orchestrator_result()
-        tracking_ids: list[str] = []
-
-        def capture_factory(agent_key: str, memory_entity_id: str | None = None):
-            t = _make_target()
-            return t
-
-        factory = MagicMock()
-        factory.create_target = MagicMock(side_effect=capture_factory)
-
-        with patch(f"{_PIPELINE_MOD}.MultiTurnOrchestrator") as MockOrchestrator:
-            mock_orch_instance = MagicMock()
-            mock_orch_instance.run_attack = AsyncMock(return_value=orch_result)
-            MockOrchestrator.return_value = mock_orch_instance
-
-            with patch(f"{_PIPELINE_MOD}.create_async_llm_client", return_value=MagicMock()):
-                job_fn = create_dynamic_redteam_job(
-                    agent_key="test-agent",
-                    agent_context=agent_context,
-                    target_factory=factory,
-                    memory_entity_ids=tracking_ids,
-                )
-                datapoint = _make_datapoint(strategy=strategy)
-                await _call_dynamic_job(job_fn, datapoint)
-
-        assert len(tracking_ids) == 1
-        import re
-        assert re.match(r"^red-team-[0-9a-f]{12}$", tracking_ids[0]), (
-            f"ID '{tracking_ids[0]}' does not match 'red-team-<12 hex chars>'"
-        )
+        assert tracking_ids == []

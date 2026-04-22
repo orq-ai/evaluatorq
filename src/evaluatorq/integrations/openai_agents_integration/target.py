@@ -24,6 +24,10 @@ class OpenAIAgentTarget(AgentTarget):
         config = DynamicRunConfig(targets=[target])
     """
 
+    memory_entity_id: str | None = None
+    """OpenAI Agents SDK keeps conversation state client-side in ``_history``;
+    there is no server-side memory entity to isolate across parallel jobs."""
+
     def __init__(self, agent: Agent, *, run_kwargs: dict[str, Any] | None = None) -> None:
         """Create an OpenAI Agents SDK red teaming target.
 

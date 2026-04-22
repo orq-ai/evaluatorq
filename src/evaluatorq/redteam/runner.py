@@ -13,7 +13,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast, get_args
+
+SaveMode = Literal['none', 'final', 'detail']
+_SAVE_MODES: frozenset[str] = frozenset(get_args(SaveMode))
 
 from loguru import logger
 
@@ -300,6 +303,7 @@ async def red_team(
     attacker_instructions: str | None = None,
     verbosity: int = 0,
     llm_kwargs: dict[str, Any] | None = None,
+    save: SaveMode = 'final',
 ) -> RedTeamReport:
     """Unified entry point for red teaming.
 
@@ -337,8 +341,13 @@ async def red_team(
             ``"hf:org/repo/filename.json"``, or ``None`` for the default HuggingFace dataset.
         hooks: Optional ``PipelineHooks`` implementation. Defaults to
             ``DefaultHooks()`` (loguru output, auto-confirm).
-        output_dir: Optional directory to save intermediate stage artifacts as
-            numbered JSON files. When ``None`` (default), no files are written.
+        output_dir: Directory for saved JSON files. Ignored when
+            ``save='none'``. For ``save='final'``, receives
+            ``03_summary_report.json``; if ``None``, the summary is written
+            to ``.evaluatorq/runs/<name>_<ts>.json`` instead so the run
+            appears in ``evaluatorq redteam runs``. Required for
+            ``save='detail'``, which writes ``01_all_datapoints.json``,
+            ``02_attack_results.json``, and ``03_summary_report.json`` here.
         target_config: Optional backend-agnostic target configuration (e.g.
             system prompt for OpenAI targets).
         generate_recommendations: Whether to generate LLM-based actionable
@@ -351,16 +360,32 @@ async def red_team(
             prompts and objective generation prompts.
         verbosity: Verbosity level (0=silent, 1=summary progress bar,
             2=per-attack progress bars). Defaults to ``0``.
+        save: What to persist to disk. ``'none'`` writes nothing. ``'final'``
+            (default) writes only the summary report. ``'detail'`` writes all
+            stage artifacts (datapoints, attack results, summary).
 
     Returns:
         RedTeamReport with results and summary statistics.
 
     Raises:
-        ValueError: If mode is invalid or required arguments are missing.
+        ValueError: If mode is invalid, required arguments are missing, or
+            ``save='detail'`` is passed without ``output_dir``.
         CancelledError: If hooks.on_confirm returns False.
     """
+    if save not in _SAVE_MODES:
+        msg = f"Invalid save mode {save!r}. Must be one of: {sorted(_SAVE_MODES)}."
+        raise ValueError(msg)
     resolved_hooks: PipelineHooks = hooks or DefaultHooks()
-    resolved_output_dir = Path(output_dir) if output_dir is not None else None
+    user_output_dir = Path(output_dir) if output_dir is not None else None
+    # Inner pipelines (_run_dynamic, _run_static) only write 01/02/03 to their
+    # output_dir parameter, so we gate it on save='detail'. For 'final' the
+    # outer red_team() does the single summary write after inner returns.
+    resolved_output_dir: Path | None = None
+    if save == 'detail':
+        if user_output_dir is None:
+            msg = "save='detail' requires output_dir to be set."
+            raise ValueError(msg)
+        resolved_output_dir = user_output_dir
 
     if target_factory is not None:
         warnings.warn(
@@ -548,16 +573,31 @@ async def red_team(
                 'Failed to generate focus area recommendations. Check LLM credentials and model configuration.'
             )
 
-    # Auto-save to .evaluatorq/runs/ for the `runs` CLI command.
-    auto_save_path = _auto_save_run(report, name=name)
-    if auto_save_path is None:
-        report.pipeline_warnings.append(
-            'Failed to auto-save run report. The run will not appear in `evaluatorq redteam runs`.'
-        )
+    # Persist report according to the save mode. 'detail' mode already had
+    # the inner pipeline write 01/02/03 to resolved_output_dir, so here we
+    # only handle 'final' (single summary file) and record the saved path.
+    auto_save_path: Path | None = None
+    if save == 'final':
+        if user_output_dir is not None:
+            _save_report(user_output_dir, '03_summary_report.json', report)
+            auto_save_path = user_output_dir / '03_summary_report.json'
+    elif save == 'detail':
+        if resolved_output_dir is not None:
+            auto_save_path = resolved_output_dir / '03_summary_report.json'
+
+    # Index in .evaluatorq/runs/ so the run appears in `evaluatorq redteam runs`.
+    if save != 'none':
+        run_path = _auto_save_run(report, name=name)
+        if auto_save_path is None:
+            auto_save_path = run_path
+        if run_path is None:
+            report.pipeline_warnings.append(
+                'Failed to auto-save run report. The run will not appear in `evaluatorq redteam runs`.'
+            )
 
     resolved_hooks.on_complete(
         report,
-        output_dir=str(resolved_output_dir) if resolved_output_dir else None,
+        output_dir=str(user_output_dir) if user_output_dir and save != 'none' else None,
         auto_save_path=str(auto_save_path) if auto_save_path else None,
     )
 

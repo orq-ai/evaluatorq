@@ -15,7 +15,6 @@ from __future__ import annotations
 import asyncio
 import time
 import traceback
-import uuid
 from typing import TYPE_CHECKING, Any, cast
 
 from evaluatorq import DataPoint, EvaluationResult, Job, job
@@ -124,10 +123,6 @@ async def generate_dynamic_datapoints_for_vulnerabilities(
                 'objective': objective,
             }
 
-            # Each datapoint gets its own memory entity ID so parallel jobs don't interfere
-            if agent_context.has_memory:
-                inputs['memory_entity_id'] = f'red-team-{uuid.uuid4().hex[:12]}'
-
             datapoints.append(DataPoint(inputs=inputs))
 
     logger.debug(f'Generated {len(datapoints)} dynamic datapoints across {len(vulnerabilities)} vulnerabilities')
@@ -231,10 +226,6 @@ async def generate_dynamic_datapoints(
                 'objective': objective,
             }
 
-            # Each datapoint gets its own memory entity ID so parallel jobs don't interfere
-            if agent_context.has_memory:
-                inputs['memory_entity_id'] = f'red-team-{uuid.uuid4().hex[:12]}'
-
             datapoints.append(DataPoint(inputs=inputs))
 
     empty_categories = [cat for cat in categories if not all_category_strategies.get(cat)]
@@ -295,15 +286,6 @@ def create_dynamic_redteam_job(
         objective = str(inputs['objective'])
         category = str(inputs['category'])
         vulnerability = str(inputs.get('vulnerability', ''))
-        # Generate a fresh memory entity ID per job execution so parallel
-        # targets sharing the same datapoints don't interfere with each other's
-        # memory state.  Falls back to the datapoint value for single-target runs.
-        if agent_context.has_memory:
-            memory_entity_id = f'red-team-{uuid.uuid4().hex[:12]}'
-            if memory_entity_ids is not None:
-                memory_entity_ids.append(memory_entity_id)
-        else:
-            memory_entity_id = inputs.get('memory_entity_id')
         effective_max_turns = 1 if strategy.turn_type == TurnType.SINGLE else max_turns
 
         async with with_redteam_span(
@@ -316,10 +298,11 @@ def create_dynamic_redteam_job(
                 'orq.redteam.max_turns': effective_max_turns,
             },
         ) as attack_span:
-            target = resolved_factory.create_target(
-                agent_key=agent_key,
-                memory_entity_id=memory_entity_id,
-            )
+            target = resolved_factory.create_target(agent_key=agent_key)
+            # Targets own their memory_entity_id — track it for cleanup.
+            target_memory_id = getattr(target, 'memory_entity_id', None)
+            if target_memory_id is not None and memory_entity_ids is not None:
+                memory_entity_ids.append(target_memory_id)
             # Inject model info for tracing if the target supports it
             if hasattr(target, 'model') and agent_context.model:
                 object.__setattr__(target, 'model', agent_context.model)  # type: ignore[misc]

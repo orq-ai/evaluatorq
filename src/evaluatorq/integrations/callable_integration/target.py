@@ -37,6 +37,10 @@ class CallableTarget(AgentTarget):
         config = DynamicRunConfig(targets=[target])
     """
 
+    memory_entity_id: str | None = None
+    """Callables are opaque — the wrapper cannot manage memory isolation.
+    If the wrapped callable holds state, use ``reset_fn`` to clear it."""
+
     def __init__(
         self,
         fn: AgentCallable,

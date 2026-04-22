@@ -394,6 +394,8 @@ class TestRedTeamWithAgentTarget:
         from unittest.mock import AsyncMock, patch
 
         class MockTarget:
+            memory_entity_id: str | None = None
+
             async def send_prompt(self, prompt: str) -> str:
                 return 'response'
 
@@ -415,6 +417,8 @@ class TestRedTeamWithAgentTarget:
         from unittest.mock import AsyncMock, patch
 
         class MockTarget:
+            memory_entity_id: str | None = None
+
             async def send_prompt(self, prompt: str) -> str:
                 return 'response'
 
@@ -440,6 +444,8 @@ class TestRedTeamWithAgentTarget:
     async def test_invalid_item_in_list_raises(self):
         """Passing an invalid item inside a list raises TypeError."""
         class MockTarget:
+            memory_entity_id: str | None = None
+
             async def send_prompt(self, prompt: str) -> str:
                 return 'response'
 

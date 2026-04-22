@@ -122,6 +122,7 @@ async def test_static_output_artifacts(
         dataset=str(static_dataset_path),
         llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
         output_dir=output_dir,
+        save='detail',
     )
 
     assert (output_dir / "01_datapoints.json").exists()
@@ -156,6 +157,7 @@ async def test_dynamic_output_artifacts(
             backend="openai",
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
             output_dir=output_dir,
+            save='detail',
         )
 
     assert (output_dir / "01_all_datapoints.json").exists()

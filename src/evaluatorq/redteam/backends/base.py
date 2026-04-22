@@ -7,7 +7,6 @@ LangChain, custom callables) can implement these protocols independently.
 
 from __future__ import annotations
 
-import inspect
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, cast
@@ -19,7 +18,16 @@ if TYPE_CHECKING:
 
 
 class AgentTarget(Protocol):
-    """Protocol for agent targets that can receive prompts."""
+    """Protocol for agent targets that can receive prompts.
+
+    Targets that maintain persistent memory (server-side entities, LangGraph
+    checkpointer threads, etc.) expose the isolation key as ``memory_entity_id``.
+    Targets without persistent memory set it to ``None``. The red teaming
+    pipeline reads this attribute after target creation to track entities for
+    cleanup — it does not inject the value into the target.
+    """
+
+    memory_entity_id: str | None
 
     async def send_prompt(self, prompt: str) -> str:
         """Send a prompt and return the response."""
@@ -36,10 +44,13 @@ class SupportsClone(Protocol):
     Note: The runner detects this via duck-typing (``getattr``/``callable``),
     not ``isinstance``.  Implementing this protocol is recommended for
     documentation and static analysis but not strictly required.
+
+    Clones are expected to own their own ``memory_entity_id`` (fresh one when
+    the target backs a persistent memory store; ``None`` otherwise).
     """
 
-    def clone(self, memory_entity_id: str | None = None) -> AgentTarget:
-        """Return a fresh target instance, optionally with a different memory entity."""
+    def clone(self) -> AgentTarget:
+        """Return a fresh target instance with isolated state."""
         ...
 
 
@@ -66,9 +77,14 @@ class SupportsAgentContext(Protocol):
 
 
 class SupportsTargetFactory(Protocol):
-    """Optional: target can create per-job instances."""
+    """Optional: target can create per-job instances.
 
-    def create_target(self, agent_key: str, memory_entity_id: str | None = None) -> AgentTarget: ...
+    The factory owns no memory-entity concern. Targets that manage persistent
+    memory generate their own ``memory_entity_id`` when constructed; callers
+    read it off the resulting target.
+    """
+
+    def create_target(self, agent_key: str) -> AgentTarget: ...
 
 
 class SupportsMemoryCleanup(Protocol):
@@ -101,20 +117,8 @@ class DirectTargetFactory:
                 'Reusing same instance across parallel jobs may cause race conditions.'
             )
 
-    def create_target(self, agent_key: str, memory_entity_id: str | None = None) -> AgentTarget:
+    def create_target(self, agent_key: str) -> AgentTarget:
         if self._clone_fn is not None:
-            try:
-                sig = inspect.signature(self._clone_fn)
-                has_memory_param = 'memory_entity_id' in sig.parameters
-            except (ValueError, TypeError):
-                has_memory_param = False
-            if has_memory_param:
-                return cast("AgentTarget", self._clone_fn(memory_entity_id=memory_entity_id))
-            logger.warning(
-                f'{type(self._target).__name__}.clone() does not accept memory_entity_id. '
-                'Parallel jobs may share memory state. '
-                'Add memory_entity_id: str | None = None to clone() to fix this.'
-            )
             return cast("AgentTarget", self._clone_fn())
         return self._target
 
@@ -135,9 +139,14 @@ class AgentContextProvider(Protocol):
 
 
 class AgentTargetFactory(Protocol):
-    """Protocol for creating AgentTarget instances per job."""
+    """Protocol for creating AgentTarget instances per job.
 
-    def create_target(self, agent_key: str, memory_entity_id: str | None = None) -> AgentTarget:
+    The returned target owns its own ``memory_entity_id`` (auto-generated for
+    targets with persistent memory, ``None`` otherwise). Callers read the
+    attribute off the target rather than passing an ID in.
+    """
+
+    def create_target(self, agent_key: str) -> AgentTarget:
         """Create a new AgentTarget for the given agent key."""
         ...
 

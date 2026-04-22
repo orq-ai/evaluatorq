@@ -14,6 +14,11 @@ from evaluatorq.redteam.backends.base import AgentTarget
 class LangGraphTarget(AgentTarget):
     """Wraps a LangGraph CompiledStateGraph as a red teaming target.
 
+    Each instance generates its own ``memory_entity_id`` used as the LangGraph
+    ``thread_id`` — this is the checkpointer's isolation key, so parallel
+    attacks never share thread state. The pipeline reads ``memory_entity_id``
+    off the target rather than injecting it.
+
     Usage::
 
         from langgraph.prebuilt import create_react_agent
@@ -42,7 +47,7 @@ class LangGraphTarget(AgentTarget):
         """
         self._graph = graph
         self._extra_config = config or {}
-        self._thread_id = uuid4().hex
+        self.memory_entity_id: str = uuid4().hex
 
     def _build_config(self) -> RunnableConfig:
         """Build the RunnableConfig with the current thread_id."""
@@ -51,7 +56,7 @@ class LangGraphTarget(AgentTarget):
             **extra,
             configurable={
                 **self._extra_config.get("configurable", {}),
-                "thread_id": self._thread_id,
+                "thread_id": self.memory_entity_id,
             },
         )
 
@@ -84,16 +89,13 @@ class LangGraphTarget(AgentTarget):
         return content
 
     def reset_conversation(self) -> None:
-        """Reset conversation state by starting a new thread."""
-        self._thread_id = uuid4().hex
+        """Reset conversation state. Thread ID is fixed at construction; clone() provides isolation."""
+        pass
 
-    def clone(self, memory_entity_id: str | None = None) -> LangGraphTarget:
+    def clone(self) -> LangGraphTarget:
         """Create an independent copy for parallel red teaming jobs.
 
-        If ``memory_entity_id`` is provided it is used as the thread_id,
-        ensuring each memory entity gets its own isolated conversation thread.
+        The clone gets a fresh ``memory_entity_id`` (and thus a fresh LangGraph
+        thread), so parallel workers never share checkpointer state.
         """
-        cloned = LangGraphTarget(self._graph, config=dict(self._extra_config))
-        if memory_entity_id is not None:
-            cloned._thread_id = memory_entity_id
-        return cloned
+        return LangGraphTarget(self._graph, config=dict(self._extra_config))

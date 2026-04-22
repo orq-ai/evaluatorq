@@ -45,6 +45,10 @@ class VercelAISdkTarget(AgentTarget):
         config = DynamicRunConfig(targets=[target])
     """
 
+    memory_entity_id: str | None = None
+    """Vercel AI SDK state lives inside the HTTP handler (stateless to us);
+    conversation history is tracked client-side in ``_history``."""
+
     def __init__(
         self,
         url: str,

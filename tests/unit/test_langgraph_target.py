@@ -38,7 +38,7 @@ class TestLangGraphTarget:
         assert messages == [{"role": "user", "content": "test prompt"}]
 
     @pytest.mark.asyncio
-    async def test_send_prompt_passes_thread_id(self) -> None:
+    async def test_send_prompt_passes_memory_entity_id(self) -> None:
         graph = _make_graph()
         target = LangGraphTarget(graph)
         await target.send_prompt("hi")
@@ -47,12 +47,12 @@ class TestLangGraphTarget:
         assert "thread_id" in config["configurable"]
 
     @pytest.mark.asyncio
-    async def test_reset_changes_thread_id(self) -> None:
+    async def test_reset_preserves_memory_entity_id(self) -> None:
         graph = _make_graph()
         target = LangGraphTarget(graph)
-        old_thread = target._thread_id
+        old_thread = target.memory_entity_id
         target.reset_conversation()
-        assert target._thread_id != old_thread
+        assert target.memory_entity_id == old_thread
 
     @pytest.mark.asyncio
     async def test_extra_config_is_preserved(self) -> None:
@@ -96,20 +96,21 @@ class TestLangGraphTarget:
         target = LangGraphTarget(graph, config={"recursion_limit": 50})
         cloned = target.clone()
         assert cloned is not target
-        assert cloned._thread_id != target._thread_id
+        assert cloned.memory_entity_id != target.memory_entity_id
         assert cloned._graph is graph
         assert cloned._extra_config is not target._extra_config
         assert cloned._extra_config == {"recursion_limit": 50}
 
-    def test_clone_with_memory_entity_id_uses_it_as_thread_id(self) -> None:
+    def test_clone_gets_fresh_memory_entity_id(self) -> None:
         graph = _make_graph()
         target = LangGraphTarget(graph)
-        cloned = target.clone(memory_entity_id="entity-abc")
-        assert cloned._thread_id == "entity-abc"
+        cloned = target.clone()
+        assert cloned.memory_entity_id != target.memory_entity_id
+        assert cloned.memory_entity_id  # non-empty
 
     @pytest.mark.asyncio
     async def test_configurable_key_collision_preserves_user_keys(self) -> None:
-        """config={"configurable": {"custom_key": "val"}} must not be overwritten by thread_id injection."""
+        """config={"configurable": {"custom_key": "val"}} must not be overwritten by memory_entity_id injection."""
         graph = _make_graph()
         target = LangGraphTarget(graph, config={"configurable": {"custom_key": "val"}})
         await target.send_prompt("hi")
