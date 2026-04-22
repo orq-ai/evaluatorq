@@ -267,6 +267,14 @@ class AgentCapability(StrEnum):
     USER_DATA = 'user_data'
 
 
+class SaveMode(StrEnum):
+    """Controls what gets persisted to disk after a red team run."""
+
+    NONE = 'none'
+    FINAL = 'final'
+    DETAIL = 'detail'
+
+
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------

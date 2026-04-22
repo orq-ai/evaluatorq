@@ -12,6 +12,7 @@ from openai import AsyncOpenAI
 
 from evaluatorq.redteam import red_team
 from evaluatorq.redteam.backends.base import BackendBundle
+from evaluatorq.redteam.contracts import SaveMode
 from evaluatorq.redteam.exceptions import CancelledError
 from evaluatorq.redteam.hooks import ConfirmPayload, DefaultHooks
 
@@ -122,7 +123,7 @@ async def test_static_output_artifacts(
         dataset=str(static_dataset_path),
         llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
         output_dir=output_dir,
-        save='detail',
+        save=SaveMode.DETAIL,
     )
 
     assert (output_dir / "01_datapoints.json").exists()
@@ -157,7 +158,7 @@ async def test_dynamic_output_artifacts(
             backend="openai",
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
             output_dir=output_dir,
-            save='detail',
+            save=SaveMode.DETAIL,
         )
 
     assert (output_dir / "01_all_datapoints.json").exists()

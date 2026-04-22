@@ -7,6 +7,7 @@ from typing import Any
 from agents import Agent, Runner
 
 from evaluatorq.redteam.backends.base import AgentTarget
+from evaluatorq.redteam.contracts import AgentContext, ToolInfo
 
 
 class OpenAIAgentTarget(AgentTarget):
@@ -65,6 +66,50 @@ class OpenAIAgentTarget(AgentTarget):
     def reset_conversation(self) -> None:
         """Reset conversation state by clearing the message history."""
         self._history = []
+
+    async def get_agent_context(self) -> AgentContext:
+        """Return agent context derived from the wrapped Agent instance.
+
+        Maps the SDK ``Agent`` fields onto :class:`AgentContext`:
+        ``name`` → ``key``/``display_name``, ``instructions`` → ``system_prompt``,
+        ``model`` → ``model``, ``tools`` → ``tools`` (via duck-typed introspection).
+        There is no server-side memory, so ``memory_stores`` stays empty.
+        """
+        agent = self._agent
+        key = str(getattr(agent, "name", None) or "openai_agent")
+        instructions = getattr(agent, "instructions", None)
+        system_prompt = instructions if isinstance(instructions, str) else None
+
+        model_attr = getattr(agent, "model", None)
+        if isinstance(model_attr, str):
+            model = model_attr
+        elif model_attr is None:
+            model = None
+        else:
+            model = getattr(model_attr, "model", None) or str(model_attr)
+
+        tools: list[ToolInfo] = []
+        for tool in getattr(agent, "tools", []) or []:
+            name = getattr(tool, "name", None) or getattr(tool, "__name__", None)
+            if not name:
+                continue
+            params = getattr(tool, "params_json_schema", None)
+            tools.append(
+                ToolInfo(
+                    name=str(name),
+                    description=getattr(tool, "description", None),
+                    parameters=params if isinstance(params, dict) else None,
+                )
+            )
+
+        return AgentContext(
+            key=key,
+            display_name=key,
+            description="OpenAI Agents SDK target",
+            system_prompt=system_prompt,
+            tools=tools,
+            model=model,
+        )
 
     def clone(self) -> OpenAIAgentTarget:
         """Create an independent copy for parallel red teaming jobs."""

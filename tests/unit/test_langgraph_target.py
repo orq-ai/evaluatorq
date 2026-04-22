@@ -13,6 +13,7 @@ from evaluatorq.integrations.langgraph_integration import LangGraphTarget  # noq
 
 def _make_graph(response_content: str = "I'm fine") -> MagicMock:
     graph = MagicMock()
+    graph.name = "test_graph"
     msg = MagicMock()
     msg.content = response_content
     graph.ainvoke = AsyncMock(return_value={"messages": [msg]})
@@ -130,3 +131,95 @@ class TestLangGraphTarget:
         result = await target.send_prompt("hi")
         assert isinstance(result, str)
         assert "multimodal content" in result
+
+
+class TestLangGraphTargetAgentContext:
+    @pytest.mark.asyncio
+    async def test_get_agent_context_from_react_agent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Tools bound via create_react_agent show up in the agent context."""
+        from langchain_core.tools import tool
+        from langchain_openai import ChatOpenAI
+        from langgraph.prebuilt import create_react_agent
+
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-stub")
+
+        @tool
+        def add(a: int, b: int) -> int:
+            """Add two integers."""
+            return a + b
+
+        graph = create_react_agent(ChatOpenAI(model="gpt-4o-mini"), tools=[add])
+        target = LangGraphTarget(graph)
+
+        ctx = await target.get_agent_context()
+        assert ctx.key.startswith("LangGraph_")
+        tool_names = ctx.get_tool_names()
+        assert "add" in tool_names
+        # create_react_agent does not set a checkpointer by default → no memory entries
+        assert ctx.memory_stores == []
+
+    @pytest.mark.asyncio
+    async def test_get_agent_context_handles_graph_without_tools_node(self) -> None:
+        graph = _make_graph()
+        graph.nodes = {}
+        graph.checkpointer = None
+        target = LangGraphTarget(graph)
+        ctx = await target.get_agent_context()
+        assert ctx.key.startswith("test_graph_")
+        assert ctx.tools == []
+        assert ctx.memory_stores == []
+
+    @pytest.mark.asyncio
+    async def test_get_agent_context_emits_memory_store_when_checkpointer_present(self) -> None:
+        from evaluatorq.redteam.contracts import MemoryStoreInfo
+
+        graph = _make_graph()
+        graph.nodes = {}
+        checkpointer = MagicMock()
+        checkpointer.__class__.__name__ = "InMemorySaver"
+        graph.checkpointer = checkpointer
+        target = LangGraphTarget(graph)
+
+        ctx = await target.get_agent_context()
+        assert len(ctx.memory_stores) == 1
+        assert isinstance(ctx.memory_stores[0], MemoryStoreInfo)
+        assert ctx.memory_stores[0].id == target.memory_entity_id
+
+    @pytest.mark.asyncio
+    async def test_get_agent_context_dedupes_tools_across_nodes(self) -> None:
+        """Same tool registered in multiple ToolNodes must yield a single entry."""
+        shared_tool = MagicMock()
+        shared_tool.description = "shared"
+        bound_a = MagicMock()
+        bound_a.tools_by_name = {"shared": shared_tool}
+        bound_b = MagicMock()
+        bound_b.tools_by_name = {"shared": shared_tool, "extra": MagicMock(description=None)}
+        node_a = MagicMock(bound=bound_a)
+        node_b = MagicMock(bound=bound_b)
+
+        graph = _make_graph()
+        graph.nodes = {"tools_a": node_a, "tools_b": node_b}
+        graph.checkpointer = None
+        target = LangGraphTarget(graph)
+
+        ctx = await target.get_agent_context()
+        names = [t.name for t in ctx.tools]
+        assert names.count("shared") == 1
+        assert sorted(names) == ["extra", "shared"]
+
+    @pytest.mark.asyncio
+    async def test_get_agent_context_override_returns_verbatim(self) -> None:
+        from evaluatorq.redteam.contracts import AgentContext, ToolInfo
+
+        override = AgentContext(
+            key="my-custom-agent",
+            tools=[ToolInfo(name="custom_tool")],
+            description="explicitly-provided context",
+        )
+        graph = _make_graph()
+        target = LangGraphTarget(graph, agent_context=override)
+
+        ctx = await target.get_agent_context()
+        assert ctx is override

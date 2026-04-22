@@ -105,6 +105,46 @@ class TestOpenAIAgentTarget:
             await target.send_prompt("hi")
 
     @pytest.mark.asyncio
+    async def test_get_agent_context_roundtrips_fields(self) -> None:
+        agent = MagicMock()
+        agent.name = "support-bot"
+        agent.instructions = "Be helpful."
+        agent.model = "gpt-4o-mini"
+        tool_a = MagicMock()
+        tool_a.name = "search_docs"
+        tool_a.description = "Search the docs."
+        tool_a.params_json_schema = {"type": "object", "properties": {}}
+        tool_b = MagicMock()
+        tool_b.name = "create_ticket"
+        tool_b.description = None
+        tool_b.params_json_schema = None
+        agent.tools = [tool_a, tool_b]
+
+        target = OpenAIAgentTarget(agent)
+        ctx = await target.get_agent_context()
+
+        assert ctx.key == "support-bot"
+        assert ctx.system_prompt == "Be helpful."
+        assert ctx.model == "gpt-4o-mini"
+        assert {t.name for t in ctx.tools} == {"search_docs", "create_ticket"}
+        assert ctx.memory_stores == []
+
+    @pytest.mark.asyncio
+    async def test_get_agent_context_handles_object_model(self) -> None:
+        agent = MagicMock()
+        agent.name = "bot"
+        agent.instructions = None
+        model_obj = MagicMock()
+        model_obj.model = "gpt-4o"
+        agent.model = model_obj
+        agent.tools = []
+
+        target = OpenAIAgentTarget(agent)
+        ctx = await target.get_agent_context()
+        assert ctx.model == "gpt-4o"
+        assert ctx.tools == []
+
+    @pytest.mark.asyncio
     async def test_history_accumulates_across_turns(self, monkeypatch: pytest.MonkeyPatch) -> None:
         call_count = 0
 

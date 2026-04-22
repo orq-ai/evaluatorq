@@ -47,3 +47,36 @@ class TestCallableTarget:
         assert cloned is not target
         assert cloned._fn is fn
         assert cloned._reset_fn is reset
+
+    @pytest.mark.asyncio
+    async def test_get_agent_context_default_is_minimal(self) -> None:
+        def my_fn(prompt: str) -> str:
+            return prompt
+
+        target = CallableTarget(my_fn)
+        ctx = await target.get_agent_context()
+        assert ctx.key == "my_fn"
+        assert ctx.tools == []
+        assert ctx.memory_stores == []
+        assert ctx.description == "opaque callable target"
+
+    @pytest.mark.asyncio
+    async def test_get_agent_context_returns_override(self) -> None:
+        from evaluatorq.redteam.contracts import AgentContext, ToolInfo
+
+        override = AgentContext(
+            key="wrapped-agent",
+            tools=[ToolInfo(name="send_email")],
+            description="wraps a real agent",
+        )
+        target = CallableTarget(lambda p: p, agent_context=override)
+        ctx = await target.get_agent_context()
+        assert ctx is override
+
+    def test_clone_preserves_agent_context(self) -> None:
+        from evaluatorq.redteam.contracts import AgentContext
+
+        override = AgentContext(key="k")
+        target = CallableTarget(lambda p: p, agent_context=override)
+        cloned = target.clone()
+        assert cloned._agent_context is override

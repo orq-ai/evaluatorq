@@ -209,3 +209,42 @@ class TestVercelAISdkTarget:
         response = _mock_response('0:"Hello"\n0:" world"\n')
         text = VercelAISdkTarget._parse_response(response)
         assert text == "Hello world"
+
+
+class TestVercelAISdkTargetAgentContext:
+    @pytest.mark.asyncio
+    async def test_get_agent_context_default_is_minimal(self) -> None:
+        target = VercelAISdkTarget("http://test/api/chat")
+        ctx = await target.get_agent_context()
+        assert ctx.key == "http://test/api/chat"
+        assert ctx.tools == []
+        assert ctx.memory_stores == []
+        assert ctx.description == "opaque Vercel AI SDK HTTP target"
+
+    @pytest.mark.asyncio
+    async def test_get_agent_context_strips_credentials_from_url_key(self) -> None:
+        target = VercelAISdkTarget("https://user:secret@api.example.com/chat?token=abc")
+        ctx = await target.get_agent_context()
+        assert "secret" not in ctx.key
+        assert "token" not in ctx.key
+        assert ctx.key == "https://api.example.com/chat"
+
+    @pytest.mark.asyncio
+    async def test_get_agent_context_returns_override(self) -> None:
+        from evaluatorq.redteam.contracts import AgentContext, ToolInfo
+
+        override = AgentContext(
+            key="vercel-bot",
+            tools=[ToolInfo(name="http_tool")],
+        )
+        target = VercelAISdkTarget("http://test/api/chat", agent_context=override)
+        ctx = await target.get_agent_context()
+        assert ctx is override
+
+    def test_clone_preserves_agent_context(self) -> None:
+        from evaluatorq.redteam.contracts import AgentContext
+
+        override = AgentContext(key="k")
+        target = VercelAISdkTarget("http://test/api/chat", agent_context=override)
+        cloned = target.clone()
+        assert cloned._agent_context is override

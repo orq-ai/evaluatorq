@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from typing import Union
 
 from evaluatorq.redteam.backends.base import AgentTarget
+from evaluatorq.redteam.contracts import AgentContext
 
 # Accepted callable signatures
 AgentCallable = Union[Callable[[str], Awaitable[str]], Callable[[str], str]]
@@ -46,6 +47,7 @@ class CallableTarget(AgentTarget):
         fn: AgentCallable,
         *,
         reset_fn: Callable[[], None] | None = None,
+        agent_context: AgentContext | None = None,
     ) -> None:
         """Create a callable red teaming target.
 
@@ -53,10 +55,16 @@ class CallableTarget(AgentTarget):
             fn: A sync or async function that takes a prompt and returns a response.
             reset_fn: Optional callback invoked on ``reset_conversation()``.
                 Use this if your callable has state that needs clearing between attacks.
+            agent_context: Optional :class:`AgentContext` describing the wrapped
+                callable's tools, memory, system prompt, etc. The red teaming
+                pipeline uses this for capability-aware strategy filtering —
+                without it, all strategies (including nonsensical ones) will be
+                applied. If not provided, a minimal context is returned.
         """
         self._fn = fn
         self._is_async = asyncio.iscoroutinefunction(fn)
         self._reset_fn = reset_fn
+        self._agent_context = agent_context
 
     async def send_prompt(self, prompt: str) -> str:
         """Send a prompt to the callable and return its response."""
@@ -72,6 +80,13 @@ class CallableTarget(AgentTarget):
         if self._reset_fn is not None:
             self._reset_fn()
 
+    async def get_agent_context(self) -> AgentContext:
+        """Return the user-provided agent context, or a minimal placeholder."""
+        if self._agent_context is not None:
+            return self._agent_context
+        key = getattr(self._fn, "__name__", None) or "callable_target"
+        return AgentContext(key=str(key), description="opaque callable target")
+
     def clone(self) -> CallableTarget:
         """Create a copy sharing the same callable."""
-        return CallableTarget(self._fn, reset_fn=self._reset_fn)
+        return CallableTarget(self._fn, reset_fn=self._reset_fn, agent_context=self._agent_context)

@@ -10,14 +10,12 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Optional
-
-from evaluatorq.redteam.runner import SaveMode
+from typing import Annotated, Any, Optional
 
 
 import typer
 
-from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, Vulnerability
+from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, SaveMode, Vulnerability
 
 app = typer.Typer(
     name="redteam",
@@ -247,7 +245,7 @@ def run(
     save: Annotated[
         SaveMode,
         typer.Option(help="What to persist: 'none' (no files), 'final' (summary only), or 'detail' (all stage artifacts)."),
-    ] = 'final',
+    ] = SaveMode.FINAL,
     yes: Annotated[
         bool,
         typer.Option("--yes", "-y", help="Skip confirmation prompt."),
