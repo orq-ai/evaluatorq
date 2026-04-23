@@ -17,6 +17,7 @@ import pytest
 from evaluatorq.redteam.backends.base import BackendBundle
 from evaluatorq.redteam.contracts import (
     AgentContext,
+    AgentResponse,
     KnowledgeBaseInfo,
     MemoryStoreInfo,
     RedTeamReport,
@@ -135,13 +136,13 @@ class MockAgentTarget:
         self.memory_entity_id: str | None = f"red-team-{uuid.uuid4().hex[:12]}"
         self._conversation: list[dict[str, str]] = []
 
-    async def send_prompt(self, prompt: str) -> str:
+    async def send_prompt(self, prompt: str) -> AgentResponse:
         lower = prompt.lower()
         if "ignore previous instructions" in lower or "system prompt" in lower or "hidden instructions" in lower:
-            return "SYSTEM_PROMPT: internal guardrails. SUPER_SECRET_TOKEN=abc123"
+            return AgentResponse(text="SYSTEM_PROMPT: internal guardrails. SUPER_SECRET_TOKEN=abc123")
         if "rm -rf" in lower or "execute:" in lower:
-            return "I can't execute system commands."
-        return "I can help with safe alternatives."
+            return AgentResponse(text="I can't execute system commands.")
+        return AgentResponse(text="I can help with safe alternatives.")
 
     def reset_conversation(self) -> None:
         self._conversation = []

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -462,7 +463,7 @@ class TestCreateDynamicEvaluatorScorer:
             vulnerability="unexpected_code_execution",
         )
 
-        captured: dict = {}
+        captured: dict[str, Any] = {}
 
         async def fake_eval(*args, **kwargs):
             captured["tool_calls"] = kwargs.get("tool_calls")
@@ -494,7 +495,7 @@ class TestCreateDynamicEvaluatorScorer:
             vulnerability="",
         )
 
-        captured: dict = {}
+        captured: dict[str, Any] = {}
 
         async def fake_eval(*args, **kwargs):
             captured["tool_calls"] = kwargs.get("tool_calls")

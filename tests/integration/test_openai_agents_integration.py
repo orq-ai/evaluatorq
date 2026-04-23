@@ -7,6 +7,7 @@ management, multi-turn conversations, reset, and clone.
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -16,7 +17,7 @@ pytest.importorskip("agents")
 from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget  # noqa: E402
 
 
-def _make_result(output: str, history: list[dict]) -> MagicMock:
+def _make_result(output: str, history: list[dict[str, Any]]) -> MagicMock:
     """Create a realistic RunResult mock."""
     result = MagicMock()
     result.final_output = output
@@ -64,7 +65,7 @@ class TestOpenAIAgentIntegration:
     @pytest.mark.asyncio
     async def test_reset_clears_conversation(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """After reset, the next prompt should be sent as a fresh string, not history."""
-        inputs_received: list = []
+        inputs_received: list[Any] = []
 
         async def fake_run(agent, input_data, **kwargs):  # noqa: ANN001, ANN003
             inputs_received.append(input_data)

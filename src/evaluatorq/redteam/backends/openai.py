@@ -54,13 +54,17 @@ class OpenAIModelTarget:
             record_llm_response(span, response, output_content=content)
 
             # Capture tool calls made by the model
+            # Only ChatCompletionMessageToolCall has a .function attribute; skip custom tool calls
             executed_tool_calls: list[ExecutedToolCall] = []
             for tc in (msg.tool_calls or []):
+                func = getattr(tc, 'function', None)
+                if func is None:
+                    continue
                 try:
-                    args = json.loads(tc.function.arguments) if tc.function.arguments else {}
+                    args = json.loads(func.arguments) if func.arguments else {}
                 except (json.JSONDecodeError, ValueError):
-                    args = {'raw': tc.function.arguments}
-                executed_tool_calls.append(ExecutedToolCall(name=tc.function.name, arguments=args))
+                    args = {'raw': func.arguments}
+                executed_tool_calls.append(ExecutedToolCall(name=func.name, arguments=args))
 
             # Store usage for consume_last_token_usage()
             usage = getattr(response, 'usage', None)

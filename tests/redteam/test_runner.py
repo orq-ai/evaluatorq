@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import pytest
 
 from evaluatorq.redteam import get_category_info, list_categories, red_team
-from evaluatorq.redteam.contracts import Pipeline, RedTeamReport, ReportSummary
+from evaluatorq.redteam.contracts import AgentResponse, Pipeline, RedTeamReport, ReportSummary
 from evaluatorq.redteam.runner import _deduplicate_target_labels, _parse_target
 
 
@@ -396,8 +396,8 @@ class TestRedTeamWithAgentTarget:
         class MockTarget:
             memory_entity_id: str | None = None
 
-            async def send_prompt(self, prompt: str) -> str:
-                return 'response'
+            async def send_prompt(self, prompt: str) -> AgentResponse:
+                return AgentResponse(text='response')
 
             def reset_conversation(self) -> None:
                 pass
@@ -419,8 +419,8 @@ class TestRedTeamWithAgentTarget:
         class MockTarget:
             memory_entity_id: str | None = None
 
-            async def send_prompt(self, prompt: str) -> str:
-                return 'response'
+            async def send_prompt(self, prompt: str) -> AgentResponse:
+                return AgentResponse(text='response')
 
             def reset_conversation(self) -> None:
                 pass
@@ -446,8 +446,8 @@ class TestRedTeamWithAgentTarget:
         class MockTarget:
             memory_entity_id: str | None = None
 
-            async def send_prompt(self, prompt: str) -> str:
-                return 'response'
+            async def send_prompt(self, prompt: str) -> AgentResponse:
+                return AgentResponse(text='response')
 
             def reset_conversation(self) -> None:
                 pass

@@ -80,7 +80,7 @@ class CallableTarget(AgentTarget):
         """
         try:
             if self._is_async:
-                result = await self._fn(prompt)  # type: ignore[misc]
+                result = await self._fn(prompt)  # type: ignore[misc, operator]
             else:
                 result = await asyncio.to_thread(self._fn, prompt)  # type: ignore[arg-type]
             if isinstance(result, AgentResponse):

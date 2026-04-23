@@ -24,7 +24,7 @@ from evaluatorq.redteam.adaptive.attack_generator import generate_attack_prompt,
 from evaluatorq.redteam.backends.base import DefaultErrorMapper, _coerce_to_agent_response
 from evaluatorq.redteam.backends.registry import create_async_llm_client, resolve_backend
 from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
-from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, PIPELINE_CONFIG, AttackOutput, AttackStrategy, EvaluatorConfig, Message, OrchestratorResult, TokenUsage, Vulnerability
+from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, PIPELINE_CONFIG, AttackOutput, AttackStrategy, EvaluatorConfig, ExecutedToolCall, Message, OrchestratorResult, TokenUsage, Vulnerability
 from evaluatorq.redteam.vulnerability_registry import get_primary_category, resolve_category_safe, resolve_vulnerabilities
 from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator, _get_active_progress
 from evaluatorq.redteam.adaptive.strategy_planner import plan_strategies_for_categories, plan_strategies_for_vulnerabilities
@@ -318,7 +318,7 @@ def create_dynamic_redteam_job(
                 error_code = None
                 error_details = None
                 token_usage = None
-                turn_tool_calls: list = []
+                turn_tool_calls: list[ExecutedToolCall] = []
                 target_timeout_s = PIPELINE_CONFIG.target_agent_timeout_ms / 1000.0
                 try:
                     async with with_redteam_span(
