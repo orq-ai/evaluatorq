@@ -427,3 +427,84 @@ class TestRunEvaluatorSanitizationEndToEnd:
         # The actual response value appears exactly once, in the response section
         assert rendered.count("REAL_RESPONSE") == 1
         assert rendered.endswith("REAL_RESPONSE")
+
+
+# ---------------------------------------------------------------------------
+# create_dynamic_evaluator scorer — tool_calls threading
+# ---------------------------------------------------------------------------
+
+def _make_fake_eval_result() -> MagicMock:
+    result = MagicMock()
+    result.passed = True
+    result.explanation = "ok"
+    result.token_usage = None
+    result.evaluator_id = "test"
+    result.raw_output = {}
+    return result
+
+
+class TestCreateDynamicEvaluatorScorer:
+    @pytest.mark.asyncio
+    async def test_scorer_flattens_tool_calls_per_turn_and_passes_to_evaluator(self) -> None:
+        """Multi-turn tool calls are flattened and forwarded to the evaluator."""
+        from evaluatorq.redteam.adaptive.pipeline import create_dynamic_evaluator
+        from evaluatorq.redteam.contracts import AttackOutput
+
+        tc_a = ExecutedToolCall(name="tool_a", arguments={})
+        tc_b = ExecutedToolCall(name="tool_b", arguments={})
+
+        attack_output = AttackOutput(
+            conversation=[Message(role="user", content="hi"), Message(role="assistant", content="done")],
+            turns=1,
+            final_response="done",
+            tool_calls_per_turn=[[tc_a], [tc_b]],
+            category="ASI05",
+            vulnerability="unexpected_code_execution",
+        )
+
+        captured: dict = {}
+
+        async def fake_eval(*args, **kwargs):
+            captured["tool_calls"] = kwargs.get("tool_calls")
+            return _make_fake_eval_result()
+
+        with patch("evaluatorq.redteam.adaptive.pipeline.OWASPEvaluator") as MockEvaluatorClass:
+            MockEvaluatorClass.return_value.evaluate_vulnerability = AsyncMock(side_effect=fake_eval)
+            MockEvaluatorClass.return_value.evaluate = AsyncMock(side_effect=fake_eval)
+            scorer = create_dynamic_evaluator()["scorer"]
+            await scorer({"data": MagicMock(inputs={"category": "ASI05", "vulnerability": ""}), "output": attack_output})
+
+        assert captured["tool_calls"] is not None
+        assert len(captured["tool_calls"]) == 2
+        assert captured["tool_calls"][0].name == "tool_a"
+        assert captured["tool_calls"][1].name == "tool_b"
+
+    @pytest.mark.asyncio
+    async def test_scorer_passes_none_when_no_tool_calls(self) -> None:
+        """`tool_calls_per_turn=[[]]` results in `tool_calls=None` passed to the evaluator."""
+        from evaluatorq.redteam.adaptive.pipeline import create_dynamic_evaluator
+        from evaluatorq.redteam.contracts import AttackOutput
+
+        attack_output = AttackOutput(
+            conversation=[Message(role="user", content="hi"), Message(role="assistant", content="nope")],
+            turns=1,
+            final_response="nope",
+            tool_calls_per_turn=[[]],
+            category="ASI05",
+            vulnerability="",
+        )
+
+        captured: dict = {}
+
+        async def fake_eval(*args, **kwargs):
+            captured["tool_calls"] = kwargs.get("tool_calls")
+            return _make_fake_eval_result()
+
+        with patch("evaluatorq.redteam.adaptive.pipeline.OWASPEvaluator") as MockEvaluatorClass:
+            MockEvaluatorClass.return_value.evaluate_vulnerability = AsyncMock(side_effect=fake_eval)
+            MockEvaluatorClass.return_value.evaluate = AsyncMock(side_effect=fake_eval)
+            scorer = create_dynamic_evaluator()["scorer"]
+            await scorer({"data": MagicMock(inputs={"category": "ASI05", "vulnerability": ""}), "output": attack_output})
+
+        # Empty turns produce empty flat list → coerced to None by `or None`
+        assert captured["tool_calls"] is None

@@ -7,10 +7,15 @@ from collections.abc import Awaitable, Callable
 from typing import Union
 
 from evaluatorq.redteam.backends.base import AgentTarget
-from evaluatorq.redteam.contracts import AgentContext
+from evaluatorq.redteam.contracts import AgentContext, AgentResponse
 
-# Accepted callable signatures
-AgentCallable = Union[Callable[[str], Awaitable[str]], Callable[[str], str]]
+# Accepted callable signatures — may return str (backward-compat) or AgentResponse
+AgentCallable = Union[
+    Callable[[str], Awaitable[AgentResponse]],
+    Callable[[str], Awaitable[str]],
+    Callable[[str], AgentResponse],
+    Callable[[str], str],
+]
 
 
 class CallableTarget(AgentTarget):
@@ -66,12 +71,21 @@ class CallableTarget(AgentTarget):
         self._reset_fn = reset_fn
         self._agent_context = agent_context
 
-    async def send_prompt(self, prompt: str) -> str:
-        """Send a prompt to the callable and return its response."""
+    async def send_prompt(self, prompt: str) -> AgentResponse:
+        """Send a prompt to the callable and return a structured response.
+
+        Callables that return a plain ``str`` are wrapped in an
+        :class:`AgentResponse` with an empty ``tool_calls`` list.
+        Callables that already return :class:`AgentResponse` are passed through.
+        """
         try:
             if self._is_async:
-                return await self._fn(prompt)  # type: ignore[misc]  # pyright: ignore[reportReturnType, reportGeneralTypeIssues]
-            return await asyncio.to_thread(self._fn, prompt)  # type: ignore[return-value]  # pyright: ignore[reportReturnType]
+                result = await self._fn(prompt)  # type: ignore[misc]
+            else:
+                result = await asyncio.to_thread(self._fn, prompt)  # type: ignore[arg-type]
+            if isinstance(result, AgentResponse):
+                return result
+            return AgentResponse(text=str(result))
         except Exception as exc:
             raise RuntimeError(f"CallableTarget: callable raised {exc!r}") from exc
 

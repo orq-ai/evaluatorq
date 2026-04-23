@@ -14,7 +14,8 @@ class TestCallableTarget:
     async def test_sync_function(self) -> None:
         target = CallableTarget(lambda prompt: f"echo: {prompt}")
         result = await target.send_prompt("hello")
-        assert result == "echo: hello"
+        assert result.text == "echo: hello"
+        assert result.tool_calls == []
 
     @pytest.mark.asyncio
     async def test_async_function(self) -> None:
@@ -23,7 +24,8 @@ class TestCallableTarget:
 
         target = CallableTarget(my_agent)
         result = await target.send_prompt("hello")
-        assert result == "async: hello"
+        assert result.text == "async: hello"
+        assert result.tool_calls == []
 
     @pytest.mark.asyncio
     async def test_reset_calls_reset_fn(self) -> None:

@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 import httpx
 
 from evaluatorq.redteam.backends.base import AgentTarget
-from evaluatorq.redteam.contracts import AgentContext
+from evaluatorq.redteam.contracts import AgentContext, AgentResponse
 
 
 class VercelAISdkTarget(AgentTarget):
@@ -83,8 +83,13 @@ class VercelAISdkTarget(AgentTarget):
         self._history: list[dict[str, str]] = []
         self._agent_context = agent_context
 
-    async def send_prompt(self, prompt: str) -> str:
-        """Send a prompt to the AI SDK endpoint and return its text response."""
+    async def send_prompt(self, prompt: str) -> AgentResponse:
+        """Send a prompt to the AI SDK endpoint and return a structured response.
+
+        The Vercel AI SDK Data Stream Protocol does not expose tool call details
+        in a structured form, so ``tool_calls`` is always empty. The full text
+        response is available via ``.text``.
+        """
         self._history.append({"role": "user", "content": prompt})
 
         body: dict[str, Any] = {
@@ -102,7 +107,7 @@ class VercelAISdkTarget(AgentTarget):
 
         text = self._parse_response(response)
         self._history.append({"role": "assistant", "content": text})
-        return text
+        return AgentResponse(text=text)
 
     def reset_conversation(self) -> None:
         """Reset conversation state by clearing the message history."""

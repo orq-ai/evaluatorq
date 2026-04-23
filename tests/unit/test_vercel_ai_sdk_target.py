@@ -104,7 +104,8 @@ class TestVercelAISdkTarget:
 
             response = await target.send_prompt("hello")
 
-        assert response == "Hello"
+        assert response.text == "Hello"
+        assert response.tool_calls == []
 
     @pytest.mark.asyncio
     async def test_sends_messages_format(self) -> None:
