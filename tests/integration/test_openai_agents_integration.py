@@ -53,10 +53,10 @@ class TestOpenAIAgentIntegration:
         target = OpenAIAgentTarget(agent)
 
         r1 = await target.send_prompt("Hello")
-        assert r1 == "Reply 1"
+        assert r1.text == "Reply 1"
 
         r2 = await target.send_prompt("Follow up")
-        assert r2 == "Reply 2"
+        assert r2.text == "Reply 2"
 
         # History should have grown
         assert len(target._history) > 2
