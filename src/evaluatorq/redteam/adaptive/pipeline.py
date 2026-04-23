@@ -530,6 +530,8 @@ def create_dynamic_evaluator(
         final_response = output.final_response
         category = output.category or data.inputs.get('category', '')
         vulnerability = output.vulnerability or data.inputs.get('vulnerability', '')
+        # Flatten all tool calls across turns so the evaluator can optionally inspect them
+        all_tool_calls = [tc for turn in output.tool_calls_per_turn for tc in turn]
 
         # Prefer vulnerability-first path when a valid Vulnerability enum can be resolved
         resolved_vuln: Vulnerability | None = None
@@ -552,12 +554,14 @@ def create_dynamic_evaluator(
                     vuln=resolved_vuln,
                     messages=conversation,
                     response=final_response,
+                    tool_calls=all_tool_calls or None,
                 )
             else:
                 eval_result = await owasp_evaluator.evaluate(
                     category=category,
                     messages=conversation,
                     response=final_response,
+                    tool_calls=all_tool_calls or None,
                 )
             set_span_attrs(eval_span, {
                 'orq.redteam.passed': eval_result.passed,
