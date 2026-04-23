@@ -48,6 +48,8 @@ from evaluatorq.redteam.backends.base import extract_provider_error_code, extrac
 from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
     AgentContext,
+    AgentResponse,
+    ExecutedToolCall,
     KnowledgeBaseInfo,
     MemoryStoreInfo,
     TokenUsage,
@@ -88,8 +90,8 @@ class ORQAgentTarget:
         self._task_id: str | None = None
         self._last_token_usage: TokenUsage | None = None
 
-    async def send_prompt(self, prompt: str) -> str:
-        """Send a prompt to the ORQ agent."""
+    async def send_prompt(self, prompt: str) -> AgentResponse:
+        """Send a prompt to the ORQ agent and return its response with any tool calls."""
         async with with_redteam_span(
             f"agent {self.agent_key}",
             {
@@ -162,8 +164,25 @@ class ORQAgentTarget:
                             ids.append(call_id)
                     return ids
 
+                def _extract_executed_tool_calls(resp: object) -> list[ExecutedToolCall]:
+                    """Extract tool calls with name and arguments from a response."""
+                    pending = getattr(resp, 'pending_tool_calls', None) or []
+                    calls: list[ExecutedToolCall] = []
+                    for call in pending:
+                        name = getattr(call, 'name', None) or (call.get('name') if isinstance(call, dict) else None) or ''
+                        args = getattr(call, 'arguments', None) or (call.get('arguments') if isinstance(call, dict) else None) or {}
+                        if isinstance(args, str):
+                            try:
+                                import json as _json
+                                args = _json.loads(args)
+                            except Exception:
+                                args = {'raw': args}
+                        calls.append(ExecutedToolCall(name=str(name), arguments=args if isinstance(args, dict) else {}))
+                    return calls
+
                 _accumulate_usage(response)
                 text_response = _extract_text(response)
+                all_tool_calls: list[ExecutedToolCall] = _extract_executed_tool_calls(response)
 
                 # Some agent tool flows require client-provided tool_result parts.
                 # Continue the same task with synthetic tool results so the thread can progress.
@@ -201,6 +220,7 @@ class ORQAgentTarget:
                     extracted = _extract_text(response)
                     if extracted:
                         text_response = extracted
+                    all_tool_calls.extend(_extract_executed_tool_calls(response))
                     pending_ids = _pending_tool_call_ids(response)
 
                 if pending_ids:
@@ -240,7 +260,7 @@ class ORQAgentTarget:
                         ensure_ascii=False,
                     ),
                 })
-                return result_text
+                return AgentResponse(text=result_text, tool_calls=all_tool_calls)
 
             except Exception as e:
                 logger.error(f'ORQ agent call failed: {e}')

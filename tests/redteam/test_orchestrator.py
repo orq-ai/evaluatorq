@@ -73,7 +73,7 @@ class TestORQAgentTarget:
             mock_to_thread.return_value = mock_response
             response = await target.send_prompt('Hello')
 
-        assert response == 'Agent response'
+        assert response.text == 'Agent response'
         assert target._task_id == 'task_123'  # pyright: ignore[reportPrivateUsage]
 
     @pytest.mark.asyncio

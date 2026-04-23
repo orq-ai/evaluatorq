@@ -9,7 +9,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 
 from evaluatorq.redteam.backends.base import AgentTarget
-from evaluatorq.redteam.contracts import AgentContext, MemoryStoreInfo, ToolInfo
+from evaluatorq.redteam.contracts import AgentContext, AgentResponse, ExecutedToolCall, MemoryStoreInfo, ToolInfo
 
 
 class LangGraphTarget(AgentTarget):
@@ -70,8 +70,8 @@ class LangGraphTarget(AgentTarget):
             },
         )
 
-    async def send_prompt(self, prompt: str) -> str:
-        """Send a prompt to the LangGraph agent and return its text response."""
+    async def send_prompt(self, prompt: str) -> AgentResponse:
+        """Send a prompt to the LangGraph agent and return its response with tool calls."""
         result = await self._graph.ainvoke(
             {"messages": [{"role": "user", "content": prompt}]},
             config=self._build_config(),
@@ -96,7 +96,24 @@ class LangGraphTarget(AgentTarget):
             content = getattr(last, "content", "")
         if not isinstance(content, str):
             content = str(content)
-        return content
+
+        # Extract tool calls from all AI messages in the state
+        tool_calls: list[ExecutedToolCall] = []
+        for msg in messages:
+            if isinstance(msg, dict):
+                if msg.get("role") == "assistant":
+                    for tc in (msg.get("tool_calls") or []):
+                        name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
+                        args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
+                        tool_calls.append(ExecutedToolCall(name=str(name), arguments=args if isinstance(args, dict) else {}))
+            else:
+                # LangChain AIMessage — tool_calls is a list of dicts with 'name' and 'args'
+                for tc in (getattr(msg, "tool_calls", None) or []):
+                    name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
+                    args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
+                    tool_calls.append(ExecutedToolCall(name=str(name), arguments=args if isinstance(args, dict) else {}))
+
+        return AgentResponse(text=content, tool_calls=tool_calls)
 
     def reset_conversation(self) -> None:
         """Reset conversation state. Thread ID is fixed at construction; clone() provides isolation."""

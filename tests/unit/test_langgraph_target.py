@@ -9,6 +9,7 @@ import pytest
 pytest.importorskip("langgraph")
 
 from evaluatorq.integrations.langgraph_integration import LangGraphTarget  # noqa: E402
+from evaluatorq.redteam.contracts import AgentResponse  # noqa: E402
 
 
 def _make_graph(response_content: str = "I'm fine") -> MagicMock:
@@ -26,7 +27,8 @@ class TestLangGraphTarget:
         graph = _make_graph("hello back")
         target = LangGraphTarget(graph)
         result = await target.send_prompt("hello")
-        assert result == "hello back"
+        assert isinstance(result, AgentResponse)
+        assert result.text == "hello back"
 
     @pytest.mark.asyncio
     async def test_send_prompt_passes_user_message(self) -> None:
@@ -90,7 +92,7 @@ class TestLangGraphTarget:
         )
         target = LangGraphTarget(graph)
         result = await target.send_prompt("hi")
-        assert result == "dict msg"
+        assert result.text == "dict msg"
 
     def test_clone_returns_independent_instance(self) -> None:
         graph = _make_graph()
@@ -129,8 +131,8 @@ class TestLangGraphTarget:
         graph.ainvoke = AsyncMock(return_value={"messages": [msg]})
         target = LangGraphTarget(graph)
         result = await target.send_prompt("hi")
-        assert isinstance(result, str)
-        assert "multimodal content" in result
+        assert isinstance(result.text, str)
+        assert "multimodal content" in result.text
 
 
 class TestLangGraphTargetAgentContext:

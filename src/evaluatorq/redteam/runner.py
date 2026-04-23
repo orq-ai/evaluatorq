@@ -46,6 +46,7 @@ from evaluatorq.redteam.backends.base import (
     ErrorMapper,
     MemoryCleanup,
     NoopMemoryCleanup,
+    _coerce_to_agent_response,
     is_agent_target,
 )
 from evaluatorq.redteam.backends.registry import create_async_llm_client, resolve_backend
@@ -1409,7 +1410,8 @@ async def _run_dynamic_or_hybrid(
                                 f'produced an empty prompt ({len(messages)} messages, none with user content).'
                             )
                         target_instance = _factory.create_target(_label)
-                        response = await target_instance.send_prompt(prompt)
+                        raw = await target_instance.send_prompt(prompt)
+                        response = _coerce_to_agent_response(raw).text
                         _active_progress = _get_active_progress()
                         if _active_progress is not None:
                             await _active_progress.finish_attack(None)

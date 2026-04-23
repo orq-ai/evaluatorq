@@ -10,6 +10,7 @@ Semantic convention:
 
 import os
 import sys
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal, TypedDict
 
@@ -343,6 +344,32 @@ class ToolCall(BaseModel):
     id: str = Field(description='Unique tool call ID (e.g., call_abc123)')
     type: Literal['function'] = Field(default='function', description='Tool type')
     function: FunctionCall = Field(description='Function call details')
+
+
+@dataclass
+class ExecutedToolCall:
+    """A tool call captured during agent execution (distinct from ToolCall which is for strategy definitions)."""
+
+    name: str
+    arguments: dict
+    result: str | None = None
+
+
+@dataclass
+class AgentResponse:
+    """Structured response from a target agent, including tool calls made during execution.
+
+    Backward-compatible: evaluators and orchestrator default to ``.text``.
+    Tool-aware components may additionally inspect ``.tool_calls``.
+
+    ``intermediate_steps`` is a hook for framework-specific raw execution data
+    (e.g. LangChain AgentAction/AgentFinish pairs). Not consumed by the orchestrator
+    or evaluator — available for custom backends and post-processing.
+    """
+
+    text: str
+    tool_calls: list[ExecutedToolCall] = field(default_factory=list)
+    intermediate_steps: list[dict[str, Any]] | None = None
 
 
 class Message(BaseModel):
@@ -849,6 +876,10 @@ class OrchestratorResult(BaseModel):
     error_turn: int | None = Field(default=None, description='1-based turn number where the error occurred')
     truncated_turns: list[int] = Field(
         default_factory=list, description='Turn numbers where adversarial LLM hit max_tokens'
+    )
+    tool_calls_per_turn: list[list[ExecutedToolCall]] = Field(
+        default_factory=list,
+        description='Tool calls captured per attack turn (index 0 = turn 1). Empty list per turn if target returned none.',
     )
 
     @property

@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from loguru import logger
 
 if TYPE_CHECKING:
-    from evaluatorq.redteam.contracts import AgentContext, TokenUsage
+    from evaluatorq.redteam.contracts import AgentContext, AgentResponse, TokenUsage
 
 
 class AgentTarget(Protocol):
@@ -29,13 +29,25 @@ class AgentTarget(Protocol):
 
     memory_entity_id: str | None
 
-    async def send_prompt(self, prompt: str) -> str:
-        """Send a prompt and return the response."""
+    async def send_prompt(self, prompt: str) -> 'AgentResponse':
+        """Send a prompt and return a structured response with text and any tool calls made."""
         ...
 
     def reset_conversation(self) -> None:
         """Reset conversation state for a new attack."""
         ...
+
+
+def _coerce_to_agent_response(raw: Any) -> 'AgentResponse':
+    """Wrap a plain str return into AgentResponse for backward-compat with legacy targets.
+
+    Any target that still returns ``str`` from ``send_prompt`` will be transparently
+    wrapped here at the orchestrator call site (Option A backward-compat strategy).
+    """
+    from evaluatorq.redteam.contracts import AgentResponse
+    if isinstance(raw, AgentResponse):
+        return raw
+    return AgentResponse(text=str(raw) if raw is not None else '')
 
 
 class SupportsClone(Protocol):

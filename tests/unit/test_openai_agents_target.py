@@ -9,6 +9,7 @@ import pytest
 pytest.importorskip("agents")
 
 from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget  # noqa: E402
+from evaluatorq.redteam.contracts import AgentResponse  # noqa: E402
 
 
 def _mock_runner_and_result(output: str = "response") -> tuple[MagicMock, MagicMock]:
@@ -31,7 +32,8 @@ class TestOpenAIAgentTarget:
 
         target = OpenAIAgentTarget(MagicMock())
         response = await target.send_prompt("hello")
-        assert response == "hello back"
+        assert isinstance(response, AgentResponse)
+        assert response.text == "hello back"
 
     @pytest.mark.asyncio
     async def test_first_prompt_sends_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -169,7 +171,7 @@ class TestOpenAIAgentTarget:
 
         target = OpenAIAgentTarget(MagicMock())
         r1 = await target.send_prompt("Hello")
-        assert r1 == "Reply 1"
+        assert r1.text == "Reply 1"
         r2 = await target.send_prompt("Follow up")
-        assert r2 == "Reply 2"
+        assert r2.text == "Reply 2"
         assert len(target._history) > 2

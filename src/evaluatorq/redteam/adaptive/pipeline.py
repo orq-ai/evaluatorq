@@ -21,7 +21,7 @@ from evaluatorq import DataPoint, EvaluationResult, Job, job
 from loguru import logger
 
 from evaluatorq.redteam.adaptive.attack_generator import generate_attack_prompt, generate_objective
-from evaluatorq.redteam.backends.base import DefaultErrorMapper
+from evaluatorq.redteam.backends.base import DefaultErrorMapper, _coerce_to_agent_response
 from evaluatorq.redteam.backends.registry import create_async_llm_client, resolve_backend
 from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, PIPELINE_CONFIG, AttackOutput, AttackStrategy, EvaluatorConfig, Message, OrchestratorResult, TokenUsage, Vulnerability
@@ -330,10 +330,12 @@ def create_dynamic_redteam_job(
                             "orq.redteam.input": prompt,
                         },
                     ) as tgt_span:
-                        response = await asyncio.wait_for(
+                        raw = await asyncio.wait_for(
                             target.send_prompt(prompt),
                             timeout=target_timeout_s,
                         )
+                        agent_resp = _coerce_to_agent_response(raw)
+                        response = agent_resp.text
                         set_span_attrs(tgt_span, {
                             "output": response or "",
                             "orq.redteam.output": response or "",

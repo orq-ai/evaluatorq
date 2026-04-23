@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from openai.types.chat import ChatCompletionMessageParam
 
 from evaluatorq.redteam.backends.base import extract_provider_error_code, extract_status_code
-from evaluatorq.redteam.contracts import AgentContext, TargetKind, TokenUsage
+from evaluatorq.redteam.contracts import AgentContext, AgentResponse, ExecutedToolCall, TargetKind, TokenUsage
 from evaluatorq.redteam.tracing import record_llm_response, with_llm_span
 
 if TYPE_CHECKING:
@@ -33,8 +34,8 @@ class OpenAIModelTarget:
         self.system_prompt = system_prompt or 'You are a helpful assistant.'
         self._last_token_usage: TokenUsage | None = None
 
-    async def send_prompt(self, prompt: str) -> str:
-        """Send a prompt to the OpenAI model and return its response."""
+    async def send_prompt(self, prompt: str) -> AgentResponse:
+        """Send a prompt to the OpenAI model and return its response with any tool calls."""
         messages: list[ChatCompletionMessageParam] = [
             {'role': 'system', 'content': self.system_prompt},
             {'role': 'user', 'content': prompt},
@@ -48,8 +49,18 @@ class OpenAIModelTarget:
                 model=self.model_id,
                 messages=messages,
             )
-            content = response.choices[0].message.content or ''
+            msg = response.choices[0].message
+            content = msg.content or ''
             record_llm_response(span, response, output_content=content)
+
+            # Capture tool calls made by the model
+            executed_tool_calls: list[ExecutedToolCall] = []
+            for tc in (msg.tool_calls or []):
+                try:
+                    args = json.loads(tc.function.arguments) if tc.function.arguments else {}
+                except (json.JSONDecodeError, ValueError):
+                    args = {'raw': tc.function.arguments}
+                executed_tool_calls.append(ExecutedToolCall(name=tc.function.name, arguments=args))
 
             # Store usage for consume_last_token_usage()
             usage = getattr(response, 'usage', None)
@@ -67,7 +78,7 @@ class OpenAIModelTarget:
             else:
                 self._last_token_usage = None
 
-        return content
+        return AgentResponse(text=content, tool_calls=executed_tool_calls)
 
     def consume_last_token_usage(self) -> TokenUsage | None:
         """Return and clear usage from last call."""

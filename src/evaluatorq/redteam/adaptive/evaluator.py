@@ -13,7 +13,7 @@ from openai.types.chat import ChatCompletionMessageParam
 
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category, get_evaluator_for_vulnerability
-from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, AttackEvaluationResult, TokenUsage, Vulnerability
+from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, AttackEvaluationResult, ExecutedToolCall, TokenUsage, Vulnerability
 from evaluatorq.redteam.tracing import record_llm_response, with_llm_span
 from evaluatorq.redteam.vulnerability_registry import resolve_category_safe
 
@@ -50,6 +50,7 @@ class OWASPEvaluator:
         vuln: Vulnerability,
         messages: list[dict[str, Any]] | list[Message],
         response: str,
+        tool_calls: list[ExecutedToolCall] | None = None,
     ) -> AttackEvaluationResult:
         """Evaluate an agent response for a specific vulnerability.
 
@@ -72,6 +73,7 @@ class OWASPEvaluator:
             evaluator_id=vuln.value,
             messages=messages,
             response=response,
+            tool_calls=tool_calls,
             span_attributes={
                 "orq.redteam.llm_purpose": "evaluation",
                 "orq.redteam.vulnerability": vuln.value,
@@ -83,6 +85,7 @@ class OWASPEvaluator:
         category: str,
         messages: list[dict[str, Any]] | list[Message],
         response: str,
+        tool_calls: list[ExecutedToolCall] | None = None,
     ) -> AttackEvaluationResult:
         """Evaluate an agent response for vulnerability.
 
@@ -94,7 +97,7 @@ class OWASPEvaluator:
 
         vuln = resolve_category_safe(category_code)
         if vuln is not None:
-            return await self.evaluate_vulnerability(vuln, messages, response)
+            return await self.evaluate_vulnerability(vuln, messages, response, tool_calls=tool_calls)
 
         # Fallback: category not in the registry — try the category-keyed lookup directly
         evaluator = get_evaluator_for_category(category, model_id=self.evaluator_model)
@@ -112,6 +115,7 @@ class OWASPEvaluator:
             evaluator_id=category_code,
             messages=messages,
             response=response,
+            tool_calls=tool_calls,
             span_attributes={
                 "orq.redteam.llm_purpose": "evaluation",
                 "orq.redteam.category": category,
@@ -126,13 +130,23 @@ class OWASPEvaluator:
         messages: list[dict[str, Any]] | list[Message],
         response: str,
         span_attributes: dict[str, str],
+        tool_calls: list[ExecutedToolCall] | None = None,
     ) -> AttackEvaluationResult:
         """Execute an evaluator entity against a conversation and return a typed result."""
         try:
             prompt = evaluator.prompt
-            # Replace {{input.all_messages}} BEFORE inserting the untrusted response so that
-            # a crafted response containing "{{input.all_messages}}" cannot expand the template.
+            # Replace template variables in a safe order. Trusted internal data first,
+            # then adversary-controlled values last so no later substitution can re-expand them.
+            # Tool call data (names, arguments) is adversary-influenced and is sanitized with
+            # _sanitize_placeholders before embedding to prevent cross-expansion attacks.
             prompt = prompt.replace('{{input.all_messages}}', json.dumps(_serialize_messages(messages), indent=2))
+            prompt = prompt.replace(
+                '{{output.tool_calls}}',
+                _sanitize_placeholders(json.dumps(
+                    [{'name': tc.name, 'arguments': tc.arguments, 'result': tc.result} for tc in (tool_calls or [])],
+                    indent=2,
+                )),
+            )
             prompt = prompt.replace('{{output.response}}', response or '')
 
             eval_messages: list[ChatCompletionMessageParam] = [
@@ -195,6 +209,7 @@ async def evaluate_attack(
     evaluator_model: str = DEFAULT_PIPELINE_MODEL,
     *,
     vulnerability: Vulnerability | None = None,
+    tool_calls: list[ExecutedToolCall] | None = None,
 ) -> AttackEvaluationResult:
     """Convenience function to evaluate a single attack.
 
@@ -203,8 +218,8 @@ async def evaluate_attack(
     """
     evaluator = OWASPEvaluator(evaluator_model=evaluator_model)
     if vulnerability is not None:
-        return await evaluator.evaluate_vulnerability(vulnerability, messages, response)
-    return await evaluator.evaluate(category, messages, response)
+        return await evaluator.evaluate_vulnerability(vulnerability, messages, response, tool_calls=tool_calls)
+    return await evaluator.evaluate(category, messages, response, tool_calls=tool_calls)
 
 
 def _serialize_messages(messages: list[dict[str, Any]] | list[Message]) -> list[dict[str, Any]]:
@@ -216,5 +231,15 @@ def _serialize_messages(messages: list[dict[str, Any]] | list[Message]) -> list[
             continue
         serialized.append({'role': str(msg.role), 'content': str(msg.content or '')})
     return serialized
+
+
+def _sanitize_placeholders(text: str) -> str:
+    """Neutralize template placeholder markers in adversary-controlled content.
+
+    Replaces ``{{`` with ``{ {`` so that crafted tool call names or argument values
+    containing placeholder strings (e.g. ``{{output.response}}``) cannot be expanded
+    by a subsequent ``.replace()`` call in the evaluator prompt pipeline.
+    """
+    return text.replace('{{', '{ {')
 
 

@@ -18,11 +18,12 @@ from openai.types.chat import ChatCompletionMessageParam
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TextColumn, TimeElapsedColumn
 
-from evaluatorq.redteam.backends.base import AgentTarget, DefaultErrorMapper, ErrorMapper
+from evaluatorq.redteam.backends.base import AgentTarget, DefaultErrorMapper, ErrorMapper, _coerce_to_agent_response
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL, PIPELINE_CONFIG,
     AgentContext,
     AttackStrategy,
+    ExecutedToolCall,
     Message,
     OrchestratorResult,
     TokenUsage,
@@ -412,6 +413,7 @@ class MultiTurnOrchestrator:
 
         # Agent conversation (what we'll return)
         conversation: list[Message] = []
+        tool_calls_per_turn: list[list[ExecutedToolCall]] = []
 
         objective_achieved = False
         final_response = ''
@@ -615,10 +617,14 @@ class MultiTurnOrchestrator:
                                 "orq.redteam.input": attack_prompt,
                             },
                         ) as tgt_span:
-                            agent_response = await asyncio.wait_for(
+                            raw_response = await asyncio.wait_for(
                                 target.send_prompt(attack_prompt),
                                 timeout=target_timeout_s,
                             )
+                            # Option A backward-compat: wrap str returns into AgentResponse
+                            agent_response_obj = _coerce_to_agent_response(raw_response)
+                            agent_response = agent_response_obj.text
+                            tool_calls_per_turn.append(agent_response_obj.tool_calls)
                             final_response = agent_response
                             consecutive_agent_errors = 0
                             set_span_attrs(tgt_span, {
@@ -650,6 +656,7 @@ class MultiTurnOrchestrator:
                                 'consecutive_errors': consecutive_agent_errors,
                             }
                             error_turn = turn + 1
+                            tool_calls_per_turn.append([])
                             conversation.extend([
                                 Message(role='user', content=attack_prompt),
                                 Message(role='assistant', content=agent_response),
@@ -683,6 +690,7 @@ class MultiTurnOrchestrator:
                             }
                             error_code = mapped_code
                             error_turn = turn + 1
+                            tool_calls_per_turn.append([])
                             conversation.extend([
                                 Message(role='user', content=attack_prompt),
                                 Message(role='assistant', content=agent_response),
@@ -696,7 +704,10 @@ class MultiTurnOrchestrator:
                             })
                             break
 
-                    # Record conversation
+                    # Record conversation (success path — tool_calls already appended in success block above;
+                    # error paths that reach here had consecutive_agent_errors < 2, append empty list)
+                    if len(tool_calls_per_turn) < len(conversation) // 2 + 1:
+                        tool_calls_per_turn.append([])
                     conversation.extend([
                         Message(role='user', content=attack_prompt),
                         Message(role='assistant', content=agent_response),
@@ -788,4 +799,5 @@ class MultiTurnOrchestrator:
             error_details=error_details,
             error_turn=error_turn,
             truncated_turns=truncation_warnings,
+            tool_calls_per_turn=tool_calls_per_turn,
         )

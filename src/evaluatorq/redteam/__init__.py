@@ -52,6 +52,8 @@ from evaluatorq.redteam.contracts import (
     Framework,
     FrameworkSummary,
     FunctionCall,
+    AgentResponse,
+    ExecutedToolCall,
     JobOutputPayload,
     KnowledgeBaseInfo,
     MemoryStoreInfo,
@@ -170,6 +172,8 @@ __all__ = [
     "AttackStrategy",
     "AttackInfo",
     # Result models
+    "AgentResponse",
+    "ExecutedToolCall",
     "OrchestratorResult",
     "AttackEvaluationResult",
     "UnifiedEvaluationResult",
