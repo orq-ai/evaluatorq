@@ -36,7 +36,7 @@ async def test_async_callable() -> None:
 
     target = CallableTarget(agent)
     r = await target.send_prompt("hello")
-    check("returns string", isinstance(r, str))
+    check("returns string", isinstance(r.text, str))
     check("correct content", r == "echo: hello", f"got: {r!r}")
 
 
@@ -58,7 +58,7 @@ async def test_sync_runs_in_thread() -> None:
     )
     elapsed = time.monotonic() - start
 
-    check("both return strings", isinstance(r1, str) and isinstance(r2, str))
+    check("both return strings", isinstance(r1, str) and isinstance(r2.text, str))
     check(
         "ran concurrently (< 0.5s)",
         elapsed < 0.5,
@@ -86,7 +86,7 @@ async def test_stateful_reset() -> None:
     check("reset cleared state", len(history) == 0, f"history={history}")
 
     r = await target.send_prompt("c")
-    check("post-reset count is 1", "count=1" in r, f"got: {r!r}")
+    check("post-reset count is 1", "count=1" in r.text, f"got: {r!r}")
 
 
 async def test_no_reset_fn_is_safe() -> None:
@@ -96,7 +96,7 @@ async def test_no_reset_fn_is_safe() -> None:
     target = CallableTarget(lambda p: p)
     target.reset_conversation()  # should not raise
     r = await target.send_prompt("test")
-    check("works after reset", r == "test")
+    check("works after reset", r.text == "test")
 
 
 async def test_clone_independence() -> None:
@@ -143,11 +143,11 @@ async def test_parallel_clones() -> None:
     check("all 10 clones returned", len(results) == 10)
     check(
         "all returned strings",
-        all(isinstance(r, str) for r in results),
+        all(isinstance(r.text, str) for r in results),
     )
     check(
         "all have correct content",
-        all(f"reply to: prompt-{i}" in r for i, r in enumerate(results)),
+        all(f"reply to: prompt-{i}" in r.text for i, r in enumerate(results)),
         f"results: {results}",
     )
 
