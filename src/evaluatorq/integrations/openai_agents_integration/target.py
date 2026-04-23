@@ -68,6 +68,7 @@ class OpenAIAgentTarget(AgentTarget):
         # prev_len items were present before this call; everything after is new
         tool_calls: list[ExecutedToolCall] = []
         for item in self._history[prev_len:]:
+            # Handle dict format (standard OpenAI message format)
             if isinstance(item, dict) and item.get("role") == "assistant":
                 for tc in (item.get("tool_calls") or []):
                     if isinstance(tc, dict):
@@ -79,6 +80,19 @@ class OpenAIAgentTarget(AgentTarget):
                         except (json.JSONDecodeError, ValueError):
                             args = {"raw": args_str}
                         tool_calls.append(ExecutedToolCall(name=name, arguments=args))
+            # Handle typed SDK objects (future-proofing if to_input_list() returns non-dict items)
+            elif not isinstance(item, dict) and getattr(item, "role", None) == "assistant":
+                for tc in (getattr(item, "tool_calls", None) or []):
+                    tc_name = getattr(tc, "name", None) or getattr(getattr(tc, "function", None), "name", "") or ""
+                    tc_args_raw = getattr(tc, "arguments", None) or getattr(getattr(tc, "function", None), "arguments", "{}")
+                    if isinstance(tc_args_raw, str):
+                        try:
+                            tc_args: dict[str, Any] = json.loads(tc_args_raw)
+                        except (json.JSONDecodeError, ValueError):
+                            tc_args = {"raw": tc_args_raw}
+                    else:
+                        tc_args = tc_args_raw if isinstance(tc_args_raw, dict) else {}
+                    tool_calls.append(ExecutedToolCall(name=str(tc_name), arguments=tc_args))
 
         return AgentResponse(text=str(result.final_output), tool_calls=tool_calls)
 

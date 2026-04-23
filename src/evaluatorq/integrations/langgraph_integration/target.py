@@ -120,7 +120,14 @@ class LangGraphTarget(AgentTarget):
         return AgentResponse(text=content, tool_calls=tool_calls)
 
     def reset_conversation(self) -> None:
-        """Reset conversation state. Thread ID is fixed at construction; clone() provides isolation."""
+        """Reset the message-count cursor used for per-turn tool call extraction.
+
+        NOTE: This does NOT clear the LangGraph checkpointer state — the thread's
+        accumulated messages remain in the checkpointer. After calling this method,
+        the next ``send_prompt`` will treat all accumulated messages as "new", which
+        means tool calls from previous turns will be re-extracted. Use ``clone()``
+        to get a fully isolated instance with a fresh thread ID instead.
+        """
         self._prev_msg_count = 0
 
     async def get_agent_context(self) -> AgentContext:

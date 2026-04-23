@@ -351,7 +351,7 @@ class ExecutedToolCall:
     """A tool call captured during agent execution (distinct from ToolCall which is for strategy definitions)."""
 
     name: str
-    arguments: dict
+    arguments: dict[str, Any]
     result: str | None = None
 
 
