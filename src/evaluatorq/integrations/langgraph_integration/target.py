@@ -56,6 +56,7 @@ class LangGraphTarget(AgentTarget):
         self._extra_config = config or {}
         self.memory_entity_id: str = uuid4().hex
         self._agent_context = agent_context
+        self._prev_msg_count: int = 0
         graph_name: str = getattr(graph, "name", None) or "langgraph_target"
         self._key = f"{graph_name}_{uuid4().hex[:8]}"
 
@@ -97,9 +98,11 @@ class LangGraphTarget(AgentTarget):
         if not isinstance(content, str):
             content = str(content)
 
-        # Extract tool calls from all AI messages in the state
+        # Extract tool calls only from messages added in this turn.
+        # LangGraph checkpointer returns the full accumulated thread state, so
+        # slicing from _prev_msg_count avoids duplicating tool calls across turns.
         tool_calls: list[ExecutedToolCall] = []
-        for msg in messages:
+        for msg in messages[self._prev_msg_count:]:
             if isinstance(msg, dict):
                 if msg.get("role") == "assistant":
                     for tc in (msg.get("tool_calls") or []):
@@ -112,12 +115,13 @@ class LangGraphTarget(AgentTarget):
                     name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
                     args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
                     tool_calls.append(ExecutedToolCall(name=str(name), arguments=args if isinstance(args, dict) else {}))
+        self._prev_msg_count = len(messages)
 
         return AgentResponse(text=content, tool_calls=tool_calls)
 
     def reset_conversation(self) -> None:
         """Reset conversation state. Thread ID is fixed at construction; clone() provides isolation."""
-        pass
+        self._prev_msg_count = 0
 
     async def get_agent_context(self) -> AgentContext:
         """Return agent context introspected from the compiled graph.

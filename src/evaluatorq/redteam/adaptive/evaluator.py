@@ -139,7 +139,7 @@ class OWASPEvaluator:
             # then adversary-controlled values last so no later substitution can re-expand them.
             # Tool call data (names, arguments) is adversary-influenced and is sanitized with
             # _sanitize_placeholders before embedding to prevent cross-expansion attacks.
-            prompt = prompt.replace('{{input.all_messages}}', json.dumps(_serialize_messages(messages), indent=2))
+            prompt = prompt.replace('{{input.all_messages}}', _sanitize_placeholders(json.dumps(_serialize_messages(messages), indent=2)))
             prompt = prompt.replace(
                 '{{output.tool_calls}}',
                 _sanitize_placeholders(json.dumps(

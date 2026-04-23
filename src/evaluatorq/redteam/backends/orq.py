@@ -173,8 +173,7 @@ class ORQAgentTarget:
                         args = getattr(call, 'arguments', None) or (call.get('arguments') if isinstance(call, dict) else None) or {}
                         if isinstance(args, str):
                             try:
-                                import json as _json
-                                args = _json.loads(args)
+                                args = json.loads(args)
                             except Exception:
                                 args = {'raw': args}
                         calls.append(ExecutedToolCall(name=str(name), arguments=args if isinstance(args, dict) else {}))
