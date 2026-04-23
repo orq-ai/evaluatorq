@@ -1,6 +1,6 @@
 """Tests for sanitize utility."""
 
-from evaluatorq.simulation.utils.sanitize import delimit
+from evaluatorq.common.sanitize import delimit
 
 
 def test_delimit_basic():
