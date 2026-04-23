@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from typing import Union
+from typing import Any, Union
 
 from evaluatorq.redteam.backends.base import AgentTarget
 from evaluatorq.redteam.contracts import AgentContext, AgentResponse
@@ -80,7 +80,8 @@ class CallableTarget(AgentTarget):
         """
         try:
             if self._is_async:
-                result = await self._fn(prompt)  # type: ignore[misc, operator]
+                coro: Any = self._fn(prompt)
+                result = await coro  # pyright: ignore[reportGeneralTypeIssues]
             else:
                 result = await asyncio.to_thread(self._fn, prompt)  # type: ignore[arg-type]
             if isinstance(result, AgentResponse):
