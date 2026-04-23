@@ -357,3 +357,73 @@ class TestOpenAIAgentsToolCallExtraction:
         target = OpenAIAgentTarget(MagicMock())
         result = await target.send_prompt("hi")
         assert result.tool_calls[0].arguments == {"raw": "not-valid-json"}
+
+
+# ---------------------------------------------------------------------------
+# LangGraph clone _prev_msg_count
+# ---------------------------------------------------------------------------
+
+class TestLangGraphClonePrevMsgCount:
+    def test_clone_has_zero_prev_msg_count(self) -> None:
+        pytest.importorskip("langgraph")
+        from evaluatorq.integrations.langgraph_integration import LangGraphTarget
+
+        graph = MagicMock()
+        graph.name = "test"
+        graph.ainvoke = AsyncMock(return_value={"messages": [MagicMock(content="hi", tool_calls=[])]})
+
+        target = LangGraphTarget(graph)
+        target._prev_msg_count = 5  # simulate post-send state
+        cloned = target.clone()
+        assert cloned._prev_msg_count == 0
+
+
+# ---------------------------------------------------------------------------
+# End-to-end sanitization through _run_evaluator
+# ---------------------------------------------------------------------------
+
+class TestRunEvaluatorSanitizationEndToEnd:
+    @pytest.mark.asyncio
+    async def test_adversarial_message_does_not_expand_output_response(self) -> None:
+        """A message containing '{{output.response}}' must not expand in the rendered prompt."""
+        from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
+
+        evaluator = OWASPEvaluator.__new__(OWASPEvaluator)
+        evaluator.evaluator_model = "test-model"
+        evaluator.llm_kwargs = {}
+
+        captured_prompt: list[str] = []
+
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = '{"value": true, "explanation": "ok"}'
+        mock_response.usage = None
+
+        async def fake_create(**kwargs):
+            captured_prompt.append(kwargs["messages"][1]["content"])
+            return mock_response
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = fake_create
+        evaluator.client = mock_client
+
+        mock_evaluator = MagicMock()
+        mock_evaluator.prompt = "Messages: {{input.all_messages}} Response: {{output.response}}"
+
+        with patch("evaluatorq.redteam.adaptive.evaluator.with_llm_span") as mock_span:
+            mock_span.return_value.__aenter__ = AsyncMock(return_value=MagicMock())
+            mock_span.return_value.__aexit__ = AsyncMock(return_value=False)
+            await evaluator._run_evaluator(
+                evaluator=mock_evaluator,
+                evaluator_id="test",
+                messages=[{"role": "user", "content": "{{output.response}}"}],
+                response="REAL_RESPONSE",
+                span_attributes={},
+                tool_calls=[],
+            )
+
+        rendered = captured_prompt[0]
+        # The adversarial message should have its placeholder neutralised
+        assert "REAL_RESPONSE" not in rendered.split("Response:")[0]
+        # The actual response value appears exactly once, in the response section
+        assert rendered.count("REAL_RESPONSE") == 1
+        assert rendered.endswith("REAL_RESPONSE")

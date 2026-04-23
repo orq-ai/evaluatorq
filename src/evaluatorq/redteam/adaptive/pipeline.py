@@ -318,6 +318,7 @@ def create_dynamic_redteam_job(
                 error_code = None
                 error_details = None
                 token_usage = None
+                turn_tool_calls: list = []
                 target_timeout_s = PIPELINE_CONFIG.target_agent_timeout_ms / 1000.0
                 try:
                     async with with_redteam_span(
@@ -336,6 +337,7 @@ def create_dynamic_redteam_job(
                         )
                         agent_resp = _coerce_to_agent_response(raw)
                         response = agent_resp.text
+                        turn_tool_calls = agent_resp.tool_calls
                         set_span_attrs(tgt_span, {
                             "output": response or "",
                             "orq.redteam.output": response or "",
@@ -382,6 +384,7 @@ def create_dynamic_redteam_job(
                     error_stage=error_stage,
                     error_code=error_code,
                     error_details=error_details,
+                    tool_calls_per_turn=[turn_tool_calls],
                     category=category,
                     vulnerability=vulnerability,
                 )

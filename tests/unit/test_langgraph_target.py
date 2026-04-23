@@ -58,6 +58,77 @@ class TestLangGraphTarget:
         assert target.memory_entity_id == old_thread
 
     @pytest.mark.asyncio
+    async def test_reset_conversation_resets_prev_msg_count(self) -> None:
+        graph = _make_graph()
+        target = LangGraphTarget(graph)
+        await target.send_prompt("hi")
+        assert target._prev_msg_count > 0
+        target.reset_conversation()
+        assert target._prev_msg_count == 0
+
+    @pytest.mark.asyncio
+    async def test_multi_turn_tool_calls_excludes_previous_turns(self) -> None:
+        """Turn N must not include tool calls from turns 1..N-1 (checkpointer accumulates state)."""
+        tool_a = MagicMock()
+        tool_a.content = "turn 1 result"
+        tool_a.tool_calls = [{"name": "tool_A", "args": {"x": 1}}]
+
+        final_1 = MagicMock()
+        final_1.content = "done turn 1"
+        final_1.tool_calls = []
+
+        tool_b = MagicMock()
+        tool_b.content = "turn 2 result"
+        tool_b.tool_calls = [{"name": "tool_B", "args": {"y": 2}}]
+
+        final_2 = MagicMock()
+        final_2.content = "done turn 2"
+        final_2.tool_calls = []
+
+        call_count = 0
+
+        async def fake_ainvoke(state, config):  # noqa: ANN001
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return {"messages": [tool_a, final_1]}
+            # Checkpointer returns full accumulated state
+            return {"messages": [tool_a, final_1, tool_b, final_2]}
+
+        graph = MagicMock()
+        graph.name = "test"
+        graph.ainvoke = fake_ainvoke
+
+        target = LangGraphTarget(graph)
+        r1 = await target.send_prompt("first")
+        assert len(r1.tool_calls) == 1
+        assert r1.tool_calls[0].name == "tool_A"
+
+        r2 = await target.send_prompt("second")
+        assert len(r2.tool_calls) == 1
+        assert r2.tool_calls[0].name == "tool_B"
+
+    @pytest.mark.asyncio
+    async def test_reset_then_send_extracts_all_tool_calls(self) -> None:
+        """After reset, _prev_msg_count=0 so all messages are treated as new."""
+        msg_with_tool = MagicMock()
+        msg_with_tool.content = "result"
+        msg_with_tool.tool_calls = [{"name": "tool_X", "args": {}}]
+
+        graph = MagicMock()
+        graph.name = "test"
+        graph.ainvoke = AsyncMock(return_value={"messages": [msg_with_tool]})
+
+        target = LangGraphTarget(graph)
+        await target.send_prompt("first")  # _prev_msg_count becomes 1
+        target.reset_conversation()        # _prev_msg_count resets to 0
+
+        # Next send scans from index 0 — all returned messages are "new"
+        result = await target.send_prompt("after reset")
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0].name == "tool_X"
+
+    @pytest.mark.asyncio
     async def test_extra_config_is_preserved(self) -> None:
         graph = _make_graph()
         target = LangGraphTarget(graph, config={"recursion_limit": 50})
