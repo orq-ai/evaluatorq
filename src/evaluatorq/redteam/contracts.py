@@ -1038,6 +1038,7 @@ class JobOutputPayload(BaseModel):
     error_turn: int | None = None
     truncated_turns: list[int] = Field(default_factory=list)
     finish_reason: str | None = None
+    tool_calls_per_turn: list[list[ExecutedToolCall]] = Field(default_factory=list)
 
     @property
     def response_text(self) -> str:
@@ -1087,6 +1088,7 @@ class RedTeamResult(BaseModel):
     error_stage: str | None = None
     error_code: str | None = None
     error_details: dict[str, Any] | None = None
+    tool_calls_per_turn: list[list[ExecutedToolCall]] = Field(default_factory=list)
 
     @property
     def error_info(self) -> 'ErrorInfo | None':

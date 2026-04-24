@@ -452,6 +452,7 @@ def dynamic_evaluatorq_results_to_report(
                 error_stage=error_stage,
                 error_code=error_code,
                 error_details=error_details,
+                tool_calls_per_turn=job_output.tool_calls_per_turn,
             )
         )
 
