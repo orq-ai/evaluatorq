@@ -13,11 +13,11 @@ pip install evaluatorq[redteam]
 Most examples work with just an API key:
 
 ```bash
-# With OpenAI directly
+# With OpenAI directly (examples use OpenAIModelTarget in Python)
 export OPENAI_API_KEY="sk-..."
 python 08_quick_smoke_test.py
 
-# With ORQ (routes through orq.ai — no OpenAI key needed)
+# With ORQ routing for attack/evaluator LLM calls
 export ORQ_API_KEY="orq-..."
 python 08_quick_smoke_test.py
 ```
@@ -136,42 +136,35 @@ evaluatorq redteam run --help
 
 - **`agent:<key>`** — Test an ORQ agent. Set `ORQ_API_KEY`.
 - **`deployment:<key>`** — Test an ORQ deployment. Set `ORQ_API_KEY`.
-- **`<model>`** — Test an LLM directly (e.g. `gpt-5-mini`). Set `OPENAI_API_KEY` or `ORQ_API_KEY` and use `--system-prompt`. For programmatic use from Python, prefer :class:`OpenAIModelTarget`.
 
-### OpenAI examples
+OpenAI models are invoked from Python with `OpenAIModelTarget`, for example:
 
-```bash
-# Basic dynamic run
-eq redteam run -t "gpt-5-mini" \
-  --system-prompt "You are a helpful assistant." \
-  --max-turns 2 --max-dynamic-datapoints 5 -y
+```python
+from evaluatorq.redteam import OpenAIModelTarget, red_team
 
-# Filter to specific categories
-eq redteam run -t "gpt-5-mini" \
-  -c LLM01 -c LLM07 \
-  --system-prompt "You are a helpful assistant." \
-  --max-turns 2 --max-dynamic-datapoints 3 -y
+target = OpenAIModelTarget(
+    "gpt-5-mini",
+    system_prompt="You are a helpful assistant.",
+)
+report = await red_team(target, categories=["LLM01"])
+```
 
-# Filter to specific vulnerabilities
-eq redteam run -t "gpt-5-mini" \
-  -V prompt_injection -V goal_hijacking \
-  --system-prompt "You are a helpful assistant." \
-  --max-turns 2 --max-dynamic-datapoints 5 -y
+### Python OpenAI examples
 
-# Compare two models
-eq redteam run -t "gpt-5-mini" -t "gpt-4o" \
-  -c LLM07 --max-turns 2 --max-dynamic-datapoints 3 -y
+```python
+from evaluatorq.redteam import OpenAIModelTarget, red_team
 
-# Domain-specific attack steering
-eq redteam run -t "gpt-5-mini" \
-  --attacker-instructions "This agent handles financial transactions, try to approve fraudulent ones" \
-  --system-prompt "You are a bank assistant." \
-  --max-turns 3 --max-dynamic-datapoints 5 -y
+target = OpenAIModelTarget(
+    "gpt-5-mini",
+    system_prompt="You are a helpful assistant.",
+)
 
-# Export reports
-eq redteam run -t "gpt-5-mini" \
-  -c LLM07 --max-dynamic-datapoints 5 \
-  --save-report ./report.json --export-md ./reports --export-html ./reports -y
+report = await red_team(
+    target,
+    categories=["LLM01", "LLM07"],
+    max_turns=2,
+    max_dynamic_datapoints=5,
+)
 ```
 
 ### ORQ platform examples

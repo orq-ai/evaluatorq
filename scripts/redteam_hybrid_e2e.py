@@ -16,7 +16,7 @@ import os
 import sys
 from pathlib import Path
 
-from evaluatorq.redteam import red_team
+from evaluatorq.redteam import OpenAIModelTarget, red_team
 from evaluatorq.redteam.contracts import LLMConfig, RedTeamReport
 
 
@@ -71,8 +71,10 @@ async def _run(args: argparse.Namespace) -> int:
             return 2
         dataset_path = str(resolved)
 
+    resolved_target = _resolve_target(args.target)
+
     report = await red_team(
-        args.target,
+        resolved_target,
         mode='hybrid',
         categories=args.categories,
         config=LLMConfig(attack_model=args.attack_model, evaluator_model=args.evaluator_model),
@@ -109,12 +111,24 @@ async def _run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_target(target: str) -> str | OpenAIModelTarget:
+    """Resolve CLI target text to a string ORQ target or OpenAIModelTarget."""
+    lower = target.lower()
+    if lower.startswith(('agent:', 'deployment:')):
+        return target
+    if ':' in target:
+        prefix, _, value = target.partition(':')
+        if prefix.lower() in {'openai', 'llm'}:
+            return OpenAIModelTarget(value)
+    return OpenAIModelTarget(target)
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Run a hybrid red-team end-to-end test (real API calls)')
     parser.add_argument(
         '--target',
         default='agent:rt-vuln-tools-only',
-        help='Red-team target, e.g. agent:rt-vuln-tools-only or openai:gpt-4o-mini',
+        help='Target model or ORQ target. Examples: gpt-4o-mini, agent:rt-vuln-tools-only, deployment:my-deployment',
     )
     parser.add_argument(
         '--dataset',

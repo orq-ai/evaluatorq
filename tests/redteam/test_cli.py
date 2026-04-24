@@ -11,8 +11,6 @@ Covers:
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
 from click.testing import Result as CliResult
 from typer.testing import CliRunner
 
@@ -58,7 +56,7 @@ class TestVulnerabilityShortFlag:
     def test_short_flag_V_accepted_single_value(self):
         """-V goal_hijacking is accepted and passes vulnerabilities to red_team()."""
         result, mock_rt = _run_with_mocked_red_team(
-            ["run", "--target", "openai:gpt-4o-mini", "-V", "goal_hijacking", "--yes"]
+            ["run", "--target", "agent:test-agent", "-V", "goal_hijacking", "--yes"]
         )
         assert result.exit_code == 0, result.output
         _kwargs = mock_rt.call_args.kwargs
@@ -69,7 +67,7 @@ class TestVulnerabilityShortFlag:
         result, mock_rt = _run_with_mocked_red_team(
             [
                 "run",
-                "--target", "openai:gpt-4o-mini",
+                "--target", "agent:test-agent",
                 "-V", "goal_hijacking",
                 "-V", "prompt_injection",
                 "--yes",
@@ -82,7 +80,7 @@ class TestVulnerabilityShortFlag:
     def test_long_flag_vulnerability_still_works(self):
         """--vulnerability long form continues to work alongside -V alias."""
         result, mock_rt = _run_with_mocked_red_team(
-            ["run", "--target", "openai:gpt-4o-mini", "--vulnerability", "tool_misuse", "--yes"]
+            ["run", "--target", "agent:test-agent", "--vulnerability", "tool_misuse", "--yes"]
         )
         assert result.exit_code == 0, result.output
         _kwargs = mock_rt.call_args.kwargs
@@ -102,7 +100,7 @@ class TestFlagConflicts:
         result, mock_rt = _run_with_mocked_red_team(
             [
                 "run",
-                "--target", "openai:gpt-4o-mini",
+                "--target", "agent:test-agent",
                 "-V", "goal_hijacking",
                 "-v",
                 "--yes",
@@ -115,7 +113,7 @@ class TestFlagConflicts:
     def test_lowercase_v_does_not_set_vulnerabilities(self):
         """-v only affects verbosity, not vulnerabilities."""
         result, mock_rt = _run_with_mocked_red_team(
-            ["run", "--target", "openai:gpt-4o-mini", "-v", "--yes"]
+            ["run", "--target", "agent:test-agent", "-v", "--yes"]
         )
         assert result.exit_code == 0, result.output
         _kwargs = mock_rt.call_args.kwargs
@@ -133,7 +131,7 @@ class TestVulnerabilityPassThrough:
     def test_no_vulnerability_passes_none(self):
         """When --vulnerability is omitted, red_team() receives vulnerabilities=None."""
         result, mock_rt = _run_with_mocked_red_team(
-            ["run", "--target", "openai:gpt-4o-mini", "--yes"]
+            ["run", "--target", "agent:test-agent", "--yes"]
         )
         assert result.exit_code == 0, result.output
         _kwargs = mock_rt.call_args.kwargs
@@ -142,7 +140,7 @@ class TestVulnerabilityPassThrough:
     def test_owasp_category_code_forwarded_as_is(self):
         """OWASP category codes like ASI01 are forwarded verbatim to red_team()."""
         result, mock_rt = _run_with_mocked_red_team(
-            ["run", "--target", "openai:gpt-4o-mini", "-V", "ASI01", "--yes"]
+            ["run", "--target", "agent:test-agent", "-V", "ASI01", "--yes"]
         )
         assert result.exit_code == 0, result.output
         _kwargs = mock_rt.call_args.kwargs
@@ -153,7 +151,7 @@ class TestVulnerabilityPassThrough:
         result, mock_rt = _run_with_mocked_red_team(
             [
                 "run",
-                "--target", "openai:gpt-4o-mini",
+                "--target", "agent:test-agent",
                 "-V", "goal_hijacking",
                 "--category", "ASI02",
                 "--yes",

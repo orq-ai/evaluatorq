@@ -17,11 +17,15 @@ This subpackage probes AI agents and LLMs for security weaknesses using a multi-
 The atomic primitive is the **vulnerability**, not the framework category. Each vulnerability has a stable, framework-agnostic ID (e.g. `prompt_injection`, `goal_hijacking`) that maps to one or more framework categories. You can target attacks at either level:
 
 ```python
+from evaluatorq.redteam import OpenAIModelTarget, red_team
+
+target = OpenAIModelTarget("gpt-5-mini", system_prompt="You are helpful.")
+
 # Target specific vulnerabilities
-report = await red_team("llm:gpt-5-mini", vulnerabilities=["prompt_injection", "goal_hijacking"])
+report = await red_team(target, vulnerabilities=["prompt_injection", "goal_hijacking"])
 
 # Or filter by framework category
-report = await red_team("llm:gpt-5-mini", categories=["LLM01", "ASI01"])
+report = await red_team(target, categories=["LLM01", "ASI01"])
 ```
 
 ### Supported vulnerabilities

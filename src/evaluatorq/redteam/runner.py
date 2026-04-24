@@ -32,7 +32,6 @@ from evaluatorq.redteam.adaptive.pipeline import (
     generate_dynamic_datapoints_for_vulnerabilities,
 )
 from evaluatorq.redteam.adaptive.strategy_registry import (
-    get_category_info,
     get_strategies_for_category,
     get_strategies_for_vulnerability,
     list_available_categories,
@@ -1514,15 +1513,9 @@ async def _run_dynamic_or_hybrid(
                 return await static_evaluator['scorer'](params)
 
             evaluators: list[Any] = [{'name': 'hybrid-owasp-security', 'scorer': hybrid_scorer}]
-            first = first_target if first_target is not None else prepared_targets[0]
-            log_label = (
-                f'{len(first.dynamic_datapoints)} dynamic + '
-                f'{len(first.static_datapoints)} static datapoints'
-            )
         else:
             evaluator = create_dynamic_evaluator(evaluator_model=evaluator_model, llm_client=resolved_llm_client, llm_kwargs=llm_kwargs)
             evaluators = [evaluator]
-            log_label = f'{len(all_datapoints)} datapoints'
 
         async with ProgressDisplay(est_total * len(prepared_targets), verbosity):
             try:
