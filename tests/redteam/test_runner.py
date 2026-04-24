@@ -37,9 +37,8 @@ class TestParseTarget:
         assert value == 'my-agent-key'
 
     def test_openai_target(self):
-        kind, value = _parse_target('openai:gpt-4o')
-        assert kind == 'openai'
-        assert value == 'gpt-4o'
+        with pytest.raises(ValueError, match='OpenAIModelTarget'):
+            _parse_target('openai:gpt-4o')
 
     def test_bare_key_defaults_to_agent(self):
         kind, value = _parse_target('my-agent-key')
@@ -55,9 +54,9 @@ class TestParseTarget:
             _parse_target('agent:')
 
     def test_multiple_colons(self):
-        kind, value = _parse_target('openai:org/gpt-4o:latest')
-        assert kind == 'openai'
-        assert value == 'org/gpt-4o:latest'
+        # openai:/llm: prefixes are removed; ensure migration error mentions OpenAIModelTarget.
+        with pytest.raises(ValueError, match='OpenAIModelTarget'):
+            _parse_target('openai:org/gpt-4o:latest')
 
 
 class _FakeTarget:
@@ -241,7 +240,6 @@ class TestStaticCoverageGuard:
                 evaluator_model='azure/gpt-5-mini',
                 parallelism=5,
                 max_static_datapoints=None,
-                backend='orq',
                 dataset=None,
                 description='test',
             )
@@ -282,7 +280,6 @@ class TestStaticCoverageGuard:
                     evaluator_model='azure/gpt-5-mini',
                     parallelism=5,
                     max_static_datapoints=None,
-                    backend='orq',
                     dataset=None,
                     description='test',
                 )
@@ -399,8 +396,8 @@ class TestRedTeamWithAgentTarget:
             async def send_prompt(self, prompt: str) -> str:
                 return 'response'
 
-            def reset_conversation(self) -> None:
-                pass
+            def new(self) -> MockTarget:
+                return MockTarget()
 
         mock_report = _make_report()
         with patch(
@@ -422,8 +419,8 @@ class TestRedTeamWithAgentTarget:
             async def send_prompt(self, prompt: str) -> str:
                 return 'response'
 
-            def reset_conversation(self) -> None:
-                pass
+            def new(self) -> MockTarget:
+                return MockTarget()
 
         mock_report = _make_report()
         with patch(
@@ -449,8 +446,8 @@ class TestRedTeamWithAgentTarget:
             async def send_prompt(self, prompt: str) -> str:
                 return 'response'
 
-            def reset_conversation(self) -> None:
-                pass
+            def new(self) -> MockTarget:
+                return MockTarget()
 
         with pytest.raises(TypeError, match='Invalid target type'):
             await red_team([MockTarget(), 42])  # type: ignore[list-item, arg-type]  # pyright: ignore[reportArgumentType]

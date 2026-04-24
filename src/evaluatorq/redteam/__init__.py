@@ -38,6 +38,7 @@ from evaluatorq.redteam.contracts import (
     TargetConfig,
     AgentInfo,
     AttackInfo,
+    AttackSource,
     AttackStrategy,
     AttackTechnique,
     CategorySummary,
@@ -54,13 +55,12 @@ from evaluatorq.redteam.contracts import (
     FunctionCall,
     JobOutputPayload,
     KnowledgeBaseInfo,
+    LLMConfig,
     MemoryStoreInfo,
     Message,
     OrchestratorResult,
     Pipeline,
-    PipelineLLMConfig,
     PipelineStage,
-    RedTeamConfig,
     RedTeamInput,
     RedTeamReport,
     RedTeamResult,
@@ -84,6 +84,7 @@ from evaluatorq.redteam.contracts import (
     normalize_category,
     normalize_framework,
 )
+from evaluatorq.redteam.backends.openai import OpenAIModelTarget
 
 from evaluatorq.redteam.runner import red_team
 from evaluatorq.redteam.reports.converters import merge_reports
@@ -105,7 +106,6 @@ from evaluatorq.redteam.backends.base import (
     AgentTarget,
     DirectTargetFactory,
     SupportsAgentContext,
-    SupportsClone,
     SupportsErrorMapping,
     SupportsMemoryCleanup,
     SupportsTargetFactory,
@@ -146,6 +146,7 @@ __all__ = [
     "TokenUsage",
     # Enums
     "TurnType",
+    "AttackSource",
     "AttackTechnique",
     "DeliveryMethod",
     "Severity",
@@ -164,8 +165,8 @@ __all__ = [
     "MemoryStoreInfo",
     "KnowledgeBaseInfo",
     # Pipeline config
-    "RedTeamConfig",
-    "PipelineLLMConfig",
+    "LLMConfig",
+    "OpenAIModelTarget",
     # Attack models
     "AttackStrategy",
     "AttackInfo",
@@ -207,7 +208,6 @@ __all__ = [
     "register_backend",
     # Target protocols
     "AgentTarget",
-    "SupportsClone",
     "SupportsTokenUsage",
     "SupportsAgentContext",
     "SupportsTargetFactory",
@@ -222,6 +222,17 @@ _deprecated_warned: set[str] = set()
 
 
 def __getattr__(name: str):
+    if name in ("RedTeamConfig", "PipelineLLMConfig"):
+        if name not in _deprecated_warned:
+            import warnings
+            _deprecated_warned.add(name)
+            warnings.warn(
+                f"{name} has been renamed to LLMConfig. Update your imports.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        from evaluatorq.redteam.contracts import LLMConfig
+        return LLMConfig
     if name == "EvaluationResult":
         if name not in _deprecated_warned:
             import warnings

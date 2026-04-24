@@ -82,7 +82,7 @@ async def test_stateful_reset() -> None:
     await target.send_prompt("b")
     check("state accumulated", len(history) == 2, f"history={history}")
 
-    target.reset_conversation()
+    target = target.new()
     check("reset cleared state", len(history) == 0, f"history={history}")
 
     r = await target.send_prompt("c")
@@ -94,7 +94,7 @@ async def test_no_reset_fn_is_safe() -> None:
     print("\n--- No reset_fn ---")
 
     target = CallableTarget(lambda p: p)
-    target.reset_conversation()  # should not raise
+    target.new()  # should not raise
     r = await target.send_prompt("test")
     check("works after reset", r == "test")
 
@@ -113,7 +113,7 @@ async def test_clone_independence() -> None:
         counter["value"] = 0
 
     target = CallableTarget(agent, reset_fn=reset)
-    cloned = target.clone()
+    cloned = target.new()
 
     await target.send_prompt("a")
     check("original increments counter", counter["value"] == 1)
@@ -122,7 +122,7 @@ async def test_clone_independence() -> None:
     check("clone shares same function", counter["value"] == 2)
 
     # Reset on original also resets the shared counter (expected — same reset_fn)
-    target.reset_conversation()
+    target = target.new()
     check("reset affects shared state", counter["value"] == 0)
 
 
@@ -135,7 +135,7 @@ async def test_parallel_clones() -> None:
         return f"reply to: {prompt}"
 
     target = CallableTarget(agent)
-    clones = [target.clone() for _ in range(10)]
+    clones = [target.new() for _ in range(10)]
 
     results = await asyncio.gather(
         *[c.send_prompt(f"prompt-{i}") for i, c in enumerate(clones)]

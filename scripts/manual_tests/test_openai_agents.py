@@ -92,7 +92,7 @@ async def test_reset_clears_memory() -> None:
     target = OpenAIAgentTarget(make_agent())
 
     await target.send_prompt("My favorite fruit is dragonfruit. Please confirm.")
-    target.reset_conversation()
+    target = target.new()
 
     check("history is empty after reset", len(target._history) == 0)
 
@@ -115,7 +115,7 @@ async def test_clone_isolation() -> None:
     await target.send_prompt("My name is Juniper. Please confirm.")
     check("original has history", len(target._history) > 0)
 
-    cloned = target.clone()
+    cloned = target.new()
     check("clone starts with empty history", len(cloned._history) == 0)
 
     r = await cloned.send_prompt(

@@ -98,10 +98,6 @@ class LangGraphTarget(AgentTarget):
             content = str(content)
         return content
 
-    def reset_conversation(self) -> None:
-        """Reset conversation state. Thread ID is fixed at construction; clone() provides isolation."""
-        pass
-
     async def get_agent_context(self) -> AgentContext:
         """Return agent context introspected from the compiled graph.
 
@@ -129,10 +125,10 @@ class LangGraphTarget(AgentTarget):
             memory_stores=memory_stores,
         )
 
-    def clone(self) -> LangGraphTarget:
-        """Create an independent copy for parallel red teaming jobs.
+    def new(self) -> LangGraphTarget:
+        """Return an independent instance for parallel red teaming jobs.
 
-        The clone gets a fresh ``memory_entity_id`` (and thus a fresh LangGraph
+        Each call gets a fresh ``memory_entity_id`` (and thus a fresh LangGraph
         thread), so parallel workers never share checkpointer state.
         """
         cloned = LangGraphTarget(

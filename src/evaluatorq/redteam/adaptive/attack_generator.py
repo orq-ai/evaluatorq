@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
     from evaluatorq.redteam.contracts import AgentContext, AttackStrategy
 
-from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, PIPELINE_CONFIG
+from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, PIPELINE_CONFIG, LLMConfig
 from evaluatorq.redteam.utils import safe_substitute
 
 
@@ -141,6 +141,7 @@ async def adapt_prompt_to_tools(
     llm_client: AsyncOpenAI,
     model: str = DEFAULT_PIPELINE_MODEL,
     llm_kwargs: dict[str, Any] | None = None,
+    pipeline_config: LLMConfig | None = None,
 ) -> str:
     """Adapt an attack prompt to leverage specific agent tools.
 
@@ -153,10 +154,12 @@ async def adapt_prompt_to_tools(
         strategy: Attack strategy being used
         llm_client: OpenAI-compatible async client
         model: Model to use for classification
+        pipeline_config: Optional LLMConfig instance. Defaults to module-level PIPELINE_CONFIG.
 
     Returns:
         Adapted prompt (or original if no tools or none relevant)
     """
+    cfg = pipeline_config or PIPELINE_CONFIG
     if not agent_context.tools:
         return base_prompt
 
@@ -174,9 +177,9 @@ async def adapt_prompt_to_tools(
             model=model,
             messages=[{'role': 'user', 'content': prompt}],
             response_format=ToolAnalysis,
-            temperature=PIPELINE_CONFIG.tool_adaptation_temperature,
-            max_completion_tokens=PIPELINE_CONFIG.tool_adaptation_max_tokens,
-            extra_body=PIPELINE_CONFIG.retry_config,
+            temperature=cfg.tool_adaptation_temperature,
+            max_completion_tokens=cfg.tool_adaptation_max_tokens,
+            extra_body=cfg.retry_config,
             **(llm_kwargs or {}),
         )
 

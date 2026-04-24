@@ -20,6 +20,7 @@ from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
     AgentCapability,
     AgentContext,
+    LLMConfig,
 )
 from evaluatorq.redteam.tracing import record_llm_response, with_llm_span
 
@@ -118,6 +119,7 @@ async def classify_agent_capabilities(
     llm_client: AsyncOpenAI,
     model: str = DEFAULT_PIPELINE_MODEL,
     llm_kwargs: dict[str, Any] | None = None,
+    pipeline_config: LLMConfig | None = None,
 ) -> AgentCapabilities:
     """Classify agent tools and resources into capability tags.
 
@@ -129,14 +131,16 @@ async def classify_agent_capabilities(
         agent_context: Agent context with tools, memory stores, knowledge bases
         llm_client: OpenAI-compatible async client
         model: Model to use for classification
+        pipeline_config: Optional LLMConfig instance. Defaults to module-level PIPELINE_CONFIG.
 
     Returns:
         AgentCapabilities with all classified capabilities
     """
+    cfg = pipeline_config or PIPELINE_CONFIG
     capabilities: dict[str, list[AgentCapability]] = {}
 
     # Infer high-level memory/knowledge capabilities with an LLM step.
-    resource_caps = await _infer_resource_capabilities(agent_context, llm_client, model, llm_kwargs)
+    resource_caps = await _infer_resource_capabilities(agent_context, llm_client, model, llm_kwargs, cfg)
 
     # Explicit resource config remains a strong signal.
     if agent_context.memory_stores:
@@ -160,7 +164,7 @@ async def classify_agent_capabilities(
     # Classify tools via LLM
     classification_failed = False
     if agent_context.tools:
-        tool_caps, _classify_ok = await _classify_tools(agent_context, llm_client, model, llm_kwargs)
+        tool_caps, _classify_ok = await _classify_tools(agent_context, llm_client, model, llm_kwargs, cfg)
         classification_failed = not _classify_ok
         capabilities.update(tool_caps)
 
@@ -179,8 +183,10 @@ async def _infer_resource_capabilities(
     llm_client: AsyncOpenAI,
     model: str,
     llm_kwargs: dict[str, Any] | None = None,
+    cfg: LLMConfig | None = None,
 ) -> ResourceCapabilityInference:
     """Infer memory/knowledge capabilities with structured LLM output."""
+    cfg = cfg or PIPELINE_CONFIG
     tool_list = '\n'.join(f'- {t.name}: {t.description or "No description"}' for t in agent_context.tools) or '- none'
     prompt = safe_substitute(RESOURCE_CAPABILITY_PROMPT, {
         '{has_memory_stores}': str(bool(agent_context.memory_stores)),
@@ -191,8 +197,8 @@ async def _infer_resource_capabilities(
         infer_messages: list[ChatCompletionMessageParam] = [{'role': 'user', 'content': prompt}]
         async with with_llm_span(
             model=model,
-            temperature=PIPELINE_CONFIG.capability_classification_temperature,
-            max_tokens=PIPELINE_CONFIG.capability_classification_max_tokens,
+            temperature=cfg.capability_classification_temperature,
+            max_tokens=cfg.capability_classification_max_tokens,
             input_messages=infer_messages,
             attributes={"orq.redteam.llm_purpose": "infer_resources"},
         ) as res_span:
@@ -200,9 +206,9 @@ async def _infer_resource_capabilities(
                 model=model,
                 messages=infer_messages,
                 response_format=ResourceCapabilityInference,
-                temperature=PIPELINE_CONFIG.capability_classification_temperature,
-                max_completion_tokens=PIPELINE_CONFIG.capability_classification_max_tokens,
-                extra_body=PIPELINE_CONFIG.retry_config,
+                temperature=cfg.capability_classification_temperature,
+                max_completion_tokens=cfg.capability_classification_max_tokens,
+                extra_body=cfg.retry_config,
                 **(llm_kwargs or {}),
             )
             parsed = response.choices[0].message.parsed
@@ -229,6 +235,7 @@ async def _classify_tools(
     llm_client: AsyncOpenAI,
     model: str,
     llm_kwargs: dict[str, Any] | None = None,
+    cfg: LLMConfig | None = None,
 ) -> tuple[dict[str, list[AgentCapability]], bool]:
     """Classify tools via LLM call.
 
@@ -236,6 +243,7 @@ async def _classify_tools(
         Tuple of (capabilities dict, success bool). success=False when
         classification failed due to an exception.
     """
+    cfg = cfg or PIPELINE_CONFIG
     tool_list = '\n'.join(f'- {t.name}: {t.description or "No description"}' for t in agent_context.tools)
 
     prompt = safe_substitute(TOOL_CLASSIFICATION_PROMPT, {'{tool_list}': tool_list})
@@ -246,8 +254,8 @@ async def _classify_tools(
         classify_messages: list[ChatCompletionMessageParam] = [{'role': 'user', 'content': prompt}]
         async with with_llm_span(
             model=model,
-            temperature=PIPELINE_CONFIG.capability_classification_temperature,
-            max_tokens=PIPELINE_CONFIG.capability_classification_max_tokens,
+            temperature=cfg.capability_classification_temperature,
+            max_tokens=cfg.capability_classification_max_tokens,
             input_messages=classify_messages,
             attributes={
                 "orq.redteam.llm_purpose": "classify_tools",
@@ -258,9 +266,9 @@ async def _classify_tools(
                 model=model,
                 messages=classify_messages,
                 response_format=ToolCapabilitiesResponse,
-                temperature=PIPELINE_CONFIG.capability_classification_temperature,
-                max_completion_tokens=PIPELINE_CONFIG.capability_classification_max_tokens,
-                extra_body=PIPELINE_CONFIG.retry_config,
+                temperature=cfg.capability_classification_temperature,
+                max_completion_tokens=cfg.capability_classification_max_tokens,
+                extra_body=cfg.retry_config,
                 **(llm_kwargs or {}),
             )
             record_llm_response(

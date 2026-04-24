@@ -53,8 +53,7 @@ class CallableTarget(AgentTarget):
 
         Args:
             fn: A sync or async function that takes a prompt and returns a response.
-            reset_fn: Optional callback invoked on ``reset_conversation()``.
-                Use this if your callable has state that needs clearing between attacks.
+            reset_fn: Optional callback invoked on ``new()`` to clear shared callable state between attacks.
             agent_context: Optional :class:`AgentContext` describing the wrapped
                 callable's tools, memory, system prompt, etc. The red teaming
                 pipeline uses this for capability-aware strategy filtering —
@@ -75,11 +74,6 @@ class CallableTarget(AgentTarget):
         except Exception as exc:
             raise RuntimeError(f"CallableTarget: callable raised {exc!r}") from exc
 
-    def reset_conversation(self) -> None:
-        """Reset conversation state via the optional reset callback."""
-        if self._reset_fn is not None:
-            self._reset_fn()
-
     async def get_agent_context(self) -> AgentContext:
         """Return the user-provided agent context, or a minimal placeholder."""
         if self._agent_context is not None:
@@ -87,6 +81,8 @@ class CallableTarget(AgentTarget):
         key = getattr(self._fn, "__name__", None) or "callable_target"
         return AgentContext(key=str(key), description="opaque callable target")
 
-    def clone(self) -> CallableTarget:
-        """Create a copy sharing the same callable."""
+    def new(self) -> CallableTarget:
+        """Return a fresh copy sharing the same callable, with state reset via reset_fn."""
+        if self._reset_fn is not None:
+            self._reset_fn()
         return CallableTarget(self._fn, reset_fn=self._reset_fn, agent_context=self._agent_context)

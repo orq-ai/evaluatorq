@@ -337,7 +337,7 @@ def _make_target():
     """Create a mock AgentTarget with the required interface."""
     target = MagicMock()
     target.send_prompt = AsyncMock()
-    target.reset_conversation = MagicMock()
+    target.new = MagicMock()
     target.consume_last_token_usage = MagicMock(return_value=None)
     return target
 

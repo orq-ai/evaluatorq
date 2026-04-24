@@ -33,6 +33,7 @@ async def main() -> None:
     args = parse_args()
 
     from evaluatorq.redteam import red_team
+    from evaluatorq.redteam.contracts import LLMConfig
 
     target = args.target[0] if len(args.target) == 1 else args.target
     report = await red_team(
@@ -43,8 +44,7 @@ async def main() -> None:
         parallelism=args.parallelism,
         max_dynamic_datapoints=args.max_dynamic_datapoints,
         max_static_datapoints=args.max_static_datapoints,
-        attack_model=args.attack_model,
-        evaluator_model=args.evaluator_model,
+        config=LLMConfig(attack_model=args.attack_model, evaluator_model=args.evaluator_model),
         dataset=args.dataset_path,
     )
     print(json.dumps(report.summary.model_dump(mode='json'), indent=2))

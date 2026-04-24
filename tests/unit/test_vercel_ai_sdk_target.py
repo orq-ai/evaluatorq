@@ -174,8 +174,9 @@ class TestVercelAISdkTarget:
             {"role": "user", "content": "old"},
             {"role": "assistant", "content": "old reply"},
         ]
-        target.reset_conversation()
-        assert target._history == []
+        fresh = target.new()
+        assert fresh._history == []
+        assert target._history != []  # original untouched
 
     def test_clone_returns_independent_instance(self) -> None:
         target = VercelAISdkTarget(
@@ -186,7 +187,7 @@ class TestVercelAISdkTarget:
         )
         target._history = [{"role": "user", "content": "old"}]
 
-        cloned = target.clone()
+        cloned = target.new()
 
         assert cloned is not target
         assert cloned._history == []
@@ -246,5 +247,5 @@ class TestVercelAISdkTargetAgentContext:
 
         override = AgentContext(key="k")
         target = VercelAISdkTarget("http://test/api/chat", agent_context=override)
-        cloned = target.clone()
+        cloned = target.new()
         assert cloned._agent_context is override

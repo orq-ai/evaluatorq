@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Protocol
 
 from loguru import logger
 
@@ -33,24 +33,12 @@ class AgentTarget(Protocol):
         """Send a prompt and return the response."""
         ...
 
-    def reset_conversation(self) -> None:
-        """Reset conversation state for a new attack."""
-        ...
+    def new(self) -> AgentTarget:
+        """Return a fresh target instance with isolated state for a new attack.
 
-
-class SupportsClone(Protocol):
-    """Optional hook for target cloning per parallel job.
-
-    Note: The runner detects this via duck-typing (``getattr``/``callable``),
-    not ``isinstance``.  Implementing this protocol is recommended for
-    documentation and static analysis but not strictly required.
-
-    Clones are expected to own their own ``memory_entity_id`` (fresh one when
-    the target backs a persistent memory store; ``None`` otherwise).
-    """
-
-    def clone(self) -> AgentTarget:
-        """Return a fresh target instance with isolated state."""
+        Each call must produce an independent instance — own ``memory_entity_id``
+        for memory-backed targets, ``None`` otherwise.
+        """
         ...
 
 
@@ -101,26 +89,17 @@ class SupportsErrorMapping(Protocol):
 
 def is_agent_target(obj: object) -> bool:
     """Return True if obj satisfies the AgentTarget protocol at runtime."""
-    return callable(getattr(obj, 'send_prompt', None)) and callable(getattr(obj, 'reset_conversation', None))
+    return callable(getattr(obj, 'send_prompt', None)) and callable(getattr(obj, 'new', None))
 
 
 class DirectTargetFactory:
-    """Fallback factory that wraps a bare AgentTarget (no SupportsTargetFactory)."""
+    """Fallback factory that wraps a bare AgentTarget."""
 
     def __init__(self, target: AgentTarget) -> None:
         self._target = target
-        clone_attr = getattr(target, 'clone', None)
-        self._clone_fn = clone_attr if callable(clone_attr) else None
-        if self._clone_fn is None:
-            logger.warning(
-                f'Target {type(target).__name__} does not implement clone(). '
-                'Reusing same instance across parallel jobs may cause race conditions.'
-            )
 
     def create_target(self, agent_key: str) -> AgentTarget:
-        if self._clone_fn is not None:
-            return cast("AgentTarget", self._clone_fn())
-        return self._target
+        return self._target.new()
 
 
 class NoopMemoryCleanup:

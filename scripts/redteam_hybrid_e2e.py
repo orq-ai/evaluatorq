@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 from evaluatorq.redteam import red_team
-from evaluatorq.redteam.contracts import RedTeamReport
+from evaluatorq.redteam.contracts import LLMConfig, RedTeamReport
 
 
 def _validate_report(report: RedTeamReport) -> list[str]:
@@ -75,15 +75,13 @@ async def _run(args: argparse.Namespace) -> int:
         args.target,
         mode='hybrid',
         categories=args.categories,
-        attack_model=args.attack_model,
-        evaluator_model=args.evaluator_model,
+        config=LLMConfig(attack_model=args.attack_model, evaluator_model=args.evaluator_model),
         parallelism=args.parallelism,
         max_turns=args.max_turns,
         max_dynamic_datapoints=args.max_dynamic_datapoints,
         max_static_datapoints=args.max_static_datapoints,
         generate_strategies=not args.no_generate_strategies,
         generated_strategy_count=args.generated_strategy_count,
-        backend=args.backend,
         dataset=dataset_path,
         description='Hybrid red-team E2E test',
         output_dir=args.output_dir,
@@ -124,7 +122,6 @@ def _parse_args() -> argparse.Namespace:
         help='Dataset path relative to packages/evaluatorq-py or absolute path. '
              'When omitted, static datapoints are loaded from the ORQ platform.',
     )
-    parser.add_argument('--backend', default='orq', choices=['openai', 'orq'])
     parser.add_argument('--parallelism', type=int, default=3)
     parser.add_argument('--max-turns', type=int, default=3)
     parser.add_argument('--max-dynamic-datapoints', type=int, default=None)

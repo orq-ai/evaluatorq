@@ -104,10 +104,6 @@ class VercelAISdkTarget(AgentTarget):
         self._history.append({"role": "assistant", "content": text})
         return text
 
-    def reset_conversation(self) -> None:
-        """Reset conversation state by clearing the message history."""
-        self._history = []
-
     async def get_agent_context(self) -> AgentContext:
         """Return the user-provided agent context, or a minimal placeholder."""
         if self._agent_context is not None:
@@ -121,8 +117,8 @@ class VercelAISdkTarget(AgentTarget):
         safe_key = f"{parsed.scheme}://{host}{port}{parsed.path}".rstrip("/") or self._url
         return AgentContext(key=safe_key, description="opaque Vercel AI SDK HTTP target")
 
-    def clone(self) -> VercelAISdkTarget:
-        """Create an independent copy for parallel red teaming jobs."""
+    def new(self) -> VercelAISdkTarget:
+        """Return an independent instance for parallel red teaming jobs."""
         return VercelAISdkTarget(
             self._url,
             headers=dict(self._headers),

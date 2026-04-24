@@ -58,23 +58,22 @@ class TestOpenAIAgentTarget:
         assert input_data[-1] == {"role": "user", "content": "second"}
 
     @pytest.mark.asyncio
-    async def test_reset_clears_history(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_new_returns_fresh_instance(self, monkeypatch: pytest.MonkeyPatch) -> None:
         runner, _ = _mock_runner_and_result()
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
         await target.send_prompt("first")
-        target.reset_conversation()
-        await target.send_prompt("after reset")
+        fresh = target.new()
 
-        call_args = runner.run.call_args
-        assert call_args[0][1] == "after reset"
+        assert fresh is not target
+        assert fresh._history == []
 
     def test_clone_returns_independent_instance(self) -> None:
         agent = MagicMock()
         target = OpenAIAgentTarget(agent, run_kwargs={"max_turns": 5})
         target._history = [{"role": "user", "content": "old"}]
-        cloned = target.clone()
+        cloned = target.new()
         assert cloned is not target
         assert cloned._history == []
         assert cloned._agent is agent

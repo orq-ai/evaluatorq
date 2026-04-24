@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from loguru import logger
 from openai.types.chat import ChatCompletionMessageParam
@@ -15,6 +15,19 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
 
+def create_async_llm_client() -> AsyncOpenAI:
+    """Lazy proxy to :func:`~evaluatorq.redteam.backends.registry.create_async_llm_client`.
+
+    Defined here so that tests can patch
+    ``evaluatorq.redteam.backends.openai.create_async_llm_client`` and to avoid
+    a circular import between this module and ``registry.py`` (which imports our
+    classes at the top level).
+    """
+    from evaluatorq.redteam.backends.registry import create_async_llm_client as _create
+
+    return _create()
+
+
 class OpenAIModelTarget:
     """Target adapter that treats ``agent_key`` as an OpenAI model identifier."""
 
@@ -23,13 +36,18 @@ class OpenAIModelTarget:
 
     def __init__(
         self,
-        model_id: str,
-        client: AsyncOpenAI,
+        model: str,
         system_prompt: str | None = None,
+        *,
+        client: AsyncOpenAI | None = None,
     ):
-        """Initialize the target with a model ID, async client, and optional system prompt."""
-        self.model_id = model_id
-        self.client = client
+        """Initialize the target with a model name, optional async client, and optional system prompt.
+
+        If ``client`` is not provided, one is created automatically via
+        :func:`~evaluatorq.redteam.backends.registry.create_async_llm_client`.
+        """
+        self.model = model
+        self.client = client or create_async_llm_client()
         self.system_prompt = system_prompt or 'You are a helpful assistant.'
         self._last_token_usage: TokenUsage | None = None
 
@@ -40,12 +58,12 @@ class OpenAIModelTarget:
             {'role': 'user', 'content': prompt},
         ]
         async with with_llm_span(
-            model=self.model_id,
+            model=self.model,
             input_messages=messages,
             attributes={"orq.redteam.llm_purpose": "target"},
         ) as span:
             response = await self.client.chat.completions.create(
-                model=self.model_id,
+                model=self.model,
                 messages=messages,
             )
             content = response.choices[0].message.content or ''
@@ -75,42 +93,34 @@ class OpenAIModelTarget:
         self._last_token_usage = None
         return usage
 
-    def reset_conversation(self) -> None:
-        """Stateless adapter; nothing to reset."""
-        return
-
     def clone(self) -> OpenAIModelTarget:
-        """Create a fresh target instance for parallel job safety."""
-        return OpenAIModelTarget(
-            model_id=self.model_id,
-            client=self.client,
-            system_prompt=self.system_prompt,
-        )
+        """Return a fresh target instance for parallel job safety."""
+        return OpenAIModelTarget(model=self.model, system_prompt=self.system_prompt, client=self.client)
+
+    def new(self) -> OpenAIModelTarget:
+        """Return a fresh target instance (alias for :meth:`clone`, satisfies ``AgentTarget`` protocol)."""
+        return self.clone()
 
     target_kind: TargetKind = TargetKind.OPENAI
     """Used by the runner to populate report metadata correctly."""
 
     @property
     def name(self) -> str:
-        """Return the model ID as the target name."""
-        return self.model_id
+        """Return the model name as the target name."""
+        return self.model
 
     async def get_agent_context(self) -> AgentContext:
         """Return a minimal agent context for this model target."""
         return AgentContext(
-            key=self.model_id,
-            display_name=self.model_id,
+            key=self.model,
+            display_name=self.model,
             description='OpenAI model target',
-            model=self.model_id,
+            model=self.model,
         )
 
     def create_target(self, agent_key: str) -> OpenAIModelTarget:
-        """Create a new OpenAI model target for the given model ID."""
-        return OpenAIModelTarget(
-            model_id=agent_key,
-            client=self.client,
-            system_prompt=self.system_prompt,
-        )
+        """Create a new OpenAI model target for the given model name."""
+        return OpenAIModelTarget(model=agent_key, system_prompt=self.system_prompt, client=self.client)
 
     def map_error(self, exc: Exception) -> tuple[str, str]:
         """Map an OpenAI exception to a normalized error code and message tuple."""
@@ -152,7 +162,7 @@ class OpenAITargetFactory:
 
     def create_target(self, agent_key: str) -> OpenAIModelTarget:
         """Create a new OpenAI model target instance."""
-        return OpenAIModelTarget(model_id=agent_key, client=self._client, system_prompt=self._system_prompt)
+        return OpenAIModelTarget(model=agent_key, system_prompt=self._system_prompt, client=self._client)
 
 
 class OpenAIErrorMapper:
@@ -177,8 +187,3 @@ class OpenAIErrorMapper:
         return 'openai.unknown', f'{type(exc).__name__}: {exc}'
 
 
-def create_openai_target(model_id: str, client: Any = None) -> OpenAIModelTarget:
-    """Create an OpenAIModelTarget from environment config."""
-    from evaluatorq.redteam.backends.registry import create_async_llm_client
-    resolved = client or create_async_llm_client()
-    return OpenAIModelTarget(model_id=model_id, client=resolved)

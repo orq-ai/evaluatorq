@@ -8,7 +8,7 @@ from typing import cast
 import pytest
 from openai import AsyncOpenAI
 
-from evaluatorq.redteam import red_team
+from evaluatorq.redteam import OpenAIModelTarget, red_team
 
 from .conftest import DeterministicAsyncOpenAI, validate_report_structure
 
@@ -20,11 +20,9 @@ async def test_full_static_run(
 ) -> None:
     """Full static pipeline run with 3 dataset samples."""
     report = await red_team(
-        "openai:e2e-static-model",
+        "agent:e2e-static-model",
         mode="static",
-        evaluator_model="e2e-evaluator",
         parallelism=2,
-        backend="openai",
         dataset=str(static_dataset_path),
         llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
         description="E2E static test",
@@ -41,14 +39,13 @@ async def test_static_vulnerability_detection(
     static_dataset_path: Path,
 ) -> None:
     """ASI01/LLM07 should be vulnerable (mock leaks), ASI05 resistant (mock refuses)."""
+    client = cast(AsyncOpenAI, cast(object, mock_llm_client))
     report = await red_team(
-        "openai:e2e-static-model",
+        OpenAIModelTarget("e2e-static-model", client=client),
         mode="static",
-        evaluator_model="e2e-evaluator",
         parallelism=2,
-        backend="openai",
         dataset=str(static_dataset_path),
-        llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
+        llm_client=client,
     )
 
     results_by_cat = {r.attack.category: r for r in report.results}
@@ -76,12 +73,10 @@ async def test_static_category_filtering(
 ) -> None:
     """Filtering to ASI01 should yield only ASI01 results."""
     report = await red_team(
-        "openai:e2e-static-model",
+        "agent:e2e-static-model",
         mode="static",
         categories=["ASI01"],
-        evaluator_model="e2e-evaluator",
         parallelism=2,
-        backend="openai",
         dataset=str(static_dataset_path),
         llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
     )
@@ -98,12 +93,10 @@ async def test_static_datapoint_capping(
 ) -> None:
     """max_static_datapoints=1 should yield exactly 1 result."""
     report = await red_team(
-        "openai:e2e-static-model",
+        "agent:e2e-static-model",
         mode="static",
         max_static_datapoints=1,
-        evaluator_model="e2e-evaluator",
         parallelism=2,
-        backend="openai",
         dataset=str(static_dataset_path),
         llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
     )

@@ -19,7 +19,7 @@ from evaluatorq.redteam.adaptive.strategy_registry import (
     select_applicable_strategies,
     select_applicable_strategies_for_vulnerability,
 )
-from evaluatorq.redteam.contracts import TurnType, Vulnerability
+from evaluatorq.redteam.contracts import LLMConfig, PIPELINE_CONFIG, TurnType, Vulnerability
 from evaluatorq.redteam.tracing import set_span_attrs, with_redteam_span
 from evaluatorq.redteam.vulnerability_registry import resolve_category
 
@@ -42,12 +42,14 @@ async def plan_strategies_for_vulnerabilities(
     generation_parallelism: int | None = None,
     attacker_instructions: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
+    pipeline_config: LLMConfig | None = None,
 ) -> tuple[dict[Vulnerability, list[AttackStrategy]], dict[Vulnerability, dict[str, Any]], AgentCapabilities]:
     """Build per-vulnerability strategy plans for dynamic red teaming.
 
     This is the primary planning function keyed by Vulnerability enum values.
     Use plan_strategies_for_categories() for backwards-compatible category-string-keyed output.
     """
+    cfg = pipeline_config or PIPELINE_CONFIG
     if llm_client is not None:
         async with with_redteam_span("orq.redteam.capability_classification", {
             "orq.redteam.num_tools": len(agent_context.tools) if agent_context.tools else 0,
@@ -58,6 +60,7 @@ async def plan_strategies_for_vulnerabilities(
                 llm_client=llm_client,
                 model=attack_model,
                 llm_kwargs=llm_kwargs,
+                pipeline_config=cfg,
             )
             set_span_attrs(cap_span, {
                 "orq.redteam.num_capabilities": len(agent_capabilities.all_capabilities()),
@@ -104,6 +107,7 @@ async def plan_strategies_for_vulnerabilities(
                             max_turns=max_turns,
                             attacker_instructions=attacker_instructions,
                             llm_kwargs=llm_kwargs,
+                            pipeline_config=cfg,
                         )
                     return vuln, generated, None
                 except Exception as e:
@@ -171,6 +175,7 @@ async def plan_strategies_for_categories(
     generation_parallelism: int | None = None,
     attacker_instructions: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
+    pipeline_config: LLMConfig | None = None,
 ) -> tuple[dict[str, list[AttackStrategy]], dict[str, dict[str, Any]], AgentCapabilities]:
     """Build per-category strategy plans for dynamic red teaming.
 
@@ -208,6 +213,7 @@ async def plan_strategies_for_categories(
         generation_parallelism=generation_parallelism,
         attacker_instructions=attacker_instructions,
         llm_kwargs=llm_kwargs,
+        pipeline_config=pipeline_config,
     )
 
     # Remap results back to original category strings

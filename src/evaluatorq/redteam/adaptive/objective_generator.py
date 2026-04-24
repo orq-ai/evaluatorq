@@ -13,7 +13,7 @@ from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel, Field
 
 from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, OWASP_CATEGORY_NAMES
-from evaluatorq.redteam.contracts import PIPELINE_CONFIG, AgentCapability, AgentContext, AttackStrategy
+from evaluatorq.redteam.contracts import PIPELINE_CONFIG, AgentCapability, AgentContext, AttackStrategy, LLMConfig
 from evaluatorq.redteam.contracts import AttackTechnique, DeliveryMethod, Severity, TurnType, Vulnerability
 from evaluatorq.redteam.tracing import record_llm_response, with_llm_span
 from evaluatorq.redteam.utils import safe_substitute
@@ -141,18 +141,20 @@ async def _call_llm_for_objectives_single(
     span_attributes: dict[str, Any],
     log_label: str,
     llm_kwargs: dict[str, Any] | None = None,
+    cfg: LLMConfig | None = None,
 ) -> list[GeneratedObjective]:
     """Make a single LLM call to generate up to ``count`` objectives.
 
     ``prompt_template`` must contain a ``{count}`` placeholder.
     """
+    cfg = cfg or PIPELINE_CONFIG
     try:
         prompt = prompt_template.replace('{count}', str(count))
         gen_messages: list[ChatCompletionMessageParam] = [{'role': 'user', 'content': prompt}]
         async with with_llm_span(
             model=model,
-            temperature=PIPELINE_CONFIG.strategy_generation_temperature,
-            max_tokens=PIPELINE_CONFIG.strategy_generation_max_tokens,
+            temperature=cfg.strategy_generation_temperature,
+            max_tokens=cfg.strategy_generation_max_tokens,
             input_messages=gen_messages,
             attributes={
                 "orq.redteam.llm_purpose": "generate_strategies",
@@ -164,9 +166,9 @@ async def _call_llm_for_objectives_single(
                 model=model,
                 messages=gen_messages,
                 response_format=GeneratedObjectives,
-                temperature=PIPELINE_CONFIG.strategy_generation_temperature,
-                max_completion_tokens=PIPELINE_CONFIG.strategy_generation_max_tokens,
-                extra_body=PIPELINE_CONFIG.retry_config,
+                temperature=cfg.strategy_generation_temperature,
+                max_completion_tokens=cfg.strategy_generation_max_tokens,
+                extra_body=cfg.retry_config,
                 **(llm_kwargs or {}),
             )
             record_llm_response(
@@ -196,15 +198,17 @@ async def _call_llm_for_objectives(
     span_attributes: dict[str, Any],
     log_label: str,
     llm_kwargs: dict[str, Any] | None = None,
+    cfg: LLMConfig | None = None,
 ) -> list[GeneratedObjective]:
     """Generate objectives, batching into multiple LLM calls if needed.
 
     ``prompt_template`` must contain a ``{count}`` placeholder. Each batch
     fills it with the batch size so the LLM generates the right number.
     """
+    cfg = cfg or PIPELINE_CONFIG
     if count <= _MAX_PER_LLM_CALL:
         return await _call_llm_for_objectives_single(
-            prompt_template, llm_client, model, count, span_attributes, log_label, llm_kwargs,
+            prompt_template, llm_client, model, count, span_attributes, log_label, llm_kwargs, cfg,
         )
 
     all_objectives: list[GeneratedObjective] = []
@@ -218,6 +222,7 @@ async def _call_llm_for_objectives(
             {**span_attributes, "orq.redteam.batch_index": batch_idx},
             f'{log_label} (batch {batch_idx + 1})',
             llm_kwargs,
+            cfg,
         )
         if not batch_objectives:
             logger.warning(f'Batch {batch_idx + 1} returned no objectives for {log_label}; stopping early')
@@ -239,6 +244,7 @@ async def generate_objectives_for_vulnerability(
     max_turns: int = 5,
     attacker_instructions: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
+    pipeline_config: LLMConfig | None = None,
 ) -> list[GeneratedObjective]:
     """Generate attack objectives using an LLM based on agent context.
 
@@ -254,10 +260,12 @@ async def generate_objectives_for_vulnerability(
         turn_type: Optional forced turn type. When None, LLM chooses per objective.
         max_turns: Maximum turns available to the adversarial LLM
         attacker_instructions: Optional domain-specific context to steer attack generation
+        pipeline_config: Optional LLMConfig instance. Defaults to module-level PIPELINE_CONFIG.
 
     Returns:
         List of generated objectives with requirements
     """
+    cfg = pipeline_config or PIPELINE_CONFIG
     vdef = VULNERABILITY_DEFS.get(vuln)
     vulnerability_name = vdef.name if vdef is not None else vuln.value
     category_code = get_primary_category(vuln)
@@ -281,6 +289,7 @@ async def generate_objectives_for_vulnerability(
         },
         log_label=f'{vuln.value} ({category_code})',
         llm_kwargs=llm_kwargs,
+        cfg=cfg,
     )
 
 
@@ -294,6 +303,7 @@ async def generate_objectives_for_category(
     max_turns: int = 5,
     attacker_instructions: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
+    pipeline_config: LLMConfig | None = None,
 ) -> list[GeneratedObjective]:
     """Generate attack objectives using an LLM based on agent context.
 
@@ -310,10 +320,12 @@ async def generate_objectives_for_category(
         turn_type: Optional forced turn type. When None, LLM chooses per objective.
         max_turns: Maximum turns available to the adversarial LLM
         attacker_instructions: Optional domain-specific context to steer attack generation
+        pipeline_config: Optional LLMConfig instance. Defaults to module-level PIPELINE_CONFIG.
 
     Returns:
         List of generated objectives with requirements
     """
+    cfg = pipeline_config or PIPELINE_CONFIG
     vuln = resolve_category_safe(category)
     if vuln is not None:
         return await generate_objectives_for_vulnerability(
@@ -326,6 +338,7 @@ async def generate_objectives_for_category(
             max_turns=max_turns,
             attacker_instructions=attacker_instructions,
             llm_kwargs=llm_kwargs,
+            pipeline_config=cfg,
         )
 
     # Fallback path for unrecognized category codes: build a best-effort prompt
@@ -356,6 +369,7 @@ async def generate_objectives_for_category(
         },
         log_label=category,
         llm_kwargs=llm_kwargs,
+        cfg=cfg,
     )
 
 
@@ -489,6 +503,7 @@ async def generate_strategies_for_vulnerability(
     max_turns: int = 5,
     attacker_instructions: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
+    pipeline_config: LLMConfig | None = None,
 ) -> list[AttackStrategy]:
     """Generate complete attack strategies for a vulnerability.
 
@@ -505,6 +520,7 @@ async def generate_strategies_for_vulnerability(
         turn_type: Optional forced turn type. When None, LLM chooses per strategy.
         max_turns: Maximum turns for multi-turn generated strategies
         attacker_instructions: Optional domain-specific context to steer attack generation
+        pipeline_config: Optional LLMConfig instance. Defaults to module-level PIPELINE_CONFIG.
 
     Returns:
         List of generated AttackStrategy instances with both vulnerability and category set
@@ -520,6 +536,7 @@ async def generate_strategies_for_vulnerability(
         max_turns=max_turns,
         attacker_instructions=attacker_instructions,
         llm_kwargs=llm_kwargs,
+        pipeline_config=pipeline_config,
     )
     return _objectives_to_strategies(
         objectives=objectives,
@@ -541,6 +558,7 @@ async def generate_strategies_for_category(
     max_turns: int = 5,
     attacker_instructions: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
+    pipeline_config: LLMConfig | None = None,
 ) -> list[AttackStrategy]:
     """Generate complete attack strategies for a category.
 
@@ -557,6 +575,7 @@ async def generate_strategies_for_category(
         turn_type: Optional forced turn type. When None, LLM chooses per strategy.
         max_turns: Maximum turns for multi-turn generated strategies
         attacker_instructions: Optional domain-specific context to steer attack generation
+        pipeline_config: Optional LLMConfig instance. Defaults to module-level PIPELINE_CONFIG.
 
     Returns:
         List of generated AttackStrategy instances
@@ -573,6 +592,7 @@ async def generate_strategies_for_category(
             max_turns=max_turns,
             attacker_instructions=attacker_instructions,
             llm_kwargs=llm_kwargs,
+            pipeline_config=pipeline_config,
         )
 
     # Fallback for unrecognized categories: generate objectives without a resolved
@@ -592,6 +612,7 @@ async def generate_strategies_for_category(
         max_turns=max_turns,
         attacker_instructions=attacker_instructions,
         llm_kwargs=llm_kwargs,
+        pipeline_config=pipeline_config,
     )
     return _objectives_to_strategies(
         objectives=objectives,

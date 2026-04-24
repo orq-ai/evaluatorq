@@ -29,13 +29,13 @@ class TestCallableTarget:
     async def test_reset_calls_reset_fn(self) -> None:
         reset = MagicMock()
         target = CallableTarget(lambda p: p, reset_fn=reset)
-        target.reset_conversation()
+        target.new()
         reset.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_reset_without_reset_fn_is_noop(self) -> None:
         target = CallableTarget(lambda p: p)
-        target.reset_conversation()  # should not raise
+        target.new()  # should not raise
 
     def test_clone_returns_independent_instance(self) -> None:
         def fn(p: str) -> str:
@@ -43,7 +43,7 @@ class TestCallableTarget:
 
         reset = MagicMock()
         target = CallableTarget(fn, reset_fn=reset)
-        cloned = target.clone()
+        cloned = target.new()
         assert cloned is not target
         assert cloned._fn is fn
         assert cloned._reset_fn is reset
@@ -78,5 +78,5 @@ class TestCallableTarget:
 
         override = AgentContext(key="k")
         target = CallableTarget(lambda p: p, agent_context=override)
-        cloned = target.clone()
+        cloned = target.new()
         assert cloned._agent_context is override

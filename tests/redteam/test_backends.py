@@ -217,23 +217,23 @@ class TestExtractProviderErrorCode:
 class TestOpenAIModelTarget:
     """Tests for OpenAIModelTarget."""
 
-    def test_clone_returns_new_instance_with_same_config(self):
-        """clone() produces a new OpenAIModelTarget with identical config."""
+    def test_new_returns_new_instance_with_same_config(self):
+        """new() produces a new OpenAIModelTarget with identical config."""
         from evaluatorq.redteam.backends.openai import OpenAIModelTarget
 
         mock_client = MagicMock()
         target = OpenAIModelTarget(
-            model_id="gpt-4o-mini",
+            model="gpt-4o-mini",
             client=mock_client,
             system_prompt="Custom prompt",
         )
-        cloned = target.clone()
+        fresh = target.new()
 
-        assert isinstance(cloned, OpenAIModelTarget)
-        assert cloned is not target
-        assert cloned.model_id == target.model_id
-        assert cloned.system_prompt == target.system_prompt
-        assert cloned.client is target.client  # Same client instance is shared
+        assert isinstance(fresh, OpenAIModelTarget)
+        assert fresh is not target
+        assert fresh.model == target.model
+        assert fresh.system_prompt == target.system_prompt
+        assert fresh.client is target.client  # Same client instance is shared
 
 
 # ===========================================================================

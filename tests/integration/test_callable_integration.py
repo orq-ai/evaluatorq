@@ -31,7 +31,7 @@ class TestCallableIntegration:
         r2 = await target.send_prompt("World")
         assert "2" in r2
 
-        target.reset_conversation()
+        target.new()
 
         r3 = await target.send_prompt("After reset")
         assert "1" in r3  # Back to 1 after reset
@@ -47,7 +47,7 @@ class TestCallableIntegration:
             return f"Call #{call_count}"
 
         target = CallableTarget(counting_agent)
-        cloned = target.clone()
+        cloned = target.new()
 
         r1 = await target.send_prompt("a")
         r2 = await cloned.send_prompt("b")

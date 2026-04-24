@@ -51,7 +51,7 @@ class TestLangGraphIntegration:
         target = LangGraphTarget(graph)
 
         await target.send_prompt("First message")
-        target.reset_conversation()
+        target.new()
         response = await target.send_prompt("Second message")
 
         assert isinstance(response, str)
@@ -62,7 +62,7 @@ class TestLangGraphIntegration:
         """Cloned targets should work independently."""
         graph = _build_echo_graph()
         target = LangGraphTarget(graph)
-        cloned = target.clone()
+        cloned = target.new()
 
         response_original = await target.send_prompt("Hello from original")
         response_cloned = await cloned.send_prompt("Hello from clone")

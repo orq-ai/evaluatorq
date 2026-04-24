@@ -16,7 +16,7 @@ from evaluatorq.redteam.backends.openai import (
     OpenAIErrorMapper,
     OpenAITargetFactory,
 )
-from evaluatorq.redteam.contracts import TargetConfig
+from evaluatorq.redteam.contracts import LLMConfig, PIPELINE_CONFIG, TargetConfig
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -80,6 +80,7 @@ def resolve_backend(
     backend: str = "orq",
     llm_client: "AsyncOpenAI | None" = None,
     target_config: TargetConfig | None = None,
+    pipeline_config: LLMConfig | None = None,
 ) -> BackendBundle:
     """Resolve runtime backend bundle with lazy optional imports.
 
@@ -89,17 +90,19 @@ def resolve_backend(
             When provided, skips ``create_async_llm_client()`` for
             the ``"openai"`` backend.
         target_config: Optional target configuration (e.g. system prompt).
+        pipeline_config: Optional LLMConfig instance. Defaults to module-level PIPELINE_CONFIG.
     """
     normalized = backend.strip().lower()
     factory = _BACKEND_REGISTRY.get(normalized)
     if factory is not None:
-        return factory(llm_client=llm_client, target_config=target_config)
+        return factory(llm_client=llm_client, target_config=target_config, pipeline_config=pipeline_config)
     raise BackendError(f"Unsupported backend: {backend!r}. Available: {sorted(_BACKEND_REGISTRY)}")
 
 
 def _create_openai_backend(
     llm_client: "AsyncOpenAI | None" = None,
     target_config: TargetConfig | None = None,
+    **kwargs: object,
 ) -> BackendBundle:
     system_prompt = target_config.system_prompt if target_config else None
     client = llm_client or create_async_llm_client()
@@ -115,13 +118,17 @@ def _create_openai_backend(
 def _create_orq_backend(
     llm_client: "AsyncOpenAI | None" = None,
     target_config: TargetConfig | None = None,
+    pipeline_config: LLMConfig | None = None,
 ) -> BackendBundle:
+    cfg = pipeline_config or PIPELINE_CONFIG
     try:
         from evaluatorq.redteam.backends.orq import ORQErrorMapper, create_orq_backend
     except ImportError as exc:
         msg = "ORQ backend requested but ORQ dependencies are unavailable."
         raise BackendError(msg) from exc
-    target_factory, context_provider, memory_cleanup = create_orq_backend()
+    target_factory, context_provider, memory_cleanup = create_orq_backend(
+        timeout_ms=cfg.target_agent_timeout_ms,
+    )
     return BackendBundle(
         name="orq",
         target_factory=target_factory,

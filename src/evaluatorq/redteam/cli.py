@@ -150,7 +150,7 @@ def run(
         list[str],
         typer.Option(
             "--target", "-t",
-            help='Target identifier(s), e.g. "agent:<key>" or "llm:<model>". Repeatable.',
+            help='Target identifier(s), e.g. "agent:<key>" or "deployment:<key>". For OpenAI models use OpenAIModelTarget in the Python API. Repeatable.',
         ),
     ],
     name: Annotated[
@@ -230,10 +230,6 @@ def run(
         bool,
         typer.Option("--no-cleanup-memory", help="Skip memory entity cleanup after dynamic runs."),
     ] = False,
-    backend: Annotated[
-        str,
-        typer.Option(help='Backend name ("openai" or "orq").'),
-    ] = "openai",
     dataset: Annotated[
         Optional[str],
         typer.Option(help='Dataset source: local path, "hf:org/repo", or "hf:org/repo/file.json".'),
@@ -291,7 +287,7 @@ def run(
     _configure_logging(verbose)
 
     from evaluatorq.redteam import red_team
-    from evaluatorq.redteam.contracts import TargetConfig
+    from evaluatorq.redteam.contracts import LLMConfig, TargetConfig
     from evaluatorq.redteam.exceptions import CancelledError, RedTeamError
     from evaluatorq.redteam.hooks import RichHooks
 
@@ -311,25 +307,29 @@ def run(
     target_config = TargetConfig(system_prompt=system_prompt) if system_prompt else None
     targets: list[str] | str = target if len(target) > 1 else target[0]
 
+    # Build LLMConfig from CLI flags
+    config = LLMConfig(
+        attack_model=attack_model,
+        evaluator_model=evaluator_model,
+    )
+
     try:
         report = asyncio.run(
             red_team(
                 target=targets,  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+                config=config,
                 name=name,
                 mode=mode,
                 categories=categories,
                 vulnerabilities=vulnerabilities,
                 max_turns=max_turns,
                 max_per_category=max_per_category,
-                attack_model=attack_model,
-                evaluator_model=evaluator_model,
                 parallelism=parallelism,
                 generate_strategies=not no_generate_strategies,
                 generated_strategy_count=generated_strategy_count,
                 max_dynamic_datapoints=max_dynamic_datapoints,
                 max_static_datapoints=max_static_datapoints,
                 cleanup_memory=not no_cleanup_memory,
-                backend=backend,
                 dataset=dataset,
                 hooks=RichHooks(skip_confirm=yes),
                 output_dir=output_dir,

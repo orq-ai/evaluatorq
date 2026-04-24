@@ -11,6 +11,7 @@ from evaluatorq.redteam.contracts import (
     AgentContext,
     AgentInfo,
     AttackInfo,
+    AttackSource,
     AttackStrategy,
     AttackTechnique,
     CategorySummary,
@@ -363,7 +364,7 @@ def dynamic_evaluatorq_results_to_report(
             vuln = resolve_category_safe(category)
             vulnerability_str = vuln.value if vuln else ''
 
-        source = 'llm_generated_strategy' if strategy.is_generated else 'hardcoded_strategy'
+        source = AttackSource.GENERATED_DYNAMIC if strategy.is_generated else AttackSource.TEMPLATE_DYNAMIC
 
         job_output = JobOutputPayload()
         eval_passed: bool | None = None
@@ -399,6 +400,8 @@ def dynamic_evaluatorq_results_to_report(
         evaluator_id = evaluator_meta.get('evaluator_id', category)
         evaluator_name = evaluator_meta.get('evaluator_name', OWASP_CATEGORY_NAMES.get(category))
 
+        vuln_key = strategy.vulnerability or resolve_category_safe(category)
+        vuln_def = VULNERABILITY_DEFS.get(vuln_key) if vuln_key else None
         attack = AttackInfo(
             id=inputs.get('id', f'{category}-{strategy.name}'),
             vulnerability=vulnerability_str,
@@ -408,6 +411,7 @@ def dynamic_evaluatorq_results_to_report(
             delivery_methods=strategy.delivery_methods,
             turn_type=strategy.turn_type,
             severity=strategy.severity,
+            vulnerability_domain=vuln_def.domain if vuln_def else None,
             source=source,
             strategy_name=strategy.name,
             objective=inputs.get('objective'),
@@ -423,10 +427,9 @@ def dynamic_evaluatorq_results_to_report(
             evaluator_name=evaluator_name,
         )
 
-        strategy_max_turns = strategy_payload.get('max_turns') if isinstance(strategy_payload, dict) else None
         execution = ExecutionDetails(
             turns=job_output.turns or 1,
-            max_turns=strategy_max_turns,
+            max_turns=job_output.max_turns,
             duration_seconds=job_output.duration_seconds,
             objective_achieved=job_output.objective_achieved,
             token_usage=token_usage,
@@ -508,7 +511,7 @@ def static_evaluatorq_results_to_reports(
                 'scope': inputs.get('scope', 'application'),
                 'framework': inputs.get('framework', 'OWASP-AGENTIC'),
                 'turn_type': inputs.get('turn_type', 'single'),
-                'source': inputs.get('source', 'orq_dataset'),
+                'source': inputs.get('source', AttackSource.ORQ_DATASET),
                 'evaluator_id': evaluator_meta.get('evaluator_id', normalized_category),
                 'evaluator_name': evaluator_meta.get(
                     'evaluator_name', OWASP_CATEGORY_NAMES.get(inputs.get('category', ''))

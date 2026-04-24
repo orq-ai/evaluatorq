@@ -143,8 +143,8 @@ class MockAgentTarget:
             return "I can't execute system commands."
         return "I can help with safe alternatives."
 
-    def reset_conversation(self) -> None:
-        self._conversation = []
+    def new(self) -> MockAgentTarget:
+        return MockAgentTarget(self.agent_key)
 
 
 class MockTargetFactory:

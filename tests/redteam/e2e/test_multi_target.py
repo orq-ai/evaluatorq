@@ -8,7 +8,7 @@ from typing import cast
 import pytest
 from openai import AsyncOpenAI
 
-from evaluatorq.redteam import red_team
+from evaluatorq.redteam import OpenAIModelTarget, red_team
 
 from .conftest import DeterministicAsyncOpenAI, validate_report_structure
 
@@ -18,15 +18,17 @@ async def test_multi_target_static_merge(
     mock_llm_client: DeterministicAsyncOpenAI,
     static_dataset_path: Path,
 ) -> None:
-    """Two static targets should produce a merged report with results from both."""
+    """Two static OpenAI targets produce a merged report with results from both."""
+    client = cast(AsyncOpenAI, cast(object, mock_llm_client))
+    target_a = OpenAIModelTarget("model-a", client=client)
+    target_b = OpenAIModelTarget("model-b", client=client)
+
     report = await red_team(
-        ["openai:model-a", "openai:model-b"],
+        [target_a, target_b],
         mode="static",
-        evaluator_model="e2e-evaluator",
         parallelism=2,
-        backend="openai",
         dataset=str(static_dataset_path),
-        llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
+        llm_client=client,
         description="E2E multi-target test",
     )
 

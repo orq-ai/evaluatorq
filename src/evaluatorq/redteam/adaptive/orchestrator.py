@@ -23,6 +23,7 @@ from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL, PIPELINE_CONFIG,
     AgentContext,
     AttackStrategy,
+    LLMConfig,
     Message,
     OrchestratorResult,
     TokenUsage,
@@ -289,6 +290,7 @@ class MultiTurnOrchestrator:
         attacker_instructions: str | None = None,
         verbosity: int = 0,
         llm_kwargs: dict[str, Any] | None = None,
+        pipeline_config: LLMConfig | None = None,
     ):
         """Initialize the orchestrator.
 
@@ -299,6 +301,7 @@ class MultiTurnOrchestrator:
             attacker_instructions: Optional domain-specific context to steer attack generation
             verbosity: Verbosity level (0=silent, 1=summary progress bar, 2=per-attack progress bars)
             llm_kwargs: Optional extra keyword arguments merged into every chat.completions call
+            pipeline_config: Optional LLMConfig instance. Defaults to module-level PIPELINE_CONFIG.
         """
         self.llm_client = llm_client
         self.model = model
@@ -306,6 +309,7 @@ class MultiTurnOrchestrator:
         self.attacker_instructions = attacker_instructions
         self.verbosity = verbosity
         self.llm_kwargs = llm_kwargs or {}
+        self._cfg = pipeline_config or PIPELINE_CONFIG
 
     async def generate_single_prompt(
         self,
@@ -341,22 +345,22 @@ class MultiTurnOrchestrator:
         ):
             async with with_llm_span(
                 model=self.model,
-                temperature=PIPELINE_CONFIG.adversarial_temperature,
-                max_tokens=PIPELINE_CONFIG.adversarial_max_tokens,
+                temperature=self._cfg.adversarial_temperature,
+                max_tokens=self._cfg.adversarial_max_tokens,
                 input_messages=llm_messages,
                 attributes={
                     "orq.redteam.llm_purpose": "adversarial",
                     "orq.redteam.strategy_name": strategy.name,
                 },
             ) as llm_span:
-                llm_timeout_s = PIPELINE_CONFIG.llm_call_timeout_ms / 1000.0
+                llm_timeout_s = self._cfg.llm_call_timeout_ms / 1000.0
                 response = await asyncio.wait_for(
                     self.llm_client.chat.completions.create(
                         model=self.model,
                         messages=llm_messages,
-                        temperature=PIPELINE_CONFIG.adversarial_temperature,
-                        max_completion_tokens=PIPELINE_CONFIG.adversarial_max_tokens,
-                        extra_body=PIPELINE_CONFIG.retry_config,
+                        temperature=self._cfg.adversarial_temperature,
+                        max_completion_tokens=self._cfg.adversarial_max_tokens,
+                        extra_body=self._cfg.retry_config,
                         **self.llm_kwargs,
                     ),
                     timeout=llm_timeout_s,
@@ -456,7 +460,7 @@ class MultiTurnOrchestrator:
                         await progress.update_attack(task_id, completed=turn)
 
                     # Generate attack prompt from adversarial LLM
-                    llm_timeout_s = PIPELINE_CONFIG.llm_call_timeout_ms / 1000.0
+                    llm_timeout_s = self._cfg.llm_call_timeout_ms / 1000.0
                     usage: TokenUsage | None = None
                     try:
                         async with with_redteam_span(
@@ -468,8 +472,8 @@ class MultiTurnOrchestrator:
                         ):
                             async with with_llm_span(
                                 model=self.model,
-                                temperature=PIPELINE_CONFIG.adversarial_temperature,
-                                max_tokens=PIPELINE_CONFIG.adversarial_max_tokens,
+                                temperature=self._cfg.adversarial_temperature,
+                                max_tokens=self._cfg.adversarial_max_tokens,
                                 input_messages=adversarial_messages,
                                 attributes={
                                     "orq.redteam.llm_purpose": "adversarial",
@@ -481,9 +485,9 @@ class MultiTurnOrchestrator:
                                     self.llm_client.chat.completions.create(
                                         model=self.model,
                                         messages=adversarial_messages,
-                                        temperature=PIPELINE_CONFIG.adversarial_temperature,
-                                        max_completion_tokens=PIPELINE_CONFIG.adversarial_max_tokens,
-                                        extra_body=PIPELINE_CONFIG.retry_config,
+                                        temperature=self._cfg.adversarial_temperature,
+                                        max_completion_tokens=self._cfg.adversarial_max_tokens,
+                                        extra_body=self._cfg.retry_config,
                                         **self.llm_kwargs,
                                     ),
                                     timeout=llm_timeout_s,
@@ -515,7 +519,7 @@ class MultiTurnOrchestrator:
                             error_stage = 'adversarial_generation'
                             error_code = 'adversarial.timeout'
                             error_details = {
-                                'timeout_ms': PIPELINE_CONFIG.llm_call_timeout_ms,
+                                'timeout_ms': self._cfg.llm_call_timeout_ms,
                                 'consecutive_timeouts': consecutive_adversarial_timeouts,
                             }
                             error_turn = turn + 1
@@ -604,7 +608,7 @@ class MultiTurnOrchestrator:
                             break
 
                     # Send attack to target agent
-                    target_timeout_s = PIPELINE_CONFIG.target_agent_timeout_ms / 1000.0
+                    target_timeout_s = self._cfg.target_agent_timeout_ms / 1000.0
                     try:
                         async with with_redteam_span(
                             "orq.redteam.target_call",
@@ -646,7 +650,7 @@ class MultiTurnOrchestrator:
                             error_stage = 'target_call'
                             error_code = 'target.timeout'
                             error_details = {
-                                'timeout_ms': PIPELINE_CONFIG.target_agent_timeout_ms,
+                                'timeout_ms': self._cfg.target_agent_timeout_ms,
                                 'consecutive_errors': consecutive_agent_errors,
                             }
                             error_turn = turn + 1
@@ -736,12 +740,12 @@ class MultiTurnOrchestrator:
                 '— the last turn was dropped silently'
             )
             if not conversation:
-                timeout_s = PIPELINE_CONFIG.llm_call_timeout_ms / 1000.0
+                timeout_s = self._cfg.llm_call_timeout_ms / 1000.0
                 error = f'Adversarial LLM timed out after {timeout_s:.0f}s with no turns completed'
                 error_type = 'llm_error'
                 error_stage = 'adversarial_generation'
                 error_code = 'adversarial.timeout'
-                error_details = {'timeout_ms': PIPELINE_CONFIG.llm_call_timeout_ms}
+                error_details = {'timeout_ms': self._cfg.llm_call_timeout_ms}
 
         duration = time.time() - start_time
         logger.debug(

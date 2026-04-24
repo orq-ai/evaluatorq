@@ -16,7 +16,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from evaluatorq.redteam import red_team
-from evaluatorq.redteam.contracts import RedTeamReport
+from evaluatorq.redteam.contracts import LLMConfig, RedTeamReport
 
 
 def _make_chat_completion(content: str, *, prompt_tokens: int, completion_tokens: int) -> Any:
@@ -143,10 +143,9 @@ async def _run(args: argparse.Namespace) -> int:
         args.target,
         mode='static',
         categories=args.categories,
-        evaluator_model=args.evaluator_model,
+        config=LLMConfig(evaluator_model=args.evaluator_model),
         parallelism=args.parallelism,
         max_static_datapoints=args.max_static_datapoints,
-        backend=args.backend,
         dataset=str(dataset_path),
         llm_client=llm_client,
         description='Local static red-team E2E smoke test',
@@ -185,7 +184,6 @@ def _parse_args() -> argparse.Namespace:
         default='openai:e2e-local-model',
         help='Red-team target, e.g. openai:gpt-4o-mini or agent:my-agent',
     )
-    parser.add_argument('--backend', default='openai', choices=['openai', 'orq'])
     parser.add_argument('--parallelism', type=int, default=2)
     parser.add_argument('--max-static-datapoints', type=int, default=None)
     parser.add_argument('--evaluator-model', default='e2e-local-evaluator')
