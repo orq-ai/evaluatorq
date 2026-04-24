@@ -2,20 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 from loguru import logger
-from openai.types.chat import ChatCompletionMessageParam
 
 from evaluatorq.redteam.backends.base import extract_provider_error_code, extract_status_code
-from evaluatorq.redteam.contracts import AgentContext, TargetKind, TokenUsage
+from evaluatorq.redteam.contracts import DEFAULT_TARGET_MAX_TOKENS, DEFAULT_TARGET_TIMEOUT_MS, AgentContext, TargetKind, TokenUsage
 from evaluatorq.redteam.tracing import record_llm_response, with_llm_span
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
+    from openai.types.chat import ChatCompletionMessageParam
 
 
-def create_async_llm_client() -> AsyncOpenAI:
+def create_async_llm_client(role_config=None) -> AsyncOpenAI:
     """Lazy proxy to :func:`~evaluatorq.redteam.backends.registry.create_async_llm_client`.
 
     Defined here so that tests can patch
@@ -25,7 +26,7 @@ def create_async_llm_client() -> AsyncOpenAI:
     """
     from evaluatorq.redteam.backends.registry import create_async_llm_client as _create
 
-    return _create()
+    return _create(role_config)
 
 
 class OpenAIModelTarget:
@@ -40,6 +41,8 @@ class OpenAIModelTarget:
         system_prompt: str | None = None,
         *,
         client: AsyncOpenAI | None = None,
+        max_tokens: int | None = None,
+        timeout_ms: int | None = None,
     ):
         """Initialize the target with a model name, optional async client, and optional system prompt.
 
@@ -49,6 +52,8 @@ class OpenAIModelTarget:
         self.model = model
         self.client = client or create_async_llm_client()
         self.system_prompt = system_prompt or 'You are a helpful assistant.'
+        self.max_tokens = max_tokens or DEFAULT_TARGET_MAX_TOKENS
+        self.timeout_ms = timeout_ms or DEFAULT_TARGET_TIMEOUT_MS
         self._last_token_usage: TokenUsage | None = None
 
     async def send_prompt(self, prompt: str) -> str:
@@ -62,9 +67,13 @@ class OpenAIModelTarget:
             input_messages=messages,
             attributes={"orq.redteam.llm_purpose": "target"},
         ) as span:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
+            response = await asyncio.wait_for(
+                self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    max_tokens=self.max_tokens,
+                ),
+                timeout=self.timeout_ms / 1000.0,
             )
             content = response.choices[0].message.content or ''
             record_llm_response(span, response, output_content=content)
@@ -72,14 +81,14 @@ class OpenAIModelTarget:
             # Store usage for consume_last_token_usage()
             usage = getattr(response, 'usage', None)
             if usage is not None:
-                _prompt = int(getattr(usage, 'prompt_tokens', 0) or 0)
-                _completion = int(getattr(usage, 'completion_tokens', 0) or 0)
-                _raw_total = getattr(usage, 'total_tokens', None)
-                _total = int(_raw_total) if _raw_total else (_prompt + _completion)
+                prompt_ = int(getattr(usage, 'prompt_tokens', 0) or 0)
+                completion = int(getattr(usage, 'completion_tokens', 0) or 0)
+                raw_total = getattr(usage, 'total_tokens', None)
+                total = int(raw_total) if raw_total else (prompt_ + completion)
                 self._last_token_usage = TokenUsage(
-                    prompt_tokens=_prompt,
-                    completion_tokens=_completion,
-                    total_tokens=_total,
+                    prompt_tokens=prompt_,
+                    completion_tokens=completion,
+                    total_tokens=total,
                     calls=1,
                 )
             else:
@@ -95,7 +104,7 @@ class OpenAIModelTarget:
 
     def clone(self) -> OpenAIModelTarget:
         """Return a fresh target instance for parallel job safety."""
-        return OpenAIModelTarget(model=self.model, system_prompt=self.system_prompt, client=self.client)
+        return OpenAIModelTarget(model=self.model, system_prompt=self.system_prompt, client=self.client, max_tokens=self.max_tokens, timeout_ms=self.timeout_ms)
 
     def new(self) -> OpenAIModelTarget:
         """Return a fresh target instance (alias for :meth:`clone`, satisfies ``AgentTarget`` protocol)."""
@@ -120,7 +129,7 @@ class OpenAIModelTarget:
 
     def create_target(self, agent_key: str) -> OpenAIModelTarget:
         """Create a new OpenAI model target for the given model name."""
-        return OpenAIModelTarget(model=agent_key, system_prompt=self.system_prompt, client=self.client)
+        return OpenAIModelTarget(model=agent_key, system_prompt=self.system_prompt, client=self.client, max_tokens=self.max_tokens, timeout_ms=self.timeout_ms)
 
     def map_error(self, exc: Exception) -> tuple[str, str]:
         """Map an OpenAI exception to a normalized error code and message tuple."""
@@ -155,14 +164,22 @@ class OpenAIContextProvider:
 class OpenAITargetFactory:
     """Factory creating OpenAI model targets."""
 
-    def __init__(self, client: AsyncOpenAI, system_prompt: str | None = None):
+    def __init__(self, client: AsyncOpenAI, system_prompt: str | None = None, max_tokens: int | None = None, timeout_ms: int | None = None):
         """Initialize the factory with a shared async OpenAI client and optional system prompt."""
         self._client = client
         self._system_prompt = system_prompt
+        self._max_tokens = max_tokens
+        self._timeout_ms = timeout_ms
 
     def create_target(self, agent_key: str) -> OpenAIModelTarget:
         """Create a new OpenAI model target instance."""
-        return OpenAIModelTarget(model=agent_key, system_prompt=self._system_prompt, client=self._client)
+        return OpenAIModelTarget(
+            model=agent_key,
+            system_prompt=self._system_prompt,
+            client=self._client,
+            max_tokens=self._max_tokens,
+            timeout_ms=self._timeout_ms,
+        )
 
 
 class OpenAIErrorMapper:
@@ -185,5 +202,3 @@ class OpenAIErrorMapper:
         if 'timeout' in name:
             return 'openai.timeout', f'{type(exc).__name__}: {exc}'
         return 'openai.unknown', f'{type(exc).__name__}: {exc}'
-
-

@@ -25,10 +25,7 @@ Excluded LLM categories:
 from collections.abc import Callable
 from typing import TypedDict
 
-from evaluatorq.redteam.contracts import OWASP_CATEGORY_NAMES, Vulnerability
-from evaluatorq.redteam.frameworks.owasp.models import LlmEvaluatorEntity
-from evaluatorq.redteam.vulnerability_registry import CANONICAL_EVALUATOR_METADATA, CATEGORY_TO_VULNERABILITY, resolve_category_safe
-
+from evaluatorq.redteam.contracts import Vulnerability
 from evaluatorq.redteam.frameworks.owasp.agent_evaluators import (
     get_asi01_goal_hijacking_evaluator,
     get_asi02_tool_misuse_evaluator,
@@ -45,6 +42,12 @@ from evaluatorq.redteam.frameworks.owasp.llm_evaluators import (
     get_llm07_system_prompt_leakage_evaluator,
     get_llm08_vector_embedding_weaknesses_evaluator,
     get_llm09_misinformation_evaluator,
+)
+from evaluatorq.redteam.frameworks.owasp.models import LlmEvaluatorEntity
+from evaluatorq.redteam.vulnerability_registry import (
+    CANONICAL_EVALUATOR_METADATA,
+    CATEGORY_TO_VULNERABILITY,
+    resolve_category_safe,
 )
 
 # Type alias for evaluator getter functions
@@ -92,6 +95,7 @@ for _cat, _getter in _LLM_REGISTRY.items():
     _vuln = CATEGORY_TO_VULNERABILITY.get(_cat)
     if _vuln is not None:
         VULNERABILITY_EVALUATOR_REGISTRY[_vuln] = _getter
+
 
 class EvaluatorMetadata(TypedDict):
     """Canonical evaluator metadata associated with an OWASP category."""

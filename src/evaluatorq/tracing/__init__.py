@@ -28,20 +28,20 @@ from .spans import (
 )
 
 __all__ = [
-    # Setup functions
-    "init_tracing_if_needed",
-    "flush_tracing",
-    "shutdown_tracing",
-    "get_tracer",
-    "is_tracing_enabled",
-    "is_tracing_initialized",
     # Context functions
     "TracingContext",
     "capture_parent_context",
+    "flush_tracing",
     "generate_run_id",
-    # Span functions
-    "with_job_span",
-    "with_evaluation_span",
+    "get_tracer",
+    # Setup functions
+    "init_tracing_if_needed",
+    "is_tracing_enabled",
+    "is_tracing_initialized",
     "set_evaluation_attributes",
     "set_job_name_attribute",
+    "shutdown_tracing",
+    "with_evaluation_span",
+    # Span functions
+    "with_job_span",
 ]

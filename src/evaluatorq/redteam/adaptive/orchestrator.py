@@ -10,17 +10,19 @@ import contextvars
 import logging
 import time
 from inspect import signature
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 from openai import AsyncOpenAI
-from openai.types.chat import ChatCompletionMessageParam
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TextColumn, TimeElapsedColumn
+from typing_extensions import Self
 
+from evaluatorq.common.sanitize import xml_escape
 from evaluatorq.redteam.backends.base import AgentTarget, DefaultErrorMapper, ErrorMapper
 from evaluatorq.redteam.contracts import (
-    DEFAULT_PIPELINE_MODEL, PIPELINE_CONFIG,
+    DEFAULT_PIPELINE_MODEL,
+    PIPELINE_CONFIG,
     AgentContext,
     AttackStrategy,
     LLMConfig,
@@ -29,8 +31,10 @@ from evaluatorq.redteam.contracts import (
     TokenUsage,
 )
 from evaluatorq.redteam.tracing import record_llm_response, set_span_attrs, with_llm_span, with_redteam_span
-from evaluatorq.common.sanitize import xml_escape
 from evaluatorq.redteam.utils import safe_substitute
+
+if TYPE_CHECKING:
+    from openai.types.chat import ChatCompletionMessageParam
 
 _ui_console = Console(stderr=True)
 _PROGRESS_LABEL_MAX_LEN = 52
@@ -68,7 +72,7 @@ class ProgressDisplay:
         self._saved_handler_levels: list[tuple[logging.Handler, int]] = []
         self._progress_token: contextvars.Token[ProgressDisplay | None] | None = None
 
-    async def __aenter__(self) -> "ProgressDisplay":
+    async def __aenter__(self) -> Self:
         if not _ui_console.is_terminal or self._verbosity < 1:
             self._progress_token = _active_progress_var.set(self)
             return self
@@ -175,6 +179,7 @@ class ProgressDisplay:
         for h, level in self._saved_handler_levels:
             h.setLevel(level)
         self._saved_handler_levels.clear()
+
 
 ADVERSARIAL_SYSTEM_PROMPT = """You are a red team security researcher testing an AI agent for vulnerabilities.
 
@@ -300,7 +305,7 @@ class MultiTurnOrchestrator:
             error_mapper: Optional custom error mapper
             attacker_instructions: Optional domain-specific context to steer attack generation
             verbosity: Verbosity level (0=silent, 1=summary progress bar, 2=per-attack progress bars)
-            llm_kwargs: Optional extra keyword arguments merged into every chat.completions call
+            llm_kwargs: Deprecated — merged into pipeline_config.attacker.extra_kwargs at init. Use LLMCallConfig.extra_kwargs instead.
             pipeline_config: Optional LLMConfig instance. Defaults to module-level PIPELINE_CONFIG.
         """
         self.llm_client = llm_client
@@ -308,8 +313,12 @@ class MultiTurnOrchestrator:
         self.error_mapper = error_mapper or DefaultErrorMapper()
         self.attacker_instructions = attacker_instructions
         self.verbosity = verbosity
-        self.llm_kwargs = llm_kwargs or {}
         self._cfg = pipeline_config or PIPELINE_CONFIG
+        if llm_kwargs:
+            merged = {**self._cfg.attacker.extra_kwargs, **llm_kwargs}
+            self._cfg = self._cfg.model_copy(
+                update={'attacker': self._cfg.attacker.model_copy(update={'extra_kwargs': merged})}
+            )
 
     async def generate_single_prompt(
         self,
@@ -342,36 +351,35 @@ class MultiTurnOrchestrator:
         async with with_redteam_span(
             "orq.redteam.adversarial_generation",
             {"orq.redteam.strategy_name": strategy.name},
-        ):
-            async with with_llm_span(
-                model=self.model,
-                temperature=self._cfg.adversarial_temperature,
-                max_tokens=self._cfg.adversarial_max_tokens,
-                input_messages=llm_messages,
-                attributes={
-                    "orq.redteam.llm_purpose": "adversarial",
-                    "orq.redteam.strategy_name": strategy.name,
-                },
-            ) as llm_span:
-                llm_timeout_s = self._cfg.llm_call_timeout_ms / 1000.0
-                response = await asyncio.wait_for(
-                    self.llm_client.chat.completions.create(
-                        model=self.model,
-                        messages=llm_messages,
-                        temperature=self._cfg.adversarial_temperature,
-                        max_completion_tokens=self._cfg.adversarial_max_tokens,
-                        extra_body=self._cfg.retry_config,
-                        **self.llm_kwargs,
-                    ),
-                    timeout=llm_timeout_s,
-                )
+        ), with_llm_span(
+            model=self.model,
+            temperature=self._cfg.attacker.temperature,
+            max_tokens=self._cfg.attacker.max_tokens,
+            input_messages=llm_messages,
+            attributes={
+                "orq.redteam.llm_purpose": "adversarial",
+                "orq.redteam.strategy_name": strategy.name,
+            },
+        ) as llm_span:
+            llm_timeout_s = self._cfg.attacker.timeout_ms / 1000.0
+            response = await asyncio.wait_for(
+                self.llm_client.chat.completions.create(
+                    model=self.model,
+                    messages=llm_messages,
+                    temperature=self._cfg.attacker.temperature,
+                    max_completion_tokens=self._cfg.attacker.max_tokens,
+                    extra_body=self._cfg.retry_config,
+                    **self._cfg.attacker.extra_kwargs,
+                ),
+                timeout=llm_timeout_s,
+            )
 
-                usage = TokenUsage.from_completion(response)
-                prompt = response.choices[0].message.content or ''
-                # Strip any objective-achieved markers (shouldn't appear but just in case)
-                prompt = prompt.replace('OBJECTIVE_ACHIEVED', '').strip()
+            usage = TokenUsage.from_completion(response)
+            prompt = response.choices[0].message.content or ''
+            # Strip any objective-achieved markers (shouldn't appear but just in case)
+            prompt = prompt.replace('OBJECTIVE_ACHIEVED', '').strip()
 
-                record_llm_response(llm_span, response, output_content=prompt)
+            record_llm_response(llm_span, response, output_content=prompt)
 
         logger.debug(f'Generated dynamic single-turn prompt for {strategy.name}: {prompt[:100]}...')
         return prompt, usage, system_prompt
@@ -460,7 +468,7 @@ class MultiTurnOrchestrator:
                         await progress.update_attack(task_id, completed=turn)
 
                     # Generate attack prompt from adversarial LLM
-                    llm_timeout_s = self._cfg.llm_call_timeout_ms / 1000.0
+                    llm_timeout_s = self._cfg.attacker.timeout_ms / 1000.0
                     usage: TokenUsage | None = None
                     try:
                         async with with_redteam_span(
@@ -469,37 +477,36 @@ class MultiTurnOrchestrator:
                                 "orq.redteam.turn": turn + 1,
                                 "orq.redteam.strategy_name": strategy.name,
                             },
-                        ):
-                            async with with_llm_span(
-                                model=self.model,
-                                temperature=self._cfg.adversarial_temperature,
-                                max_tokens=self._cfg.adversarial_max_tokens,
-                                input_messages=adversarial_messages,
-                                attributes={
-                                    "orq.redteam.llm_purpose": "adversarial",
-                                    "orq.redteam.turn": turn + 1,
-                                    "orq.redteam.strategy_name": strategy.name,
-                                },
-                            ) as adv_span:
-                                attack_response = await asyncio.wait_for(
-                                    self.llm_client.chat.completions.create(
-                                        model=self.model,
-                                        messages=adversarial_messages,
-                                        temperature=self._cfg.adversarial_temperature,
-                                        max_completion_tokens=self._cfg.adversarial_max_tokens,
-                                        extra_body=self._cfg.retry_config,
-                                        **self.llm_kwargs,
-                                    ),
-                                    timeout=llm_timeout_s,
-                                )
-                                usage = TokenUsage.from_completion(attack_response)
-                                if usage is not None:
-                                    adversarial_prompt_tokens += int(usage.prompt_tokens or 0)
-                                    adversarial_completion_tokens += int(usage.completion_tokens or 0)
-                                    adversarial_total_tokens += int(usage.total_tokens or 0)
-                                    adversarial_calls += int(usage.calls or 0) or 1
-                                attack_prompt = attack_response.choices[0].message.content or ''
-                                record_llm_response(adv_span, attack_response, output_content=attack_prompt)
+                        ), with_llm_span(
+                            model=self.model,
+                            temperature=self._cfg.attacker.temperature,
+                            max_tokens=self._cfg.attacker.max_tokens,
+                            input_messages=adversarial_messages,
+                            attributes={
+                                "orq.redteam.llm_purpose": "adversarial",
+                                "orq.redteam.turn": turn + 1,
+                                "orq.redteam.strategy_name": strategy.name,
+                            },
+                        ) as adv_span:
+                            attack_response = await asyncio.wait_for(
+                                self.llm_client.chat.completions.create(
+                                    model=self.model,
+                                    messages=adversarial_messages,
+                                    temperature=self._cfg.attacker.temperature,
+                                    max_completion_tokens=self._cfg.attacker.max_tokens,
+                                    extra_body=self._cfg.retry_config,
+                                    **self._cfg.attacker.extra_kwargs,
+                                ),
+                                timeout=llm_timeout_s,
+                            )
+                            usage = TokenUsage.from_completion(attack_response)
+                            if usage is not None:
+                                adversarial_prompt_tokens += int(usage.prompt_tokens or 0)
+                                adversarial_completion_tokens += int(usage.completion_tokens or 0)
+                                adversarial_total_tokens += int(usage.total_tokens or 0)
+                                adversarial_calls += int(usage.calls or 0) or 1
+                            attack_prompt = attack_response.choices[0].message.content or ''
+                            record_llm_response(adv_span, attack_response, output_content=attack_prompt)
                     except asyncio.TimeoutError:
                         consecutive_adversarial_timeouts += 1
                         logger.warning(
@@ -519,7 +526,7 @@ class MultiTurnOrchestrator:
                             error_stage = 'adversarial_generation'
                             error_code = 'adversarial.timeout'
                             error_details = {
-                                'timeout_ms': self._cfg.llm_call_timeout_ms,
+                                'timeout_ms': self._cfg.attacker.timeout_ms,
                                 'consecutive_timeouts': consecutive_adversarial_timeouts,
                             }
                             error_turn = turn + 1
@@ -631,7 +638,7 @@ class MultiTurnOrchestrator:
                             })
                             consume_usage = getattr(target, 'consume_last_token_usage', None)
                             if callable(consume_usage):
-                                target_usage: TokenUsage | None = cast(TokenUsage | None, consume_usage())
+                                target_usage: TokenUsage | None = cast('TokenUsage | None', consume_usage())
                                 if target_usage is not None:
                                     target_prompt_tokens += int(target_usage.prompt_tokens or 0)
                                     target_completion_tokens += int(target_usage.completion_tokens or 0)
@@ -721,7 +728,7 @@ class MultiTurnOrchestrator:
 
                     set_span_attrs(turn_span, {
                         "input": attack_prompt,
-                        "output": agent_response if agent_response else "",
+                        "output": agent_response or "",
                         "orq.redteam.adversarial_tokens": int(usage.total_tokens or 0) if usage is not None else 0,
                         "orq.redteam.finish_reason": "ok",
                     })
@@ -740,12 +747,12 @@ class MultiTurnOrchestrator:
                 '— the last turn was dropped silently'
             )
             if not conversation:
-                timeout_s = self._cfg.llm_call_timeout_ms / 1000.0
+                timeout_s = self._cfg.attacker.timeout_ms / 1000.0
                 error = f'Adversarial LLM timed out after {timeout_s:.0f}s with no turns completed'
                 error_type = 'llm_error'
                 error_stage = 'adversarial_generation'
                 error_code = 'adversarial.timeout'
-                error_details = {'timeout_ms': self._cfg.llm_call_timeout_ms}
+                error_details = {'timeout_ms': self._cfg.attacker.timeout_ms}
 
         duration = time.time() - start_time
         logger.debug(

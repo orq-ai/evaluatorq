@@ -5,16 +5,26 @@ the agent's tools, memory configuration, and system prompt.
 """
 
 import asyncio
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI
-from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel, Field
 
-from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, OWASP_CATEGORY_NAMES
-from evaluatorq.redteam.contracts import PIPELINE_CONFIG, AgentCapability, AgentContext, AttackStrategy, LLMConfig
-from evaluatorq.redteam.contracts import AttackTechnique, DeliveryMethod, Severity, TurnType, Vulnerability
+from evaluatorq.redteam.contracts import (
+    DEFAULT_PIPELINE_MODEL,
+    OWASP_CATEGORY_NAMES,
+    PIPELINE_CONFIG,
+    AgentCapability,
+    AgentContext,
+    AttackStrategy,
+    AttackTechnique,
+    DeliveryMethod,
+    LLMConfig,
+    Severity,
+    TurnType,
+    Vulnerability,
+)
 from evaluatorq.redteam.tracing import record_llm_response, with_llm_span
 from evaluatorq.redteam.utils import safe_substitute
 from evaluatorq.redteam.vulnerability_registry import (
@@ -22,6 +32,9 @@ from evaluatorq.redteam.vulnerability_registry import (
     get_primary_category,
     resolve_category_safe,
 )
+
+if TYPE_CHECKING:
+    from openai.types.chat import ChatCompletionMessageParam
 
 
 class GeneratedObjective(BaseModel):
@@ -153,8 +166,8 @@ async def _call_llm_for_objectives_single(
         gen_messages: list[ChatCompletionMessageParam] = [{'role': 'user', 'content': prompt}]
         async with with_llm_span(
             model=model,
-            temperature=cfg.strategy_generation_temperature,
-            max_tokens=cfg.strategy_generation_max_tokens,
+            temperature=cfg.attacker.temperature,
+            max_tokens=cfg.attacker.max_tokens,
             input_messages=gen_messages,
             attributes={
                 "orq.redteam.llm_purpose": "generate_strategies",
@@ -166,10 +179,10 @@ async def _call_llm_for_objectives_single(
                 model=model,
                 messages=gen_messages,
                 response_format=GeneratedObjectives,
-                temperature=cfg.strategy_generation_temperature,
-                max_completion_tokens=cfg.strategy_generation_max_tokens,
+                temperature=cfg.attacker.temperature,
+                max_completion_tokens=cfg.attacker.max_tokens,
                 extra_body=cfg.retry_config,
-                **(llm_kwargs or {}),
+                **cfg.attacker.extra_kwargs,
             )
             record_llm_response(
                 gen_span, response,
@@ -402,7 +415,7 @@ def create_strategy_from_objective(
         technique = VULNERABILITY_DEFS[resolved_vuln].default_attack_technique
         # Ensure category reflects the canonical code for this vulnerability when
         # the caller supplied a vulnerability but a bare/unknown category string.
-        effective_category = category if category else get_primary_category(resolved_vuln)
+        effective_category = category or get_primary_category(resolved_vuln)
     else:
         logger.warning(
             'Cannot resolve category %r to a known vulnerability — '

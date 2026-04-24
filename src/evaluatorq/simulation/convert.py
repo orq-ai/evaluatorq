@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from evaluatorq.simulation.types import SimulationResult
+if TYPE_CHECKING:
+    from evaluatorq.simulation.types import SimulationResult
 
 
 def _generate_item_id(prefix: str) -> str:

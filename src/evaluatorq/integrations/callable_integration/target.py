@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from typing import Union
 
 from evaluatorq.redteam.backends.base import AgentTarget
 from evaluatorq.redteam.contracts import AgentContext
 
 # Accepted callable signatures
-AgentCallable = Union[Callable[[str], Awaitable[str]], Callable[[str], str]]
+AgentCallable = Callable[[str], Awaitable[str]] | Callable[[str], str]
 
 
 class CallableTarget(AgentTarget):

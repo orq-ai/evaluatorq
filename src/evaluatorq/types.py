@@ -1,6 +1,6 @@
 import json
-from collections.abc import Awaitable, Sequence
-from typing import Any, Callable, ClassVar
+from collections.abc import Awaitable, Callable, Sequence
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
 from typing_extensions import TypedDict
@@ -42,7 +42,7 @@ class EvaluationResult(BaseModel):
     @field_serializer("value", when_used="json")
     def serialize_value(
         self,
-        value: str | int | float | bool | EvaluationResultCell | dict[str, Any],
+        value: str | float | bool | EvaluationResultCell | dict[str, Any],  # noqa: FBT001
     ) -> Any:
         if isinstance(value, dict) and not _is_evaluation_result_cell_dict(value):
             return json.dumps(value, default=_json_default)

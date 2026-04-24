@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from evaluatorq.types import DataPoint
-from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool
-from langgraph.graph.state import CompiledStateGraph
-from pydantic import BaseModel
 
 from .convert import convert_to_open_responses
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from langchain_core.messages import BaseMessage
+    from langgraph.graph.state import CompiledStateGraph
+    from pydantic import BaseModel
+
+    from evaluatorq.types import DataPoint
 
 
 def _extract_schema_parameters(
@@ -81,7 +85,7 @@ def wrap_langchain_agent(
         An async function compatible with evaluatorq's Job type.
     """
 
-    async def job(data: DataPoint, _row: int) -> dict[str, Any]:
+    async def job(data: DataPoint, _row: int) -> dict[str, Any]:  # noqa: RUF029
         input_messages = _extract_messages_from_data(data)
         has_messages = input_messages is not None
         prompt = data.inputs.get(prompt_key)

@@ -4,20 +4,20 @@ from __future__ import annotations
 
 import uuid
 
+from evaluatorq.common.sanitize import delimit
 from evaluatorq.simulation.types import (
     CULTURAL_CONTEXT_INSTRUCTIONS,
     EMOTIONAL_ARC_INSTRUCTIONS,
     INPUT_FORMAT_INSTRUCTIONS,
     STRATEGY_INSTRUCTIONS,
+    ConversationStrategy,
     CulturalContext,
     Datapoint,
     EmotionalArc,
     InputFormat,
     Persona,
     Scenario,
-    ConversationStrategy,
 )
-from evaluatorq.common.sanitize import delimit
 
 # ---------------------------------------------------------------------------
 # Emotion instructions (local to prompt builders)

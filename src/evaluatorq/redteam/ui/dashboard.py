@@ -7,6 +7,7 @@ Or directly:     streamlit run dashboard.py
 from __future__ import annotations
 
 import json
+import operator
 import sys
 from collections import Counter
 from pathlib import Path
@@ -23,7 +24,6 @@ from evaluatorq.redteam.contracts import (
     RedTeamReport,
     RedTeamResult,
     ReportSummary,
-    VulnerabilitySummary,
 )
 from evaluatorq.redteam.reports.converters import compute_report_summary
 from evaluatorq.redteam.reports.export_md import export_markdown
@@ -35,7 +35,6 @@ from evaluatorq.redteam.ui.colors import (
     QUALITATIVE,
     SEVERITY_COLORS,
     SEVERITY_ORDER,
-    STATUS_COLORS,
 )
 
 # ---------------------------------------------------------------------------
@@ -164,7 +163,7 @@ def _weakest_link(results: list[RedTeamResult]) -> tuple[str, int]:
     for r in results:
         if r.vulnerable:
             vuln = r.attack.vulnerability or r.attack.category
-            combos[(vuln, r.attack.attack_technique.value)] += 1
+            combos[vuln, r.attack.attack_technique.value] += 1
     if not combos:
         return "None", 0
     (vuln, tech), count = combos.most_common(1)[0]
@@ -204,7 +203,7 @@ def _chip_css(color: str) -> str:
 
 def _render_capability_chips(ctx: AgentContext) -> None:
     """Render tool/memory/knowledge chips for an agent context."""
-    _label = (
+    label = (
         'font-size:0.7rem;font-weight:600;text-transform:uppercase;'
         'letter-spacing:0.05em;color:#888;margin-bottom:4px;'
     )
@@ -215,7 +214,7 @@ def _render_capability_chips(ctx: AgentContext) -> None:
             f'<span style="{_chip_css(tool_color)}">{_esc_html(t.name or "unknown")}</span>'
             for t in ctx.tools
         )
-        parts.append(f'<div style="{_label}">Tools ({len(ctx.tools)})</div>{chips}')
+        parts.append(f'<div style="{label}">Tools ({len(ctx.tools)})</div>{chips}')
 
     if ctx.memory_stores:
         mem_color = COLORS['purple_400']
@@ -223,7 +222,7 @@ def _render_capability_chips(ctx: AgentContext) -> None:
             f'<span style="{_chip_css(mem_color)}">{_esc_html(m.key or m.id or "unknown")}</span>'
             for m in ctx.memory_stores
         )
-        parts.append(f'<div style="{_label}margin-top:8px;">Memory ({len(ctx.memory_stores)})</div>{chips}')
+        parts.append(f'<div style="{label}margin-top:8px;">Memory ({len(ctx.memory_stores)})</div>{chips}')
 
     if ctx.knowledge_bases:
         kb_color = COLORS['orange_300']
@@ -231,7 +230,7 @@ def _render_capability_chips(ctx: AgentContext) -> None:
             f'<span style="{_chip_css(kb_color)}">{_esc_html(kb.name or kb.key or kb.id or "unknown")}</span>'
             for kb in ctx.knowledge_bases
         )
-        parts.append(f'<div style="{_label}margin-top:8px;">Knowledge ({len(ctx.knowledge_bases)})</div>{chips}')
+        parts.append(f'<div style="{label}margin-top:8px;">Knowledge ({len(ctx.knowledge_bases)})</div>{chips}')
 
     if parts:
         st.markdown(
@@ -249,7 +248,7 @@ def _fetch_agent_context_from_orq(agent_key: str) -> AgentContext | None:
 
         if not os.environ.get("ORQ_API_KEY"):
             return None
-        from evaluatorq.redteam.backends.orq import _orq_cls, _get_orq_api_key, _get_orq_server_url
+        from evaluatorq.redteam.backends.orq import _get_orq_api_key, _get_orq_server_url, _orq_cls
         if _orq_cls is None:
             return None
         client = _orq_cls(api_key=_get_orq_api_key(), server_url=_get_orq_server_url())
@@ -350,10 +349,9 @@ def _render_agent_context_section(report: RedTeamReport) -> None:
 
     st.subheader("Target Agents")
     cols = st.columns(len(contexts))
-    for col, (key, ctx) in zip(cols, sorted(contexts.items())):
-        with col:
-            with st.container(border=True):
-                _render_agent_card(key, ctx)
+    for col, (key, ctx) in zip(cols, sorted(contexts.items()), strict=False):
+        with col, st.container(border=True):
+            _render_agent_card(key, ctx)
     st.divider()
 
 
@@ -506,10 +504,7 @@ def _render_dashboard() -> None:
     # Sidebar: report selection
     st.sidebar.title("Red Team Dashboard")
 
-    if report_path and report_path.exists():
-        report_files = _find_reports(report_path)
-    else:
-        report_files = []
+    report_files = _find_reports(report_path) if report_path and report_path.exists() else []
 
     # File uploader fallback
     if not report_files:
@@ -554,31 +549,31 @@ def _render_dashboard() -> None:
 
     # Markdown export download button
     st.sidebar.divider()
-    _target = ", ".join(sorted({r.agent.key or r.agent.display_name or "unknown" for r in report.results})) or "report"
-    _md_content = _cached_export_markdown(_report_cache_key(report), report)
-    _md_filename = f"redteam-report-{_target.replace('/', '-').replace(':', '-')}-{report.created_at:%Y%m%d_%H%M%S}.md"
+    target = ", ".join(sorted({r.agent.key or r.agent.display_name or "unknown" for r in report.results})) or "report"
+    md_content = _cached_export_markdown(_report_cache_key(report), report)
+    md_filename = f"redteam-report-{target.replace('/', '-').replace(':', '-')}-{report.created_at:%Y%m%d_%H%M%S}.md"
     st.sidebar.download_button(
         label="Download Markdown Report",
-        data=_md_content,
-        file_name=_md_filename,
+        data=md_content,
+        file_name=md_filename,
         mime="text/markdown",
     )
 
     # HTML export — on-demand to avoid blocking dashboard startup
-    _html_session_key = f"html_export_{_report_cache_key(report)}"
-    if _html_session_key not in st.session_state:
+    html_session_key = f"html_export_{_report_cache_key(report)}"
+    if html_session_key not in st.session_state:
         if st.sidebar.button("Download HTML Report"):
             with st.sidebar.spinner("Rendering HTML report..."):
-                st.session_state[_html_session_key] = _cached_export_html(_report_cache_key(report), report)
+                st.session_state[html_session_key] = _cached_export_html(_report_cache_key(report), report)
             st.rerun()
     else:
-        _html_content = st.session_state[_html_session_key]
-        if _html_content is not None:
-            _html_filename = f"redteam-report-{_target.replace('/', '-').replace(':', '-')}-{report.created_at:%Y%m%d_%H%M%S}.html"
+        html_content = st.session_state[html_session_key]
+        if html_content is not None:
+            html_filename = f"redteam-report-{target.replace('/', '-').replace(':', '-')}-{report.created_at:%Y%m%d_%H%M%S}.html"
             st.sidebar.download_button(
                 label="Download HTML Report",
-                data=_html_content,
-                file_name=_html_filename,
+                data=html_content,
+                file_name=html_filename,
                 mime="text/html",
             )
 
@@ -589,8 +584,8 @@ def _render_dashboard() -> None:
     # Recompute summary from filtered results when filters are active
     is_filtered = len(filtered_results) != len(report.results)
     if is_filtered:
-        _filter_key = f"{_report_cache_key(report)}_filtered_{len(filtered_results)}"
-        summary = _cached_compute_summary(_filter_key, filtered_results)
+        filter_key = f"{_report_cache_key(report)}_filtered_{len(filtered_results)}"
+        summary = _cached_compute_summary(filter_key, filtered_results)
     else:
         summary = report.summary
 
@@ -676,7 +671,7 @@ def _dominant_severity_for_vulnerability(results: list[RedTeamResult], vuln_id: 
 
     vuln_results_all = [r for r in results if r.attack.vulnerability == vuln_id]
     vuln_results = [r for r in vuln_results_all if r.vulnerable]
-    source = vuln_results if vuln_results else vuln_results_all
+    source = vuln_results or vuln_results_all
     if not source:
         return 'medium'
     counts = _Counter(r.attack.severity.value for r in source)
@@ -711,14 +706,14 @@ def _render_focus_areas(report: RedTeamReport) -> None:
         risk_items.append((vuln_summary, dominant_sev, risk_score))
 
     # Sort by risk score descending, take top 5
-    risk_items.sort(key=lambda x: x[2], reverse=True)
+    risk_items.sort(key=operator.itemgetter(2), reverse=True)
     top_items = risk_items[:5]
 
     if not top_items:
         return
 
     st.subheader("Focus Areas")
-    st.caption("Top-5 vulnerabilities by risk score (ASR × severity weight). Prioritize these for remediation.")
+    st.caption("Top-5 vulnerabilities by risk score (ASR × severity weight). Prioritize these for remediation.")  # noqa: RUF001
 
     for vuln_summary, dominant_sev, risk_score in top_items:
         vuln_name = _esc_html(vuln_summary.vulnerability_name or _fmt_vulnerability(vuln_summary.vulnerability))
@@ -822,7 +817,7 @@ def _render_executive_summary(report: RedTeamReport, summary: ReportSummary, fra
     )
 
     # KPI Cards
-    compliant, total_vulns = _compliant_vulnerabilities(summary)
+    _compliant, _total_vulns = _compliant_vulnerabilities(summary)
     error_rate = (summary.total_errors / summary.total_attacks * 100) if summary.total_attacks else 0
     num_agents = len(report.tested_agents) if report.tested_agents else 1
 
@@ -869,28 +864,28 @@ def _render_executive_summary(report: RedTeamReport, summary: ReportSummary, fra
     # Severity legend cards
     st.subheader("Criticality")
     st.caption("Vulnerabilities found by severity level. Hover over each card for details.")
-    _sev_short_defs = {
+    sev_short_defs = {
         'critical': 'Full system compromise or unauthorized data access — immediate fix required',
         'high': 'Significant harm such as data exfiltration or privilege escalation — prioritize remediation',
         'medium': 'Moderate impact like non-sensitive info leakage or minor policy violations — normal dev cycle',
         'low': 'Limited impact such as edge-case behaviors or cosmetic safety issues — address as time permits',
     }
-    _sev_cols = st.columns(4)
-    for _i, _lvl in enumerate(SEVERITY_ORDER):
-        _clr = SEVERITY_COLORS[_lvl]
-        _count = summary.by_severity[_lvl].vulnerabilities_found if _lvl in summary.by_severity else 0
-        _desc = _sev_short_defs[_lvl]
-        _sev_cols[_i].markdown(
-            f"<div class='sev-card' style='border-left:4px solid {_clr};padding:8px 12px;"
-            f"background:{_clr}10;border-radius:0 6px 6px 0;position:relative;cursor:default'>"
+    sev_cols = st.columns(4)
+    for i, lvl in enumerate(SEVERITY_ORDER):
+        clr = SEVERITY_COLORS[lvl]
+        count = summary.by_severity[lvl].vulnerabilities_found if lvl in summary.by_severity else 0
+        desc = sev_short_defs[lvl]
+        sev_cols[i].markdown(
+            f"<div class='sev-card' style='border-left:4px solid {clr};padding:8px 12px;"
+            f"background:{clr}10;border-radius:0 6px 6px 0;position:relative;cursor:default'>"
             f"<div style='display:flex;align-items:baseline;gap:8px'>"
-            f"<span style='font-size:1.8rem;font-weight:800;color:{_clr};line-height:1'>{_count}</span>"
-            f"<span style='font-size:0.82rem;font-weight:600;color:{_clr}'>{_lvl.capitalize()}</span>"
+            f"<span style='font-size:1.8rem;font-weight:800;color:{clr};line-height:1'>{count}</span>"
+            f"<span style='font-size:0.82rem;font-weight:600;color:{clr}'>{lvl.capitalize()}</span>"
             f"</div>"
             f"<div class='sev-tooltip' style='display:none;position:absolute;left:0;right:0;top:100%;"
-            f"z-index:999;padding:8px 12px;background:#1e1e1e;border:1px solid {_clr}40;"
+            f"z-index:999;padding:8px 12px;background:#1e1e1e;border:1px solid {clr}40;"
             f"border-radius:6px;font-size:0.78rem;color:#ccc;margin-top:4px;"
-            f"box-shadow:0 4px 12px rgba(0,0,0,0.3)'>{_desc}</div>"
+            f"box-shadow:0 4px 12px rgba(0,0,0,0.3)'>{desc}</div>"
             f"</div>"
             f"<style>.sev-card:hover .sev-tooltip {{display:block!important}}</style>",
             unsafe_allow_html=True,
@@ -967,7 +962,6 @@ def _render_executive_summary(report: RedTeamReport, summary: ReportSummary, fra
     _render_focus_areas(report)
 
 
-
 # ---------------------------------------------------------------------------
 # Methodology & Scope tab
 # ---------------------------------------------------------------------------
@@ -985,7 +979,7 @@ def _render_methodology_tab(
     col1, col2 = st.columns(2)
     with col1:
         st.markdown(f"**Pipeline:** {report.pipeline.value}")
-        st.markdown(f"**Scoring Method:** LLM-as-Judge")
+        st.markdown("**Scoring Method:** LLM-as-Judge")
         st.markdown(f"**Framework:** {report.framework.value if report.framework else 'OWASP LLM + ASI'}")
         if methodology and getattr(methodology, 'dataset_source', None):
             st.markdown(f"**Dataset Source:** {methodology.dataset_source}")
@@ -1193,19 +1187,19 @@ def _render_technical_analysis(report: RedTeamReport, summary: ReportSummary) ->
     st.divider()
 
     # Severity + Turn Type + Domain (only show panels with data)
-    _breakdown_panels = []
+    breakdown_panels = []
     if summary.by_severity:
-        _breakdown_panels.append("severity")
+        breakdown_panels.append("severity")
     if summary.by_turn_type:
-        _breakdown_panels.append("turn_type")
+        breakdown_panels.append("turn_type")
     if summary.by_domain:
-        _breakdown_panels.append("domain")
+        breakdown_panels.append("domain")
 
-    if _breakdown_panels:
-        _bd_cols = st.columns(len(_breakdown_panels))
-        for _bd_i, _bd_key in enumerate(_breakdown_panels):
-            with _bd_cols[_bd_i]:
-                if _bd_key == "severity":
+    if breakdown_panels:
+        bd_cols = st.columns(len(breakdown_panels))
+        for bd_i, bd_key in enumerate(breakdown_panels):
+            with bd_cols[bd_i]:
+                if bd_key == "severity":
                     st.subheader("By Severity")
                     items = [(k, summary.by_severity[k]) for k in SEVERITY_ORDER if k in summary.by_severity]
                     names = [k for k, _ in items]
@@ -1215,7 +1209,7 @@ def _render_technical_analysis(report: RedTeamReport, summary: ReportSummary) ->
 
                     fig = go.Figure(go.Bar(
                         x=names, y=vuln_rates, marker_color=colors,
-                        text=[f"{r:.1f}%<br>n={n}" for r, n in zip(vuln_rates, totals)],
+                        text=[f"{r:.1f}%<br>n={n}" for r, n in zip(vuln_rates, totals, strict=False)],
                         textposition="outside",
                     ))
                     fig.update_layout(
@@ -1224,7 +1218,7 @@ def _render_technical_analysis(report: RedTeamReport, summary: ReportSummary) ->
                     )
                     st.plotly_chart(fig, width="stretch")
 
-                elif _bd_key == "turn_type":
+                elif bd_key == "turn_type":
                     st.subheader("By Turn Type")
                     names = list(summary.by_turn_type.keys())
                     totals = [v.total_attacks for v in summary.by_turn_type.values()]
@@ -1238,7 +1232,7 @@ def _render_technical_analysis(report: RedTeamReport, summary: ReportSummary) ->
                     for name, tt in summary.by_turn_type.items():
                         st.caption(f"{name}: {tt.vulnerability_rate:.1%} vuln rate")
 
-                elif _bd_key == "domain":
+                elif bd_key == "domain":
                     st.subheader("By Domain")
                     names = list(summary.by_domain.keys())
                     totals = [v.total_attacks for v in summary.by_domain.values()]
@@ -1264,7 +1258,7 @@ def _render_technical_analysis(report: RedTeamReport, summary: ReportSummary) ->
         fig = px.bar(
             x=names, y=vuln_rates,
             labels={"x": "Framework", "y": "ASR (%)"},
-            text=[f"{r:.1f}% (n={n})" for r, n in zip(vuln_rates, totals)],
+            text=[f"{r:.1f}% (n={n})" for r, n in zip(vuln_rates, totals, strict=False)],
         )
         fig.update_traces(textposition="outside", marker_color=QUALITATIVE[:len(names)])
         fig.update_layout(
@@ -1356,7 +1350,7 @@ def _render_interactive_breakdown(results: list[RedTeamResult], summary: ReportS
             asr = (counts["vuln"] / counts["total"] * 100) if counts["total"] else 0
             chart_rows.append({"dimension": name, "asr": round(asr, 1), "n": counts["total"]})
 
-        chart_rows.sort(key=lambda r: r["asr"], reverse=True)
+        chart_rows.sort(key=operator.itemgetter("asr"), reverse=True)
         names = [r["dimension"] for r in chart_rows]
 
         fig = go.Figure(go.Bar(
@@ -1380,9 +1374,9 @@ def _render_interactive_breakdown(results: list[RedTeamResult], summary: ReportS
         for r in results:
             g = _dim_value(r, group_by)
             s = _dim_value(r, stack_by)
-            groups_stacked[(g, s)]["total"] += 1
+            groups_stacked[g, s]["total"] += 1
             if r.vulnerable:
-                groups_stacked[(g, s)]["vuln"] += 1
+                groups_stacked[g, s]["vuln"] += 1
 
         chart_rows_s = []
         for (g, s), counts in groups_stacked.items():
@@ -1435,16 +1429,14 @@ def _render_interactive_breakdown(results: list[RedTeamResult], summary: ReportS
     # Vulnerability details expander (always available)
     if summary.by_vulnerability:
         with st.expander("Vulnerability Details"):
-            rows = []
-            for v in sorted(summary.by_vulnerability.values(), key=lambda v: v.resistance_rate):
-                rows.append({
+            rows = [{
                     "Vulnerability": v.vulnerability_name or _fmt_vulnerability(v.vulnerability),
                     "Domain": v.domain,
                     "Attacks": v.total_attacks,
                     "Vulnerable": v.vulnerabilities_found,
                     "ASR": f"{1 - v.resistance_rate:.1%}",
                     "Strategies": ", ".join(v.strategies_used) if v.strategies_used else "-",
-                })
+                } for v in sorted(summary.by_vulnerability.values(), key=lambda v: v.resistance_rate)]
             st.dataframe(rows, width="stretch", hide_index=True)
 
 
@@ -1479,14 +1471,14 @@ def _render_turn_depth_analysis(results: list[RedTeamResult]) -> None:
         sorted_turns = sorted(turn_data.keys())
         totals = [turn_data[t]["total"] for t in sorted_turns]
         vulns = [turn_data[t]["vulnerable"] for t in sorted_turns]
-        asrs = [(v / t * 100) if t else 0 for v, t in zip(vulns, totals)]
+        asrs = [(v / t * 100) if t else 0 for v, t in zip(vulns, totals, strict=False)]
 
         fig = go.Figure()
         bar_width = 0.4 if len(sorted_turns) <= 3 else None
         fig.add_trace(go.Bar(
             x=[str(t) for t in sorted_turns], y=asrs,
             marker_color=[_asr_color(a / 100) for a in asrs],
-            text=[f"{a:.0f}%<br>n={n}" for a, n in zip(asrs, totals)],
+            text=[f"{a:.0f}%<br>n={n}" for a, n in zip(asrs, totals, strict=False)],
             textposition="outside",
             width=bar_width,
         ))
@@ -1585,7 +1577,7 @@ def _render_attack_failure_treemap(results: list[RedTeamResult]) -> None:
     for cd, label, value in zip(
         fig.data[0].customdata,
         fig.data[0].labels,
-        fig.data[0].values,
+        fig.data[0].values, strict=False,
     ):
         parts = [f"<b>{label}</b>"]
         vuln = cd[2] if cd[2] is not None and str(cd[2]) != "?" else None
@@ -1605,7 +1597,7 @@ def _render_attack_failure_treemap(results: list[RedTeamResult]) -> None:
     fig.data[0].hovertext = hovertexts
     fig.data[0].hoverinfo = "text"
     fig.update_traces(
-        texttemplate="<b>%{label}</b><br>%{value} failures",
+        texttemplate=f"<b>%{label}</b><br>%{value} failures",
         hovertemplate=None,
     )
     fig.update_layout(
@@ -1650,7 +1642,7 @@ def _render_data_explorer(report: RedTeamReport, summary: ReportSummary) -> None
             vuln_sev: Counter[tuple[str, str]] = Counter()
             for r in results:
                 vuln_label = _fmt_vulnerability(r.attack.vulnerability) if r.attack.vulnerability else r.attack.category
-                vuln_sev[(vuln_label, r.attack.severity.value)] += 1
+                vuln_sev[vuln_label, r.attack.severity.value] += 1
 
             rows = [{"vulnerability": vuln, "severity": sev, "count": cnt} for (vuln, sev), cnt in vuln_sev.items()]
             if rows:
@@ -1740,14 +1732,13 @@ def _render_data_explorer(report: RedTeamReport, summary: ReportSummary) -> None
 
     cols = st.columns(3)
     for i, (label, subtitle, counts) in enumerate(dimensions):
-        with cols[i % 3]:
-            with st.expander(f"{label} ({subtitle})", expanded=False):
-                total = sum(counts.values())
-                rows = [
-                    {label: name, "Count": cnt, "%": round(cnt / total * 100, 1) if total else 0}
-                    for name, cnt in sorted(counts.items(), key=lambda x: x[1], reverse=True)
-                ]
-                st.dataframe(rows, width="stretch", hide_index=True)
+        with cols[i % 3], st.expander(f"{label} ({subtitle})", expanded=False):
+            total = sum(counts.values())
+            rows = [
+                {label: name, "Count": cnt, "%": round(cnt / total * 100, 1) if total else 0}
+                for name, cnt in sorted(counts.items(), key=operator.itemgetter(1), reverse=True)
+            ]
+            st.dataframe(rows, width="stretch", hide_index=True)
 
     # Sample Explorer
     st.divider()
@@ -1765,10 +1756,7 @@ def _render_data_explorer(report: RedTeamReport, summary: ReportSummary) -> None
     for r in filtered:
         # delivery_methods is a list in AttackInfo; join for display
         dms = getattr(r.attack, "delivery_methods", None)
-        if dms:
-            delivery_str = ", ".join(dm.value if hasattr(dm, "value") else str(dm) for dm in dms)
-        else:
-            delivery_str = "-"
+        delivery_str = ", ".join(dm.value if hasattr(dm, "value") else str(dm) for dm in dms) if dms else "-"
         domain_val = r.attack.vulnerability_domain.value if r.attack.vulnerability_domain else "-"
         table_rows.append({
             "ID": r.attack.id,
@@ -2003,7 +1991,7 @@ def _render_usage_tab(report: RedTeamReport, summary: ReportSummary, agents: lis
             )
             st.plotly_chart(fig, width="stretch")
         else:
-            st.caption(f"Single agent: **{list(agent_usage.keys())[0]}**")
+            st.caption(f"Single agent: **{next(iter(agent_usage.keys()))}**")
 
         # Detail table
         rows = []
@@ -2088,7 +2076,7 @@ def _render_errors_tab(summary: ReportSummary, report: RedTeamReport) -> None:
 
     if summary.errors_by_type:
         st.subheader("Errors by Type")
-        items = sorted(summary.errors_by_type.items(), key=lambda t: t[1], reverse=True)
+        items = sorted(summary.errors_by_type.items(), key=operator.itemgetter(1), reverse=True)
         names = [k for k, _ in items]
         counts = [v for _, v in items]
 
@@ -2173,10 +2161,10 @@ def _render_agent_comparison(report: RedTeamReport, summary: ReportSummary, agen
 
     st.divider()
 
-    # Agent comparison heatmap — ASR% by grouping dimension × agent
+    # Agent comparison heatmap — ASR% by grouping dimension × agent  # noqa: RUF003
     st.subheader("Agent Heatmap")
 
-    _dim_options: dict[str, str] = {
+    dim_options: dict[str, str] = {
         "vulnerability": "Vulnerability",
         "category": "Category",
         "technique": "Technique",
@@ -2184,8 +2172,8 @@ def _render_agent_comparison(report: RedTeamReport, summary: ReportSummary, agen
     }
     heatmap_dim = st.selectbox(
         "Group by",
-        options=list(_dim_options.keys()),
-        format_func=lambda x: _dim_options.get(x, x),
+        options=list(dim_options.keys()),
+        format_func=lambda x: dim_options.get(x, x),
         key="comp_heatmap_dim",
     )
 
@@ -2252,7 +2240,7 @@ def _render_agent_comparison(report: RedTeamReport, summary: ReportSummary, agen
         heatmap_fig.update_layout(
             height=max(350, len(all_dim_vals) * 45 + 80),
             xaxis_title="Agent",
-            yaxis_title=_dim_options.get(heatmap_dim, heatmap_dim),
+            yaxis_title=dim_options.get(heatmap_dim, heatmap_dim),
             margin=dict(l=20, r=20, t=10, b=40),
         )
         st.plotly_chart(heatmap_fig, width="stretch")
@@ -2324,7 +2312,7 @@ def _render_agent_comparison(report: RedTeamReport, summary: ReportSummary, agen
         only_a2_fail = 0
         shared = 0
 
-        for aid, verdicts in attack_verdicts.items():
+        for verdicts in attack_verdicts.values():
             if a1 in verdicts and a2 in verdicts:
                 shared += 1
                 v1, v2 = verdicts[a1], verdicts[a2]
@@ -2362,7 +2350,6 @@ def _render_agent_comparison(report: RedTeamReport, summary: ReportSummary, agen
     # Disagreement viewer
     if len(agents) >= 2:
         _render_disagreement_viewer(report.results, agents)
-
 
 
 def _render_disagreement_viewer(results: list[RedTeamResult], agents: list[str]) -> None:
@@ -2403,7 +2390,7 @@ def _render_disagreement_viewer(results: list[RedTeamResult], agents: list[str])
 
     # Find disagreements
     disagreements: list[tuple[RedTeamResult, RedTeamResult]] = []
-    for aid, agent_map in attack_results_map.items():
+    for agent_map in attack_results_map.values():
         if a1 not in agent_map or a2 not in agent_map:
             continue
         r1, r2 = agent_map[a1], agent_map[a2]

@@ -20,9 +20,6 @@ from evaluatorq.redteam.backends.registry import ORQ_DEFAULT_BASE_URL
 from evaluatorq.redteam.contracts import TargetKind
 from evaluatorq.redteam.exceptions import CredentialError
 
-if TYPE_CHECKING:
-    from orq_ai_sdk import Orq
-
 try:
     from orq_ai_sdk import Orq as _Orq
     _orq_cls: Any = _Orq
@@ -44,6 +41,7 @@ def _get_orq_server_url() -> str:
     url = os.environ.get('ORQ_BASE_URL', ORQ_DEFAULT_BASE_URL)
     return url.rstrip('/').removesuffix('/v2/router')
 
+
 from evaluatorq.redteam.backends.base import extract_provider_error_code, extract_status_code
 from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
@@ -53,7 +51,7 @@ from evaluatorq.redteam.contracts import (
     TokenUsage,
     ToolInfo,
 )
-from evaluatorq.redteam.tracing import record_token_usage, set_span_attrs, with_llm_span, with_redteam_span
+from evaluatorq.redteam.tracing import record_token_usage, set_span_attrs, with_redteam_span
 
 if TYPE_CHECKING:
     from evaluatorq.redteam.backends.base import AgentTarget
@@ -255,7 +253,7 @@ class ORQAgentTarget:
         self._last_token_usage = None
         return usage
 
-    def new(self) -> "ORQAgentTarget":
+    def new(self) -> ORQAgentTarget:
         """Return a fresh target instance with isolated state.
 
         Each call gets its own ``memory_entity_id`` (auto-generated in
@@ -283,7 +281,7 @@ class ORQAgentTarget:
         return await ORQContextProvider(self.orq_client).get_agent_context(self.agent_key)
 
     # -- SupportsTargetFactory --
-    def create_target(self, agent_key: str) -> "ORQAgentTarget":
+    def create_target(self, agent_key: str) -> ORQAgentTarget:
         """Create a new ORQAgentTarget for the given agent key.
 
         The new target generates its own ``memory_entity_id``; callers can
@@ -478,7 +476,7 @@ class ORQMemoryCleanup:
                         memory_entity_id=entity_id,
                     )
                     logger.debug(f'Deleted memory entity {entity_id} from store {ms.key}')
-                except Exception as e:
+                except Exception as e:  # noqa: PERF203
                     if extract_status_code(e) == 404:
                         continue
                     logger.warning(f'Failed to cleanup memory entity {entity_id} from {ms.key}: {e}')

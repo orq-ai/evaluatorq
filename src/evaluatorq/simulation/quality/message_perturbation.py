@@ -7,8 +7,11 @@ to user messages: typos, unicode artifacts, truncation, injections, etc.
 from __future__ import annotations
 
 import random
-from collections.abc import Callable
 from enum import Enum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class PerturbationType(str, Enum):

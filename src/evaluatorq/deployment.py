@@ -13,8 +13,8 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 __all__ = [
     "DeploymentResponse",
-    "ThreadConfig",
     "MessageDict",
+    "ThreadConfig",
     "deployment",
     "invoke",
 ]
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from orq_ai_sdk import Orq
 
 # Cached client instance
-_cached_client: "Orq | None" = None
+_cached_client: Orq | None = None
 
 
 class ThreadConfig(TypedDict, total=False):
@@ -54,7 +54,7 @@ class DeploymentResponse:
     """The raw response from the API"""
 
 
-def _get_or_create_client() -> "Orq":
+def _get_or_create_client() -> Orq:
     """
     Get or create an Orq client instance.
     Reuses the same client for the entire process.
@@ -86,11 +86,11 @@ def _get_or_create_client() -> "Orq":
     except ModuleNotFoundError as e:
         raise ImportError(
             "The orq_ai_sdk package is not installed. To use deployment features, please install it:\n"
-            + "  pip install orq-ai-sdk\n"
-            + "  # or\n"
-            + "  uv add orq-ai-sdk\n"
-            + "  # or\n"
-            + "  poetry add orq-ai-sdk"
+             "  pip install orq-ai-sdk\n"
+             "  # or\n"
+             "  uv add orq-ai-sdk\n"
+             "  # or\n"
+             "  poetry add orq-ai-sdk"
         ) from e
     except Exception as e:
         raise RuntimeError(f"Failed to setup ORQ client: {e}") from e
@@ -157,7 +157,7 @@ async def deployment(
         context=context,
         metadata=metadata,
         thread=sdk_thread,
-        messages=cast(Any, messages),
+        messages=cast("Any", messages),
     )
 
     # Extract content from the response

@@ -17,22 +17,40 @@ import time
 import traceback
 from typing import TYPE_CHECKING, Any, cast
 
-from evaluatorq import DataPoint, EvaluationResult, Job, job
 from loguru import logger
 
+from evaluatorq import DataPoint, EvaluationResult, Job, job
 from evaluatorq.redteam.adaptive.attack_generator import generate_attack_prompt, generate_objective
+from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
+from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator, _get_active_progress
+from evaluatorq.redteam.adaptive.strategy_planner import (
+    plan_strategies_for_categories,
+    plan_strategies_for_vulnerabilities,
+)
 from evaluatorq.redteam.backends.base import DefaultErrorMapper
 from evaluatorq.redteam.backends.registry import create_async_llm_client, resolve_backend
-from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
-from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, LLMConfig, PIPELINE_CONFIG, AttackOutput, AttackStrategy, EvaluatorConfig, Message, OrchestratorResult, TokenUsage, Vulnerability
-from evaluatorq.redteam.vulnerability_registry import get_primary_category, resolve_category_safe, resolve_vulnerabilities
-from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator, _get_active_progress
-from evaluatorq.redteam.adaptive.strategy_planner import plan_strategies_for_categories, plan_strategies_for_vulnerabilities
-from evaluatorq.redteam.contracts import TurnType
+from evaluatorq.redteam.contracts import (
+    DEFAULT_PIPELINE_MODEL,
+    PIPELINE_CONFIG,
+    AttackOutput,
+    AttackStrategy,
+    EvaluatorConfig,
+    LLMCallConfig,
+    LLMConfig,
+    Message,
+    OrchestratorResult,
+    TokenUsage,
+    TurnType,
+    Vulnerability,
+)
 from evaluatorq.redteam.tracing import set_span_attrs, with_redteam_span
+from evaluatorq.redteam.vulnerability_registry import (
+    get_primary_category,
+    resolve_category_safe,
+    resolve_vulnerabilities,
+)
 
 if TYPE_CHECKING:
-    from evaluatorq.types import ScorerParameter
     from openai import AsyncOpenAI
 
     from evaluatorq.redteam.backends.base import (
@@ -41,6 +59,7 @@ if TYPE_CHECKING:
         MemoryCleanup,
     )
     from evaluatorq.redteam.contracts import AgentContext
+    from evaluatorq.types import ScorerParameter
 
 
 def _set_attack_span_attrs(span: Any, result: AttackOutput) -> None:
@@ -348,7 +367,7 @@ def create_dynamic_redteam_job(
                         })
                         consume_usage = getattr(target, 'consume_last_token_usage', None)
                         if callable(consume_usage):
-                            token_usage: TokenUsage | None = cast(TokenUsage | None, consume_usage())
+                            token_usage: TokenUsage | None = cast('TokenUsage | None', consume_usage())
                 except asyncio.TimeoutError:
                     logger.error(f'Single-turn attack timed out for {category}/{strategy.name} after {target_timeout_s:.0f}s')
                     response = f'[ERROR: Target agent timed out after {target_timeout_s:.0f}s]'
@@ -397,9 +416,9 @@ def create_dynamic_redteam_job(
 
                 # Advance the global progress bar for template single-turn attacks
                 # (multi-turn attacks are tracked by run_attack in the orchestrator).
-                _active_progress = _get_active_progress()
-                if _active_progress is not None:
-                    await _active_progress.finish_attack(None)
+                active_progress = _get_active_progress()
+                if active_progress is not None:
+                    await active_progress.finish_attack(None)
 
                 return {**result_dict.model_dump(mode='json'), 'max_turns': effective_max_turns}
 
@@ -493,13 +512,14 @@ def create_dynamic_evaluator(
     evaluator_model: str = DEFAULT_PIPELINE_MODEL,
     llm_client: AsyncOpenAI | None = None,
     llm_kwargs: dict[str, Any] | None = None,
+    cfg: LLMCallConfig | None = None,
 ) -> EvaluatorConfig:
     """Create an evaluator that uses OWASPEvaluator on the attack conversation.
 
     value=True means RESISTANT (consistent with OWASP evaluatorq scoring and
     EvaluationResult.passed convention).
     """
-    owasp_evaluator = OWASPEvaluator(evaluator_model=evaluator_model, llm_client=llm_client, llm_kwargs=llm_kwargs)
+    owasp_evaluator = OWASPEvaluator(evaluator_model=evaluator_model, llm_client=llm_client, llm_kwargs=llm_kwargs, cfg=cfg)
 
     async def scorer(params: ScorerParameter) -> EvaluationResult:
         """Evaluate the attack output using OWASPEvaluator and return a scored EvaluationResult."""

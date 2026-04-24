@@ -70,36 +70,35 @@ When your application is an ORQ agent, the pipeline auto-discovers its tools, me
 
 | # | File | Description |
 |---|------|-------------|
-| 11 | `11_redteam_config.py` | Centralized `LLMConfig` for models, retries, and LLM tuning |
+| 11 | `11_redteam_config.py` | Centralized `LLMConfig` and `LLMCallConfig` for role-based model tuning |
 | 12 | `12_vulnerability_filter.py` | Target specific vulnerability IDs instead of broad categories |
 | 13 | `13_attacker_instructions.py` | Domain-specific context to generate more targeted attacks |
 | 14 | `14_recommendations_and_artifacts.py` | LLM-generated remediation advice + debug artifacts |
 
 ## LLMConfig
 
-`LLMConfig` centralizes model selection, per-request kwargs, and call-tuning settings (temperatures, timeouts, retries). Backend routing is inferred from the target type: `"agent:<key>"` strings go through the ORQ platform, while :class:`OpenAIModelTarget` instances call OpenAI directly.
+`LLMConfig` centralizes role-based model selection and LLM call settings:
 
 ```python
-from evaluatorq.redteam import LLMConfig, OpenAIModelTarget, red_team
+from evaluatorq.redteam import LLMCallConfig, LLMConfig, OpenAIModelTarget, red_team
 
 config = LLMConfig(
-    attack_model="gpt-5-mini",
-    evaluator_model="gpt-5-mini",
-    # Extra kwargs merged into every LLM API call
-    llm_kwargs={"reasoning_effort": "medium"},
-    # Fine-tune pipeline LLM settings (flat structure)
-    adversarial_temperature=0.7,
-    llm_call_timeout_ms=90_000,
+    attacker=LLMCallConfig(
+        model="openai/gpt-5-mini",
+        temperature=0.7,
+        timeout_ms=90_000,
+        extra_kwargs={"reasoning_effort": "medium"},
+    ),
+    evaluator=LLMCallConfig(
+        model="openai/gpt-5-mini",
+        temperature=0.0,
+    ),
 )
 
-report = await red_team("agent:my-agent", config=config)
-# or call a model directly:
-report = await red_team(
-    OpenAIModelTarget("gpt-5-mini", system_prompt="You are helpful."),
-    config=config,
-)
+report = await red_team("agent:my-agent", llm_config=config)
 ```
 
+`red_team(..., config=...)` still works as a deprecated alias for backward compatibility, but new code should use `llm_config=`.
 ## Vulnerabilities vs Categories
 
 There are two ways to scope what gets tested:

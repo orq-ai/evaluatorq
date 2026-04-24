@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 # Module-level state
 _sdk: Any = None
-_tracer: "Tracer | None" = None
+_tracer: Tracer | None = None
 _is_initialized = False
 _initialization_attempted = False
 
@@ -78,7 +78,7 @@ def _get_otlp_endpoint() -> str | None:
     return None
 
 
-async def init_tracing_if_needed() -> bool:
+async def init_tracing_if_needed() -> bool:  # noqa: RUF029
     """
     Initialize the OpenTelemetry SDK if not already initialized.
     Uses dynamic imports to handle optional dependencies gracefully.
@@ -204,7 +204,7 @@ async def init_tracing_if_needed() -> bool:
         return False
 
 
-async def flush_tracing() -> None:
+async def flush_tracing() -> None:  # noqa: RUF029
     """
     Force flush all pending spans.
     Use this to ensure spans are exported before continuing.
@@ -242,7 +242,7 @@ async def shutdown_tracing() -> None:
         _is_initialized = False
 
 
-def get_tracer() -> "Tracer | None":
+def get_tracer() -> Tracer | None:
     """
     Get the tracer instance if tracing is initialized.
     Returns None if tracing is not enabled.

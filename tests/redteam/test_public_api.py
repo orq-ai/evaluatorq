@@ -8,6 +8,11 @@ def test_llm_config_importable():
     assert LLMConfig is not None
 
 
+def test_llm_call_config_importable():
+    from evaluatorq.redteam import LLMCallConfig
+    assert LLMCallConfig is not None
+
+
 def test_openai_model_target_importable():
     from evaluatorq.redteam import OpenAIModelTarget
     assert OpenAIModelTarget is not None

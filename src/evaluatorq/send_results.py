@@ -138,7 +138,7 @@ async def send_results_to_orq(
         print("\n⚠️  Warning: Could not send results to Orq platform")
 
         if os.getenv("ORQ_DEBUG", "false").lower() == "true":
-            print(f"   Details: {str(error)}")
+            print(f"   Details: {error!s}")
 
         # Don't raise - just log the warning
         return

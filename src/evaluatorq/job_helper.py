@@ -1,8 +1,8 @@
 """Helper function for creating named jobs with error handling."""
 
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from inspect import isawaitable
-from typing import Any, Callable, overload
+from typing import Any, overload
 
 from .types import DataPoint, Job, Output
 
@@ -21,7 +21,6 @@ def job(
     name: str,
 ) -> Callable[[Callable[[DataPoint, int], Awaitable[Output] | Output]], Job]:
     """Decorator form: @job("name")"""
-    ...
 
 
 @overload
@@ -30,7 +29,6 @@ def job(
     fn: Callable[[DataPoint, int], Awaitable[Output] | Output],
 ) -> Job:
     """Functional form: job("name", fn)"""
-    ...
 
 
 def job(

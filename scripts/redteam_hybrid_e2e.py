@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 from evaluatorq.redteam import OpenAIModelTarget, red_team
-from evaluatorq.redteam.contracts import LLMConfig, RedTeamReport
+from evaluatorq.redteam.contracts import LLMCallConfig, LLMConfig, RedTeamReport
 
 
 def _validate_report(report: RedTeamReport) -> list[str]:
@@ -77,7 +77,10 @@ async def _run(args: argparse.Namespace) -> int:
         resolved_target,
         mode='hybrid',
         categories=args.categories,
-        config=LLMConfig(attack_model=args.attack_model, evaluator_model=args.evaluator_model),
+        llm_config=LLMConfig(
+            attacker=LLMCallConfig(model=args.attack_model),
+            evaluator=LLMCallConfig(model=args.evaluator_model),
+        ),
         parallelism=args.parallelism,
         max_turns=args.max_turns,
         max_dynamic_datapoints=args.max_dynamic_datapoints,

@@ -6,6 +6,7 @@ calling create_async_llm_client(), and that the env var priority is correct.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -148,14 +149,14 @@ class TestCreateDynamicEvaluatorLlmClient:
 
         custom_client = MagicMock(spec=AsyncOpenAI)
         create_dynamic_evaluator(llm_client=custom_client)
-        mock_cls.assert_called_once_with(evaluator_model='gpt-5-mini', llm_client=custom_client, llm_kwargs=None)
+        mock_cls.assert_called_once_with(evaluator_model='gpt-5-mini', llm_client=custom_client, llm_kwargs=None, cfg=None)
 
     @patch('evaluatorq.redteam.adaptive.pipeline.OWASPEvaluator')
     def test_passes_none_when_no_client(self, mock_cls):
         from evaluatorq.redteam.adaptive.pipeline import create_dynamic_evaluator
 
         create_dynamic_evaluator()
-        mock_cls.assert_called_once_with(evaluator_model='gpt-5-mini', llm_client=None, llm_kwargs=None)
+        mock_cls.assert_called_once_with(evaluator_model='gpt-5-mini', llm_client=None, llm_kwargs=None, cfg=None)
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +219,36 @@ class TestCreateOWASPEvaluatorLlmClient:
 
         mock_create.assert_called_once()
         fallback_client.chat.completions.create.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @patch('evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.get_evaluator_for_category')
+    async def test_scorer_respects_timeout_config(self, mock_get_eval):
+        from evaluatorq import DataPoint
+        from evaluatorq.redteam.contracts import LLMCallConfig
+        from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
+
+        async def _slow_response(*args, **kwargs):
+            await asyncio.sleep(0.05)
+            return MagicMock()
+
+        custom_client = AsyncMock(spec=AsyncOpenAI)
+        custom_client.chat.completions.create = AsyncMock(side_effect=_slow_response)
+
+        mock_eval = MagicMock()
+        mock_eval.prompt = 'Evaluate: {{output.response}} with {{input.all_messages}}'
+        mock_get_eval.return_value = mock_eval
+
+        evaluator_config = create_owasp_evaluator(
+            llm_client=custom_client,
+            cfg=LLMCallConfig(timeout_ms=1),
+        )
+        result = await evaluator_config['scorer']({
+            'data': DataPoint(inputs={'category': 'ASI01', 'messages': []}),
+            'output': {'response': 'test response'},
+        })
+
+        assert result.value == 'error'
+        assert result.explanation == 'Evaluation timed out after 1ms'
 
 
 # ---------------------------------------------------------------------------

@@ -16,7 +16,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from evaluatorq.redteam import OpenAIModelTarget, red_team
-from evaluatorq.redteam.contracts import LLMConfig, RedTeamReport
+from evaluatorq.redteam.contracts import LLMCallConfig, LLMConfig, RedTeamReport
 
 
 def _make_chat_completion(content: str, *, prompt_tokens: int, completion_tokens: int) -> Any:
@@ -144,7 +144,7 @@ async def _run(args: argparse.Namespace) -> int:
         resolved_target,
         mode='static',
         categories=args.categories,
-        config=LLMConfig(evaluator_model=args.evaluator_model),
+        llm_config=LLMConfig(evaluator=LLMCallConfig(model=args.evaluator_model)),
         parallelism=args.parallelism,
         max_static_datapoints=args.max_static_datapoints,
         dataset=str(dataset_path),

@@ -10,13 +10,13 @@ from typing import Any
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
+from evaluatorq.common.sanitize import delimit
 from evaluatorq.simulation.types import (
     DEFAULT_MODEL,
     Criterion,
     Scenario,
     StartingEmotion,
 )
-from evaluatorq.common.sanitize import delimit
 from evaluatorq.simulation.utils.structured_output import generate_structured
 
 logger = logging.getLogger(__name__)
@@ -173,7 +173,7 @@ def _parse_scenarios(scenario_dicts: list[dict[str, Any]]) -> list[Scenario]:
     for s_dict in scenario_dicts:
         try:
             scenarios.append(Scenario.model_validate(s_dict))
-        except Exception as e:
+        except Exception as e:  # noqa: PERF203
             logger.warning("Failed to parse scenario: %s", e)
     return scenarios
 

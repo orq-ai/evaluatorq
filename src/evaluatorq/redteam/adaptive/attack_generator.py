@@ -177,10 +177,10 @@ async def adapt_prompt_to_tools(
             model=model,
             messages=[{'role': 'user', 'content': prompt}],
             response_format=ToolAnalysis,
-            temperature=cfg.tool_adaptation_temperature,
-            max_completion_tokens=cfg.tool_adaptation_max_tokens,
+            temperature=cfg.attacker.temperature,
+            max_completion_tokens=cfg.attacker.max_tokens,
             extra_body=cfg.retry_config,
-            **(llm_kwargs or {}),
+            **cfg.attacker.extra_kwargs,
         )
 
         analysis = response.choices[0].message.parsed

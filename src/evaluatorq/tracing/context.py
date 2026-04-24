@@ -6,10 +6,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    pass
+from typing import Any
 
 
 @dataclass
@@ -37,7 +34,7 @@ def generate_run_id() -> str:
     return str(uuid.uuid4())
 
 
-async def capture_parent_context() -> Any | None:
+async def capture_parent_context() -> Any | None:  # noqa: RUF029
     """
     Capture the current OTEL context as a parent context.
     Returns None if OTEL is not available.

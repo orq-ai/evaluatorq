@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from langchain_core.runnables import RunnableConfig
-from langgraph.graph.state import CompiledStateGraph
 
 from evaluatorq.redteam.backends.base import AgentTarget
 from evaluatorq.redteam.contracts import AgentContext, MemoryStoreInfo, ToolInfo
+
+if TYPE_CHECKING:
+    from langgraph.graph.state import CompiledStateGraph
 
 
 class LangGraphTarget(AgentTarget):
@@ -90,10 +92,7 @@ class LangGraphTarget(AgentTarget):
             )
         last = messages[-1]
         # Support both dict and LangChain BaseMessage
-        if isinstance(last, dict):
-            content = last.get("content", "")
-        else:
-            content = getattr(last, "content", "")
+        content = last.get("content", "") if isinstance(last, dict) else getattr(last, "content", "")
         if not isinstance(content, str):
             content = str(content)
         return content

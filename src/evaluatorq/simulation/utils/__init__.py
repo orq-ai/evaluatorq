@@ -1,5 +1,6 @@
 """Utility functions for the simulation module."""
 
+from evaluatorq.common.sanitize import delimit
 from evaluatorq.simulation.utils.dataset_export import (
     export_datapoints_to_jsonl,
     export_results_to_jsonl,
@@ -14,7 +15,6 @@ from evaluatorq.simulation.utils.prompt_builders import (
     build_scenario_user_context,
     generate_datapoint,
 )
-from evaluatorq.common.sanitize import delimit
 
 __all__ = [
     "build_datapoint_system_prompt",

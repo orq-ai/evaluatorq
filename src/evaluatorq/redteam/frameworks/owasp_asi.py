@@ -15,7 +15,15 @@ Note: Generic single-turn attacks are in the static dataset. These dynamic
 strategies specifically target agent capabilities (tools, memory, context).
 """
 
-from evaluatorq.redteam.contracts import AgentCapability as C, AttackStrategy, AttackTechnique, DeliveryMethod, Severity, TurnType, Vulnerability
+from evaluatorq.redteam.contracts import AgentCapability as C
+from evaluatorq.redteam.contracts import (
+    AttackStrategy,
+    AttackTechnique,
+    DeliveryMethod,
+    Severity,
+    TurnType,
+    Vulnerability,
+)
 
 # =============================================================================
 # ASI01: Agent Goal Hijacking

@@ -10,16 +10,17 @@ Span hierarchy:
 from __future__ import annotations
 
 import json
-
-from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from evaluatorq.types import EvaluationResultCell
+
 from .setup import get_tracer
-from ..types import EvaluationResultCell
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
     from opentelemetry.trace import Span
 
 
@@ -43,9 +44,9 @@ class EvaluationSpanOptions:
 
 
 @asynccontextmanager
-async def with_job_span(
+async def with_job_span(  # noqa: RUF029
     options: JobSpanOptions,
-) -> AsyncGenerator["Span | None", None]:
+) -> AsyncGenerator[Span | None, None]:
     """
     Execute code within an orq.job span.
     Job spans are independent roots, or children of a parent context if provided.
@@ -101,9 +102,9 @@ async def with_job_span(
 
 
 @asynccontextmanager
-async def with_evaluation_span(
+async def with_evaluation_span(  # noqa: RUF029
     options: EvaluationSpanOptions,
-) -> AsyncGenerator["Span | None", None]:
+) -> AsyncGenerator[Span | None, None]:
     """
     Execute code within an orq.evaluation span.
     Evaluation spans are children of the job span.
@@ -152,8 +153,9 @@ async def with_evaluation_span(
 
 
 def set_evaluation_attributes(
-    span: "Span | None",
-    score: str | int | float | bool | dict[str, Any] | EvaluationResultCell,
+    span: Span | None,
+    score: str | float | bool | dict[str, Any] | EvaluationResultCell,  # noqa: FBT001
+    *,
     explanation: str | None = None,
     pass_: bool | None = None,
 ) -> None:
@@ -179,7 +181,7 @@ def set_evaluation_attributes(
         span.set_attribute("orq.pass", pass_)
 
 
-def set_job_name_attribute(span: "Span | None", job_name: str) -> None:
+def set_job_name_attribute(span: Span | None, job_name: str) -> None:
     """
     Set the job name attribute on a span after job execution.
 

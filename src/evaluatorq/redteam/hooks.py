@@ -286,7 +286,6 @@ class RichHooks:
     def on_confirm(self, payload: ConfirmPayload) -> bool:
         """Render a detailed run plan and prompt for confirmation."""
         from rich import box
-        from rich.panel import Panel
         from rich.table import Table
 
         # ── Run parameters table ────────────────────────────────────────
@@ -319,7 +318,7 @@ class RichHooks:
                 total_attacks = num_dp * num_targets
                 table.add_row(
                     "Total Attacks",
-                    f'{total_attacks} ({num_dp} datapoints × {num_targets} targets)',
+                    f'{total_attacks} ({num_dp} datapoints × {num_targets} targets)',  # noqa: RUF001
                 )
 
         table.add_row("Categories", str(len(categories)))

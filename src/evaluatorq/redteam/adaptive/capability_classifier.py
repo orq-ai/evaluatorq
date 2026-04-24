@@ -6,14 +6,11 @@ while memory and knowledge capabilities are inferred from explicit
 agent configuration (memory tools / knowledge bases).
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI
-from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel, Field
-
-from evaluatorq.redteam.utils import safe_substitute
 
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
@@ -23,6 +20,10 @@ from evaluatorq.redteam.contracts import (
     LLMConfig,
 )
 from evaluatorq.redteam.tracing import record_llm_response, with_llm_span
+from evaluatorq.redteam.utils import safe_substitute
+
+if TYPE_CHECKING:
+    from openai.types.chat import ChatCompletionMessageParam
 
 
 class ToolCapabilities(BaseModel):
@@ -164,8 +165,8 @@ async def classify_agent_capabilities(
     # Classify tools via LLM
     classification_failed = False
     if agent_context.tools:
-        tool_caps, _classify_ok = await _classify_tools(agent_context, llm_client, model, llm_kwargs, cfg)
-        classification_failed = not _classify_ok
+        tool_caps, classify_ok = await _classify_tools(agent_context, llm_client, model, llm_kwargs, cfg)
+        classification_failed = not classify_ok
         capabilities.update(tool_caps)
 
     all_caps = set()
@@ -197,8 +198,8 @@ async def _infer_resource_capabilities(
         infer_messages: list[ChatCompletionMessageParam] = [{'role': 'user', 'content': prompt}]
         async with with_llm_span(
             model=model,
-            temperature=cfg.capability_classification_temperature,
-            max_tokens=cfg.capability_classification_max_tokens,
+            temperature=cfg.attacker.temperature,
+            max_tokens=cfg.attacker.max_tokens,
             input_messages=infer_messages,
             attributes={"orq.redteam.llm_purpose": "infer_resources"},
         ) as res_span:
@@ -206,10 +207,10 @@ async def _infer_resource_capabilities(
                 model=model,
                 messages=infer_messages,
                 response_format=ResourceCapabilityInference,
-                temperature=cfg.capability_classification_temperature,
-                max_completion_tokens=cfg.capability_classification_max_tokens,
+                temperature=cfg.attacker.temperature,
+                max_completion_tokens=cfg.attacker.max_tokens,
                 extra_body=cfg.retry_config,
-                **(llm_kwargs or {}),
+                **cfg.attacker.extra_kwargs,
             )
             parsed = response.choices[0].message.parsed
             record_llm_response(
@@ -254,8 +255,8 @@ async def _classify_tools(
         classify_messages: list[ChatCompletionMessageParam] = [{'role': 'user', 'content': prompt}]
         async with with_llm_span(
             model=model,
-            temperature=cfg.capability_classification_temperature,
-            max_tokens=cfg.capability_classification_max_tokens,
+            temperature=cfg.attacker.temperature,
+            max_tokens=cfg.attacker.max_tokens,
             input_messages=classify_messages,
             attributes={
                 "orq.redteam.llm_purpose": "classify_tools",
@@ -266,10 +267,10 @@ async def _classify_tools(
                 model=model,
                 messages=classify_messages,
                 response_format=ToolCapabilitiesResponse,
-                temperature=cfg.capability_classification_temperature,
-                max_completion_tokens=cfg.capability_classification_max_tokens,
+                temperature=cfg.attacker.temperature,
+                max_completion_tokens=cfg.attacker.max_tokens,
                 extra_body=cfg.retry_config,
-                **(llm_kwargs or {}),
+                **cfg.attacker.extra_kwargs,
             )
             record_llm_response(
                 cls_span, response,

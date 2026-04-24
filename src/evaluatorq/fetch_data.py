@@ -2,6 +2,7 @@
 
 import os
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .types import DataPoint
@@ -10,13 +11,13 @@ if TYPE_CHECKING:
     from orq_ai_sdk import Orq
 
 
+@dataclass
 class DataPointBatch:
     """A batch of datapoints with pagination info."""
 
-    def __init__(self, datapoints: list[DataPoint], has_more: bool, batch_number: int):
-        self.datapoints: list[DataPoint] = datapoints
-        self.has_more: bool = has_more
-        self.batch_number: int = batch_number
+    datapoints: list[DataPoint]
+    has_more: bool
+    batch_number: int
 
 
 def setup_orq_client(api_key: str) -> "Orq":
@@ -38,8 +39,7 @@ def setup_orq_client(api_key: str) -> "Orq":
         from orq_ai_sdk import Orq
 
         server_url = os.environ.get("ORQ_BASE_URL", "https://my.orq.ai")
-        client = Orq(api_key=api_key, server_url=server_url)
-        return client
+        return Orq(api_key=api_key, server_url=server_url)
     except ModuleNotFoundError as e:
         raise Exception(
             """orq_ai_sdk is not installed.

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import operator
+
 from rich import box
 from rich.console import Console
 from rich.table import Table
@@ -199,7 +201,7 @@ def print_report_summary(report: RedTeamReport, *, console: Console | None = Non
 
     # ── Top error causes ───────────────────────────────────────────────
     if summary.errors_by_type:
-        top_errors = sorted(summary.errors_by_type.items(), key=lambda t: t[1], reverse=True)[:5]
+        top_errors = sorted(summary.errors_by_type.items(), key=operator.itemgetter(1), reverse=True)[:5]
 
         # Collect a sample error message and stage per error code
         error_samples: dict[str, str] = {}

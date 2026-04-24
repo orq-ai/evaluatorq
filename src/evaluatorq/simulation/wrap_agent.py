@@ -6,8 +6,7 @@ Follows the same pattern as wrap_langchain_agent().
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from evaluatorq.simulation.adapters import from_orq_deployment
 from evaluatorq.simulation.convert import to_open_responses
@@ -19,7 +18,11 @@ from evaluatorq.simulation.types import (
     Scenario,
     SimulationResult,
 )
-from evaluatorq.types import DataPoint
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    from evaluatorq.types import DataPoint
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +30,7 @@ logger = logging.getLogger(__name__)
 def _validate_shape(value: Any, label: str, required_keys: list[str]) -> None:
     """Lightweight runtime check that an object has the expected keys."""
     if not isinstance(value, dict):
-        raise ValueError(
+        raise ValueError(  # noqa: TRY004
             f"Expected '{label}' to be an object, got {type(value).__name__}"
         )
     for key in required_keys:

@@ -9,18 +9,26 @@ This module provides:
 from __future__ import annotations
 
 import types
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from evaluatorq.redteam.contracts import (
+    OWASP_CATEGORY_NAMES,
+    AgentCapability,
+    AgentContext,
+    AttackStrategy,
+    TurnType,
+    Vulnerability,
+)
+from evaluatorq.redteam.frameworks.owasp.evaluators import OWASP_EVALUATOR_REGISTRY
 from evaluatorq.redteam.frameworks.owasp_asi import ASI_STRATEGIES
 from evaluatorq.redteam.frameworks.owasp_llm import LLM_STRATEGIES
-from evaluatorq.redteam.frameworks.owasp.evaluators import OWASP_EVALUATOR_REGISTRY
-from evaluatorq.redteam.contracts import OWASP_CATEGORY_NAMES, AgentCapability, AgentContext, AttackStrategy, TurnType, Vulnerability  # noqa: TC001
 from evaluatorq.redteam.vulnerability_registry import CATEGORY_TO_VULNERABILITY, VULNERABILITY_DEFS
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities
 
 # Combined registry of all strategies

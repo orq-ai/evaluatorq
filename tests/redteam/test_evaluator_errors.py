@@ -11,6 +11,7 @@ Covers:
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,7 +19,7 @@ import httpx
 import pytest
 from openai import APIConnectionError, APIStatusError
 
-from evaluatorq.redteam.contracts import AttackEvaluationResult, Vulnerability
+from evaluatorq.redteam.contracts import AttackEvaluationResult, LLMCallConfig, Vulnerability
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +177,37 @@ class TestRunEvaluatorErrorPaths:
         assert isinstance(result, AttackEvaluationResult)
         assert result.passed is None
         assert result.evaluator_id == "goal_hijacking"
+
+    @pytest.mark.asyncio
+    async def test_evaluator_timeout_returns_inconclusive_result(self):
+        """Configured evaluator timeout should stop slow LLM calls."""
+        from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
+
+        async def _slow_response(*args: Any, **kwargs: Any):
+            await asyncio.sleep(0.05)
+            return MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create = AsyncMock(side_effect=_slow_response)
+        evaluator = OWASPEvaluator(
+            evaluator_model="test-model",
+            llm_client=mock_client,
+            cfg=LLMCallConfig(timeout_ms=1),
+        )
+
+        span_patch, record_patch = _patch_tracing()
+        with span_patch, record_patch:
+            result = await evaluator.evaluate_vulnerability(
+                vuln=Vulnerability.GOAL_HIJACKING,
+                messages=[{"role": "user", "content": "attack prompt"}],
+                response="agent response",
+            )
+
+        assert isinstance(result, AttackEvaluationResult)
+        assert result.passed is None
+        assert result.evaluator_id == "goal_hijacking"
+        assert result.explanation == "Evaluation timed out after 1ms"
+        assert result.raw_output == {"error": "timeout", "timeout_ms": 1}
 
     # ------------------------------------------------------------------
     # 5. resolve_category_safe fallback path in evaluate()

@@ -28,10 +28,7 @@ def export_datapoints_to_jsonl(datapoints: list[Datapoint], output_path: str) ->
     """Export datapoints to JSONL format for orq.ai datasets."""
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-    lines = []
-    for dp in datapoints:
-        lines.append(
-            json.dumps(
+    lines = [json.dumps(
                 {
                     "inputs": {
                         "category": f"{dp.persona.name} - {dp.scenario.name}",
@@ -42,8 +39,7 @@ def export_datapoints_to_jsonl(datapoints: list[Datapoint], output_path: str) ->
                     },
                     "expected_output": None,
                 }
-            )
-        )
+            ) for dp in datapoints]
     Path(output_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

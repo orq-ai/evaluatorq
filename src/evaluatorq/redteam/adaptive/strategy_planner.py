@@ -14,12 +14,11 @@ from loguru import logger
 from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities, classify_agent_capabilities
 from evaluatorq.redteam.adaptive.objective_generator import generate_strategies_for_vulnerability
 from evaluatorq.redteam.adaptive.strategy_registry import (
-    get_strategies_for_category,
     get_strategies_for_vulnerability,
     select_applicable_strategies,
     select_applicable_strategies_for_vulnerability,
 )
-from evaluatorq.redteam.contracts import LLMConfig, PIPELINE_CONFIG, TurnType, Vulnerability
+from evaluatorq.redteam.contracts import PIPELINE_CONFIG, LLMConfig, TurnType, Vulnerability
 from evaluatorq.redteam.tracing import set_span_attrs, with_redteam_span
 from evaluatorq.redteam.vulnerability_registry import resolve_category
 
@@ -194,7 +193,7 @@ async def plan_strategies_for_categories(
     for category in categories:
         try:
             category_to_vuln[category] = resolve_category(category)
-        except KeyError:
+        except KeyError:  # noqa: PERF203
             logger.warning(f'Could not resolve category {category!r} to a Vulnerability — using direct category lookup')
             unresolved_categories.append(category)
 

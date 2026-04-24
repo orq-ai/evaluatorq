@@ -11,9 +11,9 @@ import logging
 import math
 from typing import Any
 
+from evaluatorq.common.sanitize import delimit
 from evaluatorq.simulation.agents.base import AgentConfig, BaseAgent, LLMResult
 from evaluatorq.simulation.types import ChatMessage, Criterion, Judgment
-from evaluatorq.common.sanitize import delimit
 
 logger = logging.getLogger(__name__)
 
@@ -258,7 +258,7 @@ class JudgeAgent(BaseAgent):
             if not isinstance(args, dict):
                 raise TypeError(f"Expected object, got {type(args).__name__}")
         except (json.JSONDecodeError, TypeError) as err:
-            logger.error(
+            logger.exception(
                 "JudgeAgent: Failed to parse tool arguments: %s (raw: %s)",
                 err,
                 arguments_str,

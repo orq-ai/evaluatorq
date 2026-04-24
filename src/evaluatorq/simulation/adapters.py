@@ -7,10 +7,12 @@ so users don't need to wire the plumbing themselves.
 from __future__ import annotations
 
 import inspect
-from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from evaluatorq.simulation.types import ChatMessage
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    from evaluatorq.simulation.types import ChatMessage
 
 
 def from_orq_deployment(

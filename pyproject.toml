@@ -18,6 +18,31 @@ markers = [
 ]
 timeout = 120
 
+[tool.ruff]
+line-length = 120
+preview = true
+src = ["src"]
+
+[tool.ruff.format]
+quote-style = "single"
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W", "FAST", "ANN", "ASYNC", "S", "FBT", "B", "A",
+    "DTZ", "INT", "ISC", "LOG", "ICN", "G", "INP", "PIE", "T20", "PYI",
+    "PT", "Q", "RSE", "RET", "SLF", "SIM", "TID", "TC", "ARG", "PTH",
+    "FLY", "I", "C90", "NPY", "PD", "N", "PERF", "DOC", "UP", "FURB",
+    "RUF", "TRY",
+]
+ignore = [
+    "G001", "G002", "Q000", "Q003", "TRY003", "G004", "TRY002", "ANN401",
+    "N815", "B904", "PYI063", "PT011", "B017", "N806", "ANN001", "ANN201",
+    "ANN202", "ANN204", "C901", "TRY301", "TRY401", "T201", "G201", "TRY300",
+    "E402", "ARG002", "F841", "SIM102", "S603", "S607", "S404", "ASYNC230",
+    "PTH123", "DOC201", "DOC501", "DOC502", "ARG001", "E501", "S311",
+    "RUF027",
+]
+
 [tool.basedpyright]
 exclude = [ "examples", ".venv", "src/evaluatorq/redteam/ui" ]
 reportIncompatibleVariableOverride = "none"

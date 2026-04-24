@@ -3,39 +3,48 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from evaluatorq.redteam.backends.base import BackendBundle
-from evaluatorq.redteam.exceptions import BackendError, CredentialError
-from evaluatorq.redteam.backends.base import NoopMemoryCleanup
+from evaluatorq.redteam.backends.base import BackendBundle, NoopMemoryCleanup
 from evaluatorq.redteam.backends.openai import (
     OpenAIContextProvider,
     OpenAIErrorMapper,
     OpenAITargetFactory,
 )
-from evaluatorq.redteam.contracts import LLMConfig, PIPELINE_CONFIG, TargetConfig
+from evaluatorq.redteam.contracts import PIPELINE_CONFIG
+from evaluatorq.redteam.exceptions import BackendError, CredentialError
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from openai import AsyncOpenAI
+
+    from evaluatorq.redteam.contracts import LLMCallConfig, LLMConfig, TargetConfig
 
 
 ORQ_DEFAULT_BASE_URL = "https://my.orq.ai"
 _ROUTER_SUFFIX = "/v2/router"
 
 
-def create_async_llm_client() -> "AsyncOpenAI":
+def create_async_llm_client(role_config: LLMCallConfig | None = None) -> AsyncOpenAI:
     """Create an OpenAI-compatible async client.
 
+    If role_config.client is set, returns it directly.
+    Otherwise auto-detects from environment variables.
+
     Preference order:
-    1. Standard OpenAI env (``OPENAI_API_KEY`` + optional ``OPENAI_BASE_URL``)
-    2. ORQ env (``ORQ_API_KEY`` + optional ``ORQ_BASE_URL``, defaults to https://my.orq.ai)
+    1. ``role_config.client`` if provided
+    2. Standard OpenAI env (``OPENAI_API_KEY`` + optional ``OPENAI_BASE_URL``)
+    3. ORQ env (``ORQ_API_KEY`` + optional ``ORQ_BASE_URL``, defaults to https://my.orq.ai)
 
     When using ORQ, the router suffix ``/v2/router`` is appended automatically
     to produce the OpenAI-compatible completions endpoint.
     """
+    if role_config is not None and role_config.client is not None:
+        return role_config.client
+
     try:
         from openai import AsyncOpenAI
     except ImportError as exc:
@@ -78,7 +87,7 @@ def register_backend(name: str, factory: Callable[..., BackendBundle]) -> None:
 
 def resolve_backend(
     backend: str = "orq",
-    llm_client: "AsyncOpenAI | None" = None,
+    llm_client: AsyncOpenAI | None = None,
     target_config: TargetConfig | None = None,
     pipeline_config: LLMConfig | None = None,
 ) -> BackendBundle:
@@ -100,7 +109,7 @@ def resolve_backend(
 
 
 def _create_openai_backend(
-    llm_client: "AsyncOpenAI | None" = None,
+    llm_client: AsyncOpenAI | None = None,
     target_config: TargetConfig | None = None,
     **kwargs: object,
 ) -> BackendBundle:
@@ -116,9 +125,10 @@ def _create_openai_backend(
 
 
 def _create_orq_backend(
-    llm_client: "AsyncOpenAI | None" = None,
+    llm_client: AsyncOpenAI | None = None,
     target_config: TargetConfig | None = None,
     pipeline_config: LLMConfig | None = None,
+    **kwargs: object,
 ) -> BackendBundle:
     cfg = pipeline_config or PIPELINE_CONFIG
     try:
@@ -127,7 +137,7 @@ def _create_orq_backend(
         msg = "ORQ backend requested but ORQ dependencies are unavailable."
         raise BackendError(msg) from exc
     target_factory, context_provider, memory_cleanup = create_orq_backend(
-        timeout_ms=cfg.target_agent_timeout_ms,
+        timeout_ms=pipeline_config.target_agent_timeout_ms if pipeline_config else None,
     )
     return BackendBundle(
         name="orq",

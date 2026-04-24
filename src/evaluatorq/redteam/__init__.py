@@ -14,12 +14,12 @@ Semantic convention throughout this package:
 from __future__ import annotations
 
 
-def _check_redteam_deps() -> None:
+def _check_redteam_deps() -> None:  # noqa: RUF067
     missing = []
     for mod in ('openai', 'loguru', 'typer'):
         try:
             __import__(mod)
-        except ImportError:
+        except ImportError:  # noqa: PERF203
             missing.append(mod)
     if missing:
         raise ImportError(
@@ -28,15 +28,33 @@ def _check_redteam_deps() -> None:
         )
 
 
-_check_redteam_deps()
+_check_redteam_deps()  # noqa: RUF067
 
-from typing import Any
 
+from evaluatorq.redteam.adaptive.strategy_registry import (
+    get_category_info,
+)
+from evaluatorq.redteam.adaptive.strategy_registry import (
+    list_available_categories as list_categories,
+)
+from evaluatorq.redteam.backends.base import (
+    AgentTarget,
+    DirectTargetFactory,
+    SupportsAgentContext,
+    SupportsErrorMapping,
+    SupportsMemoryCleanup,
+    SupportsTargetFactory,
+    SupportsTokenUsage,
+    is_agent_target,
+)
+from evaluatorq.redteam.backends.openai import OpenAIModelTarget
+from evaluatorq.redteam.backends.registry import register_backend
 from evaluatorq.redteam.contracts import (
+    SEVERITY_DEFINITIONS,
     AgentCapability,
     AgentContext,
-    TargetConfig,
     AgentInfo,
+    AttackEvaluationResult,
     AttackInfo,
     AttackSource,
     AttackStrategy,
@@ -45,9 +63,9 @@ from evaluatorq.redteam.contracts import (
     DeliveryMethod,
     DeliveryMethodSummary,
     DimensionSummary,
+    DomainSummary,
     ErrorInfo,
     EvaluationPayload,
-    AttackEvaluationResult,
     ExecutionDetails,
     FocusAreaRecommendation,
     Framework,
@@ -55,6 +73,7 @@ from evaluatorq.redteam.contracts import (
     FunctionCall,
     JobOutputPayload,
     KnowledgeBaseInfo,
+    LLMCallConfig,
     LLMConfig,
     MemoryStoreInfo,
     Message,
@@ -66,10 +85,9 @@ from evaluatorq.redteam.contracts import (
     RedTeamResult,
     ReportSnapshot,
     ReportSummary,
-    DomainSummary,
-    SEVERITY_DEFINITIONS,
     Severity,
     SeveritySummary,
+    TargetConfig,
     TechniqueSummary,
     TokenUsage,
     ToolCall,
@@ -84,15 +102,16 @@ from evaluatorq.redteam.contracts import (
     normalize_category,
     normalize_framework,
 )
-from evaluatorq.redteam.backends.openai import OpenAIModelTarget
-
-from evaluatorq.redteam.runner import red_team
+from evaluatorq.redteam.exceptions import BackendError, CancelledError, CredentialError, RedTeamError
+from evaluatorq.redteam.hooks import (
+    ConfirmPayload,
+    DefaultHooks,
+    PipelineHooks,
+    RichHooks,
+)
 from evaluatorq.redteam.reports.converters import merge_reports
 from evaluatorq.redteam.reports.display import print_report_summary
-from evaluatorq.redteam.adaptive.strategy_registry import (
-    get_category_info,
-    list_available_categories as list_categories,
-)
+from evaluatorq.redteam.runner import red_team
 from evaluatorq.redteam.vulnerability_registry import (
     VULNERABILITY_DEFS,
     get_vulnerability_name,
@@ -100,125 +119,110 @@ from evaluatorq.redteam.vulnerability_registry import (
     resolve_category,
     resolve_vulnerabilities,
 )
-from evaluatorq.redteam.exceptions import BackendError, CancelledError, CredentialError, RedTeamError
-from evaluatorq.redteam.backends.registry import register_backend
-from evaluatorq.redteam.backends.base import (
-    AgentTarget,
-    DirectTargetFactory,
-    SupportsAgentContext,
-    SupportsErrorMapping,
-    SupportsMemoryCleanup,
-    SupportsTargetFactory,
-    SupportsTokenUsage,
-    is_agent_target,
-)
-from evaluatorq.redteam.hooks import (
-    ConfirmPayload,
-    DefaultHooks,
-    PipelineHooks,
-    RichHooks,
-)
 
 __all__ = [
-    # Entry points
-    "red_team",
-    "merge_reports",
-    "print_report_summary",
-    # Category introspection
-    "list_categories",
-    "get_category_info",
-    # Vulnerability introspection
-    "list_available_vulnerabilities",
-    "get_vulnerability_name",
-    "resolve_vulnerabilities",
-    "resolve_category",
+    'SEVERITY_DEFINITIONS',
     "VULNERABILITY_DEFS",
+    "AgentCapability",
+    "AgentContext",
+    "AgentInfo",
+    # Target protocols
+    "AgentTarget",
+    "AttackEvaluationResult",
+    "AttackInfo",
+    "AttackSource",
+    # Attack models
+    "AttackStrategy",
+    "AttackTechnique",
+    "BackendError",
+    "CancelledError",
+    # Report models
+    "CategorySummary",
+    "ConfirmPayload",
+    "CredentialError",
+    "DefaultHooks",
+    "DeliveryMethod",
+    "DeliveryMethodSummary",
+    "DimensionSummary",
+    "DirectTargetFactory",
+    "DomainSummary",
+    # Error model
+    "ErrorInfo",
+    "EvaluationPayload",
+    "ExecutionDetails",
+    'FocusAreaRecommendation',
+    "Framework",
+    "FrameworkSummary",
+    # Message models
+    "FunctionCall",
+    "JobOutputPayload",
+    "KnowledgeBaseInfo",
+    # Pipeline config
+    "LLMCallConfig",
+    "LLMConfig",
+    "MemoryStoreInfo",
+    "Message",
+    "OpenAIModelTarget",
+    # Result models
+    "OrchestratorResult",
+    "Pipeline",
     # Hook system
     "PipelineHooks",
-    "DefaultHooks",
-    "RichHooks",
-    "ConfirmPayload",
+    "PipelineStage",
+    # Exceptions
+    "RedTeamError",
+    # Input models
+    "RedTeamInput",
     # Core public types
     "RedTeamReport",
     "RedTeamResult",
-    "AgentContext",
-    "TargetConfig",
-    "TokenUsage",
-    # Enums
-    "TurnType",
-    "AttackSource",
-    "AttackTechnique",
-    "DeliveryMethod",
+    "ReportSnapshot",
+    "ReportSummary",
+    "RichHooks",
     "Severity",
-    "Framework",
-    "Pipeline",
-    "PipelineStage",
-    "AgentCapability",
-    # Message models
-    "FunctionCall",
+    "SeveritySummary",
+    "SupportsAgentContext",
+    "SupportsErrorMapping",
+    "SupportsMemoryCleanup",
+    "SupportsTargetFactory",
+    "SupportsTokenUsage",
+    "TargetConfig",
+    "TechniqueSummary",
+    "TokenUsage",
     "ToolCall",
-    "Message",
-    # Input models
-    "RedTeamInput",
     # Agent context models
     "ToolInfo",
-    "MemoryStoreInfo",
-    "KnowledgeBaseInfo",
-    # Pipeline config
-    "LLMConfig",
-    "OpenAIModelTarget",
-    # Attack models
-    "AttackStrategy",
-    "AttackInfo",
-    # Result models
-    "OrchestratorResult",
-    "AttackEvaluationResult",
+    # Enums
+    "TurnType",
+    "TurnTypeSummary",
     "UnifiedEvaluationResult",
-    "EvaluationPayload",
-    "JobOutputPayload",
-    "ExecutionDetails",
-    "AgentInfo",
     # Vulnerability types
     "Vulnerability",
     "VulnerabilityDef",
     "VulnerabilityDomain",
     "VulnerabilitySummary",
-    # Error model
-    "ErrorInfo",
-    # Report models
-    "CategorySummary",
-    "DimensionSummary",
-    "ReportSummary",
-    "ReportSnapshot",
-    "TechniqueSummary",
-    "SeveritySummary",
-    "DeliveryMethodSummary",
-    "TurnTypeSummary",
-    "DomainSummary",
-    "FrameworkSummary",
+    "get_category_info",
+    "get_vulnerability_name",
+    "is_agent_target",
+    # Vulnerability introspection
+    "list_available_vulnerabilities",
+    # Category introspection
+    "list_categories",
+    "merge_reports",
+    "normalize_category",
     # Helper functions
     "normalize_framework",
-    "normalize_category",
-    # Exceptions
-    "RedTeamError",
-    "CredentialError",
-    "BackendError",
-    "CancelledError",
+    "print_report_summary",
+    # Entry points
+    "red_team",
     # Backend extension
     "register_backend",
-    # Target protocols
-    "AgentTarget",
-    "SupportsTokenUsage",
-    "SupportsAgentContext",
-    "SupportsTargetFactory",
-    "SupportsMemoryCleanup",
-    "SupportsErrorMapping",
-    "DirectTargetFactory",
-    "is_agent_target",
+    "resolve_category",
+    "resolve_vulnerabilities",
 ]
 
 
-_deprecated_warned: set[str] = set()
+_deprecated_warned: set[str] = set()  # noqa: RUF067
 
 
 def __getattr__(name: str):

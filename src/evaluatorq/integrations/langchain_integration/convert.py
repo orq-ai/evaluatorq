@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
+
+logger = logging.getLogger(__name__)
 import time
 import uuid
-import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import BaseMessage, UsageMetadata
-from langchain_core.messages.tool import ToolCall
 
-from evaluatorq.openresponses import ResponseResourceDict
 from evaluatorq.openresponses.convert_models import (
     FunctionCall,
     FunctionCallOutput,
@@ -30,6 +30,10 @@ from evaluatorq.openresponses.convert_models import (
     Usage,
 )
 
+if TYPE_CHECKING:
+    from langchain_core.messages.tool import ToolCall
+
+    from evaluatorq.openresponses import ResponseResourceDict
 
 # Type alias for message data (can be dict from serialization or BaseMessage object)
 MessageData = dict[str, Any] | BaseMessage
@@ -193,7 +197,7 @@ def convert_to_open_responses(
             input_items.append(input_message)
 
         else:
-            logging.warning(
+            logger.warning(
                 "Skipping unknown LangChain message type: %s", msg_type
             )
 
@@ -282,7 +286,7 @@ def convert_to_open_responses(
     }
 
 
-def _get_message_type(msg: BaseMessage ) -> str:
+def _get_message_type(msg: BaseMessage) -> str:
     # LangChain message objects
     type_attr: str | None = getattr(msg, "type", None)
     if type_attr:
@@ -317,10 +321,7 @@ def _get_message_data(msg: BaseMessage | dict[str, Any]) -> MessageData:
 
 def _get_content(msg_data: MessageData) -> str:
     """Extract content from message data."""
-    if isinstance(msg_data, dict):
-        content = msg_data.get("content", "")
-    else:
-        content = getattr(msg_data, "content", "")
+    content = msg_data.get("content", "") if isinstance(msg_data, dict) else getattr(msg_data, "content", "")
 
     if isinstance(content, str):
         return content
@@ -339,10 +340,7 @@ def _get_content(msg_data: MessageData) -> str:
 
 def _get_tool_calls(msg_data: MessageData) -> list[ToolCall]:
     """Extract tool calls from AI message data."""
-    if isinstance(msg_data, dict):
-        tool_calls = msg_data.get("tool_calls", [])
-    else:
-        tool_calls = getattr(msg_data, "tool_calls", [])
+    tool_calls = msg_data.get("tool_calls", []) if isinstance(msg_data, dict) else getattr(msg_data, "tool_calls", [])
 
     if not tool_calls:
         return []
@@ -391,5 +389,5 @@ def _serialize_args(args: Any) -> str:
     try:
         return json.dumps(args)
     except (TypeError, ValueError) as e:
-        logging.error(f"Failed to serialize args: {e}")
-        return json.dumps({"error": f"Serialization failed: {str(e)}"})
+        logger.exception(f"Failed to serialize args: {e}")
+        return json.dumps({"error": f"Serialization failed: {e!s}"})

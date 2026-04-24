@@ -23,7 +23,6 @@ else:
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
@@ -295,10 +294,7 @@ def normalize_framework(framework: 'Framework | str') -> 'Framework':
 
     OWASP-AGENTIC is an alias for OWASP-ASI.
     """
-    if isinstance(framework, Framework):
-        value = framework.value
-    else:
-        value = framework
+    value = framework.value if isinstance(framework, Framework) else framework
     if value == Framework.OWASP_AGENTIC.value:
         return Framework.OWASP_ASI
     return Framework(value)
@@ -562,55 +558,55 @@ class AgentContext(BaseModel):
 # and evaluation. Uses the OpenAI model name directly (works with both the
 # openai and orq backends — the orq backend accepts this format as-is).
 DEFAULT_PIPELINE_MODEL: str = 'gpt-5-mini'
+DEFAULT_TARGET_MAX_TOKENS: int = 5000
+DEFAULT_TARGET_TIMEOUT_MS: int = 240_000
+
+
+class LLMCallConfig(BaseModel):
+    """Per-role LLM call configuration.
+
+    One instance per pipeline role (attacker, evaluator). Controls model
+    selection, temperature, token limits, timeout, extra kwargs, and
+    optionally an explicit pre-configured client.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    model: str = DEFAULT_PIPELINE_MODEL
+    temperature: float = 1.0
+    max_tokens: int = DEFAULT_TARGET_MAX_TOKENS
+    timeout_ms: int = 90_000
+    extra_kwargs: dict[str, Any] = Field(default_factory=dict)
+    client: Any = None  # AsyncOpenAI | None — Any avoids import cycle
 
 
 class LLMConfig(BaseModel):
     """Unified LLM configuration for the red teaming pipeline.
 
-    Covers model selection, per-request kwargs, per-step call tuning
-    (temperature, max_tokens), timeouts, and retry behaviour. Pass an
-    instance as ``config=LLMConfig(...)`` to :func:`red_team`.
+    Configure per-role LLM behaviour via ``attacker`` and ``evaluator``.
+    Pass an instance as ``llm_config=LLMConfig(...)`` to :func:`red_team`.
 
-    Pipeline steps:
+    Example::
 
-    1. **Capability classification** — analyses agent tools/resources.
-    2. **Strategy generation** — LLM generates novel attack strategies.
-    3. **Tool adaptation** — rewrites generic prompts to target specific tools.
-    4. **Adversarial prompt generation** — crafts the actual attack messages.
+        config = LLMConfig(
+            attacker=LLMCallConfig(model="anthropic/claude-3-5-sonnet", temperature=0.9),
+            evaluator=LLMCallConfig(model="openai/gpt-4o-mini", temperature=0.0),
+        )
     """
 
-    # --- Model selection -------------------------------------------------------
-    attack_model: str = DEFAULT_PIPELINE_MODEL
-    evaluator_model: str = DEFAULT_PIPELINE_MODEL
-
-    # --- Extra kwargs forwarded to every chat.completions.create() call -------
-    llm_kwargs: dict[str, Any] = Field(default_factory=dict)
+    # --- Role-based call configs ----------------------------------------------
+    attacker: LLMCallConfig = Field(default_factory=LLMCallConfig)
+    evaluator: LLMCallConfig = Field(default_factory=LLMCallConfig)
 
     # --- Retry configuration --------------------------------------------------
     retry_count: int = 3
     retry_on_codes: list[int] = Field(default=[429, 500, 502, 503, 504])
 
-    # --- Step 1: Capability classification ------------------------------------
-    capability_classification_max_tokens: int = 5000
-    capability_classification_temperature: float = 1.0
-
-    # --- Step 2: Strategy generation ------------------------------------------
-    strategy_generation_max_tokens: int = 5000
-    strategy_generation_temperature: float = 1.0
-
-    # --- Step 3: Tool adaptation ----------------------------------------------
-    tool_adaptation_max_tokens: int = 5000
-    tool_adaptation_temperature: float = 1.0
-
-    # --- Step 4: Adversarial prompt generation --------------------------------
-    adversarial_max_tokens: int = 5000
-    adversarial_temperature: float = 1.0
-
-    # --- Target call settings -------------------------------------------------
-    target_max_tokens: int = 5000
-    target_agent_timeout_ms: int = 240_000
-    llm_call_timeout_ms: int = 90_000
+    # --- Cleanup timeout ------------------------------------------------------
     cleanup_timeout_ms: int = 60_000
+
+    # --- Target agent timeout -------------------------------------------------
+    target_agent_timeout_ms: int = 240_000
 
     @property
     def retry_config(self) -> dict[str, Any]:
@@ -623,21 +619,13 @@ class LLMConfig(BaseModel):
             return {}
         return {'retry': {'count': self.retry_count, 'on_codes': self.retry_on_codes}}
 
-    def resolve_model(self, model: str, *, uses_orq_router: bool) -> str:
-        """Add ``openai/`` prefix when routing through the ORQ router.
-
-        If the model already contains ``/`` it is returned unchanged.
-        """
-        if uses_orq_router and '/' not in model:
-            return f'openai/{model}'
-        return model
-
     @property
     def uses_orq_router(self) -> bool:
         """True when LLM calls route through the ORQ router.
 
         The ORQ router is used when no ``OPENAI_API_KEY`` is set but
-        ``ORQ_API_KEY`` is available.
+        ``ORQ_API_KEY`` is available. Controls base_url selection only —
+        does not transform model names.
         """
         return not os.getenv('OPENAI_API_KEY') and bool(os.getenv('ORQ_API_KEY'))
 
@@ -858,7 +846,6 @@ class AttackEvaluationResult(BaseModel):
     evaluator_id: str = Field(description='Evaluator identifier used')
     token_usage: TokenUsage | None = Field(default=None, description='Token usage and cost for this evaluation call')
     raw_output: dict[str, Any] | None = Field(default=None, description='Raw evaluator output')
-
 
 
 # ---------------------------------------------------------------------------

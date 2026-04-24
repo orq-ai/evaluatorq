@@ -7,6 +7,7 @@ recommendations that go beyond the static guidance in ``guidance.py``.
 from __future__ import annotations
 
 import json
+import operator
 import random
 from typing import TYPE_CHECKING, Any
 
@@ -19,8 +20,8 @@ from evaluatorq.redteam.contracts import (
     RedTeamResult,
 )
 from evaluatorq.redteam.reports._utils import extract_prompt, extract_response
+from evaluatorq.redteam.reports.sections import _compute_risk_score
 from evaluatorq.redteam.utils import xml_escape
-from evaluatorq.redteam.reports.sections import SEVERITY_WEIGHTS, _compute_risk_score
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -103,7 +104,7 @@ def _compute_top_risk_areas(
     # Build reverse mapping from category code -> vulnerability ID and name
     vuln_by_category: dict[str, tuple[str, str]] = {}
     for vuln_id, vuln_summary in report.summary.by_vulnerability.items():
-        for _framework, cat_codes in vuln_summary.framework_categories.items():
+        for cat_codes in vuln_summary.framework_categories.values():
             for cat_code in cat_codes:
                 vuln_by_category.setdefault(cat_code, (vuln_id, vuln_summary.vulnerability_name))
 
@@ -124,7 +125,7 @@ def _compute_top_risk_areas(
             'vulnerable_results': [r for r in cat_results if r.vulnerable],
         })
 
-    areas.sort(key=lambda x: x['risk_score'], reverse=True)
+    areas.sort(key=operator.itemgetter('risk_score'), reverse=True)
     return areas[:max_areas]
 
 

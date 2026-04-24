@@ -7,7 +7,15 @@ are fully implemented:
 - LLM07: System Prompt Leakage
 """
 
-from evaluatorq.redteam.contracts import AgentCapability as C, AttackStrategy, AttackTechnique, DeliveryMethod, Severity, TurnType, Vulnerability
+from evaluatorq.redteam.contracts import AgentCapability as C
+from evaluatorq.redteam.contracts import (
+    AttackStrategy,
+    AttackTechnique,
+    DeliveryMethod,
+    Severity,
+    TurnType,
+    Vulnerability,
+)
 
 # =============================================================================
 # LLM01: Prompt Injection
