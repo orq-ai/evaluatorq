@@ -1,0 +1,1328 @@
+/*-- scss:defaults --*/
+
+$orq-teal: #025558;
+$orq-orange: #ff8f34;
+$orq-sand: #f9f8f6;
+$orq-ink: #25232e;
+$orq-red: #d92d20;
+$orq-green: #2ebd85;
+
+/*-- scss:rules --*/
+
+.reveal {
+  .vulnerable { color: $orq-red; }
+  .secure     { color: $orq-green; }
+}
+
+/* === Quote slides (Act 1 turns) === */
+.reveal section[data-background-color="#f9f8f6"] {
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: center !important;
+  align-items: flex-start !important;
+  padding: 0 8% !important;
+  box-sizing: border-box;
+}
+
+.reveal .quote {
+  font-size: 3.2rem;
+  line-height: 1.55;
+  color: $orq-ink;
+  font-style: italic;
+  font-weight: 300;
+  max-width: 95%;
+  border-left: 6px solid $orq-orange;
+  padding-left: 2.5rem;
+}
+
+/* === Chapter title slides === */
+.reveal section.chapter-title {
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: center !important;
+  align-items: flex-start !important;
+  padding-left: 8% !important;
+}
+
+.reveal section.chapter-title h1 {
+  font-size: 7.5rem !important;
+  color: white !important;
+  font-weight: 700 !important;
+}
+
+/* === Pipeline diagram === */
+.reveal .pipeline-intro {
+  margin-top: 1.5rem;
+  margin-bottom: 2rem;
+  max-width: 70rem;
+}
+
+.reveal .pipeline-headline {
+  display: block;
+  font-size: 2.5rem;
+  font-weight: 700;
+  color: $orq-ink;
+  letter-spacing: -0.02em;
+  margin-bottom: 0.65rem;
+}
+
+.reveal .pipeline-subhead {
+  display: block;
+  font-size: 1.25rem;
+  line-height: 1.5;
+  color: rgba($orq-ink, 0.75);
+}
+
+.reveal .pipeline {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr auto 1fr;
+  align-items: center;
+  gap: 1.5rem;
+  margin-top: 1.75rem;
+}
+
+.reveal .pipe-box {
+  min-height: 18rem;
+  border: 2px solid rgba(37, 35, 46, 0.12);
+  border-radius: 24px;
+  padding: 1.6rem 1.5rem 1.5rem;
+  text-align: left;
+  background: white;
+  box-shadow: 0 20px 40px rgba(37, 35, 46, 0.08);
+}
+
+.reveal .pipe-probe {
+  border-color: rgba(2, 85, 88, 0.26);
+  background: linear-gradient(180deg, rgba(2, 85, 88, 0.08) 0%, rgba(255, 255, 255, 1) 75%);
+}
+
+.reveal .pipe-attack {
+  border-color: rgba(255, 143, 52, 0.36);
+  background: linear-gradient(180deg, rgba(255, 143, 52, 0.12) 0%, rgba(255, 255, 255, 1) 75%);
+}
+
+.reveal .pipe-judge {
+  border-color: rgba(217, 45, 32, 0.28);
+  background: linear-gradient(180deg, rgba(217, 45, 32, 0.08) 0%, rgba(255, 255, 255, 1) 75%);
+}
+
+.reveal .pipe-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.3rem;
+  height: 2.3rem;
+  border-radius: 999px;
+  margin-bottom: 1rem;
+  font-size: 0.95rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: white;
+  background: $orq-ink;
+}
+
+.reveal .pipe-title {
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-weight: 700;
+  display: block;
+  margin-bottom: 0.6rem;
+  color: rgba($orq-ink, 0.68);
+}
+
+.reveal .pipe-lead {
+  display: block;
+  font-size: 1.95rem;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  font-weight: 700;
+  color: $orq-ink;
+  margin-bottom: 0.85rem;
+}
+
+.reveal .pipe-desc {
+  font-size: 1.18rem;
+  color: rgba($orq-ink, 0.8);
+  display: block;
+  line-height: 1.5;
+  margin-bottom: 1.15rem;
+}
+
+.reveal .pipe-meta {
+  display: inline-block;
+  font-size: 0.92rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: $orq-ink;
+  padding: 0.45rem 0.75rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.reveal .pipe-arrow {
+  font-size: 2.5rem;
+  color: $orq-orange;
+  text-align: center;
+  font-weight: 700;
+}
+
+/* === Wallet cards === */
+.reveal .wallet-row {
+  display: flex;
+  gap: 5rem;
+  justify-content: center;
+  align-items: stretch;
+  flex-wrap: wrap;
+  margin-top: 2rem;
+}
+
+.reveal .wallet-card {
+  border: 3px solid $orq-orange;
+  padding: 2.5rem 4rem;
+  min-width: 280px;
+}
+
+/* === Agent intro cards === */
+.reveal .agent-row {
+  display: flex;
+  gap: 4rem;
+  justify-content: center;
+  align-items: stretch;
+  margin: 2.5rem 0;
+}
+
+.reveal .agent-card {
+  border: 2px solid;
+  border-radius: 12px;
+  padding: 2.25rem 2rem 2rem;
+  width: 360px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.reveal .agent-card.agent-hal {
+  border-color: #e74c3c;
+  background: linear-gradient(180deg, rgba(120, 24, 24, 0.96) 0%, rgba(76, 11, 11, 0.98) 100%);
+}
+
+.reveal .agent-card.agent-jarvis {
+  border-color: #3ec7e7;
+  background: linear-gradient(180deg, rgba(8, 59, 70, 0.94) 0%, rgba(3, 26, 31, 0.98) 100%);
+}
+
+.reveal .agent-card p,
+.reveal .agent-card figure {
+  margin: 0;
+}
+
+.reveal .agent-card img {
+  width: 140px !important;
+  height: 140px !important;
+  min-width: 140px;
+  min-height: 140px;
+  max-width: 140px;
+  max-height: 140px;
+  display: block;
+  margin: 0 auto 1.5rem !important;
+  object-fit: contain;
+  aspect-ratio: 1 / 1;
+  box-sizing: border-box;
+  padding: 0;
+  border-radius: 0;
+}
+.reveal .agent-hal img {
+  box-shadow: none;
+  filter: none;
+}
+.reveal .agent-jarvis img {
+  filter: drop-shadow(0 0 16px rgba(62, 199, 231, 0.55));
+}
+
+.reveal .agent-name {
+  font-size: 2.4rem;
+  font-weight: 700;
+  font-family: monospace;
+  display: block;
+  color: white;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  margin-top: auto;
+  margin-bottom: 0.6rem;
+  letter-spacing: 0.05em;
+}
+
+.reveal .agent-tagline {
+  font-size: 1.15rem;
+  color: rgba(255, 255, 255, 0.92);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  display: block;
+  max-width: 24ch;
+  line-height: 1.4;
+  margin-left: auto;
+  margin-right: auto;
+  text-align: center;
+}
+
+.reveal .wallet-name     { font-size: 1.8rem; font-weight: 700; display: block; margin-bottom: 0.25rem; }
+.reveal .wallet-id       { font-size: 1.1rem; color: #888; font-family: monospace; display: block; margin-bottom: 2rem; }
+.reveal .wallet-balance  { font-size: 4rem; font-weight: 700; color: $orq-orange; display: block; line-height: 1; }
+.reveal .wallet-currency { font-size: 1.4rem; color: #888; display: block; margin-top: 0.25rem; }
+
+/* === About me slide === */
+.reveal .about-grid {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  gap: 5rem;
+  align-items: center;
+  width: 100%;
+  min-height: 60vh;
+}
+
+.reveal .about-left {
+  border-right: 3px solid $orq-orange;
+  padding-right: 4rem;
+}
+
+.reveal .about-name {
+  font-size: 5rem;
+  font-weight: 700;
+  color: white;
+  display: block;
+  line-height: 1.1;
+  margin-bottom: 0.5rem;
+}
+
+.reveal .about-title {
+  font-size: 2.4rem;
+  color: $orq-orange;
+  display: block;
+  font-weight: 500;
+  margin-bottom: 2.5rem;
+}
+
+.reveal .about-history {
+  margin-bottom: 2.5rem;
+  padding-bottom: 2.5rem;
+  border-bottom: 1px solid rgba(255,255,255,0.15);
+}
+
+.reveal .about-history p {
+  margin: 0.6rem 0;
+  font-size: 1.75rem;
+  color: rgba(255,255,255,0.85);
+  line-height: 1.4;
+}
+
+.reveal .about-label {
+  color: $orq-orange;
+  font-weight: 700;
+  font-size: 1.05rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  margin-right: 0.75rem;
+}
+
+.reveal .about-product-block {
+  color: rgba(255,255,255,0.85);
+  font-size: 1.75rem;
+  line-height: 1.7;
+}
+
+.reveal .about-product-label {
+  color: $orq-orange;
+  font-weight: 700;
+}
+
+.reveal .about-package {
+  font-family: monospace;
+  color: $orq-orange;
+  font-size: 1.3rem;
+  display: block;
+  margin-top: 0.5rem;
+}
+
+.reveal .about-stats {
+  font-size: 1.1rem;
+  color: rgba(255,255,255,0.5);
+  display: block;
+  margin-top: 0.4rem;
+}
+
+/* Photo stack */
+.reveal .about-photos {
+  position: relative;
+  width: 480px;
+  height: 480px;
+  margin: 0 auto;
+}
+
+.reveal .about-photos .photo-real {
+  width: 360px;
+  height: 360px;
+  border-radius: 50%;
+  object-fit: cover;
+  object-position: center 15%;
+  border: 5px solid $orq-orange;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.reveal .about-photos .photo-cartoon {
+  width: 260px;
+  height: 260px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 5px solid white;
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  background: $orq-teal;
+}
+
+/* === Orq overview slide === */
+.reveal .orq-overview {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 3rem;
+  align-items: start;
+  width: 100%;
+  margin-top: 1.5rem;
+}
+
+.reveal .orq-overview-left {
+  max-width: 38rem;
+}
+
+.reveal .orq-overview-kicker {
+  display: block;
+  margin-bottom: 0.9rem;
+  font-size: 0.95rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: $orq-orange;
+}
+
+.reveal .orq-overview-title {
+  display: block;
+  font-size: 3.6rem;
+  line-height: 1.02;
+  letter-spacing: -0.03em;
+  font-weight: 800;
+  color: $orq-ink;
+  margin-bottom: 1.2rem;
+}
+
+.reveal .orq-overview-copy {
+  display: block;
+  font-size: 1.35rem;
+  line-height: 1.55;
+  color: rgba($orq-ink, 0.8);
+}
+
+.reveal .orq-overview-right {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+.reveal .orq-capability {
+  min-height: 8.8rem;
+  border-radius: 22px;
+  padding: 1.2rem 1.15rem;
+  background: white;
+  border: none;
+  box-shadow: 0 18px 36px rgba(37, 35, 46, 0.09);
+}
+
+.reveal .orq-capability-build {
+  background: rgba(2, 85, 88, 0.18);
+}
+
+.reveal .orq-capability-route {
+  background: rgba(255, 143, 52, 0.2);
+}
+
+.reveal .orq-capability-observe {
+  background: rgba(46, 189, 133, 0.2);
+}
+
+.reveal .orq-capability-optimize {
+  background: rgba(217, 45, 32, 0.08);
+}
+
+.reveal .orq-capability-label {
+  display: block;
+  margin-bottom: 0.65rem;
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: $orq-ink;
+}
+
+.reveal .orq-capability-build .orq-capability-label {
+  color: $orq-teal;
+}
+
+.reveal .orq-capability-route .orq-capability-label {
+  color: $orq-orange;
+}
+
+.reveal .orq-capability-observe .orq-capability-label {
+  color: $orq-green;
+}
+
+.reveal .orq-capability-copy {
+  display: block;
+  font-size: 1rem;
+  line-height: 1.45;
+  color: rgba($orq-ink, 0.84);
+}
+
+.reveal .orq-capability-ref {
+  display: block;
+  margin-top: 0.8rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: rgba($orq-ink, 0.62);
+}
+
+/* === Mode cards === */
+.reveal .mode-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.75rem;
+  margin-top: 2rem;
+}
+
+.reveal .mode-card {
+  min-height: 22rem;
+  border-radius: 26px;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  border: 1px solid rgba(37, 35, 46, 0.1);
+  box-shadow: 0 18px 40px rgba(37, 35, 46, 0.08);
+  position: relative;
+  overflow: hidden;
+}
+
+.reveal .mode-static {
+  background: linear-gradient(180deg, rgba(2, 85, 88, 0.1) 0%, rgba(255, 255, 255, 1) 72%);
+}
+
+.reveal .mode-dynamic {
+  background: linear-gradient(180deg, rgba(255, 143, 52, 0.15) 0%, rgba(255, 255, 255, 1) 72%);
+}
+
+.reveal .mode-hybrid {
+  background: linear-gradient(180deg, rgba(46, 189, 133, 0.14) 0%, rgba(255, 255, 255, 1) 72%);
+}
+
+.reveal .mode-step {
+  display: block;
+  margin-bottom: 1.25rem;
+  font-size: 4.4rem;
+  line-height: 0.9;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: rgba(37, 35, 46, 0.16);
+}
+
+.reveal .mode-kicker {
+  display: block;
+  margin-bottom: 0.7rem;
+  font-size: 0.95rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba($orq-ink, 0.62);
+}
+
+.reveal .mode-metric {
+  display: block;
+  font-size: 2.45rem;
+  line-height: 1.02;
+  letter-spacing: -0.025em;
+  font-weight: 700;
+  color: $orq-ink;
+  margin-bottom: 0.9rem;
+}
+
+.reveal .mode-copy {
+  display: block;
+  font-size: 1.08rem;
+  line-height: 1.45;
+  color: rgba($orq-ink, 0.8);
+  max-width: 100%;
+}
+
+/* === Hook conversation (turn stack) === */
+.reveal .turn-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1.35rem;
+  width: 86%;
+}
+
+.reveal .turn-item {
+  display: flex;
+  flex-direction: column;
+  width: auto;
+  max-width: 78%;
+  padding-top: 1.15rem;
+  font-size: 1.86rem;
+  line-height: 1.5;
+  color: $orq-ink;
+  font-style: normal;
+  font-weight: 400;
+  position: relative;
+}
+
+.reveal .turn-item.attacker {
+  align-items: flex-end;
+  margin-left: auto;
+  padding-right: 1.25rem;
+}
+
+.reveal .turn-item.victim,
+.reveal .turn-item.agent {
+  align-items: flex-start;
+  margin-right: auto;
+  padding-left: 1.25rem;
+}
+
+/* Agent response turns */
+.reveal .turn-item.agent {
+  color: rgba(37, 35, 46, 0.7);
+}
+
+.reveal .turn-label {
+  font-style: normal;
+  color: $orq-orange;
+  font-weight: 700;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  margin: 0;
+  position: absolute;
+  top: 0;
+  white-space: nowrap;
+}
+
+.reveal .turn-label.agent-label {
+  color: $orq-teal;
+}
+
+.reveal .turn-item.attacker .turn-label {
+  right: 1.25rem;
+  text-align: left;
+}
+
+.reveal .turn-item.victim .turn-label,
+.reveal .turn-item.agent .turn-label {
+  left: 1.25rem;
+  text-align: right;
+}
+
+.reveal .turn-bubble {
+  display: inline-block;
+  max-width: 100%;
+  padding: 1rem 1.25rem;
+  border-radius: 20px;
+  box-shadow: 0 10px 28px rgba(37, 35, 46, 0.07);
+  text-align: left;
+  position: relative;
+}
+
+.reveal .turn-item.attacker .turn-bubble {
+  background: rgba(255, 143, 52, 0.14);
+  border: 2px solid rgba(255, 143, 52, 0.65);
+  border-top-right-radius: 8px;
+}
+
+.reveal .turn-item.victim .turn-bubble,
+.reveal .turn-item.agent .turn-bubble {
+  background: rgba(2, 85, 88, 0.06);
+  border: 2px solid rgba(2, 85, 88, 0.32);
+  border-top-left-radius: 8px;
+}
+
+.reveal .turn-item.pivot .turn-bubble {
+  border-color: $orq-orange;
+  background: rgba(255, 143, 52, 0.2);
+}
+
+.reveal .turn-item.agent.compromised .turn-bubble {
+  border-color: rgba(217, 45, 32, 0.82);
+  border-width: 3px;
+  background: linear-gradient(180deg, rgba(217, 45, 32, 0.12) 0%, rgba(217, 45, 32, 0.18) 100%);
+  color: $orq-ink;
+  box-shadow: 0 14px 34px rgba(217, 45, 32, 0.12);
+}
+
+.reveal .turn-item.agent.compromised .turn-bubble::after {
+  content: 'ACTION EXECUTED';
+  position: absolute;
+  top: -0.95rem;
+  right: 1rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  background: #d92d20;
+  color: white;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.reveal .turn-item.pivot {
+  margin-top: 0.35rem;
+  margin-bottom: -0.2rem;
+}
+
+.reveal .turn-bubble code {
+  color: inherit;
+  background: rgba(255, 143, 52, 0.08);
+  padding: 0.04em 0.22em;
+  border-radius: 0.3em;
+  font-size: 0.92em;
+}
+
+/* === LIVE command slide === */
+.reveal .live-command {
+  margin-top: 1rem;
+}
+
+.reveal .live-command p {
+  margin: 0;
+}
+
+.reveal .live-command code {
+  font-size: 3.5rem;
+  color: $orq-orange;
+  background: rgba(255, 143, 52, 0.1);
+  padding: 0.4em 0.8em;
+  white-space: nowrap;
+  border-radius: 4px;
+}
+
+/* === Questions slide — two-panel split === */
+.reveal section.questions-slide {
+  padding: 0 !important;
+  align-items: stretch !important;
+  justify-content: stretch !important;
+}
+
+.reveal section.questions-slide h2 {
+  display: none;
+}
+
+.reveal .questions-layout {
+  display: grid;
+  grid-template-columns: 3.4fr 8px 1.3fr;
+  width: 100%;
+  min-height: 64vh;
+}
+
+.reveal .questions-left {
+  padding: 5rem 5rem 5rem 9%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.reveal .questions-title {
+  font-size: 7.5rem;
+  font-weight: 800;
+  color: white;
+  display: block;
+  line-height: 1;
+  margin-bottom: 3rem;
+  letter-spacing: -0.02em;
+}
+
+.reveal .questions-name {
+  font-size: 2.6rem;
+  font-weight: 700;
+  color: white;
+  display: block;
+  margin-bottom: 0.3rem;
+}
+
+.reveal .questions-role {
+  font-size: 1.6rem;
+  color: $orq-orange;
+  font-weight: 500;
+  display: block;
+  margin-bottom: 1.5rem;
+}
+
+.reveal .questions-email {
+  font-family: monospace;
+  font-size: 1.5rem;
+  color: rgba(255, 255, 255, 0.65);
+  display: block;
+}
+
+.reveal .questions-stripe {
+  background: $orq-orange;
+}
+
+.reveal .questions-right {
+  background: $orq-sand;
+  position: relative;
+  width: 260px;
+  height: 260px;
+  justify-self: center;
+  align-self: center;
+}
+
+
+/* Exact 25px whitespace on all sides: (260 - 210) / 2 = 25 */
+.reveal .questions-qr-img {
+  position: absolute !important;
+  top: 25px !important;
+  left: 25px !important;
+  width: 210px !important;
+  height: 210px !important;
+  display: block !important;
+  margin: 0 !important;
+}
+
+.reveal .questions-qr-label {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  left: 0;
+  right: 0;
+  display: block;
+  line-height: normal;
+  font-size: 0.85rem;
+  color: $orq-teal;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-align: center;
+}
+
+/* === Global orange accent rules === */
+
+/* Slide headings */
+.reveal h2 {
+  border-bottom: 3px solid $orq-orange;
+  padding-bottom: 0.4rem;
+  margin-bottom: 1.8rem;
+}
+
+/* Bullet markers */
+.reveal ul li::marker {
+  color: $orq-orange;
+}
+
+/* Blockquotes (e.g. "Why regex fails") */
+.reveal blockquote {
+  border-left: 5px solid $orq-orange;
+  background: rgba(255, 143, 52, 0.07);
+  padding: 1.2rem 1.8rem;
+  color: $orq-ink;
+  font-style: normal;
+  box-shadow: none;
+}
+
+/* Table headers */
+.reveal table thead th {
+  color: $orq-orange;
+  border-bottom: 2px solid $orq-orange;
+}
+
+/* Inline code */
+.reveal code:not(pre code) {
+  color: $orq-orange;
+  background: rgba(255, 143, 52, 0.1);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+}
+
+/* LIVE / short r-fit-text slides on sand background */
+.reveal section[data-background-color="#f9f8f6"] .r-fit-text {
+  color: $orq-ink;
+}
+
+/* Chapter title h1 — orange accent underline */
+.reveal section.chapter-title h1 {
+  border-bottom: 4px solid $orq-orange;
+  padding-bottom: 0.5rem;
+  display: inline-block;
+}
+
+/* === Probe hub-and-spoke === */
+.reveal .probe-layout {
+  display: grid;
+  grid-template-columns: 1fr 200px 1fr;
+  gap: 0 4rem;
+  align-items: center;
+  width: 92%;
+  margin: 1.5rem auto 0;
+}
+
+.reveal .probe-spokes-left,
+.reveal .probe-spokes-right {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.reveal .probe-spokes-left { align-items: flex-end; }
+.reveal .probe-spokes-right { align-items: flex-start; }
+
+.reveal .probe-spoke {
+  background: white;
+  border-radius: 6px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.07);
+  padding: 1rem 1.5rem;
+  max-width: 360px;
+  border-left: 4px solid $orq-orange;
+}
+
+.reveal .probe-spokes-left .probe-spoke {
+  border-left: none;
+  border-right: 4px solid $orq-orange;
+  text-align: right;
+}
+
+.reveal .probe-spoke-label {
+  display: block;
+  font-size: 1rem;
+  font-weight: 700;
+  color: $orq-orange;
+  margin-bottom: 0.3rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.reveal .probe-spoke p {
+  font-size: 1.15rem;
+  color: rgba(37, 35, 46, 0.65);
+  margin: 0;
+  line-height: 1.4;
+}
+
+.reveal .probe-center {
+  background: $orq-teal;
+  border-radius: 50%;
+  width: 200px;
+  height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+  box-shadow: 0 4px 24px rgba(2, 85, 88, 0.35);
+}
+
+.reveal .probe-center-label {
+  color: white;
+  font-size: 2rem;
+  font-weight: 700;
+  display: block;
+}
+
+/* === Product screenshots === */
+.reveal .product-shot {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  border-radius: 22px;
+  border: 1px solid rgba(37, 35, 46, 0.08);
+  box-shadow: 0 24px 48px rgba(37, 35, 46, 0.16);
+  margin: 0 auto;
+}
+
+.reveal .product-shot-wide {
+  width: 92%;
+}
+
+.reveal section#what-the-probe-detects ul {
+  list-style: none;
+  padding: 0;
+  margin: 0.75rem 0 0;
+}
+
+.reveal section#what-the-probe-detects ul li {
+  position: relative;
+  padding: 0.35rem 0 0.35rem 1.75rem;
+  font-size: 1.45rem;
+  line-height: 1.45;
+}
+
+.reveal section#what-the-probe-detects ul li::before {
+  content: "—";
+  position: absolute;
+  left: 0;
+  top: 0.35rem;
+  color: $orq-orange;
+  font-weight: 700;
+}
+
+.reveal section#what-we-built ul {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0 0;
+}
+
+.reveal section#what-we-built ul li {
+  position: relative;
+  padding: 0.35rem 0 0.35rem 1.75rem;
+  line-height: 1.45;
+}
+
+.reveal section#what-we-built ul li::before {
+  content: "—";
+  position: absolute;
+  left: 0;
+  top: 0.35rem;
+  color: $orq-orange;
+  font-weight: 700;
+}
+
+/* === Judge calibration slide === */
+.reveal .calibration-layout {
+  display: grid;
+  grid-template-columns: 1.05fr 0.75fr 1fr;
+  gap: 2rem;
+  align-items: stretch;
+  width: 94%;
+  margin: 1.8rem auto 1.4rem;
+}
+
+.reveal .calibration-baselines,
+.reveal .calibration-flow,
+.reveal .calibration-panel {
+  background: white;
+  border-radius: 22px;
+  border: 1px solid rgba(37, 35, 46, 0.08);
+  box-shadow: 0 16px 32px rgba(37, 35, 46, 0.08);
+  padding: 1.5rem;
+}
+
+.reveal .calibration-kicker {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba($orq-ink, 0.55);
+  margin-bottom: 1rem;
+}
+
+.reveal .calibration-baselines {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.reveal .calibration-agent {
+  border-radius: 18px;
+  padding: 1rem 1.15rem;
+  border: 2px solid;
+}
+
+.reveal .calibration-agent-icon {
+  display: block;
+  width: 54px;
+  height: 54px;
+  object-fit: contain;
+  margin: 0 0 0.75rem 0;
+}
+
+.reveal .calibration-hal {
+  border-color: rgba(231, 76, 60, 0.55);
+  background: linear-gradient(180deg, rgba(255, 243, 241, 0.95) 0%, rgba(255, 231, 227, 0.98) 100%);
+}
+
+.reveal .calibration-jarvis {
+  border-color: rgba(62, 199, 231, 0.5);
+  background: linear-gradient(180deg, rgba(232, 247, 250, 0.98) 0%, rgba(221, 241, 246, 0.98) 100%);
+}
+
+.reveal .calibration-agent-name {
+  display: block;
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.2rem;
+  color: $orq-ink;
+}
+
+.reveal .calibration-agent-role,
+.reveal .calibration-agent-expectation {
+  display: block;
+  font-size: 1.1rem;
+  color: rgba($orq-ink, 0.78);
+}
+
+.reveal .calibration-agent-expectation {
+  margin-top: 0.45rem;
+  font-weight: 700;
+}
+
+.reveal .calibration-flow {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  background: linear-gradient(180deg, rgba(255, 143, 52, 0.08) 0%, rgba(255, 143, 52, 0.16) 100%);
+}
+
+.reveal .calibration-flow-copy {
+  display: block;
+  font-size: 1.28rem;
+  line-height: 1.45;
+  color: rgba($orq-ink, 0.85);
+  max-width: 18ch;
+}
+
+.reveal .calibration-flow-arrow {
+  display: block;
+  margin: 0.55rem 0;
+  font-size: 3rem;
+  font-weight: 800;
+  color: $orq-orange;
+}
+
+.reveal .calibration-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.reveal .calibration-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.95rem 1rem;
+  border-radius: 16px;
+  background: rgba(37, 35, 46, 0.03);
+}
+
+.reveal .calibration-row-label {
+  display: block;
+  font-size: 1.12rem;
+  line-height: 1.35;
+  color: $orq-ink;
+  text-align: left;
+}
+
+.reveal .calibration-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.86rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.reveal .calibration-chip-bad {
+  background: rgba(217, 45, 32, 0.12);
+  color: #b42318;
+}
+
+.reveal .calibration-chip-warn {
+  background: rgba(255, 143, 52, 0.16);
+  color: #b54708;
+}
+
+.reveal .calibration-chip-fix {
+  background: rgba(2, 85, 88, 0.12);
+  color: $orq-teal;
+}
+
+.reveal .calibration-rule {
+  display: block;
+  width: 94%;
+  margin: 0 auto;
+  padding: 0.95rem 1.2rem;
+  border-radius: 18px;
+  background: $orq-ink;
+  color: white;
+  font-size: 1.28rem;
+  font-weight: 700;
+  line-height: 1.35;
+  text-align: center;
+  box-shadow: 0 18px 34px rgba(37, 35, 46, 0.14);
+}
+
+/* === What we test — spectrum cards === */
+.reveal .spectrum-columns {
+  display: flex !important;
+  gap: 2.5rem;
+  min-height: 62vh;
+  align-items: stretch;
+}
+
+.reveal .spectrum-columns > .column {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.08);
+  padding: 2rem 2.5rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.reveal .spectrum-columns > .column:nth-child(1) { border-top: 5px solid $orq-teal; }
+.reveal .spectrum-columns > .column:nth-child(2) { border-top: 5px solid $orq-orange; }
+.reveal .spectrum-columns > .column:nth-child(3) { border-top: 5px solid $orq-green; }
+
+.reveal .spectrum-columns .column > p:first-child {
+  font-size: 2.25rem;
+  font-weight: 700;
+  color: $orq-ink;
+  padding-bottom: 0.75rem;
+  margin-bottom: 0.5rem;
+  border-bottom: 1px solid rgba(37, 35, 46, 0.12);
+}
+
+.reveal .spectrum-columns ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.reveal .spectrum-columns ul li {
+  padding: 0.45rem 0 0.45rem 2.55rem;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+  font-size: 2.34rem;
+  line-height: 1.45;
+  position: relative;
+}
+
+.reveal .spectrum-columns ul li:last-child {
+  border-bottom: none;
+}
+
+.reveal .spectrum-columns ul li::before {
+  content: "—";
+  color: $orq-orange;
+  font-weight: 700;
+  position: absolute;
+  left: 0;
+}
+
+/* === Vibe check slide === */
+.reveal section.vibe-slide {
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: center !important;
+  align-items: flex-start !important;
+  padding-left: 8% !important;
+}
+
+.reveal .vibe-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  width: 82%;
+  margin-top: 1.5rem;
+}
+
+.reveal .vibe-item {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  padding: 1.4rem 2.2rem;
+  background: white;
+  border-radius: 16px;
+  border: 1px solid rgba($orq-ink, 0.08);
+  box-shadow: 0 4px 24px rgba($orq-ink, 0.06);
+}
+
+.reveal .vibe-check {
+  font-size: 2.2rem;
+  color: $orq-green;
+  font-weight: 800;
+  flex-shrink: 0;
+  line-height: 1;
+  width: 2.5rem;
+  text-align: center;
+}
+
+.reveal .vibe-text {
+  font-size: 2rem;
+  font-weight: 500;
+  color: $orq-ink;
+  font-family: monospace;
+  letter-spacing: -0.01em;
+}
+
+.reveal .vibe-shipped {
+  color: $orq-red !important;
+  font-weight: 700;
+}
+
+/* === Have you considered slide === */
+.reveal section.considered-slide {
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: center !important;
+  align-items: flex-start !important;
+  padding-left: 8% !important;
+  padding-right: 8% !important;
+}
+
+.reveal section.considered-slide h2 {
+  color: white !important;
+  margin-bottom: 1.5rem;
+}
+
+.reveal .considered-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1.25rem;
+  width: 100%;
+}
+
+.reveal .considered-card {
+  padding: 1.75rem 2rem;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.reveal .considered-num {
+  display: block;
+  font-size: 3.2rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: rgba($orq-orange, 0.35);
+  line-height: 1;
+  margin-bottom: 0.2rem;
+}
+
+.reveal .considered-title {
+  display: block;
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: white;
+  letter-spacing: -0.01em;
+  margin-bottom: 0.3rem;
+}
+
+.reveal .considered-desc {
+  display: block;
+  font-size: 1.15rem;
+  color: rgba(255, 255, 255, 0.6);
+  line-height: 1.5;
+}

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Demo Wallet — Red Teaming</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>Demo Wallet</h1>
+    <p class="subtitle">Two accounts · balances update live when the agent transfers</p>
+  </header>
+
+  <main class="cards">
+    <section class="card" id="card-alice" data-account="alice">
+      <h2>Alice</h2>
+      <p class="wallet-id">alice</p>
+      <p class="balance" id="balance-alice">1.00000</p>
+      <p class="currency">BTC</p>
+    </section>
+
+    <section class="card" id="card-mallory" data-account="mallory">
+      <h2>Mallory</h2>
+      <p class="wallet-id">mallory</p>
+      <p class="balance" id="balance-mallory">0.00000</p>
+      <p class="currency">BTC</p>
+    </section>
+  </main>
+
+  <section class="log">
+    <h3>Transaction log</h3>
+    <ol id="tx-log"></ol>
+  </section>
+
+  <script>
+    const source = new EventSource('/events');
+    const balanceElems = {
+      alice: document.getElementById('balance-alice'),
+      mallory: document.getElementById('balance-mallory'),
+    };
+    const cardElems = {
+      alice: document.getElementById('card-alice'),
+      mallory: document.getElementById('card-mallory'),
+    };
+    const logElem = document.getElementById('tx-log');
+
+    source.addEventListener('message', (e) => {
+      const data = JSON.parse(e.data);
+      for (const [id, val] of Object.entries(data.balances)) {
+        if (balanceElems[id] && balanceElems[id].textContent !== val) {
+          balanceElems[id].textContent = val;
+          cardElems[id].classList.remove('flash');
+          void cardElems[id].offsetWidth; // force reflow so the animation replays
+          cardElems[id].classList.add('flash');
+        }
+      }
+      if (data.tx) {
+        const li = document.createElement('li');
+        li.textContent = `${data.tx.from_id} → ${data.tx.to_id} · ${data.tx.amount} BTC · ${data.tx.hash}`;
+        logElem.prepend(li);
+      }
+    });
+  </script>
+</body>
+</html>

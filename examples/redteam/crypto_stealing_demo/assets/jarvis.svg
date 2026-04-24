@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <radialGradient id="core" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="40%" stop-color="#9fe7ff"/>
+      <stop offset="100%" stop-color="#3ec7e7"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#3ec7e7" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#3ec7e7" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <circle cx="100" cy="100" r="95" fill="url(#glow)"/>
+  <circle cx="100" cy="100" r="70" fill="none" stroke="#3ec7e7" stroke-width="2" opacity="0.6"/>
+  <circle cx="100" cy="100" r="55" fill="none" stroke="#9fe7ff" stroke-width="1.5" opacity="0.8"/>
+  <g stroke="#9fe7ff" stroke-width="3" stroke-linecap="round" opacity="0.9">
+    <line x1="100" y1="45" x2="100" y2="65"/>
+    <line x1="100" y1="135" x2="100" y2="155"/>
+    <line x1="45" y1="100" x2="65" y2="100"/>
+    <line x1="135" y1="100" x2="155" y2="100"/>
+    <line x1="61" y1="61" x2="75" y2="75"/>
+    <line x1="125" y1="125" x2="139" y2="139"/>
+    <line x1="139" y1="61" x2="125" y2="75"/>
+    <line x1="75" y1="125" x2="61" y2="139"/>
+  </g>
+  <circle cx="100" cy="100" r="28" fill="url(#core)"/>
+  <circle cx="100" cy="100" r="12" fill="#ffffff"/>
+</svg>
