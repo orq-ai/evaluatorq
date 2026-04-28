@@ -148,7 +148,7 @@ class OWASPEvaluator:
                     default=str,
                 )),
             )
-            prompt = prompt.replace('{{output.response}}', _sanitize_placeholders(response or ''))
+            prompt = prompt.replace('{{output.response}}', response or '')
 
             eval_messages: list[ChatCompletionMessageParam] = [
                 {
