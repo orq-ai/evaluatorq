@@ -174,7 +174,11 @@ class ORQAgentTarget:
                         if isinstance(args, str):
                             try:
                                 args = json.loads(args)
-                            except Exception:
+                            except (json.JSONDecodeError, ValueError):
+                                logger.warning(
+                                    f"Failed to parse tool call arguments as JSON for tool '{name}'; "
+                                    f"storing raw string. Raw: {args!r:.200}"
+                                )
                                 args = {'raw': args}
                         calls.append(ExecutedToolCall(name=str(name), arguments=args if isinstance(args, dict) else {}))
                     return calls

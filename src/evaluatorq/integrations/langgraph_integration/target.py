@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 from uuid import uuid4
 
@@ -10,6 +11,8 @@ from langgraph.graph.state import CompiledStateGraph
 
 from evaluatorq.redteam.backends.base import AgentTarget
 from evaluatorq.redteam.contracts import AgentContext, AgentResponse, ExecutedToolCall, MemoryStoreInfo, ToolInfo
+
+logger = logging.getLogger(__name__)
 
 
 class LangGraphTarget(AgentTarget):
@@ -110,6 +113,9 @@ class LangGraphTarget(AgentTarget):
                         args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
                         tool_calls.append(ExecutedToolCall(name=str(name), arguments=args if isinstance(args, dict) else {}))
             else:
+                from langchain_core.messages import AIMessage
+                if not isinstance(msg, AIMessage):
+                    continue
                 # LangChain AIMessage — tool_calls is a list of dicts with 'name' and 'args'
                 for tc in (getattr(msg, "tool_calls", None) or []):
                     name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
@@ -128,6 +134,12 @@ class LangGraphTarget(AgentTarget):
         means tool calls from previous turns will be re-extracted. Use ``clone()``
         to get a fully isolated instance with a fresh thread ID instead.
         """
+        if self._prev_msg_count > 0:
+            logger.warning(
+                "LangGraphTarget.reset_conversation() resets the message cursor but NOT the "
+                "checkpointer thread. Prior tool calls will be re-extracted on next send_prompt. "
+                "Use clone() for a fully isolated target."
+            )
         self._prev_msg_count = 0
 
     async def get_agent_context(self) -> AgentContext:

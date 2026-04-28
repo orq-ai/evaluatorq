@@ -46,7 +46,7 @@ class TestLangGraphIntegration:
 
     @pytest.mark.asyncio
     async def test_reset_starts_fresh_conversation(self) -> None:
-        """After reset, the graph should not see previous messages."""
+        """After reset, the message cursor is reset and a warning is emitted."""
         graph = _build_echo_graph()
         target = LangGraphTarget(graph)
 

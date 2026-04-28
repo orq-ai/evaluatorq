@@ -227,15 +227,15 @@ class TestLangGraphToolCallExtraction:
     @pytest.mark.asyncio
     async def test_extracts_tool_calls_from_ai_messages(self) -> None:
         pytest.importorskip("langgraph")
+        from langchain_core.messages import AIMessage
         from evaluatorq.integrations.langgraph_integration import LangGraphTarget
 
-        ai_msg = MagicMock()
-        ai_msg.content = "I'll search for that"
-        ai_msg.tool_calls = [{"name": "web_search", "args": {"query": "hello"}}]
+        ai_msg = AIMessage(
+            content="I'll search for that",
+            tool_calls=[{"name": "web_search", "args": {"query": "hello"}, "id": "call_1", "type": "tool_call"}],
+        )
 
-        final_msg = MagicMock()
-        final_msg.content = "Here is the result"
-        final_msg.tool_calls = []
+        final_msg = AIMessage(content="Here is the result")
 
         graph = MagicMock()
         graph.ainvoke = AsyncMock(return_value={"messages": [ai_msg, final_msg]})

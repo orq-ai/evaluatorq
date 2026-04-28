@@ -145,6 +145,7 @@ class OWASPEvaluator:
                 _sanitize_placeholders(json.dumps(
                     [{'name': tc.name, 'arguments': tc.arguments, 'result': tc.result} for tc in (tool_calls or [])],
                     indent=2,
+                    default=str,
                 )),
             )
             prompt = prompt.replace('{{output.response}}', _sanitize_placeholders(response or ''))

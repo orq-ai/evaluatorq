@@ -69,21 +69,19 @@ class TestLangGraphTarget:
     @pytest.mark.asyncio
     async def test_multi_turn_tool_calls_excludes_previous_turns(self) -> None:
         """Turn N must not include tool calls from turns 1..N-1 (checkpointer accumulates state)."""
-        tool_a = MagicMock()
-        tool_a.content = "turn 1 result"
-        tool_a.tool_calls = [{"name": "tool_A", "args": {"x": 1}}]
+        from langchain_core.messages import AIMessage
 
-        final_1 = MagicMock()
-        final_1.content = "done turn 1"
-        final_1.tool_calls = []
+        tool_a = AIMessage(
+            content="turn 1 result",
+            tool_calls=[{"name": "tool_A", "args": {"x": 1}, "id": "c1", "type": "tool_call"}],
+        )
+        final_1 = AIMessage(content="done turn 1")
 
-        tool_b = MagicMock()
-        tool_b.content = "turn 2 result"
-        tool_b.tool_calls = [{"name": "tool_B", "args": {"y": 2}}]
-
-        final_2 = MagicMock()
-        final_2.content = "done turn 2"
-        final_2.tool_calls = []
+        tool_b = AIMessage(
+            content="turn 2 result",
+            tool_calls=[{"name": "tool_B", "args": {"y": 2}, "id": "c2", "type": "tool_call"}],
+        )
+        final_2 = AIMessage(content="done turn 2")
 
         call_count = 0
 
@@ -111,9 +109,12 @@ class TestLangGraphTarget:
     @pytest.mark.asyncio
     async def test_reset_then_send_extracts_all_tool_calls(self) -> None:
         """After reset, _prev_msg_count=0 so all messages are treated as new."""
-        msg_with_tool = MagicMock()
-        msg_with_tool.content = "result"
-        msg_with_tool.tool_calls = [{"name": "tool_X", "args": {}}]
+        from langchain_core.messages import AIMessage
+
+        msg_with_tool = AIMessage(
+            content="result",
+            tool_calls=[{"name": "tool_X", "args": {}, "id": "c3", "type": "tool_call"}],
+        )
 
         graph = MagicMock()
         graph.name = "test"
