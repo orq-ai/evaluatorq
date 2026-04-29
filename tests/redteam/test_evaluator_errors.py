@@ -11,6 +11,7 @@ Covers:
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -143,6 +144,24 @@ class TestRunEvaluatorErrorPaths:
 
         span_patch, record_patch = _patch_tracing()
         with span_patch, record_patch, pytest.raises(APIStatusError):
+            await evaluator.evaluate_vulnerability(
+                vuln=Vulnerability.GOAL_HIJACKING,
+                messages=[{"role": "user", "content": "attack prompt"}],
+                response="agent response",
+            )
+
+    @pytest.mark.asyncio
+    async def test_timeout_error_propagates(self):
+        """asyncio.TimeoutError raised by the evaluator LLM client must not be
+        converted to an inconclusive result."""
+        from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
+
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create = AsyncMock(side_effect=asyncio.TimeoutError)
+        evaluator = OWASPEvaluator(evaluator_model="test-model", llm_client=mock_client)
+
+        span_patch, record_patch = _patch_tracing()
+        with span_patch, record_patch, pytest.raises(asyncio.TimeoutError):
             await evaluator.evaluate_vulnerability(
                 vuln=Vulnerability.GOAL_HIJACKING,
                 messages=[{"role": "user", "content": "attack prompt"}],

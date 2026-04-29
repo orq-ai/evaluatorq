@@ -10,7 +10,7 @@ import pytest
 
 from evaluatorq.redteam.backends.base import _coerce_to_agent_response
 from evaluatorq.redteam.contracts import AgentResponse, ExecutedToolCall, OrchestratorResult, Message, TextOutputItem, ToolCallOutputItem
-from evaluatorq.redteam.adaptive.evaluator import _sanitize_placeholders, _serialize_messages
+from evaluatorq.redteam.adaptive.evaluator import _sanitize_placeholders
 
 
 # ---------------------------------------------------------------------------
