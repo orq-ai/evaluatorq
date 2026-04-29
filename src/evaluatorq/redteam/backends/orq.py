@@ -52,7 +52,10 @@ from evaluatorq.redteam.contracts import (
     ExecutedToolCall,
     KnowledgeBaseInfo,
     MemoryStoreInfo,
+    OutputMessage,
+    TextOutputItem,
     TokenUsage,
+    ToolCallOutputItem,
     ToolInfo,
 )
 from evaluatorq.redteam.tracing import record_token_usage, set_span_attrs, with_llm_span, with_redteam_span
@@ -263,7 +266,12 @@ class ORQAgentTarget:
                         ensure_ascii=False,
                     ),
                 })
-                return AgentResponse(text=result_text, tool_calls=all_tool_calls)
+                output: list[OutputMessage] = [
+                    ToolCallOutputItem(name=tc.name, arguments=tc.arguments, result=tc.result)
+                    for tc in all_tool_calls
+                ]
+                output.append(TextOutputItem(text=result_text))
+                return AgentResponse(output=output)
 
             except Exception as e:
                 logger.error(f'ORQ agent call failed: {e}')

@@ -356,20 +356,83 @@ class ExecutedToolCall:
 
 
 @dataclass
-class AgentResponse:
-    """Structured response from a target agent, including tool calls made during execution.
+class TextOutputItem:
+    """An assistant text response in the agent output message list.
 
-    Backward-compatible: evaluators and orchestrator default to ``.text``.
-    Tool-aware components may additionally inspect ``.tool_calls``.
-
-    ``intermediate_steps`` is a hook for framework-specific raw execution data
-    (e.g. LangChain AgentAction/AgentFinish pairs). Not consumed by the orchestrator
-    or evaluator — available for custom backends and post-processing.
+    Aligns with the OpenResponses ``output_text`` content type.
     """
 
     text: str
-    tool_calls: list[ExecutedToolCall] = field(default_factory=list)
-    intermediate_steps: list[dict[str, Any]] | None = None
+    type: Literal["output_text"] = "output_text"
+
+
+@dataclass
+class ToolCallOutputItem:
+    """A tool call in the agent output message list.
+
+    Aligns with the OpenResponses ``function_call`` item type.
+    ``arguments`` is stored as a dict for convenience; OpenResponses serialises
+    this as a JSON string when converting to :class:`ResponseResource`.
+    """
+
+    name: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+    id: str | None = None
+    result: str | None = None
+    type: Literal["function_call"] = "function_call"
+
+
+@dataclass
+class ReasoningOutputItem:
+    """A reasoning / thinking step in the agent output message list.
+
+    Captures chain-of-thought or intermediate reasoning produced by the model
+    (e.g. OpenAI o-series extended thinking, or agent intermediate steps).
+    Aligns with the OpenResponses ``reasoning`` item type.
+    """
+
+    text: str
+    id: str | None = None
+    type: Literal["reasoning"] = "reasoning"
+
+
+OutputMessage = TextOutputItem | ToolCallOutputItem | ReasoningOutputItem
+
+
+@dataclass
+class AgentResponse:
+    """Structured response from a target agent as an ordered list of output messages.
+
+    Each item in ``output`` is a :class:`TextOutputItem`, :class:`ToolCallOutputItem`,
+    or :class:`ReasoningOutputItem`, preserving the order in which they were produced.
+    Item ``type`` discriminators align with the OpenResponses intermediate data format
+    (``output_text``, ``function_call``, ``reasoning``).
+
+    This unified representation lets evaluators reason about tool call order and
+    the interleaving of tool calls, reasoning steps, and text responses — something
+    not possible when text, tool calls, and intermediate steps are stored separately.
+
+    Backward-compatible accessors:
+        ``.text``       — last ``TextOutputItem`` content, or ``""`` if none
+        ``.tool_calls`` — :class:`ExecutedToolCall` list extracted from tool call items
+    """
+
+    output: list[OutputMessage] = field(default_factory=list)
+
+    @property
+    def text(self) -> str:
+        """Return the last text output item's content (backward-compatible)."""
+        texts = [item.text for item in self.output if isinstance(item, TextOutputItem)]
+        return texts[-1] if texts else ""
+
+    @property
+    def tool_calls(self) -> list[ExecutedToolCall]:
+        """Return tool calls extracted from output items (backward-compatible)."""
+        return [
+            ExecutedToolCall(name=item.name, arguments=item.arguments, result=item.result)
+            for item in self.output
+            if isinstance(item, ToolCallOutputItem)
+        ]
 
 
 class Message(BaseModel):

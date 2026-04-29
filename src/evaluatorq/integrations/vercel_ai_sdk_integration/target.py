@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 import httpx
 
 from evaluatorq.redteam.backends.base import AgentTarget
-from evaluatorq.redteam.contracts import AgentContext, AgentResponse
+from evaluatorq.redteam.contracts import AgentContext, AgentResponse, TextOutputItem
 
 
 class VercelAISdkTarget(AgentTarget):
@@ -107,7 +107,7 @@ class VercelAISdkTarget(AgentTarget):
 
         text = self._parse_response(response)
         self._history.append({"role": "assistant", "content": text})
-        return AgentResponse(text=text)
+        return AgentResponse(output=[TextOutputItem(text=text)])
 
     def reset_conversation(self) -> None:
         """Reset conversation state by clearing the message history."""

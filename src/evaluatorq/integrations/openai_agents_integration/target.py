@@ -8,7 +8,7 @@ from typing import Any
 from agents import Agent, Runner
 
 from evaluatorq.redteam.backends.base import AgentTarget
-from evaluatorq.redteam.contracts import AgentContext, AgentResponse, ExecutedToolCall, ToolInfo
+from evaluatorq.redteam.contracts import AgentContext, AgentResponse, ExecutedToolCall, OutputMessage, TextOutputItem, ToolCallOutputItem, ToolInfo
 
 
 class OpenAIAgentTarget(AgentTarget):
@@ -94,7 +94,12 @@ class OpenAIAgentTarget(AgentTarget):
                         tc_args = tc_args_raw if isinstance(tc_args_raw, dict) else {}
                     tool_calls.append(ExecutedToolCall(name=str(tc_name), arguments=tc_args))
 
-        return AgentResponse(text=str(result.final_output), tool_calls=tool_calls)
+        output: list[OutputMessage] = [
+            ToolCallOutputItem(name=tc.name, arguments=tc.arguments, result=tc.result)
+            for tc in tool_calls
+        ]
+        output.append(TextOutputItem(text=str(result.final_output)))
+        return AgentResponse(output=output)
 
     def reset_conversation(self) -> None:
         """Reset conversation state by clearing the message history."""

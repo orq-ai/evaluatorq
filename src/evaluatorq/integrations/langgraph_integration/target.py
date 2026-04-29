@@ -10,7 +10,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 
 from evaluatorq.redteam.backends.base import AgentTarget
-from evaluatorq.redteam.contracts import AgentContext, AgentResponse, ExecutedToolCall, MemoryStoreInfo, ToolInfo
+from evaluatorq.redteam.contracts import AgentContext, AgentResponse, ExecutedToolCall, MemoryStoreInfo, OutputMessage, TextOutputItem, ToolCallOutputItem, ToolInfo
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +123,12 @@ class LangGraphTarget(AgentTarget):
                     tool_calls.append(ExecutedToolCall(name=str(name), arguments=args if isinstance(args, dict) else {}))
         self._prev_msg_count = len(messages)
 
-        return AgentResponse(text=content, tool_calls=tool_calls)
+        output: list[OutputMessage] = [
+            ToolCallOutputItem(name=tc.name, arguments=tc.arguments, result=tc.result)
+            for tc in tool_calls
+        ]
+        output.append(TextOutputItem(text=content))
+        return AgentResponse(output=output)
 
     def reset_conversation(self) -> None:
         """Reset the message-count cursor used for per-turn tool call extraction.

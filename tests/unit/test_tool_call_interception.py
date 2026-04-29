@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from evaluatorq.redteam.backends.base import _coerce_to_agent_response
-from evaluatorq.redteam.contracts import AgentResponse, ExecutedToolCall, OrchestratorResult, Message
+from evaluatorq.redteam.contracts import AgentResponse, ExecutedToolCall, OrchestratorResult, Message, TextOutputItem, ToolCallOutputItem
 from evaluatorq.redteam.adaptive.evaluator import _sanitize_placeholders, _serialize_messages
 
 
@@ -25,8 +25,10 @@ class TestCoerceToAgentResponse:
         assert result.tool_calls == []
 
     def test_agent_response_input_returned_unchanged(self) -> None:
-        tc = ExecutedToolCall(name="foo", arguments={"x": 1})
-        original = AgentResponse(text="hi", tool_calls=[tc])
+        original = AgentResponse(output=[
+            ToolCallOutputItem(name="foo", arguments={"x": 1}),
+            TextOutputItem(text="hi"),
+        ])
         result = _coerce_to_agent_response(original)
         assert result is original
 

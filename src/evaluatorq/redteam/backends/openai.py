@@ -9,7 +9,7 @@ from loguru import logger
 from openai.types.chat import ChatCompletionMessageParam
 
 from evaluatorq.redteam.backends.base import extract_provider_error_code, extract_status_code
-from evaluatorq.redteam.contracts import AgentContext, AgentResponse, ExecutedToolCall, TargetKind, TokenUsage
+from evaluatorq.redteam.contracts import AgentContext, AgentResponse, ExecutedToolCall, OutputMessage, TargetKind, TextOutputItem, TokenUsage, ToolCallOutputItem
 from evaluatorq.redteam.tracing import record_llm_response, with_llm_span
 
 if TYPE_CHECKING:
@@ -82,7 +82,12 @@ class OpenAIModelTarget:
             else:
                 self._last_token_usage = None
 
-        return AgentResponse(text=content, tool_calls=executed_tool_calls)
+        output: list[OutputMessage] = [
+            ToolCallOutputItem(name=tc.name, arguments=tc.arguments)
+            for tc in executed_tool_calls
+        ]
+        output.append(TextOutputItem(text=content))
+        return AgentResponse(output=output)
 
     def consume_last_token_usage(self) -> TokenUsage | None:
         """Return and clear usage from last call."""
