@@ -36,8 +36,8 @@ class _TokenUsageCollector(BaseCallbackHandler):
 
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
         """Accumulate token usage from a completed LLM call."""
-        try:
-            for inner in response.generations:
+        for inner in response.generations:
+            try:
                 if not inner:
                     continue
                 # Only read first candidate — higher-n sampling reuses the same
@@ -46,8 +46,10 @@ class _TokenUsageCollector(BaseCallbackHandler):
                 meta = getattr(getattr(gen, "message", None), "usage_metadata", None)
                 if meta is None:
                     continue
-                prompt = int(meta.get("input_tokens")) if meta.get("input_tokens") is not None else 0
-                completion = int(meta.get("output_tokens")) if meta.get("output_tokens") is not None else 0
+                input_tokens = meta.get("input_tokens")
+                prompt = int(input_tokens) if input_tokens is not None else 0
+                output_tokens = meta.get("output_tokens")
+                completion = int(output_tokens) if output_tokens is not None else 0
                 raw_total = meta.get("total_tokens")
                 # CRITICAL: use `is not None`, not truthiness — total_tokens=0 is valid.
                 total = int(raw_total) if raw_total is not None else prompt + completion
@@ -55,8 +57,8 @@ class _TokenUsageCollector(BaseCallbackHandler):
                 self.completion_tokens += completion
                 self.total_tokens += total
                 self.calls += 1
-        except Exception as exc:
-            logger.warning("_TokenUsageCollector.on_llm_end: failed to extract usage: %s", exc)
+            except Exception as exc:
+                logger.warning("_TokenUsageCollector.on_llm_end: failed to extract usage: %s", exc)
 
     def on_llm_error(self, error: BaseException, **kwargs: Any) -> None:
         """Handle LLM errors — try to extract partial usage, otherwise no-op."""
