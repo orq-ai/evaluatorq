@@ -42,6 +42,11 @@ class TestCoerceToAgentResponse:
         result = _coerce_to_agent_response("")
         assert result.text == ""
 
+    def test_legacy_text_constructor(self) -> None:
+        result = AgentResponse(text="legacy")
+        assert result.text == "legacy"
+        assert result.output == [TextOutputItem(text="legacy")]
+
 
 class TestAgentResponseTextSemantics:
     def test_text_returns_last_text_item(self) -> None:
@@ -52,6 +57,39 @@ class TestAgentResponseTextSemantics:
         ])
 
         assert result.text == "final"
+
+    def test_tool_call_only_response_has_empty_text(self) -> None:
+        result = AgentResponse(output=[
+            ToolCallOutputItem(name="lookup", id="call_1", arguments={"q": "value"}),
+        ])
+
+        assert result.text == ""
+        assert len(result.tool_calls) == 1
+        assert result.output[0].id == "call_1"
+
+    def test_rejects_non_output_message_items(self) -> None:
+        with pytest.raises(TypeError, match="AgentResponse.output items"):
+            AgentResponse(output=["not an output item"])  # type: ignore[list-item]
+
+    def test_rejects_wrong_output_container_type(self) -> None:
+        with pytest.raises(TypeError, match="AgentResponse.output must be a list"):
+            AgentResponse(output=(TextOutputItem(text="hi"),))  # type: ignore[arg-type]
+
+    def test_output_items_validate_type_discriminator(self) -> None:
+        with pytest.raises(ValueError, match="TextOutputItem.type"):
+            TextOutputItem(text="hi", type="wrong")  # type: ignore[arg-type]
+
+        with pytest.raises(ValueError, match="ToolCallOutputItem.type"):
+            ToolCallOutputItem(name="tool", type="wrong")  # type: ignore[arg-type]
+
+    def test_tool_call_arguments_must_be_dict(self) -> None:
+        with pytest.raises(TypeError, match="arguments must be a dict"):
+            ToolCallOutputItem(name="tool", arguments="{}")  # type: ignore[arg-type]
+
+    def test_output_items_are_frozen(self) -> None:
+        item = TextOutputItem(text="hi")
+        with pytest.raises(Exception):
+            item.text = "changed"  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
@@ -522,3 +560,23 @@ class TestCreateDynamicEvaluatorScorer:
 
         # Empty turns produce empty flat list → coerced to None by `or None`
         assert captured["tool_calls"] is None
+
+    @pytest.mark.asyncio
+    async def test_parse_failure_log_includes_datapoint_context(self) -> None:
+        from evaluatorq.redteam.adaptive.pipeline import create_dynamic_evaluator
+
+        data = MagicMock(inputs={
+            "id": "dp_123",
+            "category": "ASI05",
+            "strategy_name": "tool_output_hijack",
+        })
+
+        with patch("evaluatorq.redteam.adaptive.pipeline.logger.error") as mock_error:
+            scorer = create_dynamic_evaluator()["scorer"]
+            result = await scorer({"data": data, "output": {"conversation": "invalid"}})
+
+        assert result.value == "error"
+        log_message = mock_error.call_args.args[0]
+        assert "datapoint_id='dp_123'" in log_message
+        assert "category='ASI05'" in log_message
+        assert "strategy_name='tool_output_hijack'" in log_message

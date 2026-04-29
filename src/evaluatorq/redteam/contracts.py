@@ -346,16 +346,22 @@ class ToolCall(BaseModel):
     function: FunctionCall = Field(description='Function call details')
 
 
-@dataclass
+@dataclass(frozen=True)
 class ExecutedToolCall:
-    """A tool call captured during agent execution (distinct from ToolCall which is for strategy definitions)."""
+    """Backward-compatible view of an executed tool call.
+
+    ``AgentResponse.tool_calls`` derives this from ``ToolCallOutputItem`` and
+    intentionally drops OpenResponses-only metadata such as ``id``. Consumers
+    that need full-fidelity output ordering or IDs should inspect
+    ``AgentResponse.output`` directly.
+    """
 
     name: str
     arguments: dict[str, Any]
     result: str | None = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class TextOutputItem:
     """An assistant text response in the agent output message list.
 
@@ -365,8 +371,12 @@ class TextOutputItem:
     text: str
     type: Literal["output_text"] = "output_text"
 
+    def __post_init__(self) -> None:
+        if self.type != "output_text":
+            raise ValueError("TextOutputItem.type must be 'output_text'")
 
-@dataclass
+
+@dataclass(frozen=True)
 class ToolCallOutputItem:
     """A tool call in the agent output message list.
 
@@ -381,8 +391,14 @@ class ToolCallOutputItem:
     result: str | None = None
     type: Literal["function_call"] = "function_call"
 
+    def __post_init__(self) -> None:
+        if self.type != "function_call":
+            raise ValueError("ToolCallOutputItem.type must be 'function_call'")
+        if not isinstance(self.arguments, dict):
+            raise TypeError("ToolCallOutputItem.arguments must be a dict")
 
-@dataclass
+
+@dataclass(frozen=True)
 class ReasoningOutputItem:
     """A reasoning / thinking step in the agent output message list.
 
@@ -395,11 +411,14 @@ class ReasoningOutputItem:
     id: str | None = None
     type: Literal["reasoning"] = "reasoning"
 
+    def __post_init__(self) -> None:
+        if self.type != "reasoning":
+            raise ValueError("ReasoningOutputItem.type must be 'reasoning'")
 
 OutputMessage = TextOutputItem | ToolCallOutputItem | ReasoningOutputItem
 
 
-@dataclass
+@dataclass(frozen=True, init=False)
 class AgentResponse:
     """Structured response from a target agent as an ordered list of output messages.
 
@@ -414,10 +433,32 @@ class AgentResponse:
 
     Backward-compatible accessors:
         ``.text``       — last ``TextOutputItem`` content, or ``""`` if none
-        ``.tool_calls`` — :class:`ExecutedToolCall` list extracted from tool call items
+        ``.tool_calls`` — lossy :class:`ExecutedToolCall` view extracted from
+        tool call items; this intentionally omits ``ToolCallOutputItem.id``
     """
 
     output: list[OutputMessage] = field(default_factory=list)
+
+    def __init__(
+        self,
+        output: list[OutputMessage] | None = None,
+        *,
+        text: str | None = None,
+    ) -> None:
+        """Create a response from ordered output items or legacy ``text=``.
+
+        ``text=`` is kept for older tests/integrations that constructed
+        ``AgentResponse(text="...")`` before ordered output items existed.
+        """
+        if output is not None and text is not None:
+            raise ValueError("AgentResponse accepts either output= or text=, not both")
+        items: list[OutputMessage]
+        if output is None:
+            items = [TextOutputItem(text=text)] if text is not None else []
+        else:
+            _validate_output_messages(output)
+            items = output
+        object.__setattr__(self, "output", items)
 
     @property
     def text(self) -> str:
@@ -427,12 +468,29 @@ class AgentResponse:
 
     @property
     def tool_calls(self) -> list[ExecutedToolCall]:
-        """Return tool calls extracted from output items (backward-compatible)."""
+        """Return a lossy backward-compatible view of tool call output items.
+
+        ``ToolCallOutputItem.id`` is not represented on ``ExecutedToolCall``.
+        Use ``.output`` when preserving OpenResponses IDs or item ordering
+        matters.
+        """
         return [
             ExecutedToolCall(name=item.name, arguments=item.arguments, result=item.result)
             for item in self.output
             if isinstance(item, ToolCallOutputItem)
         ]
+
+
+def _validate_output_messages(output: list[OutputMessage]) -> None:
+    if not isinstance(output, list):
+        raise TypeError("AgentResponse.output must be a list of output message items")
+    for index, item in enumerate(output):
+        if not isinstance(item, (TextOutputItem, ToolCallOutputItem, ReasoningOutputItem)):
+            raise TypeError(
+                "AgentResponse.output items must be TextOutputItem, "
+                f"ToolCallOutputItem, or ReasoningOutputItem; item {index} "
+                f"was {type(item).__name__}"
+            )
 
 
 class Message(BaseModel):

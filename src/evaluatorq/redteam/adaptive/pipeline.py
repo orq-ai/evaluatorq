@@ -507,7 +507,13 @@ def create_dynamic_evaluator(
             try:
                 output = AttackOutput.model_validate(raw_output)
             except Exception as e:
-                logger.error(f'Failed to parse job output as AttackOutput: {e}')
+                inputs = getattr(data, 'inputs', {}) or {}
+                logger.error(
+                    'Failed to parse job output as AttackOutput '
+                    f"(datapoint_id={inputs.get('id', '<unknown>')!r}, "
+                    f"category={inputs.get('category', '<unknown>')!r}, "
+                    f"strategy_name={inputs.get('strategy_name', '<unknown>')!r}): {e}"
+                )
                 return EvaluationResult(
                     value='error',
                     explanation=f'Failed to parse job output: {e}',

@@ -6,6 +6,7 @@ import logging
 from typing import Any
 from uuid import uuid4
 
+from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 
@@ -113,7 +114,6 @@ class LangGraphTarget(AgentTarget):
                         args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
                         tool_calls.append(ExecutedToolCall(name=str(name), arguments=args if isinstance(args, dict) else {}))
             else:
-                from langchain_core.messages import AIMessage
                 if not isinstance(msg, AIMessage):
                     continue
                 # LangChain AIMessage — tool_calls is a list of dicts with 'name' and 'args'
