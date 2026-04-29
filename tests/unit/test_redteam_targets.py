@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import MagicMock
 
 import pytest
 
 from evaluatorq.integrations.callable_integration import CallableTarget
+from evaluatorq.redteam.contracts import AgentResponse, TextOutputItem, ToolCallOutputItem
 
 
 class TestCallableTarget:
@@ -26,6 +28,28 @@ class TestCallableTarget:
         result = await target.send_prompt("hello")
         assert result.text == "async: hello"
         assert result.tool_calls == []
+
+    @pytest.mark.asyncio
+    async def test_agent_response_return_is_passed_through(self) -> None:
+        response = AgentResponse(output=[
+            ToolCallOutputItem(name="search", arguments={"query": "hello"}),
+            TextOutputItem(text="done"),
+        ])
+
+        target = CallableTarget(lambda prompt: response)
+        result = await target.send_prompt("hello")
+
+        assert result is response
+        assert result.tool_calls[0].name == "search"
+
+    @pytest.mark.asyncio
+    async def test_timeout_is_not_wrapped(self) -> None:
+        async def my_agent(prompt: str) -> str:
+            raise asyncio.TimeoutError
+
+        target = CallableTarget(my_agent)
+        with pytest.raises(asyncio.TimeoutError):
+            await target.send_prompt("hello")
 
     @pytest.mark.asyncio
     async def test_reset_calls_reset_fn(self) -> None:

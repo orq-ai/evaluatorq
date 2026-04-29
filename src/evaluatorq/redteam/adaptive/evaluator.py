@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from openai import APIConnectionError, APIStatusError
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from openai.types.chat import ChatCompletionMessageParam
 
@@ -133,6 +134,7 @@ class OWASPEvaluator:
         tool_calls: list[ExecutedToolCall] | None = None,
     ) -> AttackEvaluationResult:
         """Execute an evaluator entity against a conversation and return a typed result."""
+        raw_content = '{}'
         try:
             prompt = evaluator.prompt
             # Replace template variables in a safe order. Trusted internal data first,
@@ -191,6 +193,16 @@ class OWASPEvaluator:
                     'raw_content': raw_content,
                 },
             )
+        except ValidationError as e:
+            logger.error(f'Evaluator model returned malformed JSON for {evaluator_id}: {e}. Raw: {raw_content!r:.500}')
+            return AttackEvaluationResult(
+                passed=None,
+                explanation=f'Evaluator returned malformed JSON: {e}',
+                evaluator_id=evaluator_id,
+                raw_output={'error': str(e), 'raw_content': raw_content},
+            )
+        except asyncio.TimeoutError:
+            raise
         except (APIConnectionError, APIStatusError):
             raise
         except Exception as e:
@@ -242,5 +254,3 @@ def _sanitize_placeholders(text: str) -> str:
     by a subsequent ``.replace()`` call in the evaluator prompt pipeline.
     """
     return text.replace('{{', '{ {')
-
-

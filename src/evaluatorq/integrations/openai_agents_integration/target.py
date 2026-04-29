@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -51,6 +52,8 @@ class OpenAIAgentTarget(AgentTarget):
 
         try:
             result = await Runner.run(self._agent, input_data, **self._run_kwargs)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            raise
         except Exception as exc:
             raise RuntimeError(
                 f"OpenAIAgentTarget: Runner.run() raised an error: {exc}"
@@ -67,32 +70,49 @@ class OpenAIAgentTarget(AgentTarget):
         # Extract tool calls only from items added in this turn (not accumulated history)
         # prev_len items were present before this call; everything after is new
         tool_calls: list[ExecutedToolCall] = []
-        for item in self._history[prev_len:]:
+        new_items_start = min(prev_len, len(self._history))
+        for item in self._history[new_items_start:]:
+            # Agents SDK to_input_list() returns Responses API items for tool calls,
+            # e.g. {"type": "function_call", "name": "...", "arguments": "..."}.
+            if isinstance(item, dict) and item.get("type") == "function_call":
+                tool_calls.append(
+                    ExecutedToolCall(
+                        name=str(item.get("name", "")),
+                        arguments=_parse_tool_call_arguments(item.get("arguments", "{}")),
+                    )
+                )
             # Handle dict format (standard OpenAI message format)
-            if isinstance(item, dict) and item.get("role") == "assistant":
+            elif isinstance(item, dict) and item.get("role") == "assistant":
                 for tc in (item.get("tool_calls") or []):
                     if isinstance(tc, dict):
                         func = tc.get("function", {})
                         name = func.get("name", "") if isinstance(func, dict) else ""
-                        args_str = func.get("arguments", "{}") if isinstance(func, dict) else "{}"
-                        try:
-                            args = json.loads(args_str)
-                        except (json.JSONDecodeError, ValueError):
-                            args = {"raw": args_str}
-                        tool_calls.append(ExecutedToolCall(name=name, arguments=args))
+                        args_raw = func.get("arguments", "{}") if isinstance(func, dict) else "{}"
+                        tool_calls.append(
+                            ExecutedToolCall(
+                                name=name,
+                                arguments=_parse_tool_call_arguments(args_raw),
+                            )
+                        )
             # Handle typed SDK objects (future-proofing if to_input_list() returns non-dict items)
-            elif not isinstance(item, dict) and getattr(item, "role", None) == "assistant":
-                for tc in (getattr(item, "tool_calls", None) or []):
-                    tc_name = getattr(tc, "name", None) or getattr(getattr(tc, "function", None), "name", "") or ""
-                    tc_args_raw = getattr(tc, "arguments", None) or getattr(getattr(tc, "function", None), "arguments", "{}")
-                    if isinstance(tc_args_raw, str):
-                        try:
-                            tc_args: dict[str, Any] = json.loads(tc_args_raw)
-                        except (json.JSONDecodeError, ValueError):
-                            tc_args = {"raw": tc_args_raw}
-                    else:
-                        tc_args = tc_args_raw if isinstance(tc_args_raw, dict) else {}
-                    tool_calls.append(ExecutedToolCall(name=str(tc_name), arguments=tc_args))
+            elif not isinstance(item, dict):
+                if getattr(item, "type", None) == "function_call":
+                    tool_calls.append(
+                        ExecutedToolCall(
+                            name=str(getattr(item, "name", "")),
+                            arguments=_parse_tool_call_arguments(getattr(item, "arguments", "{}")),
+                        )
+                    )
+                elif getattr(item, "role", None) == "assistant":
+                    for tc in (getattr(item, "tool_calls", None) or []):
+                        tc_name = getattr(tc, "name", None) or getattr(getattr(tc, "function", None), "name", "") or ""
+                        tc_args_raw = getattr(tc, "arguments", None) or getattr(getattr(tc, "function", None), "arguments", "{}")
+                        tool_calls.append(
+                            ExecutedToolCall(
+                                name=str(tc_name),
+                                arguments=_parse_tool_call_arguments(tc_args_raw),
+                            )
+                        )
 
         output: list[OutputMessage] = [
             ToolCallOutputItem(name=tc.name, arguments=tc.arguments, result=tc.result)
@@ -152,3 +172,16 @@ class OpenAIAgentTarget(AgentTarget):
     def clone(self) -> OpenAIAgentTarget:
         """Create an independent copy for parallel red teaming jobs."""
         return OpenAIAgentTarget(self._agent, run_kwargs=dict(self._run_kwargs))
+
+
+def _parse_tool_call_arguments(raw: Any) -> dict[str, Any]:
+    """Normalize SDK tool-call arguments into the ExecutedToolCall dict contract."""
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str):
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return {"raw": raw}
+    return parsed if isinstance(parsed, dict) else {"raw": raw}

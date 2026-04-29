@@ -43,6 +43,17 @@ class TestCoerceToAgentResponse:
         assert result.text == ""
 
 
+class TestAgentResponseTextSemantics:
+    def test_text_returns_last_text_item(self) -> None:
+        result = AgentResponse(output=[
+            TextOutputItem(text="draft"),
+            ToolCallOutputItem(name="lookup", arguments={"q": "value"}),
+            TextOutputItem(text="final"),
+        ])
+
+        assert result.text == "final"
+
+
 # ---------------------------------------------------------------------------
 # ExecutedToolCall
 # ---------------------------------------------------------------------------

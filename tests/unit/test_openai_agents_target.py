@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -105,6 +106,57 @@ class TestOpenAIAgentTarget:
         target = OpenAIAgentTarget(MagicMock())
         with pytest.raises(RuntimeError, match="OpenAIAgentTarget: Runner.run\\(\\) raised"):
             await target.send_prompt("hi")
+
+    @pytest.mark.asyncio
+    async def test_runner_timeout_is_not_wrapped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        runner = MagicMock()
+        runner.run = AsyncMock(side_effect=asyncio.TimeoutError)
+        monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
+
+        target = OpenAIAgentTarget(MagicMock())
+        with pytest.raises(asyncio.TimeoutError):
+            await target.send_prompt("hi")
+
+    @pytest.mark.asyncio
+    async def test_extracts_responses_format_function_calls(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        result = MagicMock()
+        result.final_output = "looked it up"
+        result.to_input_list.return_value = [
+            {"role": "user", "content": "find docs"},
+            {
+                "type": "function_call",
+                "name": "search_docs",
+                "arguments": '{"query": "tool calls"}',
+            },
+            {"role": "assistant", "content": "looked it up"},
+        ]
+        runner = MagicMock()
+        runner.run = AsyncMock(return_value=result)
+        monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
+
+        target = OpenAIAgentTarget(MagicMock())
+        response = await target.send_prompt("find docs")
+
+        assert len(response.tool_calls) == 1
+        assert response.tool_calls[0].name == "search_docs"
+        assert response.tool_calls[0].arguments == {"query": "tool calls"}
+
+    @pytest.mark.asyncio
+    async def test_responses_format_invalid_json_arguments_are_preserved(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        result = MagicMock()
+        result.final_output = "done"
+        result.to_input_list.return_value = [
+            {"role": "user", "content": "run"},
+            {"type": "function_call", "name": "run_tool", "arguments": "not-json"},
+        ]
+        runner = MagicMock()
+        runner.run = AsyncMock(return_value=result)
+        monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
+
+        target = OpenAIAgentTarget(MagicMock())
+        response = await target.send_prompt("run")
+
+        assert response.tool_calls[0].arguments == {"raw": "not-json"}
 
     @pytest.mark.asyncio
     async def test_get_agent_context_roundtrips_fields(self) -> None:
