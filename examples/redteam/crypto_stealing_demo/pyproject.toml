@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Demo package for the Red Teaming AI Agents talk at AI Builders Amsterdam"
 requires-python = ">=3.12"
 dependencies = [
-  "evaluatorq[redteam]>=1.3.0rc2",
+  "evaluatorq[orq,redteam]>=1.3.0",
   "fastapi>=0.115",
   "sse-starlette>=2.1",
   "uvicorn[standard]>=0.32",

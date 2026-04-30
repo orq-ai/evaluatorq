@@ -41,14 +41,6 @@ Open `http://localhost:8001/` in a browser to see the wallets tick.
 uv run pytest
 ```
 
-## Finale (stage only)
-
-```bash
-uv run python finale.py
-```
-
-Opens a fake-shutdown overlay in the default browser. No OS action.
-
 ## Files
 
 - `agents/` — `DemoAgent` (tool-capable, implements `AgentTarget`), vulnerable + secure subclasses

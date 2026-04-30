@@ -133,10 +133,6 @@ And attackers are getting sophisticated.
 :::
 :::
 
-::: {.about-photos}
-<img src="assets/profile.jpg" class="photo-real">
-<img src="assets/cartoon-avatar.jpg" class="photo-cartoon">
-:::
 :::
 
 ::: {.notes}
@@ -523,7 +519,7 @@ After the run, you get a report you can actually prioritize from.
 
 ## Results (fallback) {background-color="#1a1a1a"}
 
-![](vulnerability-side-by-side.png){width="90%"}
+![](assets/vulnerability-side-by-side.png){width="90%"}
 
 ::: {.notes}
 - Fallback: use this if the live compare.py table didn't render or run failed

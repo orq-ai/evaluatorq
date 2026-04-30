@@ -89,11 +89,12 @@ class DemoAgent(AgentTarget):
     """
 
     system_prompt: str = ""
-    model: str = "gpt-5-mini"
+    model: str = "openai/gpt-5.4-mini"
 
     def __init__(self) -> None:
-        base_url = os.environ.get("ORQ_BASE_URL", "https://my.orq.ai").rstrip("/") + "/v2/proxy"
+        base_url = os.environ.get("ORQ_BASE_URL", "https://my.orq.ai").rstrip("/") + "/v2/router"
         self.client = AsyncOpenAI(base_url=base_url, api_key=os.environ["ORQ_API_KEY"])
+        self.memory_entity_id: str | None = None
         self._conversation: list[dict[str, Any]] = []
         self._last_tool_calls: list[ToolCall] = []
 
@@ -101,7 +102,7 @@ class DemoAgent(AgentTarget):
         self._conversation = []
         self._last_tool_calls = []
 
-    def clone(self, memory_entity_id: str | None = None) -> "DemoAgent":
+    def new(self) -> "DemoAgent":
         return type(self)()
 
     async def get_agent_context(self) -> AgentContext:

@@ -89,7 +89,14 @@ class SupportsErrorMapping(Protocol):
 
 def is_agent_target(obj: object) -> bool:
     """Return True if obj satisfies the AgentTarget protocol at runtime."""
-    return callable(getattr(obj, 'send_prompt', None)) and callable(getattr(obj, 'new', None))
+    has_send = callable(getattr(obj, 'send_prompt', None))
+    has_new = callable(getattr(obj, 'new', None))
+    if has_send and not has_new and callable(getattr(obj, 'clone', None)):
+        raise TypeError(
+            f"{type(obj).__name__} implements 'clone()' which was removed in evaluatorq 1.3. "
+            "Rename it to 'new(self) -> AgentTarget' — signature is the same, no memory_entity_id param."
+        )
+    return has_send and has_new
 
 
 class DirectTargetFactory:
@@ -99,7 +106,13 @@ class DirectTargetFactory:
         self._target = target
 
     def create_target(self, agent_key: str) -> AgentTarget:
-        return self._target.new()
+        result = self._target.new()
+        if result is None:  # pyright: ignore[reportUnnecessaryComparison]
+            raise TypeError(
+                f"{type(self._target).__name__}.new() returned None. "
+                "It must return a fresh AgentTarget instance."
+            )
+        return result
 
 
 class NoopMemoryCleanup:

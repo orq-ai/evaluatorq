@@ -45,6 +45,7 @@ class AppState:
             return list(self._log)
 
     def transfer(self, from_id: str, to_id: str, amount: Decimal) -> Transaction:
+        from_id, to_id = from_id.lower(), to_id.lower()
         with self._lock:
             if from_id not in self._balances:
                 raise UnknownAccount(from_id)

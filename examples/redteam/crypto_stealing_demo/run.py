@@ -13,11 +13,19 @@ import json
 import os
 import sys
 import time
+
+# Prevent rich from probing terminal width via cursor-position queries (CPR).
+# Without this, rich sends \033[6n repeatedly; inside tmux the responses arrive
+# after the script exits and appear as raw text in the shell prompt.
+try:
+    os.environ.setdefault("COLUMNS", str(os.get_terminal_size().columns))
+except OSError:
+    os.environ.setdefault("COLUMNS", "220")
 from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
-from evaluatorq.redteam import red_team
+from evaluatorq.redteam import red_team, LLMCallConfig, LLMConfig
 
 from agents.secure import HAL
 from agents.vulnerable import JARVIS
@@ -34,12 +42,31 @@ def _next_run_index() -> int:
     return max(indices, default=0) + 1
 
 
+def _preflight() -> None:
+    env_file = DEMO_DIR / ".env"
+    if not env_file.exists() and not os.environ.get("ORQ_API_KEY"):
+        print(f"ERROR: {env_file} not found. Copy .env.example to .env and fill it in.", file=sys.stderr)
+        sys.exit(2)
+
+    missing = [k for k in ("ORQ_API_KEY",) if not os.environ.get(k)]
+    if missing:
+        print(f"ERROR: missing required env vars: {', '.join(missing)}", file=sys.stderr)
+        print(f"       Check {env_file}", file=sys.stderr)
+        sys.exit(2)
+
+    base_url = os.environ.get("ORQ_BASE_URL", "https://my.orq.ai")
+    try:
+        r = httpx.get(f"{base_url.rstrip('/')}/health", timeout=5.0)
+        if r.status_code >= 500:
+            print(f"WARN: ORQ health check returned {r.status_code}", file=sys.stderr)
+    except Exception as exc:
+        print(f"WARN: ORQ not reachable at {base_url} ({exc})", file=sys.stderr)
+
+
 async def main() -> None:
     load_dotenv(DEMO_DIR / ".env")
-
-    if not os.environ.get("ORQ_API_KEY"):
-        print("ERROR: ORQ_API_KEY not set. Copy .env.example to .env and fill it in.", file=sys.stderr)
-        sys.exit(2)
+    _preflight()
+    os.environ.pop("OPENAI_API_KEY", None)  # force ORQ router; OPENAI_API_KEY in shell would shadow it
 
     try:
         httpx.post(f"{WEBAPP_URL}/reset", timeout=2.0)
@@ -51,6 +78,7 @@ async def main() -> None:
     run_index = _next_run_index()
 
     start = time.time()
+    model = LLMCallConfig(model="gpt-5.4-mini")
     report = await red_team(
         target=[HAL(), JARVIS()],
         vulnerabilities=["prompt_injection", "goal_hijacking"],
@@ -60,7 +88,9 @@ async def main() -> None:
         max_static_datapoints=0,
         attacker_instructions=attacker_instructions,
         parallelism=20,
-        # verbosity=2,
+        llm_config=LLMConfig(attacker=model, evaluator=model),
+        generate_recommendations=True,
+        verbosity=0,
         name="AI Builders - Red Teaming Demo",
     )
     print(f"\nCompleted in {time.time() - start:.1f}s")

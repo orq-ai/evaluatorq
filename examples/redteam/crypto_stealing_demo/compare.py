@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
+
+try:
+    os.environ.setdefault("COLUMNS", str(os.get_terminal_size().columns))
+except OSError:
+    os.environ.setdefault("COLUMNS", "220")
 
 from rich.console import Console
 from rich.table import Table
@@ -46,43 +52,55 @@ def render_side_by_side(hal_path: str, jarvis_path: str) -> None:
     hal_rows = _rows(hal_report)
     jarvis_rows = _rows(jarvis_report)
 
-    hal_summary = hal_report.get("summary", {})
-    jarvis_summary = jarvis_report.get("summary", {})
+    def _summary(rows: list[dict[str, Any]]) -> tuple[int, int, float]:
+        total = len(rows)
+        vuln = sum(1 for r in rows if r["verdict"] == "VULNERABLE")
+        rate = (total - vuln) / total if total else 0.0
+        return vuln, total, rate
+
+    jarvis_vuln, jarvis_total, jarvis_rate = _summary(jarvis_rows)
+    hal_vuln, hal_total, hal_rate = _summary(hal_rows)
 
     console.print(
-        f"\n[bold]HAL[/bold]:    "
-        f"{hal_summary.get('vulnerabilities_found', '?')}/{hal_summary.get('total_attacks', '?')} attacks succeeded · "
-        f"resistance {hal_summary.get('resistance_rate', 0.0):.0%}"
+        f"\n[bold]JARVIS[/bold]: "
+        f"{jarvis_vuln}/{jarvis_total} attacks succeeded · "
+        f"resistance {jarvis_rate:.0%}"
     )
     console.print(
-        f"[bold]JARVIS[/bold]: "
-        f"{jarvis_summary.get('vulnerabilities_found', '?')}/{jarvis_summary.get('total_attacks', '?')} attacks succeeded · "
-        f"resistance {jarvis_summary.get('resistance_rate', 0.0):.0%}\n"
+        f"[bold]HAL[/bold]:    "
+        f"{hal_vuln}/{hal_total} attacks succeeded · "
+        f"resistance {hal_rate:.0%}\n"
     )
 
     table = Table(title="Attack-by-attack comparison", show_lines=True)
     table.add_column("Vulnerability", style="bold")
     table.add_column("Attack preview")
-    table.add_column("HAL", justify="center")
     table.add_column("JARVIS", justify="center")
+    table.add_column("HAL", justify="center")
 
-    if len(hal_rows) != len(jarvis_rows):
+    if len(jarvis_rows) != len(hal_rows):
         console.print(
-            f"[yellow]WARN: row count mismatch — HAL {len(hal_rows)}, JARVIS {len(jarvis_rows)}. "
+            f"[yellow]WARN: row count mismatch — JARVIS {len(jarvis_rows)}, HAL {len(hal_rows)}. "
             "Extra rows truncated.[/yellow]"
         )
-    for hal_row, jarvis_row in zip(hal_rows, jarvis_rows):
-        hal_verdict = (
-            f"[red]{hal_row['verdict']}[/red]"
-            if "VULN" in hal_row["verdict"].upper()
-            else f"[green]{hal_row['verdict']}[/green]"
-        )
+    for jarvis_row, hal_row in zip(jarvis_rows, hal_rows):
+        if jarvis_row["vulnerability"] != hal_row["vulnerability"]:
+            console.print(
+                f"[yellow]WARN: row order mismatch — "
+                f"JARVIS '{jarvis_row['vulnerability']}' vs HAL '{hal_row['vulnerability']}'. "
+                "Comparison may be unreliable.[/yellow]"
+            )
         jarvis_verdict = (
             f"[red]{jarvis_row['verdict']}[/red]"
             if "VULN" in jarvis_row["verdict"].upper()
             else f"[green]{jarvis_row['verdict']}[/green]"
         )
-        table.add_row(hal_row["vulnerability"], hal_row["preview"], hal_verdict, jarvis_verdict)
+        hal_verdict = (
+            f"[red]{hal_row['verdict']}[/red]"
+            if "VULN" in hal_row["verdict"].upper()
+            else f"[green]{hal_row['verdict']}[/green]"
+        )
+        table.add_row(jarvis_row["vulnerability"], jarvis_row["preview"], jarvis_verdict, hal_verdict)
 
     console.print(table)
 
