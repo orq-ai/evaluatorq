@@ -78,7 +78,7 @@ async def main() -> None:
     run_index = _next_run_index()
 
     start = time.time()
-    model = LLMCallConfig(model="gpt-5.4-mini")
+    model = LLMCallConfig(model="openai/gpt-5.4-mini")
     report = await red_team(
         target=[HAL(), JARVIS()],
         vulnerabilities=["prompt_injection", "goal_hijacking"],
