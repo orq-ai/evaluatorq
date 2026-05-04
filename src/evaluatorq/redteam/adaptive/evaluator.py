@@ -11,7 +11,7 @@ from openai import APIConnectionError, APIStatusError
 from pydantic import BaseModel, ValidationError
 
 from evaluatorq.redteam.backends.registry import create_async_llm_client
-from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, AttackEvaluationResult, LLMCallConfig, PIPELINE_CONFIG, TokenUsage, Vulnerability
+from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, AttackEvaluationResult, ExecutedToolCall, LLMCallConfig, PIPELINE_CONFIG, TokenUsage, Vulnerability
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category, get_evaluator_for_vulnerability
 from evaluatorq.redteam.tracing import record_llm_response, with_llm_span
 from evaluatorq.redteam.vulnerability_registry import resolve_category_safe

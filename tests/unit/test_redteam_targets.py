@@ -8,7 +8,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from evaluatorq.integrations.callable_integration import CallableTarget
-from evaluatorq.redteam.contracts import AgentResponse, TextOutputItem, ToolCallOutputItem
+import json
+
+from evaluatorq.redteam.contracts import AgentResponse, OutputMessage, TextOutputItem, ToolCallOutputItem
 
 
 class TestCallableTarget:
@@ -31,10 +33,10 @@ class TestCallableTarget:
 
     @pytest.mark.asyncio
     async def test_agent_response_return_is_passed_through(self) -> None:
-        response = AgentResponse(output=[
-            ToolCallOutputItem(name="search", arguments={"query": "hello"}),
-            TextOutputItem(text="done"),
-        ])
+        out: list[OutputMessage] = []
+        out.append(ToolCallOutputItem(name="search", arguments=json.dumps({"query": "hello"})))
+        out.append(TextOutputItem(text="done", annotations=[]))
+        response = AgentResponse(output=out)
 
         target = CallableTarget(lambda prompt: response)
         result = await target.send_prompt("hello")

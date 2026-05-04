@@ -114,11 +114,10 @@ class OpenAIAgentTarget(AgentTarget):
                             )
                         )
 
-        output: list[OutputMessage] = [
-            ToolCallOutputItem(name=tc.name, arguments=tc.arguments, result=tc.result)
-            for tc in tool_calls
-        ]
-        output.append(TextOutputItem(text=str(result.final_output)))
+        output: list[OutputMessage] = []
+        for tc in tool_calls:
+            output.append(ToolCallOutputItem(name=tc.name, arguments=json.dumps(tc.arguments), result=tc.result))
+        output.append(TextOutputItem(text=str(result.final_output), annotations=[]))
         return AgentResponse(output=output)
 
     async def get_agent_context(self) -> AgentContext:

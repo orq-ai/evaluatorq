@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 import httpx
 
 from evaluatorq.redteam.backends.base import AgentTarget
-from evaluatorq.redteam.contracts import AgentContext, AgentResponse, TextOutputItem
+from evaluatorq.redteam.contracts import AgentContext, AgentResponse, OutputMessage, TextOutputItem
 
 
 class VercelAISdkTarget(AgentTarget):
@@ -107,7 +107,8 @@ class VercelAISdkTarget(AgentTarget):
 
         text = self._parse_response(response)
         self._history.append({"role": "assistant", "content": text})
-        return AgentResponse(output=[TextOutputItem(text=text)])
+        text_item: OutputMessage = TextOutputItem(text=text, annotations=[])
+        return AgentResponse(output=[text_item])
 
     async def get_agent_context(self) -> AgentContext:
         """Return the user-provided agent context, or a minimal placeholder."""

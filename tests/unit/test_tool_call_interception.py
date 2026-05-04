@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from evaluatorq.redteam.backends.base import _coerce_to_agent_response
-from evaluatorq.redteam.contracts import AgentResponse, ExecutedToolCall, OrchestratorResult, Message, TextOutputItem, ToolCallOutputItem
+from evaluatorq.redteam.contracts import AgentResponse, ExecutedToolCall, OrchestratorResult, Message, OutputMessage, TextOutputItem, ToolCallOutputItem
 from evaluatorq.redteam.adaptive.evaluator import _sanitize_placeholders
 
 
@@ -25,10 +25,10 @@ class TestCoerceToAgentResponse:
         assert result.tool_calls == []
 
     def test_agent_response_input_returned_unchanged(self) -> None:
-        original = AgentResponse(output=[
-            ToolCallOutputItem(name="foo", arguments={"x": 1}),
-            TextOutputItem(text="hi"),
-        ])
+        orig_out: list[OutputMessage] = []
+        orig_out.append(ToolCallOutputItem(name="foo", arguments=json.dumps({"x": 1})))
+        orig_out.append(TextOutputItem(text="hi", annotations=[]))
+        original = AgentResponse(output=orig_out)
         result = _coerce_to_agent_response(original)
         assert result is original
 
@@ -45,49 +45,51 @@ class TestCoerceToAgentResponse:
     def test_legacy_text_constructor(self) -> None:
         result = AgentResponse(text="legacy")
         assert result.text == "legacy"
-        assert result.output == [TextOutputItem(text="legacy")]
+        assert result.output == [TextOutputItem(text="legacy", annotations=[])]
 
 
 class TestAgentResponseTextSemantics:
     def test_text_returns_last_text_item(self) -> None:
-        result = AgentResponse(output=[
-            TextOutputItem(text="draft"),
-            ToolCallOutputItem(name="lookup", arguments={"q": "value"}),
-            TextOutputItem(text="final"),
-        ])
+        out: list[OutputMessage] = []
+        out.append(TextOutputItem(text="draft", annotations=[]))
+        out.append(ToolCallOutputItem(name="lookup", arguments='{"q": "value"}'))
+        out.append(TextOutputItem(text="final", annotations=[]))
+        result = AgentResponse(output=out)
 
         assert result.text == "final"
 
     def test_tool_call_only_response_has_empty_text(self) -> None:
-        result = AgentResponse(output=[
-            ToolCallOutputItem(name="lookup", id="call_1", arguments={"q": "value"}),
-        ])
+        out2: list[OutputMessage] = []
+        out2.append(ToolCallOutputItem(name="lookup", id="call_1", arguments='{"q": "value"}'))
+        result = AgentResponse(output=out2)
 
         assert result.text == ""
         assert len(result.tool_calls) == 1
-        assert result.output[0].id == "call_1"
+        tc_item = result.output[0]
+        assert isinstance(tc_item, ToolCallOutputItem)
+        assert tc_item.id == "call_1"
         # arguments stored as JSON string internally; tool_calls parses back to dict
         assert result.tool_calls[0].arguments == {"q": "value"}
 
     def test_rejects_non_output_message_items(self) -> None:
         with pytest.raises(TypeError, match="AgentResponse.output items"):
-            AgentResponse(output=["not an output item"])  # type: ignore[list-item]
+            AgentResponse(output=cast(Any, ["not an output item"]))
 
     def test_rejects_wrong_output_container_type(self) -> None:
         with pytest.raises(TypeError, match="AgentResponse.output must be a list"):
-            AgentResponse(output=(TextOutputItem(text="hi"),))  # type: ignore[arg-type]
+            AgentResponse(output=cast(Any, (TextOutputItem(text="hi", annotations=[]),)))
 
     def test_output_items_validate_type_discriminator(self) -> None:
         # Pydantic Literal validation raises ValidationError (subtype of ValueError)
         with pytest.raises(ValueError, match="output_text"):
-            TextOutputItem(text="hi", type="wrong")  # type: ignore[arg-type]
+            TextOutputItem(text="hi", annotations=[], type=cast(Any, "wrong"))
 
         with pytest.raises(ValueError, match="function_call"):
-            ToolCallOutputItem(name="tool", type="wrong")  # type: ignore[arg-type]
+            ToolCallOutputItem(name="tool", arguments="", type=cast(Any, "wrong"))
 
     def test_tool_call_arguments_accepts_dict_and_string(self) -> None:
         # dict is serialized to JSON string internally
-        item_from_dict = ToolCallOutputItem(name="tool", arguments={"x": 1})
+        item_from_dict = ToolCallOutputItem(name="tool", arguments=cast(Any, {"x": 1}))
         assert item_from_dict.arguments == '{"x": 1}'
 
         # JSON string is accepted as-is
@@ -95,7 +97,7 @@ class TestAgentResponseTextSemantics:
         assert item_from_str.arguments == '{"x": 1}'
 
     def test_output_items_are_frozen(self) -> None:
-        item = TextOutputItem(text="hi")
+        item = TextOutputItem(text="hi", annotations=[])
         with pytest.raises(Exception):
             item.text = "changed"  # type: ignore[misc]
 

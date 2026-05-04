@@ -48,10 +48,11 @@ def _coerce_to_agent_response(raw: Any) -> 'AgentResponse':
     Any target that still returns ``str`` from ``send_prompt`` will be transparently
     wrapped here at the orchestrator call site (Option A backward-compat strategy).
     """
-    from evaluatorq.redteam.contracts import AgentResponse, TextOutputItem
+    from evaluatorq.redteam.contracts import AgentResponse, OutputMessage, TextOutputItem
     if isinstance(raw, AgentResponse):
         return raw
-    return AgentResponse(output=[TextOutputItem(text=str(raw) if raw is not None else '')])
+    text_item: OutputMessage = TextOutputItem(text=str(raw) if raw is not None else '', annotations=[])
+    return AgentResponse(output=[text_item])
 
 
 class SupportsClone(Protocol):

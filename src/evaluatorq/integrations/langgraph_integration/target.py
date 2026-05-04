@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -225,11 +226,10 @@ class LangGraphTarget(AgentTarget):
                     tool_calls.append(ExecutedToolCall(name=str(name), arguments=args if isinstance(args, dict) else {}))
         self._prev_msg_count = len(messages)
 
-        output: list[OutputMessage] = [
-            ToolCallOutputItem(name=tc.name, arguments=tc.arguments, result=tc.result)
-            for tc in tool_calls
-        ]
-        output.append(TextOutputItem(text=content))
+        output: list[OutputMessage] = []
+        for tc in tool_calls:
+            output.append(ToolCallOutputItem(name=tc.name, arguments=json.dumps(tc.arguments), result=tc.result))
+        output.append(TextOutputItem(text=content, annotations=[]))
         return AgentResponse(output=output)
 
     def reset_conversation(self) -> None:

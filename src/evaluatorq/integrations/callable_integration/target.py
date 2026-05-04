@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Union
 
 from evaluatorq.redteam.backends.base import AgentTarget
-from evaluatorq.redteam.contracts import AgentContext, AgentResponse, TextOutputItem
+from evaluatorq.redteam.contracts import AgentContext, AgentResponse, OutputMessage, TextOutputItem
 
 # Accepted callable signatures — may return str (backward-compat) or AgentResponse
 AgentCallable = Union[
@@ -85,7 +85,8 @@ class CallableTarget(AgentTarget):
                 result = await asyncio.to_thread(self._fn, prompt)  # type: ignore[arg-type]
             if isinstance(result, AgentResponse):
                 return result
-            return AgentResponse(output=[TextOutputItem(text=str(result))])
+            text_item: OutputMessage = TextOutputItem(text=str(result), annotations=[])
+            return AgentResponse(output=[text_item])
         except (asyncio.CancelledError, asyncio.TimeoutError, TypeError, AttributeError):
             raise
         except Exception as exc:

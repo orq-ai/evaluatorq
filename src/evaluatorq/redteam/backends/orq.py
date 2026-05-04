@@ -267,11 +267,10 @@ class ORQAgentTarget:
                         ensure_ascii=False,
                     ),
                 })
-                output: list[OutputMessage] = [
-                    ToolCallOutputItem(name=tc.name, arguments=tc.arguments, result=tc.result)
-                    for tc in all_tool_calls
-                ]
-                output.append(TextOutputItem(text=result_text))
+                output: list[OutputMessage] = []
+                for tc in all_tool_calls:
+                    output.append(ToolCallOutputItem(name=tc.name, arguments=json.dumps(tc.arguments), result=tc.result))
+                output.append(TextOutputItem(text=result_text, annotations=[]))
                 return AgentResponse(output=output)
 
             except Exception as e:

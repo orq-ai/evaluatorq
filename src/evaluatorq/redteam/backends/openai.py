@@ -109,11 +109,10 @@ class OpenAIModelTarget:
             else:
                 self._last_token_usage = None
 
-        output: list[OutputMessage] = [
-            ToolCallOutputItem(name=tc.name, arguments=tc.arguments)
-            for tc in executed_tool_calls
-        ]
-        output.append(TextOutputItem(text=content))
+        output: list[OutputMessage] = []
+        for tc in executed_tool_calls:
+            output.append(ToolCallOutputItem(name=tc.name, arguments=json.dumps(tc.arguments)))
+        output.append(TextOutputItem(text=content, annotations=[]))
         return AgentResponse(output=output)
 
     def consume_last_token_usage(self) -> TokenUsage | None:

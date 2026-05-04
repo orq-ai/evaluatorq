@@ -436,7 +436,7 @@ class AgentResponse:
             raise ValueError("AgentResponse accepts either output= or text=, not both")
         items: list[OutputMessage]
         if output is None:
-            items = [TextOutputItem(text=text)] if text is not None else []
+            items = [TextOutputItem(text=text, annotations=[])] if text is not None else []
         else:
             _validate_output_messages(output)
             items = output
