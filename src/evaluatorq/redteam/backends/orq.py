@@ -12,7 +12,7 @@ import asyncio
 import json
 import os
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
@@ -267,9 +267,10 @@ class ORQAgentTarget:
                         ensure_ascii=False,
                     ),
                 })
-                output: list[OutputMessage] = []
-                for tc in all_tool_calls:
-                    output.append(ToolCallOutputItem(name=tc.name, arguments=json.dumps(tc.arguments), result=tc.result))
+                output: list[OutputMessage] = cast(
+                    'list[OutputMessage]',
+                    [ToolCallOutputItem(name=tc.name, arguments=json.dumps(tc.arguments), result=tc.result) for tc in all_tool_calls],
+                )
                 output.append(TextOutputItem(text=result_text, annotations=[]))
                 return AgentResponse(output=output)
 

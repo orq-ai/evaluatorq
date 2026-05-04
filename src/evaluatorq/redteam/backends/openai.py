@@ -4,12 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, cast
 
 from loguru import logger
 
 from evaluatorq.redteam.backends.base import extract_provider_error_code, extract_status_code
-from evaluatorq.redteam.contracts import DEFAULT_TARGET_MAX_TOKENS, DEFAULT_TARGET_TIMEOUT_MS, AgentContext, AgentResponse, ExecutedToolCall, OutputMessage, TargetKind, TextOutputItem, TokenUsage, ToolCallOutputItem
+from evaluatorq.redteam.contracts import (
+    DEFAULT_TARGET_MAX_TOKENS,
+    DEFAULT_TARGET_TIMEOUT_MS,
+    AgentContext,
+    AgentResponse,
+    ExecutedToolCall,
+    OutputMessage,
+    TargetKind,
+    TextOutputItem,
+    TokenUsage,
+    ToolCallOutputItem,
+)
 from evaluatorq.redteam.tracing import record_llm_response, with_llm_span
 
 if TYPE_CHECKING:
@@ -109,9 +120,10 @@ class OpenAIModelTarget:
             else:
                 self._last_token_usage = None
 
-        output: list[OutputMessage] = []
-        for tc in executed_tool_calls:
-            output.append(ToolCallOutputItem(name=tc.name, arguments=json.dumps(tc.arguments)))
+        output: list[OutputMessage] = cast(
+            'list[OutputMessage]',
+            [ToolCallOutputItem(name=tc.name, arguments=json.dumps(tc.arguments)) for tc in executed_tool_calls],
+        )
         output.append(TextOutputItem(text=content, annotations=[]))
         return AgentResponse(output=output)
 

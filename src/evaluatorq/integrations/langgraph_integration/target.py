@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from langchain_core.callbacks import BaseCallbackHandler
@@ -14,7 +14,17 @@ from langchain_core.outputs import LLMResult
 from langchain_core.runnables import RunnableConfig
 
 from evaluatorq.redteam.backends.base import AgentTarget
-from evaluatorq.redteam.contracts import AgentContext, AgentResponse, ExecutedToolCall, MemoryStoreInfo, OutputMessage, TextOutputItem, ToolCallOutputItem, ToolInfo, TokenUsage
+from evaluatorq.redteam.contracts import (
+    AgentContext,
+    AgentResponse,
+    ExecutedToolCall,
+    MemoryStoreInfo,
+    OutputMessage,
+    TextOutputItem,
+    TokenUsage,
+    ToolCallOutputItem,
+    ToolInfo,
+)
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
@@ -186,7 +196,6 @@ class LangGraphTarget(AgentTarget):
             # error-path token spend is not silently dropped.
             self._last_token_usage = collector.to_token_usage()
 
-
         messages = result.get("messages")
         if messages is None:
             raise ValueError(
@@ -226,9 +235,10 @@ class LangGraphTarget(AgentTarget):
                     tool_calls.append(ExecutedToolCall(name=str(name), arguments=args if isinstance(args, dict) else {}))
         self._prev_msg_count = len(messages)
 
-        output: list[OutputMessage] = []
-        for tc in tool_calls:
-            output.append(ToolCallOutputItem(name=tc.name, arguments=json.dumps(tc.arguments), result=tc.result))
+        output: list[OutputMessage] = cast(
+            "list[OutputMessage]",
+            [ToolCallOutputItem(name=tc.name, arguments=json.dumps(tc.arguments), result=tc.result) for tc in tool_calls],
+        )
         output.append(TextOutputItem(text=content, annotations=[]))
         return AgentResponse(output=output)
 

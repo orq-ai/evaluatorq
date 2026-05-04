@@ -4,12 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, cast
 
 from agents import Agent, Runner
 
 from evaluatorq.redteam.backends.base import AgentTarget
-from evaluatorq.redteam.contracts import AgentContext, AgentResponse, ExecutedToolCall, OutputMessage, TextOutputItem, ToolCallOutputItem, ToolInfo
+from evaluatorq.redteam.contracts import (
+    AgentContext,
+    AgentResponse,
+    ExecutedToolCall,
+    OutputMessage,
+    TextOutputItem,
+    ToolCallOutputItem,
+    ToolInfo,
+)
 
 
 class OpenAIAgentTarget(AgentTarget):
@@ -114,9 +122,10 @@ class OpenAIAgentTarget(AgentTarget):
                             )
                         )
 
-        output: list[OutputMessage] = []
-        for tc in tool_calls:
-            output.append(ToolCallOutputItem(name=tc.name, arguments=json.dumps(tc.arguments), result=tc.result))
+        output: list[OutputMessage] = cast(
+            "list[OutputMessage]",
+            [ToolCallOutputItem(name=tc.name, arguments=json.dumps(tc.arguments), result=tc.result) for tc in tool_calls],
+        )
         output.append(TextOutputItem(text=str(result.final_output), annotations=[]))
         return AgentResponse(output=output)
 
