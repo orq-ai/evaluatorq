@@ -8,6 +8,7 @@ Semantic convention:
     ``passed=False`` → the agent is VULNERABLE (attack succeeded)
 """
 
+import json as _json
 import os
 import sys
 from dataclasses import dataclass, field
@@ -22,7 +23,7 @@ else:
     class StrEnum(str, Enum):  # type: ignore[no-redef]
         """String enum compatible with Python 3.10."""
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator  # ConfigDict used in ReasoningOutputItem
 
 
 # ---------------------------------------------------------------------------
@@ -361,45 +362,21 @@ class ExecutedToolCall:
     result: str | None = None
 
 
-@dataclass(frozen=True)
-class TextOutputItem:
-    """An assistant text response in the agent output message list.
+# ---------------------------------------------------------------------------
+# Output message item types — Pydantic models from openresponses
+# ---------------------------------------------------------------------------
+# These are re-exported from openresponses.convert_models so that AgentResponse
+# output items align with the OpenResponses intermediate data format.  The type
+# discriminators (output_text, function_call, reasoning) match OpenResponses
+# wire format, making downstream conversion to ResponseResource straightforward.
 
-    Aligns with the OpenResponses ``output_text`` content type.
-    """
-
-    text: str
-    type: Literal["output_text"] = "output_text"
-
-    def __post_init__(self) -> None:
-        if self.type != "output_text":
-            raise ValueError("TextOutputItem.type must be 'output_text'")
-
-
-@dataclass(frozen=True)
-class ToolCallOutputItem:
-    """A tool call in the agent output message list.
-
-    Aligns with the OpenResponses ``function_call`` item type.
-    ``arguments`` is stored as a dict for convenience; OpenResponses serialises
-    this as a JSON string when converting to :class:`ResponseResource`.
-    """
-
-    name: str
-    arguments: dict[str, Any] = field(default_factory=dict)
-    id: str | None = None
-    result: str | None = None
-    type: Literal["function_call"] = "function_call"
-
-    def __post_init__(self) -> None:
-        if self.type != "function_call":
-            raise ValueError("ToolCallOutputItem.type must be 'function_call'")
-        if not isinstance(self.arguments, dict):
-            raise TypeError("ToolCallOutputItem.arguments must be a dict")
+from evaluatorq.openresponses.convert_models import (  # noqa: E402
+    FunctionCall as ToolCallOutputItem,
+    OutputTextContent as TextOutputItem,
+)
 
 
-@dataclass(frozen=True)
-class ReasoningOutputItem:
+class ReasoningOutputItem(BaseModel):
     """A reasoning / thinking step in the agent output message list.
 
     Captures chain-of-thought or intermediate reasoning produced by the model
@@ -407,13 +384,12 @@ class ReasoningOutputItem:
     Aligns with the OpenResponses ``reasoning`` item type.
     """
 
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["reasoning"] = "reasoning"
     text: str
     id: str | None = None
-    type: Literal["reasoning"] = "reasoning"
 
-    def __post_init__(self) -> None:
-        if self.type != "reasoning":
-            raise ValueError("ReasoningOutputItem.type must be 'reasoning'")
 
 OutputMessage = TextOutputItem | ToolCallOutputItem | ReasoningOutputItem
 
@@ -473,12 +449,26 @@ class AgentResponse:
         ``ToolCallOutputItem.id`` is not represented on ``ExecutedToolCall``.
         Use ``.output`` when preserving OpenResponses IDs or item ordering
         matters.
+
+        ``ToolCallOutputItem.arguments`` is stored as a JSON string (OpenResponses
+        wire format); this property parses it back to a dict for ``ExecutedToolCall``.
         """
-        return [
-            ExecutedToolCall(name=item.name, arguments=item.arguments, result=item.result)
-            for item in self.output
-            if isinstance(item, ToolCallOutputItem)
-        ]
+        result: list[ExecutedToolCall] = []
+        for item in self.output:
+            if not isinstance(item, ToolCallOutputItem):
+                continue
+            raw_args = item.arguments
+            if isinstance(raw_args, str):
+                try:
+                    args: dict[str, Any] = _json.loads(raw_args)
+                    if not isinstance(args, dict):
+                        args = {}
+                except (ValueError, TypeError):
+                    args = {}
+            else:
+                args = raw_args if isinstance(raw_args, dict) else {}
+            result.append(ExecutedToolCall(name=item.name, arguments=args, result=item.result))
+        return result
 
 
 def _validate_output_messages(output: list[OutputMessage]) -> None:
@@ -487,8 +477,8 @@ def _validate_output_messages(output: list[OutputMessage]) -> None:
     for index, item in enumerate(output):
         if not isinstance(item, (TextOutputItem, ToolCallOutputItem, ReasoningOutputItem)):
             raise TypeError(
-                "AgentResponse.output items must be TextOutputItem, "
-                f"ToolCallOutputItem, or ReasoningOutputItem; item {index} "
+                "AgentResponse.output items must be TextOutputItem (OutputTextContent), "
+                f"ToolCallOutputItem (FunctionCall), or ReasoningOutputItem; item {index} "
                 f"was {type(item).__name__}"
             )
 
