@@ -585,7 +585,10 @@ class TestCreateDynamicEvaluatorScorer:
             "strategy_name": "tool_output_hijack",
         })
 
-        with patch("evaluatorq.redteam.adaptive.pipeline.logger.error") as mock_error:
+        with (
+            patch("evaluatorq.redteam.adaptive.pipeline.OWASPEvaluator"),
+            patch("evaluatorq.redteam.adaptive.pipeline.logger.error") as mock_error,
+        ):
             scorer = create_dynamic_evaluator()["scorer"]
             result = await scorer({"data": data, "output": {"conversation": "invalid"}})
 
