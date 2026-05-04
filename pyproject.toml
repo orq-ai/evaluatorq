@@ -115,7 +115,7 @@ src = [ "src" ]
 ]
 
 [tool.basedpyright]
-exclude = [ "examples", ".venv", "src/evaluatorq/redteam/ui" ]
+exclude = [ "examples", "scripts", ".venv", "src/evaluatorq/redteam/ui" ]
 reportIncompatibleVariableOverride = "none"
 reportExplicitAny = "none"
 reportMissingImports = "none"
@@ -128,6 +128,7 @@ reportMissingTypeStubs = "none"
 reportUnusedCallResult = "none"
 reportUnannotatedClassAttribute = "none"
 reportPrivateUsage = "none"
+reportPrivateLocalImportUsage = "none"
 reportImplicitStringConcatenation = "none"
 reportUnusedImport = "none"
 reportDeprecated = "none"
