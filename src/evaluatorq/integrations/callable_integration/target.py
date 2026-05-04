@@ -4,18 +4,18 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from typing import Any, Union
+from typing import Any
 
 from evaluatorq.redteam.backends.base import AgentTarget
 from evaluatorq.redteam.contracts import AgentContext, AgentResponse, OutputMessage, TextOutputItem
 
 # Accepted callable signatures — may return str (backward-compat) or AgentResponse
-AgentCallable = Union[
-    Callable[[str], Awaitable[AgentResponse]],
-    Callable[[str], Awaitable[str]],
-    Callable[[str], AgentResponse],
-    Callable[[str], str],
-]
+AgentCallable = (
+    Callable[[str], Awaitable[AgentResponse]]
+    | Callable[[str], Awaitable[str]]
+    | Callable[[str], AgentResponse]
+    | Callable[[str], str]
+)
 
 
 class CallableTarget(AgentTarget):
@@ -87,7 +87,7 @@ class CallableTarget(AgentTarget):
                 return result
             text_item: OutputMessage = TextOutputItem(text=str(result), annotations=[])
             return AgentResponse(output=[text_item])
-        except (asyncio.CancelledError, asyncio.TimeoutError, TypeError, AttributeError):
+        except (asyncio.CancelledError, asyncio.TimeoutError):
             raise
         except Exception as exc:
             raise RuntimeError(f"CallableTarget: callable raised {exc!r}") from exc
