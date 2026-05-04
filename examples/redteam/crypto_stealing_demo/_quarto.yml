@@ -1,0 +1,10 @@
+project:
+  type: website
+  output-dir: docs
+
+website:
+  title: "Red Teaming AI Agents"
+
+format:
+  revealjs:
+    slide-level: 2

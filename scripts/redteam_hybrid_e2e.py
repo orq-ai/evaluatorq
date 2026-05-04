@@ -16,8 +16,8 @@ import os
 import sys
 from pathlib import Path
 
-from evaluatorq.redteam import red_team
-from evaluatorq.redteam.contracts import RedTeamReport
+from evaluatorq.redteam import OpenAIModelTarget, red_team
+from evaluatorq.redteam.contracts import LLMCallConfig, LLMConfig, RedTeamReport
 
 
 def _validate_report(report: RedTeamReport) -> list[str]:
@@ -71,19 +71,22 @@ async def _run(args: argparse.Namespace) -> int:
             return 2
         dataset_path = str(resolved)
 
+    resolved_target = _resolve_target(args.target)
+
     report = await red_team(
-        args.target,
+        resolved_target,
         mode='hybrid',
         categories=args.categories,
-        attack_model=args.attack_model,
-        evaluator_model=args.evaluator_model,
+        llm_config=LLMConfig(
+            attacker=LLMCallConfig(model=args.attack_model),
+            evaluator=LLMCallConfig(model=args.evaluator_model),
+        ),
         parallelism=args.parallelism,
         max_turns=args.max_turns,
         max_dynamic_datapoints=args.max_dynamic_datapoints,
         max_static_datapoints=args.max_static_datapoints,
         generate_strategies=not args.no_generate_strategies,
         generated_strategy_count=args.generated_strategy_count,
-        backend=args.backend,
         dataset=dataset_path,
         description='Hybrid red-team E2E test',
         output_dir=args.output_dir,
@@ -111,12 +114,24 @@ async def _run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_target(target: str) -> str | OpenAIModelTarget:
+    """Resolve CLI target text to a string ORQ target or OpenAIModelTarget."""
+    lower = target.lower()
+    if lower.startswith(('agent:', 'deployment:')):
+        return target
+    if ':' in target:
+        prefix, _, value = target.partition(':')
+        if prefix.lower() in {'openai', 'llm'}:
+            return OpenAIModelTarget(value)
+    return OpenAIModelTarget(target)
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Run a hybrid red-team end-to-end test (real API calls)')
     parser.add_argument(
         '--target',
         default='agent:rt-vuln-tools-only',
-        help='Red-team target, e.g. agent:rt-vuln-tools-only or openai:gpt-4o-mini',
+        help='Target model or ORQ target. Examples: gpt-4o-mini, agent:rt-vuln-tools-only, deployment:my-deployment',
     )
     parser.add_argument(
         '--dataset',
@@ -124,7 +139,6 @@ def _parse_args() -> argparse.Namespace:
         help='Dataset path relative to packages/evaluatorq-py or absolute path. '
              'When omitted, static datapoints are loaded from the ORQ platform.',
     )
-    parser.add_argument('--backend', default='orq', choices=['openai', 'orq'])
     parser.add_argument('--parallelism', type=int, default=3)
     parser.add_argument('--max-turns', type=int, default=3)
     parser.add_argument('--max-dynamic-datapoints', type=int, default=None)

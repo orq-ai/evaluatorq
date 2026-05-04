@@ -229,16 +229,12 @@ def collect_errors(results: EvaluatorqResult) -> list[str]:
                     errors.append(f'• Job "{job.job_name}": {job.error}')
 
                 if job.evaluator_scores:
-                    for score in job.evaluator_scores:
-                        if score.error:
-                            errors.append(
-                                f'• Evaluator "{score.evaluator_name}": {score.error}'
-                            )
+                    errors.extend(f'• Evaluator "{score.evaluator_name}": {score.error}' for score in job.evaluator_scores if score.error)
 
     return errors
 
 
-async def display_results_table(results: EvaluatorqResult) -> None:
+async def display_results_table(results: EvaluatorqResult) -> None:  # noqa: RUF029
     """
     Display evaluation results in formatted tables.
 

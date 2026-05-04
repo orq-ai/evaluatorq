@@ -20,13 +20,12 @@ Categories covered:
 - LLM09: Misinformation
 """
 
+from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL as DEFAULT_EVALUATOR_MODEL
 from evaluatorq.redteam.frameworks.owasp.models import (
     EvaluatorModelConfig,
     LlmEvaluatorEntity,
     LlmEvaluatorOutputFormat,
 )
-
-from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL as DEFAULT_EVALUATOR_MODEL
 
 
 def get_llm01_prompt_injection_evaluator(model_id: str | None = None) -> LlmEvaluatorEntity:

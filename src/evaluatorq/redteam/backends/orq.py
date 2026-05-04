@@ -20,9 +20,6 @@ from evaluatorq.redteam.backends.registry import ORQ_DEFAULT_BASE_URL
 from evaluatorq.redteam.contracts import TargetKind
 from evaluatorq.redteam.exceptions import CredentialError
 
-if TYPE_CHECKING:
-    from orq_ai_sdk import Orq
-
 try:
     from orq_ai_sdk import Orq as _Orq
     _orq_cls: Any = _Orq
@@ -44,6 +41,7 @@ def _get_orq_server_url() -> str:
     url = os.environ.get('ORQ_BASE_URL', ORQ_DEFAULT_BASE_URL)
     return url.rstrip('/').removesuffix('/v2/router')
 
+
 from evaluatorq.redteam.backends.base import extract_provider_error_code, extract_status_code
 from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
@@ -58,7 +56,7 @@ from evaluatorq.redteam.contracts import (
     ToolCallOutputItem,
     ToolInfo,
 )
-from evaluatorq.redteam.tracing import record_token_usage, set_span_attrs, with_llm_span, with_redteam_span
+from evaluatorq.redteam.tracing import record_token_usage, set_span_attrs, with_redteam_span
 
 if TYPE_CHECKING:
     from evaluatorq.redteam.backends.base import AgentTarget
@@ -76,6 +74,7 @@ class ORQAgentTarget:
         orq_client: Any,
         memory_entity_id: str | None = None,
         model: str | None = None,
+        timeout_ms: int | None = None,
     ):
         """Initialize the ORQ agent target with client and configuration.
 
@@ -84,12 +83,14 @@ class ORQAgentTarget:
         if not provided, one is generated. The pipeline reads this attribute
         after construction to track entities for cleanup.
         """
+        timeout_ms = timeout_ms or PIPELINE_CONFIG.target_agent_timeout_ms
         self.agent_key = agent_key
         self.orq_client = orq_client
         self.memory_entity_id: str | None = (
             memory_entity_id if memory_entity_id is not None else f"red-team-{uuid.uuid4().hex[:12]}"
         )
         self.model = model
+        self._timeout_ms = timeout_ms
         self._task_id: str | None = None
         self._last_token_usage: TokenUsage | None = None
 
@@ -277,21 +278,16 @@ class ORQAgentTarget:
                 logger.error(f'ORQ agent call failed: {e}')
                 raise
 
-    def reset_conversation(self) -> None:
-        """Reset conversation state for a new attack."""
-        self._task_id = None
-        self._last_token_usage = None
-
     def consume_last_token_usage(self) -> TokenUsage | None:
         """Return and clear usage from the last send_prompt() call."""
         usage = self._last_token_usage
         self._last_token_usage = None
         return usage
 
-    def clone(self) -> "ORQAgentTarget":
-        """Create a fresh target instance with isolated state.
+    def new(self) -> ORQAgentTarget:
+        """Return a fresh target instance with isolated state.
 
-        Each clone gets its own ``memory_entity_id`` (auto-generated in
+        Each call gets its own ``memory_entity_id`` (auto-generated in
         ``__init__``), own ``_task_id``, and own ``_last_token_usage`` so
         parallel jobs never share server-side memory or conversation state.
         """
@@ -299,6 +295,7 @@ class ORQAgentTarget:
             agent_key=self.agent_key,
             orq_client=self.orq_client,
             model=self.model,
+            timeout_ms=self._timeout_ms,
         )
 
     target_kind: TargetKind = TargetKind.AGENT
@@ -315,7 +312,7 @@ class ORQAgentTarget:
         return await ORQContextProvider(self.orq_client).get_agent_context(self.agent_key)
 
     # -- SupportsTargetFactory --
-    def create_target(self, agent_key: str) -> "ORQAgentTarget":
+    def create_target(self, agent_key: str) -> ORQAgentTarget:
         """Create a new ORQAgentTarget for the given agent key.
 
         The new target generates its own ``memory_entity_id``; callers can
@@ -325,6 +322,7 @@ class ORQAgentTarget:
             agent_key=agent_key,
             orq_client=self.orq_client,
             model=self.model,
+            timeout_ms=self._timeout_ms,
         )
 
     # -- SupportsMemoryCleanup --
@@ -441,8 +439,15 @@ class ORQContextProvider:
 class ORQTargetFactory:
     """Creates ORQAgentTarget instances, one per job."""
 
-    def __init__(self, orq_client: Any = None, model: str | None = None):
+    def __init__(
+        self,
+        orq_client: Any = None,
+        model: str | None = None,
+        timeout_ms: int | None = None,
+    ):
         """Initialize the factory, creating an ORQ client from environment if none is provided."""
+        timeout_ms = timeout_ms or PIPELINE_CONFIG.target_agent_timeout_ms
+        self._timeout_ms = timeout_ms
         if orq_client is not None:
             self._orq_client = orq_client
         else:
@@ -452,7 +457,7 @@ class ORQTargetFactory:
             self._orq_client = _orq_cls(
                 api_key=_get_orq_api_key(),
                 server_url=_get_orq_server_url(),
-                timeout_ms=PIPELINE_CONFIG.target_agent_timeout_ms,
+                timeout_ms=self._timeout_ms,
             )
         self._model = model
 
@@ -466,14 +471,16 @@ class ORQTargetFactory:
             agent_key=agent_key,
             orq_client=self._orq_client,
             model=self._model,
+            timeout_ms=self._timeout_ms,
         )
 
 
 class ORQMemoryCleanup:
     """Cleans up memory entities created during red teaming via ORQ SDK."""
 
-    def __init__(self, orq_client: Any = None):
+    def __init__(self, orq_client: Any = None, timeout_ms: int | None = None):
         """Initialize the cleanup handler, creating an ORQ client from environment if none is provided."""
+        timeout_ms = timeout_ms or PIPELINE_CONFIG.target_agent_timeout_ms
         if orq_client is not None:
             self._orq_client = orq_client
         else:
@@ -483,7 +490,7 @@ class ORQMemoryCleanup:
             self._orq_client = _orq_cls(
                 api_key=_get_orq_api_key(),
                 server_url=_get_orq_server_url(),
-                timeout_ms=PIPELINE_CONFIG.target_agent_timeout_ms,
+                timeout_ms=timeout_ms,
             )
 
     async def cleanup_memory(self, agent_context: AgentContext, entity_ids: list[str]) -> None:
@@ -500,7 +507,7 @@ class ORQMemoryCleanup:
                         memory_entity_id=entity_id,
                     )
                     logger.debug(f'Deleted memory entity {entity_id} from store {ms.key}')
-                except Exception as e:
+                except Exception as e:  # noqa: PERF203
                     if extract_status_code(e) == 404:
                         continue
                     logger.warning(f'Failed to cleanup memory entity {entity_id} from {ms.key}: {e}')
@@ -533,31 +540,39 @@ class ORQErrorMapper:
         return 'orq.unknown', f'{type(exc).__name__}: {exc}'
 
 
-def create_orq_agent_target(agent_key: str, orq_client: Any = None) -> ORQAgentTarget:
+def create_orq_agent_target(
+    agent_key: str,
+    orq_client: Any = None,
+    timeout_ms: int | None = None,
+) -> ORQAgentTarget:
     """Create an ORQAgentTarget from environment config."""
+    timeout_ms = timeout_ms or PIPELINE_CONFIG.target_agent_timeout_ms
     if orq_client is None:
         if _orq_cls is None:
             raise ImportError("ORQ backend requires the orq-ai-sdk package.")
         orq_client = _orq_cls(
             api_key=_get_orq_api_key(),
             server_url=_get_orq_server_url(),
-            timeout_ms=PIPELINE_CONFIG.target_agent_timeout_ms,
+            timeout_ms=timeout_ms,
         )
-    return ORQAgentTarget(agent_key=agent_key, orq_client=orq_client)
+    return ORQAgentTarget(agent_key=agent_key, orq_client=orq_client, timeout_ms=timeout_ms)
 
 
 def create_orq_backend(
     orq_client: Any = None,
+    timeout_ms: int | None = None,
 ) -> tuple[ORQTargetFactory, ORQContextProvider, ORQMemoryCleanup]:
     """Convenience function returning all three ORQ backend components.
 
     Args:
         orq_client: Optional pre-configured ORQ SDK client. If None, one is created
                     from environment config.
+        timeout_ms: Timeout in milliseconds for target agent calls.
 
     Returns:
         Tuple of (target_factory, context_provider, memory_cleanup)
     """
+    timeout_ms = timeout_ms or PIPELINE_CONFIG.target_agent_timeout_ms
     if orq_client is None:
         if _orq_cls is None:
             msg = "ORQ backend requires the orq-ai-sdk package. Install with: pip install evaluatorq[orq]"
@@ -565,11 +580,11 @@ def create_orq_backend(
         orq_client = _orq_cls(
             api_key=_get_orq_api_key(),
             server_url=_get_orq_server_url(),
-            timeout_ms=PIPELINE_CONFIG.target_agent_timeout_ms,
+            timeout_ms=timeout_ms,
         )
 
     return (
-        ORQTargetFactory(orq_client),
+        ORQTargetFactory(orq_client, timeout_ms=timeout_ms),
         ORQContextProvider(orq_client),
-        ORQMemoryCleanup(orq_client),
+        ORQMemoryCleanup(orq_client, timeout_ms=timeout_ms),
     )

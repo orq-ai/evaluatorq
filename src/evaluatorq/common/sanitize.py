@@ -16,7 +16,6 @@ Two complementary functions are provided:
 from __future__ import annotations
 
 import re
-
 import xml.sax.saxutils
 
 

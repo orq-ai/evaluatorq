@@ -1,8 +1,10 @@
 import asyncio
+import contextlib
 import os
 import sys
 from collections.abc import Awaitable, Sequence
 from datetime import datetime, timezone
+from itertools import starmap
 from typing import Any, cast
 
 from .fetch_data import fetch_dataset_batches, setup_orq_client
@@ -101,10 +103,7 @@ async def evaluatorq(
     # Handle params dict/object vs kwargs
     if params is not None:
         # Validate params if passed as dict
-        if isinstance(params, dict):
-            validated = EvaluatorParams.model_validate(params)
-        else:
-            validated = params
+        validated = EvaluatorParams.model_validate(params) if isinstance(params, dict) else params
     elif data is not None and jobs is not None:
         # Use kwargs
         validated = EvaluatorParams(
@@ -237,10 +236,8 @@ async def evaluatorq(
                 # Stop the polling task
                 stop_polling = True
                 _ = polling_task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await polling_task
-                except asyncio.CancelledError:
-                    pass
 
             # Final progress update
             await progress.update_progress(
@@ -261,7 +258,7 @@ async def evaluatorq(
 
     else:
         # Non-streaming case: process all data at once
-        data_promises = cast(list[DataPoint], data)
+        data_promises = cast("list[DataPoint]", data)
 
         async def run_evaluation() -> EvaluatorqResult:
             # Initialize progress
@@ -288,10 +285,7 @@ async def evaluatorq(
                         tracing_context,
                     )
 
-            tasks = [
-                process_with_semaphore(index, data_promise)
-                for index, data_promise in enumerate(data_promises)
-            ]
+            tasks = list(starmap(process_with_semaphore, enumerate(data_promises)))
 
             # Gather all results
             results_nested = await asyncio.gather(*tasks)

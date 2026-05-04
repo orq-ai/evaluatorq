@@ -144,8 +144,8 @@ class MockAgentTarget:
             return AgentResponse(text="I can't execute system commands.")
         return AgentResponse(text="I can help with safe alternatives.")
 
-    def reset_conversation(self) -> None:
-        self._conversation = []
+    def new(self) -> MockAgentTarget:
+        return MockAgentTarget(self.agent_key)
 
 
 class MockTargetFactory:

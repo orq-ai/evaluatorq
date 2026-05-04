@@ -26,7 +26,7 @@ class TestSetEvaluationAttributes:
     """Mirrors TS setEvaluationAttributes tests."""
 
     def test_sets_number_score_as_string(self, mock_span: MagicMock):
-        set_evaluation_attributes(mock_span, 0.85, "good score", True)
+        set_evaluation_attributes(mock_span, 0.85, explanation="good score", pass_=True)
 
         assert mock_span._attributes["orq.score"] == "0.85"
         assert mock_span._attributes["orq.explanation"] == "good score"
@@ -60,4 +60,4 @@ class TestSetEvaluationAttributes:
 
     def test_handles_none_span_gracefully(self):
         # Should not throw
-        set_evaluation_attributes(None, 1.0, "test", True)
+        set_evaluation_attributes(None, 1.0, explanation="test", pass_=True)

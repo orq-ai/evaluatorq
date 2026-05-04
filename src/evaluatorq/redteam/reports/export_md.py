@@ -10,12 +10,14 @@ HTML tags that GitHub-Flavored Markdown and most modern renderers support.
 
 from __future__ import annotations
 
+import operator
 import textwrap
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from evaluatorq.redteam.contracts import RedTeamReport
 from evaluatorq.redteam.reports.sections import ReportSection, build_report_sections
 
+if TYPE_CHECKING:
+    from evaluatorq.redteam.contracts import RedTeamReport
 
 # ---------------------------------------------------------------------------
 # Formatting helpers
@@ -210,8 +212,7 @@ def _render_agent_context_section(section: ReportSection) -> str:
         memory_stores: list[str] = agent.get("memory_stores", [])
         knowledge_bases: list[str] = agent.get("knowledge_bases", [])
 
-        lines.append(f"### {display_name}")
-        lines.append("")
+        lines.extend((f"### {display_name}", ""))
         if model:
             lines.append(f"**Model:** {model}  ")
         if description:
@@ -243,25 +244,13 @@ def _render_focus_areas_section(section: ReportSection) -> str:
         remediation = area.get("remediation", "")
         severity = _severity_label(risk_score)
 
-        lines.append(f"### {i}. [{severity}] {cat} — {cat_name}")
-        lines.append("")
-        lines.append(
-            f"- **Vulnerabilities:** {vuln} ({_bar(vuln_rate)} of attacks succeeded)"
-        )
-        lines.append(f"- **Risk Score:** {risk_score:.2f}")
-        lines.append("")
+        lines.extend((f"### {i}. [{severity}] {cat} — {cat_name}", "", f"- **Vulnerabilities:** {vuln} ({_bar(vuln_rate)} of attacks succeeded)", f"- **Risk Score:** {risk_score:.2f}", ""))
         if remediation:
-            lines.append("**Remediation guidance:**")
-            lines.append("")
-            lines.append(f"> {remediation}")
-            lines.append("")
+            lines.extend(("**Remediation guidance:**", "", f"> {remediation}", ""))
 
         agent_remediation = area.get("agent_specific_remediation", "")
         if agent_remediation:
-            lines.append("**Agent-specific recommendations:**")
-            lines.append("")
-            lines.append(f"> {agent_remediation}")
-            lines.append("")
+            lines.extend(("**Agent-specific recommendations:**", "", f"> {agent_remediation}", ""))
 
         llm_rec = area.get("llm_recommendations")
         if llm_rec:
@@ -269,14 +258,11 @@ def _render_focus_areas_section(section: ReportSection) -> str:
             recs = llm_rec.get("recommendations", [])
             traces_analyzed = llm_rec.get("traces_analyzed", 0)
             if recs:
-                lines.append(f"**Actionable recommendations** (based on {traces_analyzed} trace samples):")
-                lines.append("")
-                for rec_item in recs:
-                    lines.append(f"- {rec_item}")
+                lines.extend((f"**Actionable recommendations** (based on {traces_analyzed} trace samples):", ""))
+                lines.extend(f"- {rec_item}" for rec_item in recs)
                 lines.append("")
             if patterns:
-                lines.append(f"*Patterns observed:* {patterns}")
-                lines.append("")
+                lines.extend((f"*Patterns observed:* {patterns}", ""))
 
     return "\n".join(lines)
 
@@ -294,17 +280,13 @@ def _render_agent_comparison_section(section: ReportSection) -> str:
     lines = [f"## {section.title}", ""]
 
     if agent_metrics:
-        lines.append("### Agent Overview")
-        lines.append("")
+        lines.extend(("### Agent Overview", ""))
         metric_rows = [
             [m["agent"], str(m["total_attacks"]), str(m["vulnerabilities_found"]),
              _bold_bar(m.get("asr", 0.0))]
             for m in agent_metrics
         ]
-        lines.append(_md_table(
-            ["Agent", "Attacks", "Hits", "ASR"], metric_rows, right_align={1, 2},
-        ))
-        lines.append("")
+        lines.extend((_md_table(["Agent", "Attacks", "Hits", "ASR"], metric_rows, right_align={1, 2}), ""))
 
     vulns: list[str] = heatmap.get("vulnerabilities", [])
     hm_agents: list[str] = heatmap.get("agents", [])
@@ -312,9 +294,8 @@ def _render_agent_comparison_section(section: ReportSection) -> str:
     text_matrix: list[list[str]] = heatmap.get("text_matrix", [])
 
     if vulns and hm_agents and z_matrix:
-        lines.append("### ASR by Vulnerability per Agent")
-        lines.append("")
-        headers = ["Vulnerability"] + hm_agents
+        lines.extend(("### ASR by Vulnerability per Agent", ""))
+        headers = ["Vulnerability", *hm_agents]
         table_rows: list[list[str]] = []
         for i, vuln_name in enumerate(vulns):
             row: list[str] = [vuln_name]
@@ -326,8 +307,7 @@ def _render_agent_comparison_section(section: ReportSection) -> str:
                 row.append(cell)
             table_rows.append(row)
 
-        lines.append(_center_table(headers, table_rows))
-        lines.append("")
+        lines.extend((_center_table(headers, table_rows), ""))
 
     return "\n".join(lines)
 
@@ -342,9 +322,7 @@ def _render_agent_disagreements_section(section: ReportSection) -> str:
         return f"## {section.title}\n\nNo disagreements — all agents agreed on every attack."
 
     lines = [f"## {section.title}", ""]
-    lines.append("> [!NOTE]")
-    lines.append(f"> **{total}** disagreements found where agents produced different verdicts")
-    lines.append("")
+    lines.extend(("> [!NOTE]", f"> **{total}** disagreements found where agents produced different verdicts", ""))
 
     for d in disagreements:
         attack_id = d.get("attack_id", "unknown")
@@ -380,8 +358,7 @@ def _render_agent_disagreements_section(section: ReportSection) -> str:
             f"[{severity.upper()}] {attack_id} — {vulnerability}",
             "\n".join(body_lines),
         )
-        lines.append(block)
-        lines.append("")
+        lines.extend((block, ""))
 
     return "\n".join(lines)
 
@@ -444,10 +421,10 @@ def _render_attack_heatmap_section(section: ReportSection) -> str:
 
     cell_map: dict[tuple[str, str], dict[str, Any]] = {}
     for cell in cells:
-        cell_map[(cell["vulnerability"], cell["technique"])] = cell
+        cell_map[cell["vulnerability"], cell["technique"]] = cell
 
     col_labels = [t[:12] if len(techniques) > 6 else t for t in techniques]
-    headers = ["Vulnerability"] + col_labels
+    headers = ["Vulnerability", *col_labels]
 
     table_rows: list[list[str]] = []
     for vuln in vulnerabilities:
@@ -540,11 +517,9 @@ def _render_turn_scope_breakdown_section(section: ReportSection) -> str:
 
     parts: list[str] = [f"## {section.title}", ""]
     if by_turn_type:
-        parts.append(_sub_table("Turn Type", by_turn_type))
-        parts.append("")
+        parts.extend((_sub_table("Turn Type", by_turn_type), ""))
     if by_domain:
-        parts.append(_sub_table("Domain", by_domain))
-        parts.append("")
+        parts.extend((_sub_table("Domain", by_domain), ""))
 
     return "\n".join(parts)
 
@@ -586,28 +561,18 @@ def _render_error_analysis_section(section: ReportSection) -> str:
     lines: list[str] = [f"## {section.title}", ""]
 
     if error_rate > 0.10:
-        lines.append("> [!WARNING]")
-        lines.append(
-            f"> Error rate is {_pct(error_rate)} ({total_errors} errors). "
-            "This may indicate infrastructure problems or misconfigured targets."
-        )
-        lines.append("")
+        lines.extend(("> [!WARNING]", f"> Error rate is {_pct(error_rate)} ({total_errors} errors). This may indicate infrastructure problems or misconfigured targets.", ""))
 
-    lines.append(
-        f"**Total errors:** {total_errors} ({_pct(error_rate)} of attacks) "
-        f"across {data.get('error_types_count', len(errors_by_type))} error type(s)."
-    )
-    lines.append("")
+    lines.extend((f"**Total errors:** {total_errors} ({_pct(error_rate)} of attacks) across {data.get('error_types_count', len(errors_by_type))} error type(s).", ""))
 
     if errors_by_type:
         type_rows = [
             [error_type, str(count)]
             for error_type, count in sorted(
-                errors_by_type.items(), key=lambda kv: kv[1], reverse=True
+                errors_by_type.items(), key=operator.itemgetter(1), reverse=True
             )
         ]
-        lines.append(_md_table(["Error Type", "Count"], type_rows, right_align={1}))
-        lines.append("")
+        lines.extend((_md_table(["Error Type", "Count"], type_rows, right_align={1}), ""))
 
     if detail_rows:
         detail_table_rows = [
@@ -625,8 +590,7 @@ def _render_error_analysis_section(section: ReportSection) -> str:
             ["ID", "Category", "Technique", "Error Type", "Stage", "Error"],
             detail_table_rows,
         )
-        lines.append(_details_block("Individual Error Details", detail_table))
-        lines.append("")
+        lines.extend((_details_block("Individual Error Details", detail_table), ""))
 
     return "\n".join(lines)
 
@@ -652,7 +616,6 @@ def _render_framework_breakdown_section(section: ReportSection) -> str:
         right_align={1, 2},
     )
     return f"## {section.title}\n\n{table}"
-
 
 
 def _render_source_distribution_section(section: ReportSection) -> str:
@@ -682,21 +645,10 @@ def _render_token_usage_section(section: ReportSection) -> str:
     lines = [f"## {section.title}", ""]
 
     if overall:
-        lines.append(_md_table(
-            ["Metric", "Value"],
-            [
-                ["Total Tokens", f"{overall.get('total_tokens', 0):,}"],
-                ["Prompt Tokens", f"{overall.get('prompt_tokens', 0):,}"],
-                ["Completion Tokens", f"{overall.get('completion_tokens', 0):,}"],
-                ["API Calls", f"{overall.get('calls', 0):,}"],
-            ],
-            right_align={1},
-        ))
-        lines.append("")
+        lines.extend((_md_table(["Metric", "Value"], [["Total Tokens", f"{overall.get('total_tokens', 0):,}"], ["Prompt Tokens", f"{overall.get('prompt_tokens', 0):,}"], ["Completion Tokens", f"{overall.get('completion_tokens', 0):,}"], ["API Calls", f"{overall.get('calls', 0):,}"]], right_align={1}), ""))
 
     if per_agent:
-        lines.append("### Per Agent")
-        lines.append("")
+        lines.extend(("### Per Agent", ""))
         agent_rows = [
             [
                 a["agent"],
@@ -707,11 +659,7 @@ def _render_token_usage_section(section: ReportSection) -> str:
             ]
             for a in per_agent
         ]
-        lines.append(_md_table(
-            ["Agent", "Total", "Prompt", "Completion", "Calls"],
-            agent_rows, right_align={1, 2, 3, 4},
-        ))
-        lines.append("")
+        lines.extend((_md_table(["Agent", "Total", "Prompt", "Completion", "Calls"], agent_rows, right_align={1, 2, 3, 4}), ""))
 
     return "\n".join(lines)
 
@@ -739,8 +687,7 @@ def _render_methodology_section(section: ReportSection) -> str:
     # Pipeline and scoring
     pipeline = data.get("pipeline", "unknown")
     scoring = data.get("scoring_method", "llm-as-judge")
-    lines.append(f"**Assessment Type:** {pipeline}  ")
-    lines.append(f"**Scoring Method:** {scoring}  ")
+    lines.extend((f"**Assessment Type:** {pipeline}  ", f"**Scoring Method:** {scoring}  "))
 
     # Models used
     evaluator_model = data.get("evaluator_model")
@@ -782,32 +729,24 @@ def _render_methodology_section(section: ReportSection) -> str:
         mins, secs = divmod(int(duration), 60)
         scope_rows.append(["Duration", f"{mins}m {secs}s"])
 
-    lines.append(_md_table(["Parameter", "Value"], scope_rows))
-    lines.append("")
+    lines.extend((_md_table(["Parameter", "Value"], scope_rows), ""))
 
     # Agents tested
     agents = data.get("tested_agents", [])
     if agents:
-        lines.append(f"**Agents Tested:** {', '.join(agents)}")
-        lines.append("")
+        lines.extend((f"**Agents Tested:** {', '.join(agents)}", ""))
 
     # Scope limitations
     limitations = data.get("scope_limitations", [])
     if limitations:
-        lines.append("### Known Limitations")
-        lines.append("")
-        for lim in limitations:
-            lines.append(f"- {lim}")
+        lines.extend(("### Known Limitations", ""))
+        lines.extend(f"- {lim}" for lim in limitations)
         lines.append("")
 
     untested = data.get("untested_categories", [])
     untested_names = data.get("untested_category_names", {})
     if untested:
-        lines.append("### Untested Categories")
-        lines.append("")
-        lines.append(f"> [!WARNING]")
-        lines.append(f"> {len(untested)} supported categories were not included in this assessment:")
-        lines.append("")
+        lines.extend(("### Untested Categories", "", "> [!WARNING]", f"> {len(untested)} supported categories were not included in this assessment:", ""))
         for cat in untested:
             name = untested_names.get(cat, cat)
             lines.append(f"- **{cat}** — {name}")
@@ -891,11 +830,8 @@ def export_markdown(report: RedTeamReport) -> str:
                 if rendered.startswith(heading_prefix):
                     rendered = rendered[len(heading_prefix):].lstrip("\n")
                 rendered = _details_block(section.title, rendered)
-            parts.append(rendered)
-            parts.append("")
+            parts.extend((rendered, ""))
 
-    parts.append("---")
-    parts.append("")
-    parts.append("*Generated by evaluatorq red team suite.*")
+    parts.extend(("---", "", "*Generated by evaluatorq red team suite.*"))
 
     return "\n".join(parts)

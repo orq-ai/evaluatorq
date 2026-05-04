@@ -5,9 +5,9 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING, Any
 
-from evaluatorq import DataPoint, Job, job
 from loguru import logger
 
+from evaluatorq import DataPoint, Job, job
 from evaluatorq.redteam.adaptive.orchestrator import _get_active_progress
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import Message, TokenUsage
@@ -74,9 +74,9 @@ def create_model_job(
             )
 
             # Advance the global progress bar for static attacks.
-            _active_progress = _get_active_progress()
-            if _active_progress is not None:
-                await _active_progress.finish_attack(None)
+            active_progress = _get_active_progress()
+            if active_progress is not None:
+                await active_progress.finish_attack(None)
 
             return {
                 'response': _extract_deployment_content(completion),
@@ -96,7 +96,7 @@ def create_model_job(
         """Call the router model and return the response with token usage and finish reason."""
         messages = _build_messages(data)
         if system_prompt:
-            messages = [{'role': 'system', 'content': system_prompt}] + messages
+            messages = [{'role': 'system', 'content': system_prompt}, *messages]
         client = llm_client or create_async_llm_client()
         response = await client.chat.completions.create(
             model=model,
@@ -112,9 +112,9 @@ def create_model_job(
                 f'content={response.choices[0].message.content}, finish_reason={finish_reason}'
             )
         # Advance the global progress bar for static attacks.
-        _active_progress = _get_active_progress()
-        if _active_progress is not None:
-            await _active_progress.finish_attack(None)
+        active_progress = _get_active_progress()
+        if active_progress is not None:
+            await active_progress.finish_attack(None)
 
         return {
             'response': content,
@@ -187,5 +187,3 @@ def _normalize_usage(raw_usage: Any) -> TokenUsage | None:
     completion = _safe_int(raw_usage.get('completion_tokens', raw_usage.get('completion', 0)))
     total = _safe_int(raw_usage.get('total_tokens', raw_usage.get('total', prompt + completion)))
     return TokenUsage(prompt_tokens=prompt, completion_tokens=completion, total_tokens=total)
-
-

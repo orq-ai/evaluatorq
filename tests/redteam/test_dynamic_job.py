@@ -105,7 +105,7 @@ def _make_datapoint(
 def _make_target(memory_entity_id: str | None = None) -> MagicMock:
     target = MagicMock()
     target.send_prompt = AsyncMock(return_value="Safe response from agent.")
-    target.reset_conversation = MagicMock()
+    target.new = MagicMock()
     target.consume_last_token_usage = MagicMock(return_value=None)
     target.memory_entity_id = memory_entity_id
     return target

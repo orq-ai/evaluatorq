@@ -37,22 +37,23 @@ All other red teaming spans use ``SpanKind.INTERNAL``.
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.tracing.setup import get_tracer
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
     from opentelemetry.trace import Span
 
 
 @asynccontextmanager
-async def with_redteam_span(
+async def with_redteam_span(  # noqa: RUF029
     name: str,
     attributes: dict[str, Any] | None = None,
     parent_context: Any | None = None,
-) -> AsyncGenerator["Span | None", None]:
+) -> AsyncGenerator[Span | None, None]:
     """Execute code within a red teaming span (``SpanKind.INTERNAL``).
 
     Yields the span when tracing is enabled, ``None`` otherwise.
@@ -63,6 +64,9 @@ async def with_redteam_span(
         attributes: Initial span attributes set at creation time.
         parent_context: Explicit parent OTEL context. Falls back to the
             current active context when ``None``.
+
+    Yields:
+        The active span when tracing is enabled, ``None`` otherwise.
     """
     tracer = get_tracer()
     if tracer is None:
@@ -95,7 +99,7 @@ async def with_redteam_span(
 
 
 @asynccontextmanager
-async def with_llm_span(
+async def with_llm_span(  # noqa: RUF029
     *,
     model: str,
     operation: str = "chat",
@@ -105,7 +109,7 @@ async def with_llm_span(
     input_messages: list[Any] | None = None,
     attributes: dict[str, Any] | None = None,
     parent_context: Any | None = None,
-) -> AsyncGenerator["Span | None", None]:
+) -> AsyncGenerator[Span | None, None]:
     """Execute code within a GenAI LLM span (``SpanKind.CLIENT``).
 
     Follows `OTel GenAI semantic conventions`_ for client inference spans.
@@ -127,6 +131,9 @@ async def with_llm_span(
             ``gen_ai.input.messages`` as a JSON string.
         attributes: Extra span attributes merged after GenAI attributes.
         parent_context: Explicit parent OTEL context.
+
+    Yields:
+        The active LLM span when tracing is enabled, ``None`` otherwise.
 
     .. _OTel GenAI semantic conventions:
        https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/
@@ -185,7 +192,7 @@ async def with_llm_span(
 
 
 def record_llm_response(
-    span: "Span | None",
+    span: Span | None,
     response: Any,
     *,
     output_content: str | None = None,
@@ -270,7 +277,7 @@ def record_llm_response(
         span.set_attribute("output", serialized)
 
 
-def set_span_attrs(span: "Span | None", attrs: dict[str, Any]) -> None:
+def set_span_attrs(span: Span | None, attrs: dict[str, Any]) -> None:
     """Set attributes on a span. Safe no-op when *span* is ``None``."""
     if span is None:
         return
@@ -280,7 +287,7 @@ def set_span_attrs(span: "Span | None", attrs: dict[str, Any]) -> None:
 
 
 def record_token_usage(
-    span: "Span | None",
+    span: Span | None,
     *,
     prompt_tokens: int = 0,
     completion_tokens: int = 0,
@@ -290,7 +297,7 @@ def record_token_usage(
     """Record token usage attributes on a span. Safe no-op when *span* is ``None``."""
     if span is None:
         return
-    computed_total = total_tokens if total_tokens else (prompt_tokens + completion_tokens)
+    computed_total = total_tokens or (prompt_tokens + completion_tokens)
     # OTel GenAI semantic convention attributes
     span.set_attribute("gen_ai.usage.input_tokens", prompt_tokens)
     span.set_attribute("gen_ai.usage.output_tokens", completion_tokens)
@@ -323,12 +330,12 @@ def _sanitize_messages(
 
     Truncates very long content to keep span attributes bounded.
     """
-    _MAX_CONTENT_LEN = 2000
+    MAX_CONTENT_LEN = 2000
     sanitized: list[dict[str, str]] = []
     for msg in messages:
         role = str(msg.get('role', ''))
         content = str(msg.get('content', ''))
-        if len(content) > _MAX_CONTENT_LEN:
-            content = content[:_MAX_CONTENT_LEN] + '... [truncated]'
+        if len(content) > MAX_CONTENT_LEN:
+            content = content[:MAX_CONTENT_LEN] + '... [truncated]'
         sanitized.append({'role': role, 'content': content})
     return sanitized

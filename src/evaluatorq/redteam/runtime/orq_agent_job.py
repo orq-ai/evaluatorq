@@ -6,9 +6,9 @@ import os
 import uuid
 from typing import Any
 
-from evaluatorq import DataPoint, Job, job
 from loguru import logger
 
+from evaluatorq import DataPoint, Job, job
 from evaluatorq.redteam.contracts import Message
 from evaluatorq.redteam.exceptions import CredentialError
 
@@ -78,9 +78,9 @@ def create_orq_platform_agent_job(agent_key: str) -> Job:
                 kwargs['task_id'] = task_id
 
             response = await client.agents.responses.create_async(**kwargs)
-            _task_id = getattr(response, 'task_id', None)
-            if _task_id:
-                task_id = _task_id
+            task_id_ = getattr(response, 'task_id', None)
+            if task_id_:
+                task_id = task_id_
             result_text = _extract_agent_response_text(response)
 
         if user_turns == 0:

@@ -6,8 +6,7 @@ import asyncio
 import inspect
 import logging
 import os
-from collections.abc import Awaitable, Callable
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from openai import AsyncOpenAI
 
@@ -30,6 +29,9 @@ from evaluatorq.simulation.types import (
     TurnMetrics,
 )
 from evaluatorq.simulation.utils.prompt_builders import build_datapoint_system_prompt
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -379,7 +381,7 @@ class SimulationRunner:
                     )
                 )
             else:
-                raise RuntimeError(
+                raise TypeError(
                     f"Unexpected result type from gather: {type(result).__name__}"
                 )
 
@@ -421,11 +423,10 @@ class SimulationRunner:
             return await self.run(datapoint=datapoint, max_turns=max_turns)
 
         try:
-            result = await asyncio.wait_for(
+            return await asyncio.wait_for(
                 self.run(datapoint=datapoint, max_turns=max_turns),
                 timeout=timeout_s,
             )
-            return result
         except asyncio.TimeoutError:
             # The inner run() never throws (returns error result), so a
             # TimeoutError means asyncio cancelled the task mid-flight.

@@ -42,10 +42,7 @@ async def test_full_dynamic_run(
             mode="dynamic",
             categories=["ASI01"],
             generate_strategies=False,
-            attack_model="e2e-attack-model",
-            evaluator_model="e2e-evaluator",
             parallelism=2,
-            backend="openai",
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
             description="E2E dynamic test",
         )
@@ -68,10 +65,7 @@ async def test_dynamic_with_strategy_generation(
             categories=["ASI01"],
             generate_strategies=True,
             generated_strategy_count=1,
-            attack_model="e2e-attack-model",
-            evaluator_model="e2e-evaluator",
             parallelism=2,
-            backend="openai",
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
             description="E2E dynamic with generation",
         )
@@ -93,10 +87,7 @@ async def test_dynamic_datapoint_capping(
             categories=["ASI01"],
             generate_strategies=False,
             max_dynamic_datapoints=2,
-            attack_model="e2e-attack-model",
-            evaluator_model="e2e-evaluator",
             parallelism=2,
-            backend="openai",
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
         )
 
@@ -116,12 +107,8 @@ async def test_dynamic_memory_cleanup(
             categories=["ASI01"],
             generate_strategies=False,
             cleanup_memory=True,
-            attack_model="e2e-attack-model",
-            evaluator_model="e2e-evaluator",
             parallelism=2,
-            backend="openai",
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
-            memory_cleanup=mock_backend_bundle.memory_cleanup,
         )
 
     cleanup: MockMemoryCleanup = cast(MockMemoryCleanup, mock_backend_bundle.memory_cleanup)

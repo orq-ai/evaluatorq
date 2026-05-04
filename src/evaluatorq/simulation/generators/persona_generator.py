@@ -9,8 +9,8 @@ from typing import Any
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
-from evaluatorq.simulation.types import DEFAULT_MODEL, CommunicationStyle, Persona
 from evaluatorq.common.sanitize import delimit
+from evaluatorq.simulation.types import DEFAULT_MODEL, CommunicationStyle, Persona
 from evaluatorq.simulation.utils.structured_output import generate_structured
 
 logger = logging.getLogger(__name__)
@@ -126,7 +126,7 @@ class PersonaGenerator:
         for item in items:
             try:
                 personas.append(Persona.model_validate(item))
-            except Exception as e:
+            except Exception as e:  # noqa: PERF203
                 logger.warning("Failed to parse persona: %s", e)
         return personas
 

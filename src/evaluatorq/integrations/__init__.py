@@ -1,4 +1,3 @@
-# ruff: noqa: F401
 """Integration modules for evaluatorq.
 
 Available integrations:
@@ -16,15 +15,15 @@ not installed.
 from . import langchain_integration
 
 __all__ = [
-    "callable_integration",
+    "callable_integration",  # noqa: F822
     "langchain_integration",
-    "langgraph_integration",
-    "openai_agents_integration",
-    "vercel_ai_sdk_integration",
+    "langgraph_integration",  # noqa: F822
+    "openai_agents_integration",  # noqa: F822
+    "vercel_ai_sdk_integration",  # noqa: F822
 ]
 
 
-def __getattr__(name: str):  # noqa: ANN202
+def __getattr__(name: str):
     if name == "langgraph_integration":
         from . import langgraph_integration
 

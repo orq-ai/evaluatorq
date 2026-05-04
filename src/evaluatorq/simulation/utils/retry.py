@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from collections.abc import Awaitable, Callable
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 from openai import APIStatusError
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +73,7 @@ async def with_retry(
     for attempt in range(1, max_attempts + 1):
         try:
             return await fn()
-        except (asyncio.TimeoutError, asyncio.CancelledError):
+        except (asyncio.TimeoutError, asyncio.CancelledError):  # noqa: PERF203
             raise
         except Exception as err:
             last_error = err
@@ -82,7 +84,7 @@ async def with_retry(
             if attempt < max_attempts:
                 base_wait = RETRY_MIN_WAIT_S * (2 ** (attempt - 1))
                 wait_s = min(base_wait, RETRY_MAX_WAIT_S)
-                jitter = random.uniform(0, wait_s * 0.25)  # noqa: S311
+                jitter = random.uniform(0, wait_s * 0.25)
                 logger.warning(
                     "%s: attempt %d/%d failed (%s), retrying in %.1fs",
                     label,

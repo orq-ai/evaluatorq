@@ -142,8 +142,8 @@ async def process_job(
         try:
             # Execute the job
             result = await job(data_point, row_index)
-            job_name = cast(str, result["name"])
-            output = cast(Output, result["output"])
+            job_name = cast("str", result["name"])
+            output = cast("Output", result["output"])
 
             # Set job name on span after execution
             set_job_name_attribute(job_span, job_name)
@@ -255,17 +255,14 @@ async def process_evaluator(
             result = await evaluator["scorer"](scorer_param)
 
             # Convert dict to EvaluationResult if needed
-            if isinstance(result, dict):
-                score = EvaluationResult.model_validate(result)
-            else:
-                score = result
+            score = EvaluationResult.model_validate(result) if isinstance(result, dict) else result
 
             # Set evaluation attributes on span
             set_evaluation_attributes(
                 eval_span,
                 score.value,
-                score.explanation,
-                score.pass_,
+                explanation=score.explanation,
+                pass_=score.pass_,
             )
 
             return EvaluatorScore(

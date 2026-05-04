@@ -8,26 +8,26 @@ from typing import Any, cast
 from loguru import logger as _converters_logger
 
 from evaluatorq.redteam.contracts import (
+    OWASP_CATEGORY_NAMES,
     AgentContext,
     AgentInfo,
     AttackInfo,
+    AttackSource,
     AttackStrategy,
     AttackTechnique,
     CategorySummary,
     DeliveryMethod,
     DeliveryMethodSummary,
+    DomainSummary,
     EvaluatedRow,
     ExecutionDetails,
     Framework,
     FrameworkSummary,
     JobOutputPayload,
-    Message,
-    OWASP_CATEGORY_NAMES,
     Pipeline,
     RedTeamReport,
     RedTeamResult,
     ReportSummary,
-    DomainSummary,
     SeveritySummary,
     TechniqueSummary,
     TokenUsage,
@@ -38,6 +38,7 @@ from evaluatorq.redteam.contracts import (
     infer_framework,
     normalize_category,
 )
+from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_metadata_for_category
 from evaluatorq.redteam.runtime.jobs import _normalize_usage as _normalize_token_usage
 from evaluatorq.redteam.vulnerability_registry import (
     VULNERABILITY_DEFS,
@@ -45,9 +46,6 @@ from evaluatorq.redteam.vulnerability_registry import (
     get_vulnerability_name,
     resolve_category_safe,
 )
-
-from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_metadata_for_category
-
 
 # ---------------------------------------------------------------------------
 # Error classification
@@ -83,7 +81,6 @@ def _classify_error(error: str | None, *, existing_type: str | None = None) -> s
 # ---------------------------------------------------------------------------
 # Static pipeline converters
 # ---------------------------------------------------------------------------
-
 
 
 def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
@@ -190,7 +187,6 @@ def _normalize_attack_technique(value: str | None) -> AttackTechnique:
     return AttackTechnique.DIRECT_INJECTION
 
 
-
 def _coerce_score_passed(value: Any) -> bool | None:
     """Normalize evaluator score values to bool/None."""
     if isinstance(value, bool):
@@ -249,7 +245,7 @@ def static_sample_to_result(
         id=inp.id,
         vulnerability=vulnerability_str,
         category=category,
-        framework=cast(Framework, infer_framework(category)),
+        framework=cast('Framework', infer_framework(category)),
         attack_technique=_normalize_attack_technique(inp.attack_technique),
         delivery_methods=delivery_methods,
         turn_type=inp.turn_type,
@@ -363,7 +359,7 @@ def dynamic_evaluatorq_results_to_report(
             vuln = resolve_category_safe(category)
             vulnerability_str = vuln.value if vuln else ''
 
-        source = 'llm_generated_strategy' if strategy.is_generated else 'hardcoded_strategy'
+        source = AttackSource.GENERATED_DYNAMIC if strategy.is_generated else AttackSource.TEMPLATE_DYNAMIC
 
         job_output = JobOutputPayload()
         eval_passed: bool | None = None
@@ -399,15 +395,18 @@ def dynamic_evaluatorq_results_to_report(
         evaluator_id = evaluator_meta.get('evaluator_id', category)
         evaluator_name = evaluator_meta.get('evaluator_name', OWASP_CATEGORY_NAMES.get(category))
 
+        vuln_key = strategy.vulnerability or resolve_category_safe(category)
+        vuln_def = VULNERABILITY_DEFS.get(vuln_key) if vuln_key else None
         attack = AttackInfo(
             id=inputs.get('id', f'{category}-{strategy.name}'),
             vulnerability=vulnerability_str,
             category=category,
-            framework=cast(Framework, infer_framework(category)),
+            framework=cast('Framework', infer_framework(category)),
             attack_technique=strategy.attack_technique,
             delivery_methods=strategy.delivery_methods,
             turn_type=strategy.turn_type,
             severity=strategy.severity,
+            vulnerability_domain=vuln_def.domain if vuln_def else None,
             source=source,
             strategy_name=strategy.name,
             objective=inputs.get('objective'),
@@ -423,10 +422,9 @@ def dynamic_evaluatorq_results_to_report(
             evaluator_name=evaluator_name,
         )
 
-        strategy_max_turns = strategy_payload.get('max_turns') if isinstance(strategy_payload, dict) else None
         execution = ExecutionDetails(
             turns=job_output.turns or 1,
-            max_turns=strategy_max_turns,
+            max_turns=job_output.max_turns,
             duration_seconds=job_output.duration_seconds,
             objective_achieved=job_output.objective_achieved,
             token_usage=token_usage,
@@ -509,7 +507,7 @@ def static_evaluatorq_results_to_reports(
                 'scope': inputs.get('scope', 'application'),
                 'framework': inputs.get('framework', 'OWASP-AGENTIC'),
                 'turn_type': inputs.get('turn_type', 'single'),
-                'source': inputs.get('source', 'orq_dataset'),
+                'source': inputs.get('source', AttackSource.ORQ_DATASET),
                 'evaluator_id': evaluator_meta.get('evaluator_id', normalized_category),
                 'evaluator_name': evaluator_meta.get(
                     'evaluator_name', OWASP_CATEGORY_NAMES.get(inputs.get('category', ''))
@@ -662,18 +660,18 @@ def compute_report_summary(results: list[RedTeamResult]) -> ReportSummary:
 
     # ── Group by vulnerability ────────────────────────────────────────
     by_vuln: dict[str, list[RedTeamResult]] = {}
-    _unresolved_vuln_count = 0
+    unresolved_vuln_count = 0
     for r in results:
         v = r.attack.vulnerability
         if v:
             by_vuln.setdefault(v, []).append(r)
         else:
-            _unresolved_vuln_count += 1
+            unresolved_vuln_count += 1
 
-    if _unresolved_vuln_count > 0:
+    if unresolved_vuln_count > 0:
         _converters_logger.warning(
             '%d result(s) have no vulnerability identifier and are excluded from by_vulnerability.',
-            _unresolved_vuln_count,
+            unresolved_vuln_count,
         )
 
     vuln_summaries: dict[str, VulnerabilitySummary] = {}

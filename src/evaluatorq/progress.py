@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from types import CoroutineType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rich.columns import Columns
 from rich.console import Console
@@ -11,7 +10,10 @@ from rich.live import Live
 from rich.spinner import Spinner
 from rich.text import Text
 
-from .types import EvaluatorqResult
+if TYPE_CHECKING:
+    from types import CoroutineType
+
+    from .types import EvaluatorqResult
 
 
 class Phase(str, Enum):
@@ -170,7 +172,7 @@ class ProgressService:
                 self.live.stop()
 
             info_text = Text()
-            info_text = info_text.append(f"ℹ {message} ", style="blue")
+            info_text = info_text.append(f"ℹ {message} ", style="blue")  # noqa: RUF001
 
             self.console.print(info_text)
 
@@ -183,6 +185,7 @@ class ProgressService:
 async def with_progress(
     coroutine: CoroutineType[Any, Any, EvaluatorqResult],
     progress_service: ProgressService,
+    *,
     show_progress: bool = True,
 ):
     """
@@ -227,4 +230,4 @@ async def with_progress(
     except Exception as error:
         # Stop spinner on error
         await progress_service.stop_spinner()
-        raise error
+        raise

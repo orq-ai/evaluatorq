@@ -40,7 +40,7 @@ async def generate_structured(
 
     # Cast once — the OpenAI SDK accepts dict literals at runtime; the
     # TypedDict union just doesn't type-narrow from dict[str, Any].
-    typed_messages = cast(Any, messages)
+    typed_messages = cast("Any", messages)
 
     # 1. Try structured output via parse()
     try:

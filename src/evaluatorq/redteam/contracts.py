@@ -25,7 +25,6 @@ else:
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator  # ConfigDict used in ReasoningOutputItem
 
-
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
@@ -217,15 +216,14 @@ class TargetKind(StrEnum):
     """Kind of target being red-teamed."""
 
     AGENT = 'agent'
-    LLM = 'llm'
-    OPENAI = 'openai'
     DEPLOYMENT = 'deployment'
     DIRECT = 'direct'
+    OPENAI = 'openai'  # used internally by OpenAIModelTarget; not a valid string prefix
 
     @property
     def is_model(self) -> bool:
-        """Return True if this target kind represents a model (not an agent)."""
-        return self in (TargetKind.LLM, TargetKind.OPENAI)
+        """True when this target kind represents a model (not an agent key)."""
+        return self == TargetKind.OPENAI
 
 
 class Pipeline(StrEnum):
@@ -277,6 +275,17 @@ class SaveMode(StrEnum):
     DETAIL = 'detail'
 
 
+class AttackSource(StrEnum):
+    """Origin of an attack datapoint."""
+
+    AGENT_DOJO = 'AgentDojo'
+    ORQ_GENERATED = 'orq_generated'
+    ORQ_DATASET = 'orq_dataset'
+    TEMPLATE_DYNAMIC = 'template_dynamic'
+    GENERATED_DYNAMIC = 'generated_dynamic'
+
+
+
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
@@ -287,10 +296,7 @@ def normalize_framework(framework: 'Framework | str') -> 'Framework':
 
     OWASP-AGENTIC is an alias for OWASP-ASI.
     """
-    if isinstance(framework, Framework):
-        value = framework.value
-    else:
-        value = framework
+    value = framework.value if isinstance(framework, Framework) else framework
     if value == Framework.OWASP_AGENTIC.value:
         return Framework.OWASP_ASI
     return Framework(value)
@@ -686,138 +692,85 @@ class AgentContext(BaseModel):
 # Pipeline configuration model
 # ---------------------------------------------------------------------------
 
+# Default model used across the red teaming pipeline for adversarial generation
+# and evaluation. Uses the OpenAI model name directly (works with both the
+# openai and orq backends — the orq backend accepts this format as-is).
+DEFAULT_PIPELINE_MODEL: str = 'gpt-5-mini'
+DEFAULT_TARGET_MAX_TOKENS: int = 5000
+DEFAULT_TARGET_TIMEOUT_MS: int = 240_000
 
-class PipelineLLMConfig(BaseModel):
-    """Centralized LLM call configuration for the dynamic red teaming pipeline.
 
-    All magic numbers (max_tokens, temperature, retries, timeouts) live here.
-    Instantiate with overrides or use the defaults via ``PipelineLLMConfig()``.
+class LLMCallConfig(BaseModel):
+    """Per-role LLM call configuration.
 
-    Pipeline steps:
-
-    1. **Capability classification** — Analyzes agent tools/resources and tags them
-       with semantic capabilities (e.g. code_execution, web_request).
-    2. **Strategy generation** — LLM generates novel attack strategies + objectives
-       tailored to the agent's capabilities and OWASP category.
-    3. **Tool adaptation** — Rewrites a generic attack prompt to reference specific
-       tools the agent has, making the attack more targeted.
-    4. **Adversarial prompt generation** — The red-team LLM crafts the actual attack
-       messages sent to the target agent (single-turn or per-turn in multi-turn).
+    One instance per pipeline role (attacker, evaluator). Controls model
+    selection, temperature, token limits, timeout, extra kwargs, and
+    optionally an explicit pre-configured client.
     """
 
-    # Retry configuration (passed as extra_body to OpenAI calls)
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    model: str = DEFAULT_PIPELINE_MODEL
+    temperature: float = 1.0
+    max_tokens: int = DEFAULT_TARGET_MAX_TOKENS
+    timeout_ms: int = 90_000
+    extra_kwargs: dict[str, Any] = Field(default_factory=dict)
+    client: Any = None  # AsyncOpenAI | None — Any avoids import cycle
+
+
+class LLMConfig(BaseModel):
+    """Unified LLM configuration for the red teaming pipeline.
+
+    Configure per-role LLM behaviour via ``attacker`` and ``evaluator``.
+    Pass an instance as ``llm_config=LLMConfig(...)`` to :func:`red_team`.
+
+    Example::
+
+        config = LLMConfig(
+            attacker=LLMCallConfig(model="anthropic/claude-3-5-sonnet", temperature=0.9),
+            evaluator=LLMCallConfig(model="openai/gpt-4o-mini", temperature=0.0),
+        )
+    """
+
+    # --- Role-based call configs ----------------------------------------------
+    attacker: LLMCallConfig = Field(default_factory=LLMCallConfig)
+    evaluator: LLMCallConfig = Field(default_factory=LLMCallConfig)
+
+    # --- Retry configuration --------------------------------------------------
     retry_count: int = 3
     retry_on_codes: list[int] = Field(default=[429, 500, 502, 503, 504])
 
-    # Step 1: Capability classification — deterministic analysis of agent tools
-    capability_classification_max_tokens: int = 5000
-    capability_classification_temperature: float = 1.0
-
-    # Step 2: Strategy generation — creative but structured strategy/objective creation
-    strategy_generation_max_tokens: int = 5000
-    strategy_generation_temperature: float = 1.0
-
-    # Step 3: Tool adaptation — deterministic rewrite of prompts to target specific tools
-    tool_adaptation_max_tokens: int = 5000
-    tool_adaptation_temperature: float = 1.0
-
-    # Step 4: Adversarial prompt generation — creative attack message crafting
-    adversarial_max_tokens: int = 5000
-    adversarial_temperature: float = 1.0
-
-    # Target model max_tokens for static/hybrid model job responses
-    target_max_tokens: int = 5000
-
-    # Target agent timeout (ms) for ORQ SDK calls
-    target_agent_timeout_ms: int = 240_000
-
-    # Adversarial LLM call timeout (ms) — separate from target agent timeout
-    llm_call_timeout_ms: int = 90_000
-
-    # Overall cleanup timeout (ms) — best-effort, should never block the pipeline
+    # --- Cleanup timeout ------------------------------------------------------
     cleanup_timeout_ms: int = 60_000
 
-    # Logging level for the red teaming pipeline
-    log_level: str = 'INFO'
+    # --- Target agent timeout -------------------------------------------------
+    target_agent_timeout_ms: int = 240_000
 
     @property
     def retry_config(self) -> dict[str, Any]:
         """ORQ retry config dict for ``extra_body``.
 
-        Returns an empty dict when using the OpenAI API directly (the
+        Returns empty dict when using the OpenAI API directly (the
         ``retry`` parameter is ORQ-specific and rejected by OpenAI).
         """
         if os.getenv('OPENAI_API_KEY') or not os.getenv('ORQ_API_KEY'):
             return {}
         return {'retry': {'count': self.retry_count, 'on_codes': self.retry_on_codes}}
 
-
-# Module-level default instance used across the pipeline.
-# Import this in other modules; tests can monkeypatch or pass overrides.
-PIPELINE_CONFIG = PipelineLLMConfig()
-
-# Default model used across the red teaming pipeline for adversarial generation
-# and evaluation. Uses the OpenAI model name directly (works with both the
-# openai and orq backends — the orq backend accepts this format as-is).
-DEFAULT_PIPELINE_MODEL: str = 'gpt-5-mini'
-
-
-class RedTeamConfig(BaseModel):
-    """Top-level configuration for the red teaming pipeline.
-
-    Centralizes backend routing, model resolution, and LLM call settings
-    into a single object.  When ``backend="auto"`` (the default), the
-    backend is inferred from the target prefix and available credentials:
-
-    * ``agent:`` / ``deployment:`` targets → ``orq``
-    * ``llm:`` targets → ``openai`` (or ``orq`` if only ``ORQ_API_KEY`` is set)
-
-    Models are automatically prefixed (e.g. ``"openai/gpt-5-mini"``) when
-    routing through the orq router so callers never have to think about it.
-    """
-
-    # --- Backend / routing ---------------------------------------------------
-    backend: Literal['auto', 'openai', 'orq'] = 'auto'
-
-    # --- Models --------------------------------------------------------------
-    attack_model: str = DEFAULT_PIPELINE_MODEL
-    evaluator_model: str = DEFAULT_PIPELINE_MODEL
-
-    # --- LLM call tuning (sub-config) ----------------------------------------
-    llm: PipelineLLMConfig = Field(default_factory=PipelineLLMConfig)
-
-    # --- Extra kwargs forwarded to every chat.completions.create() call ------
-    llm_kwargs: dict[str, Any] = Field(default_factory=dict)
-
-    def resolve_backend(self, targets: list[str]) -> str:
-        """Return the concrete backend name (``"orq"`` or ``"openai"``)."""
-        if self.backend != 'auto':
-            return self.backend
-        orq_prefixes = ('agent:', 'deployment:')
-        has_orq_target = any(
-            any(t.startswith(p) for p in orq_prefixes) or ':' not in t
-            for t in targets
-        )
-        return 'orq' if has_orq_target else 'openai'
-
-    def resolve_model(self, model: str, *, uses_orq_router: bool) -> str:
-        """Add a provider prefix when the model goes through the orq router.
-
-        If the model already contains a ``/`` (e.g. ``"openai/gpt-5-mini"``)
-        it is returned unchanged.
-        """
-        if uses_orq_router and '/' not in model:
-            return f'openai/{model}'
-        return model
-
     @property
     def uses_orq_router(self) -> bool:
-        """True when the LLM client will route through the orq router.
+        """True when LLM calls route through the ORQ router.
 
-        This is the case when no custom ``llm_client`` / ``OPENAI_API_KEY``
-        is set and ``ORQ_API_KEY`` is available.
+        The ORQ router is used when no ``OPENAI_API_KEY`` is set but
+        ``ORQ_API_KEY`` is available. Controls base_url selection only —
+        does not transform model names.
         """
         return not os.getenv('OPENAI_API_KEY') and bool(os.getenv('ORQ_API_KEY'))
+
+
+# Module-level default used by internal pipeline components.
+# Import this in other modules; tests can monkeypatch it.
+PIPELINE_CONFIG = LLMConfig()
 
 
 # ---------------------------------------------------------------------------
@@ -1037,7 +990,6 @@ class AttackEvaluationResult(BaseModel):
     raw_output: dict[str, Any] | None = Field(default=None, description='Raw evaluator output')
 
 
-
 # ---------------------------------------------------------------------------
 # Result and report models
 # ---------------------------------------------------------------------------
@@ -1061,7 +1013,7 @@ class AttackInfo(BaseModel):
         default=None, description='Vulnerability domain (null for dynamic attacks without a fixed domain)'
     )
     source: str = Field(
-        description="Origin: 'AgentDojo', 'orq_generated', 'hardcoded_strategy', 'llm_generated_strategy'"
+        description="Origin: 'AgentDojo', 'orq_generated', 'orq_dataset', 'template_dynamic', 'generated_dynamic'"
     )
     strategy_name: str | None = Field(default=None, description="Dynamic strategy name (e.g., 'tool_output_hijack')")
     objective: str | None = Field(default=None, description='Filled objective template (dynamic only)')
@@ -1135,6 +1087,7 @@ class JobOutputPayload(BaseModel):
     response: str | None = None
     output: str | None = None
     turns: int | None = None
+    max_turns: int | None = None
     objective_achieved: bool | None = None
     duration_seconds: float | None = None
     token_usage: TokenUsage | None = None

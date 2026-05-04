@@ -17,22 +17,41 @@ import time
 import traceback
 from typing import TYPE_CHECKING, Any, cast
 
-from evaluatorq import DataPoint, EvaluationResult, Job, job
 from loguru import logger
 
+from evaluatorq import DataPoint, EvaluationResult, Job, job
 from evaluatorq.redteam.adaptive.attack_generator import generate_attack_prompt, generate_objective
+from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
+from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator, _get_active_progress
+from evaluatorq.redteam.adaptive.strategy_planner import (
+    plan_strategies_for_categories,
+    plan_strategies_for_vulnerabilities,
+)
 from evaluatorq.redteam.backends.base import DefaultErrorMapper, _coerce_to_agent_response
 from evaluatorq.redteam.backends.registry import create_async_llm_client, resolve_backend
-from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
-from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, PIPELINE_CONFIG, AttackOutput, AttackStrategy, EvaluatorConfig, ExecutedToolCall, Message, OrchestratorResult, TokenUsage, Vulnerability
-from evaluatorq.redteam.vulnerability_registry import get_primary_category, resolve_category_safe, resolve_vulnerabilities
-from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator, _get_active_progress
-from evaluatorq.redteam.adaptive.strategy_planner import plan_strategies_for_categories, plan_strategies_for_vulnerabilities
-from evaluatorq.redteam.contracts import TurnType
+from evaluatorq.redteam.contracts import (
+    DEFAULT_PIPELINE_MODEL,
+    PIPELINE_CONFIG,
+    AttackOutput,
+    AttackStrategy,
+    EvaluatorConfig,
+    ExecutedToolCall,
+    LLMCallConfig,
+    LLMConfig,
+    Message,
+    OrchestratorResult,
+    TokenUsage,
+    TurnType,
+    Vulnerability,
+)
 from evaluatorq.redteam.tracing import set_span_attrs, with_redteam_span
+from evaluatorq.redteam.vulnerability_registry import (
+    get_primary_category,
+    resolve_category_safe,
+    resolve_vulnerabilities,
+)
 
 if TYPE_CHECKING:
-    from evaluatorq.types import ScorerParameter
     from openai import AsyncOpenAI
 
     from evaluatorq.redteam.backends.base import (
@@ -41,6 +60,7 @@ if TYPE_CHECKING:
         MemoryCleanup,
     )
     from evaluatorq.redteam.contracts import AgentContext
+    from evaluatorq.types import ScorerParameter
 
 
 def _set_attack_span_attrs(span: Any, result: AttackOutput) -> None:
@@ -70,6 +90,7 @@ async def generate_dynamic_datapoints_for_vulnerabilities(
     parallelism: int = 5,
     attacker_instructions: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
+    pipeline_config: LLMConfig | None = None,
 ) -> tuple[list[DataPoint], dict[str, Any]]:
     """Generate evaluatorq DataPoints for dynamic red teaming, keyed by Vulnerability enum.
 
@@ -89,6 +110,7 @@ async def generate_dynamic_datapoints_for_vulnerabilities(
         per-vulnerability counts of all/applicable/generated/filtered strategies.
         The metadata keys are vulnerability ID strings (e.g. 'goal_hijacking').
     """
+    cfg = pipeline_config or PIPELINE_CONFIG
     all_vuln_strategies, filtering_metadata_by_vuln, _agent_capabilities = await plan_strategies_for_vulnerabilities(
         agent_context=agent_context,
         vulnerabilities=vulnerabilities,
@@ -101,6 +123,7 @@ async def generate_dynamic_datapoints_for_vulnerabilities(
         generation_parallelism=parallelism,
         attacker_instructions=attacker_instructions,
         llm_kwargs=llm_kwargs,
+        pipeline_config=cfg,
     )
 
     # Convert Vulnerability-keyed metadata to string keys for external consumption
@@ -142,6 +165,7 @@ async def generate_dynamic_datapoints(
     parallelism: int = 5,
     attacker_instructions: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
+    pipeline_config: LLMConfig | None = None,
 ) -> tuple[list[DataPoint], dict[str, Any]]:
     """Generate evaluatorq DataPoints for dynamic red teaming.
 
@@ -164,6 +188,7 @@ async def generate_dynamic_datapoints(
         Tuple of (datapoints, filtering_metadata) where filtering_metadata contains
         per-category counts of all/applicable/generated/filtered strategies.
     """
+    cfg = pipeline_config or PIPELINE_CONFIG
     # Try resolving all categories to vulnerabilities for the primary path
     try:
         resolved_vulnerabilities = resolve_vulnerabilities(categories)
@@ -185,6 +210,7 @@ async def generate_dynamic_datapoints(
             parallelism=parallelism,
             attacker_instructions=attacker_instructions,
             llm_kwargs=llm_kwargs,
+            pipeline_config=cfg,
         )
         # Remap metadata keys from vulnerability IDs back to original category strings
         # so callers that expect category-keyed metadata continue to work.
@@ -210,6 +236,7 @@ async def generate_dynamic_datapoints(
         generation_parallelism=parallelism,
         attacker_instructions=attacker_instructions,
         llm_kwargs=llm_kwargs,
+        pipeline_config=cfg,
     )
 
     datapoints = []
@@ -249,6 +276,7 @@ def create_dynamic_redteam_job(
     attacker_instructions: str | None = None,
     verbosity: int = 0,
     llm_kwargs: dict[str, Any] | None = None,
+    pipeline_config: LLMConfig | None = None,
 ) -> Job:
     """Create an evaluatorq Job that runs a red-team attack.
 
@@ -271,8 +299,9 @@ def create_dynamic_redteam_job(
         max_turns: Maximum turns for multi-turn attacks
         target_factory: Factory for creating AgentTarget instances. Defaults to ORQ.
     """
+    cfg = pipeline_config or PIPELINE_CONFIG
     resolved_factory: AgentTargetFactory = (
-        target_factory if target_factory is not None else resolve_backend('orq').target_factory
+        target_factory if target_factory is not None else resolve_backend('orq', pipeline_config=cfg).target_factory
     )
     resolved_error_mapper = error_mapper or DefaultErrorMapper()
     safe_agent_key = ''.join(ch if ch.isalnum() or ch in {'-', '_'} else '-' for ch in agent_key).strip('-')
@@ -306,7 +335,6 @@ def create_dynamic_redteam_job(
             # Inject model info for tracing if the target supports it
             if hasattr(target, 'model') and agent_context.model:
                 object.__setattr__(target, 'model', agent_context.model)  # type: ignore[misc]
-            target.reset_conversation()
 
             if strategy.prompt_template and strategy.turn_type == TurnType.SINGLE:
                 # Fixed template: fill and send directly (no adversarial LLM needed)
@@ -319,7 +347,7 @@ def create_dynamic_redteam_job(
                 error_details = None
                 token_usage = None
                 turn_tool_calls: list[ExecutedToolCall] = []
-                target_timeout_s = PIPELINE_CONFIG.target_agent_timeout_ms / 1000.0
+                target_timeout_s = cfg.target_agent_timeout_ms / 1000.0
                 try:
                     async with with_redteam_span(
                         "orq.redteam.target_call",
@@ -344,7 +372,7 @@ def create_dynamic_redteam_job(
                         })
                         consume_usage = getattr(target, 'consume_last_token_usage', None)
                         if callable(consume_usage):
-                            token_usage: TokenUsage | None = cast(TokenUsage | None, consume_usage())
+                            token_usage: TokenUsage | None = cast('TokenUsage | None', consume_usage())
                 except asyncio.TimeoutError:
                     logger.error(f'Single-turn attack timed out for {category}/{strategy.name} after {target_timeout_s:.0f}s')
                     response = f'[ERROR: Target agent timed out after {target_timeout_s:.0f}s]'
@@ -353,7 +381,7 @@ def create_dynamic_redteam_job(
                     error_stage = 'target_call'
                     error_code = 'target.timeout'
                     error_details = {
-                        'timeout_ms': PIPELINE_CONFIG.target_agent_timeout_ms,
+                        'timeout_ms': cfg.target_agent_timeout_ms,
                     }
                 except Exception as e:
                     if isinstance(e, (TypeError, AttributeError, ImportError, NameError)):
@@ -394,11 +422,11 @@ def create_dynamic_redteam_job(
 
                 # Advance the global progress bar for template single-turn attacks
                 # (multi-turn attacks are tracked by run_attack in the orchestrator).
-                _active_progress = _get_active_progress()
-                if _active_progress is not None:
-                    await _active_progress.finish_attack(None)
+                active_progress = _get_active_progress()
+                if active_progress is not None:
+                    await active_progress.finish_attack(None)
 
-                return result_dict.model_dump(mode='json')
+                return {**result_dict.model_dump(mode='json'), 'max_turns': effective_max_turns}
 
             # Dynamic single-turn (max_turns=1) or multi-turn — orchestrator handles both
             llm_client = attack_llm_client or create_async_llm_client()
@@ -409,6 +437,7 @@ def create_dynamic_redteam_job(
                 attacker_instructions=attacker_instructions,
                 verbosity=verbosity,
                 llm_kwargs=llm_kwargs,
+                pipeline_config=cfg,
             )
 
             try:
@@ -480,7 +509,7 @@ def create_dynamic_redteam_job(
             if result_dict.final_response:
                 set_span_attrs(attack_span, {'output': result_dict.final_response})
             _set_attack_span_attrs(attack_span, result_dict)
-            return result_dict.model_dump(mode='json')
+            return {**result_dict.model_dump(mode='json'), 'max_turns': effective_max_turns}
 
     return dynamic_job
 
@@ -489,13 +518,14 @@ def create_dynamic_evaluator(
     evaluator_model: str = DEFAULT_PIPELINE_MODEL,
     llm_client: AsyncOpenAI | None = None,
     llm_kwargs: dict[str, Any] | None = None,
+    cfg: LLMCallConfig | None = None,
 ) -> EvaluatorConfig:
     """Create an evaluator that uses OWASPEvaluator on the attack conversation.
 
     value=True means RESISTANT (consistent with OWASP evaluatorq scoring and
     EvaluationResult.passed convention).
     """
-    owasp_evaluator = OWASPEvaluator(evaluator_model=evaluator_model, llm_client=llm_client, llm_kwargs=llm_kwargs)
+    owasp_evaluator = OWASPEvaluator(evaluator_model=evaluator_model, llm_client=llm_client, llm_kwargs=llm_kwargs, cfg=cfg)
 
     async def scorer(params: ScorerParameter) -> EvaluationResult:
         """Evaluate the attack output using OWASPEvaluator and return a scored EvaluationResult."""
@@ -597,6 +627,7 @@ async def cleanup_memory_entities(
     agent_context: AgentContext,
     entity_ids: list[str],
     memory_cleanup: MemoryCleanup | None = None,
+    pipeline_config: LLMConfig | None = None,
 ) -> str | None:
     """Delete memory entities created during a red teaming run.
 
@@ -605,7 +636,8 @@ async def cleanup_memory_entities(
 
     Returns None on success, or an error message string on failure.
     """
-    cleanup_timeout_s = PIPELINE_CONFIG.cleanup_timeout_ms / 1000.0
+    cfg = pipeline_config or PIPELINE_CONFIG
+    cleanup_timeout_s = cfg.cleanup_timeout_ms / 1000.0
     try:
         if memory_cleanup is not None:
             await asyncio.wait_for(

@@ -33,8 +33,12 @@ class AgentTarget(Protocol):
         """Send a prompt and return a structured response with text and any tool calls made."""
         ...
 
-    def reset_conversation(self) -> None:
-        """Reset conversation state for a new attack."""
+    def new(self) -> AgentTarget:
+        """Return a fresh target instance with isolated state for a new attack.
+
+        Each call must produce an independent instance — own ``memory_entity_id``
+        for memory-backed targets, ``None`` otherwise.
+        """
         ...
 
 
@@ -113,26 +117,30 @@ class SupportsErrorMapping(Protocol):
 
 def is_agent_target(obj: object) -> bool:
     """Return True if obj satisfies the AgentTarget protocol at runtime."""
-    return callable(getattr(obj, 'send_prompt', None)) and callable(getattr(obj, 'reset_conversation', None))
+    has_send = callable(getattr(obj, 'send_prompt', None))
+    has_new = callable(getattr(obj, 'new', None))
+    if has_send and not has_new and callable(getattr(obj, 'clone', None)):
+        raise TypeError(
+            f"{type(obj).__name__} implements 'clone()' which was removed in evaluatorq 1.3. "
+            "Rename it to 'new(self) -> AgentTarget' — signature is the same, no memory_entity_id param."
+        )
+    return has_send and has_new
 
 
 class DirectTargetFactory:
-    """Fallback factory that wraps a bare AgentTarget (no SupportsTargetFactory)."""
+    """Fallback factory that wraps a bare AgentTarget."""
 
     def __init__(self, target: AgentTarget) -> None:
         self._target = target
-        clone_attr = getattr(target, 'clone', None)
-        self._clone_fn = clone_attr if callable(clone_attr) else None
-        if self._clone_fn is None:
-            logger.warning(
-                f'Target {type(target).__name__} does not implement clone(). '
-                'Reusing same instance across parallel jobs may cause race conditions.'
-            )
 
     def create_target(self, agent_key: str) -> AgentTarget:
-        if self._clone_fn is not None:
-            return cast("AgentTarget", self._clone_fn())
-        return self._target
+        result = self._target.new()
+        if result is None:  # pyright: ignore[reportUnnecessaryComparison]
+            raise TypeError(
+                f"{type(self._target).__name__}.new() returned None. "
+                "It must return a fresh AgentTarget instance."
+            )
+        return result
 
 
 class NoopMemoryCleanup:

@@ -9,11 +9,11 @@ import re
 from openai import APIStatusError, AsyncOpenAI
 
 from evaluatorq.simulation.types import DEFAULT_MODEL, Persona, Scenario
-from evaluatorq.simulation.utils.retry import with_retry
 from evaluatorq.simulation.utils.prompt_builders import (
     build_persona_system_prompt,
     build_scenario_user_context,
 )
+from evaluatorq.simulation.utils.retry import with_retry
 
 logger = logging.getLogger(__name__)
 

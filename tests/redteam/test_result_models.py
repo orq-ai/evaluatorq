@@ -121,7 +121,7 @@ class TestModelSerialization:
             delivery_methods=[DeliveryMethod.DIRECT_REQUEST, DeliveryMethod.ROLE_PLAY],
             turn_type=TurnType.SINGLE,
             severity=Severity.MEDIUM,
-            source='hardcoded_strategy',
+            source='template_dynamic',
             strategy_name='test_strat',
         )
         data = info.model_dump(mode='json')
@@ -149,7 +149,7 @@ class TestModelSerialization:
                 delivery_methods=[DeliveryMethod.DIRECT_REQUEST],
                 turn_type=TurnType.SINGLE,
                 severity=Severity.MEDIUM,
-                source='hardcoded_strategy',
+                source='template_dynamic',
             ),
             agent=AgentInfo(key='test_agent', model='azure/gpt-5-mini'),
             messages=cast(list[Message], [{'role': 'user', 'content': 'test'}]),
@@ -178,7 +178,7 @@ class TestModelSerialization:
                         delivery_methods=[DeliveryMethod.DIRECT_REQUEST],
                         turn_type=TurnType.SINGLE,
                         severity=Severity.MEDIUM,
-                        source='hardcoded_strategy',
+                        source='template_dynamic',
                     ),
                     agent=AgentInfo(),
                     messages=[],

@@ -87,7 +87,7 @@ async def test_reset_clears_memory() -> None:
     await target.send_prompt(
         "My favorite fruit is persimmon. Please confirm."
     )
-    target.reset_conversation()
+    target = target.new()
 
     r = await target.send_prompt(
         "What is my favorite fruit? "
@@ -107,7 +107,7 @@ async def test_clone_isolation() -> None:
 
     await target.send_prompt("My favorite city is Reykjavik. Please confirm.")
 
-    cloned = target.clone()
+    cloned = target.new()
     r = await cloned.send_prompt(
         "What is my favorite city? If you don't know, reply: unknown"
     )

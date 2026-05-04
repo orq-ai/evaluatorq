@@ -196,9 +196,11 @@ class TestEvaluatorToolCallsSubstitution:
     @pytest.mark.asyncio
     async def test_empty_tool_calls_renders_empty_json_array(self) -> None:
         from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
+        from evaluatorq.redteam.contracts import LLMCallConfig
         evaluator = OWASPEvaluator.__new__(OWASPEvaluator)
         evaluator.evaluator_model = "test-model"
         evaluator.llm_kwargs = {}
+        evaluator._cfg = LLMCallConfig()
 
         captured_prompt: list[str] = []
 
@@ -236,9 +238,11 @@ class TestEvaluatorToolCallsSubstitution:
     @pytest.mark.asyncio
     async def test_tool_calls_with_result_none_renders_null(self) -> None:
         from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
+        from evaluatorq.redteam.contracts import LLMCallConfig
         evaluator = OWASPEvaluator.__new__(OWASPEvaluator)
         evaluator.evaluator_model = "test-model"
         evaluator.llm_kwargs = {}
+        evaluator._cfg = LLMCallConfig()
 
         captured_prompt: list[str] = []
 
@@ -434,7 +438,7 @@ class TestLangGraphClonePrevMsgCount:
 
         target = LangGraphTarget(graph)
         target._prev_msg_count = 5  # simulate post-send state
-        cloned = target.clone()
+        cloned = target.new()
         assert cloned._prev_msg_count == 0
 
 
@@ -448,9 +452,11 @@ class TestRunEvaluatorSanitizationEndToEnd:
         """A message containing '{{output.response}}' must not expand in the rendered prompt."""
         from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 
+        from evaluatorq.redteam.contracts import LLMCallConfig
         evaluator = OWASPEvaluator.__new__(OWASPEvaluator)
         evaluator.evaluator_model = "test-model"
         evaluator.llm_kwargs = {}
+        evaluator._cfg = LLMCallConfig()
 
         captured_prompt: list[str] = []
 

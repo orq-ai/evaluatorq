@@ -59,10 +59,7 @@ async def test_hooks_on_confirm_cancels_dynamic(
                 mode="dynamic",
                 categories=["ASI01"],
                 generate_strategies=False,
-                attack_model="e2e-attack-model",
-                evaluator_model="e2e-evaluator",
                 parallelism=2,
-                backend="openai",
                 llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
                 hooks=hooks,
             )
@@ -87,10 +84,7 @@ async def test_hooks_on_confirm_cancels_hybrid(
                 mode="hybrid",
                 categories=["ASI01"],
                 generate_strategies=False,
-                attack_model="e2e-attack-model",
-                evaluator_model="e2e-evaluator",
                 parallelism=2,
-                backend="openai",
                 llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
                 dataset=str(static_dataset_path),
                 hooks=hooks,
@@ -115,11 +109,9 @@ async def test_static_output_artifacts(
     """Static mode should write numbered artifact files."""
     output_dir = tmp_path / "static_artifacts"
     await red_team(
-        "openai:e2e-static-model",
+        "agent:e2e-static-model",
         mode="static",
-        evaluator_model="e2e-evaluator",
         parallelism=2,
-        backend="openai",
         dataset=str(static_dataset_path),
         llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
         output_dir=output_dir,
@@ -152,10 +144,7 @@ async def test_dynamic_output_artifacts(
             mode="dynamic",
             categories=["ASI01"],
             generate_strategies=False,
-            attack_model="e2e-attack-model",
-            evaluator_model="e2e-evaluator",
             parallelism=2,
-            backend="openai",
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
             output_dir=output_dir,
             save=SaveMode.DETAIL,
@@ -176,9 +165,8 @@ async def test_invalid_mode_raises() -> None:
     """Invalid mode should raise ValueError."""
     with pytest.raises(ValueError, match="is not a valid Pipeline"):
         await red_team(
-            "openai:some-model",
+            "agent:some-model",
             mode="nonexistent",
-            backend="openai",
         )
 
 
@@ -189,5 +177,4 @@ async def test_empty_targets_raises() -> None:
         await red_team(
             [],
             mode="static",
-            backend="openai",
         )

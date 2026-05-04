@@ -121,10 +121,6 @@ class OpenAIAgentTarget(AgentTarget):
         output.append(TextOutputItem(text=str(result.final_output)))
         return AgentResponse(output=output)
 
-    def reset_conversation(self) -> None:
-        """Reset conversation state by clearing the message history."""
-        self._history = []
-
     async def get_agent_context(self) -> AgentContext:
         """Return agent context derived from the wrapped Agent instance.
 
@@ -169,9 +165,17 @@ class OpenAIAgentTarget(AgentTarget):
             model=model,
         )
 
+    def reset_conversation(self) -> None:
+        """Clear accumulated conversation history for a fresh attack turn."""
+        self._history = []
+
     def clone(self) -> OpenAIAgentTarget:
-        """Create an independent copy for parallel red teaming jobs."""
+        """Return a fresh instance with empty history for parallel job safety."""
         return OpenAIAgentTarget(self._agent, run_kwargs=dict(self._run_kwargs))
+
+    def new(self) -> OpenAIAgentTarget:
+        """Return an independent instance for parallel red teaming jobs."""
+        return self.clone()
 
 
 def _parse_tool_call_arguments(raw: Any) -> dict[str, Any]:

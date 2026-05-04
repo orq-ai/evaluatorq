@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from evaluatorq.redteam.contracts import RedTeamResult
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from evaluatorq.redteam.contracts import RedTeamResult
 
 
 def extract_prompt(result: RedTeamResult) -> str:

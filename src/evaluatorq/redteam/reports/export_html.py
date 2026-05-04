@@ -11,11 +11,14 @@ to a tables-only layout.
 from __future__ import annotations
 
 import html
+import operator
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from evaluatorq.redteam.contracts import RedTeamReport
 from evaluatorq.redteam.reports.sections import ReportSection, build_report_sections
+
+if TYPE_CHECKING:
+    from evaluatorq.redteam.contracts import RedTeamReport
 
 # ---------------------------------------------------------------------------
 # Brand colors (inline to avoid hard dependency on ui package at import time)
@@ -83,8 +86,8 @@ def _try_render_svg_chart(fig: Any) -> str | None:
 def _charts_available() -> bool:
     """Check if plotly and kaleido are importable."""
     try:
-        import plotly  # noqa: F401
         import kaleido  # noqa: F401
+        import plotly  # noqa: F401
         return True
     except ImportError:
         return False
@@ -109,10 +112,10 @@ def _render_donut_chart(summary_data: dict[str, Any]) -> str:
     colors = [_STATUS_COLORS["resistant"], _STATUS_COLORS["vulnerable"], _STATUS_COLORS["error"]]
 
     # Remove zero-value segments
-    filtered = [(l, v, c) for l, v, c in zip(labels, values, colors) if v > 0]
+    filtered = [(lbl, v, c) for lbl, v, c in zip(labels, values, colors, strict=False) if v > 0]
     if not filtered:
         return ""
-    labels, values, colors = zip(*filtered)
+    labels, values, colors = zip(*filtered, strict=False)
 
     fig = go.Figure(data=[go.Pie(
         labels=list(labels),
@@ -248,7 +251,7 @@ def _render_technique_bar_chart(rows: list[dict[str, Any]]) -> str:
 
     hover_texts = [
         f"{label}<br>ASR: {rate:.1f}%<br>Attacks: {total}"
-        for label, rate, total in zip(labels, rates, totals)
+        for label, rate, total in zip(labels, rates, totals, strict=False)
     ]
 
     fig = go.Figure(data=[go.Bar(
@@ -297,7 +300,7 @@ def _render_vulnerability_bar_chart(rows: list[dict[str, Any]]) -> str:
 
     hover_texts = [
         f"{label}<br>ASR: {rate:.1f}%<br>Attacks: {total}"
-        for label, rate, total in zip(labels, rates, totals)
+        for label, rate, total in zip(labels, rates, totals, strict=False)
     ]
 
     fig = go.Figure(data=[go.Bar(
@@ -346,13 +349,11 @@ def _truncate(text: str, max_chars: int = 800) -> str:
 
 def _html_table(headers: list[str], rows: list[list[str]]) -> str:
     parts = ["<table>", "<thead><tr>"]
-    for h in headers:
-        parts.append(f"<th>{_esc(h)}</th>")
+    parts.extend(f"<th>{_esc(h)}</th>" for h in headers)
     parts.append("</tr></thead><tbody>")
     for row in rows:
         parts.append("<tr>")
-        for cell in row:
-            parts.append(f"<td>{cell}</td>")  # cell may contain HTML (badges)
+        parts.extend(f"<td>{cell}</td>" for cell in row)  # cell may contain HTML (badges)
         parts.append("</tr>")
     parts.append("</tbody></table>")
     return "".join(parts)
@@ -394,32 +395,32 @@ def _render_kpi_cards(data: dict[str, Any]) -> str:
     errors_class = "kpi-warn" if total_errors > 0 else ""
 
     cards = [
-        f'<div class="kpi-card {asr_class}">'
+        (f'<div class="kpi-card {asr_class}">'
         f'<div class="kpi-value">{_pct(asr)}</div>'
         f'<div class="kpi-label">ASR</div>'
         f'<div class="kpi-subtitle">Target: 0%</div>'
-        f"</div>",
+        f"</div>"),
 
-        f'<div class="kpi-card {critical_class}">'
+        (f'<div class="kpi-card {critical_class}">'
         f'<div class="kpi-value">{_esc(str(critical_exposure))}</div>'
         f'<div class="kpi-label">Critical Exposure</div>'
         f'<div class="kpi-subtitle">{"Requires attention" if critical_exposure > 0 else "Clear"}</div>'
-        f"</div>",
+        f"</div>"),
 
-        f'<div class="kpi-card">'
+        (f'<div class="kpi-card">'
         f'<div class="kpi-value">{_pct(eval_coverage)}</div>'
         f'<div class="kpi-label">Eval Coverage</div>'
-        f"</div>",
+        f"</div>"),
 
-        f'<div class="kpi-card {errors_class}">'
+        (f'<div class="kpi-card {errors_class}">'
         f'<div class="kpi-value">{_esc(str(total_errors))}</div>'
         f'<div class="kpi-label">Errors</div>'
-        f"</div>",
+        f"</div>"),
 
-        f'<div class="kpi-card">'
+        (f'<div class="kpi-card">'
         f'<div class="kpi-value">{_esc(str(total_attacks))}</div>'
         f'<div class="kpi-label">Total Attacks</div>'
-        f"</div>",
+        f"</div>"),
     ]
 
     return '<div class="kpi-row">' + "".join(cards) + "</div>"
@@ -464,12 +465,11 @@ def _render_focus_areas_html(section: ReportSection) -> str:
         card_lines = [
             '<div class="card">',
             f"<h3>{i}. {cat} — {cat_name}</h3>",
-            f"<p><strong>Vulnerabilities:</strong> {vuln} ({vuln_rate} of attacks succeeded) "
-            f"&nbsp;|&nbsp; <strong>Risk Score:</strong> {risk_score:.2f}</p>",
+            (f"<p><strong>Vulnerabilities:</strong> {vuln} ({vuln_rate} of attacks succeeded) "
+            f"&nbsp;|&nbsp; <strong>Risk Score:</strong> {risk_score:.2f}</p>"),
         ]
         if remediation:
-            card_lines.append(f"<p><strong>Remediation guidance:</strong></p>")
-            card_lines.append(f"<blockquote>{_esc(remediation)}</blockquote>")
+            card_lines.extend(("<p><strong>Remediation guidance:</strong></p>", f"<blockquote>{_esc(remediation)}</blockquote>"))
 
         agent_remediation = area.get("agent_specific_remediation", "")
         if agent_remediation:
@@ -484,12 +484,8 @@ def _render_focus_areas_html(section: ReportSection) -> str:
             patterns = llm_rec.get("patterns_observed", "")
             traces_analyzed = llm_rec.get("traces_analyzed", 0)
             if recs:
-                card_lines.append(
-                    f'<p><strong>Actionable recommendations</strong> (based on {traces_analyzed} trace samples):</p>'
-                )
-                card_lines.append('<ul class="recommendations">')
-                for rec_item in recs:
-                    card_lines.append(f"<li>{_esc(rec_item)}</li>")
+                card_lines.extend((f'<p><strong>Actionable recommendations</strong> (based on {traces_analyzed} trace samples):</p>', '<ul class="recommendations">'))
+                card_lines.extend(f"<li>{_esc(rec_item)}</li>" for rec_item in recs)
                 card_lines.append("</ul>")
             if patterns:
                 card_lines.append(f"<p><em>Patterns observed:</em> {_esc(patterns)}</p>")
@@ -584,7 +580,7 @@ def _render_delivery_bar_chart(rows: list[dict[str, Any]]) -> str:
 
     hover_texts = [
         f"{label}<br>ASR: {rate:.1f}%<br>Attacks: {total}"
-        for label, rate, total in zip(labels, rates, totals)
+        for label, rate, total in zip(labels, rates, totals, strict=False)
     ]
 
     fig = go.Figure(data=[go.Bar(
@@ -644,7 +640,7 @@ def _render_error_bar_chart(errors_by_type: dict[str, int]) -> str:
         return ""
 
     parts = ['<div style="margin:1rem 0">']
-    for etype, count in sorted(errors_by_type.items(), key=lambda x: x[1], reverse=True):
+    for etype, count in sorted(errors_by_type.items(), key=operator.itemgetter(1), reverse=True):
         pct_width = min(100, int(count / total * 100))
         parts.append(
             f'<div class="error-bar-container">'
@@ -722,7 +718,7 @@ def _render_error_analysis_html(section: ReportSection) -> str:
 
 
 def _render_attack_heatmap_html(section: ReportSection) -> str:
-    """Render vulnerability × technique attack success rate as a heatmap table."""
+    """Render vulnerability × technique attack success rate as a heatmap table."""  # noqa: RUF002
     data = section.data
     vulnerabilities: list[str] = data.get("vulnerabilities", [])
     techniques: list[str] = data.get("techniques", [])
@@ -756,8 +752,7 @@ def _render_attack_heatmap_html(section: ReportSection) -> str:
 
     # Build table header row (techniques)
     header_cells = ["<th>Vulnerability</th>"]
-    for tech in techniques:
-        header_cells.append(f"<th>{_esc(tech)}</th>")
+    header_cells.extend(f"<th>{_esc(tech)}</th>" for tech in techniques)
 
     body_rows: list[str] = []
     for vuln in vulnerabilities:
@@ -952,7 +947,7 @@ def _render_mini_donut_chart(label: str, data: dict[str, Any]) -> str:
     ]
     if not filtered:
         return ""
-    lbls, vals, cols = zip(*filtered)
+    lbls, vals, cols = zip(*filtered, strict=False)
 
     fig = go.Figure(data=[go.Pie(
         labels=list(lbls),
@@ -1006,8 +1001,7 @@ def _render_turn_scope_breakdown_html(section: ReportSection) -> str:
             ]
             for turn_type, d in by_turn_type.items()
         ]
-        parts.append("<h3>By Turn Type</h3>")
-        parts.append(_html_table(["Turn Type", "Attacks", "Hits", "ASR"], tt_rows))
+        parts.extend(("<h3>By Turn Type</h3>", _html_table(["Turn Type", "Attacks", "Hits", "ASR"], tt_rows)))
 
     # Domain table
     if by_domain:
@@ -1020,8 +1014,7 @@ def _render_turn_scope_breakdown_html(section: ReportSection) -> str:
             ]
             for domain, d in by_domain.items()
         ]
-        parts.append("<h3>By Domain</h3>")
-        parts.append(_html_table(["Domain", "Attacks", "Hits", "ASR"], domain_rows))
+        parts.extend(("<h3>By Domain</h3>", _html_table(["Domain", "Attacks", "Hits", "ASR"], domain_rows)))
 
     return "\n".join(parts)
 
@@ -1174,8 +1167,7 @@ def _render_token_usage_html(section: ReportSection) -> str:
             ["Agent", "Total Tokens", "Prompt Tokens", "Completion Tokens", "API Calls"],
             table_rows,
         )
-        parts.append("<h3>Per-Agent Breakdown</h3>")
-        parts.append(table)
+        parts.extend(("<h3>Per-Agent Breakdown</h3>", table))
 
     return "\n".join(parts)
 
@@ -1263,7 +1255,7 @@ def _asr_cell_color(asr_pct: float) -> str:
     t = max(0.0, min(100.0, asr_pct)) / 100.0
 
     def _lerp(a: int, b: int, factor: float) -> int:
-        return int(round(a + (b - a) * factor))
+        return round(a + (b - a) * factor)
 
     if t <= 0.5:
         n = t * 2
@@ -1288,7 +1280,7 @@ def _render_agent_comparison_grouped_bar(
         return ""
     import plotly.graph_objects as go
 
-    _qualitative = [
+    qualitative = [
         _COLORS["teal_400"],
         _COLORS["orange_300"],
         _COLORS["blue_400"],
@@ -1308,7 +1300,7 @@ def _render_agent_comparison_grouped_bar(
             y=vuln_labels,
             x=asr_values,
             orientation="h",
-            marker_color=_qualitative[i % len(_qualitative)],
+            marker_color=qualitative[i % len(qualitative)],
             text=[f"{v:.0f}%" for v in asr_values],
             textposition="outside",
         ))
@@ -1345,7 +1337,7 @@ def _render_framework_bar_chart(rows: list[dict[str, Any]]) -> str:
         x=labels,
         y=rates,
         marker_color=_COLORS["teal_400"],
-        text=[f"{rate:.1f}%<br>n={n}" for rate, n in zip(rates, totals)],
+        text=[f"{rate:.1f}%<br>n={n}" for rate, n in zip(rates, totals, strict=False)],
         textposition="outside",
     )])
     fig.update_layout(
@@ -1414,14 +1406,11 @@ def _render_agent_comparison_html(section: ReportSection) -> str:
     if vuln_list and agent_list and z_matrix:
         parts.append("<h3>ASR Heatmap (Vulnerability \u00d7 Agent)</h3>")
         tbl_parts = ['<div style="overflow-x:auto"><table class="heatmap-table">']
-        tbl_parts.append("<thead><tr>")
-        tbl_parts.append("<th>Vulnerability</th>")
-        for ag in agent_list:
-            tbl_parts.append(f"<th>{_esc(ag)}</th>")
+        tbl_parts.extend(("<thead><tr>", "<th>Vulnerability</th>"))
+        tbl_parts.extend(f"<th>{_esc(ag)}</th>" for ag in agent_list)
         tbl_parts.append("</tr></thead><tbody>")
         for row_idx, vuln in enumerate(vuln_list):
-            tbl_parts.append("<tr>")
-            tbl_parts.append(f"<td><strong>{_esc(vuln)}</strong></td>")
+            tbl_parts.extend(("<tr>", f"<td><strong>{_esc(vuln)}</strong></td>"))
             for col_idx in range(len(agent_list)):
                 try:
                     asr_pct = z_matrix[row_idx][col_idx]
@@ -1447,7 +1436,7 @@ def _render_agent_comparison_html(section: ReportSection) -> str:
         if chart:
             parts.append(chart)
         else:
-            table_headers = ["Vulnerability"] + agents
+            table_headers = ["Vulnerability", *agents]
             table_rows_data: list[list[str]] = []
             for vrow in vuln_asr_rows[:20]:
                 row_cells = [_esc(vrow["vulnerability"])]
@@ -1480,8 +1469,8 @@ def _render_agent_disagreements_html(section: ReportSection) -> str:
 
     parts = [
         f"<h2>{_esc(section.title)}</h2>",
-        f"<p>Found <strong>{_esc(str(total))}</strong> attack(s) where agents disagreed "
-        f"(one found vulnerable, another resistant).</p>",
+        (f"<p>Found <strong>{_esc(str(total))}</strong> attack(s) where agents disagreed "
+        f"(one found vulnerable, another resistant).</p>"),
     ]
 
     for i, dis in enumerate(disagreements, start=1):
@@ -1510,8 +1499,8 @@ def _render_agent_disagreements_html(section: ReportSection) -> str:
 
             panel_parts = [
                 '<div style="flex:1 1 45%;min-width:180px;">',
-                f'<strong>{agent_name}</strong> '
-                f'<span class="badge {verdict_cls}">{verdict_label}</span>',
+                (f'<strong>{agent_name}</strong> '
+                f'<span class="badge {verdict_cls}">{verdict_label}</span>'),
             ]
             if explanation:
                 panel_parts.append(f"<p><em>{_esc(explanation)}</em></p>")
@@ -1606,8 +1595,7 @@ def _render_methodology_html(section: ReportSection) -> str:
 
     pipeline = data.get("pipeline", "unknown")
     scoring = data.get("scoring_method", "llm-as-judge")
-    rows.append(("Assessment Type", pipeline.capitalize()))
-    rows.append(("Scoring Method", scoring))
+    rows.extend((("Assessment Type", pipeline.capitalize()), ("Scoring Method", scoring)))
 
     evaluator_model = data.get("evaluator_model")
     if evaluator_model:
@@ -1632,8 +1620,7 @@ def _render_methodology_html(section: ReportSection) -> str:
     rows.append(("Categories Tested", str(len(categories))))
     if vulnerabilities:
         rows.append(("Vulnerabilities Tested", str(len(vulnerabilities))))
-    rows.append(("Total Attacks", str(total_attacks)))
-    rows.append(("Evaluation Coverage", f"{coverage:.0%}"))
+    rows.extend((("Total Attacks", str(total_attacks)), ("Evaluation Coverage", f"{coverage:.0%}")))
     if max_turns:
         rows.append(("Max Conversation Turns", str(max_turns)))
     if duration is not None:
@@ -1741,7 +1728,7 @@ def _render_risk_banner(
     elif asr < 0.10:
         summary += "No critical exposures detected."
     else:
-        summary += f"Immediate remediation of top-risk areas is recommended."
+        summary += "Immediate remediation of top-risk areas is recommended."
 
     confidence_html = ""
     if confidence:

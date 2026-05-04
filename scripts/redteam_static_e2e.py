@@ -15,8 +15,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
-from evaluatorq.redteam import red_team
-from evaluatorq.redteam.contracts import RedTeamReport
+from evaluatorq.redteam import OpenAIModelTarget, red_team
+from evaluatorq.redteam.contracts import LLMCallConfig, LLMConfig, RedTeamReport
 
 
 def _make_chat_completion(content: str, *, prompt_tokens: int, completion_tokens: int) -> Any:
@@ -138,15 +138,15 @@ async def _run(args: argparse.Namespace) -> int:
 
     from openai import AsyncOpenAI
     llm_client: AsyncOpenAI | None = None if args.live_client else cast(AsyncOpenAI, cast(object, DeterministicAsyncOpenAI()))
+    resolved_target = _resolve_target(args.target, client=llm_client)
 
     report = await red_team(
-        args.target,
+        resolved_target,
         mode='static',
         categories=args.categories,
-        evaluator_model=args.evaluator_model,
+        llm_config=LLMConfig(evaluator=LLMCallConfig(model=args.evaluator_model)),
         parallelism=args.parallelism,
         max_static_datapoints=args.max_static_datapoints,
-        backend=args.backend,
         dataset=str(dataset_path),
         llm_client=llm_client,
         description='Local static red-team E2E smoke test',
@@ -173,6 +173,18 @@ async def _run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_target(target: str, *, client: Any = None) -> str | OpenAIModelTarget:
+    """Resolve CLI target text to a string ORQ target or OpenAIModelTarget."""
+    lower = target.lower()
+    if lower.startswith(('agent:', 'deployment:')):
+        return target
+    if ':' in target:
+        prefix, _, value = target.partition(':')
+        if prefix.lower() in {'openai', 'llm'}:
+            return OpenAIModelTarget(value, client=client)
+    return OpenAIModelTarget(target, client=client)
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Run a static red-team end-to-end smoke test')
     parser.add_argument(
@@ -182,10 +194,9 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         '--target',
-        default='openai:e2e-local-model',
-        help='Red-team target, e.g. openai:gpt-4o-mini or agent:my-agent',
+        default='e2e-local-model',
+        help='Target model or ORQ target. Examples: gpt-4o-mini, agent:my-agent, deployment:my-deployment',
     )
-    parser.add_argument('--backend', default='openai', choices=['openai', 'orq'])
     parser.add_argument('--parallelism', type=int, default=2)
     parser.add_argument('--max-static-datapoints', type=int, default=None)
     parser.add_argument('--evaluator-model', default='e2e-local-evaluator')

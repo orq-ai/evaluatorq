@@ -14,7 +14,7 @@ Section kinds:
     - ``technique_breakdown``     — per-technique table rows
     - ``delivery_breakdown``      — per-delivery-method ASR breakdown
     - ``error_analysis``          — error counts, types, and detail rows
-    - ``attack_heatmap``          — vulnerability × technique attack success rates
+    - ``attack_heatmap``          — vulnerability x technique attack success rates
     - ``individual_results``      — one entry per ``RedTeamResult``
     - ``agent_comparison``        — multi-agent comparison (>= 2 agents only)
     - ``agent_disagreements``     — per-attack disagreement viewer (>= 2 agents only)
@@ -28,6 +28,7 @@ Section kinds:
 
 from __future__ import annotations
 
+import operator
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any
@@ -159,7 +160,7 @@ def _build_focus_areas_section(report: RedTeamReport) -> ReportSection:
     # Build a lookup from vulnerability -> VulnerabilitySummary for enrichment
     vuln_by_category: dict[str, str] = {}
     for vuln_id, vuln_summary in report.summary.by_vulnerability.items():
-        for _framework, cat_codes in vuln_summary.framework_categories.items():
+        for cat_codes in vuln_summary.framework_categories.values():
             for cat_code in cat_codes:
                 vuln_by_category.setdefault(cat_code, vuln_id)
 
@@ -197,7 +198,7 @@ def _build_focus_areas_section(report: RedTeamReport) -> ReportSection:
         focus_areas.append(area)
 
     # Sort by risk score descending, limit to top 5
-    focus_areas.sort(key=lambda x: x["risk_score"], reverse=True)
+    focus_areas.sort(key=operator.itemgetter("risk_score"), reverse=True)
     top_areas = focus_areas[:5]
 
     return ReportSection(
@@ -226,7 +227,7 @@ def _build_vulnerability_breakdown_section(report: RedTeamReport) -> ReportSecti
             }
         )
     # Worst first (highest vulnerability rate)
-    rows.sort(key=lambda r: r["vulnerability_rate"], reverse=True)
+    rows.sort(key=operator.itemgetter("vulnerability_rate"), reverse=True)
     return ReportSection(
         kind="vulnerability_breakdown",
         title="Per-Vulnerability Breakdown",
@@ -249,7 +250,7 @@ def _build_category_breakdown_section(report: RedTeamReport) -> ReportSection:
             }
         )
     # Worst first (highest vulnerability rate)
-    rows.sort(key=lambda r: r["vulnerability_rate"], reverse=True)
+    rows.sort(key=operator.itemgetter("vulnerability_rate"), reverse=True)
     return ReportSection(
         kind="category_breakdown",
         title="Per-Category Breakdown",
@@ -270,7 +271,7 @@ def _build_technique_breakdown_section(report: RedTeamReport) -> ReportSection:
                 "resistance_rate": tech_summary.resistance_rate,
             }
         )
-    rows.sort(key=lambda r: r["vulnerability_rate"], reverse=True)
+    rows.sort(key=operator.itemgetter("vulnerability_rate"), reverse=True)
     return ReportSection(
         kind="technique_breakdown",
         title="Per-Technique Breakdown",
@@ -280,10 +281,7 @@ def _build_technique_breakdown_section(report: RedTeamReport) -> ReportSection:
 
 def _build_individual_results_section(report: RedTeamReport) -> ReportSection:
     """Build individual attack result entries."""
-    entries: list[dict[str, Any]] = []
-    for result in report.results:
-        entries.append(
-            {
+    entries: list[dict[str, Any]] = [{
                 "id": result.attack.id,
                 "vulnerability": result.attack.vulnerability,
                 "category": result.attack.category,
@@ -295,8 +293,7 @@ def _build_individual_results_section(report: RedTeamReport) -> ReportSection:
                 "response": extract_response(result),
                 "explanation": result.evaluation.explanation if result.evaluation else "",
                 "error": result.error,
-            }
-        )
+            } for result in report.results]
     return ReportSection(
         kind="individual_results",
         title="Individual Attack Results",
@@ -322,7 +319,7 @@ def _build_delivery_breakdown_section(report: RedTeamReport) -> ReportSection:
                 "resistance_rate": dm_summary.resistance_rate,
             }
         )
-    rows.sort(key=lambda r: r["vulnerability_rate"], reverse=True)
+    rows.sort(key=operator.itemgetter("vulnerability_rate"), reverse=True)
     return ReportSection(
         kind="delivery_breakdown",
         title="ASR by Delivery Method",
@@ -346,19 +343,14 @@ def _build_error_analysis_section(report: RedTeamReport) -> ReportSection:
     errors_by_type: dict[str, int] = dict(s.errors_by_type) if s.errors_by_type else {}
 
     # Enumerate individual error detail rows from results
-    detail_rows: list[dict[str, Any]] = []
-    for result in report.results:
-        if result.error:
-            detail_rows.append(
-                {
+    detail_rows: list[dict[str, Any]] = [{
                     "id": result.attack.id,
                     "category": result.attack.category,
                     "technique": result.attack.attack_technique.value,
                     "error_type": result.error_type or "unknown",
                     "stage": result.error_stage or "",
                     "error": result.error,
-                }
-            )
+                } for result in report.results if result.error]
 
     # If errors_by_type is empty but detail_rows exist, compute it
     if not errors_by_type and detail_rows:
@@ -385,7 +377,7 @@ def _build_error_analysis_section(report: RedTeamReport) -> ReportSection:
 
 
 def _build_attack_heatmap_section(report: RedTeamReport) -> ReportSection:
-    """Build vulnerability × technique attack success rate data for heatmap rendering."""
+    """Build vulnerability × technique attack success rate data for heatmap rendering."""  # noqa: RUF002
     # Accumulate counts: vulnerability -> technique -> {vuln, total}
     matrix: dict[str, dict[str, dict[str, int]]] = defaultdict(
         lambda: defaultdict(lambda: {"vulnerable": 0, "total": 0})
@@ -422,7 +414,7 @@ def _build_attack_heatmap_section(report: RedTeamReport) -> ReportSection:
 
     return ReportSection(
         kind="attack_heatmap",
-        title="Attack Success Heatmap (Vulnerability × Technique)",
+        title="Attack Success Heatmap (Vulnerability × Technique)",  # noqa: RUF001
         data={
             "cells": cells,
             "vulnerabilities": sorted(vulnerabilities),
@@ -452,7 +444,7 @@ def _build_agent_comparison_section(report: RedTeamReport) -> ReportSection:
 
     # Group results by agent key
     agent_results: dict[str, list[RedTeamResult]] = {a: [] for a in agents}
-    _warned_agents: set[str] = set()
+    warned_agents: set[str] = set()
     for r in report.results:
         key = r.agent.key or r.agent.display_name or "unknown"
         display = r.agent.display_name or r.agent.key or "unknown"
@@ -461,9 +453,9 @@ def _build_agent_comparison_section(report: RedTeamReport) -> ReportSection:
         elif display in agent_results:
             agent_results[display].append(r)
         else:
-            if key not in _warned_agents:
+            if key not in warned_agents:
                 logger.warning("Result agent {!r} (display={!r}) not in tested_agents, skipping", key, display)
-                _warned_agents.add(key)
+                warned_agents.add(key)
 
     # Per-agent top-level metrics
     agent_metrics: list[dict[str, Any]] = []
@@ -481,7 +473,7 @@ def _build_agent_comparison_section(report: RedTeamReport) -> ReportSection:
             }
         )
 
-    # Per-vulnerability × agent ASR pivot
+    # Per-vulnerability × agent ASR pivot  # noqa: RUF003
     # pivot[vuln][agent] = {"total": int, "vuln": int}
     pivot: dict[str, dict[str, dict[str, int]]] = defaultdict(
         lambda: {a: {"total": 0, "vuln": 0} for a in agents}
@@ -505,7 +497,7 @@ def _build_agent_comparison_section(report: RedTeamReport) -> ReportSection:
             total_asr += asr
         avg_asr = total_asr / len(agents) if agents else 0.0
         vuln_asr_rows.append({"vulnerability": vuln, "agents": per_agent, "avg_asr": avg_asr})
-    vuln_asr_rows.sort(key=lambda r: r["avg_asr"], reverse=True)
+    vuln_asr_rows.sort(key=operator.itemgetter("avg_asr"), reverse=True)
 
     # Build heatmap matrix (row=vulnerability, col=agent)
     sorted_vulns = [r["vulnerability"] for r in vuln_asr_rows]
@@ -598,8 +590,8 @@ def _build_agent_disagreements_section(report: RedTeamReport) -> ReportSection:
         )
 
     # Sort so highest-severity disagreements appear first
-    _severity_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-    disagreements.sort(key=lambda d: _severity_rank.get(d["severity"], 4))
+    severity_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    disagreements.sort(key=lambda d: severity_rank.get(d["severity"], 4))
 
     return ReportSection(
         kind="agent_disagreements",
@@ -635,7 +627,7 @@ def _build_framework_breakdown_section(report: RedTeamReport) -> ReportSection:
                 "resistance_rate": fw_summary.resistance_rate,
             }
         )
-    rows.sort(key=lambda r: r["vulnerability_rate"], reverse=True)
+    rows.sort(key=operator.itemgetter("vulnerability_rate"), reverse=True)
     return ReportSection(
         kind="framework_breakdown",
         title="Framework Breakdown",
@@ -684,8 +676,7 @@ def _build_agent_context_section(report: RedTeamReport) -> ReportSection | None:
         })
     elif report.tested_agents:
         # Minimal stubs — no detailed AgentContext available
-        for agent_key in sorted(set(report.tested_agents)):
-            agents.append({
+        agents.extend({
                 "key": agent_key,
                 "display_name": agent_key,
                 "model": "",
@@ -693,7 +684,7 @@ def _build_agent_context_section(report: RedTeamReport) -> ReportSection | None:
                 "tools": [],
                 "memory_stores": [],
                 "knowledge_bases": [],
-            })
+            } for agent_key in sorted(set(report.tested_agents)))
 
     if not agents:
         return None
@@ -919,7 +910,7 @@ def build_report_sections(report: RedTeamReport) -> list[ReportSection]:
         6.  agent_disagreements      (only when >= 2 agents)
         7.  vulnerability_breakdown  (primary breakdown)
         8.  category_breakdown
-        9.  attack_heatmap           (vulnerability × technique grid)
+        9.  attack_heatmap           (vulnerability x technique grid)
         10. technique_breakdown
         11. delivery_breakdown       (when data present)
         12. turn_scope_breakdown     (when turn-type/domain data present)
@@ -950,12 +941,10 @@ def build_report_sections(report: RedTeamReport) -> list[ReportSection]:
 
     # Multi-agent comparison early — key decision info for CISO
     if len(report.tested_agents) >= 2:
-        sections.append(_build_agent_comparison_section(report))
-        sections.append(_build_agent_disagreements_section(report))
+        sections.extend((_build_agent_comparison_section(report), _build_agent_disagreements_section(report)))
 
     # Detailed breakdowns
-    sections.append(_build_vulnerability_breakdown_section(report))
-    sections.append(_build_category_breakdown_section(report))
+    sections.extend((_build_vulnerability_breakdown_section(report), _build_category_breakdown_section(report)))
 
     if report.results:
         sections.append(_build_attack_heatmap_section(report))

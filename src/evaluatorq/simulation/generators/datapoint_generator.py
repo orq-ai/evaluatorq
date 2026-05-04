@@ -8,10 +8,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from itertools import starmap
 from typing import Any
 
 from openai import AsyncOpenAI
 
+from evaluatorq.simulation.generators.first_message_generator import (
+    FirstMessageGenerator,
+)
+from evaluatorq.simulation.generators.persona_generator import PersonaGenerator
+from evaluatorq.simulation.generators.scenario_generator import ScenarioGenerator
 from evaluatorq.simulation.quality.message_perturbation import apply_random_perturbation
 from evaluatorq.simulation.types import (
     DEFAULT_MODEL,
@@ -20,11 +26,6 @@ from evaluatorq.simulation.types import (
     Scenario,
 )
 from evaluatorq.simulation.utils.prompt_builders import generate_datapoint
-from evaluatorq.simulation.generators.first_message_generator import (
-    FirstMessageGenerator,
-)
-from evaluatorq.simulation.generators.persona_generator import PersonaGenerator
-from evaluatorq.simulation.generators.scenario_generator import ScenarioGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +128,7 @@ class DatapointGenerator:
 
         task_keys = list(tasks.keys())
         raw_results = await asyncio.gather(*tasks.values())
-        results = dict(zip(task_keys, raw_results))
+        results = dict(zip(task_keys, raw_results, strict=False))
 
         personas: list[Persona] = results["personas"]
         scenarios: list[Scenario] = results["scenarios"]
@@ -186,7 +187,7 @@ class DatapointGenerator:
                 await asyncio.sleep(self._rate_limit_delay)
                 return generate_datapoint(persona, scenario, first_message)
 
-        tasks = [generate_single(p, s) for p, s in combinations]
+        tasks = list(starmap(generate_single, combinations))
         datapoints = await asyncio.gather(*tasks)
 
         logger.info("Generated %d datapoints", len(datapoints))
