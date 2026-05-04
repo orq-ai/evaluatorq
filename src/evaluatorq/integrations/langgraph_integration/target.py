@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from langchain_core.callbacks import BaseCallbackHandler
@@ -17,7 +17,6 @@ from evaluatorq.redteam.backends.base import AgentTarget
 from evaluatorq.redteam.contracts import (
     AgentContext,
     AgentResponse,
-    ExecutedToolCall,
     MemoryStoreInfo,
     OutputMessage,
     TextOutputItem,
@@ -186,11 +185,15 @@ class LangGraphTarget(AgentTarget):
 
         new_config: RunnableConfig = {**base_config, "callbacks": new_callbacks}
 
+        prev_count = self._prev_msg_count
         try:
             result = await self._graph.ainvoke(
                 {"messages": [{"role": "user", "content": prompt}]},
                 config=new_config,
             )
+        except Exception:
+            self._prev_msg_count = prev_count  # cursor is stable on failure
+            raise
         finally:
             # Always persist usage — including when ainvoke raises — so that
             # error-path token spend is not silently dropped.
@@ -214,33 +217,43 @@ class LangGraphTarget(AgentTarget):
         if not isinstance(content, str):
             content = str(content)
 
-        # Extract tool calls only from messages added in this turn.
+        # Build output items directly from messages added in this turn.
         # LangGraph checkpointer returns the full accumulated thread state, so
         # slicing from _prev_msg_count avoids duplicating tool calls across turns.
-        tool_calls: list[ExecutedToolCall] = []
+        # ToolCallOutputItem is built directly (not via ExecutedToolCall) so that
+        # the original LangChain tool call 'id' is preserved for trace correlation.
+        output_items: list[OutputMessage] = []
         for msg in messages[self._prev_msg_count:]:
             if isinstance(msg, dict):
                 if msg.get("role") == "assistant":
                     for tc in (msg.get("tool_calls") or []):
+                        call_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
                         name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
                         args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
-                        tool_calls.append(ExecutedToolCall(name=str(name), arguments=args if isinstance(args, dict) else {}))
+                        args_str = json.dumps(args if isinstance(args, dict) else {})
+                        output_items.append(
+                            ToolCallOutputItem(name=str(name), arguments=args_str, id=call_id, call_id=call_id)
+                            if call_id
+                            else ToolCallOutputItem(name=str(name), arguments=args_str)
+                        )
             else:
                 if not isinstance(msg, AIMessage):
                     continue
-                # LangChain AIMessage — tool_calls is a list of dicts with 'name' and 'args'
+                # LangChain AIMessage — tool_calls is a list of dicts with 'name', 'args', 'id'
                 for tc in (getattr(msg, "tool_calls", None) or []):
+                    call_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
                     name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
                     args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
-                    tool_calls.append(ExecutedToolCall(name=str(name), arguments=args if isinstance(args, dict) else {}))
+                    args_str = json.dumps(args if isinstance(args, dict) else {})
+                    output_items.append(
+                        ToolCallOutputItem(name=str(name), arguments=args_str, id=call_id, call_id=call_id)
+                        if call_id
+                        else ToolCallOutputItem(name=str(name), arguments=args_str)
+                    )
         self._prev_msg_count = len(messages)
 
-        output: list[OutputMessage] = cast(
-            "list[OutputMessage]",
-            [ToolCallOutputItem(name=tc.name, arguments=json.dumps(tc.arguments), result=tc.result) for tc in tool_calls],
-        )
-        output.append(TextOutputItem(text=content, annotations=[]))
-        return AgentResponse(output=output)
+        output_items.append(TextOutputItem(text=content, annotations=[]))
+        return AgentResponse(output=output_items)
 
     def reset_conversation(self) -> None:
         """Reset conversation state for a new attack by starting a fresh LangGraph thread.

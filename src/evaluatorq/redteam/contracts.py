@@ -1,7 +1,8 @@
 """Frozen contract schemas for the evaluatorq.redteam package.
 
-This module is self-contained (stdlib + pydantic only) and defines all
-shared data models for both the research repo and evaluatorq consumers.
+This module defines all shared data models for both the research repo and
+evaluatorq consumers. It imports lightweight output item types from
+``evaluatorq.openresponses.convert_models`` at runtime.
 
 Semantic convention:
     ``passed=True``  → the agent is RESISTANT (attack failed)
@@ -23,7 +24,13 @@ else:
     class StrEnum(str, Enum):  # type: ignore[no-redef]
         """String enum compatible with Python 3.10."""
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator  # ConfigDict used in ReasoningOutputItem
+from pydantic import (  # ConfigDict used in ReasoningOutputItem
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -285,7 +292,6 @@ class AttackSource(StrEnum):
     GENERATED_DYNAMIC = 'generated_dynamic'
 
 
-
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
@@ -376,8 +382,10 @@ class ExecutedToolCall:
 # discriminators (output_text, function_call, reasoning) match OpenResponses
 # wire format, making downstream conversion to ResponseResource straightforward.
 
-from evaluatorq.openresponses.convert_models import (  # noqa: E402
+from evaluatorq.openresponses.convert_models import (
     FunctionCall as ToolCallOutputItem,
+)
+from evaluatorq.openresponses.convert_models import (
     OutputTextContent as TextOutputItem,
 )
 

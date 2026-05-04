@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, cast
+from typing import Any
 
 from agents import Agent, Runner
 
@@ -12,7 +12,6 @@ from evaluatorq.redteam.backends.base import AgentTarget
 from evaluatorq.redteam.contracts import (
     AgentContext,
     AgentResponse,
-    ExecutedToolCall,
     OutputMessage,
     TextOutputItem,
     ToolCallOutputItem,
@@ -75,19 +74,22 @@ class OpenAIAgentTarget(AgentTarget):
 
         self._history = result.to_input_list()
 
-        # Extract tool calls only from items added in this turn (not accumulated history)
-        # prev_len items were present before this call; everything after is new
-        tool_calls: list[ExecutedToolCall] = []
+        # Build output items directly from new history items, preserving original
+        # Responses API 'id'/'call_id' fields for trace correlation.
+        output_items: list[OutputMessage] = []
         new_items_start = min(prev_len, len(self._history))
         for item in self._history[new_items_start:]:
             # Agents SDK to_input_list() returns Responses API items for tool calls,
-            # e.g. {"type": "function_call", "name": "...", "arguments": "..."}.
+            # e.g. {"type": "function_call", "id": "fc_...", "call_id": "call_...", "name": "...", "arguments": "..."}.
             if isinstance(item, dict) and item.get("type") == "function_call":
-                tool_calls.append(
-                    ExecutedToolCall(
-                        name=str(item.get("name", "")),
-                        arguments=_parse_tool_call_arguments(item.get("arguments", "{}")),
-                    )
+                item_id = item.get("id", "")
+                call_id = item.get("call_id", "")
+                name = str(item.get("name", ""))
+                arguments = _normalize_args_str(item.get("arguments", "{}"))
+                output_items.append(
+                    ToolCallOutputItem(name=name, arguments=arguments, id=item_id, call_id=call_id)
+                    if item_id and call_id
+                    else ToolCallOutputItem(name=name, arguments=arguments)
                 )
             # Handle dict format (standard OpenAI message format)
             elif isinstance(item, dict) and item.get("role") == "assistant":
@@ -95,39 +97,38 @@ class OpenAIAgentTarget(AgentTarget):
                     if isinstance(tc, dict):
                         func = tc.get("function", {})
                         name = func.get("name", "") if isinstance(func, dict) else ""
-                        args_raw = func.get("arguments", "{}") if isinstance(func, dict) else "{}"
-                        tool_calls.append(
-                            ExecutedToolCall(
-                                name=name,
-                                arguments=_parse_tool_call_arguments(args_raw),
-                            )
+                        args_raw = _normalize_args_str(func.get("arguments", "{}") if isinstance(func, dict) else "{}")
+                        tc_id = tc.get("id", "")
+                        output_items.append(
+                            ToolCallOutputItem(name=name, arguments=args_raw, id=tc_id, call_id=tc_id)
+                            if tc_id
+                            else ToolCallOutputItem(name=name, arguments=args_raw)
                         )
             # Handle typed SDK objects (future-proofing if to_input_list() returns non-dict items)
             elif not isinstance(item, dict):
                 if getattr(item, "type", None) == "function_call":
-                    tool_calls.append(
-                        ExecutedToolCall(
-                            name=str(getattr(item, "name", "")),
-                            arguments=_parse_tool_call_arguments(getattr(item, "arguments", "{}")),
-                        )
+                    item_id = getattr(item, "id", "")
+                    call_id = getattr(item, "call_id", "")
+                    name = str(getattr(item, "name", ""))
+                    arguments = _normalize_args_str(getattr(item, "arguments", "{}"))
+                    output_items.append(
+                        ToolCallOutputItem(name=name, arguments=arguments, id=item_id, call_id=call_id)
+                        if item_id and call_id
+                        else ToolCallOutputItem(name=name, arguments=arguments)
                     )
                 elif getattr(item, "role", None) == "assistant":
                     for tc in (getattr(item, "tool_calls", None) or []):
                         tc_name = getattr(tc, "name", None) or getattr(getattr(tc, "function", None), "name", "") or ""
-                        tc_args_raw = getattr(tc, "arguments", None) or getattr(getattr(tc, "function", None), "arguments", "{}")
-                        tool_calls.append(
-                            ExecutedToolCall(
-                                name=str(tc_name),
-                                arguments=_parse_tool_call_arguments(tc_args_raw),
-                            )
+                        tc_args_raw = _normalize_args_str(getattr(tc, "arguments", None) or getattr(getattr(tc, "function", None), "arguments", "{}"))
+                        tc_id = getattr(tc, "id", "")
+                        output_items.append(
+                            ToolCallOutputItem(name=str(tc_name), arguments=tc_args_raw, id=tc_id, call_id=tc_id)
+                            if tc_id
+                            else ToolCallOutputItem(name=str(tc_name), arguments=tc_args_raw)
                         )
 
-        output: list[OutputMessage] = cast(
-            "list[OutputMessage]",
-            [ToolCallOutputItem(name=tc.name, arguments=json.dumps(tc.arguments), result=tc.result) for tc in tool_calls],
-        )
-        output.append(TextOutputItem(text=str(result.final_output), annotations=[]))
-        return AgentResponse(output=output)
+        output_items.append(TextOutputItem(text=str(result.final_output), annotations=[]))
+        return AgentResponse(output=output_items)
 
     async def get_agent_context(self) -> AgentContext:
         """Return agent context derived from the wrapped Agent instance.
@@ -186,14 +187,20 @@ class OpenAIAgentTarget(AgentTarget):
         return self.clone()
 
 
-def _parse_tool_call_arguments(raw: Any) -> dict[str, Any]:
-    """Normalize SDK tool-call arguments into the ExecutedToolCall dict contract."""
+def _normalize_args_str(raw: Any) -> str:
+    """Convert SDK tool-call arguments to a valid JSON string.
+
+    Handles str (valid or invalid JSON), dict, or other types.
+    Invalid JSON strings are wrapped as ``{"raw": "<original>"}`` so that the
+    ``AgentResponse.tool_calls`` property can always parse ``arguments`` back
+    to a dict without silently discarding the original value.
+    """
     if isinstance(raw, dict):
-        return raw
+        return json.dumps(raw)
     if not isinstance(raw, str):
-        return {}
+        return "{}"
     try:
-        parsed = json.loads(raw)
+        json.loads(raw)
+        return raw
     except (json.JSONDecodeError, ValueError):
-        return {"raw": raw}
-    return parsed if isinstance(parsed, dict) else {"raw": raw}
+        return json.dumps({"raw": raw})
