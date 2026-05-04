@@ -78,7 +78,7 @@ from evaluatorq.redteam.contracts import (
     SeveritySummary,
     TechniqueSummary,
     TokenUsage,
-    ToolCall,
+    StrategyToolCall,
     ToolInfo,
     TurnType,
     TurnTypeSummary,
@@ -161,7 +161,7 @@ __all__ = [
     "AgentCapability",
     # Message models
     "FunctionCall",
-    "ToolCall",
+    "StrategyToolCall",
     "Message",
     # Input models
     "RedTeamInput",

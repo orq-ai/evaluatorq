@@ -511,7 +511,7 @@ class TestCreateDynamicEvaluatorScorer:
             final_response="done",
             tool_calls_per_turn=[[tc_a], [tc_b]],
             category="ASI05",
-            vulnerability="unexpected_code_execution",
+            vulnerability="code_execution",
         )
 
         captured: dict[str, Any] = {}

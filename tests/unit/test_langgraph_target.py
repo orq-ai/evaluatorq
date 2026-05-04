@@ -50,12 +50,12 @@ class TestLangGraphTarget:
         assert "thread_id" in config["configurable"]
 
     @pytest.mark.asyncio
-    async def test_reset_preserves_memory_entity_id(self) -> None:
+    async def test_reset_generates_new_memory_entity_id(self) -> None:
         graph = _make_graph()
         target = LangGraphTarget(graph)
         old_thread = target.memory_entity_id
         target.reset_conversation()
-        assert target.memory_entity_id == old_thread
+        assert target.memory_entity_id != old_thread
 
     @pytest.mark.asyncio
     async def test_reset_conversation_resets_prev_msg_count(self) -> None:
@@ -107,8 +107,22 @@ class TestLangGraphTarget:
         assert r2.tool_calls[0].name == "tool_B"
 
     @pytest.mark.asyncio
+    async def test_reset_uses_different_thread_id(self) -> None:
+        """After reset, send_prompt must invoke ainvoke with a different thread_id."""
+        graph = _make_graph()
+        target = LangGraphTarget(graph)
+        await target.send_prompt("first")
+        thread_id_before = graph.ainvoke.call_args[1]["config"]["configurable"]["thread_id"]
+
+        target.reset_conversation()
+        await target.send_prompt("second")
+        thread_id_after = graph.ainvoke.call_args[1]["config"]["configurable"]["thread_id"]
+
+        assert thread_id_before != thread_id_after
+
+    @pytest.mark.asyncio
     async def test_reset_then_send_extracts_all_tool_calls(self) -> None:
-        """After reset, _prev_msg_count=0 so all messages are treated as new."""
+        """After reset, a fresh thread_id is used and _prev_msg_count=0, so tool calls are correctly extracted."""
         from langchain_core.messages import AIMessage
 
         msg_with_tool = AIMessage(

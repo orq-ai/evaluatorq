@@ -338,8 +338,8 @@ class FunctionCall(BaseModel):
     arguments: str = Field(description='JSON string of function arguments')
 
 
-class ToolCall(BaseModel):
-    """Tool call in assistant message (OpenAI format)."""
+class StrategyToolCall(BaseModel):
+    """Tool call in assistant message (OpenAI format) — strategy wire format."""
 
     id: str = Field(description='Unique tool call ID (e.g., call_abc123)')
     type: Literal['function'] = Field(default='function', description='Tool type')
@@ -509,7 +509,7 @@ class Message(BaseModel):
     )
 
     # Tool call fields (OpenAI format)
-    tool_calls: list[ToolCall] | None = Field(default=None, description='Tool calls made by assistant')
+    tool_calls: list[StrategyToolCall] | None = Field(default=None, description='Tool calls made by assistant')
     tool_call_id: str | None = Field(default=None, description='ID linking tool response to call (for role=tool)')
     name: str | None = Field(default=None, description='Function name (for role=tool)')
 

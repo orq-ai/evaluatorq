@@ -87,7 +87,7 @@ class CallableTarget(AgentTarget):
             if isinstance(result, AgentResponse):
                 return result
             return AgentResponse(output=[TextOutputItem(text=str(result))])
-        except (asyncio.CancelledError, asyncio.TimeoutError):
+        except (asyncio.CancelledError, asyncio.TimeoutError, TypeError, AttributeError):
             raise
         except Exception as exc:
             raise RuntimeError(f"CallableTarget: callable raised {exc!r}") from exc

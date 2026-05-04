@@ -414,7 +414,6 @@ class MultiTurnOrchestrator:
         # Agent conversation (what we'll return)
         conversation: list[Message] = []
         tool_calls_per_turn: list[list[ExecutedToolCall]] = []
-        _turn_tool_calls_recorded = False  # set True when success path appends; reset each turn
 
         objective_achieved = False
         final_response = ''
@@ -444,6 +443,7 @@ class MultiTurnOrchestrator:
 
         try:
             for turn in range(max_turns):
+                _turn_calls: list[ExecutedToolCall] = []
                 async with with_redteam_span(
                     "orq.redteam.attack_turn",
                     {
@@ -625,8 +625,7 @@ class MultiTurnOrchestrator:
                             # Option A backward-compat: wrap str returns into AgentResponse
                             agent_response_obj = _coerce_to_agent_response(raw_response)
                             agent_response = agent_response_obj.text
-                            tool_calls_per_turn.append(agent_response_obj.tool_calls)
-                            _turn_tool_calls_recorded = True
+                            _turn_calls = agent_response_obj.tool_calls
                             final_response = agent_response
                             consecutive_agent_errors = 0
                             set_span_attrs(tgt_span, {
@@ -658,7 +657,7 @@ class MultiTurnOrchestrator:
                                 'consecutive_errors': consecutive_agent_errors,
                             }
                             error_turn = turn + 1
-                            tool_calls_per_turn.append([])
+                            tool_calls_per_turn.append(_turn_calls)
                             conversation.extend([
                                 Message(role='user', content=attack_prompt),
                                 Message(role='assistant', content=agent_response),
@@ -692,7 +691,7 @@ class MultiTurnOrchestrator:
                             }
                             error_code = mapped_code
                             error_turn = turn + 1
-                            tool_calls_per_turn.append([])
+                            tool_calls_per_turn.append(_turn_calls)
                             conversation.extend([
                                 Message(role='user', content=attack_prompt),
                                 Message(role='assistant', content=agent_response),
@@ -706,11 +705,8 @@ class MultiTurnOrchestrator:
                             })
                             break
 
-                    # Record conversation (success path appended tool_calls above;
-                    # error paths that fall through here with consecutive_agent_errors < 2 need an empty entry)
-                    if not _turn_tool_calls_recorded:
-                        tool_calls_per_turn.append([])
-                    _turn_tool_calls_recorded = False
+                    # Append tool calls for this turn ([] on error, populated on success)
+                    tool_calls_per_turn.append(_turn_calls)
                     conversation.extend([
                         Message(role='user', content=attack_prompt),
                         Message(role='assistant', content=agent_response),
