@@ -325,7 +325,7 @@ class TestOrqResponsesTargetTimeout:
 
     @pytest.mark.asyncio
     async def test_timeout_exceeded_raises(self):
-        """asyncio.TimeoutError propagates when the SDK call exceeds timeout_ms."""
+        """RuntimeError (wrapping asyncio.TimeoutError) is raised when SDK call exceeds timeout_ms."""
         import asyncio
 
         async def _slow(*args: Any, **kwargs: Any) -> Any:
@@ -337,7 +337,7 @@ class TestOrqResponsesTargetTimeout:
         config = LLMCallConfig(model="gpt-4o", timeout_ms=10)  # 10ms — will expire
         target = OrqResponsesTarget(config, client=client)
 
-        with pytest.raises(asyncio.TimeoutError):
+        with pytest.raises(RuntimeError, match="timed out"):
             await target.send_prompt("hi")
 
 
