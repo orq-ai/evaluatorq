@@ -53,7 +53,10 @@ async def simulate(
             are supplied.
         user_simulator: Pre-constructed ``BaseAgent`` to drive the user side
             of the conversation.  When omitted a default ``UserSimulatorAgent``
-            is built from ``model``.
+            is built from ``model``.  If the provided agent exposes an
+            ``update_context(persona_context, scenario_context)`` method it will
+            be called before each individual simulation so the agent is grounded
+            in the current datapoint's persona and scenario.
         judge: Pre-constructed ``BaseAgent`` used to evaluate each turn.
             When omitted a default ``JudgeAgent`` is built from ``model``.
     """

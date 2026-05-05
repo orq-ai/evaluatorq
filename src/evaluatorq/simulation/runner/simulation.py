@@ -6,7 +6,7 @@ import asyncio
 import inspect
 import logging
 import os
-from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from openai import AsyncOpenAI
 
@@ -28,7 +28,11 @@ from evaluatorq.simulation.types import (
     TokenUsage,
     TurnMetrics,
 )
-from evaluatorq.simulation.utils.prompt_builders import build_datapoint_system_prompt
+from evaluatorq.simulation.utils.prompt_builders import (
+    build_datapoint_system_prompt,
+    build_persona_system_prompt,
+    build_scenario_user_context,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -220,7 +224,26 @@ class SimulationRunner:
             client = self._get_shared_client()
 
             if self._injected_user_simulator is not None:
-                user_simulator = cast("UserSimulatorAgent", self._injected_user_simulator)
+                if not hasattr(self._injected_user_simulator, "generate_first_message") or \
+                   not hasattr(self._injected_user_simulator, "respond_async"):
+                    raise TypeError(
+                        "user_simulator must implement generate_first_message() and respond_async(). "
+                        "Use UserSimulatorAgent or a subclass."
+                    )
+                user_simulator: UserSimulatorAgent = self._injected_user_simulator  # pyright: ignore[reportAssignmentType]
+                # Propagate per-simulation persona/scenario context to the injected
+                # agent so it stays grounded in the current datapoint's goal and
+                # persona traits (mirrors what the default agent receives via its
+                # system_prompt constructor arg).
+                if hasattr(user_simulator, "update_context"):
+                    user_simulator.update_context(
+                        persona_context=build_persona_system_prompt(persona)  # type: ignore[arg-type]
+                        if persona
+                        else None,
+                        scenario_context=build_scenario_user_context(scenario)  # type: ignore[arg-type]
+                        if scenario
+                        else None,
+                    )
             else:
                 user_simulator = UserSimulatorAgent(
                     UserSimulatorAgentConfig(
@@ -231,7 +254,12 @@ class SimulationRunner:
                 )
 
             if self._injected_judge is not None:
-                judge = cast("JudgeAgent", self._injected_judge)
+                if not hasattr(self._injected_judge, "evaluate"):
+                    raise TypeError(
+                        "judge must implement evaluate(). "
+                        "Use JudgeAgent or a subclass."
+                    )
+                judge: JudgeAgent = self._injected_judge  # pyright: ignore[reportAssignmentType]
             else:
                 judge = JudgeAgent(
                     JudgeAgentConfig(
