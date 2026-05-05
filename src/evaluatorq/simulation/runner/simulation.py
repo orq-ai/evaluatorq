@@ -236,14 +236,20 @@ class SimulationRunner:
                 # persona traits (mirrors what the default agent receives via its
                 # system_prompt constructor arg).
                 if hasattr(user_simulator, "update_context"):
-                    user_simulator.update_context(
-                        persona_context=build_persona_system_prompt(persona)  # type: ignore[arg-type]
-                        if persona
-                        else None,
-                        scenario_context=build_scenario_user_context(scenario)  # type: ignore[arg-type]
-                        if scenario
-                        else None,
-                    )
+                    try:
+                        user_simulator.update_context(
+                            persona_context=build_persona_system_prompt(persona)  # type: ignore[arg-type]
+                            if persona
+                            else None,
+                            scenario_context=build_scenario_user_context(scenario)  # type: ignore[arg-type]
+                            if scenario
+                            else None,
+                        )
+                    except Exception as ctx_err:
+                        raise RuntimeError(
+                            "Injected user_simulator.update_context() failed. "
+                            "Ensure it accepts persona_context and scenario_context kwargs."
+                        ) from ctx_err
             else:
                 user_simulator = UserSimulatorAgent(
                     UserSimulatorAgentConfig(
