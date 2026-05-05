@@ -142,32 +142,35 @@ class BaseAgent(ABC):
     def _build_client(self, api_key: str | None = None) -> AsyncOpenAI:
         """Construct (or reuse) an ``AsyncOpenAI`` client from ``self.config``.
 
-        Resolution order for the API key:
+        Resolution order:
         1. ``self.config.client`` — injected client, used as-is (not owned).
-        2. ``api_key`` argument (extracted from legacy ``AgentConfig.api_key``).
-        3. ``ORQ_API_KEY`` environment variable.
-        4. ``OPENAI_API_KEY`` environment variable.
-
-        The base URL defaults to ``ORQ_BASE_URL/v2/router`` (or
-        ``https://api.orq.ai/v2/router``) when no injected client is provided.
+        2. ``api_key`` argument (extracted from legacy ``AgentConfig.api_key``),
+           treated as an ORQ key and routed through the Orq router.
+        3. ``OPENAI_API_KEY`` env var — uses the OpenAI SDK default base URL so
+           traffic goes to OpenAI directly, not to the Orq router.
+        4. ``ORQ_API_KEY`` env var — routes through
+           ``ORQ_BASE_URL/v2/router`` (default: ``https://api.orq.ai/v2/router``).
         """
         if self.config.client is not None:
             self._client_owned = False
             return self.config.client  # type: ignore[return-value]
 
-        resolved_api_key = (
-            api_key
-            or os.environ.get("ORQ_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")
-        )
+        # ``api_key`` argument (from legacy AgentConfig) is treated as an ORQ key.
+        orq_api_key = api_key or os.environ.get("ORQ_API_KEY")
+        resolved_api_key = orq_api_key or os.environ.get("OPENAI_API_KEY")
+
         if not resolved_api_key:
             raise ValueError(
                 "No API key found. Set ORQ_API_KEY or OPENAI_API_KEY, "
                 "or pass api_key in AgentConfig / a pre-built client in LLMCallConfig."
             )
 
-        base_url = (
+        # Only route through the Orq router when an ORQ key is active; otherwise
+        # let the OpenAI SDK use its own default base URL (api.openai.com).
+        base_url: str | None = (
             f"{os.environ.get('ORQ_BASE_URL', 'https://api.orq.ai')}/v2/router"
+            if orq_api_key
+            else None
         )
 
         self._client_owned = True
@@ -257,7 +260,7 @@ class BaseAgent(ABC):
 
             return result
 
-        return await with_retry(_do_call, label=f"{self.name}._call_llm")
+        return await with_retry(_do_call, label=f"{self.name}._call_chat_completions")
 
     async def _call_responses(
         self,
@@ -313,12 +316,17 @@ class BaseAgent(ABC):
                 if hasattr(item, "name") and hasattr(item, "arguments"):
                     tool_calls.append(item)
 
-            # Accumulate token usage if the SDK exposes it
+            # Accumulate token usage if the SDK exposes it.
+            # The Responses API reports input_tokens / output_tokens rather than
+            # prompt_tokens / completion_tokens / total_tokens, so we derive
+            # total_tokens ourselves to avoid it always being 0.
             usage = getattr(response, "usage", None)
             if usage is not None:
-                self._usage.prompt_tokens += getattr(usage, "input_tokens", 0)
-                self._usage.completion_tokens += getattr(usage, "output_tokens", 0)
-                self._usage.total_tokens += getattr(usage, "total_tokens", 0)
+                input_toks = getattr(usage, "input_tokens", 0)
+                output_toks = getattr(usage, "output_tokens", 0)
+                self._usage.prompt_tokens += input_toks
+                self._usage.completion_tokens += output_toks
+                self._usage.total_tokens += input_toks + output_toks
 
             result = LLMResult(content=text)
             if tool_calls:
