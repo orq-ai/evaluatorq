@@ -16,7 +16,7 @@ from __future__ import annotations
 
 def _check_redteam_deps() -> None:  # noqa: RUF067
     missing = []
-    for mod in ('openai', 'loguru', 'typer'):
+    for mod in ('openai', 'typer'):
         try:
             __import__(mod)
         except ImportError:  # noqa: PERF203
@@ -44,7 +44,6 @@ from evaluatorq.redteam.backends.base import (
     SupportsErrorMapping,
     SupportsMemoryCleanup,
     SupportsTargetFactory,
-    SupportsTokenUsage,
     is_agent_target,
 )
 from evaluatorq.redteam.backends.openai import OpenAIModelTarget
@@ -185,7 +184,6 @@ __all__ = [
     "SupportsErrorMapping",
     "SupportsMemoryCleanup",
     "SupportsTargetFactory",
-    "SupportsTokenUsage",
     "TargetConfig",
     "TechniqueSummary",
     "TokenUsage",

@@ -389,12 +389,13 @@ class TestRedTeamWithAgentTarget:
     @pytest.mark.asyncio
     async def test_agent_target_dispatches_to_dynamic(self):
         from unittest.mock import AsyncMock, patch
+        from evaluatorq.redteam.contracts import SendResult
 
         class MockTarget:
             memory_entity_id: str | None = None
 
-            async def send_prompt(self, prompt: str) -> str:
-                return 'response'
+            async def send_prompt_with_usage(self, prompt: str) -> SendResult:
+                return SendResult(text='response')
 
             def new(self) -> MockTarget:
                 return MockTarget()
@@ -412,12 +413,13 @@ class TestRedTeamWithAgentTarget:
     @pytest.mark.asyncio
     async def test_agent_target_list_dispatches(self):
         from unittest.mock import AsyncMock, patch
+        from evaluatorq.redteam.contracts import SendResult
 
         class MockTarget:
             memory_entity_id: str | None = None
 
-            async def send_prompt(self, prompt: str) -> str:
-                return 'response'
+            async def send_prompt_with_usage(self, prompt: str) -> SendResult:
+                return SendResult(text='response')
 
             def new(self) -> MockTarget:
                 return MockTarget()
@@ -440,11 +442,13 @@ class TestRedTeamWithAgentTarget:
     @pytest.mark.asyncio
     async def test_invalid_item_in_list_raises(self):
         """Passing an invalid item inside a list raises TypeError."""
+        from evaluatorq.redteam.contracts import SendResult
+
         class MockTarget:
             memory_entity_id: str | None = None
 
-            async def send_prompt(self, prompt: str) -> str:
-                return 'response'
+            async def send_prompt_with_usage(self, prompt: str) -> SendResult:
+                return SendResult(text='response')
 
             def new(self) -> MockTarget:
                 return MockTarget()

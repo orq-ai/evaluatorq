@@ -9,6 +9,7 @@ import pytest
 pytest.importorskip("agents")
 
 from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget  # noqa: E402
+from evaluatorq.redteam.contracts import TokenUsage  # noqa: E402
 
 
 def _mock_runner_and_result(output: str = "response") -> tuple[MagicMock, MagicMock]:
@@ -18,6 +19,36 @@ def _mock_runner_and_result(output: str = "response") -> tuple[MagicMock, MagicM
         {"role": "user", "content": "prompt"},
         {"role": "assistant", "content": output},
     ]
+    # By default, no context_wrapper so usage=None
+    del result.context_wrapper
+    runner = MagicMock()
+    runner.run = AsyncMock(return_value=result)
+    return runner, result
+
+
+def _mock_runner_with_usage(
+    output: str = "response",
+    input_tokens: int = 10,
+    output_tokens: int = 5,
+    total_tokens: int = 15,
+) -> tuple[MagicMock, MagicMock]:
+    """Build a mock runner where result.context_wrapper.usage carries token counts."""
+    agent_usage = MagicMock()
+    agent_usage.input_tokens = input_tokens
+    agent_usage.output_tokens = output_tokens
+    agent_usage.total_tokens = total_tokens
+
+    context_wrapper = MagicMock()
+    context_wrapper.usage = agent_usage
+
+    result = MagicMock()
+    result.final_output = output
+    result.context_wrapper = context_wrapper
+    result.to_input_list.return_value = [
+        {"role": "user", "content": "prompt"},
+        {"role": "assistant", "content": output},
+    ]
+
     runner = MagicMock()
     runner.run = AsyncMock(return_value=result)
     return runner, result
@@ -25,13 +56,13 @@ def _mock_runner_and_result(output: str = "response") -> tuple[MagicMock, MagicM
 
 class TestOpenAIAgentTarget:
     @pytest.mark.asyncio
-    async def test_send_prompt_returns_response(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_send_prompt_with_usage_returns_response(self, monkeypatch: pytest.MonkeyPatch) -> None:
         runner, _ = _mock_runner_and_result("hello back")
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        response = await target.send_prompt("hello")
-        assert response == "hello back"
+        result = await target.send_prompt_with_usage("hello")
+        assert result.text == "hello back"
 
     @pytest.mark.asyncio
     async def test_first_prompt_sends_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -39,7 +70,7 @@ class TestOpenAIAgentTarget:
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        await target.send_prompt("first")
+        await target.send_prompt_with_usage("first")
 
         call_args = runner.run.call_args
         assert call_args[0][1] == "first"
@@ -50,8 +81,8 @@ class TestOpenAIAgentTarget:
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        await target.send_prompt("first")
-        await target.send_prompt("second")
+        await target.send_prompt_with_usage("first")
+        await target.send_prompt_with_usage("second")
 
         input_data = runner.run.call_args[0][1]
         assert isinstance(input_data, list)
@@ -63,7 +94,7 @@ class TestOpenAIAgentTarget:
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        await target.send_prompt("first")
+        await target.send_prompt_with_usage("first")
         fresh = target.new()
 
         assert fresh is not target
@@ -91,7 +122,7 @@ class TestOpenAIAgentTarget:
 
         target = OpenAIAgentTarget(MagicMock())
         with pytest.raises(ValueError, match="final_output=None"):
-            await target.send_prompt("hi")
+            await target.send_prompt_with_usage("hi")
 
     @pytest.mark.asyncio
     async def test_runner_error_is_wrapped_with_context(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -101,7 +132,7 @@ class TestOpenAIAgentTarget:
 
         target = OpenAIAgentTarget(MagicMock())
         with pytest.raises(RuntimeError, match="OpenAIAgentTarget: Runner.run\\(\\) raised"):
-            await target.send_prompt("hi")
+            await target.send_prompt_with_usage("hi")
 
     @pytest.mark.asyncio
     async def test_get_agent_context_roundtrips_fields(self) -> None:
@@ -167,8 +198,83 @@ class TestOpenAIAgentTarget:
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        r1 = await target.send_prompt("Hello")
-        assert r1 == "Reply 1"
-        r2 = await target.send_prompt("Follow up")
-        assert r2 == "Reply 2"
+        r1 = await target.send_prompt_with_usage("Hello")
+        assert r1.text == "Reply 1"
+        r2 = await target.send_prompt_with_usage("Follow up")
+        assert r2.text == "Reply 2"
         assert len(target._history) > 2
+
+
+class TestOpenAIAgentTargetUsage:
+    @pytest.mark.asyncio
+    async def test_usage_populated_from_context_wrapper(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When result.context_wrapper.usage has token counts, SendResult.usage is populated."""
+        runner, _ = _mock_runner_with_usage(
+            output="hello back",
+            input_tokens=10,
+            output_tokens=5,
+            total_tokens=15,
+        )
+        monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
+
+        target = OpenAIAgentTarget(MagicMock())
+        result = await target.send_prompt_with_usage("hello")
+
+        assert result.text == "hello back"
+        assert isinstance(result.usage, TokenUsage)
+        assert result.usage.prompt_tokens == 10
+        assert result.usage.completion_tokens == 5
+        assert result.usage.total_tokens == 15
+        assert result.usage.calls == 1
+
+    @pytest.mark.asyncio
+    async def test_usage_none_when_context_wrapper_absent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When result has no context_wrapper, SendResult.usage is None (graceful fallback)."""
+        runner, _ = _mock_runner_and_result("reply")
+        monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
+
+        target = OpenAIAgentTarget(MagicMock())
+        result = await target.send_prompt_with_usage("hi")
+
+        assert result.text == "reply"
+        assert result.usage is None
+
+    @pytest.mark.asyncio
+    async def test_usage_none_when_usage_attr_absent_on_context_wrapper(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When context_wrapper exists but has no 'usage', SendResult.usage is None."""
+        ctx = MagicMock(spec=[])  # spec=[] means no attributes by default
+
+        sdk_result = MagicMock()
+        sdk_result.final_output = "hello"
+        sdk_result.context_wrapper = ctx
+        sdk_result.to_input_list.return_value = []
+
+        runner = MagicMock()
+        runner.run = AsyncMock(return_value=sdk_result)
+        monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
+
+        target = OpenAIAgentTarget(MagicMock())
+        result = await target.send_prompt_with_usage("hi")
+
+        assert result.usage is None
+
+    @pytest.mark.asyncio
+    async def test_usage_total_tokens_computed_from_parts_when_zero(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When total_tokens is 0, it falls back to prompt + completion sum."""
+        runner, _ = _mock_runner_with_usage(
+            output="ok",
+            input_tokens=8,
+            output_tokens=3,
+            total_tokens=0,
+        )
+        monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
+
+        target = OpenAIAgentTarget(MagicMock())
+        result = await target.send_prompt_with_usage("hi")
+
+        assert result.usage is not None
+        assert result.usage.total_tokens == 11  # 8 + 3

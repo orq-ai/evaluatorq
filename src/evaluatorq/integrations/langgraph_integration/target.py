@@ -12,7 +12,7 @@ from langchain_core.outputs import LLMResult
 from langchain_core.runnables import RunnableConfig
 
 from evaluatorq.redteam.backends.base import AgentTarget
-from evaluatorq.redteam.contracts import AgentContext, MemoryStoreInfo, TokenUsage, ToolInfo
+from evaluatorq.redteam.contracts import AgentContext, MemoryStoreInfo, SendResult, TokenUsage, ToolInfo
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
@@ -45,6 +45,14 @@ class _TokenUsageCollector(BaseCallbackHandler):
                 gen = inner[0]
                 meta = getattr(getattr(gen, "message", None), "usage_metadata", None)
                 if meta is None:
+                    # Provider/integration didn't surface usage metadata on this
+                    # generation. Real call still happened — log so cost dashboards
+                    # showing zeros are diagnosable. Once per generation is fine
+                    # since LangGraph chains rarely emit hundreds.
+                    logger.debug(
+                        "_TokenUsageCollector: generation has no usage_metadata; "
+                        "tokens for this call will not be captured"
+                    )
                     continue
                 input_tokens = meta.get("input_tokens")
                 prompt = int(input_tokens) if input_tokens is not None else 0
@@ -128,11 +136,11 @@ class LangGraphTarget(AgentTarget):
         self._extra_config = config or {}
         self.memory_entity_id: str = uuid4().hex
         self._agent_context = agent_context
-        # NOTE: _last_token_usage is not safe for concurrent send_prompt calls on
-        # the same instance — use .new() to get independent instances for parallel use.
-        self._last_token_usage: TokenUsage | None = None
         graph_name: str = getattr(graph, "name", None) or "langgraph_target"
         self._key = f"{graph_name}_{uuid4().hex[:8]}"
+        # Guard against spamming the log on every send_prompt_with_usage call when
+        # an unknown callbacks type is encountered (hot path).
+        self._warned_unknown_callbacks: bool = False
 
     def _build_config(self) -> RunnableConfig:
         """Build the RunnableConfig with the current thread_id."""
@@ -145,8 +153,14 @@ class LangGraphTarget(AgentTarget):
             },
         )
 
-    async def send_prompt(self, prompt: str) -> str:
-        """Send a prompt to the LangGraph agent and return its text response."""
+    async def send_prompt_with_usage(self, prompt: str) -> SendResult:
+        """Send a prompt to the LangGraph agent and return text + usage.
+
+        Token usage is collected via a per-call ``_TokenUsageCollector``
+        callback. The collector is drained in a ``finally:`` block so
+        partial spend on error paths is preserved in the returned
+        :class:`SendResult`.
+        """
         collector = _TokenUsageCollector()
 
         base_config = self._build_config()
@@ -164,24 +178,25 @@ class LangGraphTarget(AgentTarget):
             new_callbacks = manager_copy
         else:
             # Unknown type — wrap alongside existing without mutating.
-            logger.warning(
-                "LangGraphTarget: unrecognised callbacks type %s; wrapping in list. "
-                "Pass a list or BaseCallbackManager instead.",
-                type(existing).__name__,
-            )
+            if not self._warned_unknown_callbacks:
+                logger.warning(
+                    "LangGraphTarget: unrecognised callbacks type %s; wrapping in list. "
+                    "Pass a list or BaseCallbackManager instead.",
+                    type(existing).__name__,
+                )
+                self._warned_unknown_callbacks = True
             new_callbacks = [existing, collector]
 
         new_config: RunnableConfig = {**base_config, "callbacks": new_callbacks}
 
+        usage: TokenUsage | None = None
         try:
             result = await self._graph.ainvoke(
                 {"messages": [{"role": "user", "content": prompt}]},
                 config=new_config,
             )
         finally:
-            # Always persist usage — including when ainvoke raises — so that
-            # error-path token spend is not silently dropped.
-            self._last_token_usage = collector.to_token_usage()
+            usage = collector.to_token_usage()
 
         messages = result.get("messages")
         if messages is None:
@@ -196,22 +211,27 @@ class LangGraphTarget(AgentTarget):
                 "Ensure every execution path appends at least one AI message."
             )
         last = messages[-1]
-        # Support both dict and LangChain BaseMessage
         content = last.get("content", "") if isinstance(last, dict) else getattr(last, "content", "")
         if not isinstance(content, str):
             content = str(content)
-        return content
+        return SendResult(text=content, usage=usage)
 
-    def consume_last_token_usage(self) -> TokenUsage | None:
-        """Return and clear token usage from the last send_prompt() call.
+    async def send_prompt(self, prompt: str) -> str:
+        """Back-compat wrapper, scheduled for removal in evaluatorq 2.0.
 
-        Must be called between send_prompt() calls to avoid silently dropping
-        usage from earlier calls — each new send_prompt() overwrites the stored
-        value regardless of whether it has been consumed.
+        New code should call ``send_prompt_with_usage`` and read ``.text`` and
+        ``.usage`` directly. Emits a ``DeprecationWarning`` (deduplicated by the
+        default warnings filter) so out-of-tree callers get a visible signal
+        without noisy logs on every prompt.
         """
-        usage = self._last_token_usage
-        self._last_token_usage = None
-        return usage
+        import warnings
+        warnings.warn(
+            f"{type(self).__name__}.send_prompt is deprecated; use send_prompt_with_usage. "
+            "Will be removed in evaluatorq 2.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return (await self.send_prompt_with_usage(prompt)).text
 
     async def get_agent_context(self) -> AgentContext:
         """Return agent context introspected from the compiled graph.
@@ -251,7 +271,6 @@ class LangGraphTarget(AgentTarget):
             config=dict(self._extra_config),
             agent_context=self._agent_context,
         )
-        cloned._key = self._key
         return cloned
 
 

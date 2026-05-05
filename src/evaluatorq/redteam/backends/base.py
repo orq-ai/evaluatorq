@@ -13,8 +13,10 @@ from typing import TYPE_CHECKING, Protocol
 
 from loguru import logger
 
+from evaluatorq.redteam.contracts import SendResult
+
 if TYPE_CHECKING:
-    from evaluatorq.redteam.contracts import AgentContext, TokenUsage
+    from evaluatorq.redteam.contracts import AgentContext
 
 
 class AgentTarget(Protocol):
@@ -25,12 +27,17 @@ class AgentTarget(Protocol):
     Targets without persistent memory set it to ``None``. The red teaming
     pipeline reads this attribute after target creation to track entities for
     cleanup — it does not inject the value into the target.
+
+    Backends must implement ``send_prompt_with_usage``. A ``send_prompt``
+    helper is not required by the protocol; concrete backends may retain it
+    as a back-compat thin wrapper, but callers should use
+    ``send_prompt_with_usage`` directly.
     """
 
     memory_entity_id: str | None
 
-    async def send_prompt(self, prompt: str) -> str:
-        """Send a prompt and return the response."""
+    async def send_prompt_with_usage(self, prompt: str) -> SendResult:
+        """Send a prompt and return the response together with token usage."""
         ...
 
     def new(self) -> AgentTarget:
@@ -39,14 +46,6 @@ class AgentTarget(Protocol):
         Each call must produce an independent instance — own ``memory_entity_id``
         for memory-backed targets, ``None`` otherwise.
         """
-        ...
-
-
-class SupportsTokenUsage(Protocol):
-    """Optional hook for exposing token usage from last target call."""
-
-    def consume_last_token_usage(self) -> TokenUsage | None:
-        """Return and clear usage from last call."""
         ...
 
 
@@ -88,15 +87,75 @@ class SupportsErrorMapping(Protocol):
 
 
 def is_agent_target(obj: object) -> bool:
-    """Return True if obj satisfies the AgentTarget protocol at runtime."""
-    has_send = callable(getattr(obj, 'send_prompt', None))
+    """Return True if obj satisfies the AgentTarget protocol at runtime.
+
+    Checks strictly for ``send_prompt_with_usage`` and ``new``. If the object
+    only has the legacy ``send_prompt`` interface, call :func:`adapt_legacy_target`
+    first to upgrade it, then re-check with this function.
+    """
+    has_send = callable(getattr(obj, 'send_prompt_with_usage', None))
     has_new = callable(getattr(obj, 'new', None))
-    if has_send and not has_new and callable(getattr(obj, 'clone', None)):
+    return has_send and has_new
+
+
+def validate_agent_target(obj: object) -> None:
+    """Surface the pre-1.3 ``clone()`` -> ``new()`` migration error.
+
+    Narrow on purpose: raises ``TypeError`` only when ``obj`` exposes neither
+    ``send_prompt_with_usage`` nor ``new`` but still has the removed
+    ``clone()`` method, since that pattern uniquely identifies a target stuck
+    on the pre-1.3 API. All other contract violations (missing
+    ``send_prompt_with_usage``, missing ``new``, etc.) are intentionally left
+    to :func:`is_agent_target` so the predicate stays side-effect free; call
+    both in tandem if you want the full check.
+    """
+    has_send = callable(getattr(obj, 'send_prompt_with_usage', None))
+    has_new = callable(getattr(obj, 'new', None))
+    if not has_send and not has_new and callable(getattr(obj, 'clone', None)):
         raise TypeError(
             f"{type(obj).__name__} implements 'clone()' which was removed in evaluatorq 1.3. "
             "Rename it to 'new(self) -> AgentTarget' — signature is the same, no memory_entity_id param."
         )
-    return has_send and has_new
+
+
+def adapt_legacy_target(obj: object) -> object:
+    """Adapt a legacy target with only send_prompt() to the new send_prompt_with_usage interface.
+
+    Emits a DeprecationWarning. Remove in next minor.
+
+    If the object already has ``send_prompt_with_usage``, it is returned
+    unchanged. If neither method is present, the object is returned unchanged
+    (caller is responsible for further validation).
+    """
+    import warnings
+
+    if callable(getattr(obj, 'send_prompt_with_usage', None)):
+        return obj
+    if not callable(getattr(obj, 'send_prompt', None)):
+        return obj
+    warnings.warn(
+        f"{type(obj).__name__} implements legacy `send_prompt` only. "
+        "Migrate to `async send_prompt_with_usage(prompt) -> SendResult`. "
+        "The legacy adapter will be removed in the next minor release.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+    async def _adapted(prompt: str) -> SendResult:
+        text = await obj.send_prompt(prompt)  # pyright: ignore[reportAttributeAccessIssue]
+        return SendResult(text=text)
+
+    try:
+        obj.send_prompt_with_usage = _adapted  # pyright: ignore[reportAttributeAccessIssue]
+    except AttributeError as exc:
+        # Targets defining ``__slots__`` without ``send_prompt_with_usage`` cannot
+        # accept a runtime attribute assignment. Surface a clear migration hint
+        # rather than the cryptic AttributeError from the slot machinery.
+        raise TypeError(
+            f"{type(obj).__name__} uses __slots__ and cannot be adapted at runtime. "
+            "Implement `async send_prompt_with_usage(prompt) -> SendResult` directly on the class instead."
+        ) from exc
+    return obj
 
 
 class DirectTargetFactory:
@@ -112,7 +171,7 @@ class DirectTargetFactory:
                 f"{type(self._target).__name__}.new() returned None. "
                 "It must return a fresh AgentTarget instance."
             )
-        return result
+        return adapt_legacy_target(result)  # pyright: ignore[reportReturnType]
 
 
 class NoopMemoryCleanup:

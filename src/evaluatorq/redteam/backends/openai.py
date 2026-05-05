@@ -8,7 +8,14 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from evaluatorq.redteam.backends.base import extract_provider_error_code, extract_status_code
-from evaluatorq.redteam.contracts import DEFAULT_TARGET_MAX_TOKENS, DEFAULT_TARGET_TIMEOUT_MS, AgentContext, TargetKind, TokenUsage
+from evaluatorq.redteam.contracts import (
+    DEFAULT_TARGET_MAX_TOKENS,
+    DEFAULT_TARGET_TIMEOUT_MS,
+    AgentContext,
+    SendResult,
+    TargetKind,
+    TokenUsage,
+)
 from evaluatorq.redteam.tracing import record_llm_response, with_llm_span
 
 if TYPE_CHECKING:
@@ -54,10 +61,9 @@ class OpenAIModelTarget:
         self.system_prompt = system_prompt or 'You are a helpful assistant.'
         self.max_tokens = max_tokens or DEFAULT_TARGET_MAX_TOKENS
         self.timeout_ms = timeout_ms or DEFAULT_TARGET_TIMEOUT_MS
-        self._last_token_usage: TokenUsage | None = None
 
-    async def send_prompt(self, prompt: str) -> str:
-        """Send a prompt to the OpenAI model and return its response."""
+    async def send_prompt_with_usage(self, prompt: str) -> SendResult:
+        """Send a prompt and return text + token usage together."""
         messages: list[ChatCompletionMessageParam] = [
             {'role': 'system', 'content': self.system_prompt},
             {'role': 'user', 'content': prompt},
@@ -77,38 +83,40 @@ class OpenAIModelTarget:
             )
             content = response.choices[0].message.content or ''
             record_llm_response(span, response, output_content=content)
+            usage = TokenUsage.from_completion(response)
+            response_id = getattr(response, 'id', None)
+            finish_reason = None
+            choices = getattr(response, 'choices', None) or []
+            if choices:
+                finish_reason = getattr(choices[0], 'finish_reason', None)
+            return SendResult(
+                text=content,
+                usage=usage,
+                model=getattr(response, 'model', None),
+                response_id=response_id,
+                finish_reason=finish_reason,
+            )
 
-            # Store usage for consume_last_token_usage()
-            usage = getattr(response, 'usage', None)
-            if usage is not None:
-                prompt_ = int(getattr(usage, 'prompt_tokens', 0) or 0)
-                completion = int(getattr(usage, 'completion_tokens', 0) or 0)
-                raw_total = getattr(usage, 'total_tokens', None)
-                total = int(raw_total) if raw_total else (prompt_ + completion)
-                self._last_token_usage = TokenUsage(
-                    prompt_tokens=prompt_,
-                    completion_tokens=completion,
-                    total_tokens=total,
-                    calls=1,
-                )
-            else:
-                self._last_token_usage = None
+    async def send_prompt(self, prompt: str) -> str:
+        """Back-compat wrapper, scheduled for removal in evaluatorq 2.0.
 
-        return content
-
-    def consume_last_token_usage(self) -> TokenUsage | None:
-        """Return and clear usage from last call."""
-        usage = self._last_token_usage
-        self._last_token_usage = None
-        return usage
-
-    def clone(self) -> OpenAIModelTarget:
-        """Return a fresh target instance for parallel job safety."""
-        return OpenAIModelTarget(model=self.model, system_prompt=self.system_prompt, client=self.client, max_tokens=self.max_tokens, timeout_ms=self.timeout_ms)
+        New code should call ``send_prompt_with_usage`` and read ``.text`` and
+        ``.usage`` directly. Emits a ``DeprecationWarning`` (deduplicated by the
+        default warnings filter) so out-of-tree callers get a visible signal
+        without noisy logs on every prompt.
+        """
+        import warnings
+        warnings.warn(
+            f"{type(self).__name__}.send_prompt is deprecated; use send_prompt_with_usage. "
+            "Will be removed in evaluatorq 2.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return (await self.send_prompt_with_usage(prompt)).text
 
     def new(self) -> OpenAIModelTarget:
-        """Return a fresh target instance (alias for :meth:`clone`, satisfies ``AgentTarget`` protocol)."""
-        return self.clone()
+        """Return a fresh target instance for parallel job safety (satisfies ``AgentTarget`` protocol)."""
+        return OpenAIModelTarget(model=self.model, system_prompt=self.system_prompt, client=self.client, max_tokens=self.max_tokens, timeout_ms=self.timeout_ms)
 
     target_kind: TargetKind = TargetKind.OPENAI
     """Used by the runner to populate report metadata correctly."""

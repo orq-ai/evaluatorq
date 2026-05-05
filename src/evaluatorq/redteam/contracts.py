@@ -10,6 +10,7 @@ Semantic convention:
 
 import os
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, TypedDict
 
@@ -736,12 +737,22 @@ class AttackStrategy(BaseModel):
 
 
 class TokenUsage(BaseModel):
-    """Token usage and cost for an LLM call or aggregation of calls."""
+    """Token usage and cost for an LLM call or aggregation of calls.
 
-    total_tokens: int = Field(default=0, description='Total tokens used')
-    prompt_tokens: int = Field(default=0, description='Prompt/input tokens')
-    completion_tokens: int = Field(default=0, description='Completion/output tokens')
-    calls: int = Field(default=0, description='Number of LLM API calls')
+    ``total_tokens`` reflects the provider's reported total when available
+    (``> 0``); otherwise it falls back to ``prompt_tokens + completion_tokens``.
+    The model intentionally does not enforce ``total == prompt + completion``
+    so provider-reported totals — which on some providers include extra
+    counts for cached, reasoning, or audio tokens that this struct does not
+    break out — are not silently corrupted by a naive normalisation step.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    total_tokens: int = Field(default=0, ge=0, description='Total tokens used as reported by the provider')
+    prompt_tokens: int = Field(default=0, ge=0, description='Prompt/input tokens')
+    completion_tokens: int = Field(default=0, ge=0, description='Completion/output tokens')
+    calls: int = Field(default=0, ge=0, description='Number of LLM API calls')
 
     @classmethod
     def from_completion(cls, response: Any) -> 'TokenUsage | None':
@@ -751,8 +762,50 @@ class TokenUsage(BaseModel):
             return None
         prompt = int(getattr(usage, 'prompt_tokens', 0) or 0)
         completion = int(getattr(usage, 'completion_tokens', 0) or 0)
-        total = int(getattr(usage, 'total_tokens', prompt + completion) or 0)
+        # Mirror the > 0 guard used by other integrations: a provider-reported
+        # total of 0 (or absent) falls back to prompt+completion rather than
+        # propagating the zero, which would silently under-count totals on
+        # responses where prompt+completion are non-zero.
+        raw_total = getattr(usage, 'total_tokens', None)
+        total = int(raw_total) if raw_total is not None and int(raw_total) > 0 else prompt + completion
         return cls(prompt_tokens=prompt, completion_tokens=completion, total_tokens=total, calls=1)
+
+    def __add__(self, other: 'TokenUsage | None') -> 'TokenUsage':
+        if other is None:
+            return self.model_copy()
+        return TokenUsage(
+            prompt_tokens=self.prompt_tokens + other.prompt_tokens,
+            completion_tokens=self.completion_tokens + other.completion_tokens,
+            total_tokens=self.total_tokens + other.total_tokens,
+            calls=self.calls + other.calls,
+        )
+
+    def __radd__(self, other: object) -> 'TokenUsage':
+        """Support sum() which starts with integer 0, and reflected addition."""
+        if isinstance(other, int) and other == 0:
+            return self.model_copy()  # safe copy, no shared reference
+        if isinstance(other, TokenUsage):
+            return other.__add__(self)
+        return NotImplemented
+
+
+# Intentionally a dataclass (not Pydantic BaseModel) for hot-path performance —
+# SendResult is an internal value object produced on every target call and is
+# never serialized outside this module. Pydantic validation overhead per call is
+# unnecessary here.
+@dataclass(slots=True, frozen=True, kw_only=True)
+class SendResult:
+    """Result of an ``AgentTarget.send_prompt_with_usage()`` call.
+
+    Returns text and token usage together. On exception the caller does not
+    observe partial usage via the return value.
+    """
+
+    text: str
+    usage: 'TokenUsage | None' = None
+    model: 'str | None' = None
+    response_id: 'str | None' = None
+    finish_reason: 'str | None' = None
 
 
 # ---------------------------------------------------------------------------

@@ -22,6 +22,7 @@ from evaluatorq.redteam.exceptions import CredentialError
 
 try:
     from orq_ai_sdk import Orq as _Orq
+
     _orq_cls: Any = _Orq
 except ImportError:
     _orq_cls = None
@@ -48,10 +49,11 @@ from evaluatorq.redteam.contracts import (
     AgentContext,
     KnowledgeBaseInfo,
     MemoryStoreInfo,
+    SendResult,
     TokenUsage,
     ToolInfo,
 )
-from evaluatorq.redteam.tracing import record_token_usage, set_span_attrs, with_redteam_span
+from evaluatorq.redteam.tracing import record_token_usage, set_span_attrs, truncate_for_span, with_redteam_span
 
 if TYPE_CHECKING:
     from evaluatorq.redteam.backends.base import AgentTarget
@@ -82,23 +84,72 @@ class ORQAgentTarget:
         self.agent_key = agent_key
         self.orq_client = orq_client
         self.memory_entity_id: str | None = (
-            memory_entity_id if memory_entity_id is not None else f"red-team-{uuid.uuid4().hex[:12]}"
+            memory_entity_id if memory_entity_id is not None else f'red-team-{uuid.uuid4().hex[:12]}'
         )
         self.model = model
         self._timeout_ms = timeout_ms
         self._task_id: str | None = None
-        self._last_token_usage: TokenUsage | None = None
 
-    async def send_prompt(self, prompt: str) -> str:
-        """Send a prompt to the ORQ agent."""
+    async def send_prompt_with_usage(self, prompt: str) -> SendResult:
+        """Send a prompt to the ORQ agent and return text + accumulated usage.
+
+        Accumulates usage across pending-tool-call continuations.
+        """
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
+        total_tokens = 0
+        total_calls = 0
+
+        def _accumulate_usage(resp: object) -> None:
+            """Accumulate token usage from a response into running totals."""
+            nonlocal total_prompt_tokens, total_completion_tokens, total_tokens, total_calls
+            resp_usage = getattr(resp, 'usage', None)
+            if resp_usage is None:
+                return
+            prompt_tokens = int(getattr(resp_usage, 'prompt_tokens', 0) or 0)
+            completion_tokens = int(getattr(resp_usage, 'completion_tokens', 0) or 0)
+            raw_total = getattr(resp_usage, 'total_tokens', None)
+            if raw_total is not None and int(raw_total) > 0:
+                total = int(raw_total)
+            else:
+                total = prompt_tokens + completion_tokens
+            total_prompt_tokens += prompt_tokens
+            total_completion_tokens += completion_tokens
+            total_tokens += total
+            total_calls += 1
+
+        def _extract_text(resp: object) -> str:
+            """Extract the first non-empty text part from an agent response."""
+            output = getattr(resp, 'output', None) or []
+            for item in output:
+                parts = getattr(item, 'parts', None) or []
+                for part in parts:
+                    if getattr(part, 'kind', None) == 'text':
+                        text = getattr(part, 'text', None)
+                        if isinstance(text, str) and text.strip():
+                            return text
+            return ''
+
+        def _pending_tool_call_ids(resp: object) -> list[str]:
+            """Return IDs of pending tool calls from a response."""
+            pending = getattr(resp, 'pending_tool_calls', None) or []
+            ids: list[str] = []
+            for call in pending:
+                call_id = getattr(call, 'id', None)
+                if not call_id and isinstance(call, dict):
+                    call_id = call.get('id')
+                if isinstance(call_id, str) and call_id.strip():
+                    ids.append(call_id)
+            return ids
+
         async with with_redteam_span(
-            f"agent {self.agent_key}",
+            f'agent {self.agent_key}',
             {
-                "orq.redteam.llm_purpose": "target",
-                "gen_ai.system": "orq",
-                "gen_ai.request.model": self.model or self.agent_key,
-                "gen_ai.input.messages": json.dumps(
-                    [{"role": "user", "content": prompt[:2000]}],
+                'orq.redteam.llm_purpose': 'target',
+                'gen_ai.system': 'orq',
+                'gen_ai.request.model': self.model or self.agent_key,
+                'gen_ai.input.messages': json.dumps(
+                    [{'role': 'user', 'content': truncate_for_span(prompt)}],
                     ensure_ascii=False,
                 ),
             },
@@ -118,50 +169,6 @@ class ORQAgentTarget:
 
                 if response.task_id:
                     self._task_id = response.task_id
-
-                total_prompt_tokens = 0
-                total_completion_tokens = 0
-                total_tokens = 0
-                total_calls = 0
-
-                def _accumulate_usage(resp: object) -> None:
-                    """Accumulate token usage from a response into running totals."""
-                    nonlocal total_prompt_tokens, total_completion_tokens, total_tokens, total_calls
-                    usage = getattr(resp, 'usage', None)
-                    if usage is None:
-                        return
-                    prompt_tokens = int(getattr(usage, 'prompt_tokens', 0) or 0)
-                    completion_tokens = int(getattr(usage, 'completion_tokens', 0) or 0)
-                    raw_total = getattr(usage, 'total_tokens', None)
-                    total = int(raw_total) if raw_total else (prompt_tokens + completion_tokens)
-                    total_prompt_tokens += prompt_tokens
-                    total_completion_tokens += completion_tokens
-                    total_tokens += total
-                    total_calls += 1
-
-                def _extract_text(resp: object) -> str:
-                    """Extract the first non-empty text part from an agent response."""
-                    output = getattr(resp, 'output', None) or []
-                    for item in output:
-                        parts = getattr(item, 'parts', None) or []
-                        for part in parts:
-                            if getattr(part, 'kind', None) == 'text':
-                                text = getattr(part, 'text', None)
-                                if isinstance(text, str) and text.strip():
-                                    return text
-                    return ''
-
-                def _pending_tool_call_ids(resp: object) -> list[str]:
-                    """Return IDs of pending tool calls from a response."""
-                    pending = getattr(resp, 'pending_tool_calls', None) or []
-                    ids: list[str] = []
-                    for call in pending:
-                        call_id = getattr(call, 'id', None)
-                        if not call_id and isinstance(call, dict):
-                            call_id = call.get('id')
-                        if isinstance(call_id, str) and call_id.strip():
-                            ids.append(call_id)
-                    return ids
 
                 _accumulate_usage(response)
                 text_response = _extract_text(response)
@@ -206,21 +213,48 @@ class ORQAgentTarget:
 
                 if pending_ids:
                     raise RuntimeError(
-                        f'Unresolved pending tool calls after {max_tool_continuations} continuations ({len(pending_ids)} remaining)'
+                        f'Unresolved pending tool calls after {max_tool_continuations} continuations '
+                        f'({len(pending_ids)} remaining)'
                     )
 
-                if total_calls > 0:
-                    self._last_token_usage = TokenUsage(
+                response_model = getattr(response, 'model', None)
+                if response_model:
+                    set_span_attrs(span, {'gen_ai.response.model': str(response_model)})
+
+                result_text = text_response or ''
+                set_span_attrs(
+                    span,
+                    {
+                        'gen_ai.output.messages': json.dumps(
+                            [{'role': 'assistant', 'content': truncate_for_span(result_text)}],
+                            ensure_ascii=False,
+                        ),
+                    },
+                )
+
+                usage = (
+                    TokenUsage(
                         prompt_tokens=total_prompt_tokens,
                         completion_tokens=total_completion_tokens,
                         total_tokens=total_tokens,
                         calls=total_calls,
                     )
-                else:
-                    self._last_token_usage = None
+                    if total_calls > 0
+                    else None
+                )
+                return SendResult(
+                    text=result_text,
+                    usage=usage,
+                    model=str(response_model) if response_model else None,
+                    response_id=getattr(response, 'task_id', None),
+                    finish_reason=None,  # ORQ agent responses do not expose a standard finish_reason
+                )
 
-                # Record token usage on the agent span
-                if self._last_token_usage is not None:
+            except Exception as e:
+                logger.error(f'ORQ agent call failed: {e}')
+                raise
+            finally:
+                if total_calls > 0:
                     record_token_usage(
                         span,
                         prompt_tokens=total_prompt_tokens,
@@ -229,36 +263,29 @@ class ORQAgentTarget:
                         calls=total_calls,
                     )
 
-                # Extract response model if available from the ORQ API response
-                response_model = getattr(response, 'model', None)
-                if response_model:
-                    set_span_attrs(span, {"gen_ai.response.model": str(response_model)})
+    async def send_prompt(self, prompt: str) -> str:
+        """Back-compat wrapper, scheduled for removal in evaluatorq 2.0.
 
-                result_text = text_response or ''
-                set_span_attrs(span, {
-                    "gen_ai.output.messages": json.dumps(
-                        [{"role": "assistant", "content": result_text[:2000]}],
-                        ensure_ascii=False,
-                    ),
-                })
-                return result_text
-
-            except Exception as e:
-                logger.error(f'ORQ agent call failed: {e}')
-                raise
-
-    def consume_last_token_usage(self) -> TokenUsage | None:
-        """Return and clear usage from the last send_prompt() call."""
-        usage = self._last_token_usage
-        self._last_token_usage = None
-        return usage
+        New code should call ``send_prompt_with_usage`` and read ``.text`` and
+        ``.usage`` directly. Emits a ``DeprecationWarning`` (deduplicated by the
+        default warnings filter) so out-of-tree callers get a visible signal
+        without noisy logs on every prompt.
+        """
+        import warnings
+        warnings.warn(
+            f"{type(self).__name__}.send_prompt is deprecated; use send_prompt_with_usage. "
+            "Will be removed in evaluatorq 2.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return (await self.send_prompt_with_usage(prompt)).text
 
     def new(self) -> ORQAgentTarget:
         """Return a fresh target instance with isolated state.
 
         Each call gets its own ``memory_entity_id`` (auto-generated in
-        ``__init__``), own ``_task_id``, and own ``_last_token_usage`` so
-        parallel jobs never share server-side memory or conversation state.
+        ``__init__``) and own ``_task_id`` so parallel jobs never share
+        server-side memory or conversation state.
         """
         return ORQAgentTarget(
             agent_key=self.agent_key,
@@ -421,7 +448,7 @@ class ORQTargetFactory:
             self._orq_client = orq_client
         else:
             if _orq_cls is None:
-                msg = "ORQ backend requires the orq-ai-sdk package. Install with: pip install evaluatorq[orq]"
+                msg = 'ORQ backend requires the orq-ai-sdk package. Install with: pip install evaluatorq[orq]'
                 raise ImportError(msg)
             self._orq_client = _orq_cls(
                 api_key=_get_orq_api_key(),
@@ -454,7 +481,7 @@ class ORQMemoryCleanup:
             self._orq_client = orq_client
         else:
             if _orq_cls is None:
-                msg = "ORQ backend requires the orq-ai-sdk package. Install with: pip install evaluatorq[orq]"
+                msg = 'ORQ backend requires the orq-ai-sdk package. Install with: pip install evaluatorq[orq]'
                 raise ImportError(msg)
             self._orq_client = _orq_cls(
                 api_key=_get_orq_api_key(),
@@ -518,7 +545,7 @@ def create_orq_agent_target(
     timeout_ms = timeout_ms or PIPELINE_CONFIG.target_agent_timeout_ms
     if orq_client is None:
         if _orq_cls is None:
-            raise ImportError("ORQ backend requires the orq-ai-sdk package.")
+            raise ImportError('ORQ backend requires the orq-ai-sdk package.')
         orq_client = _orq_cls(
             api_key=_get_orq_api_key(),
             server_url=_get_orq_server_url(),
@@ -544,7 +571,7 @@ def create_orq_backend(
     timeout_ms = timeout_ms or PIPELINE_CONFIG.target_agent_timeout_ms
     if orq_client is None:
         if _orq_cls is None:
-            msg = "ORQ backend requires the orq-ai-sdk package. Install with: pip install evaluatorq[orq]"
+            msg = 'ORQ backend requires the orq-ai-sdk package. Install with: pip install evaluatorq[orq]'
             raise ImportError(msg)
         orq_client = _orq_cls(
             api_key=_get_orq_api_key(),

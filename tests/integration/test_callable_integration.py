@@ -25,16 +25,16 @@ class TestCallableIntegration:
 
         target = CallableTarget(stateful_agent, reset_fn=reset)
 
-        r1 = await target.send_prompt("Hello")
-        assert "1" in r1
+        r1 = await target.send_prompt_with_usage("Hello")
+        assert "1" in r1.text
 
-        r2 = await target.send_prompt("World")
-        assert "2" in r2
+        r2 = await target.send_prompt_with_usage("World")
+        assert "2" in r2.text
 
         target.new()
 
-        r3 = await target.send_prompt("After reset")
-        assert "1" in r3  # Back to 1 after reset
+        r3 = await target.send_prompt_with_usage("After reset")
+        assert "1" in r3.text  # Back to 1 after reset
 
     @pytest.mark.asyncio
     async def test_clone_gets_independent_state(self) -> None:
@@ -49,9 +49,10 @@ class TestCallableIntegration:
         target = CallableTarget(counting_agent)
         cloned = target.new()
 
-        r1 = await target.send_prompt("a")
-        r2 = await cloned.send_prompt("b")
+        from evaluatorq.redteam.contracts import SendResult
+        r1 = await target.send_prompt_with_usage("a")
+        r2 = await cloned.send_prompt_with_usage("b")
 
         # Both share the same function, so call_count increments for both
-        assert isinstance(r1, str)
-        assert isinstance(r2, str)
+        assert isinstance(r1, SendResult)
+        assert isinstance(r2, SendResult)

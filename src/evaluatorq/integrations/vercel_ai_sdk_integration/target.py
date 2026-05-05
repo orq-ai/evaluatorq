@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 import httpx
 
 from evaluatorq.redteam.backends.base import AgentTarget
-from evaluatorq.redteam.contracts import AgentContext
+from evaluatorq.redteam.contracts import AgentContext, SendResult, TokenUsage
 
 
 class VercelAISdkTarget(AgentTarget):
@@ -83,8 +83,8 @@ class VercelAISdkTarget(AgentTarget):
         self._history: list[dict[str, str]] = []
         self._agent_context = agent_context
 
-    async def send_prompt(self, prompt: str) -> str:
-        """Send a prompt to the AI SDK endpoint and return its text response."""
+    async def send_prompt_with_usage(self, prompt: str) -> SendResult:
+        """Send a prompt to the AI SDK endpoint and return its text response with usage."""
         self._history.append({"role": "user", "content": prompt})
 
         body: dict[str, Any] = {
@@ -92,17 +92,44 @@ class VercelAISdkTarget(AgentTarget):
             **self._extra_body,
         }
 
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            response = await client.post(
-                self._url,
-                json=body,
-                headers={"Content-Type": "application/json", **self._headers},
-            )
-            response.raise_for_status()
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.post(
+                    self._url,
+                    json=body,
+                    headers={"Content-Type": "application/json", **self._headers},
+                )
+                response.raise_for_status()
+            text, usage = self._parse_response(response)
+        except (httpx.HTTPError, ValueError, KeyError):
+            # Roll back the user turn so the next call doesn't forward a
+            # malformed conversation with a hanging user message. Catches
+            # HTTP errors (network/status) and parser errors (ValueError
+            # from json.loads, KeyError from missing fields). Programming
+            # bugs (TypeError, AttributeError) propagate without rollback
+            # so they aren't masked as transient failures.
+            self._history.pop()
+            raise
 
-        text = self._parse_response(response)
         self._history.append({"role": "assistant", "content": text})
-        return text
+        return SendResult(text=text, usage=usage)
+
+    async def send_prompt(self, prompt: str) -> str:
+        """Back-compat wrapper, scheduled for removal in evaluatorq 2.0.
+
+        New code should call ``send_prompt_with_usage`` and read ``.text`` and
+        ``.usage`` directly. Emits a ``DeprecationWarning`` (deduplicated by the
+        default warnings filter) so out-of-tree callers get a visible signal
+        without noisy logs on every prompt.
+        """
+        import warnings
+        warnings.warn(
+            f"{type(self).__name__}.send_prompt is deprecated; use send_prompt_with_usage. "
+            "Will be removed in evaluatorq 2.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return (await self.send_prompt_with_usage(prompt)).text
 
     async def get_agent_context(self) -> AgentContext:
         """Return the user-provided agent context, or a minimal placeholder."""
@@ -128,7 +155,7 @@ class VercelAISdkTarget(AgentTarget):
         )
 
     @staticmethod
-    def _parse_response(response: httpx.Response) -> str:
+    def _parse_response(response: httpx.Response) -> tuple[str, TokenUsage | None]:
         """Parse an AI SDK response, handling both Data Stream Protocol and plain formats.
 
         The Data Stream Protocol prefixes text chunks with ``0:`` and JSON-encodes
@@ -139,6 +166,10 @@ class VercelAISdkTarget(AgentTarget):
             e:{"finishReason":"stop","usage":{"promptTokens":10,"completionTokens":5}}
 
         Plain text or JSON responses are returned as-is.
+
+        Returns:
+            A ``(text, usage)`` tuple. ``usage`` is ``None`` when the response
+            does not contain token counts.
         """
         content_type = response.headers.get("content-type", "")
         raw = response.text
@@ -152,53 +183,116 @@ class VercelAISdkTarget(AgentTarget):
             return _parse_json_response(raw)
 
         # Fallback: treat as plain text
-        return raw.strip()
+        return raw.strip(), None
 
 
-def _parse_data_stream(raw: str) -> str:
-    """Extract text content from AI SDK Data Stream Protocol."""
-    chunks: list[str] = []
+def _parse_data_stream(raw: str) -> tuple[str, TokenUsage | None]:
+    """Extract text content and token usage from AI SDK Data Stream Protocol.
+
+    Returns:
+        A ``(text, usage)`` tuple. ``usage`` is ``None`` when no finish/done
+        frame carrying usage data is found in the stream.
+    """
+    parts: list[str] = []
+    usage: TokenUsage | None = None
     for line in raw.splitlines():
-        if not line.startswith("0:"):
+        if not line:
             continue
-        # Text chunks are JSON-encoded strings after the prefix
-        payload = line[2:]
-        try:
-            chunks.append(json.loads(payload))
-        except (json.JSONDecodeError, TypeError):
-            chunks.append(payload)
-    return "".join(chunks)
+        prefix, _, payload = line.partition(':')
+        if not _:
+            continue
+        if prefix == '0':
+            # Text chunks are JSON-encoded strings after the prefix
+            try:
+                parts.append(json.loads(payload))
+            except (json.JSONDecodeError, TypeError):
+                parts.append(payload)
+        elif prefix in ('e', 'd'):  # finish/done frames
+            try:
+                obj = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            u = obj.get('usage') if isinstance(obj, dict) else None
+            if isinstance(u, dict):
+                p = int(u.get('promptTokens', 0) or 0)
+                c = int(u.get('completionTokens', 0) or 0)
+                # Mirror the JSON-response parser's zero-guard: an all-zeros
+                # usage block carries no information and would skew aggregates
+                # by adding a spurious calls=1 with zero tokens.
+                if p > 0 or c > 0:
+                    t = u.get('totalTokens')
+                    # JSON numbers with a decimal point decode to float, so accept both.
+                    total = int(t) if isinstance(t, (int, float)) and t > 0 else p + c
+                    usage = TokenUsage(
+                        prompt_tokens=p,
+                        completion_tokens=c,
+                        total_tokens=total,
+                        calls=1,
+                    )
+    return ''.join(parts), usage
 
 
-def _parse_json_response(raw: str) -> str:
-    """Extract text from common JSON response formats."""
+def _parse_json_response(raw: str) -> tuple[str, TokenUsage | None]:
+    """Extract text and token usage from common JSON response formats.
+
+    Returns:
+        A ``(text, usage)`` tuple. ``usage`` is ``None`` when no recognised
+        usage block is present.
+    """
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
-        return raw.strip()
+        return raw.strip(), None
+
+    usage: TokenUsage | None = None
 
     # Common patterns from AI SDK endpoints
     if isinstance(data, str):
-        return data
+        return data, None
 
     if isinstance(data, dict):
+        # Extract usage if present — support both OpenAI shape
+        # (prompt_tokens/completion_tokens) and Vercel shape (promptTokens/completionTokens)
+        u = data.get("usage")
+        if isinstance(u, dict):
+            # OpenAI-compat shape
+            p = int(u.get("prompt_tokens", 0) or 0)
+            c = int(u.get("completion_tokens", 0) or 0)
+            # Fall back to Vercel camelCase shape when snake_case is absent
+            if p == 0 and c == 0:
+                p = int(u.get("promptTokens", 0) or 0)
+                c = int(u.get("completionTokens", 0) or 0)
+            t = u.get("total_tokens") or u.get("totalTokens")
+            # JSON numbers with a decimal point decode to float, so accept both.
+            total = int(t) if isinstance(t, (int, float)) and t > 0 else p + c
+            if p > 0 or c > 0:
+                usage = TokenUsage(
+                    prompt_tokens=p,
+                    completion_tokens=c,
+                    total_tokens=total,
+                    calls=1,
+                )
+
         # {"message": {"content": "..."}} or {"message": "..."}
         msg = data.get("message")
         if isinstance(msg, dict):
-            return str(msg.get("content", ""))
+            return str(msg.get("content", "")), usage
         if isinstance(msg, str):
-            return msg
+            return msg, usage
 
         # {"text": "..."} or {"content": "..."}
         for key in ("text", "content", "response", "output"):
             if key in data and isinstance(data[key], str):
-                return data[key]
+                return data[key], usage
 
         # {"choices": [{"message": {"content": "..."}}]} (OpenAI-compat)
         choices = data.get("choices")
         if isinstance(choices, list) and choices:
             choice_msg = choices[0].get("message", {})
             if isinstance(choice_msg, dict):
-                return str(choice_msg.get("content", ""))
+                return str(choice_msg.get("content", "")), usage
 
-    return raw.strip()
+    # Fallback: dict had no recognised text key but may still carry a valid
+    # usage block parsed above — preserve it so token telemetry isn't lost
+    # for shapes like {"result": "...", "usage": {...}}.
+    return raw.strip(), usage

@@ -12,6 +12,7 @@ from evaluatorq.integrations.vercel_ai_sdk_integration.target import (
     _parse_data_stream,
     _parse_json_response,
 )
+from evaluatorq.redteam.contracts import TokenUsage
 
 
 # ---------------------------------------------------------------------------
@@ -22,11 +23,15 @@ from evaluatorq.integrations.vercel_ai_sdk_integration.target import (
 class TestParseDataStream:
     def test_single_chunk(self) -> None:
         raw = '0:"Hello world"\n'
-        assert _parse_data_stream(raw) == "Hello world"
+        text, usage = _parse_data_stream(raw)
+        assert text == "Hello world"
+        assert usage is None
 
     def test_multiple_chunks(self) -> None:
         raw = '0:"Hello"\n0:" world"\n'
-        assert _parse_data_stream(raw) == "Hello world"
+        text, usage = _parse_data_stream(raw)
+        assert text == "Hello world"
+        assert usage is None
 
     def test_ignores_non_text_lines(self) -> None:
         raw = (
@@ -35,44 +40,124 @@ class TestParseDataStream:
             'd:{"finishReason":"stop"}\n'
             '0:" world"\n'
         )
-        assert _parse_data_stream(raw) == "Hello world"
+        text, usage = _parse_data_stream(raw)
+        assert text == "Hello world"
 
     def test_empty_stream(self) -> None:
-        assert _parse_data_stream("") == ""
+        text, usage = _parse_data_stream("")
+        assert text == ""
+        assert usage is None
 
     def test_only_metadata_lines(self) -> None:
         raw = 'e:{"finishReason":"stop"}\nd:{"finishReason":"stop"}\n'
-        assert _parse_data_stream(raw) == ""
+        text, usage = _parse_data_stream(raw)
+        assert text == ""
+
+    def test_usage_extracted_from_e_frame(self) -> None:
+        """Usage from an 'e:' finish frame is captured in the returned TokenUsage."""
+        raw = (
+            '0:"Hello"\n'
+            '0:" world"\n'
+            'e:{"finishReason":"stop","usage":{"promptTokens":10,"completionTokens":5,"totalTokens":15}}\n'
+        )
+        text, usage = _parse_data_stream(raw)
+        assert text == "Hello world"
+        assert isinstance(usage, TokenUsage)
+        assert usage.prompt_tokens == 10
+        assert usage.completion_tokens == 5
+        assert usage.total_tokens == 15
+        assert usage.calls == 1
+
+    def test_usage_extracted_from_d_frame(self) -> None:
+        """Usage from a 'd:' done frame is captured in the returned TokenUsage."""
+        raw = (
+            '0:"Reply"\n'
+            'd:{"finishReason":"stop","usage":{"promptTokens":20,"completionTokens":8}}\n'
+        )
+        text, usage = _parse_data_stream(raw)
+        assert text == "Reply"
+        assert isinstance(usage, TokenUsage)
+        assert usage.prompt_tokens == 20
+        assert usage.completion_tokens == 8
+        # totalTokens absent → falls back to sum
+        assert usage.total_tokens == 28
+
+    def test_no_usage_field_in_finish_frame_yields_none(self) -> None:
+        """Finish frame without 'usage' key does not populate TokenUsage."""
+        raw = '0:"Hi"\ne:{"finishReason":"stop"}\n'
+        _text, usage = _parse_data_stream(raw)
+        assert usage is None
 
 
 class TestParseJsonResponse:
     def test_message_dict(self) -> None:
         raw = '{"message": {"content": "Hello"}}'
-        assert _parse_json_response(raw) == "Hello"
+        text, usage = _parse_json_response(raw)
+        assert text == "Hello"
+        assert usage is None
 
     def test_message_string(self) -> None:
         raw = '{"message": "Hello"}'
-        assert _parse_json_response(raw) == "Hello"
+        text, usage = _parse_json_response(raw)
+        assert text == "Hello"
+        assert usage is None
 
     def test_text_key(self) -> None:
         raw = '{"text": "Hello"}'
-        assert _parse_json_response(raw) == "Hello"
+        text, usage = _parse_json_response(raw)
+        assert text == "Hello"
+        assert usage is None
 
     def test_content_key(self) -> None:
         raw = '{"content": "Hello"}'
-        assert _parse_json_response(raw) == "Hello"
+        text, usage = _parse_json_response(raw)
+        assert text == "Hello"
+        assert usage is None
 
     def test_openai_compat_choices(self) -> None:
         raw = '{"choices": [{"message": {"content": "Hello"}}]}'
-        assert _parse_json_response(raw) == "Hello"
+        text, usage = _parse_json_response(raw)
+        assert text == "Hello"
+        assert usage is None
 
     def test_plain_string(self) -> None:
         raw = '"Hello"'
-        assert _parse_json_response(raw) == "Hello"
+        text, usage = _parse_json_response(raw)
+        assert text == "Hello"
+        assert usage is None
 
     def test_invalid_json(self) -> None:
         raw = "not json at all"
-        assert _parse_json_response(raw) == "not json at all"
+        text, usage = _parse_json_response(raw)
+        assert text == "not json at all"
+        assert usage is None
+
+    def test_usage_extracted_openai_snake_case(self) -> None:
+        """OpenAI-style usage with snake_case keys is captured."""
+        raw = '{"text": "hi", "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}'
+        text, usage = _parse_json_response(raw)
+        assert text == "hi"
+        assert isinstance(usage, TokenUsage)
+        assert usage.prompt_tokens == 10
+        assert usage.completion_tokens == 5
+        assert usage.total_tokens == 15
+        assert usage.calls == 1
+
+    def test_usage_extracted_vercel_camel_case(self) -> None:
+        """Vercel-style usage with camelCase keys is captured as fallback."""
+        raw = '{"text": "bye", "usage": {"promptTokens": 7, "completionTokens": 3, "totalTokens": 10}}'
+        text, usage = _parse_json_response(raw)
+        assert text == "bye"
+        assert isinstance(usage, TokenUsage)
+        assert usage.prompt_tokens == 7
+        assert usage.completion_tokens == 3
+        assert usage.total_tokens == 10
+
+    def test_usage_absent_yields_none(self) -> None:
+        """JSON without a 'usage' key returns usage=None."""
+        raw = '{"text": "no usage here"}'
+        _text, usage = _parse_json_response(raw)
+        assert usage is None
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +176,7 @@ def _mock_response(text: str, content_type: str = "text/plain") -> httpx.Respons
 
 class TestVercelAISdkTarget:
     @pytest.mark.asyncio
-    async def test_send_prompt_returns_response(self) -> None:
+    async def test_send_prompt_with_usage_returns_response(self) -> None:
         target = VercelAISdkTarget("http://test/api/chat")
         mock_response = _mock_response('0:"Hello"\n')
 
@@ -102,9 +187,9 @@ class TestVercelAISdkTarget:
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
-            response = await target.send_prompt("hello")
+            result = await target.send_prompt_with_usage("hello")
 
-        assert response == "Hello"
+        assert result.text == "Hello"
 
     @pytest.mark.asyncio
     async def test_sends_messages_format(self) -> None:
@@ -118,7 +203,7 @@ class TestVercelAISdkTarget:
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
-            await target.send_prompt("hello")
+            await target.send_prompt_with_usage("hello")
 
         call_kwargs = mock_client.post.call_args
         body = call_kwargs.kwargs["json"]
@@ -140,8 +225,8 @@ class TestVercelAISdkTarget:
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
-            await target.send_prompt("first")
-            await target.send_prompt("second")
+            await target.send_prompt_with_usage("first")
+            await target.send_prompt_with_usage("second")
 
         second_call = mock_client.post.call_args_list[1]
         messages = second_call.kwargs["json"]["messages"]
@@ -163,7 +248,7 @@ class TestVercelAISdkTarget:
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
-            await target.send_prompt("hello")
+            await target.send_prompt_with_usage("hello")
 
         body = mock_client.post.call_args.kwargs["json"]
         assert body["model"] == "gpt-4o"
@@ -203,13 +288,91 @@ class TestVercelAISdkTarget:
             '{"message": {"content": "Hello"}}',
             content_type="application/json",
         )
-        text = VercelAISdkTarget._parse_response(response)
+        text, usage = VercelAISdkTarget._parse_response(response)
         assert text == "Hello"
+        assert usage is None
+
+    def test_parse_json_unknown_shape_preserves_usage(self) -> None:
+        """JSON dict with no recognised text key must still preserve a usage
+        block parsed above. Previous fallback returned (raw, None), silently
+        dropping token telemetry for shapes like {result, usage}."""
+        text, usage = _parse_json_response(
+            '{"result": "hello", "usage": {"promptTokens": 5, "completionTokens": 3}}'
+        )
+        assert usage is not None
+        assert usage.prompt_tokens == 5
+        assert usage.completion_tokens == 3
 
     def test_parse_data_stream_response(self) -> None:
         response = _mock_response('0:"Hello"\n0:" world"\n')
-        text = VercelAISdkTarget._parse_response(response)
+        text, usage = VercelAISdkTarget._parse_response(response)
         assert text == "Hello world"
+        assert usage is None
+
+    @pytest.mark.asyncio
+    async def test_send_prompt_with_usage_plumbs_stream_usage(self) -> None:
+        """Usage from the data stream 'e:' frame is returned in SendResult.usage."""
+        target = VercelAISdkTarget("http://test/api/chat")
+        stream = (
+            '0:"Hello"\n'
+            'e:{"finishReason":"stop","usage":{"promptTokens":12,"completionTokens":4,"totalTokens":16}}\n'
+        )
+        mock_response = _mock_response(stream)
+
+        with patch("evaluatorq.integrations.vercel_ai_sdk_integration.target.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            result = await target.send_prompt_with_usage("hi")
+
+        assert result.text == "Hello"
+        assert isinstance(result.usage, TokenUsage)
+        assert result.usage.prompt_tokens == 12
+        assert result.usage.completion_tokens == 4
+        assert result.usage.total_tokens == 16
+        assert result.usage.calls == 1
+
+    @pytest.mark.asyncio
+    async def test_send_prompt_with_usage_plumbs_json_usage(self) -> None:
+        """Usage from an OpenAI-compat JSON response is returned in SendResult.usage."""
+        target = VercelAISdkTarget("http://test/api/chat")
+        body = '{"text": "ok", "usage": {"prompt_tokens": 8, "completion_tokens": 2, "total_tokens": 10}}'
+        mock_response = _mock_response(body, content_type="application/json")
+
+        with patch("evaluatorq.integrations.vercel_ai_sdk_integration.target.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            result = await target.send_prompt_with_usage("hello")
+
+        assert result.text == "ok"
+        assert isinstance(result.usage, TokenUsage)
+        assert result.usage.prompt_tokens == 8
+        assert result.usage.completion_tokens == 2
+
+    @pytest.mark.asyncio
+    async def test_send_prompt_with_usage_usage_none_without_usage_frame(self) -> None:
+        """When stream has no finish frame with usage, SendResult.usage is None."""
+        target = VercelAISdkTarget("http://test/api/chat")
+        mock_response = _mock_response('0:"Plain response"\n')
+
+        with patch("evaluatorq.integrations.vercel_ai_sdk_integration.target.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            result = await target.send_prompt_with_usage("hi")
+
+        assert result.text == "Plain response"
+        assert result.usage is None
 
 
 class TestVercelAISdkTargetAgentContext:

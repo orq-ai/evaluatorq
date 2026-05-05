@@ -13,7 +13,6 @@ from evaluatorq.redteam.backends.openai import (
     OpenAIErrorMapper,
     OpenAITargetFactory,
 )
-from evaluatorq.redteam.contracts import PIPELINE_CONFIG
 from evaluatorq.redteam.exceptions import BackendError, CredentialError
 
 if TYPE_CHECKING:
@@ -130,7 +129,6 @@ def _create_orq_backend(
     pipeline_config: LLMConfig | None = None,
     **kwargs: object,
 ) -> BackendBundle:
-    cfg = pipeline_config or PIPELINE_CONFIG
     try:
         from evaluatorq.redteam.backends.orq import ORQErrorMapper, create_orq_backend
     except ImportError as exc:

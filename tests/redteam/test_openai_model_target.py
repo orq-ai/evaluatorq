@@ -34,13 +34,13 @@ def test_system_prompt_default():
     assert target.system_prompt == 'You are a helpful assistant.'
 
 
-def test_clone_preserves_fields():
+def test_new_preserves_fields():
     client = MagicMock()
     target = OpenAIModelTarget(model='gpt-4o', system_prompt='Be terse.', client=client)
-    clone = target.clone()
-    assert clone.model == 'gpt-4o'
-    assert clone.system_prompt == 'Be terse.'
-    assert clone.client is client
+    fresh = target.new()
+    assert fresh.model == 'gpt-4o'
+    assert fresh.system_prompt == 'Be terse.'
+    assert fresh.client is client
 
 
 def test_target_kind_is_openai():

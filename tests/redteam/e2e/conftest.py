@@ -20,6 +20,7 @@ from evaluatorq.redteam.contracts import (
     KnowledgeBaseInfo,
     MemoryStoreInfo,
     RedTeamReport,
+    SendResult,
     ToolInfo,
 )
 
@@ -142,6 +143,9 @@ class MockAgentTarget:
         if "rm -rf" in lower or "execute:" in lower:
             return "I can't execute system commands."
         return "I can help with safe alternatives."
+
+    async def send_prompt_with_usage(self, prompt: str) -> SendResult:
+        return SendResult(text=await self.send_prompt(prompt))
 
     def new(self) -> MockAgentTarget:
         return MockAgentTarget(self.agent_key)

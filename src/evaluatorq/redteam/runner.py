@@ -52,7 +52,6 @@ from evaluatorq.redteam.contracts import (
     SaveMode,
     TargetConfig,
     TargetKind,
-    TokenUsage,
     Vulnerability,
     normalize_category,
 )
@@ -716,20 +715,15 @@ def _create_static_job_for_agent_target(at: Any, label: str) -> Any:
     async def agent_target_job(data: DataPoint, _row: int) -> dict[str, Any]:
         prompt = _extract_static_prompt(data)
         target = at.new()
-        response = await target.send_prompt(prompt)
-
-        usage: TokenUsage | None = None
-        consume = getattr(target, 'consume_last_token_usage', None)
-        if callable(consume):
-            usage = cast('TokenUsage | None', consume())
+        result = await target.send_prompt_with_usage(prompt)
 
         _active_progress = _get_active_progress()
         if _active_progress is not None:
             await _active_progress.finish_attack(None)
 
         return {
-            'response': response,
-            'token_usage': usage,
+            'response': result.text,
+            'token_usage': result.usage,
         }
 
     return agent_target_job

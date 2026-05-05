@@ -7,7 +7,7 @@ from typing import Any
 from agents import Agent, Runner
 
 from evaluatorq.redteam.backends.base import AgentTarget
-from evaluatorq.redteam.contracts import AgentContext, ToolInfo
+from evaluatorq.redteam.contracts import AgentContext, SendResult, TokenUsage, ToolInfo
 
 
 class OpenAIAgentTarget(AgentTarget):
@@ -41,8 +41,8 @@ class OpenAIAgentTarget(AgentTarget):
         self._run_kwargs = run_kwargs or {}
         self._history: list[Any] = []
 
-    async def send_prompt(self, prompt: str) -> str:
-        """Send a prompt to the agent and return its text response."""
+    async def send_prompt_with_usage(self, prompt: str) -> SendResult:
+        """Send a prompt to the agent and return its text response with usage."""
         input_data: str | list[Any] = prompt
         if self._history:
             input_data = [*self._history, {"role": "user", "content": prompt}]
@@ -61,7 +61,43 @@ class OpenAIAgentTarget(AgentTarget):
             )
 
         self._history = result.to_input_list()
-        return str(result.final_output)
+
+        usage: TokenUsage | None = None
+        ctx = getattr(result, 'context_wrapper', None)
+        agent_usage = getattr(ctx, 'usage', None) if ctx is not None else None
+        if agent_usage is not None:
+            prompt_tokens = int(getattr(agent_usage, 'input_tokens', 0) or 0)
+            completion_tokens = int(getattr(agent_usage, 'output_tokens', 0) or 0)
+            total = getattr(agent_usage, 'total_tokens', None)
+            if total is not None and int(total) > 0:
+                total_tokens = int(total)
+            else:
+                total_tokens = prompt_tokens + completion_tokens
+            usage = TokenUsage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                calls=1,
+            )
+
+        return SendResult(text=str(result.final_output), usage=usage)
+
+    async def send_prompt(self, prompt: str) -> str:
+        """Back-compat wrapper, scheduled for removal in evaluatorq 2.0.
+
+        New code should call ``send_prompt_with_usage`` and read ``.text`` and
+        ``.usage`` directly. Emits a ``DeprecationWarning`` (deduplicated by the
+        default warnings filter) so out-of-tree callers get a visible signal
+        without noisy logs on every prompt.
+        """
+        import warnings
+        warnings.warn(
+            f"{type(self).__name__}.send_prompt is deprecated; use send_prompt_with_usage. "
+            "Will be removed in evaluatorq 2.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return (await self.send_prompt_with_usage(prompt)).text
 
     async def get_agent_context(self) -> AgentContext:
         """Return agent context derived from the wrapped Agent instance.

@@ -10,7 +10,7 @@ import contextvars
 import logging
 import time
 from inspect import signature
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from openai import AsyncOpenAI
@@ -30,7 +30,7 @@ from evaluatorq.redteam.contracts import (
     OrchestratorResult,
     TokenUsage,
 )
-from evaluatorq.redteam.tracing import record_llm_response, set_span_attrs, with_llm_span, with_redteam_span
+from evaluatorq.redteam.tracing import record_llm_response, set_span_attrs, truncate_for_span, with_llm_span, with_redteam_span
 from evaluatorq.redteam.utils import safe_substitute
 
 if TYPE_CHECKING:
@@ -622,28 +622,28 @@ class MultiTurnOrchestrator:
                             {
                                 "orq.redteam.turn": turn + 1,
                                 "orq.redteam.strategy_name": strategy.name,
-                                "input": attack_prompt,
-                                "orq.redteam.input": attack_prompt,
+                                "input": truncate_for_span(attack_prompt),
+                                "orq.redteam.input": truncate_for_span(attack_prompt),
                             },
                         ) as tgt_span:
-                            agent_response = await asyncio.wait_for(
-                                target.send_prompt(attack_prompt),
+                            _tgt_result = await asyncio.wait_for(
+                                target.send_prompt_with_usage(attack_prompt),
                                 timeout=target_timeout_s,
                             )
+                            agent_response = _tgt_result.text
                             final_response = agent_response
                             consecutive_agent_errors = 0
+                            _resp_text = truncate_for_span(agent_response or "")
                             set_span_attrs(tgt_span, {
-                                "output": agent_response or "",
-                                "orq.redteam.output": agent_response or "",
+                                "output": _resp_text,
+                                "orq.redteam.output": _resp_text,
                             })
-                            consume_usage = getattr(target, 'consume_last_token_usage', None)
-                            if callable(consume_usage):
-                                target_usage: TokenUsage | None = cast('TokenUsage | None', consume_usage())
-                                if target_usage is not None:
-                                    target_prompt_tokens += int(target_usage.prompt_tokens or 0)
-                                    target_completion_tokens += int(target_usage.completion_tokens or 0)
-                                    target_total_tokens += int(target_usage.total_tokens or 0)
-                                    target_calls += int(target_usage.calls or 0) or 1
+                            target_usage: TokenUsage | None = _tgt_result.usage
+                            if target_usage is not None:
+                                target_prompt_tokens += int(target_usage.prompt_tokens or 0)
+                                target_completion_tokens += int(target_usage.completion_tokens or 0)
+                                target_total_tokens += int(target_usage.total_tokens or 0)
+                                target_calls += int(target_usage.calls or 0) or 1
                     except asyncio.TimeoutError:
                         consecutive_agent_errors += 1
                         agent_response = f'[ERROR: Target agent timed out after {target_timeout_s:.0f}s]'
@@ -727,8 +727,8 @@ class MultiTurnOrchestrator:
                         await progress.update_attack(task_id, completed=turn + 1)
 
                     set_span_attrs(turn_span, {
-                        "input": attack_prompt,
-                        "output": agent_response or "",
+                        "input": truncate_for_span(attack_prompt),
+                        "output": truncate_for_span(agent_response or ""),
                         "orq.redteam.adversarial_tokens": int(usage.total_tokens or 0) if usage is not None else 0,
                         "orq.redteam.finish_reason": "ok",
                     })
