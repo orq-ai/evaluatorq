@@ -6,7 +6,7 @@ import asyncio
 import inspect
 import logging
 import os
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 
 from openai import AsyncOpenAI
 
@@ -32,6 +32,8 @@ from evaluatorq.simulation.utils.prompt_builders import build_datapoint_system_p
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+
+    from evaluatorq.simulation.agents.base import BaseAgent
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +156,8 @@ class SimulationRunner:
         | None = None,
         model: str = DEFAULT_MODEL,
         max_turns: int = 10,
+        user_simulator: BaseAgent | None = None,
+        judge: BaseAgent | None = None,
     ) -> None:
         if not target_agent and not target_callback:
             raise ValueError("Must provide either target_agent or target_callback")
@@ -167,6 +171,9 @@ class SimulationRunner:
         self._model = model
         self._max_turns = max_turns
         self._shared_client: AsyncOpenAI | None = None
+        # Injected agents (may be None; resolved lazily in run() when None)
+        self._injected_user_simulator: BaseAgent | None = user_simulator
+        self._injected_judge: BaseAgent | None = judge
 
     def _get_shared_client(self) -> AsyncOpenAI:
         if not self._shared_client:
@@ -212,25 +219,31 @@ class SimulationRunner:
             )  # type: ignore[arg-type]
             client = self._get_shared_client()
 
-            user_simulator = UserSimulatorAgent(
-                UserSimulatorAgentConfig(
-                    model=self._model,
-                    client=client,
-                    system_prompt=system_prompt,
+            if self._injected_user_simulator is not None:
+                user_simulator = cast("UserSimulatorAgent", self._injected_user_simulator)
+            else:
+                user_simulator = UserSimulatorAgent(
+                    UserSimulatorAgentConfig(
+                        model=self._model,
+                        client=client,
+                        system_prompt=system_prompt,
+                    )
                 )
-            )
 
-            judge = JudgeAgent(
-                JudgeAgentConfig(
-                    model=self._model,
-                    client=client,
-                    goal=scenario.goal if scenario else "",
-                    criteria=list(scenario.criteria)
-                    if scenario and scenario.criteria
-                    else [],
-                    ground_truth=scenario.ground_truth or "" if scenario else "",
+            if self._injected_judge is not None:
+                judge = cast("JudgeAgent", self._injected_judge)
+            else:
+                judge = JudgeAgent(
+                    JudgeAgentConfig(
+                        model=self._model,
+                        client=client,
+                        goal=scenario.goal if scenario else "",
+                        criteria=list(scenario.criteria)
+                        if scenario and scenario.criteria
+                        else [],
+                        ground_truth=scenario.ground_truth or "" if scenario else "",
+                    )
                 )
-            )
 
             def _get_total_usage() -> TokenUsage:
                 usage = user_simulator.get_usage()

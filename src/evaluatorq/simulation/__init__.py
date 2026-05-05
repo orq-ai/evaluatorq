@@ -21,6 +21,7 @@ from evaluatorq.simulation.types import DEFAULT_MODEL
 logger = logging.getLogger(__name__)  # noqa: RUF067
 
 if TYPE_CHECKING:
+    from evaluatorq.contracts import LLMCallConfig
     from evaluatorq.simulation.adapters import (
         from_chat_completions,
         from_orq_deployment,
@@ -48,6 +49,7 @@ if TYPE_CHECKING:
         apply_random_perturbation,
     )
     from evaluatorq.simulation.runner.simulation import SimulationRunner, TargetAgent
+    from evaluatorq.simulation.target import OrqResponsesTarget
     from evaluatorq.simulation.types import (
         ChatMessage,
         CommunicationStyle,
@@ -84,10 +86,12 @@ if TYPE_CHECKING:
 
 
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
+    "LLMCallConfig": ("evaluatorq.contracts", "LLMCallConfig"),
     "from_chat_completions": ("evaluatorq.simulation.adapters", "from_chat_completions"),
     "from_orq_deployment": ("evaluatorq.simulation.adapters", "from_orq_deployment"),
     "AgentConfig": ("evaluatorq.simulation.agents.base", "AgentConfig"),
     "BaseAgent": ("evaluatorq.simulation.agents.base", "BaseAgent"),
+    "OrqResponsesTarget": ("evaluatorq.simulation.target", "OrqResponsesTarget"),
     "JudgeAgent": ("evaluatorq.simulation.agents.judge", "JudgeAgent"),
     "UserSimulatorAgent": (
         "evaluatorq.simulation.agents.user_simulator",
@@ -224,7 +228,11 @@ __all__ = [
     "InputFormat",
     "JudgeAgent",
     "Judgment",
+    # Config (re-exported for user convenience)
+    "LLMCallConfig",
     "Message",
+    # Target implementations
+    "OrqResponsesTarget",
     "Persona",
     "PersonaGenerator",
     # Quality

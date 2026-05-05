@@ -11,6 +11,7 @@ from evaluatorq.simulation.types import DEFAULT_MODEL
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from evaluatorq.simulation.agents.base import BaseAgent
     from evaluatorq.simulation.generators import FirstMessageGenerator
     from evaluatorq.simulation.types import (
         ChatMessage,
@@ -26,6 +27,7 @@ async def simulate(
     evaluation_name: str = "",
     agent_key: str | None = None,
     target_callback: Callable[[list[ChatMessage]], str | Awaitable[str]] | None = None,
+    target: Callable[[list[ChatMessage]], str | Awaitable[str]] | None = None,
     personas: list[Persona] | None = None,
     scenarios: list[Scenario] | None = None,
     datapoints: list[Datapoint] | None = None,
@@ -33,6 +35,8 @@ async def simulate(
     model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
     parallelism: int = 5,
+    user_simulator: BaseAgent | None = None,
+    judge: BaseAgent | None = None,
 ) -> list[SimulationResult]:
     """High-level function to run agent simulations.
 
@@ -41,6 +45,17 @@ async def simulate(
     - Generating first messages for each combination
     - Running simulations in parallel
     - Applying evaluators to results
+
+    Args:
+        target_callback: Callable that receives the conversation history and
+            returns the agent's response.  Kept for backwards compatibility.
+        target: Alias for ``target_callback``.  Takes precedence when both
+            are supplied.
+        user_simulator: Pre-constructed ``BaseAgent`` to drive the user side
+            of the conversation.  When omitted a default ``UserSimulatorAgent``
+            is built from ``model``.
+        judge: Pre-constructed ``BaseAgent`` used to evaluate each turn.
+            When omitted a default ``JudgeAgent`` is built from ``model``.
     """
     from openai import AsyncOpenAI
 
@@ -100,19 +115,22 @@ async def simulate(
             "No datapoints to simulate — persona or scenario generation may have failed"
         )
 
-    # Bridge agentKey to invoke() if no callback is provided
-    resolved_callback = target_callback
+    # Bridge agentKey to invoke() if no callback is provided.
+    # ``target`` takes precedence over ``target_callback`` when both are given.
+    resolved_callback = target or target_callback
     if not resolved_callback and agent_key:
         resolved_callback = from_orq_deployment(agent_key)
 
     if not resolved_callback:
-        raise ValueError("Either target_callback or agent_key is required")
+        raise ValueError("Either target_callback (or target) or agent_key is required")
 
     # Create simulation runner
     runner = SimulationRunner(
         target_callback=resolved_callback,
         model=model,
         max_turns=max_turns,
+        user_simulator=user_simulator,
+        judge=judge,
     )
 
     try:
