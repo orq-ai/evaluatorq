@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-import os
-from typing import Any
+import logging
+from typing import TYPE_CHECKING, Any
 
-from openai import AsyncOpenAI
-
-from evaluatorq.contracts import AgentResponse, LLMCallConfig, OutputMessage, TextOutputItem, ToolCallOutputItem
+from evaluatorq.contracts import AgentResponse, LLMCallConfig
+from evaluatorq.simulation._client import build_simulation_client, extract_responses_output
 from evaluatorq.simulation.types import ChatMessage, TokenUsage
+from evaluatorq.simulation.utils.retry import with_retry
+
+if TYPE_CHECKING:
+    from openai import AsyncOpenAI
+
+logger = logging.getLogger(__name__)
 
 
 class OrqResponsesTarget:
@@ -83,117 +88,86 @@ class OrqResponsesTarget:
     # ---------------------------------------------------------------------------
 
     async def _invoke(self, *, input_: str | list[dict[str, Any]]) -> AgentResponse:
-        """Core invocation: calls client.responses.create, threads previous_response_id."""
-        timeout_s = self.config.timeout_ms / 1000.0
+        """Core invocation: calls client.responses.create, threads previous_response_id.
 
-        kwargs: dict[str, Any] = {
-            "model": self.config.model,
-            "input": input_,
-            "tools": self.tools or [],
-        }
-        if self.instructions is not None:
-            kwargs["instructions"] = self.instructions
-        if self._previous_response_id is not None:
-            kwargs["previous_response_id"] = self._previous_response_id
+        Applies retry logic (rate-limit / server errors) via :func:`with_retry`
+        and converts :class:`asyncio.TimeoutError` into a descriptive
+        :class:`RuntimeError` so callers get a useful message.
+        """
+        timeout_s = self.config.timeout_ms / 1000.0 if self.config.timeout_ms else None
 
-        response = await asyncio.wait_for(
-            self._client.responses.create(**kwargs),
-            timeout=timeout_s,
-        )
+        async def _do_call() -> AgentResponse:
+            kwargs: dict[str, Any] = {
+                "model": self.config.model,
+                "input": input_,
+            }
+            if self.tools:
+                kwargs["tools"] = self.tools
+            if self.instructions is not None:
+                kwargs["instructions"] = self.instructions
+            if self._previous_response_id is not None:
+                kwargs["previous_response_id"] = self._previous_response_id
 
-        # Thread the conversation via previous_response_id
-        response_id = getattr(response, "id", None)
-        if isinstance(response_id, str) and response_id:
-            self._previous_response_id = response_id
+            coro = self._client.responses.create(**kwargs)
+            response = await (
+                asyncio.wait_for(coro, timeout=timeout_s) if timeout_s else coro
+            )
 
-        # Accumulate token usage
-        usage_obj = getattr(response, "usage", None)
-        input_toks = int(getattr(usage_obj, "input_tokens", 0) or 0)
-        output_toks = int(getattr(usage_obj, "output_tokens", 0) or 0)
-        self._accumulated_usage = TokenUsage(
-            prompt_tokens=self._accumulated_usage.prompt_tokens + input_toks,
-            completion_tokens=self._accumulated_usage.completion_tokens + output_toks,
-            total_tokens=self._accumulated_usage.total_tokens + input_toks + output_toks,
-        )
+            # Thread the conversation via previous_response_id
+            response_id = getattr(response, "id", None)
+            if isinstance(response_id, str) and response_id:
+                self._previous_response_id = response_id
+            else:
+                logger.warning(
+                    "OrqResponsesTarget._invoke: response missing 'id'; "
+                    "conversation threading disabled (model=%s)",
+                    self.config.model,
+                )
 
-        # Extract output items
-        output_items = self._extract_output(response)
+            # Extract output items and usage via shared helper
+            output_items, usage = extract_responses_output(response)
 
-        return AgentResponse(output=output_items)
+            if not output_items:
+                logger.warning(
+                    "OrqResponsesTarget._invoke: response contained no extractable "
+                    "output items (model=%s)",
+                    self.config.model,
+                )
+
+            # Accumulate token usage
+            self._accumulated_usage = TokenUsage(
+                prompt_tokens=self._accumulated_usage.prompt_tokens + usage.prompt_tokens,
+                completion_tokens=self._accumulated_usage.completion_tokens + usage.completion_tokens,
+                total_tokens=self._accumulated_usage.total_tokens + usage.total_tokens,
+            )
+
+            return AgentResponse(output=output_items)
+
+        try:
+            return await with_retry(_do_call, label="OrqResponsesTarget._invoke")
+        except asyncio.TimeoutError:
+            raise RuntimeError(
+                f"OrqResponsesTarget._invoke timed out after {timeout_s}s "
+                f"(model={self.config.model})"
+            ) from None
 
     # ---------------------------------------------------------------------------
     # Private helpers
     # ---------------------------------------------------------------------------
 
-    def _extract_output(self, response: Any) -> list[OutputMessage]:
-        """Extract ordered output items from a Responses API response object."""
-        items: list[OutputMessage] = []
-        raw_output = getattr(response, "output", None) or []
-
-        for item in raw_output:
-            item_type = getattr(item, "type", None)
-
-            # Text message output items: type == "message", carry a content list
-            if item_type == "message":
-                content = getattr(item, "content", None) or []
-                for part in content:
-                    part_type = getattr(part, "type", None)
-                    if part_type == "output_text":
-                        text = getattr(part, "text", None)
-                        if isinstance(text, str):
-                            items.append(TextOutputItem(text=text, annotations=[]))
-                    elif hasattr(part, "text"):
-                        # Fallback: any part with a text attribute
-                        text = getattr(part, "text", None)
-                        if isinstance(text, str):
-                            items.append(TextOutputItem(text=text, annotations=[]))
-
-            # Function call output items: type == "function_call"
-            elif item_type == "function_call":
-                name = getattr(item, "name", None) or ""
-                arguments = getattr(item, "arguments", None) or "{}"
-                call_id = getattr(item, "call_id", None) or getattr(item, "id", None) or ""
-                result = getattr(item, "result", None)
-                items.append(
-                    ToolCallOutputItem(
-                        name=str(name),
-                        arguments=arguments if isinstance(arguments, str) else "{}",
-                        call_id=str(call_id),
-                        result=str(result) if result is not None else None,
-                    )
-                )
-
-        return items
-
     def _build_client(self) -> AsyncOpenAI:
         """Construct an AsyncOpenAI client from config or environment variables.
+
+        Delegates to :func:`evaluatorq.simulation._client.build_simulation_client`.
 
         Resolution order:
         1. ``self.config.client`` — injected client, used as-is (not owned).
         2. ``ORQ_API_KEY`` env var — routes through the Orq router.
         3. ``OPENAI_API_KEY`` env var — uses the OpenAI SDK default base URL.
         """
-        if self.config.client is not None:
-            self._client_owned = False
-            return self.config.client  # type: ignore[return-value]
-
-        orq_api_key = os.environ.get("ORQ_API_KEY")
-        resolved_api_key = orq_api_key or os.environ.get("OPENAI_API_KEY")
-
-        if not resolved_api_key:
-            raise ValueError(
-                "No API key found. Set ORQ_API_KEY or OPENAI_API_KEY, "
-                "or pass a pre-built client in LLMCallConfig."
-            )
-
-        base_url: str | None = (
-            f"{os.environ.get('ORQ_BASE_URL', 'https://api.orq.ai')}/v2/router"
-            if orq_api_key
-            else None
-        )
-
-        self._client_owned = True
-        return AsyncOpenAI(base_url=base_url, api_key=resolved_api_key)
+        client, owned = build_simulation_client(self.config.client)
+        self._client_owned = owned
+        return client
 
     @staticmethod
     def _messages_to_input(messages: list[ChatMessage]) -> list[dict[str, Any]]:

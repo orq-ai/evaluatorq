@@ -8,16 +8,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any
-
-from openai import AsyncOpenAI
+from typing import TYPE_CHECKING, Any
 
 from evaluatorq.contracts import LLMCallConfig
+from evaluatorq.simulation._client import build_simulation_client, extract_responses_output
 from evaluatorq.simulation.types import DEFAULT_MODEL, ChatMessage, TokenUsage
 from evaluatorq.simulation.utils.retry import with_retry
+
+if TYPE_CHECKING:
+    from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -142,39 +143,23 @@ class BaseAgent(ABC):
     def _build_client(self, api_key: str | None = None) -> AsyncOpenAI:
         """Construct (or reuse) an ``AsyncOpenAI`` client from ``self.config``.
 
+        Delegates to :func:`evaluatorq.simulation._client.build_simulation_client`.
+
         Resolution order:
         1. ``self.config.client`` — injected client, used as-is (not owned).
         2. ``api_key`` argument (extracted from legacy ``AgentConfig.api_key``),
            treated as an ORQ key and routed through the Orq router.
-        3. ``OPENAI_API_KEY`` env var — uses the OpenAI SDK default base URL so
-           traffic goes to OpenAI directly, not to the Orq router.
-        4. ``ORQ_API_KEY`` env var — routes through
+        3. ``ORQ_API_KEY`` env var — routes through
            ``ORQ_BASE_URL/v2/router`` (default: ``https://api.orq.ai/v2/router``).
+        4. ``OPENAI_API_KEY`` env var — uses the OpenAI SDK default base URL so
+           traffic goes to OpenAI directly, not to the Orq router.
         """
-        if self.config.client is not None:
-            self._client_owned = False
-            return self.config.client  # type: ignore[return-value]
-
-        # ``api_key`` argument (from legacy AgentConfig) is treated as an ORQ key.
-        orq_api_key = api_key or os.environ.get("ORQ_API_KEY")
-        resolved_api_key = orq_api_key or os.environ.get("OPENAI_API_KEY")
-
-        if not resolved_api_key:
-            raise ValueError(
-                "No API key found. Set ORQ_API_KEY or OPENAI_API_KEY, "
-                "or pass api_key in AgentConfig / a pre-built client in LLMCallConfig."
-            )
-
-        # Only route through the Orq router when an ORQ key is active; otherwise
-        # let the OpenAI SDK use its own default base URL (api.openai.com).
-        base_url: str | None = (
-            f"{os.environ.get('ORQ_BASE_URL', 'https://api.orq.ai')}/v2/router"
-            if orq_api_key
-            else None
+        client, owned = build_simulation_client(
+            self.config.client,
+            extra_api_key=api_key,
         )
-
-        self._client_owned = True
-        return AsyncOpenAI(base_url=base_url, api_key=resolved_api_key)
+        self._client_owned = owned
+        return client
 
     async def _call_llm(
         self,
@@ -254,11 +239,14 @@ class BaseAgent(ABC):
                 self._usage.completion_tokens += response.usage.completion_tokens
                 self._usage.total_tokens += response.usage.total_tokens
 
-            result = LLMResult(content=message.content or "")
-            if message.tool_calls:
-                result.tool_calls = list(message.tool_calls)
-
-            return result
+            content = message.content
+            tool_calls = list(message.tool_calls or [])
+            if not content and not tool_calls:
+                raise RuntimeError(
+                    f"{self.name}._call_chat_completions: LLM returned no text and no tool calls. "
+                    "Check model and prompt."
+                )
+            return LLMResult(content=content or "", tool_calls=tool_calls or None)
 
         return await with_retry(_do_call, label=f"{self.name}._call_chat_completions")
 
@@ -303,34 +291,29 @@ class BaseAgent(ABC):
                 timeout=timeout_s,
             )
 
-            # Extract text from output items
-            text = ""
-            tool_calls: list[Any] = []
-            for item in response.output or []:
-                # Text message output items carry a ``content`` list
-                if hasattr(item, "content"):
-                    for part in item.content or []:
-                        if hasattr(part, "text"):
-                            text += part.text
-                # Tool-call output items expose ``name`` / ``arguments``
-                if hasattr(item, "name") and hasattr(item, "arguments"):
-                    tool_calls.append(item)
+            output_items, usage = extract_responses_output(response)
 
-            # Accumulate token usage if the SDK exposes it.
-            # The Responses API reports input_tokens / output_tokens rather than
-            # prompt_tokens / completion_tokens / total_tokens, so we derive
-            # total_tokens ourselves to avoid it always being 0.
-            usage = getattr(response, "usage", None)
-            if usage is not None:
-                input_toks = getattr(usage, "input_tokens", 0)
-                output_toks = getattr(usage, "output_tokens", 0)
-                self._usage.prompt_tokens += input_toks
-                self._usage.completion_tokens += output_toks
-                self._usage.total_tokens += input_toks + output_toks
+            # Accumulate token usage
+            self._usage.prompt_tokens += usage.prompt_tokens
+            self._usage.completion_tokens += usage.completion_tokens
+            self._usage.total_tokens += usage.total_tokens
 
+            # Separate text from tool-call items
+            text_items = [i for i in output_items if hasattr(i, "text")]
+            tool_call_items = [i for i in output_items if hasattr(i, "call_id")]
+
+            if not text_items and not tool_call_items:
+                # No text, no tool calls — warn but don't raise (redteam callers may handle empty)
+                logger.warning(
+                    "%s._call_responses: no text or tool calls in response (model=%s)",
+                    self.name,
+                    self.config.model,
+                )
+
+            text = "".join(getattr(i, "text", "") for i in text_items)
             result = LLMResult(content=text)
-            if tool_calls:
-                result.tool_calls = tool_calls
+            if tool_call_items:
+                result.tool_calls = tool_call_items
             return result
 
         return await with_retry(_do_call, label=f"{self.name}._call_responses")
