@@ -38,8 +38,12 @@ class OrqResponsesTarget:
         self.tools = tools
         self.memory_entity_id = memory_entity_id
         self._previous_response_id: str | None = None
-        self._client_owned: bool
-        self._client: AsyncOpenAI = client if client is not None else self._build_client()
+        self._accumulated_usage = TokenUsage()
+        if client is not None:
+            self._client = client
+            self._client_owned = False
+        else:
+            self._client = self._build_client()
 
     # ---------------------------------------------------------------------------
     # Public API — sim callable shape
@@ -59,12 +63,19 @@ class OrqResponsesTarget:
         return await self._invoke(input_=prompt)
 
     def new(self) -> OrqResponsesTarget:
-        """Return a fresh instance with identical config but cleared state."""
+        """Return a fresh instance with identical config but cleared state.
+
+        Externally-injected clients (client_owned=False) are propagated to the
+        new instance so callers sharing a single HTTP connection continue to do
+        so. Self-owned clients are not propagated — the new instance builds its
+        own from env vars, keeping connection lifetimes independent.
+        """
         return OrqResponsesTarget(
             self.config,
             instructions=self.instructions,
             tools=self.tools,
             memory_entity_id=self.memory_entity_id,
+            client=self._client if not self._client_owned else None,
         )
 
     # ---------------------------------------------------------------------------
@@ -94,6 +105,16 @@ class OrqResponsesTarget:
         response_id = getattr(response, "id", None)
         if isinstance(response_id, str) and response_id:
             self._previous_response_id = response_id
+
+        # Accumulate token usage
+        usage_obj = getattr(response, "usage", None)
+        input_toks = int(getattr(usage_obj, "input_tokens", 0) or 0)
+        output_toks = int(getattr(usage_obj, "output_tokens", 0) or 0)
+        self._accumulated_usage = TokenUsage(
+            prompt_tokens=self._accumulated_usage.prompt_tokens + input_toks,
+            completion_tokens=self._accumulated_usage.completion_tokens + output_toks,
+            total_tokens=self._accumulated_usage.total_tokens + input_toks + output_toks,
+        )
 
         # Extract output items
         output_items = self._extract_output(response)
@@ -179,8 +200,8 @@ class OrqResponsesTarget:
         return [{"role": m.role, "content": m.content} for m in messages]
 
     def get_usage(self) -> TokenUsage:
-        """Return a zero-usage placeholder (usage not tracked per-instance here)."""
-        return TokenUsage()
+        """Return cumulative token usage across all _invoke calls on this instance."""
+        return self._accumulated_usage.model_copy()
 
 
 __all__ = ["OrqResponsesTarget"]
