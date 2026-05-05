@@ -9,11 +9,14 @@ from __future__ import annotations
 import json
 import logging
 import math
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.simulation.agents.base import AgentConfig, BaseAgent, LLMResult
 from evaluatorq.simulation.types import ChatMessage, Criterion, Judgment
+
+if TYPE_CHECKING:
+    from evaluatorq.contracts import LLMCallConfig
 
 logger = logging.getLogger(__name__)
 
@@ -190,7 +193,10 @@ class JudgeAgent(BaseAgent):
     should continue or end.
     """
 
-    def __init__(self, config: JudgeAgentConfig | AgentConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: JudgeAgentConfig | AgentConfig | LLMCallConfig | None = None,
+    ) -> None:
         super().__init__(config)
         if isinstance(config, JudgeAgentConfig):
             self._goal = config.goal
