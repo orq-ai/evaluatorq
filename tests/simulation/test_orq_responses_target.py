@@ -119,8 +119,8 @@ class TestOrqResponsesTargetCall:
         ]
 
     @pytest.mark.asyncio
-    async def test_call_returns_empty_string_on_no_output_items(self):
-        """__call__ returns empty string when response has no output items."""
+    async def test_call_raises_error_on_no_output_items(self):
+        """__call__ raises RuntimeError when response has no output items."""
         client = _make_client()
         empty_response = MagicMock()
         empty_response.id = "resp-empty"
@@ -129,8 +129,8 @@ class TestOrqResponsesTargetCall:
         client.responses.create = AsyncMock(return_value=empty_response)
         target = _make_target(client=client)
 
-        result = await target(_make_messages())
-        assert result == ""
+        with pytest.raises(RuntimeError, match="response contained no extractable output items"):
+            await target(_make_messages())
 
 
 class TestOrqResponsesTargetSendPrompt:

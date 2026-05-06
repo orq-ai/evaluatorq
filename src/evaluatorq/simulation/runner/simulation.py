@@ -170,24 +170,35 @@ class SimulationRunner:
         if not model.strip():
             raise ValueError("model must be a non-empty string")
 
+        # Validate injected agents early to fail fast
+        if user_simulator is not None:
+            if not hasattr(user_simulator, "generate_first_message") or \
+               not hasattr(user_simulator, "respond_async"):
+                raise TypeError(
+                    "user_simulator must implement generate_first_message() and respond_async(). "
+                    "Use UserSimulatorAgent or a subclass."
+                )
+        if judge is not None:
+            if not hasattr(judge, "evaluate"):
+                raise TypeError(
+                    "judge must implement evaluate(). "
+                    "Use JudgeAgent or a subclass."
+                )
+
         self._target_agent = target_agent
         self._target_callback = target_callback
         self._model = model
         self._max_turns = max_turns
         self._shared_client: AsyncOpenAI | None = None
+        self._client_owned: bool = False
         # Injected agents (may be None; resolved lazily in run() when None)
         self._injected_user_simulator: BaseAgent | None = user_simulator
         self._injected_judge: BaseAgent | None = judge
 
     def _get_shared_client(self) -> AsyncOpenAI:
         if not self._shared_client:
-            api_key = os.environ.get("ORQ_API_KEY")
-            if not api_key:
-                raise ValueError("ORQ_API_KEY environment variable is not set.")
-            self._shared_client = AsyncOpenAI(
-                api_key=api_key,
-                base_url=f"{os.environ.get('ORQ_BASE_URL', 'https://api.orq.ai')}/v2/router",
-            )
+            from evaluatorq.simulation._client import build_simulation_client
+            self._shared_client, self._client_owned = build_simulation_client()
         return self._shared_client
 
     async def run(
@@ -224,12 +235,6 @@ class SimulationRunner:
             client = self._get_shared_client()
 
             if self._injected_user_simulator is not None:
-                if not hasattr(self._injected_user_simulator, "generate_first_message") or \
-                   not hasattr(self._injected_user_simulator, "respond_async"):
-                    raise TypeError(
-                        "user_simulator must implement generate_first_message() and respond_async(). "
-                        "Use UserSimulatorAgent or a subclass."
-                    )
                 user_simulator: UserSimulatorAgent = self._injected_user_simulator  # pyright: ignore[reportAssignmentType]
                 # Propagate per-simulation persona/scenario context to the injected
                 # agent so it stays grounded in the current datapoint's goal and
@@ -260,11 +265,6 @@ class SimulationRunner:
                 )
 
             if self._injected_judge is not None:
-                if not hasattr(self._injected_judge, "evaluate"):
-                    raise TypeError(
-                        "judge must implement evaluate(). "
-                        "Use JudgeAgent or a subclass."
-                    )
                 judge: JudgeAgent = self._injected_judge  # pyright: ignore[reportAssignmentType]
             else:
                 judge = JudgeAgent(
@@ -436,7 +436,7 @@ class SimulationRunner:
 
     async def close(self) -> None:
         """Close and cleanup shared HTTP client."""
-        if self._shared_client is not None:
+        if self._shared_client is not None and self._client_owned:
             await self._shared_client.close()
             self._shared_client = None
 

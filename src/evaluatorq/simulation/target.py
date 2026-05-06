@@ -56,6 +56,9 @@ class OrqResponsesTarget:
 
     async def __call__(self, messages: list[ChatMessage]) -> str:
         """Sim target_callback shape. Sends full message list each turn."""
+        # Reset previous_response_id since simulation always passes full history
+        # Avoids duplication between full message list and response threading
+        self._previous_response_id = None
         result = await self._invoke(input_=self._messages_to_input(messages))
         return result.text
 
@@ -74,12 +77,21 @@ class OrqResponsesTarget:
         new instance so callers sharing a single HTTP connection continue to do
         so. Self-owned clients are not propagated — the new instance builds its
         own from env vars, keeping connection lifetimes independent.
+
+        Per AgentTarget protocol, each new() call must produce an independent
+        memory scope, so we mint a fresh memory_entity_id if one was set.
         """
+        import uuid
+
+        fresh_memory_id = (
+            str(uuid.uuid4()) if self.memory_entity_id is not None else None
+        )
+
         return OrqResponsesTarget(
             self.config,
             instructions=self.instructions,
             tools=self.tools,
-            memory_entity_id=self.memory_entity_id,
+            memory_entity_id=fresh_memory_id,
             client=self._client if not self._client_owned else None,
         )
 
@@ -128,10 +140,10 @@ class OrqResponsesTarget:
             output_items, usage = extract_responses_output(response)
 
             if not output_items:
-                logger.warning(
-                    "OrqResponsesTarget._invoke: response contained no extractable "
-                    "output items (model=%s)",
-                    self.config.model,
+                raise RuntimeError(
+                    f"OrqResponsesTarget._invoke: response contained no extractable "
+                    f"output items (model={self.config.model}). This likely indicates "
+                    f"an API error or unexpected response format."
                 )
 
             # Accumulate token usage
