@@ -6,7 +6,7 @@ import asyncio
 import inspect
 import logging
 import os
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from openai import AsyncOpenAI
 
@@ -14,6 +14,13 @@ from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
 from evaluatorq.simulation.agents.user_simulator import (
     UserSimulatorAgent,
     UserSimulatorAgentConfig,
+)
+from evaluatorq.simulation.tracing import (
+    record_llm_input,
+    record_llm_output,
+    record_token_usage,
+    set_span_attrs,
+    with_simulation_span,
 )
 from evaluatorq.simulation.types import (
     DEFAULT_MODEL,
@@ -226,163 +233,31 @@ class SimulationRunner:
         effective_max_turns = max_turns or self._max_turns
         messages: list[Message] = []
         turn_metrics_list: list[TurnMetrics] = []
-        get_total_usage: Callable[[], TokenUsage] | None = None
 
         try:
-            system_prompt = build_datapoint_system_prompt(
-                persona, scenario
-            )  # type: ignore[arg-type]
-            client = self._get_shared_client()
-
-            if self._injected_user_simulator is not None:
-                user_simulator: UserSimulatorAgent = self._injected_user_simulator  # pyright: ignore[reportAssignmentType]
-                # Propagate per-simulation persona/scenario context to the injected
-                # agent so it stays grounded in the current datapoint's goal and
-                # persona traits (mirrors what the default agent receives via its
-                # system_prompt constructor arg).
-                if hasattr(user_simulator, "update_context"):
-                    try:
-                        user_simulator.update_context(
-                            persona_context=build_persona_system_prompt(persona)  # type: ignore[arg-type]
-                            if persona
-                            else None,
-                            scenario_context=build_scenario_user_context(scenario)  # type: ignore[arg-type]
-                            if scenario
-                            else None,
-                        )
-                    except Exception as ctx_err:
-                        raise RuntimeError(
-                            "Injected user_simulator.update_context() failed. "
-                            "Ensure it accepts persona_context and scenario_context kwargs."
-                        ) from ctx_err
-            else:
-                user_simulator = UserSimulatorAgent(
-                    UserSimulatorAgentConfig(
-                        model=self._model,
-                        client=client,
-                        system_prompt=system_prompt,
-                    )
+            async with with_simulation_span(
+                "orq.simulation.run",
+                {
+                    "orq.simulation.persona": persona.name if persona else None,
+                    "orq.simulation.scenario": scenario.name if scenario else None,
+                    "orq.simulation.max_turns": effective_max_turns,
+                    "orq.simulation.model": self._model,
+                },
+            ) as run_span:
+                return await self._run_inner(
+                    persona=persona,
+                    scenario=scenario,
+                    first_message=first_message,
+                    effective_max_turns=effective_max_turns,
+                    messages=messages,
+                    turn_metrics_list=turn_metrics_list,
+                    run_span=run_span,
                 )
-
-            if self._injected_judge is not None:
-                judge: JudgeAgent = self._injected_judge  # pyright: ignore[reportAssignmentType]
-            else:
-                judge = JudgeAgent(
-                    JudgeAgentConfig(
-                        model=self._model,
-                        client=client,
-                        goal=scenario.goal if scenario else "",
-                        criteria=list(scenario.criteria)
-                        if scenario and scenario.criteria
-                        else [],
-                        ground_truth=scenario.ground_truth or "" if scenario else "",
-                    )
-                )
-
-            def _get_total_usage() -> TokenUsage:
-                usage = user_simulator.get_usage()
-                judge_usage = judge.get_usage()
-                return TokenUsage(
-                    prompt_tokens=usage.prompt_tokens + judge_usage.prompt_tokens,
-                    completion_tokens=usage.completion_tokens
-                    + judge_usage.completion_tokens,
-                    total_tokens=usage.total_tokens + judge_usage.total_tokens,
-                )
-
-            get_total_usage = _get_total_usage
-
-            def _build_turn_metrics(
-                turn_num: int, judgment: Judgment, usage_before: TokenUsage
-            ) -> TurnMetrics:
-                usage_after = _get_total_usage()
-                return TurnMetrics(
-                    turn_number=turn_num,
-                    token_usage=TokenUsage(
-                        prompt_tokens=usage_after.prompt_tokens
-                        - usage_before.prompt_tokens,
-                        completion_tokens=usage_after.completion_tokens
-                        - usage_before.completion_tokens,
-                        total_tokens=usage_after.total_tokens
-                        - usage_before.total_tokens,
-                    ),
-                    response_quality=judgment.response_quality,
-                    hallucination_risk=judgment.hallucination_risk,
-                    tone_appropriateness=judgment.tone_appropriateness,
-                    factual_accuracy=judgment.factual_accuracy,
-                    judge_reason=judgment.reason,
-                )
-
-            # Generate or use first message
-            first_msg = first_message or await user_simulator.generate_first_message()
-            messages.append(Message(role="user", content=first_msg))
-
-            last_judgment: Judgment | None = None
-
-            for turn in range(effective_max_turns):
-                usage_before = _get_total_usage()
-
-                # 1. Target agent responds
-                agent_response = await self._get_target_response(
-                    [ChatMessage(role=m.role, content=m.content) for m in messages]
-                )
-                messages.append(Message(role="assistant", content=agent_response))
-
-                # 2. Judge evaluates
-                judgment = await judge.evaluate(
-                    [ChatMessage(role=m.role, content=m.content) for m in messages]
-                )
-
-                turn_metrics_list.append(
-                    _build_turn_metrics(turn + 1, judgment, usage_before)
-                )
-                last_judgment = judgment
-
-                if judgment.should_terminate:
-                    return SimulationResult(
-                        messages=messages,
-                        terminated_by=TerminatedBy.judge,
-                        reason=judgment.reason,
-                        goal_achieved=judgment.goal_achieved,
-                        goal_completion_score=judgment.goal_completion_score,
-                        rules_broken=judgment.rules_broken,
-                        turn_count=turn + 1,
-                        turn_metrics=turn_metrics_list,
-                        token_usage=_get_total_usage(),
-                        criteria_results=self._build_criteria_results(
-                            scenario, judgment
-                        )
-                        if scenario
-                        else None,  # type: ignore[arg-type]
-                        metadata={
-                            "persona": persona.name if persona else None,
-                            "scenario": scenario.name if scenario else None,
-                        },  # type: ignore[union-attr]
-                    )
-
-                # 3. User simulator continues (if not last turn)
-                if turn < effective_max_turns - 1:
-                    user_response = await user_simulator.respond_async(
-                        _invert_roles_for_simulator(messages),
-                    )
-                    messages.append(Message(role="user", content=user_response))
-
-            return _max_turns_result(
-                effective_max_turns,
-                messages,
-                turn_metrics_list,
-                _get_total_usage(),
-                persona,
-                scenario,
-                last_judgment,
-            )
-
         except Exception as e:
             logger.error("SimulationRunner.run() failed: %s", e, exc_info=True)
             error_msg = str(e)
             try:
-                usage = (
-                    get_total_usage() if get_total_usage else ZERO_USAGE.model_copy()
-                )
+                usage = ZERO_USAGE.model_copy()
             except Exception as e:
                 logger.warning("Failed to get token usage: %s", e)
                 usage = ZERO_USAGE.model_copy()
@@ -393,6 +268,237 @@ class SimulationRunner:
             result.turn_metrics = turn_metrics_list
             result.token_usage = usage
             return result
+
+    async def _run_inner(
+        self,
+        *,
+        persona: Persona | None,
+        scenario: Scenario | None,
+        first_message: str | None,
+        effective_max_turns: int,
+        messages: list[Message],
+        turn_metrics_list: list[TurnMetrics],
+        run_span: Any,
+    ) -> SimulationResult:
+        """Inner simulation body (runs inside the orq.simulation.run span)."""
+        system_prompt = build_datapoint_system_prompt(persona, scenario)  # pyright: ignore[reportArgumentType]
+        client = self._get_shared_client()
+
+        if self._injected_user_simulator is not None:
+            user_simulator: UserSimulatorAgent = self._injected_user_simulator  # pyright: ignore[reportAssignmentType]
+            # Propagate per-simulation persona/scenario context to the injected
+            # agent so it stays grounded in the current datapoint's goal and
+            # persona traits (mirrors what the default agent receives via its
+            # system_prompt constructor arg).
+            if hasattr(user_simulator, "update_context"):
+                try:
+                    user_simulator.update_context(
+                        persona_context=build_persona_system_prompt(persona)  # type: ignore[arg-type]
+                        if persona
+                        else None,
+                        scenario_context=build_scenario_user_context(scenario)  # type: ignore[arg-type]
+                        if scenario
+                        else None,
+                    )
+                except Exception as ctx_err:
+                    raise RuntimeError(
+                        "Injected user_simulator.update_context() failed. "
+                        "Ensure it accepts persona_context and scenario_context kwargs."
+                    ) from ctx_err
+        else:
+            user_simulator = UserSimulatorAgent(
+                UserSimulatorAgentConfig(
+                    model=self._model,
+                    client=client,
+                    system_prompt=system_prompt,
+                )
+            )
+
+        if self._injected_judge is not None:
+            judge: JudgeAgent = self._injected_judge  # pyright: ignore[reportAssignmentType]
+        else:
+            judge = JudgeAgent(
+                JudgeAgentConfig(
+                    model=self._model,
+                    client=client,
+                    goal=scenario.goal if scenario else "",
+                    criteria=list(scenario.criteria)
+                    if scenario and scenario.criteria
+                    else [],
+                    ground_truth=scenario.ground_truth or "" if scenario else "",
+                )
+            )
+
+        def _get_total_usage() -> TokenUsage:
+            usage = user_simulator.get_usage()
+            judge_usage = judge.get_usage()
+            return TokenUsage(
+                prompt_tokens=usage.prompt_tokens + judge_usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens
+                + judge_usage.completion_tokens,
+                total_tokens=usage.total_tokens + judge_usage.total_tokens,
+            )
+
+        def _build_turn_metrics(
+            turn_num: int, judgment: Judgment, usage_before: TokenUsage
+        ) -> TurnMetrics:
+            usage_after = _get_total_usage()
+            return TurnMetrics(
+                turn_number=turn_num,
+                token_usage=TokenUsage(
+                    prompt_tokens=usage_after.prompt_tokens
+                    - usage_before.prompt_tokens,
+                    completion_tokens=usage_after.completion_tokens
+                    - usage_before.completion_tokens,
+                    total_tokens=usage_after.total_tokens
+                    - usage_before.total_tokens,
+                ),
+                response_quality=judgment.response_quality,
+                hallucination_risk=judgment.hallucination_risk,
+                tone_appropriateness=judgment.tone_appropriateness,
+                factual_accuracy=judgment.factual_accuracy,
+                judge_reason=judgment.reason,
+            )
+
+        # Generate or use first message
+        if first_message:
+            first_msg = first_message
+        else:
+            async with with_simulation_span(
+                "orq.simulation.first_message_generation",
+                {
+                    "orq.simulation.persona": persona.name if persona else None,
+                    "orq.simulation.scenario": scenario.name if scenario else None,
+                    "orq.simulation.model": self._model,
+                },
+            ):
+                first_msg = await user_simulator.generate_first_message()
+        messages.append(Message(role="user", content=first_msg))
+
+        last_judgment: Judgment | None = None
+
+        for turn in range(effective_max_turns):
+            usage_before = _get_total_usage()
+
+            async with with_simulation_span(
+                "orq.simulation.turn",
+                {
+                    "orq.simulation.turn": turn + 1,
+                    "orq.simulation.max_turns": effective_max_turns,
+                },
+            ) as turn_span:
+                # 1. Target agent responds
+                target_messages = [
+                    ChatMessage(role=m.role, content=m.content) for m in messages
+                ]
+                async with with_simulation_span(
+                    "orq.simulation.target_call", None
+                ) as target_span:
+                    record_llm_input(
+                        target_span,
+                        [{"role": m.role, "content": m.content} for m in target_messages],
+                    )
+                    agent_response = await self._get_target_response(target_messages)
+                    record_llm_output(target_span, agent_response)
+                messages.append(Message(role="assistant", content=agent_response))
+
+                # 2. Judge evaluates
+                async with with_simulation_span(
+                    "orq.simulation.judge_evaluation", None
+                ):
+                    judgment = await judge.evaluate(
+                        [ChatMessage(role=m.role, content=m.content) for m in messages]
+                    )
+
+                turn_metrics_list.append(
+                    _build_turn_metrics(turn + 1, judgment, usage_before)
+                )
+                last_judgment = judgment
+
+                set_span_attrs(
+                    turn_span,
+                    {
+                        "orq.simulation.goal_achieved": judgment.goal_achieved,
+                        "orq.simulation.goal_completion_score": judgment.goal_completion_score,
+                        "orq.simulation.should_terminate": judgment.should_terminate,
+                    },
+                )
+
+                # 3. User simulator continues (if not last turn and not terminated)
+                if not judgment.should_terminate and turn < effective_max_turns - 1:
+                    async with with_simulation_span(
+                        "orq.simulation.user_simulator_call", None
+                    ):
+                        user_response = await user_simulator.respond_async(
+                            _invert_roles_for_simulator(messages),
+                            llm_purpose="user_simulator",
+                        )
+                    messages.append(Message(role="user", content=user_response))
+
+            if last_judgment and last_judgment.should_terminate:
+                final_usage = _get_total_usage()
+                record_token_usage(
+                    run_span,
+                    prompt_tokens=final_usage.prompt_tokens,
+                    completion_tokens=final_usage.completion_tokens,
+                    total_tokens=final_usage.total_tokens,
+                )
+                set_span_attrs(
+                    run_span,
+                    {
+                        "orq.simulation.terminated_by": "judge",
+                        "orq.simulation.goal_achieved": last_judgment.goal_achieved,
+                        "orq.simulation.turn_count": turn + 1,
+                    },
+                )
+                return SimulationResult(
+                    messages=messages,
+                    terminated_by=TerminatedBy.judge,
+                    reason=last_judgment.reason,
+                    goal_achieved=last_judgment.goal_achieved,
+                    goal_completion_score=last_judgment.goal_completion_score,
+                    rules_broken=last_judgment.rules_broken,
+                    turn_count=turn + 1,
+                    turn_metrics=turn_metrics_list,
+                    token_usage=final_usage,
+                    criteria_results=self._build_criteria_results(
+                        scenario, last_judgment
+                    )
+                    if scenario
+                    else None,  # type: ignore[arg-type]
+                    metadata={
+                        "persona": persona.name if persona else None,
+                        "scenario": scenario.name if scenario else None,
+                    },  # type: ignore[union-attr]
+                )
+
+        # Max turns reached
+        final_usage = _get_total_usage()
+        record_token_usage(
+            run_span,
+            prompt_tokens=final_usage.prompt_tokens,
+            completion_tokens=final_usage.completion_tokens,
+            total_tokens=final_usage.total_tokens,
+        )
+        set_span_attrs(
+            run_span,
+            {
+                "orq.simulation.terminated_by": "max_turns",
+                "orq.simulation.goal_achieved": last_judgment.goal_achieved
+                if last_judgment
+                else False,
+                "orq.simulation.turn_count": effective_max_turns,
+            },
+        )
+        return _max_turns_result(
+            effective_max_turns,
+            messages,
+            turn_metrics_list,
+            final_usage,
+            persona,
+            scenario,
+            last_judgment,
+        )
 
     async def run_batch(
         self,

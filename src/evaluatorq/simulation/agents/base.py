@@ -14,6 +14,12 @@ from typing import TYPE_CHECKING, Any
 
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation._client import build_simulation_client, extract_responses_output
+from evaluatorq.simulation.tracing import (
+    get_trace_context_headers,
+    record_llm_input,
+    record_llm_response,
+    with_llm_span,
+)
 from evaluatorq.simulation.types import DEFAULT_MODEL, ChatMessage, TokenUsage
 from evaluatorq.simulation.utils.retry import with_retry
 
@@ -109,6 +115,7 @@ class BaseAgent(ABC):
         temperature: float | None = None,
         max_tokens: int | None = None,
         timeout: float | None = None,
+        llm_purpose: str | None = None,
     ) -> str:
         """Generate a text response for a conversation."""
         result = await self._call_llm(
@@ -116,6 +123,7 @@ class BaseAgent(ABC):
             temperature=temperature,
             max_tokens=max_tokens,
             timeout=timeout,
+            llm_purpose=llm_purpose,
         )
         if not result.content:
             raise RuntimeError(
@@ -169,6 +177,7 @@ class BaseAgent(ABC):
         max_tokens: int | None = None,
         timeout: float | None = None,
         tools: list[dict[str, Any]] | None = None,
+        llm_purpose: str | None = None,
     ) -> LLMResult:
         """Call the LLM with retry logic, dispatching to chat or responses API.
 
@@ -182,6 +191,7 @@ class BaseAgent(ABC):
                 max_tokens=max_tokens,
                 timeout=timeout,
                 tools=tools,
+                llm_purpose=llm_purpose,
             )
         return await self._call_chat_completions(
             messages,
@@ -189,6 +199,7 @@ class BaseAgent(ABC):
             max_tokens=max_tokens,
             timeout=timeout,
             tools=tools,
+            llm_purpose=llm_purpose,
         )
 
     async def _call_chat_completions(
@@ -199,6 +210,7 @@ class BaseAgent(ABC):
         max_tokens: int | None = None,
         timeout: float | None = None,
         tools: list[dict[str, Any]] | None = None,
+        llm_purpose: str | None = None,
     ) -> LLMResult:
         """Call the LLM via the Chat Completions API with retry logic."""
         temp = temperature if temperature is not None else 0.7
@@ -221,34 +233,57 @@ class BaseAgent(ABC):
             params["tools"] = tools
             params["tool_choice"] = "auto"
 
-        async def _do_call() -> LLMResult:
-            response = await asyncio.wait_for(
-                self._client.chat.completions.create(**params),
-                timeout=timeout_s,
+        async with with_llm_span(
+            model=self._model,
+            operation="chat",
+            temperature=temp,
+            max_tokens=max_tok,
+            purpose=llm_purpose,
+        ) as span:
+            record_llm_input(
+                span,
+                [{"role": str(m["role"]), "content": str(m["content"])} for m in full_messages],
             )
 
-            choice = response.choices[0] if response.choices else None
-            if not choice:
-                raise RuntimeError(f"{self.name}: No choices in response")
+            # Inject W3C trace context so the router can link its spans to
+            # the current simulation trace. Active span and trace context
+            # don't change across retries — compute headers once.
+            trace_headers = await get_trace_context_headers()
 
-            message = choice.message
-
-            # Accumulate token usage
-            if response.usage:
-                self._usage.prompt_tokens += response.usage.prompt_tokens
-                self._usage.completion_tokens += response.usage.completion_tokens
-                self._usage.total_tokens += response.usage.total_tokens
-
-            content = message.content
-            tool_calls = list(message.tool_calls or [])
-            if not content and not tool_calls:
-                raise RuntimeError(
-                    f"{self.name}._call_chat_completions: LLM returned no text and no tool calls. "
-                    "Check model and prompt."
+            async def _do_call() -> LLMResult:
+                call_kwargs: dict[str, Any] = dict(params)
+                if trace_headers:
+                    call_kwargs["extra_headers"] = trace_headers
+                response = await asyncio.wait_for(
+                    self._client.chat.completions.create(**call_kwargs),
+                    timeout=timeout_s,
                 )
-            return LLMResult(content=content or "", tool_calls=tool_calls or None)
 
-        return await with_retry(_do_call, label=f"{self.name}._call_chat_completions")
+                choice = response.choices[0] if response.choices else None
+                if not choice:
+                    raise RuntimeError(f"{self.name}: No choices in response")
+
+                message = choice.message
+
+                # Record LLM response on the span (token usage, finish reason, etc.)
+                record_llm_response(span, response)
+
+                # Accumulate token usage
+                if response.usage:
+                    self._usage.prompt_tokens += response.usage.prompt_tokens
+                    self._usage.completion_tokens += response.usage.completion_tokens
+                    self._usage.total_tokens += response.usage.total_tokens
+
+                content = message.content
+                tool_calls = list(message.tool_calls or [])
+                if not content and not tool_calls:
+                    raise RuntimeError(
+                        f"{self.name}._call_chat_completions: LLM returned no text and no tool calls. "
+                        "Check model and prompt."
+                    )
+                return LLMResult(content=content or "", tool_calls=tool_calls or None)
+
+            return await with_retry(_do_call, label=f"{self.name}._call_chat_completions")
 
     async def _call_responses(
         self,
@@ -258,6 +293,7 @@ class BaseAgent(ABC):
         max_tokens: int | None = None,
         timeout: float | None = None,
         tools: list[dict[str, Any]] | None = None,
+        llm_purpose: str | None = None,
     ) -> LLMResult:
         """Call the LLM via the OpenAI Responses API with retry logic.
 
@@ -285,35 +321,53 @@ class BaseAgent(ABC):
         if max_tokens is not None:
             params["max_output_tokens"] = max_tokens
 
-        async def _do_call() -> LLMResult:
-            response = await asyncio.wait_for(
-                self._client.responses.create(**params),
-                timeout=timeout_s,
+        async with with_llm_span(
+            model=self._model,
+            operation="responses",
+            temperature=temperature,
+            max_tokens=max_tokens,
+            purpose=llm_purpose,
+        ) as span:
+            record_llm_input(
+                span,
+                [{"role": "system", "content": self.system_prompt}, *input_messages],
             )
+            trace_headers = await get_trace_context_headers()
 
-            output_items, usage = extract_responses_output(response)
-
-            # Accumulate token usage
-            self._usage.prompt_tokens += usage.prompt_tokens
-            self._usage.completion_tokens += usage.completion_tokens
-            self._usage.total_tokens += usage.total_tokens
-
-            # Separate text from tool-call items
-            text_items = [i for i in output_items if hasattr(i, "text")]
-            tool_call_items = [i for i in output_items if hasattr(i, "call_id")]
-
-            if not text_items and not tool_call_items:
-                # No text, no tool calls — warn but don't raise (redteam callers may handle empty)
-                logger.warning(
-                    "%s._call_responses: no text or tool calls in response (model=%s)",
-                    self.name,
-                    self.config.model,
+            async def _do_call() -> LLMResult:
+                call_kwargs: dict[str, Any] = dict(params)
+                if trace_headers:
+                    call_kwargs["extra_headers"] = trace_headers
+                response = await asyncio.wait_for(
+                    self._client.responses.create(**call_kwargs),
+                    timeout=timeout_s,
                 )
 
-            text = "".join(getattr(i, "text", "") for i in text_items)
-            result = LLMResult(content=text)
-            if tool_call_items:
-                result.tool_calls = tool_call_items
-            return result
+                output_items, usage = extract_responses_output(response)
 
-        return await with_retry(_do_call, label=f"{self.name}._call_responses")
+                record_llm_response(span, response)
+
+                # Accumulate token usage
+                self._usage.prompt_tokens += usage.prompt_tokens
+                self._usage.completion_tokens += usage.completion_tokens
+                self._usage.total_tokens += usage.total_tokens
+
+                # Separate text from tool-call items
+                text_items = [i for i in output_items if hasattr(i, "text")]
+                tool_call_items = [i for i in output_items if hasattr(i, "call_id")]
+
+                if not text_items and not tool_call_items:
+                    # No text, no tool calls — warn but don't raise (redteam callers may handle empty)
+                    logger.warning(
+                        "%s._call_responses: no text or tool calls in response (model=%s)",
+                        self.name,
+                        self.config.model,
+                    )
+
+                text = "".join(getattr(i, "text", "") for i in text_items)
+                result = LLMResult(content=text)
+                if tool_call_items:
+                    result.tool_calls = tool_call_items
+                return result
+
+            return await with_retry(_do_call, label=f"{self.name}._call_responses")

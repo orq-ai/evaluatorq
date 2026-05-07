@@ -139,9 +139,18 @@ class PersonaGenerator:
         edge_case_percentage: float = 0.2,
     ) -> list[Persona]:
         """Generate personas for agent testing."""
-        num_edge_cases = int(num_personas * edge_case_percentage)
+        from evaluatorq.simulation.tracing import with_simulation_span
 
-        user_prompt = f"""Agent Description: {delimit(agent_description)}
+        async with with_simulation_span(
+            "orq.simulation.persona_generation",
+            {
+                "orq.simulation.num_personas": num_personas,
+                "orq.simulation.model": self._model,
+            },
+        ):
+            num_edge_cases = int(num_personas * edge_case_percentage)
+
+            user_prompt = f"""Agent Description: {delimit(agent_description)}
 
 Additional Context: {delimit(context or "None provided")}
 
@@ -152,29 +161,29 @@ Generate {num_personas} diverse personas for testing this agent.
 
 Return ONLY a JSON array, no other text."""
 
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": _PERSONA_GENERATOR_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ]
+            messages: list[dict[str, Any]] = [
+                {"role": "system", "content": _PERSONA_GENERATOR_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ]
 
-        parsed, raw = await generate_structured(
-            self._client,
-            model=self._model,
-            messages=messages,
-            response_format=PersonaListResponse,
-            temperature=_TEMPERATURE_CREATIVE,
-            max_tokens=4000,
-            label="PersonaGenerator.generate",
-        )
-        personas = parsed.personas if parsed is not None else self._parse_personas(raw or "[]")
-
-        if len(personas) < num_personas:
-            logger.warning(
-                "PersonaGenerator: requested %d personas but only %d were successfully parsed",
-                num_personas,
-                len(personas),
+            parsed, raw = await generate_structured(
+                self._client,
+                model=self._model,
+                messages=messages,
+                response_format=PersonaListResponse,
+                temperature=_TEMPERATURE_CREATIVE,
+                max_tokens=4000,
+                label="PersonaGenerator.generate",
             )
-        return personas
+            personas = parsed.personas if parsed is not None else self._parse_personas(raw or "[]")
+
+            if len(personas) < num_personas:
+                logger.warning(
+                    "PersonaGenerator: requested %d personas but only %d were successfully parsed",
+                    num_personas,
+                    len(personas),
+                )
+            return personas
 
     async def generate_with_coverage(
         self,

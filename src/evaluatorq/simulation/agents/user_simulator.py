@@ -80,7 +80,9 @@ class UserSimulatorAgent(BaseAgent):
                 content="Generate your first message to start the conversation. Remember your goal and persona.",
             )
         )
-        return await self.respond_async(prompt_messages, temperature=0.8)
+        return await self.respond_async(
+            prompt_messages, temperature=0.8, llm_purpose="first_message"
+        )
 
     def update_context(
         self,

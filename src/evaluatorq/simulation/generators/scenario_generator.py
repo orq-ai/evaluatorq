@@ -211,9 +211,18 @@ class ScenarioGenerator:
         edge_case_percentage: float = 0.3,
     ) -> list[Scenario]:
         """Generate scenarios for agent testing."""
-        num_edge_cases = int(num_scenarios * edge_case_percentage)
+        from evaluatorq.simulation.tracing import with_simulation_span
 
-        user_prompt = f"""Agent Description: {delimit(agent_description)}
+        async with with_simulation_span(
+            "orq.simulation.scenario_generation",
+            {
+                "orq.simulation.num_scenarios": num_scenarios,
+                "orq.simulation.model": self._model,
+            },
+        ):
+            num_edge_cases = int(num_scenarios * edge_case_percentage)
+
+            user_prompt = f"""Agent Description: {delimit(agent_description)}
 
 Additional Context: {delimit(context or "None provided")}
 
@@ -225,40 +234,40 @@ Generate {num_scenarios} diverse test scenarios for this agent.
 
 Return ONLY a JSON array, no other text."""
 
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": _SCENARIO_GENERATOR_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ]
+            messages: list[dict[str, Any]] = [
+                {"role": "system", "content": _SCENARIO_GENERATOR_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ]
 
-        try:
-            parsed, raw = await generate_structured(
-                self._client,
-                model=self._model,
-                messages=messages,
-                response_format=ScenarioListResponse,
-                temperature=_TEMPERATURE_CREATIVE,
-                max_tokens=6000,
-                label="ScenarioGenerator.generate",
-            )
-
-            if parsed is not None:
-                scenarios = parsed.scenarios
-            else:
-                scenario_dicts = _parse_json_list(raw or "[]")
-                scenarios = _parse_scenarios(scenario_dicts)
-
-            if len(scenarios) < num_scenarios:
-                logger.warning(
-                    "ScenarioGenerator: requested %d scenarios but only %d were successfully parsed",
-                    num_scenarios,
-                    len(scenarios),
+            try:
+                parsed, raw = await generate_structured(
+                    self._client,
+                    model=self._model,
+                    messages=messages,
+                    response_format=ScenarioListResponse,
+                    temperature=_TEMPERATURE_CREATIVE,
+                    max_tokens=6000,
+                    label="ScenarioGenerator.generate",
                 )
-            return scenarios
-        except json.JSONDecodeError:
-            logger.warning(
-                "ScenarioGenerator: LLM response was not valid JSON — returning empty array"
-            )
-            return []
+
+                if parsed is not None:
+                    scenarios = parsed.scenarios
+                else:
+                    scenario_dicts = _parse_json_list(raw or "[]")
+                    scenarios = _parse_scenarios(scenario_dicts)
+
+                if len(scenarios) < num_scenarios:
+                    logger.warning(
+                        "ScenarioGenerator: requested %d scenarios but only %d were successfully parsed",
+                        num_scenarios,
+                        len(scenarios),
+                    )
+                return scenarios
+            except json.JSONDecodeError:
+                logger.warning(
+                    "ScenarioGenerator: LLM response was not valid JSON — returning empty array"
+                )
+                return []
 
     async def generate_with_coverage(
         self,
