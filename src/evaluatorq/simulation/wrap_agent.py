@@ -121,7 +121,10 @@ def wrap_simulation_agent(
                 "'datapoints', or 'personas' + 'scenarios'"
             )
 
-        # Run simulation
+        # Run simulation. ``upload_results=False`` because this code path
+        # runs inside an evaluatorq() job — the framework will upload the
+        # final EvaluatorqResult itself; uploading from inside simulate()
+        # would create a second, duplicate experiment.
         effective_model = model or DEFAULT_MODEL
         results: list[SimulationResult] = await simulate(
             evaluation_name=name,
@@ -132,6 +135,7 @@ def wrap_simulation_agent(
             max_turns=max_turns,
             model=effective_model,
             evaluator_names=evaluators,
+            upload_results=False,
         )
 
         if not results:
