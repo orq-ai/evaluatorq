@@ -359,6 +359,12 @@ def record_llm_response(span: Span | None, response: Any) -> None:
             reason = getattr(choice, "finish_reason", None)
             if reason:
                 finish_reasons.append(reason)
+    else:
+        # Responses API uses response.status (e.g. "completed", "failed",
+        # "incomplete") in place of choices[*].finish_reason.
+        status = getattr(response, "status", None)
+        if isinstance(status, str) and status:
+            finish_reasons.append(status)
     if finish_reasons:
         span.set_attribute("gen_ai.response.finish_reasons", finish_reasons)
 

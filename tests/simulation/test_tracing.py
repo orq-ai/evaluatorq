@@ -316,6 +316,49 @@ async def test_simulation_span_records_asyncio_cancellation(
 
 
 @pytest.mark.asyncio
+async def test_llm_span_records_asyncio_cancellation(
+    span_collector: _CollectingExporter,
+):
+    """Mirror of the with_simulation_span cancellation test for the LLM
+    span path (timed-out LLM calls must record as ERROR on the span)."""
+    import asyncio
+
+    from evaluatorq.simulation.tracing import with_llm_span
+
+    with pytest.raises(asyncio.CancelledError):
+        async with with_llm_span(model="openai/gpt-4o"):
+            raise asyncio.CancelledError()
+
+    s = _find(span_collector, "chat openai/gpt-4o")
+    assert s.status.status_code.name == "ERROR"
+    assert _attrs(s)["error.type"] == "CancelledError"
+
+
+@pytest.mark.asyncio
+async def test_record_llm_response_responses_api_finish_reason(
+    span_collector: _CollectingExporter,
+):
+    """gen_ai.response.finish_reasons must be set from response.status when
+    the response has no .choices (Responses API shape)."""
+    from evaluatorq.simulation.tracing import record_llm_response, with_llm_span
+
+    class _Resp:
+        id = "resp_x"
+        model = "openai/gpt-4o"
+        usage = None
+        status = "completed"
+        # No .choices
+
+    async with with_llm_span(
+        model="openai/gpt-4o", operation="responses"
+    ) as span:
+        record_llm_response(span, _Resp())
+
+    a = _attrs(_find(span_collector, "responses openai/gpt-4o"))
+    assert a["gen_ai.response.finish_reasons"] == ("completed",)
+
+
+@pytest.mark.asyncio
 async def test_llm_span_records_exception(span_collector: _CollectingExporter):
     """Exceptions inside with_llm_span are recorded with ERROR status."""
     from evaluatorq.simulation.tracing import with_llm_span
