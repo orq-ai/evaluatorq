@@ -300,24 +300,28 @@ Return ONLY a JSON array, no other text."""
                 max_tokens=4000,
                 label="PersonaGenerator.generate_with_coverage",
             )
-        personas = parsed.personas if parsed is not None else self._parse_personas(raw or "[]")
-
-        # Validate coverage and fill gaps
-        personas = self._ensure_style_coverage(
-            personas, [CommunicationStyle(s) for s in styles]
-        )
-        self._log_trait_coverage_gaps(personas)
-
-        if len(personas) > num_personas:
-            personas = personas[:num_personas]
-
-        if len(personas) < num_personas:
-            logger.warning(
-                "PersonaGenerator: requested %d personas (with coverage) but only %d were successfully parsed",
-                num_personas,
-                len(personas),
+            personas = (
+                parsed.personas
+                if parsed is not None
+                else self._parse_personas(raw or "[]")
             )
-        return personas
+
+            # Validate coverage and fill gaps
+            personas = self._ensure_style_coverage(
+                personas, [CommunicationStyle(s) for s in styles]
+            )
+            self._log_trait_coverage_gaps(personas)
+
+            if len(personas) > num_personas:
+                personas = personas[:num_personas]
+
+            if len(personas) < num_personas:
+                logger.warning(
+                    "PersonaGenerator: requested %d personas (with coverage) but only %d were successfully parsed",
+                    num_personas,
+                    len(personas),
+                )
+            return personas
 
     @staticmethod
     def _ensure_style_coverage(

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from evaluatorq.simulation.types import DEFAULT_MODEL
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+
+    from opentelemetry.trace import Span
 
     from evaluatorq.simulation.agents.base import BaseAgent
     from evaluatorq.simulation.generators import FirstMessageGenerator
@@ -111,7 +113,7 @@ async def _simulate_core(
     parallelism: int,
     user_simulator: BaseAgent | None,
     judge: BaseAgent | None,
-    pipeline_span: Any,
+    pipeline_span: Span | None,
 ) -> list[SimulationResult]:
     """Core simulation logic (runs inside the orq.simulation.pipeline span)."""
     from openai import AsyncOpenAI

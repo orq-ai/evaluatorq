@@ -44,6 +44,8 @@ from evaluatorq.simulation.utils.prompt_builders import (
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from opentelemetry.trace import Span
+
     from evaluatorq.simulation.agents.base import BaseAgent
 
 logger = logging.getLogger(__name__)
@@ -283,7 +285,7 @@ class SimulationRunner:
         effective_max_turns: int,
         messages: list[Message],
         turn_metrics_list: list[TurnMetrics],
-        run_span: Any,
+        run_span: Span | None,
         usage_holder: dict[str, Callable[[], TokenUsage]],
     ) -> SimulationResult:
         """Inner simulation body (runs inside the orq.simulation.run span)."""

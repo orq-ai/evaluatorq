@@ -205,18 +205,28 @@ def _truncate(text: str) -> str:
     return f"{text[:MAX_CONTENT_LEN]}…"
 
 
-def _serialize_messages(messages: list[dict[str, str]]) -> str:
+def _serialize_messages(messages: list[dict[str, Any]]) -> str:
     return json.dumps(
-        [{"role": m["role"], "content": _truncate(m["content"])} for m in messages]
+        [
+            {
+                "role": str(m.get("role", "")),
+                "content": _truncate(str(m.get("content") or "")),
+            }
+            for m in messages
+        ]
     )
 
 
 def _capture_message_content() -> bool:
     """Honor ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` env flag.
 
-    The OTel GenAI semconv classifies ``gen_ai.input.messages`` and
-    ``gen_ai.output.messages`` as opt-in because they may carry PII. Default
-    is ``True`` so the platform UI keeps working.
+    Deliberate deviation from the OTel GenAI semconv: the spec classifies
+    ``gen_ai.input.messages`` and ``gen_ai.output.messages`` as opt-in
+    (default ``false``) due to PII risk. We default to ``True`` to match
+    the TypeScript implementation (RES-595) so the Orq dashboard's input/
+    output panels keep rendering. Set
+    ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false`` to opt out
+    if traces will be exported to a third-party backend.
     """
     flag = os.environ.get("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT")
     if flag is None:
@@ -337,9 +347,9 @@ def record_llm_response(span: Span | None, response: Any) -> None:
             span.set_attribute("output", serialized)
 
     finish_reasons: list[str] = []
-    choices = getattr(response, "choices", None)
-    if choices:
-        for choice in choices:
+    finish_choices = getattr(response, "choices", None)
+    if finish_choices:
+        for choice in finish_choices:
             reason = getattr(choice, "finish_reason", None)
             if reason:
                 finish_reasons.append(reason)

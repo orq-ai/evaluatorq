@@ -331,28 +331,28 @@ Return ONLY a JSON array, no other text."""
                     label="ScenarioGenerator.generate_with_coverage",
                 )
 
-            if parsed is not None:
-                scenarios = parsed.scenarios
-            else:
-                scenario_dicts = _parse_json_list(raw or "[]")
-                scenarios = _parse_scenarios(scenario_dicts)
+                if parsed is not None:
+                    scenarios = parsed.scenarios
+                else:
+                    scenario_dicts = _parse_json_list(raw or "[]")
+                    scenarios = _parse_scenarios(scenario_dicts)
 
-            # Validate coverage
-            scenarios = self._ensure_emotion_coverage(
-                scenarios, [StartingEmotion(e) for e in emotions]
-            )
-            scenarios = self._ensure_criteria_coverage(scenarios)
-
-            if len(scenarios) > num_scenarios:
-                scenarios = scenarios[:num_scenarios]
-
-            if len(scenarios) < num_scenarios:
-                logger.warning(
-                    "ScenarioGenerator: requested %d scenarios (with coverage) but only %d parsed",
-                    num_scenarios,
-                    len(scenarios),
+                # Validate coverage
+                scenarios = self._ensure_emotion_coverage(
+                    scenarios, [StartingEmotion(e) for e in emotions]
                 )
-            return scenarios
+                scenarios = self._ensure_criteria_coverage(scenarios)
+
+                if len(scenarios) > num_scenarios:
+                    scenarios = scenarios[:num_scenarios]
+
+                if len(scenarios) < num_scenarios:
+                    logger.warning(
+                        "ScenarioGenerator: requested %d scenarios (with coverage) but only %d parsed",
+                        num_scenarios,
+                        len(scenarios),
+                    )
+                return scenarios
         except json.JSONDecodeError:
             logger.warning(
                 "ScenarioGenerator: LLM response was not valid JSON — returning empty array"
@@ -412,23 +412,23 @@ Return ONLY a JSON array, no other text."""
                     label="ScenarioGenerator.generate_edge_cases",
                 )
 
-            if parsed is not None:
-                scenarios = [
-                    s.model_copy(update={"is_edge_case": True}) for s in parsed.scenarios
-                ]
-            else:
-                scenario_dicts = _parse_json_list(raw or "[]")
-                for s_dict in scenario_dicts:
-                    s_dict["is_edge_case"] = True
-                scenarios = _parse_scenarios(scenario_dicts)
+                if parsed is not None:
+                    scenarios = [
+                        s.model_copy(update={"is_edge_case": True}) for s in parsed.scenarios
+                    ]
+                else:
+                    scenario_dicts = _parse_json_list(raw or "[]")
+                    for s_dict in scenario_dicts:
+                        s_dict["is_edge_case"] = True
+                    scenarios = _parse_scenarios(scenario_dicts)
 
-            if len(scenarios) < num_edge_cases:
-                logger.warning(
-                    "ScenarioGenerator: requested %d edge cases but only %d parsed",
-                    num_edge_cases,
-                    len(scenarios),
-                )
-            return scenarios
+                if len(scenarios) < num_edge_cases:
+                    logger.warning(
+                        "ScenarioGenerator: requested %d edge cases but only %d parsed",
+                        num_edge_cases,
+                        len(scenarios),
+                    )
+                return scenarios
         except json.JSONDecodeError:
             logger.warning(
                 "ScenarioGenerator: LLM response was not valid JSON — returning empty array"
@@ -482,23 +482,23 @@ Return ONLY a JSON array, no other text."""
                     label="ScenarioGenerator.generate_boundary_scenarios",
                 )
 
-            if parsed is not None:
-                scenarios = [
-                    s.model_copy(update={"is_edge_case": True}) for s in parsed.scenarios
-                ]
-            else:
-                scenario_dicts = _parse_json_list(raw or "[]")
-                for s_dict in scenario_dicts:
-                    s_dict["is_edge_case"] = True
-                scenarios = _parse_scenarios(scenario_dicts)
+                if parsed is not None:
+                    scenarios = [
+                        s.model_copy(update={"is_edge_case": True}) for s in parsed.scenarios
+                    ]
+                else:
+                    scenario_dicts = _parse_json_list(raw or "[]")
+                    for s_dict in scenario_dicts:
+                        s_dict["is_edge_case"] = True
+                    scenarios = _parse_scenarios(scenario_dicts)
 
-            if len(scenarios) < num_scenarios:
-                logger.warning(
-                    "ScenarioGenerator: requested %d boundary scenarios but only %d parsed",
-                    num_scenarios,
-                    len(scenarios),
-                )
-            return scenarios
+                if len(scenarios) < num_scenarios:
+                    logger.warning(
+                        "ScenarioGenerator: requested %d boundary scenarios but only %d parsed",
+                        num_scenarios,
+                        len(scenarios),
+                    )
+                return scenarios
         except json.JSONDecodeError:
             logger.warning(
                 "ScenarioGenerator: LLM response was not valid JSON — returning empty array"
@@ -569,23 +569,23 @@ Return ONLY a JSON array, no other text."""
                     label="ScenarioGenerator.generate_security_scenarios",
                 )
 
-            if parsed is not None:
-                scenarios = [
-                    s.model_copy(update={"is_edge_case": True}) for s in parsed.scenarios
-                ]
-            else:
-                scenario_dicts = _parse_json_list(raw or "[]")
-                for s_dict in scenario_dicts:
-                    s_dict["is_edge_case"] = True
-                scenarios = _parse_scenarios(scenario_dicts)
+                if parsed is not None:
+                    scenarios = [
+                        s.model_copy(update={"is_edge_case": True}) for s in parsed.scenarios
+                    ]
+                else:
+                    scenario_dicts = _parse_json_list(raw or "[]")
+                    for s_dict in scenario_dicts:
+                        s_dict["is_edge_case"] = True
+                    scenarios = _parse_scenarios(scenario_dicts)
 
-            if len(scenarios) < num_scenarios:
-                logger.warning(
-                    "ScenarioGenerator: requested %d security scenarios but only %d parsed",
-                    num_scenarios,
-                    len(scenarios),
-                )
-            return scenarios
+                if len(scenarios) < num_scenarios:
+                    logger.warning(
+                        "ScenarioGenerator: requested %d security scenarios but only %d parsed",
+                        num_scenarios,
+                        len(scenarios),
+                    )
+                return scenarios
         except json.JSONDecodeError:
             logger.warning(
                 "ScenarioGenerator: LLM response was not valid JSON — returning empty array"
