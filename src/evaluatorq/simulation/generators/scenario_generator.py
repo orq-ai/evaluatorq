@@ -213,16 +213,17 @@ class ScenarioGenerator:
         """Generate scenarios for agent testing."""
         from evaluatorq.simulation.tracing import with_simulation_span
 
-        async with with_simulation_span(
-            "orq.simulation.scenario_generation",
-            {
-                "orq.simulation.num_scenarios": num_scenarios,
-                "orq.simulation.model": self._model,
-            },
-        ):
-            num_edge_cases = int(num_scenarios * edge_case_percentage)
+        try:
+            async with with_simulation_span(
+                "orq.simulation.scenario_generation",
+                {
+                    "orq.simulation.num_scenarios": num_scenarios,
+                    "orq.simulation.model": self._model,
+                },
+            ):
+                num_edge_cases = int(num_scenarios * edge_case_percentage)
 
-            user_prompt = f"""Agent Description: {delimit(agent_description)}
+                user_prompt = f"""Agent Description: {delimit(agent_description)}
 
 Additional Context: {delimit(context or "None provided")}
 
@@ -234,12 +235,11 @@ Generate {num_scenarios} diverse test scenarios for this agent.
 
 Return ONLY a JSON array, no other text."""
 
-            messages: list[dict[str, Any]] = [
-                {"role": "system", "content": _SCENARIO_GENERATOR_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ]
+                messages: list[dict[str, Any]] = [
+                    {"role": "system", "content": _SCENARIO_GENERATOR_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ]
 
-            try:
                 parsed, raw = await generate_structured(
                     self._client,
                     model=self._model,
@@ -263,11 +263,11 @@ Return ONLY a JSON array, no other text."""
                         len(scenarios),
                     )
                 return scenarios
-            except json.JSONDecodeError:
-                logger.warning(
-                    "ScenarioGenerator: LLM response was not valid JSON — returning empty array"
-                )
-                return []
+        except json.JSONDecodeError:
+            logger.warning(
+                "ScenarioGenerator: LLM response was not valid JSON — returning empty array"
+            )
+            return []
 
     async def generate_with_coverage(
         self,

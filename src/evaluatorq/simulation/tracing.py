@@ -75,7 +75,11 @@ async def with_simulation_span(  # noqa: RUF029
         try:
             yield span
             span.set_status(Status(StatusCode.OK))
-        except Exception as e:
+        except BaseException as e:
+            # Catch BaseException so asyncio.CancelledError (used by
+            # asyncio.wait_for / timeouts) is recorded on the span instead
+            # of leaving it with UNSET status. KeyboardInterrupt / SystemExit
+            # are also surfaced — desirable for trace visibility.
             span.set_status(Status(StatusCode.ERROR, str(e)))
             span.record_exception(e)
             span.set_attribute("error.type", type(e).__name__)
@@ -138,7 +142,9 @@ async def with_llm_span(  # noqa: RUF029
         try:
             yield span
             span.set_status(Status(StatusCode.OK))
-        except Exception as e:
+        except BaseException as e:
+            # See with_simulation_span for why BaseException (asyncio
+            # cancellation visibility on timeout).
             span.set_status(Status(StatusCode.ERROR, str(e)))
             span.record_exception(e)
             span.set_attribute("error.type", type(e).__name__)

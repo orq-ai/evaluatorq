@@ -296,6 +296,26 @@ async def test_record_llm_response_responses_api_shape(
 
 
 @pytest.mark.asyncio
+async def test_simulation_span_records_asyncio_cancellation(
+    span_collector: _CollectingExporter,
+):
+    """asyncio.CancelledError (a BaseException, not Exception) must be
+    recorded on the span — otherwise timed-out simulations end with UNSET
+    status and look like normal completions in the dashboard."""
+    import asyncio
+
+    from evaluatorq.simulation.tracing import with_simulation_span
+
+    with pytest.raises(asyncio.CancelledError):
+        async with with_simulation_span("orq.simulation.run", None):
+            raise asyncio.CancelledError()
+
+    s = _find(span_collector, "orq.simulation.run")
+    assert s.status.status_code.name == "ERROR"
+    assert _attrs(s)["error.type"] == "CancelledError"
+
+
+@pytest.mark.asyncio
 async def test_llm_span_records_exception(span_collector: _CollectingExporter):
     """Exceptions inside with_llm_span are recorded with ERROR status."""
     from evaluatorq.simulation.tracing import with_llm_span
