@@ -233,6 +233,9 @@ class SimulationRunner:
         effective_max_turns = max_turns or self._max_turns
         messages: list[Message] = []
         turn_metrics_list: list[TurnMetrics] = []
+        # Holder so the outer except can read partial token usage from agents
+        # created inside _run_inner (mirrors TS getTotalUsage closure).
+        usage_holder: dict[str, Callable[[], TokenUsage]] = {}
 
         try:
             async with with_simulation_span(
@@ -252,14 +255,16 @@ class SimulationRunner:
                     messages=messages,
                     turn_metrics_list=turn_metrics_list,
                     run_span=run_span,
+                    usage_holder=usage_holder,
                 )
         except Exception as e:
             logger.error("SimulationRunner.run() failed: %s", e, exc_info=True)
             error_msg = str(e)
+            get_total_usage = usage_holder.get("get_total_usage")
             try:
-                usage = ZERO_USAGE.model_copy()
-            except Exception as e:
-                logger.warning("Failed to get token usage: %s", e)
+                usage = get_total_usage() if get_total_usage else ZERO_USAGE.model_copy()
+            except Exception as usage_err:
+                logger.warning("Failed to collect token usage: %s", usage_err)
                 usage = ZERO_USAGE.model_copy()
 
             result = _error_result(error_msg, persona, scenario)
@@ -279,6 +284,7 @@ class SimulationRunner:
         messages: list[Message],
         turn_metrics_list: list[TurnMetrics],
         run_span: Any,
+        usage_holder: dict[str, Callable[[], TokenUsage]],
     ) -> SimulationResult:
         """Inner simulation body (runs inside the orq.simulation.run span)."""
         system_prompt = build_datapoint_system_prompt(persona, scenario)  # pyright: ignore[reportArgumentType]
@@ -338,6 +344,9 @@ class SimulationRunner:
                 + judge_usage.completion_tokens,
                 total_tokens=usage.total_tokens + judge_usage.total_tokens,
             )
+
+        # Expose to the outer run() except path so it can report partial usage.
+        usage_holder["get_total_usage"] = _get_total_usage
 
         def _build_turn_metrics(
             turn_num: int, judgment: Judgment, usage_before: TokenUsage

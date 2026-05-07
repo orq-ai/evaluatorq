@@ -274,12 +274,12 @@ def record_llm_response(span: Span | None, response: Any) -> None:
 
     usage = getattr(response, "usage", None)
     if usage is not None:
-        prompt = getattr(usage, "prompt_tokens", None) or getattr(
-            usage, "input_tokens", None
-        )
-        completion = getattr(usage, "completion_tokens", None) or getattr(
-            usage, "output_tokens", None
-        )
+        prompt = getattr(usage, "prompt_tokens", None)
+        if prompt is None:
+            prompt = getattr(usage, "input_tokens", None)
+        completion = getattr(usage, "completion_tokens", None)
+        if completion is None:
+            completion = getattr(usage, "output_tokens", None)
         total = getattr(usage, "total_tokens", None)
         details = getattr(usage, "prompt_tokens_details", None)
         cache_read = getattr(details, "cached_tokens", None) if details else None
@@ -302,16 +302,34 @@ def record_llm_response(span: Span | None, response: Any) -> None:
                     role = getattr(message, "role", None) or "assistant"
                     output_messages.append({"role": role, "content": content})
         else:
-            # Responses API: response.output is a list of items with .text
-            output_items = getattr(response, "output", None)
-            if output_items:
-                text = "".join(
-                    getattr(item, "text", "") or ""
-                    for item in output_items
-                    if hasattr(item, "text")
+            # Responses API: response.output is a list of typed items.
+            # Prefer the SDK helper response.output_text when available,
+            # else descend into item.content[*].text for "message" items
+            # and fall back to a flat .text attribute for older shapes.
+            output_text = getattr(response, "output_text", None)
+            if isinstance(output_text, str) and output_text:
+                output_messages.append(
+                    {"role": "assistant", "content": output_text}
                 )
-                if text:
-                    output_messages.append({"role": "assistant", "content": text})
+            else:
+                output_items = getattr(response, "output", None) or []
+                parts: list[str] = []
+                for item in output_items:
+                    content = getattr(item, "content", None)
+                    if content:
+                        for part in content:
+                            text = getattr(part, "text", None)
+                            if isinstance(text, str) and text:
+                                parts.append(text)
+                    else:
+                        text = getattr(item, "text", None)
+                        if isinstance(text, str) and text:
+                            parts.append(text)
+                joined = "".join(parts)
+                if joined:
+                    output_messages.append(
+                        {"role": "assistant", "content": joined}
+                    )
 
         if output_messages:
             serialized = _serialize_messages(output_messages)

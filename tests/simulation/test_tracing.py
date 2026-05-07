@@ -224,6 +224,92 @@ async def test_record_llm_input_truncates_long_content(
 
 
 @pytest.mark.asyncio
+async def test_record_token_usage_preserves_zero_prompt_tokens(
+    span_collector: _CollectingExporter,
+):
+    """Zero prompt_tokens (e.g. fully-cached request) must not fall back to
+    input_tokens. Regression guard for the falsy-or chain bug."""
+    from evaluatorq.simulation.tracing import record_llm_response, with_llm_span
+
+    class _Usage:
+        prompt_tokens = 0
+        completion_tokens = 5
+        total_tokens = 5
+        input_tokens = 99  # would be selected if `prompt_tokens or input_tokens`
+        output_tokens = 99
+        prompt_tokens_details = None
+
+    class _Resp:
+        id = "r"
+        model = "m"
+        usage = _Usage()
+        choices = []
+
+    async with with_llm_span(model="openai/gpt-4o") as span:
+        record_llm_response(span, _Resp())
+
+    a = _attrs(_find(span_collector, "chat openai/gpt-4o"))
+    assert a["gen_ai.usage.input_tokens"] == 0
+    assert a["gen_ai.usage.output_tokens"] == 5
+
+
+@pytest.mark.asyncio
+async def test_record_llm_response_responses_api_shape(
+    span_collector: _CollectingExporter,
+):
+    """recordLLMResponse with a Responses API-shaped object: output items
+    have content[].text, not flat .text on the item."""
+    from evaluatorq.simulation.tracing import record_llm_response, with_llm_span
+
+    class _ContentPart:
+        text = "hello world"
+
+    class _OutputItem:
+        # No .text on the item itself; SDK shape uses .content[*].text
+        content = [_ContentPart()]
+
+    class _Usage:
+        input_tokens = 4
+        output_tokens = 2
+        total_tokens = 6
+        prompt_tokens_details = None
+
+    class _Resp:
+        id = "resp_1"
+        model = "openai/gpt-4o"
+        usage = _Usage()
+        # No .choices; this is the Responses API shape
+        output = [_OutputItem()]
+
+    async with with_llm_span(
+        model="openai/gpt-4o", operation="responses"
+    ) as span:
+        record_llm_response(span, _Resp())
+
+    a = _attrs(_find(span_collector, "responses openai/gpt-4o"))
+    assert "gen_ai.output.messages" in a
+    parsed = json.loads(a["gen_ai.output.messages"])
+    assert parsed == [{"role": "assistant", "content": "hello world"}]
+    # Falls back from .input_tokens since prompt_tokens is absent
+    assert a["gen_ai.usage.input_tokens"] == 4
+    assert a["gen_ai.usage.output_tokens"] == 2
+
+
+@pytest.mark.asyncio
+async def test_llm_span_records_exception(span_collector: _CollectingExporter):
+    """Exceptions inside with_llm_span are recorded with ERROR status."""
+    from evaluatorq.simulation.tracing import with_llm_span
+
+    with pytest.raises(ValueError, match="boom"):
+        async with with_llm_span(model="openai/gpt-4o"):
+            raise ValueError("boom")
+
+    s = _find(span_collector, "chat openai/gpt-4o")
+    assert _attrs(s)["error.type"] == "ValueError"
+    assert s.status.status_code.name == "ERROR"
+
+
+@pytest.mark.asyncio
 async def test_record_llm_response_chat_completions(
     span_collector: _CollectingExporter,
 ):
@@ -450,6 +536,100 @@ async def test_end_to_end_simulation_produces_full_span_tree(
     for root in children.get(None, []):
         _print(root, 0)
     print(f"=== {len(span_collector.spans)} spans total ===\n")
+
+
+@pytest.mark.asyncio
+async def test_traceparent_injected_into_chat_completions_call(
+    span_collector: _CollectingExporter,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """When tracing is enabled, _call_chat_completions should inject
+    traceparent into the OpenAI client request via extra_headers."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    monkeypatch.setenv("ORQ_API_KEY", "test-key")
+
+    captured: dict[str, object] = {}
+
+    class _Choice:
+        finish_reason = "stop"
+
+        class message:  # noqa: N801
+            content = "ok"
+            tool_calls = None
+            role = "assistant"
+
+    class _Usage:
+        prompt_tokens = 1
+        completion_tokens = 1
+        total_tokens = 2
+        prompt_tokens_details = None
+
+    class _Resp:
+        id = "r"
+        model = "test"
+        usage = _Usage()
+        choices = [_Choice()]
+
+    async def fake_create(**kwargs: object) -> _Resp:
+        captured.update(kwargs)
+        return _Resp()
+
+    fake_client = MagicMock()
+    fake_client.chat = MagicMock()
+    fake_client.chat.completions = MagicMock()
+    fake_client.chat.completions.create = AsyncMock(side_effect=fake_create)
+
+    from evaluatorq.contracts import LLMCallConfig
+    from evaluatorq.simulation.agents.base import BaseAgent
+    from evaluatorq.simulation.tracing import with_simulation_span
+    from evaluatorq.simulation.types import ChatMessage
+
+    class _A(BaseAgent):
+        @property
+        def name(self) -> str:
+            return "T"
+
+        @property
+        def system_prompt(self) -> str:
+            return "sys"
+
+    a = _A(LLMCallConfig(model="test", client=fake_client))
+
+    # Wrap in an outer span so traceparent is meaningful to inject.
+    async with with_simulation_span("orq.simulation.run", None):
+        await a._call_chat_completions([ChatMessage(role="user", content="hi")])
+
+    headers = captured.get("extra_headers")
+    assert isinstance(headers, dict)
+    assert "traceparent" in headers, f"expected traceparent in {headers}"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_runs_share_pipeline_parent(
+    span_collector: _CollectingExporter,
+):
+    """Two concurrent simulation spans started under one pipeline span both
+    have the pipeline as their parent — confirms asyncio.gather doesn't leak
+    OTel context across tasks."""
+    import asyncio
+
+    from evaluatorq.simulation.tracing import with_simulation_span
+
+    async def _sub(name: str) -> None:
+        async with with_simulation_span(name, None):
+            await asyncio.sleep(0)
+
+    async with with_simulation_span("orq.simulation.pipeline", None):
+        await asyncio.gather(
+            _sub("orq.simulation.run"), _sub("orq.simulation.run")
+        )
+
+    pipeline = _find(span_collector, "orq.simulation.pipeline")
+    runs = [s for s in span_collector.spans if s.name == "orq.simulation.run"]
+    assert len(runs) == 2
+    for r in runs:
+        assert r.parent.span_id == pipeline.context.span_id
 
 
 @pytest.mark.asyncio

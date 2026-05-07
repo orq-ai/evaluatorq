@@ -281,15 +281,25 @@ Return ONLY a JSON array, no other text."""
             {"role": "user", "content": user_prompt},
         ]
 
-        parsed, raw = await generate_structured(
-            self._client,
-            model=self._model,
-            messages=messages,
-            response_format=PersonaListResponse,
-            temperature=_TEMPERATURE_BALANCED,
-            max_tokens=4000,
-            label="PersonaGenerator.generate_with_coverage",
-        )
+        from evaluatorq.simulation.tracing import with_simulation_span
+
+        async with with_simulation_span(
+            "orq.simulation.persona_generation",
+            {
+                "orq.simulation.num_personas": num_personas,
+                "orq.simulation.mode": "coverage",
+                "orq.simulation.model": self._model,
+            },
+        ):
+            parsed, raw = await generate_structured(
+                self._client,
+                model=self._model,
+                messages=messages,
+                response_format=PersonaListResponse,
+                temperature=_TEMPERATURE_BALANCED,
+                max_tokens=4000,
+                label="PersonaGenerator.generate_with_coverage",
+            )
         personas = parsed.personas if parsed is not None else self._parse_personas(raw or "[]")
 
         # Validate coverage and fill gaps

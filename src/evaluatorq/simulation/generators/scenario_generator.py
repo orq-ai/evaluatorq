@@ -310,16 +310,26 @@ Return ONLY a JSON array, no other text."""
             {"role": "user", "content": user_prompt},
         ]
 
+        from evaluatorq.simulation.tracing import with_simulation_span
+
         try:
-            parsed, raw = await generate_structured(
-                self._client,
-                model=self._model,
-                messages=messages,
-                response_format=ScenarioListResponse,
-                temperature=_TEMPERATURE_BALANCED,
-                max_tokens=6000,
-                label="ScenarioGenerator.generate_with_coverage",
-            )
+            async with with_simulation_span(
+                "orq.simulation.scenario_generation",
+                {
+                    "orq.simulation.num_scenarios": num_scenarios,
+                    "orq.simulation.mode": "coverage",
+                    "orq.simulation.model": self._model,
+                },
+            ):
+                parsed, raw = await generate_structured(
+                    self._client,
+                    model=self._model,
+                    messages=messages,
+                    response_format=ScenarioListResponse,
+                    temperature=_TEMPERATURE_BALANCED,
+                    max_tokens=6000,
+                    label="ScenarioGenerator.generate_with_coverage",
+                )
 
             if parsed is not None:
                 scenarios = parsed.scenarios
@@ -381,16 +391,26 @@ Return ONLY a JSON array, no other text."""
             {"role": "user", "content": user_prompt},
         ]
 
+        from evaluatorq.simulation.tracing import with_simulation_span
+
         try:
-            parsed, raw = await generate_structured(
-                self._client,
-                model=self._model,
-                messages=messages,
-                response_format=ScenarioListResponse,
-                temperature=_TEMPERATURE_EDGE_CASE,
-                max_tokens=4000,
-                label="ScenarioGenerator.generate_edge_cases",
-            )
+            async with with_simulation_span(
+                "orq.simulation.scenario_generation",
+                {
+                    "orq.simulation.num_scenarios": num_edge_cases,
+                    "orq.simulation.mode": "edge_cases",
+                    "orq.simulation.model": self._model,
+                },
+            ):
+                parsed, raw = await generate_structured(
+                    self._client,
+                    model=self._model,
+                    messages=messages,
+                    response_format=ScenarioListResponse,
+                    temperature=_TEMPERATURE_EDGE_CASE,
+                    max_tokens=4000,
+                    label="ScenarioGenerator.generate_edge_cases",
+                )
 
             if parsed is not None:
                 scenarios = [
@@ -441,16 +461,26 @@ Return ONLY a JSON array, no other text."""
             {"role": "user", "content": user_prompt},
         ]
 
+        from evaluatorq.simulation.tracing import with_simulation_span
+
         try:
-            parsed, raw = await generate_structured(
-                self._client,
-                model=self._model,
-                messages=messages,
-                response_format=ScenarioListResponse,
-                temperature=_TEMPERATURE_EDGE_CASE,
-                max_tokens=4000,
-                label="ScenarioGenerator.generate_boundary_scenarios",
-            )
+            async with with_simulation_span(
+                "orq.simulation.scenario_generation",
+                {
+                    "orq.simulation.num_scenarios": num_scenarios,
+                    "orq.simulation.mode": "boundary",
+                    "orq.simulation.model": self._model,
+                },
+            ):
+                parsed, raw = await generate_structured(
+                    self._client,
+                    model=self._model,
+                    messages=messages,
+                    response_format=ScenarioListResponse,
+                    temperature=_TEMPERATURE_EDGE_CASE,
+                    max_tokens=4000,
+                    label="ScenarioGenerator.generate_boundary_scenarios",
+                )
 
             if parsed is not None:
                 scenarios = [
@@ -518,16 +548,26 @@ Return ONLY a JSON array, no other text."""
             {"role": "user", "content": user_prompt},
         ]
 
+        from evaluatorq.simulation.tracing import with_simulation_span
+
         try:
-            parsed, raw = await generate_structured(
-                self._client,
-                model=self._model,
-                messages=messages,
-                response_format=ScenarioListResponse,
-                temperature=_TEMPERATURE_EDGE_CASE,
-                max_tokens=6000,
-                label="ScenarioGenerator.generate_security_scenarios",
-            )
+            async with with_simulation_span(
+                "orq.simulation.scenario_generation",
+                {
+                    "orq.simulation.num_scenarios": num_scenarios,
+                    "orq.simulation.mode": "security",
+                    "orq.simulation.model": self._model,
+                },
+            ):
+                parsed, raw = await generate_structured(
+                    self._client,
+                    model=self._model,
+                    messages=messages,
+                    response_format=ScenarioListResponse,
+                    temperature=_TEMPERATURE_EDGE_CASE,
+                    max_tokens=6000,
+                    label="ScenarioGenerator.generate_security_scenarios",
+                )
 
             if parsed is not None:
                 scenarios = [
