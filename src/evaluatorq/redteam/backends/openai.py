@@ -97,23 +97,6 @@ class OpenAIModelTarget:
                 finish_reason=finish_reason,
             )
 
-    async def send_prompt(self, prompt: str) -> str:
-        """Back-compat wrapper, scheduled for removal in evaluatorq 2.0.
-
-        New code should call ``send_prompt_with_usage`` and read ``.text`` and
-        ``.usage`` directly. Emits a ``DeprecationWarning`` (deduplicated by the
-        default warnings filter) so out-of-tree callers get a visible signal
-        without noisy logs on every prompt.
-        """
-        import warnings
-        warnings.warn(
-            f"{type(self).__name__}.send_prompt is deprecated; use send_prompt_with_usage. "
-            "Will be removed in evaluatorq 2.0.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return (await self.send_prompt_with_usage(prompt)).text
-
     def new(self) -> OpenAIModelTarget:
         """Return a fresh target instance for parallel job safety (satisfies ``AgentTarget`` protocol)."""
         return OpenAIModelTarget(model=self.model, system_prompt=self.system_prompt, client=self.client, max_tokens=self.max_tokens, timeout_ms=self.timeout_ms)

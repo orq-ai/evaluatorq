@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from collections.abc import Awaitable, Callable
+
+from loguru import logger
 
 from evaluatorq.redteam.backends.base import AgentTarget
 from evaluatorq.redteam.contracts import AgentContext, SendResult, TokenUsage
-
-logger = logging.getLogger(__name__)
 
 # Accepted callable signatures
 AgentCallable = Callable[[str], Awaitable[str]] | Callable[[str], str]
@@ -94,28 +93,8 @@ class CallableTarget(AgentTarget):
             try:
                 usage = self._usage_fn(prompt, str(text))
             except Exception:
-                # Surface the full traceback so a buggy user-supplied callback
-                # is debuggable. usage drops to None — token telemetry will
-                # under-count but the call still succeeds.
-                logger.exception("CallableTarget: usage_fn raised; using usage=None")
+                logger.exception("usage_fn raised an exception; using usage=None")
         return SendResult(text=str(text), usage=usage)
-
-    async def send_prompt(self, prompt: str) -> str:
-        """Back-compat wrapper, scheduled for removal in evaluatorq 2.0.
-
-        New code should call ``send_prompt_with_usage`` and read ``.text`` and
-        ``.usage`` directly. Emits a ``DeprecationWarning`` (deduplicated by the
-        default warnings filter) so out-of-tree callers get a visible signal
-        without noisy logs on every prompt.
-        """
-        import warnings
-        warnings.warn(
-            f"{type(self).__name__}.send_prompt is deprecated; use send_prompt_with_usage. "
-            "Will be removed in evaluatorq 2.0.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return (await self.send_prompt_with_usage(prompt)).text
 
     async def get_agent_context(self) -> AgentContext:
         """Return the user-provided agent context, or a minimal placeholder."""

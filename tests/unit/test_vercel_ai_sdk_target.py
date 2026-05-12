@@ -292,17 +292,6 @@ class TestVercelAISdkTarget:
         assert text == "Hello"
         assert usage is None
 
-    def test_parse_json_unknown_shape_preserves_usage(self) -> None:
-        """JSON dict with no recognised text key must still preserve a usage
-        block parsed above. Previous fallback returned (raw, None), silently
-        dropping token telemetry for shapes like {result, usage}."""
-        text, usage = _parse_json_response(
-            '{"result": "hello", "usage": {"promptTokens": 5, "completionTokens": 3}}'
-        )
-        assert usage is not None
-        assert usage.prompt_tokens == 5
-        assert usage.completion_tokens == 3
-
     def test_parse_data_stream_response(self) -> None:
         response = _mock_response('0:"Hello"\n0:" world"\n')
         text, usage = VercelAISdkTarget._parse_response(response)

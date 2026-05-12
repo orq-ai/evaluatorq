@@ -91,6 +91,23 @@ def test_record_token_usage_with_span():
     mock_span.set_attribute.assert_any_call("gen_ai.usage.completion_tokens", 50)
     mock_span.set_attribute.assert_any_call("gen_ai.usage.total_tokens", 150)
     mock_span.set_attribute.assert_any_call("total_tokens", 150)
+    # calls=2 should set both gen_ai.usage.calls and calls attributes
+    mock_span.set_attribute.assert_any_call("gen_ai.usage.calls", 2)
+    mock_span.set_attribute.assert_any_call("calls", 2)
+
+
+def test_record_token_usage_calls_zero_omits_calls_attribute():
+    """When calls=0, gen_ai.usage.calls is NOT set (conditional branch)."""
+    from evaluatorq.redteam.tracing import record_token_usage
+
+    mock_span = MagicMock()
+    record_token_usage(mock_span, prompt_tokens=10, completion_tokens=5, total_tokens=15, calls=0)
+    # Verify gen_ai.usage.calls was never set
+    calls_in_attrs = [
+        call for call in mock_span.set_attribute.call_args_list
+        if call.args and call.args[0] == "gen_ai.usage.calls"
+    ]
+    assert calls_in_attrs == [], "gen_ai.usage.calls must not be set when calls=0"
 
 
 def test_record_llm_response_sets_both_token_conventions():
@@ -126,6 +143,38 @@ def test_record_llm_response_sets_both_token_conventions():
     mock_span.set_attribute.assert_any_call("gen_ai.usage.completion_tokens_details.reasoning_tokens", 10)
     mock_span.set_attribute.assert_any_call("gen_ai.response.id", "resp-123")
     mock_span.set_attribute.assert_any_call("gen_ai.response.model", "gpt-5-mini")
+
+
+@pytest.mark.parametrize(
+    "raw_total, expected_total",
+    [
+        (0, 150),       # total=0 → fallback to prompt + completion (silent-undercount fix)
+        (None, 150),    # total=None → fallback to prompt + completion
+        (200, 200),     # total>0 → use provider-reported value (override branch)
+    ],
+)
+def test_record_llm_response_total_tokens_override_branch(raw_total, expected_total):
+    """record_llm_response uses raw_total only when > 0, else falls back to prompt+completion."""
+    from evaluatorq.redteam.tracing import record_llm_response
+
+    mock_span = MagicMock()
+    mock_usage = MagicMock()
+    mock_usage.prompt_tokens = 100
+    mock_usage.completion_tokens = 50
+    mock_usage.total_tokens = raw_total
+    mock_usage.prompt_tokens_details = None
+    mock_usage.completion_tokens_details = None
+
+    mock_response = MagicMock()
+    mock_response.id = "resp-abc"
+    mock_response.model = "gpt-test"
+    mock_response.usage = mock_usage
+    mock_response.choices = []
+
+    record_llm_response(mock_span, mock_response)
+
+    mock_span.set_attribute.assert_any_call("gen_ai.usage.total_tokens", expected_total)
+    mock_span.set_attribute.assert_any_call("total_tokens", expected_total)
 
 
 def test_record_llm_response_without_cached_tokens():

@@ -82,23 +82,6 @@ class OpenAIAgentTarget(AgentTarget):
 
         return SendResult(text=str(result.final_output), usage=usage)
 
-    async def send_prompt(self, prompt: str) -> str:
-        """Back-compat wrapper, scheduled for removal in evaluatorq 2.0.
-
-        New code should call ``send_prompt_with_usage`` and read ``.text`` and
-        ``.usage`` directly. Emits a ``DeprecationWarning`` (deduplicated by the
-        default warnings filter) so out-of-tree callers get a visible signal
-        without noisy logs on every prompt.
-        """
-        import warnings
-        warnings.warn(
-            f"{type(self).__name__}.send_prompt is deprecated; use send_prompt_with_usage. "
-            "Will be removed in evaluatorq 2.0.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return (await self.send_prompt_with_usage(prompt)).text
-
     async def get_agent_context(self) -> AgentContext:
         """Return agent context derived from the wrapped Agent instance.
 

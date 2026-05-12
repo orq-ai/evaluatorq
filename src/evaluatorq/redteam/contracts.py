@@ -609,6 +609,12 @@ class LLMConfig(BaseModel):
     # --- Target agent timeout -------------------------------------------------
     target_agent_timeout_ms: int = 240_000
 
+    # --- Agent tool continuation cap ------------------------------------------
+    max_tool_continuations: int = Field(
+        default=5,
+        description='Max client-driven tool-result continuation rounds for ORQ agents that emit pending_tool_calls.',
+    )
+
     @property
     def retry_config(self) -> dict[str, Any]:
         """ORQ retry config dict for ``extra_body``.
@@ -739,12 +745,10 @@ class AttackStrategy(BaseModel):
 class TokenUsage(BaseModel):
     """Token usage and cost for an LLM call or aggregation of calls.
 
-    ``total_tokens`` reflects the provider's reported total when available
-    (``> 0``); otherwise it falls back to ``prompt_tokens + completion_tokens``.
-    The model intentionally does not enforce ``total == prompt + completion``
-    so provider-reported totals — which on some providers include extra
-    counts for cached, reasoning, or audio tokens that this struct does not
-    break out — are not silently corrupted by a naive normalisation step.
+    ``total_tokens`` is stored as provided by the upstream provider and is
+    never overridden. This preserves provider-specific token breakdowns
+    (cached_tokens, reasoning_tokens, audio tokens, etc.) that would be
+    silently corrupted by a normalisation step.
     """
 
     model_config = ConfigDict(frozen=True)

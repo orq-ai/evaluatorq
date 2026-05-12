@@ -4,6 +4,15 @@ Covers:
 - OpenAIModelTarget (backends/openai.py)
 - ORQAgentTarget (backends/orq.py)
 - LangGraphTarget (integrations/langgraph_integration/target.py)
+- CallableTarget (integrations/callable_integration/target.py)
+- OpenAIAgentTarget (integrations/openai_agents_integration/target.py)
+- VercelAISdkTarget (integrations/vercel_ai_sdk_integration/target.py)
+
+This module is the cross-target conformance harness for RES-715: every target
+that implements ``send_prompt_with_usage`` must return a ``SendResult`` whose
+``usage`` is either ``None`` or a populated ``TokenUsage``. Adding a new
+target without an entry here is a process bug, not a code bug — the integration
+should not ship until the conformance check is extended.
 """
 
 from __future__ import annotations
@@ -223,17 +232,15 @@ class TestORQAgentTargetSendPromptWithUsage:
 
     @pytest.mark.asyncio
     async def test_continuation_exhaustion_raises_runtime_error(self) -> None:
-        """5 continuations all returning pending_tool_calls raises RuntimeError
-        so the orchestrator's existing circuit-breaker counts it as an agent
-        error and continues with other runs (rather than treating an empty/
-        partial response as a successful answer)."""
+        """5 continuations all returning pending_tool_calls raises RuntimeError."""
         target, orq_client = self._make_target()
 
         pending_call = MagicMock()
         pending_call.id = "tool-call-persist"
 
+        # All responses keep returning pending tool calls
         continuing_response = _make_orq_response(
-            text="partial",
+            text="",
             task_id="task-001",
             prompt_tokens=5,
             completion_tokens=2,
@@ -345,16 +352,17 @@ class TestORQAgentTargetSendPromptWithUsage:
         assert result.usage.total_tokens == 15  # falls back to prompt + completion
 
     @pytest.mark.asyncio
-    async def test_orq_continuation_loop_call_count(self) -> None:
-        """Hardcoded cap is 5 — 1 initial call + 5 continuation calls = 6 total
-        before exhaustion raises."""
+    async def test_orq_uses_pipeline_config_max_continuations(self) -> None:
+        """Loop bails after PIPELINE_CONFIG.max_tool_continuations continuations."""
+        from evaluatorq.redteam import contracts as contracts_module
+
         target, _ = self._make_target()
 
         pending_call = MagicMock()
         pending_call.id = "tool-call-persist"
 
         continuing_response = _make_orq_response(
-            text="partial",
+            text="",
             task_id="task-001",
             prompt_tokens=5,
             completion_tokens=2,
@@ -369,14 +377,22 @@ class TestORQAgentTargetSendPromptWithUsage:
             call_count += 1
             return continuing_response
 
-        with (
-            patch("asyncio.to_thread", side_effect=count_calls),
-            patch("evaluatorq.redteam.tracing.get_tracer", return_value=None),
-            pytest.raises(RuntimeError, match="Unresolved pending tool calls"),
-        ):
-            await target.send_prompt_with_usage("prompt")
+        original_max = contracts_module.PIPELINE_CONFIG.max_tool_continuations
+        try:
+            # Monkeypatch to 2 so the loop stops after 2 continuations instead of 5
+            contracts_module.PIPELINE_CONFIG.max_tool_continuations = 2
 
-        assert call_count == 6
+            with (
+                patch("asyncio.to_thread", side_effect=count_calls),
+                patch("evaluatorq.redteam.tracing.get_tracer", return_value=None),
+                pytest.raises(RuntimeError, match="Unresolved pending tool calls"),
+            ):
+                await target.send_prompt_with_usage("prompt")
+        finally:
+            contracts_module.PIPELINE_CONFIG.max_tool_continuations = original_max
+
+        # 1 initial call + 2 continuation calls = 3 total
+        assert call_count == 3
 
 
 # ===========================================================================
@@ -517,3 +533,271 @@ class TestLangGraphTargetSendPromptWithUsage:
 
         assert result.usage is not None
         assert result.usage.prompt_tokens == 12
+
+
+# ===========================================================================
+# CallableTarget — send_prompt_with_usage
+# ===========================================================================
+
+
+class TestCallableTargetSendPromptWithUsage:
+    @pytest.mark.asyncio
+    async def test_async_callable_returns_send_result(self) -> None:
+        from evaluatorq.integrations.callable_integration import CallableTarget
+
+        async def agent(prompt: str) -> str:
+            return f"reply:{prompt}"
+
+        target = CallableTarget(agent)
+        result = await target.send_prompt_with_usage("hi")
+        assert isinstance(result, SendResult)
+        assert result.text == "reply:hi"
+        assert result.usage is None
+
+    @pytest.mark.asyncio
+    async def test_sync_callable_returns_send_result(self) -> None:
+        from evaluatorq.integrations.callable_integration import CallableTarget
+
+        target = CallableTarget(lambda prompt: f"sync:{prompt}")
+        result = await target.send_prompt_with_usage("hi")
+        assert isinstance(result, SendResult)
+        assert result.text == "sync:hi"
+        assert result.usage is None
+
+    @pytest.mark.asyncio
+    async def test_usage_fn_populates_token_usage(self) -> None:
+        from evaluatorq.integrations.callable_integration import CallableTarget
+
+        async def agent(prompt: str) -> str:
+            return "ok"
+
+        def usage_fn(prompt: str, response: str) -> TokenUsage:
+            return TokenUsage(prompt_tokens=7, completion_tokens=3, total_tokens=10, calls=1)
+
+        target = CallableTarget(agent, usage_fn=usage_fn)
+        result = await target.send_prompt_with_usage("hi")
+        assert result.usage is not None
+        assert result.usage.prompt_tokens == 7
+        assert result.usage.completion_tokens == 3
+        assert result.usage.total_tokens == 10
+        assert result.usage.calls == 1
+
+    @pytest.mark.asyncio
+    async def test_usage_fn_exception_yields_none_usage(self) -> None:
+        from evaluatorq.integrations.callable_integration import CallableTarget
+
+        async def agent(prompt: str) -> str:
+            return "ok"
+
+        def bad_usage_fn(prompt: str, response: str) -> TokenUsage:
+            raise RuntimeError("boom")
+
+        target = CallableTarget(agent, usage_fn=bad_usage_fn)
+        result = await target.send_prompt_with_usage("hi")
+        assert result.usage is None
+        assert result.text == "ok"
+
+
+# ===========================================================================
+# OpenAIAgentTarget — send_prompt_with_usage
+# ===========================================================================
+
+
+# Skip if the optional openai-agents SDK isn't available
+pytest.importorskip("agents")
+
+
+class TestOpenAIAgentTargetSendPromptWithUsage:
+    def _make_run_result(
+        self,
+        *,
+        final_output: str = "agent reply",
+        input_tokens: int | None = 30,
+        output_tokens: int | None = 12,
+        total_tokens: int | None = 42,
+    ) -> MagicMock:
+        result = MagicMock()
+        result.final_output = final_output
+        result.to_input_list.return_value = []
+        if input_tokens is None and output_tokens is None and total_tokens is None:
+            result.context_wrapper = None
+        else:
+            usage = MagicMock()
+            usage.input_tokens = input_tokens
+            usage.output_tokens = output_tokens
+            usage.total_tokens = total_tokens
+            ctx = MagicMock()
+            ctx.usage = usage
+            result.context_wrapper = ctx
+        return result
+
+    @pytest.mark.asyncio
+    async def test_happy_path_returns_send_result_with_usage(self) -> None:
+        from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget
+
+        agent = MagicMock()
+        target = OpenAIAgentTarget(agent)
+
+        run_result = self._make_run_result(
+            final_output="hello",
+            input_tokens=30,
+            output_tokens=12,
+            total_tokens=42,
+        )
+
+        with patch(
+            "evaluatorq.integrations.openai_agents_integration.target.Runner.run",
+            new=AsyncMock(return_value=run_result),
+        ):
+            result = await target.send_prompt_with_usage("hi")
+
+        assert isinstance(result, SendResult)
+        assert result.text == "hello"
+        assert result.usage is not None
+        assert result.usage.prompt_tokens == 30
+        assert result.usage.completion_tokens == 12
+        assert result.usage.total_tokens == 42
+        assert result.usage.calls == 1
+
+    @pytest.mark.asyncio
+    async def test_total_tokens_zero_falls_back_to_sum(self) -> None:
+        from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget
+
+        agent = MagicMock()
+        target = OpenAIAgentTarget(agent)
+
+        run_result = self._make_run_result(
+            final_output="hello",
+            input_tokens=20,
+            output_tokens=10,
+            total_tokens=0,
+        )
+
+        with patch(
+            "evaluatorq.integrations.openai_agents_integration.target.Runner.run",
+            new=AsyncMock(return_value=run_result),
+        ):
+            result = await target.send_prompt_with_usage("hi")
+
+        assert result.usage is not None
+        assert result.usage.total_tokens == 30  # falls back to prompt + completion
+
+    @pytest.mark.asyncio
+    async def test_no_usage_in_context_yields_none(self) -> None:
+        from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget
+
+        agent = MagicMock()
+        target = OpenAIAgentTarget(agent)
+
+        run_result = self._make_run_result(
+            final_output="hello",
+            input_tokens=None,
+            output_tokens=None,
+            total_tokens=None,
+        )
+
+        with patch(
+            "evaluatorq.integrations.openai_agents_integration.target.Runner.run",
+            new=AsyncMock(return_value=run_result),
+        ):
+            result = await target.send_prompt_with_usage("hi")
+
+        assert result.text == "hello"
+        assert result.usage is None
+
+
+# ===========================================================================
+# VercelAISdkTarget — send_prompt_with_usage
+# ===========================================================================
+
+
+class TestVercelAISdkTargetSendPromptWithUsage:
+    def _make_response(self, *, content_type: str, text: str) -> MagicMock:
+        response = MagicMock()
+        response.headers = {"content-type": content_type}
+        response.text = text
+        response.raise_for_status = MagicMock()
+        return response
+
+    @pytest.mark.asyncio
+    async def test_data_stream_protocol_returns_text_and_usage(self) -> None:
+        from evaluatorq.integrations.vercel_ai_sdk_integration import VercelAISdkTarget
+
+        target = VercelAISdkTarget("http://example.local/api/chat")
+
+        stream = (
+            '0:"Hello"\n'
+            '0:" world"\n'
+            'e:{"finishReason":"stop","usage":{"promptTokens":10,"completionTokens":5,"totalTokens":15}}\n'
+        )
+        response = self._make_response(content_type="text/plain", text=stream)
+
+        mock_client = MagicMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client.post = AsyncMock(return_value=response)
+
+        with patch(
+            "evaluatorq.integrations.vercel_ai_sdk_integration.target.httpx.AsyncClient",
+            return_value=mock_client,
+        ):
+            result = await target.send_prompt_with_usage("hi")
+
+        assert isinstance(result, SendResult)
+        assert result.text == "Hello world"
+        assert result.usage is not None
+        assert result.usage.prompt_tokens == 10
+        assert result.usage.completion_tokens == 5
+        assert result.usage.total_tokens == 15
+        assert result.usage.calls == 1
+
+    @pytest.mark.asyncio
+    async def test_json_response_returns_text_and_usage(self) -> None:
+        from evaluatorq.integrations.vercel_ai_sdk_integration import VercelAISdkTarget
+
+        target = VercelAISdkTarget("http://example.local/api/chat")
+
+        body = (
+            '{"text":"hello there",'
+            '"usage":{"prompt_tokens":20,"completion_tokens":4,"total_tokens":24}}'
+        )
+        response = self._make_response(content_type="application/json", text=body)
+
+        mock_client = MagicMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client.post = AsyncMock(return_value=response)
+
+        with patch(
+            "evaluatorq.integrations.vercel_ai_sdk_integration.target.httpx.AsyncClient",
+            return_value=mock_client,
+        ):
+            result = await target.send_prompt_with_usage("hi")
+
+        assert isinstance(result, SendResult)
+        assert result.usage is not None
+        assert result.usage.prompt_tokens == 20
+        assert result.usage.completion_tokens == 4
+        assert result.usage.total_tokens == 24
+
+    @pytest.mark.asyncio
+    async def test_plain_text_response_yields_none_usage(self) -> None:
+        from evaluatorq.integrations.vercel_ai_sdk_integration import VercelAISdkTarget
+
+        target = VercelAISdkTarget("http://example.local/api/chat")
+        response = self._make_response(content_type="text/html", text="plain reply")
+
+        mock_client = MagicMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client.post = AsyncMock(return_value=response)
+
+        with patch(
+            "evaluatorq.integrations.vercel_ai_sdk_integration.target.httpx.AsyncClient",
+            return_value=mock_client,
+        ):
+            result = await target.send_prompt_with_usage("hi")
+
+        assert isinstance(result, SendResult)
+        assert result.text == "plain reply"
+        assert result.usage is None

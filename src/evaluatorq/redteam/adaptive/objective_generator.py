@@ -447,14 +447,8 @@ def create_strategy_from_objective(
         )
         effective_category = category
 
-    # Diversify attack techniques across generated objectives without sacrificing
-    # reproducibility: seed a local RNG from a stable hash of the objective text
-    # so identical inputs always pick the same technique. ``hash()`` is salted
-    # per-process, so use ``hashlib`` for a deterministic digest across runs.
-    technique_rng = random.Random(
-        int(hashlib.sha256(objective.objective.encode('utf-8')).hexdigest(), 16)
-    )
-    technique = technique_rng.choice(ATTACK_TECHNIQUE_POOL)
+    seed = int(hashlib.sha256(objective.objective.encode()).hexdigest(), 16)
+    technique = random.Random(seed).choice(ATTACK_TECHNIQUE_POOL)
     resolved_turn_type = turn_type or objective.turn_type
     delivery_method = objective.delivery_method
 

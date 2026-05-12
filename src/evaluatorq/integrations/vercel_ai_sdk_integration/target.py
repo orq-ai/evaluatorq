@@ -100,7 +100,6 @@ class VercelAISdkTarget(AgentTarget):
                     headers={"Content-Type": "application/json", **self._headers},
                 )
                 response.raise_for_status()
-            text, usage = self._parse_response(response)
         except (httpx.HTTPError, ValueError, KeyError):
             # Roll back the user turn so the next call doesn't forward a
             # malformed conversation with a hanging user message. Catches
@@ -111,25 +110,9 @@ class VercelAISdkTarget(AgentTarget):
             self._history.pop()
             raise
 
+        text, usage = self._parse_response(response)
         self._history.append({"role": "assistant", "content": text})
         return SendResult(text=text, usage=usage)
-
-    async def send_prompt(self, prompt: str) -> str:
-        """Back-compat wrapper, scheduled for removal in evaluatorq 2.0.
-
-        New code should call ``send_prompt_with_usage`` and read ``.text`` and
-        ``.usage`` directly. Emits a ``DeprecationWarning`` (deduplicated by the
-        default warnings filter) so out-of-tree callers get a visible signal
-        without noisy logs on every prompt.
-        """
-        import warnings
-        warnings.warn(
-            f"{type(self).__name__}.send_prompt is deprecated; use send_prompt_with_usage. "
-            "Will be removed in evaluatorq 2.0.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return (await self.send_prompt_with_usage(prompt)).text
 
     async def get_agent_context(self) -> AgentContext:
         """Return the user-provided agent context, or a minimal placeholder."""
@@ -216,12 +199,8 @@ def _parse_data_stream(raw: str) -> tuple[str, TokenUsage | None]:
             if isinstance(u, dict):
                 p = int(u.get('promptTokens', 0) or 0)
                 c = int(u.get('completionTokens', 0) or 0)
-                # Mirror the JSON-response parser's zero-guard: an all-zeros
-                # usage block carries no information and would skew aggregates
-                # by adding a spurious calls=1 with zero tokens.
                 if p > 0 or c > 0:
                     t = u.get('totalTokens')
-                    # JSON numbers with a decimal point decode to float, so accept both.
                     total = int(t) if isinstance(t, (int, float)) and t > 0 else p + c
                     usage = TokenUsage(
                         prompt_tokens=p,
@@ -263,7 +242,6 @@ def _parse_json_response(raw: str) -> tuple[str, TokenUsage | None]:
                 p = int(u.get("promptTokens", 0) or 0)
                 c = int(u.get("completionTokens", 0) or 0)
             t = u.get("total_tokens") or u.get("totalTokens")
-            # JSON numbers with a decimal point decode to float, so accept both.
             total = int(t) if isinstance(t, (int, float)) and t > 0 else p + c
             if p > 0 or c > 0:
                 usage = TokenUsage(
@@ -292,7 +270,4 @@ def _parse_json_response(raw: str) -> tuple[str, TokenUsage | None]:
             if isinstance(choice_msg, dict):
                 return str(choice_msg.get("content", "")), usage
 
-    # Fallback: dict had no recognised text key but may still carry a valid
-    # usage block parsed above — preserve it so token telemetry isn't lost
-    # for shapes like {"result": "...", "usage": {...}}.
     return raw.strip(), usage

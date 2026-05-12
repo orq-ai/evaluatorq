@@ -12,7 +12,6 @@ Groups:
 
 from __future__ import annotations
 
-import warnings
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -120,15 +119,14 @@ class TestTokenUsageFromCompletion:
 # truncate_for_span + _default_span_max_text_chars
 # ---------------------------------------------------------------------------
 class TestTruncateForSpanNegativeArg:
-    def test_negative_max_chars_warns_and_returns_unchanged(self, caplog: Any) -> None:
-        # Symmetric with env-var negative handling: a misconfig must not
-        # crash the surrounding span recorder. Returns the original text
-        # untouched and emits a warning so the caller can diagnose.
+    def test_negative_max_chars_raises(self) -> None:
+        # truncate_for_span raises ValueError for negative max_chars.
+        # _default_span_max_text_chars (env var path) warns-and-returns-None instead;
+        # the two codepaths differ by design.
         from evaluatorq.redteam.tracing import truncate_for_span
 
-        text = "x" * 50
-        result = truncate_for_span(text, max_chars=-1)
-        assert result == text  # unlimited fallback
+        with pytest.raises(ValueError, match="non-negative"):
+            truncate_for_span("x" * 50, max_chars=-1)
 
 
 class TestSpanMaxTextCharsCacheMemoization:
@@ -150,51 +148,6 @@ class TestSpanMaxTextCharsCacheMemoization:
         assert second == 100  # cached, not re-read
 
         _default_span_max_text_chars.cache_clear()
-
-
-# ---------------------------------------------------------------------------
-# send_prompt back-compat: emits DeprecationWarning
-# ---------------------------------------------------------------------------
-class TestSendPromptDeprecationWarning:
-    @pytest.mark.asyncio
-    async def test_callable_target_send_prompt_warns(self) -> None:
-        from evaluatorq.integrations.callable_integration import CallableTarget
-
-        async def agent(prompt: str) -> str:
-            return f"echo: {prompt}"
-
-        target = CallableTarget(agent)
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always", DeprecationWarning)
-            text = await target.send_prompt("hi")
-        assert text == "echo: hi"
-        assert any(
-            issubclass(w.category, DeprecationWarning) and "send_prompt is deprecated" in str(w.message)
-            for w in caught
-        )
-
-    @pytest.mark.asyncio
-    async def test_openai_model_target_send_prompt_warns(self) -> None:
-        from evaluatorq.redteam.backends.openai import OpenAIModelTarget
-
-        client = MagicMock()
-        client.chat.completions.create = AsyncMock(
-            return_value=MagicMock(
-                choices=[MagicMock(message=MagicMock(content="reply"), finish_reason="stop")],
-                usage=MagicMock(prompt_tokens=1, completion_tokens=1, total_tokens=2),
-                id="r-1",
-                model="gpt-x",
-            )
-        )
-        target = OpenAIModelTarget(model="gpt-x", client=client)
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always", DeprecationWarning)
-            text = await target.send_prompt("hi")
-        assert text == "reply"
-        assert any(
-            issubclass(w.category, DeprecationWarning) and "send_prompt is deprecated" in str(w.message)
-            for w in caught
-        )
 
 
 # ---------------------------------------------------------------------------

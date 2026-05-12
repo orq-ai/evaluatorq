@@ -1409,7 +1409,7 @@ async def _run_dynamic_or_hybrid(
                         _factory: Any = at_factory,
                         _label: str = at_label,
                     ) -> Any:
-                        """Send a static datapoint to the AgentTarget via send_prompt."""
+                        """Send a static datapoint to the AgentTarget via send_prompt_with_usage."""
                         messages = _build_messages(data)
                         prompt = '\n'.join(
                             content for m in messages
@@ -1422,11 +1422,11 @@ async def _run_dynamic_or_hybrid(
                                 f'produced an empty prompt ({len(messages)} messages, none with user content).'
                             )
                         target_instance = _factory.create_target(_label)
-                        response = await target_instance.send_prompt(prompt)
+                        result = await target_instance.send_prompt_with_usage(prompt)
                         active_progress = _get_active_progress()
                         if active_progress is not None:
                             await active_progress.finish_attack(None)
-                        return {'response': response}
+                        return {'response': result.text, 'token_usage': result.usage}
 
                     @job(f'redteam:hybrid:{at_safe}')
                     async def at_target_job(

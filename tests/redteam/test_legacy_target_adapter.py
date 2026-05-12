@@ -46,6 +46,16 @@ class _CloneOnlyTarget:
         return _CloneOnlyTarget()
 
 
+class _SyncLegacyTarget:
+    """Legacy target with a *synchronous* `send_prompt()` returning a str."""
+
+    def send_prompt(self, prompt: str) -> str:
+        return f"sync:{prompt}"
+
+    def new(self) -> "_SyncLegacyTarget":
+        return _SyncLegacyTarget()
+
+
 class _SlottedLegacyTarget:
     __slots__ = ("_state",)
 
@@ -114,7 +124,17 @@ class TestAdaptLegacyTarget:
         assert result.text == "echo:ping"
         assert result.usage is None
 
-    def test_slotted_legacy_target_raises_typeerror_with_hint(self) -> None:
+    @pytest.mark.asyncio
+    async def test_sync_legacy_target_adapted(self) -> None:
+        """Sync `send_prompt()` legacy targets must be supported, not TypeError."""
         with pytest.warns(DeprecationWarning):
-            with pytest.raises(TypeError, match=r"__slots__.*send_prompt_with_usage"):
+            target = adapt_legacy_target(_SyncLegacyTarget())
+        result = await target.send_prompt_with_usage("ping")  # pyright: ignore[reportAttributeAccessIssue]
+        assert isinstance(result, SendResult)
+        assert result.text == "sync:ping"
+        assert result.usage is None
+
+    def test_slotted_legacy_target_raises_attributeerror(self) -> None:
+        with pytest.warns(DeprecationWarning):
+            with pytest.raises(AttributeError):
                 adapt_legacy_target(_SlottedLegacyTarget())

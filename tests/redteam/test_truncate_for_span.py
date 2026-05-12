@@ -10,13 +10,22 @@ import pytest
 
 
 class TestTruncateForSpanExplicitMaxChars:
-    def test_default_behavior_returns_input_unchanged(self) -> None:
-        """With env unset and no max_chars, returns input regardless of length."""
-        from evaluatorq.redteam.tracing import _default_span_max_text_chars, truncate_for_span
+    def test_default_behavior_caps_at_8192(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """With env unset and no max_chars, default cap is 8192 chars."""
+        from evaluatorq.redteam.tracing import (
+            _DEFAULT_SPAN_MAX_TEXT_CHARS,
+            _default_span_max_text_chars,
+            truncate_for_span,
+        )
 
+        monkeypatch.delenv("EVALUATORQ_SPAN_MAX_TEXT_CHARS", raising=False)
         _default_span_max_text_chars.cache_clear()
-        long_text = "x" * 10_000
-        assert truncate_for_span(long_text) == long_text
+        try:
+            long_text = "x" * 10_000
+            result = truncate_for_span(long_text)
+            assert len(result) == _DEFAULT_SPAN_MAX_TEXT_CHARS == 8192
+        finally:
+            _default_span_max_text_chars.cache_clear()
 
     def test_max_chars_zero_returns_input_unchanged(self) -> None:
         from evaluatorq.redteam.tracing import truncate_for_span
@@ -24,12 +33,19 @@ class TestTruncateForSpanExplicitMaxChars:
         text = "x" * 1000
         assert truncate_for_span(text, max_chars=0) == text
 
-    def test_max_chars_none_returns_input_unchanged(self) -> None:
+    def test_max_chars_none_consults_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """max_chars=None falls through to the env-derived default (8192)."""
         from evaluatorq.redteam.tracing import _default_span_max_text_chars, truncate_for_span
 
+        monkeypatch.delenv("EVALUATORQ_SPAN_MAX_TEXT_CHARS", raising=False)
         _default_span_max_text_chars.cache_clear()
-        text = "hello world " * 100
-        assert truncate_for_span(text, max_chars=None) == text
+        try:
+            short = "hello world"  # well below 8192
+            assert truncate_for_span(short, max_chars=None) == short
+        finally:
+            _default_span_max_text_chars.cache_clear()
 
     def test_short_input_unchanged(self) -> None:
         """Input shorter than max_chars is returned unchanged."""
@@ -96,19 +112,17 @@ class TestTruncateForSpanExplicitMaxChars:
         assert result == _TRUNCATION_MARKER[:1]
         assert len(result) == 1
 
-    def test_negative_max_chars_warns_and_returns_unchanged(self) -> None:
-        # Symmetric with env-var negative handling: a misconfig must not
-        # crash the surrounding span recorder. Warn and treat as unlimited.
+    def test_negative_max_chars_raises_value_error(self) -> None:
         from evaluatorq.redteam.tracing import truncate_for_span
 
-        text = "hello"
-        assert truncate_for_span(text, max_chars=-1) == text
+        with pytest.raises(ValueError, match="non-negative"):
+            truncate_for_span("hello", max_chars=-1)
 
-    def test_large_negative_max_chars_warns_and_returns_unchanged(self) -> None:
+    def test_large_negative_max_chars_raises_value_error(self) -> None:
         from evaluatorq.redteam.tracing import truncate_for_span
 
-        text = "hello"
-        assert truncate_for_span(text, max_chars=-999) == text
+        with pytest.raises(ValueError):
+            truncate_for_span("hello", max_chars=-999)
 
     def test_non_string_input_coerced_via_str(self) -> None:
         """Non-string input is coerced via str() before truncation."""
@@ -159,44 +173,51 @@ class TestTruncateForSpanEnvOverride:
         finally:
             _default_span_max_text_chars.cache_clear()
 
-    def test_env_override_invalid_falls_back_to_unlimited(
+    def test_env_override_invalid_falls_back_to_default(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Non-integer env value falls back to None (unlimited)."""
-        from evaluatorq.redteam.tracing import _default_span_max_text_chars, truncate_for_span
+        """Non-integer env value falls back to the 8192 default."""
+        from evaluatorq.redteam.tracing import (
+            _DEFAULT_SPAN_MAX_TEXT_CHARS,
+            _default_span_max_text_chars,
+        )
 
         monkeypatch.setenv("EVALUATORQ_SPAN_MAX_TEXT_CHARS", "abc")
         _default_span_max_text_chars.cache_clear()
         try:
-            text = "x" * 1000
-            result = truncate_for_span(text)
-            assert result == text
+            assert _default_span_max_text_chars() == _DEFAULT_SPAN_MAX_TEXT_CHARS
         finally:
             _default_span_max_text_chars.cache_clear()
 
-    def test_env_unset_returns_none(
+    def test_env_unset_returns_default(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Unset env var returns None from _default_span_max_text_chars."""
-        from evaluatorq.redteam.tracing import _default_span_max_text_chars
+        """Unset env var returns the 8192 default."""
+        from evaluatorq.redteam.tracing import (
+            _DEFAULT_SPAN_MAX_TEXT_CHARS,
+            _default_span_max_text_chars,
+        )
 
         monkeypatch.delenv("EVALUATORQ_SPAN_MAX_TEXT_CHARS", raising=False)
         _default_span_max_text_chars.cache_clear()
         try:
-            assert _default_span_max_text_chars() is None
+            assert _default_span_max_text_chars() == _DEFAULT_SPAN_MAX_TEXT_CHARS
         finally:
             _default_span_max_text_chars.cache_clear()
 
-    def test_env_empty_string_returns_none(
+    def test_env_empty_string_returns_default(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Empty string env var treated same as unset — returns None."""
-        from evaluatorq.redteam.tracing import _default_span_max_text_chars
+        """Empty string env var treated same as unset — returns the 8192 default."""
+        from evaluatorq.redteam.tracing import (
+            _DEFAULT_SPAN_MAX_TEXT_CHARS,
+            _default_span_max_text_chars,
+        )
 
         monkeypatch.setenv("EVALUATORQ_SPAN_MAX_TEXT_CHARS", "")
         _default_span_max_text_chars.cache_clear()
         try:
-            assert _default_span_max_text_chars() is None
+            assert _default_span_max_text_chars() == _DEFAULT_SPAN_MAX_TEXT_CHARS
         finally:
             _default_span_max_text_chars.cache_clear()
 
@@ -247,8 +268,9 @@ class TestTruncateForSpanEnvOverride:
         try:
             with caplog.at_level(logging.WARNING):
                 result = _default_span_max_text_chars()
-            # Function must return None (unlimited) and not raise
-            assert result is None
+            # Function must fall back to the 8192 default and not raise
+            from evaluatorq.redteam.tracing import _DEFAULT_SPAN_MAX_TEXT_CHARS
+            assert result == _DEFAULT_SPAN_MAX_TEXT_CHARS
         finally:
             _default_span_max_text_chars.cache_clear()
 
@@ -265,10 +287,8 @@ class TestTruncateForSpanEnvOverride:
         try:
             with caplog.at_level(logging.WARNING):
                 _default_span_max_text_chars()
-            # Either loguru or stdlib warning should contain the bad value
-            # (loguru propagates to stdlib by default in test environments)
             all_messages = " ".join(caplog.messages)
-            # If loguru doesn't propagate, the function still returns None correctly
+            assert "bad_value" in all_messages, f"Expected bad_value in warning, got: {all_messages!r}"
             assert _default_span_max_text_chars.cache_info().currsize >= 1
         finally:
             _default_span_max_text_chars.cache_clear()

@@ -337,47 +337,51 @@ def _derive_provider(model: str) -> str:
 
 _TRUNCATION_MARKER = '... [truncated]'
 
+# Most OTLP exporters cap span attribute values around 4–32 KB. Multi-turn
+# red-team payloads easily exceed that and get silently dropped at export
+# time. Default to a conservative 8192 chars so payloads survive every common
+# exporter; override via ``EVALUATORQ_SPAN_MAX_TEXT_CHARS`` (set ``0`` to disable).
+_DEFAULT_SPAN_MAX_TEXT_CHARS = 8192
+
 
 @functools.lru_cache(maxsize=1)
 def _default_span_max_text_chars() -> int | None:
-    """Read EVALUATORQ_SPAN_MAX_TEXT_CHARS once. Default ``None`` = unlimited.
+    """Read EVALUATORQ_SPAN_MAX_TEXT_CHARS once. Default ``8192``.
 
-    Set the env var to a positive integer to cap span text payloads. ``0``
-    is also treated as unlimited. Invalid values (non-integer, negative)
-    are warn-and-ignored: a misconfigured env var must never crash a
-    red-teaming run from the hot-path span recorders that call this.
+    Set the env var to a positive integer to override the cap, or ``0`` to
+    disable truncation entirely. Negative or invalid values warn and fall
+    back to the 8192 default.
 
     Use ``_default_span_max_text_chars.cache_clear()`` in tests to force
     re-read after changing the env var.
     """
     raw = os.getenv('EVALUATORQ_SPAN_MAX_TEXT_CHARS')
     if raw is None or raw == '':
-        return None
+        return _DEFAULT_SPAN_MAX_TEXT_CHARS
     try:
         value = int(raw)
     except ValueError:
         logger.warning(
-            'EVALUATORQ_SPAN_MAX_TEXT_CHARS=%r is not a valid int; ignoring (truncation disabled)',
+            'EVALUATORQ_SPAN_MAX_TEXT_CHARS={!r} is not a valid int; using default {}',
             raw,
+            _DEFAULT_SPAN_MAX_TEXT_CHARS,
         )
-        return None
+        return _DEFAULT_SPAN_MAX_TEXT_CHARS
     if value < 0:
         logger.warning(
-            'EVALUATORQ_SPAN_MAX_TEXT_CHARS=%r is negative; ignoring (truncation disabled)',
-            raw,
+            'EVALUATORQ_SPAN_MAX_TEXT_CHARS={!r} must be non-negative; using default {}',
+            value,
+            _DEFAULT_SPAN_MAX_TEXT_CHARS,
         )
-        return None
+        return _DEFAULT_SPAN_MAX_TEXT_CHARS
     return value
 
 
 def truncate_for_span(text: object, *, max_chars: int | None = None) -> str:
     """Truncate text for span attribute storage.
 
-    Defaults to ``EVALUATORQ_SPAN_MAX_TEXT_CHARS`` env var (or ``None`` =
-    unlimited if unset). ``None``, ``0``, and negative values all disable
-    truncation. Symmetric with ``_default_span_max_text_chars``: a misconfig
-    on either path degrades to "unlimited" with a warning rather than
-    crashing the surrounding span recorder on a non-fatal config issue.
+    Defaults to ``EVALUATORQ_SPAN_MAX_TEXT_CHARS`` env var (or ``8192`` if
+    unset). ``0`` disables truncation. Negative values raise ``ValueError``.
 
     Output never exceeds ``max_chars``: the marker ``... [truncated]`` is
     reserved within the budget when truncation fires.
@@ -394,11 +398,7 @@ def truncate_for_span(text: object, *, max_chars: int | None = None) -> str:
     if max_chars is None or max_chars == 0:
         return s
     if max_chars < 0:
-        logger.warning(
-            'truncate_for_span: max_chars=%r is negative; treating as unlimited',
-            max_chars,
-        )
-        return s
+        raise ValueError(f'max_chars must be non-negative, got {max_chars}')
     if len(s) <= max_chars:
         return s
     marker_len = len(_TRUNCATION_MARKER)

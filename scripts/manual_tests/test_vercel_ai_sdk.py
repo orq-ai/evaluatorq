@@ -49,7 +49,7 @@ async def test_basic_response() -> None:
     """Endpoint returns a non-empty string response."""
     print("\n--- Basic response ---")
     target = make_target()
-    r = await target.send_prompt("Say exactly: PONG")
+    r = (await target.send_prompt_with_usage("Say exactly: PONG")).text
     check("returns string", isinstance(r, str))
     check("non-empty", len(r) > 0, "got empty string")
     check("contains expected content", "PONG" in r.upper(), f"got: {r!r}")
@@ -60,11 +60,11 @@ async def test_multi_turn_memory() -> None:
     print("\n--- Multi-turn memory ---")
     target = make_target()
 
-    await target.send_prompt(
+    await target.send_prompt_with_usage(
         "My favorite color is lavender and my pet's name is Mochi. "
         "Please confirm you understand."
     )
-    r2 = await target.send_prompt("What is my pet's name?")
+    r2 = (await target.send_prompt_with_usage("What is my pet's name?")).text
     check(
         "agent remembers from previous turn",
         "mochi" in r2.lower(),
@@ -77,15 +77,15 @@ async def test_reset_clears_memory() -> None:
     print("\n--- Reset clears memory ---")
     target = make_target()
 
-    await target.send_prompt(
+    await target.send_prompt_with_usage(
         "My favorite fruit is persimmon. Please confirm."
     )
     target = target.new()
 
-    r = await target.send_prompt(
+    r = (await target.send_prompt_with_usage(
         "What is my favorite fruit? "
         "If you don't know, reply: I don't know"
-    )
+    )).text
     check(
         "agent does NOT remember after reset",
         "persimmon" not in r.lower(),
@@ -98,12 +98,12 @@ async def test_clone_isolation() -> None:
     print("\n--- Clone isolation ---")
     target = make_target()
 
-    await target.send_prompt("My favorite city is Reykjavik. Please confirm.")
+    await target.send_prompt_with_usage("My favorite city is Reykjavik. Please confirm.")
 
     cloned = target.new()
-    r = await cloned.send_prompt(
+    r = (await cloned.send_prompt_with_usage(
         "What is my favorite city? If you don't know, reply: unknown"
-    )
+    )).text
     check(
         "clone does NOT inherit conversation",
         "reykjavik" not in r.lower(),
@@ -118,8 +118,8 @@ async def test_parallel_clones() -> None:
     targets = [base.new() for _ in range(5)]
 
     async def run_target(target: VercelAISdkTarget, word: str) -> str:
-        await target.send_prompt(f"My favorite tree is {word}. Confirm.")
-        return await target.send_prompt("What is my favorite tree?")
+        await target.send_prompt_with_usage(f"My favorite tree is {word}. Confirm.")
+        return (await target.send_prompt_with_usage("What is my favorite tree?")).text
 
     secrets = ["maple", "cedar", "birch", "willow", "aspen"]
     results = await asyncio.gather(

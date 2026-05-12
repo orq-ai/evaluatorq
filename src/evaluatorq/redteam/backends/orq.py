@@ -175,7 +175,7 @@ class ORQAgentTarget:
 
                 # Some agent tool flows require client-provided tool_result parts.
                 # Continue the same task with synthetic tool results so the thread can progress.
-                max_tool_continuations = 5
+                max_tool_continuations = PIPELINE_CONFIG.max_tool_continuations
                 pending_ids = _pending_tool_call_ids(response)
                 continuation_count = 0
                 while pending_ids and continuation_count < max_tool_continuations:
@@ -262,23 +262,6 @@ class ORQAgentTarget:
                         total_tokens=total_tokens,
                         calls=total_calls,
                     )
-
-    async def send_prompt(self, prompt: str) -> str:
-        """Back-compat wrapper, scheduled for removal in evaluatorq 2.0.
-
-        New code should call ``send_prompt_with_usage`` and read ``.text`` and
-        ``.usage`` directly. Emits a ``DeprecationWarning`` (deduplicated by the
-        default warnings filter) so out-of-tree callers get a visible signal
-        without noisy logs on every prompt.
-        """
-        import warnings
-        warnings.warn(
-            f"{type(self).__name__}.send_prompt is deprecated; use send_prompt_with_usage. "
-            "Will be removed in evaluatorq 2.0.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return (await self.send_prompt_with_usage(prompt)).text
 
     def new(self) -> ORQAgentTarget:
         """Return a fresh target instance with isolated state.

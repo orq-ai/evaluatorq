@@ -120,8 +120,8 @@ src/evaluatorq/
 
 ### Dependencies
 
-- Runtime: `pydantic`, `httpx`, `rich`
-- Red team extra: `openai`, `loguru`, `typer`, `python-dotenv`, `huggingface-hub`
+- Runtime: `pydantic`, `httpx`, `rich`, `loguru`
+- Red team extra: `openai`, `typer`, `python-dotenv`, `huggingface-hub`
 - Dev: `pytest`, `pytest-asyncio`, `basedpyright`, `ruff`
 - Package manager: `uv` (not pip)
 - Build system: `hatchling`
@@ -139,4 +139,4 @@ src/evaluatorq/
 - `StrEnum` polyfill for Python 3.10 (native in 3.11+)
 - Linting: ruff
 - Type checking: basedpyright (lenient config — many rules disabled)
-- Logging: `loguru` in the redteam subpackage, stdlib `logging` elsewhere
+- Logging: `loguru` everywhere (core runtime dependency since 1.3)
