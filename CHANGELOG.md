@@ -8,6 +8,7 @@ All notable changes to `evaluatorq` are documented here.
 
 ### Breaking Changes
 
+- `simulate()` and `generate_and_simulate()` now upload results to the Orq platform by default when `ORQ_API_KEY` is set. Existing callers who do not want this network call must pass `upload_results=False`. Both functions also accept new `evaluation_description=` and `path=` parameters mirroring `evaluatorq()` (RES-598).
 - `red_team()` parameter renamed: `config=` → `llm_config=`. The old `config=` keyword still works in 1.3.0 but emits a `DeprecationWarning` and **will be removed in 1.4.0**.
 - `LLMConfig` flat fields removed: `attack_model`, `evaluator_model`, `adversarial_temperature`, `adversarial_max_tokens`, `llm_call_timeout_ms`, `llm_kwargs` — replaced by role-based `attacker` / `evaluator` sub-configs (`LLMCallConfig`)
 

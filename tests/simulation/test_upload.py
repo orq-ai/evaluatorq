@@ -333,7 +333,6 @@ async def test_wrap_simulation_agent_does_not_double_upload(
 
     # The wrap_agent path passes inputs as a dict — feed it a single datapoint
     inputs = {"datapoint": dp.model_dump()}
-    data_point = Datapoint.model_validate(dp.model_dump())  # noqa: F841 (kept for typing)
 
     from evaluatorq.types import DataPoint
 

@@ -43,7 +43,8 @@ def _to_data_point_result(
     metadata = dict(result.metadata or {})
     persona = metadata.get("persona")
     scenario = metadata.get("scenario")
-    error = metadata.get("error") if isinstance(metadata.get("error"), str) else None
+    raw_error = metadata.get("error")
+    error = raw_error if isinstance(raw_error, str) else None
 
     inputs: dict[str, Any] = {}
     if persona:
@@ -88,11 +89,12 @@ async def upload_simulation_results(
     *,
     api_key: str,
     evaluation_name: str,
-    evaluation_description: str | None,
+    evaluation_description: str | None = None,
     results: list[SimulationResult],
     start_time: datetime,
     end_time: datetime,
     model: str,
+    path: str | None = None,
 ) -> None:
     """Convert simulation results and upload them to the Orq platform.
 
@@ -133,6 +135,7 @@ async def upload_simulation_results(
             results=data_point_results,
             start_time=start_time,
             end_time=end_time,
+            path=path,
         )
     except Exception as e:
         logger.error(
