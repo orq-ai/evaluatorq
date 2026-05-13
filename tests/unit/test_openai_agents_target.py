@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -9,7 +10,7 @@ import pytest
 pytest.importorskip("agents")
 
 from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget  # noqa: E402
-from evaluatorq.redteam.contracts import TokenUsage  # noqa: E402
+from evaluatorq.redteam.contracts import AgentResponse, TokenUsage  # noqa: E402
 
 
 def _mock_runner_and_result(output: str = "response") -> tuple[MagicMock, MagicMock]:
@@ -56,13 +57,14 @@ def _mock_runner_with_usage(
 
 class TestOpenAIAgentTarget:
     @pytest.mark.asyncio
-    async def test_send_prompt_with_usage_returns_response(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_send_prompt_returns_response(self, monkeypatch: pytest.MonkeyPatch) -> None:
         runner, _ = _mock_runner_and_result("hello back")
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        result = await target.send_prompt_with_usage("hello")
-        assert result.text == "hello back"
+        response = await target.send_prompt("hello")
+        assert isinstance(response, AgentResponse)
+        assert response.text == "hello back"
 
     @pytest.mark.asyncio
     async def test_first_prompt_sends_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -70,7 +72,7 @@ class TestOpenAIAgentTarget:
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        await target.send_prompt_with_usage("first")
+        await target.send_prompt("first")
 
         call_args = runner.run.call_args
         assert call_args[0][1] == "first"
@@ -81,8 +83,8 @@ class TestOpenAIAgentTarget:
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        await target.send_prompt_with_usage("first")
-        await target.send_prompt_with_usage("second")
+        await target.send_prompt("first")
+        await target.send_prompt("second")
 
         input_data = runner.run.call_args[0][1]
         assert isinstance(input_data, list)
@@ -94,7 +96,7 @@ class TestOpenAIAgentTarget:
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        await target.send_prompt_with_usage("first")
+        await target.send_prompt("first")
         fresh = target.new()
 
         assert fresh is not target
@@ -122,7 +124,7 @@ class TestOpenAIAgentTarget:
 
         target = OpenAIAgentTarget(MagicMock())
         with pytest.raises(ValueError, match="final_output=None"):
-            await target.send_prompt_with_usage("hi")
+            await target.send_prompt("hi")
 
     @pytest.mark.asyncio
     async def test_runner_error_is_wrapped_with_context(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -132,7 +134,58 @@ class TestOpenAIAgentTarget:
 
         target = OpenAIAgentTarget(MagicMock())
         with pytest.raises(RuntimeError, match="OpenAIAgentTarget: Runner.run\\(\\) raised"):
-            await target.send_prompt_with_usage("hi")
+            await target.send_prompt("hi")
+
+    @pytest.mark.asyncio
+    async def test_runner_timeout_is_not_wrapped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        runner = MagicMock()
+        runner.run = AsyncMock(side_effect=asyncio.TimeoutError)
+        monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
+
+        target = OpenAIAgentTarget(MagicMock())
+        with pytest.raises(asyncio.TimeoutError):
+            await target.send_prompt("hi")
+
+    @pytest.mark.asyncio
+    async def test_extracts_responses_format_function_calls(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        result = MagicMock()
+        result.final_output = "looked it up"
+        result.to_input_list.return_value = [
+            {"role": "user", "content": "find docs"},
+            {
+                "type": "function_call",
+                "name": "search_docs",
+                "arguments": '{"query": "tool calls"}',
+            },
+            {"role": "assistant", "content": "looked it up"},
+        ]
+        runner = MagicMock()
+        runner.run = AsyncMock(return_value=result)
+        monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
+
+        target = OpenAIAgentTarget(MagicMock())
+        response = await target.send_prompt("find docs")
+
+        assert len(response.tool_calls) == 1
+        assert response.tool_calls[0].name == "search_docs"
+        assert response.tool_calls[0].arguments == {"query": "tool calls"}
+
+    @pytest.mark.asyncio
+    async def test_responses_format_invalid_json_arguments_are_preserved(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        result = MagicMock()
+        result.final_output = "done"
+        result.to_input_list.return_value = [
+            {"role": "user", "content": "run"},
+            {"type": "function_call", "name": "run_tool", "arguments": "not-json"},
+        ]
+        runner = MagicMock()
+        runner.run = AsyncMock(return_value=result)
+        monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
+
+        target = OpenAIAgentTarget(MagicMock())
+        response = await target.send_prompt("run")
+
+        assert response.tool_calls[0].arguments == {"raw": "not-json"}
 
     @pytest.mark.asyncio
     async def test_get_agent_context_roundtrips_fields(self) -> None:
@@ -198,9 +251,9 @@ class TestOpenAIAgentTarget:
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        r1 = await target.send_prompt_with_usage("Hello")
+        r1 = await target.send_prompt("Hello")
         assert r1.text == "Reply 1"
-        r2 = await target.send_prompt_with_usage("Follow up")
+        r2 = await target.send_prompt("Follow up")
         assert r2.text == "Reply 2"
         assert len(target._history) > 2
 
@@ -218,7 +271,7 @@ class TestOpenAIAgentTargetUsage:
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        result = await target.send_prompt_with_usage("hello")
+        result = await target.send_prompt("hello")
 
         assert result.text == "hello back"
         assert isinstance(result.usage, TokenUsage)
@@ -234,7 +287,7 @@ class TestOpenAIAgentTargetUsage:
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        result = await target.send_prompt_with_usage("hi")
+        result = await target.send_prompt("hi")
 
         assert result.text == "reply"
         assert result.usage is None
@@ -256,7 +309,7 @@ class TestOpenAIAgentTargetUsage:
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        result = await target.send_prompt_with_usage("hi")
+        result = await target.send_prompt("hi")
 
         assert result.usage is None
 
@@ -274,7 +327,7 @@ class TestOpenAIAgentTargetUsage:
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        result = await target.send_prompt_with_usage("hi")
+        result = await target.send_prompt("hi")
 
         assert result.usage is not None
         assert result.usage.total_tokens == 11  # 8 + 3

@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from typing import Any
 
 from agents import Agent, Runner
 
 from evaluatorq.redteam.backends.base import AgentTarget
-from evaluatorq.redteam.contracts import AgentContext, SendResult, TokenUsage, ToolInfo
+from evaluatorq.redteam.contracts import (
+    AgentContext,
+    AgentResponse,
+    OutputMessage,
+    TextOutputItem,
+    TokenUsage,
+    ToolCallOutputItem,
+    ToolInfo,
+)
 
 
 class OpenAIAgentTarget(AgentTarget):
@@ -41,14 +51,17 @@ class OpenAIAgentTarget(AgentTarget):
         self._run_kwargs = run_kwargs or {}
         self._history: list[Any] = []
 
-    async def send_prompt_with_usage(self, prompt: str) -> SendResult:
-        """Send a prompt to the agent and return its text response with usage."""
+    async def send_prompt(self, prompt: str) -> AgentResponse:
+        """Send a prompt to the agent and return its response with usage + tool calls."""
         input_data: str | list[Any] = prompt
+        prev_len = len(self._history)
         if self._history:
             input_data = [*self._history, {"role": "user", "content": prompt}]
 
         try:
             result = await Runner.run(self._agent, input_data, **self._run_kwargs)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            raise
         except Exception as exc:
             raise RuntimeError(
                 f"OpenAIAgentTarget: Runner.run() raised an error: {exc}"
@@ -61,6 +74,77 @@ class OpenAIAgentTarget(AgentTarget):
             )
 
         self._history = result.to_input_list()
+
+        # Build output items directly from new history items, preserving original
+        # Responses API 'id'/'call_id' fields for trace correlation. Iteration order
+        # is preserved so interleaved text/tool calls (e.g. reasoning -> tool_call ->
+        # reasoning) round-trip into AgentResponse.output.
+        output_items: list[OutputMessage] = []
+        new_items_start = min(prev_len, len(self._history))
+        for item in self._history[new_items_start:]:
+            # Agents SDK to_input_list() returns Responses API items for tool calls,
+            # e.g. {"type": "function_call", "id": "fc_...", "call_id": "call_...", "name": "...", "arguments": "..."}.
+            if isinstance(item, dict) and item.get("type") == "function_call":
+                item_id = item.get("id", "")
+                call_id = item.get("call_id", "")
+                name = str(item.get("name", ""))
+                arguments = _normalize_args_str(item.get("arguments", "{}"))
+                output_items.append(
+                    ToolCallOutputItem(name=name, arguments=arguments, id=item_id, call_id=call_id)
+                    if item_id and call_id
+                    else ToolCallOutputItem(name=name, arguments=arguments)
+                )
+            # Handle dict format (standard OpenAI message format)
+            elif isinstance(item, dict) and item.get("role") == "assistant":
+                text = _extract_assistant_text(item.get("content"))
+                if text:
+                    output_items.append(TextOutputItem(text=text, annotations=[]))
+                for tc in (item.get("tool_calls") or []):
+                    if isinstance(tc, dict):
+                        func = tc.get("function", {})
+                        name = func.get("name", "") if isinstance(func, dict) else ""
+                        args_raw = _normalize_args_str(func.get("arguments", "{}") if isinstance(func, dict) else "{}")
+                        tc_id = tc.get("id", "")
+                        output_items.append(
+                            ToolCallOutputItem(name=name, arguments=args_raw, id=tc_id, call_id=tc_id)
+                            if tc_id
+                            else ToolCallOutputItem(name=name, arguments=args_raw)
+                        )
+            # Handle typed SDK objects (future-proofing if to_input_list() returns non-dict items)
+            elif not isinstance(item, dict):
+                if getattr(item, "type", None) == "function_call":
+                    item_id = getattr(item, "id", "")
+                    call_id = getattr(item, "call_id", "")
+                    name = str(getattr(item, "name", ""))
+                    arguments = _normalize_args_str(getattr(item, "arguments", "{}"))
+                    output_items.append(
+                        ToolCallOutputItem(name=name, arguments=arguments, id=item_id, call_id=call_id)
+                        if item_id and call_id
+                        else ToolCallOutputItem(name=name, arguments=arguments)
+                    )
+                elif getattr(item, "role", None) == "assistant":
+                    text = _extract_assistant_text(getattr(item, "content", None))
+                    if text:
+                        output_items.append(TextOutputItem(text=text, annotations=[]))
+                    for tc in (getattr(item, "tool_calls", None) or []):
+                        tc_name = getattr(tc, "name", None) or getattr(getattr(tc, "function", None), "name", "") or ""
+                        tc_args_raw = _normalize_args_str(getattr(tc, "arguments", None) or getattr(getattr(tc, "function", None), "arguments", "{}"))
+                        tc_id = getattr(tc, "id", "")
+                        output_items.append(
+                            ToolCallOutputItem(name=str(tc_name), arguments=tc_args_raw, id=tc_id, call_id=tc_id)
+                            if tc_id
+                            else ToolCallOutputItem(name=str(tc_name), arguments=tc_args_raw)
+                        )
+
+        # Ensure final_output is reflected as a TextOutputItem. Avoid duplicating
+        # if the last text emitted from history already matches.
+        final_text = str(result.final_output)
+        last_text = next(
+            (item.text for item in reversed(output_items) if isinstance(item, TextOutputItem)),
+            None,
+        )
+        if last_text != final_text:
+            output_items.append(TextOutputItem(text=final_text, annotations=[]))
 
         usage: TokenUsage | None = None
         ctx = getattr(result, 'context_wrapper', None)
@@ -80,7 +164,7 @@ class OpenAIAgentTarget(AgentTarget):
                 calls=1,
             )
 
-        return SendResult(text=str(result.final_output), usage=usage)
+        return AgentResponse(output=output_items, usage=usage)
 
     async def get_agent_context(self) -> AgentContext:
         """Return agent context derived from the wrapped Agent instance.
@@ -126,6 +210,61 @@ class OpenAIAgentTarget(AgentTarget):
             model=model,
         )
 
+    def reset_conversation(self) -> None:
+        """Clear accumulated conversation history for a fresh attack turn."""
+        self._history = []
+
+    def clone(self) -> OpenAIAgentTarget:
+        """Return a fresh instance with empty history for parallel job safety."""
+        return OpenAIAgentTarget(self._agent, run_kwargs=dict(self._run_kwargs))
+
     def new(self) -> OpenAIAgentTarget:
         """Return an independent instance for parallel red teaming jobs."""
-        return OpenAIAgentTarget(self._agent, run_kwargs=dict(self._run_kwargs))
+        return self.clone()
+
+
+def _extract_assistant_text(content: Any) -> str:
+    """Pull plain text out of a Responses-API assistant content field.
+
+    ``content`` may be a string or a list of content parts such as
+    ``{"type": "output_text", "text": "..."}`` / ``{"type": "text", "text": "..."}``.
+    Returns the concatenated text, or empty string if none found.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict):
+                text = part.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+            else:
+                text = getattr(part, "text", None)
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts)
+    return ""
+
+
+def _normalize_args_str(raw: Any) -> str:
+    """Convert SDK tool-call arguments to a valid JSON string.
+
+    Handles str (valid or invalid JSON), dict, or other types.
+    Invalid JSON strings are wrapped as ``{"raw": "<original>"}`` so that the
+    ``AgentResponse.tool_calls`` property can always parse ``arguments`` back
+    to a dict without silently discarding the original value.
+    """
+    if isinstance(raw, dict):
+        return json.dumps(raw)
+    if not isinstance(raw, str):
+        return "{}"
+    try:
+        json.loads(raw)
+        return raw
+    except (json.JSONDecodeError, ValueError):
+        return json.dumps({"raw": raw})

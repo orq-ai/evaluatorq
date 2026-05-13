@@ -40,19 +40,19 @@ class TestLangGraphIntegration:
         graph = _build_echo_graph()
         target = LangGraphTarget(graph)
 
-        result = await target.send_prompt_with_usage("Hello")
-        assert isinstance(result.text, str)
-        assert len(result.text) > 0
+        response = await target.send_prompt("Hello")
+        assert isinstance(response.text, str)
+        assert len(response.text) > 0
 
     @pytest.mark.asyncio
     async def test_reset_starts_fresh_conversation(self) -> None:
-        """After reset, the graph should not see previous messages."""
+        """After reset, the message cursor is reset and a warning is emitted."""
         graph = _build_echo_graph()
         target = LangGraphTarget(graph)
 
-        await target.send_prompt_with_usage("First message")
+        await target.send_prompt("First message")
         target.new()
-        result = await target.send_prompt_with_usage("Second message")
+        result = await target.send_prompt("Second message")
 
         assert isinstance(result.text, str)
         assert len(result.text) > 0
@@ -64,8 +64,8 @@ class TestLangGraphIntegration:
         target = LangGraphTarget(graph)
         cloned = target.new()
 
-        result_original = await target.send_prompt_with_usage("Hello from original")
-        result_cloned = await cloned.send_prompt_with_usage("Hello from clone")
+        result_original = await target.send_prompt("Hello from original")
+        result_cloned = await cloned.send_prompt("Hello from clone")
 
         assert isinstance(result_original.text, str)
         assert isinstance(result_cloned.text, str)

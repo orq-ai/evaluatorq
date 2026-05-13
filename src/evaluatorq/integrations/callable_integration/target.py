@@ -4,14 +4,20 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 from loguru import logger
 
 from evaluatorq.redteam.backends.base import AgentTarget
-from evaluatorq.redteam.contracts import AgentContext, SendResult, TokenUsage
+from evaluatorq.redteam.contracts import AgentContext, AgentResponse, OutputMessage, TextOutputItem, TokenUsage
 
-# Accepted callable signatures
-AgentCallable = Callable[[str], Awaitable[str]] | Callable[[str], str]
+# Accepted callable signatures — may return str (backward-compat) or AgentResponse
+AgentCallable = (
+    Callable[[str], Awaitable[AgentResponse]]
+    | Callable[[str], Awaitable[str]]
+    | Callable[[str], AgentResponse]
+    | Callable[[str], str]
+)
 
 
 class CallableTarget(AgentTarget):
@@ -79,22 +85,36 @@ class CallableTarget(AgentTarget):
         self._usage_fn = usage_fn
         self._agent_context = agent_context
 
-    async def send_prompt_with_usage(self, prompt: str) -> SendResult:
-        """Send a prompt to the callable and return its response with usage."""
+    async def send_prompt(self, prompt: str) -> AgentResponse:
+        """Send a prompt to the callable and return a structured response.
+
+        Callables that return a plain ``str`` are wrapped in an
+        :class:`AgentResponse`. Callables that already return :class:`AgentResponse`
+        are passed through. Token usage from ``usage_fn`` (if provided) is
+        attached to the returned ``AgentResponse``.
+        """
         try:
             if self._is_async:
-                text = await self._fn(prompt)  # type: ignore[misc]  # pyright: ignore[reportReturnType, reportGeneralTypeIssues]
+                coro: Any = self._fn(prompt)
+                result = await coro  # pyright: ignore[reportGeneralTypeIssues]
             else:
-                text = await asyncio.to_thread(self._fn, prompt)  # type: ignore[return-value]  # pyright: ignore[reportReturnType]
+                result = await asyncio.to_thread(self._fn, prompt)  # type: ignore[arg-type]
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            raise
         except Exception as exc:
             raise RuntimeError(f"CallableTarget: callable raised {exc!r}") from exc
+
+        if isinstance(result, AgentResponse):
+            return result
+        text = str(result) if result is not None else ""
         usage: TokenUsage | None = None
         if self._usage_fn is not None:
             try:
-                usage = self._usage_fn(prompt, str(text))
+                usage = self._usage_fn(prompt, text)
             except Exception:
                 logger.exception("usage_fn raised an exception; using usage=None")
-        return SendResult(text=str(text), usage=usage)
+        text_item: OutputMessage = TextOutputItem(text=text, annotations=[])
+        return AgentResponse(output=[text_item], usage=usage)
 
     async def get_agent_context(self) -> AgentContext:
         """Return the user-provided agent context, or a minimal placeholder."""

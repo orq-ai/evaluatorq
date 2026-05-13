@@ -491,3 +491,116 @@ class TestGetOrqApiKey:
         monkeypatch.setenv("ORQ_API_KEY", "")
         with pytest.raises(CredentialError, match="ORQ_API_KEY"):
             _get_orq_api_key()
+
+
+# ===========================================================================
+# backends/orq.py — ORQAgentTarget._extract_executed_tool_calls
+# ===========================================================================
+
+
+class TestORQExtractExecutedToolCalls:
+    """Tests for the _extract_executed_tool_calls inner function via ORQAgentTarget.send_prompt."""
+
+    def _make_target(self) -> Any:
+        from evaluatorq.redteam.backends.orq import ORQAgentTarget
+
+        return ORQAgentTarget(agent_key="test-agent", orq_client=MagicMock())
+
+    def _make_response(self, pending_tool_calls: list[Any]) -> MagicMock:
+        resp = MagicMock()
+        resp.task_id = None
+        resp.pending_tool_calls = pending_tool_calls
+        resp.output = []
+        resp.usage = None
+        resp.model = None
+        return resp
+
+    def _make_call(self, name: str, arguments: Any) -> MagicMock:
+        call = MagicMock()
+        call.name = name
+        call.arguments = arguments
+        call.id = "call_1"
+        return call
+
+    @pytest.mark.asyncio
+    async def test_extracts_tool_call_with_dict_arguments(self) -> None:
+        from unittest.mock import patch
+
+        target = self._make_target()
+        call = self._make_call("search", {"query": "test"})
+        first_resp = self._make_response([call])
+        # Second response (after synthetic tool_result) has no pending calls
+        second_resp = self._make_response([])
+        _part = MagicMock()
+        _part.kind = "text"
+        _part.text = "result"
+        _item = MagicMock()
+        _item.parts = [_part]
+        second_resp.output = [_item]
+
+        async def fake_to_thread(fn, **kwargs):  # type: ignore[return]
+            return fn(**kwargs)
+
+        with patch("evaluatorq.redteam.backends.orq.asyncio.to_thread", side_effect=fake_to_thread):
+            target.orq_client.agents.responses.create = MagicMock(side_effect=[first_resp, second_resp])
+            response = await target.send_prompt("find something")
+
+        assert len(response.tool_calls) == 1
+        assert response.tool_calls[0].name == "search"
+        assert response.tool_calls[0].arguments == {"query": "test"}
+        assert response.text == "result"
+
+    @pytest.mark.asyncio
+    async def test_extracts_tool_call_with_json_string_arguments(self) -> None:
+        import asyncio
+        from unittest.mock import patch
+
+        target = self._make_target()
+        call = self._make_call("send_email", '{"to": "user@example.com", "subject": "hi"}')
+        first_resp = self._make_response([call])
+        second_resp = self._make_response([])
+        _part = MagicMock()
+        _part.kind = "text"
+        _part.text = "sent"
+        _item = MagicMock()
+        _item.parts = [_part]
+        second_resp.output = [_item]
+
+        async def fake_to_thread(fn, **kwargs):  # type: ignore[return]
+            return fn(**kwargs)
+
+        with patch("evaluatorq.redteam.backends.orq.asyncio.to_thread", side_effect=fake_to_thread):
+            target.orq_client.agents.responses.create = MagicMock(side_effect=[first_resp, second_resp])
+            response = await target.send_prompt("send a message")
+
+        assert len(response.tool_calls) == 1
+        assert response.tool_calls[0].name == "send_email"
+        assert response.tool_calls[0].arguments == {"to": "user@example.com", "subject": "hi"}
+        assert response.text == "sent"
+
+    @pytest.mark.asyncio
+    async def test_json_parse_fallback_for_invalid_string_arguments(self) -> None:
+        import asyncio
+        from unittest.mock import patch
+
+        target = self._make_target()
+        call = self._make_call("bad_tool", "not-valid-json")
+        first_resp = self._make_response([call])
+        second_resp = self._make_response([])
+        _part = MagicMock()
+        _part.kind = "text"
+        _part.text = "done"
+        _item = MagicMock()
+        _item.parts = [_part]
+        second_resp.output = [_item]
+
+        async def fake_to_thread(fn, **kwargs):  # type: ignore[return]
+            return fn(**kwargs)
+
+        with patch("evaluatorq.redteam.backends.orq.asyncio.to_thread", side_effect=fake_to_thread):
+            target.orq_client.agents.responses.create = MagicMock(side_effect=[first_resp, second_resp])
+            response = await target.send_prompt("trigger bad tool")
+
+        assert len(response.tool_calls) == 1
+        assert response.tool_calls[0].arguments == {"raw": "not-valid-json"}
+        assert response.text == "done"

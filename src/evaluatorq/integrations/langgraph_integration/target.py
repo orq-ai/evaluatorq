@@ -2,17 +2,28 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.callbacks.base import BaseCallbackManager
+from langchain_core.messages import AIMessage
 from langchain_core.outputs import LLMResult
 from langchain_core.runnables import RunnableConfig
 
 from evaluatorq.redteam.backends.base import AgentTarget
-from evaluatorq.redteam.contracts import AgentContext, MemoryStoreInfo, SendResult, TokenUsage, ToolInfo
+from evaluatorq.redteam.contracts import (
+    AgentContext,
+    AgentResponse,
+    MemoryStoreInfo,
+    OutputMessage,
+    TextOutputItem,
+    TokenUsage,
+    ToolCallOutputItem,
+    ToolInfo,
+)
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
@@ -136,9 +147,13 @@ class LangGraphTarget(AgentTarget):
         self._extra_config = config or {}
         self.memory_entity_id: str = uuid4().hex
         self._agent_context = agent_context
+        # Tracks how many messages were in the LangGraph thread before this turn.
+        # Not safe for concurrent send_prompt calls on the same instance —
+        # use .new() to get independent instances for parallel use.
+        self._prev_msg_count: int = 0
         graph_name: str = getattr(graph, "name", None) or "langgraph_target"
         self._key = f"{graph_name}_{uuid4().hex[:8]}"
-        # Guard against spamming the log on every send_prompt_with_usage call when
+        # Guard against spamming the log on every send_prompt call when
         # an unknown callbacks type is encountered (hot path).
         self._warned_unknown_callbacks: bool = False
 
@@ -153,13 +168,12 @@ class LangGraphTarget(AgentTarget):
             },
         )
 
-    async def send_prompt_with_usage(self, prompt: str) -> SendResult:
-        """Send a prompt to the LangGraph agent and return text + usage.
+    async def send_prompt(self, prompt: str) -> AgentResponse:
+        """Send a prompt to the LangGraph agent and return its response with usage + tool calls.
 
-        Token usage is collected via a per-call ``_TokenUsageCollector``
-        callback. The collector is drained in a ``finally:`` block so
-        partial spend on error paths is preserved in the returned
-        :class:`SendResult`.
+        Token usage is collected via a per-call ``_TokenUsageCollector`` callback.
+        The collector is drained in a ``finally:`` block so partial spend on
+        error paths is preserved.
         """
         collector = _TokenUsageCollector()
 
@@ -189,12 +203,16 @@ class LangGraphTarget(AgentTarget):
 
         new_config: RunnableConfig = {**base_config, "callbacks": new_callbacks}
 
+        prev_count = self._prev_msg_count
         usage: TokenUsage | None = None
         try:
             result = await self._graph.ainvoke(
                 {"messages": [{"role": "user", "content": prompt}]},
                 config=new_config,
             )
+        except Exception:
+            self._prev_msg_count = prev_count  # cursor is stable on failure
+            raise
         finally:
             usage = collector.to_token_usage()
 
@@ -210,11 +228,62 @@ class LangGraphTarget(AgentTarget):
                 "LangGraphTarget: graph returned an empty 'messages' list. "
                 "Ensure every execution path appends at least one AI message."
             )
-        last = messages[-1]
-        content = last.get("content", "") if isinstance(last, dict) else getattr(last, "content", "")
-        if not isinstance(content, str):
-            content = str(content)
-        return SendResult(text=content, usage=usage)
+        # Build output items directly from messages added in this turn, preserving
+        # interleaving of text and tool calls (ReAct-style: text -> tool_call -> text).
+        # LangGraph checkpointer returns the full accumulated thread state, so
+        # slicing from _prev_msg_count avoids duplicating tool calls across turns.
+        # ToolCallOutputItem is built directly (not via ExecutedToolCall) so that
+        # the original LangChain tool call 'id' is preserved for trace correlation.
+        output_items: list[OutputMessage] = []
+        for msg in messages[self._prev_msg_count:]:
+            if isinstance(msg, dict):
+                if msg.get("role") != "assistant":
+                    continue
+                msg_content = msg.get("content", "")
+                tool_calls_iter = msg.get("tool_calls") or []
+            else:
+                if not isinstance(msg, AIMessage):
+                    continue
+                msg_content = getattr(msg, "content", "")
+                tool_calls_iter = getattr(msg, "tool_calls", None) or []
+
+            if not isinstance(msg_content, str):
+                msg_content = str(msg_content)
+            if msg_content:
+                output_items.append(TextOutputItem(text=msg_content, annotations=[]))
+
+            for tc in tool_calls_iter:
+                call_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
+                name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
+                args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
+                args_str = json.dumps(args if isinstance(args, dict) else {}, default=str)
+                output_items.append(
+                    ToolCallOutputItem(name=str(name), arguments=args_str, id=call_id, call_id=call_id)
+                    if call_id
+                    else ToolCallOutputItem(name=str(name), arguments=args_str)
+                )
+
+        self._prev_msg_count = len(messages)
+
+        # Fallback: if no AIMessage text was emitted (e.g. duck-typed message objects
+        # that don't subclass AIMessage), use the last message's .content so that
+        # AgentResponse.text remains well-defined.
+        if not any(isinstance(item, TextOutputItem) for item in output_items):
+            last = messages[-1]
+            last_content = last.get("content", "") if isinstance(last, dict) else getattr(last, "content", "")
+            if not isinstance(last_content, str):
+                last_content = str(last_content)
+            output_items.append(TextOutputItem(text=last_content, annotations=[]))
+        return AgentResponse(output=output_items, usage=usage)
+
+    def reset_conversation(self) -> None:
+        """Reset conversation state for a new attack by starting a fresh LangGraph thread.
+
+        Generates a new ``memory_entity_id`` (thread_id) so the checkpointer starts
+        with a clean slate — identical semantics to the other AgentTarget implementations.
+        """
+        self.memory_entity_id = uuid4().hex
+        self._prev_msg_count = 0
 
     async def get_agent_context(self) -> AgentContext:
         """Return agent context introspected from the compiled graph.

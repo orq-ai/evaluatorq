@@ -7,10 +7,12 @@ cause runtime import errors.
 
 from __future__ import annotations
 
+import json
+import uuid
 from enum import Enum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class MessageRole(Enum):
@@ -80,34 +82,63 @@ class LogProb(BaseModel):
 
 
 class OutputTextContent(BaseModel):
-    type: Annotated[
-        Literal["output_text"],
-        Field(description="The type of the output text. Always `output_text`."),
-    ]
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["output_text"] = Field(
+        default="output_text",
+        description="The type of the output text. Always `output_text`.",
+    )
     text: Annotated[str, Field(description="The text output from the model.")]
     annotations: Annotated[
-        list[UrlCitationBody], Field(description="The annotations of the text output.")
+        list[UrlCitationBody], Field(default_factory=list, description="The annotations of the text output.")
     ]
-    logprobs: list[LogProb]
+    logprobs: list[LogProb] = Field(default_factory=list)
 
 
 class FunctionCall(BaseModel):
-    type: Annotated[
-        Literal["function_call"],
-        Field(description="The type of the item. Always `function_call`."),
-    ]
-    id: Annotated[str, Field(description="The unique ID of the function call item.")]
-    call_id: Annotated[
-        str,
-        Field(
-            description="The unique ID of the function tool call that was generated."
-        ),
-    ]
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["function_call"] = Field(
+        default="function_call",
+        description="The type of the item. Always `function_call`.",
+    )
+    id: str = Field(
+        default_factory=lambda: f"fc_{uuid.uuid4().hex}",
+        description="The unique ID of the function call item.",
+    )
+    call_id: str = Field(
+        default_factory=lambda: f"call_{uuid.uuid4().hex}",
+        description="The unique ID of the function tool call that was generated.",
+    )
     name: Annotated[str, Field(description="The name of the function that was called.")]
     arguments: Annotated[
         str, Field(description="The arguments JSON string that was generated.")
     ]
-    status: FunctionCallStatus
+    status: FunctionCallStatus = FunctionCallStatus.completed
+    result: str | None = Field(
+        default=None,
+        description="The result returned by the tool call, if available.",
+    )
+
+    @field_validator("arguments", mode="before")
+    @classmethod
+    def _serialize_arguments(cls, v: Any) -> str:
+        """Accept dict or str for arguments; serialize dict to JSON string."""
+        if isinstance(v, str):
+            return v
+        try:
+            return json.dumps(v)
+        except (TypeError, ValueError):
+            try:
+                return json.dumps(v, default=str)
+            except (TypeError, ValueError):
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "FunctionCall.arguments not JSON-serializable; dropping to '{}'. type=%s",
+                    type(v).__name__,
+                )
+                return "{}"
 
 
 class FunctionCallOutput(BaseModel):

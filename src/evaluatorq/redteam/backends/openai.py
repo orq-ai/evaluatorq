@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+import json
+from typing import TYPE_CHECKING, cast
 
 from loguru import logger
 
@@ -12,9 +13,13 @@ from evaluatorq.redteam.contracts import (
     DEFAULT_TARGET_MAX_TOKENS,
     DEFAULT_TARGET_TIMEOUT_MS,
     AgentContext,
-    SendResult,
+    AgentResponse,
+    ExecutedToolCall,
+    OutputMessage,
     TargetKind,
+    TextOutputItem,
     TokenUsage,
+    ToolCallOutputItem,
 )
 from evaluatorq.redteam.tracing import record_llm_response, with_llm_span
 
@@ -62,8 +67,8 @@ class OpenAIModelTarget:
         self.max_tokens = max_tokens or DEFAULT_TARGET_MAX_TOKENS
         self.timeout_ms = timeout_ms or DEFAULT_TARGET_TIMEOUT_MS
 
-    async def send_prompt_with_usage(self, prompt: str) -> SendResult:
-        """Send a prompt and return text + token usage together."""
+    async def send_prompt(self, prompt: str) -> AgentResponse:
+        """Send a prompt to the OpenAI model and return its response with usage + any tool calls."""
         messages: list[ChatCompletionMessageParam] = [
             {'role': 'system', 'content': self.system_prompt},
             {'role': 'user', 'content': prompt},
@@ -81,21 +86,42 @@ class OpenAIModelTarget:
                 ),
                 timeout=self.timeout_ms / 1000.0,
             )
-            content = response.choices[0].message.content or ''
+            msg = response.choices[0].message
+            content = msg.content or ''
             record_llm_response(span, response, output_content=content)
+
+            # Capture tool calls made by the model.
+            # Only ChatCompletionMessageToolCall has a .function attribute; skip custom tool calls.
+            executed_tool_calls: list[ExecutedToolCall] = []
+            for tc in (getattr(msg, 'tool_calls', None) or []):
+                func = getattr(tc, 'function', None)
+                if func is None:
+                    continue
+                try:
+                    args = json.loads(func.arguments) if func.arguments else {}
+                except (json.JSONDecodeError, ValueError):
+                    args = {'raw': func.arguments}
+                executed_tool_calls.append(ExecutedToolCall(name=func.name, arguments=args))
+
             usage = TokenUsage.from_completion(response)
             response_id = getattr(response, 'id', None)
             finish_reason = None
             choices = getattr(response, 'choices', None) or []
             if choices:
                 finish_reason = getattr(choices[0], 'finish_reason', None)
-            return SendResult(
-                text=content,
-                usage=usage,
-                model=getattr(response, 'model', None),
-                response_id=response_id,
-                finish_reason=finish_reason,
-            )
+
+        output: list[OutputMessage] = cast(
+            'list[OutputMessage]',
+            [ToolCallOutputItem(name=tc.name, arguments=json.dumps(tc.arguments, default=str)) for tc in executed_tool_calls],
+        )
+        output.append(TextOutputItem(text=content, annotations=[]))
+        return AgentResponse(
+            output=output,
+            usage=usage,
+            model=getattr(response, 'model', None),
+            response_id=response_id,
+            finish_reason=finish_reason,
+        )
 
     def new(self) -> OpenAIModelTarget:
         """Return a fresh target instance for parallel job safety (satisfies ``AgentTarget`` protocol)."""

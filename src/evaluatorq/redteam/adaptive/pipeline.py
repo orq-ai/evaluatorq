@@ -27,7 +27,7 @@ from evaluatorq.redteam.adaptive.strategy_planner import (
     plan_strategies_for_categories,
     plan_strategies_for_vulnerabilities,
 )
-from evaluatorq.redteam.backends.base import DefaultErrorMapper
+from evaluatorq.redteam.backends.base import DefaultErrorMapper, _coerce_to_agent_response
 from evaluatorq.redteam.backends.registry import create_async_llm_client, resolve_backend
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
@@ -35,6 +35,7 @@ from evaluatorq.redteam.contracts import (
     AttackOutput,
     AttackStrategy,
     EvaluatorConfig,
+    ExecutedToolCall,
     LLMCallConfig,
     LLMConfig,
     Message,
@@ -345,6 +346,7 @@ def create_dynamic_redteam_job(
                 error_code = None
                 error_details = None
                 token_usage = None
+                turn_tool_calls: list[ExecutedToolCall] = []
                 target_timeout_s = cfg.target_agent_timeout_ms / 1000.0
                 try:
                     async with with_redteam_span(
@@ -357,12 +359,14 @@ def create_dynamic_redteam_job(
                             "orq.redteam.input": truncate_for_span(prompt),
                         },
                     ) as tgt_span:
-                        _send_result = await asyncio.wait_for(
-                            target.send_prompt_with_usage(prompt),
+                        raw = await asyncio.wait_for(
+                            target.send_prompt(prompt),
                             timeout=target_timeout_s,
                         )
-                        response = _send_result.text
-                        token_usage: TokenUsage | None = _send_result.usage
+                        agent_resp = _coerce_to_agent_response(raw)
+                        response = agent_resp.text
+                        turn_tool_calls = agent_resp.tool_calls
+                        token_usage: TokenUsage | None = agent_resp.usage
                         _resp_text = truncate_for_span(response or "")
                         set_span_attrs(tgt_span, {
                             "output": _resp_text,
@@ -407,6 +411,7 @@ def create_dynamic_redteam_job(
                     error_stage=error_stage,
                     error_code=error_code,
                     error_details=error_details,
+                    tool_calls_per_turn=[turn_tool_calls],
                     category=category,
                     vulnerability=vulnerability,
                 )
@@ -534,7 +539,13 @@ def create_dynamic_evaluator(
             try:
                 output = AttackOutput.model_validate(raw_output)
             except Exception as e:
-                logger.error(f'Failed to parse job output as AttackOutput: {e}')
+                inputs = getattr(data, 'inputs', {}) or {}
+                logger.error(
+                    'Failed to parse job output as AttackOutput '
+                    f"(datapoint_id={inputs.get('id', '<unknown>')!r}, "
+                    f"category={inputs.get('category', '<unknown>')!r}, "
+                    f"strategy_name={inputs.get('strategy_name', '<unknown>')!r}): {e}"
+                )
                 return EvaluationResult(
                     value='error',
                     explanation=f'Failed to parse job output: {e}',
@@ -557,6 +568,8 @@ def create_dynamic_evaluator(
         final_response = output.final_response
         category = output.category or data.inputs.get('category', '')
         vulnerability = output.vulnerability or data.inputs.get('vulnerability', '')
+        # Flatten all tool calls across turns so the evaluator can optionally inspect them
+        all_tool_calls = [tc for turn in output.tool_calls_per_turn for tc in turn]
 
         # Prefer vulnerability-first path when a valid Vulnerability enum can be resolved
         resolved_vuln: Vulnerability | None = None
@@ -579,12 +592,14 @@ def create_dynamic_evaluator(
                     vuln=resolved_vuln,
                     messages=conversation,
                     response=final_response,
+                    tool_calls=all_tool_calls or None,
                 )
             else:
                 eval_result = await owasp_evaluator.evaluate(
                     category=category,
                     messages=conversation,
                     response=final_response,
+                    tool_calls=all_tool_calls or None,
                 )
             set_span_attrs(eval_span, {
                 'orq.redteam.passed': eval_result.passed,

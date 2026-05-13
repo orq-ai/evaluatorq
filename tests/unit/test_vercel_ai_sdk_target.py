@@ -176,7 +176,7 @@ def _mock_response(text: str, content_type: str = "text/plain") -> httpx.Respons
 
 class TestVercelAISdkTarget:
     @pytest.mark.asyncio
-    async def test_send_prompt_with_usage_returns_response(self) -> None:
+    async def test_send_prompt_returns_response(self) -> None:
         target = VercelAISdkTarget("http://test/api/chat")
         mock_response = _mock_response('0:"Hello"\n')
 
@@ -187,9 +187,10 @@ class TestVercelAISdkTarget:
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
-            result = await target.send_prompt_with_usage("hello")
+            result = await target.send_prompt("hello")
 
         assert result.text == "Hello"
+        assert result.tool_calls == []
 
     @pytest.mark.asyncio
     async def test_sends_messages_format(self) -> None:
@@ -203,7 +204,7 @@ class TestVercelAISdkTarget:
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
-            await target.send_prompt_with_usage("hello")
+            await target.send_prompt("hello")
 
         call_kwargs = mock_client.post.call_args
         body = call_kwargs.kwargs["json"]
@@ -225,8 +226,8 @@ class TestVercelAISdkTarget:
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
-            await target.send_prompt_with_usage("first")
-            await target.send_prompt_with_usage("second")
+            await target.send_prompt("first")
+            await target.send_prompt("second")
 
         second_call = mock_client.post.call_args_list[1]
         messages = second_call.kwargs["json"]["messages"]
@@ -248,7 +249,7 @@ class TestVercelAISdkTarget:
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
-            await target.send_prompt_with_usage("hello")
+            await target.send_prompt("hello")
 
         body = mock_client.post.call_args.kwargs["json"]
         assert body["model"] == "gpt-4o"
@@ -299,7 +300,7 @@ class TestVercelAISdkTarget:
         assert usage is None
 
     @pytest.mark.asyncio
-    async def test_send_prompt_with_usage_plumbs_stream_usage(self) -> None:
+    async def test_send_prompt_plumbs_stream_usage(self) -> None:
         """Usage from the data stream 'e:' frame is returned in SendResult.usage."""
         target = VercelAISdkTarget("http://test/api/chat")
         stream = (
@@ -315,7 +316,7 @@ class TestVercelAISdkTarget:
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
-            result = await target.send_prompt_with_usage("hi")
+            result = await target.send_prompt("hi")
 
         assert result.text == "Hello"
         assert isinstance(result.usage, TokenUsage)
@@ -325,7 +326,7 @@ class TestVercelAISdkTarget:
         assert result.usage.calls == 1
 
     @pytest.mark.asyncio
-    async def test_send_prompt_with_usage_plumbs_json_usage(self) -> None:
+    async def test_send_prompt_plumbs_json_usage(self) -> None:
         """Usage from an OpenAI-compat JSON response is returned in SendResult.usage."""
         target = VercelAISdkTarget("http://test/api/chat")
         body = '{"text": "ok", "usage": {"prompt_tokens": 8, "completion_tokens": 2, "total_tokens": 10}}'
@@ -338,7 +339,7 @@ class TestVercelAISdkTarget:
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
-            result = await target.send_prompt_with_usage("hello")
+            result = await target.send_prompt("hello")
 
         assert result.text == "ok"
         assert isinstance(result.usage, TokenUsage)
@@ -346,7 +347,7 @@ class TestVercelAISdkTarget:
         assert result.usage.completion_tokens == 2
 
     @pytest.mark.asyncio
-    async def test_send_prompt_with_usage_usage_none_without_usage_frame(self) -> None:
+    async def test_send_prompt_usage_none_without_usage_frame(self) -> None:
         """When stream has no finish frame with usage, SendResult.usage is None."""
         target = VercelAISdkTarget("http://test/api/chat")
         mock_response = _mock_response('0:"Plain response"\n')
@@ -358,7 +359,7 @@ class TestVercelAISdkTarget:
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
-            result = await target.send_prompt_with_usage("hi")
+            result = await target.send_prompt("hi")
 
         assert result.text == "Plain response"
         assert result.usage is None

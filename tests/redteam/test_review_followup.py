@@ -168,7 +168,7 @@ class TestOpenAIBackendMetadataPropagation:
             )
         )
         target = OpenAIModelTarget(model="gpt-x", client=client)
-        result = await target.send_prompt_with_usage("hi")
+        result = await target.send_prompt("hi")
         assert result.response_id == "resp-abc"
         assert result.finish_reason == "length"
         # backend prefers server-reported model over the configured one

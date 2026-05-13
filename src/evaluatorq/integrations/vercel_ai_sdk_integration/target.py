@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 import httpx
 
 from evaluatorq.redteam.backends.base import AgentTarget
-from evaluatorq.redteam.contracts import AgentContext, SendResult, TokenUsage
+from evaluatorq.redteam.contracts import AgentContext, AgentResponse, OutputMessage, TextOutputItem, TokenUsage
 
 
 class VercelAISdkTarget(AgentTarget):
@@ -83,8 +83,13 @@ class VercelAISdkTarget(AgentTarget):
         self._history: list[dict[str, str]] = []
         self._agent_context = agent_context
 
-    async def send_prompt_with_usage(self, prompt: str) -> SendResult:
-        """Send a prompt to the AI SDK endpoint and return its text response with usage."""
+    async def send_prompt(self, prompt: str) -> AgentResponse:
+        """Send a prompt to the AI SDK endpoint and return a structured response with usage.
+
+        The Vercel AI SDK Data Stream Protocol does not expose tool call details
+        in a structured form, so ``tool_calls`` is always empty. The full text
+        response is available via ``.text``.
+        """
         self._history.append({"role": "user", "content": prompt})
 
         body: dict[str, Any] = {
@@ -112,7 +117,8 @@ class VercelAISdkTarget(AgentTarget):
 
         text, usage = self._parse_response(response)
         self._history.append({"role": "assistant", "content": text})
-        return SendResult(text=text, usage=usage)
+        text_item: OutputMessage = TextOutputItem(text=text, annotations=[])
+        return AgentResponse(output=[text_item], usage=usage)
 
     async def get_agent_context(self) -> AgentContext:
         """Return the user-provided agent context, or a minimal placeholder."""

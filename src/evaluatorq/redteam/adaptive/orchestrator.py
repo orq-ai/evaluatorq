@@ -19,12 +19,13 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TextColumn
 from typing_extensions import Self
 
 from evaluatorq.common.sanitize import xml_escape
-from evaluatorq.redteam.backends.base import AgentTarget, DefaultErrorMapper, ErrorMapper
+from evaluatorq.redteam.backends.base import AgentTarget, DefaultErrorMapper, ErrorMapper, _coerce_to_agent_response
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
     PIPELINE_CONFIG,
     AgentContext,
     AttackStrategy,
+    ExecutedToolCall,
     LLMConfig,
     Message,
     OrchestratorResult,
@@ -424,6 +425,7 @@ class MultiTurnOrchestrator:
 
         # Agent conversation (what we'll return)
         conversation: list[Message] = []
+        tool_calls_per_turn: list[list[ExecutedToolCall]] = []
 
         objective_achieved = False
         final_response = ''
@@ -453,6 +455,7 @@ class MultiTurnOrchestrator:
 
         try:
             for turn in range(max_turns):
+                _turn_calls: list[ExecutedToolCall] = []
                 async with with_redteam_span(
                     "orq.redteam.attack_turn",
                     {
@@ -626,11 +629,13 @@ class MultiTurnOrchestrator:
                                 "orq.redteam.input": truncate_for_span(attack_prompt),
                             },
                         ) as tgt_span:
-                            _tgt_result = await asyncio.wait_for(
-                                target.send_prompt_with_usage(attack_prompt),
+                            raw_response = await asyncio.wait_for(
+                                target.send_prompt(attack_prompt),
                                 timeout=target_timeout_s,
                             )
+                            _tgt_result = _coerce_to_agent_response(raw_response)
                             agent_response = _tgt_result.text
+                            _turn_calls = _tgt_result.tool_calls
                             final_response = agent_response
                             consecutive_agent_errors = 0
                             _resp_text = truncate_for_span(agent_response or "")
@@ -661,6 +666,7 @@ class MultiTurnOrchestrator:
                                 'consecutive_errors': consecutive_agent_errors,
                             }
                             error_turn = turn + 1
+                            tool_calls_per_turn.append(_turn_calls)
                             conversation.extend([
                                 Message(role='user', content=attack_prompt),
                                 Message(role='assistant', content=agent_response),
@@ -694,6 +700,7 @@ class MultiTurnOrchestrator:
                             }
                             error_code = mapped_code
                             error_turn = turn + 1
+                            tool_calls_per_turn.append(_turn_calls)
                             conversation.extend([
                                 Message(role='user', content=attack_prompt),
                                 Message(role='assistant', content=agent_response),
@@ -707,7 +714,8 @@ class MultiTurnOrchestrator:
                             })
                             break
 
-                    # Record conversation
+                    # Append tool calls for this turn ([] on error, populated on success)
+                    tool_calls_per_turn.append(_turn_calls)
                     conversation.extend([
                         Message(role='user', content=attack_prompt),
                         Message(role='assistant', content=agent_response),
@@ -799,4 +807,5 @@ class MultiTurnOrchestrator:
             error_details=error_details,
             error_turn=error_turn,
             truncated_turns=truncation_warnings,
+            tool_calls_per_turn=tool_calls_per_turn,
         )

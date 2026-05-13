@@ -1,16 +1,18 @@
 """Frozen contract schemas for the evaluatorq.redteam package.
 
-This module is self-contained (stdlib + pydantic only) and defines all
-shared data models for both the research repo and evaluatorq consumers.
+This module defines all shared data models for both the research repo and
+evaluatorq consumers. It imports lightweight output item types from
+``evaluatorq.openresponses.convert_models`` at runtime.
 
 Semantic convention:
     ``passed=True``  → the agent is RESISTANT (attack failed)
     ``passed=False`` → the agent is VULNERABLE (attack succeeded)
 """
 
+import json as _json
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal, TypedDict
 
@@ -22,7 +24,13 @@ else:
     class StrEnum(str, Enum):  # type: ignore[no-redef]
         """String enum compatible with Python 3.10."""
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (  # ConfigDict used in ReasoningOutputItem
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -284,7 +292,6 @@ class AttackSource(StrEnum):
     GENERATED_DYNAMIC = 'generated_dynamic'
 
 
-
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
@@ -344,12 +351,166 @@ class FunctionCall(BaseModel):
     arguments: str = Field(description='JSON string of function arguments')
 
 
-class ToolCall(BaseModel):
-    """Tool call in assistant message (OpenAI format)."""
+class StrategyToolCall(BaseModel):
+    """Tool call in assistant message (OpenAI format) — strategy wire format."""
 
     id: str = Field(description='Unique tool call ID (e.g., call_abc123)')
     type: Literal['function'] = Field(default='function', description='Tool type')
     function: FunctionCall = Field(description='Function call details')
+
+
+@dataclass(frozen=True)
+class ExecutedToolCall:
+    """Backward-compatible view of an executed tool call.
+
+    ``AgentResponse.tool_calls`` derives this from ``ToolCallOutputItem`` and
+    intentionally drops OpenResponses-only metadata such as ``id``. Consumers
+    that need full-fidelity output ordering or IDs should inspect
+    ``AgentResponse.output`` directly.
+    """
+
+    name: str
+    arguments: dict[str, Any]
+    result: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Output message item types — Pydantic models from openresponses
+# ---------------------------------------------------------------------------
+# These are re-exported from openresponses.convert_models so that AgentResponse
+# output items align with the OpenResponses intermediate data format.  The type
+# discriminators (output_text, function_call, reasoning) match OpenResponses
+# wire format, making downstream conversion to ResponseResource straightforward.
+
+from evaluatorq.openresponses.convert_models import (
+    FunctionCall as ToolCallOutputItem,
+)
+from evaluatorq.openresponses.convert_models import (
+    OutputTextContent as TextOutputItem,
+)
+
+
+class ReasoningOutputItem(BaseModel):
+    """A reasoning / thinking step in the agent output message list.
+
+    Captures chain-of-thought or intermediate reasoning produced by the model
+    (e.g. OpenAI o-series extended thinking, or agent intermediate steps).
+    Aligns with the OpenResponses ``reasoning`` item type.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["reasoning"] = "reasoning"
+    text: str
+    id: str | None = None
+
+
+OutputMessage = TextOutputItem | ToolCallOutputItem | ReasoningOutputItem
+
+
+@dataclass(frozen=True, init=False)
+class AgentResponse:
+    """Structured response from a target agent as an ordered list of output messages.
+
+    Each item in ``output`` is a :class:`TextOutputItem`, :class:`ToolCallOutputItem`,
+    or :class:`ReasoningOutputItem`, preserving the order in which they were produced.
+    Item ``type`` discriminators align with the OpenResponses intermediate data format
+    (``output_text``, ``function_call``, ``reasoning``).
+
+    This unified representation lets evaluators reason about tool call order and
+    the interleaving of tool calls, reasoning steps, and text responses — something
+    not possible when text, tool calls, and intermediate steps are stored separately.
+
+    Backward-compatible accessors:
+        ``.text``       — last ``TextOutputItem`` content, or ``""`` if none
+        ``.tool_calls`` — lossy :class:`ExecutedToolCall` view extracted from
+        tool call items; this intentionally omits ``ToolCallOutputItem.id``
+    """
+
+    output: list[OutputMessage] = field(default_factory=list)
+    usage: 'TokenUsage | None' = None
+    model: 'str | None' = None
+    response_id: 'str | None' = None
+    finish_reason: 'str | None' = None
+
+    def __init__(
+        self,
+        output: list[OutputMessage] | None = None,
+        *,
+        text: str | None = None,
+        usage: 'TokenUsage | None' = None,
+        model: 'str | None' = None,
+        response_id: 'str | None' = None,
+        finish_reason: 'str | None' = None,
+    ) -> None:
+        """Create a response from ordered output items or legacy ``text=``.
+
+        ``text=`` is kept for older tests/integrations that constructed
+        ``AgentResponse(text="...")`` before ordered output items existed.
+
+        ``usage``/``model``/``response_id``/``finish_reason`` carry the LLM call
+        metadata previously returned via ``SendResult``. They are optional and
+        default to ``None`` for integrations that do not surface them.
+        """
+        if output is not None and text is not None:
+            raise ValueError("AgentResponse accepts either output= or text=, not both")
+        items: list[OutputMessage]
+        if output is None:
+            items = [TextOutputItem(text=text, annotations=[])] if text is not None else []
+        else:
+            _validate_output_messages(output)
+            items = output
+        object.__setattr__(self, "output", items)
+        object.__setattr__(self, "usage", usage)
+        object.__setattr__(self, "model", model)
+        object.__setattr__(self, "response_id", response_id)
+        object.__setattr__(self, "finish_reason", finish_reason)
+
+    @property
+    def text(self) -> str:
+        """Return the last text output item's content (backward-compatible)."""
+        texts = [item.text for item in self.output if isinstance(item, TextOutputItem)]
+        return texts[-1] if texts else ""
+
+    @property
+    def tool_calls(self) -> list[ExecutedToolCall]:
+        """Return a lossy backward-compatible view of tool call output items.
+
+        ``ToolCallOutputItem.id`` is not represented on ``ExecutedToolCall``.
+        Use ``.output`` when preserving OpenResponses IDs or item ordering
+        matters.
+
+        ``ToolCallOutputItem.arguments`` is stored as a JSON string (OpenResponses
+        wire format); this property parses it back to a dict for ``ExecutedToolCall``.
+        """
+        result: list[ExecutedToolCall] = []
+        for item in self.output:
+            if not isinstance(item, ToolCallOutputItem):
+                continue
+            raw_args = item.arguments
+            if isinstance(raw_args, str):
+                try:
+                    args: dict[str, Any] = _json.loads(raw_args)
+                    if not isinstance(args, dict):
+                        args = {}
+                except (ValueError, TypeError):
+                    args = {}
+            else:
+                args = raw_args if isinstance(raw_args, dict) else {}
+            result.append(ExecutedToolCall(name=item.name, arguments=args, result=item.result))
+        return result
+
+
+def _validate_output_messages(output: list[OutputMessage]) -> None:
+    if not isinstance(output, list):
+        raise TypeError("AgentResponse.output must be a list of output message items")
+    for index, item in enumerate(output):
+        if not isinstance(item, (TextOutputItem, ToolCallOutputItem, ReasoningOutputItem)):
+            raise TypeError(
+                "AgentResponse.output items must be TextOutputItem (OutputTextContent), "
+                f"ToolCallOutputItem (FunctionCall), or ReasoningOutputItem; item {index} "
+                f"was {type(item).__name__}"
+            )
 
 
 class Message(BaseModel):
@@ -368,7 +529,7 @@ class Message(BaseModel):
     )
 
     # Tool call fields (OpenAI format)
-    tool_calls: list[ToolCall] | None = Field(default=None, description='Tool calls made by assistant')
+    tool_calls: list[StrategyToolCall] | None = Field(default=None, description='Tool calls made by assistant')
     tool_call_id: str | None = Field(default=None, description='ID linking tool response to call (for role=tool)')
     name: str | None = Field(default=None, description='Function name (for role=tool)')
 
@@ -793,23 +954,12 @@ class TokenUsage(BaseModel):
         return NotImplemented
 
 
-# Intentionally a dataclass (not Pydantic BaseModel) for hot-path performance —
-# SendResult is an internal value object produced on every target call and is
-# never serialized outside this module. Pydantic validation overhead per call is
-# unnecessary here.
-@dataclass(slots=True, frozen=True, kw_only=True)
-class SendResult:
-    """Result of an ``AgentTarget.send_prompt_with_usage()`` call.
-
-    Returns text and token usage together. On exception the caller does not
-    observe partial usage via the return value.
-    """
-
-    text: str
-    usage: 'TokenUsage | None' = None
-    model: 'str | None' = None
-    response_id: 'str | None' = None
-    finish_reason: 'str | None' = None
+# SendResult was the prior per-call return type. It has been merged into
+# :class:`AgentResponse` which carries both output items and call metadata
+# (``usage``/``model``/``response_id``/``finish_reason``). The alias is kept
+# so existing tests and downstream callers that import ``SendResult`` continue
+# to work; new code should use ``AgentResponse`` directly.
+SendResult = AgentResponse
 
 
 # ---------------------------------------------------------------------------
@@ -859,6 +1009,10 @@ class OrchestratorResult(BaseModel):
     error_turn: int | None = Field(default=None, description='1-based turn number where the error occurred')
     truncated_turns: list[int] = Field(
         default_factory=list, description='Turn numbers where adversarial LLM hit max_tokens'
+    )
+    tool_calls_per_turn: list[list[ExecutedToolCall]] = Field(
+        default_factory=list,
+        description='Tool calls captured per attack turn (index 0 = turn 1). Empty list per turn if target returned none.',
     )
 
     @property
@@ -1017,6 +1171,7 @@ class JobOutputPayload(BaseModel):
     error_turn: int | None = None
     truncated_turns: list[int] = Field(default_factory=list)
     finish_reason: str | None = None
+    tool_calls_per_turn: list[list[ExecutedToolCall]] = Field(default_factory=list)
 
     @property
     def response_text(self) -> str:
@@ -1066,6 +1221,7 @@ class RedTeamResult(BaseModel):
     error_stage: str | None = None
     error_code: str | None = None
     error_details: dict[str, Any] | None = None
+    tool_calls_per_turn: list[list[ExecutedToolCall]] = Field(default_factory=list)
 
     @property
     def error_info(self) -> 'ErrorInfo | None':

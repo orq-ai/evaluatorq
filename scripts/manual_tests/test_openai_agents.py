@@ -57,10 +57,10 @@ async def test_basic_response() -> None:
     """Agent returns a non-empty string response."""
     print("\n--- Basic response ---")
     target = OpenAIAgentTarget(make_agent())
-    r = (await target.send_prompt_with_usage("Say exactly: PONG")).text
-    check("returns string", isinstance(r, str))
-    check("non-empty", len(r) > 0)
-    check("contains expected content", "PONG" in r.upper(), f"got: {r!r}")
+    r = await target.send_prompt("Say exactly: PONG")
+    check("returns string", isinstance(r.text, str))
+    check("non-empty", len(r.text) > 0)
+    check("contains expected content", "PONG" in r.text.upper(), f"got: {r!r}")
 
 
 async def test_multi_turn_memory() -> None:
@@ -68,13 +68,13 @@ async def test_multi_turn_memory() -> None:
     print("\n--- Multi-turn memory ---")
     target = OpenAIAgentTarget(make_agent())
 
-    await target.send_prompt_with_usage(
+    await target.send_prompt(
         "My favorite color is turquoise and my pet's name is Biscuit. Please confirm."
     )
-    r2 = (await target.send_prompt_with_usage("What is my pet's name?")).text
+    r2 = (await target.send_prompt("What is my pet's name?")).text
     check(
         "agent remembers from previous turn",
-        "biscuit" in r2.lower(),
+        "biscuit" in r2.text.lower(),
         f"agent forgot — response: {r2!r}",
     )
 
@@ -91,18 +91,18 @@ async def test_reset_clears_memory() -> None:
     print("\n--- Reset clears memory ---")
     target = OpenAIAgentTarget(make_agent())
 
-    await target.send_prompt_with_usage("My favorite fruit is dragonfruit. Please confirm.")
+    await target.send_prompt("My favorite fruit is dragonfruit. Please confirm.")
     target = target.new()
 
     check("history is empty after reset", len(target._history) == 0)
 
-    r = (await target.send_prompt_with_usage(
+    r = (await target.send_prompt(
         "What is my favorite fruit? "
         "If you don't know, reply exactly: I don't know"
     )).text
     check(
         "agent does NOT remember after reset",
-        "dragonfruit" not in r.lower(),
+        "dragonfruit" not in r.text.lower(),
         f"agent still remembers — response: {r!r}",
     )
 
@@ -112,18 +112,18 @@ async def test_clone_isolation() -> None:
     print("\n--- Clone isolation ---")
     target = OpenAIAgentTarget(make_agent())
 
-    await target.send_prompt_with_usage("My name is Juniper. Please confirm.")
+    await target.send_prompt("My name is Juniper. Please confirm.")
     check("original has history", len(target._history) > 0)
 
     cloned = target.new()
     check("clone starts with empty history", len(cloned._history) == 0)
 
-    r = (await cloned.send_prompt_with_usage(
+    r = (await cloned.send_prompt(
         "What is my name? If you don't know, reply exactly: unknown"
     )).text
     check(
         "clone does NOT know original's conversation",
-        "juniper" not in r.lower(),
+        "juniper" not in r.text.lower(),
         f"clone leaked state — response: {r!r}",
     )
 
@@ -135,17 +135,17 @@ async def test_parallel_clones() -> None:
 
     words = ["maple", "cedar", "birch", "willow", "aspen"]
 
-    async def run_one(word: str) -> str:
+    async def run_one(word: str):  # type: ignore[return]
         target = OpenAIAgentTarget(agent)
-        await target.send_prompt_with_usage(f"My favorite tree is {word}. Confirm.")
-        return (await target.send_prompt_with_usage("What is my favorite tree?")).text
+        await target.send_prompt(f"My favorite tree is {word}. Confirm.")
+        return (await target.send_prompt("What is my favorite tree?")).text
 
     results = await asyncio.gather(*[run_one(w) for w in words])
 
     check("all 5 returned", len(results) == 5)
-    check("all are strings", all(isinstance(r, str) for r in results))
+    check("all are strings", all(isinstance(r.text, str) for r in results))
 
-    correct = sum(1 for w, r in zip(words, results) if w in r.lower())
+    correct = sum(1 for w, r in zip(words, results) if w in r.text.lower())
     check(
         f"at least 3/5 remembered their own secret",
         correct >= 3,
@@ -158,11 +158,11 @@ async def test_three_turn_conversation() -> None:
     print("\n--- Three-turn conversation ---")
     target = OpenAIAgentTarget(make_agent())
 
-    await target.send_prompt_with_usage("I'm going to tell you three colors.")
-    await target.send_prompt_with_usage("The colors are: red, blue, green.")
-    r3 = (await target.send_prompt_with_usage("List the three colors I told you.")).text
+    await target.send_prompt("I'm going to tell you three colors.")
+    await target.send_prompt("The colors are: red, blue, green.")
+    r3 = (await target.send_prompt("List the three colors I told you.")).text
 
-    has_colors = all(c in r3.lower() for c in ["red", "blue", "green"])
+    has_colors = all(c in r3.text.lower() for c in ["red", "blue", "green"])
     check(
         "remembers all three colors after 3 turns",
         has_colors,
@@ -174,8 +174,8 @@ async def test_run_kwargs_passthrough() -> None:
     """Extra run_kwargs are accepted without crashing."""
     print("\n--- run_kwargs passthrough ---")
     target = OpenAIAgentTarget(make_agent(), run_kwargs={"max_turns": 3})
-    r = (await target.send_prompt_with_usage("Say hello.")).text
-    check("works with run_kwargs", isinstance(r, str) and len(r) > 0, f"got: {r!r}")
+    r = await target.send_prompt("Say hello.")
+    check("works with run_kwargs", isinstance(r.text, str) and len(r.text) > 0, f"got: {r!r}")
 
 
 async def main() -> None:

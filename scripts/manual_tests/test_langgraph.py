@@ -56,10 +56,10 @@ async def test_basic_response() -> None:
     """Agent returns a non-empty string response."""
     print("\n--- Basic response ---")
     target = LangGraphTarget(make_graph())
-    r = (await target.send_prompt_with_usage("Say exactly: PONG")).text
-    check("returns string", isinstance(r, str))
-    check("non-empty", len(r) > 0, f"got empty string")
-    check("contains expected content", "PONG" in r.upper(), f"got: {r!r}")
+    r = await target.send_prompt("Say exactly: PONG")
+    check("returns string", isinstance(r.text, str))
+    check("non-empty", len(r.text) > 0, f"got empty string")
+    check("contains expected content", "PONG" in r.text.upper(), f"got: {r!r}")
 
 
 async def test_multi_turn_memory() -> None:
@@ -67,14 +67,14 @@ async def test_multi_turn_memory() -> None:
     print("\n--- Multi-turn memory ---")
     target = LangGraphTarget(make_graph())
 
-    await target.send_prompt_with_usage(
+    await target.send_prompt(
         "My favorite color is lavender and my pet's name is Mochi. "
         "Please confirm you understand."
     )
-    r2 = (await target.send_prompt_with_usage("What is my pet's name?")).text
+    r2 = (await target.send_prompt("What is my pet's name?")).text
     check(
         "agent remembers from previous turn",
-        "mochi" in r2.lower(),
+        "mochi" in r2.text.lower(),
         f"agent forgot — response: {r2!r}",
     )
 
@@ -84,18 +84,18 @@ async def test_reset_clears_memory() -> None:
     print("\n--- Reset clears memory ---")
     target = LangGraphTarget(make_graph())
 
-    await target.send_prompt_with_usage(
+    await target.send_prompt(
         "My favorite fruit is persimmon. Please confirm."
     )
     target = target.new()
 
-    r = (await target.send_prompt_with_usage(
+    r = (await target.send_prompt(
         "What is my favorite fruit? "
         "If you don't know, reply: I don't know"
     )).text
     check(
         "agent does NOT remember after reset",
-        "persimmon" not in r.lower(),
+        "persimmon" not in r.text.lower(),
         f"agent still remembers — response: {r!r}",
     )
 
@@ -105,15 +105,15 @@ async def test_clone_isolation() -> None:
     print("\n--- Clone isolation ---")
     target = LangGraphTarget(make_graph())
 
-    await target.send_prompt_with_usage("My favorite city is Reykjavik. Please confirm.")
+    await target.send_prompt("My favorite city is Reykjavik. Please confirm.")
 
     cloned = target.new()
-    r = (await cloned.send_prompt_with_usage(
+    r = (await cloned.send_prompt(
         "What is my favorite city? If you don't know, reply: unknown"
     )).text
     check(
         "clone does NOT inherit conversation",
-        "reykjavik" not in r.lower(),
+        "reykjavik" not in r.text.lower(),
         f"clone leaked state — response: {r!r}",
     )
 
@@ -124,9 +124,9 @@ async def test_parallel_clones() -> None:
     graph = make_graph()
     targets = [LangGraphTarget(graph) for _ in range(5)]
 
-    async def run_target(target: LangGraphTarget, word: str) -> str:
-        await target.send_prompt_with_usage(f"My favorite tree is {word}. Confirm.")
-        return (await target.send_prompt_with_usage(f"What is my favorite tree?")).text
+    async def run_target(target: LangGraphTarget, word: str):  # type: ignore[return]
+        await target.send_prompt(f"My favorite tree is {word}. Confirm.")
+        return await target.send_prompt(f"What is my favorite tree?")
 
     secrets = ["maple", "cedar", "birch", "willow", "aspen"]
     results = await asyncio.gather(
@@ -134,10 +134,10 @@ async def test_parallel_clones() -> None:
     )
 
     check("all 5 returned", len(results) == 5)
-    check("all are strings", all(isinstance(r, str) for r in results))
+    check("all are strings", all(isinstance(r.text, str) for r in results))
 
     # Each should remember its own secret (not another target's)
-    correct = sum(1 for s, r in zip(secrets, results) if s in r.lower())
+    correct = sum(1 for s, r in zip(secrets, results) if s in r.text.lower())
     check(
         f"at least 3/5 remembered their own secret",
         correct >= 3,
@@ -151,8 +151,8 @@ async def test_config_passthrough() -> None:
     graph = make_graph()
     # recursion_limit=5 is a valid config key — should not crash
     target = LangGraphTarget(graph, config={"recursion_limit": 5})
-    r = (await target.send_prompt_with_usage("Say hello in one word.")).text
-    check("works with extra config", isinstance(r, str) and len(r) > 0, f"got: {r!r}")
+    r = await target.send_prompt("Say hello in one word.")
+    check("works with extra config", isinstance(r.text, str) and len(r.text) > 0, f"got: {r!r}")
 
 
 async def test_config_with_configurable() -> None:
@@ -163,8 +163,8 @@ async def test_config_with_configurable() -> None:
         graph,
         config={"configurable": {"custom_key": "value"}, "recursion_limit": 10},
     )
-    r = (await target.send_prompt_with_usage("Say hello.")).text
-    check("no crash with user configurable", isinstance(r, str) and len(r) > 0, f"got: {r!r}")
+    r = await target.send_prompt("Say hello.")
+    check("no crash with user configurable", isinstance(r.text, str) and len(r.text) > 0, f"got: {r!r}")
 
 
 async def main() -> None:

@@ -7,17 +7,16 @@ LangChain, custom callables) can implement these protocols independently.
 
 from __future__ import annotations
 
-import inspect
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from loguru import logger
 
-from evaluatorq.redteam.contracts import SendResult
+from evaluatorq.redteam.contracts import AgentResponse
 
 if TYPE_CHECKING:
-    from evaluatorq.redteam.contracts import AgentContext
+    from evaluatorq.redteam.contracts import AgentContext, TokenUsage
 
 
 class AgentTarget(Protocol):
@@ -29,16 +28,16 @@ class AgentTarget(Protocol):
     pipeline reads this attribute after target creation to track entities for
     cleanup — it does not inject the value into the target.
 
-    Backends must implement ``send_prompt_with_usage``. A ``send_prompt``
-    helper is not required by the protocol; concrete backends may retain it
-    as a back-compat thin wrapper, but callers should use
-    ``send_prompt_with_usage`` directly.
+    Backends must implement ``send_prompt`` returning :class:`AgentResponse`.
+    ``AgentResponse`` carries both the ordered output items (text + tool calls)
+    and the per-call LLM metadata (``usage``, ``model``, ``response_id``,
+    ``finish_reason``) that previously lived on the now-removed ``SendResult``.
     """
 
     memory_entity_id: str | None
 
-    async def send_prompt_with_usage(self, prompt: str) -> SendResult:
-        """Send a prompt and return the response together with token usage."""
+    async def send_prompt(self, prompt: str) -> 'AgentResponse':
+        """Send a prompt and return the response (output items + token usage)."""
         ...
 
     def new(self) -> AgentTarget:
@@ -47,6 +46,47 @@ class AgentTarget(Protocol):
         Each call must produce an independent instance — own ``memory_entity_id``
         for memory-backed targets, ``None`` otherwise.
         """
+        ...
+
+
+def _coerce_to_agent_response(raw: Any) -> AgentResponse:
+    """Wrap a plain str return into AgentResponse for backward-compat with legacy targets.
+
+    Any target that still returns ``str`` from ``send_prompt`` will be transparently
+    wrapped here at the orchestrator call site.
+    """
+    from evaluatorq.redteam.contracts import OutputMessage, TextOutputItem
+    if isinstance(raw, AgentResponse):
+        return raw
+    text_item: OutputMessage = TextOutputItem(text=str(raw) if raw is not None else '', annotations=[])
+    return AgentResponse(output=[text_item])
+
+
+class SupportsClone(Protocol):
+    """Optional hook for target cloning per parallel job.
+
+    Note: The runner detects this via duck-typing (``getattr``/``callable``),
+    not ``isinstance``.  Implementing this protocol is recommended for
+    documentation and static analysis but not strictly required.
+
+    Clones are expected to own their own ``memory_entity_id`` (fresh one when
+    the target backs a persistent memory store; ``None`` otherwise).
+    """
+
+    def clone(self) -> AgentTarget:
+        """Return a fresh target instance with isolated state."""
+        ...
+
+
+class SupportsTokenUsage(Protocol):
+    """Optional hook for exposing token usage from last target call.
+
+    Deprecated: ``AgentResponse.usage`` is the canonical channel for token usage.
+    Implementing this protocol is no longer required.
+    """
+
+    def consume_last_token_usage(self) -> 'TokenUsage | None':
+        """Return and clear usage from last call."""
         ...
 
 
@@ -90,23 +130,16 @@ class SupportsErrorMapping(Protocol):
 def is_agent_target(obj: object) -> bool:
     """Return True if obj satisfies the AgentTarget protocol at runtime.
 
-    Checks strictly for ``send_prompt_with_usage`` and ``new``. If the object
-    only has the legacy ``send_prompt`` interface, call :func:`adapt_legacy_target`
-    first to upgrade it, then re-check with this function.
+    Checks for ``send_prompt`` and ``new``.
     """
-    has_send = callable(getattr(obj, 'send_prompt_with_usage', None))
+    has_send = callable(getattr(obj, 'send_prompt', None))
     has_new = callable(getattr(obj, 'new', None))
     return has_send and has_new
 
 
 def validate_agent_target(obj: object) -> None:
-    """Raise ``TypeError`` with a migration message if obj uses the removed ``clone()`` API.
-
-    Callers that need a hard error on stale implementations can call this in
-    addition to :func:`is_agent_target`. Separating the concern keeps the
-    predicate function free of side effects.
-    """
-    has_send = callable(getattr(obj, 'send_prompt_with_usage', None))
+    """Raise ``TypeError`` with a migration message if obj uses the removed ``clone()`` API."""
+    has_send = callable(getattr(obj, 'send_prompt', None))
     has_new = callable(getattr(obj, 'new', None))
     if not has_send and not has_new and callable(getattr(obj, 'clone', None)):
         raise TypeError(
@@ -116,38 +149,10 @@ def validate_agent_target(obj: object) -> None:
 
 
 def adapt_legacy_target(obj: object) -> AgentTarget:
-    """Adapt a legacy target with only send_prompt() to the new send_prompt_with_usage interface.
-
-    Emits a DeprecationWarning. Remove in next minor.
-
-    If the object already has ``send_prompt_with_usage``, it is returned
-    unchanged. If neither method is present, the object is returned unchanged
-    (caller is responsible for further validation).
+    """Pass-through. Legacy targets that return ``str`` from ``send_prompt`` are
+    transparently coerced into :class:`AgentResponse` by ``_coerce_to_agent_response``
+    at the orchestrator call site, so no adapter installation is required here.
     """
-    import warnings
-
-    if callable(getattr(obj, 'send_prompt_with_usage', None)):
-        return cast(AgentTarget, obj)
-    if not callable(getattr(obj, 'send_prompt', None)):
-        return cast(AgentTarget, obj)
-    warnings.warn(
-        f"{type(obj).__name__} implements legacy `send_prompt` only. "
-        "Migrate to `async send_prompt_with_usage(prompt) -> SendResult`. "
-        "The legacy adapter will be removed in the next minor release.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-
-    legacy = cast(Any, obj)
-    send_prompt = legacy.send_prompt
-    is_async = inspect.iscoroutinefunction(send_prompt)
-
-    async def _adapted(prompt: str) -> SendResult:
-        result = send_prompt(prompt)
-        text = await result if is_async else result
-        return SendResult(text=text)
-
-    legacy.send_prompt_with_usage = _adapted
     return cast(AgentTarget, obj)
 
 

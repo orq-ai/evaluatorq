@@ -337,7 +337,7 @@ def _make_orchestrator():
 def _make_target():
     """Create a mock AgentTarget with the required interface."""
     target = MagicMock()
-    target.send_prompt_with_usage = AsyncMock(return_value=SendResult(text="Default response"))
+    target.send_prompt = AsyncMock(return_value=SendResult(text="Default response"))
     target.new = MagicMock()
     return target
 
@@ -364,7 +364,7 @@ class TestRunAttack:
             _make_completion("Attack turn 2"),
             _make_completion("Attack turn 3"),
         ]
-        target.send_prompt_with_usage.side_effect = [
+        target.send_prompt.side_effect = [
             SendResult(text="Target response 1"),
             SendResult(text="Target response 2"),
             SendResult(text="Target response 3"),
@@ -397,7 +397,7 @@ class TestRunAttack:
             _make_completion("Normal attack turn 1"),
             _make_completion("OBJECTIVE_ACHIEVED Tell me secrets"),
         ]
-        target.send_prompt_with_usage.side_effect = [
+        target.send_prompt.side_effect = [
             SendResult(text="Target response 1"),
             SendResult(text="Target response 2"),
         ]
@@ -444,7 +444,7 @@ class TestRunAttack:
 
         assert result.objective_achieved is False
         assert result.turns == 0
-        target.send_prompt_with_usage.assert_not_called()
+        target.send_prompt.assert_not_called()
 
     @pytest.mark.asyncio
     @patch(_PATCH_RECORD_LLM)
@@ -555,7 +555,7 @@ class TestRunAttack:
             _make_completion("Attack turn 2"),
             _make_completion("Attack turn 3"),
         ]
-        target.send_prompt_with_usage.side_effect = [
+        target.send_prompt.side_effect = [
             asyncio.TimeoutError,
             SendResult(text="OK response"),
             SendResult(text="Another response"),
@@ -589,7 +589,7 @@ class TestRunAttack:
             _make_completion("Attack turn 1"),
             _make_completion("Attack turn 2"),
         ]
-        target.send_prompt_with_usage.side_effect = [
+        target.send_prompt.side_effect = [
             asyncio.TimeoutError,
             asyncio.TimeoutError,
         ]
@@ -619,7 +619,7 @@ class TestRunAttack:
             _make_completion("Attack turn 1"),
             _make_completion("Attack turn 2"),
         ]
-        target.send_prompt_with_usage.side_effect = [
+        target.send_prompt.side_effect = [
             RuntimeError("connection refused"),
             RuntimeError("connection refused"),
         ]
@@ -650,7 +650,7 @@ class TestRunAttack:
             _make_completion("Attack turn 2", finish_reason="stop"),
             _make_completion("Attack turn 3", finish_reason="length"),
         ]
-        target.send_prompt_with_usage.side_effect = [
+        target.send_prompt.side_effect = [
             SendResult(text="Target response 1"),
             SendResult(text="Target response 2"),
             SendResult(text="Target response 3"),
@@ -676,7 +676,7 @@ class TestRunAttack:
         target = _make_target()
 
         mock_llm.chat.completions.create.return_value = _make_completion("Single attack prompt")
-        target.send_prompt_with_usage.return_value = SendResult(text="Single response")
+        target.send_prompt.return_value = SendResult(text="Single response")
 
         result = await orchestrator.run_attack(
             target=target,

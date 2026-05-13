@@ -2,20 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import MagicMock
 
 import pytest
 
 from evaluatorq.integrations.callable_integration import CallableTarget
-from evaluatorq.redteam.contracts import TokenUsage
+import json
+
+from evaluatorq.redteam.contracts import AgentResponse, OutputMessage, TextOutputItem, TokenUsage, ToolCallOutputItem
 
 
 class TestCallableTarget:
     @pytest.mark.asyncio
     async def test_sync_function(self) -> None:
         target = CallableTarget(lambda prompt: f"echo: {prompt}")
-        result = await target.send_prompt_with_usage("hello")
+        result = await target.send_prompt("hello")
         assert result.text == "echo: hello"
+        assert result.tool_calls == []
 
     @pytest.mark.asyncio
     async def test_async_function(self) -> None:
@@ -23,8 +27,31 @@ class TestCallableTarget:
             return f"async: {prompt}"
 
         target = CallableTarget(my_agent)
-        result = await target.send_prompt_with_usage("hello")
+        result = await target.send_prompt("hello")
         assert result.text == "async: hello"
+        assert result.tool_calls == []
+
+    @pytest.mark.asyncio
+    async def test_agent_response_return_is_passed_through(self) -> None:
+        out: list[OutputMessage] = []
+        out.append(ToolCallOutputItem(name="search", arguments=json.dumps({"query": "hello"})))
+        out.append(TextOutputItem(text="done", annotations=[]))
+        response = AgentResponse(output=out)
+
+        target = CallableTarget(lambda prompt: response)
+        result = await target.send_prompt("hello")
+
+        assert result is response
+        assert result.tool_calls[0].name == "search"
+
+    @pytest.mark.asyncio
+    async def test_timeout_is_not_wrapped(self) -> None:
+        async def my_agent(prompt: str) -> str:
+            raise asyncio.TimeoutError
+
+        target = CallableTarget(my_agent)
+        with pytest.raises(asyncio.TimeoutError):
+            await target.send_prompt("hello")
 
     @pytest.mark.asyncio
     async def test_reset_calls_reset_fn(self) -> None:
@@ -105,7 +132,7 @@ class TestCallableTargetUsage:
             return TokenUsage(prompt_tokens=3, completion_tokens=2, total_tokens=5, calls=1)
 
         target = CallableTarget(lambda p: f"echo:{p}", usage_fn=usage_fn)
-        result = await target.send_prompt_with_usage("hello")
+        result = await target.send_prompt("hello")
 
         assert result.text == "echo:hello"
         assert isinstance(result.usage, TokenUsage)
@@ -119,7 +146,7 @@ class TestCallableTargetUsage:
     async def test_usage_none_when_no_usage_fn(self) -> None:
         """Without usage_fn, SendResult.usage is None."""
         target = CallableTarget(lambda p: "response")
-        result = await target.send_prompt_with_usage("hi")
+        result = await target.send_prompt("hi")
         assert result.text == "response"
         assert result.usage is None
 
@@ -133,7 +160,7 @@ class TestCallableTargetUsage:
 
         target = CallableTarget(lambda p: "reply", usage_fn=bad_usage_fn)
         with caplog.at_level(logging.WARNING):
-            result = await target.send_prompt_with_usage("hi")
+            result = await target.send_prompt("hi")
 
         assert result.text == "reply"
         assert result.usage is None
@@ -143,7 +170,7 @@ class TestCallableTargetUsage:
     async def test_usage_fn_returning_none_propagates(self) -> None:
         """If usage_fn returns None explicitly, SendResult.usage is None."""
         target = CallableTarget(lambda p: "ok", usage_fn=lambda p, r: None)
-        result = await target.send_prompt_with_usage("hi")
+        result = await target.send_prompt("hi")
         assert result.usage is None
 
     @pytest.mark.asyncio
@@ -156,7 +183,7 @@ class TestCallableTargetUsage:
             return TokenUsage(prompt_tokens=5, completion_tokens=10, total_tokens=15, calls=1)
 
         target = CallableTarget(my_agent, usage_fn=usage_fn)
-        result = await target.send_prompt_with_usage("test")
+        result = await target.send_prompt("test")
 
         assert result.text == "async:test"
         assert isinstance(result.usage, TokenUsage)
