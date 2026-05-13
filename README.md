@@ -2,6 +2,22 @@
 
 An evaluation framework library for Python that provides a flexible way to run parallel evaluations and optionally integrate with the Orq AI platform.
 
+## Why evaluatorq?
+
+Orq's built-in experiment runner works well for evaluating deployments hosted on the platform, but it has limits: you can only target Orq-managed agents and deployments, and evaluation logic is constrained to what the UI exposes.
+
+`evaluatorq` was built to remove those limits. It gives you a full Python evaluation loop you control entirely — bring your own agent, your own data, your own scorers. The Orq platform becomes optional infrastructure for storing results and datasets, not a hard requirement.
+
+**When to use evaluatorq instead of the built-in experiment runner:**
+
+- Your agent runs outside Orq (LangChain, LangGraph, OpenAI Agents SDK, a custom HTTP service, anything)
+- You need custom evaluation logic — LLM-as-judge, multi-criteria rubrics, programmatic checks, or external APIs
+- You want CI/CD integration with pass/fail signals and exit codes
+- You need to compare multiple agent implementations side by side in the same run
+- You want full observability via OpenTelemetry into exactly what ran and how long it took
+
+The library is deliberately lightweight: async-first, typed end-to-end, and usable standalone or wired into Orq for result storage and dataset management.
+
 ## 🎯 Features
 
 - **Parallel Execution**: Run multiple evaluation jobs concurrently with progress tracking
