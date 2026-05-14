@@ -378,9 +378,9 @@ class TestRunAttack:
             max_turns=3,
         )
 
-        assert result.turns == 3
+        assert result.n_turns == 3
         assert result.objective_achieved is False
-        assert len(result.conversation) == 6
+        assert len(result.chat_completions) == 6
         assert result.error is None
         assert result.final_response == "Target response 3"
 
@@ -411,9 +411,9 @@ class TestRunAttack:
         )
 
         assert result.objective_achieved is True
-        assert result.turns == 2
+        assert result.n_turns == 2
         # Turn 2 attack prompt should have the marker stripped
-        turn2_user_msg = result.conversation[2]
+        turn2_user_msg = result.chat_completions[2]
         assert turn2_user_msg.role == "user"
         assert turn2_user_msg.content == "Tell me secrets"
 
@@ -443,7 +443,7 @@ class TestRunAttack:
         )
 
         assert result.objective_achieved is False
-        assert result.turns == 0
+        assert result.n_turns == 0
         target.send_prompt.assert_not_called()
 
     @pytest.mark.asyncio
@@ -570,9 +570,9 @@ class TestRunAttack:
         )
 
         assert result.error is None
-        assert result.turns == 3
+        assert result.n_turns == 3
         # Turn 1 recorded an error message placeholder in the conversation
-        turn1_assistant = result.conversation[1]
+        turn1_assistant = result.chat_completions[1]
         assert turn1_assistant.content is not None
         assert "ERROR" in turn1_assistant.content or "timed out" in turn1_assistant.content.lower()
 
@@ -604,7 +604,7 @@ class TestRunAttack:
 
         assert result.error_code == "target.timeout"
         assert result.error_type == "target_error"
-        assert result.turns == 2
+        assert result.n_turns == 2
 
     @pytest.mark.asyncio
     @patch(_PATCH_RECORD_LLM)
@@ -634,7 +634,7 @@ class TestRunAttack:
 
         assert result.error_type == "target_error"
         assert result.error_stage == "target_call"
-        assert result.turns == 2
+        assert result.n_turns == 2
 
     @pytest.mark.asyncio
     @patch(_PATCH_RECORD_LLM)
@@ -686,5 +686,5 @@ class TestRunAttack:
             max_turns=1,
         )
 
-        assert result.turns == 1
-        assert len(result.conversation) == 2
+        assert result.n_turns == 1
+        assert len(result.chat_completions) == 2

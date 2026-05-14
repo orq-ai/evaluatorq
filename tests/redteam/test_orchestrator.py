@@ -110,7 +110,7 @@ class TestORQAgentTarget:
         assert response.text == 'done'
         assert len(response.tool_calls) == 1
         assert response.tool_calls[0].name == 'search_docs'
-        assert response.tool_calls[0].arguments == {'query': 'tool calls'}
+        assert response.tool_calls[0].arguments_dict == {'query': 'tool calls'}
 
     @pytest.mark.asyncio
     async def test_send_prompt_preserves_raw_tool_call_arguments(self):
@@ -138,7 +138,7 @@ class TestORQAgentTarget:
 
         assert len(response.tool_calls) == 1
         assert response.tool_calls[0].name == 'bad_tool'
-        assert response.tool_calls[0].arguments == {'raw': 'not-json'}
+        assert response.tool_calls[0].arguments_dict == {'raw': 'not-json'}
 
     @pytest.mark.asyncio
     async def test_send_prompt_multi_turn(self):
@@ -223,8 +223,8 @@ class TestMultiTurnOrchestrator:
         )
 
         # Verify result structure
-        assert isinstance(result.conversation, list)
-        assert isinstance(result.turns, int)
+        assert isinstance(result.chat_completions, list)
+        assert isinstance(result.n_turns, int)
         assert isinstance(result.objective_achieved, bool)
         assert isinstance(result.final_response, str)
         assert isinstance(result.duration_seconds, float)
@@ -268,7 +268,7 @@ class TestMultiTurnOrchestrator:
         )
 
         # Should have stopped after max_turns
-        assert result.turns <= 2
+        assert result.n_turns <= 2
 
     @pytest.mark.asyncio
     async def test_run_attack_detects_success(self):
@@ -464,9 +464,10 @@ class TestTimeoutHandling:
 
         # Attack should complete without a fatal error
         assert result.error_type is None
-        assert result.turns == 2
-        assert len(result.tool_calls_per_turn) == result.turns
-        assert result.tool_calls_per_turn == [[], []]
+        assert result.n_turns == 2
+        per_turn_tcs = [t.target.tool_calls for t in result.turns]
+        assert len(per_turn_tcs) == result.n_turns
+        assert per_turn_tcs == [[], []]
 
     @pytest.mark.asyncio
     async def test_adversarial_llm_timeout_maps_to_error_fields(self):

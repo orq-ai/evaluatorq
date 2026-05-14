@@ -232,8 +232,8 @@ class LangGraphTarget(AgentTarget):
         # interleaving of text and tool calls (ReAct-style: text -> tool_call -> text).
         # LangGraph checkpointer returns the full accumulated thread state, so
         # slicing from _prev_msg_count avoids duplicating tool calls across turns.
-        # ToolCallOutputItem is built directly (not via ExecutedToolCall) so that
-        # the original LangChain tool call 'id' is preserved for trace correlation.
+        # Build ToolCallOutputItem directly (not via the .tool_calls view) so
+        # interleaved text/tool ordering is preserved in .output.
         output_items: list[OutputMessage] = []
         for msg in messages[self._prev_msg_count:]:
             if isinstance(msg, dict):
@@ -270,6 +270,10 @@ class LangGraphTarget(AgentTarget):
         # AgentResponse.text remains well-defined.
         if not any(isinstance(item, TextOutputItem) for item in output_items):
             last = messages[-1]
+            logger.warning(
+                "LangGraphTarget: no AIMessage text in turn; falling back to last message content (type=%s)",
+                type(last).__name__,
+            )
             last_content = last.get("content", "") if isinstance(last, dict) else getattr(last, "content", "")
             if not isinstance(last_content, str):
                 last_content = str(last_content)

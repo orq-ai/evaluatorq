@@ -168,7 +168,7 @@ class TestOpenAIAgentTarget:
 
         assert len(response.tool_calls) == 1
         assert response.tool_calls[0].name == "search_docs"
-        assert response.tool_calls[0].arguments == {"query": "tool calls"}
+        assert response.tool_calls[0].arguments_dict == {"query": "tool calls"}
 
     @pytest.mark.asyncio
     async def test_responses_format_invalid_json_arguments_are_preserved(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -185,7 +185,7 @@ class TestOpenAIAgentTarget:
         target = OpenAIAgentTarget(MagicMock())
         response = await target.send_prompt("run")
 
-        assert response.tool_calls[0].arguments == {"raw": "not-json"}
+        assert response.tool_calls[0].arguments_dict == {"raw": "not-json"}
 
     @pytest.mark.asyncio
     async def test_get_agent_context_roundtrips_fields(self) -> None:

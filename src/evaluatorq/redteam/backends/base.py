@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol
 
 from loguru import logger
 
@@ -138,7 +138,14 @@ def is_agent_target(obj: object) -> bool:
 
 
 def validate_agent_target(obj: object) -> None:
-    """Raise ``TypeError`` with a migration message if obj uses the removed ``clone()`` API."""
+    """Raise ``TypeError`` if ``obj`` implements only the removed ``clone()`` API.
+
+    The check fires only when the object has ``clone()`` but neither
+    ``send_prompt`` nor ``new()`` — i.e. a clone-only object that cannot be
+    used as an :class:`AgentTarget` at all. Objects that implement the full
+    protocol (``send_prompt`` + ``new``) are accepted regardless of whether
+    they also define ``clone``.
+    """
     has_send = callable(getattr(obj, 'send_prompt', None))
     has_new = callable(getattr(obj, 'new', None))
     if not has_send and not has_new and callable(getattr(obj, 'clone', None)):
@@ -146,14 +153,6 @@ def validate_agent_target(obj: object) -> None:
             f"{type(obj).__name__} implements 'clone()' which was removed in evaluatorq 1.3. "
             "Rename it to 'new(self) -> AgentTarget' — signature is the same, no memory_entity_id param."
         )
-
-
-def adapt_legacy_target(obj: object) -> AgentTarget:
-    """Pass-through. Legacy targets that return ``str`` from ``send_prompt`` are
-    transparently coerced into :class:`AgentResponse` by ``_coerce_to_agent_response``
-    at the orchestrator call site, so no adapter installation is required here.
-    """
-    return cast(AgentTarget, obj)
 
 
 class DirectTargetFactory:
@@ -169,7 +168,7 @@ class DirectTargetFactory:
                 f"{type(self._target).__name__}.new() returned None. "
                 "It must return a fresh AgentTarget instance."
             )
-        return adapt_legacy_target(result)  # type: ignore[return-value]
+        return result
 
 
 class NoopMemoryCleanup:

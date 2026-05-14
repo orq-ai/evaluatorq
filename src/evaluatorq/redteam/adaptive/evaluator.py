@@ -11,7 +11,15 @@ from openai import APIConnectionError, APIStatusError
 from pydantic import BaseModel, ValidationError
 
 from evaluatorq.redteam.backends.registry import create_async_llm_client
-from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, AttackEvaluationResult, ExecutedToolCall, LLMCallConfig, PIPELINE_CONFIG, TokenUsage, Vulnerability
+from evaluatorq.redteam.contracts import (
+    DEFAULT_PIPELINE_MODEL,
+    PIPELINE_CONFIG,
+    AttackEvaluationResult,
+    LLMCallConfig,
+    TokenUsage,
+    ToolCallOutputItem,
+    Vulnerability,
+)
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category, get_evaluator_for_vulnerability
 from evaluatorq.redteam.tracing import record_llm_response, with_llm_span
 from evaluatorq.redteam.vulnerability_registry import resolve_category_safe
@@ -52,7 +60,7 @@ class OWASPEvaluator:
         vuln: Vulnerability,
         messages: list[dict[str, Any]] | list[Message],
         response: str,
-        tool_calls: list[ExecutedToolCall] | None = None,
+        tool_calls: list[ToolCallOutputItem] | None = None,
     ) -> AttackEvaluationResult:
         """Evaluate an agent response for a specific vulnerability.
 
@@ -87,7 +95,7 @@ class OWASPEvaluator:
         category: str,
         messages: list[dict[str, Any]] | list[Message],
         response: str,
-        tool_calls: list[ExecutedToolCall] | None = None,
+        tool_calls: list[ToolCallOutputItem] | None = None,
     ) -> AttackEvaluationResult:
         """Evaluate an agent response for vulnerability.
 
@@ -132,7 +140,7 @@ class OWASPEvaluator:
         messages: list[dict[str, Any]] | list[Message],
         response: str,
         span_attributes: dict[str, str],
-        tool_calls: list[ExecutedToolCall] | None = None,
+        tool_calls: list[ToolCallOutputItem] | None = None,
     ) -> AttackEvaluationResult:
         """Execute an evaluator entity against a conversation and return a typed result."""
         raw_content = '{}'
@@ -146,7 +154,7 @@ class OWASPEvaluator:
             prompt = prompt.replace(
                 '{{output.tool_calls}}',
                 _sanitize_placeholders(json.dumps(
-                    [{'name': tc.name, 'arguments': tc.arguments, 'result': tc.result} for tc in (tool_calls or [])],
+                    [{'name': tc.name, 'arguments': tc.arguments_dict, 'result': tc.result, 'id': tc.id} for tc in (tool_calls or [])],
                     indent=2,
                     default=str,
                 )),
@@ -239,7 +247,7 @@ async def evaluate_attack(
     evaluator_model: str = DEFAULT_PIPELINE_MODEL,
     *,
     vulnerability: Vulnerability | None = None,
-    tool_calls: list[ExecutedToolCall] | None = None,
+    tool_calls: list[ToolCallOutputItem] | None = None,
 ) -> AttackEvaluationResult:
     """Convenience function to evaluate a single attack.
 

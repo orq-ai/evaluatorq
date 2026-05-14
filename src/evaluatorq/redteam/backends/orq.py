@@ -48,7 +48,6 @@ from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
     AgentContext,
     AgentResponse,
-    ExecutedToolCall,
     KnowledgeBaseInfo,
     MemoryStoreInfo,
     OutputMessage,
@@ -146,24 +145,34 @@ class ORQAgentTarget:
                     ids.append(call_id)
             return ids
 
-        def _extract_executed_tool_calls(resp: object) -> list[ExecutedToolCall]:
-            """Extract tool calls with name and arguments from a response."""
+        def _extract_tool_call_items(resp: object) -> list[ToolCallOutputItem]:
+            """Extract tool calls from a response as ToolCallOutputItem instances."""
             pending = getattr(resp, 'pending_tool_calls', None) or []
-            calls: list[ExecutedToolCall] = []
+            items: list[ToolCallOutputItem] = []
             for call in pending:
                 name = getattr(call, 'name', None) or (call.get('name') if isinstance(call, dict) else None) or ''
-                args = getattr(call, 'arguments', None) or (call.get('arguments') if isinstance(call, dict) else None) or {}
-                if isinstance(args, str):
+                args_raw = getattr(call, 'arguments', None) or (call.get('arguments') if isinstance(call, dict) else None) or {}
+                if isinstance(args_raw, str):
                     try:
-                        args = json.loads(args)
+                        json.loads(args_raw)
+                        args_str = args_raw
                     except (json.JSONDecodeError, ValueError):
                         logger.warning(
                             f"Failed to parse tool call arguments as JSON for tool '{name}'; "
-                            f"storing raw string. Raw: {args!r:.200}"
+                            f"wrapping raw string under 'raw' key. Raw: {args_raw!r:.200}"
                         )
-                        args = {'raw': args}
-                calls.append(ExecutedToolCall(name=str(name), arguments=args if isinstance(args, dict) else {}))
-            return calls
+                        args_str = json.dumps({'raw': args_raw})
+                else:
+                    try:
+                        args_str = json.dumps(args_raw if isinstance(args_raw, dict) else {})
+                    except (TypeError, ValueError):
+                        args_str = json.dumps(args_raw, default=str)
+                call_id = getattr(call, 'id', None) or (call.get('id') if isinstance(call, dict) else None)
+                kwargs: dict[str, Any] = {'name': str(name), 'arguments': args_str}
+                if isinstance(call_id, str) and call_id:
+                    kwargs['id'] = call_id
+                items.append(ToolCallOutputItem(**kwargs))
+            return items
 
         async with with_redteam_span(
             f'agent {self.agent_key}',
@@ -195,7 +204,7 @@ class ORQAgentTarget:
 
                 _accumulate_usage(response)
                 text_response = _extract_text(response)
-                all_tool_calls: list[ExecutedToolCall] = _extract_executed_tool_calls(response)
+                all_tool_calls: list[ToolCallOutputItem] = _extract_tool_call_items(response)
 
                 # Some agent tool flows require client-provided tool_result parts.
                 # Continue the same task with synthetic tool results so the thread can progress.
@@ -233,7 +242,7 @@ class ORQAgentTarget:
                     extracted = _extract_text(response)
                     if extracted:
                         text_response = extracted
-                    all_tool_calls.extend(_extract_executed_tool_calls(response))
+                    all_tool_calls.extend(_extract_tool_call_items(response))
                     pending_ids = _pending_tool_call_ids(response)
 
                 if pending_ids:
@@ -267,10 +276,7 @@ class ORQAgentTarget:
                     if total_calls > 0
                     else None
                 )
-                output: list[OutputMessage] = cast(
-                    'list[OutputMessage]',
-                    [ToolCallOutputItem(name=tc.name, arguments=json.dumps(tc.arguments, default=str), result=tc.result) for tc in all_tool_calls],
-                )
+                output: list[OutputMessage] = cast('list[OutputMessage]', list(all_tool_calls))
                 output.append(TextOutputItem(text=result_text, annotations=[]))
                 return AgentResponse(
                     output=output,

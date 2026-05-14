@@ -12,6 +12,7 @@ import uuid
 from enum import Enum
 from typing import Annotated, Any, Literal
 
+from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
@@ -127,18 +128,41 @@ class FunctionCall(BaseModel):
         if isinstance(v, str):
             return v
         try:
-            return json.dumps(v)
-        except (TypeError, ValueError):
-            try:
-                return json.dumps(v, default=str)
-            except (TypeError, ValueError):
-                import logging
+            return json.dumps(v, default=str)
+        except (TypeError, ValueError) as e:
+            logger.warning(
+                "FunctionCall._serialize_arguments: arguments not JSON-serializable, "
+                "falling back to repr (value={!r}, err={})",
+                v,
+                e,
+            )
+            return str(v)
 
-                logging.getLogger(__name__).warning(
-                    "FunctionCall.arguments not JSON-serializable; dropping to '{}'. type=%s",
-                    type(v).__name__,
-                )
-                return "{}"
+    @property
+    def arguments_dict(self) -> dict[str, Any]:
+        """Parse the JSON ``arguments`` string into a dict.
+
+        Returns an empty dict if the JSON is malformed or not an object —
+        callers should not rely on the parsed shape for adversary-controlled
+        tool calls.
+        """
+        try:
+            parsed = json.loads(self.arguments)
+        except (ValueError, TypeError) as e:
+            logger.warning(
+                "FunctionCall.arguments_dict: arguments not valid JSON (err={}, raw={!r})",
+                e,
+                self.arguments[:200],
+            )
+            return {}
+        if not isinstance(parsed, dict):
+            logger.warning(
+                "FunctionCall.arguments_dict: parsed JSON is not an object (type={}, raw={!r})",
+                type(parsed).__name__,
+                self.arguments[:200],
+            )
+            return {}
+        return parsed
 
 
 class FunctionCallOutput(BaseModel):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 from typing import TYPE_CHECKING
 
@@ -11,6 +12,9 @@ from evaluatorq.simulation.types import DEFAULT_MODEL
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from opentelemetry.trace import Span
+
+    from evaluatorq.simulation.agents.base import BaseAgent
     from evaluatorq.simulation.generators import FirstMessageGenerator
     from evaluatorq.simulation.types import (
         ChatMessage,
@@ -26,6 +30,7 @@ async def simulate(
     evaluation_name: str = "",
     agent_key: str | None = None,
     target_callback: Callable[[list[ChatMessage]], str | Awaitable[str]] | None = None,
+    target: Callable[[list[ChatMessage]], str | Awaitable[str]] | None = None,
     personas: list[Persona] | None = None,
     scenarios: list[Scenario] | None = None,
     datapoints: list[Datapoint] | None = None,
@@ -33,6 +38,8 @@ async def simulate(
     model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
     parallelism: int = 5,
+    user_simulator: BaseAgent | None = None,
+    judge: BaseAgent | None = None,
 ) -> list[SimulationResult]:
     """High-level function to run agent simulations.
 
@@ -41,13 +48,80 @@ async def simulate(
     - Generating first messages for each combination
     - Running simulations in parallel
     - Applying evaluators to results
+
+    Args:
+        target_callback: Callable that receives the conversation history and
+            returns the agent's response.  Kept for backwards compatibility.
+        target: Alias for ``target_callback``.  Takes precedence when both
+            are supplied.
+        user_simulator: Pre-constructed ``BaseAgent`` to drive the user side
+            of the conversation.  When omitted a default ``UserSimulatorAgent``
+            is built from ``model``.  If the provided agent exposes an
+            ``update_context(persona_context, scenario_context)`` method it will
+            be called before each individual simulation so the agent is grounded
+            in the current datapoint's persona and scenario.
+        judge: Pre-constructed ``BaseAgent`` used to evaluate each turn.
+            When omitted a default ``JudgeAgent`` is built from ``model``.
     """
+    from evaluatorq.simulation.tracing import with_simulation_span
+    from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
+
+    await init_tracing_if_needed()
+
+    try:
+        async with with_simulation_span(
+            "orq.simulation.pipeline",
+            {
+                "orq.simulation.evaluation_name": evaluation_name,
+                "orq.simulation.max_turns": max_turns,
+                "orq.simulation.parallelism": parallelism,
+            },
+        ) as pipeline_span:
+            return await _simulate_core(
+                evaluation_name=evaluation_name,
+                agent_key=agent_key,
+                target_callback=target_callback,
+                target=target,
+                personas=personas,
+                scenarios=scenarios,
+                datapoints=datapoints,
+                max_turns=max_turns,
+                model=model,
+                evaluator_names=evaluator_names,
+                parallelism=parallelism,
+                user_simulator=user_simulator,
+                judge=judge,
+                pipeline_span=pipeline_span,
+            )
+    finally:
+        await flush_tracing()
+
+
+async def _simulate_core(
+    *,
+    evaluation_name: str,
+    agent_key: str | None,
+    target_callback: Callable[[list[ChatMessage]], str | Awaitable[str]] | None,
+    target: Callable[[list[ChatMessage]], str | Awaitable[str]] | None,
+    personas: list[Persona] | None,
+    scenarios: list[Scenario] | None,
+    datapoints: list[Datapoint] | None,
+    max_turns: int,
+    model: str,
+    evaluator_names: list[str] | None,
+    parallelism: int,
+    user_simulator: BaseAgent | None,
+    judge: BaseAgent | None,
+    pipeline_span: Span | None,
+) -> list[SimulationResult]:
+    """Core simulation logic (runs inside the orq.simulation.pipeline span)."""
     from openai import AsyncOpenAI
 
     from evaluatorq.simulation.adapters import from_orq_deployment
     from evaluatorq.simulation.evaluators import get_evaluator
     from evaluatorq.simulation.generators import FirstMessageGenerator
     from evaluatorq.simulation.runner.simulation import SimulationRunner
+    from evaluatorq.simulation.tracing import record_token_usage, set_span_attrs
 
     # Validate evaluator names early
     resolved_evaluator_names = evaluator_names or ["goal_achieved", "criteria_met"]
@@ -100,19 +174,27 @@ async def simulate(
             "No datapoints to simulate — persona or scenario generation may have failed"
         )
 
-    # Bridge agentKey to invoke() if no callback is provided
-    resolved_callback = target_callback
+    set_span_attrs(
+        pipeline_span,
+        {"orq.simulation.datapoints_count": len(datapoints)},
+    )
+
+    # Bridge agentKey to invoke() if no callback is provided.
+    # ``target`` takes precedence over ``target_callback`` when both are given.
+    resolved_callback = target or target_callback
     if not resolved_callback and agent_key:
         resolved_callback = from_orq_deployment(agent_key)
 
     if not resolved_callback:
-        raise ValueError("Either target_callback or agent_key is required")
+        raise ValueError("Either target_callback (or target) or agent_key is required")
 
     # Create simulation runner
     runner = SimulationRunner(
         target_callback=resolved_callback,
         model=model,
         max_turns=max_turns,
+        user_simulator=user_simulator,
+        judge=judge,
     )
 
     try:
@@ -132,17 +214,56 @@ async def simulate(
             if evaluation_name:
                 result.metadata["evaluation_name"] = evaluation_name
 
+        # Aggregate token usage onto the pipeline span
+        total_prompt = sum((r.token_usage.prompt_tokens or 0) for r in results)
+        total_completion = sum(
+            (r.token_usage.completion_tokens or 0) for r in results
+        )
+        total_total = sum((r.token_usage.total_tokens or 0) for r in results)
+        record_token_usage(
+            pipeline_span,
+            prompt_tokens=total_prompt,
+            completion_tokens=total_completion,
+            total_tokens=total_total,
+        )
+        set_span_attrs(
+            pipeline_span,
+            {
+                "orq.simulation.results_count": len(results),
+                "orq.simulation.goal_achieved_count": sum(
+                    1 for r in results if r.goal_achieved
+                ),
+            },
+        )
+
         return results
     finally:
         await runner.close()
+        # Close the target if it owns resources (e.g. OrqResponsesTarget
+        # built its own AsyncOpenAI client). Plain callables / functions
+        # have no close(); duck-type to avoid coupling to the concrete type.
+        target_close = getattr(resolved_callback, "close", None)
+        if callable(target_close):
+            maybe = target_close()
+            if inspect.isawaitable(maybe):
+                await maybe
 
 
 async def _generate_single_datapoint(
     gen: FirstMessageGenerator, persona: Persona, scenario: Scenario
 ) -> Datapoint:
+    from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.simulation.utils.prompt_builders import generate_datapoint
 
-    first_message = await gen.generate(persona, scenario)
+    async with with_simulation_span(
+        "orq.simulation.first_message_generation",
+        {
+            "orq.simulation.persona": persona.name,
+            "orq.simulation.scenario": scenario.name,
+            "orq.simulation.model": getattr(gen, "_model", None),
+        },
+    ):
+        first_message = await gen.generate(persona, scenario)
     return generate_datapoint(persona, scenario, first_message)
 
 
@@ -167,6 +288,10 @@ async def generate_and_simulate(
 
     from evaluatorq.simulation.adapters import from_orq_deployment
     from evaluatorq.simulation.generators import PersonaGenerator, ScenarioGenerator
+    from evaluatorq.simulation.tracing import with_simulation_span
+    from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
+
+    await init_tracing_if_needed()
 
     # Bridge agentKey to invoke() if no callback is provided
     resolved_callback = target_callback
@@ -184,34 +309,56 @@ async def generate_and_simulate(
             "ORQ_API_KEY environment variable is not set. Set it before calling generate_and_simulate()."
         )
 
-    shared_client = AsyncOpenAI(
-        api_key=api_key,
-        base_url=f"{os.environ.get('ORQ_BASE_URL', 'https://api.orq.ai')}/v2/router",
-    )
-
     try:
-        persona_gen = PersonaGenerator(model=model, client=shared_client)
-        scenario_gen = ScenarioGenerator(model=model, client=shared_client)
+        async with with_simulation_span(
+            "orq.simulation.pipeline",
+            {
+                "orq.simulation.evaluation_name": evaluation_name,
+                "orq.simulation.mode": "generate_and_simulate",
+                "orq.simulation.num_personas": num_personas,
+                "orq.simulation.num_scenarios": num_scenarios,
+                "orq.simulation.max_turns": max_turns,
+                "orq.simulation.parallelism": parallelism,
+            },
+        ) as pipeline_span:
+            shared_client = AsyncOpenAI(
+                api_key=api_key,
+                base_url=f"{os.environ.get('ORQ_BASE_URL', 'https://api.orq.ai')}/v2/router",
+            )
 
-        personas, scenarios = await asyncio.gather(
-            persona_gen.generate(
-                agent_description=agent_description, num_personas=num_personas
-            ),
-            scenario_gen.generate(
-                agent_description=agent_description, num_scenarios=num_scenarios
-            ),
-        )
+            try:
+                persona_gen = PersonaGenerator(model=model, client=shared_client)
+                scenario_gen = ScenarioGenerator(model=model, client=shared_client)
+
+                personas, scenarios = await asyncio.gather(
+                    persona_gen.generate(
+                        agent_description=agent_description,
+                        num_personas=num_personas,
+                    ),
+                    scenario_gen.generate(
+                        agent_description=agent_description,
+                        num_scenarios=num_scenarios,
+                    ),
+                )
+            finally:
+                await shared_client.close()
+
+            # Delegate to core (no duplicate pipeline span)
+            return await _simulate_core(
+                evaluation_name=evaluation_name,
+                agent_key=None,
+                target_callback=resolved_callback,
+                target=None,
+                personas=personas,
+                scenarios=scenarios,
+                datapoints=None,
+                max_turns=max_turns,
+                model=model,
+                evaluator_names=evaluator_names,
+                parallelism=parallelism,
+                user_simulator=None,
+                judge=None,
+                pipeline_span=pipeline_span,
+            )
     finally:
-        await shared_client.close()
-
-    # Run simulations
-    return await simulate(
-        evaluation_name=evaluation_name,
-        target_callback=resolved_callback,
-        personas=personas,
-        scenarios=scenarios,
-        max_turns=max_turns,
-        model=model,
-        evaluator_names=evaluator_names,
-        parallelism=parallelism,
-    )
+        await flush_tracing()

@@ -6,10 +6,13 @@ generating realistic user messages in conversations.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from evaluatorq.simulation.agents.base import AgentConfig, BaseAgent
 from evaluatorq.simulation.types import ChatMessage
+
+if TYPE_CHECKING:
+    from evaluatorq.contracts import LLMCallConfig
 
 DEFAULT_USER_SIMULATOR_PROMPT = """You are a user simulator. Your role is to simulate realistic user behavior in a conversation with an AI agent.
 
@@ -48,7 +51,8 @@ class UserSimulatorAgent(BaseAgent):
     """
 
     def __init__(
-        self, config: UserSimulatorAgentConfig | AgentConfig | None = None
+        self,
+        config: UserSimulatorAgentConfig | AgentConfig | LLMCallConfig | None = None,
     ) -> None:
         super().__init__(config)
         self._custom_system_prompt: str | None = None
@@ -76,7 +80,9 @@ class UserSimulatorAgent(BaseAgent):
                 content="Generate your first message to start the conversation. Remember your goal and persona.",
             )
         )
-        return await self.respond_async(prompt_messages, temperature=0.8)
+        return await self.respond_async(
+            prompt_messages, temperature=0.8, llm_purpose="first_message"
+        )
 
     def update_context(
         self,
