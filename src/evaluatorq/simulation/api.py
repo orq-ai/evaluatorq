@@ -39,7 +39,7 @@ async def simulate(
     parallelism: int = 5,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
-    upload_results: bool = True,
+    upload_results: bool = False,
     evaluation_description: str | None = None,
     path: str | None = None,
 ) -> list[SimulationResult]:
@@ -50,8 +50,8 @@ async def simulate(
     - Generating first messages for each combination
     - Running simulations in parallel
     - Applying evaluators to results
-    - Uploading results to the Orq platform when ``ORQ_API_KEY`` is set
-      (set ``upload_results=False`` to suppress)
+    - Optionally uploading results to the Orq platform when
+      ``upload_results=True`` is passed and ``ORQ_API_KEY`` is set
 
     Args:
         target_callback: Callable that receives the conversation history and
@@ -66,12 +66,11 @@ async def simulate(
             in the current datapoint's persona and scenario.
         judge: Pre-constructed ``BaseAgent`` used to evaluate each turn.
             When omitted a default ``JudgeAgent`` is built from ``model``.
-        upload_results: When ``True`` (default), results are uploaded to the
-            Orq platform if ``ORQ_API_KEY`` is set in the environment.
-            Upload errors are logged but do not fail the call. Note that
-            ``True`` is the default — callers with ``ORQ_API_KEY`` set will
-            now perform a network upload at the end of every ``simulate()``
-            call. Set to ``False`` to opt out.
+        upload_results: When ``True``, results are uploaded to the Orq
+            platform if ``ORQ_API_KEY`` is set in the environment. Defaults
+            to ``False`` so ``simulate()`` performs no network I/O unless the
+            caller explicitly opts in. Upload errors are logged but do not
+            fail the call.
         evaluation_description: Optional human-readable description attached
             to the experiment uploaded to Orq. Mirrors ``evaluatorq()``.
         path: Optional Orq folder path (e.g. ``"MyProject/MyFolder"``) under
@@ -123,7 +122,8 @@ async def simulate(
         if upload_results and api_key:
             await upload_simulation_results(
                 api_key=api_key,
-                evaluation_name=evaluation_name or "simulation",
+                evaluation_name=evaluation_name
+                or f"simulation-{start_time.strftime('%Y%m%d-%H%M%S')}",
                 evaluation_description=evaluation_description,
                 results=results,
                 start_time=start_time,
@@ -312,19 +312,20 @@ async def generate_and_simulate(
     model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
     parallelism: int = 5,
-    upload_results: bool = True,
+    upload_results: bool = False,
     evaluation_description: str | None = None,
     path: str | None = None,
 ) -> list[SimulationResult]:
     """Generate personas/scenarios and run simulations.
 
-    Convenience function that combines generation and simulation. Uploads
-    results to the Orq platform when ``ORQ_API_KEY`` is set; pass
-    ``upload_results=False`` to suppress.
+    Convenience function that combines generation and simulation.
+    Uploads results to the Orq platform only when ``upload_results=True``
+    is passed; defaults to ``False`` so no extra network I/O happens
+    unless the caller opts in.
 
     ``ORQ_API_KEY`` is required for this function to work at all (persona
-    and scenario generation calls the Orq router). ``upload_results=False``
-    only skips the final results upload, not the generation calls.
+    and scenario generation calls the Orq router). ``upload_results``
+    only controls the final results upload, not the generation calls.
     """
     from datetime import datetime, timezone
 
@@ -416,7 +417,8 @@ async def generate_and_simulate(
         if upload_results:
             await upload_simulation_results(
                 api_key=api_key,
-                evaluation_name=evaluation_name or "simulation",
+                evaluation_name=evaluation_name
+                or f"simulation-{start_time.strftime('%Y%m%d-%H%M%S')}",
                 evaluation_description=evaluation_description,
                 results=results,
                 start_time=start_time,

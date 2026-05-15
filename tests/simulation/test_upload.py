@@ -177,37 +177,25 @@ async def test_upload_skips_per_result_conversion_failures(
     """One malformed SimulationResult must not drop the whole batch."""
     import logging
 
-    from evaluatorq.simulation.types import (
-        Message,
-        SimulationResult,
-        TerminatedBy,
-        TokenUsage,
-    )
-
     sent: dict[str, object] = {}
 
     async def fake_send(**kwargs: object) -> None:
         sent.update(kwargs)
 
     good = _make_result(persona="good")
-    # ``to_open_responses`` reads attributes off the result; corrupt one of
-    # those attributes by giving messages a non-list value via dict-bypass.
-    bad = SimulationResult(
-        messages=[Message(role="user", content="x")],
-        terminated_by=TerminatedBy.error,
-        reason="r",
-        goal_achieved=False,
-        goal_completion_score=0,
-        rules_broken=[],
-        turn_count=0,
-        turn_metrics=[],
-        token_usage=TokenUsage(),
-        metadata={},
-    )
-    object.__setattr__(bad, "messages", "not a list")  # break it post-validation
+    bad = _make_result(persona="bad")
+
+    def conversion(result, _model):
+        if result is bad:
+            raise RuntimeError("boom")
+        from evaluatorq.simulation.convert import to_open_responses
+
+        return to_open_responses(result, _model)
 
     with caplog.at_level(logging.WARNING, logger="evaluatorq.simulation.upload"), patch(
         "evaluatorq.simulation.upload.send_results_to_orq", side_effect=fake_send
+    ), patch(
+        "evaluatorq.simulation.upload.to_open_responses", side_effect=conversion
     ):
         await upload_simulation_results(
             api_key="k",
