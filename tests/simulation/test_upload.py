@@ -486,6 +486,7 @@ async def test_simulate_calls_upload_when_flag_and_key_set(
         )
 
     upload_mock.assert_awaited_once()
+    assert upload_mock.await_args is not None
     kwargs = upload_mock.await_args.kwargs
     assert kwargs["api_key"] == "test-key"
     assert kwargs["evaluation_name"] == "t"
@@ -646,6 +647,7 @@ async def test_generate_and_simulate_calls_upload(
         )
 
     upload_mock.assert_awaited_once()
+    assert upload_mock.await_args is not None
     kwargs = upload_mock.await_args.kwargs
     assert kwargs["evaluation_name"] == "gn"
 
