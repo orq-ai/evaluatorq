@@ -641,6 +641,85 @@ async def test_generate_and_simulate_calls_upload(
 
 
 @pytest.mark.asyncio
+async def test_generate_and_simulate_skips_upload_when_flag_false(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """generate_and_simulate(upload_results=False) must not call the uploader."""
+    monkeypatch.setenv("ORQ_API_KEY", "test-key")
+
+    from unittest.mock import MagicMock
+
+    from evaluatorq.simulation import generate_and_simulate
+    from evaluatorq.simulation.types import (
+        ChatMessage,
+        CommunicationStyle,
+        Persona,
+        Scenario,
+    )
+
+    upload_mock = AsyncMock()
+
+    async def target_cb(messages: list[ChatMessage]) -> str:
+        return "ok"
+
+    persona = Persona(
+        name="P",
+        patience=0.5,
+        assertiveness=0.5,
+        politeness=0.5,
+        technical_level=0.5,
+        communication_style=CommunicationStyle.casual,
+        background="bg",
+    )
+    scenario = Scenario(name="S", goal="g")
+
+    fake_persona_gen = MagicMock()
+    fake_persona_gen.generate = AsyncMock(return_value=[persona])
+    fake_scenario_gen = MagicMock()
+    fake_scenario_gen.generate = AsyncMock(return_value=[scenario])
+
+    canned_result = _make_result()
+
+    from evaluatorq.simulation.types import Datapoint as SimDatapoint
+
+    async def fake_gen_dp(_gen: object, p: Persona, s: Scenario) -> SimDatapoint:
+        return SimDatapoint(
+            id="dp",
+            persona=p,
+            scenario=s,
+            user_system_prompt="sys",
+            first_message="hi",
+        )
+
+    with patch(
+        "evaluatorq.simulation.generators.PersonaGenerator",
+        return_value=fake_persona_gen,
+    ), patch(
+        "evaluatorq.simulation.generators.ScenarioGenerator",
+        return_value=fake_scenario_gen,
+    ), patch(
+        "evaluatorq.simulation.api._generate_single_datapoint",
+        new=AsyncMock(side_effect=fake_gen_dp),
+    ), patch(
+        "evaluatorq.simulation.runner.simulation.SimulationRunner.run_batch",
+        new=AsyncMock(return_value=[canned_result]),
+    ), patch(
+        "evaluatorq.simulation.upload.upload_simulation_results", new=upload_mock
+    ):
+        await generate_and_simulate(
+            evaluation_name="gn",
+            agent_description="agent",
+            target_callback=target_cb,
+            num_personas=1,
+            num_scenarios=1,
+            max_turns=1,
+            upload_results=False,
+        )
+
+    upload_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_simulate_skips_upload_when_no_api_key(
     monkeypatch: pytest.MonkeyPatch,
 ):

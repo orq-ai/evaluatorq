@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import uuid
 from typing import TYPE_CHECKING
 
 from evaluatorq.simulation.types import DEFAULT_MODEL
@@ -123,7 +124,7 @@ async def simulate(
             await upload_simulation_results(
                 api_key=api_key,
                 evaluation_name=evaluation_name
-                or f"simulation-{start_time.strftime('%Y%m%d-%H%M%S')}",
+                or f"simulation-{start_time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}",
                 evaluation_description=evaluation_description,
                 results=results,
                 start_time=start_time,
@@ -418,7 +419,7 @@ async def generate_and_simulate(
             await upload_simulation_results(
                 api_key=api_key,
                 evaluation_name=evaluation_name
-                or f"simulation-{start_time.strftime('%Y%m%d-%H%M%S')}",
+                or f"simulation-{start_time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}",
                 evaluation_description=evaluation_description,
                 results=results,
                 start_time=start_time,
