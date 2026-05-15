@@ -14,6 +14,7 @@ from evaluatorq.redteam.contracts import (
     AgentResponse,
     OutputMessage,
     TextOutputItem,
+    TokenUsage,
     ToolCallOutputItem,
     ToolInfo,
 )
@@ -51,7 +52,7 @@ class OpenAIAgentTarget(AgentTarget):
         self._history: list[Any] = []
 
     async def send_prompt(self, prompt: str) -> AgentResponse:
-        """Send a prompt to the agent and return its response with tool calls."""
+        """Send a prompt to the agent and return its response with usage + tool calls."""
         input_data: str | list[Any] = prompt
         prev_len = len(self._history)
         if self._history:
@@ -75,7 +76,9 @@ class OpenAIAgentTarget(AgentTarget):
         self._history = result.to_input_list()
 
         # Build output items directly from new history items, preserving original
-        # Responses API 'id'/'call_id' fields for trace correlation.
+        # Responses API 'id'/'call_id' fields for trace correlation. Iteration order
+        # is preserved so interleaved text/tool calls (e.g. reasoning -> tool_call ->
+        # reasoning) round-trip into AgentResponse.output.
         output_items: list[OutputMessage] = []
         new_items_start = min(prev_len, len(self._history))
         for item in self._history[new_items_start:]:
@@ -93,6 +96,9 @@ class OpenAIAgentTarget(AgentTarget):
                 )
             # Handle dict format (standard OpenAI message format)
             elif isinstance(item, dict) and item.get("role") == "assistant":
+                text = _extract_assistant_text(item.get("content"))
+                if text:
+                    output_items.append(TextOutputItem(text=text, annotations=[]))
                 for tc in (item.get("tool_calls") or []):
                     if isinstance(tc, dict):
                         func = tc.get("function", {})
@@ -117,6 +123,9 @@ class OpenAIAgentTarget(AgentTarget):
                         else ToolCallOutputItem(name=name, arguments=arguments)
                     )
                 elif getattr(item, "role", None) == "assistant":
+                    text = _extract_assistant_text(getattr(item, "content", None))
+                    if text:
+                        output_items.append(TextOutputItem(text=text, annotations=[]))
                     for tc in (getattr(item, "tool_calls", None) or []):
                         tc_name = getattr(tc, "name", None) or getattr(getattr(tc, "function", None), "name", "") or ""
                         tc_args_raw = _normalize_args_str(getattr(tc, "arguments", None) or getattr(getattr(tc, "function", None), "arguments", "{}"))
@@ -127,8 +136,35 @@ class OpenAIAgentTarget(AgentTarget):
                             else ToolCallOutputItem(name=str(tc_name), arguments=tc_args_raw)
                         )
 
-        output_items.append(TextOutputItem(text=str(result.final_output), annotations=[]))
-        return AgentResponse(output=output_items)
+        # Ensure final_output is reflected as a TextOutputItem. Avoid duplicating
+        # if the last text emitted from history already matches.
+        final_text = str(result.final_output)
+        last_text = next(
+            (item.text for item in reversed(output_items) if isinstance(item, TextOutputItem)),
+            None,
+        )
+        if last_text != final_text:
+            output_items.append(TextOutputItem(text=final_text, annotations=[]))
+
+        usage: TokenUsage | None = None
+        ctx = getattr(result, 'context_wrapper', None)
+        agent_usage = getattr(ctx, 'usage', None) if ctx is not None else None
+        if agent_usage is not None:
+            prompt_tokens = int(getattr(agent_usage, 'input_tokens', 0) or 0)
+            completion_tokens = int(getattr(agent_usage, 'output_tokens', 0) or 0)
+            total = getattr(agent_usage, 'total_tokens', None)
+            if total is not None and int(total) > 0:
+                total_tokens = int(total)
+            else:
+                total_tokens = prompt_tokens + completion_tokens
+            usage = TokenUsage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                calls=1,
+            )
+
+        return AgentResponse(output=output_items, usage=usage)
 
     async def get_agent_context(self) -> AgentContext:
         """Return agent context derived from the wrapped Agent instance.
@@ -185,6 +221,34 @@ class OpenAIAgentTarget(AgentTarget):
     def new(self) -> OpenAIAgentTarget:
         """Return an independent instance for parallel red teaming jobs."""
         return self.clone()
+
+
+def _extract_assistant_text(content: Any) -> str:
+    """Pull plain text out of a Responses-API assistant content field.
+
+    ``content`` may be a string or a list of content parts such as
+    ``{"type": "output_text", "text": "..."}`` / ``{"type": "text", "text": "..."}``.
+    Returns the concatenated text, or empty string if none found.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict):
+                text = part.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+            else:
+                text = getattr(part, "text", None)
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts)
+    return ""
 
 
 def _normalize_args_str(raw: Any) -> str:

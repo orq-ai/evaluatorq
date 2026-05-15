@@ -71,7 +71,7 @@ async def test_multi_turn_memory() -> None:
     await target.send_prompt(
         "My favorite color is turquoise and my pet's name is Biscuit. Please confirm."
     )
-    r2 = await target.send_prompt("What is my pet's name?")
+    r2 = (await target.send_prompt("What is my pet's name?")).text
     check(
         "agent remembers from previous turn",
         "biscuit" in r2.text.lower(),
@@ -96,10 +96,10 @@ async def test_reset_clears_memory() -> None:
 
     check("history is empty after reset", len(target._history) == 0)
 
-    r = await target.send_prompt(
+    r = (await target.send_prompt(
         "What is my favorite fruit? "
         "If you don't know, reply exactly: I don't know"
-    )
+    )).text
     check(
         "agent does NOT remember after reset",
         "dragonfruit" not in r.text.lower(),
@@ -118,9 +118,9 @@ async def test_clone_isolation() -> None:
     cloned = target.new()
     check("clone starts with empty history", len(cloned._history) == 0)
 
-    r = await cloned.send_prompt(
+    r = (await cloned.send_prompt(
         "What is my name? If you don't know, reply exactly: unknown"
-    )
+    )).text
     check(
         "clone does NOT know original's conversation",
         "juniper" not in r.text.lower(),
@@ -138,7 +138,7 @@ async def test_parallel_clones() -> None:
     async def run_one(word: str):  # type: ignore[return]
         target = OpenAIAgentTarget(agent)
         await target.send_prompt(f"My favorite tree is {word}. Confirm.")
-        return await target.send_prompt("What is my favorite tree?")
+        return (await target.send_prompt("What is my favorite tree?")).text
 
     results = await asyncio.gather(*[run_one(w) for w in words])
 
@@ -160,7 +160,7 @@ async def test_three_turn_conversation() -> None:
 
     await target.send_prompt("I'm going to tell you three colors.")
     await target.send_prompt("The colors are: red, blue, green.")
-    r3 = await target.send_prompt("List the three colors I told you.")
+    r3 = (await target.send_prompt("List the three colors I told you.")).text
 
     has_colors = all(c in r3.text.lower() for c in ["red", "blue", "green"])
     check(

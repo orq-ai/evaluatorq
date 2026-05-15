@@ -6,6 +6,7 @@ Verifies:
 - send_prompt is callable and returns AgentResponse
 - new() returns a different object
 - new() fresh instance has previous_response_id == None
+- __call__ (sim mode) does not corrupt AgentTarget threading state (partial-stateless contract)
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import pytest
 from evaluatorq.contracts import AgentResponse, LLMCallConfig
 from evaluatorq.redteam.backends.base import is_agent_target
 from evaluatorq.simulation.target import OrqResponsesTarget
+from evaluatorq.simulation.types import ChatMessage
 
 
 # ---------------------------------------------------------------------------
@@ -175,3 +177,45 @@ class TestNew:
 
         fresh = target.new()
         assert fresh._client is client
+
+
+class TestCallDoesNotCorruptAgentTargetState:
+    """Fork contract: __call__ (sim mode) must not mutate AgentTarget threading state.
+
+    An OrqResponsesTarget used as an AgentTarget (redteam) can legally also be
+    passed as a sim target_callback.  Calling __call__ between send_prompt turns
+    must leave _previous_response_id and _accumulated_usage untouched on self.
+    """
+
+    @pytest.mark.asyncio
+    async def test_call_does_not_overwrite_previous_response_id(self):
+        """__call__ must not clear or overwrite _previous_response_id set by send_prompt."""
+        client = _make_client()
+        client.responses.create = AsyncMock(
+            side_effect=[
+                _make_response(text="turn-1 reply"),   # send_prompt
+                _make_response(text="sim reply"),       # __call__ (stateless)
+            ]
+        )
+        config = LLMCallConfig(model="gpt-4o")
+        target = OrqResponsesTarget(config, client=client)
+
+        await target.send_prompt("redteam turn 1")
+        thread_id_after_send = target._previous_response_id
+
+        await target([ChatMessage(role="user", content="sim input")])
+
+        assert target._previous_response_id == thread_id_after_send
+
+    @pytest.mark.asyncio
+    async def test_call_does_not_reset_previous_response_id_to_none(self):
+        """__call__ on a fresh instance must leave _previous_response_id as None."""
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        config = LLMCallConfig(model="gpt-4o")
+        target = OrqResponsesTarget(config, client=client)
+
+        assert target._previous_response_id is None
+        await target([ChatMessage(role="user", content="sim input")])
+        # Must still be None — __call__ is stateless w.r.t. self
+        assert target._previous_response_id is None

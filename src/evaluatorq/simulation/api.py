@@ -285,9 +285,18 @@ async def _simulate_core(
 async def _generate_single_datapoint(
     gen: FirstMessageGenerator, persona: Persona, scenario: Scenario
 ) -> Datapoint:
+    from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.simulation.utils.prompt_builders import generate_datapoint
 
-    first_message = await gen.generate(persona, scenario)
+    async with with_simulation_span(
+        "orq.simulation.first_message_generation",
+        {
+            "orq.simulation.persona": persona.name,
+            "orq.simulation.scenario": scenario.name,
+            "orq.simulation.model": getattr(gen, "_model", None),
+        },
+    ):
+        first_message = await gen.generate(persona, scenario)
     return generate_datapoint(persona, scenario, first_message)
 
 

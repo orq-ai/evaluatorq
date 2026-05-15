@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
@@ -14,7 +13,6 @@ from evaluatorq.redteam.contracts import (
     DEFAULT_TARGET_TIMEOUT_MS,
     AgentContext,
     AgentResponse,
-    ExecutedToolCall,
     OutputMessage,
     TargetKind,
     TextOutputItem,
@@ -66,13 +64,15 @@ class OpenAIModelTarget:
         self.system_prompt = system_prompt or 'You are a helpful assistant.'
         self.max_tokens = max_tokens or DEFAULT_TARGET_MAX_TOKENS
         self.timeout_ms = timeout_ms or DEFAULT_TARGET_TIMEOUT_MS
-        self._last_token_usage: TokenUsage | None = None
+        self._history: list[ChatCompletionMessageParam] = []
 
     async def send_prompt(self, prompt: str) -> AgentResponse:
-        """Send a prompt to the OpenAI model and return its response with any tool calls."""
+        """Send a prompt to the OpenAI model and return its response with usage + any tool calls."""
+        user_msg: ChatCompletionMessageParam = {'role': 'user', 'content': prompt}
         messages: list[ChatCompletionMessageParam] = [
             {'role': 'system', 'content': self.system_prompt},
-            {'role': 'user', 'content': prompt},
+            *self._history,
+            user_msg,
         ]
         async with with_llm_span(
             model=self.model,
@@ -91,55 +91,64 @@ class OpenAIModelTarget:
             content = msg.content or ''
             record_llm_response(span, response, output_content=content)
 
-            # Capture tool calls made by the model
-            # Only ChatCompletionMessageToolCall has a .function attribute; skip custom tool calls
-            executed_tool_calls: list[ExecutedToolCall] = []
+            # Capture tool calls made by the model.
+            # Only ChatCompletionMessageToolCall has a .function attribute; skip custom tool calls.
+            tool_call_items: list[ToolCallOutputItem] = []
             for tc in (getattr(msg, 'tool_calls', None) or []):
                 func = getattr(tc, 'function', None)
                 if func is None:
                     continue
-                try:
-                    args = json.loads(func.arguments) if func.arguments else {}
-                except (json.JSONDecodeError, ValueError):
-                    args = {'raw': func.arguments}
-                executed_tool_calls.append(ExecutedToolCall(name=func.name, arguments=args))
+                tc_id = getattr(tc, 'id', None)
+                kwargs: dict[str, Any] = {
+                    'name': func.name,
+                    'arguments': func.arguments or '{}',
+                }
+                if isinstance(tc_id, str) and tc_id:
+                    kwargs['id'] = tc_id
+                tool_call_items.append(ToolCallOutputItem(**kwargs))
 
-            # Store usage for consume_last_token_usage()
-            usage = getattr(response, 'usage', None)
-            if usage is not None:
-                prompt_ = int(getattr(usage, 'prompt_tokens', 0) or 0)
-                completion = int(getattr(usage, 'completion_tokens', 0) or 0)
-                raw_total = getattr(usage, 'total_tokens', None)
-                total = int(raw_total) if raw_total else (prompt_ + completion)
-                self._last_token_usage = TokenUsage(
-                    prompt_tokens=prompt_,
-                    completion_tokens=completion,
-                    total_tokens=total,
-                    calls=1,
-                )
-            else:
-                self._last_token_usage = None
+            usage = TokenUsage.from_completion(response)
+            response_id = getattr(response, 'id', None)
+            finish_reason = None
+            choices = getattr(response, 'choices', None) or []
+            if choices:
+                finish_reason = getattr(choices[0], 'finish_reason', None)
 
-        output: list[OutputMessage] = cast(
-            'list[OutputMessage]',
-            [ToolCallOutputItem(name=tc.name, arguments=json.dumps(tc.arguments)) for tc in executed_tool_calls],
-        )
+        # Accumulate history for multi-turn context.
+        assistant_msg: ChatCompletionMessageParam
+        raw_tool_calls = getattr(msg, 'tool_calls', None) or []
+        if raw_tool_calls:
+            assistant_msg = {
+                'role': 'assistant',
+                'content': content or None,
+                'tool_calls': [
+                    {
+                        'id': tc.id,
+                        'type': 'function',
+                        'function': {'name': tc.function.name, 'arguments': tc.function.arguments},
+                    }
+                    for tc in raw_tool_calls
+                    if getattr(tc, 'function', None) is not None
+                ],
+            }
+        else:
+            assistant_msg = {'role': 'assistant', 'content': content}
+        self._history.append(user_msg)
+        self._history.append(assistant_msg)
+
+        output: list[OutputMessage] = cast('list[OutputMessage]', list(tool_call_items))
         output.append(TextOutputItem(text=content, annotations=[]))
-        return AgentResponse(output=output)
-
-    def consume_last_token_usage(self) -> TokenUsage | None:
-        """Return and clear usage from last call."""
-        usage = self._last_token_usage
-        self._last_token_usage = None
-        return usage
-
-    def clone(self) -> OpenAIModelTarget:
-        """Return a fresh target instance for parallel job safety."""
-        return OpenAIModelTarget(model=self.model, system_prompt=self.system_prompt, client=self.client, max_tokens=self.max_tokens, timeout_ms=self.timeout_ms)
+        return AgentResponse(
+            output=output,
+            usage=usage,
+            model=getattr(response, 'model', None),
+            response_id=response_id,
+            finish_reason=finish_reason,
+        )
 
     def new(self) -> OpenAIModelTarget:
-        """Return a fresh target instance (alias for :meth:`clone`, satisfies ``AgentTarget`` protocol)."""
-        return self.clone()
+        """Return a fresh target instance for parallel job safety (satisfies ``AgentTarget`` protocol)."""
+        return OpenAIModelTarget(model=self.model, system_prompt=self.system_prompt, client=self.client, max_tokens=self.max_tokens, timeout_ms=self.timeout_ms)
 
     target_kind: TargetKind = TargetKind.OPENAI
     """Used by the runner to populate report metadata correctly."""

@@ -52,10 +52,10 @@ class TestLangGraphIntegration:
 
         await target.send_prompt("First message")
         target.new()
-        response = await target.send_prompt("Second message")
+        result = await target.send_prompt("Second message")
 
-        assert isinstance(response.text, str)
-        assert len(response.text) > 0
+        assert isinstance(result.text, str)
+        assert len(result.text) > 0
 
     @pytest.mark.asyncio
     async def test_clone_works_independently(self) -> None:
@@ -64,8 +64,8 @@ class TestLangGraphIntegration:
         target = LangGraphTarget(graph)
         cloned = target.new()
 
-        response_original = await target.send_prompt("Hello from original")
-        response_cloned = await cloned.send_prompt("Hello from clone")
+        result_original = await target.send_prompt("Hello from original")
+        result_cloned = await cloned.send_prompt("Hello from clone")
 
-        assert isinstance(response_original.text, str)
-        assert isinstance(response_cloned.text, str)
+        assert isinstance(result_original.text, str)
+        assert isinstance(result_cloned.text, str)

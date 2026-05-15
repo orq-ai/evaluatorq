@@ -92,14 +92,19 @@ async def generate_structured(
             schema_keywords = ("structured", "response_format", "json_schema", "not supported")
             if not any(kw in err_body for kw in schema_keywords):
                 raise
-            logger.debug(
+            logger.warning(
                 "%s: structured output not supported by model, falling back to json_object",
                 label,
             )
+            # TODO: annotate the active OTel span with
+            #   orq.simulation.structured_output.fallback=true
+            # once a get_current_span() helper is wired into this module.
+            if span is not None:
+                span.set_attribute("orq.simulation.structured_output.fallback", True)
 
         # 2. Fallback: json_object mode
         fallback_response = await with_retry(
-            lambda: client.chat.completions.create(
+            lambda: client.chat.completions.create(  # pyright: ignore[reportUnknownLambdaType]
                 model=model,
                 messages=typed_messages,
                 temperature=temperature,

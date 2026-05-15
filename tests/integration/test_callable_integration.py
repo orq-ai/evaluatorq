@@ -49,6 +49,7 @@ class TestCallableIntegration:
         target = CallableTarget(counting_agent)
         cloned = target.new()
 
+        from evaluatorq.redteam.contracts import SendResult
         r1 = await target.send_prompt("a")
         r2 = await cloned.send_prompt("b")
 

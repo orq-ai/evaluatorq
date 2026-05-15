@@ -86,6 +86,37 @@ def _classify_error(error: str | None, *, existing_type: str | None = None) -> s
 def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
     """Normalize evaluatorq job output into a typed payload."""
 
+    def _flatten_turns(d: dict[str, Any]) -> dict[str, Any]:
+        """If ``turns`` is a list of new-shape Turn dicts, translate to the legacy
+        wire fields (turns:int, conversation:list[Message-dict], final_response)
+        so JobOutputPayload validates.
+        """
+        turns_val = d.get('turns')
+        if not isinstance(turns_val, list) or not turns_val:
+            return d
+        first = turns_val[0]
+        if not (isinstance(first, dict) and 'attacker' in first and 'target' in first):
+            return d
+        conversation: list[dict[str, Any]] = []
+        final_response_text = ''
+        for t in turns_val:
+            attacker = t.get('attacker') or {}
+            target = t.get('target') or {}
+            conversation.append({'role': 'user', 'content': attacker.get('generated_prompt', '')})
+            target_text = ''
+            for item in target.get('output') or []:
+                if not isinstance(item, dict):
+                    continue
+                if item.get('type') == 'output_text':
+                    target_text = item.get('text', '') or target_text
+            conversation.append({'role': 'assistant', 'content': target_text})
+            final_response_text = target_text or final_response_text
+        out = dict(d)
+        out['turns'] = len(turns_val)
+        out.setdefault('conversation', conversation)
+        out.setdefault('final_response', final_response_text)
+        return out
+
     def _normalize_output_dict(d: dict[str, Any]) -> dict[str, Any]:
         """Unwrap nested 'output' keys and merge top-level fields into a flat dict."""
         wrapped = d.get('output')
@@ -94,7 +125,7 @@ def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
             for k, v in d.items():
                 if k != 'output' and k not in merged:
                     merged[k] = v
-            return merged
+            return _flatten_turns(merged)
         if isinstance(wrapped, str):
             nested = _coerce_job_output_payload(wrapped).model_dump(mode='json')
             if nested:
@@ -102,8 +133,8 @@ def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
                 for k, v in d.items():
                     if k != 'output' and k not in merged:
                         merged[k] = v
-                return merged
-        return d
+                return _flatten_turns(merged)
+        return _flatten_turns(d)
 
     if isinstance(raw_output, dict):
         return JobOutputPayload.model_validate(_normalize_output_dict(raw_output))
@@ -450,7 +481,6 @@ def dynamic_evaluatorq_results_to_report(
                 error_stage=error_stage,
                 error_code=error_code,
                 error_details=error_details,
-                tool_calls_per_turn=job_output.tool_calls_per_turn,
             )
         )
 

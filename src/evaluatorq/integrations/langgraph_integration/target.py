@@ -56,6 +56,14 @@ class _TokenUsageCollector(BaseCallbackHandler):
                 gen = inner[0]
                 meta = getattr(getattr(gen, "message", None), "usage_metadata", None)
                 if meta is None:
+                    # Provider/integration didn't surface usage metadata on this
+                    # generation. Real call still happened — log so cost dashboards
+                    # showing zeros are diagnosable. Once per generation is fine
+                    # since LangGraph chains rarely emit hundreds.
+                    logger.debug(
+                        "_TokenUsageCollector: generation has no usage_metadata; "
+                        "tokens for this call will not be captured"
+                    )
                     continue
                 input_tokens = meta.get("input_tokens")
                 prompt = int(input_tokens) if input_tokens is not None else 0
@@ -139,12 +147,15 @@ class LangGraphTarget(AgentTarget):
         self._extra_config = config or {}
         self.memory_entity_id: str = uuid4().hex
         self._agent_context = agent_context
+        # Tracks how many messages were in the LangGraph thread before this turn.
+        # Not safe for concurrent send_prompt calls on the same instance —
+        # use .new() to get independent instances for parallel use.
         self._prev_msg_count: int = 0
-        # NOTE: _last_token_usage is not safe for concurrent send_prompt calls on
-        # the same instance — use .new() to get independent instances for parallel use.
-        self._last_token_usage: TokenUsage | None = None
         graph_name: str = getattr(graph, "name", None) or "langgraph_target"
         self._key = f"{graph_name}_{uuid4().hex[:8]}"
+        # Guard against spamming the log on every send_prompt call when
+        # an unknown callbacks type is encountered (hot path).
+        self._warned_unknown_callbacks: bool = False
 
     def _build_config(self) -> RunnableConfig:
         """Build the RunnableConfig with the current thread_id."""
@@ -158,7 +169,12 @@ class LangGraphTarget(AgentTarget):
         )
 
     async def send_prompt(self, prompt: str) -> AgentResponse:
-        """Send a prompt to the LangGraph agent and return its response with tool calls."""
+        """Send a prompt to the LangGraph agent and return its response with usage + tool calls.
+
+        Token usage is collected via a per-call ``_TokenUsageCollector`` callback.
+        The collector is drained in a ``finally:`` block so partial spend on
+        error paths is preserved.
+        """
         collector = _TokenUsageCollector()
 
         base_config = self._build_config()
@@ -176,16 +192,19 @@ class LangGraphTarget(AgentTarget):
             new_callbacks = manager_copy
         else:
             # Unknown type — wrap alongside existing without mutating.
-            logger.warning(
-                "LangGraphTarget: unrecognised callbacks type %s; wrapping in list. "
-                "Pass a list or BaseCallbackManager instead.",
-                type(existing).__name__,
-            )
+            if not self._warned_unknown_callbacks:
+                logger.warning(
+                    "LangGraphTarget: unrecognised callbacks type %s; wrapping in list. "
+                    "Pass a list or BaseCallbackManager instead.",
+                    type(existing).__name__,
+                )
+                self._warned_unknown_callbacks = True
             new_callbacks = [existing, collector]
 
         new_config: RunnableConfig = {**base_config, "callbacks": new_callbacks}
 
         prev_count = self._prev_msg_count
+        usage: TokenUsage | None = None
         try:
             result = await self._graph.ainvoke(
                 {"messages": [{"role": "user", "content": prompt}]},
@@ -195,9 +214,7 @@ class LangGraphTarget(AgentTarget):
             self._prev_msg_count = prev_count  # cursor is stable on failure
             raise
         finally:
-            # Always persist usage — including when ainvoke raises — so that
-            # error-path token spend is not silently dropped.
-            self._last_token_usage = collector.to_token_usage()
+            usage = collector.to_token_usage()
 
         messages = result.get("messages")
         if messages is None:
@@ -211,49 +228,57 @@ class LangGraphTarget(AgentTarget):
                 "LangGraphTarget: graph returned an empty 'messages' list. "
                 "Ensure every execution path appends at least one AI message."
             )
-        last = messages[-1]
-        # Support both dict and LangChain BaseMessage
-        content = last.get("content", "") if isinstance(last, dict) else getattr(last, "content", "")
-        if not isinstance(content, str):
-            content = str(content)
-
-        # Build output items directly from messages added in this turn.
+        # Build output items directly from messages added in this turn, preserving
+        # interleaving of text and tool calls (ReAct-style: text -> tool_call -> text).
         # LangGraph checkpointer returns the full accumulated thread state, so
         # slicing from _prev_msg_count avoids duplicating tool calls across turns.
-        # ToolCallOutputItem is built directly (not via ExecutedToolCall) so that
-        # the original LangChain tool call 'id' is preserved for trace correlation.
+        # Build ToolCallOutputItem directly (not via the .tool_calls view) so
+        # interleaved text/tool ordering is preserved in .output.
         output_items: list[OutputMessage] = []
         for msg in messages[self._prev_msg_count:]:
             if isinstance(msg, dict):
-                if msg.get("role") == "assistant":
-                    for tc in (msg.get("tool_calls") or []):
-                        call_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
-                        name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
-                        args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
-                        args_str = json.dumps(args if isinstance(args, dict) else {})
-                        output_items.append(
-                            ToolCallOutputItem(name=str(name), arguments=args_str, id=call_id, call_id=call_id)
-                            if call_id
-                            else ToolCallOutputItem(name=str(name), arguments=args_str)
-                        )
+                if msg.get("role") != "assistant":
+                    continue
+                msg_content = msg.get("content", "")
+                tool_calls_iter = msg.get("tool_calls") or []
             else:
                 if not isinstance(msg, AIMessage):
                     continue
-                # LangChain AIMessage — tool_calls is a list of dicts with 'name', 'args', 'id'
-                for tc in (getattr(msg, "tool_calls", None) or []):
-                    call_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
-                    name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
-                    args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
-                    args_str = json.dumps(args if isinstance(args, dict) else {})
-                    output_items.append(
-                        ToolCallOutputItem(name=str(name), arguments=args_str, id=call_id, call_id=call_id)
-                        if call_id
-                        else ToolCallOutputItem(name=str(name), arguments=args_str)
-                    )
+                msg_content = getattr(msg, "content", "")
+                tool_calls_iter = getattr(msg, "tool_calls", None) or []
+
+            if not isinstance(msg_content, str):
+                msg_content = str(msg_content)
+            if msg_content:
+                output_items.append(TextOutputItem(text=msg_content, annotations=[]))
+
+            for tc in tool_calls_iter:
+                call_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
+                name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
+                args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
+                args_str = json.dumps(args if isinstance(args, dict) else {}, default=str)
+                output_items.append(
+                    ToolCallOutputItem(name=str(name), arguments=args_str, id=call_id, call_id=call_id)
+                    if call_id
+                    else ToolCallOutputItem(name=str(name), arguments=args_str)
+                )
+
         self._prev_msg_count = len(messages)
 
-        output_items.append(TextOutputItem(text=content, annotations=[]))
-        return AgentResponse(output=output_items)
+        # Fallback: if no AIMessage text was emitted (e.g. duck-typed message objects
+        # that don't subclass AIMessage), use the last message's .content so that
+        # AgentResponse.text remains well-defined.
+        if not any(isinstance(item, TextOutputItem) for item in output_items):
+            last = messages[-1]
+            logger.warning(
+                "LangGraphTarget: no AIMessage text in turn; falling back to last message content (type=%s)",
+                type(last).__name__,
+            )
+            last_content = last.get("content", "") if isinstance(last, dict) else getattr(last, "content", "")
+            if not isinstance(last_content, str):
+                last_content = str(last_content)
+            output_items.append(TextOutputItem(text=last_content, annotations=[]))
+        return AgentResponse(output=output_items, usage=usage)
 
     def reset_conversation(self) -> None:
         """Reset conversation state for a new attack by starting a fresh LangGraph thread.
@@ -263,17 +288,6 @@ class LangGraphTarget(AgentTarget):
         """
         self.memory_entity_id = uuid4().hex
         self._prev_msg_count = 0
-
-    def consume_last_token_usage(self) -> TokenUsage | None:
-        """Return and clear token usage from the last send_prompt() call.
-
-        Must be called between send_prompt() calls to avoid silently dropping
-        usage from earlier calls — each new send_prompt() overwrites the stored
-        value regardless of whether it has been consumed.
-        """
-        usage = self._last_token_usage
-        self._last_token_usage = None
-        return usage
 
     async def get_agent_context(self) -> AgentContext:
         """Return agent context introspected from the compiled graph.
@@ -313,7 +327,6 @@ class LangGraphTarget(AgentTarget):
             config=dict(self._extra_config),
             agent_context=self._agent_context,
         )
-        cloned._key = self._key
         return cloned
 
 

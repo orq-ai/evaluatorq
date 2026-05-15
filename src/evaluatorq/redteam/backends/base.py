@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol
 
 from loguru import logger
 
+from evaluatorq.redteam.contracts import AgentResponse
+
 if TYPE_CHECKING:
-    from evaluatorq.redteam.contracts import AgentContext, AgentResponse, TokenUsage
+    from evaluatorq.redteam.contracts import AgentContext, TokenUsage
 
 
 class AgentTarget(Protocol):
@@ -25,12 +27,17 @@ class AgentTarget(Protocol):
     Targets without persistent memory set it to ``None``. The red teaming
     pipeline reads this attribute after target creation to track entities for
     cleanup — it does not inject the value into the target.
+
+    Backends must implement ``send_prompt`` returning :class:`AgentResponse`.
+    ``AgentResponse`` carries both the ordered output items (text + tool calls)
+    and the per-call LLM metadata (``usage``, ``model``, ``response_id``,
+    ``finish_reason``) that previously lived on the now-removed ``SendResult``.
     """
 
     memory_entity_id: str | None
 
     async def send_prompt(self, prompt: str) -> 'AgentResponse':
-        """Send a prompt and return a structured response with text and any tool calls made."""
+        """Send a prompt and return the response (output items + token usage)."""
         ...
 
     def new(self) -> AgentTarget:
@@ -42,13 +49,13 @@ class AgentTarget(Protocol):
         ...
 
 
-def _coerce_to_agent_response(raw: Any) -> 'AgentResponse':
+def _coerce_to_agent_response(raw: Any) -> AgentResponse:
     """Wrap a plain str return into AgentResponse for backward-compat with legacy targets.
 
     Any target that still returns ``str`` from ``send_prompt`` will be transparently
-    wrapped here at the orchestrator call site (Option A backward-compat strategy).
+    wrapped here at the orchestrator call site.
     """
-    from evaluatorq.redteam.contracts import AgentResponse, OutputMessage, TextOutputItem
+    from evaluatorq.redteam.contracts import OutputMessage, TextOutputItem
     if isinstance(raw, AgentResponse):
         return raw
     text_item: OutputMessage = TextOutputItem(text=str(raw) if raw is not None else '', annotations=[])
@@ -72,9 +79,13 @@ class SupportsClone(Protocol):
 
 
 class SupportsTokenUsage(Protocol):
-    """Optional hook for exposing token usage from last target call."""
+    """Optional hook for exposing token usage from last target call.
 
-    def consume_last_token_usage(self) -> TokenUsage | None:
+    Deprecated: ``AgentResponse.usage`` is the canonical channel for token usage.
+    Implementing this protocol is no longer required.
+    """
+
+    def consume_last_token_usage(self) -> 'TokenUsage | None':
         """Return and clear usage from last call."""
         ...
 
@@ -117,15 +128,31 @@ class SupportsErrorMapping(Protocol):
 
 
 def is_agent_target(obj: object) -> bool:
-    """Return True if obj satisfies the AgentTarget protocol at runtime."""
+    """Return True if obj satisfies the AgentTarget protocol at runtime.
+
+    Checks for ``send_prompt`` and ``new``.
+    """
     has_send = callable(getattr(obj, 'send_prompt', None))
     has_new = callable(getattr(obj, 'new', None))
-    if has_send and not has_new and callable(getattr(obj, 'clone', None)):
+    return has_send and has_new
+
+
+def validate_agent_target(obj: object) -> None:
+    """Raise ``TypeError`` if ``obj`` implements only the removed ``clone()`` API.
+
+    The check fires only when the object has ``clone()`` but neither
+    ``send_prompt`` nor ``new()`` — i.e. a clone-only object that cannot be
+    used as an :class:`AgentTarget` at all. Objects that implement the full
+    protocol (``send_prompt`` + ``new``) are accepted regardless of whether
+    they also define ``clone``.
+    """
+    has_send = callable(getattr(obj, 'send_prompt', None))
+    has_new = callable(getattr(obj, 'new', None))
+    if not has_send and not has_new and callable(getattr(obj, 'clone', None)):
         raise TypeError(
             f"{type(obj).__name__} implements 'clone()' which was removed in evaluatorq 1.3. "
             "Rename it to 'new(self) -> AgentTarget' — signature is the same, no memory_entity_id param."
         )
-    return has_send and has_new
 
 
 class DirectTargetFactory:

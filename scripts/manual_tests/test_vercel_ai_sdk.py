@@ -64,7 +64,7 @@ async def test_multi_turn_memory() -> None:
         "My favorite color is lavender and my pet's name is Mochi. "
         "Please confirm you understand."
     )
-    r2 = await target.send_prompt("What is my pet's name?")
+    r2 = (await target.send_prompt("What is my pet's name?")).text
     check(
         "agent remembers from previous turn",
         "mochi" in r2.text.lower(),
@@ -82,10 +82,10 @@ async def test_reset_clears_memory() -> None:
     )
     target = target.new()
 
-    r = await target.send_prompt(
+    r = (await target.send_prompt(
         "What is my favorite fruit? "
         "If you don't know, reply: I don't know"
-    )
+    )).text
     check(
         "agent does NOT remember after reset",
         "persimmon" not in r.text.lower(),
@@ -101,9 +101,9 @@ async def test_clone_isolation() -> None:
     await target.send_prompt("My favorite city is Reykjavik. Please confirm.")
 
     cloned = target.new()
-    r = await cloned.send_prompt(
+    r = (await cloned.send_prompt(
         "What is my favorite city? If you don't know, reply: unknown"
-    )
+    )).text
     check(
         "clone does NOT inherit conversation",
         "reykjavik" not in r.text.lower(),

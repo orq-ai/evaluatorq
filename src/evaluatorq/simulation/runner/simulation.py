@@ -5,10 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-import os
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
-
-from openai import AsyncOpenAI
 
 from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
 from evaluatorq.simulation.agents.user_simulator import (
@@ -44,6 +41,7 @@ from evaluatorq.simulation.utils.prompt_builders import (
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from openai import AsyncOpenAI
     from opentelemetry.trace import Span
 
     from evaluatorq.simulation.agents.base import BaseAgent
@@ -78,6 +76,31 @@ class TargetAgent(Protocol):
     async def respond(self, messages: list[ChatMessage]) -> str: ...
 
 
+@runtime_checkable
+class SimulationUserSimulator(Protocol):
+    """Protocol for user-simulator agents injected into the runner."""
+
+    def update_context(
+        self,
+        *,
+        persona_context: str | None,
+        scenario_context: str | None,
+    ) -> None: ...
+
+    async def generate_first_message(self) -> str: ...
+
+    async def respond_async(
+        self, messages: list[ChatMessage], *, llm_purpose: str | None = None
+    ) -> str: ...
+
+
+@runtime_checkable
+class SimulationJudge(Protocol):
+    """Protocol for judge agents injected into the runner."""
+
+    async def evaluate(self, messages: list[ChatMessage]) -> Judgment: ...
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -87,7 +110,16 @@ def _error_result(
     reason: str,
     persona: Persona | None = None,
     scenario: Scenario | None = None,
+    *,
+    error_type: str | None = None,
 ) -> SimulationResult:
+    metadata: dict[str, Any] = {
+        "persona": persona.name if persona else "unknown",
+        "scenario": scenario.name if scenario else "unknown",
+        "error": reason,
+    }
+    if error_type is not None:
+        metadata["error_type"] = error_type
     return SimulationResult(
         messages=[],
         terminated_by=TerminatedBy.error,
@@ -98,11 +130,7 @@ def _error_result(
         turn_count=0,
         turn_metrics=[],
         token_usage=ZERO_USAGE.model_copy(),
-        metadata={
-            "persona": persona.name if persona else "unknown",
-            "scenario": scenario.name if scenario else "unknown",
-            "error": reason,
-        },
+        metadata=metadata,
     )
 
 
@@ -180,19 +208,16 @@ class SimulationRunner:
             raise ValueError("model must be a non-empty string")
 
         # Validate injected agents early to fail fast
-        if user_simulator is not None:
-            if not hasattr(user_simulator, "generate_first_message") or \
-               not hasattr(user_simulator, "respond_async"):
-                raise TypeError(
-                    "user_simulator must implement generate_first_message() and respond_async(). "
-                    "Use UserSimulatorAgent or a subclass."
-                )
-        if judge is not None:
-            if not hasattr(judge, "evaluate"):
-                raise TypeError(
-                    "judge must implement evaluate(). "
-                    "Use JudgeAgent or a subclass."
-                )
+        if user_simulator is not None and not isinstance(user_simulator, SimulationUserSimulator):
+            raise TypeError(
+                "user_simulator must implement generate_first_message(), respond_async(), "
+                "and update_context(). Use UserSimulatorAgent or a subclass."
+            )
+        if judge is not None and not isinstance(judge, SimulationJudge):
+            raise TypeError(
+                "judge must implement evaluate(). "
+                "Use JudgeAgent or a subclass."
+            )
 
         self._target_agent = target_agent
         self._target_callback = target_callback
@@ -249,27 +274,65 @@ class SimulationRunner:
                     "orq.simulation.model": self._model,
                 },
             ) as run_span:
-                return await self._run_inner(
-                    persona=persona,
-                    scenario=scenario,
-                    first_message=first_message,
-                    effective_max_turns=effective_max_turns,
-                    messages=messages,
-                    turn_metrics_list=turn_metrics_list,
-                    run_span=run_span,
-                    usage_holder=usage_holder,
-                )
+                try:
+                    return await self._run_inner(
+                        persona=persona,
+                        scenario=scenario,
+                        first_message=first_message,
+                        effective_max_turns=effective_max_turns,
+                        messages=messages,
+                        turn_metrics_list=turn_metrics_list,
+                        run_span=run_span,
+                        usage_holder=usage_holder,
+                    )
+                except BaseException:
+                    get_total_usage = usage_holder.get("get_total_usage")
+                    try:
+                        usage = (
+                            get_total_usage()
+                            if get_total_usage
+                            else ZERO_USAGE.model_copy()
+                        )
+                    except Exception as usage_err:
+                        logger.error(
+                            "Failed to collect token usage during error path: %s",
+                            usage_err,
+                            exc_info=True,
+                        )
+                        usage = ZERO_USAGE.model_copy()
+                    record_token_usage(
+                        run_span,
+                        prompt_tokens=usage.prompt_tokens,
+                        completion_tokens=usage.completion_tokens,
+                        total_tokens=usage.total_tokens,
+                    )
+                    set_span_attrs(
+                        run_span,
+                        {
+                            "orq.simulation.terminated_by": "error",
+                            "orq.simulation.goal_achieved": False,
+                            "orq.simulation.turn_count": sum(
+                                1 for m in messages if m.role == "assistant"
+                            ),
+                        },
+                    )
+                    raise
         except Exception as e:
             logger.error("SimulationRunner.run() failed: %s", e, exc_info=True)
             error_msg = str(e)
+            error_type = type(e).__name__
             get_total_usage = usage_holder.get("get_total_usage")
             try:
                 usage = get_total_usage() if get_total_usage else ZERO_USAGE.model_copy()
             except Exception as usage_err:
-                logger.warning("Failed to collect token usage: %s", usage_err)
+                logger.error(
+                    "Failed to collect token usage during error path: %s",
+                    usage_err,
+                    exc_info=True,
+                )
                 usage = ZERO_USAGE.model_copy()
 
-            result = _error_result(error_msg, persona, scenario)
+            result = _error_result(error_msg, persona, scenario, error_type=error_type)
             result.messages = messages
             result.turn_count = sum(1 for m in messages if m.role == "assistant")
             result.turn_metrics = turn_metrics_list
@@ -290,15 +353,16 @@ class SimulationRunner:
     ) -> SimulationResult:
         """Inner simulation body (runs inside the orq.simulation.run span)."""
         system_prompt = build_datapoint_system_prompt(persona, scenario)  # pyright: ignore[reportArgumentType]
-        client = self._get_shared_client()
+        client: AsyncOpenAI | None = None
 
         if self._injected_user_simulator is not None:
-            user_simulator: UserSimulatorAgent = self._injected_user_simulator  # pyright: ignore[reportAssignmentType]
-            # Propagate per-simulation persona/scenario context to the injected
-            # agent so it stays grounded in the current datapoint's goal and
-            # persona traits (mirrors what the default agent receives via its
-            # system_prompt constructor arg).
-            if hasattr(user_simulator, "update_context"):
+            import copy
+            # Shallow-copy isolates _custom_system_prompt mutations from concurrent
+            # run_batch tasks. Reset _usage to a fresh TokenUsage — shallow copy
+            # keeps the same reference, which would cross-contaminate per-sim counts.
+            user_simulator: UserSimulatorAgent = copy.copy(self._injected_user_simulator)  # pyright: ignore[reportAssignmentType]
+            user_simulator.reset_usage()
+            if isinstance(user_simulator, SimulationUserSimulator):
                 try:
                     user_simulator.update_context(
                         persona_context=build_persona_system_prompt(persona)  # type: ignore[arg-type]
@@ -314,6 +378,8 @@ class SimulationRunner:
                         "Ensure it accepts persona_context and scenario_context kwargs."
                     ) from ctx_err
         else:
+            if client is None:
+                client = self._get_shared_client()
             user_simulator = UserSimulatorAgent(
                 UserSimulatorAgentConfig(
                     model=self._model,
@@ -323,8 +389,13 @@ class SimulationRunner:
             )
 
         if self._injected_judge is not None:
-            judge: JudgeAgent = self._injected_judge  # pyright: ignore[reportAssignmentType]
+            import copy
+            # Isolate per-sim state — see user_simulator comment above.
+            judge: JudgeAgent = copy.copy(self._injected_judge)  # pyright: ignore[reportAssignmentType]
+            judge.reset_usage()
         else:
+            if client is None:
+                client = self._get_shared_client()
             judge = JudgeAgent(
                 JudgeAgentConfig(
                     model=self._model,
@@ -338,6 +409,9 @@ class SimulationRunner:
             )
 
         def _get_total_usage() -> TokenUsage:
+            # Note: target token usage is not included here. OrqResponsesTarget and
+            # callable targets do not expose get_usage() via a shared protocol, so
+            # SimulationResult.token_usage reflects only user_simulator + judge cost.
             usage = user_simulator.get_usage()
             judge_usage = judge.get_usage()
             return TokenUsage(
@@ -371,7 +445,6 @@ class SimulationRunner:
                 judge_reason=judgment.reason,
             )
 
-        # Generate or use first message
         if first_message:
             first_msg = first_message
         else:
@@ -398,7 +471,6 @@ class SimulationRunner:
                     "orq.simulation.max_turns": effective_max_turns,
                 },
             ) as turn_span:
-                # 1. Target agent responds
                 target_messages = [
                     ChatMessage(role=m.role, content=m.content) for m in messages
                 ]
@@ -413,7 +485,6 @@ class SimulationRunner:
                     record_llm_output(target_span, agent_response)
                 messages.append(Message(role="assistant", content=agent_response))
 
-                # 2. Judge evaluates
                 async with with_simulation_span(
                     "orq.simulation.judge_evaluation", None
                 ):
@@ -435,7 +506,6 @@ class SimulationRunner:
                     },
                 )
 
-                # 3. User simulator continues (if not last turn and not terminated)
                 if not judgment.should_terminate and turn < effective_max_turns - 1:
                     async with with_simulation_span(
                         "orq.simulation.user_simulator_call", None

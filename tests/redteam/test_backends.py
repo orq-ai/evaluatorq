@@ -494,12 +494,12 @@ class TestGetOrqApiKey:
 
 
 # ===========================================================================
-# backends/orq.py — ORQAgentTarget._extract_executed_tool_calls
+# backends/orq.py — ORQAgentTarget._extract_tool_call_items
 # ===========================================================================
 
 
-class TestORQExtractExecutedToolCalls:
-    """Tests for the _extract_executed_tool_calls inner function via ORQAgentTarget.send_prompt."""
+class TestORQExtractToolCallItems:
+    """Tests for the _extract_tool_call_items inner function via ORQAgentTarget.send_prompt."""
 
     def _make_target(self) -> Any:
         from evaluatorq.redteam.backends.orq import ORQAgentTarget
@@ -547,7 +547,7 @@ class TestORQExtractExecutedToolCalls:
 
         assert len(response.tool_calls) == 1
         assert response.tool_calls[0].name == "search"
-        assert response.tool_calls[0].arguments == {"query": "test"}
+        assert response.tool_calls[0].arguments_dict == {"query": "test"}
         assert response.text == "result"
 
     @pytest.mark.asyncio
@@ -575,7 +575,7 @@ class TestORQExtractExecutedToolCalls:
 
         assert len(response.tool_calls) == 1
         assert response.tool_calls[0].name == "send_email"
-        assert response.tool_calls[0].arguments == {"to": "user@example.com", "subject": "hi"}
+        assert response.tool_calls[0].arguments_dict == {"to": "user@example.com", "subject": "hi"}
         assert response.text == "sent"
 
     @pytest.mark.asyncio
@@ -602,5 +602,6 @@ class TestORQExtractExecutedToolCalls:
             response = await target.send_prompt("trigger bad tool")
 
         assert len(response.tool_calls) == 1
-        assert response.tool_calls[0].arguments == {"raw": "not-valid-json"}
+        # Invalid JSON args wrapped under 'raw' key so arguments_dict still parses
+        assert response.tool_calls[0].arguments_dict == {"raw": "not-valid-json"}
         assert response.text == "done"

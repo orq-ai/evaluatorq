@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from evaluatorq.contracts import LLMCallConfig
+from evaluatorq.contracts import LLMCallConfig, TextOutputItem, ToolCallOutputItem
 from evaluatorq.simulation._client import build_simulation_client, extract_responses_output
 from evaluatorq.simulation.tracing import (
     get_trace_context_headers,
@@ -328,10 +328,13 @@ class BaseAgent(ABC):
             max_tokens=max_tokens,
             purpose=llm_purpose,
         ) as span:
-            record_llm_input(
-                span,
-                [{"role": "system", "content": self.system_prompt}, *input_messages],
-            )
+            # Responses API sends system context via `instructions`, not as a
+            # message in `input`. Record what is actually sent so the span
+            # matches the real request shape (mirrors _call_chat_completions
+            # which records full_messages including the system entry).
+            if span is not None:
+                span.set_attribute("gen_ai.request.instructions", self.system_prompt[:2000])
+            record_llm_input(span, input_messages)
             trace_headers = await get_trace_context_headers()
 
             async def _do_call() -> LLMResult:
@@ -347,14 +350,15 @@ class BaseAgent(ABC):
 
                 record_llm_response(span, response)
 
-                # Accumulate token usage
-                self._usage.prompt_tokens += usage.prompt_tokens
-                self._usage.completion_tokens += usage.completion_tokens
-                self._usage.total_tokens += usage.total_tokens
+                if usage is not None:
+                    self._usage.prompt_tokens += usage.prompt_tokens
+                    self._usage.completion_tokens += usage.completion_tokens
+                    self._usage.total_tokens += usage.total_tokens
 
-                # Separate text from tool-call items
-                text_items = [i for i in output_items if hasattr(i, "text")]
-                tool_call_items = [i for i in output_items if hasattr(i, "call_id")]
+                # Separate text from tool-call items; isinstance guards prevent
+                # ReasoningOutputItem.text leaking into response content.
+                text_items = [i for i in output_items if isinstance(i, TextOutputItem)]
+                tool_call_items = [i for i in output_items if isinstance(i, ToolCallOutputItem)]
 
                 if not text_items and not tool_call_items:
                     # No text, no tool calls — warn but don't raise (redteam callers may handle empty)

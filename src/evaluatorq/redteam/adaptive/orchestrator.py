@@ -10,7 +10,7 @@ import contextvars
 import logging
 import time
 from inspect import signature
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from openai import AsyncOpenAI
@@ -19,19 +19,26 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TextColumn
 from typing_extensions import Self
 
 from evaluatorq.common.sanitize import xml_escape
+from evaluatorq.contracts import AgentResponse, TextOutputItem
 from evaluatorq.redteam.backends.base import AgentTarget, DefaultErrorMapper, ErrorMapper, _coerce_to_agent_response
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
     PIPELINE_CONFIG,
     AgentContext,
+    AttackerResponse,
     AttackStrategy,
-    ExecutedToolCall,
     LLMConfig,
-    Message,
     OrchestratorResult,
     TokenUsage,
+    Turn,
 )
-from evaluatorq.redteam.tracing import record_llm_response, set_span_attrs, with_llm_span, with_redteam_span
+from evaluatorq.redteam.tracing import (
+    record_llm_response,
+    set_span_attrs,
+    truncate_for_span,
+    with_llm_span,
+    with_redteam_span,
+)
 from evaluatorq.redteam.utils import safe_substitute
 
 if TYPE_CHECKING:
@@ -423,12 +430,11 @@ class MultiTurnOrchestrator:
             {'role': 'user', 'content': ADVERSARIAL_INITIAL_USER_PROMPT.format(max_turns=max_turns)},
         ]
 
-        # Agent conversation (what we'll return)
-        conversation: list[Message] = []
-        tool_calls_per_turn: list[list[ExecutedToolCall]] = []
+        # Canonical per-turn record (attacker + target). Conversation, final_response,
+        # and tool calls are all derived from this list.
+        turns_record: list[Turn] = []
 
         objective_achieved = False
-        final_response = ''
         target_prompt_tokens = 0
         target_completion_tokens = 0
         target_total_tokens = 0
@@ -455,7 +461,8 @@ class MultiTurnOrchestrator:
 
         try:
             for turn in range(max_turns):
-                _turn_calls: list[ExecutedToolCall] = []
+                # Per-turn target response (populated on success or synthesized on error)
+                _tgt_result: AgentResponse = AgentResponse()
                 async with with_redteam_span(
                     "orq.redteam.attack_turn",
                     {
@@ -563,6 +570,16 @@ class MultiTurnOrchestrator:
                     if finish_reason == 'length':
                         truncation_warnings.append(turn + 1)
 
+                    # Build the canonical attacker record for this turn (used whether
+                    # the target then succeeds or fails).
+                    fr = finish_reason if isinstance(finish_reason, str) else None
+                    current_attacker = AttackerResponse(
+                        generated_prompt=attack_prompt,
+                        usage=usage,
+                        truncated=fr == 'length',
+                        finish_reason=fr,
+                    )
+
                     # Abort if adversarial LLM returned empty content
                     if not attack_prompt.strip():
                         model_used = getattr(attack_response, 'model', self.model)
@@ -597,7 +614,7 @@ class MultiTurnOrchestrator:
                         # Only accept self-reported success when at least one full turn has
                         # completed (conversation is non-empty).  An adversarial LLM claiming
                         # success before any target interaction is an invalid signal.
-                        if conversation:
+                        if turns_record:
                             objective_achieved = True
                         else:
                             logger.warning(
@@ -606,6 +623,8 @@ class MultiTurnOrchestrator:
                             )
                         # Extract the actual prompt (remove marker)
                         attack_prompt = attack_prompt.replace('OBJECTIVE_ACHIEVED', '').strip()
+                        # Rebuild attacker record with stripped prompt
+                        current_attacker = current_attacker.model_copy(update={'generated_prompt': attack_prompt})
                         if not attack_prompt:
                             # Adversarial LLM signaled success but no more prompts needed
                             logger.info('Adversarial LLM signaled objective achieved')
@@ -625,35 +644,32 @@ class MultiTurnOrchestrator:
                             {
                                 "orq.redteam.turn": turn + 1,
                                 "orq.redteam.strategy_name": strategy.name,
-                                "input": attack_prompt,
-                                "orq.redteam.input": attack_prompt,
+                                "input": truncate_for_span(attack_prompt),
+                                "orq.redteam.input": truncate_for_span(attack_prompt),
                             },
                         ) as tgt_span:
                             raw_response = await asyncio.wait_for(
                                 target.send_prompt(attack_prompt),
                                 timeout=target_timeout_s,
                             )
-                            # Option A backward-compat: wrap str returns into AgentResponse
-                            agent_response_obj = _coerce_to_agent_response(raw_response)
-                            agent_response = agent_response_obj.text
-                            _turn_calls = agent_response_obj.tool_calls
-                            final_response = agent_response
+                            _tgt_result = _coerce_to_agent_response(raw_response)
+                            agent_response = _tgt_result.text
                             consecutive_agent_errors = 0
+                            _resp_text = truncate_for_span(agent_response or "")
                             set_span_attrs(tgt_span, {
-                                "output": agent_response or "",
-                                "orq.redteam.output": agent_response or "",
+                                "output": _resp_text,
+                                "orq.redteam.output": _resp_text,
                             })
-                            consume_usage = getattr(target, 'consume_last_token_usage', None)
-                            if callable(consume_usage):
-                                target_usage: TokenUsage | None = cast('TokenUsage | None', consume_usage())
-                                if target_usage is not None:
-                                    target_prompt_tokens += int(target_usage.prompt_tokens or 0)
-                                    target_completion_tokens += int(target_usage.completion_tokens or 0)
-                                    target_total_tokens += int(target_usage.total_tokens or 0)
-                                    target_calls += int(target_usage.calls or 0) or 1
+                            target_usage: TokenUsage | None = _tgt_result.usage
+                            if target_usage is not None:
+                                target_prompt_tokens += int(target_usage.prompt_tokens or 0)
+                                target_completion_tokens += int(target_usage.completion_tokens or 0)
+                                target_total_tokens += int(target_usage.total_tokens or 0)
+                                target_calls += int(target_usage.calls or 0) or 1
                     except asyncio.TimeoutError:
                         consecutive_agent_errors += 1
                         agent_response = f'[ERROR: Target agent timed out after {target_timeout_s:.0f}s]'
+                        _tgt_result = AgentResponse(output=[TextOutputItem(text=agent_response, annotations=[])])
                         logger.warning(f'Target agent timed out on turn {turn + 1}/{max_turns}')
 
                         if consecutive_agent_errors >= 2:
@@ -668,11 +684,10 @@ class MultiTurnOrchestrator:
                                 'consecutive_errors': consecutive_agent_errors,
                             }
                             error_turn = turn + 1
-                            tool_calls_per_turn.append(_turn_calls)
-                            conversation.extend([
-                                Message(role='user', content=attack_prompt),
-                                Message(role='assistant', content=agent_response),
-                            ])
+                            turns_record.append(Turn(
+                                attacker=current_attacker,
+                                target=AgentResponse(output=[TextOutputItem(text=agent_response, annotations=[])]),
+                            ))
                             if progress is not None and task_id is not None:
                                 await progress.update_attack(task_id, completed=turn + 1)
                             set_span_attrs(turn_span, {
@@ -685,6 +700,7 @@ class MultiTurnOrchestrator:
                         consecutive_agent_errors += 1
                         mapped_code, error_msg = self.error_mapper.map_error(e)
                         agent_response = f'[ERROR: {error_msg}]'
+                        _tgt_result = AgentResponse(output=[TextOutputItem(text=agent_response, annotations=[])])
                         logger.warning(f'Target agent error on turn {turn + 1}/{max_turns}: {error_msg}')
 
                         if consecutive_agent_errors >= 2:
@@ -702,11 +718,10 @@ class MultiTurnOrchestrator:
                             }
                             error_code = mapped_code
                             error_turn = turn + 1
-                            tool_calls_per_turn.append(_turn_calls)
-                            conversation.extend([
-                                Message(role='user', content=attack_prompt),
-                                Message(role='assistant', content=agent_response),
-                            ])
+                            turns_record.append(Turn(
+                                attacker=current_attacker,
+                                target=AgentResponse(output=[TextOutputItem(text=agent_response, annotations=[])]),
+                            ))
                             if progress is not None and task_id is not None:
                                 await progress.update_attack(task_id, completed=turn + 1)
                             set_span_attrs(turn_span, {
@@ -716,12 +731,8 @@ class MultiTurnOrchestrator:
                             })
                             break
 
-                    # Append tool calls for this turn ([] on error, populated on success)
-                    tool_calls_per_turn.append(_turn_calls)
-                    conversation.extend([
-                        Message(role='user', content=attack_prompt),
-                        Message(role='assistant', content=agent_response),
-                    ])
+                    # Record the completed turn (target succeeded)
+                    turns_record.append(Turn(attacker=current_attacker, target=_tgt_result))
 
                     # Update adversarial LLM context
                     adversarial_messages.append({'role': 'assistant', 'content': attack_prompt})
@@ -737,8 +748,8 @@ class MultiTurnOrchestrator:
                         await progress.update_attack(task_id, completed=turn + 1)
 
                     set_span_attrs(turn_span, {
-                        "input": attack_prompt,
-                        "output": agent_response or "",
+                        "input": truncate_for_span(attack_prompt),
+                        "output": truncate_for_span(agent_response or ""),
                         "orq.redteam.adversarial_tokens": int(usage.total_tokens or 0) if usage is not None else 0,
                         "orq.redteam.finish_reason": "ok",
                     })
@@ -756,7 +767,7 @@ class MultiTurnOrchestrator:
                 f'Conversation for {strategy.name} ended with an unresolved adversarial timeout '
                 '— the last turn was dropped silently'
             )
-            if not conversation:
+            if not turns_record:
                 timeout_s = self._cfg.attacker.timeout_ms / 1000.0
                 error = f'Adversarial LLM timed out after {timeout_s:.0f}s with no turns completed'
                 error_type = 'llm_error'
@@ -766,7 +777,7 @@ class MultiTurnOrchestrator:
 
         duration = time.time() - start_time
         logger.debug(
-            f'Multi-turn attack completed: {len(conversation) // 2} turns, '
+            f'Multi-turn attack completed: {len(turns_record)} turns, '
             f'objective_achieved={objective_achieved}, duration={duration:.2f}s'
             + (f', error_type={error_type}' if error_type else '')
         )
@@ -793,10 +804,9 @@ class MultiTurnOrchestrator:
         )
 
         return OrchestratorResult(
-            conversation=conversation,
-            turns=len(conversation) // 2,
+            turns=turns_record,
+            max_turns=max_turns,
             objective_achieved=objective_achieved,
-            final_response=final_response,
             duration_seconds=duration,
             token_usage=_merge_usage(adversarial_usage, target_usage),
             token_usage_adversarial=adversarial_usage,
@@ -809,5 +819,4 @@ class MultiTurnOrchestrator:
             error_details=error_details,
             error_turn=error_turn,
             truncated_turns=truncation_warnings,
-            tool_calls_per_turn=tool_calls_per_turn,
         )

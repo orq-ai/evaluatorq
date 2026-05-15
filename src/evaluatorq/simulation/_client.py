@@ -6,6 +6,8 @@ import json as _json
 import os
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
+
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
@@ -53,10 +55,12 @@ def build_simulation_client(
     return AsyncOpenAI(base_url=base_url, api_key=resolved), True
 
 
-def extract_responses_output(response: object) -> tuple[list[Any], TokenUsage]:
+def extract_responses_output(response: object) -> tuple[list[Any], TokenUsage | None]:
     """Extract output items and usage from a Responses API response object.
 
-    Returns (output_messages, token_usage).
+    Returns ``(output_messages, token_usage)``. ``token_usage`` is ``None``
+    when the response carries no ``usage`` block — callers must distinguish
+    "no usage reported" from "zero tokens used" so cost reports stay honest.
 
     Uses the correct ``item.type`` discriminator (``"message"`` for text,
     ``"function_call"`` for tool calls) rather than fragile ``hasattr`` checks.
@@ -73,16 +77,6 @@ def extract_responses_output(response: object) -> tuple[list[Any], TokenUsage]:
                 part_type = getattr(part, "type", None)
                 text = getattr(part, "text", None)
                 if part_type == "output_text" and text:
-                    items.append(
-                        TextOutputItem(
-                            type="output_text",
-                            text=text,
-                            annotations=[],
-                            logprobs=[],
-                        )
-                    )
-                elif hasattr(part, "text") and text:
-                    # Fallback: any part with a text attribute
                     items.append(
                         TextOutputItem(
                             type="output_text",
@@ -111,7 +105,19 @@ def extract_responses_output(response: object) -> tuple[list[Any], TokenUsage]:
                 )
             )
 
+        elif item_type == "reasoning":
+            pass  # reasoning/thinking steps (o1/o3/o4-mini) intentionally excluded from output
+
+        else:
+            logger.warning("extract_responses_output: skipping unknown item type={!r}", item_type)
+
     usage_obj = getattr(response, "usage", None)
+    if usage_obj is None:
+        logger.warning(
+            "extract_responses_output: response.usage is None; returning None "
+            "so cost reports do not record fake-zero usage for billed calls"
+        )
+        return items, None
     input_toks = int(getattr(usage_obj, "input_tokens", 0) or 0)
     output_toks = int(getattr(usage_obj, "output_tokens", 0) or 0)
     usage = TokenUsage(

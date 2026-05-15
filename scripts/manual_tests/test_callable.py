@@ -52,10 +52,11 @@ async def test_sync_runs_in_thread() -> None:
 
     # Run two slow calls concurrently — if they block, it takes 0.6s+
     start = time.monotonic()
-    r1, r2 = await asyncio.gather(
+    _res1, _res2 = await asyncio.gather(
         target.send_prompt("a"),
         target.send_prompt("b"),
     )
+    r1, r2 = _res1.text, _res2.text
     elapsed = time.monotonic() - start
 
     check("both return strings", isinstance(r1, str) and isinstance(r2.text, str))
@@ -137,9 +138,10 @@ async def test_parallel_clones() -> None:
     target = CallableTarget(agent)
     clones = [target.new() for _ in range(10)]
 
-    results = await asyncio.gather(
+    _results = await asyncio.gather(
         *[c.send_prompt(f"prompt-{i}") for i, c in enumerate(clones)]
     )
+    results = [res.text for res in _results]
     check("all 10 clones returned", len(results) == 10)
     check(
         "all returned strings",
@@ -161,11 +163,11 @@ async def test_empty_and_long_prompts() -> None:
 
     target = CallableTarget(agent)
 
-    r_empty = await target.send_prompt("")
+    r_empty = (await target.send_prompt("")).text
     check("empty prompt works", r_empty == "len=0", f"got: {r_empty!r}")
 
     long_prompt = "x" * 10_000
-    r_long = await target.send_prompt(long_prompt)
+    r_long = (await target.send_prompt(long_prompt)).text
     check("long prompt works", r_long == "len=10000", f"got: {r_long!r}")
 
 

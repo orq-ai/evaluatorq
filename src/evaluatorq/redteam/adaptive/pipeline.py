@@ -13,13 +13,16 @@ Flow:
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import inspect
 import time
 import traceback
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, Job, job
+from evaluatorq.contracts import AgentResponse
 from evaluatorq.redteam.adaptive.attack_generator import generate_attack_prompt, generate_objective
 from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator, _get_active_progress
@@ -32,19 +35,20 @@ from evaluatorq.redteam.backends.registry import create_async_llm_client, resolv
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
     PIPELINE_CONFIG,
+    AttackerResponse,
     AttackOutput,
     AttackStrategy,
     EvaluatorConfig,
-    ExecutedToolCall,
     LLMCallConfig,
     LLMConfig,
-    Message,
     OrchestratorResult,
+    TextOutputItem,
     TokenUsage,
+    Turn,
     TurnType,
     Vulnerability,
 )
-from evaluatorq.redteam.tracing import set_span_attrs, with_redteam_span
+from evaluatorq.redteam.tracing import set_span_attrs, truncate_for_span, with_redteam_span
 from evaluatorq.redteam.vulnerability_registry import (
     get_primary_category,
     resolve_category_safe,
@@ -67,7 +71,7 @@ def _set_attack_span_attrs(span: Any, result: AttackOutput) -> None:
     """Set common tracing attributes on an attack span from an AttackOutput."""
     set_span_attrs(span, {
         'orq.redteam.objective_achieved': result.objective_achieved,
-        'orq.redteam.actual_turns': result.turns,
+        'orq.redteam.actual_turns': result.n_turns,
         'orq.redteam.duration_seconds': result.duration_seconds,
     })
     if result.error:
@@ -326,8 +330,20 @@ def create_dynamic_redteam_job(
                 'orq.redteam.turn_type': strategy.turn_type.value,
                 'orq.redteam.max_turns': effective_max_turns,
             },
-        ) as attack_span:
+        ) as attack_span, contextlib.AsyncExitStack() as cleanup_stack:
             target = resolved_factory.create_target(agent_key=agent_key)
+            # Register HTTP-client cleanup for targets that own a client
+            # (e.g. OrqResponsesTarget). Plain callable targets have no
+            # close(); duck-type to avoid coupling.
+            target_close = getattr(target, 'close', None)
+            if callable(target_close):
+
+                async def _close_target() -> None:
+                    maybe = target_close()
+                    if inspect.isawaitable(maybe):
+                        await maybe
+
+                cleanup_stack.push_async_callback(_close_target)
             # Targets own their memory_entity_id — track it for cleanup.
             target_memory_id = getattr(target, 'memory_entity_id', None)
             if target_memory_id is not None and memory_entity_ids is not None:
@@ -346,7 +362,7 @@ def create_dynamic_redteam_job(
                 error_code = None
                 error_details = None
                 token_usage = None
-                turn_tool_calls: list[ExecutedToolCall] = []
+                agent_resp: AgentResponse = AgentResponse()
                 target_timeout_s = cfg.target_agent_timeout_ms / 1000.0
                 try:
                     async with with_redteam_span(
@@ -355,8 +371,8 @@ def create_dynamic_redteam_job(
                             "orq.redteam.category": category,
                             "orq.redteam.strategy_name": strategy.name,
                             "orq.redteam.turn": 1,
-                            "input": prompt,
-                            "orq.redteam.input": prompt,
+                            "input": truncate_for_span(prompt),
+                            "orq.redteam.input": truncate_for_span(prompt),
                         },
                     ) as tgt_span:
                         raw = await asyncio.wait_for(
@@ -365,14 +381,12 @@ def create_dynamic_redteam_job(
                         )
                         agent_resp = _coerce_to_agent_response(raw)
                         response = agent_resp.text
-                        turn_tool_calls = agent_resp.tool_calls
+                        token_usage: TokenUsage | None = agent_resp.usage
+                        _resp_text = truncate_for_span(response or "")
                         set_span_attrs(tgt_span, {
-                            "output": response or "",
-                            "orq.redteam.output": response or "",
+                            "output": _resp_text,
+                            "orq.redteam.output": _resp_text,
                         })
-                        consume_usage = getattr(target, 'consume_last_token_usage', None)
-                        if callable(consume_usage):
-                            token_usage: TokenUsage | None = cast('TokenUsage | None', consume_usage())
                 except asyncio.TimeoutError:
                     logger.error(f'Single-turn attack timed out for {category}/{strategy.name} after {target_timeout_s:.0f}s')
                     response = f'[ERROR: Target agent timed out after {target_timeout_s:.0f}s]'
@@ -398,10 +412,13 @@ def create_dynamic_redteam_job(
                         'raw_message': str(e),
                     }
                 result_dict = AttackOutput(
-                    conversation=[Message(role='user', content=prompt), Message(role='assistant', content=response)],
-                    final_response=response,
+                    turns=[Turn(
+                        attacker=AttackerResponse(generated_prompt=prompt),
+                        target=agent_resp if agent_resp.output else AgentResponse(
+                            output=[TextOutputItem(text=response or '', annotations=[])],
+                        ),
+                    )],
                     objective_achieved=False,
-                    turns=1,
                     duration_seconds=time.time() - t0,
                     token_usage=token_usage,
                     token_usage_adversarial=None,
@@ -412,12 +429,14 @@ def create_dynamic_redteam_job(
                     error_stage=error_stage,
                     error_code=error_code,
                     error_details=error_details,
-                    tool_calls_per_turn=[turn_tool_calls],
                     category=category,
                     vulnerability=vulnerability,
                 )
 
-                set_span_attrs(attack_span, {'input': prompt, 'output': response or ''})
+                set_span_attrs(attack_span, {
+                    'input': truncate_for_span(prompt),
+                    'output': truncate_for_span(response or ''),
+                })
                 _set_attack_span_attrs(attack_span, result_dict)
 
                 # Advance the global progress bar for template single-turn attacks
@@ -453,10 +472,7 @@ def create_dynamic_redteam_job(
                 mapped_code, mapped_msg = resolved_error_mapper.map_error(e)
                 logger.error(f'Orchestrator timed out for {category}/{strategy.name}: {mapped_msg}\n{tb}')
                 result = OrchestratorResult(
-                    conversation=[],
-                    final_response='',
                     objective_achieved=False,
-                    turns=0,
                     duration_seconds=0.0,
                     token_usage=None,
                     token_usage_adversarial=None,
@@ -479,10 +495,7 @@ def create_dynamic_redteam_job(
                 mapped_code, mapped_msg = resolved_error_mapper.map_error(e)
                 logger.error(f'Unexpected orchestrator error for {category}/{strategy.name}: {mapped_msg}\n{tb}')
                 result = OrchestratorResult(
-                    conversation=[],
-                    final_response='',
                     objective_achieved=False,
-                    turns=0,
                     duration_seconds=0.0,
                     token_usage=None,
                     token_usage_adversarial=None,
@@ -502,12 +515,12 @@ def create_dynamic_redteam_job(
             result_dict = AttackOutput(**result.model_dump(), category=category, vulnerability=vulnerability)
 
             # Set input/output on the attack span so the platform can display them
-            if result_dict.conversation:
-                first_user = next((m.content for m in result_dict.conversation if m.role == 'user'), None)
+            if result_dict.chat_completions:
+                first_user = next((m.content for m in result_dict.chat_completions if m.role == 'user'), None)
                 if first_user:
-                    set_span_attrs(attack_span, {'input': first_user})
+                    set_span_attrs(attack_span, {'input': truncate_for_span(first_user)})
             if result_dict.final_response:
-                set_span_attrs(attack_span, {'output': result_dict.final_response})
+                set_span_attrs(attack_span, {'output': truncate_for_span(result_dict.final_response)})
             _set_attack_span_attrs(attack_span, result_dict)
             return {**result_dict.model_dump(mode='json'), 'max_turns': effective_max_turns}
 
@@ -562,12 +575,12 @@ def create_dynamic_evaluator(
                 explanation=f'Skipped: target returned error — {output.error}',
             )
 
-        conversation = output.conversation
+        conversation = output.chat_completions
         final_response = output.final_response
         category = output.category or data.inputs.get('category', '')
         vulnerability = output.vulnerability or data.inputs.get('vulnerability', '')
         # Flatten all tool calls across turns so the evaluator can optionally inspect them
-        all_tool_calls = [tc for turn in output.tool_calls_per_turn for tc in turn]
+        all_tool_calls = [tc for t in output.turns for tc in t.target.tool_calls]
 
         # Prefer vulnerability-first path when a valid Vulnerability enum can be resolved
         resolved_vuln: Vulnerability | None = None

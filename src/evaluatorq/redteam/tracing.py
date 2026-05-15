@@ -36,9 +36,13 @@ All other red teaming spans use ``SpanKind.INTERNAL``.
 
 from __future__ import annotations
 
+import functools
 import json
+import os
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
+
+from loguru import logger
 
 from evaluatorq.tracing.setup import get_tracer
 
@@ -237,7 +241,10 @@ def record_llm_response(
         input_tokens = int(getattr(usage, 'prompt_tokens', 0) or 0)
         output_tokens = int(getattr(usage, 'completion_tokens', 0) or 0)
         raw_total = getattr(usage, 'total_tokens', None)
-        total = int(raw_total) if raw_total else (input_tokens + output_tokens)
+        if raw_total is not None and int(raw_total) > 0:
+            total = int(raw_total)
+        else:
+            total = input_tokens + output_tokens
         span.set_attribute("gen_ai.usage.input_tokens", input_tokens)
         span.set_attribute("gen_ai.usage.output_tokens", output_tokens)
         span.set_attribute("gen_ai.usage.prompt_tokens", input_tokens)
@@ -271,7 +278,8 @@ def record_llm_response(
     # Output content
     if output_content is not None:
         serialized = json.dumps(
-            [{"role": "assistant", "content": output_content}], ensure_ascii=False,
+            [{"role": "assistant", "content": truncate_for_span(output_content)}],
+            ensure_ascii=False,
         )
         span.set_attribute("gen_ai.output.messages", serialized)
         span.set_attribute("output", serialized)
@@ -310,6 +318,10 @@ def record_token_usage(
     span.set_attribute("input_tokens", prompt_tokens)
     span.set_attribute("output_tokens", completion_tokens)
     span.set_attribute("total_tokens", computed_total)
+    # Call count — records how many LLM calls contributed to this aggregate
+    if calls:
+        span.set_attribute("gen_ai.usage.calls", calls)
+        span.set_attribute("calls", calls)
 
 
 def _derive_provider(model: str) -> str:
@@ -323,19 +335,87 @@ def _derive_provider(model: str) -> str:
     return "openai"
 
 
-def _sanitize_messages(
-    messages: list[Any],
-) -> list[dict[str, str]]:
-    """Produce a JSON-safe list of {role, content} dicts.
+_TRUNCATION_MARKER = '... [truncated]'
 
-    Truncates very long content to keep span attributes bounded.
+# Most OTLP exporters cap span attribute values around 4–32 KB. Multi-turn
+# red-team payloads easily exceed that and get silently dropped at export
+# time. Default to a conservative 8192 chars so payloads survive every common
+# exporter; override via ``EVALUATORQ_SPAN_MAX_TEXT_CHARS`` (set ``0`` to disable).
+_DEFAULT_SPAN_MAX_TEXT_CHARS = 8192
+
+
+@functools.lru_cache(maxsize=1)
+def _default_span_max_text_chars() -> int | None:
+    """Read EVALUATORQ_SPAN_MAX_TEXT_CHARS once. Default ``8192``.
+
+    Set the env var to a positive integer to override the cap, or ``0`` to
+    disable truncation entirely. Negative or invalid values warn and fall
+    back to the 8192 default.
+
+    Use ``_default_span_max_text_chars.cache_clear()`` in tests to force
+    re-read after changing the env var.
     """
-    MAX_CONTENT_LEN = 2000
+    raw = os.getenv('EVALUATORQ_SPAN_MAX_TEXT_CHARS')
+    if raw is None or raw == '':
+        return _DEFAULT_SPAN_MAX_TEXT_CHARS
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            'EVALUATORQ_SPAN_MAX_TEXT_CHARS={!r} is not a valid int; using default {}',
+            raw,
+            _DEFAULT_SPAN_MAX_TEXT_CHARS,
+        )
+        return _DEFAULT_SPAN_MAX_TEXT_CHARS
+    if value < 0:
+        logger.warning(
+            'EVALUATORQ_SPAN_MAX_TEXT_CHARS={!r} must be non-negative; using default {}',
+            value,
+            _DEFAULT_SPAN_MAX_TEXT_CHARS,
+        )
+        return _DEFAULT_SPAN_MAX_TEXT_CHARS
+    return value
+
+
+def truncate_for_span(text: object, *, max_chars: int | None = None) -> str:
+    """Truncate text for span attribute storage.
+
+    Defaults to ``EVALUATORQ_SPAN_MAX_TEXT_CHARS`` env var (or ``8192`` if
+    unset). ``0`` disables truncation. Negative values raise ``ValueError``.
+
+    Output never exceeds ``max_chars``: the marker ``... [truncated]`` is
+    reserved within the budget when truncation fires.
+    """
+    if isinstance(text, str):
+        s = text
+    else:
+        try:
+            s = str(text)
+        except Exception as e:  # pragma: no cover  # noqa: BLE001
+            s = f'<unrepresentable {type(text).__name__}: {e}>'
+    if max_chars is None:
+        max_chars = _default_span_max_text_chars()
+    if max_chars is None or max_chars == 0:
+        return s
+    if max_chars < 0:
+        raise ValueError(f'max_chars must be non-negative, got {max_chars}')
+    if len(s) <= max_chars:
+        return s
+    marker_len = len(_TRUNCATION_MARKER)
+    if max_chars <= marker_len:
+        return _TRUNCATION_MARKER[:max_chars]
+    return s[: max_chars - marker_len] + _TRUNCATION_MARKER
+
+
+def _sanitize_messages(messages: list[Any]) -> list[dict[str, str]]:
+    """JSON-safe list of {role, content}. Accepts dicts or pydantic message-like objects."""
     sanitized: list[dict[str, str]] = []
     for msg in messages:
-        role = str(msg.get('role', ''))
-        content = str(msg.get('content', ''))
-        if len(content) > MAX_CONTENT_LEN:
-            content = content[:MAX_CONTENT_LEN] + '... [truncated]'
-        sanitized.append({'role': role, 'content': content})
+        if hasattr(msg, 'get') and callable(msg.get):
+            role = msg.get('role', '')
+            content = msg.get('content', '')
+        else:
+            role = getattr(msg, 'role', '')
+            content = getattr(msg, 'content', '')
+        sanitized.append({'role': str(role), 'content': truncate_for_span(content)})
     return sanitized

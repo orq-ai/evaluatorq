@@ -110,7 +110,7 @@ def _make_runner_with_mocks(
     max_turns: int = 1,
 ) -> SimulationRunner:
     """Build a SimulationRunner; target_callback or target must be provided."""
-    cb = target_callback or target or (lambda msgs: "agent reply")
+    cb = target_callback or target or (lambda msgs: "agent reply")  # pyright: ignore[reportUnknownLambdaType]
     return SimulationRunner(
         target_callback=cb,
         model=model,
@@ -365,34 +365,23 @@ class TestUpdateContextCalledPerSimulation:
 class TestInvalidUserSimulatorRaisesTypeError:
     """Passing a BaseAgent subclass lacking generate_first_message raises TypeError."""
 
-    @pytest.mark.asyncio
-    async def test_base_agent_lacking_generate_first_message_raises_type_error(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_base_agent_lacking_generate_first_message_raises_type_error(
+        self,
     ):
-        """A custom BaseAgent without generate_first_message fails with TypeError."""
-        monkeypatch.setenv("ORQ_API_KEY", "test-key")
-
+        """A custom BaseAgent without generate_first_message raises TypeError at construction."""
         # Build a plain MagicMock with respond_async but NO generate_first_message
         bad_sim = MagicMock(spec=[])  # spec=[] means no attributes allowed
-        # Explicitly give it respond_async but not generate_first_message
         bad_sim.respond_async = AsyncMock(return_value="hi")
         bad_sim.get_usage = MagicMock(return_value=TokenUsage())
-        # Do NOT add generate_first_message
 
         judge = _make_mock_judge()
 
-        runner = _make_runner_with_mocks(
-            user_simulator=bad_sim,
-            judge=judge,
-            max_turns=1,
-        )
-
-        dp = _make_datapoint()
-        result = await runner.run(datapoint=dp)
-
-        # run() never throws — TypeError is captured in error result
-        assert result.terminated_by == TerminatedBy.error
-        assert "generate_first_message" in result.reason or "user_simulator" in result.reason
+        with pytest.raises(TypeError, match="generate_first_message"):
+            _make_runner_with_mocks(
+                user_simulator=bad_sim,
+                judge=judge,
+                max_turns=1,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -402,4 +391,4 @@ class TestInvalidUserSimulatorRaisesTypeError:
 
 def _make_runner_that_captures(kw: dict[str, Any]) -> SimulationRunner:
     """Placeholder — not actually used in the test above."""
-    return SimulationRunner(target_callback=kw.get("target_callback", lambda m: "ok"))
+    return SimulationRunner(target_callback=kw.get("target_callback", lambda m: "ok"))  # pyright: ignore[reportUnknownLambdaType]

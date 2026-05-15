@@ -16,7 +16,7 @@ from __future__ import annotations
 
 def _check_redteam_deps() -> None:  # noqa: RUF067
     missing = []
-    for mod in ('openai', 'loguru', 'typer'):
+    for mod in ('openai', 'typer'):
         try:
             __import__(mod)
         except ImportError:  # noqa: PERF203
@@ -44,7 +44,6 @@ from evaluatorq.redteam.backends.base import (
     SupportsErrorMapping,
     SupportsMemoryCleanup,
     SupportsTargetFactory,
-    SupportsTokenUsage,
     is_agent_target,
 )
 from evaluatorq.redteam.backends.openai import OpenAIModelTarget
@@ -72,7 +71,6 @@ from evaluatorq.redteam.contracts import (
     FrameworkSummary,
     FunctionCall,
     AgentResponse,
-    ExecutedToolCall,
     OutputMessage,
     ReasoningOutputItem,
     TextOutputItem,
@@ -108,6 +106,11 @@ from evaluatorq.redteam.contracts import (
     normalize_category,
     normalize_framework,
 )
+from evaluatorq.redteam.adaptive.orchestrator import (
+    ADVERSARIAL_ANALYSIS_PROMPT,
+    ADVERSARIAL_INITIAL_USER_PROMPT,
+    ADVERSARIAL_SYSTEM_PROMPT,
+)
 from evaluatorq.redteam.exceptions import BackendError, CancelledError, CredentialError, RedTeamError
 from evaluatorq.redteam.hooks import (
     ConfirmPayload,
@@ -127,6 +130,9 @@ from evaluatorq.redteam.vulnerability_registry import (
 )
 
 __all__ = [
+    "ADVERSARIAL_ANALYSIS_PROMPT",
+    "ADVERSARIAL_INITIAL_USER_PROMPT",
+    "ADVERSARIAL_SYSTEM_PROMPT",
     'SEVERITY_DEFINITIONS',
     "VULNERABILITY_DEFS",
     "AgentCapability",
@@ -188,7 +194,6 @@ __all__ = [
     "Severity",
     # Result models
     "AgentResponse",
-    "ExecutedToolCall",
     "OutputMessage",
     "ReasoningOutputItem",
     "StrategyToolCall",
@@ -199,7 +204,6 @@ __all__ = [
     "SupportsErrorMapping",
     "SupportsMemoryCleanup",
     "SupportsTargetFactory",
-    "SupportsTokenUsage",
     "TargetConfig",
     "TechniqueSummary",
     "TokenUsage",

@@ -6,6 +6,11 @@ All notable changes to `evaluatorq` are documented here.
 
 ## [1.3.0] — unreleased
 
+### Notable defaults
+
+- `EVALUATORQ_SPAN_MAX_TEXT_CHARS` now defaults to `8192` (previously unlimited). Most OTLP exporters cap attribute values between 4 and 32 KB, so unlimited payloads were being dropped silently in real deployments. Set the env var to `0` to disable truncation or to a larger integer to raise the cap (RES-715).
+- `loguru` is now a core dependency (previously gated behind the `[redteam]` extra). This slightly widens the install footprint for non-redteam consumers but unifies the logging stack across the package.
+
 ### Breaking Changes
 
 - `simulate()` and `generate_and_simulate()` now upload results to the Orq platform by default when `ORQ_API_KEY` is set. Existing callers who do not want this network call must pass `upload_results=False`. Both functions also accept new `evaluation_description=` and `path=` parameters mirroring `evaluatorq()` (RES-598).

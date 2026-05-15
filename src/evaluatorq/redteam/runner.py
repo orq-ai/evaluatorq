@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import inspect
 import json
 import os
 import re
@@ -53,7 +54,6 @@ from evaluatorq.redteam.contracts import (
     SaveMode,
     TargetConfig,
     TargetKind,
-    TokenUsage,
     Vulnerability,
     normalize_category,
 )
@@ -717,22 +717,24 @@ def _create_static_job_for_agent_target(at: Any, label: str) -> Any:
     async def agent_target_job(data: DataPoint, _row: int) -> dict[str, Any]:
         prompt = _extract_static_prompt(data)
         target = at.new()
-        raw_response = await target.send_prompt(prompt)
-        response = _coerce_to_agent_response(raw_response).text
+        try:
+            raw_response = await target.send_prompt(prompt)
+            result = _coerce_to_agent_response(raw_response)
 
-        usage: TokenUsage | None = None
-        consume = getattr(target, 'consume_last_token_usage', None)
-        if callable(consume):
-            usage = cast('TokenUsage | None', consume())
+            _active_progress = _get_active_progress()
+            if _active_progress is not None:
+                await _active_progress.finish_attack(None)
 
-        _active_progress = _get_active_progress()
-        if _active_progress is not None:
-            await _active_progress.finish_attack(None)
-
-        return {
-            'response': response,
-            'token_usage': usage,
-        }
+            return {
+                'response': result.text,
+                'token_usage': result.usage,
+            }
+        finally:
+            target_close = getattr(target, 'close', None)
+            if callable(target_close):
+                maybe = target_close()
+                if inspect.isawaitable(maybe):
+                    await maybe
 
     return agent_target_job
 
@@ -1431,11 +1433,11 @@ async def _run_dynamic_or_hybrid(
                             )
                         target_instance = _factory.create_target(_label)
                         raw = await target_instance.send_prompt(prompt)
-                        response = _coerce_to_agent_response(raw).text
+                        result = _coerce_to_agent_response(raw)
                         active_progress = _get_active_progress()
                         if active_progress is not None:
                             await active_progress.finish_attack(None)
-                        return {'response': response}
+                        return {'response': result.text, 'token_usage': result.usage}
 
                     @job(f'redteam:hybrid:{at_safe}')
                     async def at_target_job(
