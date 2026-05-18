@@ -67,13 +67,6 @@ class ConfirmPayload(TypedDict, total=False):
     agent_contexts: dict[str, dict[str, Any]] | None
     """Per-target agent contexts keyed by target string (multi-target runs)."""
 
-    agent_capabilities: dict[str, dict[str, Any]] | None
-    """Per-target classified ``AgentCapabilities`` (model_dump) keyed by target string.
-
-    Populated by the runner after capability classification runs (pre-confirm).
-    ``None`` when classification was skipped (no llm_client / static mode).
-    """
-
     num_datapoints: int
     """Total number of attack datapoints to be executed."""
 
@@ -279,6 +272,25 @@ class RichHooks:
     def on_stage_end(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
         if stage == PipelineStage.CONTEXT_RETRIEVAL:
             self._render_context_summary(meta)
+            # Per RES-716: surface the classifier output for this target
+            # immediately after context retrieval. The runner places the
+            # classified caps (and any classifier error) on the meta dict.
+            agent_context = meta.get("agent_context")
+            agent_capabilities = meta.get("agent_capabilities")
+            if agent_context is not None:
+                target_label = meta.get("target", "")
+                title = (
+                    f"Detected Capabilities — {target_label}"
+                    if target_label
+                    else "Detected Capabilities"
+                )
+                self._render_agent_capabilities(
+                    agent_context,
+                    classified=agent_capabilities,
+                    title=title,
+                    classification_error=meta.get("classification_error"),
+                    classification_available=meta.get("classification_available", True),
+                )
 
         elapsed = meta.get("elapsed_s")
         if elapsed is not None:
@@ -353,26 +365,9 @@ class RichHooks:
 
         self._console.print(table)
 
-        # ── Detected capabilities table(s) ─────────────────────────────
-        agent_contexts = payload.get("agent_contexts")
-        agent_capabilities = payload.get("agent_capabilities") or {}
-        if agent_contexts and len(agent_contexts) > 1:
-            for target_str, ctx in agent_contexts.items():
-                self._render_agent_capabilities(
-                    ctx,
-                    classified=agent_capabilities.get(target_str),
-                    title=f"Detected Capabilities — {target_str}",
-                )
-        elif agent_contexts:
-            target_str, ctx = next(iter(agent_contexts.items()))
-            self._render_agent_capabilities(
-                ctx,
-                classified=agent_capabilities.get(target_str),
-            )
-        else:
-            agent_context = payload.get("agent_context")
-            if agent_context is not None:
-                self._render_agent_capabilities(agent_context, classified=None)
+        # Detected capabilities tables are rendered earlier, in
+        # on_stage_end(CONTEXT_RETRIEVAL), so the operator sees per-resource
+        # classification before reaching this confirmation step.
 
         # ── Filtering metadata ──────────────────────────────────────────
         filtering_metadata = payload.get("filtering_metadata")
@@ -395,8 +390,11 @@ class RichHooks:
     def _render_agent_capabilities(
         self,
         agent_context: dict[str, Any],
+        *,
         classified: dict[str, Any] | None = None,
         title: str = "Detected Capabilities",
+        classification_error: str | None = None,
+        classification_available: bool = True,
     ) -> None:
         """Render a per-target table of detected agent capabilities.
 
@@ -412,6 +410,13 @@ class RichHooks:
             classified: Serialized AgentCapabilities (model_dump) for this
                 target, or None when classification was skipped.
             title: Table title (caller appends " — <target>" for multi-target).
+            classification_error: Concrete error string captured when the
+                classifier raised; shown verbatim under the table so the
+                operator can tell auth / network / model errors apart from
+                an empty result.
+            classification_available: ``False`` when no LLM client could be
+                resolved, so the "disabled" hint should be shown instead of
+                the failure hint.
         """
         from rich import box
         from rich.table import Table
@@ -448,10 +453,12 @@ class RichHooks:
             caps_map = classified.get("capabilities") or {}
             classification_failed = bool(classified.get("classification_failed"))
 
-        # When the classifier produced no entries at all we treat the table as
-        # "classification unavailable" — distinct from an explicit failure flag.
-        classification_disabled = classified is None or (
-            not caps_map and not classification_failed
+        # "Disabled" means no client could be resolved at all (true no-op),
+        # whereas "failed" means a client was used but the call raised. The
+        # runner sets classification_available=False for the disabled case.
+        classification_disabled = (
+            not classification_available
+            or (classified is None and not classification_failed)
         )
 
         table = Table(title=title, show_header=True, header_style="bold", box=box.ROUNDED)
@@ -494,6 +501,8 @@ class RichHooks:
             self._console.print(
                 "[yellow]Classification incomplete — strategies will be included optimistically.[/yellow]"
             )
+            if classification_error:
+                self._console.print(f"[yellow]  reason: {classification_error}[/yellow]")
         elif classification_disabled:
             self._console.print(
                 "[dim]Capability classification disabled (no llm_client configured); "
