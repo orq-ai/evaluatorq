@@ -48,6 +48,8 @@ def _make_confirm_payload(**kwargs) -> ConfirmPayload:
 
     payload: ConfirmPayload = {
         "agent_context": kwargs.get("agent_context", None),
+        "agent_contexts": kwargs.get("agent_contexts", None),
+        "agent_capabilities": kwargs.get("agent_capabilities", None),
         "num_datapoints": kwargs.get("num_datapoints", 20),
         "num_dynamic": kwargs.get("num_dynamic", None),
         "num_static": kwargs.get("num_static", None),
@@ -187,18 +189,112 @@ class TestRichHooks:
         assert "30" in output or "Datapoint" in output
 
     def test_rich_on_confirm_renders_agent_capabilities(self):
-        """on_confirm should render agent capabilities when agent_context is provided."""
+        """on_confirm should render a capabilities table listing each resource and its type."""
         hooks, buf = self._make_rich_hooks(skip_confirm=True)
         agent_ctx = {
             "tools": [{"name": "search_web"}, {"name": "send_email"}],
-            "memory_stores": [{"store_id": "mem1"}],
+            "memory_stores": [{"key": "user_prefs"}],
             "knowledge_bases": [],
         }
         payload = _make_confirm_payload(agent_context=agent_ctx)
         hooks.on_confirm(payload)
         output = buf.getvalue()
-        # Should render tools count or memory info
-        assert "search_web" in output or "2" in output or "tool" in output.lower()
+        # Resource names and the per-row Type column should appear.
+        assert "search_web" in output
+        assert "send_email" in output
+        assert "user_prefs" in output
+        assert "tool" in output
+        assert "memory" in output
+        # Title should use the new "Detected Capabilities" wording.
+        assert "Detected Capabilities" in output
+
+    def test_rich_on_confirm_table_renders_classified_caps(self):
+        """When `agent_capabilities` is supplied, classified tags appear in the table."""
+        hooks, buf = self._make_rich_hooks(skip_confirm=True)
+        agent_ctx = {
+            "tools": [{"name": "run_python"}, {"name": "search_web"}],
+            "memory_stores": [],
+            "knowledge_bases": [],
+        }
+        # Mimics AgentCapabilities.model_dump(): keys match the resource names
+        # we emit for tools, the dump includes a capabilities dict + flag.
+        caps = {
+            "capabilities": {
+                "run_python": ["code_execution"],
+                "search_web": ["web_request"],
+            },
+            "classification_failed": False,
+        }
+        payload = _make_confirm_payload(
+            agent_contexts={"agent:bot": agent_ctx},
+            agent_capabilities={"agent:bot": caps},
+            target="agent:bot",
+        )
+        hooks.on_confirm(payload)
+        output = buf.getvalue()
+        assert "code_execution" in output
+        assert "web_request" in output
+        # Footer summary mentions the high-risk count.
+        assert "high-risk" in output
+
+    def test_rich_on_confirm_table_multi_target(self):
+        """Multi-target runs should render one table per target."""
+        hooks, buf = self._make_rich_hooks(skip_confirm=True)
+        ctx_a = {"tools": [{"name": "tool_a"}], "memory_stores": [], "knowledge_bases": []}
+        ctx_b = {"tools": [{"name": "tool_b"}], "memory_stores": [], "knowledge_bases": []}
+        caps_a = {"capabilities": {"tool_a": ["web_request"]}, "classification_failed": False}
+        caps_b = {"capabilities": {"tool_b": ["file_system"]}, "classification_failed": False}
+        payload = _make_confirm_payload(
+            agent_contexts={"agent:a": ctx_a, "agent:b": ctx_b},
+            agent_capabilities={"agent:a": caps_a, "agent:b": caps_b},
+            target="agent:a, agent:b",
+        )
+        hooks.on_confirm(payload)
+        output = buf.getvalue()
+        # Both target labels show up in their respective table titles.
+        assert "agent:a" in output
+        assert "agent:b" in output
+        assert "tool_a" in output
+        assert "tool_b" in output
+
+    def test_rich_on_confirm_table_classification_failed(self):
+        """A `classification_failed=True` payload should render a yellow hint."""
+        hooks, buf = self._make_rich_hooks(skip_confirm=True)
+        agent_ctx = {"tools": [{"name": "tool_x"}], "memory_stores": [], "knowledge_bases": []}
+        caps = {"capabilities": {}, "classification_failed": True}
+        payload = _make_confirm_payload(
+            agent_contexts={"agent:x": agent_ctx},
+            agent_capabilities={"agent:x": caps},
+        )
+        hooks.on_confirm(payload)
+        output = buf.getvalue()
+        assert "Classification incomplete" in output
+
+    def test_rich_on_confirm_table_no_llm_client(self):
+        """Empty/absent agent_capabilities should render a 'classification disabled' hint."""
+        hooks, buf = self._make_rich_hooks(skip_confirm=True)
+        agent_ctx = {"tools": [{"name": "tool_x"}], "memory_stores": [], "knowledge_bases": []}
+        payload = _make_confirm_payload(
+            agent_contexts={"agent:x": agent_ctx},
+            agent_capabilities=None,
+        )
+        hooks.on_confirm(payload)
+        output = buf.getvalue()
+        # Resource is still listed; the hint explains why classifications are blank.
+        assert "tool_x" in output
+        assert "classification disabled" in output.lower()
+
+    def test_rich_on_confirm_table_empty_agent(self):
+        """No tools/memory/KB → placeholder row instead of three empty sections."""
+        hooks, buf = self._make_rich_hooks(skip_confirm=True)
+        empty_ctx = {"tools": [], "memory_stores": [], "knowledge_bases": []}
+        payload = _make_confirm_payload(
+            agent_contexts={"agent:empty": empty_ctx},
+            agent_capabilities={"agent:empty": {"capabilities": {}, "classification_failed": False}},
+        )
+        hooks.on_confirm(payload)
+        output = buf.getvalue()
+        assert "No tools" in output
 
     def test_rich_on_confirm_renders_filtering_metadata(self):
         """on_confirm should render filtering metadata (strategy counts)."""

@@ -58,6 +58,7 @@ from evaluatorq.redteam.vulnerability_registry import (
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
+    from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities
     from evaluatorq.redteam.backends.base import (
         AgentTargetFactory,
         ErrorMapper,
@@ -95,6 +96,7 @@ async def generate_dynamic_datapoints_for_vulnerabilities(
     attacker_instructions: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     pipeline_config: LLMConfig | None = None,
+    agent_capabilities: AgentCapabilities | None = None,
 ) -> tuple[list[DataPoint], dict[str, Any]]:
     """Generate evaluatorq DataPoints for dynamic red teaming, keyed by Vulnerability enum.
 
@@ -128,6 +130,7 @@ async def generate_dynamic_datapoints_for_vulnerabilities(
         attacker_instructions=attacker_instructions,
         llm_kwargs=llm_kwargs,
         pipeline_config=cfg,
+        agent_capabilities=agent_capabilities,
     )
 
     # Convert Vulnerability-keyed metadata to string keys for external consumption
@@ -170,6 +173,7 @@ async def generate_dynamic_datapoints(
     attacker_instructions: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     pipeline_config: LLMConfig | None = None,
+    agent_capabilities: AgentCapabilities | None = None,
 ) -> tuple[list[DataPoint], dict[str, Any]]:
     """Generate evaluatorq DataPoints for dynamic red teaming.
 
@@ -215,6 +219,7 @@ async def generate_dynamic_datapoints(
             attacker_instructions=attacker_instructions,
             llm_kwargs=llm_kwargs,
             pipeline_config=cfg,
+            agent_capabilities=agent_capabilities,
         )
         # Remap metadata keys from vulnerability IDs back to original category strings
         # so callers that expect category-keyed metadata continue to work.
@@ -241,6 +246,7 @@ async def generate_dynamic_datapoints(
         attacker_instructions=attacker_instructions,
         llm_kwargs=llm_kwargs,
         pipeline_config=cfg,
+        agent_capabilities=agent_capabilities,
     )
 
     datapoints = []

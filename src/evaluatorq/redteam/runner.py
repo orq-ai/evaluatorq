@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, cast
 from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, job
+from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities, classify_agent_capabilities
 from evaluatorq.redteam.adaptive.orchestrator import ProgressDisplay, _get_active_progress
 from evaluatorq.redteam.adaptive.pipeline import (
     cleanup_memory_entities,
@@ -45,9 +46,9 @@ from evaluatorq.redteam.backends.base import (
 )
 from evaluatorq.redteam.backends.registry import create_async_llm_client, resolve_backend
 from evaluatorq.redteam.contracts import (
+    PIPELINE_CONFIG,
     AgentContext,
     LLMConfig,
-    PIPELINE_CONFIG,
     Pipeline,
     PipelineStage,
     RedTeamReport,
@@ -798,6 +799,7 @@ async def _prepare_target(
     shared_datapoints: list[Any] | None = None,
     attacker_instructions: str | None = None,
     prefetched_agent_context: AgentContext | None = None,
+    prefetched_agent_capabilities: AgentCapabilities | None = None,
     prefetched_static_data: list[Any] | None = None,
     verbosity: int = 0,
     pipeline_config: LLMConfig | None = None,
@@ -877,6 +879,7 @@ async def _prepare_target(
                 parallelism=parallelism,
                 attacker_instructions=attacker_instructions,
                 pipeline_config=pipeline_config,
+                agent_capabilities=prefetched_agent_capabilities,
             )
         else:
             # Fallback: categories that could not be resolved to vulnerabilities
@@ -892,6 +895,7 @@ async def _prepare_target(
                 parallelism=parallelism,
                 attacker_instructions=attacker_instructions,
                 pipeline_config=pipeline_config,
+                agent_capabilities=prefetched_agent_capabilities,
             )
 
         if max_dynamic_datapoints is not None and max_dynamic_datapoints > 0 and len(dynamic_datapoints) > max_dynamic_datapoints:
@@ -1145,6 +1149,54 @@ async def _run_dynamic_or_hybrid(
             msg = 'red_team() requires at least one target'
             raise ValueError(msg)
 
+        # Step 1b: Classify agent capabilities per target (one LLM call each)
+        # so the confirm-time table can show what the planner will see. Results
+        # are cached and threaded into _prepare_target / direct-target paths to
+        # avoid a duplicate classifier round-trip downstream.
+        cap_llm_client = llm_client
+        if cap_llm_client is None and pipeline_config is not None and pipeline_config.attacker.client is not None:
+            cap_llm_client = pipeline_config.attacker.client
+        if cap_llm_client is None and generate_strategies:
+            cap_llm_client = create_async_llm_client()
+
+        all_agent_caps: dict[str, AgentCapabilities] = {}
+        at_caps: dict[int, AgentCapabilities] = {}
+        if cap_llm_client is not None:
+            async def _classify_one(ctx: AgentContext) -> AgentCapabilities:
+                try:
+                    return await classify_agent_capabilities(
+                        agent_context=ctx,
+                        llm_client=cap_llm_client,
+                        model=attack_model,
+                        pipeline_config=pipeline_config,
+                    )
+                except Exception as exc:
+                    # Never let capability classification take down the run — fall back to
+                    # an empty classification with the failed flag set; strategies will be
+                    # included optimistically by the planner.
+                    logger.warning(
+                        f'Capability classification failed for {ctx.key!r}: {exc}. '
+                        f'Strategies will be included optimistically.'
+                    )
+                    return AgentCapabilities(classification_failed=True)
+
+            string_target_items = list(all_agent_contexts.items())
+            at_items = list(at_contexts.items())
+            all_results = await asyncio.gather(
+                *[_classify_one(ctx) for _, ctx in string_target_items],
+                *[_classify_one(ctx) for _, ctx in at_items],
+            )
+            n_strings = len(string_target_items)
+            for (t, _), caps in zip(string_target_items, all_results[:n_strings], strict=True):
+                all_agent_caps[t] = caps
+            for (at_id, _), caps in zip(at_items, all_results[n_strings:], strict=True):
+                at_caps[at_id] = caps
+        else:
+            for t in all_agent_contexts:
+                all_agent_caps[t] = AgentCapabilities()
+            for at_id in at_contexts:
+                at_caps[at_id] = AgentCapabilities()
+
         # Step 2: Estimate datapoint counts (cheap registry lookups, no LLM).
         est_dynamic = 0
         strategy_breakdown: dict[str, Any] = {}
@@ -1224,9 +1276,17 @@ async def _run_dynamic_or_hybrid(
             for at in resolved_agent_targets
         }
         all_contexts_for_confirm = {**all_agent_contexts, **at_contexts_by_label}
+        at_caps_by_label = {
+            agent_target_labels[id(at)]: at_caps[id(at)]
+            for at in resolved_agent_targets
+        }
+        all_caps_for_confirm: dict[str, AgentCapabilities] = {**all_agent_caps, **at_caps_by_label}
         confirm_payload: ConfirmPayload = {
             "agent_contexts": {
                 t: ctx.model_dump(mode="json") for t, ctx in all_contexts_for_confirm.items()
+            },
+            "agent_capabilities": {
+                t: caps.model_dump(mode="json") for t, caps in all_caps_for_confirm.items()
             },
             "agent_context": first_agent_context.model_dump(mode="json"),
             "num_datapoints": est_total,
@@ -1280,6 +1340,7 @@ async def _run_dynamic_or_hybrid(
             first_target = await _prepare_target(
                 target=targets[0],
                 prefetched_agent_context=first_agent_context,
+                prefetched_agent_capabilities=all_agent_caps.get(targets[0]),
                 prefetched_static_data=static_data,
                 **common_prepare_kwargs,
             )
@@ -1292,6 +1353,7 @@ async def _run_dynamic_or_hybrid(
                             target=t,
                             shared_datapoints=first_target.all_datapoints,
                             prefetched_agent_context=all_agent_contexts.get(t),
+                            prefetched_agent_capabilities=all_agent_caps.get(t),
                             **common_prepare_kwargs,
                         )
                         for t in targets[1:]
@@ -1364,6 +1426,7 @@ async def _run_dynamic_or_hybrid(
                         "num_categories": len(resolved_categories),
                         "target": at_label,
                     })
+                    at_pref_caps = at_caps.get(id(at))
                     if resolved_vulns is not None:
                         at_dps, at_filter_meta = await generate_dynamic_datapoints_for_vulnerabilities(
                             agent_context=at_ctx,
@@ -1377,6 +1440,7 @@ async def _run_dynamic_or_hybrid(
                             parallelism=parallelism,
                             attacker_instructions=attacker_instructions,
                             pipeline_config=pipeline_config,
+                            agent_capabilities=at_pref_caps,
                         )
                     else:
                         at_dps, at_filter_meta = await generate_dynamic_datapoints(
@@ -1391,6 +1455,7 @@ async def _run_dynamic_or_hybrid(
                             parallelism=parallelism,
                             attacker_instructions=attacker_instructions,
                             pipeline_config=pipeline_config,
+                            agent_capabilities=at_pref_caps,
                         )
                     if max_dynamic_datapoints is not None and max_dynamic_datapoints > 0 and len(at_dps) > max_dynamic_datapoints:
                         at_dps = _cap_datapoints_balanced(at_dps, max_dynamic_datapoints)
