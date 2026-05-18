@@ -37,6 +37,8 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
+
 from evaluatorq.contracts import (
     AgentResponse,
     TextOutputItem,
@@ -420,7 +422,9 @@ def load_openresponses_dataset(
     rows: list[dict[str, Any]]
     if p.suffix.lower() == ".jsonl":
         rows = []
-        for line_no, line in enumerate(p.read_text().splitlines(), start=1):
+        # Explicit utf-8 — on Windows / non-UTF-8 locales the platform default
+        # can corrupt or fail on dataset files containing non-ASCII content.
+        for line_no, line in enumerate(p.read_text(encoding="utf-8").splitlines(), start=1):
             stripped = line.strip()
             if not stripped:
                 continue
@@ -431,7 +435,7 @@ def load_openresponses_dataset(
                     f"Malformed JSONL on line {line_no} of {p}: {e}"
                 ) from e
     else:
-        loaded = json.loads(p.read_text())
+        loaded = json.loads(p.read_text(encoding="utf-8"))
         if isinstance(loaded, dict) and "samples" in loaded:
             rows = loaded["samples"]
         elif isinstance(loaded, list):
@@ -576,7 +580,12 @@ def record_openresponses_response(
     elif isinstance(response, AgentResponse):
         try:
             dumped = response.model_dump(mode="json")
-        except Exception:
+        except Exception as exc:  # tracing must not raise; log + fall back
+            logger.debug(
+                "record_openresponses_response: model_dump failed ({}); "
+                "falling back to str repr of output items",
+                exc,
+            )
             dumped = {"output": [str(item) for item in response.output]}
         span.set_attribute(
             "orq.openresponses.response",

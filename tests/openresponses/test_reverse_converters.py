@@ -234,3 +234,46 @@ class TestLoadOpenResponsesDataset:
         path.write_text(json.dumps([row]))
         with pytest.raises(ValueError, match="missing 'openresponses_input'"):
             load_openresponses_dataset(path)
+
+    def test_reads_non_ascii_content_as_utf8(self, tmp_path: Path):
+        """Dataset files must be read as UTF-8 regardless of platform locale.
+
+        Without an explicit encoding, Windows installs with a non-UTF-8
+        default codec would mangle or fail on Unicode content. Write the
+        file as utf-8 bytes directly to bypass the platform default and
+        confirm the loader still decodes it correctly.
+        """
+        row = {
+            "input": {
+                "id": "unicode-1",
+                "vulnerability": "prompt_injection",
+                "severity": "low",
+                "vulnerability_domain": "model",
+                "turn_type": "single",
+                "source": "utf8-test",
+            },
+            "openresponses_input": [
+                {"role": "user", "content": "café — naïve résumé — 日本語 — 🔓"},
+            ],
+        }
+        path = tmp_path / "unicode.json"
+        path.write_bytes(json.dumps([row], ensure_ascii=False).encode("utf-8"))
+        ds = load_openresponses_dataset(path)
+        assert ds.samples[0].messages[0].content == "café — naïve résumé — 日本語 — 🔓"
+
+    def test_reads_non_ascii_content_jsonl_as_utf8(self, tmp_path: Path):
+        row = {
+            "input": {
+                "id": "unicode-jsonl-1",
+                "vulnerability": "prompt_injection",
+                "severity": "low",
+                "vulnerability_domain": "model",
+                "turn_type": "single",
+                "source": "utf8-jsonl-test",
+            },
+            "openresponses_input": [{"role": "user", "content": "ünïcödé"}],
+        }
+        path = tmp_path / "unicode.jsonl"
+        path.write_bytes((json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8"))
+        ds = load_openresponses_dataset(path)
+        assert ds.samples[0].messages[0].content == "ünïcödé"
