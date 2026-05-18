@@ -234,8 +234,9 @@ class TestRichHooks:
         output = buf.getvalue()
         assert "code_execution" in output
         assert "web_request" in output
-        # Footer summary mentions the high-risk count.
-        assert "high-risk" in output
+        # Footer summary counts distinct high-risk capability kinds, not occurrences:
+        # run_python contributes code_execution; search_web has no high-risk tag.
+        assert "1 high-risk capability" in output
 
     def test_rich_on_confirm_table_multi_target(self):
         """Multi-target runs should render one table per target."""

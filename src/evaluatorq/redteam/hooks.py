@@ -459,29 +459,33 @@ class RichHooks:
         table.add_column("Type", style="dim")
         table.add_column("Detected Capabilities", overflow="fold")
 
+        high_risk_values = {c.value for c in _HIGH_RISK_CAPS}
         unique_caps: set[str] = set()
-        n_high_risk = 0
         for key, rtype, display in resources:
             tags = caps_map.get(key) or []
             unique_caps.update(tags)
             cell_parts: list[str] = []
             for tag in tags:
-                style = "bold red" if tag in {c.value for c in _HIGH_RISK_CAPS} else "cyan"
+                style = "bold red" if tag in high_risk_values else "cyan"
                 cell_parts.append(f"[{style}]{tag}[/{style}]")
-                if tag in {c.value for c in _HIGH_RISK_CAPS}:
-                    n_high_risk += 1
             if not cell_parts:
                 cell_parts.append("[dim]—[/dim]")
             table.add_row(display, rtype, ", ".join(cell_parts))
 
-        # Footer: totals across this target.
+        # Footer: totals across this target. Counts the number of *distinct*
+        # high-risk capability kinds the agent has (not tag occurrences), since
+        # that is the threat-model-relevant number.
+        n_high_risk_kinds = len(unique_caps & high_risk_values)
         table.add_section()
         footer_bits = [
             f"{len(resources)} resource{'s' if len(resources) != 1 else ''}",
             f"{len(unique_caps)} unique capabilit{'ies' if len(unique_caps) != 1 else 'y'}",
         ]
-        if n_high_risk:
-            footer_bits.append(f"[bold red]{n_high_risk} high-risk[/bold red]")
+        if n_high_risk_kinds:
+            footer_bits.append(
+                f"[bold red]{n_high_risk_kinds} high-risk capabilit"
+                f"{'ies' if n_high_risk_kinds != 1 else 'y'}[/bold red]"
+            )
         table.add_row(f"[bold]{' · '.join(footer_bits)}[/bold]", "", "")
 
         self._console.print(table)

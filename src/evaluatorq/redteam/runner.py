@@ -1163,22 +1163,32 @@ async def _run_dynamic_or_hybrid(
         at_caps: dict[int, AgentCapabilities] = {}
         if cap_llm_client is not None:
             async def _classify_one(ctx: AgentContext) -> AgentCapabilities:
-                try:
-                    return await classify_agent_capabilities(
-                        agent_context=ctx,
-                        llm_client=cap_llm_client,
-                        model=attack_model,
-                        pipeline_config=pipeline_config,
-                    )
-                except Exception as exc:
-                    # Never let capability classification take down the run — fall back to
-                    # an empty classification with the failed flag set; strategies will be
-                    # included optimistically by the planner.
-                    logger.warning(
-                        f'Capability classification failed for {ctx.key!r}: {exc}. '
-                        f'Strategies will be included optimistically.'
-                    )
-                    return AgentCapabilities(classification_failed=True)
+                async with with_redteam_span("orq.redteam.capability_classification", {
+                    "orq.redteam.target": ctx.key,
+                    "orq.redteam.num_tools": len(ctx.tools) if ctx.tools else 0,
+                    "orq.redteam.model": attack_model,
+                }) as cap_span:
+                    try:
+                        caps = await classify_agent_capabilities(
+                            agent_context=ctx,
+                            llm_client=cap_llm_client,
+                            model=attack_model,
+                            pipeline_config=pipeline_config,
+                        )
+                    except Exception as exc:
+                        # Never let capability classification take down the run. Fall back
+                        # to an empty classification with the failed flag set; strategies
+                        # will be included optimistically downstream.
+                        logger.warning(
+                            f'Capability classification failed for {ctx.key!r}: {exc}. '
+                            f'Strategies will be included optimistically.'
+                        )
+                        return AgentCapabilities(classification_failed=True)
+                    set_span_attrs(cap_span, {
+                        "orq.redteam.num_capabilities": len(caps.all_capabilities()),
+                        "orq.redteam.classification_failed": caps.classification_failed,
+                    })
+                    return caps
 
             string_target_items = list(all_agent_contexts.items())
             at_items = list(at_contexts.items())
