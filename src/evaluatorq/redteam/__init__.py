@@ -31,6 +31,11 @@ def _check_redteam_deps() -> None:  # noqa: RUF067
 _check_redteam_deps()  # noqa: RUF067
 
 
+from evaluatorq.redteam.adaptive.orchestrator import (
+    ADVERSARIAL_ANALYSIS_PROMPT,
+    ADVERSARIAL_INITIAL_USER_PROMPT,
+    ADVERSARIAL_SYSTEM_PROMPT,
+)
 from evaluatorq.redteam.adaptive.strategy_registry import (
     get_category_info,
 )
@@ -47,12 +52,17 @@ from evaluatorq.redteam.backends.base import (
     is_agent_target,
 )
 from evaluatorq.redteam.backends.openai import OpenAIModelTarget
+from evaluatorq.redteam.backends.openresponses import (
+    OpenResponsesAgentTarget,
+    OpenResponsesTargetFactory,
+)
 from evaluatorq.redteam.backends.registry import register_backend
 from evaluatorq.redteam.contracts import (
     SEVERITY_DEFINITIONS,
     AgentCapability,
     AgentContext,
     AgentInfo,
+    AgentResponse,
     AttackEvaluationResult,
     AttackInfo,
     AttackSource,
@@ -70,11 +80,6 @@ from evaluatorq.redteam.contracts import (
     Framework,
     FrameworkSummary,
     FunctionCall,
-    AgentResponse,
-    OutputMessage,
-    ReasoningOutputItem,
-    TextOutputItem,
-    ToolCallOutputItem,
     JobOutputPayload,
     KnowledgeBaseInfo,
     LLMCallConfig,
@@ -82,8 +87,10 @@ from evaluatorq.redteam.contracts import (
     MemoryStoreInfo,
     Message,
     OrchestratorResult,
+    OutputMessage,
     Pipeline,
     PipelineStage,
+    ReasoningOutputItem,
     RedTeamInput,
     RedTeamReport,
     RedTeamResult,
@@ -91,10 +98,12 @@ from evaluatorq.redteam.contracts import (
     ReportSummary,
     Severity,
     SeveritySummary,
+    StrategyToolCall,
     TargetConfig,
     TechniqueSummary,
+    TextOutputItem,
     TokenUsage,
-    StrategyToolCall,
+    ToolCallOutputItem,
     ToolInfo,
     TurnType,
     TurnTypeSummary,
@@ -106,17 +115,31 @@ from evaluatorq.redteam.contracts import (
     normalize_category,
     normalize_framework,
 )
-from evaluatorq.redteam.adaptive.orchestrator import (
-    ADVERSARIAL_ANALYSIS_PROMPT,
-    ADVERSARIAL_INITIAL_USER_PROMPT,
-    ADVERSARIAL_SYSTEM_PROMPT,
-)
 from evaluatorq.redteam.exceptions import BackendError, CancelledError, CredentialError, RedTeamError
 from evaluatorq.redteam.hooks import (
     ConfirmPayload,
     DefaultHooks,
     PipelineHooks,
     RichHooks,
+)
+from evaluatorq.redteam.openresponses_adapter import (
+    agent_response_from_openresponses,
+    agent_response_to_openresponses,
+    append_assistant_turn,
+    append_user_followup,
+    build_openresponses_request,
+    load_openresponses_dataset,
+    messages_from_openresponses_input,
+    orchestrator_result_to_openresponses_input,
+    record_openresponses_request,
+    record_openresponses_response,
+    redteam_sample_from_openresponses,
+    turns_to_openresponses_input,
+)
+from evaluatorq.redteam.parsing import (
+    extract_assistant_text,
+    extract_reasoning,
+    extract_tool_calls,
 )
 from evaluatorq.redteam.reports.converters import merge_reports
 from evaluatorq.redteam.reports.display import print_report_summary
@@ -175,6 +198,8 @@ __all__ = [
     "MemoryStoreInfo",
     "Message",
     "OpenAIModelTarget",
+    "OpenResponsesAgentTarget",
+    "OpenResponsesTargetFactory",
     # Result models
     "OrchestratorResult",
     "Pipeline",
@@ -218,6 +243,22 @@ __all__ = [
     "VulnerabilityDef",
     "VulnerabilityDomain",
     "VulnerabilitySummary",
+    # OpenResponses adapter (RES-540)
+    "agent_response_from_openresponses",
+    "agent_response_to_openresponses",
+    "append_assistant_turn",
+    "append_user_followup",
+    "build_openresponses_request",
+    "extract_assistant_text",
+    "extract_reasoning",
+    "extract_tool_calls",
+    "load_openresponses_dataset",
+    "messages_from_openresponses_input",
+    "orchestrator_result_to_openresponses_input",
+    "record_openresponses_request",
+    "record_openresponses_response",
+    "redteam_sample_from_openresponses",
+    "turns_to_openresponses_input",
     "get_category_info",
     "get_vulnerability_name",
     "is_agent_target",

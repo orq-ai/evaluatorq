@@ -146,5 +146,34 @@ def _create_orq_backend(
     )
 
 
+def _create_openresponses_backend(
+    llm_client: AsyncOpenAI | None = None,
+    target_config: TargetConfig | None = None,
+    pipeline_config: LLMConfig | None = None,
+    **kwargs: object,
+) -> BackendBundle:
+    from evaluatorq.redteam.backends.openresponses import (
+        OpenResponsesContextProvider,
+        OpenResponsesErrorMapper,
+        OpenResponsesTargetFactory,
+        _create_openresponses_client,
+    )
+    instructions = target_config.system_prompt if target_config else None
+    timeout_ms = pipeline_config.target_agent_timeout_ms if pipeline_config else None
+    client = llm_client or _create_openresponses_client()
+    return BackendBundle(
+        name="openresponses",
+        target_factory=OpenResponsesTargetFactory(
+            client,
+            instructions=instructions,
+            timeout_ms=timeout_ms,
+        ),
+        context_provider=OpenResponsesContextProvider(instructions=instructions),
+        memory_cleanup=NoopMemoryCleanup(),
+        error_mapper=OpenResponsesErrorMapper(),
+    )
+
+
 register_backend("openai", _create_openai_backend)
 register_backend("orq", _create_orq_backend)
+register_backend("openresponses", _create_openresponses_backend)
