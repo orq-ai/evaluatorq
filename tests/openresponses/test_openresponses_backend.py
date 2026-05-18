@@ -164,6 +164,29 @@ class TestResponseParsing:
         assert result.usage.completion_tokens == 8
         assert result.usage.calls == 1
 
+    @pytest.mark.asyncio
+    async def test_total_tokens_falls_back_to_prompt_plus_completion(self):
+        """When the upstream usage.total_tokens is absent (simulation.TokenUsage
+        derived from a response missing the total field), the redteam token usage
+        should compute total = prompt + completion rather than report zero."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+
+        # Build a response with a usage shape that yields total_tokens=0 from the
+        # simulation extractor (simulation/_client computes total = in + out, so to
+        # get a 0 we craft a usage with both fields zero except prompt non-zero, then
+        # bypass by injecting directly into _to_redteam_usage).
+        from evaluatorq.redteam.backends.openresponses import OpenResponsesAgentTarget
+
+        usage_obj = SimpleNamespace(prompt_tokens=12, completion_tokens=8, total_tokens=0)
+        result = OpenResponsesAgentTarget._to_redteam_usage(usage_obj)
+        assert result is not None
+        assert result.total_tokens == 20  # 12 + 8 fallback
+
+    def test_to_redteam_usage_returns_none_when_usage_absent(self):
+        from evaluatorq.redteam.backends.openresponses import OpenResponsesAgentTarget
+        assert OpenResponsesAgentTarget._to_redteam_usage(None) is None
+
 
 class TestMultiTurnThreading:
     @pytest.mark.asyncio

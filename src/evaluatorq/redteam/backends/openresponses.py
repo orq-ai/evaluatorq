@@ -50,7 +50,7 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
 
-def _create_openresponses_client() -> AsyncOpenAI:
+def create_openresponses_client() -> AsyncOpenAI:
     """Build an ``AsyncOpenAI`` client routed at the ORQ ``/responses`` endpoint.
 
     Defined as a module-level function so tests can monkeypatch the factory
@@ -61,6 +61,34 @@ def _create_openresponses_client() -> AsyncOpenAI:
 
     client, _ = build_simulation_client()
     return client
+
+
+# Backwards-compatible alias for callers that imported the private name during
+# RES-540 development.
+_create_openresponses_client = create_openresponses_client
+
+
+def _map_openresponses_error(exc: Exception) -> tuple[str, str]:
+    """Single source of truth for OpenResponses error taxonomy.
+
+    Both :meth:`OpenResponsesAgentTarget.map_error` and
+    :class:`OpenResponsesErrorMapper` delegate here so changes only need to
+    be made in one place.
+    """
+    status_code = extract_status_code(exc)
+    if status_code is not None:
+        return f"openresponses.http.{status_code}", f"{type(exc).__name__}: {exc}"
+    provider_code = extract_provider_error_code(exc)
+    if provider_code:
+        return f"openresponses.code.{provider_code}", f"{type(exc).__name__}: {exc}"
+    name = type(exc).__name__.lower()
+    if "ratelimit" in name:
+        return "openresponses.rate_limit", f"{type(exc).__name__}: {exc}"
+    if "timeout" in name or isinstance(exc, asyncio.TimeoutError):
+        return "openresponses.timeout", f"{type(exc).__name__}: {exc}"
+    if "authentication" in name:
+        return "openresponses.auth", f"{type(exc).__name__}: {exc}"
+    return "openresponses.unknown", f"{type(exc).__name__}: {exc}"
 
 
 class OpenResponsesAgentTarget:
@@ -109,7 +137,7 @@ class OpenResponsesAgentTarget:
         use_server_threading: bool = True,
     ):
         self.agent_id = agent_id
-        self.client = client or _create_openresponses_client()
+        self.client = client or create_openresponses_client()
         self.instructions = instructions
         self.tools = list(tools) if tools else None
         self.max_tokens = max_tokens or DEFAULT_TARGET_MAX_TOKENS
@@ -243,20 +271,7 @@ class OpenResponsesAgentTarget:
 
     def map_error(self, exc: Exception) -> tuple[str, str]:
         """Normalize OpenResponses transport exceptions for the runner error taxonomy."""
-        status_code = extract_status_code(exc)
-        if status_code is not None:
-            return f"openresponses.http.{status_code}", f"{type(exc).__name__}: {exc}"
-        provider_code = extract_provider_error_code(exc)
-        if provider_code:
-            return f"openresponses.code.{provider_code}", f"{type(exc).__name__}: {exc}"
-        name = type(exc).__name__.lower()
-        if "ratelimit" in name:
-            return "openresponses.rate_limit", f"{type(exc).__name__}: {exc}"
-        if "timeout" in name or isinstance(exc, asyncio.TimeoutError):
-            return "openresponses.timeout", f"{type(exc).__name__}: {exc}"
-        if "authentication" in name:
-            return "openresponses.auth", f"{type(exc).__name__}: {exc}"
-        return "openresponses.unknown", f"{type(exc).__name__}: {exc}"
+        return _map_openresponses_error(exc)
 
     @staticmethod
     def _to_redteam_usage(usage: Any) -> TokenUsage | None:
@@ -265,21 +280,32 @@ class OpenResponsesAgentTarget:
         ``extract_responses_output`` returns ``evaluatorq.simulation.types.TokenUsage``
         which has the same field names but is a distinct class — the
         orchestrator's accumulators expect the redteam :class:`TokenUsage`.
+
+        When the upstream ``total_tokens`` field is absent or zero, falls back
+        to ``prompt + completion`` so token-cost dashboards never display a
+        spurious zero for a billed call.
         """
         if usage is None:
             return None
+        prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        raw_total = int(getattr(usage, "total_tokens", 0) or 0)
         return TokenUsage(
-            prompt_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
-            completion_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
-            total_tokens=int(getattr(usage, "total_tokens", 0) or 0),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=raw_total or (prompt_tokens + completion_tokens),
             calls=1,
         )
 
     @property
     def output_messages(self) -> list[OutputMessage]:
-        """Last response's output items, kept for parity with other backends.
+        """Always empty — kept on the class for protocol parity only.
 
-        Returns the empty list until ``send_prompt`` has been called.
+        OpenResponses conversation state lives in ``previous_response_id``
+        (server-side threading) or the ``_client_side_input`` array
+        (fallback path), never in a cached output list. Callers that need
+        the most recent response should keep the :class:`AgentResponse`
+        returned by :meth:`send_prompt` directly.
         """
         return []
 
@@ -346,25 +372,12 @@ class OpenResponsesTargetFactory:
 class OpenResponsesErrorMapper:
     """Standalone error mapper so the backend bundle has a fresh mapper per call.
 
-    Delegates to :meth:`OpenResponsesAgentTarget.map_error` semantics without
-    requiring a live target instance.
+    Delegates to :func:`_map_openresponses_error` — the single source of
+    truth for the OpenResponses error taxonomy.
     """
 
     def map_error(self, exc: Exception) -> tuple[str, str]:
-        status_code = extract_status_code(exc)
-        if status_code is not None:
-            return f"openresponses.http.{status_code}", f"{type(exc).__name__}: {exc}"
-        provider_code = extract_provider_error_code(exc)
-        if provider_code:
-            return f"openresponses.code.{provider_code}", f"{type(exc).__name__}: {exc}"
-        name = type(exc).__name__.lower()
-        if "ratelimit" in name:
-            return "openresponses.rate_limit", f"{type(exc).__name__}: {exc}"
-        if "timeout" in name or isinstance(exc, asyncio.TimeoutError):
-            return "openresponses.timeout", f"{type(exc).__name__}: {exc}"
-        if "authentication" in name:
-            return "openresponses.auth", f"{type(exc).__name__}: {exc}"
-        return "openresponses.unknown", f"{type(exc).__name__}: {exc}"
+        return _map_openresponses_error(exc)
 
 
 __all__ = [
@@ -372,4 +385,5 @@ __all__ = [
     "OpenResponsesContextProvider",
     "OpenResponsesErrorMapper",
     "OpenResponsesTargetFactory",
+    "create_openresponses_client",
 ]

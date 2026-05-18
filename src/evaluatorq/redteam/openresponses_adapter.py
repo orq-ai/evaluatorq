@@ -34,6 +34,7 @@ untouched.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.contracts import (
@@ -50,7 +51,7 @@ from evaluatorq.redteam.parsing import (
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
-    from evaluatorq.redteam.contracts import RedTeamInput, RedTeamSample, Turn
+    from evaluatorq.redteam.contracts import RedTeamInput, RedTeamSample, StaticDataset, Turn
 
 
 # ---------------------------------------------------------------------------
@@ -389,8 +390,8 @@ def messages_from_openresponses_input(
 
 
 def load_openresponses_dataset(
-    path: str | Any,
-) -> Any:
+    path: str | Path,
+) -> StaticDataset:
     """Load a static red teaming dataset stored in OpenResponses format.
 
     Accepts a JSON file containing either a top-level ``{"samples": [...]}``
@@ -410,12 +411,9 @@ def load_openresponses_dataset(
     Raises ``FileNotFoundError`` for missing files and ``ValueError`` for
     malformed rows.
     """
-    import json as _json
-    from pathlib import Path as _Path
-
     from evaluatorq.redteam.contracts import RedTeamInput, StaticDataset
 
-    p = _Path(path)
+    p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"Dataset file not found: {p}")
 
@@ -427,13 +425,13 @@ def load_openresponses_dataset(
             if not stripped:
                 continue
             try:
-                rows.append(_json.loads(stripped))
-            except _json.JSONDecodeError as e:
+                rows.append(json.loads(stripped))
+            except json.JSONDecodeError as e:
                 raise ValueError(
                     f"Malformed JSONL on line {line_no} of {p}: {e}"
                 ) from e
     else:
-        loaded = _json.loads(p.read_text())
+        loaded = json.loads(p.read_text())
         if isinstance(loaded, dict) and "samples" in loaded:
             rows = loaded["samples"]
         elif isinstance(loaded, list):
@@ -573,13 +571,8 @@ def record_openresponses_response(
         if isinstance(usage, dict):
             input_tokens = int(usage.get("input_tokens", 0) or 0)
             output_tokens = int(usage.get("output_tokens", 0) or 0)
-            total = int(usage.get("total_tokens", input_tokens + output_tokens) or 0)
-            span.set_attribute("gen_ai.usage.input_tokens", input_tokens)
-            span.set_attribute("gen_ai.usage.output_tokens", output_tokens)
-            span.set_attribute("gen_ai.usage.total_tokens", total)
-            span.set_attribute("input_tokens", input_tokens)
-            span.set_attribute("output_tokens", output_tokens)
-            span.set_attribute("total_tokens", total)
+            total = int(usage.get("total_tokens", 0) or 0) or (input_tokens + output_tokens)
+            _record_usage_attrs(span, input_tokens, output_tokens, total)
     elif isinstance(response, AgentResponse):
         try:
             dumped = response.model_dump(mode="json")
@@ -593,6 +586,31 @@ def record_openresponses_response(
             span.set_attribute("gen_ai.response.id", response.response_id)
         if response.model:
             span.set_attribute("gen_ai.response.model", response.model)
+        agent_usage = response.usage
+        if agent_usage is not None:
+            input_tokens = int(getattr(agent_usage, "prompt_tokens", 0) or 0)
+            output_tokens = int(getattr(agent_usage, "completion_tokens", 0) or 0)
+            total = int(getattr(agent_usage, "total_tokens", 0) or 0) or (input_tokens + output_tokens)
+            _record_usage_attrs(span, input_tokens, output_tokens, total)
+
+
+def _record_usage_attrs(
+    span: Span, input_tokens: int, output_tokens: int, total: int,
+) -> None:
+    """Mirror token usage to both ``gen_ai.usage.*`` and bare keys.
+
+    The bare keys (``input_tokens``, ``output_tokens``, ``total_tokens``)
+    are read by the platform GenericAdapter for span extraction; the
+    ``gen_ai.usage.*`` keys follow OTel GenAI semantic conventions. Setting
+    both keeps OpenResponses spans consistent with the chat-completions
+    spans emitted by :mod:`evaluatorq.redteam.tracing`.
+    """
+    span.set_attribute("gen_ai.usage.input_tokens", input_tokens)
+    span.set_attribute("gen_ai.usage.output_tokens", output_tokens)
+    span.set_attribute("gen_ai.usage.total_tokens", total)
+    span.set_attribute("input_tokens", input_tokens)
+    span.set_attribute("output_tokens", output_tokens)
+    span.set_attribute("total_tokens", total)
 
 
 __all__ = [

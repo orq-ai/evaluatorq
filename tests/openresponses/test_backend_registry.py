@@ -64,11 +64,20 @@ class TestResolveBackendOpenResponses:
         """When no client is passed, the registry calls the factory which builds one
         from env vars. Make sure that path doesn't crash when env is configured."""
         with patch(
-            "evaluatorq.redteam.backends.openresponses._create_openresponses_client",
+            "evaluatorq.redteam.backends.openresponses.create_openresponses_client",
             return_value=MagicMock(),
         ):
             bundle = resolve_backend("openresponses")
             assert bundle.name == "openresponses"
+
+    def test_private_alias_still_works_for_backwards_compatibility(self):
+        """The pre-public name was ``_create_openresponses_client``; keep the alias
+        for any in-flight callers that already imported it."""
+        from evaluatorq.redteam.backends.openresponses import (
+            _create_openresponses_client,
+            create_openresponses_client,
+        )
+        assert _create_openresponses_client is create_openresponses_client
 
 
 class TestErrorMapper:

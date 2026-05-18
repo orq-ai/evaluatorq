@@ -128,3 +128,41 @@ class TestRecordOpenResponsesResponse:
             }],
         })
         assert "gen_ai.usage.input_tokens" not in span.attrs
+
+    def test_dict_response_falls_back_to_sum_when_total_missing(self):
+        span = StubSpan()
+        record_openresponses_response(span, {
+            "output": [],
+            "usage": {"input_tokens": 7, "output_tokens": 3},
+        })
+        assert span.attrs["gen_ai.usage.total_tokens"] == 10
+        assert span.attrs["total_tokens"] == 10
+
+    def test_agent_response_records_token_attrs(self):
+        from evaluatorq.redteam.contracts import TokenUsage
+        agent_response = AgentResponse(
+            output=[TextOutputItem(text="ok", annotations=[])],
+            usage=TokenUsage(prompt_tokens=11, completion_tokens=4, total_tokens=15),
+            model="agent-id",
+            response_id="resp_x",
+        )
+        span = StubSpan()
+        record_openresponses_response(span, agent_response)
+        # Both OTel-canonical and bare keys are written, matching the
+        # chat-completions span convention used elsewhere in redteam/tracing.
+        assert span.attrs["gen_ai.usage.input_tokens"] == 11
+        assert span.attrs["gen_ai.usage.output_tokens"] == 4
+        assert span.attrs["gen_ai.usage.total_tokens"] == 15
+        assert span.attrs["input_tokens"] == 11
+        assert span.attrs["output_tokens"] == 4
+        assert span.attrs["total_tokens"] == 15
+
+    def test_agent_response_falls_back_to_sum_when_total_zero(self):
+        from evaluatorq.redteam.contracts import TokenUsage
+        agent_response = AgentResponse(
+            output=[TextOutputItem(text="ok", annotations=[])],
+            usage=TokenUsage(prompt_tokens=6, completion_tokens=2, total_tokens=0),
+        )
+        span = StubSpan()
+        record_openresponses_response(span, agent_response)
+        assert span.attrs["gen_ai.usage.total_tokens"] == 8

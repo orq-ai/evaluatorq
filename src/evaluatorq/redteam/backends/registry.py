@@ -156,11 +156,11 @@ def _create_openresponses_backend(
         OpenResponsesContextProvider,
         OpenResponsesErrorMapper,
         OpenResponsesTargetFactory,
-        _create_openresponses_client,
+        create_openresponses_client,
     )
     instructions = target_config.system_prompt if target_config else None
     timeout_ms = pipeline_config.target_agent_timeout_ms if pipeline_config else None
-    client = llm_client or _create_openresponses_client()
+    client = llm_client or create_openresponses_client()
     return BackendBundle(
         name="openresponses",
         target_factory=OpenResponsesTargetFactory(
