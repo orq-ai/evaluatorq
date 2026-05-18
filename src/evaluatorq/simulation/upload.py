@@ -12,8 +12,9 @@ helper covers the standalone entry points (RES-598).
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, Any
+
+from loguru import logger
 
 from evaluatorq.send_results import send_results_to_orq
 from evaluatorq.simulation.convert import to_open_responses
@@ -29,8 +30,6 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from evaluatorq.simulation.types import SimulationResult
-
-logger = logging.getLogger(__name__)
 
 
 JOB_NAME = "simulation"
@@ -65,7 +64,7 @@ def _to_data_point_result(
                 )
             except Exception as e:
                 logger.warning(
-                    "Skipping evaluator score %r (could not coerce value=%r): %s",
+                    "Skipping evaluator score {!r} (could not coerce value={!r}): {}",
                     name,
                     score,
                     e,
@@ -114,14 +113,14 @@ async def upload_simulation_results(
             data_point_results.append(_to_data_point_result(r, model))
         except Exception as e:
             logger.warning(
-                "Skipping simulation result %d during upload conversion: %s",
+                "Skipping simulation result {} during upload conversion: {}",
                 i,
                 e,
             )
 
     if not data_point_results:
         logger.error(
-            "All %d simulation results failed conversion; nothing to upload.",
+            "All {} simulation results failed conversion; nothing to upload.",
             len(results),
         )
         return
@@ -139,7 +138,7 @@ async def upload_simulation_results(
         )
     except Exception as e:
         logger.error(
-            "Failed to upload %d simulation results to Orq platform: %s. "
+            "Failed to upload {} simulation results to Orq platform: {}. "
             "Results have been kept in memory.",
             len(data_point_results),
             e,
