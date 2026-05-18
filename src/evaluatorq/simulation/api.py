@@ -39,7 +39,7 @@ async def simulate(
     parallelism: int = 5,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
-    upload_results: bool = True,
+    upload_results: bool = False,
     evaluation_description: str | None = None,
     path: str | None = None,
 ) -> list[SimulationResult]:
@@ -50,8 +50,8 @@ async def simulate(
     - Generating first messages for each combination
     - Running simulations in parallel
     - Applying evaluators to results
-    - Uploading results to the Orq platform when ``ORQ_API_KEY`` is set
-      (set ``upload_results=False`` to suppress)
+    - Optional upload of results to the Orq platform — pass
+      ``upload_results=True`` and set ``ORQ_API_KEY`` to enable.
 
     Args:
         target_callback: Callable that receives the conversation history and
@@ -66,12 +66,12 @@ async def simulate(
             in the current datapoint's persona and scenario.
         judge: Pre-constructed ``BaseAgent`` used to evaluate each turn.
             When omitted a default ``JudgeAgent`` is built from ``model``.
-        upload_results: When ``True`` (default), results are uploaded to the
-            Orq platform if ``ORQ_API_KEY`` is set in the environment.
-            Upload errors are logged but do not fail the call. Note that
-            ``True`` is the default — callers with ``ORQ_API_KEY`` set will
-            now perform a network upload at the end of every ``simulate()``
-            call. Set to ``False`` to opt out.
+        upload_results: When ``True``, results are uploaded to the Orq
+            platform if ``ORQ_API_KEY`` is set in the environment. Upload
+            errors are logged but do not fail the call. Defaults to
+            ``False`` (opt-in) so simulate() does not perform network
+            uploads silently — callers must opt in explicitly to surface
+            results in the platform.
         evaluation_description: Optional human-readable description attached
             to the experiment uploaded to Orq. Mirrors ``evaluatorq()``.
         path: Optional Orq folder path (e.g. ``"MyProject/MyFolder"``) under
@@ -312,19 +312,20 @@ async def generate_and_simulate(
     model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
     parallelism: int = 5,
-    upload_results: bool = True,
+    upload_results: bool = False,
     evaluation_description: str | None = None,
     path: str | None = None,
 ) -> list[SimulationResult]:
     """Generate personas/scenarios and run simulations.
 
-    Convenience function that combines generation and simulation. Uploads
-    results to the Orq platform when ``ORQ_API_KEY`` is set; pass
-    ``upload_results=False`` to suppress.
+    Convenience function that combines generation and simulation. Pass
+    ``upload_results=True`` to upload results to the Orq platform after
+    the run; defaults to ``False`` so the call performs no network
+    upload unless explicitly requested.
 
     ``ORQ_API_KEY`` is required for this function to work at all (persona
-    and scenario generation calls the Orq router). ``upload_results=False``
-    only skips the final results upload, not the generation calls.
+    and scenario generation calls the Orq router). The ``upload_results``
+    flag only controls the final results upload, not the generation calls.
     """
     from datetime import datetime, timezone
 
