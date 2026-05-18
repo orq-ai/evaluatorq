@@ -245,6 +245,31 @@ class TestMultiTurnThreading:
         assert second_kwargs["input"][-1] == {"role": "user", "content": "follow-up attack"}
 
     @pytest.mark.asyncio
+    async def test_mid_conversation_fallback_preserves_prior_history(self):
+        """If the server returns response_ids for turns 1..N then stops, the
+        client-side fallback must replay the full prior conversation, not just
+        the failing turn. Regression guard for PR #131 review pass 3."""
+        target, create = _make_target(responses=[
+            _fake_response(text="reply 1", response_id="resp_1"),
+            _fake_response(text="reply 2", response_id="resp_2"),
+            _fake_response(text="reply 3", response_id=None),  # server stops returning ids
+            _fake_response(text="reply 4", response_id=None),
+        ])
+        await target.send_prompt("attack 1")
+        await target.send_prompt("attack 2")
+        await target.send_prompt("attack 3")  # falls back
+        await target.send_prompt("attack 4")  # must include attacks 1-3 history
+
+        fourth_call_kwargs = create.call_args_list[3].kwargs
+        # The input array sent on turn 4 must carry the full conversation,
+        # including the turns that originally threaded server-side.
+        contents = [it.get("content") for it in fourth_call_kwargs["input"]]
+        assert "attack 1" in contents
+        assert "attack 2" in contents
+        assert "attack 3" in contents
+        assert contents[-1] == "attack 4"
+
+    @pytest.mark.asyncio
     async def test_new_resets_conversation_state(self):
         target, create = _make_target(responses=[
             _fake_response(response_id="resp_1"),

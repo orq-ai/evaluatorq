@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -106,6 +107,31 @@ class TestAgentResponseToOpenResponses:
         assert back.response_id == "resp_99"
         assert back.model == "agent-id"
 
+    def test_usage_round_trips_symmetrically(self):
+        """Token usage must survive a full to/from round-trip — the wire
+        format uses input_tokens/output_tokens while the internal model uses
+        prompt_tokens/completion_tokens, and the converters do the remapping."""
+        original = AgentResponse(
+            output=[TextOutputItem(text="ok", annotations=[])],
+            usage=TokenUsage(prompt_tokens=11, completion_tokens=4, total_tokens=15),
+        )
+        wire = agent_response_to_openresponses(original)
+        assert wire["usage"] == {"input_tokens": 11, "output_tokens": 4, "total_tokens": 15}
+        back = agent_response_from_openresponses(wire)
+        assert back.usage is not None
+        assert back.usage.prompt_tokens == 11
+        assert back.usage.completion_tokens == 4
+        assert back.usage.total_tokens == 15
+
+    def test_from_converter_falls_back_to_sum_when_total_missing(self):
+        wire = {
+            "output": [],
+            "usage": {"input_tokens": 6, "output_tokens": 2},
+        }
+        back = agent_response_from_openresponses(wire)
+        assert back.usage is not None
+        assert back.usage.total_tokens == 8
+
 
 class TestOrchestratorResultToOpenResponsesInput:
     def test_aliases_turns_to_openresponses_input(self):
@@ -124,7 +150,7 @@ class TestOrchestratorResultToOpenResponsesInput:
 
 class TestLoadOpenResponsesDataset:
     @pytest.fixture
-    def _sample_row(self) -> dict:
+    def _sample_row(self) -> dict[str, Any]:
         return {
             "input": {
                 "id": "s1",
@@ -233,6 +259,22 @@ class TestLoadOpenResponsesDataset:
         path = tmp_path / "bad.json"
         path.write_text(json.dumps([row]))
         with pytest.raises(ValueError, match="missing 'openresponses_input'"):
+            load_openresponses_dataset(path)
+
+    def test_invalid_input_metadata_raises_valueerror_not_validationerror(
+        self, tmp_path: Path
+    ):
+        """RedTeamInput(**meta) raises pydantic.ValidationError when fields are
+        missing/wrong; the loader must wrap into ValueError so callers catching
+        the documented contract don't get a leaked Pydantic exception."""
+        row = {
+            # 'severity' is required by RedTeamInput; omit it to force validation failure.
+            "input": {"id": "bad-1", "source": "test"},
+            "openresponses_input": [{"role": "user", "content": "x"}],
+        }
+        path = tmp_path / "bad-meta.json"
+        path.write_text(json.dumps([row]))
+        with pytest.raises(ValueError, match="failed validation"):
             load_openresponses_dataset(path)
 
     def test_reads_non_ascii_content_as_utf8(self, tmp_path: Path):

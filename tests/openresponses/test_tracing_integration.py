@@ -33,7 +33,7 @@ class StubSpan:
 class TestRecordOpenResponsesRequest:
     def test_sets_gen_ai_input_messages_with_input_array(self):
         payload = build_openresponses_request(model="agent-id", prompt="attack")
-        span = StubSpan()
+        span: Any = StubSpan()
         record_openresponses_request(span, payload)
         assert "gen_ai.input.messages" in span.attrs
         recovered = json.loads(span.attrs["gen_ai.input.messages"])
@@ -41,7 +41,7 @@ class TestRecordOpenResponsesRequest:
 
     def test_stores_full_request_under_orq_namespace(self):
         payload = build_openresponses_request(model="agent-id", prompt="attack")
-        span = StubSpan()
+        span: Any = StubSpan()
         record_openresponses_request(span, payload)
         assert "orq.openresponses.request" in span.attrs
         recovered = json.loads(span.attrs["orq.openresponses.request"])
@@ -50,7 +50,7 @@ class TestRecordOpenResponsesRequest:
 
     def test_sets_request_model_attribute(self):
         payload = build_openresponses_request(model="agent-id", prompt="attack")
-        span = StubSpan()
+        span: Any = StubSpan()
         record_openresponses_request(span, payload)
         assert span.attrs["gen_ai.request.model"] == "agent-id"
 
@@ -75,7 +75,7 @@ class TestRecordOpenResponsesResponse:
                 "total_tokens": 15,
             },
         }
-        span = StubSpan()
+        span: Any = StubSpan()
         record_openresponses_response(span, response)
 
         output_messages = json.loads(span.attrs["gen_ai.output.messages"])
@@ -100,7 +100,7 @@ class TestRecordOpenResponsesResponse:
             model="agent-id",
             response_id="resp_2",
         )
-        span = StubSpan()
+        span: Any = StubSpan()
         record_openresponses_response(span, agent_response)
 
         output_messages = json.loads(span.attrs["gen_ai.output.messages"])
@@ -109,7 +109,7 @@ class TestRecordOpenResponsesResponse:
         assert span.attrs["gen_ai.response.model"] == "agent-id"
 
     def test_handles_empty_response(self):
-        span = StubSpan()
+        span: Any = StubSpan()
         record_openresponses_response(span, {"output": []})
         recovered = json.loads(span.attrs["gen_ai.output.messages"])
         assert recovered == [{"role": "assistant", "content": ""}]
@@ -118,7 +118,7 @@ class TestRecordOpenResponsesResponse:
         record_openresponses_response(None, {"output": []})
 
     def test_missing_usage_does_not_set_token_attrs(self):
-        span = StubSpan()
+        span: Any = StubSpan()
         record_openresponses_response(span, {
             "id": "r",
             "output": [{
@@ -130,7 +130,7 @@ class TestRecordOpenResponsesResponse:
         assert "gen_ai.usage.input_tokens" not in span.attrs
 
     def test_dict_response_falls_back_to_sum_when_total_missing(self):
-        span = StubSpan()
+        span: Any = StubSpan()
         record_openresponses_response(span, {
             "output": [],
             "usage": {"input_tokens": 7, "output_tokens": 3},
@@ -146,7 +146,7 @@ class TestRecordOpenResponsesResponse:
             model="agent-id",
             response_id="resp_x",
         )
-        span = StubSpan()
+        span: Any = StubSpan()
         record_openresponses_response(span, agent_response)
         # Both OTel-canonical and bare keys are written, matching the
         # chat-completions span convention used elsewhere in redteam/tracing.
@@ -163,6 +163,6 @@ class TestRecordOpenResponsesResponse:
             output=[TextOutputItem(text="ok", annotations=[])],
             usage=TokenUsage(prompt_tokens=6, completion_tokens=2, total_tokens=0),
         )
-        span = StubSpan()
+        span: Any = StubSpan()
         record_openresponses_response(span, agent_response)
         assert span.attrs["gen_ai.usage.total_tokens"] == 8

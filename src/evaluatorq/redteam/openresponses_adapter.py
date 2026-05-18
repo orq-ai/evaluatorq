@@ -219,8 +219,14 @@ def agent_response_from_openresponses(response: dict[str, Any]) -> AgentResponse
     are skipped (use :func:`extract_reasoning` if needed).
 
     Reads ``model``, ``id`` (→ ``response_id``), and ``status`` (→
-    ``finish_reason``) from the resource when present.
+    ``finish_reason``) from the resource when present. The ``usage`` block,
+    when shaped like an OpenResponses ``UsageDict`` (``input_tokens`` /
+    ``output_tokens`` / ``total_tokens``), is rehydrated into a
+    :class:`TokenUsage` instance so a round-trip through
+    :func:`agent_response_to_openresponses` preserves token accounting.
     """
+    from evaluatorq.redteam.contracts import TokenUsage
+
     items: list[TextOutputItem | ToolCallOutputItem] = []
     for item in response.get("output") or []:
         if not isinstance(item, dict):
@@ -240,8 +246,28 @@ def agent_response_from_openresponses(response: dict[str, Any]) -> AgentResponse
                 arguments=str(item.get("arguments", "")),
                 call_id=str(item.get("call_id") or item.get("id") or ""),
             ))
+
+    # Rehydrate token usage from the OpenResponses ``UsageDict`` shape
+    # (``input_tokens`` → ``prompt_tokens`` / ``output_tokens`` →
+    # ``completion_tokens``). Falls back to ``prompt + completion`` when the
+    # upstream ``total_tokens`` is absent or zero, matching the convention
+    # used in ``_record_usage_attrs`` and ``_to_redteam_usage``.
+    usage_dict = response.get("usage")
+    rehydrated_usage: TokenUsage | None = None
+    if isinstance(usage_dict, dict):
+        inp = int(usage_dict.get("input_tokens", 0) or 0)
+        out = int(usage_dict.get("output_tokens", 0) or 0)
+        raw_total = int(usage_dict.get("total_tokens", 0) or 0)
+        rehydrated_usage = TokenUsage(
+            prompt_tokens=inp,
+            completion_tokens=out,
+            total_tokens=raw_total or (inp + out),
+            calls=1,
+        )
+
     return AgentResponse(
         output=list(items),
+        usage=rehydrated_usage,
         model=response.get("model"),
         response_id=response.get("id"),
         finish_reason=response.get("status"),
@@ -463,8 +489,17 @@ def load_openresponses_dataset(
                 f"Dataset row {idx} is missing 'openresponses_input' (or legacy "
                 "'input_messages') — expected a list of OpenResponses input items"
             )
+        try:
+            rt_input = RedTeamInput(**meta)
+        except Exception as exc:
+            # Pydantic raises ValidationError here; the rest of this function
+            # raises ValueError for malformed rows. Wrap so callers catching
+            # ValueError | FileNotFoundError see a consistent contract.
+            raise ValueError(
+                f"Dataset row {idx}: 'input' metadata failed validation: {exc}"
+            ) from exc
         samples.append(redteam_sample_from_openresponses(
-            input=RedTeamInput(**meta),
+            input=rt_input,
             openresponses_input=conv,
         ))
     return StaticDataset(samples=samples)

@@ -220,8 +220,18 @@ class OpenResponsesAgentTarget:
             record_openresponses_response(span, agent_response)
 
         # Advance conversation state for the next turn.
+        #
+        # We mirror every successful turn into ``_client_side_input`` even when
+        # server-side threading is active. If the server later stops returning
+        # a response_id mid-conversation, the fallback path then has the full
+        # prior history rather than just the failed turn — a partial history
+        # would silently restart the conversation with degraded context.
+        # Cost: ~2x memory for multi-turn sessions; acceptable given red team
+        # sessions are bounded by max_turns (default 5).
         if self.use_server_threading and isinstance(response_id, str) and response_id:
             self._previous_response_id = response_id
+            append_user_followup(self._client_side_input, prompt)
+            append_assistant_turn(self._client_side_input, agent_response)
         else:
             if self.use_server_threading and not self._threading_disabled:
                 logger.warning(

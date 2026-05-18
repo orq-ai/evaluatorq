@@ -7,6 +7,8 @@ attacks.
 
 from __future__ import annotations
 
+from typing import Any
+
 from evaluatorq.contracts import AgentResponse, TextOutputItem, ToolCallOutputItem
 from evaluatorq.redteam.contracts import AttackerResponse, Turn
 from evaluatorq.redteam.openresponses_adapter import (
@@ -31,7 +33,7 @@ def _turn(attacker_prompt: str, agent_text: str) -> Turn:
 
 class TestAppendAssistantTurn:
     def test_appends_assistant_text_item(self):
-        input_array: list[dict] = [user_input_item("initial attack")]
+        input_array: list[dict[str, Any]] =[user_input_item("initial attack")]
         append_assistant_turn(input_array, _agent_text("agent response"))
         assert input_array == [
             {"role": "user", "content": "initial attack"},
@@ -39,7 +41,7 @@ class TestAppendAssistantTurn:
         ]
 
     def test_appends_nothing_when_response_has_no_text(self):
-        input_array: list[dict] = [user_input_item("x")]
+        input_array: list[dict[str, Any]] =[user_input_item("x")]
         append_assistant_turn(input_array, AgentResponse(output=[]))
         assert input_array == [{"role": "user", "content": "x"}]
 
@@ -48,7 +50,7 @@ class TestAppendAssistantTurn:
             TextOutputItem(text="I'll check that.", annotations=[]),
             ToolCallOutputItem(name="search", call_id="call_1", arguments='{"q": "x"}'),
         ])
-        input_array: list[dict] = []
+        input_array: list[dict[str, Any]] =[]
         append_assistant_turn(input_array, resp)
         assert input_array[0] == {"role": "assistant", "content": "I'll check that."}
         assert input_array[1] == {
@@ -69,14 +71,14 @@ class TestAppendAssistantTurn:
                 "content": [{"type": "output_text", "text": "ok"}],
             }],
         }
-        input_array: list[dict] = []
+        input_array: list[dict[str, Any]] =[]
         append_assistant_turn(input_array, response_resource)
         assert input_array == [{"role": "assistant", "content": "ok"}]
 
 
 class TestAppendUserFollowup:
     def test_appends_user_role_item(self):
-        input_array: list[dict] = [
+        input_array: list[dict[str, Any]] =[
             user_input_item("initial attack"),
             {"role": "assistant", "content": "agent response"},
         ]

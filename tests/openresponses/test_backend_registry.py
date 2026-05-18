@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from evaluatorq.redteam.backends.openresponses import (
+    OpenResponsesAgentTarget,
     OpenResponsesContextProvider,
     OpenResponsesErrorMapper,
     OpenResponsesTargetFactory,
@@ -33,6 +34,7 @@ class TestResolveBackendOpenResponses:
         client = MagicMock()
         bundle = resolve_backend("openresponses", llm_client=client)
         target = bundle.target_factory.create_target("my-agent")
+        assert isinstance(target, OpenResponsesAgentTarget)
         assert target.agent_id == "my-agent"
 
     def test_instructions_are_threaded_from_target_config(self):
@@ -43,6 +45,7 @@ class TestResolveBackendOpenResponses:
             target_config=TargetConfig(system_prompt="be safe"),
         )
         target = bundle.target_factory.create_target("agent-id")
+        assert isinstance(target, OpenResponsesAgentTarget)
         assert target.instructions == "be safe"
 
     def test_context_provider_returns_minimal_agent_context(self):
@@ -83,8 +86,9 @@ class TestResolveBackendOpenResponses:
 class TestErrorMapper:
     def test_maps_http_status_codes(self):
         mapper = OpenResponsesErrorMapper()
-        exc = type("HTTPErr", (Exception,), {})()
-        exc.status_code = 429  # type: ignore[attr-defined]
+        # Build an exception with a status_code attribute at construction time
+        # so the type checker doesn't complain about dynamic attribute assignment.
+        exc = type("HTTPErr", (Exception,), {"status_code": 429})()
         code, _ = mapper.map_error(exc)
         assert code == "openresponses.http.429"
 
