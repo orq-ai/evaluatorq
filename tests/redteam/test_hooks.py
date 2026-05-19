@@ -191,11 +191,11 @@ class TestRichHooks:
         self,
         *,
         target: str = "agent:test",
-        agent_context: dict | None = None,
-        agent_capabilities: dict | None = None,
+        agent_context: dict[str, Any] | None = None,
+        agent_capabilities: dict[str, Any] | None = None,
         classification_error: str | None = None,
         classification_available: bool = True,
-    ) -> dict:
+    ) -> dict[str, Any]:
         ctx = agent_context or {"tools": [], "memory_stores": [], "knowledge_bases": []}
         return {
             "target": target,

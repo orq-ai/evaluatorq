@@ -1251,13 +1251,26 @@ async def _run_dynamic_or_hybrid(
             )
 
         # Step 2: Estimate datapoint counts (cheap registry lookups, no LLM).
+        # Use the first target's classified capabilities (already in
+        # all_agent_caps / at_caps from Step 1b) so the estimator's
+        # capability-gated filter matches what the planner will actually do
+        # at run time. Passing None here would fall back to the
+        # tool-presence heuristic and over-count email/payment-only
+        # strategies on agents that don't have those capabilities,
+        # inflating the datapoint count shown in the confirm prompt.
+        first_caps: AgentCapabilities | None = None
+        if targets:
+            first_caps = all_agent_caps.get(targets[0])
+        elif resolved_agent_targets:
+            first_caps = at_caps.get(id(resolved_agent_targets[0]))
+
         est_dynamic = 0
         strategy_breakdown: dict[str, Any] = {}
         if resolved_vulns is not None:
             for vuln in resolved_vulns:
                 all_strategies = get_strategies_for_vulnerability(vuln)
                 applicable = select_applicable_strategies_for_vulnerability(
-                    vuln, first_agent_context, agent_capabilities=None,
+                    vuln, first_agent_context, agent_capabilities=first_caps,
                 )
                 n_generated = generated_strategy_count if generate_strategies else 0
                 n = len(applicable) + n_generated
@@ -1275,7 +1288,7 @@ async def _run_dynamic_or_hybrid(
             for cat in resolved_categories:
                 all_strategies = get_strategies_for_category(cat)
                 applicable = select_applicable_strategies(
-                    cat, first_agent_context, agent_capabilities=None,
+                    cat, first_agent_context, agent_capabilities=first_caps,
                 )
                 n_generated = generated_strategy_count if generate_strategies else 0
                 n = len(applicable) + n_generated
