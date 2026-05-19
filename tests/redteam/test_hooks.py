@@ -228,8 +228,8 @@ class TestRichHooks:
         assert "user_prefs" in output
         assert "tool" in output
         assert "memory" in output
-        # Title carries the target label so multi-target runs are distinguishable.
-        assert "Detected Capabilities" in output
+        # The target label is printed as a heading above the table so
+        # multi-target runs are distinguishable.
         assert "agent:bot" in output
 
     def test_rich_on_stage_end_renders_classified_caps(self):
@@ -263,7 +263,7 @@ class TestRichHooks:
         # Caption counts distinct high-risk capability kinds, not occurrences.
         # Collapse whitespace because Rich may wrap the caption on narrow consoles.
         collapsed = " ".join(output.split())
-        assert "1 high-risk capability" in collapsed
+        assert "1 high-risk" in collapsed
 
     def test_rich_on_stage_end_multi_target(self):
         """Multi-target runs emit on_stage_end once per target; both tables must render."""
@@ -305,7 +305,7 @@ class TestRichHooks:
             ),
         )
         output = buf.getvalue()
-        assert "Classification incomplete" in output
+        assert "classifier failed" in output.lower()
         # The actual error string is surfaced so the operator can diagnose
         # auth / network / model failures without re-running with debug logs.
         assert "AuthenticationError" in output
@@ -328,7 +328,7 @@ class TestRichHooks:
         )
         output = buf.getvalue()
         assert "tool_x" in output
-        assert "classification disabled" in output.lower()
+        assert "classifier disabled" in output.lower()
 
     def test_rich_on_stage_end_empty_agent_collapsed(self):
         """No tools/memory/KB → single placeholder row, not three empty sections."""
@@ -364,7 +364,7 @@ class TestRichHooks:
         output = buf.getvalue()
         assert "no capability tags detected" in output.lower()
         # Must NOT show the disabled hint, which would be factually wrong here.
-        assert "classification disabled" not in output.lower()
+        assert "classifier disabled" not in output.lower()
 
     def test_rich_on_stage_end_skips_context_summary_when_table_renders(self):
         """When agent_context is present the per-target one-liner is folded
@@ -390,7 +390,7 @@ class TestRichHooks:
         assert "agent:bot: 1 tool" not in collapsed
         # But the breakdown should still appear *somewhere* (in the caption).
         assert "1 tool" in collapsed
-        assert "1 memory store" in collapsed
+        assert "1 memory" in collapsed
 
     def test_rich_on_confirm_renders_filtering_metadata(self):
         """on_confirm should render filtering metadata (strategy counts)."""
