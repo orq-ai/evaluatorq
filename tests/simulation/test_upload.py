@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -251,119 +252,6 @@ def test_to_data_point_result_handles_terminated_by_error():
     assert output["object"] == "response"
 
 
-@pytest.mark.asyncio
-async def test_wrap_simulation_agent_does_not_double_upload(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    """Regression: wrap_simulation_agent's nested simulate() call must NOT
-    auto-upload, otherwise evaluatorq's framework upload + simulate's own
-    upload create two experiments per run."""
-    from unittest.mock import AsyncMock, MagicMock
-
-    monkeypatch.setenv("ORQ_API_KEY", "test-key")
-
-    upload_mock = AsyncMock()
-
-    from evaluatorq.simulation.types import (
-        ChatMessage,
-        CommunicationStyle,
-        Datapoint,
-        Persona,
-        Scenario,
-    )
-    from evaluatorq.simulation.wrap_agent import wrap_simulation_agent
-
-    persona = Persona(
-        name="P",
-        patience=0.5,
-        assertiveness=0.5,
-        politeness=0.5,
-        technical_level=0.5,
-        communication_style=CommunicationStyle.casual,
-        background="bg",
-    )
-    scenario = Scenario(name="S", goal="g")
-    dp = Datapoint(
-        id="dp",
-        persona=persona,
-        scenario=scenario,
-        user_system_prompt="sys",
-        first_message="hi",
-    )
-
-    async def target_cb(messages: list[ChatMessage]) -> str:
-        return "ok"
-
-    user_sim = MagicMock()
-    user_sim.generate_first_message = AsyncMock(return_value="hi")
-    user_sim.respond_async = AsyncMock(return_value="bye")
-    user_sim.get_usage = MagicMock(return_value=TokenUsage())
-
-    judgment = MagicMock()
-    judgment.should_terminate = True
-    judgment.goal_achieved = True
-    judgment.goal_completion_score = 1.0
-    judgment.rules_broken = []
-    judgment.reason = "done"
-    judgment.response_quality = 0.9
-    judgment.hallucination_risk = 0.1
-    judgment.tone_appropriateness = 0.9
-    judgment.factual_accuracy = 0.9
-
-    judge = MagicMock()
-    judge.evaluate = AsyncMock(return_value=judgment)
-    judge.get_usage = MagicMock(return_value=TokenUsage())
-
-    job_fn = wrap_simulation_agent(
-        target_callback=target_cb,
-        max_turns=1,
-    )
-
-    # The wrap_agent path passes inputs as a dict — feed it a single datapoint
-    inputs = {"datapoint": dp.model_dump()}
-
-    from evaluatorq.types import DataPoint
-
-    eval_dp = DataPoint(inputs=inputs)
-
-    with patch(
-        "evaluatorq.simulation.upload.upload_simulation_results", new=upload_mock
-    ):
-        # Patch the user_simulator/judge factories used by simulate() so we
-        # don't hit the network. The cleanest way is to override the
-        # SimulationRunner inputs via simulate()'s injected agents — but
-        # wrap_simulation_agent doesn't expose them. Instead patch the
-        # runner class to return a canned result.
-        from evaluatorq.simulation.types import (
-            Message,
-            SimulationResult,
-            TerminatedBy,
-        )
-
-        canned = SimulationResult(
-            messages=[Message(role="user", content="hi")],
-            terminated_by=TerminatedBy.judge,
-            reason="done",
-            goal_achieved=True,
-            goal_completion_score=1.0,
-            rules_broken=[],
-            turn_count=1,
-            turn_metrics=[],
-            token_usage=TokenUsage(),
-            metadata={"persona": "P", "scenario": "S"},
-        )
-
-        with patch(
-            "evaluatorq.simulation.runner.simulation.SimulationRunner.run_batch",
-            new=AsyncMock(return_value=[canned]),
-        ):
-            result = await job_fn(eval_dp, 0)
-
-    # job_fn produces an output (sanity)
-    assert "output" in result
-    # And critically: the auto-upload did NOT fire from inside simulate()
-    upload_mock.assert_not_called()
-
 
 @pytest.mark.asyncio
 async def test_upload_swallows_send_errors(caplog: pytest.LogCaptureFixture):
@@ -390,411 +278,414 @@ async def test_upload_swallows_send_errors(caplog: pytest.LogCaptureFixture):
     assert any("Failed to upload" in r.message for r in caplog.records)
 
 
+
 # ---------------------------------------------------------------------------
-# simulate() integration: respects upload_results flag and ORQ_API_KEY
+# simulate() now routes through evaluatorq() — RES-594. These tests verify
+# the wiring (upload_results flag, evaluation_name, description, path) at the
+# seam where simulate() calls evaluatorq(), without spinning up the real
+# evaluatorq machinery.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_simulate_calls_upload_when_flag_and_key_set(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    """simulate(upload_results=True) with ORQ_API_KEY set triggers upload."""
-    monkeypatch.setenv("ORQ_API_KEY", "test-key")
-
-    upload_mock = AsyncMock()
-
-    from evaluatorq.simulation import simulate
+def _make_datapoint():
     from evaluatorq.simulation.types import (
-        ChatMessage,
-        CommunicationStyle,
-        Persona,
-        Scenario,
-    )
-
-    async def target_cb(messages: list[ChatMessage]) -> str:
-        return "ok"
-
-    persona = Persona(
-        name="P",
-        patience=0.5,
-        assertiveness=0.5,
-        politeness=0.5,
-        technical_level=0.5,
-        communication_style=CommunicationStyle.casual,
-        background="bg",
-    )
-    scenario = Scenario(name="S", goal="g")
-
-    # Need a datapoint so simulate() doesn't try to call generators
-    from evaluatorq.simulation.types import Datapoint
-
-    dp = Datapoint(
-        id="dp",
-        persona=persona,
-        scenario=scenario,
-        user_system_prompt="sys",
-        first_message="hi",
-    )
-
-    # Mock the user_simulator and judge so we don't hit the network
-    from unittest.mock import MagicMock
-
-    user_sim = MagicMock()
-    user_sim.generate_first_message = AsyncMock(return_value="hi")
-    user_sim.respond_async = AsyncMock(return_value="bye")
-    user_sim.get_usage = MagicMock(return_value=TokenUsage())
-
-    judgment = MagicMock()
-    judgment.should_terminate = True
-    judgment.goal_achieved = True
-    judgment.goal_completion_score = 1.0
-    judgment.rules_broken = []
-    judgment.reason = "done"
-    judgment.response_quality = 0.9
-    judgment.hallucination_risk = 0.1
-    judgment.tone_appropriateness = 0.9
-    judgment.factual_accuracy = 0.9
-
-    judge = MagicMock()
-    judge.evaluate = AsyncMock(return_value=judgment)
-    judge.get_usage = MagicMock(return_value=TokenUsage())
-
-    with patch(
-        "evaluatorq.simulation.upload.upload_simulation_results", new=upload_mock
-    ):
-        await simulate(
-            evaluation_name="t",
-            target_callback=target_cb,
-            datapoints=[dp],
-            max_turns=1,
-            user_simulator=user_sim,
-            judge=judge,
-            upload_results=True,
-        )
-
-    upload_mock.assert_awaited_once()
-    assert upload_mock.await_args is not None
-    kwargs = upload_mock.await_args.kwargs
-    assert kwargs["api_key"] == "test-key"
-    assert kwargs["evaluation_name"] == "t"
-
-
-@pytest.mark.asyncio
-async def test_simulate_skips_upload_when_flag_false(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setenv("ORQ_API_KEY", "test-key")
-
-    upload_mock = AsyncMock()
-
-    from unittest.mock import MagicMock
-
-    from evaluatorq.simulation import simulate
-    from evaluatorq.simulation.types import (
-        ChatMessage,
         CommunicationStyle,
         Datapoint,
         Persona,
         Scenario,
     )
 
-    async def target_cb(messages: list[ChatMessage]) -> str:
-        return "ok"
-
-    persona = Persona(
-        name="P",
-        patience=0.5,
-        assertiveness=0.5,
-        politeness=0.5,
-        technical_level=0.5,
-        communication_style=CommunicationStyle.casual,
-        background="bg",
-    )
-    scenario = Scenario(name="S", goal="g")
-    dp = Datapoint(
+    return Datapoint(
         id="dp",
-        persona=persona,
-        scenario=scenario,
+        persona=Persona(
+            name="P",
+            patience=0.5,
+            assertiveness=0.5,
+            politeness=0.5,
+            technical_level=0.5,
+            communication_style=CommunicationStyle.casual,
+            background="bg",
+        ),
+        scenario=Scenario(name="S", goal="g"),
         user_system_prompt="sys",
         first_message="hi",
     )
 
-    user_sim = MagicMock()
-    user_sim.generate_first_message = AsyncMock(return_value="hi")
-    user_sim.respond_async = AsyncMock(return_value="bye")
-    user_sim.get_usage = MagicMock(return_value=TokenUsage())
 
-    judgment = MagicMock()
-    judgment.should_terminate = True
-    judgment.goal_achieved = True
-    judgment.goal_completion_score = 1.0
-    judgment.rules_broken = []
-    judgment.reason = "done"
-    judgment.response_quality = 0.9
-    judgment.hallucination_risk = 0.1
-    judgment.tone_appropriateness = 0.9
-    judgment.factual_accuracy = 0.9
-
-    judge = MagicMock()
-    judge.evaluate = AsyncMock(return_value=judgment)
-    judge.get_usage = MagicMock(return_value=TokenUsage())
-
-    with patch(
-        "evaluatorq.simulation.upload.upload_simulation_results", new=upload_mock
-    ):
-        await simulate(
-            evaluation_name="t",
-            target_callback=target_cb,
-            datapoints=[dp],
-            max_turns=1,
-            user_simulator=user_sim,
-            judge=judge,
-            upload_results=False,
-        )
-
-    upload_mock.assert_not_called()
+import sys
+import evaluatorq.evaluatorq  # noqa: F401  # ensure submodule registered in sys.modules
+_evq_module = sys.modules["evaluatorq.evaluatorq"]
 
 
 @pytest.mark.asyncio
-async def test_generate_and_simulate_calls_upload(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    """Mirror of the simulate() upload test, for the generate_and_simulate path."""
-    monkeypatch.setenv("ORQ_API_KEY", "test-key")
-
-    from unittest.mock import MagicMock
-
-    from evaluatorq.simulation import generate_and_simulate
-    from evaluatorq.simulation.types import (
-        ChatMessage,
-        CommunicationStyle,
-        Persona,
-        Scenario,
-    )
-
-    upload_mock = AsyncMock()
-
-    async def target_cb(messages: list[ChatMessage]) -> str:
-        return "ok"
-
-    persona = Persona(
-        name="P",
-        patience=0.5,
-        assertiveness=0.5,
-        politeness=0.5,
-        technical_level=0.5,
-        communication_style=CommunicationStyle.casual,
-        background="bg",
-    )
-    scenario = Scenario(name="S", goal="g")
-
-    # Stub the persona/scenario generators and the runner so we don't touch
-    # the network.
-    fake_persona_gen = MagicMock()
-    fake_persona_gen.generate = AsyncMock(return_value=[persona])
-    fake_scenario_gen = MagicMock()
-    fake_scenario_gen.generate = AsyncMock(return_value=[scenario])
-
-    canned_result = _make_result()
-
-    from evaluatorq.simulation.types import Datapoint as SimDatapoint
-
-    async def fake_gen_dp(_gen: object, p: Persona, s: Scenario) -> SimDatapoint:
-        return SimDatapoint(
-            id="dp",
-            persona=p,
-            scenario=s,
-            user_system_prompt="sys",
-            first_message="hi",
-        )
-
-    with patch(
-        "evaluatorq.simulation.generators.PersonaGenerator",
-        return_value=fake_persona_gen,
-    ), patch(
-        "evaluatorq.simulation.generators.ScenarioGenerator",
-        return_value=fake_scenario_gen,
-    ), patch(
-        "evaluatorq.simulation.api._generate_single_datapoint",
-        new=AsyncMock(side_effect=fake_gen_dp),
-    ), patch(
-        "evaluatorq.simulation.runner.simulation.SimulationRunner.run_batch",
-        new=AsyncMock(return_value=[canned_result]),
-    ), patch(
-        "evaluatorq.simulation.upload.upload_simulation_results", new=upload_mock
-    ):
-        await generate_and_simulate(
-            evaluation_name="gn",
-            agent_description="agent",
-            target_callback=target_cb,
-            num_personas=1,
-            num_scenarios=1,
-            max_turns=1,
-            upload_results=True,
-        )
-
-    upload_mock.assert_awaited_once()
-    assert upload_mock.await_args is not None
-    kwargs = upload_mock.await_args.kwargs
-    assert kwargs["evaluation_name"] == "gn"
-
-
-@pytest.mark.asyncio
-async def test_generate_and_simulate_skips_upload_when_flag_false(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    """generate_and_simulate(upload_results=False) must not call the uploader."""
-    monkeypatch.setenv("ORQ_API_KEY", "test-key")
-
-    from unittest.mock import MagicMock
-
-    from evaluatorq.simulation import generate_and_simulate
-    from evaluatorq.simulation.types import (
-        ChatMessage,
-        CommunicationStyle,
-        Persona,
-        Scenario,
-    )
-
-    upload_mock = AsyncMock()
-
-    async def target_cb(messages: list[ChatMessage]) -> str:
-        return "ok"
-
-    persona = Persona(
-        name="P",
-        patience=0.5,
-        assertiveness=0.5,
-        politeness=0.5,
-        technical_level=0.5,
-        communication_style=CommunicationStyle.casual,
-        background="bg",
-    )
-    scenario = Scenario(name="S", goal="g")
-
-    fake_persona_gen = MagicMock()
-    fake_persona_gen.generate = AsyncMock(return_value=[persona])
-    fake_scenario_gen = MagicMock()
-    fake_scenario_gen.generate = AsyncMock(return_value=[scenario])
-
-    canned_result = _make_result()
-
-    from evaluatorq.simulation.types import Datapoint as SimDatapoint
-
-    async def fake_gen_dp(_gen: object, p: Persona, s: Scenario) -> SimDatapoint:
-        return SimDatapoint(
-            id="dp",
-            persona=p,
-            scenario=s,
-            user_system_prompt="sys",
-            first_message="hi",
-        )
-
-    with patch(
-        "evaluatorq.simulation.generators.PersonaGenerator",
-        return_value=fake_persona_gen,
-    ), patch(
-        "evaluatorq.simulation.generators.ScenarioGenerator",
-        return_value=fake_scenario_gen,
-    ), patch(
-        "evaluatorq.simulation.api._generate_single_datapoint",
-        new=AsyncMock(side_effect=fake_gen_dp),
-    ), patch(
-        "evaluatorq.simulation.runner.simulation.SimulationRunner.run_batch",
-        new=AsyncMock(return_value=[canned_result]),
-    ), patch(
-        "evaluatorq.simulation.upload.upload_simulation_results", new=upload_mock
-    ):
-        await generate_and_simulate(
-            evaluation_name="gn",
-            agent_description="agent",
-            target_callback=target_cb,
-            num_personas=1,
-            num_scenarios=1,
-            max_turns=1,
-            upload_results=False,
-        )
-
-    upload_mock.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_simulate_skips_upload_when_no_api_key(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.delenv("ORQ_API_KEY", raising=False)
-
-    upload_mock = AsyncMock()
-
-    from unittest.mock import MagicMock
-
+async def test_simulate_calls_evaluatorq_with_send_results_true_by_default():
+    """RES-594: native integration means evaluatorq()'s upload is the canonical
+    persistence path, so simulate() defaults to letting it fire."""
     from evaluatorq.simulation import simulate
-    from evaluatorq.simulation.types import (
-        ChatMessage,
-        CommunicationStyle,
-        Datapoint,
-        Persona,
-        Scenario,
-    )
 
-    async def target_cb(messages: list[ChatMessage]) -> str:
+    async def target_cb(_msgs):
         return "ok"
 
-    persona = Persona(
-        name="P",
-        patience=0.5,
-        assertiveness=0.5,
-        politeness=0.5,
-        technical_level=0.5,
-        communication_style=CommunicationStyle.casual,
-        background="bg",
-    )
-    scenario = Scenario(name="S", goal="g")
-    dp = Datapoint(
-        id="dp",
-        persona=persona,
-        scenario=scenario,
-        user_system_prompt="sys",
-        first_message="hi",
-    )
-
-    user_sim = MagicMock()
-    user_sim.generate_first_message = AsyncMock(return_value="hi")
-    user_sim.respond_async = AsyncMock(return_value="bye")
-    user_sim.get_usage = MagicMock(return_value=TokenUsage())
-
-    judgment = MagicMock()
-    judgment.should_terminate = True
-    judgment.goal_achieved = True
-    judgment.goal_completion_score = 1.0
-    judgment.rules_broken = []
-    judgment.reason = "done"
-    judgment.response_quality = 0.9
-    judgment.hallucination_risk = 0.1
-    judgment.tone_appropriateness = 0.9
-    judgment.factual_accuracy = 0.9
-
-    judge = MagicMock()
-    judge.evaluate = AsyncMock(return_value=judgment)
-    judge.get_usage = MagicMock(return_value=TokenUsage())
-
-    # SimulationRunner needs SOME credential to build its shared client;
-    # pass OPENAI_API_KEY instead so the runner is happy but ORQ_API_KEY
-    # is absent (the path we want to test).
-    monkeypatch.setenv("OPENAI_API_KEY", "fake-openai-key")
-
-    with patch(
-        "evaluatorq.simulation.upload.upload_simulation_results", new=upload_mock
-    ):
+    eq_mock = AsyncMock(return_value=[])
+    with patch.object(_evq_module, "evaluatorq", new=eq_mock):
         await simulate(
-            evaluation_name="t",
+            evaluation_name="my-eval",
             target_callback=target_cb,
-            datapoints=[dp],
+            datapoints=[_make_datapoint()],
             max_turns=1,
-            user_simulator=user_sim,
-            judge=judge,
-            upload_results=True,
+            exit_on_failure=False,  # stub evaluatorq doesn't populate result_cache
         )
 
-    upload_mock.assert_not_called()
+    eq_mock.assert_awaited_once()
+    call = eq_mock.await_args
+    assert call is not None
+    assert call.args[0] == "my-eval"  # type: ignore[index]
+    assert call.kwargs["_send_results"] is True
+
+
+@pytest.mark.asyncio
+async def test_simulate_forwards_upload_results_false():
+    from evaluatorq.simulation import simulate
+
+    async def target_cb(_msgs):
+        return "ok"
+
+    eq_mock = AsyncMock(return_value=[])
+    with patch.object(_evq_module, "evaluatorq", new=eq_mock):
+        await simulate(
+            evaluation_name="my-eval",
+            target_callback=target_cb,
+            datapoints=[_make_datapoint()],
+            max_turns=1,
+            upload_results=False,
+            exit_on_failure=False,
+        )
+
+    assert eq_mock.await_args is not None
+    assert eq_mock.await_args.kwargs["_send_results"] is False
+
+
+@pytest.mark.asyncio
+async def test_simulate_synthesises_run_name_when_empty():
+    from evaluatorq.simulation import simulate
+
+    async def target_cb(_msgs):
+        return "ok"
+
+    eq_mock = AsyncMock(return_value=[])
+    with patch.object(_evq_module, "evaluatorq", new=eq_mock):
+        await simulate(
+            evaluation_name="",
+            target_callback=target_cb,
+            datapoints=[_make_datapoint()],
+            max_turns=1,
+            exit_on_failure=False,
+        )
+
+    assert eq_mock.await_args is not None
+    name = eq_mock.await_args.args[0]
+    assert name.startswith("simulation-")
+    # YYYYMMDD-HHMMSS-{8 hex} → 8+1+6+1+8 = 24 chars after the "simulation-" prefix
+    assert len(name) == len("simulation-") + 24
+
+
+@pytest.mark.asyncio
+async def test_simulate_passes_description_and_path():
+    from evaluatorq.simulation import simulate
+
+    async def target_cb(_msgs):
+        return "ok"
+
+    eq_mock = AsyncMock(return_value=[])
+    with patch.object(_evq_module, "evaluatorq", new=eq_mock):
+        await simulate(
+            evaluation_name="e",
+            target_callback=target_cb,
+            datapoints=[_make_datapoint()],
+            max_turns=1,
+            evaluation_description="my run",
+            path="Proj/Folder",
+            exit_on_failure=False,
+        )
+
+    assert eq_mock.await_args is not None
+    kwargs = eq_mock.await_args.kwargs
+    assert kwargs["description"] == "my run"
+    assert kwargs["path"] == "Proj/Folder"
+
+
+# ---------------------------------------------------------------------------
+# RES-594: _sim_idx wiring — verifies the stable-key cache path end-to-end
+# by driving a fake evaluatorq that mimics the real "call job, then scorer
+# with the same DataPoint" contract.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_simulate_sim_idx_roundtrip_through_evaluatorq(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """simulate() seeds each DataPoint.inputs with _sim_idx; the job stashes
+    SimulationResults under that idx; the scorer adapter and the final
+    result list both recover by idx. Verifies the contract holds across the
+    full lifecycle, not just the call to evaluatorq()."""
+    from evaluatorq.simulation import simulate
+    from evaluatorq.simulation.runner.simulation import SimulationRunner
+
+    canned = [
+        _make_result(persona=f"P{i}", scenario=f"S{i}") for i in range(3)
+    ]
+    dps = [_make_datapoint() for _ in range(3)]
+
+    # Drive simulate()'s real wiring with a stub evaluatorq that calls the
+    # job for each datapoint then the scorer, mirroring processings.py.
+    async def fake_evaluatorq(name, *, data, jobs, evaluators, **_kwargs):
+        for dp in data:
+            await jobs[0](dp, 0)
+            for ev in evaluators:
+                await ev["scorer"]({"data": dp, "output": {}})
+
+    runner_run = AsyncMock(side_effect=canned)
+    monkeypatch.setattr(SimulationRunner, "run", runner_run)
+    monkeypatch.setattr(SimulationRunner, "close", AsyncMock())
+
+    with patch.object(_evq_module, "evaluatorq", new=fake_evaluatorq):
+        results = await simulate(
+            evaluation_name="t",
+            target_callback=lambda _msgs: "ok",
+            datapoints=dps,
+            max_turns=1,
+            evaluator_names=["goal_achieved"],
+            upload_results=False,
+        )
+
+    # Returned in input order via _sim_idx lookup
+    assert len(results) == 3
+    assert [r.metadata["persona"] for r in results] == ["P0", "P1", "P2"]
+    # Scorer adapter mirrored the score into each result's metadata
+    for r in results:
+        assert "evaluator_scores" in r.metadata
+        assert "goal_achieved" in r.metadata["evaluator_scores"]
+
+
+@pytest.mark.asyncio
+async def test_simulate_warns_when_jobs_drop_results(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    """If a job throws, evaluatorq swallows it and result_cache stays short.
+    simulate() must log a warning naming the caller so the missing rows are
+    not silently dropped from the returned list."""
+    from evaluatorq.simulation import simulate
+    from evaluatorq.simulation.runner.simulation import SimulationRunner
+
+    # Two datapoints; only the first job succeeds.
+    dps = [_make_datapoint(), _make_datapoint()]
+    runner_run = AsyncMock(
+        side_effect=[_make_result(), RuntimeError("agent blew up")]
+    )
+    monkeypatch.setattr(SimulationRunner, "run", runner_run)
+    monkeypatch.setattr(SimulationRunner, "close", AsyncMock())
+
+    async def fake_evaluatorq(name, *, data, jobs, evaluators, **_kwargs):
+        for dp in data:
+            try:
+                await jobs[0](dp, 0)
+            except Exception:  # noqa: BLE001 — mimic evaluatorq swallowing job errors
+                pass
+
+    with patch.object(_evq_module, "evaluatorq", new=fake_evaluatorq):
+        with caplog.at_level("WARNING", logger="evaluatorq.simulation.api"):
+            results = await simulate(
+                target_callback=lambda _msgs: "ok",
+                datapoints=dps,
+                max_turns=1,
+                upload_results=False,
+                exit_on_failure=False,
+            )
+
+    assert len(results) == 1
+    assert any(
+        "simulate(): 1 of 2 simulation job" in rec.message
+        for rec in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_simulate_raises_on_dropped_results_when_exit_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """With exit_on_failure=True, simulate() must hard-raise when jobs
+    failed and reduced the result count — otherwise CI silently looks
+    green on broken runs."""
+    from evaluatorq.simulation import simulate
+    from evaluatorq.simulation.runner.simulation import SimulationRunner
+
+    dps = [_make_datapoint(), _make_datapoint()]
+    monkeypatch.setattr(
+        SimulationRunner,
+        "run",
+        AsyncMock(side_effect=[_make_result(), RuntimeError("blew up")]),
+    )
+    monkeypatch.setattr(SimulationRunner, "close", AsyncMock())
+
+    async def fake_evaluatorq(name, *, data, jobs, evaluators, **_kwargs):
+        for dp in data:
+            try:
+                await jobs[0](dp, 0)
+            except Exception:  # noqa: BLE001
+                pass
+
+    with patch.object(_evq_module, "evaluatorq", new=fake_evaluatorq):
+        with pytest.raises(RuntimeError, match="1 of 2 simulation job"):
+            await simulate(
+                target_callback=lambda _msgs: "ok",
+                datapoints=dps,
+                max_turns=1,
+                upload_results=False,
+                exit_on_failure=True,
+            )
+
+
+@pytest.mark.asyncio
+async def test_simulate_forwards_exit_on_failure(monkeypatch: pytest.MonkeyPatch):
+    """exit_on_failure=True propagates to evaluatorq's _exit_on_failure so
+    callers wiring simulate() into CI can opt into hard-failing on errors."""
+    from evaluatorq.simulation import simulate
+    from evaluatorq.simulation.runner.simulation import SimulationRunner
+
+    monkeypatch.setattr(
+        SimulationRunner, "run", AsyncMock(return_value=_make_result())
+    )
+    monkeypatch.setattr(SimulationRunner, "close", AsyncMock())
+
+    captured: dict[str, Any] = {}
+
+    async def fake_evaluatorq(name, *, data, jobs, evaluators, **kwargs):
+        captured.update(kwargs)
+        for dp in data:
+            await jobs[0](dp, 0)
+
+    with patch.object(_evq_module, "evaluatorq", new=fake_evaluatorq):
+        await simulate(
+            target_callback=lambda _msgs: "ok",
+            datapoints=[_make_datapoint()],
+            max_turns=1,
+            upload_results=False,
+            exit_on_failure=True,
+        )
+    assert captured["_exit_on_failure"] is True
+
+
+@pytest.mark.asyncio
+async def test_simulate_dataset_id_fetches_and_runs(monkeypatch: pytest.MonkeyPatch):
+    """When given dataset_id, simulate() must fetch the dataset via the Orq
+    client, parse each row through the same shape-tolerant extractor used
+    inline, and run the standard pipeline. No inline datapoints supplied."""
+    from evaluatorq.simulation import simulate
+    from evaluatorq.simulation.runner.simulation import SimulationRunner
+    from evaluatorq.types import DataPoint
+
+    monkeypatch.setenv("ORQ_API_KEY", "test-key")
+
+    sim_dp = _make_datapoint()
+    eq_rows = [DataPoint(inputs={"datapoint": sim_dp.model_dump(mode="json")})]
+
+    class _FakeBatch:
+        def __init__(self, dps):
+            self.datapoints = dps
+
+    async def fake_fetch(_client, _dataset_id, **_kwargs):
+        yield _FakeBatch(eq_rows)
+        return
+
+    monkeypatch.setattr(
+        "evaluatorq.fetch_data.fetch_dataset_batches", fake_fetch
+    )
+    monkeypatch.setattr(
+        "evaluatorq.fetch_data.setup_orq_client", lambda _k: object()
+    )
+
+    runner_run = AsyncMock(return_value=_make_result())
+    monkeypatch.setattr(SimulationRunner, "run", runner_run)
+    monkeypatch.setattr(SimulationRunner, "close", AsyncMock())
+
+    async def fake_evaluatorq(name, *, data, jobs, evaluators, **_kwargs):
+        for dp in data:
+            await jobs[0](dp, 0)
+
+    with patch.object(_evq_module, "evaluatorq", new=fake_evaluatorq):
+        results = await simulate(
+            target_callback=lambda _msgs: "ok",
+            dataset_id="ds-123",
+            max_turns=1,
+            upload_results=False,
+        )
+
+    assert len(results) == 1
+    runner_run.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_simulate_rejects_dataset_id_with_inline_datapoints():
+    """dataset_id, datapoints, and personas/scenarios are mutually exclusive
+    sources — passing two raises before any work starts."""
+    from evaluatorq.simulation import simulate
+
+    with pytest.raises(ValueError, match="exactly one of"):
+        await simulate(
+            target_callback=lambda _msgs: "ok",
+            dataset_id="ds-123",
+            datapoints=[_make_datapoint()],
+            max_turns=1,
+            upload_results=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_simulate_scorer_error_raises_so_evaluatorq_records_it(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A failing scorer must raise so evaluatorq's process_evaluator catches
+    the exception and records a structured error on EvaluatorScore. Silently
+    returning value=0.0 looked like a legitimate low score and defeated
+    exit_on_failure."""
+    from evaluatorq.simulation import simulate
+    from evaluatorq.simulation.runner.simulation import SimulationRunner
+
+    dps = [_make_datapoint()]
+    monkeypatch.setattr(
+        SimulationRunner, "run", AsyncMock(return_value=_make_result())
+    )
+    monkeypatch.setattr(SimulationRunner, "close", AsyncMock())
+
+    raised: list[BaseException] = []
+
+    async def fake_evaluatorq(name, *, data, jobs, evaluators, **_kwargs):
+        for dp in data:
+            await jobs[0](dp, 0)
+            for ev in evaluators:
+                try:
+                    await ev["scorer"]({"data": dp, "output": {}})
+                except Exception as e:  # noqa: BLE001
+                    raised.append(e)
+
+    def boom(_result):
+        raise ValueError("scorer broke")
+
+    from evaluatorq.simulation.evaluators.scorers import SIMULATION_EVALUATORS
+
+    monkeypatch.setitem(SIMULATION_EVALUATORS, "broken_scorer", boom)
+
+    with patch.object(_evq_module, "evaluatorq", new=fake_evaluatorq):
+        await simulate(
+            target_callback=lambda _msgs: "ok",
+            datapoints=dps,
+            max_turns=1,
+            evaluator_names=["broken_scorer"],
+            upload_results=False,
+        )
+
+    assert len(raised) == 1
+    assert isinstance(raised[0], ValueError)
+    assert "scorer broke" in str(raised[0])
