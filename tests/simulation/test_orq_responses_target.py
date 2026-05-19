@@ -18,7 +18,7 @@ import pytest
 
 from evaluatorq.contracts import AgentResponse, LLMCallConfig
 from evaluatorq.simulation.target import OrqResponsesTarget
-from evaluatorq.simulation.types import ChatMessage, TokenUsage
+from evaluatorq.simulation.types import ChatMessage
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +61,26 @@ def _make_response(
     response.usage = usage
     response.output = [msg_item]
     return response
+
+
+def _make_dict_response(
+    text: str = "hello",
+    response_id: str = "resp-dict",
+    input_tokens: int = 10,
+    output_tokens: int = 5,
+) -> dict[str, Any]:
+    return {
+        "id": response_id,
+        "model": "gpt-4o",
+        "status": "completed",
+        "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+        "output": [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": text}],
+            }
+        ],
+    }
 
 
 def _make_target(
@@ -193,6 +213,9 @@ class TestOrqResponsesTargetSendPrompt:
 
         assert isinstance(result, AgentResponse)
         assert result.text == "I'm fine"
+        assert result.usage is not None
+        assert result.response_id == "resp-123"
+        assert result.model == "gpt-4o"
 
     @pytest.mark.asyncio
     async def test_send_prompt_passes_string_as_input(self):
@@ -254,6 +277,28 @@ class TestOrqResponsesTargetPreviousResponseId:
 
         first_call_kwargs = client.responses.create.call_args.kwargs
         assert "previous_response_id" not in first_call_kwargs
+
+    @pytest.mark.asyncio
+    async def test_dict_response_id_threads_and_usage_is_returned(self):
+        client = _make_client()
+        client.responses.create = AsyncMock(
+            side_effect=[
+                _make_dict_response(text="one", response_id="resp-dict-1"),
+                _make_dict_response(text="two", response_id="resp-dict-2"),
+            ]
+        )
+        target = _make_target(client=client)
+
+        result = await target.send_prompt("turn 1")
+        await target.send_prompt("turn 2")
+
+        second_call_kwargs = client.responses.create.call_args_list[1].kwargs
+        assert second_call_kwargs.get("previous_response_id") == "resp-dict-1"
+        assert target._previous_response_id == "resp-dict-2"
+        assert result.text == "one"
+        assert result.response_id == "resp-dict-1"
+        assert result.usage.prompt_tokens == 10
+        assert result.usage.completion_tokens == 5
 
 
 class TestOrqResponsesTargetNew:

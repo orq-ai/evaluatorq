@@ -14,6 +14,12 @@ if TYPE_CHECKING:
     from evaluatorq.simulation.types import TokenUsage
 
 
+def _get_field(obj: Any, name: str, default: Any = None) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
+
+
 def build_simulation_client(
     config_client: AsyncOpenAI | None = None,
     *,
@@ -69,13 +75,13 @@ def extract_responses_output(response: object) -> tuple[list[Any], TokenUsage | 
     from evaluatorq.simulation.types import TokenUsage
 
     items: list[Any] = []
-    for item in getattr(response, "output", None) or []:
-        item_type = getattr(item, "type", None)
+    for item in _get_field(response, "output") or []:
+        item_type = _get_field(item, "type")
 
         if item_type == "message":
-            for part in getattr(item, "content", None) or []:
-                part_type = getattr(part, "type", None)
-                text = getattr(part, "text", None)
+            for part in _get_field(item, "content") or []:
+                part_type = _get_field(part, "type")
+                text = _get_field(part, "text")
                 if part_type == "output_text" and text:
                     items.append(
                         TextOutputItem(
@@ -87,14 +93,14 @@ def extract_responses_output(response: object) -> tuple[list[Any], TokenUsage | 
                     )
 
         elif item_type == "function_call":
-            name = getattr(item, "name", None) or ""
-            raw_args = getattr(item, "arguments", None) or "{}"
+            name = _get_field(item, "name") or ""
+            raw_args = _get_field(item, "arguments") or "{}"
             call_id = (
-                getattr(item, "call_id", None)
-                or getattr(item, "id", None)
+                _get_field(item, "call_id")
+                or _get_field(item, "id")
                 or ""
             )
-            result = getattr(item, "result", None)
+            result = _get_field(item, "result")
             items.append(
                 ToolCallOutputItem(
                     type="function_call",
@@ -111,15 +117,15 @@ def extract_responses_output(response: object) -> tuple[list[Any], TokenUsage | 
         else:
             logger.warning("extract_responses_output: skipping unknown item type={!r}", item_type)
 
-    usage_obj = getattr(response, "usage", None)
+    usage_obj = _get_field(response, "usage")
     if usage_obj is None:
         logger.warning(
             "extract_responses_output: response.usage is None; returning None "
             "so cost reports do not record fake-zero usage for billed calls"
         )
         return items, None
-    input_toks = int(getattr(usage_obj, "input_tokens", 0) or 0)
-    output_toks = int(getattr(usage_obj, "output_tokens", 0) or 0)
+    input_toks = int(_get_field(usage_obj, "input_tokens", 0) or 0)
+    output_toks = int(_get_field(usage_obj, "output_tokens", 0) or 0)
     usage = TokenUsage(
         prompt_tokens=input_toks,
         completion_tokens=output_toks,

@@ -7,12 +7,13 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from evaluatorq.redteam.backends.base import BackendBundle, NoopMemoryCleanup
+from evaluatorq.redteam.backends.base import BackendBundle, DefaultErrorMapper, NoopMemoryCleanup
 from evaluatorq.redteam.backends.openai import (
     OpenAIContextProvider,
     OpenAIErrorMapper,
     OpenAITargetFactory,
 )
+from evaluatorq.redteam.contracts import AgentContext
 from evaluatorq.redteam.exceptions import BackendError, CredentialError
 
 if TYPE_CHECKING:
@@ -152,26 +153,94 @@ def _create_openresponses_backend(
     pipeline_config: LLMConfig | None = None,
     **kwargs: object,
 ) -> BackendBundle:
-    from evaluatorq.redteam.backends.openresponses import (
-        OpenResponsesContextProvider,
-        OpenResponsesErrorMapper,
-        OpenResponsesTargetFactory,
-        create_openresponses_client,
-    )
     instructions = target_config.system_prompt if target_config else None
     timeout_ms = pipeline_config.target_agent_timeout_ms if pipeline_config else None
-    client = llm_client or create_openresponses_client()
+    retry_attempts = pipeline_config.retry_count + 1 if pipeline_config else None
+    retry_statuses = pipeline_config.retry_on_codes if pipeline_config else None
     return BackendBundle(
         name="openresponses",
-        target_factory=OpenResponsesTargetFactory(
-            client,
+        target_factory=_OrqResponsesTargetFactory(
+            client=llm_client,
             instructions=instructions,
             timeout_ms=timeout_ms,
+            retry_attempts=retry_attempts,
+            retry_statuses=retry_statuses,
         ),
-        context_provider=OpenResponsesContextProvider(instructions=instructions),
+        context_provider=_OpenResponsesContextProvider(instructions=instructions),
         memory_cleanup=NoopMemoryCleanup(),
-        error_mapper=OpenResponsesErrorMapper(),
+        error_mapper=_OpenResponsesErrorMapper(),
     )
+
+
+class _OrqResponsesTargetFactory:
+    """Redteam backend factory backed by the shared simulation Responses target."""
+
+    def __init__(
+        self,
+        *,
+        client: AsyncOpenAI | None = None,
+        instructions: str | None = None,
+        timeout_ms: int | None = None,
+        retry_attempts: int | None = None,
+        retry_statuses: list[int] | None = None,
+    ) -> None:
+        self._client = client
+        self._instructions = instructions
+        self._timeout_ms = timeout_ms
+        self._retry_attempts = retry_attempts
+        self._retry_statuses = retry_statuses
+
+    def create_target(self, agent_key: str) -> object:
+        from evaluatorq.contracts import LLMCallConfig
+        from evaluatorq.simulation.target import OrqResponsesTarget
+
+        config = LLMCallConfig(
+            model=agent_key,
+            api="responses",
+            timeout_ms=self._timeout_ms or 240_000,
+            client=self._client,
+        )
+        return OrqResponsesTarget(
+            config,
+            instructions=self._instructions,
+            client=self._client,
+            retry_attempts=self._retry_attempts,
+            retry_statuses=self._retry_statuses,
+        )
+
+
+class _OpenResponsesContextProvider:
+    def __init__(self, instructions: str | None = None) -> None:
+        self._instructions = instructions
+
+    async def get_agent_context(self, agent_key: str) -> AgentContext:
+        return AgentContext(
+            key=agent_key,
+            display_name=agent_key,
+            description="OpenResponses agent target",
+            system_prompt=self._instructions,
+            model=agent_key,
+        )
+
+
+class _OpenResponsesErrorMapper(DefaultErrorMapper):
+    def map_error(self, exc: Exception) -> tuple[str, str]:
+        from evaluatorq.redteam.backends.base import extract_provider_error_code, extract_status_code
+
+        status_code = extract_status_code(exc)
+        if status_code is not None:
+            return f"openresponses.http.{status_code}", f"{type(exc).__name__}: {exc}"
+        provider_code = extract_provider_error_code(exc)
+        if provider_code:
+            return f"openresponses.code.{provider_code}", f"{type(exc).__name__}: {exc}"
+        name = type(exc).__name__.lower()
+        if "ratelimit" in name:
+            return "openresponses.rate_limit", f"{type(exc).__name__}: {exc}"
+        if "timeout" in name:
+            return "openresponses.timeout", f"{type(exc).__name__}: {exc}"
+        if "authentication" in name:
+            return "openresponses.auth", f"{type(exc).__name__}: {exc}"
+        return "openresponses.unknown", f"{type(exc).__name__}: {exc}"
 
 
 register_backend("openai", _create_openai_backend)

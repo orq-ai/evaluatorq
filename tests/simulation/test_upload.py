@@ -171,23 +171,14 @@ async def test_upload_skips_empty_results():
 
 
 @pytest.mark.asyncio
-async def test_upload_skips_per_result_conversion_failures(
-    caplog: pytest.LogCaptureFixture,
-):
-    """One malformed SimulationResult must not drop the whole batch."""
-    import logging
-
+async def test_upload_raises_per_result_conversion_failures():
+    """A malformed SimulationResult fails the requested upload."""
     from evaluatorq.simulation.types import (
         Message,
         SimulationResult,
         TerminatedBy,
         TokenUsage,
     )
-
-    sent: dict[str, object] = {}
-
-    async def fake_send(**kwargs: object) -> None:
-        sent.update(kwargs)
 
     good = _make_result(persona="good")
     # ``to_open_responses`` reads attributes off the result; corrupt one of
@@ -206,26 +197,37 @@ async def test_upload_skips_per_result_conversion_failures(
     )
     object.__setattr__(bad, "messages", "not a list")  # break it post-validation
 
-    with caplog.at_level(logging.WARNING, logger="evaluatorq.simulation.upload"), patch(
-        "evaluatorq.simulation.upload.send_results_to_orq", side_effect=fake_send
-    ):
-        await upload_simulation_results(
-            api_key="k",
-            evaluation_name="e",
-            evaluation_description=None,
-            results=[good, bad],
-            start_time=datetime.now(tz=timezone.utc),
-            end_time=datetime.now(tz=timezone.utc),
-            model="m",
-        )
+    with patch("evaluatorq.simulation.upload.send_results_to_orq", new=AsyncMock()):
+        with pytest.raises(Exception):
+            await upload_simulation_results(
+                api_key="k",
+                evaluation_name="e",
+                evaluation_description=None,
+                results=[good, bad],
+                start_time=datetime.now(tz=timezone.utc),
+                end_time=datetime.now(tz=timezone.utc),
+                model="m",
+            )
 
-    sent_results = sent["results"]
-    assert isinstance(sent_results, list)
-    assert len(sent_results) == 1, "good result should still be uploaded"
-    assert sent_results[0].data_point.inputs["persona"] == "good"
-    assert any(
-        "Skipping simulation result" in r.message for r in caplog.records
-    )
+
+@pytest.mark.asyncio
+async def test_upload_raises_send_errors():
+    """Network failures propagate so callers can detect failed uploads."""
+
+    async def fake_send(**_: object) -> None:
+        raise RuntimeError("network down")
+
+    with patch("evaluatorq.simulation.upload.send_results_to_orq", side_effect=fake_send):
+        with pytest.raises(RuntimeError, match="network down"):
+            await upload_simulation_results(
+                api_key="k",
+                evaluation_name="x",
+                evaluation_description=None,
+                results=[_make_result()],
+                start_time=datetime.now(tz=timezone.utc),
+                end_time=datetime.now(tz=timezone.utc),
+                model="m",
+            )
 
 
 def test_to_data_point_result_handles_terminated_by_error():
@@ -375,31 +377,6 @@ async def test_wrap_simulation_agent_does_not_double_upload(
     assert "output" in result
     # And critically: the auto-upload did NOT fire from inside simulate()
     upload_mock.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_upload_swallows_send_errors(caplog: pytest.LogCaptureFixture):
-    """Network failures must NOT propagate — simulation must succeed even
-    when Orq upload fails (matches evaluatorq core's contract)."""
-    import logging
-
-    async def fake_send(**_: object) -> None:
-        raise RuntimeError("network down")
-
-    with caplog.at_level(logging.ERROR, logger="evaluatorq.simulation.upload"), patch(
-        "evaluatorq.simulation.upload.send_results_to_orq", side_effect=fake_send
-    ):
-        await upload_simulation_results(
-            api_key="k",
-            evaluation_name="x",
-            evaluation_description=None,
-            results=[_make_result()],
-            start_time=datetime.now(tz=timezone.utc),
-            end_time=datetime.now(tz=timezone.utc),
-            model="m",
-        )
-
-    assert any("Failed to upload" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -653,12 +630,10 @@ async def test_generate_and_simulate_calls_upload(
 
 
 @pytest.mark.asyncio
-async def test_simulate_skips_upload_when_no_api_key(
+async def test_simulate_raises_upload_when_no_api_key(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.delenv("ORQ_API_KEY", raising=False)
-
-    upload_mock = AsyncMock()
 
     from unittest.mock import MagicMock
 
@@ -717,9 +692,7 @@ async def test_simulate_skips_upload_when_no_api_key(
     # is absent (the path we want to test).
     monkeypatch.setenv("OPENAI_API_KEY", "fake-openai-key")
 
-    with patch(
-        "evaluatorq.simulation.upload.upload_simulation_results", new=upload_mock
-    ):
+    with pytest.raises(ValueError, match="ORQ_API_KEY"):
         await simulate(
             evaluation_name="t",
             target_callback=target_cb,
@@ -729,5 +702,3 @@ async def test_simulate_skips_upload_when_no_api_key(
             judge=judge,
             upload_results=True,
         )
-
-    upload_mock.assert_not_called()

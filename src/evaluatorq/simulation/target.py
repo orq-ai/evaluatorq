@@ -10,11 +10,22 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq.contracts import AgentResponse, LLMCallConfig
-from evaluatorq.simulation._client import build_simulation_client, extract_responses_output
+from evaluatorq.simulation._client import (
+    _get_field,
+    build_simulation_client,
+    extract_responses_output,
+)
+from evaluatorq.simulation.tracing import (
+    record_openresponses_request,
+    record_openresponses_response,
+    with_llm_span,
+)
 from evaluatorq.simulation.types import ChatMessage, TokenUsage
 from evaluatorq.simulation.utils.retry import with_retry
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from openai import AsyncOpenAI
 
 
@@ -62,11 +73,15 @@ class OrqResponsesTarget:
         tools: list[dict[str, Any]] | None = None,
         memory_entity_id: str | None = None,
         client: AsyncOpenAI | None = None,
+        retry_attempts: int | None = None,
+        retry_statuses: Iterable[int] | None = None,
     ) -> None:
         self.config = config
         self.instructions = instructions
         self.tools = tools
         self.memory_entity_id = memory_entity_id
+        self.retry_attempts = retry_attempts
+        self.retry_statuses = set(retry_statuses) if retry_statuses is not None else None
         self.threading_disabled = False
         self._previous_response_id: str | None = None
         self._accumulated_usage = TokenUsage()
@@ -112,6 +127,8 @@ class OrqResponsesTarget:
             tools=self.tools,
             memory_entity_id=fresh_memory_id,
             client=self._client if not self._client_owned else None,
+            retry_attempts=self.retry_attempts,
+            retry_statuses=self.retry_statuses,
         )
 
     def get_usage(self) -> TokenUsage:
@@ -133,7 +150,7 @@ class OrqResponsesTarget:
             await self._client.close()
             self._client_owned = False
 
-    async def __aenter__(self) -> "OrqResponsesTarget":
+    async def __aenter__(self) -> "OrqResponsesTarget":  # noqa: PYI034, UP037
         return self
 
     async def __aexit__(self, *_exc_info: object) -> None:
@@ -209,6 +226,8 @@ class OrqResponsesTarget:
                 "model": self.config.model,
                 "input": responses_input,
             }
+            if self.config.max_tokens:
+                kwargs["max_output_tokens"] = self.config.max_tokens
             if self.tools:
                 kwargs["tools"] = self.tools
             if self.instructions is not None:
@@ -216,10 +235,18 @@ class OrqResponsesTarget:
             if previous_response_id is not None:
                 kwargs["previous_response_id"] = previous_response_id
 
-            coro = self._client.responses.create(**kwargs)
-            response = await (
-                asyncio.wait_for(coro, timeout=timeout_s) if timeout_s else coro
-            )
+            async with with_llm_span(
+                model=self.config.model,
+                operation="responses",
+                purpose="target",
+                max_tokens=self.config.max_tokens,
+            ) as span:
+                record_openresponses_request(span, kwargs)
+                coro = self._client.responses.create(**kwargs)
+                response = await (
+                    asyncio.wait_for(coro, timeout=timeout_s) if timeout_s else coro
+                )
+                record_openresponses_response(span, response)
 
             response_id = _validate_response_id(response, self.config.model)
 
@@ -230,15 +257,32 @@ class OrqResponsesTarget:
                     f"output items (model={self.config.model}). This likely indicates "
                     f"an API error or unexpected response format."
                 )
+            finish_reason = _get_field(response, "status")
+            response_model = _get_field(response, "model")
 
             return _ResponsesCallResult(
-                response=AgentResponse(output=output_items),
+                response=AgentResponse(
+                    output=output_items,
+                    usage=usage,
+                    model=response_model if isinstance(response_model, str) else self.config.model,
+                    response_id=response_id,
+                    finish_reason=finish_reason if isinstance(finish_reason, str) else None,
+                ),
                 response_id=response_id,
                 usage=usage,
             )
 
         try:
-            return await with_retry(_do_call, label="OrqResponsesTarget._call_responses_api")
+            retry_kwargs: dict[str, Any] = {}
+            if self.retry_attempts is not None:
+                retry_kwargs["max_attempts"] = self.retry_attempts
+            if self.retry_statuses is not None:
+                retry_kwargs["retry_statuses"] = self.retry_statuses
+            return await with_retry(
+                _do_call,
+                label="OrqResponsesTarget._call_responses_api",
+                **retry_kwargs,
+            )
         except asyncio.TimeoutError as e:
             raise RuntimeError(
                 f"OrqResponsesTarget timed out after {timeout_s}s "
@@ -252,7 +296,7 @@ class OrqResponsesTarget:
 
 def _validate_response_id(response: Any, model: str) -> str | None:
     """Return the response id if usable for threading, else None + warn."""
-    response_id = getattr(response, "id", None)
+    response_id = _get_field(response, "id")
     if isinstance(response_id, str) and response_id:
         return response_id
     logger.warning(

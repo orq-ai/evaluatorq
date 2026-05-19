@@ -296,6 +296,63 @@ async def test_record_llm_response_responses_api_shape(
 
 
 @pytest.mark.asyncio
+async def test_record_llm_response_dict_responses_api_shape(
+    span_collector: _CollectingExporter,
+):
+    from evaluatorq.simulation.tracing import record_llm_response, with_llm_span
+
+    response = {
+        "id": "resp_dict",
+        "model": "openai/gpt-4o",
+        "status": "completed",
+        "usage": {"input_tokens": 4, "output_tokens": 2, "total_tokens": 6},
+        "output": [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": "hello dict"}],
+            }
+        ],
+    }
+
+    async with with_llm_span(
+        model="openai/gpt-4o", operation="responses"
+    ) as span:
+        record_llm_response(span, response)
+
+    a = _attrs(_find(span_collector, "responses openai/gpt-4o"))
+    assert a["gen_ai.response.id"] == "resp_dict"
+    assert a["gen_ai.response.model"] == "openai/gpt-4o"
+    assert a["gen_ai.usage.input_tokens"] == 4
+    assert a["gen_ai.usage.output_tokens"] == 2
+    assert a["gen_ai.response.finish_reasons"] == ("completed",)
+    parsed = json.loads(a["gen_ai.output.messages"])
+    assert parsed == [{"role": "assistant", "content": "hello dict"}]
+
+
+@pytest.mark.asyncio
+async def test_record_openresponses_request_sets_max_tokens(
+    span_collector: _CollectingExporter,
+):
+    from evaluatorq.simulation.tracing import record_openresponses_request, with_llm_span
+
+    async with with_llm_span(
+        model="openai/gpt-4o", operation="responses"
+    ) as span:
+        record_openresponses_request(
+            span,
+            {
+                "model": "openai/gpt-4o",
+                "input": [{"role": "user", "content": "hi"}],
+                "max_output_tokens": 123,
+            },
+        )
+
+    a = _attrs(_find(span_collector, "responses openai/gpt-4o"))
+    assert a["gen_ai.request.max_tokens"] == 123
+    assert "orq.openresponses.request" in a
+
+
+@pytest.mark.asyncio
 async def test_record_llm_response_tool_call_only_chat_output(
     span_collector: _CollectingExporter,
 ):

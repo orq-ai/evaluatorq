@@ -68,7 +68,7 @@ async def simulate(
             When omitted a default ``JudgeAgent`` is built from ``model``.
         upload_results: When ``True``, results are uploaded to the Orq
             platform if ``ORQ_API_KEY`` is set in the environment. Upload
-            errors are logged but do not fail the call. Defaults to
+            errors are raised so callers can detect failed uploads. Defaults to
             ``False`` (opt-in) so simulate() does not perform network
             uploads silently — callers must opt in explicitly to surface
             results in the platform.
@@ -120,7 +120,11 @@ async def simulate(
         # pattern (evaluatorq.py) where upload happens after the eval span
         # closes. Keeps the trace timing focused on simulation work.
         api_key = os.environ.get("ORQ_API_KEY")
-        if upload_results and api_key:
+        if upload_results and not api_key:
+            raise ValueError(
+                "ORQ_API_KEY environment variable is not set. Set it before calling simulate(upload_results=True)."
+            )
+        if upload_results:
             await upload_simulation_results(
                 api_key=api_key,
                 evaluation_name=evaluation_name or "simulation",

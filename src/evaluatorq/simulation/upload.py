@@ -55,20 +55,12 @@ def _to_data_point_result(
     evaluator_scores: list[EvaluatorScore] = []
     if isinstance(raw_scores, dict):
         for name, score in raw_scores.items():
-            try:
-                evaluator_scores.append(
-                    EvaluatorScore(
-                        evaluator_name=str(name),
-                        score=EvaluationResult(value=score),
-                    )
+            evaluator_scores.append(
+                EvaluatorScore(
+                    evaluator_name=str(name),
+                    score=EvaluationResult(value=score),
                 )
-            except Exception as e:
-                logger.warning(
-                    "Skipping evaluator score {!r} (could not coerce value={!r}): {}",
-                    name,
-                    score,
-                    e,
-                )
+            )
 
     job_result = JobResult(
         job_name=JOB_NAME,
@@ -97,49 +89,23 @@ async def upload_simulation_results(
 ) -> None:
     """Convert simulation results and upload them to the Orq platform.
 
-    Mirrors the contract of evaluatorq's own auto-upload: failures are
-    logged but not raised, so a network glitch never breaks a successful
-    simulation run.
+    Raises conversion or upload errors so ``upload_results=True`` cannot
+    report a successful simulation shape when the requested upload failed.
     """
     if not results:
         logger.debug("upload_simulation_results: no results to send")
         return
 
-    # Convert per-result so one malformed SimulationResult doesn't drop the
-    # whole batch. Skipped results are logged with their index for diagnosis.
-    data_point_results: list[DataPointResult] = []
-    for i, r in enumerate(results):
-        try:
-            data_point_results.append(_to_data_point_result(r, model))
-        except Exception as e:
-            logger.warning(
-                "Skipping simulation result {} during upload conversion: {}",
-                i,
-                e,
-            )
+    data_point_results = [_to_data_point_result(r, model) for r in results]
 
-    if not data_point_results:
-        logger.error(
-            "All {} simulation results failed conversion; nothing to upload.",
-            len(results),
-        )
-        return
-
-    try:
-        await send_results_to_orq(
-            api_key=api_key,
-            evaluation_name=evaluation_name,
-            evaluation_description=evaluation_description,
-            dataset_id=None,
-            results=data_point_results,
-            start_time=start_time,
-            end_time=end_time,
-            path=path,
-        )
-    except Exception as e:
-        logger.error(
-            "Failed to upload {} simulation results to Orq platform: {}. "
-            "Results have been kept in memory.",
-            len(data_point_results),
-            e,
-        )
+    await send_results_to_orq(
+        api_key=api_key,
+        evaluation_name=evaluation_name,
+        evaluation_description=evaluation_description,
+        dataset_id=None,
+        results=data_point_results,
+        start_time=start_time,
+        end_time=end_time,
+        path=path,
+        raise_on_error=True,
+    )
