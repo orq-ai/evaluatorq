@@ -39,6 +39,10 @@ _HIGH_RISK_CAPS: frozenset[AgentCapability] = frozenset({
     AgentCapability.MESSAGING,
 })
 
+# Pre-computed string values for membership checks in the per-tag render
+# loop — avoids rebuilding the set for every tag of every resource.
+_HIGH_RISK_CAP_VALUES: frozenset[str] = frozenset(c.value for c in _HIGH_RISK_CAPS)
+
 # ---------------------------------------------------------------------------
 # Stage label mapping
 # ---------------------------------------------------------------------------
@@ -271,10 +275,12 @@ class RichHooks:
 
     def on_stage_end(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
         if stage == PipelineStage.CONTEXT_RETRIEVAL:
-            self._render_context_summary(meta)
             # Per RES-716: surface the classifier output for this target
             # immediately after context retrieval. The runner places the
             # classified caps (and any classifier error) on the meta dict.
+            # The table's caption absorbs the resource-type breakdown that
+            # _render_context_summary used to print, so we skip the one-liner
+            # when an agent_context is present.
             agent_context = meta.get("agent_context")
             agent_capabilities = meta.get("agent_capabilities")
             if agent_context is not None:
@@ -291,6 +297,11 @@ class RichHooks:
                     classification_error=meta.get("classification_error"),
                     classification_available=meta.get("classification_available", True),
                 )
+            else:
+                # Static mode / non-redteam callers: no agent context to
+                # classify, but a target was still resolved — keep the
+                # one-liner so they get *some* signal.
+                self._render_context_summary(meta)
 
         elapsed = meta.get("elapsed_s")
         if elapsed is not None:
@@ -453,60 +464,71 @@ class RichHooks:
             caps_map = classified.get("capabilities") or {}
             classification_failed = bool(classified.get("classification_failed"))
 
-        # "Disabled" means no client could be resolved at all (true no-op),
-        # whereas "failed" means a client was used but the call raised. The
-        # runner sets classification_available=False for the disabled case.
-        classification_disabled = (
-            not classification_available
-            or (classified is None and not classification_failed)
-        )
+        n_tools = sum(1 for _, rtype, _ in resources if rtype == "tool")
+        n_memory = sum(1 for _, rtype, _ in resources if rtype == "memory")
+        n_knowledge = sum(1 for _, rtype, _ in resources if rtype == "knowledge")
 
         table = Table(title=title, show_header=True, header_style="bold", box=box.ROUNDED)
         table.add_column("Resource", style="white", overflow="fold")
         table.add_column("Type", style="dim")
         table.add_column("Detected Capabilities", overflow="fold")
 
-        high_risk_values = {c.value for c in _HIGH_RISK_CAPS}
         unique_caps: set[str] = set()
         for key, rtype, display in resources:
             tags = caps_map.get(key) or []
             unique_caps.update(tags)
             cell_parts: list[str] = []
             for tag in tags:
-                style = "bold red" if tag in high_risk_values else "cyan"
+                style = "bold red" if tag in _HIGH_RISK_CAP_VALUES else "cyan"
                 cell_parts.append(f"[{style}]{tag}[/{style}]")
             if not cell_parts:
                 cell_parts.append("[dim]—[/dim]")
             table.add_row(display, rtype, ", ".join(cell_parts))
 
-        # Footer: totals across this target. Counts the number of *distinct*
-        # high-risk capability kinds the agent has (not tag occurrences), since
-        # that is the threat-model-relevant number.
-        n_high_risk_kinds = len(unique_caps & high_risk_values)
-        table.add_section()
-        footer_bits = [
-            f"{len(resources)} resource{'s' if len(resources) != 1 else ''}",
-            f"{len(unique_caps)} unique capabilit{'ies' if len(unique_caps) != 1 else 'y'}",
-        ]
+        # Caption: one-line summary that absorbs both the resource-type
+        # breakdown (formerly _render_context_summary) and the capability
+        # counts. Counts *distinct* high-risk capability kinds, not tag
+        # occurrences — that's the threat-model-relevant number.
+        n_high_risk_kinds = len(unique_caps & _HIGH_RISK_CAP_VALUES)
+        breakdown_bits: list[str] = []
+        if n_tools:
+            breakdown_bits.append(f"{n_tools} tool{'s' if n_tools != 1 else ''}")
+        if n_memory:
+            breakdown_bits.append(f"{n_memory} memory store{'s' if n_memory != 1 else ''}")
+        if n_knowledge:
+            breakdown_bits.append(f"{n_knowledge} knowledge base{'s' if n_knowledge != 1 else ''}")
+        cap_bits = [f"{len(unique_caps)} unique capabilit{'ies' if len(unique_caps) != 1 else 'y'}"]
         if n_high_risk_kinds:
-            footer_bits.append(
+            cap_bits.append(
                 f"[bold red]{n_high_risk_kinds} high-risk capabilit"
                 f"{'ies' if n_high_risk_kinds != 1 else 'y'}[/bold red]"
             )
-        table.add_row(f"[bold]{' · '.join(footer_bits)}[/bold]", "", "")
+        table.caption = " · ".join([*breakdown_bits, *cap_bits])
+        table.caption_style = "dim"
+        table.caption_justify = "center"
 
         self._console.print(table)
 
+        # Render a hint underneath the table when the capability column is
+        # not authoritative. Four distinguishable cases:
+        #   * classifier ran and failed       → yellow "incomplete" + reason
+        #   * no llm_client could be resolved → dim "disabled" hint
+        #   * classifier ran, no tags found   → dim "no tags detected" hint
+        #   * classifier ran, tags found      → no hint
         if classification_failed:
             self._console.print(
                 "[yellow]Classification incomplete — strategies will be included optimistically.[/yellow]"
             )
             if classification_error:
                 self._console.print(f"[yellow]  reason: {classification_error}[/yellow]")
-        elif classification_disabled:
+        elif not classification_available or classified is None:
             self._console.print(
                 "[dim]Capability classification disabled (no llm_client configured); "
                 "showing configured resources only.[/dim]"
+            )
+        elif not caps_map:
+            self._console.print(
+                "[dim]No capability tags detected for this agent.[/dim]"
             )
 
     def _render_filtering_metadata(self, filtering_metadata: dict[str, Any]) -> None:

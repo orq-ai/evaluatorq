@@ -260,8 +260,10 @@ class TestRichHooks:
         output = buf.getvalue()
         assert "code_execution" in output
         assert "web_request" in output
-        # Footer counts distinct high-risk capability kinds, not occurrences.
-        assert "1 high-risk capability" in output
+        # Caption counts distinct high-risk capability kinds, not occurrences.
+        # Collapse whitespace because Rich may wrap the caption on narrow consoles.
+        collapsed = " ".join(output.split())
+        assert "1 high-risk capability" in collapsed
 
     def test_rich_on_stage_end_multi_target(self):
         """Multi-target runs emit on_stage_end once per target; both tables must render."""
@@ -340,6 +342,55 @@ class TestRichHooks:
         )
         output = buf.getvalue()
         assert "No tools" in output
+
+    def test_rich_on_stage_end_classifier_ran_but_no_tags(self):
+        """Classifier ran, didn't fail, but returned an empty capabilities map →
+        the 'no tags detected' hint, NOT the misleading 'disabled' hint."""
+        from evaluatorq.redteam.contracts import PipelineStage
+
+        hooks, buf = self._make_rich_hooks()
+        agent_ctx = {"tools": [{"name": "unknown_thing"}], "memory_stores": [], "knowledge_bases": []}
+        # Classifier produced no recognised tags for any resource.
+        caps = {"capabilities": {}, "classification_failed": False}
+        hooks.on_stage_end(
+            PipelineStage.CONTEXT_RETRIEVAL,
+            self._stage_end_meta(
+                target="agent:unknown",
+                agent_context=agent_ctx,
+                agent_capabilities=caps,
+                classification_available=True,
+            ),
+        )
+        output = buf.getvalue()
+        assert "no capability tags detected" in output.lower()
+        # Must NOT show the disabled hint, which would be factually wrong here.
+        assert "classification disabled" not in output.lower()
+
+    def test_rich_on_stage_end_skips_context_summary_when_table_renders(self):
+        """When agent_context is present the per-target one-liner is folded
+        into the table caption; the standalone summary line must not appear
+        (would be redundant)."""
+        from evaluatorq.redteam.contracts import PipelineStage
+
+        hooks, buf = self._make_rich_hooks()
+        agent_ctx = {
+            "tools": [{"name": "search_web"}],
+            "memory_stores": [{"key": "kv"}],
+            "knowledge_bases": [],
+        }
+        hooks.on_stage_end(
+            PipelineStage.CONTEXT_RETRIEVAL,
+            self._stage_end_meta(target="agent:bot", agent_context=agent_ctx),
+        )
+        output = buf.getvalue()
+        # The standalone summary line is "agent:bot: 1 tool, 1 memory store"
+        # and was the old _render_context_summary output. The caption now
+        # carries the same breakdown, so the standalone line is suppressed.
+        collapsed = " ".join(output.split())
+        assert "agent:bot: 1 tool" not in collapsed
+        # But the breakdown should still appear *somewhere* (in the caption).
+        assert "1 tool" in collapsed
+        assert "1 memory store" in collapsed
 
     def test_rich_on_confirm_renders_filtering_metadata(self):
         """on_confirm should render filtering metadata (strategy counts)."""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 from typing import TYPE_CHECKING
 
@@ -280,6 +281,17 @@ async def _simulate_core(
         return results
     finally:
         await runner.close()
+        # Some targets (notably OrqResponsesTarget) build their own
+        # AsyncOpenAI client lazily when none is injected. If they expose a
+        # close() method, call it so those HTTP connections are returned to
+        # the pool instead of leaking until process exit. Targets that don't
+        # manage a client (plain callables, OrqAgentTarget) simply don't
+        # implement close() and the getattr lookup is a no-op.
+        target_close = getattr(resolved_callback, "close", None)
+        if callable(target_close):
+            maybe = target_close()
+            if inspect.isawaitable(maybe):
+                await maybe
 
 
 async def _generate_single_datapoint(
