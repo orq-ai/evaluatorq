@@ -545,6 +545,7 @@ async def red_team(
                 report=report,
                 llm_client=rec_client,
                 model=config.evaluator.model,
+                cfg=config,
             )
         except (TypeError, AttributeError, ImportError, NameError, KeyError):
             raise
