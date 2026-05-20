@@ -193,7 +193,8 @@ async def generate_focus_area_recommendations(
                 **cfg.evaluator.extra_kwargs,
                 **(llm_kwargs or {}),
             }
-            response = await llm_client.chat.completions.create(
+            create_call: Any = llm_client.chat.completions.create
+            response = await create_call(
                 model=model,
                 messages=[
                     {'role': 'system', 'content': _SYSTEM_PROMPT},
