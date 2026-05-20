@@ -119,12 +119,12 @@ async def simulate(
         # Upload runs OUTSIDE the pipeline span — matches evaluatorq core's
         # pattern (evaluatorq.py) where upload happens after the eval span
         # closes. Keeps the trace timing focused on simulation work.
-        api_key = os.environ.get("ORQ_API_KEY")
-        if upload_results and not api_key:
-            raise ValueError(
-                "ORQ_API_KEY environment variable is not set. Set it before calling simulate(upload_results=True)."
-            )
         if upload_results:
+            api_key = os.environ.get("ORQ_API_KEY")
+            if not api_key:
+                raise ValueError(
+                    "ORQ_API_KEY environment variable is not set. Set it before calling simulate(upload_results=True)."
+                )
             await upload_simulation_results(
                 api_key=api_key,
                 evaluation_name=evaluation_name or "simulation",

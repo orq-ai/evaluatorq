@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
     from openai import AsyncOpenAI
 
+    from evaluatorq.redteam.backends.base import AgentTarget
     from evaluatorq.redteam.contracts import LLMCallConfig, LLMConfig, TargetConfig
 
 
@@ -190,7 +191,7 @@ class _OrqResponsesTargetFactory:
         self._retry_attempts = retry_attempts
         self._retry_statuses = retry_statuses
 
-    def create_target(self, agent_key: str) -> object:
+    def create_target(self, agent_key: str) -> AgentTarget:
         from evaluatorq.contracts import LLMCallConfig
         from evaluatorq.simulation.target import OrqResponsesTarget
 

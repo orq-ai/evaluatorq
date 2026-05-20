@@ -297,6 +297,7 @@ class TestOrqResponsesTargetPreviousResponseId:
         assert target._previous_response_id == "resp-dict-2"
         assert result.text == "one"
         assert result.response_id == "resp-dict-1"
+        assert result.usage is not None
         assert result.usage.prompt_tokens == 10
         assert result.usage.completion_tokens == 5
 

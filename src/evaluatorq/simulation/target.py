@@ -260,10 +260,22 @@ class OrqResponsesTarget:
             finish_reason = _get_field(response, "status")
             response_model = _get_field(response, "model")
 
+            from evaluatorq.redteam.contracts import TokenUsage as RedteamTokenUsage
+
+            response_usage = (
+                RedteamTokenUsage(
+                    prompt_tokens=usage.prompt_tokens,
+                    completion_tokens=usage.completion_tokens,
+                    total_tokens=usage.total_tokens,
+                    calls=1,
+                )
+                if usage is not None
+                else None
+            )
             return _ResponsesCallResult(
                 response=AgentResponse(
                     output=output_items,
-                    usage=usage,
+                    usage=response_usage,
                     model=response_model if isinstance(response_model, str) else self.config.model,
                     response_id=response_id,
                     finish_reason=finish_reason if isinstance(finish_reason, str) else None,
