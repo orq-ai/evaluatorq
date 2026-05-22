@@ -188,20 +188,23 @@ async def generate_focus_area_recommendations(
         try:
             # Two ``**`` splats in a function call raise TypeError on
             # duplicate keys; merge into a dict first for last-wins precedence.
-            merged_kwargs = {
+            # Typed as ``Any`` so ``**merged_kwargs`` does not trip the
+            # platform-conditional basedpyright Iterable[Omit] checks on
+            # OpenAI's ``create()`` overload (CI Linux vs local Darwin).
+            merged_kwargs: Any = {
                 'extra_body': cfg.retry_config,
                 **cfg.evaluator.extra_kwargs,
                 **(llm_kwargs or {}),
             }
-            response = await llm_client.chat.completions.create(
+            response = await llm_client.chat.completions.create(  # pyright: ignore[reportCallIssue, reportArgumentType]
                 model=model,
-                messages=[
+                messages=[  # pyright: ignore[reportArgumentType]
                     {'role': 'system', 'content': _SYSTEM_PROMPT},
                     {'role': 'user', 'content': user_prompt},
                 ],
                 temperature=cfg.evaluator.temperature,
                 max_completion_tokens=1500,
-                response_format={'type': 'json_object'},
+                response_format={'type': 'json_object'},  # pyright: ignore[reportArgumentType]
                 **merged_kwargs,
             )
 

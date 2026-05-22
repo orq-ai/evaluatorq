@@ -186,4 +186,4 @@ def _normalize_usage(raw_usage: Any) -> TokenUsage | None:
     prompt = _safe_int(raw_usage.get('prompt_tokens', raw_usage.get('prompt', 0)))
     completion = _safe_int(raw_usage.get('completion_tokens', raw_usage.get('completion', 0)))
     total = _safe_int(raw_usage.get('total_tokens', raw_usage.get('total', prompt + completion)))
-    return TokenUsage(prompt_tokens=prompt, completion_tokens=completion, total_tokens=total)
+    return TokenUsage(prompt_tokens=prompt, completion_tokens=completion, total_tokens=total, calls=1)
