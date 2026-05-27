@@ -1,9 +1,9 @@
-"""Tests for OpenAIModelTarget.respond (stateless) — RES-808 PR3.
+"""Tests for OpenAIModelTarget.respond (stateless) — RES-877 PR6.
 
-OpenAIModelTarget keeps a stateful ``send_prompt`` (accumulates ``_history``)
-for redteam orchestrator/runner callers, AND a stateless ``respond(messages)``
-for callers that own the transcript (sim). ``respond`` must not read or write
-``_history`` and must prepend exactly one system prompt.
+OpenAIModelTarget is fully stateless: it exposes only ``respond(messages)``.
+The orchestrator owns multi-turn conversation state. Tests verify that
+``respond`` prepends exactly one system prompt and does not accumulate state
+across calls.
 """
 
 from __future__ import annotations
@@ -104,34 +104,7 @@ async def test_respond_extracts_tool_calls_into_output():
 
 
 @pytest.mark.asyncio
-async def test_send_prompt_remains_stateful_accumulates_history():
-    """The stateful send_prompt path must still thread _history across turns.
-
-    Guards the intentional respond(stateless)/send_prompt(stateful) divergence —
-    a refactor collapsing both onto the stateless path would break multi-turn
-    redteam and must be caught here (until PR4/RES-877 removes the split).
-    """
-    client = MagicMock()
-    client.chat.completions.create = AsyncMock(
-        side_effect=[_make_openai_response("a1"), _make_openai_response("a2")]
-    )
-    target = _make_target(client)
-
-    with patch("evaluatorq.redteam.tracing.get_tracer", return_value=None):
-        await target.send_prompt("q1")
-        await target.send_prompt("q2")
-
-    # _history accumulated both turns (unlike respond, which leaves it empty).
-    assert target._history != []
-    # The second call saw the first turn (system + q1 + a1 + q2), not just q2.
-    second_sent = client.chat.completions.create.call_args_list[1].kwargs["messages"]
-    contents = [m["content"] for m in second_sent]
-    assert "q1" in contents
-    assert "q2" in contents
-
-
-@pytest.mark.asyncio
-async def test_respond_is_stateless_does_not_touch_history():
+async def test_respond_is_stateless_across_calls():
     client = MagicMock()
     client.chat.completions.create = AsyncMock(return_value=_make_openai_response())
     target = _make_target(client)
@@ -140,9 +113,6 @@ async def test_respond_is_stateless_does_not_touch_history():
         await target.respond([Message(role="user", content="one")])
         await target.respond([Message(role="user", content="two")])
 
-    # respond never appends to _history; send_prompt is the stateful path.
-    assert target._history == []
-    # Second call did not carry the first call's turn.
     second_sent = client.chat.completions.create.call_args_list[1].kwargs["messages"]
     assert second_sent == [
         {"role": "system", "content": "SYS"},

@@ -1,7 +1,7 @@
-"""Unit tests for backend send_prompt happy-path and error paths.
+"""Unit tests for backend respond/send_prompt happy-path and error paths.
 
 Covers:
-- OpenAIModelTarget (backends/openai.py)
+- OpenAIModelTarget (backends/openai.py) — uses respond()
 - ORQAgentTarget (backends/orq.py)
 - LangGraphTarget (integrations/langgraph_integration/target.py)
 - CallableTarget (integrations/callable_integration/target.py)
@@ -9,10 +9,10 @@ Covers:
 - VercelAISdkTarget (integrations/vercel_ai_sdk_integration/target.py)
 
 This module is the cross-target conformance harness for RES-715: every target
-that implements ``send_prompt`` must return a ``SendResult`` whose
-``usage`` is either ``None`` or a populated ``TokenUsage``. Adding a new
-target without an entry here is a process bug, not a code bug — the integration
-should not ship until the conformance check is extended.
+must return a ``SendResult`` whose ``usage`` is either ``None`` or a populated
+``TokenUsage``. Adding a new target without an entry here is a process bug,
+not a code bug — the integration should not ship until the conformance check
+is extended.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ import pytest
 
 pytest.importorskip("openai")
 
+from evaluatorq.contracts import Message
 from evaluatorq.redteam.contracts import SendResult, TokenUsage
 
 
@@ -96,7 +97,7 @@ def _make_orq_response(
 # ===========================================================================
 
 
-class TestOpenAIModelTargetSendPromptWithUsage:
+class TestOpenAIModelTargetRespondWithUsage:
     @pytest.mark.asyncio
     async def test_happy_path_returns_send_result(self) -> None:
         """Happy path: returns SendResult with text, usage, model populated."""
@@ -111,7 +112,7 @@ class TestOpenAIModelTargetSendPromptWithUsage:
         target = OpenAIModelTarget(model="gpt-4o-mini", client=mock_client)
 
         with patch("evaluatorq.redteam.tracing.get_tracer", return_value=None):
-            result = await target.send_prompt("test prompt")
+            result = await target.respond([Message(role="user", content="test prompt")])
 
         assert isinstance(result, SendResult)
         assert result.text == "Hello!"
@@ -134,7 +135,7 @@ class TestOpenAIModelTargetSendPromptWithUsage:
 
         target = OpenAIModelTarget(model="gpt-4o-mini", client=mock_client)
         with patch("evaluatorq.redteam.tracing.get_tracer", return_value=None):
-            result = await target.send_prompt("prompt")
+            result = await target.respond([Message(role="user", content="prompt")])
 
         assert result.usage is None
 
