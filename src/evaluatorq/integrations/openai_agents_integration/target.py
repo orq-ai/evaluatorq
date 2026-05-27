@@ -52,7 +52,10 @@ class OpenAIAgentTarget(AgentTarget):
 
         The OpenAI Agents SDK accepts a list of input items, so ``respond``
         passes the full ``messages`` list directly. The caller (orchestrator)
-        owns conversation continuity.
+        owns conversation continuity. Only the items the run *adds* (sliced
+        from ``to_input_list()`` past the input length) are passed to
+        ``_build_response``, so the returned ``AgentResponse`` reflects just
+        this turn's output.
         """
         input_data: list[Any] = [{"role": m.role, "content": m.content or ""} for m in messages]
         prev_len = len(input_data)
@@ -214,7 +217,7 @@ class OpenAIAgentTarget(AgentTarget):
         )
 
     def clone(self) -> OpenAIAgentTarget:
-        """Return a fresh instance with empty history for parallel job safety."""
+        """Return a fresh independent instance for parallel job safety."""
         return OpenAIAgentTarget(self._agent, run_kwargs=dict(self._run_kwargs))
 
     def new(self) -> OpenAIAgentTarget:
