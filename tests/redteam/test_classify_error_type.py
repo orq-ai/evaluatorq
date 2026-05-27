@@ -36,3 +36,20 @@ def test_empty_or_none_returns_none() -> None:
 
 def test_unmatched_returns_unknown() -> None:
     assert classify_error_type("something entirely unexpected") == "unknown"
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        # explicit HTTP status wins over the generic 'connection' fallback
+        ("Status 503 connection reset by peer", "server_error"),
+        ("Status 404 connection closed", "client_error"),
+        # 429 embedded in a longer number must NOT trigger rate_limit
+        ("request req_42900 failed", "unknown"),
+        ("processed 4290 tokens", "unknown"),
+        # a bare 3-digit number without a 'status' prefix is not a status error
+        ("took 450 ms", "unknown"),
+    ],
+)
+def test_classify_avoids_false_positives(error: str, expected: str) -> None:
+    assert classify_error_type(error) == expected

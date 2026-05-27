@@ -236,7 +236,9 @@ class TestVercelAISdkTarget:
 
         body = mock_client.post.call_args.kwargs["json"]
         assistant = next(m for m in body["messages"] if m["role"] == "assistant")
-        assert assistant["tool_calls"][0]["id"] == "c1"
+        assert assistant["tool_calls"] == [
+            {"id": "c1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+        ]
         tool_row = next(m for m in body["messages"] if m["role"] == "tool")
         assert tool_row["tool_call_id"] == "c1"
         assert tool_row["content"] == "r"

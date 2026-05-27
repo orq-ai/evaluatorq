@@ -10,6 +10,7 @@ Semantic convention:
 """
 
 import os
+import re
 from datetime import datetime
 from typing import Any, TypedDict
 
@@ -674,17 +675,19 @@ class RunError(BaseModel):
     turn: int | None = None
 
 
-# Patterns matched against the error string to infer a coarse error_type.
-_ERROR_PATTERNS: list[tuple[str, str]] = [
-    ('content_filter', 'content_filter'),
-    ('content management policy', 'content_filter'),
-    ('rate limit', 'rate_limit'),
-    ('429', 'rate_limit'),
-    ('timeout', 'timeout'),
-    ('timed out', 'timeout'),
-    ('connection', 'network_error'),
-    ('Status 5', 'server_error'),
-    ('Status 4', 'client_error'),
+# Regex patterns matched (case-insensitively) against the error string to infer
+# a coarse error_type. Ordered most-specific first; the first match wins, so an
+# explicit HTTP status must precede the generic 'connection' fallback (otherwise
+# "Status 503 connection reset" would misclassify as network_error). HTTP codes
+# require three digits and 429 is digit-bounded so stray numbers (request ids,
+# byte counts) do not trigger false rate_limit/status matches.
+_ERROR_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r'content[_ ]filter|content management policy'), 'content_filter'),
+    (re.compile(r'rate limit|(?<!\d)429(?!\d)'), 'rate_limit'),
+    (re.compile(r'timed out|timeout'), 'timeout'),
+    (re.compile(r'status[ _]?5\d\d'), 'server_error'),
+    (re.compile(r'status[ _]?4\d\d'), 'client_error'),
+    (re.compile(r'connection'), 'network_error'),
 ]
 
 
@@ -702,7 +705,7 @@ def classify_error_type(error: str | None, *, existing_type: str | None = None) 
         return None
     lower = error.lower()
     for pattern, etype in _ERROR_PATTERNS:
-        if pattern.lower() in lower:
+        if pattern.search(lower):
             return etype
     return 'unknown'
 

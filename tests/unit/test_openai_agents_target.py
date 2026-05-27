@@ -9,8 +9,11 @@ import pytest
 
 pytest.importorskip("agents")
 
-from evaluatorq.contracts import FunctionCall, Message, StrategyToolCall  # noqa: E402
+from evaluatorq.contracts import FunctionCall, Message, StrategyToolCall, ToolCallOutputItem  # noqa: E402
 from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget  # noqa: E402
+from evaluatorq.integrations.openai_agents_integration.target import (  # noqa: E402
+    _message_to_responses_input_items,
+)
 from evaluatorq.redteam.contracts import AgentResponse, TokenUsage  # noqa: E402
 
 
@@ -107,6 +110,32 @@ class TestOpenAIAgentTarget:
         fco = next(i for i in input_data if isinstance(i, dict) and i.get("type") == "function_call_output")
         assert fco["call_id"] == "c1"
         assert fco["output"] == "found"
+
+    def test_responses_input_items_round_trip_through_build_response(self) -> None:
+        """Inverse mapper output is consumable by _build_response, and the
+        function_call/function_call_output pair shares one call_id (the SDK
+        requirement for pairing a call with its result on replay)."""
+        items = _message_to_responses_input_items(
+            Message(
+                role="assistant",
+                content=None,
+                tool_calls=[StrategyToolCall(id="call_1", function=FunctionCall(name="lookup", arguments='{"q":"x"}'))],
+            )
+        )
+        items += _message_to_responses_input_items(Message(role="tool", tool_call_id="call_1", content="found"))
+
+        fc = next(i for i in items if i["type"] == "function_call")
+        fco = next(i for i in items if i["type"] == "function_call_output")
+        assert fc["call_id"] == fco["call_id"] == "call_1"
+
+        target = OpenAIAgentTarget(MagicMock())
+        result = MagicMock()
+        result.final_output = "done"
+        resp = target._build_response(items, result)
+        tool_calls = [o for o in resp.output if isinstance(o, ToolCallOutputItem)]
+        assert len(tool_calls) == 1
+        assert tool_calls[0].name == "lookup"
+        assert tool_calls[0].arguments == '{"q":"x"}'
 
     def test_new_returns_independent_instance(self) -> None:
         agent = MagicMock()

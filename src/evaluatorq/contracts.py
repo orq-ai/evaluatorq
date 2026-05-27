@@ -153,6 +153,8 @@ def message_to_chat_param(m: Message) -> dict[str, Any]:
     (built by ``turns_to_messages``) without losing multi-turn tool context.
     """
     if m.role == "tool":
+        # A tool message carries a result keyed to tool_call_id; tool_calls belong
+        # on assistant messages, so any present here are malformed and not emitted.
         param: dict[str, Any] = {
             "role": "tool",
             "tool_call_id": m.tool_call_id or "",
