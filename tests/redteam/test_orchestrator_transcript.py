@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from evaluatorq.contracts import AgentResponse, AgentTarget, Message, TextOutputItem
+from evaluatorq.contracts import AgentResponse, AgentTarget, Message, TextOutputItem, ToolCallOutputItem
 from evaluatorq.redteam.contracts import (
     AgentContext,
     AttackStrategy,
@@ -242,3 +242,73 @@ class TestOrchestratorTranscript:
 
         # And the current prompt q3 is the last user message
         assert turn3_messages[-1] == Message(role="user", content="q3")
+
+    @pytest.mark.asyncio
+    @patch(_PATCH_RECORD_LLM)
+    @patch(_PATCH_LLM_SPAN, side_effect=_noop_span_ctx)
+    @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
+    async def test_tool_calls_round_trip_through_transcript(self, _rs: Any, _ls: Any, _rl: Any) -> None:
+        """RES-877: a ToolCallOutputItem emitted by the target on turn 1 must appear
+        as an assistant message with tool_calls in the transcript delivered to turn 2.
+
+        This tests the end-to-end seam: real target emits ToolCallOutputItem →
+        orchestrator records the turn → turns_to_messages builds the transcript →
+        next turn's respond() receives a message with tool_calls intact.
+        """
+        orchestrator, mock_llm = _make_orchestrator()
+
+        class _ToolCallTarget(AgentTarget):
+            """On first respond() returns a ToolCallOutputItem + text; thereafter plain text."""
+
+            def __init__(self) -> None:
+                super().__init__(memory_entity_id=None)
+                self.calls: list[list[Message]] = []
+                self._call_count = 0
+
+            async def respond(self, messages: list[Message]) -> AgentResponse:
+                self.calls.append(list(messages))
+                self._call_count += 1
+                if self._call_count == 1:
+                    return AgentResponse(output=[
+                        ToolCallOutputItem(
+                            name="lookup",
+                            arguments='{"q":"x"}',
+                            id="call_1",
+                            call_id="call_1",
+                        ),
+                        TextOutputItem(text="a1", annotations=[]),
+                    ])
+                return AgentResponse(output=[TextOutputItem(text=f"a{self._call_count}", annotations=[])])
+
+            def new(self) -> _ToolCallTarget:
+                return _ToolCallTarget()
+
+        target = _ToolCallTarget()
+
+        mock_llm.chat.completions.create.side_effect = [
+            _make_completion("q1"),
+            _make_completion("q2"),
+        ]
+
+        await orchestrator.run_attack(
+            target=target,
+            strategy=_make_strategy(),
+            objective="Test tool_calls round-trip",
+            agent_context=_make_context(),
+            max_turns=2,
+        )
+
+        assert len(target.calls) == 2
+
+        # Turn 2's messages must contain an assistant message carrying the tool call
+        # from turn 1 — proving tool_calls survive the orchestrator transcript round-trip.
+        turn2_messages = target.calls[1]
+        assistant_tool_msg = next(
+            (m for m in turn2_messages if m.role == "assistant" and m.tool_calls),
+            None,
+        )
+        assert assistant_tool_msg is not None, (
+            "Turn 2 transcript is missing an assistant message with tool_calls. "
+            "The ToolCallOutputItem from turn 1 was not preserved through the orchestrator transcript."
+        )
+        assert assistant_tool_msg.tool_calls[0].function.name == "lookup"
