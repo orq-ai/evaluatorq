@@ -701,6 +701,61 @@ class Turn(BaseModel):
     target: AgentResponse
 
 
+def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[Message]:
+    """Convert per-turn records into an OpenAI chat-completions message list.
+
+    Each turn becomes a ``user`` message (the attacker prompt) followed by the
+    target's output rows: consecutive text runs collapse into one ``assistant``
+    message; each tool call becomes an ``assistant`` message with one
+    ``tool_calls`` entry, plus a following ``tool`` row when ``result`` is set;
+    reasoning items are dropped. An empty target output still emits an empty
+    ``assistant`` row so consumers can rely on a user/assistant pair per turn.
+
+    When ``skip_errors`` is True, turns whose target carries an
+    :class:`evaluatorq.contracts.AgentResponseError` are omitted entirely — used
+    to build the transcript replayed to the target so failed turns never
+    re-enter its view.
+    """
+    out: list[Message] = []
+    for turn in turns:
+        if skip_errors and turn.target.error is not None:
+            continue
+        out.append(Message(role='user', content=turn.attacker.generated_prompt))
+        text_buffer: list[str] = []
+        target = turn.target
+
+        def _flush_text() -> None:
+            if text_buffer:
+                out.append(Message(role='assistant', content=''.join(text_buffer)))
+                text_buffer.clear()
+
+        for item in target.output:
+            if isinstance(item, TextOutputItem):
+                text_buffer.append(item.text)
+            elif isinstance(item, ToolCallOutputItem):
+                _flush_text()
+                out.append(Message(
+                    role='assistant',
+                    content=None,
+                    tool_calls=[StrategyToolCall(
+                        id=item.call_id,
+                        function=FunctionCall(name=item.name, arguments=item.arguments),
+                    )],
+                ))
+                if item.result is not None:
+                    out.append(Message(
+                        role='tool',
+                        tool_call_id=item.call_id,
+                        name=item.name,
+                        content=item.result,
+                    ))
+            # ReasoningOutputItem intentionally dropped.
+        _flush_text()
+        if not target.output:
+            out.append(Message(role='assistant', content=''))
+    return out
+
+
 class OrchestratorResult(BaseModel):
     """Result from multi-turn attack orchestration.
 
@@ -779,44 +834,7 @@ class OrchestratorResult(BaseModel):
           standard role for reasoning. Callers needing it should read
           ``turn.target.output`` directly.
         """
-        out: list[Message] = []
-        for turn in self.turns:
-            out.append(Message(role='user', content=turn.attacker.generated_prompt))
-            text_buffer: list[str] = []
-            target = turn.target
-
-            def _flush_text() -> None:
-                if text_buffer:
-                    out.append(Message(role='assistant', content=''.join(text_buffer)))
-                    text_buffer.clear()
-
-            for item in target.output:
-                if isinstance(item, TextOutputItem):
-                    text_buffer.append(item.text)
-                elif isinstance(item, ToolCallOutputItem):
-                    _flush_text()
-                    out.append(Message(
-                        role='assistant',
-                        content=None,
-                        tool_calls=[StrategyToolCall(
-                            id=item.call_id,
-                            function=FunctionCall(name=item.name, arguments=item.arguments),
-                        )],
-                    ))
-                    if item.result is not None:
-                        out.append(Message(
-                            role='tool',
-                            tool_call_id=item.call_id,
-                            name=item.name,
-                            content=item.result,
-                        ))
-                # ReasoningOutputItem intentionally dropped.
-            _flush_text()
-            # If the output was entirely empty (no items at all), still emit an
-            # assistant row so consumers can rely on a user/assistant pair per turn.
-            if not target.output:
-                out.append(Message(role='assistant', content=''))
-        return out
+        return turns_to_messages(self.turns)
 
     def attacker_input_at(self, turn_index: int) -> list[Message]:
         """Reconstruct the chat messages sent to the adversarial LLM at turn ``turn_index``.
