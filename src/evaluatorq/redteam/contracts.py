@@ -662,7 +662,7 @@ SendResult = AgentResponse  # deprecated alias; use AgentResponse directly
 
 
 class RunError(BaseModel):
-    """Structured whole-run error for an attack/evaluation result (the rollup; per-response errors use AgentResponseError)."""
+    """Structured whole-run error for an attack/evaluation result (the rollup; per-response errors use :class:`evaluatorq.contracts.AgentResponseError`)."""
 
     message: str
     error_type: str
