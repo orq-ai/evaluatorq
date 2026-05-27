@@ -71,61 +71,22 @@ class VercelAISdkTarget(AgentTarget):
                 nonsensical ones) will be applied. The HTTP handler cannot
                 be introspected from Python, so this must be supplied by
                 the caller when capability-aware filtering matters.
-        Vercel AI SDK state lives inside the HTTP handler (stateless to us);
-        conversation history is tracked client-side in ``_history``.
+
+        Vercel AI SDK state lives inside the HTTP handler (stateless to this
+        client); the caller owns multi-turn conversation history.
         """
         super().__init__(memory_entity_id=None)
         self._url = url
         self._headers = headers or {}
         self._extra_body = extra_body or {}
         self._timeout = timeout
-        self._history: list[dict[str, str]] = []
         self._agent_context = agent_context
-
-    async def send_prompt(self, prompt: str) -> AgentResponse:
-        """Send a prompt to the AI SDK endpoint and return a structured response with usage.
-
-        The Vercel AI SDK Data Stream Protocol does not expose tool call details
-        in a structured form, so ``tool_calls`` is always empty. The full text
-        response is available via ``.text``.
-        """
-        self._history.append({"role": "user", "content": prompt})
-
-        body: dict[str, Any] = {
-            "messages": list(self._history),
-            **self._extra_body,
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                response = await client.post(
-                    self._url,
-                    json=body,
-                    headers={"Content-Type": "application/json", **self._headers},
-                )
-                response.raise_for_status()
-        except (httpx.HTTPError, ValueError, KeyError):
-            # Roll back the user turn so the next call doesn't forward a
-            # malformed conversation with a hanging user message. Catches
-            # HTTP errors (network/status) and parser errors (ValueError
-            # from json.loads, KeyError from missing fields). Programming
-            # bugs (TypeError, AttributeError) propagate without rollback
-            # so they aren't masked as transient failures.
-            self._history.pop()
-            raise
-
-        text, usage = self._parse_response(response)
-        self._history.append({"role": "assistant", "content": text})
-        text_item: OutputMessage = TextOutputItem(text=text, annotations=[])
-        return AgentResponse(output=[text_item], usage=usage)
 
     async def respond(self, messages: list[Message]) -> AgentResponse:
         """Stateless: POST the provided transcript to the AI SDK endpoint.
 
         The caller owns conversation continuity — the full ``messages`` list is
-        sent as the request body and ``self._history`` is neither read nor
-        written. For redteam single-prompt callers that want per-instance
-        history, use ``send_prompt``.
+        sent as-is in the request body.
         """
         body: dict[str, Any] = {
             "messages": [{"role": m.role, "content": m.content or ""} for m in messages],
