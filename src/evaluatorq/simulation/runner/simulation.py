@@ -51,16 +51,16 @@ logger = logging.getLogger(__name__)
 ZERO_USAGE = TokenUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
 
 
-def _invert_roles_for_simulator(messages: list[Message]) -> list[ChatMessage]:
+def _invert_roles_for_simulator(messages: list[Message]) -> list[Message]:
     """Swap roles so the user simulator sees the conversation from its perspective."""
-    inverted = []
+    inverted: list[Message] = []
     for m in messages:
         if m.role == "user":
-            inverted.append(ChatMessage(role="assistant", content=m.content))
+            inverted.append(m.model_copy(update={"role": "assistant"}))
         elif m.role == "assistant":
-            inverted.append(ChatMessage(role="user", content=m.content))
+            inverted.append(m.model_copy(update={"role": "user"}))
         else:
-            inverted.append(ChatMessage(role=m.role, content=m.content))
+            inverted.append(m)
     return inverted
 
 
@@ -419,6 +419,7 @@ class SimulationRunner:
                 completion_tokens=usage.completion_tokens
                 + judge_usage.completion_tokens,
                 total_tokens=usage.total_tokens + judge_usage.total_tokens,
+                calls=usage.calls + judge_usage.calls,
             )
 
         # Expose to the outer run() except path so it can report partial usage.
@@ -437,6 +438,7 @@ class SimulationRunner:
                     - usage_before.completion_tokens,
                     total_tokens=usage_after.total_tokens
                     - usage_before.total_tokens,
+                    calls=usage_after.calls - usage_before.calls,
                 ),
                 response_quality=judgment.response_quality,
                 hallucination_risk=judgment.hallucination_risk,
@@ -471,26 +473,21 @@ class SimulationRunner:
                     "orq.simulation.max_turns": effective_max_turns,
                 },
             ) as turn_span:
-                target_messages = [
-                    ChatMessage(role=m.role, content=m.content) for m in messages
-                ]
                 async with with_simulation_span(
                     "orq.simulation.target_call", None
                 ) as target_span:
                     record_llm_input(
                         target_span,
-                        [{"role": m.role, "content": m.content} for m in target_messages],
+                        [{"role": m.role, "content": m.content or ""} for m in messages],
                     )
-                    agent_response = await self._get_target_response(target_messages)
+                    agent_response = await self._get_target_response(messages)
                     record_llm_output(target_span, agent_response)
                 messages.append(Message(role="assistant", content=agent_response))
 
                 async with with_simulation_span(
                     "orq.simulation.judge_evaluation", None
                 ):
-                    judgment = await judge.evaluate(
-                        [ChatMessage(role=m.role, content=m.content) for m in messages]
-                    )
+                    judgment = await judge.evaluate(messages)
 
                 turn_metrics_list.append(
                     _build_turn_metrics(turn + 1, judgment, usage_before)

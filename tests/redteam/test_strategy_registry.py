@@ -26,6 +26,18 @@ class TestGetStrategiesForCategory:
         assert len(strategies) > 0
         assert all(s.category == 'LLM01' for s in strategies)
 
+    def test_get_llm05_strategies(self):
+        """LLM05 (Improper Output Handling) registered with 5 strategies."""
+        strategies = get_strategies_for_category('LLM05')
+        assert len(strategies) == 5
+        assert all(s.category == 'LLM05' for s in strategies)
+
+    def test_get_llm09_strategies(self):
+        """LLM09 (Misinformation) registered with 5 strategies."""
+        strategies = get_strategies_for_category('LLM09')
+        assert len(strategies) == 5
+        assert all(s.category == 'LLM09' for s in strategies)
+
     def test_get_with_owasp_prefix(self):
         """Test retrieving strategies with OWASP- prefix."""
         strategies = get_strategies_for_category('OWASP-ASI01')

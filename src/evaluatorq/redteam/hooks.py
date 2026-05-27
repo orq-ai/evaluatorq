@@ -184,21 +184,42 @@ class DefaultHooks:
         logger.info(f"[redteam] Stage started: {stage} — {label} | meta={meta}")
 
     def on_stage_end(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
+        if stage == PipelineStage.DATAPOINT_GENERATION:
+            num_dp = meta.get("num_datapoints")
+            num_dyn = meta.get("num_dynamic")
+            num_sta = meta.get("num_static")
+            # Prefer the dynamic/static breakdown when both are present (hybrid
+            # mode emits all three keys); fall back to the total otherwise.
+            if num_dyn is not None and num_sta is not None:
+                total = (num_dyn or 0) + (num_sta or 0)
+                logger.info(
+                    f"[redteam] \U0001f4ca Generated {total} datapoints "
+                    f"({num_dyn or 0} dynamic + {num_sta or 0} static)"
+                )
+            elif num_dp is not None:
+                logger.info(f"[redteam] \U0001f4ca Generated {num_dp} datapoints")
         label = _STAGE_LABELS.get(stage, str(stage))
         logger.info(f"[redteam] Stage complete: {stage} — {label} | meta={meta}")
 
     def on_confirm(self, payload: ConfirmPayload) -> bool:
         """Log plan details and always approve."""
         num_dp = payload.get("num_datapoints", "?")
+        num_dyn = payload.get("num_dynamic")
+        num_sta = payload.get("num_static")
         categories = payload.get("categories") or []
         attack_model = payload.get("attack_model", "?")
         evaluator_model = payload.get("evaluator_model", "?")
         target = payload.get("target", "?")
         mode = payload.get("mode", "?")
+        cat_word = "category" if len(categories) == 1 else "categories"
+        if num_dyn is not None and num_sta is not None:
+            dp_detail = f"{num_dp} datapoints ({num_dyn} dynamic + {num_sta} static)"
+        else:
+            dp_detail = f"{num_dp} datapoints"
         logger.info(
-            f"[redteam] Run plan: target={target!r} mode={mode!r} "
-            f"datapoints={num_dp} categories={len(categories)} "
-            f"attack_model={attack_model!r} evaluator_model={evaluator_model!r}"
+            f"[redteam] \U0001f4ca Run plan: {dp_detail} | "
+            f"{len(categories)} {cat_word} | mode={mode!r} | target={target!r} | "
+            f"attack_model={attack_model!r} | evaluator_model={evaluator_model!r}"
         )
         return True
 

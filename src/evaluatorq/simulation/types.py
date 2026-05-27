@@ -5,10 +5,12 @@ Uses Pydantic models for maximum compatibility with generators/runner/agents.
 
 from __future__ import annotations
 
-from enum import Enum
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+from evaluatorq.contracts import Message, StrEnum, TokenUsage
+
 
 DEFAULT_MODEL = "azure/gpt-4o-mini"
 
@@ -18,14 +20,14 @@ DEFAULT_MODEL = "azure/gpt-4o-mini"
 # ---------------------------------------------------------------------------
 
 
-class CommunicationStyle(str, Enum):
+class CommunicationStyle(StrEnum):
     formal = "formal"
     casual = "casual"
     terse = "terse"
     verbose = "verbose"
 
 
-class StartingEmotion(str, Enum):
+class StartingEmotion(StrEnum):
     neutral = "neutral"
     frustrated = "frustrated"
     confused = "confused"
@@ -33,7 +35,7 @@ class StartingEmotion(str, Enum):
     urgent = "urgent"
 
 
-class EmotionalArc(str, Enum):
+class EmotionalArc(StrEnum):
     stable = "stable"
     escalating = "escalating"
     de_escalating = "de_escalating"
@@ -42,7 +44,7 @@ class EmotionalArc(str, Enum):
     hostile = "hostile"
 
 
-class CulturalContext(str, Enum):
+class CulturalContext(StrEnum):
     neutral = "neutral"
     direct = "direct"
     indirect = "indirect"
@@ -51,7 +53,7 @@ class CulturalContext(str, Enum):
     hierarchical = "hierarchical"
 
 
-class ConversationStrategy(str, Enum):
+class ConversationStrategy(StrEnum):
     cooperative = "cooperative"
     topic_switching = "topic_switching"
     contradictory = "contradictory"
@@ -61,7 +63,7 @@ class ConversationStrategy(str, Enum):
     ambiguous = "ambiguous"
 
 
-class InputFormat(str, Enum):
+class InputFormat(StrEnum):
     plain_text = "plain_text"
     with_url = "with_url"
     with_attachment = "with_attachment"
@@ -70,7 +72,7 @@ class InputFormat(str, Enum):
     mixed_media = "mixed_media"
 
 
-class TerminatedBy(str, Enum):
+class TerminatedBy(StrEnum):
     judge = "judge"
     max_turns = "max_turns"
     error = "error"
@@ -214,20 +216,8 @@ INPUT_FORMAT_INSTRUCTIONS: dict[InputFormat, str] = {
 # ---------------------------------------------------------------------------
 
 
-class ChatMessage(BaseModel):
-    role: Literal["user", "assistant", "system"]
-    content: str
-
-
-# ---------------------------------------------------------------------------
-# Token usage
-# ---------------------------------------------------------------------------
-
-
-class TokenUsage(BaseModel):
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    total_tokens: int = 0
+# ChatMessage is kept as a deprecated alias for Message (RES-596 consolidation).
+ChatMessage = Message
 
 
 # ---------------------------------------------------------------------------
@@ -290,16 +280,6 @@ class Judgment(BaseModel):
     hallucination_risk: float | None = None
     tone_appropriateness: float | None = None
     factual_accuracy: float | None = None
-
-
-# ---------------------------------------------------------------------------
-# Message
-# ---------------------------------------------------------------------------
-
-
-class Message(BaseModel):
-    role: Literal["user", "assistant", "system"]
-    content: str
 
 
 # ---------------------------------------------------------------------------

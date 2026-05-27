@@ -15,7 +15,9 @@ from loguru import logger
 
 from evaluatorq.redteam.contracts import (
     OWASP_CATEGORY_NAMES,
+    PIPELINE_CONFIG,
     FocusAreaRecommendation,
+    LLMConfig,
     RedTeamReport,
     RedTeamResult,
 )
@@ -137,6 +139,7 @@ async def generate_focus_area_recommendations(
     max_areas: int = 5,
     max_traces: int = 10,
     llm_kwargs: dict[str, Any] | None = None,
+    cfg: LLMConfig | None = None,
 ) -> list[FocusAreaRecommendation]:
     """Analyze failed traces and generate actionable recommendations per focus area.
 
@@ -146,10 +149,16 @@ async def generate_focus_area_recommendations(
         model: Model identifier for the analysis calls.
         max_areas: Maximum number of focus areas to analyze.
         max_traces: Maximum traces to sample per area.
+        llm_kwargs: Optional extra kwargs forwarded to the chat completion call.
+        cfg: Pipeline LLM config; ``cfg.evaluator`` supplies temperature,
+            extra_kwargs, and retry config so reasoning models
+            (e.g. ``gpt-5*``, ``o*``) that require ``temperature=1.0``
+            are not broken by a hardcoded value.
 
     Returns:
         List of ``FocusAreaRecommendation`` objects, one per analyzed area.
     """
+    cfg = cfg or PIPELINE_CONFIG
     top_areas = _compute_top_risk_areas(report, max_areas)
     if not top_areas:
         return []
@@ -177,16 +186,26 @@ async def generate_focus_area_recommendations(
         )
 
         try:
-            response = await llm_client.chat.completions.create(
+            # Two ``**`` splats in a function call raise TypeError on
+            # duplicate keys; merge into a dict first for last-wins precedence.
+            # Typed as ``Any`` so ``**merged_kwargs`` does not trip the
+            # platform-conditional basedpyright Iterable[Omit] checks on
+            # OpenAI's ``create()`` overload (CI Linux vs local Darwin).
+            merged_kwargs: Any = {
+                'extra_body': cfg.retry_config,
+                **cfg.evaluator.extra_kwargs,
+                **(llm_kwargs or {}),
+            }
+            response = await llm_client.chat.completions.create(  # pyright: ignore[reportCallIssue, reportArgumentType]
                 model=model,
-                messages=[
+                messages=[  # pyright: ignore[reportArgumentType]
                     {'role': 'system', 'content': _SYSTEM_PROMPT},
                     {'role': 'user', 'content': user_prompt},
                 ],
-                temperature=0.3,
+                temperature=cfg.evaluator.temperature,
                 max_completion_tokens=1500,
-                response_format={'type': 'json_object'},
-                **(llm_kwargs or {}),
+                response_format={'type': 'json_object'},  # pyright: ignore[reportArgumentType]
+                **merged_kwargs,
             )
 
             content = response.choices[0].message.content or '{}'

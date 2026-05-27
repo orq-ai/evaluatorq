@@ -123,6 +123,46 @@ class TestInvertRolesForSimulator:
     def test_empty_messages(self):
         assert _invert_roles_for_simulator([]) == []
 
+    def test_preserves_tool_calls_on_assistant_message(self):
+        """Regression: inversion must keep tool_calls/tool_call_id/name fields."""
+        from evaluatorq.contracts import FunctionCall, StrategyToolCall
+
+        tool_call = StrategyToolCall(
+            id="call_123",
+            function=FunctionCall(name="lookup", arguments='{"q": "x"}'),
+        )
+        messages = [
+            Message(role="assistant", content="thinking", tool_calls=[tool_call]),
+            Message(
+                role="tool",
+                content="result",
+                tool_call_id="call_123",
+                name="lookup",
+            ),
+        ]
+        result = _invert_roles_for_simulator(messages)
+
+        assert result[0].role == "user"
+        assert result[0].tool_calls == [tool_call]
+        assert result[1].role == "tool"
+        assert result[1].tool_call_id == "call_123"
+        assert result[1].name == "lookup"
+
+    def test_message_with_tool_role_round_trips(self):
+        """Tool-role messages with full superset fields survive serialize/deserialize."""
+        msg = Message(
+            role="tool",
+            content="42",
+            tool_call_id="call_abc",
+            name="calculator",
+        )
+        dumped = msg.model_dump()
+        rebuilt = Message.model_validate(dumped)
+        assert rebuilt == msg
+        assert rebuilt.role == "tool"
+        assert rebuilt.tool_call_id == "call_abc"
+        assert rebuilt.name == "calculator"
+
 
 class TestSimulationRunnerBatchValidation:
     @pytest.mark.asyncio

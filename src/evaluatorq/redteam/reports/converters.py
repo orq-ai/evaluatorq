@@ -620,26 +620,22 @@ def _is_vulnerable(r: RedTeamResult) -> bool:
 
 
 def _aggregate_token_usage(results: list[RedTeamResult]) -> TokenUsage | None:
-    """Sum token usage across all results that have execution details."""
-    total = prompt = completion = 0
-    calls = 0
+    """Sum token usage across all results, covering both execution and evaluator calls.
+
+    Walks both ``r.execution.token_usage`` (orchestrator: adversarial + target)
+    and ``r.evaluation.token_usage`` (per-attack evaluator) so the report's
+    grand total reflects the full LLM cost of the run.
+    """
+    total = TokenUsage()
     found = False
     for r in results:
         if r.execution and r.execution.token_usage:
-            u = r.execution.token_usage
-            total += u.total_tokens
-            prompt += u.prompt_tokens
-            completion += u.completion_tokens
-            calls += u.calls
+            total = total + r.execution.token_usage
             found = True
-    if not found:
-        return None
-    return TokenUsage(
-        total_tokens=total,
-        prompt_tokens=prompt,
-        completion_tokens=completion,
-        calls=calls,
-    )
+        if r.evaluation and r.evaluation.token_usage:
+            total = total + r.evaluation.token_usage
+            found = True
+    return total if found else None
 
 
 def compute_report_summary(results: list[RedTeamResult]) -> ReportSummary:

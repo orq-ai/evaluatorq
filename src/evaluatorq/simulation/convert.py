@@ -41,10 +41,12 @@ def to_open_responses(
                     "id": _generate_item_id("msg"),
                     "role": msg.role,
                     "status": "completed",
-                    "content": [{"type": "input_text", "text": msg.content}],
+                    "content": [{"type": "input_text", "text": msg.content or ""}],
                 }
             )
         elif msg.role == "assistant":
+            # tool_calls on assistant messages and role="tool" messages are not
+            # mapped here; the simulation runner currently never produces them.
             output_items.append(
                 {
                     "type": "message",
@@ -54,7 +56,7 @@ def to_open_responses(
                     "content": [
                         {
                             "type": "output_text",
-                            "text": msg.content,
+                            "text": msg.content or "",
                             "annotations": [],
                             "logprobs": [],
                         }
