@@ -144,6 +144,40 @@ class Message(BaseModel):
     name: str | None = Field(default=None, description="Function name (for role=tool)")
 
 
+def message_to_chat_param(m: Message) -> dict[str, Any]:
+    """Render a :class:`Message` as an OpenAI chat-completions message dict.
+
+    Preserves tool-call structure that a naive ``{"role", "content"}`` flatten
+    would drop: an assistant message's ``tool_calls`` and a ``tool`` row's
+    ``tool_call_id``/``name``. Used by stateless targets to replay a transcript
+    (built by ``turns_to_messages``) without losing multi-turn tool context.
+    """
+    if m.role == "tool":
+        param: dict[str, Any] = {
+            "role": "tool",
+            "tool_call_id": m.tool_call_id or "",
+            "content": m.content or "",
+        }
+        if m.name:
+            param["name"] = m.name
+        return param
+    if m.role == "assistant" and m.tool_calls:
+        # content may be None on a pure tool-call turn; OpenAI accepts null.
+        return {
+            "role": "assistant",
+            "content": m.content,
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                }
+                for tc in m.tool_calls
+            ],
+        }
+    return {"role": m.role, "content": m.content or ""}
+
+
 class TokenUsage(BaseModel):
     """Token usage and cost for an LLM call or aggregation of calls.
 
@@ -206,9 +240,17 @@ class AgentResponseError(BaseModel):
     Set when a target (or simulation agent) failed to produce a real response,
     e.g. a timeout or backend exception. The orchestrator uses its presence to
     exclude the turn from the transcript replayed to the target. ``message`` is
-    the same human text surfaced in ``AgentResponse.text``; ``error_type`` is a
-    coarse kind ("timeout" | "exception" | "content_filter" | "target_error" | ...); ``code`` is
-    an optional provider/mapped code.
+    the same human text surfaced in ``AgentResponse.text``; ``code`` is an
+    optional provider/mapped code.
+
+    ``error_type`` is a coarse, open-vocabulary string — consumers key off the
+    error's *presence*, not its value, so the field is intentionally not an
+    enum. The orchestrator sets ``"timeout"`` on the timeout path and otherwise
+    classifies the failure via
+    :func:`evaluatorq.redteam.contracts.classify_error_type`, which yields one
+    of ``content_filter``, ``rate_limit``, ``timeout``, ``network_error``,
+    ``server_error``, ``client_error``, or ``target_error`` (fallback for an
+    unmatched error). Other producers may set their own values.
 
     This is the leaf, per-response error. The whole-run rollup is
     :class:`evaluatorq.redteam.contracts.RunError`.
@@ -433,4 +475,5 @@ __all__ = [
     "TokenUsage",
     "ToolCallOutputItem",
     "ToolInfo",
+    "message_to_chat_param",
 ]

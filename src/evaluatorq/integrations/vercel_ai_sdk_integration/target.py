@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from evaluatorq.contracts import AgentTarget, Message
+from evaluatorq.contracts import AgentTarget, Message, message_to_chat_param
 from evaluatorq.redteam.contracts import AgentContext, AgentResponse, OutputMessage, TextOutputItem, TokenUsage
 
 
@@ -89,7 +89,7 @@ class VercelAISdkTarget(AgentTarget):
         sent as-is in the request body.
         """
         body: dict[str, Any] = {
-            "messages": [{"role": m.role, "content": m.content or ""} for m in messages],
+            "messages": [message_to_chat_param(m) for m in messages],
             **self._extra_body,
         }
         async with httpx.AsyncClient(timeout=self._timeout) as client:

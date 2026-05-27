@@ -9,7 +9,7 @@ import pytest
 
 pytest.importorskip("agents")
 
-from evaluatorq.contracts import Message  # noqa: E402
+from evaluatorq.contracts import FunctionCall, Message, StrategyToolCall  # noqa: E402
 from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget  # noqa: E402
 from evaluatorq.redteam.contracts import AgentResponse, TokenUsage  # noqa: E402
 
@@ -79,6 +79,34 @@ class TestOpenAIAgentTarget:
         input_data = call_args[0][1]
         assert isinstance(input_data, list)
         assert input_data[0] == {"role": "user", "content": "first"}
+
+    @pytest.mark.asyncio
+    async def test_respond_maps_tool_calls_to_responses_input_items(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A replayed transcript with tool calls becomes Responses-API input items
+        (function_call / function_call_output), not flattened chat messages."""
+        runner, _ = _mock_runner_and_result()
+        monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
+
+        target = OpenAIAgentTarget(MagicMock())
+        await target.respond([
+            Message(role="user", content="q1"),
+            Message(
+                role="assistant",
+                content=None,
+                tool_calls=[StrategyToolCall(id="c1", function=FunctionCall(name="lookup", arguments='{"q":"x"}'))],
+            ),
+            Message(role="tool", tool_call_id="c1", name="lookup", content="found"),
+            Message(role="user", content="q2"),
+        ])
+
+        input_data = runner.run.call_args[0][1]
+        fc = next(i for i in input_data if isinstance(i, dict) and i.get("type") == "function_call")
+        assert fc["call_id"] == "c1"
+        assert fc["name"] == "lookup"
+        assert fc["arguments"] == '{"q":"x"}'
+        fco = next(i for i in input_data if isinstance(i, dict) and i.get("type") == "function_call_output")
+        assert fco["call_id"] == "c1"
+        assert fco["output"] == "found"
 
     def test_new_returns_independent_instance(self) -> None:
         agent = MagicMock()

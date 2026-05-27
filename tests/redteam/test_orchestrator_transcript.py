@@ -47,11 +47,6 @@ class _RecordingTarget(AgentTarget):
         return _RecordingTarget(self._original_replies)
 
 
-def test_recording_target_is_constructible():
-    t = _RecordingTarget(["a"])
-    assert t.calls == []
-
-
 # ---------------------------------------------------------------------------
 # Helpers (mirrors test_orchestrator_coverage.py style)
 # ---------------------------------------------------------------------------
@@ -229,6 +224,14 @@ class TestOrchestratorTranscript:
         assert result.error_type is None
         assert result.n_turns == 3
 
+        # The recorded errored turn carries a typed timeout marker (this is what
+        # drives skip_errors — a mislabeled marker would silently change replay).
+        errored = [t for t in result.turns if t.target.error is not None]
+        assert len(errored) == 1
+        assert errored[0].target.error is not None
+        assert errored[0].target.error.error_type == "timeout"
+        assert errored[0].target.error.code == "target.timeout"
+
         # Turn 3's transcript should NOT contain q2 or its failed reply
         turn3_messages = target.calls[2]
         turn3_pairs = [(m.role, m.content) for m in turn3_messages]
@@ -242,6 +245,56 @@ class TestOrchestratorTranscript:
 
         # And the current prompt q3 is the last user message
         assert turn3_messages[-1] == Message(role="user", content="q3")
+
+    @pytest.mark.asyncio
+    @patch(_PATCH_RECORD_LLM)
+    @patch(_PATCH_LLM_SPAN, side_effect=_noop_span_ctx)
+    @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
+    async def test_exception_turn_carries_classified_error_type(self, _rs: Any, _ls: Any, _rl: Any) -> None:
+        """A target exception (not a timeout) is recorded with a classified error_type
+        derived from the message, while code carries the mapped backend code."""
+        orchestrator, mock_llm = _make_orchestrator()
+
+        class _RaisingTarget(AgentTarget):
+            def __init__(self) -> None:
+                super().__init__(memory_entity_id=None)
+                self.calls: list[list[Message]] = []
+                self._call_count = 0
+
+            async def respond(self, messages: list[Message]) -> AgentResponse:
+                self.calls.append(list(messages))
+                self._call_count += 1
+                if self._call_count == 2:
+                    raise RuntimeError("rate limit exceeded")
+                text = f"a{self._call_count}"
+                return AgentResponse(output=[TextOutputItem(text=text, annotations=[])])
+
+            def new(self) -> "_RaisingTarget":
+                return _RaisingTarget()
+
+        target = _RaisingTarget()
+        mock_llm.chat.completions.create.side_effect = [
+            _make_completion("q1"),
+            _make_completion("q2"),
+            _make_completion("q3"),
+        ]
+
+        result = await orchestrator.run_attack(
+            target=target,
+            strategy=_make_strategy(),
+            objective="Test exception classification",
+            agent_context=_make_context(),
+            max_turns=3,
+        )
+
+        assert result.n_turns == 3
+        errored = [t for t in result.turns if t.target.error is not None]
+        assert len(errored) == 1
+        assert errored[0].target.error is not None
+        # "rate limit exceeded" classifies to rate_limit (not the generic target_error)
+        assert errored[0].target.error.error_type == "rate_limit"
+        # _default_map_error (no backend) returns code "target_error"
+        assert errored[0].target.error.code == "target_error"
 
     @pytest.mark.asyncio
     @patch(_PATCH_RECORD_LLM)

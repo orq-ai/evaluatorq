@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from evaluatorq.contracts import Message
+from evaluatorq.contracts import FunctionCall, Message, StrategyToolCall
 from evaluatorq.integrations.vercel_ai_sdk_integration import VercelAISdkTarget
 from evaluatorq.integrations.vercel_ai_sdk_integration.target import (
     _parse_data_stream,
@@ -210,6 +210,36 @@ class TestVercelAISdkTarget:
         call_kwargs = mock_client.post.call_args
         body = call_kwargs.kwargs["json"]
         assert body["messages"] == [{"role": "user", "content": "hello"}]
+
+    @pytest.mark.asyncio
+    async def test_sends_tool_calls_in_messages(self) -> None:
+        """A replayed transcript with tool calls keeps them in the POST body."""
+        target = VercelAISdkTarget("http://test/api/chat")
+        mock_response = _mock_response('0:"ok"\n')
+
+        with patch("evaluatorq.integrations.vercel_ai_sdk_integration.target.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            await target.respond([
+                Message(role="user", content="q1"),
+                Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[StrategyToolCall(id="c1", function=FunctionCall(name="lookup", arguments="{}"))],
+                ),
+                Message(role="tool", tool_call_id="c1", name="lookup", content="r"),
+            ])
+
+        body = mock_client.post.call_args.kwargs["json"]
+        assistant = next(m for m in body["messages"] if m["role"] == "assistant")
+        assert assistant["tool_calls"][0]["id"] == "c1"
+        tool_row = next(m for m in body["messages"] if m["role"] == "tool")
+        assert tool_row["tool_call_id"] == "c1"
+        assert tool_row["content"] == "r"
 
     @pytest.mark.asyncio
     async def test_extra_body_merged(self) -> None:

@@ -35,6 +35,7 @@ from evaluatorq.redteam.contracts import (
     UnifiedEvaluationResult,
     Vulnerability,
     VulnerabilitySummary,
+    classify_error_type,
     infer_framework,
     normalize_category,
 )
@@ -47,35 +48,9 @@ from evaluatorq.redteam.vulnerability_registry import (
     resolve_category_safe,
 )
 
-# ---------------------------------------------------------------------------
-# Error classification
-# ---------------------------------------------------------------------------
-
-# Patterns matched against the error string to infer error_type.
-_ERROR_PATTERNS: list[tuple[str, str]] = [
-    ('content_filter', 'content_filter'),
-    ('content management policy', 'content_filter'),
-    ('rate limit', 'rate_limit'),
-    ('429', 'rate_limit'),
-    ('timeout', 'timeout'),
-    ('timed out', 'timeout'),
-    ('connection', 'network_error'),
-    ('Status 5', 'server_error'),
-    ('Status 4', 'client_error'),
-]
-
-
-def _classify_error(error: str | None, *, existing_type: str | None = None) -> str | None:
-    """Infer ``error_type`` from a raw error string when not already set."""
-    if existing_type:
-        return existing_type
-    if not error:
-        return None
-    lower = error.lower()
-    for pattern, etype in _ERROR_PATTERNS:
-        if pattern.lower() in lower:
-            return etype
-    return 'unknown'
+# Error classification lives in evaluatorq.redteam.contracts so the orchestrator
+# can share it without importing the report layer. Alias kept for call sites here.
+_classify_error = classify_error_type
 
 
 # ---------------------------------------------------------------------------

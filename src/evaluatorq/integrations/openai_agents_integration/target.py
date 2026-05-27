@@ -51,13 +51,14 @@ class OpenAIAgentTarget(AgentTarget):
         """Stateless: run the agent over the provided transcript.
 
         The OpenAI Agents SDK accepts a list of input items, so ``respond``
-        passes the full ``messages`` list directly. The caller (orchestrator)
+        renders each ``Message`` into Responses-API input items (preserving
+        tool calls / tool results) and passes them in. The caller (orchestrator)
         owns conversation continuity. Only the items the run *adds* (sliced
         from ``to_input_list()`` past the input length) are passed to
         ``_build_response``, so the returned ``AgentResponse`` reflects just
         this turn's output.
         """
-        input_data: list[Any] = [{"role": m.role, "content": m.content or ""} for m in messages]
+        input_data: list[Any] = [item for m in messages for item in _message_to_responses_input_items(m)]
         prev_len = len(input_data)
         try:
             result = await Runner.run(self._agent, input_data, **self._run_kwargs)
@@ -270,3 +271,32 @@ def _normalize_args_str(raw: Any) -> str:
         return raw
     except (json.JSONDecodeError, ValueError):
         return json.dumps({"raw": raw})
+
+
+def _message_to_responses_input_items(m: Message) -> list[dict[str, Any]]:
+    """Render a :class:`Message` as Responses-API input items.
+
+    Inverse of :meth:`OpenAIAgentTarget._build_response`: an assistant turn with
+    tool calls becomes a ``function_call`` item per call (plus a leading assistant
+    text message when content is present); a ``tool`` result becomes a
+    ``function_call_output``; anything else is a plain ``{"role", "content"}``
+    message. This preserves multi-turn tool context that a naive flatten drops,
+    matching what the SDK's ``to_input_list()`` round-trips.
+    """
+    if m.role == "tool":
+        return [{"type": "function_call_output", "call_id": m.tool_call_id or "", "output": m.content or ""}]
+    if m.role == "assistant" and m.tool_calls:
+        items: list[dict[str, Any]] = []
+        if m.content:
+            items.append({"role": "assistant", "content": m.content})
+        items.extend(
+            {
+                "type": "function_call",
+                "call_id": tc.id,
+                "name": tc.function.name,
+                "arguments": tc.function.arguments,
+            }
+            for tc in m.tool_calls
+        )
+        return items
+    return [{"role": m.role, "content": m.content or ""}]

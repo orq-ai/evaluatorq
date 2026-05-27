@@ -664,12 +664,47 @@ SendResult = AgentResponse  # deprecated alias; use AgentResponse directly
 class RunError(BaseModel):
     """Structured whole-run error for an attack/evaluation result (the rollup; per-response errors use :class:`evaluatorq.contracts.AgentResponseError`)."""
 
+    model_config = ConfigDict(frozen=True)
+
     message: str
     error_type: str
     stage: str | None = None
     code: str | None = None
     details: dict[str, Any] | None = None
     turn: int | None = None
+
+
+# Patterns matched against the error string to infer a coarse error_type.
+_ERROR_PATTERNS: list[tuple[str, str]] = [
+    ('content_filter', 'content_filter'),
+    ('content management policy', 'content_filter'),
+    ('rate limit', 'rate_limit'),
+    ('429', 'rate_limit'),
+    ('timeout', 'timeout'),
+    ('timed out', 'timeout'),
+    ('connection', 'network_error'),
+    ('Status 5', 'server_error'),
+    ('Status 4', 'client_error'),
+]
+
+
+def classify_error_type(error: str | None, *, existing_type: str | None = None) -> str | None:
+    """Infer a coarse ``error_type`` from a raw error string when not already set.
+
+    Returns ``existing_type`` unchanged when provided, ``None`` for an empty
+    error, the first matching pattern's type, or ``'unknown'`` when nothing
+    matches. Shared by the orchestrator (per-response :class:`AgentResponseError`)
+    and report converters (run-level rollup) so both classify identically.
+    """
+    if existing_type:
+        return existing_type
+    if not error:
+        return None
+    lower = error.lower()
+    for pattern, etype in _ERROR_PATTERNS:
+        if pattern.lower() in lower:
+            return etype
+    return 'unknown'
 
 
 # ---------------------------------------------------------------------------

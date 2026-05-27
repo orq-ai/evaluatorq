@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
-from evaluatorq.contracts import AgentTarget, Message
+from evaluatorq.contracts import AgentTarget, Message, message_to_chat_param
 from evaluatorq.redteam.backends._errors import extract_provider_error_code, extract_status_code
 from evaluatorq.redteam.backends.base import Backend
 from evaluatorq.redteam.contracts import (
@@ -96,7 +96,7 @@ class OpenAIModelTarget(AgentTarget):
             'list[ChatCompletionMessageParam]',
             [
                 {'role': 'system', 'content': self.system_prompt},
-                *[{'role': m.role, 'content': m.content or ''} for m in user_visible],
+                *[message_to_chat_param(m) for m in user_visible],
             ],
         )
         async with with_llm_span(

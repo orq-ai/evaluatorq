@@ -49,6 +49,32 @@ def test_tool_calls_preserved():
     assert assistant_with_tool.tool_calls[0].function.name == "lookup"
 
 
+def test_empty_output_emits_empty_assistant_row():
+    """An empty target output still yields a user/assistant pair (alternation invariant)."""
+    turn = Turn(
+        attacker=AttackerResponse(generated_prompt="q"),
+        target=AgentResponse(output=[]),
+    )
+    msgs = turns_to_messages([turn])
+    assert [(m.role, m.content) for m in msgs] == [("user", "q"), ("assistant", "")]
+
+
+def test_tool_result_emits_following_tool_row():
+    turn = Turn(
+        attacker=AttackerResponse(generated_prompt="go"),
+        target=AgentResponse(output=[
+            ToolCallOutputItem(name="lookup", arguments='{"q":"x"}', id="c1", call_id="c1", result="found"),
+        ]),
+    )
+    msgs = turns_to_messages([turn])
+    tool_row = next(m for m in msgs if m.role == "tool")
+    assert tool_row.tool_call_id == "c1"
+    assert tool_row.content == "found"
+    # the tool row immediately follows its assistant tool_calls row
+    assistant_idx = next(i for i, m in enumerate(msgs) if m.role == "assistant" and m.tool_calls)
+    assert msgs[assistant_idx + 1] is tool_row
+
+
 def test_skip_errors_drops_errored_turn():
     turns = [_turn("q1", "a1"), _turn("q2", "[ERROR: boom]", error=True), _turn("q3", "a3")]
     kept = turns_to_messages(turns, skip_errors=True)

@@ -31,6 +31,7 @@ from evaluatorq.redteam.contracts import (
     OrchestratorResult,
     TokenUsage,
     Turn,
+    classify_error_type,
     turns_to_messages,
 )
 from evaluatorq.redteam.tracing import (
@@ -643,8 +644,11 @@ class MultiTurnOrchestrator:
                             })
                             break
 
-                    # Send attack to target agent
+                    # Send attack to target agent. The transcript is derived from
+                    # the recorded turns BEFORE the try: it is a pure local op, so a
+                    # bug here must not be misattributed to the target by the except.
                     target_timeout_s = self._cfg.target_agent_timeout_ms / 1000.0
+                    transcript = turns_to_messages(turns_record, skip_errors=True)
                     try:
                         async with with_redteam_span(
                             "orq.redteam.target_call",
@@ -655,7 +659,6 @@ class MultiTurnOrchestrator:
                                 "orq.redteam.input": truncate_for_span(attack_prompt),
                             },
                         ) as tgt_span:
-                            transcript = turns_to_messages(turns_record, skip_errors=True)
                             raw_response = await asyncio.wait_for(
                                 target.respond([*transcript, Message(role="user", content=attack_prompt)]),
                                 timeout=target_timeout_s,
@@ -711,11 +714,16 @@ class MultiTurnOrchestrator:
                         consecutive_agent_errors += 1
                         mapped_code, error_msg = self._backend.map_error(e) if self._backend is not None else _default_map_error(e)
                         agent_response = f'[ERROR: {error_msg}]'
+                        classified = classify_error_type(error_msg)
                         _tgt_result = AgentResponse(
                             output=[TextOutputItem(text=agent_response, annotations=[])],
-                            error=AgentResponseError(message=agent_response, error_type="target_error", code=mapped_code),
+                            error=AgentResponseError(
+                                message=agent_response,
+                                error_type=classified if classified and classified != 'unknown' else 'target_error',
+                                code=mapped_code,
+                            ),
                         )
-                        logger.warning(f'Target agent error on turn {turn + 1}/{max_turns}: {error_msg}')
+                        logger.warning(f'Target agent error on turn {turn + 1}/{max_turns}: {error_msg}', exc_info=True)
 
                         if consecutive_agent_errors >= 2:
                             # Persistent failure — abort to avoid wasting turns

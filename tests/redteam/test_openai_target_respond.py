@@ -14,7 +14,7 @@ import pytest
 
 pytest.importorskip("openai")
 
-from evaluatorq.contracts import AgentResponse, Message
+from evaluatorq.contracts import AgentResponse, FunctionCall, Message, StrategyToolCall
 from evaluatorq.redteam.backends.openai import OpenAIModelTarget
 
 
@@ -101,6 +101,37 @@ async def test_respond_extracts_tool_calls_into_output():
     assert call.name == "lookup"
     assert call.arguments == '{"q": "x"}'
     assert call.id == "call_abc"
+
+
+@pytest.mark.asyncio
+async def test_respond_preserves_tool_calls_in_replayed_transcript():
+    """A replayed assistant tool_calls message + tool result must reach the API
+    intact, not flattened to {role, content}."""
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=_make_openai_response())
+    target = _make_target(client)
+
+    transcript = [
+        Message(role="user", content="q1"),
+        Message(
+            role="assistant",
+            content=None,
+            tool_calls=[StrategyToolCall(id="call_1", function=FunctionCall(name="lookup", arguments='{"q":"x"}'))],
+        ),
+        Message(role="tool", tool_call_id="call_1", name="lookup", content="result-text"),
+        Message(role="user", content="q2"),
+    ]
+
+    with patch("evaluatorq.redteam.tracing.get_tracer", return_value=None):
+        await target.respond(transcript)
+
+    sent = client.chat.completions.create.call_args.kwargs["messages"]
+    assistant = next(m for m in sent if m["role"] == "assistant")
+    assert assistant["tool_calls"][0]["id"] == "call_1"
+    assert assistant["tool_calls"][0]["function"]["name"] == "lookup"
+    tool_row = next(m for m in sent if m["role"] == "tool")
+    assert tool_row["tool_call_id"] == "call_1"
+    assert tool_row["content"] == "result-text"
 
 
 @pytest.mark.asyncio
