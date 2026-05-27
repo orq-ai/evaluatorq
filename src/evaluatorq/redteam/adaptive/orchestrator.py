@@ -19,7 +19,7 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TextColumn
 from typing_extensions import Self
 
 from evaluatorq.common.sanitize import xml_escape
-from evaluatorq.contracts import AgentResponse, AgentTarget, TextOutputItem
+from evaluatorq.contracts import AgentResponse, AgentResponseError, AgentTarget, Message, TextOutputItem
 from evaluatorq.redteam.backends.base import Backend, _coerce_to_agent_response
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
@@ -31,6 +31,7 @@ from evaluatorq.redteam.contracts import (
     OrchestratorResult,
     TokenUsage,
     Turn,
+    turns_to_messages,
 )
 from evaluatorq.redteam.tracing import (
     record_llm_response,
@@ -654,8 +655,9 @@ class MultiTurnOrchestrator:
                                 "orq.redteam.input": truncate_for_span(attack_prompt),
                             },
                         ) as tgt_span:
+                            transcript = turns_to_messages(turns_record, skip_errors=True)
                             raw_response = await asyncio.wait_for(
-                                target.send_prompt(attack_prompt),
+                                target.respond([*transcript, Message(role="user", content=attack_prompt)]),
                                 timeout=target_timeout_s,
                             )
                             _tgt_result = _coerce_to_agent_response(raw_response)
@@ -675,7 +677,10 @@ class MultiTurnOrchestrator:
                     except asyncio.TimeoutError:
                         consecutive_agent_errors += 1
                         agent_response = f'[ERROR: Target agent timed out after {target_timeout_s:.0f}s]'
-                        _tgt_result = AgentResponse(output=[TextOutputItem(text=agent_response, annotations=[])])
+                        _tgt_result = AgentResponse(
+                            output=[TextOutputItem(text=agent_response, annotations=[])],
+                            error=AgentResponseError(message=agent_response, error_type="timeout", code="target.timeout"),
+                        )
                         logger.warning(f'Target agent timed out on turn {turn + 1}/{max_turns}')
 
                         if consecutive_agent_errors >= 2:
@@ -692,7 +697,7 @@ class MultiTurnOrchestrator:
                             error_turn = turn + 1
                             turns_record.append(Turn(
                                 attacker=current_attacker,
-                                target=AgentResponse(output=[TextOutputItem(text=agent_response, annotations=[])]),
+                                target=_tgt_result,
                             ))
                             if progress is not None and task_id is not None:
                                 await progress.update_attack(task_id, completed=turn + 1)
@@ -706,7 +711,10 @@ class MultiTurnOrchestrator:
                         consecutive_agent_errors += 1
                         mapped_code, error_msg = self._backend.map_error(e) if self._backend is not None else _default_map_error(e)
                         agent_response = f'[ERROR: {error_msg}]'
-                        _tgt_result = AgentResponse(output=[TextOutputItem(text=agent_response, annotations=[])])
+                        _tgt_result = AgentResponse(
+                            output=[TextOutputItem(text=agent_response, annotations=[])],
+                            error=AgentResponseError(message=agent_response, error_type="target_error", code=mapped_code),
+                        )
                         logger.warning(f'Target agent error on turn {turn + 1}/{max_turns}: {error_msg}')
 
                         if consecutive_agent_errors >= 2:
@@ -726,7 +734,7 @@ class MultiTurnOrchestrator:
                             error_turn = turn + 1
                             turns_record.append(Turn(
                                 attacker=current_attacker,
-                                target=AgentResponse(output=[TextOutputItem(text=agent_response, annotations=[])]),
+                                target=_tgt_result,
                             ))
                             if progress is not None and task_id is not None:
                                 await progress.update_attack(task_id, completed=turn + 1)
