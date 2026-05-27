@@ -1262,6 +1262,7 @@ class RedTeamReport(BaseModel):
     token_usage_summary: TokenUsage | None = None
     duration_seconds: float | None = None
     pipeline_warnings: list[str] = Field(default_factory=list)
+    experiment_url: str | None = None
 
     @field_validator('pipeline', mode='before')
     @classmethod
