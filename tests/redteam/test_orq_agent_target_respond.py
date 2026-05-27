@@ -8,7 +8,7 @@ whose final message is not a user turn.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock, patch  # patch/Any used in remaining tests
+from unittest.mock import MagicMock, patch
 
 import pytest
 

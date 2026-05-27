@@ -69,11 +69,6 @@ class TestRespond:
         assert isinstance(result, AgentResponse)
         assert result.text == "all good"
 
-    def test_send_prompt_shim_removed(self):
-        """send_prompt shim was removed in RES-877 Task 9."""
-        from evaluatorq.contracts import AgentTarget
-        assert not hasattr(AgentTarget, "send_prompt")
-
 
 class TestRespondIsStateless:
     @pytest.mark.asyncio

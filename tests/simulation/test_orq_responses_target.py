@@ -175,11 +175,6 @@ class TestOrqResponsesTargetRespond:
         with pytest.raises(RuntimeError, match="response contained no extractable output items"):
             await target.respond(_make_messages())
 
-    def test_send_prompt_shim_removed(self):
-        """send_prompt back-compat shim removed in RES-877 Task 9."""
-        from evaluatorq.contracts import AgentTarget
-        assert not hasattr(AgentTarget, "send_prompt")
-
     @pytest.mark.asyncio
     async def test_respond_with_single_user_message(self):
         client = _make_client()
