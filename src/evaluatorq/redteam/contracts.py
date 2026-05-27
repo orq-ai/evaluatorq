@@ -661,8 +661,8 @@ SendResult = AgentResponse  # deprecated alias; use AgentResponse directly
 # ---------------------------------------------------------------------------
 
 
-class ErrorInfo(BaseModel):
-    """Structured error information for attack/evaluation results."""
+class RunError(BaseModel):
+    """Structured whole-run error for an attack/evaluation result (the rollup; per-response errors use AgentResponseError)."""
 
     message: str
     error_type: str
@@ -850,11 +850,11 @@ class OrchestratorResult(BaseModel):
         return msgs
 
     @property
-    def error_info(self) -> 'ErrorInfo | None':
+    def error_info(self) -> 'RunError | None':
         """Structured view of the flat error fields."""
         if self.error is None:
             return None
-        return ErrorInfo(
+        return RunError(
             message=self.error,
             error_type=self.error_type or 'unknown',
             stage=self.error_stage,
@@ -1056,11 +1056,11 @@ class RedTeamResult(BaseModel):
     error_details: dict[str, Any] | None = None
 
     @property
-    def error_info(self) -> 'ErrorInfo | None':
+    def error_info(self) -> 'RunError | None':
         """Structured view of the flat error fields."""
         if self.error is None:
             return None
-        return ErrorInfo(
+        return RunError(
             message=self.error,
             error_type=self.error_type or 'unknown',
             stage=self.error_stage,
