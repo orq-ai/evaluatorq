@@ -196,6 +196,32 @@ class TokenUsage(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# AgentResponseError
+# ---------------------------------------------------------------------------
+
+
+class AgentResponseError(BaseModel):
+    """A per-response error marker on :class:`AgentResponse`.
+
+    Set when a target (or simulation agent) failed to produce a real response,
+    e.g. a timeout or backend exception. The orchestrator uses its presence to
+    exclude the turn from the transcript replayed to the target. ``message`` is
+    the same human text surfaced in ``AgentResponse.text``; ``error_type`` is a
+    coarse kind ("timeout" | "exception" | "content_filter" | ...); ``code`` is
+    an optional provider/mapped code.
+
+    This is the leaf, per-response error. The whole-run rollup is
+    :class:`evaluatorq.redteam.contracts.RunError`.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    message: str
+    error_type: str
+    code: str | None = None
+
+
+# ---------------------------------------------------------------------------
 # AgentResponse
 # ---------------------------------------------------------------------------
 
@@ -221,6 +247,7 @@ class AgentResponse(BaseModel):
     model: str | None = None
     response_id: str | None = None
     finish_reason: str | None = None
+    error: AgentResponseError | None = None
 
     if TYPE_CHECKING:
 
@@ -233,6 +260,7 @@ class AgentResponse(BaseModel):
             model: str | None = None,
             response_id: str | None = None,
             finish_reason: str | None = None,
+            error: AgentResponseError | None = None,
         ) -> None: ...
 
     @model_validator(mode="before")
@@ -395,6 +423,7 @@ __all__ = [
     "DEFAULT_TARGET_TIMEOUT_MS",
     "AgentContext",
     "AgentResponse",
+    "AgentResponseError",
     "AgentTarget",
     "FunctionCall",
     "KnowledgeBaseInfo",
