@@ -42,47 +42,17 @@ class OpenAIAgentTarget(AgentTarget):
             agent: An OpenAI Agents SDK Agent instance.
             run_kwargs: Optional extra keyword arguments passed to ``Runner.run()``
                 (e.g. ``{"max_turns": 10}``).
-        OpenAI Agents SDK keeps conversation state client-side in ``_history``;
-        there is no server-side memory entity to isolate across parallel jobs.
         """
         super().__init__(memory_entity_id=None)
         self._agent = agent
         self._run_kwargs = run_kwargs or {}
-        self._history: list[Any] = []
-
-    async def send_prompt(self, prompt: str) -> AgentResponse:
-        """Send a prompt to the agent and return its response with usage + tool calls."""
-        input_data: str | list[Any] = prompt
-        prev_len = len(self._history)
-        if self._history:
-            input_data = [*self._history, {"role": "user", "content": prompt}]
-
-        try:
-            result = await Runner.run(self._agent, input_data, **self._run_kwargs)
-        except (asyncio.CancelledError, asyncio.TimeoutError):
-            raise
-        except Exception as exc:
-            raise RuntimeError(
-                f"OpenAIAgentTarget: Runner.run() raised an error: {exc}"
-            ) from exc
-
-        if result.final_output is None:
-            raise ValueError(
-                "OpenAIAgentTarget: Runner.run() returned final_output=None. "
-                "Ensure the agent produces a text response."
-            )
-
-        self._history = result.to_input_list()
-        new_items = self._history[min(prev_len, len(self._history)):]
-        return self._build_response(new_items, result)
 
     async def respond(self, messages: list[Message]) -> AgentResponse:
         """Stateless: run the agent over the provided transcript.
 
         The OpenAI Agents SDK accepts a list of input items, so ``respond``
-        passes the full ``messages`` list and neither reads nor writes
-        ``self._history``. The caller owns conversation continuity; redteam
-        single-prompt callers that want per-instance history use ``send_prompt``.
+        passes the full ``messages`` list directly. The caller (orchestrator)
+        owns conversation continuity.
         """
         input_data: list[Any] = [{"role": m.role, "content": m.content or ""} for m in messages]
         prev_len = len(input_data)
@@ -242,10 +212,6 @@ class OpenAIAgentTarget(AgentTarget):
             tools=tools,
             model=model,
         )
-
-    def reset_conversation(self) -> None:
-        """Clear accumulated conversation history for a fresh attack turn."""
-        self._history = []
 
     def clone(self) -> OpenAIAgentTarget:
         """Return a fresh instance with empty history for parallel job safety."""
