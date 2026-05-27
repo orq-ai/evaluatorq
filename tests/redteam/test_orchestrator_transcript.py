@@ -34,6 +34,7 @@ class _RecordingTarget(AgentTarget):
 
     def __init__(self, replies: list[str]) -> None:
         super().__init__(memory_entity_id=None)
+        self._original_replies = list(replies)
         self._replies = list(replies)
         self.calls: list[list[Message]] = []
 
@@ -43,7 +44,7 @@ class _RecordingTarget(AgentTarget):
         return AgentResponse(output=[TextOutputItem(text=text, annotations=[])])
 
     def new(self) -> "_RecordingTarget":
-        return _RecordingTarget(self._replies)
+        return _RecordingTarget(self._original_replies)
 
 
 def test_recording_target_is_constructible():

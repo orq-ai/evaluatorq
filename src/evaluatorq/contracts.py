@@ -207,7 +207,7 @@ class AgentResponseError(BaseModel):
     e.g. a timeout or backend exception. The orchestrator uses its presence to
     exclude the turn from the transcript replayed to the target. ``message`` is
     the same human text surfaced in ``AgentResponse.text``; ``error_type`` is a
-    coarse kind ("timeout" | "exception" | "content_filter" | ...); ``code`` is
+    coarse kind ("timeout" | "exception" | "content_filter" | "target_error" | ...); ``code`` is
     an optional provider/mapped code.
 
     This is the leaf, per-response error. The whole-run rollup is
