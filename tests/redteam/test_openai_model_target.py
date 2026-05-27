@@ -1,8 +1,9 @@
 # tests/redteam/test_openai_model_target.py
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+
 from evaluatorq.contracts import Message
 from evaluatorq.redteam.backends.openai import OpenAIModelTarget
 from evaluatorq.redteam.contracts import AgentContext, TargetKind
@@ -34,18 +35,6 @@ def _make_completion_response(
     response.model = model
     response.id = "chatcmpl-test"
     return response
-
-
-def _make_tool_call(id: str = "tc-1", name: str = "search", arguments: str = '{"q":"hi"}') -> MagicMock:
-    func = MagicMock()
-    func.name = name
-    func.arguments = arguments
-
-    tc = MagicMock()
-    tc.id = id
-    tc.function = func
-    tc.type = "function"
-    return tc
 
 
 def test_optional_client_auto_creates():
