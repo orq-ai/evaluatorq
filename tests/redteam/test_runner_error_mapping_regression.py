@@ -146,7 +146,7 @@ async def test_orchestrator_uses_backend_map_error_for_error_code(_rs, _ls, _rl)
     )
 
     target = MagicMock()
-    target.send_prompt = AsyncMock(side_effect=[_OrqHTTPError(429), _OrqHTTPError(429)])
+    target.respond = AsyncMock(side_effect=[_OrqHTTPError(429), _OrqHTTPError(429)])
     target.new = MagicMock()
 
     result = await orchestrator.run_attack(

@@ -25,6 +25,7 @@ from evaluatorq.redteam.contracts import (
     AttackTechnique,
     DeliveryMethod,
     MemoryStoreInfo,
+    Message,
     OrchestratorResult,
     SendResult,
     TokenUsage,
@@ -107,7 +108,7 @@ def _make_datapoint(
 
 def _make_target(memory_entity_id: str | None = None) -> MagicMock:
     target = MagicMock()
-    target.send_prompt = AsyncMock(return_value=SendResult(text="Safe response from agent."))
+    target.respond = AsyncMock(return_value=SendResult(text="Safe response from agent."))
     target.new = MagicMock()
     target.memory_entity_id = memory_entity_id
     return target
@@ -272,8 +273,8 @@ class TestTemplateSingleTurnPath:
             output = await _call_dynamic_job(job_fn, datapoint)
 
         # Target should have been called once
-        target.send_prompt.assert_called_once()
-        sent_prompt = target.send_prompt.call_args[0][0]
+        target.respond.assert_called_once()
+        sent_prompt = target.respond.call_args[0][0][-1].content
         # The template substitution should have occurred (not contain raw {agent_name})
         assert "{agent_name}" not in sent_prompt
 
@@ -590,7 +591,7 @@ class TestProgrammingErrorsPropagate:
             prompt_template="Static attack for {agent_name}.",
         )
         target = _make_target()
-        target.send_prompt = AsyncMock(side_effect=TypeError("type mismatch"))
+        target.respond = AsyncMock(side_effect=TypeError("type mismatch"))
         factory = _make_target_factory(target)
         agent_context = _make_agent_context()
         datapoint = _make_datapoint(strategy=strategy)
@@ -782,7 +783,7 @@ class TestRuntimeErrorsProduceErrorOutput:
             prompt_template="Static attack for {agent_name}.",
         )
         target = _make_target()
-        target.send_prompt = AsyncMock(side_effect=RuntimeError("Service unavailable"))
+        target.respond = AsyncMock(side_effect=RuntimeError("Service unavailable"))
         factory = _make_target_factory(target)
         agent_context = _make_agent_context()
         datapoint = _make_datapoint(strategy=strategy)
@@ -821,7 +822,7 @@ class TestRuntimeErrorsProduceErrorOutput:
             prompt_template="Static attack for {agent_name}.",
         )
         target = _make_target()
-        target.send_prompt = AsyncMock(side_effect=asyncio.TimeoutError())
+        target.respond = AsyncMock(side_effect=asyncio.TimeoutError())
         factory = _make_target_factory(target)
         agent_context = _make_agent_context()
         datapoint = _make_datapoint(strategy=strategy)
@@ -1023,7 +1024,7 @@ class TestSingleTurnTokenUsagePropagation:
 
         usage = TokenUsage(prompt_tokens=11, completion_tokens=4, total_tokens=15, calls=1)
         target = _make_target()
-        target.send_prompt = AsyncMock(
+        target.respond = AsyncMock(
             return_value=SendResult(text="hi", usage=usage)
         )
         factory = _make_target_factory(target)

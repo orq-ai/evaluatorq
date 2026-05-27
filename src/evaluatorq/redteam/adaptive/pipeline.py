@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, Job, job
-from evaluatorq.contracts import AgentResponse
+from evaluatorq.contracts import AgentResponse, Message
 from evaluatorq.redteam.adaptive.attack_generator import generate_attack_prompt, generate_objective
 from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator, _get_active_progress
@@ -369,7 +369,7 @@ def create_dynamic_redteam_job(
                         },
                     ) as tgt_span:
                         raw = await asyncio.wait_for(
-                            target.send_prompt(prompt),
+                            target.respond([Message(role="user", content=prompt)]),
                             timeout=target_timeout_s,
                         )
                         agent_resp = _coerce_to_agent_response(raw)
