@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from evaluatorq.contracts import AgentResponse, AgentResponseError
 
 
@@ -21,9 +24,8 @@ def test_agent_response_carries_error_and_text():
 
 
 def test_agent_response_error_is_frozen():
-    import pytest
     err = AgentResponseError(message="m", error_type="timeout")
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         err.message = "changed"  # type: ignore[misc]
 
 
