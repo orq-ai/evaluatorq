@@ -7,6 +7,7 @@ import json
 from typing import Any
 
 from agents import Agent, Runner
+from loguru import logger
 
 from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.contracts import (
@@ -76,6 +77,13 @@ class OpenAIAgentTarget(AgentTarget):
             )
 
         full_list = result.to_input_list()
+        if full_list[:prev_len] != input_data:
+            logger.warning(
+                "OpenAIAgentTarget: Runner.to_input_list() no longer echoes the input "
+                "items 1:1 at the front (sent prev_len={n}, prefix differs); the "
+                "new-items slice may misalign. Treat response output as approximate.",
+                n=prev_len,
+            )
         new_items = full_list[min(prev_len, len(full_list)):]
         return self._build_response(new_items, result)
 

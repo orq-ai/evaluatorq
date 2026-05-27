@@ -649,6 +649,9 @@ class MultiTurnOrchestrator:
                     # bug here must not be misattributed to the target by the except.
                     target_timeout_s = self._cfg.target_agent_timeout_ms / 1000.0
                     transcript = turns_to_messages(turns_record, skip_errors=True)
+                    # Accumulated only on the success path, AFTER the try below, so a
+                    # bug in the token arithmetic is never misattributed to the target.
+                    turn_usage: TokenUsage | None = None
                     try:
                         async with with_redteam_span(
                             "orq.redteam.target_call",
@@ -671,12 +674,7 @@ class MultiTurnOrchestrator:
                                 "output": _resp_text,
                                 "orq.redteam.output": _resp_text,
                             })
-                            target_usage: TokenUsage | None = _tgt_result.usage
-                            if target_usage is not None:
-                                target_prompt_tokens += int(target_usage.prompt_tokens or 0)
-                                target_completion_tokens += int(target_usage.completion_tokens or 0)
-                                target_total_tokens += int(target_usage.total_tokens or 0)
-                                target_calls += int(target_usage.calls or 0) or 1
+                            turn_usage = _tgt_result.usage
                     except asyncio.TimeoutError:
                         consecutive_agent_errors += 1
                         agent_response = f'[ERROR: Target agent timed out after {target_timeout_s:.0f}s]'
@@ -752,6 +750,15 @@ class MultiTurnOrchestrator:
                                 "orq.redteam.finish_reason": "target_error",
                             })
                             break
+
+                    # Accumulate token usage outside the target-blame try (above), so
+                    # arithmetic bugs aren't mapped to target_error. Only the success
+                    # path sets turn_usage; recoverable error turns leave it None.
+                    if turn_usage is not None:
+                        target_prompt_tokens += int(turn_usage.prompt_tokens or 0)
+                        target_completion_tokens += int(turn_usage.completion_tokens or 0)
+                        target_total_tokens += int(turn_usage.total_tokens or 0)
+                        target_calls += int(turn_usage.calls or 0) or 1
 
                     # Record the completed turn (target succeeded)
                     turns_record.append(Turn(attacker=current_attacker, target=_tgt_result))

@@ -137,6 +137,51 @@ class TestOpenAIAgentTarget:
         assert tool_calls[0].name == "lookup"
         assert tool_calls[0].arguments == '{"q":"x"}'
 
+    @pytest.mark.asyncio
+    async def test_no_warning_when_input_echoed(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """When to_input_list() echoes our input at the front, the slice is sound — no warning."""
+        result = MagicMock()
+        result.final_output = "resp"
+        result.to_input_list.return_value = [
+            {"role": "user", "content": "hi"},  # echoes the rendered input 1:1
+            {"role": "assistant", "content": "resp"},
+        ]
+        del result.context_wrapper
+        runner = MagicMock()
+        runner.run = AsyncMock(return_value=result)
+        monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
+
+        target = OpenAIAgentTarget(MagicMock())
+        with caplog.at_level("WARNING"):
+            resp = await target.respond([Message(role="user", content="hi")])
+        assert resp.text == "resp"
+        assert "no longer echoes" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_warns_when_input_not_echoed(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """If the SDK stops echoing input 1:1 at the front, the slice may misalign —
+        respond() must warn loudly (not corrupt output silently) and still return a response."""
+        result = MagicMock()
+        result.final_output = "resp"
+        result.to_input_list.return_value = [
+            {"role": "system", "content": "normalized"},  # front differs from sent input
+            {"role": "assistant", "content": "resp"},
+        ]
+        del result.context_wrapper
+        runner = MagicMock()
+        runner.run = AsyncMock(return_value=result)
+        monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
+
+        target = OpenAIAgentTarget(MagicMock())
+        with caplog.at_level("WARNING"):
+            resp = await target.respond([Message(role="user", content="hi")])
+        assert isinstance(resp, AgentResponse)
+        assert "no longer echoes" in caplog.text
+
     def test_new_returns_independent_instance(self) -> None:
         agent = MagicMock()
         target = OpenAIAgentTarget(agent, run_kwargs={"max_turns": 5})

@@ -11,6 +11,7 @@ and passes the full message list to respond().
 
 from __future__ import annotations
 
+import os
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -20,6 +21,9 @@ pytest.importorskip("agents")
 
 from evaluatorq.contracts import Message  # noqa: E402
 from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget  # noqa: E402
+from evaluatorq.integrations.openai_agents_integration.target import (  # noqa: E402
+    _message_to_responses_input_items,
+)
 
 
 def _make_result(output: str, history: list[dict[str, Any]]) -> MagicMock:
@@ -76,3 +80,31 @@ class TestOpenAIAgentIntegration:
         # Stateless — clone is just a fresh instance sharing the same agent
         r = await cloned.respond([Message(role="user", content="Hello from clone")])
         assert r.text == "response"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_to_input_list_echoes_input_prefix() -> None:
+    """Real Agents SDK: to_input_list() echoes our input 1:1 at the front.
+
+    Guards the core assumption in ``OpenAIAgentTarget.respond``: the new-items
+    slice ``full_list[prev_len:]`` only yields this turn's output because the SDK
+    returns ``input + appended`` from ``to_input_list()``. If a future SDK version
+    normalizes or reorders the input, this test fails loud (and the runtime guard
+    in ``respond`` warns). Requires ``OPENAI_API_KEY``.
+    """
+    if not os.getenv("OPENAI_API_KEY"):
+        pytest.skip("requires OPENAI_API_KEY")
+
+    from agents import Agent, Runner
+
+    agent = Agent(name="echo-probe", instructions="Reply with a single short word.")
+    messages = [Message(role="user", content="Say hello in one word.")]
+    input_data = [item for m in messages for item in _message_to_responses_input_items(m)]
+    prev_len = len(input_data)
+
+    result = await Runner.run(agent, input_data)
+    full_list = result.to_input_list()
+
+    assert full_list[:prev_len] == input_data, "SDK no longer echoes input 1:1 at the front"
+    assert len(full_list) > prev_len, "run should append at least the assistant reply"

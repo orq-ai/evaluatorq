@@ -89,7 +89,10 @@ class OpenAIModelTarget(AgentTarget):
 
         The caller owns the transcript. ``self.system_prompt`` is always
         prepended, so any leading ``system`` messages in ``messages`` are
-        stripped to avoid a double system prompt.
+        stripped to avoid a double system prompt. Assistant ``tool_calls`` and
+        ``tool`` results in the transcript are preserved (rendered as OpenAI
+        chat params via :func:`~evaluatorq.contracts.message_to_chat_param`), so
+        multi-turn tool-using transcripts replay faithfully.
         """
         user_visible = [m for m in messages if m.role != 'system']
         completion_messages = cast(

@@ -212,8 +212,8 @@ class TestVercelAISdkTarget:
         assert body["messages"] == [{"role": "user", "content": "hello"}]
 
     @pytest.mark.asyncio
-    async def test_sends_tool_calls_in_messages(self) -> None:
-        """A replayed transcript with tool calls keeps them in the POST body."""
+    async def test_sends_tool_calls_as_ai_sdk_parts(self) -> None:
+        """A replayed transcript with tool calls becomes AI SDK v5 CoreMessage parts."""
         target = VercelAISdkTarget("http://test/api/chat")
         mock_response = _mock_response('0:"ok"\n')
 
@@ -229,19 +229,70 @@ class TestVercelAISdkTarget:
                 Message(
                     role="assistant",
                     content=None,
-                    tool_calls=[StrategyToolCall(id="c1", function=FunctionCall(name="lookup", arguments="{}"))],
+                    tool_calls=[StrategyToolCall(id="c1", function=FunctionCall(name="lookup", arguments='{"q": "x"}'))],
                 ),
                 Message(role="tool", tool_call_id="c1", name="lookup", content="r"),
             ])
 
         body = mock_client.post.call_args.kwargs["json"]
+        # Plain user turn unchanged
+        assert {"role": "user", "content": "q1"} in body["messages"]
+        # Assistant tool call rendered as a v5 tool-call part with parsed `input`
         assistant = next(m for m in body["messages"] if m["role"] == "assistant")
-        assert assistant["tool_calls"] == [
-            {"id": "c1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+        assert assistant["content"] == [
+            {"type": "tool-call", "toolCallId": "c1", "toolName": "lookup", "input": {"q": "x"}}
         ]
+        # Tool result rendered as a v5 tool-result part with typed `output`
         tool_row = next(m for m in body["messages"] if m["role"] == "tool")
-        assert tool_row["tool_call_id"] == "c1"
-        assert tool_row["content"] == "r"
+        assert tool_row["content"] == [
+            {
+                "type": "tool-result",
+                "toolCallId": "c1",
+                "toolName": "lookup",
+                "output": {"type": "text", "value": "r"},
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_sends_tool_calls_as_v4_parts(self) -> None:
+        """message_format='v4' renders tool turns with legacy `args` / bare `result`."""
+        target = VercelAISdkTarget("http://test/api/chat", message_format="v4")
+        mock_response = _mock_response('0:"ok"\n')
+
+        with patch("evaluatorq.integrations.vercel_ai_sdk_integration.target.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            await target.respond([
+                Message(role="user", content="q1"),
+                Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[StrategyToolCall(id="c1", function=FunctionCall(name="lookup", arguments='{"q": "x"}'))],
+                ),
+                Message(role="tool", tool_call_id="c1", name="lookup", content="r"),
+            ])
+
+        body = mock_client.post.call_args.kwargs["json"]
+        assert {"role": "user", "content": "q1"} in body["messages"]
+        # v4 tool-call uses `args`, not `input`
+        assistant = next(m for m in body["messages"] if m["role"] == "assistant")
+        assert assistant["content"] == [
+            {"type": "tool-call", "toolCallId": "c1", "toolName": "lookup", "args": {"q": "x"}}
+        ]
+        # v4 tool-result uses a bare `result`, not the typed `output` wrapper
+        tool_row = next(m for m in body["messages"] if m["role"] == "tool")
+        assert tool_row["content"] == [
+            {"type": "tool-result", "toolCallId": "c1", "toolName": "lookup", "result": "r"}
+        ]
+
+    def test_new_preserves_message_format(self) -> None:
+        """new() forwards the configured tool wire format to the fresh instance."""
+        target = VercelAISdkTarget("http://test/api/chat", message_format="v4")
+        assert target.new()._message_format == "v4"
 
     @pytest.mark.asyncio
     async def test_extra_body_merged(self) -> None:
