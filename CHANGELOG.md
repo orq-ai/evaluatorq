@@ -115,3 +115,29 @@ from evaluatorq.contracts import AgentTarget   # replaces the simulation TargetA
 - RUF027 added to Ruff ignore list (intentional literal string keys used as `safe_substitute` template placeholders)
 - CLI `--save` flag migrated to `typer.Choice`
 - Ruff cleanup across all redteam modules (import sorting, `Optional[X]` → `X | None`, `TYPE_CHECKING` guards)
+
+---
+
+<!-- RES-877 -->
+
+### Breaking Changes (RES-877)
+
+- **`AgentTarget.send_prompt` removed**: `respond(messages: list[Message]) -> AgentResponse` is now the sole response method on every target; callers own the conversation transcript. Migrate `target.send_prompt("x")` to `target.respond([Message(role="user", content="x")])`.
+- **`OpenAIModelTarget`, `VercelAISdkTarget`, and `OpenAIAgentTarget` are now stateless**: per-instance `_history` is gone. Multi-turn conversation state is owned by the red-team orchestrator, not the target.
+- **`evaluatorq.redteam.ErrorInfo` renamed to `RunError`**: update any imports or `isinstance` checks that reference the old name.
+
+**Migration:**
+
+```python
+# Before
+response = await target.send_prompt("Hello")
+
+# After
+from evaluatorq.contracts import Message
+response = await target.respond([Message(role="user", content="Hello")])
+```
+
+### New Features (RES-877)
+
+- **`AgentResponseError`** — a per-response error marker exposed on `AgentResponse.error`; used by the orchestrator to exclude failed turns from the replayed transcript.
+- **`turns_to_messages(turns, *, skip_errors=False)`** — helper exported from `evaluatorq.redteam.contracts` that converts a list of completed turns into a flat `list[Message]`, optionally dropping turns whose response carries an `AgentResponseError`.
