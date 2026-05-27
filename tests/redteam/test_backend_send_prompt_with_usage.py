@@ -1,4 +1,4 @@
-"""Unit tests for backend respond/send_prompt happy-path and error paths.
+"""Unit tests for backend respond happy-path and error paths.
 
 Covers:
 - OpenAIModelTarget (backends/openai.py) — uses respond()
@@ -174,7 +174,7 @@ class TestORQAgentTargetSendPromptWithUsage:
             patch("evaluatorq.redteam.tracing.get_tracer", return_value=None),
         ):
             mock_to_thread.return_value = response
-            result = await target.send_prompt("hello")
+            result = await target.respond([Message(role="user", content="hello")])
 
         assert isinstance(result, SendResult)
         assert result.text == "agent says hi"
@@ -222,7 +222,7 @@ class TestORQAgentTargetSendPromptWithUsage:
             patch("asyncio.to_thread", side_effect=fake_to_thread),
             patch("evaluatorq.redteam.tracing.get_tracer", return_value=None),
         ):
-            result = await target.send_prompt("prompt")
+            result = await target.respond([Message(role="user", content="prompt")])
 
         assert isinstance(result, SendResult)
         assert result.text == "final answer"
@@ -257,7 +257,7 @@ class TestORQAgentTargetSendPromptWithUsage:
             patch("evaluatorq.redteam.tracing.get_tracer", return_value=None),
             pytest.raises(RuntimeError, match="Unresolved pending tool calls"),
         ):
-            await target.send_prompt("prompt")
+            await target.respond([Message(role="user", content="prompt")])
 
     @pytest.mark.asyncio
     async def test_no_usage_in_response_yields_none(self) -> None:
@@ -273,7 +273,7 @@ class TestORQAgentTargetSendPromptWithUsage:
             patch("asyncio.to_thread", side_effect=fake_to_thread),
             patch("evaluatorq.redteam.tracing.get_tracer", return_value=None),
         ):
-            result = await target.send_prompt("prompt")
+            result = await target.respond([Message(role="user", content="prompt")])
 
         assert result.usage is None
 
@@ -317,7 +317,7 @@ class TestORQAgentTargetSendPromptWithUsage:
             patch("evaluatorq.redteam.backends.orq.record_token_usage") as mock_record,
         ):
             with pytest.raises(RuntimeError, match="network failure mid-loop"):
-                await target.send_prompt("prompt")
+                await target.respond([Message(role="user", content="prompt")])
 
         # Partial usage from the first call must have been recorded before the exception propagated
         mock_record.assert_called_once()
@@ -345,7 +345,7 @@ class TestORQAgentTargetSendPromptWithUsage:
             patch("asyncio.to_thread", side_effect=fake_to_thread),
             patch("evaluatorq.redteam.tracing.get_tracer", return_value=None),
         ):
-            result = await target.send_prompt("prompt")
+            result = await target.respond([Message(role="user", content="prompt")])
 
         assert result.usage is not None
         assert result.usage.prompt_tokens == 10
@@ -388,7 +388,7 @@ class TestORQAgentTargetSendPromptWithUsage:
                 patch("evaluatorq.redteam.tracing.get_tracer", return_value=None),
                 pytest.raises(RuntimeError, match="Unresolved pending tool calls"),
             ):
-                await target.send_prompt("prompt")
+                await target.respond([Message(role="user", content="prompt")])
         finally:
             contracts_module.PIPELINE_CONFIG.max_tool_continuations = original_max
 
@@ -397,7 +397,7 @@ class TestORQAgentTargetSendPromptWithUsage:
 
 
 # ===========================================================================
-# LangGraphTarget — send_prompt
+# LangGraphTarget — respond
 # ===========================================================================
 
 
@@ -415,13 +415,13 @@ class TestLangGraphTargetSendPromptWithUsage:
 
     @pytest.mark.asyncio
     async def test_happy_path_returns_send_result(self) -> None:
-        """Happy path: send_prompt returns SendResult with text."""
+        """Happy path: respond returns SendResult with text."""
         from evaluatorq.integrations.langgraph_integration import LangGraphTarget
 
         graph = self._make_graph("hello from graph")
         target = LangGraphTarget(graph)
 
-        result = await target.send_prompt("test prompt")
+        result = await target.respond([Message(role="user", content="test prompt")])
 
         assert isinstance(result, SendResult)
         assert result.text == "hello from graph"
@@ -434,7 +434,7 @@ class TestLangGraphTargetSendPromptWithUsage:
         graph = self._make_graph()
         target = LangGraphTarget(graph)
 
-        result = await target.send_prompt("prompt")
+        result = await target.respond([Message(role="user", content="prompt")])
 
         # MagicMock graph does not fire callbacks → no usage captured
         assert result.usage is None
@@ -472,7 +472,7 @@ class TestLangGraphTargetSendPromptWithUsage:
         # We can't read usage from the exception path, but this verifies
         # the finally block runs without error.
         with pytest.raises(RuntimeError, match="graph failed"):
-            await target.send_prompt("hi")
+            await target.respond([Message(role="user", content="hi")])
 
     @pytest.mark.asyncio
     async def test_no_messages_key_raises_value_error(self) -> None:
@@ -486,7 +486,7 @@ class TestLangGraphTargetSendPromptWithUsage:
         target = LangGraphTarget(graph)
 
         with pytest.raises(ValueError, match="'messages' key"):
-            await target.send_prompt("hi")
+            await target.respond([Message(role="user", content="hi")])
 
     @pytest.mark.asyncio
     async def test_empty_messages_raises_value_error(self) -> None:
@@ -500,7 +500,7 @@ class TestLangGraphTargetSendPromptWithUsage:
         target = LangGraphTarget(graph)
 
         with pytest.raises(ValueError, match="empty 'messages' list"):
-            await target.send_prompt("hi")
+            await target.respond([Message(role="user", content="hi")])
 
     @pytest.mark.asyncio
     async def test_usage_persisted_in_send_result_on_success(self) -> None:
@@ -530,14 +530,14 @@ class TestLangGraphTargetSendPromptWithUsage:
         graph.ainvoke = AsyncMock(side_effect=_fake_ainvoke)
 
         target = LangGraphTarget(graph)
-        result = await target.send_prompt("hi")
+        result = await target.respond([Message(role="user", content="hi")])
 
         assert result.usage is not None
         assert result.usage.prompt_tokens == 12
 
 
 # ===========================================================================
-# CallableTarget — send_prompt
+# CallableTarget — respond
 # ===========================================================================
 
 
@@ -550,7 +550,7 @@ class TestCallableTargetSendPromptWithUsage:
             return f"reply:{prompt}"
 
         target = CallableTarget(agent)
-        result = await target.send_prompt("hi")
+        result = await target.respond([Message(role="user", content="hi")])
         assert isinstance(result, SendResult)
         assert result.text == "reply:hi"
         assert result.usage is None
@@ -560,7 +560,7 @@ class TestCallableTargetSendPromptWithUsage:
         from evaluatorq.integrations.callable_integration import CallableTarget
 
         target = CallableTarget(lambda prompt: f"sync:{prompt}")
-        result = await target.send_prompt("hi")
+        result = await target.respond([Message(role="user", content="hi")])
         assert isinstance(result, SendResult)
         assert result.text == "sync:hi"
         assert result.usage is None
@@ -576,7 +576,7 @@ class TestCallableTargetSendPromptWithUsage:
             return TokenUsage(prompt_tokens=7, completion_tokens=3, total_tokens=10, calls=1)
 
         target = CallableTarget(agent, usage_fn=usage_fn)
-        result = await target.send_prompt("hi")
+        result = await target.respond([Message(role="user", content="hi")])
         assert result.usage is not None
         assert result.usage.prompt_tokens == 7
         assert result.usage.completion_tokens == 3
@@ -594,13 +594,13 @@ class TestCallableTargetSendPromptWithUsage:
             raise RuntimeError("boom")
 
         target = CallableTarget(agent, usage_fn=bad_usage_fn)
-        result = await target.send_prompt("hi")
+        result = await target.respond([Message(role="user", content="hi")])
         assert result.usage is None
         assert result.text == "ok"
 
 
 # ===========================================================================
-# OpenAIAgentTarget — send_prompt
+# OpenAIAgentTarget — respond
 # ===========================================================================
 
 
@@ -650,7 +650,7 @@ class TestOpenAIAgentTargetSendPromptWithUsage:
             "evaluatorq.integrations.openai_agents_integration.target.Runner.run",
             new=AsyncMock(return_value=run_result),
         ):
-            result = await target.send_prompt("hi")
+            result = await target.respond([Message(role="user", content="hi")])
 
         assert isinstance(result, SendResult)
         assert result.text == "hello"
@@ -678,7 +678,7 @@ class TestOpenAIAgentTargetSendPromptWithUsage:
             "evaluatorq.integrations.openai_agents_integration.target.Runner.run",
             new=AsyncMock(return_value=run_result),
         ):
-            result = await target.send_prompt("hi")
+            result = await target.respond([Message(role="user", content="hi")])
 
         assert result.usage is not None
         assert result.usage.total_tokens == 30  # falls back to prompt + completion
@@ -701,14 +701,14 @@ class TestOpenAIAgentTargetSendPromptWithUsage:
             "evaluatorq.integrations.openai_agents_integration.target.Runner.run",
             new=AsyncMock(return_value=run_result),
         ):
-            result = await target.send_prompt("hi")
+            result = await target.respond([Message(role="user", content="hi")])
 
         assert result.text == "hello"
         assert result.usage is None
 
 
 # ===========================================================================
-# VercelAISdkTarget — send_prompt
+# VercelAISdkTarget — respond
 # ===========================================================================
 
 
@@ -742,7 +742,7 @@ class TestVercelAISdkTargetSendPromptWithUsage:
             "evaluatorq.integrations.vercel_ai_sdk_integration.target.httpx.AsyncClient",
             return_value=mock_client,
         ):
-            result = await target.send_prompt("hi")
+            result = await target.respond([Message(role="user", content="hi")])
 
         assert isinstance(result, SendResult)
         assert result.text == "Hello world"
@@ -773,7 +773,7 @@ class TestVercelAISdkTargetSendPromptWithUsage:
             "evaluatorq.integrations.vercel_ai_sdk_integration.target.httpx.AsyncClient",
             return_value=mock_client,
         ):
-            result = await target.send_prompt("hi")
+            result = await target.respond([Message(role="user", content="hi")])
 
         assert isinstance(result, SendResult)
         assert result.usage is not None
@@ -797,7 +797,7 @@ class TestVercelAISdkTargetSendPromptWithUsage:
             "evaluatorq.integrations.vercel_ai_sdk_integration.target.httpx.AsyncClient",
             return_value=mock_client,
         ):
-            result = await target.send_prompt("hi")
+            result = await target.respond([Message(role="user", content="hi")])
 
         assert isinstance(result, SendResult)
         assert result.text == "plain reply"

@@ -332,7 +332,7 @@ class TestLangGraphToolCallExtraction:
         graph.ainvoke = AsyncMock(return_value={"messages": [ai_msg, final_msg]})
 
         target = LangGraphTarget(graph)
-        result = await target.send_prompt("search for something")
+        result = await target.respond([Message(role="user", content="search for something")])
 
         assert result.text == "I'll search for thatHere is the result"
         assert len(result.tool_calls) == 1
@@ -352,7 +352,7 @@ class TestLangGraphToolCallExtraction:
         graph.ainvoke = AsyncMock(return_value={"messages": [msg]})
 
         target = LangGraphTarget(graph)
-        result = await target.send_prompt("hi")
+        result = await target.respond([Message(role="user", content="hi")])
         assert result.tool_calls == []
 
     @pytest.mark.asyncio
@@ -369,7 +369,7 @@ class TestLangGraphToolCallExtraction:
         ]})
 
         target = LangGraphTarget(graph)
-        result = await target.send_prompt("weather?")
+        result = await target.respond([Message(role="user", content="weather?")])
         assert len(result.tool_calls) == 1
         assert result.tool_calls[0].name == "get_weather"
 

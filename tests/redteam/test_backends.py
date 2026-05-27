@@ -7,6 +7,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from evaluatorq.contracts import Message
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -475,7 +477,7 @@ class TestGetOrqApiKey:
 
 
 class TestORQExtractToolCallItems:
-    """Tests for the _extract_tool_call_items inner function via ORQAgentTarget.send_prompt."""
+    """Tests for the _extract_tool_call_items inner function via ORQAgentTarget.respond."""
 
     def _make_target(self) -> Any:
         from evaluatorq.redteam.backends.orq import ORQAgentTarget
@@ -519,7 +521,7 @@ class TestORQExtractToolCallItems:
 
         with patch("evaluatorq.redteam.backends.orq.asyncio.to_thread", side_effect=fake_to_thread):
             target.orq_client.agents.responses.create = MagicMock(side_effect=[first_resp, second_resp])
-            response = await target.send_prompt("find something")
+            response = await target.respond([Message(role="user", content="find something")])
 
         assert len(response.tool_calls) == 1
         assert response.tool_calls[0].name == "search"
@@ -547,7 +549,7 @@ class TestORQExtractToolCallItems:
 
         with patch("evaluatorq.redteam.backends.orq.asyncio.to_thread", side_effect=fake_to_thread):
             target.orq_client.agents.responses.create = MagicMock(side_effect=[first_resp, second_resp])
-            response = await target.send_prompt("send a message")
+            response = await target.respond([Message(role="user", content="send a message")])
 
         assert len(response.tool_calls) == 1
         assert response.tool_calls[0].name == "send_email"
@@ -575,7 +577,7 @@ class TestORQExtractToolCallItems:
 
         with patch("evaluatorq.redteam.backends.orq.asyncio.to_thread", side_effect=fake_to_thread):
             target.orq_client.agents.responses.create = MagicMock(side_effect=[first_resp, second_resp])
-            response = await target.send_prompt("trigger bad tool")
+            response = await target.respond([Message(role="user", content="trigger bad tool")])
 
         assert len(response.tool_calls) == 1
         # Invalid JSON args wrapped under 'raw' key so arguments_dict still parses

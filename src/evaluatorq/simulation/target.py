@@ -20,8 +20,8 @@ class OrqResponsesTarget(AgentTarget):
     Stateless: each ``respond(messages)`` call sends the full message list and
     holds no per-instance conversation state. Conversation continuity is owned
     by the caller — the sim runner or the red-team orchestrator passes the full
-    transcript every turn. ``send_prompt(prompt)`` is the inherited single-prompt
-    shim from :class:`AgentTarget` (wraps the prompt in one user message).
+    transcript every turn. ``respond`` is the sole response method; callers
+    own the conversation transcript.
 
     Because nothing is mutated on ``self``, a single instance is safe to invoke
     concurrently.

@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from evaluatorq.contracts import Message
 from evaluatorq.integrations.callable_integration import CallableTarget
 import json
 
@@ -17,7 +18,7 @@ class TestCallableTarget:
     @pytest.mark.asyncio
     async def test_sync_function(self) -> None:
         target = CallableTarget(lambda prompt: f"echo: {prompt}")
-        result = await target.send_prompt("hello")
+        result = await target.respond([Message(role="user", content="hello")])
         assert result.text == "echo: hello"
         assert result.tool_calls == []
 
@@ -27,7 +28,7 @@ class TestCallableTarget:
             return f"async: {prompt}"
 
         target = CallableTarget(my_agent)
-        result = await target.send_prompt("hello")
+        result = await target.respond([Message(role="user", content="hello")])
         assert result.text == "async: hello"
         assert result.tool_calls == []
 
@@ -39,7 +40,7 @@ class TestCallableTarget:
         response = AgentResponse(output=out)
 
         target = CallableTarget(lambda prompt: response)
-        result = await target.send_prompt("hello")
+        result = await target.respond([Message(role="user", content="hello")])
 
         assert result is response
         assert result.tool_calls[0].name == "search"
@@ -51,7 +52,7 @@ class TestCallableTarget:
 
         target = CallableTarget(my_agent)
         with pytest.raises(asyncio.TimeoutError):
-            await target.send_prompt("hello")
+            await target.respond([Message(role="user", content="hello")])
 
     @pytest.mark.asyncio
     async def test_reset_calls_reset_fn(self) -> None:
@@ -132,7 +133,7 @@ class TestCallableTargetUsage:
             return TokenUsage(prompt_tokens=3, completion_tokens=2, total_tokens=5, calls=1)
 
         target = CallableTarget(lambda p: f"echo:{p}", usage_fn=usage_fn)
-        result = await target.send_prompt("hello")
+        result = await target.respond([Message(role="user", content="hello")])
 
         assert result.text == "echo:hello"
         assert isinstance(result.usage, TokenUsage)
@@ -146,7 +147,7 @@ class TestCallableTargetUsage:
     async def test_usage_none_when_no_usage_fn(self) -> None:
         """Without usage_fn, SendResult.usage is None."""
         target = CallableTarget(lambda p: "response")
-        result = await target.send_prompt("hi")
+        result = await target.respond([Message(role="user", content="hi")])
         assert result.text == "response"
         assert result.usage is None
 
@@ -160,7 +161,7 @@ class TestCallableTargetUsage:
 
         target = CallableTarget(lambda p: "reply", usage_fn=bad_usage_fn)
         with caplog.at_level(logging.WARNING):
-            result = await target.send_prompt("hi")
+            result = await target.respond([Message(role="user", content="hi")])
 
         assert result.text == "reply"
         assert result.usage is None
@@ -170,7 +171,7 @@ class TestCallableTargetUsage:
     async def test_usage_fn_returning_none_propagates(self) -> None:
         """If usage_fn returns None explicitly, SendResult.usage is None."""
         target = CallableTarget(lambda p: "ok", usage_fn=lambda p, r: None)
-        result = await target.send_prompt("hi")
+        result = await target.respond([Message(role="user", content="hi")])
         assert result.usage is None
 
     @pytest.mark.asyncio
@@ -183,7 +184,7 @@ class TestCallableTargetUsage:
             return TokenUsage(prompt_tokens=5, completion_tokens=10, total_tokens=15, calls=1)
 
         target = CallableTarget(my_agent, usage_fn=usage_fn)
-        result = await target.send_prompt("test")
+        result = await target.respond([Message(role="user", content="test")])
 
         assert result.text == "async:test"
         assert isinstance(result.usage, TokenUsage)

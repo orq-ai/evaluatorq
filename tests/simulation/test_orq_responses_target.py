@@ -1,8 +1,8 @@
 """Tests for OrqResponsesTarget (stateless target backed by the Responses API).
 
-After RES-808 PR3 the target is fully stateless:
+After RES-877 Task 9 the target is fully stateless:
 - respond(messages) returns AgentResponse; the message list is sent verbatim
-- send_prompt(prompt) is the inherited shim → respond([user message])
+- send_prompt shim removed; respond is the sole response method
 - no previous_response_id threading, no get_usage accumulation
 - new() returns a fresh instance; client lifecycle preserved
 - timeout applied via asyncio.wait_for; retry wraps the SDK call
@@ -74,7 +74,7 @@ def _make_messages(content: str = "hi") -> list[Message]:
 
 
 # ---------------------------------------------------------------------------
-# respond + send_prompt shim
+# respond (sole response method; send_prompt shim removed in RES-877)
 # ---------------------------------------------------------------------------
 
 
@@ -175,24 +175,29 @@ class TestOrqResponsesTargetRespond:
         with pytest.raises(RuntimeError, match="response contained no extractable output items"):
             await target.respond(_make_messages())
 
+    def test_send_prompt_shim_removed(self):
+        """send_prompt back-compat shim removed in RES-877 Task 9."""
+        from evaluatorq.contracts import AgentTarget
+        assert not hasattr(AgentTarget, "send_prompt")
+
     @pytest.mark.asyncio
-    async def test_send_prompt_shim_returns_agent_response(self):
+    async def test_respond_with_single_user_message(self):
         client = _make_client()
         client.responses.create = AsyncMock(return_value=_make_response(text="I'm fine"))
         target = _make_target(client=client)
 
-        result = await target.send_prompt("hello")
+        result = await target.respond([Message(role="user", content="hello")])
 
         assert isinstance(result, AgentResponse)
         assert result.text == "I'm fine"
 
     @pytest.mark.asyncio
-    async def test_send_prompt_shim_wraps_prompt_as_single_user_message(self):
+    async def test_respond_wraps_single_user_message(self):
         client = _make_client()
         client.responses.create = AsyncMock(return_value=_make_response())
         target = _make_target(client=client)
 
-        await target.send_prompt("attack prompt")
+        await target.respond([Message(role="user", content="attack prompt")])
 
         call_kwargs = client.responses.create.call_args.kwargs
         assert call_kwargs["input"] == [{"role": "user", "content": "attack prompt"}]

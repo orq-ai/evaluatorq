@@ -582,7 +582,7 @@ class TestProgrammingErrorsPropagate:
     async def test_type_error_in_template_path_propagates(
         self, _attrs, _set_attrs, _span
     ):
-        """TypeError raised during target.send_prompt in template path is re-raised."""
+        """TypeError raised during target.respond in template path is re-raised."""
         from evaluatorq.job_helper import JobError
         from evaluatorq.redteam.adaptive.pipeline import create_dynamic_redteam_job
 

@@ -65,8 +65,8 @@ async def test_vercel_target_respond_returns_agent_response():
 
     assert isinstance(result, AgentResponse)
     assert result.text == "plain reply"
-    # Stateless: _history is not touched by respond.
-    assert target._history == []
+    # Stateless: no _history accumulation — target is fully stateless.
+    assert not hasattr(target, "_history")
     # Full transcript is posted as the body's messages.
     body = mock_client.post.call_args.kwargs["json"]
     assert body["messages"] == [{"role": "user", "content": "hi"}]
@@ -114,5 +114,5 @@ async def test_openai_agents_target_respond_returns_agent_response():
 
     assert isinstance(result, AgentResponse)
     assert result.text == "agent reply"
-    # Stateless: respond does not mutate _history.
-    assert target._history == []
+    # Stateless: no _history accumulation — target is fully stateless.
+    assert not hasattr(target, "_history")

@@ -364,8 +364,8 @@ class AgentTarget(ABC):
     """Abstract base class for agent targets that can receive messages.
 
     Subclasses implement ``respond`` (the canonical message-based interface)
-    and ``new``. ``send_prompt`` is a concrete shim retained for single-prompt
-    callers — it wraps the prompt in one user message and calls ``respond``.
+    and ``new``. ``respond`` is the sole response method; callers own the
+    conversation transcript.
     Targets that back a server-side memory store override ``get_agent_context``
     (self-describing), ``cleanup_memory`` (release created entities), and
     ``map_error`` (provider-specific error codes); stateless targets inherit
@@ -395,10 +395,6 @@ class AgentTarget(ABC):
     def new(self) -> AgentTarget:
         """Return a fresh independent instance for a new attack."""
         ...
-
-    async def send_prompt(self, prompt: str) -> AgentResponse:
-        """Back-compat shim: wrap a single prompt in one user message and call ``respond``."""
-        return await self.respond([Message(role="user", content=prompt)])
 
     async def get_agent_context(self) -> AgentContext:
         """Default: minimal context. Override for platform-backed targets."""

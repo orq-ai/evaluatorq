@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from evaluatorq.contracts import AgentResponse
+from evaluatorq.contracts import AgentResponse, Message
 from evaluatorq.redteam.contracts import AgentContext, AttackStrategy, AttackTechnique, DeliveryMethod, SendResult, TokenUsage, TurnType
 from evaluatorq.redteam.adaptive.orchestrator import (
     ADVERSARIAL_SYSTEM_PROMPT,
@@ -47,8 +47,8 @@ class TestORQAgentTarget:
         assert target._task_id == 'some_task_id'  # original untouched
 
     @pytest.mark.asyncio
-    async def test_send_prompt(self):
-        """Test sending a prompt to the agent."""
+    async def test_respond(self):
+        """Test sending a prompt to the agent via respond."""
         assert ORQAgentTarget is not None
         # Create mock response — parts need 'kind' attr for text extraction
         mock_part = MagicMock()
@@ -73,13 +73,13 @@ class TestORQAgentTarget:
         # Send prompt (using patch for asyncio.to_thread)
         with patch('asyncio.to_thread', new_callable=AsyncMock) as mock_to_thread:
             mock_to_thread.return_value = mock_response
-            result = await target.send_prompt('Hello')
+            result = await target.respond([Message(role='user', content='Hello')])
 
         assert result.text == 'Agent response'
         assert target._task_id == 'task_123'  # pyright: ignore[reportPrivateUsage]
 
     @pytest.mark.asyncio
-    async def test_send_prompt_extracts_executed_tool_calls(self):
+    async def test_respond_extracts_executed_tool_calls(self):
         """ORQ pending tool calls are surfaced as executed tool calls, including
         JSON string argument parsing and continuation through synthetic results."""
         assert ORQAgentTarget is not None
@@ -106,7 +106,7 @@ class TestORQAgentTarget:
 
         with patch('asyncio.to_thread', new_callable=AsyncMock) as mock_to_thread:
             mock_to_thread.side_effect = [first_response, final_response]
-            response = await target.send_prompt('Hello')
+            response = await target.respond([Message(role='user', content='Hello')])
 
         assert response.text == 'done'
         assert len(response.tool_calls) == 1
@@ -114,7 +114,7 @@ class TestORQAgentTarget:
         assert response.tool_calls[0].arguments_dict == {'query': 'tool calls'}
 
     @pytest.mark.asyncio
-    async def test_send_prompt_preserves_raw_tool_call_arguments(self):
+    async def test_respond_preserves_raw_tool_call_arguments(self):
         """Malformed ORQ tool-call arguments are preserved instead of dropped."""
         assert ORQAgentTarget is not None
 
@@ -135,14 +135,14 @@ class TestORQAgentTarget:
 
         with patch('asyncio.to_thread', new_callable=AsyncMock) as mock_to_thread:
             mock_to_thread.side_effect = [first_response, final_response]
-            response = await target.send_prompt('Hello')
+            response = await target.respond([Message(role='user', content='Hello')])
 
         assert len(response.tool_calls) == 1
         assert response.tool_calls[0].name == 'bad_tool'
         assert response.tool_calls[0].arguments_dict == {'raw': 'not-json'}
 
     @pytest.mark.asyncio
-    async def test_send_prompt_multi_turn(self):
+    async def test_respond_multi_turn(self):
         """Test that task_id is preserved for multi-turn conversations."""
         assert ORQAgentTarget is not None
         mock_part = MagicMock()
@@ -163,7 +163,7 @@ class TestORQAgentTarget:
 
         with patch('asyncio.to_thread', new_callable=AsyncMock) as mock_to_thread:
             mock_to_thread.return_value = mock_response
-            await target.send_prompt('Continue conversation')
+            await target.respond([Message(role='user', content='Continue conversation')])
 
             # Verify task_id was passed to create
             call_kwargs = mock_to_thread.call_args
