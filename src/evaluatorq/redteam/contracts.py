@@ -777,6 +777,7 @@ def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[M
                     content=None,
                     tool_calls=[StrategyToolCall(
                         id=item.call_id,
+                        item_id=item.id or None,
                         function=FunctionCall(name=item.name, arguments=item.arguments),
                     )],
                 ))
@@ -789,7 +790,11 @@ def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[M
                     ))
             # ReasoningOutputItem intentionally dropped.
         _flush_text()
-        if not target.output:
+        # Alternation invariant: every user row must be followed by an assistant row.
+        # If nothing got appended after the user row, the turn produced no assistant
+        # output (empty output, or all-reasoning since reasoning items are dropped).
+        # A trailing 'tool' row is fine — an assistant tool_calls row preceded it.
+        if out[-1].role == 'user':
             out.append(Message(role='assistant', content=''))
     return out
 

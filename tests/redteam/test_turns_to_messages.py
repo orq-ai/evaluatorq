@@ -5,6 +5,7 @@ from __future__ import annotations
 from evaluatorq.contracts import (
     AgentResponse,
     AgentResponseError,
+    ReasoningOutputItem,
     TextOutputItem,
     ToolCallOutputItem,
 )
@@ -88,3 +89,45 @@ def test_default_includes_errored_turn():
     turns = [_turn("q1", "a1"), _turn("q2", "[ERROR: boom]", error=True)]
     everything = turns_to_messages(turns)  # skip_errors defaults False
     assert any(m.content == "[ERROR: boom]" for m in everything)
+
+
+def test_reasoning_only_output_emits_empty_assistant_row():
+    """All-reasoning output still yields a user/assistant pair (alternation invariant).
+
+    Reasoning items are dropped by turns_to_messages; without an assistant row the
+    transcript would have a bare user turn and downstream chat-completions APIs
+    would 400 on the broken alternation.
+    """
+    turn = Turn(
+        attacker=AttackerResponse(generated_prompt="q"),
+        target=AgentResponse(output=[ReasoningOutputItem(text="thinking...")]),
+    )
+    msgs = turns_to_messages([turn])
+    assert [(m.role, m.content) for m in msgs] == [("user", "q"), ("assistant", "")]
+
+
+def test_tool_call_with_result_does_not_emit_extra_assistant_row():
+    """A turn ending in a tool result must not get a trailing empty assistant row."""
+    turn = Turn(
+        attacker=AttackerResponse(generated_prompt="go"),
+        target=AgentResponse(output=[
+            ToolCallOutputItem(name="lookup", arguments='{"q":"x"}', id="c1", call_id="c1", result="found"),
+        ]),
+    )
+    msgs = turns_to_messages([turn])
+    assert [m.role for m in msgs] == ["user", "assistant", "tool"]
+
+
+def test_tool_call_preserves_responses_item_id():
+    """Responses-API fc_* item id round-trips through StrategyToolCall.item_id."""
+    turn = Turn(
+        attacker=AttackerResponse(generated_prompt="go"),
+        target=AgentResponse(output=[
+            ToolCallOutputItem(name="lookup", arguments='{"q":"x"}', id="fc_abc", call_id="call_xyz"),
+        ]),
+    )
+    msgs = turns_to_messages([turn])
+    assistant = next(m for m in msgs if m.role == "assistant" and m.tool_calls)
+    tc = assistant.tool_calls[0]
+    assert tc.id == "call_xyz"
+    assert tc.item_id == "fc_abc"

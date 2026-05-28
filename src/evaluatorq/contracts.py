@@ -116,6 +116,12 @@ class StrategyToolCall(BaseModel):
     id: str = Field(description="Unique tool call ID (e.g., call_abc123)")
     type: Literal["function"] = Field(default="function", description="Tool type")
     function: FunctionCall = Field(description="Function call details")
+    # Responses-API item id (e.g. ``fc_abc123``), distinct from ``id`` (which maps to
+    # the chat-completions / Responses ``call_id``). Preserved through transcript
+    # replay so :class:`OpenAIAgentTarget` can echo the original ``function_call``
+    # item back to the Responses API on subsequent turns. ``None`` for tool calls
+    # that did not originate from a Responses-API turn.
+    item_id: str | None = Field(default=None, description="Responses-API function_call item id (fc_*)")
 
 
 class Message(BaseModel):

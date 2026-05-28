@@ -111,6 +111,42 @@ class TestOpenAIAgentTarget:
         assert fco["call_id"] == "c1"
         assert fco["output"] == "found"
 
+    def test_responses_input_items_preserve_fc_item_id(self) -> None:
+        """When StrategyToolCall.item_id is set, the rendered function_call item
+        echoes both ``id`` (fc_*) and ``call_id`` (call_*) so the Responses API can
+        match the call to its prior turn instead of treating it as a fresh call."""
+        items = _message_to_responses_input_items(
+            Message(
+                role="assistant",
+                content=None,
+                tool_calls=[StrategyToolCall(
+                    id="call_xyz",
+                    item_id="fc_abc",
+                    function=FunctionCall(name="lookup", arguments='{"q":"x"}'),
+                )],
+            )
+        )
+        fc = next(i for i in items if i["type"] == "function_call")
+        assert fc["id"] == "fc_abc"
+        assert fc["call_id"] == "call_xyz"
+
+    def test_responses_input_items_omit_id_when_item_id_missing(self) -> None:
+        """A tool call without item_id (e.g. originating from chat-completions) must
+        not emit a stub ``id`` field; the Responses API rejects empty ids."""
+        items = _message_to_responses_input_items(
+            Message(
+                role="assistant",
+                content=None,
+                tool_calls=[StrategyToolCall(
+                    id="call_only",
+                    function=FunctionCall(name="lookup", arguments="{}"),
+                )],
+            )
+        )
+        fc = next(i for i in items if i["type"] == "function_call")
+        assert "id" not in fc
+        assert fc["call_id"] == "call_only"
+
     def test_responses_input_items_round_trip_through_build_response(self) -> None:
         """Inverse mapper output is consumable by _build_response, and the
         function_call/function_call_output pair shares one call_id (the SDK

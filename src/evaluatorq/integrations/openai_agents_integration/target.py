@@ -297,14 +297,17 @@ def _message_to_responses_input_items(m: Message) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         if m.content:
             items.append({"role": "assistant", "content": m.content})
-        items.extend(
-            {
+        for tc in m.tool_calls:
+            fc: dict[str, Any] = {
                 "type": "function_call",
                 "call_id": tc.id,
                 "name": tc.function.name,
                 "arguments": tc.function.arguments,
             }
-            for tc in m.tool_calls
-        )
+            # Echo the Responses-API item id (fc_*) when available so the
+            # function_call item round-trips intact across turns.
+            if tc.item_id:
+                fc["id"] = tc.item_id
+            items.append(fc)
         return items
     return [{"role": m.role, "content": m.content or ""}]
