@@ -324,8 +324,9 @@ async def _fetch_simulation_datapoints_from_orq(
     """Stream the named Orq dataset and parse each row into a simulation
     Datapoint via the same shape-tolerant extractor used by the inline path.
     """
-    from evaluatorq.fetch_data import fetch_dataset_batches, setup_orq_client
+    from pydantic import ValidationError
 
+    from evaluatorq.fetch_data import fetch_dataset_batches, setup_orq_client
     from evaluatorq.simulation._datapoint_io import _extract_single_datapoint
 
     orq_client = setup_orq_client(api_key)
@@ -335,7 +336,7 @@ async def _fetch_simulation_datapoints_from_orq(
         for eq_dp in batch.datapoints:
             try:
                 out.append(_extract_single_datapoint(eq_dp))
-            except ValueError as e:
+            except (ValueError, ValidationError) as e:
                 raise ValueError(
                     f"dataset {dataset_id!r} row {row}: {e}"
                 ) from e
@@ -485,7 +486,9 @@ async def _simulate_via_evaluatorq(
     from evaluatorq.simulation.evaluators import get_evaluator
     from evaluatorq.types import DataPoint
 
-    resolved_evaluator_names = evaluator_names or ["goal_achieved", "criteria_met"]
+    resolved_evaluator_names = (
+        evaluator_names if evaluator_names is not None else ["goal_achieved", "criteria_met"]
+    )
     scorers = [(name, get_evaluator(name)) for name in resolved_evaluator_names]
 
     eq_datapoints = [
