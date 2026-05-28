@@ -196,16 +196,15 @@ async def generate_focus_area_recommendations(
                 **cfg.evaluator.extra_kwargs,
                 **(llm_kwargs or {}),
             }
-            create_call: Any = llm_client.chat.completions.create
-            response = await create_call(
+            response = await llm_client.chat.completions.create(  # pyright: ignore[reportCallIssue, reportArgumentType]
                 model=model,
-                messages=[
+                messages=[  # pyright: ignore[reportArgumentType]
                     {'role': 'system', 'content': _SYSTEM_PROMPT},
                     {'role': 'user', 'content': user_prompt},
                 ],
                 temperature=cfg.evaluator.temperature,
                 max_completion_tokens=1500,
-                response_format={'type': 'json_object'},
+                response_format={'type': 'json_object'},  # pyright: ignore[reportArgumentType]
                 **merged_kwargs,
             )
 

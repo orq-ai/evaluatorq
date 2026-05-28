@@ -43,11 +43,13 @@ class OpenResponsesBackend(Backend):
         self._retry_statuses = retry_statuses
 
     def create_target(self, agent_key: str) -> OrqResponsesTarget:
+        # OrqResponsesTarget picks up the client from the explicit ``client=``
+        # kwarg below; ``config.client`` is left ``None`` so the precedence is
+        # unambiguous.
         config = LLMCallConfig(
             model=agent_key,
             api="responses",
             timeout_ms=self._timeout_ms or 240_000,
-            client=self._client,
         )
         return OrqResponsesTarget(
             config,

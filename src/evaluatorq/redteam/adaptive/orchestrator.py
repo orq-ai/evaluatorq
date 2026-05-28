@@ -468,7 +468,7 @@ class MultiTurnOrchestrator:
         try:
             for turn in range(max_turns):
                 # Per-turn target response (populated on success or synthesized on error)
-                tgt_result: AgentResponse = AgentResponse()
+                _tgt_result: AgentResponse = AgentResponse()
                 async with with_redteam_span(
                     "orq.redteam.attack_turn",
                     {
@@ -658,24 +658,24 @@ class MultiTurnOrchestrator:
                                 target.send_prompt(attack_prompt),
                                 timeout=target_timeout_s,
                             )
-                            tgt_result = _coerce_to_agent_response(raw_response)
-                            agent_response = tgt_result.text
+                            _tgt_result = _coerce_to_agent_response(raw_response)
+                            agent_response = _tgt_result.text
                             consecutive_agent_errors = 0
-                            resp_text = truncate_for_span(agent_response or "")
+                            _resp_text = truncate_for_span(agent_response or "")
                             set_span_attrs(tgt_span, {
-                                "output": resp_text,
-                                "orq.redteam.output": resp_text,
+                                "output": _resp_text,
+                                "orq.redteam.output": _resp_text,
                             })
-                            target_usage: TokenUsage | None = tgt_result.usage
+                            target_usage: TokenUsage | None = _tgt_result.usage
                             if target_usage is not None:
                                 target_prompt_tokens += int(target_usage.prompt_tokens or 0)
                                 target_completion_tokens += int(target_usage.completion_tokens or 0)
                                 target_total_tokens += int(target_usage.total_tokens or 0)
-                                target_calls += int(getattr(target_usage, "calls", 0) or 0) or 1
+                                target_calls += int(target_usage.calls or 0) or 1
                     except asyncio.TimeoutError:
                         consecutive_agent_errors += 1
                         agent_response = f'[ERROR: Target agent timed out after {target_timeout_s:.0f}s]'
-                        tgt_result = AgentResponse(output=[TextOutputItem(text=agent_response, annotations=[])])
+                        _tgt_result = AgentResponse(output=[TextOutputItem(text=agent_response, annotations=[])])
                         logger.warning(f'Target agent timed out on turn {turn + 1}/{max_turns}')
 
                         if consecutive_agent_errors >= 2:
@@ -706,7 +706,7 @@ class MultiTurnOrchestrator:
                         consecutive_agent_errors += 1
                         mapped_code, error_msg = self._backend.map_error(e) if self._backend is not None else _default_map_error(e)
                         agent_response = f'[ERROR: {error_msg}]'
-                        tgt_result = AgentResponse(output=[TextOutputItem(text=agent_response, annotations=[])])
+                        _tgt_result = AgentResponse(output=[TextOutputItem(text=agent_response, annotations=[])])
                         logger.warning(f'Target agent error on turn {turn + 1}/{max_turns}: {error_msg}')
 
                         if consecutive_agent_errors >= 2:
@@ -738,7 +738,7 @@ class MultiTurnOrchestrator:
                             break
 
                     # Record the completed turn (target succeeded)
-                    turns_record.append(Turn(attacker=current_attacker, target=tgt_result))
+                    turns_record.append(Turn(attacker=current_attacker, target=_tgt_result))
 
                     # Update adversarial LLM context
                     adversarial_messages.append({'role': 'assistant', 'content': attack_prompt})
