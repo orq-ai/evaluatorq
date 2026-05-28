@@ -20,7 +20,7 @@ from evaluatorq.simulation.tracing import (
     record_llm_response,
     with_llm_span,
 )
-from evaluatorq.simulation.types import DEFAULT_MODEL, ChatMessage, TokenUsage
+from evaluatorq.simulation.types import DEFAULT_MODEL, Message, TokenUsage
 from evaluatorq.simulation.utils.retry import with_retry
 
 if TYPE_CHECKING:
@@ -110,7 +110,7 @@ class BaseAgent(ABC):
 
     async def respond_async(
         self,
-        messages: list[ChatMessage],
+        messages: list[Message],
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
@@ -171,7 +171,7 @@ class BaseAgent(ABC):
 
     async def _call_llm(
         self,
-        messages: list[ChatMessage],
+        messages: list[Message],
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
@@ -204,7 +204,7 @@ class BaseAgent(ABC):
 
     async def _call_chat_completions(
         self,
-        messages: list[ChatMessage],
+        messages: list[Message],
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
@@ -286,7 +286,7 @@ class BaseAgent(ABC):
 
     async def _call_responses(
         self,
-        messages: list[ChatMessage],
+        messages: list[Message],
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,

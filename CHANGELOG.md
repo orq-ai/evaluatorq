@@ -46,6 +46,52 @@ from evaluatorq.redteam.backends.base import AgentTarget
 from evaluatorq.contracts import AgentTarget
 ```
 
+- **`AgentTarget` unified on `respond(messages)`**: `respond(messages: list[Message]) -> AgentResponse` is now the abstract method every target implements. `send_prompt(prompt: str) -> AgentResponse` is retained as a concrete back-compat shim on the ABC — it wraps the prompt in a single user message and calls `respond`. Custom targets that previously implemented only `send_prompt` must implement `respond` instead.
+
+**Migration (bare custom subclass):**
+
+```python
+# Before — only send_prompt was abstract
+from evaluatorq.contracts import AgentResponse, AgentTarget
+
+
+class MyTarget(AgentTarget):
+    async def send_prompt(self, prompt: str) -> AgentResponse:
+        return AgentResponse(text=await my_llm_call(prompt))
+
+    def new(self) -> "MyTarget":
+        return MyTarget()
+
+
+# After — respond is the abstract method; send_prompt is a free shim on the ABC
+from evaluatorq.contracts import AgentResponse, AgentTarget, Message
+
+
+class MyTarget(AgentTarget):
+    async def respond(self, messages: list[Message]) -> AgentResponse:
+        prompt = messages[-1].content or ""
+        return AgentResponse(text=await my_llm_call(prompt))
+
+    def new(self) -> "MyTarget":
+        return MyTarget()
+```
+- **`OrqResponsesTarget` is now stateless**: `__call__`, `_previous_response_id` threading, `_accumulated_usage`, and `get_usage()` are removed. Conversation continuity is the caller's responsibility — pass the full transcript to `respond` each turn. Pass the target to `simulate(target=...)` (auto-routes to the target-agent path) or `simulate(target_agent=...)` instead of relying on `__call__`. Per-call token usage is reported on the returned `AgentResponse.usage`.
+- **`ORQAgentTarget` last-user contract**: `respond(messages)` forwards only the last user message to the ORQ agents endpoint (server-side state is held via `task_id`) and raises `ValueError` if `messages[-1].role != "user"`. The endpoint, `task_id` threading, and usage accumulation are unchanged.
+- **`ChatMessage` alias removed**: the RES-596 deprecated alias `ChatMessage = Message` is gone. Import `Message` from `evaluatorq.contracts` (the public `evaluatorq.simulation.ChatMessage` re-export is also removed).
+- **Simulation `TargetAgent` Protocol removed**: the simulation runner consumes the canonical `AgentTarget` ABC from `evaluatorq.contracts`. The `evaluatorq.simulation.TargetAgent` / `evaluatorq.simulation.runner.TargetAgent` exports are replaced by `AgentTarget`.
+
+**Migration:**
+
+```python
+# Before
+from evaluatorq.simulation.types import ChatMessage
+from evaluatorq.simulation import TargetAgent
+
+# After
+from evaluatorq.contracts import Message      # ChatMessage was an alias of Message
+from evaluatorq.contracts import AgentTarget   # replaces the simulation TargetAgent Protocol
+```
+
 ### New Features
 
 - **`LLMCallConfig`** — per-role LLM configuration with `model`, `temperature`, `max_tokens`, `timeout_ms`, `extra_kwargs`, and `client` fields

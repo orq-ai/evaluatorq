@@ -8,7 +8,7 @@ from typing import Any
 
 from loguru import logger
 
-from evaluatorq.contracts import AgentTarget
+from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.contracts import AgentContext, AgentResponse, OutputMessage, TextOutputItem, TokenUsage
 
 # Accepted callable signatures — may return str (backward-compat) or AgentResponse
@@ -84,14 +84,18 @@ class CallableTarget(AgentTarget):
         self._usage_fn = usage_fn
         self._agent_context = agent_context
 
-    async def send_prompt(self, prompt: str) -> AgentResponse:
-        """Send a prompt to the callable and return a structured response.
+    async def respond(self, messages: list[Message]) -> AgentResponse:
+        """Send the last user message to the wrapped callable; return a structured response.
 
-        Callables that return a plain ``str`` are wrapped in an
-        :class:`AgentResponse`. Callables that already return :class:`AgentResponse`
-        are passed through. Token usage from ``usage_fn`` (if provided) is
-        attached to the returned ``AgentResponse``.
+        Opaque callables take a single prompt, so ``respond`` forwards the last
+        user turn (the caller owns any prior context). Callables that return a
+        plain ``str`` are wrapped in an :class:`AgentResponse`; those returning
+        :class:`AgentResponse` pass through. Token usage from ``usage_fn`` (if
+        provided) is attached to the returned ``AgentResponse``.
         """
+        if not messages or messages[-1].role != "user":
+            raise ValueError("CallableTarget.respond requires messages[-1].role == 'user'")
+        prompt = messages[-1].content or ""
         try:
             if self._is_async:
                 coro: Any = self._fn(prompt)

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
-from evaluatorq.contracts import AgentTarget
+from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.backends._errors import extract_provider_error_code, extract_status_code
 from evaluatorq.redteam.backends.base import Backend
 from evaluatorq.redteam.contracts import (
@@ -154,6 +154,71 @@ class OpenAIModelTarget(AgentTarget):
             assistant_msg = {'role': 'assistant', 'content': content}
         self._history.append(user_msg)
         self._history.append(assistant_msg)
+
+        output: list[OutputMessage] = cast('list[OutputMessage]', list(tool_call_items))
+        output.append(TextOutputItem(text=content, annotations=[]))
+        return AgentResponse(
+            output=output,
+            usage=usage,
+            model=getattr(response, 'model', None),
+            response_id=response_id,
+            finish_reason=finish_reason,
+        )
+
+    async def respond(self, messages: list[Message]) -> AgentResponse:
+        """Stateless: send the provided message list + system prompt.
+
+        Does not read or write ``self._history`` — the caller owns the
+        transcript. ``self.system_prompt`` is always prepended, so all
+        ``system``-role messages in ``messages`` are stripped to avoid a double
+        system prompt. For redteam single-prompt callers that want per-instance
+        conversation state, use ``send_prompt`` instead.
+        """
+        user_visible = [m for m in messages if m.role != 'system']
+        completion_messages = cast(
+            'list[ChatCompletionMessageParam]',
+            [
+                {'role': 'system', 'content': self.system_prompt},
+                *[{'role': m.role, 'content': m.content or ''} for m in user_visible],
+            ],
+        )
+        async with with_llm_span(
+            model=self.model,
+            input_messages=completion_messages,
+            attributes={"orq.redteam.llm_purpose": "target"},
+        ) as span:
+            response = await asyncio.wait_for(
+                self.client.chat.completions.create(
+                    model=self.model,
+                    messages=completion_messages,
+                    max_tokens=self.max_tokens,
+                ),
+                timeout=self.timeout_ms / 1000.0,
+            )
+            msg = response.choices[0].message
+            content = msg.content or ''
+            record_llm_response(span, response, output_content=content)
+
+            tool_call_items: list[ToolCallOutputItem] = []
+            for tc in (getattr(msg, 'tool_calls', None) or []):
+                func = getattr(tc, 'function', None)
+                if func is None:
+                    continue
+                tc_id = getattr(tc, 'id', None)
+                kwargs: dict[str, Any] = {
+                    'name': func.name,
+                    'arguments': func.arguments or '{}',
+                }
+                if isinstance(tc_id, str) and tc_id:
+                    kwargs['id'] = tc_id
+                tool_call_items.append(ToolCallOutputItem(**kwargs))
+
+            usage = TokenUsage.from_completion(response)
+            response_id = getattr(response, 'id', None)
+            finish_reason = None
+            choices = getattr(response, 'choices', None) or []
+            if choices:
+                finish_reason = getattr(choices[0], 'finish_reason', None)
 
         output: list[OutputMessage] = cast('list[OutputMessage]', list(tool_call_items))
         output.append(TextOutputItem(text=content, annotations=[]))

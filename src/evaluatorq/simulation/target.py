@@ -1,54 +1,30 @@
-"""Simulation target implementations backed by the Orq Responses API."""
+"""Stateless OrqResponsesTarget — implements the AgentTarget.respond interface."""
 
 from __future__ import annotations
 
 import asyncio
 import uuid
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from loguru import logger
-
-from evaluatorq.contracts import AgentResponse, AgentTarget, LLMCallConfig
+from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, LLMCallConfig, Message
 from evaluatorq.simulation._client import build_simulation_client, extract_responses_output
-from evaluatorq.simulation.types import ChatMessage, TokenUsage
 from evaluatorq.simulation.utils.retry import with_retry
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
 
-@dataclass(frozen=True)
-class _ResponsesCallResult:
-    """Internal result of a single Responses API call.
-
-    Holds everything a caller might use to update state — but the call itself
-    performs no mutation. Callers decide what (if anything) to persist.
-    """
-
-    response: AgentResponse
-    response_id: str | None
-    usage: TokenUsage | None
-
-
 class OrqResponsesTarget(AgentTarget):
-    """Wraps the Orq Responses v3 API as a simulation target.
+    """Wraps the Orq Responses v3 API as a stateless ``AgentTarget``.
 
-    Implements two interfaces with different state semantics:
+    Stateless: each ``respond(messages)`` call sends the full message list and
+    holds no per-instance conversation state. Conversation continuity is owned
+    by the caller — the sim runner or the red-team orchestrator passes the full
+    transcript every turn. ``send_prompt(prompt)`` is the inherited single-prompt
+    shim from :class:`AgentTarget` (wraps the prompt in one user message).
 
-    * ``__call__(messages)`` — sim callable shape. **Stateless w.r.t. self**:
-      reads no state, writes no state. The sim runner owns conversation
-      history (passed via ``messages``) and tracks usage independently.
-
-    * ``send_prompt(prompt)`` — redteam ``AgentTarget`` protocol. **Stateful**:
-      threads via ``self._previous_response_id`` and accumulates token usage on
-      ``self._accumulated_usage``. Multi-turn server-side state continuity.
-
-    Concurrency contract: a single instance is single-caller for the stateful
-    path. Two concurrent ``send_prompt`` calls on the same instance race on
-    ``_previous_response_id`` and ``_accumulated_usage`` — wrap with an external
-    ``asyncio.Lock`` if you need concurrent invocation. The stateless ``__call__``
-    path is safe to invoke concurrently because it mutates nothing on self.
+    Because nothing is mutated on ``self``, a single instance is safe to invoke
+    concurrently.
     """
 
     def __init__(
@@ -64,45 +40,30 @@ class OrqResponsesTarget(AgentTarget):
         self.config = config
         self.instructions = instructions
         self.tools = tools
-        self.threading_disabled = False
-        self._previous_response_id: str | None = None
-        self._accumulated_usage = TokenUsage()
         if client is not None:
             self._client = client
             self._client_owned = False
         else:
             self._client, self._client_owned = build_simulation_client(config.client)
 
-    async def __call__(self, messages: list[ChatMessage]) -> str:
-        """Sim target_callback shape. Sends full message list each turn.
-
-        Stateless w.r.t. self: never reads or writes ``_previous_response_id``
-        or ``_accumulated_usage``. Safe to call concurrently with itself.
-        """
-        result = await self._invoke_stateless(
+    async def respond(self, messages: list[Message]) -> AgentResponse:
+        """Stateless: send the full message list, return the response."""
+        return await self._call_responses_api(
             responses_input=self._messages_to_input(messages),
         )
-        return result.response.text
-
-    async def send_prompt(self, prompt: str) -> AgentResponse:
-        """Redteam AgentTarget protocol shape. Threads previous_response_id."""
-        return await self._invoke_stateful(responses_input=prompt)
 
     def new(self) -> OrqResponsesTarget:
-        """Return a fresh instance with identical config but cleared state.
+        """Return a fresh instance with identical config but no shared state.
 
         Externally-injected clients (``_client_owned=False``) are propagated to
         the new instance so callers sharing a single HTTP connection continue to
         do so. Self-owned clients are not propagated — the new instance builds
         its own from env vars, keeping connection lifetimes independent.
 
-        Per AgentTarget protocol, each ``new()`` call must produce an
-        independent memory scope; we mint a fresh ``memory_entity_id`` if one
-        was set.
+        Per the ``AgentTarget`` contract each ``new()`` produces an independent
+        memory scope; we mint a fresh ``memory_entity_id`` if one was set.
         """
-        fresh_memory_id = (
-            str(uuid.uuid4()) if self.memory_entity_id is not None else None
-        )
+        fresh_memory_id = str(uuid.uuid4()) if self.memory_entity_id is not None else None
         return OrqResponsesTarget(
             self.config,
             instructions=self.instructions,
@@ -111,20 +72,15 @@ class OrqResponsesTarget(AgentTarget):
             client=self._client if not self._client_owned else None,
         )
 
-    def get_usage(self) -> TokenUsage:
-        """Return cumulative token usage across ``send_prompt`` calls.
-
-        Only the stateful path (``send_prompt``) contributes; sim ``__call__``
-        is stateless and does not update this counter.
-        """
-        return self._accumulated_usage.model_copy()
+    async def get_agent_context(self) -> AgentContext:
+        """Describe this target — the configured model is the agent key."""
+        return AgentContext(key=self.config.model, model=self.config.model)
 
     async def close(self) -> None:
         """Close the underlying HTTP client if this instance owns it.
 
         Externally-injected clients (``_client_owned=False``) are left
-        untouched — the caller owns their lifecycle. Safe to call multiple
-        times; subsequent calls are no-ops.
+        untouched — the caller owns their lifecycle. Safe to call repeatedly.
         """
         if self._client_owned:
             await self._client.close()
@@ -136,69 +92,19 @@ class OrqResponsesTarget(AgentTarget):
     async def __aexit__(self, *_exc_info: object) -> None:
         await self.close()
 
-    async def _invoke_stateless(
-        self,
-        *,
-        responses_input: str | list[dict[str, Any]],
-    ) -> _ResponsesCallResult:
-        """Sim path: pure call, no instance mutation, no threading."""
-        return await self._call_responses_api(
-            responses_input=responses_input,
-            previous_response_id=None,
-        )
-
-    async def _invoke_stateful(
-        self,
-        *,
-        responses_input: str | list[dict[str, Any]],
-    ) -> AgentResponse:
-        """Redteam path: threads via self._previous_response_id, accumulates usage.
-
-        Atomic mutation: builds the new ``_previous_response_id`` and
-        ``_accumulated_usage`` locally and writes them in a single block after
-        the API call succeeds. A partial-mutation window remains only across
-        the two assignments below, which run with no awaits between them.
-        """
-        result = await self._call_responses_api(
-            responses_input=responses_input,
-            previous_response_id=self._previous_response_id,
-        )
-
-        if result.usage is None:
-            new_usage = self._accumulated_usage
-        else:
-            # extract_responses_output returns calls=0; bump to 1 for this API call
-            new_usage = self._accumulated_usage + result.usage.model_copy(update={"calls": 1})
-        threading_disabled = result.response_id is None
-        if not threading_disabled:
-            self._previous_response_id = result.response_id
-        elif not self.threading_disabled:
-            logger.error(
-                "OrqResponsesTarget: response missing 'id'; server-side "
-                "conversation threading disabled for this instance "
-                "(model={}). Multi-turn continuity lost; subsequent send_prompt "
-                "calls will behave as turn 1.",
-                self.config.model,
-            )
-        self.threading_disabled = self.threading_disabled or threading_disabled
-        self._accumulated_usage = new_usage
-
-        return result.response
-
     async def _call_responses_api(
         self,
         *,
         responses_input: str | list[dict[str, Any]],
-        previous_response_id: str | None,
-    ) -> _ResponsesCallResult:
-        """Pure call into ``client.responses.create``. No instance mutation.
+    ) -> AgentResponse:
+        """Pure call into ``client.responses.create``; no instance mutation.
 
         Applies retry (rate-limit / server errors) via :func:`with_retry` and
         converts :class:`asyncio.TimeoutError` into a descriptive RuntimeError.
         """
         timeout_s = self.config.timeout_ms / 1000.0 if self.config.timeout_ms else None
 
-        async def _do_call() -> _ResponsesCallResult:
+        async def _do_call() -> AgentResponse:
             kwargs: dict[str, Any] = {
                 "model": self.config.model,
                 "input": responses_input,
@@ -207,15 +113,11 @@ class OrqResponsesTarget(AgentTarget):
                 kwargs["tools"] = self.tools
             if self.instructions is not None:
                 kwargs["instructions"] = self.instructions
-            if previous_response_id is not None:
-                kwargs["previous_response_id"] = previous_response_id
 
             coro = self._client.responses.create(**kwargs)
             response = await (
                 asyncio.wait_for(coro, timeout=timeout_s) if timeout_s else coro
             )
-
-            response_id = _validate_response_id(response, self.config.model)
 
             output_items, usage = extract_responses_output(response)
             if not output_items:
@@ -225,11 +127,11 @@ class OrqResponsesTarget(AgentTarget):
                     f"an API error or unexpected response format."
                 )
 
-            return _ResponsesCallResult(
-                response=AgentResponse(output=output_items),
-                response_id=response_id,
-                usage=usage,
-            )
+            # extract_responses_output returns calls=0; this was one API call.
+            # Bump it so usage aggregation stays consistent with the other targets.
+            if usage is not None:
+                usage = usage.model_copy(update={"calls": 1})
+            return AgentResponse(output=output_items, usage=usage)
 
         try:
             return await with_retry(_do_call, label="OrqResponsesTarget._call_responses_api")
@@ -240,7 +142,7 @@ class OrqResponsesTarget(AgentTarget):
             ) from e
 
     @staticmethod
-    def _messages_to_input(messages: list[ChatMessage]) -> list[dict[str, Any]]:
+    def _messages_to_input(messages: list[Message]) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         for m in messages:
             # Assistant messages with tool_calls require content: null per
@@ -259,19 +161,6 @@ class OrqResponsesTarget(AgentTarget):
                 d["name"] = m.name
             result.append(d)
         return result
-
-
-def _validate_response_id(response: Any, model: str) -> str | None:
-    """Return the response id if usable for threading, else None + warn."""
-    response_id = getattr(response, "id", None)
-    if isinstance(response_id, str) and response_id:
-        return response_id
-    logger.warning(
-        "OrqResponsesTarget: response missing 'id'; "
-        "conversation threading disabled (model={})",
-        model,
-    )
-    return None
 
 
 __all__ = ["OrqResponsesTarget"]

@@ -333,13 +333,15 @@ class AgentContext(BaseModel):
 
 
 class AgentTarget(ABC):
-    """Abstract base class for agent targets that can receive prompts.
+    """Abstract base class for agent targets that can receive messages.
 
-    Subclasses must implement ``send_prompt`` and ``new``. Targets that back a
-    server-side memory store override ``get_agent_context`` (self-describing),
-    ``cleanup_memory`` (release created entities), and ``map_error``
-    (provider-specific error codes); stateless targets inherit the safe
-    defaults. ``memory_entity_id`` is an instance attribute (set in
+    Subclasses implement ``respond`` (the canonical message-based interface)
+    and ``new``. ``send_prompt`` is a concrete shim retained for single-prompt
+    callers — it wraps the prompt in one user message and calls ``respond``.
+    Targets that back a server-side memory store override ``get_agent_context``
+    (self-describing), ``cleanup_memory`` (release created entities), and
+    ``map_error`` (provider-specific error codes); stateless targets inherit
+    the safe defaults. ``memory_entity_id`` is an instance attribute (set in
     ``__init__``) so subclasses can mutate it without shadowing a class default.
     """
 
@@ -347,14 +349,28 @@ class AgentTarget(ABC):
         self.memory_entity_id = memory_entity_id
 
     @abstractmethod
-    async def send_prompt(self, prompt: str) -> AgentResponse:
-        """Send a prompt; return the response."""
+    async def respond(self, messages: list[Message]) -> AgentResponse:
+        """Send a list of messages; return the response.
+
+        Contract notes for implementers and callers:
+        - ``Message`` carries the full chat shape (tool calls, tool results),
+          but most targets consume only ``role`` + ``content`` and treat the
+          tool-call fields as advisory. Do not rely on a target round-tripping
+          ``tool_calls`` / ``tool_call_id`` / ``name`` unless its docstring says so.
+        - Some targets that hold server-side conversation state (e.g.
+          ``ORQAgentTarget``) require ``messages[-1].role == "user"`` and forward
+          only that last turn; they raise ``ValueError`` otherwise.
+        """
         ...
 
     @abstractmethod
     def new(self) -> AgentTarget:
         """Return a fresh independent instance for a new attack."""
         ...
+
+    async def send_prompt(self, prompt: str) -> AgentResponse:
+        """Back-compat shim: wrap a single prompt in one user message and call ``respond``."""
+        return await self.respond([Message(role="user", content=prompt)])
 
     async def get_agent_context(self) -> AgentContext:
         """Default: minimal context. Override for platform-backed targets."""

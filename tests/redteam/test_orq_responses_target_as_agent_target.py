@@ -1,12 +1,10 @@
-"""Tests for OrqResponsesTarget conformance with the redteam AgentTarget protocol.
+"""Tests for OrqResponsesTarget conformance with the AgentTarget ABC.
 
-Verifies:
-- is_agent_target() returns True for OrqResponsesTarget
-- memory_entity_id attribute exists and defaults to None
-- send_prompt is callable and returns AgentResponse
-- new() returns a different object
-- new() fresh instance has previous_response_id == None
-- __call__ (sim mode) does not corrupt AgentTarget threading state (partial-stateless contract)
+After RES-808 PR3:
+- ``respond(messages)`` is the canonical entry point
+- ``send_prompt(str)`` is the inherited shim
+- ``OrqResponsesTarget`` is fully stateless — no ``_previous_response_id`` or
+  ``get_usage`` invariants
 """
 
 from __future__ import annotations
@@ -15,17 +13,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from evaluatorq.contracts import AgentResponse, AgentTarget, LLMCallConfig
+from evaluatorq.contracts import AgentResponse, AgentTarget, LLMCallConfig, Message
 from evaluatorq.simulation.target import OrqResponsesTarget
-from evaluatorq.simulation.types import ChatMessage
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _make_client() -> MagicMock:
-    """Return a mock AsyncOpenAI client with a stub responses.create."""
     client = MagicMock()
     client.responses = MagicMock()
     client.responses.create = AsyncMock()
@@ -33,21 +25,17 @@ def _make_client() -> MagicMock:
 
 
 def _make_response(text: str = "all good") -> MagicMock:
-    """Build a minimal mock Responses API response object."""
     part = MagicMock()
     part.type = "output_text"
     part.text = text
-
     msg_item = MagicMock()
     msg_item.type = "message"
     msg_item.content = [part]
-
     usage = MagicMock()
     usage.input_tokens = 5
     usage.output_tokens = 3
-
     response = MagicMock()
-    response.id = "resp-agent-target-test"
+    response.id = "resp-1"
     response.usage = usage
     response.output = [msg_item]
     return response
@@ -56,164 +44,87 @@ def _make_response(text: str = "all good") -> MagicMock:
 def _make_target() -> OrqResponsesTarget:
     client = _make_client()
     client.responses.create = AsyncMock(return_value=_make_response())
-    config = LLMCallConfig(model="gpt-4o")
-    return OrqResponsesTarget(config, client=client)
+    return OrqResponsesTarget(LLMCallConfig(model="gpt-4o"), client=client)
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
+class TestAgentTargetConformance:
+    def test_is_agent_target_instance(self):
+        assert isinstance(_make_target(), AgentTarget)
 
+    def test_memory_entity_id_default_none(self):
+        assert _make_target().memory_entity_id is None
 
-class TestIsAgentTarget:
-    def test_is_agent_target_returns_true(self):
-        """isinstance(x, AgentTarget) must return True for OrqResponsesTarget."""
-        target = _make_target()
-        assert isinstance(target, AgentTarget) is True
-
-    def test_has_send_prompt_callable(self):
-        """send_prompt attribute must exist and be callable."""
-        target = _make_target()
-        assert callable(getattr(target, "send_prompt", None))
-
-    def test_has_new_callable(self):
-        """new attribute must exist and be callable."""
-        target = _make_target()
-        assert callable(getattr(target, "new", None))
-
-
-class TestMemoryEntityId:
-    def test_memory_entity_id_attribute_exists(self):
-        """memory_entity_id attribute must exist (AgentTarget protocol field)."""
-        target = _make_target()
-        assert hasattr(target, "memory_entity_id")
-
-    def test_memory_entity_id_is_none_by_default(self):
-        """memory_entity_id defaults to None when not explicitly set."""
-        target = _make_target()
-        assert target.memory_entity_id is None
-
-    def test_memory_entity_id_can_be_set(self):
-        """memory_entity_id can be set to a non-None value via constructor."""
+    def test_memory_entity_id_settable(self):
         client = _make_client()
-        config = LLMCallConfig(model="gpt-4o")
-        target = OrqResponsesTarget(config, client=client, memory_entity_id="entity-42")
-        assert target.memory_entity_id == "entity-42"
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o"), client=client, memory_entity_id="x-1"
+        )
+        assert target.memory_entity_id == "x-1"
 
 
-class TestSendPrompt:
+class TestRespond:
     @pytest.mark.asyncio
-    async def test_send_prompt_is_awaitable(self):
-        """send_prompt must be awaitable (coroutine function)."""
-        import asyncio
-
+    async def test_respond_returns_agent_response(self):
         target = _make_target()
-        result = target.send_prompt("test prompt")
-        assert asyncio.iscoroutine(result)
-        await result  # exhaust the coroutine to avoid ResourceWarning
-
-    @pytest.mark.asyncio
-    async def test_send_prompt_returns_agent_response(self):
-        """send_prompt must return an AgentResponse instance."""
-        target = _make_target()
-        result = await target.send_prompt("hello")
+        result = await target.respond([Message(role="user", content="hi")])
         assert isinstance(result, AgentResponse)
+        assert result.text == "all good"
 
     @pytest.mark.asyncio
-    async def test_send_prompt_returns_text(self):
-        """send_prompt result has the expected text content."""
-        client = _make_client()
-        client.responses.create = AsyncMock(return_value=_make_response(text="safe response"))
-        config = LLMCallConfig(model="gpt-4o")
-        target = OrqResponsesTarget(config, client=client)
+    async def test_send_prompt_delegates_to_respond(self):
+        target = _make_target()
+        result = await target.send_prompt("hi")
+        assert isinstance(result, AgentResponse)
+        assert result.text == "all good"
 
-        result = await target.send_prompt("attack prompt")
-        assert result.text == "safe response"
+
+class TestRespondIsStateless:
+    @pytest.mark.asyncio
+    async def test_consecutive_respond_calls_pass_messages_as_sent(self):
+        """respond is stateless: each call's input is exactly what the caller passed.
+
+        No previous_response_id threading, no accumulation on self.
+        """
+        client = _make_client()
+        client.responses.create = AsyncMock(
+            side_effect=[_make_response("r1"), _make_response("r2")]
+        )
+        target = OrqResponsesTarget(LLMCallConfig(model="gpt-4o"), client=client)
+
+        await target.respond([Message(role="user", content="turn1")])
+        await target.respond([Message(role="user", content="turn2")])
+
+        call1_kwargs = client.responses.create.await_args_list[0].kwargs
+        call2_kwargs = client.responses.create.await_args_list[1].kwargs
+        assert "previous_response_id" not in call1_kwargs
+        assert "previous_response_id" not in call2_kwargs
+        assert call1_kwargs["input"] == [{"role": "user", "content": "turn1"}]
+        assert call2_kwargs["input"] == [{"role": "user", "content": "turn2"}]
+
+    @pytest.mark.asyncio
+    async def test_send_prompt_routes_single_user_message_through_respond(self):
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(LLMCallConfig(model="gpt-4o"), client=client)
+
+        await target.send_prompt("attack prompt")
+
+        call_kwargs = client.responses.create.await_args_list[-1].kwargs
+        assert call_kwargs["input"] == [{"role": "user", "content": "attack prompt"}]
+        assert "previous_response_id" not in call_kwargs
 
 
 class TestNew:
-    def test_new_returns_different_object(self):
-        """new() must return a new instance, not the same object."""
+    def test_new_returns_different_instance(self):
         target = _make_target()
-        fresh = target.new()
-        assert fresh is not target
+        assert target.new() is not target
 
-    def test_new_returns_orq_responses_target(self):
-        """new() must return an OrqResponsesTarget."""
+    def test_new_memory_entity_id_is_none(self):
         target = _make_target()
-        fresh = target.new()
-        assert isinstance(fresh, OrqResponsesTarget)
-
-    def test_new_result_is_also_agent_target(self):
-        """The instance returned by new() must also satisfy isinstance(x, AgentTarget)."""
-        target = _make_target()
-        fresh = target.new()
-        assert isinstance(fresh, AgentTarget) is True
-
-    def test_new_fresh_instance_has_previous_response_id_none(self):
-        """new() fresh instance must have _previous_response_id == None."""
-        target = _make_target()
-
-        # Simulate setting state on the original
-        target._previous_response_id = "resp-existing"
-
-        fresh = target.new()
-        assert fresh._previous_response_id is None
-
-    def test_new_fresh_memory_entity_id_is_none(self):
-        """new() propagates memory_entity_id (None by default)."""
-        target = _make_target()
-        fresh = target.new()
-        assert fresh.memory_entity_id is None
+        assert target.new().memory_entity_id is None
 
     def test_new_propagates_injected_client(self):
-        """new() propagates the injected client to the fresh instance."""
         client = _make_client()
         client.responses.create = AsyncMock(return_value=_make_response())
-        config = LLMCallConfig(model="gpt-4o")
-        target = OrqResponsesTarget(config, client=client)
-
-        fresh = target.new()
-        assert fresh._client is client
-
-
-class TestCallDoesNotCorruptAgentTargetState:
-    """Fork contract: __call__ (sim mode) must not mutate AgentTarget threading state.
-
-    An OrqResponsesTarget used as an AgentTarget (redteam) can legally also be
-    passed as a sim target_callback.  Calling __call__ between send_prompt turns
-    must leave _previous_response_id and _accumulated_usage untouched on self.
-    """
-
-    @pytest.mark.asyncio
-    async def test_call_does_not_overwrite_previous_response_id(self):
-        """__call__ must not clear or overwrite _previous_response_id set by send_prompt."""
-        client = _make_client()
-        client.responses.create = AsyncMock(
-            side_effect=[
-                _make_response(text="turn-1 reply"),   # send_prompt
-                _make_response(text="sim reply"),       # __call__ (stateless)
-            ]
-        )
-        config = LLMCallConfig(model="gpt-4o")
-        target = OrqResponsesTarget(config, client=client)
-
-        await target.send_prompt("redteam turn 1")
-        thread_id_after_send = target._previous_response_id
-
-        await target([ChatMessage(role="user", content="sim input")])
-
-        assert target._previous_response_id == thread_id_after_send
-
-    @pytest.mark.asyncio
-    async def test_call_does_not_reset_previous_response_id_to_none(self):
-        """__call__ on a fresh instance must leave _previous_response_id as None."""
-        client = _make_client()
-        client.responses.create = AsyncMock(return_value=_make_response())
-        config = LLMCallConfig(model="gpt-4o")
-        target = OrqResponsesTarget(config, client=client)
-
-        assert target._previous_response_id is None
-        await target([ChatMessage(role="user", content="sim input")])
-        # Must still be None — __call__ is stateless w.r.t. self
-        assert target._previous_response_id is None
+        target = OrqResponsesTarget(LLMCallConfig(model="gpt-4o"), client=client)
+        assert target.new()._client is client

@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator
-from evaluatorq.contracts import AgentTarget
+from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.contracts import (
     AgentContext,
     AgentInfo,
@@ -81,7 +81,7 @@ class _FakeTarget(AgentTarget):
         self._usage = usage
         self.call_count = 0
 
-    async def send_prompt(self, prompt: str) -> AgentResponse:
+    async def respond(self, messages: list[Message]) -> AgentResponse:
         self.call_count += 1
         return AgentResponse(text=f"target reply {self.call_count}", usage=self._usage)
 
@@ -260,7 +260,7 @@ class TestPipelineTokenUsageAggregation:
                 super().__init__()
                 self.attempts = 0
 
-            async def send_prompt(self, prompt: str) -> AgentResponse:
+            async def respond(self, messages: list[Message]) -> AgentResponse:
                 self.attempts += 1
                 raise RuntimeError("target down")
 

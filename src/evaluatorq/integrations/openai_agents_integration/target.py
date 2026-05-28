@@ -8,7 +8,7 @@ from typing import Any
 
 from agents import Agent, Runner
 
-from evaluatorq.contracts import AgentTarget
+from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.contracts import (
     AgentContext,
     AgentResponse,
@@ -73,14 +73,48 @@ class OpenAIAgentTarget(AgentTarget):
             )
 
         self._history = result.to_input_list()
+        new_items = self._history[min(prev_len, len(self._history)):]
+        return self._build_response(new_items, result)
 
-        # Build output items directly from new history items, preserving original
-        # Responses API 'id'/'call_id' fields for trace correlation. Iteration order
-        # is preserved so interleaved text/tool calls (e.g. reasoning -> tool_call ->
-        # reasoning) round-trip into AgentResponse.output.
+    async def respond(self, messages: list[Message]) -> AgentResponse:
+        """Stateless: run the agent over the provided transcript.
+
+        The OpenAI Agents SDK accepts a list of input items, so ``respond``
+        passes the full ``messages`` list and neither reads nor writes
+        ``self._history``. The caller owns conversation continuity; redteam
+        single-prompt callers that want per-instance history use ``send_prompt``.
+        """
+        input_data: list[Any] = [{"role": m.role, "content": m.content or ""} for m in messages]
+        prev_len = len(input_data)
+        try:
+            result = await Runner.run(self._agent, input_data, **self._run_kwargs)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            raise
+        except Exception as exc:
+            raise RuntimeError(
+                f"OpenAIAgentTarget: Runner.run() raised an error: {exc}"
+            ) from exc
+
+        if result.final_output is None:
+            raise ValueError(
+                "OpenAIAgentTarget: Runner.run() returned final_output=None. "
+                "Ensure the agent produces a text response."
+            )
+
+        full_list = result.to_input_list()
+        new_items = full_list[min(prev_len, len(full_list)):]
+        return self._build_response(new_items, result)
+
+    def _build_response(self, new_items: list[Any], result: Any) -> AgentResponse:
+        """Build an AgentResponse from the items a run added, plus its final output.
+
+        Preserves original Responses API ``id``/``call_id`` fields for trace
+        correlation. Iteration order is preserved so interleaved text/tool calls
+        (e.g. reasoning -> tool_call -> reasoning) round-trip into
+        ``AgentResponse.output``.
+        """
         output_items: list[OutputMessage] = []
-        new_items_start = min(prev_len, len(self._history))
-        for item in self._history[new_items_start:]:
+        for item in new_items:
             # Agents SDK to_input_list() returns Responses API items for tool calls,
             # e.g. {"type": "function_call", "id": "fc_...", "call_id": "call_...", "name": "...", "arguments": "..."}.
             if isinstance(item, dict) and item.get("type") == "function_call":

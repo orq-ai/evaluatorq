@@ -43,7 +43,7 @@ def _get_orq_server_url() -> str:
     return url.rstrip('/').removesuffix('/v2/router')
 
 
-from evaluatorq.contracts import AgentTarget
+from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.backends._errors import extract_provider_error_code, extract_status_code
 from evaluatorq.redteam.backends.base import Backend
 from evaluatorq.redteam.contracts import (
@@ -132,11 +132,25 @@ class ORQAgentTarget(AgentTarget):
         self._task_id: str | None = None
         self._cached_context: AgentContext | None = None
 
-    async def send_prompt(self, prompt: str) -> AgentResponse:
-        """Send a prompt to the ORQ agent and return the response with usage + any tool calls.
+    async def respond(self, messages: list[Message]) -> AgentResponse:
+        """Send the last user message to the ORQ agents endpoint, threaded via ``task_id``.
+
+        The ORQ agents endpoint holds conversation state server-side via
+        ``task_id``, so ``respond`` forwards only the last user turn. Prior turns
+        in ``messages`` are assumed consistent with the server-side history that
+        ``task_id`` references; the first call (``task_id is None``) seeds it.
+
+        Caller contract: ``messages[-1].role == "user"``. A mismatch with the
+        server-side history is a caller bug.
 
         Token usage is accumulated across pending-tool-call continuations.
         """
+        if not messages or messages[-1].role != "user":
+            raise ValueError(
+                "ORQAgentTarget.respond requires messages[-1].role == 'user'. "
+                "Server-side conversation state is held via task_id."
+            )
+        prompt = messages[-1].content or ""
         total_prompt_tokens = 0
         total_completion_tokens = 0
         total_tokens = 0

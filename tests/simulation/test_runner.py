@@ -7,7 +7,6 @@ from evaluatorq.simulation.runner.simulation import (
     _invert_roles_for_simulator,
 )
 from evaluatorq.simulation.types import (
-    ChatMessage,
     CommunicationStyle,
     Message,
     Persona,
@@ -111,14 +110,14 @@ class TestInvertRolesForSimulator:
         ]
         result = _invert_roles_for_simulator(messages)
 
-        assert result[0] == ChatMessage(role="assistant", content="Hello")
-        assert result[1] == ChatMessage(role="user", content="Hi there")
-        assert result[2] == ChatMessage(role="assistant", content="Help me")
+        assert result[0] == Message(role="assistant", content="Hello")
+        assert result[1] == Message(role="user", content="Hi there")
+        assert result[2] == Message(role="assistant", content="Help me")
 
     def test_preserves_system_role(self):
         messages = [Message(role="system", content="You are helpful")]
         result = _invert_roles_for_simulator(messages)
-        assert result[0] == ChatMessage(role="system", content="You are helpful")
+        assert result[0] == Message(role="system", content="You are helpful")
 
     def test_empty_messages(self):
         assert _invert_roles_for_simulator([]) == []
