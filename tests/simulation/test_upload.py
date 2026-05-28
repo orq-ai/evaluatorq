@@ -603,7 +603,7 @@ async def test_simulate_dataset_id_fetches_and_runs(monkeypatch: pytest.MonkeyPa
         "evaluatorq.fetch_data.fetch_dataset_batches", fake_fetch
     )
     monkeypatch.setattr(
-        "evaluatorq.fetch_data.setup_orq_client", lambda _k: object()
+        "evaluatorq.fetch_data.setup_orq_client", lambda _k: object()  # pyright: ignore[reportUnknownLambdaType]
     )
 
     runner_run = AsyncMock(return_value=_make_result())
