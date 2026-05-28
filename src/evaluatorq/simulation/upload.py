@@ -1,13 +1,11 @@
-"""Auto-upload helper for the direct simulate() path.
+"""Standalone upload helper for simulation results (not called by simulate()).
 
 Converts ``list[SimulationResult]`` into ``list[DataPointResult]`` (the
 shape ``send_results_to_orq`` expects) and posts them to the Orq platform.
 
-Used by ``simulate()`` and ``generate_and_simulate()`` when their
-``upload_results=True`` flag is set and ``ORQ_API_KEY`` is present in
-the environment. The ``wrap_simulation_agent()`` → ``evaluatorq()``
-routing path already gets upload for free via the framework; this
-helper covers the standalone entry points (RES-598).
+``simulate()`` and ``generate_and_simulate()`` get upload for free via their
+``evaluatorq()`` routing path; this helper is available for direct callers
+who invoke ``SimulationRunner`` outside of the standard pipeline (RES-598).
 """
 
 from __future__ import annotations

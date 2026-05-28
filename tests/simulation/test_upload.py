@@ -312,9 +312,14 @@ def _make_datapoint():
     )
 
 
-import sys
-import evaluatorq.evaluatorq  # noqa: F401  # ensure submodule registered in sys.modules
-_evq_module = sys.modules["evaluatorq.evaluatorq"]
+# `evaluatorq()` is imported lazily inside `_simulate_via_evaluatorq` (avoids a
+# circular import at package init), so it never appears as a module-level name
+# in `evaluatorq.simulation.api`. Patch the source module directly — the
+# package re-export `evaluatorq.evaluatorq` is shadowed by the function of the
+# same name, hence `importlib` rather than attribute lookup.
+import importlib
+
+_evq_module = importlib.import_module("evaluatorq.evaluatorq")
 
 
 @pytest.mark.asyncio

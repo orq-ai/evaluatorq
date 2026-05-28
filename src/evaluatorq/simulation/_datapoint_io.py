@@ -84,7 +84,7 @@ def _extract_single_datapoint(data: DataPoint) -> Datapoint:
             persona=persona,
             scenario=scenario,
             user_system_prompt="",
-            first_message="",
+            first_message=inputs.get("first_message", ""),
         )
     raise ValueError(
         "Expected data.inputs to contain 'persona' + 'scenario', 'datapoint', "
