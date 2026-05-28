@@ -143,9 +143,9 @@ class LangGraphTarget(AgentTarget):
                 introspects the compiled graph (tools from a ``ToolNode``,
                 checkpointer presence) on a best-effort basis.
         """
+        super().__init__(memory_entity_id=uuid4().hex)
         self._graph = graph
         self._extra_config = config or {}
-        self.memory_entity_id: str = uuid4().hex
         self._agent_context = agent_context
         # Tracks how many messages were in the LangGraph thread before this turn.
         # Not safe for concurrent send_prompt calls on the same instance —

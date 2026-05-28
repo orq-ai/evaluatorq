@@ -47,10 +47,6 @@ class VercelAISdkTarget(AgentTarget):
         config = DynamicRunConfig(targets=[target])
     """
 
-    memory_entity_id: str | None = None
-    """Vercel AI SDK state lives inside the HTTP handler (stateless to us);
-    conversation history is tracked client-side in ``_history``."""
-
     def __init__(
         self,
         url: str,
@@ -75,7 +71,10 @@ class VercelAISdkTarget(AgentTarget):
                 nonsensical ones) will be applied. The HTTP handler cannot
                 be introspected from Python, so this must be supplied by
                 the caller when capability-aware filtering matters.
+        Vercel AI SDK state lives inside the HTTP handler (stateless to us);
+        conversation history is tracked client-side in ``_history``.
         """
+        super().__init__(memory_entity_id=None)
         self._url = url
         self._headers = headers or {}
         self._extra_body = extra_body or {}

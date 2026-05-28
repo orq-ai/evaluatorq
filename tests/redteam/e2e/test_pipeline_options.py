@@ -11,12 +11,11 @@ import pytest
 from openai import AsyncOpenAI
 
 from evaluatorq.redteam import red_team
-from evaluatorq.redteam.backends.base import BackendBundle
 from evaluatorq.redteam.contracts import SaveMode
 from evaluatorq.redteam.exceptions import CancelledError
 from evaluatorq.redteam.hooks import ConfirmPayload, DefaultHooks
 
-from .conftest import DeterministicAsyncOpenAI
+from .conftest import DeterministicAsyncOpenAI, MockBackend
 
 
 class _CancellingHooks(DefaultHooks):
@@ -31,7 +30,7 @@ class _CancellingHooks(DefaultHooks):
 
 
 @contextmanager
-def _dynamic_patches(mock_backend_bundle: BackendBundle):
+def _dynamic_patches(mock_backend_bundle: MockBackend):
     with (
         patch("evaluatorq.redteam.runner.resolve_backend", return_value=mock_backend_bundle),
         patch("evaluatorq.redteam.runner.init_tracing_if_needed", return_value=None),
@@ -48,7 +47,7 @@ def _dynamic_patches(mock_backend_bundle: BackendBundle):
 @pytest.mark.asyncio
 async def test_hooks_on_confirm_cancels_dynamic(
     mock_llm_client: DeterministicAsyncOpenAI,
-    mock_backend_bundle: BackendBundle,
+    mock_backend_bundle: MockBackend,
 ) -> None:
     """on_confirm returning False should raise RuntimeError."""
     hooks = _CancellingHooks()
@@ -72,7 +71,7 @@ async def test_hooks_on_confirm_cancels_dynamic(
 @pytest.mark.asyncio
 async def test_hooks_on_confirm_cancels_hybrid(
     mock_llm_client: DeterministicAsyncOpenAI,
-    mock_backend_bundle: BackendBundle,
+    mock_backend_bundle: MockBackend,
     static_dataset_path: Path,
 ) -> None:
     """on_confirm returning False in hybrid mode should raise RuntimeError."""
@@ -133,7 +132,7 @@ async def test_static_output_artifacts(
 @pytest.mark.asyncio
 async def test_dynamic_output_artifacts(
     mock_llm_client: DeterministicAsyncOpenAI,
-    mock_backend_bundle: BackendBundle,
+    mock_backend_bundle: MockBackend,
     tmp_path: Path,
 ) -> None:
     """Dynamic mode should write artifact files via the unified pipeline."""

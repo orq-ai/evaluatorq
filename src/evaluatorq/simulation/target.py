@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq.contracts import AgentResponse, LLMCallConfig
+from evaluatorq.redteam.backends.base import AgentTarget
 from evaluatorq.simulation._client import build_simulation_client, extract_responses_output
 from evaluatorq.simulation.types import ChatMessage, TokenUsage
 from evaluatorq.simulation.utils.retry import with_retry
@@ -31,7 +32,7 @@ class _ResponsesCallResult:
     usage: TokenUsage | None
 
 
-class OrqResponsesTarget:
+class OrqResponsesTarget(AgentTarget):
     """Wraps the Orq Responses v3 API as a simulation target.
 
     Implements two interfaces with different state semantics:
@@ -51,9 +52,6 @@ class OrqResponsesTarget:
     path is safe to invoke concurrently because it mutates nothing on self.
     """
 
-    memory_entity_id: str | None
-    threading_disabled: bool
-
     def __init__(
         self,
         config: LLMCallConfig,
@@ -63,10 +61,10 @@ class OrqResponsesTarget:
         memory_entity_id: str | None = None,
         client: AsyncOpenAI | None = None,
     ) -> None:
+        super().__init__(memory_entity_id=memory_entity_id)
         self.config = config
         self.instructions = instructions
         self.tools = tools
-        self.memory_entity_id = memory_entity_id
         self.threading_disabled = False
         self._previous_response_id: str | None = None
         self._accumulated_usage = TokenUsage()

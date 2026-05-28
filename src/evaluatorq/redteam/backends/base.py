@@ -1,52 +1,63 @@
-"""Backend protocols for dynamic red teaming agent targets.
+"""Backend abstract base classes for dynamic red teaming agent targets.
 
-Defines the abstract interfaces that any agent backend must implement.
-The ORQ implementation lives in ``backends.orq``; other backends (HTTP,
-LangChain, custom callables) can implement these protocols independently.
+Defines the ABCs (``AgentTarget``, ``Backend``) that any agent backend must
+subclass. The ORQ implementation lives in ``backends.orq``; other backends
+(HTTP, LangChain, custom callables) subclass these independently.
 """
 
 from __future__ import annotations
 
-import re
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from evaluatorq.redteam.contracts import AgentResponse
 
 if TYPE_CHECKING:
-    from evaluatorq.redteam.contracts import AgentContext, TokenUsage
+    from evaluatorq.redteam.contracts import AgentContext
 
 
-class AgentTarget(Protocol):
-    """Protocol for agent targets that can receive prompts.
+class AgentTarget(ABC):
+    """Abstract base class for agent targets that can receive prompts.
 
-    Targets that maintain persistent memory (server-side entities, LangGraph
-    checkpointer threads, etc.) expose the isolation key as ``memory_entity_id``.
-    Targets without persistent memory set it to ``None``. The red teaming
-    pipeline reads this attribute after target creation to track entities for
-    cleanup — it does not inject the value into the target.
-
-    Backends must implement ``send_prompt`` returning :class:`AgentResponse`.
-    ``AgentResponse`` carries both the ordered output items (text + tool calls)
-    and the per-call LLM metadata (``usage``, ``model``, ``response_id``,
-    ``finish_reason``) that previously lived on the now-removed ``SendResult``.
+    Subclasses must implement ``send_prompt`` and ``new``. Targets that back a
+    server-side memory store override ``get_agent_context`` (self-describing),
+    ``cleanup_memory`` (release created entities), and ``map_error``
+    (provider-specific error codes); stateless targets inherit the safe
+    defaults. ``memory_entity_id`` is an instance attribute (set in
+    ``__init__``) so subclasses can mutate it without shadowing a class default.
     """
 
-    memory_entity_id: str | None
+    def __init__(self, memory_entity_id: str | None = None) -> None:
+        self.memory_entity_id = memory_entity_id
 
-    async def send_prompt(self, prompt: str) -> 'AgentResponse':
-        """Send a prompt and return the response (output items + token usage)."""
+    @abstractmethod
+    async def send_prompt(self, prompt: str) -> AgentResponse:
+        """Send a prompt; return the response."""
         ...
 
+    @abstractmethod
     def new(self) -> AgentTarget:
-        """Return a fresh target instance with isolated state for a new attack.
-
-        Each call must produce an independent instance — own ``memory_entity_id``
-        for memory-backed targets, ``None`` otherwise.
-        """
+        """Return a fresh independent instance for a new attack."""
         ...
+
+    async def get_agent_context(self) -> AgentContext:
+        """Default: minimal context. Override for platform-backed targets."""
+        from evaluatorq.redteam.contracts import AgentContext
+        return AgentContext(key=getattr(self, "agent_key", "unknown"))
+
+    async def cleanup_memory(self, ctx: AgentContext, entity_ids: list[str]) -> None:
+        """Release any memory entities this target created. Default: no-op (stateless)."""
+        return
+
+    def map_error(self, exc: Exception) -> tuple[str, str] | None:
+        """Map an exception to a provider-specific ``(code, message)``.
+
+        Return ``None`` to defer to the backend's default mapping. Stateless
+        targets inherit this no-opinion default.
+        """
+        return None
 
 
 def _coerce_to_agent_response(raw: Any) -> AgentResponse:
@@ -60,81 +71,6 @@ def _coerce_to_agent_response(raw: Any) -> AgentResponse:
         return raw
     text_item: OutputMessage = TextOutputItem(text=str(raw) if raw is not None else '', annotations=[])
     return AgentResponse(output=[text_item])
-
-
-class SupportsClone(Protocol):
-    """Optional hook for target cloning per parallel job.
-
-    Note: The runner detects this via duck-typing (``getattr``/``callable``),
-    not ``isinstance``.  Implementing this protocol is recommended for
-    documentation and static analysis but not strictly required.
-
-    Clones are expected to own their own ``memory_entity_id`` (fresh one when
-    the target backs a persistent memory store; ``None`` otherwise).
-    """
-
-    def clone(self) -> AgentTarget:
-        """Return a fresh target instance with isolated state."""
-        ...
-
-
-class SupportsTokenUsage(Protocol):
-    """Optional hook for exposing token usage from last target call.
-
-    Deprecated: ``AgentResponse.usage`` is the canonical channel for token usage.
-    Implementing this protocol is no longer required.
-    """
-
-    def consume_last_token_usage(self) -> 'TokenUsage | None':
-        """Return and clear usage from last call."""
-        ...
-
-
-class SupportsTargetMetadata(Protocol):
-    """Optional hook for backend-specific target metadata."""
-
-    def target_metadata(self) -> dict[str, object]:
-        """Return provider/target metadata for diagnostics."""
-        ...
-
-
-class SupportsAgentContext(Protocol):
-    """Optional: target provides its own agent context."""
-
-    async def get_agent_context(self) -> AgentContext: ...
-
-
-class SupportsTargetFactory(Protocol):
-    """Optional: target can create per-job instances.
-
-    The factory owns no memory-entity concern. Targets that manage persistent
-    memory generate their own ``memory_entity_id`` when constructed; callers
-    read it off the resulting target.
-    """
-
-    def create_target(self, agent_key: str) -> AgentTarget: ...
-
-
-class SupportsMemoryCleanup(Protocol):
-    """Optional: target can clean up memory entities."""
-
-    async def cleanup_memory(self, agent_context: AgentContext, entity_ids: list[str]) -> None: ...
-
-
-class SupportsErrorMapping(Protocol):
-    """Optional: target provides custom error classification."""
-
-    def map_error(self, exc: Exception) -> tuple[str, str]: ...
-
-
-def is_agent_target(obj: object) -> bool:
-    """Return True if obj satisfies the AgentTarget protocol at runtime.
-
-    Checks for ``send_prompt`` and ``new``.
-    """
-    has_send = callable(getattr(obj, 'send_prompt', None))
-    has_new = callable(getattr(obj, 'new', None))
-    return has_send and has_new
 
 
 def validate_agent_target(obj: object) -> None:
@@ -155,138 +91,73 @@ def validate_agent_target(obj: object) -> None:
         )
 
 
-class DirectTargetFactory:
-    """Fallback factory that wraps a bare AgentTarget."""
+class Backend(ABC):
+    """Backend ABC. Owns target construction, memory cleanup, and error mapping.
 
-    def __init__(self, target: AgentTarget) -> None:
-        self._target = target
-
-    def create_target(self, agent_key: str) -> AgentTarget:
-        result = self._target.new()
-        if result is None:  # pyright: ignore[reportUnnecessaryComparison]
-            raise TypeError(
-                f"{type(self._target).__name__}.new() returned None. "
-                "It must return a fresh AgentTarget instance."
-            )
-        return result
-
-
-class NoopMemoryCleanup:
-    """No-op memory cleanup for targets that do not manage memory stores."""
-
-    async def cleanup_memory(self, agent_context: AgentContext, entity_ids: list[str]) -> None:
-        logger.debug('Skipping memory cleanup: target does not manage memory stores')
-
-
-class AgentContextProvider(Protocol):
-    """Protocol for retrieving agent context (tools, memory, system prompt)."""
-
-    async def get_agent_context(self, agent_key: str) -> AgentContext:
-        """Retrieve full agent context for the given key."""
-        ...
-
-
-class AgentTargetFactory(Protocol):
-    """Protocol for creating AgentTarget instances per job.
-
-    The returned target owns its own ``memory_entity_id`` (auto-generated for
-    targets with persistent memory, ``None`` otherwise). Callers read the
-    attribute off the target rather than passing an ID in.
+    Subclasses must implement ``create_target`` and ``cleanup_memory``.
+    ``map_error`` has a sensible default; override for provider-specific
+    HTTP/status-code mapping.
     """
 
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self._ctx_cache: dict[str, AgentContext] = {}
+
+    @abstractmethod
     def create_target(self, agent_key: str) -> AgentTarget:
         """Create a new AgentTarget for the given agent key."""
         ...
 
-
-class MemoryCleanup(Protocol):
-    """Protocol for cleaning up memory entities created during red teaming."""
-
-    async def cleanup_memory(self, agent_context: AgentContext, entity_ids: list[str]) -> None:
+    @abstractmethod
+    async def cleanup_memory(self, ctx: AgentContext, entity_ids: list[str]) -> None:
         """Delete memory entities created during a red teaming run."""
         ...
 
+    def map_error(self, exc: Exception) -> tuple[str, str]:
+        """Return normalized ``(error_code, error_message)``."""
+        return "target_error", f"{type(exc).__name__}: {exc}"
 
-class ErrorMapper(Protocol):
-    """Protocol for backend-specific exception normalization."""
+    async def resolve_context(self, agent_key: str) -> AgentContext:
+        """Resolve agent context for a key by probing a target once, then caching.
+
+        Distinct from ``AgentTarget.get_agent_context()`` (no args, self-describing):
+        a backend resolves context for *any* key, a target describes *itself*.
+        """
+        if agent_key in self._ctx_cache:
+            return self._ctx_cache[agent_key]
+        probe = self.create_target(agent_key)
+        ctx = await probe.get_agent_context()
+        self._ctx_cache[agent_key] = ctx
+        return ctx
+
+
+class BareTargetBackend(Backend):
+    """Adapter wrapping a bare ``AgentTarget`` so it satisfies the ``Backend`` ABC.
+
+    Used by the runner's bring-your-own-target path. Absorbs the duck-typed
+    capability checks (``cleanup_memory``, ``map_error``) that used to scatter
+    across ``runner.py``.
+    """
+
+    def __init__(self, target: AgentTarget) -> None:
+        super().__init__(name=type(target).__name__)
+        self._target = target
+
+    def create_target(self, agent_key: str) -> AgentTarget:
+        """Ignore ``agent_key`` — target was pre-configured at construction time."""
+        return self._target.new()
+
+    async def cleanup_memory(self, ctx: AgentContext, entity_ids: list[str]) -> None:
+        if entity_ids and type(self._target).cleanup_memory is AgentTarget.cleanup_memory:
+            # Target created memory entities but inherits the no-op cleanup default;
+            # adversarial data may persist. Surface loudly (matches ORQ path).
+            logger.warning(
+                f"BareTargetBackend: {type(self._target).__name__} created "
+                f"{len(entity_ids)} memory entity id(s) but does not override cleanup_memory; "
+                "they may persist. Implement cleanup_memory on the target to release them."
+            )
+        await self._target.cleanup_memory(ctx, entity_ids)
 
     def map_error(self, exc: Exception) -> tuple[str, str]:
-        """Return normalized (error_code, error_message)."""
-        ...
-
-
-@dataclass(slots=True)
-class BackendBundle:
-    """Bundle of backend components used by dynamic runtime."""
-
-    name: str
-    target_factory: AgentTargetFactory
-    context_provider: AgentContextProvider
-    memory_cleanup: MemoryCleanup
-    error_mapper: ErrorMapper
-
-
-class DefaultErrorMapper:
-    """Fallback error mapper for unknown backends."""
-
-    def map_error(self, exc: Exception) -> tuple[str, str]:
-        return 'target_error', f'{type(exc).__name__}: {exc}'
-
-
-def extract_status_code(exc: Exception) -> int | None:
-    """Extract HTTP-like status code from structured exception fields or text."""
-    # Structured response.status_code (httpx/openai-like)
-    response = getattr(exc, 'response', None)
-    status_code = getattr(response, 'status_code', None)
-    if isinstance(status_code, int) and 100 <= status_code <= 599:
-        return status_code
-
-    # Some SDKs expose status/status_code directly on exception.
-    for attr in ('status_code', 'status'):
-        value = getattr(exc, attr, None)
-        if isinstance(value, int) and 100 <= value <= 599:
-            return value
-
-    # Fallback to regex on raw error text.
-    text = str(exc)
-    patterns = [
-        r'\bstatus(?:_code)?\s*[=:]\s*(\d{3})\b',
-        r'\bHTTP\s*(\d{3})\b',
-        r'\bcode\s*[=:]\s*(\d{3})\b',
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if not match:
-            continue
-        code = int(match.group(1))
-        if 100 <= code <= 599:
-            return code
-    return None
-
-
-def extract_provider_error_code(exc: Exception) -> str | None:
-    """Extract provider-specific symbolic error code if present."""
-    # Common structured fields.
-    for attr in ('code', 'error_code', 'type'):
-        value = getattr(exc, attr, None)
-        if isinstance(value, str) and value.strip():
-            return value.strip().lower()
-
-    body = getattr(exc, 'body', None)
-    if isinstance(body, dict):
-        error = body.get('error') if isinstance(body.get('error'), dict) else body
-        for key in ('code', 'type', 'error_code'):
-            value = error.get(key) if isinstance(error, dict) else None
-            if isinstance(value, str) and value.strip():
-                return value.strip().lower()
-
-    text = str(exc)
-    patterns = [
-        r'\b(?:error_)?code\s*[=:]\s*["\']?([a-z0-9_.-]+)["\']?',
-        r'\btype\s*[=:]\s*["\']?([a-z0-9_.-]+)["\']?',
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if match:
-            return match.group(1).strip().lower()
-    return None
+        result = self._target.map_error(exc)
+        return result if result is not None else super().map_error(exc)

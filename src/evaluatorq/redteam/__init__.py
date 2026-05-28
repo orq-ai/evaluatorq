@@ -39,12 +39,6 @@ from evaluatorq.redteam.adaptive.strategy_registry import (
 )
 from evaluatorq.redteam.backends.base import (
     AgentTarget,
-    DirectTargetFactory,
-    SupportsAgentContext,
-    SupportsErrorMapping,
-    SupportsMemoryCleanup,
-    SupportsTargetFactory,
-    is_agent_target,
 )
 from evaluatorq.redteam.backends.openai import OpenAIModelTarget
 from evaluatorq.redteam.backends.registry import register_backend
@@ -156,7 +150,6 @@ __all__ = [
     "DeliveryMethod",
     "DeliveryMethodSummary",
     "DimensionSummary",
-    "DirectTargetFactory",
     "DomainSummary",
     # Error model
     "ErrorInfo",
@@ -200,10 +193,6 @@ __all__ = [
     "TextOutputItem",
     "ToolCallOutputItem",
     "SeveritySummary",
-    "SupportsAgentContext",
-    "SupportsErrorMapping",
-    "SupportsMemoryCleanup",
-    "SupportsTargetFactory",
     "TargetConfig",
     "TechniqueSummary",
     "TokenUsage",
@@ -220,7 +209,6 @@ __all__ = [
     "VulnerabilitySummary",
     "get_category_info",
     "get_vulnerability_name",
-    "is_agent_target",
     # Vulnerability introspection
     "list_available_vulnerabilities",
     # Category introspection
