@@ -15,11 +15,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from evaluatorq.contracts import AgentResponse, LLMCallConfig
-from evaluatorq.redteam.backends.base import AgentTarget
+from evaluatorq.contracts import AgentResponse, AgentTarget, LLMCallConfig
 from evaluatorq.simulation.target import OrqResponsesTarget
 from evaluatorq.simulation.types import ChatMessage
-
 
 # ---------------------------------------------------------------------------
 # Helpers

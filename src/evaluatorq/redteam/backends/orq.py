@@ -43,8 +43,9 @@ def _get_orq_server_url() -> str:
     return url.rstrip('/').removesuffix('/v2/router')
 
 
+from evaluatorq.contracts import AgentTarget
 from evaluatorq.redteam.backends._errors import extract_provider_error_code, extract_status_code
-from evaluatorq.redteam.backends.base import AgentTarget, Backend
+from evaluatorq.redteam.backends.base import Backend
 from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
     AgentContext,

@@ -8,7 +8,7 @@ from typing import Any
 
 from loguru import logger
 
-from evaluatorq.redteam.backends.base import AgentTarget
+from evaluatorq.contracts import AgentTarget
 from evaluatorq.redteam.contracts import AgentContext, AgentResponse, OutputMessage, TextOutputItem, TokenUsage
 
 # Accepted callable signatures — may return str (backward-compat) or AgentResponse

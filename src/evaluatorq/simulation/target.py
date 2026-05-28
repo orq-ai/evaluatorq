@@ -9,8 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.contracts import AgentResponse, LLMCallConfig
-from evaluatorq.redteam.backends.base import AgentTarget
+from evaluatorq.contracts import AgentResponse, AgentTarget, LLMCallConfig
 from evaluatorq.simulation._client import build_simulation_client, extract_responses_output
 from evaluatorq.simulation.types import ChatMessage, TokenUsage
 from evaluatorq.simulation.utils.retry import with_retry
@@ -131,7 +130,7 @@ class OrqResponsesTarget(AgentTarget):
             await self._client.close()
             self._client_owned = False
 
-    async def __aenter__(self) -> "OrqResponsesTarget":
+    async def __aenter__(self) -> OrqResponsesTarget:
         return self
 
     async def __aexit__(self, *_exc_info: object) -> None:

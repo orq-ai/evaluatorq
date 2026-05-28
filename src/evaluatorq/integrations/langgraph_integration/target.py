@@ -13,7 +13,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.outputs import LLMResult
 from langchain_core.runnables import RunnableConfig
 
-from evaluatorq.redteam.backends.base import AgentTarget
+from evaluatorq.contracts import AgentTarget
 from evaluatorq.redteam.contracts import (
     AgentContext,
     AgentResponse,

@@ -1,8 +1,10 @@
-"""Backend abstract base classes for dynamic red teaming agent targets.
+"""Backend abstract base class for dynamic red teaming agent targets.
 
-Defines the ABCs (``AgentTarget``, ``Backend``) that any agent backend must
-subclass. The ORQ implementation lives in ``backends.orq``; other backends
-(HTTP, LangChain, custom callables) subclass these independently.
+Defines the ``Backend`` ABC plus the ``BareTargetBackend`` adapter. The
+``AgentTarget`` ABC that backends construct lives in ``evaluatorq.contracts``
+(relocated in RES-808 PR2). The ORQ implementation lives in ``backends.orq``;
+other backends (HTTP, LangChain, custom callables) subclass ``Backend``
+independently.
 """
 
 from __future__ import annotations
@@ -12,52 +14,10 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.redteam.contracts import AgentResponse
+from evaluatorq.contracts import AgentResponse
 
 if TYPE_CHECKING:
-    from evaluatorq.redteam.contracts import AgentContext
-
-
-class AgentTarget(ABC):
-    """Abstract base class for agent targets that can receive prompts.
-
-    Subclasses must implement ``send_prompt`` and ``new``. Targets that back a
-    server-side memory store override ``get_agent_context`` (self-describing),
-    ``cleanup_memory`` (release created entities), and ``map_error``
-    (provider-specific error codes); stateless targets inherit the safe
-    defaults. ``memory_entity_id`` is an instance attribute (set in
-    ``__init__``) so subclasses can mutate it without shadowing a class default.
-    """
-
-    def __init__(self, memory_entity_id: str | None = None) -> None:
-        self.memory_entity_id = memory_entity_id
-
-    @abstractmethod
-    async def send_prompt(self, prompt: str) -> AgentResponse:
-        """Send a prompt; return the response."""
-        ...
-
-    @abstractmethod
-    def new(self) -> AgentTarget:
-        """Return a fresh independent instance for a new attack."""
-        ...
-
-    async def get_agent_context(self) -> AgentContext:
-        """Default: minimal context. Override for platform-backed targets."""
-        from evaluatorq.redteam.contracts import AgentContext
-        return AgentContext(key=getattr(self, "agent_key", "unknown"))
-
-    async def cleanup_memory(self, ctx: AgentContext, entity_ids: list[str]) -> None:
-        """Release any memory entities this target created. Default: no-op (stateless)."""
-        return
-
-    def map_error(self, exc: Exception) -> tuple[str, str] | None:
-        """Map an exception to a provider-specific ``(code, message)``.
-
-        Return ``None`` to defer to the backend's default mapping. Stateless
-        targets inherit this no-opinion default.
-        """
-        return None
+    from evaluatorq.contracts import AgentContext, AgentTarget
 
 
 def _coerce_to_agent_response(raw: Any) -> AgentResponse:
@@ -148,6 +108,10 @@ class BareTargetBackend(Backend):
         return self._target.new()
 
     async def cleanup_memory(self, ctx: AgentContext, entity_ids: list[str]) -> None:
+        # Local import: module-level would re-expose AgentTarget as backends.base.AgentTarget,
+        # violating the clean-break invariant pinned by test_agent_target_not_re_exported_from_base.
+        from evaluatorq.contracts import AgentTarget
+
         if entity_ids and type(self._target).cleanup_memory is AgentTarget.cleanup_memory:
             # Target created memory entities but inherits the no-op cleanup default;
             # adversarial data may persist. Surface loudly (matches ORQ path).

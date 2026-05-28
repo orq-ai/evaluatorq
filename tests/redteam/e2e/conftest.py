@@ -14,7 +14,8 @@ from typing import Any
 
 import pytest
 
-from evaluatorq.redteam.backends.base import AgentTarget, Backend
+from evaluatorq.contracts import AgentTarget
+from evaluatorq.redteam.backends.base import Backend
 from evaluatorq.redteam.contracts import (
     AgentContext,
     AgentResponse,

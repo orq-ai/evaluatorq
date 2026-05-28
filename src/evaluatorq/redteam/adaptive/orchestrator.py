@@ -19,8 +19,8 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TextColumn
 from typing_extensions import Self
 
 from evaluatorq.common.sanitize import xml_escape
-from evaluatorq.contracts import AgentResponse, TextOutputItem
-from evaluatorq.redteam.backends.base import AgentTarget, Backend, _coerce_to_agent_response
+from evaluatorq.contracts import AgentResponse, AgentTarget, TextOutputItem
+from evaluatorq.redteam.backends.base import Backend, _coerce_to_agent_response
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
     PIPELINE_CONFIG,

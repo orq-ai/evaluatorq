@@ -31,14 +31,17 @@ def _check_redteam_deps() -> None:  # noqa: RUF067
 _check_redteam_deps()  # noqa: RUF067
 
 
+from evaluatorq.contracts import AgentTarget
+from evaluatorq.redteam.adaptive.orchestrator import (
+    ADVERSARIAL_ANALYSIS_PROMPT,
+    ADVERSARIAL_INITIAL_USER_PROMPT,
+    ADVERSARIAL_SYSTEM_PROMPT,
+)
 from evaluatorq.redteam.adaptive.strategy_registry import (
     get_category_info,
 )
 from evaluatorq.redteam.adaptive.strategy_registry import (
     list_available_categories as list_categories,
-)
-from evaluatorq.redteam.backends.base import (
-    AgentTarget,
 )
 from evaluatorq.redteam.backends.openai import OpenAIModelTarget
 from evaluatorq.redteam.backends.registry import register_backend
@@ -47,6 +50,7 @@ from evaluatorq.redteam.contracts import (
     AgentCapability,
     AgentContext,
     AgentInfo,
+    AgentResponse,
     AttackEvaluationResult,
     AttackInfo,
     AttackSource,
@@ -64,11 +68,6 @@ from evaluatorq.redteam.contracts import (
     Framework,
     FrameworkSummary,
     FunctionCall,
-    AgentResponse,
-    OutputMessage,
-    ReasoningOutputItem,
-    TextOutputItem,
-    ToolCallOutputItem,
     JobOutputPayload,
     KnowledgeBaseInfo,
     LLMCallConfig,
@@ -76,8 +75,10 @@ from evaluatorq.redteam.contracts import (
     MemoryStoreInfo,
     Message,
     OrchestratorResult,
+    OutputMessage,
     Pipeline,
     PipelineStage,
+    ReasoningOutputItem,
     RedTeamInput,
     RedTeamReport,
     RedTeamResult,
@@ -85,10 +86,12 @@ from evaluatorq.redteam.contracts import (
     ReportSummary,
     Severity,
     SeveritySummary,
+    StrategyToolCall,
     TargetConfig,
     TechniqueSummary,
+    TextOutputItem,
     TokenUsage,
-    StrategyToolCall,
+    ToolCallOutputItem,
     ToolInfo,
     TurnType,
     TurnTypeSummary,
@@ -99,11 +102,6 @@ from evaluatorq.redteam.contracts import (
     VulnerabilitySummary,
     normalize_category,
     normalize_framework,
-)
-from evaluatorq.redteam.adaptive.orchestrator import (
-    ADVERSARIAL_ANALYSIS_PROMPT,
-    ADVERSARIAL_INITIAL_USER_PROMPT,
-    ADVERSARIAL_SYSTEM_PROMPT,
 )
 from evaluatorq.redteam.exceptions import BackendError, CancelledError, CredentialError, RedTeamError
 from evaluatorq.redteam.hooks import (

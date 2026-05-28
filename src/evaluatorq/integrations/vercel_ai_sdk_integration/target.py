@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from evaluatorq.redteam.backends.base import AgentTarget
+from evaluatorq.contracts import AgentTarget
 from evaluatorq.redteam.contracts import AgentContext, AgentResponse, OutputMessage, TextOutputItem, TokenUsage
 
 

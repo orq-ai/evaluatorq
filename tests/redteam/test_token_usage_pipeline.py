@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator
-from evaluatorq.redteam.backends.base import AgentTarget
+from evaluatorq.contracts import AgentTarget
 from evaluatorq.redteam.contracts import (
     AgentContext,
     AgentInfo,

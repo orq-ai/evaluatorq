@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, cast
 from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, job
+from evaluatorq.contracts import AgentTarget
 from evaluatorq.redteam.adaptive.orchestrator import ProgressDisplay, _get_active_progress
 from evaluatorq.redteam.adaptive.pipeline import (
     cleanup_memory_entities,
@@ -34,7 +35,6 @@ from evaluatorq.redteam.adaptive.strategy_registry import (
     select_applicable_strategies_for_vulnerability,
 )
 from evaluatorq.redteam.backends.base import (
-    AgentTarget,
     Backend,
     BareTargetBackend,
     _coerce_to_agent_response,

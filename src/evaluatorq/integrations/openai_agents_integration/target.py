@@ -8,7 +8,7 @@ from typing import Any
 
 from agents import Agent, Runner
 
-from evaluatorq.redteam.backends.base import AgentTarget
+from evaluatorq.contracts import AgentTarget
 from evaluatorq.redteam.contracts import (
     AgentContext,
     AgentResponse,

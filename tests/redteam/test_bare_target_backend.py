@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from evaluatorq.redteam.backends.base import AgentTarget, BareTargetBackend
+from evaluatorq.contracts import AgentTarget
+from evaluatorq.redteam.backends.base import BareTargetBackend
 from evaluatorq.redteam.contracts import AgentContext, AgentResponse
 
 
@@ -14,7 +15,7 @@ class _StubTarget(AgentTarget):
     async def send_prompt(self, prompt: str) -> AgentResponse:
         return AgentResponse(text="ok")
 
-    def new(self) -> "_StubTarget":
+    def new(self) -> _StubTarget:
         return _StubTarget()
 
 

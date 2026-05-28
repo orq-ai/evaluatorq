@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 
 import pytest
 
+from evaluatorq.contracts import AgentTarget
 from evaluatorq.redteam import get_category_info, list_categories, red_team
-from evaluatorq.redteam.backends.base import AgentTarget
 from evaluatorq.redteam.contracts import AgentResponse, Pipeline, RedTeamReport, ReportSummary
 from evaluatorq.redteam.runner import _deduplicate_target_labels, _parse_target
 
@@ -292,7 +292,7 @@ class TestConfirmCallback:
     @pytest.mark.asyncio
     async def test_hooks_on_confirm_false_aborts(self):
         """Hooks returning False from on_confirm should abort execution."""
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import patch
 
         from evaluatorq.redteam.hooks import DefaultHooks
 
@@ -390,7 +390,6 @@ class TestRedTeamWithAgentTarget:
     @pytest.mark.asyncio
     async def test_agent_target_dispatches_to_dynamic(self):
         from unittest.mock import AsyncMock, patch
-        from evaluatorq.redteam.contracts import SendResult
 
         class MockTarget(AgentTarget):
             async def send_prompt(self, prompt: str) -> AgentResponse:
@@ -412,7 +411,6 @@ class TestRedTeamWithAgentTarget:
     @pytest.mark.asyncio
     async def test_agent_target_list_dispatches(self):
         from unittest.mock import AsyncMock, patch
-        from evaluatorq.redteam.contracts import SendResult
 
         class MockTarget(AgentTarget):
             async def send_prompt(self, prompt: str) -> AgentResponse:
@@ -439,7 +437,6 @@ class TestRedTeamWithAgentTarget:
     @pytest.mark.asyncio
     async def test_invalid_item_in_list_raises(self):
         """Passing an invalid item inside a list raises TypeError."""
-        from evaluatorq.redteam.contracts import SendResult
 
         class MockTarget(AgentTarget):
             async def send_prompt(self, prompt: str) -> AgentResponse:
