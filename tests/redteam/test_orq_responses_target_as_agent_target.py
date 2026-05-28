@@ -15,11 +15,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from evaluatorq.contracts import AgentResponse, LLMCallConfig
-from evaluatorq.redteam.backends.base import is_agent_target
+from evaluatorq.contracts import AgentResponse, AgentTarget, LLMCallConfig
 from evaluatorq.simulation.target import OrqResponsesTarget
 from evaluatorq.simulation.types import ChatMessage
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -69,9 +67,9 @@ def _make_target() -> OrqResponsesTarget:
 
 class TestIsAgentTarget:
     def test_is_agent_target_returns_true(self):
-        """is_agent_target() must return True for OrqResponsesTarget."""
+        """isinstance(x, AgentTarget) must return True for OrqResponsesTarget."""
         target = _make_target()
-        assert is_agent_target(target) is True
+        assert isinstance(target, AgentTarget) is True
 
     def test_has_send_prompt_callable(self):
         """send_prompt attribute must exist and be callable."""
@@ -147,10 +145,10 @@ class TestNew:
         assert isinstance(fresh, OrqResponsesTarget)
 
     def test_new_result_is_also_agent_target(self):
-        """The instance returned by new() must also satisfy is_agent_target."""
+        """The instance returned by new() must also satisfy isinstance(x, AgentTarget)."""
         target = _make_target()
         fresh = target.new()
-        assert is_agent_target(fresh) is True
+        assert isinstance(fresh, AgentTarget) is True
 
     def test_new_fresh_instance_has_previous_response_id_none(self):
         """new() fresh instance must have _previous_response_id == None."""

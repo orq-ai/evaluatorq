@@ -8,7 +8,7 @@ from typing import Any
 
 from agents import Agent, Runner
 
-from evaluatorq.redteam.backends.base import AgentTarget
+from evaluatorq.contracts import AgentTarget
 from evaluatorq.redteam.contracts import (
     AgentContext,
     AgentResponse,
@@ -35,10 +35,6 @@ class OpenAIAgentTarget(AgentTarget):
         config = DynamicRunConfig(targets=[target])
     """
 
-    memory_entity_id: str | None = None
-    """OpenAI Agents SDK keeps conversation state client-side in ``_history``;
-    there is no server-side memory entity to isolate across parallel jobs."""
-
     def __init__(self, agent: Agent, *, run_kwargs: dict[str, Any] | None = None) -> None:
         """Create an OpenAI Agents SDK red teaming target.
 
@@ -46,7 +42,10 @@ class OpenAIAgentTarget(AgentTarget):
             agent: An OpenAI Agents SDK Agent instance.
             run_kwargs: Optional extra keyword arguments passed to ``Runner.run()``
                 (e.g. ``{"max_turns": 10}``).
+        OpenAI Agents SDK keeps conversation state client-side in ``_history``;
+        there is no server-side memory entity to isolate across parallel jobs.
         """
+        super().__init__(memory_entity_id=None)
         self._agent = agent
         self._run_kwargs = run_kwargs or {}
         self._history: list[Any] = []

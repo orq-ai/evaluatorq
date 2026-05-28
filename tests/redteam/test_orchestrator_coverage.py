@@ -319,7 +319,6 @@ async def _noop_span_ctx(*args, **kwargs):
 def _make_orchestrator():
     """Create a MultiTurnOrchestrator with a mocked AsyncOpenAI client."""
     from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator
-    from evaluatorq.redteam.backends.base import DefaultErrorMapper
 
     mock_llm = MagicMock()
     mock_llm.chat = MagicMock()
@@ -329,7 +328,6 @@ def _make_orchestrator():
     orchestrator = MultiTurnOrchestrator(
         llm_client=mock_llm,
         model="test-model",
-        error_mapper=DefaultErrorMapper(),
     )
     return orchestrator, mock_llm
 

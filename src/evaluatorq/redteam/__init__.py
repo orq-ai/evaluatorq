@@ -31,6 +31,7 @@ def _check_redteam_deps() -> None:  # noqa: RUF067
 _check_redteam_deps()  # noqa: RUF067
 
 
+from evaluatorq.contracts import AgentTarget
 from evaluatorq.openresponses import (
     append_assistant_turn,
     append_user_followup,
@@ -51,15 +52,6 @@ from evaluatorq.redteam.adaptive.strategy_registry import (
 )
 from evaluatorq.redteam.adaptive.strategy_registry import (
     list_available_categories as list_categories,
-)
-from evaluatorq.redteam.backends.base import (
-    AgentTarget,
-    DirectTargetFactory,
-    SupportsAgentContext,
-    SupportsErrorMapping,
-    SupportsMemoryCleanup,
-    SupportsTargetFactory,
-    is_agent_target,
 )
 from evaluatorq.redteam.backends.openai import OpenAIModelTarget
 from evaluatorq.redteam.backends.registry import register_backend
@@ -166,7 +158,6 @@ __all__ = [
     "DeliveryMethod",
     "DeliveryMethodSummary",
     "DimensionSummary",
-    "DirectTargetFactory",
     "DomainSummary",
     # Error model
     "ErrorInfo",
@@ -210,10 +201,6 @@ __all__ = [
     "TextOutputItem",
     "ToolCallOutputItem",
     "SeveritySummary",
-    "SupportsAgentContext",
-    "SupportsErrorMapping",
-    "SupportsMemoryCleanup",
-    "SupportsTargetFactory",
     "TargetConfig",
     "TechniqueSummary",
     "TokenUsage",
@@ -239,7 +226,6 @@ __all__ = [
     "turns_to_openresponses_input",
     "get_category_info",
     "get_vulnerability_name",
-    "is_agent_target",
     # Vulnerability introspection
     "list_available_vulnerabilities",
     # Category introspection

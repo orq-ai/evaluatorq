@@ -14,7 +14,8 @@ from typing import Any
 
 import pytest
 
-from evaluatorq.redteam.backends.base import BackendBundle
+from evaluatorq.contracts import AgentTarget
+from evaluatorq.redteam.backends.base import Backend
 from evaluatorq.redteam.contracts import (
     AgentContext,
     AgentResponse,
@@ -128,12 +129,12 @@ class DeterministicAsyncOpenAI:
 # ---------------------------------------------------------------------------
 
 
-class MockAgentTarget:
+class MockAgentTarget(AgentTarget):
     """Deterministic agent target with leak/refuse/safe logic."""
 
     def __init__(self, agent_key: str) -> None:
+        super().__init__(memory_entity_id=f"red-team-{uuid.uuid4().hex[:12]}")
         self.agent_key = agent_key
-        self.memory_entity_id: str | None = f"red-team-{uuid.uuid4().hex[:12]}"
         self._conversation: list[dict[str, str]] = []
 
     async def send_prompt(self, prompt: str) -> AgentResponse:
@@ -185,6 +186,30 @@ class MockErrorMapper:
         return "test_error", f"{type(exc).__name__}: {exc}"
 
 
+class MockBackend(Backend):
+    """Concrete Backend for E2E tests — combines factory, context, cleanup, and error mapping."""
+
+    def __init__(self, context: AgentContext) -> None:
+        super().__init__("mock")
+        self._context = context
+        self.cleaned_entity_ids: list[str] = []
+        self.created_targets: list[MockAgentTarget] = []
+
+    def create_target(self, agent_key: str) -> MockAgentTarget:
+        target = MockAgentTarget(agent_key)
+        self.created_targets.append(target)
+        return target
+
+    async def resolve_context(self, agent_key: str) -> AgentContext:
+        return self._context
+
+    async def cleanup_memory(self, ctx: AgentContext, entity_ids: list[str]) -> None:
+        self.cleaned_entity_ids.extend(entity_ids)
+
+    def map_error(self, exc: Exception) -> tuple[str, str]:
+        return "test_error", f"{type(exc).__name__}: {exc}"
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -232,15 +257,9 @@ def agent_context() -> AgentContext:
 
 
 @pytest.fixture()
-def mock_backend_bundle(agent_context: AgentContext) -> BackendBundle:
-    """Assembles mock backend components into a BackendBundle."""
-    return BackendBundle(
-        name="mock",
-        target_factory=MockTargetFactory(),
-        context_provider=MockContextProvider(agent_context),
-        memory_cleanup=MockMemoryCleanup(),
-        error_mapper=MockErrorMapper(),
-    )
+def mock_backend_bundle(agent_context: AgentContext) -> MockBackend:
+    """Returns a MockBackend instance for patching resolve_backend."""
+    return MockBackend(context=agent_context)
 
 
 @pytest.fixture()

@@ -8,7 +8,7 @@ from typing import Any
 
 from loguru import logger
 
-from evaluatorq.redteam.backends.base import AgentTarget
+from evaluatorq.contracts import AgentTarget
 from evaluatorq.redteam.contracts import AgentContext, AgentResponse, OutputMessage, TextOutputItem, TokenUsage
 
 # Accepted callable signatures — may return str (backward-compat) or AgentResponse
@@ -51,10 +51,6 @@ class CallableTarget(AgentTarget):
         config = DynamicRunConfig(targets=[target])
     """
 
-    memory_entity_id: str | None = None
-    """Callables are opaque — the wrapper cannot manage memory isolation.
-    If the wrapped callable holds state, use ``reset_fn`` to clear it."""
-
     def __init__(
         self,
         fn: AgentCallable,
@@ -78,7 +74,10 @@ class CallableTarget(AgentTarget):
                 pipeline uses this for capability-aware strategy filtering —
                 without it, all strategies (including nonsensical ones) will be
                 applied. If not provided, a minimal context is returned.
+        Callables are opaque — the wrapper cannot manage memory isolation.
+        If the wrapped callable holds state, use ``reset_fn`` to clear it.
         """
+        super().__init__(memory_entity_id=None)
         self._fn = fn
         self._is_async = asyncio.iscoroutinefunction(fn)
         self._reset_fn = reset_fn

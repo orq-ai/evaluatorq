@@ -50,7 +50,7 @@ async def send_results_to_orq(
     *,
     path: str | None = None,
     raise_on_error: bool = False,
-) -> None:
+) -> str | None:
     """
     Send evaluation results to Orq platform.
 
@@ -65,6 +65,10 @@ async def send_results_to_orq(
         path: Optional path (e.g. "MyProject/MyFolder") to place the experiment
               in a specific project and folder on the Orq platform.
         raise_on_error: Raise upload errors instead of treating upload as best-effort.
+
+    Returns:
+        The experiment URL from the Orq platform on success, or ``None`` if the
+        upload failed or the platform did not return a URL.
     """
     try:
         # Calculate duration in milliseconds
@@ -128,7 +132,7 @@ async def send_results_to_orq(
                         "Could not send results to Orq platform "
                         f"({response.status_code} {response.reason_phrase}): {error_text}"
                     )
-                return
+                return None
 
             orq_result = OrqResponse.model_validate(response.json())
 
@@ -139,6 +143,8 @@ async def send_results_to_orq(
             # Display the experiment URL if available
             if orq_result.experiment_url:
                 print(f"\n📊 View your evaluation at: {orq_result.experiment_url}")
+
+            return orq_result.experiment_url
 
     except SendResultsError:
         raise
@@ -151,4 +157,4 @@ async def send_results_to_orq(
 
         if raise_on_error:
             raise
-        return
+        return None

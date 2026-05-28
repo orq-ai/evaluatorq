@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, Union
+import sys
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+if sys.version_info >= (3, 11):
+    from enum import StrEnum
+else:
+    from enum import Enum
+
+    class StrEnum(str, Enum):  # type: ignore[no-redef]
+        """String enum compatible with Python 3.10."""
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
-    _ClientT: TypeAlias = "AsyncOpenAI | None"
+    _ClientT: TypeAlias = AsyncOpenAI | None
 else:
     _ClientT = Any
 
@@ -78,9 +88,111 @@ class ReasoningOutputItem(BaseModel):
 
 
 OutputMessage = Annotated[
-    Union[TextOutputItem, ToolCallOutputItem, ReasoningOutputItem],
+    TextOutputItem | ToolCallOutputItem | ReasoningOutputItem,
     Field(discriminator="type"),
 ]
+
+
+# ---------------------------------------------------------------------------
+# Shared message + token-usage types (RES-596)
+# ---------------------------------------------------------------------------
+# These were previously duplicated across simulation/types.py and
+# redteam/contracts.py. The redteam variants are the supersets — Message
+# supports tool calls and the "tool" role; TokenUsage carries an extra
+# ``calls`` field plus ``from_completion()``. Both are re-exported from the
+# subpackage modules so legacy import paths keep working.
+
+
+class FunctionCall(BaseModel):
+    """Function call details in OpenAI tool call format."""
+
+    name: str = Field(description="Function name to call")
+    arguments: str = Field(description="JSON string of function arguments")
+
+
+class StrategyToolCall(BaseModel):
+    """Tool call in assistant message (OpenAI format)."""
+
+    id: str = Field(description="Unique tool call ID (e.g., call_abc123)")
+    type: Literal["function"] = Field(default="function", description="Tool type")
+    function: FunctionCall = Field(description="Function call details")
+
+
+class Message(BaseModel):
+    """Single message in conversation history (OpenAI format with tool support).
+
+    Supports both simple messages and tool calls:
+    - Simple: ``{"role": "user", "content": "Hello"}``
+    - Tool call: ``{"role": "assistant", "tool_calls": [...]}``
+    - Tool response: ``{"role": "tool", "tool_call_id": "...", "name": "...", "content": "..."}``
+    """
+
+    role: Literal["user", "assistant", "tool", "system"]
+    content: str | None = Field(
+        default=None,
+        description="Message content (required for user/system, optional for assistant with tool_calls)",
+    )
+
+    # Tool call fields (OpenAI format)
+    tool_calls: list[StrategyToolCall] | None = Field(
+        default=None, description="Tool calls made by assistant"
+    )
+    tool_call_id: str | None = Field(
+        default=None,
+        description="ID linking tool response to call (for role=tool)",
+    )
+    name: str | None = Field(default=None, description="Function name (for role=tool)")
+
+
+class TokenUsage(BaseModel):
+    """Token usage and cost for an LLM call or aggregation of calls.
+
+    ``total_tokens`` is stored as provided by the upstream provider and is
+    never overridden. This preserves provider-specific token breakdowns
+    (cached_tokens, reasoning_tokens, audio tokens, etc.) that would be
+    silently corrupted by a normalisation step.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    total_tokens: int = Field(default=0, ge=0, description="Total tokens used as reported by the provider")
+    prompt_tokens: int = Field(default=0, ge=0, description="Prompt/input tokens")
+    completion_tokens: int = Field(default=0, ge=0, description="Completion/output tokens")
+    calls: int = Field(default=0, ge=0, description="Number of LLM API calls")
+
+    @classmethod
+    def from_completion(cls, response: Any) -> TokenUsage | None:
+        """Extract token usage from an OpenAI-compatible completion response."""
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return None
+        prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
+        completion = int(getattr(usage, "completion_tokens", 0) or 0)
+        # Mirror the > 0 guard used by other integrations: a provider-reported
+        # total of 0 (or absent) falls back to prompt+completion rather than
+        # propagating the zero, which would silently under-count totals on
+        # responses where prompt+completion are non-zero.
+        raw_total = getattr(usage, "total_tokens", None)
+        total = int(raw_total) if raw_total is not None and int(raw_total) > 0 else prompt + completion
+        return cls(prompt_tokens=prompt, completion_tokens=completion, total_tokens=total, calls=1)
+
+    def __add__(self, other: TokenUsage | None) -> TokenUsage:
+        if other is None:
+            return self.model_copy()
+        return TokenUsage(
+            prompt_tokens=self.prompt_tokens + other.prompt_tokens,
+            completion_tokens=self.completion_tokens + other.completion_tokens,
+            total_tokens=self.total_tokens + other.total_tokens,
+            calls=self.calls + other.calls,
+        )
+
+    def __radd__(self, other: object) -> TokenUsage:
+        """Support sum() which starts with integer 0, and reflected addition."""
+        if isinstance(other, int) and other == 0:
+            return self.model_copy()
+        if isinstance(other, TokenUsage):
+            return other.__add__(self)
+        return NotImplemented
 
 
 # ---------------------------------------------------------------------------
@@ -100,31 +212,24 @@ class AgentResponse(BaseModel):
         ``.text``       — last ``TextOutputItem`` content, or ``""`` if none
         ``.tool_calls`` — list of :class:`ToolCallOutputItem` filtered from
         :attr:`output` in order
-
-    ``usage`` holds a :class:`evaluatorq.redteam.contracts.TokenUsage` instance
-    when available. The field is typed ``Any | None`` at runtime to avoid a
-    circular import: ``redteam.contracts`` imports this module, so
-    ``TokenUsage`` cannot be imported here unconditionally. Static type
-    checkers see the correct annotation via the ``TYPE_CHECKING`` stub below.
     """
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     output: list[OutputMessage] = Field(default_factory=list)
-    usage: Any | None = None
+    usage: TokenUsage | None = None
     model: str | None = None
     response_id: str | None = None
     finish_reason: str | None = None
 
     if TYPE_CHECKING:
-        from evaluatorq.redteam.contracts import TokenUsage
 
         def __init__(  # pyright: ignore[reportMissingSuperCall]
             self,
             *,
             output: list[OutputMessage] | None = None,
             text: str | None = None,
-            usage: "TokenUsage | None" = None,
+            usage: TokenUsage | None = None,
             model: str | None = None,
             response_id: str | None = None,
             finish_reason: str | None = None,
@@ -156,15 +261,135 @@ class AgentResponse(BaseModel):
         return [item for item in self.output if isinstance(item, ToolCallOutputItem)]
 
 
+# ---------------------------------------------------------------------------
+# Agent context models
+# ---------------------------------------------------------------------------
+
+
+class ToolInfo(BaseModel):
+    """Information about an agent's tool."""
+
+    name: str = Field(description='Tool name/identifier')
+    description: str | None = Field(default=None, description='Tool description')
+    parameters: dict[str, Any] | None = Field(default=None, description='Tool parameter schema')
+
+
+class MemoryStoreInfo(BaseModel):
+    """Information about an agent's memory store."""
+
+    id: str = Field(description='Memory store ID')
+    key: str | None = Field(default=None, description='Memory store key/slug')
+    description: str | None = Field(default=None, description='Memory store description')
+
+
+class KnowledgeBaseInfo(BaseModel):
+    """Information about an agent's knowledge base."""
+
+    id: str = Field(description='Knowledge base ID')
+    key: str | None = Field(default=None, description='Knowledge base key/slug')
+    name: str | None = Field(default=None, description='Knowledge base name')
+    description: str | None = Field(default=None, description='Knowledge base description')
+
+
+class AgentContext(BaseModel):
+    """Extended agent information for context-aware attacks.
+
+    Describes the target agent's configuration and capabilities.
+    """
+
+    key: str = Field(description='Agent identifier key')
+    display_name: str | None = Field(default=None, description='Agent display name')
+    description: str | None = Field(default=None, description='Agent description')
+    system_prompt: str | None = Field(default=None, description='Agent system prompt (used by deployments)')
+    instructions: str | None = Field(default=None, description='Agent behavioral instructions')
+    tools: list[ToolInfo] = Field(default_factory=list, description='Available tools')
+    memory_stores: list[MemoryStoreInfo] = Field(default_factory=list, description='Memory stores')
+    knowledge_bases: list[KnowledgeBaseInfo] = Field(default_factory=list, description='Knowledge bases')
+    model: str | None = Field(default=None, description='Primary model')
+
+    @property
+    def has_tools(self) -> bool:
+        """Check if agent has any tools configured."""
+        return len(self.tools) > 0
+
+    @property
+    def has_memory(self) -> bool:
+        """Check if agent has any memory stores configured."""
+        return len(self.memory_stores) > 0
+
+    @property
+    def has_knowledge(self) -> bool:
+        """Check if agent has any knowledge bases configured."""
+        return len(self.knowledge_bases) > 0
+
+    def get_tool_names(self) -> list[str]:
+        """Get list of tool names."""
+        return [t.name for t in self.tools]
+
+
+# ---------------------------------------------------------------------------
+# AgentTarget ABC
+# ---------------------------------------------------------------------------
+
+
+class AgentTarget(ABC):
+    """Abstract base class for agent targets that can receive prompts.
+
+    Subclasses must implement ``send_prompt`` and ``new``. Targets that back a
+    server-side memory store override ``get_agent_context`` (self-describing),
+    ``cleanup_memory`` (release created entities), and ``map_error``
+    (provider-specific error codes); stateless targets inherit the safe
+    defaults. ``memory_entity_id`` is an instance attribute (set in
+    ``__init__``) so subclasses can mutate it without shadowing a class default.
+    """
+
+    def __init__(self, memory_entity_id: str | None = None) -> None:
+        self.memory_entity_id = memory_entity_id
+
+    @abstractmethod
+    async def send_prompt(self, prompt: str) -> AgentResponse:
+        """Send a prompt; return the response."""
+        ...
+
+    @abstractmethod
+    def new(self) -> AgentTarget:
+        """Return a fresh independent instance for a new attack."""
+        ...
+
+    async def get_agent_context(self) -> AgentContext:
+        """Default: minimal context. Override for platform-backed targets."""
+        return AgentContext(key=getattr(self, "agent_key", "unknown"))
+
+    async def cleanup_memory(self, ctx: AgentContext, entity_ids: list[str]) -> None:
+        """Release any memory entities this target created. Default: no-op (stateless)."""
+        return
+
+    def map_error(self, exc: Exception) -> tuple[str, str] | None:
+        """Map an exception to a provider-specific ``(code, message)``.
+
+        Return ``None`` to defer to the backend's default mapping. Stateless
+        targets inherit this no-opinion default.
+        """
+        return None
+
+
 __all__ = [
     "DEFAULT_PIPELINE_MODEL",
     "DEFAULT_TARGET_MAX_TOKENS",
     "DEFAULT_TARGET_TIMEOUT_MS",
+    "AgentContext",
     "AgentResponse",
+    "AgentTarget",
+    "FunctionCall",
+    "KnowledgeBaseInfo",
     "LLMCallConfig",
+    "MemoryStoreInfo",
+    "Message",
     "OutputMessage",
     "ReasoningOutputItem",
+    "StrategyToolCall",
     "TextOutputItem",
+    "TokenUsage",
     "ToolCallOutputItem",
+    "ToolInfo",
 ]
-

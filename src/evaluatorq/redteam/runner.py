@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, cast
 from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, job
+from evaluatorq.contracts import AgentTarget
 from evaluatorq.redteam.adaptive.orchestrator import ProgressDisplay, _get_active_progress
 from evaluatorq.redteam.adaptive.pipeline import (
     cleanup_memory_entities,
@@ -34,20 +35,15 @@ from evaluatorq.redteam.adaptive.strategy_registry import (
     select_applicable_strategies_for_vulnerability,
 )
 from evaluatorq.redteam.backends.base import (
-    AgentTargetFactory,
-    DefaultErrorMapper,
-    DirectTargetFactory,
-    ErrorMapper,
-    MemoryCleanup,
-    NoopMemoryCleanup,
+    Backend,
+    BareTargetBackend,
     _coerce_to_agent_response,
-    is_agent_target,
 )
 from evaluatorq.redteam.backends.registry import create_async_llm_client, resolve_backend
 from evaluatorq.redteam.contracts import (
+    PIPELINE_CONFIG,
     AgentContext,
     LLMConfig,
-    PIPELINE_CONFIG,
     Pipeline,
     PipelineStage,
     RedTeamReport,
@@ -138,6 +134,7 @@ async def _send_cleaned_results(
     name: str,
     description: str,
     start_time: datetime,
+    report: RedTeamReport | None = None,
 ) -> None:
     """Strip skipped job results and upload to the Orq platform.
 
@@ -146,6 +143,9 @@ async def _send_cleaned_results(
     output — the rest return ``None``.  Before uploading we remove those
     empty job results so the experiment shows one clean row per datapoint
     without duplication.
+
+    If *report* is provided, ``report.experiment_url`` is set to the URL
+    returned by the platform on a successful upload.
     """
     api_key = os.environ.get("ORQ_API_KEY")
     if not api_key:
@@ -171,7 +171,7 @@ async def _send_cleaned_results(
 
     logger.debug(f"Sending {len(cleaned)} cleaned results to Orq platform (stripped from {len(results)} raw)")
     try:
-        await send_results_to_orq(
+        experiment_url = await send_results_to_orq(
             api_key=api_key,
             evaluation_name=name,
             evaluation_description=description,
@@ -180,6 +180,8 @@ async def _send_cleaned_results(
             start_time=start_time,
             end_time=datetime.now(tz=timezone.utc),
         )
+        if report is not None and experiment_url:
+            report.experiment_url = experiment_url
     except Exception as e:
         logger.error(
             f'Failed to upload {len(cleaned)} results to Orq platform: {e}. '
@@ -249,8 +251,6 @@ if TYPE_CHECKING:
 
     from openai import AsyncOpenAI
 
-    from evaluatorq.redteam.backends.base import AgentTarget
-
 
 # ---------------------------------------------------------------------------
 # PreparedTarget dataclass
@@ -274,7 +274,7 @@ class PreparedTarget:
     all_datapoints: list[DataPoint]
     job: Callable[..., Any]  # the @job-decorated callable for this target
     dynamic_job: Callable[..., Any]  # raw inner dynamic job
-    resolved_memory_cleanup: MemoryCleanup
+    backend: Backend
     resolved_llm_client: AsyncOpenAI | None
     filtering_metadata: dict[str, Any]
     memory_entity_ids: list[str]  # runtime-accumulated entity IDs for cleanup
@@ -415,7 +415,7 @@ async def red_team(
 
     if isinstance(target, list):
         raw_targets: list[str | AgentTarget] = list(target)
-    elif isinstance(target, str) or is_agent_target(target):
+    elif isinstance(target, (str, AgentTarget)):
         raw_targets = [target]
     else:
         raise TypeError(f'Invalid target type: {type(target).__name__}. Expected str or AgentTarget.')
@@ -430,7 +430,7 @@ async def red_team(
     for t in raw_targets:
         if isinstance(t, str):
             string_targets.append(t)
-        elif is_agent_target(t):
+        elif isinstance(t, AgentTarget):
             agent_targets.append(t)
         else:
             raise TypeError(f'Invalid target type: {type(t).__name__}. Expected str or AgentTarget.')
@@ -740,6 +740,25 @@ def _create_static_job_for_agent_target(at: Any, label: str) -> Any:
     return agent_target_job
 
 
+def _resolve_attacker_llm_client(
+    llm_client: AsyncOpenAI | None,
+    pipeline_config: LLMConfig | None,
+    *,
+    create_if_missing: bool,
+) -> AsyncOpenAI | None:
+    # Per-role attacker client wins over the default factory so a caller-supplied
+    # `pipeline_config.attacker.client` is never silently replaced (ENG-1820).
+    if llm_client is not None:
+        return llm_client
+    if pipeline_config is not None and pipeline_config.attacker.client is not None:
+        return pipeline_config.attacker.client
+    if create_if_missing:
+        return create_async_llm_client(
+            role_config=pipeline_config.attacker if pipeline_config is not None else None
+        )
+    return None
+
+
 def _create_job_for_target(
     target: str,
     llm_client: Any,
@@ -828,17 +847,14 @@ async def _prepare_target(
     target_kind, target_value = _parse_target(target)
     safe_target = _make_safe_target(target_value)
 
-    backend_bundle = resolve_backend('orq', llm_client=llm_client, target_config=target_config, pipeline_config=pipeline_config)
-    resolved_factory = backend_bundle.target_factory
-    resolved_error_mapper = DefaultErrorMapper()
-    resolved_memory_cleanup_t = backend_bundle.memory_cleanup
+    backend = resolve_backend('orq', llm_client=llm_client, target_config=target_config, pipeline_config=pipeline_config)
 
     # Context retrieval (skip if already fetched for the confirm step)
     if prefetched_agent_context is not None:
         agent_context = prefetched_agent_context
     else:
         hooks.on_stage_start(PipelineStage.CONTEXT_RETRIEVAL, {"target": target_value})
-        agent_context = await backend_bundle.context_provider.get_agent_context(target_value)
+        agent_context = await backend.resolve_context(target_value)
         hooks.on_stage_end(PipelineStage.CONTEXT_RETRIEVAL, {
             "num_tools": len(agent_context.tools) if agent_context.tools else 0,
             "num_memory_stores": len(agent_context.memory_stores) if agent_context.memory_stores else 0,
@@ -846,12 +862,9 @@ async def _prepare_target(
         })
 
     # LLM client — prefer per-role attacker client if set
-    resolved_llm_client = llm_client
-    if resolved_llm_client is None:
-        if pipeline_config is not None and pipeline_config.attacker.client is not None:
-            resolved_llm_client = pipeline_config.attacker.client
-        elif generate_strategies:
-            resolved_llm_client = create_async_llm_client()
+    resolved_llm_client = _resolve_attacker_llm_client(
+        llm_client, pipeline_config, create_if_missing=generate_strategies
+    )
 
     if shared_datapoints is not None:
         # Reuse datapoints generated by the first target — skip generation (no banner)
@@ -909,8 +922,7 @@ async def _prepare_target(
         agent_context=agent_context,
         red_team_model=attack_model,
         max_turns=max_turns,
-        target_factory=resolved_factory,
-        error_mapper=resolved_error_mapper,
+        backend=backend,
         attack_llm_client=resolved_llm_client,
         memory_entity_ids=memory_entity_ids,
         attacker_instructions=attacker_instructions,
@@ -1012,7 +1024,7 @@ async def _prepare_target(
         all_datapoints=all_datapoints,
         job=target_job,
         dynamic_job=dynamic_job,
-        resolved_memory_cleanup=resolved_memory_cleanup_t,
+        backend=backend,
         resolved_llm_client=resolved_llm_client,
         filtering_metadata=filtering_metadata,
         memory_entity_ids=memory_entity_ids,
@@ -1102,12 +1114,12 @@ async def _run_dynamic_or_hybrid(
 
         # Step 1: Retrieve agent context for all targets (cheap) so we
         # can show capabilities in the confirmation prompt before expensive generation.
-        bundle = resolve_backend('orq', llm_client=llm_client, target_config=target_config, pipeline_config=pipeline_config)
+        orq_backend = resolve_backend('orq', llm_client=llm_client, target_config=target_config, pipeline_config=pipeline_config)
         all_agent_contexts: dict[str, AgentContext] = {}
         resolved_hooks.on_stage_start(PipelineStage.CONTEXT_RETRIEVAL, {"targets": all_target_labels})
         for target_str in targets:
             _kind, value = _parse_target(target_str)
-            ctx = await bundle.context_provider.get_agent_context(value)
+            ctx = await orq_backend.resolve_context(value)
             all_agent_contexts[target_str] = ctx
             resolved_hooks.on_stage_end(PipelineStage.CONTEXT_RETRIEVAL, {
                 "target": value,
@@ -1323,9 +1335,9 @@ async def _run_dynamic_or_hybrid(
 
         # Step 4b: Prepare AgentTarget objects (direct targets)
         if resolved_agent_targets:
-            at_llm_client = llm_client
-            if at_llm_client is None:
-                at_llm_client = create_async_llm_client()
+            at_llm_client = _resolve_attacker_llm_client(
+                llm_client, pipeline_config, create_if_missing=True
+            )
 
             # If no string targets prepared yet, generate datapoints from first AgentTarget's context
             shared_at_dps: list[Any] | None = prepared_targets[0].all_datapoints if prepared_targets else None
@@ -1334,22 +1346,15 @@ async def _run_dynamic_or_hybrid(
                 at_label = agent_target_labels[id(at)]
                 at_ctx = at_contexts[id(at)]
 
-                # For direct targets, always use DirectTargetFactory (which uses clone()).
-                # The target's create_target() expects an external agent_key string,
-                # which doesn't apply when the key is embedded in the object.
-                at_factory = DirectTargetFactory(at)
-                at_mapper = at if callable(getattr(at, 'map_error', None)) else DefaultErrorMapper()
-                at_cleanup = at if callable(getattr(at, 'cleanup_memory', None)) else NoopMemoryCleanup()
-
+                at_backend = BareTargetBackend(at)
                 at_mem_ids: list[str] = []
-                all_at_cleanup_info.append((at_ctx, at_mem_ids, at_cleanup))
+                all_at_cleanup_info.append((at_ctx, at_mem_ids, at_backend))
                 at_dyn_job = create_dynamic_redteam_job(
                     agent_key=at_label,
                     agent_context=at_ctx,
                     red_team_model=attack_model,
                     max_turns=max_turns,
-                    target_factory=cast("AgentTargetFactory", at_factory),
-                    error_mapper=cast("ErrorMapper", at_mapper),
+                    backend=at_backend,
                     attack_llm_client=at_llm_client,
                     memory_entity_ids=at_mem_ids,
                     attacker_instructions=attacker_instructions,
@@ -1412,12 +1417,12 @@ async def _run_dynamic_or_hybrid(
                         dp.inputs['hybrid_source'] = 'static'
 
                     # Build a static job that invokes the AgentTarget directly
-                    # Reuse the same DirectTargetFactory created for the dynamic job
+                    # Reuse the same BareTargetBackend created for the dynamic job
                     @job(f'redteam:static:{at_safe}')
                     async def at_static_job(
                         data: DataPoint,
                         _row: int,
-                        _factory: Any = at_factory,
+                        _backend: Any = at_backend,
                         _label: str = at_label,
                     ) -> Any:
                         """Send a static datapoint to the AgentTarget via send_prompt."""
@@ -1432,7 +1437,7 @@ async def _run_dynamic_or_hybrid(
                                 f'Static datapoint {sample_id!r} for target {_label!r} '
                                 f'produced an empty prompt ({len(messages)} messages, none with user content).'
                             )
-                        target_instance = _factory.create_target(_label)
+                        target_instance = _backend.create_target(_label)
                         raw = await target_instance.send_prompt(prompt)
                         result = _coerce_to_agent_response(raw)
                         active_progress = _get_active_progress()
@@ -1477,7 +1482,7 @@ async def _run_dynamic_or_hybrid(
                     all_datapoints=at_all_dps,
                     job=at_target_job,
                     dynamic_job=at_dyn_job,
-                    resolved_memory_cleanup=cast("MemoryCleanup", at_cleanup),
+                    backend=at_backend,
                     resolved_llm_client=at_llm_client,
                     filtering_metadata=at_filter_meta,
                     memory_entity_ids=at_mem_ids,
@@ -1560,13 +1565,13 @@ async def _run_dynamic_or_hybrid(
                         entity_ids = pt.memory_entity_ids
                         if entity_ids:
                             await cleanup_memory_entities(
-                                pt.agent_context, entity_ids, memory_cleanup=pt.resolved_memory_cleanup
+                                pt.agent_context, entity_ids, memory_cleanup=pt.backend
                             )
                     # Also clean up AgentTarget memory entities not yet in prepared_targets
                     prepared_mem_id_lists = {id(pt.memory_entity_ids) for pt in prepared_targets}
-                    for at_ctx_c, at_mem_c, at_cleanup_c in all_at_cleanup_info:
+                    for at_ctx_c, at_mem_c, at_backend_c in all_at_cleanup_info:
                         if id(at_mem_c) not in prepared_mem_id_lists and at_mem_c:
-                            await cleanup_memory_entities(at_ctx_c, at_mem_c, memory_cleanup=at_cleanup_c)
+                            await cleanup_memory_entities(at_ctx_c, at_mem_c, memory_cleanup=at_backend_c)
                 raise
 
         resolved_hooks.on_stage_end(PipelineStage.ATTACK_EXECUTION, {"num_results": len(results)})
@@ -1744,16 +1749,21 @@ async def _run_dynamic_or_hybrid(
             "elapsed_s": pipeline_duration,
         })
 
-        _save_report(output_dir, "03_summary_report.json", merged)
-
         # Upload cleaned results to Orq platform — strip skipped job results
         # (jobs return None for datapoints belonging to a different target).
-        await _send_cleaned_results(
-            results=results,
-            name=resolved_name,
-            description=description or f'{mode.capitalize()} red teaming ({len(all_target_labels)} targets)',
-            start_time=pipeline_start,
-        )
+        # Send before saving so report.experiment_url is included in the persisted JSON.
+        # try/finally guarantees the report is written even if upload is cancelled
+        # (CancelledError bypasses the except Exception inside _send_cleaned_results).
+        try:
+            await _send_cleaned_results(
+                results=results,
+                name=resolved_name,
+                description=description or f'{mode.capitalize()} red teaming ({len(all_target_labels)} targets)',
+                start_time=pipeline_start,
+                report=merged,
+            )
+        finally:
+            _save_report(output_dir, "03_summary_report.json", merged)
 
         set_span_attrs(pipeline_span, {
             "orq.redteam.num_datapoints": len(all_datapoints),
@@ -1771,7 +1781,7 @@ async def _run_dynamic_or_hybrid(
                         "orq.redteam.memory_cleanup",
                         {"orq.redteam.num_entities": len(entity_ids)},
                     ) as cleanup_span:
-                        cleanup_error = await cleanup_memory_entities(pt.agent_context, entity_ids, memory_cleanup=pt.resolved_memory_cleanup)
+                        cleanup_error = await cleanup_memory_entities(pt.agent_context, entity_ids, memory_cleanup=pt.backend)
                         set_span_attrs(cleanup_span, {
                             "orq.redteam.num_stores": len(pt.agent_context.memory_stores) if pt.agent_context.memory_stores else 0,
                         })
@@ -1966,11 +1976,11 @@ async def _run_static(
     # Fetch agent contexts for all targets (best-effort)
     agent_contexts: dict[str, AgentContext] = {}
     try:
-        backend_bundle = resolve_backend('orq', llm_client=llm_client, target_config=target_config, pipeline_config=pipeline_config)
+        static_backend = resolve_backend('orq', llm_client=llm_client, target_config=target_config, pipeline_config=pipeline_config)
         for t in targets:
             _kind, value = _parse_target(t)
             try:
-                ctx = await backend_bundle.context_provider.get_agent_context(value)
+                ctx = await static_backend.resolve_context(value)
                 agent_contexts[value] = ctx
             except Exception:
                 logger.debug(f'Could not retrieve agent context for {value} — skipping')
@@ -2008,15 +2018,20 @@ async def _run_static(
         "elapsed_s": pipeline_duration,
     })
 
-    _save_report(output_dir, "03_summary_report.json", merged)
-
     # Upload results to Orq platform — in static mode all jobs produce real
     # output for every datapoint, so we send results as-is (no stripping).
-    await _send_cleaned_results(
-        results=results,
-        name=resolved_name,
-        description=description or f'Static red teaming ({len(all_target_labels)} targets)',
-        start_time=pipeline_start,
-    )
+    # Send before saving so report.experiment_url is included in the persisted JSON.
+    # try/finally guarantees the report is written even if upload is cancelled
+    # (CancelledError bypasses the except Exception inside _send_cleaned_results).
+    try:
+        await _send_cleaned_results(
+            results=results,
+            name=resolved_name,
+            description=description or f'Static red teaming ({len(all_target_labels)} targets)',
+            start_time=pipeline_start,
+            report=merged,
+        )
+    finally:
+        _save_report(output_dir, "03_summary_report.json", merged)
 
     return merged

@@ -188,7 +188,10 @@ async def generate_focus_area_recommendations(
         try:
             # Two ``**`` splats in a function call raise TypeError on
             # duplicate keys; merge into a dict first for last-wins precedence.
-            merged_kwargs = {
+            # Typed as ``Any`` so ``**merged_kwargs`` does not trip the
+            # platform-conditional basedpyright Iterable[Omit] checks on
+            # OpenAI's ``create()`` overload (CI Linux vs local Darwin).
+            merged_kwargs: Any = {
                 'extra_body': cfg.retry_config,
                 **cfg.evaluator.extra_kwargs,
                 **(llm_kwargs or {}),

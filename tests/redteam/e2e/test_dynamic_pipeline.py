@@ -10,17 +10,15 @@ import pytest
 from openai import AsyncOpenAI
 
 from evaluatorq.redteam import red_team
-from evaluatorq.redteam.backends.base import BackendBundle
-
 from .conftest import (
     DeterministicAsyncOpenAI,
-    MockMemoryCleanup,
+    MockBackend,
     validate_report_structure,
 )
 
 
 @contextmanager
-def _dynamic_patches(mock_backend_bundle: BackendBundle):
+def _dynamic_patches(mock_backend_bundle: MockBackend):
     """Patch lazy imports used by _run_dynamic and _run_hybrid."""
     with (
         patch("evaluatorq.redteam.runner.resolve_backend", return_value=mock_backend_bundle),
@@ -33,7 +31,7 @@ def _dynamic_patches(mock_backend_bundle: BackendBundle):
 @pytest.mark.asyncio
 async def test_full_dynamic_run(
     mock_llm_client: DeterministicAsyncOpenAI,
-    mock_backend_bundle: BackendBundle,
+    mock_backend_bundle: MockBackend,
 ) -> None:
     """Full dynamic pipeline run with a single category, no strategy generation."""
     with _dynamic_patches(mock_backend_bundle):
@@ -55,7 +53,7 @@ async def test_full_dynamic_run(
 @pytest.mark.asyncio
 async def test_dynamic_with_strategy_generation(
     mock_llm_client: DeterministicAsyncOpenAI,
-    mock_backend_bundle: BackendBundle,
+    mock_backend_bundle: MockBackend,
 ) -> None:
     """Dynamic run with strategy generation enabled."""
     with _dynamic_patches(mock_backend_bundle):
@@ -77,7 +75,7 @@ async def test_dynamic_with_strategy_generation(
 @pytest.mark.asyncio
 async def test_dynamic_datapoint_capping(
     mock_llm_client: DeterministicAsyncOpenAI,
-    mock_backend_bundle: BackendBundle,
+    mock_backend_bundle: MockBackend,
 ) -> None:
     """max_dynamic_datapoints=2 should cap results."""
     with _dynamic_patches(mock_backend_bundle):
@@ -97,7 +95,7 @@ async def test_dynamic_datapoint_capping(
 @pytest.mark.asyncio
 async def test_dynamic_memory_cleanup(
     mock_llm_client: DeterministicAsyncOpenAI,
-    mock_backend_bundle: BackendBundle,
+    mock_backend_bundle: MockBackend,
 ) -> None:
     """Memory cleanup should be invoked when agent has memory stores."""
     with _dynamic_patches(mock_backend_bundle):
@@ -111,5 +109,4 @@ async def test_dynamic_memory_cleanup(
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
         )
 
-    cleanup: MockMemoryCleanup = cast(MockMemoryCleanup, mock_backend_bundle.memory_cleanup)
-    assert len(cleanup.cleaned_entity_ids) > 0, "Expected memory cleanup to be called"
+    assert len(mock_backend_bundle.cleaned_entity_ids) > 0, "Expected memory cleanup to be called"

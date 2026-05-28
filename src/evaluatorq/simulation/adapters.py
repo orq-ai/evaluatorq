@@ -27,7 +27,7 @@ def from_orq_deployment(
 
         return await invoke(
             agent_key,
-            messages=[{"role": m.role, "content": m.content} for m in messages],
+            messages=[{"role": m.role, "content": m.content or ""} for m in messages],
         )
 
     return callback
@@ -42,7 +42,7 @@ def from_chat_completions(
     """
 
     async def callback(messages: list[ChatMessage]) -> str:
-        result = fn([{"role": m.role, "content": m.content} for m in messages])
+        result = fn([{"role": m.role, "content": m.content or ""} for m in messages])
         if inspect.isawaitable(result):
             return await result
         return result

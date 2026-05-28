@@ -10,17 +10,8 @@ Semantic convention:
 """
 
 import os
-import sys
 from datetime import datetime
-from typing import Any, Literal, TypedDict
-
-if sys.version_info >= (3, 11):
-    from enum import StrEnum
-else:
-    from enum import Enum
-
-    class StrEnum(str, Enum):  # type: ignore[no-redef]
-        """String enum compatible with Python 3.10."""
+from typing import Any, TypedDict
 
 from pydantic import (
     BaseModel,
@@ -29,6 +20,8 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+from evaluatorq.contracts import StrEnum
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -342,57 +335,23 @@ def infer_framework(category: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-class FunctionCall(BaseModel):
-    """Function call details in OpenAI tool call format."""
-
-    name: str = Field(description='Function name to call')
-    arguments: str = Field(description='JSON string of function arguments')
-
-
-class StrategyToolCall(BaseModel):
-    """Tool call in assistant message (OpenAI format) — strategy wire format."""
-
-    id: str = Field(description='Unique tool call ID (e.g., call_abc123)')
-    type: Literal['function'] = Field(default='function', description='Tool type')
-    function: FunctionCall = Field(description='Function call details')
-
-
 # ---------------------------------------------------------------------------
 # Re-exports from evaluatorq.contracts (shared types)
 # ---------------------------------------------------------------------------
 # These types are defined in evaluatorq.contracts and re-exported here so that
 # existing ``from evaluatorq.redteam.contracts import ...`` call sites continue
-# to work unchanged.
+# to work unchanged. (RES-596 consolidated the duplicated definitions.)
 
 from evaluatorq.contracts import (  # noqa: F401
     AgentResponse,
+    FunctionCall,
+    Message,
     OutputMessage,
     ReasoningOutputItem,
+    StrategyToolCall,
     TextOutputItem,
     ToolCallOutputItem,
 )
-
-
-class Message(BaseModel):
-    """Single message in conversation history (OpenAI format with tool support).
-
-    Supports both simple messages and tool calls:
-    - Simple: {"role": "user", "content": "Hello"}
-    - Tool call: {"role": "assistant", "tool_calls": [...]}
-    - Tool response: {"role": "tool", "tool_call_id": "...", "name": "...", "content": "..."}
-    """
-
-    role: Literal['user', 'assistant', 'tool', 'system']
-    content: str | None = Field(
-        default=None,
-        description='Message content (required for user/system, optional for assistant with tool_calls)',
-    )
-
-    # Tool call fields (OpenAI format)
-    tool_calls: list[StrategyToolCall] | None = Field(default=None, description='Tool calls made by assistant')
-    tool_call_id: str | None = Field(default=None, description='ID linking tool response to call (for role=tool)')
-    name: str | None = Field(default=None, description='Function name (for role=tool)')
-
 
 # ---------------------------------------------------------------------------
 # Input models
@@ -495,33 +454,16 @@ class StaticDataset(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Agent context models
+# Agent context models — relocated to evaluatorq.contracts (RES-808 PR2).
+# Re-exported here so existing ``evaluatorq.redteam.contracts`` imports keep working.
 # ---------------------------------------------------------------------------
 
-
-class ToolInfo(BaseModel):
-    """Information about an agent's tool."""
-
-    name: str = Field(description='Tool name/identifier')
-    description: str | None = Field(default=None, description='Tool description')
-    parameters: dict[str, Any] | None = Field(default=None, description='Tool parameter schema')
-
-
-class MemoryStoreInfo(BaseModel):
-    """Information about an agent's memory store."""
-
-    id: str = Field(description='Memory store ID')
-    key: str | None = Field(default=None, description='Memory store key/slug')
-    description: str | None = Field(default=None, description='Memory store description')
-
-
-class KnowledgeBaseInfo(BaseModel):
-    """Information about an agent's knowledge base."""
-
-    id: str = Field(description='Knowledge base ID')
-    key: str | None = Field(default=None, description='Knowledge base key/slug')
-    name: str | None = Field(default=None, description='Knowledge base name')
-    description: str | None = Field(default=None, description='Knowledge base description')
+from evaluatorq.contracts import (  # noqa: F401
+    AgentContext,
+    KnowledgeBaseInfo,
+    MemoryStoreInfo,
+    ToolInfo,
+)
 
 
 class TargetConfig(BaseModel):
@@ -534,42 +476,6 @@ class TargetConfig(BaseModel):
         default=None,
         description="System prompt for the target model/agent",
     )
-
-
-class AgentContext(BaseModel):
-    """Extended agent information for context-aware attacks.
-
-    Describes the target agent's configuration and capabilities.
-    """
-
-    key: str = Field(description='Agent identifier key')
-    display_name: str | None = Field(default=None, description='Agent display name')
-    description: str | None = Field(default=None, description='Agent description')
-    system_prompt: str | None = Field(default=None, description='Agent system prompt (used by deployments)')
-    instructions: str | None = Field(default=None, description='Agent behavioral instructions')
-    tools: list[ToolInfo] = Field(default_factory=list, description='Available tools')
-    memory_stores: list[MemoryStoreInfo] = Field(default_factory=list, description='Memory stores')
-    knowledge_bases: list[KnowledgeBaseInfo] = Field(default_factory=list, description='Knowledge bases')
-    model: str | None = Field(default=None, description='Primary model')
-
-    @property
-    def has_tools(self) -> bool:
-        """Check if agent has any tools configured."""
-        return len(self.tools) > 0
-
-    @property
-    def has_memory(self) -> bool:
-        """Check if agent has any memory stores configured."""
-        return len(self.memory_stores) > 0
-
-    @property
-    def has_knowledge(self) -> bool:
-        """Check if agent has any knowledge bases configured."""
-        return len(self.knowledge_bases) > 0
-
-    def get_tool_names(self) -> list[str]:
-        """Get list of tool names."""
-        return [t.name for t in self.tools]
 
 
 # ---------------------------------------------------------------------------
@@ -742,60 +648,10 @@ class AttackStrategy(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Token usage
+# Token usage — re-exported from evaluatorq.contracts (RES-596)
 # ---------------------------------------------------------------------------
 
-
-class TokenUsage(BaseModel):
-    """Token usage and cost for an LLM call or aggregation of calls.
-
-    ``total_tokens`` is stored as provided by the upstream provider and is
-    never overridden. This preserves provider-specific token breakdowns
-    (cached_tokens, reasoning_tokens, audio tokens, etc.) that would be
-    silently corrupted by a normalisation step.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    total_tokens: int = Field(default=0, ge=0, description='Total tokens used as reported by the provider')
-    prompt_tokens: int = Field(default=0, ge=0, description='Prompt/input tokens')
-    completion_tokens: int = Field(default=0, ge=0, description='Completion/output tokens')
-    calls: int = Field(default=0, ge=0, description='Number of LLM API calls')
-
-    @classmethod
-    def from_completion(cls, response: Any) -> 'TokenUsage | None':
-        """Extract token usage from an OpenAI-compatible completion response."""
-        usage = getattr(response, 'usage', None)
-        if usage is None:
-            return None
-        prompt = int(getattr(usage, 'prompt_tokens', 0) or 0)
-        completion = int(getattr(usage, 'completion_tokens', 0) or 0)
-        # Mirror the > 0 guard used by other integrations: a provider-reported
-        # total of 0 (or absent) falls back to prompt+completion rather than
-        # propagating the zero, which would silently under-count totals on
-        # responses where prompt+completion are non-zero.
-        raw_total = getattr(usage, 'total_tokens', None)
-        total = int(raw_total) if raw_total is not None and int(raw_total) > 0 else prompt + completion
-        return cls(prompt_tokens=prompt, completion_tokens=completion, total_tokens=total, calls=1)
-
-    def __add__(self, other: 'TokenUsage | None') -> 'TokenUsage':
-        if other is None:
-            return self.model_copy()
-        return TokenUsage(
-            prompt_tokens=self.prompt_tokens + other.prompt_tokens,
-            completion_tokens=self.completion_tokens + other.completion_tokens,
-            total_tokens=self.total_tokens + other.total_tokens,
-            calls=self.calls + other.calls,
-        )
-
-    def __radd__(self, other: object) -> 'TokenUsage':
-        """Support sum() which starts with integer 0, and reflected addition."""
-        if isinstance(other, int) and other == 0:
-            return self.model_copy()  # safe copy, no shared reference
-        if isinstance(other, TokenUsage):
-            return other.__add__(self)
-        return NotImplemented
-
+from evaluatorq.contracts import TokenUsage
 
 SendResult = AgentResponse  # deprecated alias; use AgentResponse directly
 
@@ -1351,6 +1207,7 @@ class RedTeamReport(BaseModel):
     token_usage_summary: TokenUsage | None = None
     duration_seconds: float | None = None
     pipeline_warnings: list[str] = Field(default_factory=list)
+    experiment_url: str | None = None
 
     @field_validator('pipeline', mode='before')
     @classmethod

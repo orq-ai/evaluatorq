@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.contracts import AgentResponse, LLMCallConfig
+from evaluatorq.contracts import AgentResponse, AgentTarget, LLMCallConfig
 from evaluatorq.simulation._client import (
     _get_field,
     build_simulation_client,
@@ -42,7 +42,7 @@ class _ResponsesCallResult:
     usage: TokenUsage | None
 
 
-class OrqResponsesTarget:
+class OrqResponsesTarget(AgentTarget):
     """Wraps the Orq Responses v3 API as a simulation target.
 
     Implements two interfaces with different state semantics:
@@ -62,9 +62,6 @@ class OrqResponsesTarget:
     path is safe to invoke concurrently because it mutates nothing on self.
     """
 
-    memory_entity_id: str | None
-    threading_disabled: bool
-
     def __init__(
         self,
         config: LLMCallConfig,
@@ -76,10 +73,10 @@ class OrqResponsesTarget:
         retry_attempts: int | None = None,
         retry_statuses: Iterable[int] | None = None,
     ) -> None:
+        super().__init__(memory_entity_id=memory_entity_id)
         self.config = config
         self.instructions = instructions
         self.tools = tools
-        self.memory_entity_id = memory_entity_id
         self.retry_attempts = retry_attempts
         self.retry_statuses = set(retry_statuses) if retry_statuses is not None else None
         self.threading_disabled = False
@@ -150,7 +147,7 @@ class OrqResponsesTarget:
             await self._client.close()
             self._client_owned = False
 
-    async def __aenter__(self) -> "OrqResponsesTarget":  # noqa: PYI034, UP037
+    async def __aenter__(self) -> OrqResponsesTarget:
         return self
 
     async def __aexit__(self, *_exc_info: object) -> None:
@@ -187,11 +184,8 @@ class OrqResponsesTarget:
         if result.usage is None:
             new_usage = self._accumulated_usage
         else:
-            new_usage = TokenUsage(
-                prompt_tokens=self._accumulated_usage.prompt_tokens + result.usage.prompt_tokens,
-                completion_tokens=self._accumulated_usage.completion_tokens + result.usage.completion_tokens,
-                total_tokens=self._accumulated_usage.total_tokens + result.usage.total_tokens,
-            )
+            # extract_responses_output returns calls=0; bump to 1 for this API call
+            new_usage = self._accumulated_usage + result.usage.model_copy(update={"calls": 1})
         threading_disabled = result.response_id is None
         if not threading_disabled:
             self._previous_response_id = result.response_id
@@ -303,7 +297,24 @@ class OrqResponsesTarget:
 
     @staticmethod
     def _messages_to_input(messages: list[ChatMessage]) -> list[dict[str, Any]]:
-        return [{"role": m.role, "content": m.content} for m in messages]
+        result: list[dict[str, Any]] = []
+        for m in messages:
+            # Assistant messages with tool_calls require content: null per
+            # OpenAI's spec; collapsing None to "" produces an invalid payload.
+            # For other roles, the API expects a string, so coerce None -> "".
+            if m.role == "assistant":
+                content: Any = m.content
+            else:
+                content = m.content or ""
+            d: dict[str, Any] = {"role": m.role, "content": content}
+            if m.tool_calls is not None:
+                d["tool_calls"] = [tc.model_dump() for tc in m.tool_calls]
+            if m.tool_call_id is not None:
+                d["tool_call_id"] = m.tool_call_id
+            if m.name is not None:
+                d["name"] = m.name
+            result.append(d)
+        return result
 
 
 def _validate_response_id(response: Any, model: str) -> str | None:
