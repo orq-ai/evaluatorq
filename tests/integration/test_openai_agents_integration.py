@@ -12,7 +12,7 @@ and passes the full message list to respond().
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -103,7 +103,10 @@ async def test_to_input_list_echoes_input_prefix() -> None:
     input_data = [item for m in messages for item in _message_to_responses_input_items(m)]
     prev_len = len(input_data)
 
-    result = await Runner.run(agent, input_data)
+    # Runner.run types its input as list[TResponseInputItem] (a TypedDict union); the
+    # mapper returns plain dicts. Cast for the type checker — the SDK is structurally
+    # compatible at runtime.
+    result = await Runner.run(agent, cast(Any, input_data))
     full_list = result.to_input_list()
 
     assert full_list[:prev_len] == input_data, "SDK no longer echoes input 1:1 at the front"

@@ -364,4 +364,5 @@ class TestOrchestratorTranscript:
             "Turn 2 transcript is missing an assistant message with tool_calls. "
             "The ToolCallOutputItem from turn 1 was not preserved through the orchestrator transcript."
         )
+        assert assistant_tool_msg.tool_calls is not None
         assert assistant_tool_msg.tool_calls[0].function.name == "lookup"

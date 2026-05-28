@@ -17,8 +17,8 @@ def test_agent_response_carries_error_and_text():
     err = AgentResponseError(message="[ERROR: boom]", error_type="exception", code="target.crash")
     resp = AgentResponse(text="[ERROR: boom]", error=err)
     assert resp.error is err
-    assert resp.error.error_type == "exception"
-    assert resp.error.code == "target.crash"
+    assert err.error_type == "exception"
+    assert err.code == "target.crash"
     # .text still returns the human message so the report is unaffected.
     assert resp.text == "[ERROR: boom]"
 

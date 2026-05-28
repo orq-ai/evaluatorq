@@ -47,6 +47,7 @@ def test_tool_calls_preserved():
     msgs = turns_to_messages([turn])
     assert msgs[0].role == "user"
     assistant_with_tool = next(m for m in msgs if m.role == "assistant" and m.tool_calls)
+    assert assistant_with_tool.tool_calls is not None
     assert assistant_with_tool.tool_calls[0].function.name == "lookup"
 
 
@@ -128,6 +129,7 @@ def test_tool_call_preserves_responses_item_id():
     )
     msgs = turns_to_messages([turn])
     assistant = next(m for m in msgs if m.role == "assistant" and m.tool_calls)
+    assert assistant.tool_calls is not None
     tc = assistant.tool_calls[0]
     assert tc.id == "call_xyz"
     assert tc.item_id == "fc_abc"
