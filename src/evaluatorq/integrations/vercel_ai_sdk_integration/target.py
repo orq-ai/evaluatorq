@@ -180,8 +180,9 @@ class VercelAISdkTarget(AgentTarget):
 def _message_to_ai_sdk_message(m: Message, *, version: AISdkMessageFormat = "v5") -> dict[str, Any]:
     """Render a :class:`Message` as an AI SDK ModelMessage (v5 default, or v4).
 
-    Plain turns stay ``{"role", "content"}`` (byte-identical to a naive flatten,
-    identical across versions). Tool turns use the SDK's native content-parts
+    Plain turns stay ``{"role", "content"}`` (structurally equivalent for text
+    turns, identical across versions; ``None`` content is coerced to ``""``).
+    Tool turns use the SDK's native content-parts
     shape so AI SDK endpoints (``streamText`` / ``generateText``) can consume
     prior tool context: an assistant turn with tool calls becomes a ``tool-call``
     part per call (plus a leading ``text`` part when content is present), and a

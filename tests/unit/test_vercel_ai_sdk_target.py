@@ -289,6 +289,35 @@ class TestVercelAISdkTarget:
             {"type": "tool-result", "toolCallId": "c1", "toolName": "lookup", "result": "r"}
         ]
 
+    @pytest.mark.asyncio
+    async def test_sends_tool_call_with_malformed_arguments_falls_back_to_raw_string(self) -> None:
+        """Non-JSON tool arguments must not crash the renderer — the raw string is forwarded
+        as `input` (v5) so the wire format still validates structurally and the malformed
+        payload is observable end-to-end instead of swallowed mid-replay."""
+        target = VercelAISdkTarget("http://test/api/chat")  # default v5
+        mock_response = _mock_response('0:"ok"\n')
+
+        with patch("evaluatorq.integrations.vercel_ai_sdk_integration.target.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            await target.respond([
+                Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[StrategyToolCall(id="c1", function=FunctionCall(name="lookup", arguments="not json"))],
+                ),
+            ])
+
+        body = mock_client.post.call_args.kwargs["json"]
+        assistant = next(m for m in body["messages"] if m["role"] == "assistant")
+        assert assistant["content"] == [
+            {"type": "tool-call", "toolCallId": "c1", "toolName": "lookup", "input": "not json"}
+        ]
+
     def test_new_preserves_message_format(self) -> None:
         """new() forwards the configured tool wire format to the fresh instance."""
         target = VercelAISdkTarget("http://test/api/chat", message_format="v4")

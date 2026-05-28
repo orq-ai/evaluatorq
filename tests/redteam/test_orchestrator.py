@@ -471,6 +471,50 @@ class TestTimeoutHandling:
         assert per_turn_tcs == [[], []]
 
     @pytest.mark.asyncio
+    async def test_recoverable_error_turn_contributes_zero_tokens(self):
+        """A recoverable target error (timeout) must not accumulate tokens nor flip the
+        run to target_error. Guards the usage-arithmetic hoist (RES-877 follow-up): the
+        accumulation now lives after the target-blame try, so error paths leave
+        turn_usage=None and totals reflect only the success turn."""
+        mock_llm = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = 'Attack prompt'
+        mock_response.choices[0].finish_reason = 'stop'
+        mock_llm.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        success_usage = TokenUsage(prompt_tokens=12, completion_tokens=7, total_tokens=19, calls=1)
+        mock_target = AsyncMock()
+        # Turn 1: timeout (no usage). Turn 2: success with explicit usage.
+        mock_target.respond = AsyncMock(
+            side_effect=[
+                asyncio.TimeoutError,
+                AgentResponse(text='Agent response', usage=success_usage),
+            ]
+        )
+        mock_target.consume_last_token_usage = lambda: None
+
+        orchestrator = MultiTurnOrchestrator(llm_client=mock_llm, model='azure/gpt-5-mini')
+        result = await orchestrator.run_attack(
+            target=mock_target,
+            strategy=_make_strategy(),
+            objective='Test',
+            agent_context=AgentContext(key='test_agent'),
+            max_turns=2,
+        )
+
+        # Recoverable single error must not surface as a run-level target_error
+        assert result.error_type is None
+        assert result.n_turns == 2
+
+        # Totals reflect ONLY the success turn — the error turn contributed zero
+        assert result.token_usage_target is not None
+        assert result.token_usage_target.prompt_tokens == 12
+        assert result.token_usage_target.completion_tokens == 7
+        assert result.token_usage_target.total_tokens == 19
+        assert result.token_usage_target.calls == 1
+
+    @pytest.mark.asyncio
     async def test_adversarial_llm_timeout_maps_to_error_fields(self):
         """Timeout from adversarial LLM is caught and mapped correctly."""
         mock_llm = AsyncMock()
