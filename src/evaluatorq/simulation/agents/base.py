@@ -219,7 +219,7 @@ class BaseAgent(ABC):
 
         full_messages: list[dict[str, Any]] = [
             {"role": "system", "content": self.system_prompt},
-            *[{"role": m.role, "content": m.content} for m in messages],
+            *[{"role": m.role, "content": m.content or ""} for m in messages],
         ]
 
         params: dict[str, Any] = {
@@ -268,11 +268,10 @@ class BaseAgent(ABC):
                 # Record LLM response on the span (token usage, finish reason, etc.)
                 record_llm_response(span, response)
 
-                # Accumulate token usage
-                if response.usage:
-                    self._usage.prompt_tokens += response.usage.prompt_tokens
-                    self._usage.completion_tokens += response.usage.completion_tokens
-                    self._usage.total_tokens += response.usage.total_tokens
+                # Accumulate token usage (TokenUsage is frozen — reassign via __add__)
+                delta = TokenUsage.from_completion(response)
+                if delta is not None:
+                    self._usage = self._usage + delta
 
                 content = message.content
                 tool_calls = list(message.tool_calls or [])
@@ -304,7 +303,7 @@ class BaseAgent(ABC):
         """
         timeout_s = timeout or DEFAULT_TIMEOUT_S
 
-        input_messages = [{"role": m.role, "content": m.content} for m in messages]
+        input_messages = [{"role": m.role, "content": m.content or ""} for m in messages]
 
         params: dict[str, Any] = {
             "model": self._model,
@@ -350,10 +349,9 @@ class BaseAgent(ABC):
 
                 record_llm_response(span, response)
 
+                # Accumulate token usage (extract_responses_output returns calls=0, add 1)
                 if usage is not None:
-                    self._usage.prompt_tokens += usage.prompt_tokens
-                    self._usage.completion_tokens += usage.completion_tokens
-                    self._usage.total_tokens += usage.total_tokens
+                    self._usage = self._usage + usage.model_copy(update={"calls": 1})
 
                 # Separate text from tool-call items; isinstance guards prevent
                 # ReasoningOutputItem.text leaking into response content.

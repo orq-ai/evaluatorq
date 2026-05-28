@@ -170,11 +170,8 @@ class OrqResponsesTarget:
         if result.usage is None:
             new_usage = self._accumulated_usage
         else:
-            new_usage = TokenUsage(
-                prompt_tokens=self._accumulated_usage.prompt_tokens + result.usage.prompt_tokens,
-                completion_tokens=self._accumulated_usage.completion_tokens + result.usage.completion_tokens,
-                total_tokens=self._accumulated_usage.total_tokens + result.usage.total_tokens,
-            )
+            # extract_responses_output returns calls=0; bump to 1 for this API call
+            new_usage = self._accumulated_usage + result.usage.model_copy(update={"calls": 1})
         threading_disabled = result.response_id is None
         if not threading_disabled:
             self._previous_response_id = result.response_id
@@ -247,7 +244,24 @@ class OrqResponsesTarget:
 
     @staticmethod
     def _messages_to_input(messages: list[ChatMessage]) -> list[dict[str, Any]]:
-        return [{"role": m.role, "content": m.content} for m in messages]
+        result: list[dict[str, Any]] = []
+        for m in messages:
+            # Assistant messages with tool_calls require content: null per
+            # OpenAI's spec; collapsing None to "" produces an invalid payload.
+            # For other roles, the API expects a string, so coerce None -> "".
+            if m.role == "assistant":
+                content: Any = m.content
+            else:
+                content = m.content or ""
+            d: dict[str, Any] = {"role": m.role, "content": content}
+            if m.tool_calls is not None:
+                d["tool_calls"] = [tc.model_dump() for tc in m.tool_calls]
+            if m.tool_call_id is not None:
+                d["tool_call_id"] = m.tool_call_id
+            if m.name is not None:
+                d["name"] = m.name
+            result.append(d)
+        return result
 
 
 def _validate_response_id(response: Any, model: str) -> str | None:
