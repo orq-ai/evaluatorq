@@ -122,3 +122,34 @@ def test_rich_hooks_tolerates_runner_only_lifecycle(datapoint_factory):
     hooks.on_turn_complete("unknown", _turn_metrics())  # must not raise
     hooks.on_datapoint_complete(_result())
     hooks.on_run_complete([_result()])  # stops Progress; no prior on_run_start
+
+
+def test_rich_hooks_full_lifecycle(datapoint_factory):
+    from rich.console import Console
+
+    from evaluatorq.simulation.hooks import RichHooks
+
+    hooks = RichHooks(console=Console())
+    hooks.on_run_start(_meta())  # creates overall bar
+    dp = datapoint_factory("dp1")
+    hooks.on_datapoint_start(dp)
+    hooks.on_datapoint_start(dp)  # idempotent: no 2nd task
+    assert len(hooks._tasks) == 1
+    hooks.on_turn_complete("dp1", _turn_metrics())
+    hooks.on_datapoint_error(dp, RuntimeError("boom"))  # exercises error render
+    hooks.on_datapoint_complete(_result())  # increments overall bar
+    assert hooks._completed == 1
+    hooks.on_run_complete([_result()])
+    hooks.on_run_complete([_result()])  # double-call safe, no raise
+
+
+def test_rich_hooks_escapes_markup_in_names(datapoint_factory):
+    """A scenario name / id containing rich markup must not raise."""
+    from rich.console import Console
+
+    from evaluatorq.simulation.hooks import RichHooks
+
+    hooks = RichHooks(console=Console())
+    dp = datapoint_factory("[bold]evil[/bold]")  # id + scenario name carry markup
+    hooks.on_datapoint_start(dp)  # must not raise MarkupError
+    hooks.on_datapoint_error(dp, RuntimeError("x"))

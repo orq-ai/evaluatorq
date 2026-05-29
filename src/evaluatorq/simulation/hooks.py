@@ -154,7 +154,6 @@ class RichHooks:
         self._tasks: dict[str, int] = {}  # datapoint_id -> rich TaskID
         self._max_turns: int | None = None
         self._completed = 0
-        self._total: int | None = None
 
     def on_confirm(self, meta: SimulationRunMeta) -> bool:
         # Core RichHooks does not prompt (no typer dep). The interactive
@@ -185,17 +184,18 @@ class RichHooks:
     def on_run_start(self, meta: SimulationRunMeta) -> None:
         self._ensure_started()
         self._max_turns = meta["max_turns"]
-        self._total = meta["num_datapoints"]
         self._overall_task_id = self._progress.add_task(
             "[bold cyan]Simulations", total=meta["num_datapoints"]
         )
 
     def on_datapoint_start(self, datapoint: Datapoint) -> None:
+        from rich.markup import escape
+
         self._ensure_started()
         if datapoint.id in self._tasks:
             return
         self._tasks[datapoint.id] = self._progress.add_task(
-            f"  {datapoint.scenario.name}", total=self._max_turns
+            f"  {escape(datapoint.scenario.name)}", total=self._max_turns
         )
 
     def on_turn_complete(self, datapoint_id: str, metrics: TurnMetrics) -> None:
@@ -209,12 +209,14 @@ class RichHooks:
     def on_datapoint_complete(self, result: SimulationResult) -> None:
         if self._progress is None:
             return
+        from rich.markup import escape
+
         dp_id = result.metadata.get("datapoint_id")
         task_id = self._tasks.get(dp_id) if dp_id else None
-        if task_id is not None:
+        if dp_id and task_id is not None:
             self._progress.update(
                 task_id,
-                description=f"  [green]{dp_id}[/green] {result.terminated_by}",
+                description=f"  [green]{escape(dp_id)}[/green] {result.terminated_by}",
             )
         self._completed += 1
         if self._overall_task_id is not None:
@@ -223,7 +225,7 @@ class RichHooks:
     def on_evaluator_complete(
         self, datapoint_id: str, name: str, score: float, result: SimulationResult
     ) -> None:
-        # Evaluator scores are summarised on on_run_complete; no per-event render.
+        # No per-event render.
         return
 
     def on_datapoint_error(
@@ -231,19 +233,21 @@ class RichHooks:
     ) -> None:
         if self._progress is None:
             return
+        from rich.markup import escape
+
         task_id = self._tasks.get(datapoint.id)
         if task_id is not None:
             self._progress.update(
                 task_id,
-                description=f"  [red]{datapoint.id} ERROR[/red]",
+                description=f"  [red]{escape(datapoint.id)} ERROR[/red]",
             )
 
     def on_run_complete(self, results: list[SimulationResult]) -> None:
         if self._progress is not None:
             self._progress.stop()
             self._progress = None
-        achieved = sum(1 for r in results if r.goal_achieved)
-        self._console.print(
-            f"[bold green]Done[/bold green]: {len(results)} simulations, "
-            f"{achieved} goal-achieved"
-        )
+            achieved = sum(1 for r in results if r.goal_achieved)
+            self._console.print(
+                f"[bold green]Done[/bold green]: {len(results)} simulations, "
+                f"{achieved} goal-achieved"
+            )
