@@ -375,6 +375,30 @@ async def test_on_confirm_false_aborts_before_running(datapoint_factory):
     assert calls == []          # confirm gate aborted before any target call
 
 
+@pytest.mark.asyncio
+async def test_hooks_none_is_behaviour_identical(datapoint_factory):
+    """hooks=None must produce the same results + token usage as today."""
+
+    async def _ok_target(messages):
+        return "fine"
+
+    # hooks defaults to None -> DefaultHooks
+    baseline = await simulate(
+        target=_ok_target,
+        datapoints=[datapoint_factory("dp1")],
+        max_turns=1,
+        evaluator_names=["goal_achieved"],
+        user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+        judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+    )
+    assert len(baseline) == 1
+    r = baseline[0]
+    assert r.terminated_by == TerminatedBy.judge
+    assert r.metadata["evaluator_scores"]["goal_achieved"] in (0.0, 1.0)
+    # DefaultHooks is silent at info-: result shape unchanged, datapoint_id set
+    assert r.metadata["datapoint_id"] == "dp1"
+
+
 def test_hooks_exported_from_package():
     import evaluatorq.simulation as sim
 

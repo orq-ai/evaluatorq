@@ -503,7 +503,9 @@ class SimulationRunner:
                     self._hooks.on_turn_complete(datapoint_id, turn_metrics_list[-1])
                 except Exception:
                     logger.warning(
-                        "on_turn_complete hook raised; ignoring", exc_info=True
+                        "on_turn_complete hook raised for datapoint %s; ignoring",
+                        datapoint_id,
+                        exc_info=True,
                     )
                 last_judgment = judgment
 
