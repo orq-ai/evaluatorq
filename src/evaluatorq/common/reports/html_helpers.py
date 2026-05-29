@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import html
 from pathlib import Path
+from string import Template
 from typing import Any
 
 
@@ -48,8 +49,12 @@ _CSS_CACHE: dict[Path, str] = {}
 def load_css(css_path: Path | None = None) -> str:
     """Load and interpolate the shared report.css with the brand color palette.
 
+    Uses ``string.Template`` (``$color_name``) so bare ``%`` characters in CSS
+    (e.g. ``opacity: 50%``) don't raise ``ValueError`` like ``%``-formatting
+    would.
+
     Args:
-        css_path: Path to a ``.css`` file with ``%(color_name)s`` placeholders.
+        css_path: Path to a ``.css`` file with ``$color_name`` placeholders.
             Defaults to the bundled ``common/reports/report.css``.
 
     Returns:
@@ -59,7 +64,7 @@ def load_css(css_path: Path | None = None) -> str:
     cached = _CSS_CACHE.get(path)
     if cached is not None:
         return cached
-    text = path.read_text(encoding="utf-8") % COLORS
+    text = Template(path.read_text(encoding="utf-8")).safe_substitute(COLORS)
     _CSS_CACHE[path] = text
     return text
 

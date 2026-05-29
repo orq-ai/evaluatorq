@@ -1,14 +1,14 @@
 :root {
-    --ink-700: %(ink_700)s;
-    --ink-800: %(ink_800)s;
-    --sand-100: %(sand_100)s;
-    --sand-400: %(sand_400)s;
-    --teal-400: %(teal_400)s;
-    --teal-500: %(teal_500)s;
-    --orange-300: %(orange_300)s;
-    --success-400: %(success_400)s;
-    --red-400: %(red_400)s;
-    --yellow-400: %(yellow_400)s;
+    --ink-700: $ink_700;
+    --ink-800: $ink_800;
+    --sand-100: $sand_100;
+    --sand-400: $sand_400;
+    --teal-400: $teal_400;
+    --teal-500: $teal_500;
+    --orange-300: $orange_300;
+    --success-400: $success_400;
+    --red-400: $red_400;
+    --yellow-400: $yellow_400;
 }
 *, *::before, *::after { box-sizing: border-box; }
 body {
@@ -150,10 +150,10 @@ details pre { background: #f5f5f5; padding: 1rem; border-radius: 4px; overflow-x
     font-size: 1.1em;
     font-weight: 700;
 }
-.risk-critical { background: %(red_400)s; color: white; }
-.risk-high { background: %(orange_300)s; color: white; }
-.risk-medium { background: %(yellow_400)s; color: var(--ink-700); }
-.risk-low { background: %(success_400)s; color: white; }
+.risk-critical { background: $red_400; color: white; }
+.risk-high { background: $orange_300; color: white; }
+.risk-medium { background: $yellow_400; color: var(--ink-700); }
+.risk-low { background: $success_400; color: white; }
 .toc { margin: 1.5rem 0; padding: 1rem 1.5rem; background: white; border: 1px solid var(--sand-400); border-radius: 8px; }
 .toc h3 { margin: 0 0 .5rem; color: var(--teal-400); }
 .toc ol { margin: 0; padding-left: 1.5rem; }

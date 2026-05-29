@@ -59,6 +59,14 @@ def _error_message(result: SimulationResult) -> str | None:
     return str(err) if err else None
 
 
+def _is_errored(result: SimulationResult) -> bool:
+    """A run is errored if it has an error metadata key or the judge terminated
+    it due to an error. Shared between the summary and errors sections so the
+    "errors" counts agree across the report.
+    """
+    return bool(_error_message(result)) or result.terminated_by.value == "error"
+
+
 # ---------------------------------------------------------------------------
 # Section builders
 # ---------------------------------------------------------------------------
@@ -66,8 +74,8 @@ def _error_message(result: SimulationResult) -> str | None:
 
 def _build_summary_section(results: list[SimulationResult]) -> ReportSection:
     total = len(results)
-    achieved = sum(1 for r in results if r.goal_achieved)
-    errored = sum(1 for r in results if _error_message(r))
+    achieved = sum(1 for r in results if r.goal_achieved and not _is_errored(r))
+    errored = sum(1 for r in results if _is_errored(r))
     avg_score = sum(r.goal_completion_score for r in results) / total if total else 0.0
     avg_turns = sum(r.turn_count for r in results) / total if total else 0.0
     total_tokens = sum(r.token_usage.total_tokens for r in results)
@@ -280,7 +288,7 @@ def _build_individual_results_section(results: list[SimulationResult]) -> Report
 
 
 def _build_errors_section(results: list[SimulationResult]) -> ReportSection | None:
-    errored = [r for r in results if _error_message(r) or r.terminated_by.value == "error"]
+    errored = [r for r in results if _is_errored(r)]
     if not errored:
         return None
     err_messages = [

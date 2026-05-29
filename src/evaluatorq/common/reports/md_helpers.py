@@ -7,6 +7,7 @@ collapsible blocks.
 
 from __future__ import annotations
 
+import html
 import textwrap
 
 
@@ -77,6 +78,11 @@ def truncate(text: str, max_chars: int = 800) -> str:
 
 
 def details_block(summary: str, body: str) -> str:
-    """Wrap content in a collapsible ``<details>`` block."""
+    """Wrap content in a collapsible ``<details>`` block.
+
+    The ``summary`` argument is HTML-escaped so titles containing ``&``,
+    ``<``, ``>`` render correctly in GitHub-Flavored Markdown.
+    """
     inner = textwrap.indent(body.strip(), "  ")
-    return f"<details>\n<summary>{summary}</summary>\n\n{inner}\n\n</details>"
+    escaped_summary = html.escape(summary)
+    return f"<details>\n<summary>{escaped_summary}</summary>\n\n{inner}\n\n</details>"

@@ -139,6 +139,49 @@ def test_errors_section_present_when_failures_present():
     assert errors.data["by_message"]["rate limit"] == 1
 
 
+def test_summary_partitions_achieved_failed_errored_disjointly():
+    """An errored run never counts as achieved, and goals_failed is never negative.
+
+    Regression: a result with both ``goal_achieved=True`` and a metadata
+    ``error`` would previously be double-counted (in achieved AND errored),
+    producing ``goals_failed = total - achieved - errored < 0``.
+    """
+    results = [
+        _make_result(goal_achieved=True),                  # clean win
+        _make_result(goal_achieved=False),                 # clean loss
+        _make_result(goal_achieved=True, error="weird"),   # achieved + error -> errored
+        _make_result(terminated_by=TerminatedBy.error),    # terminated_by=error
+    ]
+    sections = build_report_sections(results)
+    summary = next(s for s in sections if s.kind == "summary")
+    assert summary.data["goals_achieved"] == 1
+    assert summary.data["errors"] == 2
+    assert summary.data["goals_failed"] == 1
+    assert (
+        summary.data["goals_achieved"]
+        + summary.data["errors"]
+        + summary.data["goals_failed"]
+        == summary.data["total_conversations"]
+    )
+
+
+def test_errors_section_count_matches_summary_section_count():
+    """Both sections must agree on what 'errored' means.
+
+    Regression: the summary counted only metadata['error'] results, while the
+    errors section also counted ``terminated_by == error``.
+    """
+    results = [
+        _make_result(error="rate limit"),
+        _make_result(terminated_by=TerminatedBy.error),  # no metadata error
+        _make_result(),
+    ]
+    sections = build_report_sections(results)
+    summary = next(s for s in sections if s.kind == "summary")
+    errors = next(s for s in sections if s.kind == "errors")
+    assert summary.data["errors"] == errors.data["total_errored"] == 2
+
+
 def test_individual_results_section_carries_transcript_and_meta():
     results = [_make_result(persona="A", goal_achieved=True)]
     sections = build_report_sections(results)
