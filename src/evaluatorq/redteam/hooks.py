@@ -435,7 +435,7 @@ class RichHooks:
         The Panel acts as the visual container (lazydocker / nethogs idiom)
         so the inner Table only needs a header separator, not a full grid.
         Border color shifts to signal status: cyan = classified cleanly,
-        yellow = classifier failed or returned no tags, dim = no client.
+        yellow = classifier failed, blue = no tags detected, grey50 = no client.
 
         Args:
             agent_context: Serialized AgentContext (model_dump).
