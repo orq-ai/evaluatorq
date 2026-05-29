@@ -10,6 +10,7 @@ inside an ``orq.simulation.pipeline`` span and accept the unified
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import os
 import uuid
@@ -667,11 +668,14 @@ async def _simulate_via_evaluatorq(
             logger.exception("SimulationRunner.close() raised during cleanup")
         target_close = getattr(target_agent or target_callback, "close", None)
         if callable(target_close):
-            import inspect
-
-            maybe = target_close()
-            if inspect.isawaitable(maybe):
-                await maybe
+            try:
+                maybe = target_close()
+                if inspect.isawaitable(maybe):
+                    await maybe
+            except Exception:
+                # Same guard as runner.close(): a target raising on close
+                # must not mask the primary exception from evaluatorq().
+                logger.exception("target close() raised during cleanup")
 
     # Mirror evaluator scores onto SimulationResult.metadata once, from the
     # final evaluatorq result, so the scorer stays pure (no side-effects mid-run)
