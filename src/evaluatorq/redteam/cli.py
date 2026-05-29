@@ -111,14 +111,22 @@ def write_markdown_report(
     from evaluatorq.redteam.reports.export_md import export_markdown
 
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        typer.echo(f"Error: failed to create report directory {output_dir}: {e}", err=True)
+        raise typer.Exit(code=1) from e
 
     timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
     filename = _generate_md_filename(target=target, timestamp=timestamp)
     output_path = output_dir / filename
 
     md_content = export_markdown(report)
-    output_path.write_text(md_content, encoding="utf-8")
+    try:
+        output_path.write_text(md_content, encoding="utf-8")
+    except OSError as e:
+        typer.echo(f"Error: failed to write Markdown report to {output_path}: {e}", err=True)
+        raise typer.Exit(code=1) from e
     return output_path
 
 
@@ -131,7 +139,11 @@ def write_html_report(
     from evaluatorq.redteam.reports.export_html import export_html
 
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        typer.echo(f"Error: failed to create report directory {output_dir}: {e}", err=True)
+        raise typer.Exit(code=1) from e
 
     timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
     filename = _generate_report_filename(
@@ -140,7 +152,11 @@ def write_html_report(
     output_path = output_dir / filename
 
     html_content = export_html(report)
-    output_path.write_text(html_content, encoding="utf-8")
+    try:
+        output_path.write_text(html_content, encoding="utf-8")
+    except OSError as e:
+        typer.echo(f"Error: failed to write HTML report to {output_path}: {e}", err=True)
+        raise typer.Exit(code=1) from e
     return output_path
 
 

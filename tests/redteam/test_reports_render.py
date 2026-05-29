@@ -49,3 +49,30 @@ def test_redteam_export_html_smoke():
     assert "<style>" in html
     # The %% bug regression: rendered CSS must not contain '%%'.
     assert "%%" not in html
+
+
+def test_write_report_helpers_exit_on_oserror(tmp_path, monkeypatch):
+    """The CLI write_*_report helpers must convert OSError into a friendly
+    typer.Exit instead of leaking a raw traceback.
+    """
+    import typer
+
+    from evaluatorq.redteam.cli import write_html_report, write_markdown_report
+
+    report = _make_empty_report()
+    out_dir = tmp_path / "reports"
+
+    def fail_write(self, *args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("pathlib.Path.write_text", fail_write)
+
+    import pytest
+
+    with pytest.raises(typer.Exit) as exc:
+        write_markdown_report(report, out_dir, target="t")
+    assert exc.value.exit_code == 1
+
+    with pytest.raises(typer.Exit) as exc:
+        write_html_report(report, out_dir, target="t")
+    assert exc.value.exit_code == 1

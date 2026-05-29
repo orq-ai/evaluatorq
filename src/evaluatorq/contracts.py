@@ -469,7 +469,40 @@ class AgentTarget(ABC):
 # ---------------------------------------------------------------------------
 
 
-@dataclass
+ReportSectionKind = Literal[
+    # Shared
+    "summary",
+    "token_usage",
+    "individual_results",
+    "agent_context",
+    # Simulation-specific
+    "persona_breakdown",
+    "scenario_breakdown",
+    "judge_verdicts",
+    "turn_metrics",
+    "evaluator_scores",
+    "errors",
+    # Red-team-specific
+    "focus_areas",
+    "vulnerability_breakdown",
+    "category_breakdown",
+    "technique_breakdown",
+    "delivery_breakdown",
+    "error_analysis",
+    "attack_heatmap",
+    "agent_comparison",
+    "agent_disagreements",
+    "framework_breakdown",
+    "turn_scope_breakdown",
+    "turn_depth_analysis",
+    "source_distribution",
+    "severity_definitions",
+    "methodology",
+]
+"""Closed set of known report section kinds across simulation and red-team."""
+
+
+@dataclass(frozen=True)
 class ReportSection:
     """Renderer-agnostic section of a report.
 
@@ -477,13 +510,18 @@ class ReportSection:
     list of these; renderers (in ``evaluatorq.common.reports``) consume them and
     dispatch by ``kind`` to a module-specific render function.
 
+    Frozen so the ``kind`` / ``title`` identity is fixed once built. ``data``
+    is itself mutable — red-team's HTML renderer enriches the summary
+    section's data dict with values derived from the full report object,
+    which would be awkward to thread through the section builders.
+
     Attributes:
         kind: Machine-readable section identifier (e.g. ``"summary"``).
         title: Human-readable section title.
         data: Free-form dict of section data consumed by renderers.
     """
 
-    kind: str
+    kind: ReportSectionKind
     title: str
     data: dict[str, Any] = field(default_factory=dict)
 
@@ -504,6 +542,7 @@ __all__ = [
     "OutputMessage",
     "ReasoningOutputItem",
     "ReportSection",
+    "ReportSectionKind",
     "StrategyToolCall",
     "TextOutputItem",
     "TokenUsage",
