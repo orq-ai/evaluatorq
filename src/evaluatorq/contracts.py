@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -463,6 +464,30 @@ class AgentTarget(ABC):
         return None
 
 
+# ---------------------------------------------------------------------------
+# Reporting
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ReportSection:
+    """Renderer-agnostic section of a report.
+
+    Section builders (in ``redteam.reports`` / ``simulation.reports``) emit a
+    list of these; renderers (in ``evaluatorq.common.reports``) consume them and
+    dispatch by ``kind`` to a module-specific render function.
+
+    Attributes:
+        kind: Machine-readable section identifier (e.g. ``"summary"``).
+        title: Human-readable section title.
+        data: Free-form dict of section data consumed by renderers.
+    """
+
+    kind: str
+    title: str
+    data: dict[str, Any] = field(default_factory=dict)
+
+
 __all__ = [
     "DEFAULT_PIPELINE_MODEL",
     "DEFAULT_TARGET_MAX_TOKENS",
@@ -478,6 +503,7 @@ __all__ = [
     "Message",
     "OutputMessage",
     "ReasoningOutputItem",
+    "ReportSection",
     "StrategyToolCall",
     "TextOutputItem",
     "TokenUsage",

@@ -30,11 +30,11 @@ from __future__ import annotations
 
 import operator
 from collections import Counter, defaultdict
-from dataclasses import dataclass, field
 from typing import Any
 
 from loguru import logger
 
+from evaluatorq.contracts import ReportSection
 from evaluatorq.redteam.contracts import OWASP_CATEGORY_NAMES, SEVERITY_DEFINITIONS, RedTeamReport, RedTeamResult
 from evaluatorq.redteam.reports._utils import extract_prompt, extract_response
 from evaluatorq.redteam.reports.guidance import REMEDIATION_GUIDANCE
@@ -49,26 +49,6 @@ SEVERITY_WEIGHTS: dict[str, int] = {
     "high": 4,
     "critical": 8,
 }
-
-
-# ---------------------------------------------------------------------------
-# Section data model
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class ReportSection:
-    """Renderer-agnostic section of a report.
-
-    Attributes:
-        kind:  Machine-readable section identifier (e.g. ``"summary"``).
-        title: Human-readable section title.
-        data:  Free-form dict of section data consumed by renderers.
-    """
-
-    kind: str
-    title: str
-    data: dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
