@@ -250,15 +250,6 @@ def _build_token_usage_section(results: list[SimulationResult]) -> ReportSection
 def _build_individual_results_section(results: list[SimulationResult]) -> ReportSection:
     entries: list[dict[str, Any]] = []
     for idx, r in enumerate(results):
-        first_user = next(
-            (m.content for m in r.messages if m.role == "user" and m.content),
-            "",
-        )
-        last_assistant = next(
-            (m.content for m in reversed(r.messages)
-             if m.role == "assistant" and m.content),
-            "",
-        )
         entries.append({
             "index": idx,
             "persona": _persona_name(r),
@@ -270,8 +261,6 @@ def _build_individual_results_section(results: list[SimulationResult]) -> Report
             "rules_broken": list(r.rules_broken),
             "turn_count": r.turn_count,
             "total_tokens": r.token_usage.total_tokens,
-            "first_user_message": first_user,
-            "last_assistant_message": last_assistant,
             "judge_reason": r.reason,
             "error": _error_message(r),
             "evaluator_scores": _evaluator_scores(r),

@@ -133,6 +133,6 @@ def render_html(
         "<!DOCTYPE html>\n"
         "<html lang=\"en\">\n"
         f"<head>\n{head}\n</head>\n"
-        f"<body>\n{''.join(body_parts)}\n</body>\n"
+        f"<body>\n{chr(10).join(body_parts)}\n</body>\n"
         "</html>\n"
     )

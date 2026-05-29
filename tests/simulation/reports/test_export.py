@@ -76,6 +76,37 @@ def test_export_html_handles_empty_results():
     assert "<!DOCTYPE html>" in html
 
 
+def test_export_html_css_has_no_double_percent_artifacts():
+    """The CSS must not contain ``%%`` (a leftover from the old %-format era).
+
+    Regression: when load_css used Python's % string formatting, CSS rules
+    that needed a literal % (``width: 100%``) had to be escaped as ``%%``.
+    The switch to string.Template removes the need to escape, so ``%%`` in
+    the rendered CSS now produces invalid rules that browsers silently drop.
+    """
+    html = export_html(
+        [_result("Alice", achieved=True, score=1.0)],
+        target="t",
+    )
+    assert "%%" not in html, "double-percent artifacts in CSS will break browser rendering"
+    # Sanity: width: 100% should be present and well-formed.
+    assert "width: 100%" in html
+
+
+def test_export_html_uses_only_defined_css_classes():
+    """Sim HTML only references CSS classes that exist in report.css."""
+    from evaluatorq.common.reports import load_css
+    css = load_css()
+    html = export_html(
+        [_result("Alice", achieved=True, score=1.0)],
+        target="t",
+    )
+    # Inspect status classes the sim renderer applies.
+    for cls in ("status-success", "status-failure", "transcript-message"):
+        if cls in html:
+            assert f".{cls}" in css, f"sim HTML uses .{cls} but it's not defined in report.css"
+
+
 def test_export_html_truncates_long_transcript_messages():
     """Very long messages must be truncated so HTML files stay manageable."""
     long_content = "x" * 5000
