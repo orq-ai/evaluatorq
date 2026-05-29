@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -19,6 +20,9 @@ from evaluatorq.simulation.upload import (
     _to_data_point_result,
     upload_simulation_results,
 )
+
+if TYPE_CHECKING:
+    from evaluatorq.simulation.agents.base import BaseAgent
 
 
 def _make_result(
@@ -50,6 +54,110 @@ def _make_result(
         token_usage=TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
         metadata=metadata,
     )
+
+
+# ---------------------------------------------------------------------------
+# Shared fixtures for simulate() integration tests
+#
+# These use real stub classes (not bare MagicMock) for the injected user
+# simulator and judge. The runner validates them via
+# ``isinstance(obj, SimulationUserSimulator)`` against a ``@runtime_checkable``
+# Protocol; on Python 3.12+ that check is strict enough that a bare MagicMock
+# fails, so concrete stubs keep the tests green across all supported versions.
+# ---------------------------------------------------------------------------
+
+
+def _make_persona(name: str = "P"):
+    from evaluatorq.simulation.types import CommunicationStyle, Persona
+
+    return Persona(
+        name=name,
+        patience=0.5,
+        assertiveness=0.5,
+        politeness=0.5,
+        technical_level=0.5,
+        communication_style=CommunicationStyle.casual,
+        background="bg",
+    )
+
+
+def _make_scenario(name: str = "S", goal: str = "g"):
+    from evaluatorq.simulation.types import Scenario
+
+    return Scenario(name=name, goal=goal)
+
+
+def _make_datapoint():
+    from evaluatorq.simulation.types import Datapoint
+
+    return Datapoint(
+        id="dp",
+        persona=_make_persona(),
+        scenario=_make_scenario(),
+        user_system_prompt="sys",
+        first_message="hi",
+    )
+
+
+def _make_judgment():
+    from evaluatorq.simulation.types import Judgment
+
+    return Judgment(
+        should_terminate=True,
+        reason="done",
+        goal_achieved=True,
+        rules_broken=[],
+        goal_completion_score=1.0,
+        response_quality=0.9,
+        hallucination_risk=0.1,
+        tone_appropriateness=0.9,
+        factual_accuracy=0.9,
+    )
+
+
+class _StubUserSimulator:
+    """Concrete user simulator satisfying the runner's Protocol."""
+
+    def __init__(self, *, first: str = "hi", reply: str = "bye") -> None:
+        self._first = first
+        self._reply = reply
+
+    def update_context(self, *, persona_context=None, scenario_context=None) -> None:
+        return None
+
+    async def generate_first_message(self) -> str:
+        return self._first
+
+    async def respond_async(self, messages, *, llm_purpose=None) -> str:
+        return self._reply
+
+    def get_usage(self) -> TokenUsage:
+        return TokenUsage()
+
+
+class _StubJudge:
+    """Concrete judge satisfying the runner's Protocol."""
+
+    def __init__(self, judgment=None) -> None:
+        self._judgment = judgment if judgment is not None else _make_judgment()
+
+    async def evaluate(self, messages):
+        return self._judgment
+
+    def get_usage(self) -> TokenUsage:
+        return TokenUsage()
+
+
+# simulate() annotates user_simulator/judge as BaseAgent, but the runner
+# validates them structurally against a @runtime_checkable Protocol. The stubs
+# satisfy that Protocol; cast() bridges the nominal/structural gap for the
+# type checker without forcing a heavyweight BaseAgent subclass.
+def _user_sim(**kwargs) -> BaseAgent:
+    return cast("BaseAgent", cast(object, _StubUserSimulator(**kwargs)))
+
+
+def _judge() -> BaseAgent:
+    return cast("BaseAgent", cast(object, _StubJudge()))
 
 
 # ---------------------------------------------------------------------------
@@ -272,61 +380,17 @@ async def test_wrap_simulation_agent_does_not_double_upload(
     """Regression: wrap_simulation_agent's nested simulate() call must NOT
     auto-upload, otherwise evaluatorq's framework upload + simulate's own
     upload create two experiments per run."""
-    from unittest.mock import AsyncMock, MagicMock
-
     monkeypatch.setenv("ORQ_API_KEY", "test-key")
 
     upload_mock = AsyncMock()
 
-    from evaluatorq.simulation.types import (
-        Message,
-        CommunicationStyle,
-        Datapoint,
-        Persona,
-        Scenario,
-    )
+    from evaluatorq.simulation.types import Message
     from evaluatorq.simulation.wrap_agent import wrap_simulation_agent
 
-    persona = Persona(
-        name="P",
-        patience=0.5,
-        assertiveness=0.5,
-        politeness=0.5,
-        technical_level=0.5,
-        communication_style=CommunicationStyle.casual,
-        background="bg",
-    )
-    scenario = Scenario(name="S", goal="g")
-    dp = Datapoint(
-        id="dp",
-        persona=persona,
-        scenario=scenario,
-        user_system_prompt="sys",
-        first_message="hi",
-    )
+    dp = _make_datapoint()
 
     async def target_cb(messages: list[Message]) -> str:
         return "ok"
-
-    user_sim = MagicMock()
-    user_sim.generate_first_message = AsyncMock(return_value="hi")
-    user_sim.respond_async = AsyncMock(return_value="bye")
-    user_sim.get_usage = MagicMock(return_value=TokenUsage())
-
-    judgment = MagicMock()
-    judgment.should_terminate = True
-    judgment.goal_achieved = True
-    judgment.goal_completion_score = 1.0
-    judgment.rules_broken = []
-    judgment.reason = "done"
-    judgment.response_quality = 0.9
-    judgment.hallucination_risk = 0.1
-    judgment.tone_appropriateness = 0.9
-    judgment.factual_accuracy = 0.9
-
-    judge = MagicMock()
-    judge.evaluate = AsyncMock(return_value=judgment)
-    judge.get_usage = MagicMock(return_value=TokenUsage())
 
     job_fn = wrap_simulation_agent(
         target_callback=target_cb,
@@ -394,60 +458,9 @@ async def test_simulate_calls_upload_when_flag_and_key_set(
     upload_mock = AsyncMock()
 
     from evaluatorq.simulation import simulate
-    from evaluatorq.simulation.types import (
-        Message,
-        CommunicationStyle,
-        Persona,
-        Scenario,
-    )
 
     async def target_cb(messages: list[Message]) -> str:
         return "ok"
-
-    persona = Persona(
-        name="P",
-        patience=0.5,
-        assertiveness=0.5,
-        politeness=0.5,
-        technical_level=0.5,
-        communication_style=CommunicationStyle.casual,
-        background="bg",
-    )
-    scenario = Scenario(name="S", goal="g")
-
-    # Need a datapoint so simulate() doesn't try to call generators
-    from evaluatorq.simulation.types import Datapoint
-
-    dp = Datapoint(
-        id="dp",
-        persona=persona,
-        scenario=scenario,
-        user_system_prompt="sys",
-        first_message="hi",
-    )
-
-    # Mock the user_simulator and judge so we don't hit the network
-    from unittest.mock import MagicMock
-
-    user_sim = MagicMock()
-    user_sim.generate_first_message = AsyncMock(return_value="hi")
-    user_sim.respond_async = AsyncMock(return_value="bye")
-    user_sim.get_usage = MagicMock(return_value=TokenUsage())
-
-    judgment = MagicMock()
-    judgment.should_terminate = True
-    judgment.goal_achieved = True
-    judgment.goal_completion_score = 1.0
-    judgment.rules_broken = []
-    judgment.reason = "done"
-    judgment.response_quality = 0.9
-    judgment.hallucination_risk = 0.1
-    judgment.tone_appropriateness = 0.9
-    judgment.factual_accuracy = 0.9
-
-    judge = MagicMock()
-    judge.evaluate = AsyncMock(return_value=judgment)
-    judge.get_usage = MagicMock(return_value=TokenUsage())
 
     with patch(
         "evaluatorq.simulation.upload.upload_simulation_results", new=upload_mock
@@ -455,10 +468,10 @@ async def test_simulate_calls_upload_when_flag_and_key_set(
         await simulate(
             evaluation_name="t",
             target_callback=target_cb,
-            datapoints=[dp],
+            datapoints=[_make_datapoint()],
             max_turns=1,
-            user_simulator=user_sim,
-            judge=judge,
+            user_simulator=_user_sim(),
+            judge=_judge(),
             upload_results=True,
         )
 
@@ -477,57 +490,10 @@ async def test_simulate_skips_upload_when_flag_false(
 
     upload_mock = AsyncMock()
 
-    from unittest.mock import MagicMock
-
     from evaluatorq.simulation import simulate
-    from evaluatorq.simulation.types import (
-        Message,
-        CommunicationStyle,
-        Datapoint,
-        Persona,
-        Scenario,
-    )
 
     async def target_cb(messages: list[Message]) -> str:
         return "ok"
-
-    persona = Persona(
-        name="P",
-        patience=0.5,
-        assertiveness=0.5,
-        politeness=0.5,
-        technical_level=0.5,
-        communication_style=CommunicationStyle.casual,
-        background="bg",
-    )
-    scenario = Scenario(name="S", goal="g")
-    dp = Datapoint(
-        id="dp",
-        persona=persona,
-        scenario=scenario,
-        user_system_prompt="sys",
-        first_message="hi",
-    )
-
-    user_sim = MagicMock()
-    user_sim.generate_first_message = AsyncMock(return_value="hi")
-    user_sim.respond_async = AsyncMock(return_value="bye")
-    user_sim.get_usage = MagicMock(return_value=TokenUsage())
-
-    judgment = MagicMock()
-    judgment.should_terminate = True
-    judgment.goal_achieved = True
-    judgment.goal_completion_score = 1.0
-    judgment.rules_broken = []
-    judgment.reason = "done"
-    judgment.response_quality = 0.9
-    judgment.hallucination_risk = 0.1
-    judgment.tone_appropriateness = 0.9
-    judgment.factual_accuracy = 0.9
-
-    judge = MagicMock()
-    judge.evaluate = AsyncMock(return_value=judgment)
-    judge.get_usage = MagicMock(return_value=TokenUsage())
 
     with patch(
         "evaluatorq.simulation.upload.upload_simulation_results", new=upload_mock
@@ -535,10 +501,10 @@ async def test_simulate_skips_upload_when_flag_false(
         await simulate(
             evaluation_name="t",
             target_callback=target_cb,
-            datapoints=[dp],
+            datapoints=[_make_datapoint()],
             max_turns=1,
-            user_simulator=user_sim,
-            judge=judge,
+            user_simulator=_user_sim(),
+            judge=_judge(),
             upload_results=False,
         )
 
@@ -555,28 +521,14 @@ async def test_generate_and_simulate_calls_upload(
     from unittest.mock import MagicMock
 
     from evaluatorq.simulation import generate_and_simulate
-    from evaluatorq.simulation.types import (
-        Message,
-        CommunicationStyle,
-        Persona,
-        Scenario,
-    )
+    from evaluatorq.simulation.types import Datapoint, Persona, Scenario
 
     upload_mock = AsyncMock()
+    persona = _make_persona()
+    scenario = _make_scenario()
 
     async def target_cb(messages: list[Message]) -> str:
         return "ok"
-
-    persona = Persona(
-        name="P",
-        patience=0.5,
-        assertiveness=0.5,
-        politeness=0.5,
-        technical_level=0.5,
-        communication_style=CommunicationStyle.casual,
-        background="bg",
-    )
-    scenario = Scenario(name="S", goal="g")
 
     # Stub the persona/scenario generators and the runner so we don't touch
     # the network.
@@ -587,10 +539,8 @@ async def test_generate_and_simulate_calls_upload(
 
     canned_result = _make_result()
 
-    from evaluatorq.simulation.types import Datapoint as SimDatapoint
-
-    async def fake_gen_dp(_gen: object, p: Persona, s: Scenario) -> SimDatapoint:
-        return SimDatapoint(
+    async def fake_gen_dp(_gen: object, p: Persona, s: Scenario) -> Datapoint:
+        return Datapoint(
             id="dp",
             persona=p,
             scenario=s,
@@ -635,57 +585,10 @@ async def test_simulate_raises_upload_when_no_api_key(
 ):
     monkeypatch.delenv("ORQ_API_KEY", raising=False)
 
-    from unittest.mock import MagicMock
-
     from evaluatorq.simulation import simulate
-    from evaluatorq.simulation.types import (
-        Message,
-        CommunicationStyle,
-        Datapoint,
-        Persona,
-        Scenario,
-    )
 
     async def target_cb(messages: list[Message]) -> str:
         return "ok"
-
-    persona = Persona(
-        name="P",
-        patience=0.5,
-        assertiveness=0.5,
-        politeness=0.5,
-        technical_level=0.5,
-        communication_style=CommunicationStyle.casual,
-        background="bg",
-    )
-    scenario = Scenario(name="S", goal="g")
-    dp = Datapoint(
-        id="dp",
-        persona=persona,
-        scenario=scenario,
-        user_system_prompt="sys",
-        first_message="hi",
-    )
-
-    user_sim = MagicMock()
-    user_sim.generate_first_message = AsyncMock(return_value="hi")
-    user_sim.respond_async = AsyncMock(return_value="bye")
-    user_sim.get_usage = MagicMock(return_value=TokenUsage())
-
-    judgment = MagicMock()
-    judgment.should_terminate = True
-    judgment.goal_achieved = True
-    judgment.goal_completion_score = 1.0
-    judgment.rules_broken = []
-    judgment.reason = "done"
-    judgment.response_quality = 0.9
-    judgment.hallucination_risk = 0.1
-    judgment.tone_appropriateness = 0.9
-    judgment.factual_accuracy = 0.9
-
-    judge = MagicMock()
-    judge.evaluate = AsyncMock(return_value=judgment)
-    judge.get_usage = MagicMock(return_value=TokenUsage())
 
     # SimulationRunner needs SOME credential to build its shared client;
     # pass OPENAI_API_KEY instead so the runner is happy but ORQ_API_KEY
@@ -696,9 +599,9 @@ async def test_simulate_raises_upload_when_no_api_key(
         await simulate(
             evaluation_name="t",
             target_callback=target_cb,
-            datapoints=[dp],
+            datapoints=[_make_datapoint()],
             max_turns=1,
-            user_simulator=user_sim,
-            judge=judge,
+            user_simulator=_user_sim(),
+            judge=_judge(),
             upload_results=True,
         )
