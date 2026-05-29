@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, cast
 from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, job
-from evaluatorq.contracts import AgentTarget
+from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.adaptive.orchestrator import ProgressDisplay, _get_active_progress
 from evaluatorq.redteam.adaptive.pipeline import (
     cleanup_memory_entities,
@@ -719,7 +719,7 @@ def _create_static_job_for_agent_target(at: Any, label: str) -> Any:
         prompt = _extract_static_prompt(data)
         target = at.new()
         try:
-            raw_response = await target.send_prompt(prompt)
+            raw_response = await target.respond([Message(role="user", content=prompt)])
             result = _coerce_to_agent_response(raw_response)
 
             _active_progress = _get_active_progress()
@@ -1425,7 +1425,7 @@ async def _run_dynamic_or_hybrid(
                         _backend: Any = at_backend,
                         _label: str = at_label,
                     ) -> Any:
-                        """Send a static datapoint to the AgentTarget via send_prompt."""
+                        """Send a static datapoint to the AgentTarget via respond."""
                         messages = _build_messages(data)
                         prompt = '\n'.join(
                             content for m in messages
@@ -1438,7 +1438,7 @@ async def _run_dynamic_or_hybrid(
                                 f'produced an empty prompt ({len(messages)} messages, none with user content).'
                             )
                         target_instance = _backend.create_target(_label)
-                        raw = await target_instance.send_prompt(prompt)
+                        raw = await target_instance.respond([Message(role="user", content=prompt)])
                         result = _coerce_to_agent_response(raw)
                         active_progress = _get_active_progress()
                         if active_progress is not None:

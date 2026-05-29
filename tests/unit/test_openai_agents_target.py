@@ -9,7 +9,11 @@ import pytest
 
 pytest.importorskip("agents")
 
+from evaluatorq.contracts import FunctionCall, Message, StrategyToolCall, ToolCallOutputItem  # noqa: E402
 from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget  # noqa: E402
+from evaluatorq.integrations.openai_agents_integration.target import (  # noqa: E402
+    _message_to_responses_input_items,
+)
 from evaluatorq.redteam.contracts import AgentResponse, TokenUsage  # noqa: E402
 
 
@@ -57,61 +61,171 @@ def _mock_runner_with_usage(
 
 class TestOpenAIAgentTarget:
     @pytest.mark.asyncio
-    async def test_send_prompt_returns_response(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_respond_returns_response(self, monkeypatch: pytest.MonkeyPatch) -> None:
         runner, _ = _mock_runner_and_result("hello back")
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        response = await target.send_prompt("hello")
+        response = await target.respond([Message(role="user", content="hello")])
         assert isinstance(response, AgentResponse)
         assert response.text == "hello back"
 
     @pytest.mark.asyncio
-    async def test_first_prompt_sends_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_respond_passes_messages_as_input(self, monkeypatch: pytest.MonkeyPatch) -> None:
         runner, _ = _mock_runner_and_result()
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        await target.send_prompt("first")
+        await target.respond([Message(role="user", content="first")])
 
         call_args = runner.run.call_args
-        assert call_args[0][1] == "first"
+        input_data = call_args[0][1]
+        assert isinstance(input_data, list)
+        assert input_data[0] == {"role": "user", "content": "first"}
 
     @pytest.mark.asyncio
-    async def test_second_prompt_sends_history(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_respond_maps_tool_calls_to_responses_input_items(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A replayed transcript with tool calls becomes Responses-API input items
+        (function_call / function_call_output), not flattened chat messages."""
         runner, _ = _mock_runner_and_result()
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        await target.send_prompt("first")
-        await target.send_prompt("second")
+        await target.respond([
+            Message(role="user", content="q1"),
+            Message(
+                role="assistant",
+                content=None,
+                tool_calls=[StrategyToolCall(id="c1", function=FunctionCall(name="lookup", arguments='{"q":"x"}'))],
+            ),
+            Message(role="tool", tool_call_id="c1", name="lookup", content="found"),
+            Message(role="user", content="q2"),
+        ])
 
         input_data = runner.run.call_args[0][1]
-        assert isinstance(input_data, list)
-        assert input_data[-1] == {"role": "user", "content": "second"}
+        fc = next(i for i in input_data if isinstance(i, dict) and i.get("type") == "function_call")
+        assert fc["call_id"] == "c1"
+        assert fc["name"] == "lookup"
+        assert fc["arguments"] == '{"q":"x"}'
+        fco = next(i for i in input_data if isinstance(i, dict) and i.get("type") == "function_call_output")
+        assert fco["call_id"] == "c1"
+        assert fco["output"] == "found"
+
+    def test_responses_input_items_preserve_fc_item_id(self) -> None:
+        """When StrategyToolCall.item_id is set, the rendered function_call item
+        echoes both ``id`` (fc_*) and ``call_id`` (call_*) so the Responses API can
+        match the call to its prior turn instead of treating it as a fresh call."""
+        items = _message_to_responses_input_items(
+            Message(
+                role="assistant",
+                content=None,
+                tool_calls=[StrategyToolCall(
+                    id="call_xyz",
+                    item_id="fc_abc",
+                    function=FunctionCall(name="lookup", arguments='{"q":"x"}'),
+                )],
+            )
+        )
+        fc = next(i for i in items if i["type"] == "function_call")
+        assert fc["id"] == "fc_abc"
+        assert fc["call_id"] == "call_xyz"
+
+    def test_responses_input_items_omit_id_when_item_id_missing(self) -> None:
+        """A tool call without item_id (e.g. originating from chat-completions) must
+        not emit a stub ``id`` field; the Responses API rejects empty ids."""
+        items = _message_to_responses_input_items(
+            Message(
+                role="assistant",
+                content=None,
+                tool_calls=[StrategyToolCall(
+                    id="call_only",
+                    function=FunctionCall(name="lookup", arguments="{}"),
+                )],
+            )
+        )
+        fc = next(i for i in items if i["type"] == "function_call")
+        assert "id" not in fc
+        assert fc["call_id"] == "call_only"
+
+    def test_responses_input_items_round_trip_through_build_response(self) -> None:
+        """Inverse mapper output is consumable by _build_response, and the
+        function_call/function_call_output pair shares one call_id (the SDK
+        requirement for pairing a call with its result on replay)."""
+        items = _message_to_responses_input_items(
+            Message(
+                role="assistant",
+                content=None,
+                tool_calls=[StrategyToolCall(id="call_1", function=FunctionCall(name="lookup", arguments='{"q":"x"}'))],
+            )
+        )
+        items += _message_to_responses_input_items(Message(role="tool", tool_call_id="call_1", content="found"))
+
+        fc = next(i for i in items if i["type"] == "function_call")
+        fco = next(i for i in items if i["type"] == "function_call_output")
+        assert fc["call_id"] == fco["call_id"] == "call_1"
+
+        target = OpenAIAgentTarget(MagicMock())
+        result = MagicMock()
+        result.final_output = "done"
+        resp = target._build_response(items, result)
+        tool_calls = [o for o in resp.output if isinstance(o, ToolCallOutputItem)]
+        assert len(tool_calls) == 1
+        assert tool_calls[0].name == "lookup"
+        assert tool_calls[0].arguments == '{"q":"x"}'
 
     @pytest.mark.asyncio
-    async def test_new_returns_fresh_instance(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        runner, _ = _mock_runner_and_result()
+    async def test_no_warning_when_input_echoed(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """When to_input_list() echoes our input at the front, the slice is sound — no warning."""
+        result = MagicMock()
+        result.final_output = "resp"
+        result.to_input_list.return_value = [
+            {"role": "user", "content": "hi"},  # echoes the rendered input 1:1
+            {"role": "assistant", "content": "resp"},
+        ]
+        del result.context_wrapper
+        runner = MagicMock()
+        runner.run = AsyncMock(return_value=result)
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        await target.send_prompt("first")
-        fresh = target.new()
+        with caplog.at_level("WARNING"):
+            resp = await target.respond([Message(role="user", content="hi")])
+        assert resp.text == "resp"
+        assert "no longer echoes" not in caplog.text
 
-        assert fresh is not target
-        assert fresh._history == []
+    @pytest.mark.asyncio
+    async def test_warns_when_input_not_echoed(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """If the SDK stops echoing input 1:1 at the front, the slice may misalign —
+        respond() must warn loudly (not corrupt output silently) and still return a response."""
+        result = MagicMock()
+        result.final_output = "resp"
+        result.to_input_list.return_value = [
+            {"role": "system", "content": "normalized"},  # front differs from sent input
+            {"role": "assistant", "content": "resp"},
+        ]
+        del result.context_wrapper
+        runner = MagicMock()
+        runner.run = AsyncMock(return_value=result)
+        monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
-    def test_clone_returns_independent_instance(self) -> None:
+        target = OpenAIAgentTarget(MagicMock())
+        with caplog.at_level("WARNING"):
+            resp = await target.respond([Message(role="user", content="hi")])
+        assert isinstance(resp, AgentResponse)
+        assert "no longer echoes" in caplog.text
+
+    def test_new_returns_independent_instance(self) -> None:
         agent = MagicMock()
         target = OpenAIAgentTarget(agent, run_kwargs={"max_turns": 5})
-        target._history = [{"role": "user", "content": "old"}]
-        cloned = target.new()
-        assert cloned is not target
-        assert cloned._history == []
-        assert cloned._agent is agent
-        assert cloned._run_kwargs is not target._run_kwargs
-        assert cloned._run_kwargs == {"max_turns": 5}
+        fresh = target.new()
+        assert fresh is not target
+        assert fresh._agent is agent
+        assert fresh._run_kwargs is not target._run_kwargs
+        assert fresh._run_kwargs == {"max_turns": 5}
 
     @pytest.mark.asyncio
     async def test_raises_when_final_output_is_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -124,7 +238,7 @@ class TestOpenAIAgentTarget:
 
         target = OpenAIAgentTarget(MagicMock())
         with pytest.raises(ValueError, match="final_output=None"):
-            await target.send_prompt("hi")
+            await target.respond([Message(role="user", content="hi")])
 
     @pytest.mark.asyncio
     async def test_runner_error_is_wrapped_with_context(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -134,7 +248,7 @@ class TestOpenAIAgentTarget:
 
         target = OpenAIAgentTarget(MagicMock())
         with pytest.raises(RuntimeError, match="OpenAIAgentTarget: Runner.run\\(\\) raised"):
-            await target.send_prompt("hi")
+            await target.respond([Message(role="user", content="hi")])
 
     @pytest.mark.asyncio
     async def test_runner_timeout_is_not_wrapped(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -144,7 +258,7 @@ class TestOpenAIAgentTarget:
 
         target = OpenAIAgentTarget(MagicMock())
         with pytest.raises(asyncio.TimeoutError):
-            await target.send_prompt("hi")
+            await target.respond([Message(role="user", content="hi")])
 
     @pytest.mark.asyncio
     async def test_extracts_responses_format_function_calls(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -164,7 +278,7 @@ class TestOpenAIAgentTarget:
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        response = await target.send_prompt("find docs")
+        response = await target.respond([Message(role="user", content="find docs")])
 
         assert len(response.tool_calls) == 1
         assert response.tool_calls[0].name == "search_docs"
@@ -183,7 +297,7 @@ class TestOpenAIAgentTarget:
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        response = await target.send_prompt("run")
+        response = await target.respond([Message(role="user", content="run")])
 
         assert response.tool_calls[0].arguments_dict == {"raw": "not-json"}
 
@@ -227,41 +341,115 @@ class TestOpenAIAgentTarget:
         assert ctx.model == "gpt-4o"
         assert ctx.tools == []
 
+
+class TestToolCallOutputRoundTrip:
+    """``function_call_output`` items must be merged into the matching
+    ``ToolCallOutputItem`` so transcript replay preserves the tool result.
+    Without this, a subsequent turn would send the Responses API a
+    ``function_call`` with no paired ``function_call_output`` and get rejected.
+    """
+
     @pytest.mark.asyncio
-    async def test_history_accumulates_across_turns(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        call_count = 0
+    async def test_function_call_output_attaches_result_to_matching_call(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from evaluatorq.redteam.contracts import turns_to_messages, Turn, AttackerResponse
 
-        async def fake_run(agent, input_data, **kwargs):  # noqa: ANN001, ANN003
-            nonlocal call_count
-            call_count += 1
-            if isinstance(input_data, str):
-                history = [
-                    {"role": "user", "content": input_data},
-                    {"role": "assistant", "content": f"Reply {call_count}"},
-                ]
-            else:
-                history = [*input_data, {"role": "assistant", "content": f"Reply {call_count}"}]
-            result = MagicMock()
-            result.final_output = f"Reply {call_count}"
-            result.to_input_list.return_value = history
-            return result
-
+        result = MagicMock()
+        result.final_output = "done"
+        result.to_input_list.return_value = [
+            {"role": "user", "content": "lookup x"},
+            {
+                "type": "function_call",
+                "id": "fc_abc",
+                "call_id": "call_xyz",
+                "name": "lookup",
+                "arguments": '{"q":"x"}',
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_xyz",
+                "output": "found",
+            },
+            {"role": "assistant", "content": "done"},
+        ]
+        del result.context_wrapper
         runner = MagicMock()
-        runner.run = fake_run
+        runner.run = AsyncMock(return_value=result)
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        r1 = await target.send_prompt("Hello")
-        assert r1.text == "Reply 1"
-        r2 = await target.send_prompt("Follow up")
-        assert r2.text == "Reply 2"
-        assert len(target._history) > 2
+        response = await target.respond([Message(role="user", content="lookup x")])
+
+        tool_calls = [it for it in response.output if isinstance(it, ToolCallOutputItem)]
+        assert len(tool_calls) == 1
+        assert tool_calls[0].call_id == "call_xyz"
+        assert tool_calls[0].id == "fc_abc"
+        assert tool_calls[0].result == "found"
+
+        # Round-trip through transcript replay: the orphan-function_call bug
+        # would show up here as a missing ``tool`` row, which then renders to a
+        # Responses-API function_call without function_call_output.
+        turn = Turn(attacker=AttackerResponse(generated_prompt="lookup x"), target=response)
+        msgs = turns_to_messages([turn])
+        roles = [m.role for m in msgs]
+        assert "tool" in roles, "tool result row missing — function_call_output was dropped"
+        tool_msg = next(m for m in msgs if m.role == "tool")
+        assert tool_msg.tool_call_id == "call_xyz"
+        assert tool_msg.content == "found"
+
+        items = _message_to_responses_input_items(tool_msg)
+        assert items == [{"type": "function_call_output", "call_id": "call_xyz", "output": "found"}]
+
+    @pytest.mark.asyncio
+    async def test_function_call_output_with_dict_payload_serialized(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result = MagicMock()
+        result.final_output = "ok"
+        result.to_input_list.return_value = [
+            {"role": "user", "content": "x"},
+            {"type": "function_call", "id": "fc_a", "call_id": "call_a", "name": "n", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_a", "output": {"value": 42}},
+        ]
+        del result.context_wrapper
+        runner = MagicMock()
+        runner.run = AsyncMock(return_value=result)
+        monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
+
+        target = OpenAIAgentTarget(MagicMock())
+        response = await target.respond([Message(role="user", content="x")])
+
+        tool_call = next(it for it in response.output if isinstance(it, ToolCallOutputItem))
+        assert tool_call.result == '{"value": 42}'
+
+    @pytest.mark.asyncio
+    async def test_function_call_output_with_no_matching_call_is_ignored(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Defensive: a function_call_output with an unknown call_id must not raise."""
+        result = MagicMock()
+        result.final_output = "ok"
+        result.to_input_list.return_value = [
+            {"role": "user", "content": "x"},
+            {"type": "function_call_output", "call_id": "call_unknown", "output": "stray"},
+        ]
+        del result.context_wrapper
+        runner = MagicMock()
+        runner.run = AsyncMock(return_value=result)
+        monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
+
+        target = OpenAIAgentTarget(MagicMock())
+        response = await target.respond([Message(role="user", content="x")])
+
+        # No tool call to attach to; the orphan output is dropped silently.
+        assert not [it for it in response.output if isinstance(it, ToolCallOutputItem)]
 
 
 class TestOpenAIAgentTargetUsage:
     @pytest.mark.asyncio
     async def test_usage_populated_from_context_wrapper(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """When result.context_wrapper.usage has token counts, SendResult.usage is populated."""
+        """When result.context_wrapper.usage has token counts, AgentResponse.usage is populated."""
         runner, _ = _mock_runner_with_usage(
             output="hello back",
             input_tokens=10,
@@ -271,7 +459,7 @@ class TestOpenAIAgentTargetUsage:
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        result = await target.send_prompt("hello")
+        result = await target.respond([Message(role="user", content="hello")])
 
         assert result.text == "hello back"
         assert isinstance(result.usage, TokenUsage)
@@ -282,12 +470,12 @@ class TestOpenAIAgentTargetUsage:
 
     @pytest.mark.asyncio
     async def test_usage_none_when_context_wrapper_absent(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """When result has no context_wrapper, SendResult.usage is None (graceful fallback)."""
+        """When result has no context_wrapper, AgentResponse.usage is None (graceful fallback)."""
         runner, _ = _mock_runner_and_result("reply")
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        result = await target.send_prompt("hi")
+        result = await target.respond([Message(role="user", content="hi")])
 
         assert result.text == "reply"
         assert result.usage is None
@@ -296,7 +484,7 @@ class TestOpenAIAgentTargetUsage:
     async def test_usage_none_when_usage_attr_absent_on_context_wrapper(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When context_wrapper exists but has no 'usage', SendResult.usage is None."""
+        """When context_wrapper exists but has no 'usage', AgentResponse.usage is None."""
         ctx = MagicMock(spec=[])  # spec=[] means no attributes by default
 
         sdk_result = MagicMock()
@@ -309,7 +497,7 @@ class TestOpenAIAgentTargetUsage:
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        result = await target.send_prompt("hi")
+        result = await target.respond([Message(role="user", content="hi")])
 
         assert result.usage is None
 
@@ -327,7 +515,7 @@ class TestOpenAIAgentTargetUsage:
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        result = await target.send_prompt("hi")
+        result = await target.respond([Message(role="user", content="hi")])
 
         assert result.usage is not None
         assert result.usage.total_tokens == 11  # 8 + 3

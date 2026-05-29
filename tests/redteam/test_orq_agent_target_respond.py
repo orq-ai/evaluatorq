@@ -89,25 +89,6 @@ async def test_respond_forwards_only_last_user_message():
     }
 
 
-@pytest.mark.asyncio
-async def test_send_prompt_shim_delegates_to_respond():
-    """The inherited send_prompt shim wraps the prompt as a single user message."""
-    target = ORQAgentTarget(agent_key="a", orq_client=MagicMock())
-
-    captured: dict[str, Any] = {}
-
-    async def fake_to_thread(fn: Any, **kwargs: Any) -> Any:
-        captured.update(kwargs)
-        return _make_orq_response()
-
-    with (
-        patch("asyncio.to_thread", side_effect=fake_to_thread),
-        patch("evaluatorq.redteam.tracing.get_tracer", return_value=None),
-    ):
-        result = await target.send_prompt("hello there")
-
-    assert isinstance(result, AgentResponse)
-    assert captured["message"] == {
-        "role": "user",
-        "parts": [{"kind": "text", "text": "hello there"}],
-    }
+def test_send_prompt_shim_removed():
+    """send_prompt back-compat shim was removed in RES-877 Task 9; respond is the sole method."""
+    assert not hasattr(ORQAgentTarget, "send_prompt")

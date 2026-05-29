@@ -19,7 +19,7 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TextColumn
 from typing_extensions import Self
 
 from evaluatorq.common.sanitize import xml_escape
-from evaluatorq.contracts import AgentResponse, AgentTarget, TextOutputItem
+from evaluatorq.contracts import AgentResponse, AgentResponseError, AgentTarget, Message, TextOutputItem
 from evaluatorq.redteam.backends.base import Backend, _coerce_to_agent_response
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
@@ -31,6 +31,8 @@ from evaluatorq.redteam.contracts import (
     OrchestratorResult,
     TokenUsage,
     Turn,
+    classify_error_type,
+    turns_to_messages,
 )
 from evaluatorq.redteam.tracing import (
     record_llm_response,
@@ -642,8 +644,14 @@ class MultiTurnOrchestrator:
                             })
                             break
 
-                    # Send attack to target agent
+                    # Send attack to target agent. The transcript is derived from
+                    # the recorded turns BEFORE the try: it is a pure local op, so a
+                    # bug here must not be misattributed to the target by the except.
                     target_timeout_s = self._cfg.target_agent_timeout_ms / 1000.0
+                    transcript = turns_to_messages(turns_record, skip_errors=True)
+                    # Accumulated only on the success path, AFTER the try below, so a
+                    # bug in the token arithmetic is never misattributed to the target.
+                    turn_usage: TokenUsage | None = None
                     try:
                         async with with_redteam_span(
                             "orq.redteam.target_call",
@@ -655,7 +663,7 @@ class MultiTurnOrchestrator:
                             },
                         ) as tgt_span:
                             raw_response = await asyncio.wait_for(
-                                target.send_prompt(attack_prompt),
+                                target.respond([*transcript, Message(role="user", content=attack_prompt)]),
                                 timeout=target_timeout_s,
                             )
                             _tgt_result = _coerce_to_agent_response(raw_response)
@@ -666,16 +674,14 @@ class MultiTurnOrchestrator:
                                 "output": _resp_text,
                                 "orq.redteam.output": _resp_text,
                             })
-                            target_usage: TokenUsage | None = _tgt_result.usage
-                            if target_usage is not None:
-                                target_prompt_tokens += int(target_usage.prompt_tokens or 0)
-                                target_completion_tokens += int(target_usage.completion_tokens or 0)
-                                target_total_tokens += int(target_usage.total_tokens or 0)
-                                target_calls += int(target_usage.calls or 0) or 1
+                            turn_usage = _tgt_result.usage
                     except asyncio.TimeoutError:
                         consecutive_agent_errors += 1
                         agent_response = f'[ERROR: Target agent timed out after {target_timeout_s:.0f}s]'
-                        _tgt_result = AgentResponse(output=[TextOutputItem(text=agent_response, annotations=[])])
+                        _tgt_result = AgentResponse(
+                            output=[TextOutputItem(text=agent_response, annotations=[])],
+                            error=AgentResponseError(message=agent_response, error_type="timeout", code="target.timeout"),
+                        )
                         logger.warning(f'Target agent timed out on turn {turn + 1}/{max_turns}')
 
                         if consecutive_agent_errors >= 2:
@@ -692,7 +698,7 @@ class MultiTurnOrchestrator:
                             error_turn = turn + 1
                             turns_record.append(Turn(
                                 attacker=current_attacker,
-                                target=AgentResponse(output=[TextOutputItem(text=agent_response, annotations=[])]),
+                                target=_tgt_result,
                             ))
                             if progress is not None and task_id is not None:
                                 await progress.update_attack(task_id, completed=turn + 1)
@@ -706,8 +712,16 @@ class MultiTurnOrchestrator:
                         consecutive_agent_errors += 1
                         mapped_code, error_msg = self._backend.map_error(e) if self._backend is not None else _default_map_error(e)
                         agent_response = f'[ERROR: {error_msg}]'
-                        _tgt_result = AgentResponse(output=[TextOutputItem(text=agent_response, annotations=[])])
-                        logger.warning(f'Target agent error on turn {turn + 1}/{max_turns}: {error_msg}')
+                        classified = classify_error_type(error_msg)
+                        _tgt_result = AgentResponse(
+                            output=[TextOutputItem(text=agent_response, annotations=[])],
+                            error=AgentResponseError(
+                                message=agent_response,
+                                error_type=classified if classified and classified != 'unknown' else 'target_error',
+                                code=mapped_code,
+                            ),
+                        )
+                        logger.warning(f'Target agent error on turn {turn + 1}/{max_turns}: {error_msg}', exc_info=True)
 
                         if consecutive_agent_errors >= 2:
                             # Persistent failure — abort to avoid wasting turns
@@ -726,7 +740,7 @@ class MultiTurnOrchestrator:
                             error_turn = turn + 1
                             turns_record.append(Turn(
                                 attacker=current_attacker,
-                                target=AgentResponse(output=[TextOutputItem(text=agent_response, annotations=[])]),
+                                target=_tgt_result,
                             ))
                             if progress is not None and task_id is not None:
                                 await progress.update_attack(task_id, completed=turn + 1)
@@ -736,6 +750,15 @@ class MultiTurnOrchestrator:
                                 "orq.redteam.finish_reason": "target_error",
                             })
                             break
+
+                    # Accumulate token usage outside the target-blame try (above), so
+                    # arithmetic bugs aren't mapped to target_error. Only the success
+                    # path sets turn_usage; recoverable error turns leave it None.
+                    if turn_usage is not None:
+                        target_prompt_tokens += int(turn_usage.prompt_tokens or 0)
+                        target_completion_tokens += int(turn_usage.completion_tokens or 0)
+                        target_total_tokens += int(turn_usage.total_tokens or 0)
+                        target_calls += int(turn_usage.calls or 0) or 1
 
                     # Record the completed turn (target succeeded)
                     turns_record.append(Turn(attacker=current_attacker, target=_tgt_result))

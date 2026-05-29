@@ -1,8 +1,7 @@
 """Tests for OrqResponsesTarget conformance with the AgentTarget ABC.
 
-After RES-808 PR3:
-- ``respond(messages)`` is the canonical entry point
-- ``send_prompt(str)`` is the inherited shim
+After RES-877 Task 9:
+- ``respond(messages)`` is the sole response method; send_prompt shim removed
 - ``OrqResponsesTarget`` is fully stateless — no ``_previous_response_id`` or
   ``get_usage`` invariants
 """
@@ -70,13 +69,6 @@ class TestRespond:
         assert isinstance(result, AgentResponse)
         assert result.text == "all good"
 
-    @pytest.mark.asyncio
-    async def test_send_prompt_delegates_to_respond(self):
-        target = _make_target()
-        result = await target.send_prompt("hi")
-        assert isinstance(result, AgentResponse)
-        assert result.text == "all good"
-
 
 class TestRespondIsStateless:
     @pytest.mark.asyncio
@@ -102,12 +94,12 @@ class TestRespondIsStateless:
         assert call2_kwargs["input"] == [{"role": "user", "content": "turn2"}]
 
     @pytest.mark.asyncio
-    async def test_send_prompt_routes_single_user_message_through_respond(self):
+    async def test_respond_routes_single_user_message(self):
         client = _make_client()
         client.responses.create = AsyncMock(return_value=_make_response())
         target = OrqResponsesTarget(LLMCallConfig(model="gpt-4o"), client=client)
 
-        await target.send_prompt("attack prompt")
+        await target.respond([Message(role="user", content="attack prompt")])
 
         call_kwargs = client.responses.create.await_args_list[-1].kwargs
         assert call_kwargs["input"] == [{"role": "user", "content": "attack prompt"}]

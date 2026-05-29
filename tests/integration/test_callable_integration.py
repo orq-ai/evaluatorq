@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import pytest
 
+from evaluatorq.contracts import Message
 from evaluatorq.integrations.callable_integration import CallableTarget
 
 
@@ -25,15 +26,15 @@ class TestCallableIntegration:
 
         target = CallableTarget(stateful_agent, reset_fn=reset)
 
-        r1 = await target.send_prompt("Hello")
+        r1 = await target.respond([Message(role="user", content="Hello")])
         assert "1" in r1.text
 
-        r2 = await target.send_prompt("World")
+        r2 = await target.respond([Message(role="user", content="World")])
         assert "2" in r2.text
 
         target.new()
 
-        r3 = await target.send_prompt("After reset")
+        r3 = await target.respond([Message(role="user", content="After reset")])
         assert "1" in r3.text  # Back to 1 after reset
 
     @pytest.mark.asyncio
@@ -50,8 +51,8 @@ class TestCallableIntegration:
         cloned = target.new()
 
         from evaluatorq.redteam.contracts import SendResult
-        r1 = await target.send_prompt("a")
-        r2 = await cloned.send_prompt("b")
+        r1 = await target.respond([Message(role="user", content="a")])
+        r2 = await cloned.respond([Message(role="user", content="b")])
 
         # Both share the same function, so call_count increments for both
         assert isinstance(r1.text, str)

@@ -2,9 +2,10 @@
 and a redteam AgentTarget without state corruption.
 
 Mock-based (no network) — runs in the default unit suite. Verifies the
-stateless contract: the sim path (respond) and the redteam path (send_prompt
-shim) do not leak each other's payloads, and neither threads
-previous_response_id.
+stateless contract: the sim path (respond) and the redteam path (also respond)
+do not leak each other's payloads, and neither threads previous_response_id.
+
+After RES-877 Task 9: the send_prompt shim is gone; both paths use respond().
 """
 
 from __future__ import annotations
@@ -45,8 +46,8 @@ async def test_one_instance_used_for_sim_then_redteam_path():
 
     # Sim path: caller hands the runner an AgentTarget; runner calls respond().
     sim_result = await target.respond([Message(role="user", content="sim-q")])
-    # Redteam path: orchestrator calls the single-prompt shim.
-    redteam_result = await target.send_prompt("redteam-q")
+    # Redteam path: orchestrator also calls respond() — shim removed in RES-877 Task 9.
+    redteam_result = await target.respond([Message(role="user", content="redteam-q")])
 
     assert isinstance(sim_result, AgentResponse)
     assert isinstance(redteam_result, AgentResponse)
@@ -56,7 +57,6 @@ async def test_one_instance_used_for_sim_then_redteam_path():
     call_args = client.responses.create.await_args_list
     # No state leakage: each call's input is exactly what was passed.
     assert call_args[0].kwargs["input"] == [{"role": "user", "content": "sim-q"}]
-    # send_prompt routes through the respond shim → [Message(user, "redteam-q")].
     assert call_args[1].kwargs["input"] == [{"role": "user", "content": "redteam-q"}]
     # Stateless contract: no previous_response_id threading anywhere.
     assert "previous_response_id" not in call_args[0].kwargs

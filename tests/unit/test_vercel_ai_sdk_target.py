@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
+from evaluatorq.contracts import FunctionCall, Message, StrategyToolCall
 from evaluatorq.integrations.vercel_ai_sdk_integration import VercelAISdkTarget
 from evaluatorq.integrations.vercel_ai_sdk_integration.target import (
     _parse_data_stream,
@@ -176,7 +177,7 @@ def _mock_response(text: str, content_type: str = "text/plain") -> httpx.Respons
 
 class TestVercelAISdkTarget:
     @pytest.mark.asyncio
-    async def test_send_prompt_returns_response(self) -> None:
+    async def test_respond_returns_response(self) -> None:
         target = VercelAISdkTarget("http://test/api/chat")
         mock_response = _mock_response('0:"Hello"\n')
 
@@ -187,7 +188,7 @@ class TestVercelAISdkTarget:
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
-            result = await target.send_prompt("hello")
+            result = await target.respond([Message(role="user", content="hello")])
 
         assert result.text == "Hello"
         assert result.tool_calls == []
@@ -204,38 +205,123 @@ class TestVercelAISdkTarget:
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
-            await target.send_prompt("hello")
+            await target.respond([Message(role="user", content="hello")])
 
         call_kwargs = mock_client.post.call_args
         body = call_kwargs.kwargs["json"]
         assert body["messages"] == [{"role": "user", "content": "hello"}]
 
     @pytest.mark.asyncio
-    async def test_multi_turn_sends_history(self) -> None:
+    async def test_sends_tool_calls_as_ai_sdk_parts(self) -> None:
+        """A replayed transcript with tool calls becomes AI SDK v5 CoreMessage parts."""
         target = VercelAISdkTarget("http://test/api/chat")
-
-        responses = [
-            _mock_response('0:"first response"\n'),
-            _mock_response('0:"second response"\n'),
-        ]
+        mock_response = _mock_response('0:"ok"\n')
 
         with patch("evaluatorq.integrations.vercel_ai_sdk_integration.target.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
-            mock_client.post = AsyncMock(side_effect=responses)
+            mock_client.post = AsyncMock(return_value=mock_response)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
-            await target.send_prompt("first")
-            await target.send_prompt("second")
+            await target.respond([
+                Message(role="user", content="q1"),
+                Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[StrategyToolCall(id="c1", function=FunctionCall(name="lookup", arguments='{"q": "x"}'))],
+                ),
+                Message(role="tool", tool_call_id="c1", name="lookup", content="r"),
+            ])
 
-        second_call = mock_client.post.call_args_list[1]
-        messages = second_call.kwargs["json"]["messages"]
-        assert messages == [
-            {"role": "user", "content": "first"},
-            {"role": "assistant", "content": "first response"},
-            {"role": "user", "content": "second"},
+        body = mock_client.post.call_args.kwargs["json"]
+        # Plain user turn unchanged
+        assert {"role": "user", "content": "q1"} in body["messages"]
+        # Assistant tool call rendered as a v5 tool-call part with parsed `input`
+        assistant = next(m for m in body["messages"] if m["role"] == "assistant")
+        assert assistant["content"] == [
+            {"type": "tool-call", "toolCallId": "c1", "toolName": "lookup", "input": {"q": "x"}}
         ]
+        # Tool result rendered as a v5 tool-result part with typed `output`
+        tool_row = next(m for m in body["messages"] if m["role"] == "tool")
+        assert tool_row["content"] == [
+            {
+                "type": "tool-result",
+                "toolCallId": "c1",
+                "toolName": "lookup",
+                "output": {"type": "text", "value": "r"},
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_sends_tool_calls_as_v4_parts(self) -> None:
+        """message_format='v4' renders tool turns with legacy `args` / bare `result`."""
+        target = VercelAISdkTarget("http://test/api/chat", message_format="v4")
+        mock_response = _mock_response('0:"ok"\n')
+
+        with patch("evaluatorq.integrations.vercel_ai_sdk_integration.target.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            await target.respond([
+                Message(role="user", content="q1"),
+                Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[StrategyToolCall(id="c1", function=FunctionCall(name="lookup", arguments='{"q": "x"}'))],
+                ),
+                Message(role="tool", tool_call_id="c1", name="lookup", content="r"),
+            ])
+
+        body = mock_client.post.call_args.kwargs["json"]
+        assert {"role": "user", "content": "q1"} in body["messages"]
+        # v4 tool-call uses `args`, not `input`
+        assistant = next(m for m in body["messages"] if m["role"] == "assistant")
+        assert assistant["content"] == [
+            {"type": "tool-call", "toolCallId": "c1", "toolName": "lookup", "args": {"q": "x"}}
+        ]
+        # v4 tool-result uses a bare `result`, not the typed `output` wrapper
+        tool_row = next(m for m in body["messages"] if m["role"] == "tool")
+        assert tool_row["content"] == [
+            {"type": "tool-result", "toolCallId": "c1", "toolName": "lookup", "result": "r"}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_sends_tool_call_with_malformed_arguments_falls_back_to_raw_string(self) -> None:
+        """Non-JSON tool arguments must not crash the renderer — the raw string is forwarded
+        as `input` (v5) so the wire format still validates structurally and the malformed
+        payload is observable end-to-end instead of swallowed mid-replay."""
+        target = VercelAISdkTarget("http://test/api/chat")  # default v5
+        mock_response = _mock_response('0:"ok"\n')
+
+        with patch("evaluatorq.integrations.vercel_ai_sdk_integration.target.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            await target.respond([
+                Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[StrategyToolCall(id="c1", function=FunctionCall(name="lookup", arguments="not json"))],
+                ),
+            ])
+
+        body = mock_client.post.call_args.kwargs["json"]
+        assistant = next(m for m in body["messages"] if m["role"] == "assistant")
+        assert assistant["content"] == [
+            {"type": "tool-call", "toolCallId": "c1", "toolName": "lookup", "input": "not json"}
+        ]
+
+    def test_new_preserves_message_format(self) -> None:
+        """new() forwards the configured tool wire format to the fresh instance."""
+        target = VercelAISdkTarget("http://test/api/chat", message_format="v4")
+        assert target.new()._message_format == "v4"
 
     @pytest.mark.asyncio
     async def test_extra_body_merged(self) -> None:
@@ -249,20 +335,10 @@ class TestVercelAISdkTarget:
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
-            await target.send_prompt("hello")
+            await target.respond([Message(role="user", content="hello")])
 
         body = mock_client.post.call_args.kwargs["json"]
         assert body["model"] == "gpt-4o"
-
-    def test_reset_clears_history(self) -> None:
-        target = VercelAISdkTarget("http://test/api/chat")
-        target._history = [
-            {"role": "user", "content": "old"},
-            {"role": "assistant", "content": "old reply"},
-        ]
-        fresh = target.new()
-        assert fresh._history == []
-        assert target._history != []  # original untouched
 
     def test_clone_returns_independent_instance(self) -> None:
         target = VercelAISdkTarget(
@@ -271,12 +347,10 @@ class TestVercelAISdkTarget:
             extra_body={"model": "gpt-4o"},
             timeout=60.0,
         )
-        target._history = [{"role": "user", "content": "old"}]
 
         cloned = target.new()
 
         assert cloned is not target
-        assert cloned._history == []
         assert cloned._url == "http://test/api/chat"
         assert cloned._headers == {"Authorization": "Bearer sk-test"}
         assert cloned._headers is not target._headers
@@ -300,8 +374,8 @@ class TestVercelAISdkTarget:
         assert usage is None
 
     @pytest.mark.asyncio
-    async def test_send_prompt_plumbs_stream_usage(self) -> None:
-        """Usage from the data stream 'e:' frame is returned in SendResult.usage."""
+    async def test_respond_plumbs_stream_usage(self) -> None:
+        """Usage from the data stream 'e:' frame is returned in AgentResponse.usage."""
         target = VercelAISdkTarget("http://test/api/chat")
         stream = (
             '0:"Hello"\n'
@@ -316,7 +390,7 @@ class TestVercelAISdkTarget:
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
-            result = await target.send_prompt("hi")
+            result = await target.respond([Message(role="user", content="hi")])
 
         assert result.text == "Hello"
         assert isinstance(result.usage, TokenUsage)
@@ -326,8 +400,8 @@ class TestVercelAISdkTarget:
         assert result.usage.calls == 1
 
     @pytest.mark.asyncio
-    async def test_send_prompt_plumbs_json_usage(self) -> None:
-        """Usage from an OpenAI-compat JSON response is returned in SendResult.usage."""
+    async def test_respond_plumbs_json_usage(self) -> None:
+        """Usage from an OpenAI-compat JSON response is returned in AgentResponse.usage."""
         target = VercelAISdkTarget("http://test/api/chat")
         body = '{"text": "ok", "usage": {"prompt_tokens": 8, "completion_tokens": 2, "total_tokens": 10}}'
         mock_response = _mock_response(body, content_type="application/json")
@@ -339,7 +413,7 @@ class TestVercelAISdkTarget:
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
-            result = await target.send_prompt("hello")
+            result = await target.respond([Message(role="user", content="hello")])
 
         assert result.text == "ok"
         assert isinstance(result.usage, TokenUsage)
@@ -347,8 +421,8 @@ class TestVercelAISdkTarget:
         assert result.usage.completion_tokens == 2
 
     @pytest.mark.asyncio
-    async def test_send_prompt_usage_none_without_usage_frame(self) -> None:
-        """When stream has no finish frame with usage, SendResult.usage is None."""
+    async def test_respond_usage_none_without_usage_frame(self) -> None:
+        """When stream has no finish frame with usage, AgentResponse.usage is None."""
         target = VercelAISdkTarget("http://test/api/chat")
         mock_response = _mock_response('0:"Plain response"\n')
 
@@ -359,10 +433,31 @@ class TestVercelAISdkTarget:
             mock_client.__aexit__ = AsyncMock(return_value=None)
             mock_client_cls.return_value = mock_client
 
-            result = await target.send_prompt("hi")
+            result = await target.respond([Message(role="user", content="hi")])
 
         assert result.text == "Plain response"
         assert result.usage is None
+
+    @pytest.mark.asyncio
+    async def test_respond_propagates_http_error(self) -> None:
+        """An HTTP error from the endpoint propagates out of respond()."""
+        target = VercelAISdkTarget("http://x/agent")
+
+        error_response = httpx.Response(
+            status_code=500,
+            text="Internal Server Error",
+            request=httpx.Request("POST", "http://x/agent"),
+        )
+
+        with patch("evaluatorq.integrations.vercel_ai_sdk_integration.target.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=error_response)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=None)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(httpx.HTTPStatusError):
+                await target.respond([Message(role="user", content="hi")])
 
 
 class TestVercelAISdkTargetAgentContext:

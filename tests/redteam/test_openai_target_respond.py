@@ -1,9 +1,9 @@
-"""Tests for OpenAIModelTarget.respond (stateless) — RES-808 PR3.
+"""Tests for OpenAIModelTarget.respond (stateless) — RES-877 PR6.
 
-OpenAIModelTarget keeps a stateful ``send_prompt`` (accumulates ``_history``)
-for redteam orchestrator/runner callers, AND a stateless ``respond(messages)``
-for callers that own the transcript (sim). ``respond`` must not read or write
-``_history`` and must prepend exactly one system prompt.
+OpenAIModelTarget is fully stateless: it exposes only ``respond(messages)``.
+The orchestrator owns multi-turn conversation state. Tests verify that
+``respond`` prepends exactly one system prompt and does not accumulate state
+across calls.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import pytest
 
 pytest.importorskip("openai")
 
-from evaluatorq.contracts import AgentResponse, Message
+from evaluatorq.contracts import AgentResponse, FunctionCall, Message, StrategyToolCall
 from evaluatorq.redteam.backends.openai import OpenAIModelTarget
 
 
@@ -104,34 +104,38 @@ async def test_respond_extracts_tool_calls_into_output():
 
 
 @pytest.mark.asyncio
-async def test_send_prompt_remains_stateful_accumulates_history():
-    """The stateful send_prompt path must still thread _history across turns.
-
-    Guards the intentional respond(stateless)/send_prompt(stateful) divergence —
-    a refactor collapsing both onto the stateless path would break multi-turn
-    redteam and must be caught here (until PR4/RES-877 removes the split).
-    """
+async def test_respond_preserves_tool_calls_in_replayed_transcript():
+    """A replayed assistant tool_calls message + tool result must reach the API
+    intact, not flattened to {role, content}."""
     client = MagicMock()
-    client.chat.completions.create = AsyncMock(
-        side_effect=[_make_openai_response("a1"), _make_openai_response("a2")]
-    )
+    client.chat.completions.create = AsyncMock(return_value=_make_openai_response())
     target = _make_target(client)
 
-    with patch("evaluatorq.redteam.tracing.get_tracer", return_value=None):
-        await target.send_prompt("q1")
-        await target.send_prompt("q2")
+    transcript = [
+        Message(role="user", content="q1"),
+        Message(
+            role="assistant",
+            content=None,
+            tool_calls=[StrategyToolCall(id="call_1", function=FunctionCall(name="lookup", arguments='{"q":"x"}'))],
+        ),
+        Message(role="tool", tool_call_id="call_1", name="lookup", content="result-text"),
+        Message(role="user", content="q2"),
+    ]
 
-    # _history accumulated both turns (unlike respond, which leaves it empty).
-    assert target._history != []
-    # The second call saw the first turn (system + q1 + a1 + q2), not just q2.
-    second_sent = client.chat.completions.create.call_args_list[1].kwargs["messages"]
-    contents = [m["content"] for m in second_sent]
-    assert "q1" in contents
-    assert "q2" in contents
+    with patch("evaluatorq.redteam.tracing.get_tracer", return_value=None):
+        await target.respond(transcript)
+
+    sent = client.chat.completions.create.call_args.kwargs["messages"]
+    assistant = next(m for m in sent if m["role"] == "assistant")
+    assert assistant["tool_calls"][0]["id"] == "call_1"
+    assert assistant["tool_calls"][0]["function"]["name"] == "lookup"
+    tool_row = next(m for m in sent if m["role"] == "tool")
+    assert tool_row["tool_call_id"] == "call_1"
+    assert tool_row["content"] == "result-text"
 
 
 @pytest.mark.asyncio
-async def test_respond_is_stateless_does_not_touch_history():
+async def test_respond_is_stateless_across_calls():
     client = MagicMock()
     client.chat.completions.create = AsyncMock(return_value=_make_openai_response())
     target = _make_target(client)
@@ -140,9 +144,6 @@ async def test_respond_is_stateless_does_not_touch_history():
         await target.respond([Message(role="user", content="one")])
         await target.respond([Message(role="user", content="two")])
 
-    # respond never appends to _history; send_prompt is the stateful path.
-    assert target._history == []
-    # Second call did not carry the first call's turn.
     second_sent = client.chat.completions.create.call_args_list[1].kwargs["messages"]
     assert second_sent == [
         {"role": "system", "content": "SYS"},

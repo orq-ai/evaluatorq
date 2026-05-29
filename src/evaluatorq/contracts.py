@@ -116,6 +116,12 @@ class StrategyToolCall(BaseModel):
     id: str = Field(description="Unique tool call ID (e.g., call_abc123)")
     type: Literal["function"] = Field(default="function", description="Tool type")
     function: FunctionCall = Field(description="Function call details")
+    # Responses-API item id (e.g. ``fc_abc123``), distinct from ``id`` (which maps to
+    # the chat-completions / Responses ``call_id``). Preserved through transcript
+    # replay so :class:`OpenAIAgentTarget` can echo the original ``function_call``
+    # item back to the Responses API on subsequent turns. ``None`` for tool calls
+    # that did not originate from a Responses-API turn.
+    item_id: str | None = Field(default=None, description="Responses-API function_call item id (fc_*)")
 
 
 class Message(BaseModel):
@@ -142,6 +148,42 @@ class Message(BaseModel):
         description="ID linking tool response to call (for role=tool)",
     )
     name: str | None = Field(default=None, description="Function name (for role=tool)")
+
+
+def message_to_chat_param(m: Message) -> dict[str, Any]:
+    """Render a :class:`Message` as an OpenAI chat-completions message dict.
+
+    Preserves tool-call structure that a naive ``{"role", "content"}`` flatten
+    would drop: an assistant message's ``tool_calls`` and a ``tool`` row's
+    ``tool_call_id``/``name``. Used by stateless targets to replay a transcript
+    (built by ``turns_to_messages``) without losing multi-turn tool context.
+    """
+    if m.role == "tool":
+        # A tool message carries a result keyed to tool_call_id; tool_calls belong
+        # on assistant messages, so any present here are malformed and not emitted.
+        param: dict[str, Any] = {
+            "role": "tool",
+            "tool_call_id": m.tool_call_id or "",
+            "content": m.content or "",
+        }
+        if m.name:
+            param["name"] = m.name
+        return param
+    if m.role == "assistant" and m.tool_calls:
+        # content may be None on a pure tool-call turn; OpenAI accepts null.
+        return {
+            "role": "assistant",
+            "content": m.content,
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                }
+                for tc in m.tool_calls
+            ],
+        }
+    return {"role": m.role, "content": m.content or ""}
 
 
 class TokenUsage(BaseModel):
@@ -196,6 +238,40 @@ class TokenUsage(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# AgentResponseError
+# ---------------------------------------------------------------------------
+
+
+class AgentResponseError(BaseModel):
+    """A per-response error marker on :class:`AgentResponse`.
+
+    Set when a target (or simulation agent) failed to produce a real response,
+    e.g. a timeout or backend exception. The orchestrator uses its presence to
+    exclude the turn from the transcript replayed to the target. ``message`` is
+    the same human text surfaced in ``AgentResponse.text``; ``code`` is an
+    optional provider/mapped code.
+
+    ``error_type`` is a coarse, open-vocabulary string — consumers key off the
+    error's *presence*, not its value, so the field is intentionally not an
+    enum. The orchestrator sets ``"timeout"`` on the timeout path and otherwise
+    classifies the failure via
+    :func:`evaluatorq.redteam.contracts.classify_error_type`, which yields one
+    of ``content_filter``, ``rate_limit``, ``timeout``, ``network_error``,
+    ``server_error``, ``client_error``, or ``target_error`` (fallback for an
+    unmatched error). Other producers may set their own values.
+
+    This is the leaf, per-response error. The whole-run rollup is
+    :class:`evaluatorq.redteam.contracts.RunError`.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    message: str
+    error_type: str
+    code: str | None = None
+
+
+# ---------------------------------------------------------------------------
 # AgentResponse
 # ---------------------------------------------------------------------------
 
@@ -221,6 +297,7 @@ class AgentResponse(BaseModel):
     model: str | None = None
     response_id: str | None = None
     finish_reason: str | None = None
+    error: AgentResponseError | None = None
 
     if TYPE_CHECKING:
 
@@ -233,6 +310,7 @@ class AgentResponse(BaseModel):
             model: str | None = None,
             response_id: str | None = None,
             finish_reason: str | None = None,
+            error: AgentResponseError | None = None,
         ) -> None: ...
 
     @model_validator(mode="before")
@@ -336,8 +414,8 @@ class AgentTarget(ABC):
     """Abstract base class for agent targets that can receive messages.
 
     Subclasses implement ``respond`` (the canonical message-based interface)
-    and ``new``. ``send_prompt`` is a concrete shim retained for single-prompt
-    callers — it wraps the prompt in one user message and calls ``respond``.
+    and ``new``. ``respond`` is the sole response method; callers own the
+    conversation transcript.
     Targets that back a server-side memory store override ``get_agent_context``
     (self-describing), ``cleanup_memory`` (release created entities), and
     ``map_error`` (provider-specific error codes); stateless targets inherit
@@ -368,10 +446,6 @@ class AgentTarget(ABC):
         """Return a fresh independent instance for a new attack."""
         ...
 
-    async def send_prompt(self, prompt: str) -> AgentResponse:
-        """Back-compat shim: wrap a single prompt in one user message and call ``respond``."""
-        return await self.respond([Message(role="user", content=prompt)])
-
     async def get_agent_context(self) -> AgentContext:
         """Default: minimal context. Override for platform-backed targets."""
         return AgentContext(key=getattr(self, "agent_key", "unknown"))
@@ -395,6 +469,7 @@ __all__ = [
     "DEFAULT_TARGET_TIMEOUT_MS",
     "AgentContext",
     "AgentResponse",
+    "AgentResponseError",
     "AgentTarget",
     "FunctionCall",
     "KnowledgeBaseInfo",
@@ -408,4 +483,5 @@ __all__ = [
     "TokenUsage",
     "ToolCallOutputItem",
     "ToolInfo",
+    "message_to_chat_param",
 ]

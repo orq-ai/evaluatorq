@@ -121,3 +121,31 @@ from evaluatorq.contracts import AgentTarget   # replaces the simulation TargetA
 - RUF027 added to Ruff ignore list (intentional literal string keys used as `safe_substitute` template placeholders)
 - CLI `--save` flag migrated to `typer.Choice`
 - Ruff cleanup across all redteam modules (import sorting, `Optional[X]` → `X | None`, `TYPE_CHECKING` guards)
+
+---
+
+<!-- RES-877 -->
+
+### Breaking Changes (RES-877)
+
+- **`AgentTarget.send_prompt` removed**: `respond(messages: list[Message]) -> AgentResponse` is now the sole response method on every target; callers own the conversation transcript. Migrate `target.send_prompt("x")` to `target.respond([Message(role="user", content="x")])`.
+- **`OpenAIModelTarget`, `VercelAISdkTarget`, and `OpenAIAgentTarget` are now stateless**: per-instance `_history` is gone. Multi-turn conversation state is owned by the red-team orchestrator, not the target.
+- **`evaluatorq.redteam.ErrorInfo` renamed to `RunError`**: update any imports or `isinstance` checks that reference the old name.
+
+**Migration:**
+
+```python
+# Before
+response = await target.send_prompt("Hello")
+
+# After
+from evaluatorq.contracts import Message
+response = await target.respond([Message(role="user", content="Hello")])
+```
+
+### New Features (RES-877)
+
+- **`AgentResponseError`** — a per-response error marker exposed on `AgentResponse.error`; used by the orchestrator to exclude failed turns from the replayed transcript.
+- **`turns_to_messages(turns, *, skip_errors=False)`** — helper exported from `evaluatorq.redteam.contracts` that converts a list of completed turns into a flat `list[Message]`, optionally dropping turns whose response carries an `AgentResponseError`.
+- **`classify_error_type(error, *, existing_type=None)`** — exported from `evaluatorq.redteam.contracts`; infers a coarse `error_type` (`content_filter`, `rate_limit`, `timeout`, `network_error`, `server_error`, `client_error`, or `unknown`) from an error string. Shared by the orchestrator and report converters. On a per-response `AgentResponseError`, the orchestrator records an unmatched (`unknown`) result as `target_error`, so that field never carries `unknown`.
+- **Tool-call fidelity on replay** — the transcript replayed to a target now preserves assistant `tool_calls` and `tool` results across turns (`OpenAIModelTarget` as OpenAI chat params, `VercelAISdkTarget` as AI SDK CoreMessage `tool-call`/`tool-result` parts, `OpenAIAgentTarget` as Responses-API `function_call`/`function_call_output` items), so multi-turn tool-using agents see their prior tool context. `VercelAISdkTarget` accepts `message_format="v5"` (default) or `"v4"` to match the endpoint's AI SDK version (`input`/`output:{type,value}` vs `args`/`result`). Errored turns recorded by the orchestrator now carry a classified `AgentResponseError.error_type` instead of a flat `target_error`.

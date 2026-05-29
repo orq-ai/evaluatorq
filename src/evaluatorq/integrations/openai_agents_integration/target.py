@@ -7,6 +7,7 @@ import json
 from typing import Any
 
 from agents import Agent, Runner
+from loguru import logger
 
 from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.contracts import (
@@ -42,49 +43,23 @@ class OpenAIAgentTarget(AgentTarget):
             agent: An OpenAI Agents SDK Agent instance.
             run_kwargs: Optional extra keyword arguments passed to ``Runner.run()``
                 (e.g. ``{"max_turns": 10}``).
-        OpenAI Agents SDK keeps conversation state client-side in ``_history``;
-        there is no server-side memory entity to isolate across parallel jobs.
         """
         super().__init__(memory_entity_id=None)
         self._agent = agent
         self._run_kwargs = run_kwargs or {}
-        self._history: list[Any] = []
-
-    async def send_prompt(self, prompt: str) -> AgentResponse:
-        """Send a prompt to the agent and return its response with usage + tool calls."""
-        input_data: str | list[Any] = prompt
-        prev_len = len(self._history)
-        if self._history:
-            input_data = [*self._history, {"role": "user", "content": prompt}]
-
-        try:
-            result = await Runner.run(self._agent, input_data, **self._run_kwargs)
-        except (asyncio.CancelledError, asyncio.TimeoutError):
-            raise
-        except Exception as exc:
-            raise RuntimeError(
-                f"OpenAIAgentTarget: Runner.run() raised an error: {exc}"
-            ) from exc
-
-        if result.final_output is None:
-            raise ValueError(
-                "OpenAIAgentTarget: Runner.run() returned final_output=None. "
-                "Ensure the agent produces a text response."
-            )
-
-        self._history = result.to_input_list()
-        new_items = self._history[min(prev_len, len(self._history)):]
-        return self._build_response(new_items, result)
 
     async def respond(self, messages: list[Message]) -> AgentResponse:
         """Stateless: run the agent over the provided transcript.
 
         The OpenAI Agents SDK accepts a list of input items, so ``respond``
-        passes the full ``messages`` list and neither reads nor writes
-        ``self._history``. The caller owns conversation continuity; redteam
-        single-prompt callers that want per-instance history use ``send_prompt``.
+        renders each ``Message`` into Responses-API input items (preserving
+        tool calls / tool results) and passes them in. The caller (orchestrator)
+        owns conversation continuity. Only the items the run *adds* (sliced
+        from ``to_input_list()`` past the input length) are passed to
+        ``_build_response``, so the returned ``AgentResponse`` reflects just
+        this turn's output.
         """
-        input_data: list[Any] = [{"role": m.role, "content": m.content or ""} for m in messages]
+        input_data: list[Any] = [item for m in messages for item in _message_to_responses_input_items(m)]
         prev_len = len(input_data)
         try:
             result = await Runner.run(self._agent, input_data, **self._run_kwargs)
@@ -102,6 +77,13 @@ class OpenAIAgentTarget(AgentTarget):
             )
 
         full_list = result.to_input_list()
+        if full_list[:prev_len] != input_data:
+            logger.warning(
+                "OpenAIAgentTarget: Runner.to_input_list() no longer echoes the input "
+                "items 1:1 at the front (sent prev_len={n}, prefix differs); the "
+                "new-items slice may misalign. Treat response output as approximate.",
+                n=prev_len,
+            )
         new_items = full_list[min(prev_len, len(full_list)):]
         return self._build_response(new_items, result)
 
@@ -112,8 +94,36 @@ class OpenAIAgentTarget(AgentTarget):
         correlation. Iteration order is preserved so interleaved text/tool calls
         (e.g. reasoning -> tool_call -> reasoning) round-trip into
         ``AgentResponse.output``.
+
+        ``function_call_output`` items returned by ``result.to_input_list()`` are
+        merged into their matching ``ToolCallOutputItem`` (by ``call_id``) so the
+        tool result survives transcript replay. Without this, a subsequent turn
+        would emit a Responses-API ``function_call`` with no paired
+        ``function_call_output`` and the API would reject the input list.
         """
         output_items: list[OutputMessage] = []
+        # call_id -> index into output_items, for back-filling ``result`` when a
+        # ``function_call_output`` item is encountered later in the stream.
+        tool_call_index: dict[str, int] = {}
+
+        def _record_tool_call(name: str, arguments: str, item_id: str, call_id: str) -> None:
+            tc = (
+                ToolCallOutputItem(name=name, arguments=arguments, id=item_id, call_id=call_id)
+                if item_id and call_id
+                else ToolCallOutputItem(name=name, arguments=arguments)
+            )
+            output_items.append(tc)
+            if call_id:
+                tool_call_index[call_id] = len(output_items) - 1
+
+        def _attach_tool_output(call_id: str, output: str) -> None:
+            idx = tool_call_index.get(call_id)
+            if idx is None:
+                return
+            existing = output_items[idx]
+            if isinstance(existing, ToolCallOutputItem):
+                output_items[idx] = existing.model_copy(update={"result": output})
+
         for item in new_items:
             # Agents SDK to_input_list() returns Responses API items for tool calls,
             # e.g. {"type": "function_call", "id": "fc_...", "call_id": "call_...", "name": "...", "arguments": "..."}.
@@ -122,11 +132,14 @@ class OpenAIAgentTarget(AgentTarget):
                 call_id = item.get("call_id", "")
                 name = str(item.get("name", ""))
                 arguments = _normalize_args_str(item.get("arguments", "{}"))
-                output_items.append(
-                    ToolCallOutputItem(name=name, arguments=arguments, id=item_id, call_id=call_id)
-                    if item_id and call_id
-                    else ToolCallOutputItem(name=name, arguments=arguments)
-                )
+                _record_tool_call(name, arguments, item_id, call_id)
+            # function_call_output items appear after their matching function_call in
+            # ``result.to_input_list()`` and carry the tool's result. Merge into the
+            # prior ToolCallOutputItem so transcript replay preserves the result.
+            elif isinstance(item, dict) and item.get("type") == "function_call_output":
+                call_id = item.get("call_id", "")
+                output_str = _extract_function_call_output(item.get("output"))
+                _attach_tool_output(call_id, output_str)
             # Handle dict format (standard OpenAI message format)
             elif isinstance(item, dict) and item.get("role") == "assistant":
                 text = _extract_assistant_text(item.get("content"))
@@ -138,11 +151,7 @@ class OpenAIAgentTarget(AgentTarget):
                         name = func.get("name", "") if isinstance(func, dict) else ""
                         args_raw = _normalize_args_str(func.get("arguments", "{}") if isinstance(func, dict) else "{}")
                         tc_id = tc.get("id", "")
-                        output_items.append(
-                            ToolCallOutputItem(name=name, arguments=args_raw, id=tc_id, call_id=tc_id)
-                            if tc_id
-                            else ToolCallOutputItem(name=name, arguments=args_raw)
-                        )
+                        _record_tool_call(name, args_raw, tc_id, tc_id)
             # Handle typed SDK objects (future-proofing if to_input_list() returns non-dict items)
             elif not isinstance(item, dict):
                 if getattr(item, "type", None) == "function_call":
@@ -150,11 +159,11 @@ class OpenAIAgentTarget(AgentTarget):
                     call_id = getattr(item, "call_id", "")
                     name = str(getattr(item, "name", ""))
                     arguments = _normalize_args_str(getattr(item, "arguments", "{}"))
-                    output_items.append(
-                        ToolCallOutputItem(name=name, arguments=arguments, id=item_id, call_id=call_id)
-                        if item_id and call_id
-                        else ToolCallOutputItem(name=name, arguments=arguments)
-                    )
+                    _record_tool_call(name, arguments, item_id, call_id)
+                elif getattr(item, "type", None) == "function_call_output":
+                    call_id = getattr(item, "call_id", "")
+                    output_str = _extract_function_call_output(getattr(item, "output", None))
+                    _attach_tool_output(call_id, output_str)
                 elif getattr(item, "role", None) == "assistant":
                     text = _extract_assistant_text(getattr(item, "content", None))
                     if text:
@@ -163,11 +172,7 @@ class OpenAIAgentTarget(AgentTarget):
                         tc_name = getattr(tc, "name", None) or getattr(getattr(tc, "function", None), "name", "") or ""
                         tc_args_raw = _normalize_args_str(getattr(tc, "arguments", None) or getattr(getattr(tc, "function", None), "arguments", "{}"))
                         tc_id = getattr(tc, "id", "")
-                        output_items.append(
-                            ToolCallOutputItem(name=str(tc_name), arguments=tc_args_raw, id=tc_id, call_id=tc_id)
-                            if tc_id
-                            else ToolCallOutputItem(name=str(tc_name), arguments=tc_args_raw)
-                        )
+                        _record_tool_call(str(tc_name), tc_args_raw, tc_id, tc_id)
 
         # Ensure final_output is reflected as a TextOutputItem. Avoid duplicating
         # if the last text emitted from history already matches.
@@ -243,12 +248,8 @@ class OpenAIAgentTarget(AgentTarget):
             model=model,
         )
 
-    def reset_conversation(self) -> None:
-        """Clear accumulated conversation history for a fresh attack turn."""
-        self._history = []
-
     def clone(self) -> OpenAIAgentTarget:
-        """Return a fresh instance with empty history for parallel job safety."""
+        """Return a fresh independent instance for parallel job safety."""
         return OpenAIAgentTarget(self._agent, run_kwargs=dict(self._run_kwargs))
 
     def new(self) -> OpenAIAgentTarget:
@@ -301,3 +302,53 @@ def _normalize_args_str(raw: Any) -> str:
         return raw
     except (json.JSONDecodeError, ValueError):
         return json.dumps({"raw": raw})
+
+
+def _extract_function_call_output(raw: Any) -> str:
+    """Coerce a Responses-API ``function_call_output.output`` field to a string.
+
+    The SDK may pass the output as a plain string, a JSON-serializable dict, or
+    ``None`` (for tool errors that produced no payload). All branches collapse
+    to ``str`` because :attr:`ToolCallOutputItem.result` is typed ``str | None``
+    and the Responses API's ``function_call_output`` expects ``output: str``.
+    """
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        return raw
+    try:
+        return json.dumps(raw)
+    except (TypeError, ValueError):
+        return str(raw)
+
+
+def _message_to_responses_input_items(m: Message) -> list[dict[str, Any]]:
+    """Render a :class:`Message` as Responses-API input items.
+
+    Inverse of :meth:`OpenAIAgentTarget._build_response`: an assistant turn with
+    tool calls becomes a ``function_call`` item per call (plus a leading assistant
+    text message when content is present); a ``tool`` result becomes a
+    ``function_call_output``; anything else is a plain ``{"role", "content"}``
+    message. This preserves multi-turn tool context that a naive flatten drops,
+    matching what the SDK's ``to_input_list()`` round-trips.
+    """
+    if m.role == "tool":
+        return [{"type": "function_call_output", "call_id": m.tool_call_id or "", "output": m.content or ""}]
+    if m.role == "assistant" and m.tool_calls:
+        items: list[dict[str, Any]] = []
+        if m.content:
+            items.append({"role": "assistant", "content": m.content})
+        for tc in m.tool_calls:
+            fc: dict[str, Any] = {
+                "type": "function_call",
+                "call_id": tc.id,
+                "name": tc.function.name,
+                "arguments": tc.function.arguments,
+            }
+            # Echo the Responses-API item id (fc_*) when available so the
+            # function_call item round-trips intact across turns.
+            if tc.item_id:
+                fc["id"] = tc.item_id
+            items.append(fc)
+        return items
+    return [{"role": m.role, "content": m.content or ""}]
