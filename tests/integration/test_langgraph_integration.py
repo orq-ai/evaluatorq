@@ -15,6 +15,7 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel  #
 from langgraph.graph import END, MessagesState, StateGraph  # noqa: E402
 from langgraph.graph.state import CompiledStateGraph  # noqa: E402
 
+from evaluatorq.contracts import Message  # noqa: E402
 from evaluatorq.integrations.langgraph_integration import LangGraphTarget  # noqa: E402
 
 
@@ -35,12 +36,12 @@ def _build_echo_graph() -> CompiledStateGraph:  # pyright: ignore[reportMissingT
 
 class TestLangGraphIntegration:
     @pytest.mark.asyncio
-    async def test_send_prompt_gets_response(self) -> None:
+    async def test_respond_gets_response(self) -> None:
         """Full round-trip: send a prompt through a real graph, get a response."""
         graph = _build_echo_graph()
         target = LangGraphTarget(graph)
 
-        response = await target.send_prompt("Hello")
+        response = await target.respond([Message(role="user", content="Hello")])
         assert isinstance(response.text, str)
         assert len(response.text) > 0
 
@@ -50,9 +51,9 @@ class TestLangGraphIntegration:
         graph = _build_echo_graph()
         target = LangGraphTarget(graph)
 
-        await target.send_prompt("First message")
+        await target.respond([Message(role="user", content="First message")])
         target.new()
-        result = await target.send_prompt("Second message")
+        result = await target.respond([Message(role="user", content="Second message")])
 
         assert isinstance(result.text, str)
         assert len(result.text) > 0
@@ -64,8 +65,8 @@ class TestLangGraphIntegration:
         target = LangGraphTarget(graph)
         cloned = target.new()
 
-        result_original = await target.send_prompt("Hello from original")
-        result_cloned = await cloned.send_prompt("Hello from clone")
+        result_original = await target.respond([Message(role="user", content="Hello from original")])
+        result_cloned = await cloned.respond([Message(role="user", content="Hello from clone")])
 
         assert isinstance(result_original.text, str)
         assert isinstance(result_cloned.text, str)

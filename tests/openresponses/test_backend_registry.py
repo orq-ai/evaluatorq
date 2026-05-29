@@ -10,8 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from evaluatorq.contracts import AgentResponse
 from evaluatorq.redteam.backends.registry import resolve_backend
-from evaluatorq.redteam.contracts import AgentContext, LLMConfig, TargetConfig, TokenUsage
+from evaluatorq.redteam.contracts import AgentContext, LLMConfig, TargetConfig
 from evaluatorq.simulation.target import OrqResponsesTarget
 
 
@@ -156,12 +157,11 @@ class TestAgentContextProvider:
 
 
 class TestCallResponsesApiTokenUsage:
-    """Verify _call_responses_api produces correct TokenUsage on the returned AgentResponse."""
+    """Verify _call_responses_api returns AgentResponse with correct TokenUsage."""
 
     @pytest.mark.asyncio
     async def test_token_usage_is_populated_from_response(self):
-        from evaluatorq.contracts import TextOutputItem
-        from evaluatorq.redteam.contracts import TokenUsage as RedteamTokenUsage
+        from evaluatorq.simulation.types import TokenUsage
 
         mock_response = MagicMock()
         mock_response.id = "resp-123"
@@ -180,14 +180,13 @@ class TestCallResponsesApiTokenUsage:
             client=client,
         )
 
-        result = await target._call_responses_api(
-            responses_input="hello", previous_response_id=None
-        )
-        assert result.response.usage is not None
-        assert isinstance(result.response.usage, RedteamTokenUsage)
-        assert result.response.usage.calls == 1
-        assert result.response.usage.prompt_tokens == 10
-        assert result.response.usage.completion_tokens == 5
+        result = await target._call_responses_api(responses_input="hello")
+        assert isinstance(result, AgentResponse)
+        assert result.usage is not None
+        assert isinstance(result.usage, TokenUsage)
+        assert result.usage.calls == 1
+        assert result.usage.prompt_tokens == 10
+        assert result.usage.completion_tokens == 5
 
     @pytest.mark.asyncio
     async def test_token_usage_is_none_when_response_has_no_usage(self):
@@ -208,7 +207,6 @@ class TestCallResponsesApiTokenUsage:
             client=client,
         )
 
-        result = await target._call_responses_api(
-            responses_input="hi", previous_response_id=None
-        )
-        assert result.response.usage is None
+        result = await target._call_responses_api(responses_input="hi")
+        assert isinstance(result, AgentResponse)
+        assert result.usage is None

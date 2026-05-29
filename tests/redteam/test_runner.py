@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from evaluatorq.contracts import AgentTarget
+from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam import get_category_info, list_categories, red_team
 from evaluatorq.redteam.contracts import AgentResponse, Pipeline, RedTeamReport, ReportSummary
 from evaluatorq.redteam.runner import _deduplicate_target_labels, _parse_target
@@ -392,7 +392,7 @@ class TestRedTeamWithAgentTarget:
         from unittest.mock import AsyncMock, patch
 
         class MockTarget(AgentTarget):
-            async def send_prompt(self, prompt: str) -> AgentResponse:
+            async def respond(self, messages: list[Message]) -> AgentResponse:
                 return AgentResponse(text='response')
 
             def new(self) -> MockTarget:
@@ -413,7 +413,7 @@ class TestRedTeamWithAgentTarget:
         from unittest.mock import AsyncMock, patch
 
         class MockTarget(AgentTarget):
-            async def send_prompt(self, prompt: str) -> AgentResponse:
+            async def respond(self, messages: list[Message]) -> AgentResponse:
                 return AgentResponse(text='response')
 
             def new(self) -> MockTarget:
@@ -439,7 +439,7 @@ class TestRedTeamWithAgentTarget:
         """Passing an invalid item inside a list raises TypeError."""
 
         class MockTarget(AgentTarget):
-            async def send_prompt(self, prompt: str) -> AgentResponse:
+            async def respond(self, messages: list[Message]) -> AgentResponse:
                 return AgentResponse(text='response')
 
             def new(self) -> MockTarget:

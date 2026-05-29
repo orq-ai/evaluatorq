@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 def _coerce_to_agent_response(raw: Any) -> AgentResponse:
     """Wrap a plain str return into AgentResponse for backward-compat with legacy targets.
 
-    Any target that still returns ``str`` from ``send_prompt`` will be transparently
+    Any target that still returns ``str`` from ``respond`` will be transparently
     wrapped here at the orchestrator call site.
     """
     from evaluatorq.redteam.contracts import OutputMessage, TextOutputItem
@@ -37,14 +37,14 @@ def validate_agent_target(obj: object) -> None:
     """Raise ``TypeError`` if ``obj`` implements only the removed ``clone()`` API.
 
     The check fires only when the object has ``clone()`` but neither
-    ``send_prompt`` nor ``new()`` — i.e. a clone-only object that cannot be
+    ``respond`` nor ``new()`` — i.e. a clone-only object that cannot be
     used as an :class:`AgentTarget` at all. Objects that implement the full
-    protocol (``send_prompt`` + ``new``) are accepted regardless of whether
+    protocol (``respond`` + ``new``) are accepted regardless of whether
     they also define ``clone``.
     """
-    has_send = callable(getattr(obj, 'send_prompt', None))
+    has_respond = callable(getattr(obj, 'respond', None))
     has_new = callable(getattr(obj, 'new', None))
-    if not has_send and not has_new and callable(getattr(obj, 'clone', None)):
+    if not has_respond and not has_new and callable(getattr(obj, 'clone', None)):
         raise TypeError(
             f"{type(obj).__name__} implements 'clone()' which was removed in evaluatorq 1.3. "
             "Rename it to 'new(self) -> AgentTarget' — signature is the same, no memory_entity_id param."

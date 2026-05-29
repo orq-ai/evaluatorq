@@ -10,6 +10,7 @@ Semantic convention:
 """
 
 import os
+import re
 from datetime import datetime
 from typing import Any, TypedDict
 
@@ -661,8 +662,10 @@ SendResult = AgentResponse  # deprecated alias; use AgentResponse directly
 # ---------------------------------------------------------------------------
 
 
-class ErrorInfo(BaseModel):
-    """Structured error information for attack/evaluation results."""
+class RunError(BaseModel):
+    """Structured whole-run error for an attack/evaluation result (the rollup; per-response errors use :class:`evaluatorq.contracts.AgentResponseError`)."""
+
+    model_config = ConfigDict(frozen=True)
 
     message: str
     error_type: str
@@ -670,6 +673,41 @@ class ErrorInfo(BaseModel):
     code: str | None = None
     details: dict[str, Any] | None = None
     turn: int | None = None
+
+
+# Regex patterns matched (case-insensitively) against the error string to infer
+# a coarse error_type. Ordered most-specific first; the first match wins, so an
+# explicit HTTP status must precede the generic 'connection' fallback (otherwise
+# "Status 503 connection reset" would misclassify as network_error). HTTP codes
+# require three digits and 429 is digit-bounded so stray numbers (request ids,
+# byte counts) do not trigger false rate_limit/status matches.
+_ERROR_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r'content[_ ]filter|content management policy'), 'content_filter'),
+    (re.compile(r'rate limit|(?<!\d)429(?!\d)'), 'rate_limit'),
+    (re.compile(r'timed out|timeout'), 'timeout'),
+    (re.compile(r'status[ _]?5\d\d'), 'server_error'),
+    (re.compile(r'status[ _]?4\d\d'), 'client_error'),
+    (re.compile(r'connection'), 'network_error'),
+]
+
+
+def classify_error_type(error: str | None, *, existing_type: str | None = None) -> str | None:
+    """Infer a coarse ``error_type`` from a raw error string when not already set.
+
+    Returns ``existing_type`` unchanged when provided, ``None`` for an empty
+    error, the first matching pattern's type, or ``'unknown'`` when nothing
+    matches. Shared by the orchestrator (per-response :class:`AgentResponseError`)
+    and report converters (run-level rollup) so both classify identically.
+    """
+    if existing_type:
+        return existing_type
+    if not error:
+        return None
+    lower = error.lower()
+    for pattern, etype in _ERROR_PATTERNS:
+        if pattern.search(lower):
+            return etype
+    return 'unknown'
 
 
 # ---------------------------------------------------------------------------
@@ -699,6 +737,66 @@ class Turn(BaseModel):
 
     attacker: AttackerResponse
     target: AgentResponse
+
+
+def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[Message]:
+    """Convert per-turn records into an OpenAI chat-completions message list.
+
+    Each turn becomes a ``user`` message (the attacker prompt) followed by the
+    target's output rows: consecutive text runs collapse into one ``assistant``
+    message; each tool call becomes an ``assistant`` message with one
+    ``tool_calls`` entry, plus a following ``tool`` row when ``result`` is set;
+    reasoning items are dropped. An empty target output still emits an empty
+    ``assistant`` row so consumers can rely on a user/assistant pair per turn.
+
+    When ``skip_errors`` is True, turns whose target carries an
+    :class:`evaluatorq.contracts.AgentResponseError` are omitted entirely — used
+    to build the transcript replayed to the target so failed turns never
+    re-enter its view.
+    """
+    out: list[Message] = []
+    for turn in turns:
+        if skip_errors and turn.target.error is not None:
+            continue
+        out.append(Message(role='user', content=turn.attacker.generated_prompt))
+        text_buffer: list[str] = []
+        target = turn.target
+
+        def _flush_text() -> None:
+            if text_buffer:
+                out.append(Message(role='assistant', content=''.join(text_buffer)))
+                text_buffer.clear()
+
+        for item in target.output:
+            if isinstance(item, TextOutputItem):
+                text_buffer.append(item.text)
+            elif isinstance(item, ToolCallOutputItem):
+                _flush_text()
+                out.append(Message(
+                    role='assistant',
+                    content=None,
+                    tool_calls=[StrategyToolCall(
+                        id=item.call_id,
+                        item_id=item.id or None,
+                        function=FunctionCall(name=item.name, arguments=item.arguments),
+                    )],
+                ))
+                if item.result is not None:
+                    out.append(Message(
+                        role='tool',
+                        tool_call_id=item.call_id,
+                        name=item.name,
+                        content=item.result,
+                    ))
+            # ReasoningOutputItem intentionally dropped.
+        _flush_text()
+        # Alternation invariant: every user row must be followed by an assistant row.
+        # If nothing got appended after the user row, the turn produced no assistant
+        # output (empty output, or all-reasoning since reasoning items are dropped).
+        # A trailing 'tool' row is fine — an assistant tool_calls row preceded it.
+        if out[-1].role == 'user':
+            out.append(Message(role='assistant', content=''))
+    return out
 
 
 class OrchestratorResult(BaseModel):
@@ -779,44 +877,7 @@ class OrchestratorResult(BaseModel):
           standard role for reasoning. Callers needing it should read
           ``turn.target.output`` directly.
         """
-        out: list[Message] = []
-        for turn in self.turns:
-            out.append(Message(role='user', content=turn.attacker.generated_prompt))
-            text_buffer: list[str] = []
-            target = turn.target
-
-            def _flush_text() -> None:
-                if text_buffer:
-                    out.append(Message(role='assistant', content=''.join(text_buffer)))
-                    text_buffer.clear()
-
-            for item in target.output:
-                if isinstance(item, TextOutputItem):
-                    text_buffer.append(item.text)
-                elif isinstance(item, ToolCallOutputItem):
-                    _flush_text()
-                    out.append(Message(
-                        role='assistant',
-                        content=None,
-                        tool_calls=[StrategyToolCall(
-                            id=item.call_id,
-                            function=FunctionCall(name=item.name, arguments=item.arguments),
-                        )],
-                    ))
-                    if item.result is not None:
-                        out.append(Message(
-                            role='tool',
-                            tool_call_id=item.call_id,
-                            name=item.name,
-                            content=item.result,
-                        ))
-                # ReasoningOutputItem intentionally dropped.
-            _flush_text()
-            # If the output was entirely empty (no items at all), still emit an
-            # assistant row so consumers can rely on a user/assistant pair per turn.
-            if not target.output:
-                out.append(Message(role='assistant', content=''))
-        return out
+        return turns_to_messages(self.turns)
 
     def attacker_input_at(self, turn_index: int) -> list[Message]:
         """Reconstruct the chat messages sent to the adversarial LLM at turn ``turn_index``.
@@ -850,11 +911,11 @@ class OrchestratorResult(BaseModel):
         return msgs
 
     @property
-    def error_info(self) -> 'ErrorInfo | None':
+    def error_info(self) -> 'RunError | None':
         """Structured view of the flat error fields."""
         if self.error is None:
             return None
-        return ErrorInfo(
+        return RunError(
             message=self.error,
             error_type=self.error_type or 'unknown',
             stage=self.error_stage,
@@ -1056,11 +1117,11 @@ class RedTeamResult(BaseModel):
     error_details: dict[str, Any] | None = None
 
     @property
-    def error_info(self) -> 'ErrorInfo | None':
+    def error_info(self) -> 'RunError | None':
         """Structured view of the flat error fields."""
         if self.error is None:
             return None
-        return ErrorInfo(
+        return RunError(
             message=self.error,
             error_type=self.error_type or 'unknown',
             stage=self.error_stage,

@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.simulation.agents.base import AgentConfig, BaseAgent
-from evaluatorq.simulation.types import ChatMessage
+from evaluatorq.simulation.types import Message
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import LLMCallConfig
@@ -70,12 +70,12 @@ class UserSimulatorAgent(BaseAgent):
         return DEFAULT_USER_SIMULATOR_PROMPT
 
     async def generate_first_message(
-        self, messages: list[ChatMessage] | None = None
+        self, messages: list[Message] | None = None
     ) -> str:
         """Generate the first message to start a conversation."""
         prompt_messages = list(messages or [])
         prompt_messages.append(
-            ChatMessage(
+            Message(
                 role="user",
                 content="Generate your first message to start the conversation. Remember your goal and persona.",
             )

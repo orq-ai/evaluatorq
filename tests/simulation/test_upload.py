@@ -279,7 +279,7 @@ async def test_wrap_simulation_agent_does_not_double_upload(
     upload_mock = AsyncMock()
 
     from evaluatorq.simulation.types import (
-        ChatMessage,
+        Message,
         CommunicationStyle,
         Datapoint,
         Persona,
@@ -305,7 +305,7 @@ async def test_wrap_simulation_agent_does_not_double_upload(
         first_message="hi",
     )
 
-    async def target_cb(messages: list[ChatMessage]) -> str:
+    async def target_cb(messages: list[Message]) -> str:
         return "ok"
 
     user_sim = MagicMock()
@@ -395,13 +395,13 @@ async def test_simulate_calls_upload_when_flag_and_key_set(
 
     from evaluatorq.simulation import simulate
     from evaluatorq.simulation.types import (
-        ChatMessage,
+        Message,
         CommunicationStyle,
         Persona,
         Scenario,
     )
 
-    async def target_cb(messages: list[ChatMessage]) -> str:
+    async def target_cb(messages: list[Message]) -> str:
         return "ok"
 
     persona = Persona(
@@ -481,14 +481,14 @@ async def test_simulate_skips_upload_when_flag_false(
 
     from evaluatorq.simulation import simulate
     from evaluatorq.simulation.types import (
-        ChatMessage,
+        Message,
         CommunicationStyle,
         Datapoint,
         Persona,
         Scenario,
     )
 
-    async def target_cb(messages: list[ChatMessage]) -> str:
+    async def target_cb(messages: list[Message]) -> str:
         return "ok"
 
     persona = Persona(
@@ -556,7 +556,7 @@ async def test_generate_and_simulate_calls_upload(
 
     from evaluatorq.simulation import generate_and_simulate
     from evaluatorq.simulation.types import (
-        ChatMessage,
+        Message,
         CommunicationStyle,
         Persona,
         Scenario,
@@ -564,7 +564,7 @@ async def test_generate_and_simulate_calls_upload(
 
     upload_mock = AsyncMock()
 
-    async def target_cb(messages: list[ChatMessage]) -> str:
+    async def target_cb(messages: list[Message]) -> str:
         return "ok"
 
     persona = Persona(
@@ -639,14 +639,14 @@ async def test_simulate_raises_upload_when_no_api_key(
 
     from evaluatorq.simulation import simulate
     from evaluatorq.simulation.types import (
-        ChatMessage,
+        Message,
         CommunicationStyle,
         Datapoint,
         Persona,
         Scenario,
     )
 
-    async def target_cb(messages: list[ChatMessage]) -> str:
+    async def target_cb(messages: list[Message]) -> str:
         return "ok"
 
     persona = Persona(

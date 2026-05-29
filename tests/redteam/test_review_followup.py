@@ -6,7 +6,7 @@ Groups:
   from_completion zero-total fallback
 - truncate_for_span negative-arg warn-and-return path
 - _default_span_max_text_chars LRU memoization (no re-read without cache_clear)
-- send_prompt back-compat wrapper emits DeprecationWarning
+- OpenAI backend response_id / finish_reason / model propagation
 - Vercel _parse_data_stream all-zeros usage guard
 """
 
@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
+from evaluatorq.contracts import Message
 from evaluatorq.redteam.contracts import SendResult, TokenUsage
 
 
@@ -168,7 +169,7 @@ class TestOpenAIBackendMetadataPropagation:
             )
         )
         target = OpenAIModelTarget(model="gpt-x", client=client)
-        result = await target.send_prompt("hi")
+        result = await target.respond([Message(role="user", content="hi")])
         assert result.response_id == "resp-abc"
         assert result.finish_reason == "length"
         # backend prefers server-reported model over the configured one

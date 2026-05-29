@@ -7,7 +7,8 @@ attributes, and hierarchy of the simulation tracing helpers.
 from __future__ import annotations
 
 import json
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -33,7 +34,7 @@ class _CollectingExporter(SpanExporter):
         pass
 
 
-@pytest.fixture()
+@pytest.fixture
 def span_collector():
     """Set up an in-memory OTel TracerProvider; patch the simulation tracer."""
     exporter = _CollectingExporter()
@@ -563,9 +564,9 @@ async def test_end_to_end_simulation_produces_full_span_tree(
     from evaluatorq.simulation.runner.simulation import SimulationRunner
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.simulation.types import (
-        ChatMessage,
         CommunicationStyle,
         Datapoint,
+        Message,
         Persona,
         Scenario,
         TokenUsage,
@@ -596,7 +597,7 @@ async def test_end_to_end_simulation_produces_full_span_tree(
 
     target_calls: list[int] = []
 
-    async def target_cb(messages: list[ChatMessage]) -> str:
+    async def target_cb(messages: list[Message]) -> str:
         target_calls.append(len(messages))
         return f"agent reply #{len(target_calls)}"
 
@@ -743,7 +744,7 @@ async def test_traceparent_injected_into_chat_completions_call(
     from evaluatorq.contracts import LLMCallConfig
     from evaluatorq.simulation.agents.base import BaseAgent
     from evaluatorq.simulation.tracing import with_simulation_span
-    from evaluatorq.simulation.types import ChatMessage
+    from evaluatorq.simulation.types import Message
 
     class _A(BaseAgent):
         @property
@@ -758,7 +759,7 @@ async def test_traceparent_injected_into_chat_completions_call(
 
     # Wrap in an outer span so traceparent is meaningful to inject.
     async with with_simulation_span("orq.simulation.run", None):
-        await a._call_chat_completions([ChatMessage(role="user", content="hi")])
+        await a._call_chat_completions([Message(role="user", content="hi")])
 
     headers = captured.get("extra_headers")
     assert isinstance(headers, dict)
@@ -917,13 +918,13 @@ async def test_run_span_records_error_metadata_and_usage(
     from evaluatorq.simulation.runner.simulation import SimulationRunner
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.simulation.types import (
-        ChatMessage,
         CommunicationStyle,
         Datapoint,
+        Message,
         Persona,
         Scenario,
-        TokenUsage,
         TerminatedBy,
+        TokenUsage,
     )
 
     judge = MagicMock()
@@ -938,7 +939,7 @@ async def test_run_span_records_error_metadata_and_usage(
     )
     user_sim.generate_first_message = AsyncMock(return_value="hello")
 
-    async def target_cb(messages: list[ChatMessage]) -> str:
+    async def target_cb(messages: list[Message]) -> str:
         return "agent reply"
 
     runner = SimulationRunner(
@@ -982,12 +983,129 @@ async def test_run_span_records_error_metadata_and_usage(
 
 
 @pytest.mark.asyncio
+async def test_target_agent_usage_aggregated_into_run_result(
+    span_collector: _CollectingExporter,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """`AgentTarget.respond().usage` must flow into `SimulationResult.token_usage`.
+
+    Regression guard for the aggregation added in `bf840ed` — without this
+    test, a future refactor can silently drop target token spend from cost
+    reporting again (the bug `arianpasquali` flagged).
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    monkeypatch.setenv("ORQ_API_KEY", "test-key")
+
+    from evaluatorq.contracts import AgentResponse, AgentTarget, Message
+    from evaluatorq.simulation.runner.simulation import SimulationRunner
+    from evaluatorq.simulation.tracing import with_simulation_span
+    from evaluatorq.simulation.types import (
+        CommunicationStyle,
+        Datapoint,
+        Persona,
+        Scenario,
+        TokenUsage,
+    )
+
+    class _FakeAgentTarget(AgentTarget):
+        def __init__(self, usage: TokenUsage) -> None:
+            super().__init__()
+            self._usage = usage
+            self.call_count = 0
+
+        async def respond(self, messages: list[Message]) -> AgentResponse:
+            self.call_count += 1
+            return AgentResponse(text=f"reply #{self.call_count}", usage=self._usage)
+
+        def new(self) -> "_FakeAgentTarget":
+            return _FakeAgentTarget(self._usage)
+
+    target_usage = TokenUsage(
+        prompt_tokens=9, completion_tokens=11, total_tokens=20, calls=1
+    )
+    user_sim_usage = TokenUsage(
+        prompt_tokens=2, completion_tokens=3, total_tokens=5, calls=1
+    )
+    judge_usage = TokenUsage(
+        prompt_tokens=5, completion_tokens=7, total_tokens=12, calls=1
+    )
+
+    def _judgment(*, terminate: bool) -> MagicMock:
+        j = MagicMock()
+        j.should_terminate = terminate
+        j.goal_achieved = terminate
+        j.goal_completion_score = 1.0 if terminate else 0.5
+        j.rules_broken = []
+        j.reason = "done" if terminate else "keep going"
+        j.response_quality = 0.9
+        j.hallucination_risk = 0.1
+        j.tone_appropriateness = 0.9
+        j.factual_accuracy = 0.9
+        return j
+
+    judge = MagicMock()
+    judge.evaluate = AsyncMock(return_value=_judgment(terminate=True))
+    judge.get_usage = MagicMock(return_value=judge_usage)
+
+    user_sim = MagicMock()
+    user_sim.generate_first_message = AsyncMock(return_value="Hi")
+    user_sim.respond_async = AsyncMock(return_value="ok")
+    user_sim.get_usage = MagicMock(return_value=user_sim_usage)
+
+    target = _FakeAgentTarget(target_usage)
+
+    runner = SimulationRunner(
+        target_agent=target,
+        model="test",
+        max_turns=2,
+        user_simulator=user_sim,
+        judge=judge,
+    )
+
+    persona = Persona(
+        name="Tester",
+        patience=0.5,
+        assertiveness=0.5,
+        politeness=0.5,
+        technical_level=0.5,
+        communication_style=CommunicationStyle.casual,
+        background="A test user",
+    )
+    scenario = Scenario(name="UsageRollup", goal="Get help")
+    dp = Datapoint(
+        id="dp-usage",
+        persona=persona,
+        scenario=scenario,
+        user_system_prompt="sys",
+        first_message="Hi",
+    )
+
+    async with with_simulation_span("orq.simulation.pipeline", None):
+        result = await runner.run(datapoint=dp)
+
+    assert target.call_count >= 1
+    expected_prompt = user_sim_usage.prompt_tokens + judge_usage.prompt_tokens + target_usage.prompt_tokens * target.call_count
+    expected_completion = user_sim_usage.completion_tokens + judge_usage.completion_tokens + target_usage.completion_tokens * target.call_count
+    expected_total = user_sim_usage.total_tokens + judge_usage.total_tokens + target_usage.total_tokens * target.call_count
+    expected_calls = user_sim_usage.calls + judge_usage.calls + target_usage.calls * target.call_count
+
+    assert result.token_usage.prompt_tokens == expected_prompt
+    assert result.token_usage.completion_tokens == expected_completion
+    assert result.token_usage.total_tokens == expected_total
+    assert result.token_usage.calls == expected_calls
+
+    run = _find(span_collector, "orq.simulation.run")
+    attrs = _attrs(run)
+    assert attrs["gen_ai.usage.total_tokens"] == expected_total
+
+
+@pytest.mark.asyncio
 async def test_run_span_records_cancellation_metadata_and_usage(
     span_collector: _CollectingExporter,
     monkeypatch: pytest.MonkeyPatch,
 ):
     import asyncio
-
     from unittest.mock import AsyncMock, MagicMock
 
     monkeypatch.setenv("ORQ_API_KEY", "test-key")
@@ -995,9 +1113,9 @@ async def test_run_span_records_cancellation_metadata_and_usage(
     from evaluatorq.simulation.runner.simulation import SimulationRunner
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.simulation.types import (
-        ChatMessage,
         CommunicationStyle,
         Datapoint,
+        Message,
         Persona,
         Scenario,
         TokenUsage,
@@ -1015,7 +1133,7 @@ async def test_run_span_records_cancellation_metadata_and_usage(
     )
     user_sim.generate_first_message = AsyncMock(return_value="hello")
 
-    async def target_cb(messages: list[ChatMessage]) -> str:
+    async def target_cb(messages: list[Message]) -> str:
         return "agent reply"
 
     runner = SimulationRunner(

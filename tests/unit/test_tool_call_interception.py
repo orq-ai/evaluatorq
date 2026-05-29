@@ -332,7 +332,7 @@ class TestLangGraphToolCallExtraction:
         graph.ainvoke = AsyncMock(return_value={"messages": [ai_msg, final_msg]})
 
         target = LangGraphTarget(graph)
-        result = await target.send_prompt("search for something")
+        result = await target.respond([Message(role="user", content="search for something")])
 
         assert result.text == "I'll search for thatHere is the result"
         assert len(result.tool_calls) == 1
@@ -352,7 +352,7 @@ class TestLangGraphToolCallExtraction:
         graph.ainvoke = AsyncMock(return_value={"messages": [msg]})
 
         target = LangGraphTarget(graph)
-        result = await target.send_prompt("hi")
+        result = await target.respond([Message(role="user", content="hi")])
         assert result.tool_calls == []
 
     @pytest.mark.asyncio
@@ -369,7 +369,7 @@ class TestLangGraphToolCallExtraction:
         ]})
 
         target = LangGraphTarget(graph)
-        result = await target.send_prompt("weather?")
+        result = await target.respond([Message(role="user", content="weather?")])
         assert len(result.tool_calls) == 1
         assert result.tool_calls[0].name == "get_weather"
 
@@ -384,15 +384,22 @@ class TestOpenAIAgentsToolCallExtraction:
         pytest.importorskip("agents")
         from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget
 
-        turn1_history = [
+        # Turn 1: caller passes [user("first")], respond returns tool_a + reply
+        turn1_result = [
             {"role": "user", "content": "first"},
             {"role": "assistant", "content": None, "tool_calls": [
                 {"function": {"name": "tool_a", "arguments": '{"x": 1}'}, "type": "function", "id": "1"}
             ]},
             {"role": "assistant", "content": "done first"},
         ]
-        turn2_history = [
-            *turn1_history,
+        # Turn 2: caller passes the full transcript so far + new user message (4 items).
+        # respond slices from prev_len=4; new_items should be only tool_b + final reply.
+        turn2_result = [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"function": {"name": "tool_a", "arguments": '{"x": 1}'}, "type": "function", "id": "1"}
+            ]},
+            {"role": "assistant", "content": "done first"},
             {"role": "user", "content": "second"},
             {"role": "assistant", "content": None, "tool_calls": [
                 {"function": {"name": "tool_b", "arguments": '{"y": 2}'}, "type": "function", "id": "2"}
@@ -407,7 +414,7 @@ class TestOpenAIAgentsToolCallExtraction:
             call_count += 1
             result = MagicMock()
             result.final_output = f"reply {call_count}"
-            result.to_input_list.return_value = turn1_history if call_count == 1 else turn2_history
+            result.to_input_list.return_value = turn1_result if call_count == 1 else turn2_result
             return result
 
         runner = MagicMock()
@@ -415,13 +422,21 @@ class TestOpenAIAgentsToolCallExtraction:
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        r1 = await target.send_prompt("first")
-        # Turn 1: tool_a only
+
+        # Turn 1: single user message
+        r1 = await target.respond([Message(role="user", content="first")])
         assert len(r1.tool_calls) == 1
         assert r1.tool_calls[0].name == "tool_a"
 
-        r2 = await target.send_prompt("second")
-        # Turn 2: tool_b only (not tool_a again)
+        # Turn 2: full transcript so far passed by orchestrator (prev turn output + new user msg)
+        turn2_messages = [
+            Message(role="user", content="first"),
+            Message(role="assistant", content="done first"),
+            Message(role="user", content="second"),
+            Message(role="assistant", content="done second"),
+        ]
+        r2 = await target.respond(turn2_messages)
+        # Turn 2: tool_b only (not tool_a again — sliced from prev_len)
         assert len(r2.tool_calls) == 1
         assert r2.tool_calls[0].name == "tool_b"
 
@@ -431,6 +446,7 @@ class TestOpenAIAgentsToolCallExtraction:
         from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget
 
         history = [
+            {"role": "user", "content": "hi"},
             {"role": "assistant", "content": None, "tool_calls": [
                 {"function": {"name": "bad_tool", "arguments": "not-valid-json"}, "type": "function", "id": "1"}
             ]},
@@ -447,7 +463,7 @@ class TestOpenAIAgentsToolCallExtraction:
         monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
 
         target = OpenAIAgentTarget(MagicMock())
-        result = await target.send_prompt("hi")
+        result = await target.respond([Message(role="user", content="hi")])
         assert result.tool_calls[0].arguments_dict == {"raw": "not-valid-json"}
 
 

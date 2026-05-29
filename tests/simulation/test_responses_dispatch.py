@@ -14,8 +14,7 @@ import pytest
 
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.agents.base import BaseAgent, LLMResult
-from evaluatorq.simulation.types import ChatMessage
-
+from evaluatorq.simulation.types import Message
 
 # ---------------------------------------------------------------------------
 # Concrete subclass for testing (BaseAgent is abstract)
@@ -45,8 +44,8 @@ def _make_client() -> MagicMock:
     return client
 
 
-def _make_messages() -> list[ChatMessage]:
-    return [ChatMessage(role="user", content="hello")]
+def _make_messages() -> list[Message]:
+    return [Message(role="user", content="hello")]
 
 
 # ---------------------------------------------------------------------------

@@ -14,13 +14,17 @@ See: https://ai-sdk.dev/docs/ai-sdk-ui/stream-protocol
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 import httpx
 
-from evaluatorq.contracts import AgentTarget
+from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.contracts import AgentContext, AgentResponse, OutputMessage, TextOutputItem, TokenUsage
+
+AISdkMessageFormat = Literal["v4", "v5"]
+"""AI SDK tool-message wire format. v5 (current) vs v4 (legacy) differ on tool
+field names — see :func:`_message_to_ai_sdk_message`."""
 
 
 class VercelAISdkTarget(AgentTarget):
@@ -55,6 +59,7 @@ class VercelAISdkTarget(AgentTarget):
         extra_body: dict[str, Any] | None = None,
         timeout: float = 120.0,
         agent_context: AgentContext | None = None,
+        message_format: AISdkMessageFormat = "v5",
     ) -> None:
         """Create a Vercel AI SDK red teaming target.
 
@@ -71,51 +76,48 @@ class VercelAISdkTarget(AgentTarget):
                 nonsensical ones) will be applied. The HTTP handler cannot
                 be introspected from Python, so this must be supplied by
                 the caller when capability-aware filtering matters.
-        Vercel AI SDK state lives inside the HTTP handler (stateless to us);
-        conversation history is tracked client-side in ``_history``.
+            message_format: AI SDK tool-message wire format for replayed tool
+                turns — ``"v5"`` (default, current SDK) or ``"v4"`` (legacy).
+                Only affects turns carrying tool calls/results; plain turns are
+                identical either way. Set ``"v4"`` if the endpoint runs AI SDK
+                v4 (expects ``args`` / bare ``result`` instead of ``input`` /
+                ``output: {type, value}``).
+
+        Vercel AI SDK state lives inside the HTTP handler (stateless to this
+        client); the caller owns multi-turn conversation history.
         """
         super().__init__(memory_entity_id=None)
         self._url = url
         self._headers = headers or {}
         self._extra_body = extra_body or {}
         self._timeout = timeout
-        self._history: list[dict[str, str]] = []
         self._agent_context = agent_context
+        self._message_format: AISdkMessageFormat = message_format
 
-    async def send_prompt(self, prompt: str) -> AgentResponse:
-        """Send a prompt to the AI SDK endpoint and return a structured response with usage.
+    async def respond(self, messages: list[Message]) -> AgentResponse:
+        """Stateless: POST the provided transcript to the AI SDK endpoint.
 
-        The Vercel AI SDK Data Stream Protocol does not expose tool call details
-        in a structured form, so ``tool_calls`` is always empty. The full text
-        response is available via ``.text``.
+        The caller owns conversation continuity — the full ``messages`` list is
+        sent as-is in the request body. Tool turns are rendered as AI SDK
+        CoreMessage ``tool-call`` / ``tool-result`` content parts (via
+        :func:`_message_to_ai_sdk_message`, in the ``message_format`` selected at
+        construction), so endpoints backed by ``streamText`` / ``generateText``
+        see prior tool context; plain turns keep the simple
+        ``{"role", "content"}`` shape.
         """
-        self._history.append({"role": "user", "content": prompt})
-
         body: dict[str, Any] = {
-            "messages": list(self._history),
+            "messages": [_message_to_ai_sdk_message(m, version=self._message_format) for m in messages],
             **self._extra_body,
         }
-
-        try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                response = await client.post(
-                    self._url,
-                    json=body,
-                    headers={"Content-Type": "application/json", **self._headers},
-                )
-                response.raise_for_status()
-        except (httpx.HTTPError, ValueError, KeyError):
-            # Roll back the user turn so the next call doesn't forward a
-            # malformed conversation with a hanging user message. Catches
-            # HTTP errors (network/status) and parser errors (ValueError
-            # from json.loads, KeyError from missing fields). Programming
-            # bugs (TypeError, AttributeError) propagate without rollback
-            # so they aren't masked as transient failures.
-            self._history.pop()
-            raise
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            response = await client.post(
+                self._url,
+                json=body,
+                headers={"Content-Type": "application/json", **self._headers},
+            )
+            response.raise_for_status()
 
         text, usage = self._parse_response(response)
-        self._history.append({"role": "assistant", "content": text})
         text_item: OutputMessage = TextOutputItem(text=text, annotations=[])
         return AgentResponse(output=[text_item], usage=usage)
 
@@ -140,6 +142,7 @@ class VercelAISdkTarget(AgentTarget):
             extra_body=dict(self._extra_body),
             timeout=self._timeout,
             agent_context=self._agent_context,
+            message_format=self._message_format,
         )
 
     @staticmethod
@@ -172,6 +175,56 @@ class VercelAISdkTarget(AgentTarget):
 
         # Fallback: treat as plain text
         return raw.strip(), None
+
+
+def _message_to_ai_sdk_message(m: Message, *, version: AISdkMessageFormat = "v5") -> dict[str, Any]:
+    """Render a :class:`Message` as an AI SDK ModelMessage (v5 default, or v4).
+
+    Plain turns stay ``{"role", "content"}`` (structurally equivalent for text
+    turns, identical across versions; ``None`` content is coerced to ``""``).
+    Tool turns use the SDK's native content-parts
+    shape so AI SDK endpoints (``streamText`` / ``generateText``) can consume
+    prior tool context: an assistant turn with tool calls becomes a ``tool-call``
+    part per call (plus a leading ``text`` part when content is present), and a
+    ``tool`` result becomes a ``tool-result`` part.
+
+    The versions differ only in tool field names:
+    - tool-call payload: v5 ``input`` vs v4 ``args`` (both a parsed object).
+    - tool-result value: v5 ``output: {type: "text", value}`` vs v4 bare
+      ``result``.
+    """
+    if m.role == "tool":
+        result_part: dict[str, Any] = {
+            "type": "tool-result",
+            "toolCallId": m.tool_call_id or "",
+            "toolName": m.name or "",
+        }
+        if version == "v4":
+            result_part["result"] = m.content or ""
+        else:
+            result_part["output"] = {"type": "text", "value": m.content or ""}
+        return {"role": "tool", "content": [result_part]}
+    if m.role == "assistant" and m.tool_calls:
+        parts: list[dict[str, Any]] = []
+        if m.content:
+            parts.append({"type": "text", "text": m.content})
+        input_key = "args" if version == "v4" else "input"
+        for tc in m.tool_calls:
+            try:
+                tool_input: Any = json.loads(tc.function.arguments)
+            except (json.JSONDecodeError, TypeError):
+                # payload is typed `unknown`; keep the raw string on parse failure
+                tool_input = tc.function.arguments
+            parts.append(
+                {
+                    "type": "tool-call",
+                    "toolCallId": tc.id,
+                    "toolName": tc.function.name,
+                    input_key: tool_input,
+                }
+            )
+        return {"role": "assistant", "content": parts}
+    return {"role": m.role, "content": m.content or ""}
 
 
 def _parse_data_stream(raw: str) -> tuple[str, TokenUsage | None]:

@@ -71,7 +71,6 @@ from evaluatorq.redteam.contracts import (
     DeliveryMethodSummary,
     DimensionSummary,
     DomainSummary,
-    ErrorInfo,
     EvaluationPayload,
     ExecutionDetails,
     FocusAreaRecommendation,
@@ -94,6 +93,7 @@ from evaluatorq.redteam.contracts import (
     RedTeamResult,
     ReportSnapshot,
     ReportSummary,
+    RunError,
     Severity,
     SeveritySummary,
     StrategyToolCall,
@@ -159,8 +159,6 @@ __all__ = [
     "DeliveryMethodSummary",
     "DimensionSummary",
     "DomainSummary",
-    # Error model
-    "ErrorInfo",
     "EvaluationPayload",
     "ExecutionDetails",
     'FocusAreaRecommendation',
@@ -192,6 +190,8 @@ __all__ = [
     "ReportSnapshot",
     "ReportSummary",
     "RichHooks",
+    # Run-level error rollup
+    "RunError",
     "Severity",
     # Result models
     "AgentResponse",
