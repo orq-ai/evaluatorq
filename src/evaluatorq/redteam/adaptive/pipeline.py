@@ -59,11 +59,6 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
     from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities
-    from evaluatorq.redteam.backends.base import (
-        AgentTargetFactory,
-        ErrorMapper,
-        MemoryCleanup,
-    )
     from evaluatorq.redteam.contracts import AgentContext
     from evaluatorq.types import ScorerParameter
 

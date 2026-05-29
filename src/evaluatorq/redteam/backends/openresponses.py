@@ -26,8 +26,9 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.contracts import AgentResponse, OutputMessage
+from evaluatorq.contracts import AgentResponse, AgentTarget, Message, OutputMessage
 from evaluatorq.redteam.backends._errors import extract_provider_error_code, extract_status_code
+from evaluatorq.redteam.backends.base import Backend
 from evaluatorq.redteam.contracts import (
     DEFAULT_TARGET_MAX_TOKENS,
     DEFAULT_TARGET_TIMEOUT_MS,
@@ -91,7 +92,7 @@ def _map_openresponses_error(exc: Exception) -> tuple[str, str]:
     return "openresponses.unknown", f"{type(exc).__name__}: {exc}"
 
 
-class OpenResponsesAgentTarget:
+class OpenResponsesAgentTarget(AgentTarget):
     """Target adapter that calls an agent/deployment via the OpenResponses API.
 
     Implements the :class:`evaluatorq.redteam.backends.base.AgentTarget`
@@ -122,7 +123,6 @@ class OpenResponsesAgentTarget:
             or the client-side ``input`` array.
     """
 
-    memory_entity_id: str | None = None
     target_kind: TargetKind = TargetKind.OPENAI  # routed through the OpenAI-compatible /responses path
 
     def __init__(
@@ -136,6 +136,7 @@ class OpenResponsesAgentTarget:
         timeout_ms: int | None = None,
         use_server_threading: bool = True,
     ):
+        super().__init__(memory_entity_id=None)
         self.agent_id = agent_id
         self.client = client or create_openresponses_client()
         self.instructions = instructions
@@ -246,6 +247,11 @@ class OpenResponsesAgentTarget:
             append_assistant_turn(self._client_side_input, agent_response)
 
         return agent_response
+
+    async def respond(self, messages: list[Message]) -> AgentResponse:
+        """Implement ``AgentTarget.respond`` by forwarding the last user turn to ``send_prompt``."""
+        prompt = messages[-1].content or "" if messages else ""
+        return await self.send_prompt(str(prompt))
 
     def new(self) -> OpenResponsesAgentTarget:
         """Return a fresh target instance with no carried-over conversation state."""
@@ -390,13 +396,12 @@ class OpenResponsesErrorMapper:
         return _map_openresponses_error(exc)
 
 
-class OpenResponsesBackend:
-    """``Backend``-shaped wrapper for the OpenResponses target components.
+class OpenResponsesBackend(Backend):
+    """OpenResponses ``Backend`` implementation.
 
-    Satisfies the ``Backend`` ABC interface so the registry can return a
-    uniform object regardless of which backend is selected. Delegates all
-    behaviour to the composable factory / context-provider / error-mapper
-    components so those can be tested independently.
+    Wraps the composable factory / context-provider / error-mapper
+    components so those can be tested independently while conforming to
+    the ``Backend`` ABC used by the registry and runner.
     """
 
     def __init__(
@@ -406,29 +411,28 @@ class OpenResponsesBackend:
         instructions: str | None = None,
         timeout_ms: int | None = None,
     ) -> None:
-        self.name = "openresponses"
-        self.target_factory = OpenResponsesTargetFactory(
+        super().__init__(name="openresponses")
+        self._target_factory = OpenResponsesTargetFactory(
             client,
             instructions=instructions,
             timeout_ms=timeout_ms,
         )
-        self.context_provider = OpenResponsesContextProvider(instructions=instructions)
-        self.error_mapper = OpenResponsesErrorMapper()
-        self._ctx_cache: dict[str, AgentContext] = {}
+        self._context_provider = OpenResponsesContextProvider(instructions=instructions)
+        self._error_mapper = OpenResponsesErrorMapper()
 
     def create_target(self, agent_key: str) -> OpenResponsesAgentTarget:
-        return self.target_factory.create_target(agent_key)
+        return self._target_factory.create_target(agent_key)
 
     async def cleanup_memory(self, ctx: AgentContext, entity_ids: list[str]) -> None:
         pass  # OpenResponses backend has no server-side memory to clean up
 
     def map_error(self, exc: Exception) -> tuple[str, str]:
-        return self.error_mapper.map_error(exc)
+        return self._error_mapper.map_error(exc)
 
     async def resolve_context(self, agent_key: str) -> AgentContext:
         if agent_key in self._ctx_cache:
             return self._ctx_cache[agent_key]
-        ctx = await self.context_provider.get_agent_context(agent_key)
+        ctx = await self._context_provider.get_agent_context(agent_key)
         self._ctx_cache[agent_key] = ctx
         return ctx
 

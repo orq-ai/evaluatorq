@@ -1,7 +1,7 @@
-"""Tests for the openresponses backend bundle registration.
+"""Tests for the openresponses backend registration.
 
 Verifies the registry can resolve ``backend="openresponses"`` and that the
-bundle wires the right factory / context provider / error mapper.
+backend wires target construction, context resolution, and error mapping.
 """
 
 from __future__ import annotations
@@ -11,67 +11,68 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from evaluatorq.redteam.backends.base import Backend
 from evaluatorq.redteam.backends.openresponses import (
     OpenResponsesAgentTarget,
+    OpenResponsesBackend,
     OpenResponsesContextProvider,
     OpenResponsesErrorMapper,
-    OpenResponsesTargetFactory,
 )
 from evaluatorq.redteam.backends.registry import resolve_backend
 from evaluatorq.redteam.contracts import TargetConfig
 
 
 class TestResolveBackendOpenResponses:
-    def test_resolves_to_bundle_with_correct_components(self):
+    def test_resolves_to_backend_with_correct_name(self):
         client = MagicMock()
-        bundle = resolve_backend("openresponses", llm_client=client)
-        assert bundle.name == "openresponses"
-        assert isinstance(bundle.target_factory, OpenResponsesTargetFactory)
-        assert isinstance(bundle.context_provider, OpenResponsesContextProvider)
-        assert isinstance(bundle.error_mapper, OpenResponsesErrorMapper)
+        backend = resolve_backend("openresponses", llm_client=client)
+        assert backend.name == "openresponses"
+        assert isinstance(backend, OpenResponsesBackend)
+        assert isinstance(backend, Backend)
 
-    def test_factory_creates_targets_with_correct_agent_id(self):
+    def test_create_target_returns_openresponses_target_with_correct_agent_id(self):
         client = MagicMock()
-        bundle = resolve_backend("openresponses", llm_client=client)
-        target = bundle.target_factory.create_target("my-agent")
+        backend = resolve_backend("openresponses", llm_client=client)
+        target = backend.create_target("my-agent")
         assert isinstance(target, OpenResponsesAgentTarget)
         assert target.agent_id == "my-agent"
 
     def test_instructions_are_threaded_from_target_config(self):
         client = MagicMock()
-        bundle = resolve_backend(
+        backend = resolve_backend(
             "openresponses",
             llm_client=client,
             target_config=TargetConfig(system_prompt="be safe"),
         )
-        target = bundle.target_factory.create_target("agent-id")
+        target = backend.create_target("agent-id")
         assert isinstance(target, OpenResponsesAgentTarget)
         assert target.instructions == "be safe"
 
-    def test_context_provider_returns_minimal_agent_context(self):
+    @pytest.mark.asyncio
+    async def test_resolve_context_returns_minimal_agent_context(self):
         client = MagicMock()
-        bundle = resolve_backend(
+        backend = resolve_backend(
             "openresponses",
             llm_client=client,
             target_config=TargetConfig(system_prompt="hi"),
         )
-        provider = bundle.context_provider
-        assert isinstance(provider, OpenResponsesContextProvider)
+        ctx = await backend.resolve_context("agent-id")
+        assert ctx.key == "agent-id"
+        assert ctx.system_prompt == "hi"
 
     def test_lookup_is_case_insensitive(self):
         client = MagicMock()
-        bundle = resolve_backend("OpenResponses", llm_client=client)
-        assert bundle.name == "openresponses"
+        backend = resolve_backend("OpenResponses", llm_client=client)
+        assert backend.name == "openresponses"
 
     def test_resolution_without_explicit_client_uses_env(self):
-        """When no client is passed, the registry calls the factory which builds one
-        from env vars. Make sure that path doesn't crash when env is configured."""
+        """When no client is passed, the registry builds one from env vars."""
         with patch(
             "evaluatorq.redteam.backends.openresponses.create_openresponses_client",
             return_value=MagicMock(),
         ):
-            bundle = resolve_backend("openresponses")
-            assert bundle.name == "openresponses"
+            backend = resolve_backend("openresponses")
+            assert backend.name == "openresponses"
 
     def test_private_alias_still_works_for_backwards_compatibility(self):
         """The pre-public name was ``_create_openresponses_client``; keep the alias
