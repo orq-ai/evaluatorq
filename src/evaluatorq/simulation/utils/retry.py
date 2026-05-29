@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import random
 from typing import TYPE_CHECKING, TypeVar
 
+from loguru import logger
 from openai import APIStatusError
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
-
-logger = logging.getLogger(__name__)
 
 MAX_RETRY_ATTEMPTS = 5
 RETRY_MIN_WAIT_S = 2.0
@@ -98,7 +96,7 @@ async def with_retry(
                 wait_s = min(base_wait, RETRY_MAX_WAIT_S)
                 jitter = random.uniform(0, wait_s * 0.25)
                 logger.warning(
-                    "%s: attempt %d/%d failed (%s), retrying in %.1fs",
+                    "{}: attempt {}/{} failed ({}), retrying in {:.1f}s",
                     label,
                     attempt,
                     max_attempts,
