@@ -28,14 +28,17 @@ if TYPE_CHECKING:
         Scenario,
         SimulationResult,
     )
-    from evaluatorq.types import DataPoint, Evaluator
+    from evaluatorq.types import DataPoint, DataPointResult, Evaluator
 
 logger = logging.getLogger(__name__)
 
-# Key embedded in each evaluatorq DataPoint.inputs so the scorer adapter and
-# the final result-list reconstruction can recover their SimulationResult
-# without depending on object identity (id()) of the DataPoint instance.
-_SIM_IDX_KEY = "_sim_idx"
+
+class SimulationDroppedError(RuntimeError):
+    """Raised when simulation job(s) produced no result and were dropped.
+
+    Distinct subclass of RuntimeError so callers can grep/catch the
+    cache-miss path specifically rather than matching on the message.
+    """
 
 
 async def simulate(
@@ -91,8 +94,8 @@ async def simulate(
             gating for free" benefit of routing through ``evaluatorq()``.
             Two paths: score-based failures (``pass_=False`` on a scorer
             result) call ``sys.exit(1)`` via evaluatorq's own gate; dropped
-            jobs (job raised, no result cached) raise ``RuntimeError`` from
-            ``simulate()`` itself. Both exit non-zero when uncaught. Pass
+            jobs (job raised, no result cached) raise ``SimulationDroppedError``
+            from ``simulate()`` itself. Both exit non-zero when uncaught. Pass
             ``False`` for interactive / exploratory runs where failures
             should surface as warnings + error metadata instead.
     """
@@ -369,6 +372,7 @@ async def _generate_single_datapoint(
 def _build_simulation_job_and_cache(
     *,
     job_name: str,
+    sim_dp_by_id: dict[int, Datapoint],
     target_callback: Callable[[list[ChatMessage]], str | Awaitable[str]],
     model: str,
     max_turns: int,
@@ -376,20 +380,20 @@ def _build_simulation_job_and_cache(
     judge: BaseAgent | None,
 ) -> tuple[
     Callable[[DataPoint, int], Awaitable[dict[str, Any]]],
-    "dict[int, SimulationResult]",
+    dict[int, SimulationResult],
     Any,
 ]:
     """Build the simulation job_fn, its result cache, and the shared runner.
 
-    The cache is keyed by the integer ``_sim_idx`` embedded in each
-    DataPoint's ``inputs`` — stable across any internal copying evaluatorq
-    might do, so the scorer adapter can always recover the raw
-    ``SimulationResult``.
+    Both the cache and ``sim_dp_by_id`` are keyed by ``id(data)`` — the
+    identity of the evaluatorq DataPoint instance. evaluatorq passes the same
+    instance to the job and every scorer within a single run (it does not
+    serialize/rehydrate DataPoints mid-run), so identity is stable for the
+    call lifetime. This avoids polluting the UI inputs column with a synthetic
+    index key and removes a pydantic re-parse per datapoint.
     """
     from evaluatorq.simulation.convert import to_open_responses
     from evaluatorq.simulation.runner.simulation import SimulationRunner
-
-    from evaluatorq.simulation._datapoint_io import _extract_single_datapoint
 
     runner = SimulationRunner(
         target_callback=target_callback,
@@ -401,15 +405,15 @@ def _build_simulation_job_and_cache(
     result_cache: dict[int, SimulationResult] = {}
 
     async def job_fn(data: DataPoint, _row: int) -> dict[str, Any]:
-        idx = data.inputs.get(_SIM_IDX_KEY)
-        if not isinstance(idx, int):
+        sim_dp = sim_dp_by_id.get(id(data))
+        if sim_dp is None:
             raise RuntimeError(
-                f"DataPoint.inputs is missing integer {_SIM_IDX_KEY!r} — "
-                "simulate()'s scorer/result wiring requires it"
+                "DataPoint instance not found in sim_dp_by_id — "
+                "simulate()'s scorer/result wiring requires the same "
+                "DataPoint instance evaluatorq was given"
             )
-        sim_dp = _extract_single_datapoint(data)
         result = await runner.run(datapoint=sim_dp, max_turns=max_turns)
-        result_cache[idx] = result
+        result_cache[id(data)] = result
         return {"name": job_name, "output": to_open_responses(result, model)}
 
     return job_fn, result_cache, runner
@@ -419,12 +423,12 @@ def _adapt_simulation_scorer(
     name: str,
     sim_scorer: SimulationScorer,
     result_cache: dict[int, SimulationResult],
-) -> "Evaluator":
+) -> Evaluator:
     """Wrap a SimulationScorer as an evaluatorq Evaluator.
 
     The evaluatorq scorer receives ``{data: DataPoint, output: Output}``;
     it recovers the raw ``SimulationResult`` from ``result_cache`` keyed by
-    the ``_sim_idx`` stored in ``data.inputs``.
+    ``id(data)`` — the same DataPoint instance the upstream job cached against.
     """
     from evaluatorq.types import EvaluationResult, ScorerParameter
 
@@ -434,29 +438,24 @@ def _adapt_simulation_scorer(
         # the EvaluatorScore, so callers (and exit_on_failure) see a real
         # failure instead of mistaking a degenerate score for a low result.
         data = params["data"]
-        idx = data.inputs.get(_SIM_IDX_KEY)
-        sim_result = result_cache.get(idx) if isinstance(idx, int) else None
+        sim_result = result_cache.get(id(data))
         if sim_result is None:
             logger.error(
-                "scorer %r: no SimulationResult cached for _sim_idx=%r — "
+                "scorer %r: no SimulationResult cached for DataPoint id=%r — "
                 "upstream simulation job failed or did not run",
                 name,
-                idx,
+                id(data),
             )
             raise RuntimeError(
-                f"missing simulation result for _sim_idx={idx} (scorer={name!r})"
+                f"missing simulation result for DataPoint id={id(data)} "
+                f"(scorer={name!r})"
             )
         try:
             value = sim_scorer(sim_result)
         except Exception as e:
-            logger.exception("scorer %r raised on _sim_idx=%s", name, idx)
+            logger.exception("scorer %r raised on DataPoint id=%s", name, id(data))
             sim_result.metadata.setdefault("scorer_errors", {})[name] = repr(e)
             raise
-        # Mirror old simulate() behavior so callers inspecting
-        # SimulationResult.metadata still find evaluator_scores.
-        scores_dict = sim_result.metadata.setdefault("evaluator_scores", {})
-        if isinstance(scores_dict, dict):
-            scores_dict[name] = value
         return EvaluationResult(value=value)
 
     return {"name": name, "scorer": scorer}
@@ -492,17 +491,19 @@ async def _simulate_via_evaluatorq(
     scorers = [(name, get_evaluator(name)) for name in resolved_evaluator_names]
 
     eq_datapoints = [
-        DataPoint(
-            inputs={
-                "datapoint": dp.model_dump(mode="json"),
-                _SIM_IDX_KEY: idx,
-            }
-        )
-        for idx, dp in enumerate(sim_datapoints)
+        DataPoint(inputs={"datapoint": dp.model_dump(mode="json")})
+        for dp in sim_datapoints
     ]
+    # Map the evaluatorq DataPoint instance back to its source simulation
+    # Datapoint by identity, so the job can run the source directly without
+    # re-parsing inputs["datapoint"] on every run.
+    sim_dp_by_id = {
+        id(eq): sim for eq, sim in zip(eq_datapoints, sim_datapoints, strict=True)
+    }
 
     job_fn, result_cache, runner = _build_simulation_job_and_cache(
-        job_name=evaluation_name or "simulation",
+        job_name="simulation",
+        sim_dp_by_id=sim_dp_by_id,
         target_callback=target_callback,
         model=model,
         max_turns=max_turns,
@@ -521,7 +522,7 @@ async def _simulate_via_evaluatorq(
     )
 
     try:
-        await evaluatorq(
+        eq_results = await evaluatorq(
             run_name,
             data=eq_datapoints,
             jobs=[job_fn],
@@ -540,15 +541,47 @@ async def _simulate_via_evaluatorq(
             # from evaluatorq() if there was one.
             logger.exception("SimulationRunner.close() raised during cleanup")
 
+    # Mirror evaluator scores onto SimulationResult.metadata once, from the
+    # final evaluatorq result, so the scorer stays pure (no side-effects mid-run)
+    # and callers inspecting SimulationResult.metadata still find evaluator_scores.
+    _stamp_evaluator_scores(eq_results, result_cache)
+
     expected = len(eq_datapoints)
-    missing_idx = [idx for idx in range(expected) if idx not in result_cache]
-    if missing_idx:
+    missing = [
+        i for i, eq in enumerate(eq_datapoints) if id(eq) not in result_cache
+    ]
+    if missing:
         msg = (
-            f"{caller}(): {len(missing_idx)} of {expected} simulation job(s) failed "
-            f"and produced no result (missing _sim_idx: {missing_idx})"
+            f"{caller}(): {len(missing)} of {expected} simulation job(s) failed "
+            f"and produced no result (missing rows: {missing})"
         )
         if exit_on_failure:
-            raise RuntimeError(msg)
+            raise SimulationDroppedError(msg)
         logger.warning(msg)
 
-    return [result_cache[idx] for idx in range(expected) if idx in result_cache]
+    return [
+        result_cache[id(eq)] for eq in eq_datapoints if id(eq) in result_cache
+    ]
+
+
+def _stamp_evaluator_scores(
+    eq_results: list[DataPointResult],
+    result_cache: dict[int, SimulationResult],
+) -> None:
+    """Walk the evaluatorq result and stamp each evaluator score onto the
+    matching SimulationResult.metadata["evaluator_scores"].
+
+    Matches by ``id(data_point)`` — on success evaluatorq returns the same
+    DataPoint instance the job cached against. Error rows carry a placeholder
+    DataPoint whose id won't match, so they're skipped.
+    """
+    for dp_result in eq_results:
+        sim_result = result_cache.get(id(dp_result.data_point))
+        if sim_result is None or not dp_result.job_results:
+            continue
+        scores_dict = sim_result.metadata.setdefault("evaluator_scores", {})
+        if not isinstance(scores_dict, dict):
+            continue
+        for job_result in dp_result.job_results:
+            for score in job_result.evaluator_scores or []:
+                scores_dict[score.evaluator_name] = score.score.value

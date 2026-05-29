@@ -15,7 +15,11 @@ import importlib
 import logging
 from typing import TYPE_CHECKING, Any
 
-from evaluatorq.simulation.api import generate_and_simulate, simulate
+from evaluatorq.simulation.api import (
+    SimulationDroppedError,
+    generate_and_simulate,
+    simulate,
+)
 from evaluatorq.simulation.types import DEFAULT_MODEL
 
 logger = logging.getLogger(__name__)  # noqa: RUF067
@@ -239,6 +243,7 @@ __all__ = [
     "PerturbationType",
     "Scenario",
     "ScenarioGenerator",
+    "SimulationDroppedError",
     "SimulationResult",
     # Runner
     "SimulationRunner",
