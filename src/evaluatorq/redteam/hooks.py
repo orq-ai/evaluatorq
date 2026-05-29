@@ -564,8 +564,8 @@ class RichHooks:
             border_style = "grey50"
             hint = "[dim]∅ classifier disabled (no llm_client)[/dim]"
         elif not caps_map:
-            border_style = "yellow"
-            hint = "[dim]no capability tags detected for this agent[/dim]"
+            border_style = "blue"
+            hint = "[blue]∅ no capability tags detected for this agent[/blue]"
 
         renderables: list[Any] = [table, Text.from_markup(summary_line, justify="center")]
         if hint is not None:
