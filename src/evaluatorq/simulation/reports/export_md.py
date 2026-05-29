@@ -29,14 +29,17 @@ from evaluatorq.simulation.types import SimulationResult
 
 
 def _render_summary_section(section: ReportSection) -> str:
+    # Required keys (always populated by _build_summary_section): subscript
+    # directly so schema drift fails loud instead of rendering a misleading
+    # zero. Optional keys (`confidence`, `confidence_note`) use .get().
     data = section.data
-    total = data.get("total_conversations", 0)
-    achieved = data.get("goals_achieved", 0)
-    success_rate = data.get("success_rate", 0.0)
-    avg_score = data.get("avg_goal_completion_score", 0.0)
-    avg_turns = data.get("avg_turn_count", 0.0)
-    errors = data.get("errors", 0)
-    total_tokens = data.get("total_tokens", 0)
+    total = data["total_conversations"]
+    achieved = data["goals_achieved"]
+    success_rate = data["success_rate"]
+    avg_score = data["avg_goal_completion_score"]
+    avg_turns = data["avg_turn_count"]
+    errors = data["errors"]
+    total_tokens = data["total_tokens"]
     confidence = data.get("confidence", "")
     confidence_note = data.get("confidence_note", "")
 
@@ -136,9 +139,9 @@ def _render_scenario_breakdown_section(section: ReportSection) -> str:
 
 def _render_judge_verdicts_section(section: ReportSection) -> str:
     data = section.data
-    terminated_by = data.get("terminated_by", {})
-    rules_broken = data.get("rules_broken", {})
-    total_broken = data.get("total_rules_broken_instances", 0)
+    terminated_by = data["terminated_by"]
+    rules_broken = data["rules_broken"]
+    total_broken = data["total_rules_broken_instances"]
 
     lines = [f"## {section.title}", ""]
 
@@ -171,8 +174,8 @@ def _render_judge_verdicts_section(section: ReportSection) -> str:
 
 def _render_turn_metrics_section(section: ReportSection) -> str:
     data = section.data
-    dist = data.get("turn_count_distribution", {})
-    qualities = data.get("avg_quality_metrics", {})
+    dist = data["turn_count_distribution"]
+    qualities = data["avg_quality_metrics"]
 
     lines = [f"## {section.title}", ""]
 
@@ -219,14 +222,15 @@ def _render_evaluator_scores_section(section: ReportSection) -> str:
 
 
 def _render_token_usage_section(section: ReportSection) -> str:
+    # All token_usage keys are required (always populated).
     data = section.data
     rows = [
-        ["Prompt Tokens (total)", f"{data.get('prompt_tokens', 0):,}"],
-        ["Completion Tokens (total)", f"{data.get('completion_tokens', 0):,}"],
-        ["Total Tokens", f"{data.get('total_tokens', 0):,}"],
-        ["Avg Total / Conversation", f"{data.get('avg_total_per_conversation', 0):,.0f}"],
-        ["Avg Prompt / Conversation", f"{data.get('avg_prompt_per_conversation', 0):,.0f}"],
-        ["Avg Completion / Conversation", f"{data.get('avg_completion_per_conversation', 0):,.0f}"],
+        ["Prompt Tokens (total)", f"{data['prompt_tokens']:,}"],
+        ["Completion Tokens (total)", f"{data['completion_tokens']:,}"],
+        ["Total Tokens", f"{data['total_tokens']:,}"],
+        ["Avg Total / Conversation", f"{data['avg_total_per_conversation']:,.0f}"],
+        ["Avg Prompt / Conversation", f"{data['avg_prompt_per_conversation']:,.0f}"],
+        ["Avg Completion / Conversation", f"{data['avg_completion_per_conversation']:,.0f}"],
     ]
     table = _md_table(["Metric", "Value"], rows)
     return f"## {section.title}\n\n{table}"
@@ -234,8 +238,8 @@ def _render_token_usage_section(section: ReportSection) -> str:
 
 def _render_errors_section(section: ReportSection) -> str:
     data = section.data
-    total = data.get("total_errored", 0)
-    by_message = data.get("by_message", {})
+    total = data["total_errored"]
+    by_message = data["by_message"]
     lines = [f"## {section.title}", "", f"**Total errored conversations:** {total}", ""]
     if by_message:
         rows = [[msg, str(count)] for msg, count in by_message.items()]
@@ -312,7 +316,10 @@ _SECTION_RENDERERS = {
 
 _COLLAPSED_SECTIONS = {
     "token_usage",
-    "individual_results",
+    # "individual_results" intentionally NOT collapsed here: each entry is
+    # already wrapped in its own <details> block, so collapsing the
+    # section as a whole produces nested <details> that render
+    # doubly-collapsed.
 }
 
 

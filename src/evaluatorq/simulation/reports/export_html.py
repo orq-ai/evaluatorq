@@ -30,13 +30,14 @@ from evaluatorq.simulation.types import SimulationResult
 
 
 def _render_summary_html(section: ReportSection) -> str:
+    # Required keys: subscript so schema drift fails loud (see export_md notes).
     data = section.data
-    total = data.get("total_conversations", 0)
-    achieved = data.get("goals_achieved", 0)
-    failed = data.get("goals_failed", 0)
-    errors = data.get("errors", 0)
-    success_rate = data.get("success_rate", 0.0)
-    avg_score = data.get("avg_goal_completion_score", 0.0)
+    total = data["total_conversations"]
+    achieved = data["goals_achieved"]
+    failed = data["goals_failed"]
+    errors = data["errors"]
+    success_rate = data["success_rate"]
+    avg_score = data["avg_goal_completion_score"]
 
     donut = _render_donut_chart_common(
         labels=["Achieved", "Not Achieved", "Errored"],
@@ -109,8 +110,8 @@ def _render_scenario_breakdown_html(section: ReportSection) -> str:
 
 def _render_judge_verdicts_html(section: ReportSection) -> str:
     data = section.data
-    terminated_by = data.get("terminated_by", {})
-    rules_broken = data.get("rules_broken", {})
+    terminated_by = data["terminated_by"]
+    rules_broken = data["rules_broken"]
 
     parts = [f"<section><h2>{_esc(section.title)}</h2>"]
 
@@ -133,8 +134,8 @@ def _render_judge_verdicts_html(section: ReportSection) -> str:
 
 def _render_turn_metrics_html(section: ReportSection) -> str:
     data = section.data
-    dist = data.get("turn_count_distribution", {})
-    qualities = data.get("avg_quality_metrics", {})
+    dist = data["turn_count_distribution"]
+    qualities = data["avg_quality_metrics"]
 
     parts = [f"<section><h2>{_esc(section.title)}</h2>"]
 
@@ -181,13 +182,13 @@ def _render_evaluator_scores_html(section: ReportSection) -> str:
 def _render_token_usage_html(section: ReportSection) -> str:
     data = section.data
     rows = [
-        ["Prompt Tokens (total)", f"{data.get('prompt_tokens', 0):,}"],
-        ["Completion Tokens (total)", f"{data.get('completion_tokens', 0):,}"],
-        ["Total Tokens", f"{data.get('total_tokens', 0):,}"],
-        ["Avg Total / Conversation", f"{data.get('avg_total_per_conversation', 0):,.0f}"],
-        ["Avg Prompt / Conversation", f"{data.get('avg_prompt_per_conversation', 0):,.0f}"],
+        ["Prompt Tokens (total)", f"{data['prompt_tokens']:,}"],
+        ["Completion Tokens (total)", f"{data['completion_tokens']:,}"],
+        ["Total Tokens", f"{data['total_tokens']:,}"],
+        ["Avg Total / Conversation", f"{data['avg_total_per_conversation']:,.0f}"],
+        ["Avg Prompt / Conversation", f"{data['avg_prompt_per_conversation']:,.0f}"],
         ["Avg Completion / Conversation",
-         f"{data.get('avg_completion_per_conversation', 0):,.0f}"],
+         f"{data['avg_completion_per_conversation']:,.0f}"],
     ]
     table = _html_table(["Metric", "Value"], rows)
     return f"<section><h2>{_esc(section.title)}</h2>{table}</section>"
@@ -195,8 +196,8 @@ def _render_token_usage_html(section: ReportSection) -> str:
 
 def _render_errors_html(section: ReportSection) -> str:
     data = section.data
-    total = data.get("total_errored", 0)
-    by_message = data.get("by_message", {})
+    total = data["total_errored"]
+    by_message = data["by_message"]
     parts = [f"<section><h2>{_esc(section.title)}</h2>",
              f"<p>Total errored conversations: <strong>{total}</strong></p>"]
     if by_message:
