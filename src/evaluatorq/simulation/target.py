@@ -188,7 +188,7 @@ class OrqResponsesTarget(AgentTarget):
             )
             new_usage = self._accumulated_usage
         else:
-            # extract_responses_output returns calls=0; bump to 1 for this API call
+            # TokenUsage.calls defaults to 0; bump to 1 to count this API call
             new_usage = self._accumulated_usage + result.usage.model_copy(update={"calls": 1})
         threading_disabled = result.response_id is None
         if not threading_disabled:

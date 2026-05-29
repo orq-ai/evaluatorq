@@ -49,7 +49,7 @@ class OpenResponsesBackend(Backend):
         config = LLMCallConfig(
             model=agent_key,
             api="responses",
-            timeout_ms=self._timeout_ms or 240_000,
+            timeout_ms=self._timeout_ms or 240_000,  # 240s matches Orq router default for long-tail tool calls
         )
         return OrqResponsesTarget(
             config,

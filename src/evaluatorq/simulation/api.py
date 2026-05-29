@@ -83,6 +83,12 @@ async def simulate(
     from evaluatorq.simulation.upload import upload_simulation_results
     from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
 
+    # Validate ORQ_API_KEY early so a missing key doesn't waste a full simulation run.
+    if upload_results and not os.environ.get("ORQ_API_KEY"):
+        raise ValueError(
+            "ORQ_API_KEY environment variable is not set. Set it before calling simulate(upload_results=True)."
+        )
+
     # Initialize OTel tracing (no-op if already initialized or not configured)
     await init_tracing_if_needed()
 
@@ -120,11 +126,7 @@ async def simulate(
         # pattern (evaluatorq.py) where upload happens after the eval span
         # closes. Keeps the trace timing focused on simulation work.
         if upload_results:
-            api_key = os.environ.get("ORQ_API_KEY")
-            if not api_key:
-                raise ValueError(
-                    "ORQ_API_KEY environment variable is not set. Set it before calling simulate(upload_results=True)."
-                )
+            api_key = os.environ.get("ORQ_API_KEY", "")
             await upload_simulation_results(
                 api_key=api_key,
                 evaluation_name=evaluation_name or "simulation",

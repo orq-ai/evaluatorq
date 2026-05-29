@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
+
 from evaluatorq.simulation.utils.fields import get_field as _get_field
 
 if TYPE_CHECKING:
@@ -175,10 +177,16 @@ def messages_from_openresponses_input(input_array: list[dict[str, Any]]) -> list
             out.append({"role": role, "content": text})
             continue
 
-        if item.get("type") == "message":
+        elif item.get("type") == "message":
             text = "".join(_text_from_output_item(block) for block in item.get("content") or [])
             if text:
                 out.append({"role": item.get("role", "assistant"), "content": text})
+        elif item.get("type") == "function_call":
+            logger.debug(
+                "messages_from_openresponses_input: dropping function_call item (name={!r}); "
+                "tool calls are not represented in redteam chat messages",
+                item.get("name"),
+            )
     return out
 
 
@@ -229,7 +237,8 @@ def load_openresponses_dataset(path: str | Path) -> StaticDataset:
             )
         try:
             rt_input = RedTeamInput(**meta)
-        except Exception as exc:
+        except (TypeError, ValueError) as exc:
+            # pydantic.ValidationError is a subclass of ValueError in v2; TypeError covers wrong field types
             raise ValueError(f"Dataset row {idx}: 'input' metadata failed validation: {exc}") from exc
         samples.append(redteam_sample_from_openresponses(input=rt_input, openresponses_input=conv))
     return StaticDataset(samples=samples)
