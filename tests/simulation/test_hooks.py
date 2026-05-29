@@ -77,6 +77,72 @@ def _turn_metrics() -> TurnMetrics:
     )
 
 
+from evaluatorq.simulation.runner.simulation import SimulationRunner
+from evaluatorq.simulation.types import Judgment, Message
+from evaluatorq.simulation.types import TokenUsage as _TU
+
+
+class _StubUserSim:
+    """Minimal SimulationUserSimulator: no LLM, deterministic replies."""
+
+    def update_context(self, *, persona_context=None, scenario_context=None) -> None:
+        pass
+
+    async def generate_first_message(self) -> str:
+        return "hello"
+
+    async def respond_async(self, messages, *, llm_purpose=None) -> str:
+        return "more"
+
+    def reset_usage(self) -> None:
+        pass
+
+    def get_usage(self) -> _TU:
+        return _TU(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+
+
+class _StubJudge:
+    """Minimal SimulationJudge returning a fixed Judgment."""
+
+    def __init__(self, *, terminate: bool) -> None:
+        self._terminate = terminate
+
+    async def evaluate(self, messages) -> Judgment:
+        return Judgment(
+            should_terminate=self._terminate,
+            reason="stub",
+            goal_achieved=self._terminate,
+            rules_broken=[],
+            goal_completion_score=1.0 if self._terminate else 0.0,
+        )
+
+    def reset_usage(self) -> None:
+        pass
+
+    def get_usage(self) -> _TU:
+        return _TU(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+
+
+class RecordingHooks(DefaultHooks):
+    def __init__(self) -> None:
+        self.turn_events: list[tuple[str, int]] = []
+        self.completed: list[str] = []
+        self.errors: list[tuple[str, str]] = []
+
+    def on_turn_complete(self, datapoint_id, metrics):
+        self.turn_events.append((datapoint_id, metrics.turn_number))
+
+    def on_datapoint_complete(self, result):
+        self.completed.append(result.metadata.get("datapoint_id", "?"))
+
+    def on_datapoint_error(self, datapoint, exception):
+        self.errors.append((datapoint.id, type(exception).__name__))
+
+
+async def _ok_target(messages: list[Message]) -> str:
+    return "fine"
+
+
 def test_default_hooks_satisfies_protocol():
     assert isinstance(DefaultHooks(), SimulationHooks)
 
@@ -153,3 +219,70 @@ def test_rich_hooks_escapes_markup_in_names(datapoint_factory):
     dp = datapoint_factory("[bold]evil[/bold]")  # id + scenario name carry markup
     hooks.on_datapoint_start(dp)  # must not raise MarkupError
     hooks.on_datapoint_error(dp, RuntimeError("x"))
+
+
+@pytest.mark.asyncio
+async def test_on_turn_complete_guard_does_not_corrupt_result(datapoint_factory):
+    """A raising on_turn_complete logs a warning but must NOT turn the sim
+    into an error result."""
+
+    class RaisingHooks(DefaultHooks):
+        def on_turn_complete(self, datapoint_id, metrics):
+            raise RuntimeError("hook boom")
+
+    runner = SimulationRunner(
+        target_callback=_ok_target,
+        model="gpt-4o-mini",
+        max_turns=1,
+        user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+        judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+        hooks=RaisingHooks(),
+    )
+    result = await runner.run(datapoint=datapoint_factory("dp1"))
+    assert result.terminated_by != TerminatedBy.error
+
+
+@pytest.mark.asyncio
+async def test_on_datapoint_error_fires_for_raising_target(datapoint_factory):
+    """A raising target is swallowed into an error SimulationResult; the error
+    hook must still fire, and run_batch must still return an error result."""
+
+    async def _boom_target(messages: list[Message]) -> str:
+        raise ValueError("target down")
+
+    hooks = RecordingHooks()
+    runner = SimulationRunner(
+        target_callback=_boom_target,
+        model="gpt-4o-mini",
+        max_turns=2,
+        user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+        judge=_StubJudge(terminate=False),  # pyright: ignore[reportArgumentType]
+        hooks=hooks,
+    )
+    results = await runner.run_batch(
+        [datapoint_factory("dp1")], max_turns=2, max_concurrency=1
+    )
+    assert len(results) == 1
+    assert results[0].terminated_by == TerminatedBy.error
+    assert hooks.errors == [("dp1", "RuntimeError")]  # reconstructed from metadata
+    assert hooks.completed == ["dp1"]
+
+
+@pytest.mark.asyncio
+async def test_concurrency_attribution(datapoint_factory):
+    hooks = RecordingHooks()
+    runner = SimulationRunner(
+        target_callback=_ok_target,
+        model="gpt-4o-mini",
+        max_turns=2,
+        user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+        judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+        hooks=hooks,
+    )
+    dps = [datapoint_factory(f"dp{i}") for i in range(3)]
+    results = await runner.run_batch(dps, max_turns=2, max_concurrency=3)
+    assert len(results) == 3
+    assert len(hooks.completed) == 3                 # one complete per datapoint
+    valid_ids = {"dp0", "dp1", "dp2"}
+    assert all(dp_id in valid_ids for dp_id, _ in hooks.turn_events)
+    assert all(r.metadata.get("datapoint_id") in valid_ids for r in results)

@@ -45,6 +45,7 @@ if TYPE_CHECKING:
 
     from evaluatorq.contracts import AgentTarget
     from evaluatorq.simulation.agents.base import BaseAgent
+    from evaluatorq.simulation.hooks import SimulationHooks
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +193,7 @@ class SimulationRunner:
         max_turns: int = 10,
         user_simulator: BaseAgent | None = None,
         judge: BaseAgent | None = None,
+        hooks: SimulationHooks | None = None,
     ) -> None:
         if not target_agent and not target_callback:
             raise ValueError("Must provide either target_agent or target_callback")
@@ -222,6 +224,12 @@ class SimulationRunner:
         self._injected_user_simulator: BaseAgent | None = user_simulator
         self._injected_judge: BaseAgent | None = judge
 
+        from evaluatorq.simulation.hooks import DefaultHooks
+
+        # Single resolution: _simulate_core passes an already-resolved instance,
+        # so a RichHooks is never re-instantiated (no double progress display).
+        self._hooks: SimulationHooks = hooks or DefaultHooks()
+
     def _get_shared_client(self) -> AsyncOpenAI:
         if not self._shared_client:
             from evaluatorq.simulation._client import build_simulation_client
@@ -250,6 +258,8 @@ class SimulationRunner:
                 scenario,
             )
 
+        datapoint_id = datapoint.id if datapoint else ""
+
         effective_max_turns = max_turns or self._max_turns
         messages: list[Message] = []
         turn_metrics_list: list[TurnMetrics] = []
@@ -271,6 +281,7 @@ class SimulationRunner:
                     return await self._run_inner(
                         persona=persona,
                         scenario=scenario,
+                        datapoint_id=datapoint_id,
                         first_message=first_message,
                         effective_max_turns=effective_max_turns,
                         messages=messages,
@@ -337,6 +348,7 @@ class SimulationRunner:
         *,
         persona: Persona | None,
         scenario: Scenario | None,
+        datapoint_id: str,
         first_message: str | None,
         effective_max_turns: int,
         messages: list[Message],
@@ -487,6 +499,12 @@ class SimulationRunner:
                 turn_metrics_list.append(
                     _build_turn_metrics(turn + 1, judgment, usage_before)
                 )
+                try:
+                    self._hooks.on_turn_complete(datapoint_id, turn_metrics_list[-1])
+                except Exception:
+                    logger.warning(
+                        "on_turn_complete hook raised; ignoring", exc_info=True
+                    )
                 last_judgment = judgment
 
                 set_span_attrs(
@@ -592,20 +610,28 @@ class SimulationRunner:
                     dp, max_turns, timeout_per_simulation
                 )
 
+        for dp in datapoints:
+            self._hooks.on_datapoint_start(dp)
         tasks = [run_single(dp) for dp in datapoints]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         final_results: list[SimulationResult] = []
         for i, result in enumerate(results):
+            dp = datapoints[i]
             if isinstance(result, SimulationResult):
+                result.metadata["datapoint_id"] = dp.id
+                if result.terminated_by in (TerminatedBy.error, TerminatedBy.timeout):
+                    reason = result.metadata.get("error") or result.reason
+                    self._hooks.on_datapoint_error(dp, RuntimeError(reason))
                 final_results.append(result)
+                self._hooks.on_datapoint_complete(result)
             elif isinstance(result, BaseException):
                 error_msg = f"{type(result).__name__}: {result}"
-                final_results.append(
-                    _error_result(
-                        error_msg, datapoints[i].persona, datapoints[i].scenario
-                    )
-                )
+                err = _error_result(error_msg, dp.persona, dp.scenario)
+                err.metadata["datapoint_id"] = dp.id
+                final_results.append(err)
+                self._hooks.on_datapoint_error(dp, result)
+                self._hooks.on_datapoint_complete(err)
             else:
                 raise TypeError(
                     f"Unexpected result type from gather: {type(result).__name__}"
