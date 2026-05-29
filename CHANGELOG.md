@@ -96,6 +96,7 @@ from evaluatorq.contracts import AgentTarget   # replaces the simulation TargetA
 
 ### New Features
 
+- `simulate()` and `generate_and_simulate()` accept a new opt-in `upload_results=` flag (default `False`). When set to `True`, results are uploaded to the Orq platform after the run, surfacing as an experiment when `ORQ_API_KEY` is configured. Upload errors are logged but never fail the call. Both functions also accept `evaluation_description=` and `path=` parameters mirroring `evaluatorq()` (RES-598).
 - **`LLMCallConfig`** — per-role LLM configuration with `model`, `temperature`, `max_tokens`, `timeout_ms`, `extra_kwargs`, and `client` fields
 - **`LLMConfig`** — now role-based via `attacker: LLMCallConfig` and `evaluator: LLMCallConfig`; retry, cleanup, and target-agent timeout settings retained at top level
 - `LLMCallConfig` exported from the `evaluatorq.redteam` public API
