@@ -97,3 +97,28 @@ def test_default_hooks_all_methods_silent(datapoint_factory):
     assert hooks.on_evaluator_complete("dp1", "goal_achieved", 1.0, _result()) is None
     assert hooks.on_datapoint_error(dp, RuntimeError("boom")) is None
     assert hooks.on_run_complete([_result()]) is None
+
+
+def test_rich_hooks_satisfies_protocol():
+    from rich.console import Console
+
+    from evaluatorq.simulation.hooks import RichHooks
+
+    assert isinstance(RichHooks(console=Console()), SimulationHooks)
+
+
+def test_rich_hooks_tolerates_runner_only_lifecycle(datapoint_factory):
+    """No on_run_start: Progress must start lazily on first datapoint_start
+    and per-item events must not KeyError on an unknown datapoint_id."""
+    from rich.console import Console
+
+    from evaluatorq.simulation.hooks import RichHooks
+
+    hooks = RichHooks(console=Console())
+    dp = datapoint_factory("dp1")
+
+    hooks.on_datapoint_start(dp)  # lazily starts Progress, creates task
+    hooks.on_turn_complete("dp1", _turn_metrics())
+    hooks.on_turn_complete("unknown", _turn_metrics())  # must not raise
+    hooks.on_datapoint_complete(_result())
+    hooks.on_run_complete([_result()])  # stops Progress; no prior on_run_start

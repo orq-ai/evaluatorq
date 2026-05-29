@@ -18,12 +18,12 @@ concurrent simulation.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, TypedDict, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, TypedDict, runtime_checkable
 
 from loguru import logger
 
 if TYPE_CHECKING:
-    from rich.console import Console as RichConsole  # noqa: F401  (used by RichHooks in Task 2)
+    from rich.console import Console as RichConsole
 
     from evaluatorq.simulation.types import (
         Datapoint,
@@ -129,3 +129,121 @@ class DefaultHooks:
 
     def on_run_complete(self, results: list[SimulationResult]) -> None:
         logger.info(f"[simulation] Run complete: {len(results)} results")
+
+
+class RichHooks:
+    """Rich terminal hooks: one progress task per ``datapoint_id``.
+
+    Lifecycle-tolerant: ``on_run_start`` is optional. If the runner is driven
+    directly (no ``_simulate_core``), the ``Progress`` starts lazily on the
+    first ``on_datapoint_start`` and ``max_turns`` is unknown (turn fields are
+    advisory). Per-item events ``.get()`` their task defensively.
+
+    Args:
+        console: a ``rich.console.Console``; a new one is created when ``None``.
+    """
+
+    def __init__(self, *, console: RichConsole | None = None) -> None:
+        if console is None:
+            from rich.console import Console
+
+            console = Console()
+        self._console = console
+        self._progress: Any = None  # rich.progress.Progress
+        self._overall_task_id: Any = None  # rich.progress.TaskID | None
+        self._tasks: dict[str, int] = {}  # datapoint_id -> rich TaskID
+        self._max_turns: int | None = None
+        self._completed = 0
+        self._total: int | None = None
+
+    def on_confirm(self, meta: SimulationRunMeta) -> bool:
+        # Core RichHooks does not prompt (no typer dep). The interactive
+        # confirm table + typer.confirm lands in the CLI override (RES-845).
+        return True
+
+    def _ensure_started(self) -> None:
+        if self._progress is not None:
+            return
+        from rich.progress import (
+            BarColumn,
+            Progress,
+            SpinnerColumn,
+            TextColumn,
+            TimeElapsedColumn,
+        )
+
+        self._progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("{task.completed}/{task.total}"),
+            TimeElapsedColumn(),
+            console=self._console,
+        )
+        self._progress.start()
+
+    def on_run_start(self, meta: SimulationRunMeta) -> None:
+        self._ensure_started()
+        self._max_turns = meta["max_turns"]
+        self._total = meta["num_datapoints"]
+        self._overall_task_id = self._progress.add_task(
+            "[bold cyan]Simulations", total=meta["num_datapoints"]
+        )
+
+    def on_datapoint_start(self, datapoint: Datapoint) -> None:
+        self._ensure_started()
+        if datapoint.id in self._tasks:
+            return
+        self._tasks[datapoint.id] = self._progress.add_task(
+            f"  {datapoint.scenario.name}", total=self._max_turns
+        )
+
+    def on_turn_complete(self, datapoint_id: str, metrics: TurnMetrics) -> None:
+        if self._progress is None:
+            return
+        task_id = self._tasks.get(datapoint_id)
+        if task_id is None:
+            return
+        self._progress.update(task_id, completed=metrics.turn_number)
+
+    def on_datapoint_complete(self, result: SimulationResult) -> None:
+        if self._progress is None:
+            return
+        dp_id = result.metadata.get("datapoint_id")
+        task_id = self._tasks.get(dp_id) if dp_id else None
+        if task_id is not None:
+            self._progress.update(
+                task_id,
+                description=f"  [green]{dp_id}[/green] {result.terminated_by}",
+            )
+        self._completed += 1
+        if self._overall_task_id is not None:
+            self._progress.update(self._overall_task_id, completed=self._completed)
+
+    def on_evaluator_complete(
+        self, datapoint_id: str, name: str, score: float, result: SimulationResult
+    ) -> None:
+        # Evaluator scores are summarised on on_run_complete; no per-event render.
+        return
+
+    def on_datapoint_error(
+        self, datapoint: Datapoint, exception: BaseException
+    ) -> None:
+        if self._progress is None:
+            return
+        task_id = self._tasks.get(datapoint.id)
+        if task_id is not None:
+            self._progress.update(
+                task_id,
+                description=f"  [red]{datapoint.id} ERROR[/red]",
+            )
+
+    def on_run_complete(self, results: list[SimulationResult]) -> None:
+        if self._progress is not None:
+            self._progress.stop()
+            self._progress = None
+        achieved = sum(1 for r in results if r.goal_achieved)
+        self._console.print(
+            f"[bold green]Done[/bold green]: {len(results)} simulations, "
+            f"{achieved} goal-achieved"
+        )
