@@ -15,7 +15,6 @@ from datetime import datetime
 from evaluatorq.common.reports.md_helpers import details_block
 from evaluatorq.contracts import ReportSection
 
-
 RendererRegistry = dict[str, Callable[[ReportSection], str]]
 """Map a ``ReportSection.kind`` to a function rendering it as a string."""
 

@@ -10,22 +10,18 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from evaluatorq.common.reports import (
-    bar as _bar,
-    bold_bar as _bold_bar,
-    center_table as _center_table,
-    details_block as _details_block,
-    format_date as _format_date,
-    md_table as _md_table,
-    pct as _pct,
-    render_header_md as _render_header_md,
-    render_markdown as _render_markdown_doc,
-    truncate as _truncate,
-)
+from evaluatorq.common.reports import bold_bar as _bold_bar
+from evaluatorq.common.reports import center_table as _center_table
+from evaluatorq.common.reports import details_block as _details_block
+from evaluatorq.common.reports import format_date as _format_date
+from evaluatorq.common.reports import md_table as _md_table
+from evaluatorq.common.reports import pct as _pct
+from evaluatorq.common.reports import render_header_md as _render_header_md
+from evaluatorq.common.reports import render_markdown as _render_markdown_doc
+from evaluatorq.common.reports import truncate as _truncate
 from evaluatorq.contracts import ReportSection
 from evaluatorq.simulation.reports.sections import build_report_sections
 from evaluatorq.simulation.types import SimulationResult
-
 
 # ---------------------------------------------------------------------------
 # Section renderers
@@ -151,18 +147,22 @@ def _render_judge_verdicts_section(section: ReportSection) -> str:
             [reason, str(count)] for reason, count in
             sorted(terminated_by.items(), key=lambda kv: -kv[1])
         ]
-        lines.append("**Terminated By:**")
-        lines.append("")
-        lines.append(_md_table(["Reason", "Count"], term_rows, right_align={1}))
-        lines.append("")
+        lines.extend((
+            "**Terminated By:**",
+            "",
+            _md_table(["Reason", "Count"], term_rows, right_align={1}),
+            "",
+        ))
 
     if rules_broken:
         rule_rows = [
             [rule, str(count)] for rule, count in rules_broken.items()
         ]
-        lines.append(f"**Rules Broken** (total instances: {total_broken}):")
-        lines.append("")
-        lines.append(_md_table(["Rule", "Count"], rule_rows, right_align={1}))
+        lines.extend((
+            f"**Rules Broken** (total instances: {total_broken}):",
+            "",
+            _md_table(["Rule", "Count"], rule_rows, right_align={1}),
+        ))
     else:
         lines.append("No rules broken across any conversation.")
 
@@ -178,16 +178,20 @@ def _render_turn_metrics_section(section: ReportSection) -> str:
 
     if dist:
         dist_rows = [[str(t), str(c)] for t, c in dist.items()]
-        lines.append("**Turn Count Distribution:**")
-        lines.append("")
-        lines.append(_md_table(["Turns", "Conversations"], dist_rows, right_align={1}))
-        lines.append("")
+        lines.extend((
+            "**Turn Count Distribution:**",
+            "",
+            _md_table(["Turns", "Conversations"], dist_rows, right_align={1}),
+            "",
+        ))
 
     if qualities:
         qual_rows = [[k, f"{v:.2f}"] for k, v in qualities.items()]
-        lines.append("**Average Per-Turn Quality Metrics:**")
-        lines.append("")
-        lines.append(_md_table(["Metric", "Avg Score"], qual_rows))
+        lines.extend((
+            "**Average Per-Turn Quality Metrics:**",
+            "",
+            _md_table(["Metric", "Avg Score"], qual_rows),
+        ))
 
     return "\n".join(lines)
 
@@ -254,9 +258,11 @@ def _render_individual_results_section(section: ReportSection) -> str:
         )
 
         body_lines: list[str] = []
-        body_lines.append(f"- **Model:** {entry['model']}")
-        body_lines.append(f"- **Terminated by:** {entry['terminated_by']}")
-        body_lines.append(f"- **Tokens:** {entry['total_tokens']:,}")
+        body_lines.extend((
+            f"- **Model:** {entry['model']}",
+            f"- **Terminated by:** {entry['terminated_by']}",
+            f"- **Tokens:** {entry['total_tokens']:,}",
+        ))
         if entry["rules_broken"]:
             body_lines.append(
                 "- **Rules broken:** " + ", ".join(entry["rules_broken"])
@@ -268,20 +274,26 @@ def _render_individual_results_section(section: ReportSection) -> str:
             body_lines.append(f"- **Evaluator scores:** {scores_str}")
         if entry["error"]:
             body_lines.append(f"- **Error:** {entry['error']}")
-        body_lines.append("")
-        body_lines.append(f"**Judge reason:** {entry['judge_reason']}")
-        body_lines.append("")
-        body_lines.append("**Transcript:**")
-        body_lines.append("")
+        body_lines.extend((
+            "",
+            f"**Judge reason:** {entry['judge_reason']}",
+            "",
+            "**Transcript:**",
+            "",
+        ))
         for msg in entry["transcript"]:
             content = _truncate(msg.get("content", ""), 600)
-            body_lines.append(f"_{msg['role']}_:")
-            body_lines.append("")
-            body_lines.append(f"> {content.replace(chr(10), chr(10) + '> ')}")
-            body_lines.append("")
+            body_lines.extend((
+                f"_{msg['role']}_:",
+                "",
+                f"> {content.replace(chr(10), chr(10) + '> ')}",
+                "",
+            ))
 
-        lines.append(_details_block(title, "\n".join(body_lines)))
-        lines.append("")
+        lines.extend((
+            _details_block(title, "\n".join(body_lines)),
+            "",
+        ))
 
     return "\n".join(lines)
 

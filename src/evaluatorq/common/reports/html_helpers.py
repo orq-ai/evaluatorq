@@ -13,6 +13,7 @@ from pathlib import Path
 from string import Template
 from typing import Any
 
+from loguru import logger
 
 # ---------------------------------------------------------------------------
 # Brand colors
@@ -120,11 +121,22 @@ def charts_available() -> bool:
 
 
 def try_render_svg(fig: Any) -> str | None:
-    """Render a Plotly figure as inline SVG, or ``None`` on failure."""
+    """Render a Plotly figure as inline SVG, or ``None`` on failure.
+
+    Failures here are not the "deps not installed" case (``charts_available``
+    has already gated the call). They are real render failures — missing
+    Chrome/Chromium runtime, OOM, version mismatch — and silently dropping
+    them produces "the report is broken and I don't know why" output. Log a
+    warning with the exception so the failure is observable.
+    """
     try:
         svg_bytes = fig.to_image(format="svg", engine="kaleido")
         return svg_bytes.decode("utf-8") if isinstance(svg_bytes, bytes) else svg_bytes
     except Exception:
+        logger.opt(exception=True).warning(
+            "Chart render failed; chart will be omitted from the report. "
+            "Check kaleido runtime (Chrome/Chromium) and plotly version."
+        )
         return None
 
 

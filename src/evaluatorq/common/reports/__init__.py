@@ -34,11 +34,10 @@ from evaluatorq.common.reports.render import (
     render_markdown,
 )
 
-
 __all__ = [
     "COLORS",
-    "RendererRegistry",
     "STATUS_COLORS",
+    "RendererRegistry",
     "bar",
     "bold_bar",
     "center_table",
@@ -55,5 +54,5 @@ __all__ = [
     "render_horizontal_bar_chart",
     "render_html",
     "render_markdown",
-    "truncate",
+    "truncate", "try_render_svg",
 ]

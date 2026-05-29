@@ -25,7 +25,6 @@ from typing import TYPE_CHECKING, Any
 
 from evaluatorq.contracts import ReportSection
 
-
 if TYPE_CHECKING:
     from evaluatorq.simulation.types import SimulationResult
 
@@ -302,12 +301,13 @@ def _build_errors_section(results: list[SimulationResult]) -> ReportSection | No
 
 def build_report_sections(results: list[SimulationResult]) -> list[ReportSection]:
     """Produce the ordered list of report sections from simulation results."""
-    sections: list[ReportSection] = []
-    sections.append(_build_summary_section(results))
-    sections.append(_build_persona_breakdown_section(results))
-    sections.append(_build_scenario_breakdown_section(results))
-    sections.append(_build_judge_verdicts_section(results))
-    sections.append(_build_turn_metrics_section(results))
+    sections: list[ReportSection] = [
+        _build_summary_section(results),
+        _build_persona_breakdown_section(results),
+        _build_scenario_breakdown_section(results),
+        _build_judge_verdicts_section(results),
+        _build_turn_metrics_section(results),
+    ]
     evaluator = _build_evaluator_scores_section(results)
     if evaluator is not None:
         sections.append(evaluator)

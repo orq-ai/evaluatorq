@@ -13,15 +13,13 @@ from __future__ import annotations
 import operator
 from typing import TYPE_CHECKING, Any
 
-from evaluatorq.common.reports import (
-    bar as _bar,
-    bold_bar as _bold_bar,
-    center_table as _center_table,
-    details_block as _details_block,
-    md_table as _md_table,
-    pct as _pct,
-    truncate as _truncate,
-)
+from evaluatorq.common.reports import bar as _bar
+from evaluatorq.common.reports import bold_bar as _bold_bar
+from evaluatorq.common.reports import center_table as _center_table
+from evaluatorq.common.reports import details_block as _details_block
+from evaluatorq.common.reports import md_table as _md_table
+from evaluatorq.common.reports import pct as _pct
+from evaluatorq.common.reports import truncate as _truncate
 from evaluatorq.contracts import ReportSection
 from evaluatorq.redteam.reports.sections import build_report_sections
 

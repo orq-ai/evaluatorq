@@ -9,23 +9,20 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from evaluatorq.common.reports import (
-    COLORS as _COLORS,
-    STATUS_COLORS as _STATUS_COLORS,
-    esc as _esc,
-    format_date as _format_date,
-    html_table as _html_table,
-    load_css as _load_css,
-    pct as _pct,
-    render_donut_chart as _render_donut_chart_common,
-    render_horizontal_bar_chart as _render_horizontal_bar_chart,
-    render_html as _render_html_doc,
-)
+from evaluatorq.common.reports import COLORS as _COLORS
+from evaluatorq.common.reports import STATUS_COLORS as _STATUS_COLORS
+from evaluatorq.common.reports import esc as _esc
+from evaluatorq.common.reports import format_date as _format_date
+from evaluatorq.common.reports import html_table as _html_table
+from evaluatorq.common.reports import load_css as _load_css
+from evaluatorq.common.reports import pct as _pct
+from evaluatorq.common.reports import render_donut_chart as _render_donut_chart_common
+from evaluatorq.common.reports import render_horizontal_bar_chart as _render_horizontal_bar_chart
+from evaluatorq.common.reports import render_html as _render_html_doc
 from evaluatorq.common.reports.html_helpers import truncate as _truncate_html
 from evaluatorq.contracts import ReportSection
 from evaluatorq.simulation.reports.sections import build_report_sections
 from evaluatorq.simulation.types import SimulationResult
-
 
 # ---------------------------------------------------------------------------
 # Section renderers
