@@ -1287,13 +1287,22 @@ async def _run_dynamic_or_hybrid(
         elif resolved_agent_targets:
             first_caps = at_caps.get(id(resolved_agent_targets[0]))
 
+        # Mirror strategy_planner's caps_for_filter normalization: an empty
+        # AgentCapabilities (classification skipped or no tags found) must be
+        # treated as None so the estimator falls through to the same heuristic
+        # the planner uses at run time. Without this, the confirm-prompt count
+        # under-represents what the planner actually runs.
+        first_caps_for_estimate: AgentCapabilities | None = (
+            first_caps if first_caps is not None and first_caps.capabilities else None
+        )
+
         est_dynamic = 0
         strategy_breakdown: dict[str, Any] = {}
         if resolved_vulns is not None:
             for vuln in resolved_vulns:
                 all_strategies = get_strategies_for_vulnerability(vuln)
                 applicable = select_applicable_strategies_for_vulnerability(
-                    vuln, first_agent_context, agent_capabilities=first_caps,
+                    vuln, first_agent_context, agent_capabilities=first_caps_for_estimate,
                 )
                 n_generated = generated_strategy_count if generate_strategies else 0
                 n = len(applicable) + n_generated
@@ -1311,7 +1320,7 @@ async def _run_dynamic_or_hybrid(
             for cat in resolved_categories:
                 all_strategies = get_strategies_for_category(cat)
                 applicable = select_applicable_strategies(
-                    cat, first_agent_context, agent_capabilities=first_caps,
+                    cat, first_agent_context, agent_capabilities=first_caps_for_estimate,
                 )
                 n_generated = generated_strategy_count if generate_strategies else 0
                 n = len(applicable) + n_generated

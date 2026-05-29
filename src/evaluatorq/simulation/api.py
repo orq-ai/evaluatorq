@@ -7,6 +7,8 @@ import inspect
 import os
 from typing import TYPE_CHECKING
 
+from loguru import logger
+
 from evaluatorq.simulation.types import DEFAULT_MODEL
 
 if TYPE_CHECKING:
@@ -121,6 +123,8 @@ async def simulate(
         # pattern (evaluatorq.py) where upload happens after the eval span
         # closes. Keeps the trace timing focused on simulation work.
         api_key = os.environ.get("ORQ_API_KEY")
+        if upload_results and not api_key:
+            logger.warning("upload_results=True but ORQ_API_KEY is not set; skipping upload.")
         if upload_results and api_key:
             await upload_simulation_results(
                 api_key=api_key,
