@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from evaluatorq.simulation.hooks import (
@@ -265,6 +267,52 @@ async def test_on_datapoint_error_fires_for_raising_target(datapoint_factory):
     assert len(results) == 1
     assert results[0].terminated_by == TerminatedBy.error
     assert hooks.errors == [("dp1", "RuntimeError")]  # reconstructed from metadata
+    assert hooks.completed == ["dp1"]
+
+
+@pytest.mark.asyncio
+async def test_on_turn_complete_fires_per_turn(datapoint_factory):
+    """on_turn_complete must fire once per turn across a multi-turn run."""
+    hooks = RecordingHooks()
+    runner = SimulationRunner(
+        target_callback=_ok_target,
+        model="gpt-4o-mini",
+        max_turns=3,
+        user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+        judge=_StubJudge(terminate=False),  # pyright: ignore[reportArgumentType] never terminates early -> runs all turns
+        hooks=hooks,
+    )
+    await runner.run(datapoint=datapoint_factory("dp1"))
+    assert hooks.turn_events == [("dp1", 1), ("dp1", 2), ("dp1", 3)]
+
+
+@pytest.mark.asyncio
+async def test_on_datapoint_error_fires_on_timeout(datapoint_factory):
+    """A target slower than the per-sim timeout yields a timeout result AND
+    fires on_datapoint_error."""
+
+    async def _slow_target(messages):
+        await asyncio.sleep(0.2)
+        return "too slow"
+
+    hooks = RecordingHooks()
+    runner = SimulationRunner(
+        target_callback=_slow_target,
+        model="gpt-4o-mini",
+        max_turns=2,
+        user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+        judge=_StubJudge(terminate=False),  # pyright: ignore[reportArgumentType]
+        hooks=hooks,
+    )
+    results = await runner.run_batch(
+        [datapoint_factory("dp1")],
+        max_turns=2,
+        timeout_per_simulation=0.01,
+        max_concurrency=1,
+    )
+    assert len(results) == 1
+    assert results[0].terminated_by == TerminatedBy.timeout
+    assert hooks.errors == [("dp1", "RuntimeError")]
     assert hooks.completed == ["dp1"]
 
 

@@ -623,6 +623,10 @@ class SimulationRunner:
             if isinstance(result, SimulationResult):
                 result.metadata["datapoint_id"] = dp.id
                 if result.terminated_by in (TerminatedBy.error, TerminatedBy.timeout):
+                    # The original exception was already swallowed into the error
+                    # result by run(); its type is in metadata["error_type"]. Hooks
+                    # get a reconstructed RuntimeError here (real exc only on the
+                    # BaseException branch below).
                     reason = result.metadata.get("error") or result.reason
                     self._hooks.on_datapoint_error(dp, RuntimeError(reason))
                 final_results.append(result)
@@ -683,6 +687,11 @@ class SimulationRunner:
                 timeout=timeout_s,
             )
         except asyncio.TimeoutError:
+            logger.warning(
+                "Simulation for datapoint %s timed out after %ss; returning timeout result",
+                datapoint.id,
+                timeout_s,
+            )
             # The inner run() never throws (returns error result), so a
             # TimeoutError means asyncio cancelled the task mid-flight.
             # We cannot recover partial messages from the cancelled coroutine,

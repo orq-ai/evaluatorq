@@ -52,10 +52,16 @@ class SimulationHooks(Protocol):
     """Protocol for simulation lifecycle hooks.
 
     Implementations are injected via ``simulate(hooks=...)`` or
-    ``SimulationRunner(hooks=...)``. All methods are synchronous. Hooks fired
-    outside the runner's blanket ``try`` (run-level events) propagate; the
-    ``on_turn_complete`` call is exception-guarded by the runner because it
-    fires inside the per-turn loop under ``run()``'s catch-all.
+    ``SimulationRunner(hooks=...)``. All methods are synchronous; they run on
+    the async event loop, so keep them fast — a slow sync hook stalls every
+    concurrent simulation.
+
+    Exception policy: only ``on_turn_complete`` is exception-guarded by the
+    runner — it fires inside ``run()``'s catch-all, which would otherwise
+    mis-attribute a hook bug as a simulation error. All other hooks
+    (``on_confirm``, ``on_run_start``, ``on_datapoint_start``/``_complete``/
+    ``_error``, ``on_evaluator_complete``, ``on_run_complete``) are NOT
+    guarded: a raising hook propagates and aborts the run/batch.
 
     ``on_confirm`` is the single pre-run gate (reuses the ``SimulationRunMeta``
     payload). It fires before the runner/target exist; returning ``False``
@@ -82,11 +88,12 @@ class SimulationHooks(Protocol):
 
 
 class DefaultHooks:
-    """Loguru no-op/info baseline — the default when no ``hooks`` is supplied.
+    """Loguru baseline — the default when no ``hooks`` is supplied.
 
-    Subclass this to override a single event (e.g. the CLI). Silent at INFO-
-    by design so ``hooks=None`` is behaviour-identical to having no hooks.
-    """
+    Subclass this to override a single event (e.g. the CLI). Emits run-level
+    start/complete at INFO and per-datapoint detail at DEBUG; datapoint errors
+    at WARNING. ``on_confirm`` never blocks, so ``hooks=None`` is
+    control-flow-identical to supplying no hooks (it does still log)."""
 
     def on_confirm(self, meta: SimulationRunMeta) -> bool:
         # Library default: never block. Interactive prompt lives in the CLI
