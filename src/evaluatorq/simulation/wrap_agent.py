@@ -13,7 +13,7 @@ from evaluatorq.simulation.adapters import from_orq_deployment
 from evaluatorq.simulation.convert import to_open_responses
 from evaluatorq.simulation.types import (
     DEFAULT_MODEL,
-    ChatMessage,
+    Message,
 )
 
 if TYPE_CHECKING:
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 def wrap_simulation_agent(
     *,
     name: str = "simulation",
-    target_callback: Callable[[list[ChatMessage]], str | Awaitable[str]] | None = None,
+    target_callback: Callable[[list[Message]], str | Awaitable[str]] | None = None,
     agent_key: str | None = None,
     max_turns: int = 10,
     model: str | None = None,

@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from evaluatorq.redteam.backends.base import AgentTarget
+from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.contracts import AgentContext, AgentResponse, OutputMessage, TextOutputItem, TokenUsage
 
 
@@ -47,10 +47,6 @@ class VercelAISdkTarget(AgentTarget):
         config = DynamicRunConfig(targets=[target])
     """
 
-    memory_entity_id: str | None = None
-    """Vercel AI SDK state lives inside the HTTP handler (stateless to us);
-    conversation history is tracked client-side in ``_history``."""
-
     def __init__(
         self,
         url: str,
@@ -75,7 +71,10 @@ class VercelAISdkTarget(AgentTarget):
                 nonsensical ones) will be applied. The HTTP handler cannot
                 be introspected from Python, so this must be supplied by
                 the caller when capability-aware filtering matters.
+        Vercel AI SDK state lives inside the HTTP handler (stateless to us);
+        conversation history is tracked client-side in ``_history``.
         """
+        super().__init__(memory_entity_id=None)
         self._url = url
         self._headers = headers or {}
         self._extra_body = extra_body or {}
@@ -117,6 +116,30 @@ class VercelAISdkTarget(AgentTarget):
 
         text, usage = self._parse_response(response)
         self._history.append({"role": "assistant", "content": text})
+        text_item: OutputMessage = TextOutputItem(text=text, annotations=[])
+        return AgentResponse(output=[text_item], usage=usage)
+
+    async def respond(self, messages: list[Message]) -> AgentResponse:
+        """Stateless: POST the provided transcript to the AI SDK endpoint.
+
+        The caller owns conversation continuity — the full ``messages`` list is
+        sent as the request body and ``self._history`` is neither read nor
+        written. For redteam single-prompt callers that want per-instance
+        history, use ``send_prompt``.
+        """
+        body: dict[str, Any] = {
+            "messages": [{"role": m.role, "content": m.content or ""} for m in messages],
+            **self._extra_body,
+        }
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            response = await client.post(
+                self._url,
+                json=body,
+                headers={"Content-Type": "application/json", **self._headers},
+            )
+            response.raise_for_status()
+
+        text, usage = self._parse_response(response)
         text_item: OutputMessage = TextOutputItem(text=text, annotations=[])
         return AgentResponse(output=[text_item], usage=usage)
 

@@ -11,7 +11,7 @@ Semantic convention:
 
 import os
 from datetime import datetime
-from typing import Any, Literal, TypedDict
+from typing import Any, TypedDict
 
 from pydantic import (
     BaseModel,
@@ -342,7 +342,7 @@ def infer_framework(category: str) -> str:
 # existing ``from evaluatorq.redteam.contracts import ...`` call sites continue
 # to work unchanged. (RES-596 consolidated the duplicated definitions.)
 
-from evaluatorq.contracts import (  # noqa: F401, E402
+from evaluatorq.contracts import (  # noqa: F401
     AgentResponse,
     FunctionCall,
     Message,
@@ -352,7 +352,6 @@ from evaluatorq.contracts import (  # noqa: F401, E402
     TextOutputItem,
     ToolCallOutputItem,
 )
-
 
 # ---------------------------------------------------------------------------
 # Input models
@@ -455,33 +454,16 @@ class StaticDataset(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Agent context models
+# Agent context models — relocated to evaluatorq.contracts (RES-808 PR2).
+# Re-exported here so existing ``evaluatorq.redteam.contracts`` imports keep working.
 # ---------------------------------------------------------------------------
 
-
-class ToolInfo(BaseModel):
-    """Information about an agent's tool."""
-
-    name: str = Field(description='Tool name/identifier')
-    description: str | None = Field(default=None, description='Tool description')
-    parameters: dict[str, Any] | None = Field(default=None, description='Tool parameter schema')
-
-
-class MemoryStoreInfo(BaseModel):
-    """Information about an agent's memory store."""
-
-    id: str = Field(description='Memory store ID')
-    key: str | None = Field(default=None, description='Memory store key/slug')
-    description: str | None = Field(default=None, description='Memory store description')
-
-
-class KnowledgeBaseInfo(BaseModel):
-    """Information about an agent's knowledge base."""
-
-    id: str = Field(description='Knowledge base ID')
-    key: str | None = Field(default=None, description='Knowledge base key/slug')
-    name: str | None = Field(default=None, description='Knowledge base name')
-    description: str | None = Field(default=None, description='Knowledge base description')
+from evaluatorq.contracts import (  # noqa: F401
+    AgentContext,
+    KnowledgeBaseInfo,
+    MemoryStoreInfo,
+    ToolInfo,
+)
 
 
 class TargetConfig(BaseModel):
@@ -494,42 +476,6 @@ class TargetConfig(BaseModel):
         default=None,
         description="System prompt for the target model/agent",
     )
-
-
-class AgentContext(BaseModel):
-    """Extended agent information for context-aware attacks.
-
-    Describes the target agent's configuration and capabilities.
-    """
-
-    key: str = Field(description='Agent identifier key')
-    display_name: str | None = Field(default=None, description='Agent display name')
-    description: str | None = Field(default=None, description='Agent description')
-    system_prompt: str | None = Field(default=None, description='Agent system prompt (used by deployments)')
-    instructions: str | None = Field(default=None, description='Agent behavioral instructions')
-    tools: list[ToolInfo] = Field(default_factory=list, description='Available tools')
-    memory_stores: list[MemoryStoreInfo] = Field(default_factory=list, description='Memory stores')
-    knowledge_bases: list[KnowledgeBaseInfo] = Field(default_factory=list, description='Knowledge bases')
-    model: str | None = Field(default=None, description='Primary model')
-
-    @property
-    def has_tools(self) -> bool:
-        """Check if agent has any tools configured."""
-        return len(self.tools) > 0
-
-    @property
-    def has_memory(self) -> bool:
-        """Check if agent has any memory stores configured."""
-        return len(self.memory_stores) > 0
-
-    @property
-    def has_knowledge(self) -> bool:
-        """Check if agent has any knowledge bases configured."""
-        return len(self.knowledge_bases) > 0
-
-    def get_tool_names(self) -> list[str]:
-        """Get list of tool names."""
-        return [t.name for t in self.tools]
 
 
 # ---------------------------------------------------------------------------
@@ -705,8 +651,7 @@ class AttackStrategy(BaseModel):
 # Token usage — re-exported from evaluatorq.contracts (RES-596)
 # ---------------------------------------------------------------------------
 
-from evaluatorq.contracts import TokenUsage  # noqa: F401, E402
-
+from evaluatorq.contracts import TokenUsage
 
 SendResult = AgentResponse  # deprecated alias; use AgentResponse directly
 

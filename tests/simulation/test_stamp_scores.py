@@ -62,12 +62,13 @@ def test_stamps_scores_onto_matching_result_by_identity():
         )
     ]
 
-    _stamp_evaluator_scores(eq_results, cache)
+    _stamp_evaluator_scores(eq_results, cache, "my-run")
 
     assert sim.metadata["evaluator_scores"] == {
         "goal_achieved": 1.0,
         "criteria_met": 0.0,
     }
+    assert sim.metadata["evaluation_name"] == "my-run"
 
 
 def test_skips_rows_with_no_cached_result():
@@ -76,4 +77,4 @@ def test_skips_rows_with_no_cached_result():
     eq_results = [DataPointResult(data_point=placeholder, error="boom")]
 
     # No cache entry, no job_results — must not raise.
-    _stamp_evaluator_scores(eq_results, {})
+    _stamp_evaluator_scores(eq_results, {}, "")

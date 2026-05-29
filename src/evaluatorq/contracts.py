@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import sys
-from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, Union
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -18,7 +19,7 @@ else:
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
-    _ClientT: TypeAlias = "AsyncOpenAI | None"
+    _ClientT: TypeAlias = AsyncOpenAI | None
 else:
     _ClientT = Any
 
@@ -87,7 +88,7 @@ class ReasoningOutputItem(BaseModel):
 
 
 OutputMessage = Annotated[
-    Union[TextOutputItem, ToolCallOutputItem, ReasoningOutputItem],
+    TextOutputItem | ToolCallOutputItem | ReasoningOutputItem,
     Field(discriminator="type"),
 ]
 
@@ -160,7 +161,7 @@ class TokenUsage(BaseModel):
     calls: int = Field(default=0, ge=0, description="Number of LLM API calls")
 
     @classmethod
-    def from_completion(cls, response: Any) -> "TokenUsage | None":
+    def from_completion(cls, response: Any) -> TokenUsage | None:
         """Extract token usage from an OpenAI-compatible completion response."""
         usage = getattr(response, "usage", None)
         if usage is None:
@@ -175,7 +176,7 @@ class TokenUsage(BaseModel):
         total = int(raw_total) if raw_total is not None and int(raw_total) > 0 else prompt + completion
         return cls(prompt_tokens=prompt, completion_tokens=completion, total_tokens=total, calls=1)
 
-    def __add__(self, other: "TokenUsage | None") -> "TokenUsage":
+    def __add__(self, other: TokenUsage | None) -> TokenUsage:
         if other is None:
             return self.model_copy()
         return TokenUsage(
@@ -185,7 +186,7 @@ class TokenUsage(BaseModel):
             calls=self.calls + other.calls,
         )
 
-    def __radd__(self, other: object) -> "TokenUsage":
+    def __radd__(self, other: object) -> TokenUsage:
         """Support sum() which starts with integer 0, and reflected addition."""
         if isinstance(other, int) and other == 0:
             return self.model_copy()
@@ -228,7 +229,7 @@ class AgentResponse(BaseModel):
             *,
             output: list[OutputMessage] | None = None,
             text: str | None = None,
-            usage: "TokenUsage | None" = None,
+            usage: TokenUsage | None = None,
             model: str | None = None,
             response_id: str | None = None,
             finish_reason: str | None = None,
@@ -260,13 +261,145 @@ class AgentResponse(BaseModel):
         return [item for item in self.output if isinstance(item, ToolCallOutputItem)]
 
 
+# ---------------------------------------------------------------------------
+# Agent context models
+# ---------------------------------------------------------------------------
+
+
+class ToolInfo(BaseModel):
+    """Information about an agent's tool."""
+
+    name: str = Field(description='Tool name/identifier')
+    description: str | None = Field(default=None, description='Tool description')
+    parameters: dict[str, Any] | None = Field(default=None, description='Tool parameter schema')
+
+
+class MemoryStoreInfo(BaseModel):
+    """Information about an agent's memory store."""
+
+    id: str = Field(description='Memory store ID')
+    key: str | None = Field(default=None, description='Memory store key/slug')
+    description: str | None = Field(default=None, description='Memory store description')
+
+
+class KnowledgeBaseInfo(BaseModel):
+    """Information about an agent's knowledge base."""
+
+    id: str = Field(description='Knowledge base ID')
+    key: str | None = Field(default=None, description='Knowledge base key/slug')
+    name: str | None = Field(default=None, description='Knowledge base name')
+    description: str | None = Field(default=None, description='Knowledge base description')
+
+
+class AgentContext(BaseModel):
+    """Extended agent information for context-aware attacks.
+
+    Describes the target agent's configuration and capabilities.
+    """
+
+    key: str = Field(description='Agent identifier key')
+    display_name: str | None = Field(default=None, description='Agent display name')
+    description: str | None = Field(default=None, description='Agent description')
+    system_prompt: str | None = Field(default=None, description='Agent system prompt (used by deployments)')
+    instructions: str | None = Field(default=None, description='Agent behavioral instructions')
+    tools: list[ToolInfo] = Field(default_factory=list, description='Available tools')
+    memory_stores: list[MemoryStoreInfo] = Field(default_factory=list, description='Memory stores')
+    knowledge_bases: list[KnowledgeBaseInfo] = Field(default_factory=list, description='Knowledge bases')
+    model: str | None = Field(default=None, description='Primary model')
+
+    @property
+    def has_tools(self) -> bool:
+        """Check if agent has any tools configured."""
+        return len(self.tools) > 0
+
+    @property
+    def has_memory(self) -> bool:
+        """Check if agent has any memory stores configured."""
+        return len(self.memory_stores) > 0
+
+    @property
+    def has_knowledge(self) -> bool:
+        """Check if agent has any knowledge bases configured."""
+        return len(self.knowledge_bases) > 0
+
+    def get_tool_names(self) -> list[str]:
+        """Get list of tool names."""
+        return [t.name for t in self.tools]
+
+
+# ---------------------------------------------------------------------------
+# AgentTarget ABC
+# ---------------------------------------------------------------------------
+
+
+class AgentTarget(ABC):
+    """Abstract base class for agent targets that can receive messages.
+
+    Subclasses implement ``respond`` (the canonical message-based interface)
+    and ``new``. ``send_prompt`` is a concrete shim retained for single-prompt
+    callers — it wraps the prompt in one user message and calls ``respond``.
+    Targets that back a server-side memory store override ``get_agent_context``
+    (self-describing), ``cleanup_memory`` (release created entities), and
+    ``map_error`` (provider-specific error codes); stateless targets inherit
+    the safe defaults. ``memory_entity_id`` is an instance attribute (set in
+    ``__init__``) so subclasses can mutate it without shadowing a class default.
+    """
+
+    def __init__(self, memory_entity_id: str | None = None) -> None:
+        self.memory_entity_id = memory_entity_id
+
+    @abstractmethod
+    async def respond(self, messages: list[Message]) -> AgentResponse:
+        """Send a list of messages; return the response.
+
+        Contract notes for implementers and callers:
+        - ``Message`` carries the full chat shape (tool calls, tool results),
+          but most targets consume only ``role`` + ``content`` and treat the
+          tool-call fields as advisory. Do not rely on a target round-tripping
+          ``tool_calls`` / ``tool_call_id`` / ``name`` unless its docstring says so.
+        - Some targets that hold server-side conversation state (e.g.
+          ``ORQAgentTarget``) require ``messages[-1].role == "user"`` and forward
+          only that last turn; they raise ``ValueError`` otherwise.
+        """
+        ...
+
+    @abstractmethod
+    def new(self) -> AgentTarget:
+        """Return a fresh independent instance for a new attack."""
+        ...
+
+    async def send_prompt(self, prompt: str) -> AgentResponse:
+        """Back-compat shim: wrap a single prompt in one user message and call ``respond``."""
+        return await self.respond([Message(role="user", content=prompt)])
+
+    async def get_agent_context(self) -> AgentContext:
+        """Default: minimal context. Override for platform-backed targets."""
+        return AgentContext(key=getattr(self, "agent_key", "unknown"))
+
+    async def cleanup_memory(self, ctx: AgentContext, entity_ids: list[str]) -> None:
+        """Release any memory entities this target created. Default: no-op (stateless)."""
+        return
+
+    def map_error(self, exc: Exception) -> tuple[str, str] | None:
+        """Map an exception to a provider-specific ``(code, message)``.
+
+        Return ``None`` to defer to the backend's default mapping. Stateless
+        targets inherit this no-opinion default.
+        """
+        return None
+
+
 __all__ = [
     "DEFAULT_PIPELINE_MODEL",
     "DEFAULT_TARGET_MAX_TOKENS",
     "DEFAULT_TARGET_TIMEOUT_MS",
+    "AgentContext",
     "AgentResponse",
+    "AgentTarget",
     "FunctionCall",
+    "KnowledgeBaseInfo",
     "LLMCallConfig",
+    "MemoryStoreInfo",
     "Message",
     "OutputMessage",
     "ReasoningOutputItem",
@@ -274,4 +407,5 @@ __all__ = [
     "TextOutputItem",
     "TokenUsage",
     "ToolCallOutputItem",
+    "ToolInfo",
 ]

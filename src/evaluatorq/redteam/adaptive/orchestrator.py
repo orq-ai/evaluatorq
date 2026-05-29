@@ -19,8 +19,8 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TextColumn
 from typing_extensions import Self
 
 from evaluatorq.common.sanitize import xml_escape
-from evaluatorq.contracts import AgentResponse, TextOutputItem
-from evaluatorq.redteam.backends.base import AgentTarget, DefaultErrorMapper, ErrorMapper, _coerce_to_agent_response
+from evaluatorq.contracts import AgentResponse, AgentTarget, TextOutputItem
+from evaluatorq.redteam.backends.base import Backend, _coerce_to_agent_response
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
     PIPELINE_CONFIG,
@@ -43,6 +43,12 @@ from evaluatorq.redteam.utils import safe_substitute
 
 if TYPE_CHECKING:
     from openai.types.chat import ChatCompletionMessageParam
+
+
+def _default_map_error(exc: Exception) -> tuple[str, str]:
+    """Fallback error mapping for the no-backend path; mirrors ``Backend.map_error``."""
+    return "target_error", f"{type(exc).__name__}: {exc}"
+
 
 _ui_console = Console(stderr=True)
 _PROGRESS_LABEL_MAX_LEN = 52
@@ -299,7 +305,7 @@ class MultiTurnOrchestrator:
         self,
         llm_client: AsyncOpenAI,
         model: str = DEFAULT_PIPELINE_MODEL,
-        error_mapper: ErrorMapper | None = None,
+        backend: Backend | None = None,
         attacker_instructions: str | None = None,
         verbosity: int = 0,
         llm_kwargs: dict[str, Any] | None = None,
@@ -310,7 +316,7 @@ class MultiTurnOrchestrator:
         Args:
             llm_client: OpenAI-compatible async client for adversarial LLM
             model: Model to use for adversarial prompt generation
-            error_mapper: Optional custom error mapper
+            backend: Optional Backend for error mapping
             attacker_instructions: Optional domain-specific context to steer attack generation
             verbosity: Verbosity level (0=silent, 1=summary progress bar, 2=per-attack progress bars)
             llm_kwargs: Deprecated — merged into pipeline_config.attacker.extra_kwargs at init. Use LLMCallConfig.extra_kwargs instead.
@@ -318,7 +324,7 @@ class MultiTurnOrchestrator:
         """
         self.llm_client = llm_client
         self.model = model
-        self.error_mapper = error_mapper or DefaultErrorMapper()
+        self._backend = backend
         self.attacker_instructions = attacker_instructions
         self.verbosity = verbosity
         self._cfg = pipeline_config or PIPELINE_CONFIG
@@ -698,7 +704,7 @@ class MultiTurnOrchestrator:
                             break
                     except Exception as e:
                         consecutive_agent_errors += 1
-                        mapped_code, error_msg = self.error_mapper.map_error(e)
+                        mapped_code, error_msg = self._backend.map_error(e) if self._backend is not None else _default_map_error(e)
                         agent_response = f'[ERROR: {error_msg}]'
                         _tgt_result = AgentResponse(output=[TextOutputItem(text=agent_response, annotations=[])])
                         logger.warning(f'Target agent error on turn {turn + 1}/{max_turns}: {error_msg}')

@@ -21,7 +21,6 @@ from evaluatorq.simulation.tracing import (
 )
 from evaluatorq.simulation.types import (
     DEFAULT_MODEL,
-    ChatMessage,
     Datapoint,
     Judgment,
     Message,
@@ -44,6 +43,7 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
     from opentelemetry.trace import Span
 
+    from evaluatorq.contracts import AgentTarget
     from evaluatorq.simulation.agents.base import BaseAgent
 
 logger = logging.getLogger(__name__)
@@ -70,13 +70,6 @@ def _invert_roles_for_simulator(messages: list[Message]) -> list[Message]:
 
 
 @runtime_checkable
-class TargetAgent(Protocol):
-    """Protocol for target agents being tested."""
-
-    async def respond(self, messages: list[ChatMessage]) -> str: ...
-
-
-@runtime_checkable
 class SimulationUserSimulator(Protocol):
     """Protocol for user-simulator agents injected into the runner."""
 
@@ -90,7 +83,7 @@ class SimulationUserSimulator(Protocol):
     async def generate_first_message(self) -> str: ...
 
     async def respond_async(
-        self, messages: list[ChatMessage], *, llm_purpose: str | None = None
+        self, messages: list[Message], *, llm_purpose: str | None = None
     ) -> str: ...
 
 
@@ -98,7 +91,7 @@ class SimulationUserSimulator(Protocol):
 class SimulationJudge(Protocol):
     """Protocol for judge agents injected into the runner."""
 
-    async def evaluate(self, messages: list[ChatMessage]) -> Judgment: ...
+    async def evaluate(self, messages: list[Message]) -> Judgment: ...
 
 
 # ---------------------------------------------------------------------------
@@ -192,8 +185,8 @@ class SimulationRunner:
     def __init__(
         self,
         *,
-        target_agent: TargetAgent | None = None,
-        target_callback: Callable[[list[ChatMessage]], str | Awaitable[str]]
+        target_agent: AgentTarget | None = None,
+        target_callback: Callable[[list[Message]], str | Awaitable[str]]
         | None = None,
         model: str = DEFAULT_MODEL,
         max_turns: int = 10,
@@ -408,18 +401,18 @@ class SimulationRunner:
                 )
             )
 
+        target_usage_acc: dict[str, TokenUsage] = {"acc": ZERO_USAGE.model_copy()}
+
         def _get_total_usage() -> TokenUsage:
-            # Note: target token usage is not included here. OrqResponsesTarget and
-            # callable targets do not expose get_usage() via a shared protocol, so
-            # SimulationResult.token_usage reflects only user_simulator + judge cost.
             usage = user_simulator.get_usage()
             judge_usage = judge.get_usage()
+            target_usage = target_usage_acc["acc"]
             return TokenUsage(
-                prompt_tokens=usage.prompt_tokens + judge_usage.prompt_tokens,
+                prompt_tokens=usage.prompt_tokens + judge_usage.prompt_tokens + target_usage.prompt_tokens,
                 completion_tokens=usage.completion_tokens
-                + judge_usage.completion_tokens,
-                total_tokens=usage.total_tokens + judge_usage.total_tokens,
-                calls=usage.calls + judge_usage.calls,
+                + judge_usage.completion_tokens + target_usage.completion_tokens,
+                total_tokens=usage.total_tokens + judge_usage.total_tokens + target_usage.total_tokens,
+                calls=usage.calls + judge_usage.calls + target_usage.calls,
             )
 
         # Expose to the outer run() except path so it can report partial usage.
@@ -480,9 +473,11 @@ class SimulationRunner:
                         target_span,
                         [{"role": m.role, "content": m.content or ""} for m in messages],
                     )
-                    agent_response = await self._get_target_response(messages)
-                    record_llm_output(target_span, agent_response)
-                messages.append(Message(role="assistant", content=agent_response))
+                    agent_response_text, agent_response_usage = await self._get_target_response(messages)
+                    if agent_response_usage is not None:
+                        target_usage_acc["acc"] = target_usage_acc["acc"] + agent_response_usage
+                    record_llm_output(target_span, agent_response_text)
+                messages.append(Message(role="assistant", content=agent_response_text))
 
                 async with with_simulation_span(
                     "orq.simulation.judge_evaluation", None
@@ -628,14 +623,15 @@ class SimulationRunner:
     # Private helpers
     # ---------------------------------------------------------------------------
 
-    async def _get_target_response(self, messages: list[ChatMessage]) -> str:
+    async def _get_target_response(self, messages: list[Message]) -> tuple[str, TokenUsage | None]:
         if self._target_agent:
-            return await self._target_agent.respond(messages)
+            resp = await self._target_agent.respond(messages)
+            return resp.text, resp.usage
         if self._target_callback:
             result = self._target_callback(messages)
             if inspect.isawaitable(result):
-                return await result
-            return result
+                return await result, None
+            return result, None
         raise RuntimeError("No target agent or callback configured")
 
     @staticmethod

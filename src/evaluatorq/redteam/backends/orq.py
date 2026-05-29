@@ -1,8 +1,8 @@
 """ORQ backend implementation for dynamic red teaming.
 
-Consolidates all ORQ SDK-specific agent code behind the backend protocols
+Consolidates all ORQ SDK-specific agent code behind the backend ABCs
 defined in ``backends.base``. Other modules import these concrete classes
-when they need ORQ-specific behavior, or accept the protocols when they
+when they need ORQ-specific behavior, or accept the base classes when they
 want to be backend-agnostic.
 """
 
@@ -12,7 +12,7 @@ import asyncio
 import json
 import os
 import uuid
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 from loguru import logger
 
@@ -43,7 +43,9 @@ def _get_orq_server_url() -> str:
     return url.rstrip('/').removesuffix('/v2/router')
 
 
-from evaluatorq.redteam.backends.base import extract_provider_error_code, extract_status_code
+from evaluatorq.contracts import AgentTarget, Message
+from evaluatorq.redteam.backends._errors import extract_provider_error_code, extract_status_code
+from evaluatorq.redteam.backends.base import Backend
 from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
     AgentContext,
@@ -58,14 +60,50 @@ from evaluatorq.redteam.contracts import (
 )
 from evaluatorq.redteam.tracing import record_token_usage, set_span_attrs, truncate_for_span, with_redteam_span
 
-if TYPE_CHECKING:
-    from evaluatorq.redteam.backends.base import AgentTarget
+
+async def _orq_cleanup_memory(orq_client: Any, ctx: AgentContext, entity_ids: list[str]) -> None:
+    """Delete memory entities for each (memory store, entity_id) combination."""
+    for ms in ctx.memory_stores:
+        if not ms.key:
+            logger.warning(f'Memory store {ms.id} has no key, skipping cleanup')
+            continue
+        for entity_id in entity_ids:
+            try:
+                await asyncio.to_thread(
+                    orq_client.memory_stores.delete_memory,
+                    memory_store_key=ms.key,
+                    memory_entity_id=entity_id,
+                )
+                logger.debug(f'Deleted memory entity {entity_id} from store {ms.key}')
+            except Exception as e:  # noqa: PERF203
+                if extract_status_code(e) == 404:
+                    continue
+                logger.warning(f'Failed to cleanup memory entity {entity_id} from {ms.key}: {e}')
 
 
-class ORQAgentTarget:
+def _orq_map_error(exc: Exception) -> tuple[str, str]:
+    """Map an ORQ exception to a normalized (error_code, error_message) tuple."""
+    name = type(exc).__name__.lower()
+    text = str(exc).lower()
+    status_code = extract_status_code(exc)
+    provider_code = extract_provider_error_code(exc)
+    if status_code is not None:
+        return f'orq.http.{status_code}', f'{type(exc).__name__}: {exc}'
+    if provider_code:
+        return f'orq.code.{provider_code}', f'{type(exc).__name__}: {exc}'
+    if 'timeout' in name or 'timed out' in text:
+        return 'orq.timeout', f'{type(exc).__name__}: {exc}'
+    if 'auth' in name or 'unauthorized' in text or 'forbidden' in text:
+        return 'orq.auth', f'{type(exc).__name__}: {exc}'
+    if 'ratelimit' in name or '429' in text:
+        return 'orq.rate_limit', f'{type(exc).__name__}: {exc}'
+    return 'orq.unknown', f'{type(exc).__name__}: {exc}'
+
+
+class ORQAgentTarget(AgentTarget):
     """Target adapter for ORQ agents.
 
-    Wraps the ORQ SDK to provide the AgentTarget protocol.
+    Wraps the ORQ SDK to satisfy the ``AgentTarget`` ABC.
     """
 
     def __init__(
@@ -83,21 +121,36 @@ class ORQAgentTarget:
         if not provided, one is generated. The pipeline reads this attribute
         after construction to track entities for cleanup.
         """
+        if memory_entity_id is None:
+            memory_entity_id = f'red-team-{uuid.uuid4().hex[:12]}'
+        super().__init__(memory_entity_id=memory_entity_id)
         timeout_ms = timeout_ms or PIPELINE_CONFIG.target_agent_timeout_ms
         self.agent_key = agent_key
         self.orq_client = orq_client
-        self.memory_entity_id: str | None = (
-            memory_entity_id if memory_entity_id is not None else f'red-team-{uuid.uuid4().hex[:12]}'
-        )
         self.model = model
         self._timeout_ms = timeout_ms
         self._task_id: str | None = None
+        self._cached_context: AgentContext | None = None
 
-    async def send_prompt(self, prompt: str) -> AgentResponse:
-        """Send a prompt to the ORQ agent and return the response with usage + any tool calls.
+    async def respond(self, messages: list[Message]) -> AgentResponse:
+        """Send the last user message to the ORQ agents endpoint, threaded via ``task_id``.
+
+        The ORQ agents endpoint holds conversation state server-side via
+        ``task_id``, so ``respond`` forwards only the last user turn. Prior turns
+        in ``messages`` are assumed consistent with the server-side history that
+        ``task_id`` references; the first call (``task_id is None``) seeds it.
+
+        Caller contract: ``messages[-1].role == "user"``. A mismatch with the
+        server-side history is a caller bug.
 
         Token usage is accumulated across pending-tool-call continuations.
         """
+        if not messages or messages[-1].role != "user":
+            raise ValueError(
+                "ORQAgentTarget.respond requires messages[-1].role == 'user'. "
+                "Server-side conversation state is held via task_id."
+            )
+        prompt = messages[-1].content or ""
         total_prompt_tokens = 0
         total_completion_tokens = 0
         total_tokens = 0
@@ -321,53 +374,16 @@ class ORQAgentTarget:
         """Return the agent key as the display name for reports and tracing."""
         return self.agent_key
 
-    # -- SupportsAgentContext --
     async def get_agent_context(self) -> AgentContext:
         """Return agent context for this target's agent key."""
-        return await ORQContextProvider(self.orq_client).get_agent_context(self.agent_key)
-
-    # -- SupportsTargetFactory --
-    def create_target(self, agent_key: str) -> ORQAgentTarget:
-        """Create a new ORQAgentTarget for the given agent key.
-
-        The new target generates its own ``memory_entity_id``; callers can
-        read it via the attribute after construction.
-        """
-        return ORQAgentTarget(
-            agent_key=agent_key,
-            orq_client=self.orq_client,
-            model=self.model,
-            timeout_ms=self._timeout_ms,
-        )
-
-    # -- SupportsMemoryCleanup --
-    async def cleanup_memory(self, agent_context: AgentContext, entity_ids: list[str]) -> None:
-        """Clean up memory entities created during red teaming."""
-        await ORQMemoryCleanup(orq_client=self.orq_client).cleanup_memory(agent_context, entity_ids)
-
-    # -- SupportsErrorMapping --
-    def map_error(self, exc: Exception) -> tuple[str, str]:
-        """Map an exception to a normalized error code and message tuple."""
-        return ORQErrorMapper().map_error(exc)
-
-
-class ORQContextProvider:
-    """Retrieves agent context from the ORQ API."""
-
-    def __init__(self, orq_client: Any):
-        """Initialize the context provider with an ORQ SDK client."""
-        self.orq_client = orq_client
-
-    async def get_agent_context(self, agent_key: str) -> AgentContext:
-        """Retrieve full agent context from ORQ API."""
-        logger.debug(f'Retrieving agent context for: {agent_key}')
-
+        if self._cached_context is not None:
+            return self._cached_context
+        logger.debug(f'Retrieving agent context for: {self.agent_key}')
         agent_data = await asyncio.to_thread(
             self.orq_client.agents.retrieve,
-            agent_key=agent_key,
+            agent_key=self.agent_key,
         )
 
-        # Parse tools from settings.tools
         tools: list[ToolInfo] = []
         settings = getattr(agent_data, 'settings', None)
         if settings and hasattr(settings, 'tools') and settings.tools:
@@ -380,7 +396,6 @@ class ORQContextProvider:
                 for tool in settings.tools
             )
 
-        # Extract raw IDs for enrichment
         raw_kb_ids: list[str] = []
         if hasattr(agent_data, 'knowledge_bases') and agent_data.knowledge_bases:
             raw_kb_ids = [getattr(kb, 'knowledge_id', None) or str(kb) for kb in agent_data.knowledge_bases]
@@ -389,20 +404,18 @@ class ORQContextProvider:
         if hasattr(agent_data, 'memory_stores') and agent_data.memory_stores:
             raw_ms_ids = [ms if isinstance(ms, str) else getattr(ms, 'key', str(ms)) for ms in agent_data.memory_stores]
 
-        # Enrich knowledge bases and memory stores concurrently
         enrichment_tasks: list[Any] = [self._enrich_knowledge_base(kb_id) for kb_id in raw_kb_ids]
         enrichment_tasks.extend(self._enrich_memory_store(ms_id) for ms_id in raw_ms_ids)
 
         enriched_results = await asyncio.gather(*enrichment_tasks) if enrichment_tasks else []
-
         knowledge_bases = [r for r in enriched_results if isinstance(r, KnowledgeBaseInfo)]
         memory_stores = [r for r in enriched_results if isinstance(r, MemoryStoreInfo)]
 
         model_raw = getattr(agent_data, 'model', None)
         model_id = getattr(model_raw, 'id', None) if model_raw is not None else None
 
-        context = AgentContext(
-            key=agent_key,
+        self._cached_context = AgentContext(
+            key=self.agent_key,
             display_name=getattr(agent_data, 'display_name', None),
             description=getattr(agent_data, 'description', None),
             system_prompt=getattr(agent_data, 'system_prompt', None),
@@ -412,13 +425,7 @@ class ORQContextProvider:
             knowledge_bases=knowledge_bases,
             model=model_id,
         )
-
-        logger.debug(
-            f'Retrieved context: {len(tools)} tools, {len(memory_stores)} memory stores, '
-            f'{len(knowledge_bases)} knowledge bases'
-        )
-
-        return context
+        return self._cached_context
 
     async def _enrich_knowledge_base(self, kb_id: str) -> KnowledgeBaseInfo:
         """Retrieve full knowledge base details from ORQ API."""
@@ -450,109 +457,53 @@ class ORQContextProvider:
             logger.warning(f'Failed to enrich memory store {ms_key}: {e} — attack strategies will use limited context')
             return MemoryStoreInfo(id=ms_key)
 
+    def map_error(self, exc: Exception) -> tuple[str, str]:
+        """Map an exception to a normalized error code and message tuple."""
+        return _orq_map_error(exc)
 
-class ORQTargetFactory:
-    """Creates ORQAgentTarget instances, one per job."""
+    async def cleanup_memory(self, ctx: AgentContext, entity_ids: list[str]) -> None:
+        """Clean up memory entities created during red teaming."""
+        await _orq_cleanup_memory(self.orq_client, ctx, entity_ids)
 
-    def __init__(
-        self,
-        orq_client: Any = None,
-        model: str | None = None,
-        timeout_ms: int | None = None,
-    ):
-        """Initialize the factory, creating an ORQ client from environment if none is provided."""
+
+class ORQBackend(Backend):
+    """Backend for ORQ-hosted agents.
+
+    Owns the ORQ SDK client. Creates ``ORQAgentTarget`` instances per job.
+    Performs memory cleanup via the SDK. Maps ORQ exceptions to a normalized
+    error taxonomy.
+    """
+
+    def __init__(self, *, orq_client: Any = None, timeout_ms: int | None = None) -> None:
+        super().__init__(name="orq")
         timeout_ms = timeout_ms or PIPELINE_CONFIG.target_agent_timeout_ms
         self._timeout_ms = timeout_ms
         if orq_client is not None:
             self._orq_client = orq_client
         else:
             if _orq_cls is None:
-                msg = 'ORQ backend requires the orq-ai-sdk package. Install with: pip install evaluatorq[orq]'
-                raise ImportError(msg)
+                raise ImportError(
+                    "ORQ backend requires the orq-ai-sdk package. "
+                    "Install with: pip install evaluatorq[orq]"
+                )
             self._orq_client = _orq_cls(
                 api_key=_get_orq_api_key(),
                 server_url=_get_orq_server_url(),
                 timeout_ms=self._timeout_ms,
             )
-        self._model = model
 
-    def create_target(self, agent_key: str) -> AgentTarget:
-        """Create a new ORQAgentTarget for the given agent key.
-
-        The new target generates its own ``memory_entity_id``; callers can
-        read it via the attribute after construction.
-        """
+    def create_target(self, agent_key: str) -> ORQAgentTarget:
         return ORQAgentTarget(
             agent_key=agent_key,
             orq_client=self._orq_client,
-            model=self._model,
             timeout_ms=self._timeout_ms,
         )
 
-
-class ORQMemoryCleanup:
-    """Cleans up memory entities created during red teaming via ORQ SDK."""
-
-    def __init__(self, orq_client: Any = None, timeout_ms: int | None = None):
-        """Initialize the cleanup handler, creating an ORQ client from environment if none is provided."""
-        timeout_ms = timeout_ms or PIPELINE_CONFIG.target_agent_timeout_ms
-        if orq_client is not None:
-            self._orq_client = orq_client
-        else:
-            if _orq_cls is None:
-                msg = 'ORQ backend requires the orq-ai-sdk package. Install with: pip install evaluatorq[orq]'
-                raise ImportError(msg)
-            self._orq_client = _orq_cls(
-                api_key=_get_orq_api_key(),
-                server_url=_get_orq_server_url(),
-                timeout_ms=timeout_ms,
-            )
-
-    async def cleanup_memory(self, agent_context: AgentContext, entity_ids: list[str]) -> None:
-        """Delete memory entities for each memory store x entity_id combination."""
-        for ms in agent_context.memory_stores:
-            if not ms.key:
-                logger.warning(f'Memory store {ms.id} has no key, skipping cleanup')
-                continue
-            for entity_id in entity_ids:
-                try:
-                    await asyncio.to_thread(
-                        self._orq_client.memory_stores.delete_memory,
-                        memory_store_key=ms.key,
-                        memory_entity_id=entity_id,
-                    )
-                    logger.debug(f'Deleted memory entity {entity_id} from store {ms.key}')
-                except Exception as e:  # noqa: PERF203
-                    if extract_status_code(e) == 404:
-                        continue
-                    logger.warning(f'Failed to cleanup memory entity {entity_id} from {ms.key}: {e}')
-
-        logger.debug(
-            f'Memory cleanup complete ({len(entity_ids)} entities across {len(agent_context.memory_stores)} stores)'
-        )
-
-
-class ORQErrorMapper:
-    """Normalize ORQ SDK/HTTP failures into runtime error taxonomy."""
+    async def cleanup_memory(self, ctx: AgentContext, entity_ids: list[str]) -> None:
+        await _orq_cleanup_memory(self._orq_client, ctx, entity_ids)
 
     def map_error(self, exc: Exception) -> tuple[str, str]:
-        """Map an exception to a (error_code, error_message) tuple."""
-        name = type(exc).__name__.lower()
-        text = str(exc).lower()
-        status_code = extract_status_code(exc)
-        provider_code = extract_provider_error_code(exc)
-
-        if status_code is not None:
-            return f'orq.http.{status_code}', f'{type(exc).__name__}: {exc}'
-        if provider_code:
-            return f'orq.code.{provider_code}', f'{type(exc).__name__}: {exc}'
-        if 'timeout' in name or 'timed out' in text:
-            return 'orq.timeout', f'{type(exc).__name__}: {exc}'
-        if 'auth' in name or 'unauthorized' in text or 'forbidden' in text:
-            return 'orq.auth', f'{type(exc).__name__}: {exc}'
-        if 'ratelimit' in name or '429' in text:
-            return 'orq.rate_limit', f'{type(exc).__name__}: {exc}'
-        return 'orq.unknown', f'{type(exc).__name__}: {exc}'
+        return _orq_map_error(exc)
 
 
 def create_orq_agent_target(
@@ -571,35 +522,3 @@ def create_orq_agent_target(
             timeout_ms=timeout_ms,
         )
     return ORQAgentTarget(agent_key=agent_key, orq_client=orq_client, timeout_ms=timeout_ms)
-
-
-def create_orq_backend(
-    orq_client: Any = None,
-    timeout_ms: int | None = None,
-) -> tuple[ORQTargetFactory, ORQContextProvider, ORQMemoryCleanup]:
-    """Convenience function returning all three ORQ backend components.
-
-    Args:
-        orq_client: Optional pre-configured ORQ SDK client. If None, one is created
-                    from environment config.
-        timeout_ms: Timeout in milliseconds for target agent calls.
-
-    Returns:
-        Tuple of (target_factory, context_provider, memory_cleanup)
-    """
-    timeout_ms = timeout_ms or PIPELINE_CONFIG.target_agent_timeout_ms
-    if orq_client is None:
-        if _orq_cls is None:
-            msg = 'ORQ backend requires the orq-ai-sdk package. Install with: pip install evaluatorq[orq]'
-            raise ImportError(msg)
-        orq_client = _orq_cls(
-            api_key=_get_orq_api_key(),
-            server_url=_get_orq_server_url(),
-            timeout_ms=timeout_ms,
-        )
-
-    return (
-        ORQTargetFactory(orq_client, timeout_ms=timeout_ms),
-        ORQContextProvider(orq_client),
-        ORQMemoryCleanup(orq_client, timeout_ms=timeout_ms),
-    )

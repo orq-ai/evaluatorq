@@ -1,5 +1,6 @@
 """Simulation runner module."""
 
-from evaluatorq.simulation.runner.simulation import SimulationRunner, TargetAgent
+from evaluatorq.contracts import AgentTarget
+from evaluatorq.simulation.runner.simulation import SimulationRunner
 
-__all__ = ["SimulationRunner", "TargetAgent"]
+__all__ = ["AgentTarget", "SimulationRunner"]

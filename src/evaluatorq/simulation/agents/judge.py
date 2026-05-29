@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.simulation.agents.base import AgentConfig, BaseAgent, LLMResult
-from evaluatorq.simulation.types import ChatMessage, Criterion, Judgment
+from evaluatorq.simulation.types import Criterion, Judgment, Message
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import LLMCallConfig
@@ -221,11 +221,11 @@ class JudgeAgent(BaseAgent):
 
         return f"{DEFAULT_JUDGE_PROMPT}\n\n---\n\nUSER'S GOAL: {delimit(self._goal)}\n\nEVALUATION CRITERIA:\n{criteria_text}{ground_truth_text}"
 
-    async def evaluate(self, messages: list[ChatMessage]) -> Judgment:
+    async def evaluate(self, messages: list[Message]) -> Judgment:
         """Evaluate a conversation and decide next action."""
         eval_messages = [
             *messages,
-            ChatMessage(
+            Message(
                 role="user",
                 content="Evaluate the conversation above. Should it continue or end? Use the appropriate tool.",
             ),
