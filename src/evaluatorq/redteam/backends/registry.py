@@ -135,6 +135,7 @@ def _create_openresponses_backend(
     timeout_ms = pipeline_config.target_agent_timeout_ms if pipeline_config else None
     # retry_count is the number of *retries*; OrqResponsesTarget wants total
     # attempts (initial + retries), hence the +1.
+    # retry_count is the number of *retries*; OrqResponsesTarget wants total attempts (initial + retries).
     retry_attempts = pipeline_config.retry_count + 1 if pipeline_config else None
     retry_statuses = pipeline_config.retry_on_codes if pipeline_config else None
     return OpenResponsesBackend(
