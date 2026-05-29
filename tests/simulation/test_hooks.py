@@ -373,3 +373,24 @@ async def test_on_confirm_false_aborts_before_running(datapoint_factory):
         )
     assert hooks.run_started == 0
     assert calls == []          # confirm gate aborted before any target call
+
+
+def test_hooks_exported_from_package():
+    import evaluatorq.simulation as sim
+
+    assert sim.SimulationHooks is not None
+    assert sim.DefaultHooks is not None
+    assert sim.RichHooks is not None
+    assert sim.SimulationRunMeta is not None
+    assert sim.SimulationError is not None
+    assert sim.SimulationCancelledError is not None
+    assert issubclass(sim.SimulationCancelledError, sim.SimulationError)
+    for name in (
+        "SimulationHooks",
+        "DefaultHooks",
+        "RichHooks",
+        "SimulationRunMeta",
+        "SimulationError",
+        "SimulationCancelledError",
+    ):
+        assert name in sim.__all__

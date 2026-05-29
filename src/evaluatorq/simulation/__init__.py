@@ -36,11 +36,21 @@ if TYPE_CHECKING:
         get_all_evaluators,
         get_evaluator,
     )
+    from evaluatorq.simulation.exceptions import (
+        SimulationCancelledError,
+        SimulationError,
+    )
     from evaluatorq.simulation.generators import (
         DatapointGenerator,
         FirstMessageGenerator,
         PersonaGenerator,
         ScenarioGenerator,
+    )
+    from evaluatorq.simulation.hooks import (
+        DefaultHooks,
+        RichHooks,
+        SimulationHooks,
+        SimulationRunMeta,
     )
     from evaluatorq.simulation.quality.message_perturbation import (
         PerturbationType,
@@ -134,6 +144,15 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
         "evaluatorq.simulation.runner.simulation",
         "SimulationRunner",
     ),
+    "SimulationHooks": ("evaluatorq.simulation.hooks", "SimulationHooks"),
+    "DefaultHooks": ("evaluatorq.simulation.hooks", "DefaultHooks"),
+    "RichHooks": ("evaluatorq.simulation.hooks", "RichHooks"),
+    "SimulationRunMeta": ("evaluatorq.simulation.hooks", "SimulationRunMeta"),
+    "SimulationError": ("evaluatorq.simulation.exceptions", "SimulationError"),
+    "SimulationCancelledError": (
+        "evaluatorq.simulation.exceptions",
+        "SimulationCancelledError",
+    ),
     "AgentTarget": ("evaluatorq.contracts", "AgentTarget"),
     "DEFAULT_MODEL": ("evaluatorq.simulation.types", "DEFAULT_MODEL"),
     "CommunicationStyle": ("evaluatorq.simulation.types", "CommunicationStyle"),
@@ -221,6 +240,8 @@ __all__ = [
     "Datapoint",
     # Generators
     "DatapointGenerator",
+    # Hooks
+    "DefaultHooks",
     "EmotionalArc",
     "FirstMessageGenerator",
     "InputFormat",
@@ -235,10 +256,16 @@ __all__ = [
     "PersonaGenerator",
     # Quality
     "PerturbationType",
+    "RichHooks",
     "Scenario",
     "ScenarioGenerator",
+    # Exceptions
+    "SimulationCancelledError",
+    "SimulationError",
+    "SimulationHooks",
     "SimulationResult",
     # Runner
+    "SimulationRunMeta",
     "SimulationRunner",
     "SimulationScorer",
     "StartingEmotion",
