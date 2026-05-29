@@ -63,6 +63,7 @@ if TYPE_CHECKING:
         Persona,
         Scenario,
         SimulationResult,
+        SimulationRun,
         StartingEmotion,
         TerminatedBy,
         TokenUsage,
@@ -151,6 +152,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
     "Persona": ("evaluatorq.simulation.types", "Persona"),
     "Scenario": ("evaluatorq.simulation.types", "Scenario"),
     "SimulationResult": ("evaluatorq.simulation.types", "SimulationResult"),
+    "SimulationRun": ("evaluatorq.simulation.types", "SimulationRun"),
     "StartingEmotion": ("evaluatorq.simulation.types", "StartingEmotion"),
     "TerminatedBy": ("evaluatorq.simulation.types", "TerminatedBy"),
     "TokenUsage": ("evaluatorq.simulation.types", "TokenUsage"),
@@ -238,6 +240,7 @@ __all__ = [
     "Scenario",
     "ScenarioGenerator",
     "SimulationResult",
+    "SimulationRun",
     # Runner
     "SimulationRunner",
     "SimulationScorer",

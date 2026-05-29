@@ -5,6 +5,7 @@ Uses Pydantic models for maximum compatibility with generators/runner/agents.
 
 from __future__ import annotations
 
+from datetime import datetime  # noqa: TC003
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -320,3 +321,19 @@ class Datapoint(BaseModel):
     """Cached/serialized system prompt. Used for export only — the runner
     always rebuilds from persona + scenario via ``build_datapoint_system_prompt``."""
     first_message: str
+
+
+# ---------------------------------------------------------------------------
+# SimulationRun  (run-store record)
+# ---------------------------------------------------------------------------
+
+
+class SimulationRun(BaseModel):
+    run_name: str
+    created_at: datetime
+    mode: Literal["run", "generate"]
+    target_kind: Literal["orq_deployment", "vercel", "openai_model"]
+    evaluator_names: list[str]
+    total_results: int
+    scorer_averages: dict[str, float]
+    results: list[SimulationResult]
