@@ -117,7 +117,7 @@ def _build_persona_breakdown_section(results: list[SimulationResult]) -> ReportS
     rows: list[dict[str, Any]] = []
     for name, items in by_persona.items():
         total = len(items)
-        achieved = sum(1 for r in items if r.goal_achieved)
+        achieved = sum(1 for r in items if r.goal_achieved and not _is_errored(r))
         avg_score = sum(r.goal_completion_score for r in items) / total
         tokens = sum(r.token_usage.total_tokens for r in items)
         rows.append({
@@ -144,7 +144,7 @@ def _build_scenario_breakdown_section(results: list[SimulationResult]) -> Report
     rows: list[dict[str, Any]] = []
     for name, items in by_scenario.items():
         total = len(items)
-        achieved = sum(1 for r in items if r.goal_achieved)
+        achieved = sum(1 for r in items if r.goal_achieved and not _is_errored(r))
         avg_score = sum(r.goal_completion_score for r in items) / total
         avg_turns = sum(r.turn_count for r in items) / total
         rows.append({

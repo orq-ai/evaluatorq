@@ -76,6 +76,31 @@ def test_export_html_handles_empty_results():
     assert "<!DOCTYPE html>" in html
 
 
+def test_export_html_truncates_long_transcript_messages():
+    """Very long messages must be truncated so HTML files stay manageable."""
+    long_content = "x" * 5000
+    result = SimulationResult(
+        messages=[
+            Message(role="user", content=long_content),
+            Message(role="assistant", content="ok"),
+        ],
+        terminated_by=TerminatedBy.judge,
+        reason="done",
+        goal_achieved=True,
+        goal_completion_score=1.0,
+        rules_broken=[],
+        turn_count=1,
+        token_usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        turn_metrics=[],
+        metadata={"persona": "p", "scenario": "s", "model": "m"},
+    )
+    html = export_html([result], target="t")
+    # The raw 5000-char run must not appear verbatim.
+    assert long_content not in html
+    # The truncation marker should be present.
+    assert "truncated" in html
+
+
 def test_export_markdown_collapses_token_usage_and_individual_results():
     results = [_result("Alice", achieved=True, score=1.0)]
     md = export_markdown(results, target="t")

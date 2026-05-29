@@ -21,6 +21,7 @@ from evaluatorq.common.reports import (
     render_horizontal_bar_chart as _render_horizontal_bar_chart,
     render_html as _render_html_doc,
 )
+from evaluatorq.common.reports.html_helpers import truncate as _truncate_html
 from evaluatorq.contracts import ReportSection
 from evaluatorq.simulation.reports.sections import build_report_sections
 from evaluatorq.simulation.types import SimulationResult
@@ -242,7 +243,9 @@ def _render_individual_results_html(section: ReportSection) -> str:
         transcript_html = []
         for msg in entry["transcript"]:
             role = _esc(msg["role"])
-            content = _esc(msg.get("content", "")).replace("\n", "<br>")
+            content = _esc(_truncate_html(msg.get("content", ""), 1500)).replace(
+                "\n", "<br>"
+            )
             transcript_html.append(
                 f'<div class="transcript-message"><em>{role}:</em><br>{content}</div>'
             )

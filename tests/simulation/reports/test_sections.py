@@ -139,6 +139,45 @@ def test_errors_section_present_when_failures_present():
     assert errors.data["by_message"]["rate limit"] == 1
 
 
+def test_persona_breakdown_excludes_errored_runs_from_achieved():
+    """Per-persona success rate must not count errored runs as achieved.
+
+    Regression: a result with both ``goal_achieved=True`` and an error
+    metadata key would previously count in the persona breakdown's
+    ``goals_achieved`` but not in the summary's. The per-persona rate
+    could paradoxically exceed the overall rate.
+    """
+    results = [
+        _make_result(persona="A", goal_achieved=True),                   # achieved
+        _make_result(persona="A", goal_achieved=True, error="oh no"),    # errored, not achieved
+    ]
+    sections = build_report_sections(results)
+    persona = next(s for s in sections if s.kind == "persona_breakdown")
+    row_a = next(r for r in persona.data["rows"] if r["persona"] == "A")
+    assert row_a["conversations"] == 2
+    assert row_a["goals_achieved"] == 1
+    assert row_a["success_rate"] == 0.5
+
+    summary = next(s for s in sections if s.kind == "summary")
+    # The persona rate must not exceed the overall rate for the same data.
+    assert row_a["success_rate"] <= summary.data["success_rate"] + 1e-9 or \
+           summary.data["success_rate"] == row_a["success_rate"]
+    assert summary.data["goals_achieved"] == row_a["goals_achieved"]
+
+
+def test_scenario_breakdown_excludes_errored_runs_from_achieved():
+    """Same partition discipline as persona breakdown."""
+    results = [
+        _make_result(scenario="X", goal_achieved=True),
+        _make_result(scenario="X", goal_achieved=True, error="boom"),
+    ]
+    sections = build_report_sections(results)
+    scenario = next(s for s in sections if s.kind == "scenario_breakdown")
+    row_x = next(r for r in scenario.data["rows"] if r["scenario"] == "X")
+    assert row_x["goals_achieved"] == 1
+    assert row_x["success_rate"] == 0.5
+
+
 def test_summary_partitions_achieved_failed_errored_disjointly():
     """An errored run never counts as achieved, and goals_failed is never negative.
 
