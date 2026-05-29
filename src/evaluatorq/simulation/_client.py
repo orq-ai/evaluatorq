@@ -8,16 +8,12 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from evaluatorq.simulation.utils.fields import get_field as _get_field
+
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
     from evaluatorq.simulation.types import TokenUsage
-
-
-def _get_field(obj: Any, name: str, default: Any = None) -> Any:
-    if isinstance(obj, dict):
-        return obj.get(name, default)
-    return getattr(obj, name, default)
 
 
 def build_simulation_client(

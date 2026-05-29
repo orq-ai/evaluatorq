@@ -77,6 +77,8 @@ async def with_retry(
     (connection reset, timeout, DNS). All other errors are raised immediately.
     ``asyncio.TimeoutError`` and ``asyncio.CancelledError`` are never retried.
     """
+    if max_attempts < 1:
+        raise ValueError(f"with_retry: max_attempts must be >= 1, got {max_attempts}")
     last_error: Exception = RuntimeError("with_retry: no attempts made")
     retry_status_set = set(retry_statuses) if retry_statuses is not None else None
 

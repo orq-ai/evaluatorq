@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 
 import httpx
+from loguru import logger
 from pydantic import BaseModel, Field
 
 from .types import DataPointResult, EvaluatorqResult
@@ -122,39 +123,35 @@ async def send_results_to_orq(
 
             if not response.is_success:
                 error_text = response.text or "Unknown error"
-                print(
-                    f"\n⚠️  Warning: Could not send results to Orq platform ({response.status_code} {response.reason_phrase})"
-                )
-                if orq_debug or response.status_code >= 400:
-                    print(f"   Details: {error_text}")
                 if raise_on_error:
                     raise SendResultsError(
                         "Could not send results to Orq platform "
                         f"({response.status_code} {response.reason_phrase}): {error_text}"
                     )
+                logger.warning(
+                    "Could not send results to Orq platform ({} {}): {}",
+                    response.status_code,
+                    response.reason_phrase,
+                    error_text,
+                )
                 return None
 
             orq_result = OrqResponse.model_validate(response.json())
 
-            print(
-                f"✅ Results sent to Orq: {orq_result.experiment_name} ({orq_result.rows_created} rows created)"
+            logger.info(
+                "Results sent to Orq: {} ({} rows created)",
+                orq_result.experiment_name,
+                orq_result.rows_created,
             )
-
-            # Display the experiment URL if available
             if orq_result.experiment_url:
-                print(f"\n📊 View your evaluation at: {orq_result.experiment_url}")
+                logger.info("View your evaluation at: {}", orq_result.experiment_url)
 
             return orq_result.experiment_url
 
     except SendResultsError:
         raise
-    except Exception as error:
-        # Log warning for network or other errors
-        print("\n⚠️  Warning: Could not send results to Orq platform")
-
-        if os.getenv("ORQ_DEBUG", "false").lower() == "true":
-            print(f"   Details: {error!s}")
-
+    except Exception:
+        logger.exception("Could not send results to Orq platform")
         if raise_on_error:
             raise
         return None

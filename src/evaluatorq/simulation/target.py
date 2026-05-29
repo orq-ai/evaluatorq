@@ -11,10 +11,10 @@ from loguru import logger
 
 from evaluatorq.contracts import AgentResponse, AgentTarget, LLMCallConfig
 from evaluatorq.simulation._client import (
-    _get_field,
     build_simulation_client,
     extract_responses_output,
 )
+from evaluatorq.simulation.utils.fields import get_field as _get_field
 from evaluatorq.simulation.tracing import (
     record_openresponses_request,
     record_openresponses_response,
@@ -182,6 +182,10 @@ class OrqResponsesTarget(AgentTarget):
         )
 
         if result.usage is None:
+            logger.warning(
+                "OrqResponsesTarget: response returned no usage; turn skipped in cost total (model={})",
+                self.config.model,
+            )
             new_usage = self._accumulated_usage
         else:
             # extract_responses_output returns calls=0; bump to 1 for this API call

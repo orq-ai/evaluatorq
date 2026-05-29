@@ -284,6 +284,14 @@ async def _simulate_core(
         return results
     finally:
         await runner.close()
+        # Close target if it owns its HTTP client (e.g. OrqResponsesTarget with _client_owned=True).
+        close = getattr(resolved_callback, "close", None)
+        if callable(close):
+            import inspect
+            if inspect.iscoroutinefunction(close):
+                await close()
+            else:
+                close()
 
 
 async def _generate_single_datapoint(

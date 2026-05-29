@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from evaluatorq.simulation.utils.fields import get_field as _get_field
+
 if TYPE_CHECKING:
     from evaluatorq.redteam.contracts import RedTeamInput, RedTeamSample, StaticDataset, Turn
 
@@ -23,12 +25,6 @@ def assistant_input_item(content: str) -> dict[str, Any]:
 def system_input_item(content: str) -> dict[str, Any]:
     """Build an OpenResponses input entry for a system message."""
     return {"role": "system", "content": content}
-
-
-def _get_field(obj: Any, name: str, default: Any = None) -> Any:
-    if isinstance(obj, dict):
-        return obj.get(name, default)
-    return getattr(obj, name, default)
 
 
 def build_openresponses_request(

@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from evaluatorq.simulation.utils.fields import get_field as _field
 from evaluatorq.tracing.setup import get_tracer
 
 if TYPE_CHECKING:
@@ -224,12 +225,6 @@ def _serialize_messages(messages: list[dict[str, Any]]) -> str:
 def _serialize_tool_call_content(tool_calls: list[dict[str, Any]]) -> str:
     """Render tool-call-only outputs into assistant content for trace display."""
     return json.dumps({"tool_calls": tool_calls}, ensure_ascii=False)
-
-
-def _field(obj: Any, name: str, default: Any = None) -> Any:
-    if isinstance(obj, dict):
-        return obj.get(name, default)
-    return getattr(obj, name, default)
 
 
 def _extract_chat_tool_call_payloads(tool_calls: Any) -> list[dict[str, str]]:
@@ -439,6 +434,14 @@ def record_openresponses_request(span: Span | None, payload: dict[str, Any]) -> 
     """Record a Responses API request with both generic and Orq-specific attrs."""
     if span is None:
         return
+    model = payload.get("model")
+    if model:
+        span.set_attribute("gen_ai.request.model", str(model))
+    max_output_tokens = payload.get("max_output_tokens")
+    if isinstance(max_output_tokens, int):
+        span.set_attribute("gen_ai.request.max_tokens", max_output_tokens)
+    if not _capture_message_content():
+        return
     input_items = payload.get("input") or []
     serialized_input = _truncate(json.dumps(input_items, ensure_ascii=False, default=str))
     span.set_attribute("gen_ai.input.messages", serialized_input)
@@ -447,12 +450,6 @@ def record_openresponses_request(span: Span | None, payload: dict[str, Any]) -> 
         "orq.openresponses.request",
         _truncate(json.dumps(payload, ensure_ascii=False, default=str)),
     )
-    model = payload.get("model")
-    if model:
-        span.set_attribute("gen_ai.request.model", str(model))
-    max_output_tokens = payload.get("max_output_tokens")
-    if isinstance(max_output_tokens, int):
-        span.set_attribute("gen_ai.request.max_tokens", max_output_tokens)
 
 
 def record_openresponses_response(span: Span | None, response: Any) -> None:
@@ -468,10 +465,11 @@ def record_openresponses_response(span: Span | None, response: Any) -> None:
             exc,
         )
         payload = repr(response)
-    span.set_attribute(
-        "orq.openresponses.response",
-        _truncate(json.dumps(payload, ensure_ascii=False, default=str)),
-    )
+    if _capture_message_content():
+        span.set_attribute(
+            "orq.openresponses.response",
+            _truncate(json.dumps(payload, ensure_ascii=False, default=str)),
+        )
 
 
 def set_span_attrs(span: Span | None, attrs: AttrMap) -> None:
