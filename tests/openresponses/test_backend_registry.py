@@ -131,7 +131,8 @@ class TestErrorMapper:
         with patch("evaluatorq.redteam.backends.openresponses.logger") as mock_logger:
             code, _ = backend.map_error(RuntimeError("boom"))
         assert code == "openresponses.unknown"
-        mock_logger.exception.assert_called_once()
+        mock_logger.opt.assert_called_once_with(exception=mock_logger.opt.call_args[1]["exception"])
+        mock_logger.opt.return_value.error.assert_called_once()
 
     def test_message_includes_exception_type_and_text(self):
         backend = resolve_backend("openresponses", llm_client=MagicMock())

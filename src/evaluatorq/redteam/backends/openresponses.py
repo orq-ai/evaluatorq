@@ -76,7 +76,7 @@ class OpenResponsesBackend(Backend):
             return "openresponses.timeout", f"{type(exc).__name__}: {exc}"
         if "authentication" in name:
             return "openresponses.auth", f"{type(exc).__name__}: {exc}"
-        logger.exception("OpenResponsesBackend.map_error: unclassified exception mapped to openresponses.unknown")
+        logger.opt(exception=exc).error("OpenResponsesBackend.map_error: unclassified exception mapped to openresponses.unknown")
         return "openresponses.unknown", f"{type(exc).__name__}: {exc}"
 
     async def resolve_context(self, agent_key: str) -> AgentContext:
