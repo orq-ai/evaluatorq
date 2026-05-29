@@ -237,8 +237,7 @@ def load_openresponses_dataset(path: str | Path) -> StaticDataset:
             )
         try:
             rt_input = RedTeamInput(**meta)
-        except (TypeError, ValueError) as exc:
-            # pydantic.ValidationError is a subclass of ValueError in v2; TypeError covers wrong field types
+        except Exception as exc:
             raise ValueError(f"Dataset row {idx}: 'input' metadata failed validation: {exc}") from exc
         samples.append(redteam_sample_from_openresponses(input=rt_input, openresponses_input=conv))
     return StaticDataset(samples=samples)
