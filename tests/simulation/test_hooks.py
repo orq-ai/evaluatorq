@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from evaluatorq.simulation.hooks import (
@@ -286,3 +288,85 @@ async def test_concurrency_attribution(datapoint_factory):
     valid_ids = {"dp0", "dp1", "dp2"}
     assert all(dp_id in valid_ids for dp_id, _ in hooks.turn_events)
     assert all(r.metadata.get("datapoint_id") in valid_ids for r in results)
+
+
+from evaluatorq.simulation.api import simulate
+
+
+class RunLevelRecorder(DefaultHooks):
+    def __init__(self) -> None:
+        self.confirmed: list[int] = []
+        self.run_started: list[int] = []
+        self.evaluator_events: list[tuple[str, str, float]] = []
+        self.run_completed = 0
+
+    def on_confirm(self, meta):
+        self.confirmed.append(meta["num_datapoints"])
+        return True
+
+    def on_run_start(self, meta):
+        self.run_started.append(meta["num_datapoints"])
+
+    def on_evaluator_complete(self, datapoint_id, name, score, result):
+        self.evaluator_events.append((datapoint_id, name, score))
+
+    def on_run_complete(self, results):
+        self.run_completed += 1
+
+
+@pytest.mark.asyncio
+async def test_simulate_fires_run_level_hooks(datapoint_factory):
+    hooks = RunLevelRecorder()
+
+    async def _ok_target(messages):
+        return "fine"
+
+    results = await simulate(
+        target=_ok_target,
+        datapoints=[datapoint_factory("dp1"), datapoint_factory("dp2")],
+        max_turns=1,
+        evaluator_names=["goal_achieved"],
+        user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+        judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+        hooks=hooks,
+    )
+    assert hooks.confirmed == [2]      # gate fired with the plan size
+    assert hooks.run_started == [2]    # notify fired after confirm passed
+    assert hooks.run_completed == 1
+    # one evaluator event per (datapoint, evaluator); datapoint_id threaded
+    assert len(hooks.evaluator_events) == 2
+    assert {e[0] for e in hooks.evaluator_events} == {"dp1", "dp2"}
+    assert all(e[1] == "goal_achieved" for e in hooks.evaluator_events)
+    assert len(results) == 2
+
+
+@pytest.mark.asyncio
+async def test_on_confirm_false_aborts_before_running(datapoint_factory):
+    """A declining on_confirm aborts via CancelledError; on_run_start never
+    fires and no simulation runs."""
+
+    class DecliningHooks(DefaultHooks):
+        def __init__(self) -> None:
+            self.run_started = 0
+
+        def on_confirm(self, meta):
+            return False
+
+        def on_run_start(self, meta):
+            self.run_started += 1
+
+    async def _ok_target(messages):
+        return "fine"
+
+    hooks = DecliningHooks()
+    with pytest.raises(asyncio.CancelledError):
+        await simulate(
+            target=_ok_target,
+            datapoints=[datapoint_factory("dp1")],
+            max_turns=1,
+            evaluator_names=["goal_achieved"],
+            user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+            judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+            hooks=hooks,
+        )
+    assert hooks.run_started == 0

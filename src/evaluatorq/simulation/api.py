@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from evaluatorq.contracts import AgentTarget
     from evaluatorq.simulation.agents.base import BaseAgent
     from evaluatorq.simulation.generators import FirstMessageGenerator
+    from evaluatorq.simulation.hooks import SimulationHooks
     from evaluatorq.simulation.types import (
         Datapoint,
         Message,
@@ -41,6 +42,7 @@ async def simulate(
     parallelism: int = 5,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
+    hooks: SimulationHooks | None = None,
 ) -> list[SimulationResult]:
     """High-level function to run agent simulations.
 
@@ -93,6 +95,7 @@ async def simulate(
                 user_simulator=user_simulator,
                 judge=judge,
                 pipeline_span=pipeline_span,
+                hooks=hooks,
             )
     finally:
         await flush_tracing()
@@ -114,6 +117,7 @@ async def _simulate_core(
     user_simulator: BaseAgent | None,
     judge: BaseAgent | None,
     pipeline_span: Span | None,
+    hooks: SimulationHooks | None = None,
 ) -> list[SimulationResult]:
     """Core simulation logic (runs inside the orq.simulation.pipeline span)."""
     from openai import AsyncOpenAI
@@ -121,6 +125,7 @@ async def _simulate_core(
     from evaluatorq.simulation.adapters import from_orq_deployment
     from evaluatorq.simulation.evaluators import get_evaluator
     from evaluatorq.simulation.generators import FirstMessageGenerator
+    from evaluatorq.simulation.hooks import DefaultHooks, SimulationRunMeta
     from evaluatorq.simulation.runner.simulation import SimulationRunner
     from evaluatorq.simulation.tracing import record_token_usage, set_span_attrs
 
@@ -180,6 +185,21 @@ async def _simulate_core(
         {"orq.simulation.datapoints_count": len(datapoints)},
     )
 
+    resolved_hooks = hooks or DefaultHooks()
+    run_meta: SimulationRunMeta = {
+        "num_datapoints": len(datapoints),
+        "model": model,
+        "max_turns": max_turns,
+        "parallelism": parallelism,
+        "evaluation_name": evaluation_name,
+        "evaluator_names": resolved_evaluator_names,
+    }
+    # Gate first. Nothing is allocated yet, so a decline is a clean abort.
+    if not resolved_hooks.on_confirm(run_meta):
+        raise asyncio.CancelledError("Simulation run declined by on_confirm hook")
+    # Render-init only after confirmation passes.
+    resolved_hooks.on_run_start(run_meta)
+
     # Resolve the target. ``target`` takes precedence over ``target_callback``
     # when both are given. An AgentTarget instance is routed to the runner's
     # target_agent path (it speaks respond(messages), not the callable shape);
@@ -205,6 +225,7 @@ async def _simulate_core(
         max_turns=max_turns,
         user_simulator=user_simulator,
         judge=judge,
+        hooks=resolved_hooks,
     )
 
     try:
@@ -217,9 +238,14 @@ async def _simulate_core(
 
         # Apply evaluators to results
         for result in results:
+            datapoint_id = result.metadata.get("datapoint_id", "")
             scores: dict[str, float] = {}
             for scorer_name, fn in scorers:
-                scores[scorer_name] = fn(result)
+                score = fn(result)
+                scores[scorer_name] = score
+                resolved_hooks.on_evaluator_complete(
+                    datapoint_id, scorer_name, score, result
+                )
             result.metadata["evaluator_scores"] = scores
             if evaluation_name:
                 result.metadata["evaluation_name"] = evaluation_name
@@ -246,6 +272,7 @@ async def _simulate_core(
             },
         )
 
+        resolved_hooks.on_run_complete(results)
         return results
     finally:
         await runner.close()
@@ -290,6 +317,7 @@ async def generate_and_simulate(
     model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
     parallelism: int = 5,
+    hooks: SimulationHooks | None = None,
 ) -> list[SimulationResult]:
     """Generate personas/scenarios and run simulations.
 
@@ -376,6 +404,7 @@ async def generate_and_simulate(
                 user_simulator=None,
                 judge=None,
                 pipeline_span=pipeline_span,
+                hooks=hooks,
             )
     finally:
         await flush_tracing()
