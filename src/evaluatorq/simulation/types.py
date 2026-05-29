@@ -11,7 +11,6 @@ from pydantic import BaseModel, Field
 
 from evaluatorq.contracts import Message, StrEnum, TokenUsage
 
-
 DEFAULT_MODEL = "azure/gpt-4o-mini"
 
 
@@ -209,15 +208,6 @@ INPUT_FORMAT_INSTRUCTIONS: dict[InputFormat, str] = {
         "attachment references, structured data, or code blocks."
     ),
 }
-
-
-# ---------------------------------------------------------------------------
-# Chat messages
-# ---------------------------------------------------------------------------
-
-
-# ChatMessage is kept as a deprecated alias for Message (RES-596 consolidation).
-ChatMessage = Message
 
 
 # ---------------------------------------------------------------------------

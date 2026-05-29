@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator
+from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.contracts import (
     AgentContext,
     AgentInfo,
@@ -72,16 +73,15 @@ def _make_chat_completion(content: str = "next attack prompt") -> MagicMock:
     return response
 
 
-class _FakeTarget:
+class _FakeTarget(AgentTarget):
     """Minimal :class:`AgentTarget` returning fixed token usage each call."""
 
-    memory_entity_id: str | None = None
-
     def __init__(self, usage: TokenUsage | None) -> None:
+        super().__init__()
         self._usage = usage
         self.call_count = 0
 
-    async def send_prompt(self, prompt: str) -> AgentResponse:
+    async def respond(self, messages: list[Message]) -> AgentResponse:
         self.call_count += 1
         return AgentResponse(text=f"target reply {self.call_count}", usage=self._usage)
 
@@ -255,13 +255,12 @@ class TestPipelineTokenUsageAggregation:
         max_turns = 4
         create_mock = AsyncMock(side_effect=[_make_chat_completion() for _ in range(max_turns)])
 
-        class _FailingTarget:
-            memory_entity_id: str | None = None
-
+        class _FailingTarget(AgentTarget):
             def __init__(self) -> None:
+                super().__init__()
                 self.attempts = 0
 
-            async def send_prompt(self, prompt: str) -> AgentResponse:
+            async def respond(self, messages: list[Message]) -> AgentResponse:
                 self.attempts += 1
                 raise RuntimeError("target down")
 

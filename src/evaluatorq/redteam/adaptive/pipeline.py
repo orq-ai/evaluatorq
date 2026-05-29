@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, Job, job
-from evaluatorq.contracts import AgentResponse
+from evaluatorq.contracts import AgentResponse, Message
 from evaluatorq.redteam.adaptive.attack_generator import generate_attack_prompt, generate_objective
 from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator, _get_active_progress
@@ -30,7 +30,7 @@ from evaluatorq.redteam.adaptive.strategy_planner import (
     plan_strategies_for_categories,
     plan_strategies_for_vulnerabilities,
 )
-from evaluatorq.redteam.backends.base import DefaultErrorMapper, _coerce_to_agent_response
+from evaluatorq.redteam.backends.base import Backend, _coerce_to_agent_response
 from evaluatorq.redteam.backends.registry import create_async_llm_client, resolve_backend
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
@@ -279,8 +279,7 @@ def create_dynamic_redteam_job(
     agent_context: AgentContext,
     red_team_model: str = DEFAULT_PIPELINE_MODEL,
     max_turns: int = 5,
-    target_factory: AgentTargetFactory | None = None,
-    error_mapper: ErrorMapper | None = None,
+    backend: Backend | None = None,
     attack_llm_client: AsyncOpenAI | None = None,
     memory_entity_ids: list[str] | None = None,
     attacker_instructions: str | None = None,
@@ -307,13 +306,12 @@ def create_dynamic_redteam_job(
         agent_context: Pre-retrieved agent context
         red_team_model: Model for adversarial prompt generation
         max_turns: Maximum turns for multi-turn attacks
-        target_factory: Factory for creating AgentTarget instances. Defaults to ORQ.
+        backend: Backend for creating targets and mapping errors. Defaults to ORQ.
     """
     cfg = pipeline_config or PIPELINE_CONFIG
-    resolved_factory: AgentTargetFactory = (
-        target_factory if target_factory is not None else resolve_backend('orq', pipeline_config=cfg).target_factory
+    resolved_backend: Backend = (
+        backend if backend is not None else resolve_backend('orq', pipeline_config=cfg)
     )
-    resolved_error_mapper = error_mapper or DefaultErrorMapper()
     safe_agent_key = ''.join(ch if ch.isalnum() or ch in {'-', '_'} else '-' for ch in agent_key).strip('-')
     job_name = f'redteam:dynamic:{safe_agent_key or "agent"}'
 
@@ -337,7 +335,7 @@ def create_dynamic_redteam_job(
                 'orq.redteam.max_turns': effective_max_turns,
             },
         ) as attack_span, contextlib.AsyncExitStack() as cleanup_stack:
-            target = resolved_factory.create_target(agent_key=agent_key)
+            target = resolved_backend.create_target(agent_key=agent_key)
             # Register HTTP-client cleanup for targets that own a client
             # (e.g. OrqResponsesTarget). Plain callable targets have no
             # close(); duck-type to avoid coupling.
@@ -382,7 +380,7 @@ def create_dynamic_redteam_job(
                         },
                     ) as tgt_span:
                         raw = await asyncio.wait_for(
-                            target.send_prompt(prompt),
+                            target.respond([Message(role="user", content=prompt)]),
                             timeout=target_timeout_s,
                         )
                         agent_resp = _coerce_to_agent_response(raw)
@@ -406,7 +404,7 @@ def create_dynamic_redteam_job(
                 except Exception as e:
                     if isinstance(e, (TypeError, AttributeError, ImportError, NameError)):
                         raise
-                    mapped_code, mapped_msg = resolved_error_mapper.map_error(e)
+                    mapped_code, mapped_msg = resolved_backend.map_error(e)
                     logger.error(f'Single-turn attack failed for {category}/{strategy.name}: {mapped_msg}')
                     response = f'[ERROR: {mapped_msg}]'
                     error = mapped_msg
@@ -458,7 +456,7 @@ def create_dynamic_redteam_job(
             orchestrator = MultiTurnOrchestrator(
                 llm_client,
                 model=red_team_model,
-                error_mapper=resolved_error_mapper,
+                backend=resolved_backend,
                 attacker_instructions=attacker_instructions,
                 verbosity=verbosity,
                 llm_kwargs=llm_kwargs,
@@ -475,7 +473,7 @@ def create_dynamic_redteam_job(
                 )
             except asyncio.TimeoutError as e:
                 tb = traceback.format_exc(limit=8)
-                mapped_code, mapped_msg = resolved_error_mapper.map_error(e)
+                mapped_code, mapped_msg = resolved_backend.map_error(e)
                 logger.error(f'Orchestrator timed out for {category}/{strategy.name}: {mapped_msg}\n{tb}')
                 result = OrchestratorResult(
                     objective_achieved=False,
@@ -498,7 +496,7 @@ def create_dynamic_redteam_job(
                 if isinstance(e, (TypeError, AttributeError, KeyError, IndexError, ImportError, NameError)):
                     raise
                 tb = traceback.format_exc(limit=8)
-                mapped_code, mapped_msg = resolved_error_mapper.map_error(e)
+                mapped_code, mapped_msg = resolved_backend.map_error(e)
                 logger.error(f'Unexpected orchestrator error for {category}/{strategy.name}: {mapped_msg}\n{tb}')
                 result = OrchestratorResult(
                     objective_achieved=False,
@@ -645,7 +643,7 @@ def create_dynamic_evaluator(
 async def cleanup_memory_entities(
     agent_context: AgentContext,
     entity_ids: list[str],
-    memory_cleanup: MemoryCleanup | None = None,
+    memory_cleanup: Backend | None = None,
     pipeline_config: LLMConfig | None = None,
 ) -> str | None:
     """Delete memory entities created during a red teaming run.
@@ -666,7 +664,7 @@ async def cleanup_memory_entities(
             return None
         # Default fallback keeps existing ORQ behavior.
         await asyncio.wait_for(
-            resolve_backend('orq').memory_cleanup.cleanup_memory(agent_context, entity_ids),
+            resolve_backend('orq').cleanup_memory(agent_context, entity_ids),
             timeout=cleanup_timeout_s,
         )
     except asyncio.TimeoutError:

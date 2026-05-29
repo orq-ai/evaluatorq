@@ -12,8 +12,8 @@ from evaluatorq.simulation.adapters import from_orq_deployment
 from evaluatorq.simulation.convert import to_open_responses
 from evaluatorq.simulation.types import (
     DEFAULT_MODEL,
-    ChatMessage,
     Datapoint,
+    Message,
     Persona,
     Scenario,
     SimulationResult,
@@ -41,7 +41,7 @@ def _validate_shape(value: Any, label: str, required_keys: list[str]) -> None:
 def wrap_simulation_agent(
     *,
     name: str = "simulation",
-    target_callback: Callable[[list[ChatMessage]], str | Awaitable[str]] | None = None,
+    target_callback: Callable[[list[Message]], str | Awaitable[str]] | None = None,
     agent_key: str | None = None,
     max_turns: int = 10,
     model: str | None = None,

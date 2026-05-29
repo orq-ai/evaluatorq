@@ -16,7 +16,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from evaluatorq.contracts import TextOutputItem, ToolCallOutputItem
-from evaluatorq.redteam.backends.base import is_agent_target
 from evaluatorq.redteam.backends.openresponses import (
     OpenResponsesAgentTarget,
     OpenResponsesTargetFactory,
@@ -81,7 +80,9 @@ def _make_target(
 class TestProtocolConformance:
     def test_satisfies_agent_target_protocol(self):
         target, _ = _make_target()
-        assert is_agent_target(target)
+        assert callable(getattr(target, "send_prompt", None))
+        assert callable(getattr(target, "new", None))
+        assert hasattr(target, "memory_entity_id")
 
     def test_memory_entity_id_is_none(self):
         target, _ = _make_target()

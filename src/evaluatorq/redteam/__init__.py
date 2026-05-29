@@ -31,6 +31,7 @@ def _check_redteam_deps() -> None:  # noqa: RUF067
 _check_redteam_deps()  # noqa: RUF067
 
 
+from evaluatorq.contracts import AgentTarget
 from evaluatorq.redteam.adaptive.orchestrator import (
     ADVERSARIAL_ANALYSIS_PROMPT,
     ADVERSARIAL_INITIAL_USER_PROMPT,
@@ -41,15 +42,6 @@ from evaluatorq.redteam.adaptive.strategy_registry import (
 )
 from evaluatorq.redteam.adaptive.strategy_registry import (
     list_available_categories as list_categories,
-)
-from evaluatorq.redteam.backends.base import (
-    AgentTarget,
-    DirectTargetFactory,
-    SupportsAgentContext,
-    SupportsErrorMapping,
-    SupportsMemoryCleanup,
-    SupportsTargetFactory,
-    is_agent_target,
 )
 from evaluatorq.redteam.backends.openai import OpenAIModelTarget
 from evaluatorq.redteam.backends.openresponses import (
@@ -73,7 +65,6 @@ from evaluatorq.redteam.contracts import (
     DeliveryMethodSummary,
     DimensionSummary,
     DomainSummary,
-    ErrorInfo,
     EvaluationPayload,
     ExecutionDetails,
     FocusAreaRecommendation,
@@ -96,6 +87,7 @@ from evaluatorq.redteam.contracts import (
     RedTeamResult,
     ReportSnapshot,
     ReportSummary,
+    RunError,
     Severity,
     SeveritySummary,
     StrategyToolCall,
@@ -179,10 +171,7 @@ __all__ = [
     "DeliveryMethod",
     "DeliveryMethodSummary",
     "DimensionSummary",
-    "DirectTargetFactory",
     "DomainSummary",
-    # Error model
-    "ErrorInfo",
     "EvaluationPayload",
     "ExecutionDetails",
     'FocusAreaRecommendation',
@@ -216,6 +205,8 @@ __all__ = [
     "ReportSnapshot",
     "ReportSummary",
     "RichHooks",
+    # Run-level error rollup
+    "RunError",
     "Severity",
     # Result models
     "AgentResponse",
@@ -225,10 +216,6 @@ __all__ = [
     "TextOutputItem",
     "ToolCallOutputItem",
     "SeveritySummary",
-    "SupportsAgentContext",
-    "SupportsErrorMapping",
-    "SupportsMemoryCleanup",
-    "SupportsTargetFactory",
     "TargetConfig",
     "TechniqueSummary",
     "TokenUsage",
@@ -261,7 +248,6 @@ __all__ = [
     "turns_to_openresponses_input",
     "get_category_info",
     "get_vulnerability_name",
-    "is_agent_target",
     # Vulnerability introspection
     "list_available_vulnerabilities",
     # Category introspection

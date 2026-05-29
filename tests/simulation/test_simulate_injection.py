@@ -15,18 +15,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.runner.simulation import SimulationRunner
 from evaluatorq.simulation.types import (
-    ChatMessage,
     CommunicationStyle,
     Datapoint,
+    Message,
     Persona,
     Scenario,
     TerminatedBy,
     TokenUsage,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -135,7 +133,7 @@ class TestSimulateWithInjectedTarget:
 
         call_count = 0
 
-        async def my_target(messages: list[ChatMessage]) -> str:
+        async def my_target(messages: list[Message]) -> str:
             nonlocal call_count
             call_count += 1
             return "agent says hi"
@@ -161,9 +159,9 @@ class TestSimulateWithInjectedTarget:
         """Target callback receives the accumulated message list each turn."""
         monkeypatch.setenv("ORQ_API_KEY", "test-key")
 
-        received_messages: list[list[ChatMessage]] = []
+        received_messages: list[list[Message]] = []
 
-        async def my_target(messages: list[ChatMessage]) -> str:
+        async def my_target(messages: list[Message]) -> str:
             received_messages.append(list(messages))
             return "response"
 
@@ -201,11 +199,11 @@ class TestSimulateTargetPrecedence:
         calls_a: list[int] = []
         calls_b: list[int] = []
 
-        async def target_a(messages: list[ChatMessage]) -> str:
+        async def target_a(messages: list[Message]) -> str:
             calls_a.append(1)
             return "from A"
 
-        async def target_b(messages: list[ChatMessage]) -> str:
+        async def target_b(messages: list[Message]) -> str:
             calls_b.append(1)
             return "from B"
 
@@ -246,6 +244,53 @@ class TestSimulateTargetPrecedence:
 
         # target= takes precedence, so resolved_callback must be target_a
         assert resolved.get("target_callback") is target_a
+
+
+class TestSimulateAutoRoutesAgentTarget:
+    """An AgentTarget instance passed as target= is routed to runner.target_agent."""
+
+    @pytest.mark.asyncio
+    async def test_agent_target_routes_to_target_agent_not_callback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("ORQ_API_KEY", "test-key")
+
+        from evaluatorq.contracts import AgentResponse, AgentTarget
+        from evaluatorq.simulation.api import simulate
+
+        class _FakeAgentTarget(AgentTarget):
+            async def respond(self, messages: list[Message]) -> AgentResponse:
+                return AgentResponse(text="ok")
+
+            def new(self) -> "_FakeAgentTarget":
+                return _FakeAgentTarget()
+
+        agent_target = _FakeAgentTarget()
+        sim = _make_mock_user_simulator()
+        judge = _make_mock_judge()
+        dp = _make_datapoint()
+        resolved: dict[str, Any] = {}
+
+        import evaluatorq.simulation.runner.simulation as runner_mod
+
+        original_cls = runner_mod.SimulationRunner
+
+        class CapturingRunner(original_cls):  # type: ignore[valid-type]
+            def __init__(self, **kwargs: Any) -> None:
+                resolved.update(kwargs)
+                super().__init__(
+                    target_agent=kwargs.get("target_agent"),
+                    model=kwargs.get("model", "test"),
+                    max_turns=1,
+                    user_simulator=sim,
+                    judge=judge,
+                )
+
+        with patch("evaluatorq.simulation.runner.simulation.SimulationRunner", CapturingRunner):
+            await simulate(target=agent_target, datapoints=[dp], model="test", max_turns=1)
+
+        assert resolved.get("target_agent") is agent_target
+        assert resolved.get("target_callback") is None
 
 
 class TestSimulateWithInjectedUserSimulator:

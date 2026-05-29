@@ -7,7 +7,9 @@ from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
-from evaluatorq.redteam.backends.base import extract_provider_error_code, extract_status_code
+from evaluatorq.contracts import AgentTarget, Message, message_to_chat_param
+from evaluatorq.redteam.backends._errors import extract_provider_error_code, extract_status_code
+from evaluatorq.redteam.backends.base import Backend
 from evaluatorq.redteam.contracts import (
     DEFAULT_TARGET_MAX_TOKENS,
     DEFAULT_TARGET_TIMEOUT_MS,
@@ -39,11 +41,26 @@ def create_async_llm_client(role_config=None) -> AsyncOpenAI:
     return _create(role_config)
 
 
-class OpenAIModelTarget:
-    """Target adapter that treats ``agent_key`` as an OpenAI model identifier."""
+def _openai_map_error(exc: Exception) -> tuple[str, str]:
+    """Map an OpenAI exception to a normalized (error_code, error_message) tuple."""
+    name = type(exc).__name__.lower()
+    status_code = extract_status_code(exc)
+    provider_code = extract_provider_error_code(exc)
+    if status_code is not None:
+        return f'openai.http.{status_code}', f'{type(exc).__name__}: {exc}'
+    if provider_code:
+        return f'openai.code.{provider_code}', f'{type(exc).__name__}: {exc}'
+    if 'ratelimit' in name:
+        return 'openai.rate_limit', f'{type(exc).__name__}: {exc}'
+    if 'authentication' in name:
+        return 'openai.auth', f'{type(exc).__name__}: {exc}'
+    if 'timeout' in name:
+        return 'openai.timeout', f'{type(exc).__name__}: {exc}'
+    return 'openai.unknown', f'{type(exc).__name__}: {exc}'
 
-    memory_entity_id: str | None = None
-    """OpenAI models are stateless — no server-side memory to isolate."""
+
+class OpenAIModelTarget(AgentTarget):
+    """Target adapter that treats ``agent_key`` as an OpenAI model identifier."""
 
     def __init__(
         self,
@@ -58,31 +75,42 @@ class OpenAIModelTarget:
 
         If ``client`` is not provided, one is created automatically via
         :func:`~evaluatorq.redteam.backends.registry.create_async_llm_client`.
+        OpenAI models are stateless — no server-side memory to isolate.
         """
+        super().__init__(memory_entity_id=None)
         self.model = model
         self.client = client or create_async_llm_client()
         self.system_prompt = system_prompt or 'You are a helpful assistant.'
         self.max_tokens = max_tokens or DEFAULT_TARGET_MAX_TOKENS
         self.timeout_ms = timeout_ms or DEFAULT_TARGET_TIMEOUT_MS
-        self._history: list[ChatCompletionMessageParam] = []
 
-    async def send_prompt(self, prompt: str) -> AgentResponse:
-        """Send a prompt to the OpenAI model and return its response with usage + any tool calls."""
-        user_msg: ChatCompletionMessageParam = {'role': 'user', 'content': prompt}
-        messages: list[ChatCompletionMessageParam] = [
-            {'role': 'system', 'content': self.system_prompt},
-            *self._history,
-            user_msg,
-        ]
+    async def respond(self, messages: list[Message]) -> AgentResponse:
+        """Stateless: send the provided message list + system prompt.
+
+        The caller owns the transcript. ``self.system_prompt`` is always
+        prepended, so any leading ``system`` messages in ``messages`` are
+        stripped to avoid a double system prompt. Assistant ``tool_calls`` and
+        ``tool`` results in the transcript are preserved (rendered as OpenAI
+        chat params via :func:`~evaluatorq.contracts.message_to_chat_param`), so
+        multi-turn tool-using transcripts replay faithfully.
+        """
+        user_visible = [m for m in messages if m.role != 'system']
+        completion_messages = cast(
+            'list[ChatCompletionMessageParam]',
+            [
+                {'role': 'system', 'content': self.system_prompt},
+                *[message_to_chat_param(m) for m in user_visible],
+            ],
+        )
         async with with_llm_span(
             model=self.model,
-            input_messages=messages,
+            input_messages=completion_messages,
             attributes={"orq.redteam.llm_purpose": "target"},
         ) as span:
             response = await asyncio.wait_for(
                 self.client.chat.completions.create(
                     model=self.model,
-                    messages=messages,
+                    messages=completion_messages,
                     max_tokens=self.max_tokens,
                 ),
                 timeout=self.timeout_ms / 1000.0,
@@ -91,8 +119,6 @@ class OpenAIModelTarget:
             content = msg.content or ''
             record_llm_response(span, response, output_content=content)
 
-            # Capture tool calls made by the model.
-            # Only ChatCompletionMessageToolCall has a .function attribute; skip custom tool calls.
             tool_call_items: list[ToolCallOutputItem] = []
             for tc in (getattr(msg, 'tool_calls', None) or []):
                 func = getattr(tc, 'function', None)
@@ -114,28 +140,6 @@ class OpenAIModelTarget:
             if choices:
                 finish_reason = getattr(choices[0], 'finish_reason', None)
 
-        # Accumulate history for multi-turn context.
-        assistant_msg: ChatCompletionMessageParam
-        raw_tool_calls = getattr(msg, 'tool_calls', None) or []
-        if raw_tool_calls:
-            assistant_msg = {
-                'role': 'assistant',
-                'content': content or None,
-                'tool_calls': [
-                    {
-                        'id': tc.id,
-                        'type': 'function',
-                        'function': {'name': tc.function.name, 'arguments': tc.function.arguments},
-                    }
-                    for tc in raw_tool_calls
-                    if getattr(tc, 'function', None) is not None
-                ],
-            }
-        else:
-            assistant_msg = {'role': 'assistant', 'content': content}
-        self._history.append(user_msg)
-        self._history.append(assistant_msg)
-
         output: list[OutputMessage] = cast('list[OutputMessage]', list(tool_call_items))
         output.append(TextOutputItem(text=content, annotations=[]))
         return AgentResponse(
@@ -147,7 +151,7 @@ class OpenAIModelTarget:
         )
 
     def new(self) -> OpenAIModelTarget:
-        """Return a fresh target instance for parallel job safety (satisfies ``AgentTarget`` protocol)."""
+        """Return a fresh target instance for parallel job safety (satisfies the ``AgentTarget`` ABC)."""
         return OpenAIModelTarget(model=self.model, system_prompt=self.system_prompt, client=self.client, max_tokens=self.max_tokens, timeout_ms=self.timeout_ms)
 
     target_kind: TargetKind = TargetKind.OPENAI
@@ -167,52 +171,33 @@ class OpenAIModelTarget:
             model=self.model,
         )
 
-    def create_target(self, agent_key: str) -> OpenAIModelTarget:
-        """Create a new OpenAI model target for the given model name."""
-        return OpenAIModelTarget(model=agent_key, system_prompt=self.system_prompt, client=self.client, max_tokens=self.max_tokens, timeout_ms=self.timeout_ms)
-
     def map_error(self, exc: Exception) -> tuple[str, str]:
         """Map an OpenAI exception to a normalized error code and message tuple."""
-        return OpenAIErrorMapper().map_error(exc)
+        return _openai_map_error(exc)
 
 
-class OpenAIContextProvider:
-    """Context provider for plain model targets.
+class OpenAIBackend(Backend):
+    """Backend for direct OpenAI model targets.
 
-    There is no tool/memory/KB metadata in raw model mode.
+    Targets are stateless. ``cleanup_memory`` is a no-op (OpenAI models do not
+    own server-side memory).
     """
 
-    def __init__(self, system_prompt: str | None = None):
-        """Initialize the context provider with an optional system prompt override."""
-        self._system_prompt = system_prompt
-
-    async def get_agent_context(self, agent_key: str) -> AgentContext:
-        """Return agent context for the specified OpenAI model."""
-        logger.debug(f'Using OpenAI model target context for model={agent_key}')
-        return AgentContext(
-            key=agent_key,
-            display_name=agent_key,
-            description='OpenAI model target',
-            system_prompt=self._system_prompt,
-            tools=[],
-            memory_stores=[],
-            knowledge_bases=[],
-            model=agent_key,
-        )
-
-
-class OpenAITargetFactory:
-    """Factory creating OpenAI model targets."""
-
-    def __init__(self, client: AsyncOpenAI, system_prompt: str | None = None, max_tokens: int | None = None, timeout_ms: int | None = None):
-        """Initialize the factory with a shared async OpenAI client and optional system prompt."""
-        self._client = client
+    def __init__(
+        self,
+        *,
+        client: AsyncOpenAI | None = None,
+        system_prompt: str | None = None,
+        max_tokens: int | None = None,
+        timeout_ms: int | None = None,
+    ) -> None:
+        super().__init__(name="openai")
+        self._client = client or create_async_llm_client()
         self._system_prompt = system_prompt
         self._max_tokens = max_tokens
         self._timeout_ms = timeout_ms
 
     def create_target(self, agent_key: str) -> OpenAIModelTarget:
-        """Create a new OpenAI model target instance."""
         return OpenAIModelTarget(
             model=agent_key,
             system_prompt=self._system_prompt,
@@ -221,24 +206,8 @@ class OpenAITargetFactory:
             timeout_ms=self._timeout_ms,
         )
 
-
-class OpenAIErrorMapper:
-    """Normalize OpenAI exceptions into runtime error taxonomy."""
+    async def cleanup_memory(self, ctx: AgentContext, entity_ids: list[str]) -> None:
+        logger.debug('OpenAI backend has no memory store; cleanup is a no-op')
 
     def map_error(self, exc: Exception) -> tuple[str, str]:
-        """Map an OpenAI exception to a normalized error code and message tuple."""
-        name = type(exc).__name__.lower()
-        status_code = extract_status_code(exc)
-        provider_code = extract_provider_error_code(exc)
-
-        if status_code is not None:
-            return f'openai.http.{status_code}', f'{type(exc).__name__}: {exc}'
-        if provider_code:
-            return f'openai.code.{provider_code}', f'{type(exc).__name__}: {exc}'
-        if 'ratelimit' in name:
-            return 'openai.rate_limit', f'{type(exc).__name__}: {exc}'
-        if 'authentication' in name:
-            return 'openai.auth', f'{type(exc).__name__}: {exc}'
-        if 'timeout' in name:
-            return 'openai.timeout', f'{type(exc).__name__}: {exc}'
-        return 'openai.unknown', f'{type(exc).__name__}: {exc}'
+        return _openai_map_error(exc)

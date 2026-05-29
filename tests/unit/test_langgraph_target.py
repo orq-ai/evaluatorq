@@ -9,6 +9,7 @@ import pytest
 
 pytest.importorskip("langgraph")
 
+from evaluatorq.contracts import Message  # noqa: E402
 from evaluatorq.integrations.langgraph_integration import LangGraphTarget  # noqa: E402
 from evaluatorq.redteam.contracts import AgentResponse  # noqa: E402
 
@@ -24,28 +25,28 @@ def _make_graph(response_content: str = "I'm fine") -> MagicMock:
 
 class TestLangGraphTarget:
     @pytest.mark.asyncio
-    async def test_send_prompt_returns_response(self) -> None:
+    async def test_respond_returns_response(self) -> None:
         graph = _make_graph("hello back")
         target = LangGraphTarget(graph)
-        result = await target.send_prompt("hello")
+        result = await target.respond([Message(role="user", content="hello")])
         assert isinstance(result, AgentResponse)
         assert result.text == "hello back"
 
     @pytest.mark.asyncio
-    async def test_send_prompt_passes_user_message(self) -> None:
+    async def test_respond_passes_user_message(self) -> None:
         graph = _make_graph()
         target = LangGraphTarget(graph)
-        await target.send_prompt("test prompt")
+        await target.respond([Message(role="user", content="test prompt")])
 
         call_args = graph.ainvoke.call_args
         messages = call_args[0][0]["messages"]
         assert messages == [{"role": "user", "content": "test prompt"}]
 
     @pytest.mark.asyncio
-    async def test_send_prompt_passes_memory_entity_id(self) -> None:
+    async def test_respond_passes_memory_entity_id(self) -> None:
         graph = _make_graph()
         target = LangGraphTarget(graph)
-        await target.send_prompt("hi")
+        await target.respond([Message(role="user", content="hi")])
 
         config = graph.ainvoke.call_args[1]["config"]
         assert "thread_id" in config["configurable"]
@@ -70,7 +71,7 @@ class TestLangGraphTarget:
     async def test_reset_conversation_resets_prev_msg_count(self) -> None:
         graph = _make_graph()
         target = LangGraphTarget(graph)
-        await target.send_prompt("hi")
+        await target.respond([Message(role="user", content="hi")])
         assert target._prev_msg_count > 0
         target.reset_conversation()
         assert target._prev_msg_count == 0
@@ -107,24 +108,24 @@ class TestLangGraphTarget:
         graph.ainvoke = fake_ainvoke
 
         target = LangGraphTarget(graph)
-        r1 = await target.send_prompt("first")
+        r1 = await target.respond([Message(role="user", content="first")])
         assert len(r1.tool_calls) == 1
         assert r1.tool_calls[0].name == "tool_A"
 
-        r2 = await target.send_prompt("second")
+        r2 = await target.respond([Message(role="user", content="second")])
         assert len(r2.tool_calls) == 1
         assert r2.tool_calls[0].name == "tool_B"
 
     @pytest.mark.asyncio
     async def test_reset_uses_different_thread_id(self) -> None:
-        """After reset, send_prompt must invoke ainvoke with a different thread_id."""
+        """After reset, respond must invoke ainvoke with a different thread_id."""
         graph = _make_graph()
         target = LangGraphTarget(graph)
-        await target.send_prompt("first")
+        await target.respond([Message(role="user", content="first")])
         thread_id_before = graph.ainvoke.call_args[1]["config"]["configurable"]["thread_id"]
 
         target.reset_conversation()
-        await target.send_prompt("second")
+        await target.respond([Message(role="user", content="second")])
         thread_id_after = graph.ainvoke.call_args[1]["config"]["configurable"]["thread_id"]
 
         assert thread_id_before != thread_id_after
@@ -144,11 +145,11 @@ class TestLangGraphTarget:
         graph.ainvoke = AsyncMock(return_value={"messages": [msg_with_tool]})
 
         target = LangGraphTarget(graph)
-        await target.send_prompt("first")  # _prev_msg_count becomes 1
+        await target.respond([Message(role="user", content="first")])  # _prev_msg_count becomes 1
         target.reset_conversation()        # _prev_msg_count resets to 0
 
         # Next send scans from index 0 — all returned messages are "new"
-        result = await target.send_prompt("after reset")
+        result = await target.respond([Message(role="user", content="after reset")])
         assert len(result.tool_calls) == 1
         assert result.tool_calls[0].name == "tool_X"
 
@@ -156,7 +157,7 @@ class TestLangGraphTarget:
     async def test_extra_config_is_preserved(self) -> None:
         graph = _make_graph()
         target = LangGraphTarget(graph, config={"recursion_limit": 50})
-        await target.send_prompt("hi")
+        await target.respond([Message(role="user", content="hi")])
 
         config = graph.ainvoke.call_args[1]["config"]
         assert config["recursion_limit"] == 50
@@ -168,7 +169,7 @@ class TestLangGraphTarget:
         target = LangGraphTarget(graph)
 
         with pytest.raises(ValueError, match="'messages' key"):
-            await target.send_prompt("hi")
+            await target.respond([Message(role="user", content="hi")])
 
     @pytest.mark.asyncio
     async def test_raises_on_empty_messages_list(self) -> None:
@@ -177,7 +178,7 @@ class TestLangGraphTarget:
         target = LangGraphTarget(graph)
 
         with pytest.raises(ValueError, match="empty 'messages' list"):
-            await target.send_prompt("hi")
+            await target.respond([Message(role="user", content="hi")])
 
     @pytest.mark.asyncio
     async def test_handles_dict_messages(self) -> None:
@@ -186,7 +187,7 @@ class TestLangGraphTarget:
             return_value={"messages": [{"role": "assistant", "content": "dict msg"}]}
         )
         target = LangGraphTarget(graph)
-        result = await target.send_prompt("hi")
+        result = await target.respond([Message(role="user", content="hi")])
         assert result.text == "dict msg"
 
     def test_clone_returns_independent_instance(self) -> None:
@@ -229,7 +230,7 @@ class TestLangGraphTarget:
         """config={"configurable": {"custom_key": "val"}} must not be overwritten by memory_entity_id injection."""
         graph = _make_graph()
         target = LangGraphTarget(graph, config={"configurable": {"custom_key": "val"}})
-        await target.send_prompt("hi")
+        await target.respond([Message(role="user", content="hi")])
 
         config = graph.ainvoke.call_args[1]["config"]
         assert config["configurable"]["custom_key"] == "val"
@@ -243,7 +244,7 @@ class TestLangGraphTarget:
         msg.content = [{"type": "text", "text": "multimodal content"}]
         graph.ainvoke = AsyncMock(return_value={"messages": [msg]})
         target = LangGraphTarget(graph)
-        result = await target.send_prompt("hi")
+        result = await target.respond([Message(role="user", content="hi")])
         assert isinstance(result.text, str)
         assert "multimodal content" in result.text
 
@@ -460,7 +461,7 @@ class TestLangGraphTargetTokenUsage:
         sentinel = SentinelHandler()
         graph = _make_graph("response")
         target = LangGraphTarget(graph, config={"callbacks": [sentinel]})
-        await target.send_prompt("hi")
+        await target.respond([Message(role="user", content="hi")])
 
         config_passed = graph.ainvoke.call_args[1]["config"]
         callbacks = config_passed["callbacks"]
@@ -473,7 +474,7 @@ class TestLangGraphTargetTokenUsage:
 
     @pytest.mark.asyncio
     async def test_callbacks_as_manager_not_mutated(self) -> None:
-        """Original BaseCallbackManager must not be mutated across send_prompt calls.
+        """Original BaseCallbackManager must not be mutated across respond calls.
 
         The implementation must copy the manager before adding the per-call collector
         so that stale collectors do not accumulate on the original instance or on
@@ -491,10 +492,10 @@ class TestLangGraphTargetTokenUsage:
         graph = _make_graph("response")
         target = LangGraphTarget(graph, config={"callbacks": original_manager})
 
-        await target.send_prompt("first")
-        await target.send_prompt("second")
+        await target.respond([Message(role="user", content="first")])
+        await target.respond([Message(role="user", content="second")])
 
-        # copy() called once per send_prompt — never mutate the original.
+        # copy() called once per respond — never mutate the original.
         assert original_manager.copy.call_count == 2
         original_manager.add_handler.assert_not_called()
 
@@ -527,10 +528,10 @@ class TestLangGraphTargetTokenUsage:
         graph.ainvoke = AsyncMock(side_effect=_fake_ainvoke)
 
         parent = LangGraphTarget(graph)
-        parent_result = await parent.send_prompt("p1")
+        parent_result = await parent.respond([Message(role="user", content="p1")])
 
         clone = parent.new()
-        clone_result = await clone.send_prompt("p2")
+        clone_result = await clone.respond([Message(role="user", content="p2")])
 
         assert parent_result.usage is not None
         assert clone_result.usage is not None
@@ -545,7 +546,7 @@ class TestLangGraphTargetTokenUsage:
     async def test_usage_collector_drains_when_ainvoke_raises(self) -> None:
         """Collector's finally block runs even when ainvoke raises.
 
-        The inner try/finally in send_prompt drains the collector;
+        The inner try/finally in respond drains the collector;
         the exception propagates normally. This test verifies the finally runs
         without error and that the exception still reaches the caller.
         """
@@ -574,13 +575,13 @@ class TestLangGraphTargetTokenUsage:
 
         target = LangGraphTarget(graph)
         with pytest.raises(RuntimeError, match="provider error"):
-            await target.send_prompt("hi")
+            await target.respond([Message(role="user", content="hi")])
 
     @pytest.mark.asyncio
     async def test_no_usage_metadata_returns_none_in_send_result(self) -> None:
         """When graph fires no LLM callbacks, SendResult.usage is None."""
         graph = _make_graph("no usage")
         target = LangGraphTarget(graph)
-        result = await target.send_prompt("hi")
+        result = await target.respond([Message(role="user", content="hi")])
         # ainvoke mock doesn't fire callbacks, so collector gets no calls
         assert result.usage is None

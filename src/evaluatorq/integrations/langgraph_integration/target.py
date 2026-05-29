@@ -13,7 +13,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.outputs import LLMResult
 from langchain_core.runnables import RunnableConfig
 
-from evaluatorq.redteam.backends.base import AgentTarget
+from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.contracts import (
     AgentContext,
     AgentResponse,
@@ -143,17 +143,17 @@ class LangGraphTarget(AgentTarget):
                 introspects the compiled graph (tools from a ``ToolNode``,
                 checkpointer presence) on a best-effort basis.
         """
+        super().__init__(memory_entity_id=uuid4().hex)
         self._graph = graph
         self._extra_config = config or {}
-        self.memory_entity_id: str = uuid4().hex
         self._agent_context = agent_context
         # Tracks how many messages were in the LangGraph thread before this turn.
-        # Not safe for concurrent send_prompt calls on the same instance —
+        # Not safe for concurrent respond() calls on the same instance —
         # use .new() to get independent instances for parallel use.
         self._prev_msg_count: int = 0
         graph_name: str = getattr(graph, "name", None) or "langgraph_target"
         self._key = f"{graph_name}_{uuid4().hex[:8]}"
-        # Guard against spamming the log on every send_prompt call when
+        # Guard against spamming the log on every respond() call when
         # an unknown callbacks type is encountered (hot path).
         self._warned_unknown_callbacks: bool = False
 
@@ -168,13 +168,17 @@ class LangGraphTarget(AgentTarget):
             },
         )
 
-    async def send_prompt(self, prompt: str) -> AgentResponse:
-        """Send a prompt to the LangGraph agent and return its response with usage + tool calls.
+    async def respond(self, messages: list[Message]) -> AgentResponse:
+        """Send the last user message to the LangGraph agent; return its response.
 
-        Token usage is collected via a per-call ``_TokenUsageCollector`` callback.
-        The collector is drained in a ``finally:`` block so partial spend on
-        error paths is preserved.
+        LangGraph owns thread state (keyed by ``thread_id``/``memory_entity_id``),
+        so ``respond`` forwards only the latest user turn. Token usage is
+        collected via a per-call ``_TokenUsageCollector`` callback, drained in a
+        ``finally:`` block so partial spend on error paths is preserved.
         """
+        if not messages or messages[-1].role != "user":
+            raise ValueError("LangGraphTarget.respond requires messages[-1].role == 'user'")
+        prompt = messages[-1].content or ""
         collector = _TokenUsageCollector()
 
         base_config = self._build_config()
@@ -186,7 +190,7 @@ class LangGraphTarget(AgentTarget):
             new_callbacks = [*existing, collector]
         elif isinstance(existing, BaseCallbackManager) and hasattr(existing, "copy"):
             # Copy before mutating — avoid accumulating stale collectors on the
-            # original manager across repeated send_prompt calls and .new() clones.
+            # original manager across repeated respond() calls and .new() clones.
             manager_copy = existing.copy()
             manager_copy.add_handler(collector, inherit=True)
             new_callbacks = manager_copy
@@ -216,14 +220,14 @@ class LangGraphTarget(AgentTarget):
         finally:
             usage = collector.to_token_usage()
 
-        messages = result.get("messages")
-        if messages is None:
+        result_messages = result.get("messages")
+        if result_messages is None:
             raise ValueError(
                 "LangGraphTarget requires a graph whose state has a 'messages' key "
                 "(e.g. built with MessagesState). Got state keys: "
                 + str(list(result.keys()))
             )
-        if not messages:
+        if not result_messages:
             raise ValueError(
                 "LangGraphTarget: graph returned an empty 'messages' list. "
                 "Ensure every execution path appends at least one AI message."
@@ -235,7 +239,18 @@ class LangGraphTarget(AgentTarget):
         # Build ToolCallOutputItem directly (not via the .tool_calls view) so
         # interleaved text/tool ordering is preserved in .output.
         output_items: list[OutputMessage] = []
-        for msg in messages[self._prev_msg_count:]:
+        sliced = result_messages[self._prev_msg_count:]
+        if not sliced and self._prev_msg_count > 0:
+            # Graph may use a trimming reducer; fall back to the full result set
+            # so the caller receives the current turn's response, not silence.
+            logger.warning(
+                "LangGraphTarget: _prev_msg_count (%d) exceeds result len (%d); "
+                "graph may be trimming messages. Falling back to full result.",
+                self._prev_msg_count,
+                len(result_messages),
+            )
+            sliced = result_messages
+        for msg in sliced:
             if isinstance(msg, dict):
                 if msg.get("role") != "assistant":
                     continue
@@ -263,13 +278,13 @@ class LangGraphTarget(AgentTarget):
                     else ToolCallOutputItem(name=str(name), arguments=args_str)
                 )
 
-        self._prev_msg_count = len(messages)
+        self._prev_msg_count = len(result_messages)
 
         # Fallback: if no AIMessage text was emitted (e.g. duck-typed message objects
         # that don't subclass AIMessage), use the last message's .content so that
         # AgentResponse.text remains well-defined.
         if not any(isinstance(item, TextOutputItem) for item in output_items):
-            last = messages[-1]
+            last = result_messages[-1]
             logger.warning(
                 "LangGraphTarget: no AIMessage text in turn; falling back to last message content (type=%s)",
                 type(last).__name__,

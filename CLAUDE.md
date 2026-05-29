@@ -108,7 +108,7 @@ src/evaluatorq/
 - New vulnerabilities: see `docs/custom-evaluators-and-frameworks.md`
 - New evaluators: create a function returning `LlmEvaluatorEntity`, register in `VULNERABILITY_EVALUATOR_REGISTRY`
 - New strategies: create `AttackStrategy` objects, register in `strategy_registry.py`
-- New backends: implement the `AgentTarget` protocol from `backends/base.py`
+- New backends: implement the `AgentTarget` ABC from `evaluatorq.contracts` (subclass `Backend` from `backends/base.py` for full target lifecycle)
 
 ### Testing Conventions
 

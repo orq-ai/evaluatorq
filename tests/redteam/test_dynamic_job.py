@@ -25,6 +25,7 @@ from evaluatorq.redteam.contracts import (
     AttackTechnique,
     DeliveryMethod,
     MemoryStoreInfo,
+    Message,
     OrchestratorResult,
     SendResult,
     TokenUsage,
@@ -107,18 +108,24 @@ def _make_datapoint(
 
 def _make_target(memory_entity_id: str | None = None) -> MagicMock:
     target = MagicMock()
-    target.send_prompt = AsyncMock(return_value=SendResult(text="Safe response from agent."))
+    target.respond = AsyncMock(return_value=SendResult(text="Safe response from agent."))
     target.new = MagicMock()
     target.memory_entity_id = memory_entity_id
     return target
 
 
-def _make_target_factory(target: MagicMock | None = None) -> MagicMock:
+def _make_backend(target: MagicMock | None = None) -> MagicMock:
     if target is None:
         target = _make_target()
-    factory = MagicMock()
-    factory.create_target = MagicMock(return_value=target)
-    return factory
+    backend = MagicMock()
+    backend.create_target = MagicMock(return_value=target)
+    backend.map_error = MagicMock(side_effect=lambda exc: ("target_error", f"{type(exc).__name__}: {exc}"))  # pyright: ignore[reportUnknownLambdaType]
+    return backend
+
+
+# Backward-compat alias used in some tests
+def _make_target_factory(target: MagicMock | None = None) -> MagicMock:
+    return _make_backend(target)
 
 
 def _make_orchestrator_result(*, error: str | None = None) -> OrchestratorResult:
@@ -215,7 +222,7 @@ class TestTemplateSingleTurnPath:
             job_fn = create_dynamic_redteam_job(
                 agent_key="test-agent",
                 agent_context=agent_context,
-                target_factory=factory,
+                backend=factory,
             )
 
             with patch(
@@ -256,7 +263,7 @@ class TestTemplateSingleTurnPath:
         job_fn = create_dynamic_redteam_job(
             agent_key="test-agent",
             agent_context=agent_context,
-            target_factory=factory,
+            backend=factory,
         )
 
         with patch(
@@ -266,8 +273,8 @@ class TestTemplateSingleTurnPath:
             output = await _call_dynamic_job(job_fn, datapoint)
 
         # Target should have been called once
-        target.send_prompt.assert_called_once()
-        sent_prompt = target.send_prompt.call_args[0][0]
+        target.respond.assert_called_once()
+        sent_prompt = target.respond.call_args[0][0][-1].content
         # The template substitution should have occurred (not contain raw {agent_name})
         assert "{agent_name}" not in sent_prompt
 
@@ -298,7 +305,7 @@ class TestTemplateSingleTurnPath:
         job_fn = create_dynamic_redteam_job(
             agent_key="test-agent",
             agent_context=agent_context,
-            target_factory=factory,
+            backend=factory,
         )
 
         with patch(
@@ -350,7 +357,7 @@ class TestDynamicMultiTurnPath:
                 job_fn = create_dynamic_redteam_job(
                     agent_key="test-agent",
                     agent_context=agent_context,
-                    target_factory=factory,
+                    backend=factory,
                 )
 
                 output = await _call_dynamic_job(job_fn, datapoint)
@@ -388,7 +395,7 @@ class TestDynamicMultiTurnPath:
                 job_fn = create_dynamic_redteam_job(
                     agent_key="test-agent",
                     agent_context=agent_context,
-                    target_factory=factory,
+                    backend=factory,
                 )
 
                 output = await _call_dynamic_job(job_fn, datapoint)
@@ -426,7 +433,7 @@ class TestDynamicMultiTurnPath:
                 job_fn = create_dynamic_redteam_job(
                     agent_key="test-agent",
                     agent_context=agent_context,
-                    target_factory=factory,
+                    backend=factory,
                 )
                 await _call_dynamic_job(job_fn, datapoint)
 
@@ -463,7 +470,7 @@ class TestDynamicMultiTurnPath:
                 job_fn = create_dynamic_redteam_job(
                     agent_key="test-agent",
                     agent_context=agent_context,
-                    target_factory=factory,
+                    backend=factory,
                     attack_llm_client=custom_llm_client,
                 )
                 await _call_dynamic_job(job_fn, datapoint)
@@ -514,7 +521,7 @@ class TestProgrammingErrorsPropagate:
                 job_fn = create_dynamic_redteam_job(
                     agent_key="test-agent",
                     agent_context=agent_context,
-                    target_factory=factory,
+                    backend=factory,
                 )
 
                 # The @job wrapper re-wraps as JobError; the original is a TypeError
@@ -556,7 +563,7 @@ class TestProgrammingErrorsPropagate:
                 job_fn = create_dynamic_redteam_job(
                     agent_key="test-agent",
                     agent_context=agent_context,
-                    target_factory=factory,
+                    backend=factory,
                 )
 
                 with pytest.raises((AttributeError, JobError)) as exc_info:
@@ -575,7 +582,7 @@ class TestProgrammingErrorsPropagate:
     async def test_type_error_in_template_path_propagates(
         self, _attrs, _set_attrs, _span
     ):
-        """TypeError raised during target.send_prompt in template path is re-raised."""
+        """TypeError raised during target.respond in template path is re-raised."""
         from evaluatorq.job_helper import JobError
         from evaluatorq.redteam.adaptive.pipeline import create_dynamic_redteam_job
 
@@ -584,7 +591,7 @@ class TestProgrammingErrorsPropagate:
             prompt_template="Static attack for {agent_name}.",
         )
         target = _make_target()
-        target.send_prompt = AsyncMock(side_effect=TypeError("type mismatch"))
+        target.respond = AsyncMock(side_effect=TypeError("type mismatch"))
         factory = _make_target_factory(target)
         agent_context = _make_agent_context()
         datapoint = _make_datapoint(strategy=strategy)
@@ -592,7 +599,7 @@ class TestProgrammingErrorsPropagate:
         job_fn = create_dynamic_redteam_job(
             agent_key="test-agent",
             agent_context=agent_context,
-            target_factory=factory,
+            backend=factory,
         )
 
         with pytest.raises((TypeError, JobError)) as exc_info:
@@ -628,7 +635,7 @@ class TestProgrammingErrorsPropagate:
                 job_fn = create_dynamic_redteam_job(
                     agent_key="test-agent",
                     agent_context=agent_context,
-                    target_factory=factory,
+                    backend=factory,
                 )
 
                 with pytest.raises((KeyError, JobError)) as exc_info:
@@ -676,7 +683,7 @@ class TestRuntimeErrorsProduceErrorOutput:
                 job_fn = create_dynamic_redteam_job(
                     agent_key="test-agent",
                     agent_context=agent_context,
-                    target_factory=factory,
+                    backend=factory,
                 )
                 output = await _call_dynamic_job(job_fn, datapoint)
 
@@ -714,7 +721,7 @@ class TestRuntimeErrorsProduceErrorOutput:
                 job_fn = create_dynamic_redteam_job(
                     agent_key="test-agent",
                     agent_context=agent_context,
-                    target_factory=factory,
+                    backend=factory,
                 )
                 output = await _call_dynamic_job(job_fn, datapoint)
 
@@ -751,7 +758,7 @@ class TestRuntimeErrorsProduceErrorOutput:
                 job_fn = create_dynamic_redteam_job(
                     agent_key="test-agent",
                     agent_context=agent_context,
-                    target_factory=factory,
+                    backend=factory,
                 )
                 output = await _call_dynamic_job(job_fn, datapoint)
 
@@ -776,7 +783,7 @@ class TestRuntimeErrorsProduceErrorOutput:
             prompt_template="Static attack for {agent_name}.",
         )
         target = _make_target()
-        target.send_prompt = AsyncMock(side_effect=RuntimeError("Service unavailable"))
+        target.respond = AsyncMock(side_effect=RuntimeError("Service unavailable"))
         factory = _make_target_factory(target)
         agent_context = _make_agent_context()
         datapoint = _make_datapoint(strategy=strategy)
@@ -784,7 +791,7 @@ class TestRuntimeErrorsProduceErrorOutput:
         job_fn = create_dynamic_redteam_job(
             agent_key="test-agent",
             agent_context=agent_context,
-            target_factory=factory,
+            backend=factory,
         )
 
         with patch(
@@ -815,7 +822,7 @@ class TestRuntimeErrorsProduceErrorOutput:
             prompt_template="Static attack for {agent_name}.",
         )
         target = _make_target()
-        target.send_prompt = AsyncMock(side_effect=asyncio.TimeoutError())
+        target.respond = AsyncMock(side_effect=asyncio.TimeoutError())
         factory = _make_target_factory(target)
         agent_context = _make_agent_context()
         datapoint = _make_datapoint(strategy=strategy)
@@ -823,7 +830,7 @@ class TestRuntimeErrorsProduceErrorOutput:
         job_fn = create_dynamic_redteam_job(
             agent_key="test-agent",
             agent_context=agent_context,
-            target_factory=factory,
+            backend=factory,
         )
 
         # Patch wait_for to raise immediately so we don't actually wait
@@ -871,7 +878,7 @@ class TestRuntimeErrorsProduceErrorOutput:
                 job_fn = create_dynamic_redteam_job(
                     agent_key="test-agent",
                     agent_context=agent_context,
-                    target_factory=factory,
+                    backend=factory,
                 )
                 output = await _call_dynamic_job(job_fn, datapoint)
 
@@ -916,7 +923,7 @@ class TestMemoryEntityIdGeneration:
                 job_fn = create_dynamic_redteam_job(
                     agent_key="test-agent",
                     agent_context=agent_context,
-                    target_factory=factory,
+                    backend=factory,
                     memory_entity_ids=tracking_ids,
                 )
                 await _call_dynamic_job(job_fn, datapoint)
@@ -955,7 +962,7 @@ class TestMemoryEntityIdGeneration:
                 job_fn = create_dynamic_redteam_job(
                     agent_key="test-agent",
                     agent_context=agent_context,
-                    target_factory=factory,
+                    backend=factory,
                     memory_entity_ids=tracking_ids,
                 )
                 datapoint = _make_datapoint(strategy=strategy)
@@ -991,7 +998,7 @@ class TestMemoryEntityIdGeneration:
                 job_fn = create_dynamic_redteam_job(
                     agent_key="test-agent",
                     agent_context=agent_context,
-                    target_factory=factory,
+                    backend=factory,
                     memory_entity_ids=tracking_ids,
                 )
                 await _call_dynamic_job(job_fn, datapoint)
@@ -1017,7 +1024,7 @@ class TestSingleTurnTokenUsagePropagation:
 
         usage = TokenUsage(prompt_tokens=11, completion_tokens=4, total_tokens=15, calls=1)
         target = _make_target()
-        target.send_prompt = AsyncMock(
+        target.respond = AsyncMock(
             return_value=SendResult(text="hi", usage=usage)
         )
         factory = _make_target_factory(target)
@@ -1031,7 +1038,7 @@ class TestSingleTurnTokenUsagePropagation:
         job_fn = create_dynamic_redteam_job(
             agent_key="test-agent",
             agent_context=agent_context,
-            target_factory=factory,
+            backend=factory,
         )
 
         with patch(

@@ -11,13 +11,11 @@ import pytest
 from openai import AsyncOpenAI
 
 from evaluatorq.redteam import red_team
-from evaluatorq.redteam.backends.base import BackendBundle
-
-from .conftest import DeterministicAsyncOpenAI, validate_report_structure
+from .conftest import DeterministicAsyncOpenAI, MockBackend, validate_report_structure
 
 
 @contextmanager
-def _hybrid_patches(mock_backend_bundle: BackendBundle):
+def _hybrid_patches(mock_backend_bundle: MockBackend):
     """Patch lazy imports used by _run_hybrid."""
     with (
         patch("evaluatorq.redteam.runner.resolve_backend", return_value=mock_backend_bundle),
@@ -30,7 +28,7 @@ def _hybrid_patches(mock_backend_bundle: BackendBundle):
 @pytest.mark.asyncio
 async def test_full_hybrid_run(
     mock_llm_client: DeterministicAsyncOpenAI,
-    mock_backend_bundle: BackendBundle,
+    mock_backend_bundle: MockBackend,
     static_dataset_path: Path,
 ) -> None:
     """Full hybrid pipeline: dynamic + static merged."""
@@ -60,7 +58,7 @@ async def test_full_hybrid_run(
 @pytest.mark.asyncio
 async def test_hybrid_independent_caps(
     mock_llm_client: DeterministicAsyncOpenAI,
-    mock_backend_bundle: BackendBundle,
+    mock_backend_bundle: MockBackend,
     static_dataset_path: Path,
 ) -> None:
     """Independent capping: max_dynamic_datapoints=1 + max_static_datapoints=1."""

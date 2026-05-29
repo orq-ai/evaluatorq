@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq.contracts import AgentResponse, OutputMessage
-from evaluatorq.redteam.backends.base import extract_provider_error_code, extract_status_code
+from evaluatorq.redteam.backends._errors import extract_provider_error_code, extract_status_code
 from evaluatorq.redteam.contracts import (
     DEFAULT_TARGET_MAX_TOKENS,
     DEFAULT_TARGET_TIMEOUT_MS,
@@ -390,8 +390,52 @@ class OpenResponsesErrorMapper:
         return _map_openresponses_error(exc)
 
 
+class OpenResponsesBackend:
+    """``Backend``-shaped wrapper for the OpenResponses target components.
+
+    Satisfies the ``Backend`` ABC interface so the registry can return a
+    uniform object regardless of which backend is selected. Delegates all
+    behaviour to the composable factory / context-provider / error-mapper
+    components so those can be tested independently.
+    """
+
+    def __init__(
+        self,
+        *,
+        client: AsyncOpenAI,
+        instructions: str | None = None,
+        timeout_ms: int | None = None,
+    ) -> None:
+        self.name = "openresponses"
+        self.target_factory = OpenResponsesTargetFactory(
+            client,
+            instructions=instructions,
+            timeout_ms=timeout_ms,
+        )
+        self.context_provider = OpenResponsesContextProvider(instructions=instructions)
+        self.error_mapper = OpenResponsesErrorMapper()
+        self._ctx_cache: dict[str, AgentContext] = {}
+
+    def create_target(self, agent_key: str) -> OpenResponsesAgentTarget:
+        return self.target_factory.create_target(agent_key)
+
+    async def cleanup_memory(self, ctx: AgentContext, entity_ids: list[str]) -> None:
+        pass  # OpenResponses backend has no server-side memory to clean up
+
+    def map_error(self, exc: Exception) -> tuple[str, str]:
+        return self.error_mapper.map_error(exc)
+
+    async def resolve_context(self, agent_key: str) -> AgentContext:
+        if agent_key in self._ctx_cache:
+            return self._ctx_cache[agent_key]
+        ctx = await self.context_provider.get_agent_context(agent_key)
+        self._ctx_cache[agent_key] = ctx
+        return ctx
+
+
 __all__ = [
     "OpenResponsesAgentTarget",
+    "OpenResponsesBackend",
     "OpenResponsesContextProvider",
     "OpenResponsesErrorMapper",
     "OpenResponsesTargetFactory",

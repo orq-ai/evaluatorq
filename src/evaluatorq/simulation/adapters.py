@@ -12,17 +12,17 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from evaluatorq.simulation.types import ChatMessage
+    from evaluatorq.simulation.types import Message
 
 
 def from_orq_deployment(
     agent_key: str,
-) -> Callable[[list[ChatMessage]], Awaitable[str]]:
+) -> Callable[[list[Message]], Awaitable[str]]:
     """Create a simulation ``target_callback`` from an Orq deployment key."""
     if not agent_key.strip():
         raise ValueError("agent_key must be a non-empty string")
 
-    async def callback(messages: list[ChatMessage]) -> str:
+    async def callback(messages: list[Message]) -> str:
         from evaluatorq.deployment import invoke
 
         return await invoke(
@@ -35,13 +35,13 @@ def from_orq_deployment(
 
 def from_chat_completions(
     fn: Callable[[list[dict[str, str]]], Any],
-) -> Callable[[list[ChatMessage]], Awaitable[str]]:
+) -> Callable[[list[Message]], Awaitable[str]]:
     """Create a simulation ``target_callback`` from a chat completions function.
 
     Useful for raw OpenAI SDK, Azure OpenAI, or any OpenAI-compatible provider.
     """
 
-    async def callback(messages: list[ChatMessage]) -> str:
+    async def callback(messages: list[Message]) -> str:
         result = fn([{"role": m.role, "content": m.content or ""} for m in messages])
         if inspect.isawaitable(result):
             return await result

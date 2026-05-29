@@ -7,12 +7,6 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from evaluatorq.redteam.backends.base import BackendBundle, NoopMemoryCleanup
-from evaluatorq.redteam.backends.openai import (
-    OpenAIContextProvider,
-    OpenAIErrorMapper,
-    OpenAITargetFactory,
-)
 from evaluatorq.redteam.exceptions import BackendError, CredentialError
 
 if TYPE_CHECKING:
@@ -20,6 +14,8 @@ if TYPE_CHECKING:
 
     from openai import AsyncOpenAI
 
+    from evaluatorq.redteam.backends.base import Backend
+    from evaluatorq.redteam.backends.openresponses import OpenResponsesBackend
     from evaluatorq.redteam.contracts import LLMCallConfig, LLMConfig, TargetConfig
 
 
@@ -76,74 +72,55 @@ def create_async_llm_client(role_config: LLMCallConfig | None = None) -> AsyncOp
     raise CredentialError(msg)
 
 
-_BACKEND_REGISTRY: dict[str, Callable[..., BackendBundle]] = {}
+_BACKEND_REGISTRY: dict[str, Callable[..., Backend]] = {}
 
 
-def register_backend(name: str, factory: Callable[..., BackendBundle]) -> None:
+def register_backend(name: str, factory: Callable[..., Backend]) -> None:
     """Register a backend factory for use with resolve_backend()."""
     _BACKEND_REGISTRY[name.strip().lower()] = factory
 
 
 def resolve_backend(
     backend: str = "orq",
+    *,
     llm_client: AsyncOpenAI | None = None,
     target_config: TargetConfig | None = None,
     pipeline_config: LLMConfig | None = None,
-) -> BackendBundle:
-    """Resolve runtime backend bundle with lazy optional imports.
-
-    Args:
-        backend: Backend name (e.g. ``"orq"`` or ``"openai"``).
-        llm_client: Pre-configured client for the OpenAI backend.
-            When provided, skips ``create_async_llm_client()`` for
-            the ``"openai"`` backend.
-        target_config: Optional target configuration (e.g. system prompt).
-        pipeline_config: Optional LLMConfig instance. Defaults to module-level PIPELINE_CONFIG.
-    """
+) -> Backend:
+    """Resolve a backend by name."""
     normalized = backend.strip().lower()
     factory = _BACKEND_REGISTRY.get(normalized)
-    if factory is not None:
-        return factory(llm_client=llm_client, target_config=target_config, pipeline_config=pipeline_config)
-    raise BackendError(f"Unsupported backend: {backend!r}. Available: {sorted(_BACKEND_REGISTRY)}")
+    if factory is None:
+        raise BackendError(
+            f"Unsupported backend: {backend!r}. Available: {sorted(_BACKEND_REGISTRY)}"
+        )
+    return factory(llm_client=llm_client, target_config=target_config, pipeline_config=pipeline_config)
 
 
 def _create_openai_backend(
     llm_client: AsyncOpenAI | None = None,
     target_config: TargetConfig | None = None,
-    **kwargs: object,
-) -> BackendBundle:
+    **_: object,
+) -> Backend:
+    from evaluatorq.redteam.backends.openai import OpenAIBackend
+
     system_prompt = target_config.system_prompt if target_config else None
-    client = llm_client or create_async_llm_client()
-    return BackendBundle(
-        name="openai",
-        target_factory=OpenAITargetFactory(client, system_prompt=system_prompt),
-        context_provider=OpenAIContextProvider(system_prompt=system_prompt),
-        memory_cleanup=NoopMemoryCleanup(),
-        error_mapper=OpenAIErrorMapper(),
-    )
+    return OpenAIBackend(client=llm_client, system_prompt=system_prompt)
 
 
 def _create_orq_backend(
     llm_client: AsyncOpenAI | None = None,
     target_config: TargetConfig | None = None,
     pipeline_config: LLMConfig | None = None,
-    **kwargs: object,
-) -> BackendBundle:
+    **_: object,
+) -> Backend:
     try:
-        from evaluatorq.redteam.backends.orq import ORQErrorMapper, create_orq_backend
+        from evaluatorq.redteam.backends.orq import ORQBackend
     except ImportError as exc:
-        msg = "ORQ backend requested but ORQ dependencies are unavailable."
-        raise BackendError(msg) from exc
-    target_factory, context_provider, memory_cleanup = create_orq_backend(
-        timeout_ms=pipeline_config.target_agent_timeout_ms if pipeline_config else None,
-    )
-    return BackendBundle(
-        name="orq",
-        target_factory=target_factory,
-        context_provider=context_provider,
-        memory_cleanup=memory_cleanup,
-        error_mapper=ORQErrorMapper(),
-    )
+        raise BackendError("ORQ backend requested but ORQ dependencies are unavailable.") from exc
+
+    timeout_ms = pipeline_config.target_agent_timeout_ms if pipeline_config else None
+    return ORQBackend(timeout_ms=timeout_ms)
 
 
 def _create_openresponses_backend(
@@ -151,26 +128,18 @@ def _create_openresponses_backend(
     target_config: TargetConfig | None = None,
     pipeline_config: LLMConfig | None = None,
     **kwargs: object,
-) -> BackendBundle:
+) -> OpenResponsesBackend:
     from evaluatorq.redteam.backends.openresponses import (
-        OpenResponsesContextProvider,
-        OpenResponsesErrorMapper,
-        OpenResponsesTargetFactory,
+        OpenResponsesBackend,
         create_openresponses_client,
     )
     instructions = target_config.system_prompt if target_config else None
     timeout_ms = pipeline_config.target_agent_timeout_ms if pipeline_config else None
     client = llm_client or create_openresponses_client()
-    return BackendBundle(
-        name="openresponses",
-        target_factory=OpenResponsesTargetFactory(
-            client,
-            instructions=instructions,
-            timeout_ms=timeout_ms,
-        ),
-        context_provider=OpenResponsesContextProvider(instructions=instructions),
-        memory_cleanup=NoopMemoryCleanup(),
-        error_mapper=OpenResponsesErrorMapper(),
+    return OpenResponsesBackend(
+        client=client,
+        instructions=instructions,
+        timeout_ms=timeout_ms,
     )
 
 
