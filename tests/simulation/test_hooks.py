@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 from evaluatorq.simulation.hooks import (
@@ -342,8 +340,9 @@ async def test_simulate_fires_run_level_hooks(datapoint_factory):
 
 @pytest.mark.asyncio
 async def test_on_confirm_false_aborts_before_running(datapoint_factory):
-    """A declining on_confirm aborts via CancelledError; on_run_start never
-    fires and no simulation runs."""
+    """A declining on_confirm aborts via SimulationCancelledError; on_run_start
+    never fires and no simulation runs."""
+    from evaluatorq.simulation.exceptions import SimulationCancelledError
 
     class DecliningHooks(DefaultHooks):
         def __init__(self) -> None:
@@ -355,13 +354,16 @@ async def test_on_confirm_false_aborts_before_running(datapoint_factory):
         def on_run_start(self, meta):
             self.run_started += 1
 
-    async def _ok_target(messages):
+    calls = []
+
+    async def _spy_target(messages):
+        calls.append(1)
         return "fine"
 
     hooks = DecliningHooks()
-    with pytest.raises(asyncio.CancelledError):
+    with pytest.raises(SimulationCancelledError):
         await simulate(
-            target=_ok_target,
+            target=_spy_target,
             datapoints=[datapoint_factory("dp1")],
             max_turns=1,
             evaluator_names=["goal_achieved"],
@@ -370,3 +372,4 @@ async def test_on_confirm_false_aborts_before_running(datapoint_factory):
             hooks=hooks,
         )
     assert hooks.run_started == 0
+    assert calls == []          # confirm gate aborted before any target call

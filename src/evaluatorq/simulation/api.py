@@ -124,6 +124,7 @@ async def _simulate_core(
 
     from evaluatorq.simulation.adapters import from_orq_deployment
     from evaluatorq.simulation.evaluators import get_evaluator
+    from evaluatorq.simulation.exceptions import SimulationCancelledError
     from evaluatorq.simulation.generators import FirstMessageGenerator
     from evaluatorq.simulation.hooks import DefaultHooks, SimulationRunMeta
     from evaluatorq.simulation.runner.simulation import SimulationRunner
@@ -196,7 +197,7 @@ async def _simulate_core(
     }
     # Gate first. Nothing is allocated yet, so a decline is a clean abort.
     if not resolved_hooks.on_confirm(run_meta):
-        raise asyncio.CancelledError("Simulation run declined by on_confirm hook")
+        raise SimulationCancelledError("Simulation run declined by on_confirm hook")
     # Render-init only after confirmation passes.
     resolved_hooks.on_run_start(run_meta)
 

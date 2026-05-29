@@ -59,8 +59,12 @@ class SimulationHooks(Protocol):
 
     ``on_confirm`` is the single pre-run gate (reuses the ``SimulationRunMeta``
     payload). It fires before the runner/target exist; returning ``False``
-    aborts the run via ``asyncio.CancelledError``. ``on_run_start`` fires only
-    after ``on_confirm`` returns truthy — gate first, then render-init.
+    aborts the run via ``SimulationCancelledError``. ``on_run_start`` fires only
+    after ``on_confirm`` returns truthy — gate first, then render-init. Note:
+    for ``generate_and_simulate`` the gate fires AFTER persona/scenario/
+    first-message generation, so those generation tokens are already spent when
+    ``on_confirm`` is called — the gate protects the simulation batch, not
+    generation.
     """
 
     def on_confirm(self, meta: SimulationRunMeta) -> bool: ...
