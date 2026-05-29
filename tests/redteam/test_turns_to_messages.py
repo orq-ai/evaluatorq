@@ -133,3 +133,77 @@ def test_tool_call_preserves_responses_item_id():
     tc = assistant.tool_calls[0]
     assert tc.id == "call_xyz"
     assert tc.item_id == "fc_abc"
+
+
+def test_interleaved_text_tool_text_emits_three_assistant_rows():
+    """The docstring claims ``Text -> ToolCall -> Text`` yields three assistant
+    rows in order. A refactor that merged the bracketing text rows would silently
+    break multi-turn replay for agents that narrate around tool use.
+    """
+    turn = Turn(
+        attacker=AttackerResponse(generated_prompt="search"),
+        target=AgentResponse(output=[
+            TextOutputItem(text="thinking...", annotations=[]),
+            ToolCallOutputItem(name="lookup", arguments="{}", id="c1", call_id="c1"),
+            TextOutputItem(text="found it", annotations=[]),
+        ]),
+    )
+    msgs = turns_to_messages([turn])
+    # user, assistant("thinking..."), assistant(tool_calls), assistant("found it")
+    assert [m.role for m in msgs] == ["user", "assistant", "assistant", "assistant"]
+    assert msgs[1].content == "thinking..."
+    assert msgs[2].tool_calls is not None and msgs[2].tool_calls[0].function.name == "lookup"
+    assert msgs[3].content == "found it"
+
+
+def test_consecutive_text_items_collapse_into_one_assistant_row():
+    """Two adjacent ``TextOutputItem``s join into a single assistant message.
+    Documented in ``turns_to_messages``; pinning the behavior here.
+    """
+    turn = Turn(
+        attacker=AttackerResponse(generated_prompt="hi"),
+        target=AgentResponse(output=[
+            TextOutputItem(text="part one ", annotations=[]),
+            TextOutputItem(text="part two", annotations=[]),
+        ]),
+    )
+    msgs = turns_to_messages([turn])
+    assert [m.role for m in msgs] == ["user", "assistant"]
+    assert msgs[1].content == "part one part two"
+
+
+def test_tool_result_empty_string_still_emits_tool_row():
+    """``result=""`` is a legitimate tool return (e.g. an action with no
+    payload). The current check is ``if item.result is not None``; a refactor
+    to ``if item.result:`` would silently drop the row and break alternation.
+    """
+    turn = Turn(
+        attacker=AttackerResponse(generated_prompt="go"),
+        target=AgentResponse(output=[
+            ToolCallOutputItem(name="noop", arguments="{}", id="c1", call_id="c1", result=""),
+        ]),
+    )
+    msgs = turns_to_messages([turn])
+    assert [m.role for m in msgs] == ["user", "assistant", "tool"]
+    assert msgs[2].content == ""
+
+
+def test_reasoning_interleaved_with_text_and_tool_dropped_silently():
+    """Reasoning items are dropped, but the surrounding text/tool ordering must
+    not collapse — flushing the text buffer on a reasoning item would split
+    what should be one assistant text row.
+    """
+    from evaluatorq.contracts import ReasoningOutputItem
+
+    turn = Turn(
+        attacker=AttackerResponse(generated_prompt="q"),
+        target=AgentResponse(output=[
+            TextOutputItem(text="hello", annotations=[]),
+            ReasoningOutputItem(text="(internal)"),
+            ToolCallOutputItem(name="lookup", arguments="{}", id="c1", call_id="c1", result="ok"),
+        ]),
+    )
+    msgs = turns_to_messages([turn])
+    # user, assistant("hello"), assistant(tool_calls), tool
+    assert [m.role for m in msgs] == ["user", "assistant", "assistant", "tool"]
+    assert msgs[1].content == "hello"

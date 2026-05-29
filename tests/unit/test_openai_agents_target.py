@@ -342,6 +342,110 @@ class TestOpenAIAgentTarget:
         assert ctx.tools == []
 
 
+class TestToolCallOutputRoundTrip:
+    """``function_call_output`` items must be merged into the matching
+    ``ToolCallOutputItem`` so transcript replay preserves the tool result.
+    Without this, a subsequent turn would send the Responses API a
+    ``function_call`` with no paired ``function_call_output`` and get rejected.
+    """
+
+    @pytest.mark.asyncio
+    async def test_function_call_output_attaches_result_to_matching_call(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from evaluatorq.redteam.contracts import turns_to_messages, Turn, AttackerResponse
+
+        result = MagicMock()
+        result.final_output = "done"
+        result.to_input_list.return_value = [
+            {"role": "user", "content": "lookup x"},
+            {
+                "type": "function_call",
+                "id": "fc_abc",
+                "call_id": "call_xyz",
+                "name": "lookup",
+                "arguments": '{"q":"x"}',
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_xyz",
+                "output": "found",
+            },
+            {"role": "assistant", "content": "done"},
+        ]
+        del result.context_wrapper
+        runner = MagicMock()
+        runner.run = AsyncMock(return_value=result)
+        monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
+
+        target = OpenAIAgentTarget(MagicMock())
+        response = await target.respond([Message(role="user", content="lookup x")])
+
+        tool_calls = [it for it in response.output if isinstance(it, ToolCallOutputItem)]
+        assert len(tool_calls) == 1
+        assert tool_calls[0].call_id == "call_xyz"
+        assert tool_calls[0].id == "fc_abc"
+        assert tool_calls[0].result == "found"
+
+        # Round-trip through transcript replay: the orphan-function_call bug
+        # would show up here as a missing ``tool`` row, which then renders to a
+        # Responses-API function_call without function_call_output.
+        turn = Turn(attacker=AttackerResponse(generated_prompt="lookup x"), target=response)
+        msgs = turns_to_messages([turn])
+        roles = [m.role for m in msgs]
+        assert "tool" in roles, "tool result row missing — function_call_output was dropped"
+        tool_msg = next(m for m in msgs if m.role == "tool")
+        assert tool_msg.tool_call_id == "call_xyz"
+        assert tool_msg.content == "found"
+
+        items = _message_to_responses_input_items(tool_msg)
+        assert items == [{"type": "function_call_output", "call_id": "call_xyz", "output": "found"}]
+
+    @pytest.mark.asyncio
+    async def test_function_call_output_with_dict_payload_serialized(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result = MagicMock()
+        result.final_output = "ok"
+        result.to_input_list.return_value = [
+            {"role": "user", "content": "x"},
+            {"type": "function_call", "id": "fc_a", "call_id": "call_a", "name": "n", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_a", "output": {"value": 42}},
+        ]
+        del result.context_wrapper
+        runner = MagicMock()
+        runner.run = AsyncMock(return_value=result)
+        monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
+
+        target = OpenAIAgentTarget(MagicMock())
+        response = await target.respond([Message(role="user", content="x")])
+
+        tool_call = next(it for it in response.output if isinstance(it, ToolCallOutputItem))
+        assert tool_call.result == '{"value": 42}'
+
+    @pytest.mark.asyncio
+    async def test_function_call_output_with_no_matching_call_is_ignored(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Defensive: a function_call_output with an unknown call_id must not raise."""
+        result = MagicMock()
+        result.final_output = "ok"
+        result.to_input_list.return_value = [
+            {"role": "user", "content": "x"},
+            {"type": "function_call_output", "call_id": "call_unknown", "output": "stray"},
+        ]
+        del result.context_wrapper
+        runner = MagicMock()
+        runner.run = AsyncMock(return_value=result)
+        monkeypatch.setattr("evaluatorq.integrations.openai_agents_integration.target.Runner", runner)
+
+        target = OpenAIAgentTarget(MagicMock())
+        response = await target.respond([Message(role="user", content="x")])
+
+        # No tool call to attach to; the orphan output is dropped silently.
+        assert not [it for it in response.output if isinstance(it, ToolCallOutputItem)]
+
+
 class TestOpenAIAgentTargetUsage:
     @pytest.mark.asyncio
     async def test_usage_populated_from_context_wrapper(self, monkeypatch: pytest.MonkeyPatch) -> None:

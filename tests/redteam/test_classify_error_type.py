@@ -53,3 +53,24 @@ def test_unmatched_returns_unknown() -> None:
 )
 def test_classify_avoids_false_positives(error: str, expected: str) -> None:
     assert classify_error_type(error) == expected
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        # Mixed-substring inputs: pattern order is load-bearing per the module.
+        # content_filter precedes rate_limit so a filter-blocked request that
+        # mentions rate limiting still classifies as content_filter.
+        ("content_filter triggered after rate limit was reset", "content_filter"),
+        # Reverse order in the string — still content_filter wins because the
+        # classifier walks patterns in declared precedence, not input order.
+        ("rate limit reset, request blocked by content_filter", "content_filter"),
+        # timeout vs network_error: timeout fires first when both substrings present.
+        ("connection reset; operation timeout", "timeout"),
+    ],
+)
+def test_classify_precedence_between_patterns(error: str, expected: str) -> None:
+    """Pin pattern precedence so an alphabetical refactor of the pattern list
+    surfaces as a test failure rather than a silent behavior change.
+    """
+    assert classify_error_type(error) == expected
