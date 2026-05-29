@@ -15,6 +15,8 @@ All notable changes to `evaluatorq` are documented here.
 
 - `red_team()` parameter renamed: `config=` → `llm_config=`. The old `config=` keyword still works in 1.3.0 but emits a `DeprecationWarning` and **will be removed in 1.4.0**.
 - `LLMConfig` flat fields removed: `attack_model`, `evaluator_model`, `adversarial_temperature`, `adversarial_max_tokens`, `llm_call_timeout_ms`, `llm_kwargs` — replaced by role-based `attacker` / `evaluator` sub-configs (`LLMCallConfig`)
+- `wrap_simulation_agent()` no longer accepts the `evaluators=` kwarg. Evaluators are wired through `evaluatorq()` directly (the framework that consumes the job); callers passing `evaluators=[...]` will now get a `TypeError` and should move the list onto their `evaluatorq(..., evaluators=...)` call instead (RES-594).
+- `simulate()` and `generate_and_simulate()` now default `upload_results=True`. With the move to evaluatorq-native execution the framework's upload is the canonical persistence path — the previous `False` default left runs with no record anywhere. Set `upload_results=False` explicitly to suppress (RES-594).
 
 **Migration:**
 
@@ -99,6 +101,10 @@ from evaluatorq.contracts import AgentTarget   # replaces the simulation TargetA
 - `LLMCallConfig` exported from the `evaluatorq.redteam` public API
 - `OpenAIModelTarget.send_prompt` now enforces `timeout_ms` via `asyncio.wait_for`
 - Evaluator role config (`temperature`, `max_tokens`, `timeout_ms`, `extra_kwargs`, `client`) fully propagated through `OWASPEvaluator`, `create_dynamic_evaluator`, and `create_owasp_evaluator`
+- `simulate()` and `generate_and_simulate()` accept new `evaluation_description=` and `path=` parameters, forwarded straight to `evaluatorq()` (RES-598).
+- `simulate()` and `generate_and_simulate()` now run on top of `evaluatorq()`: persona × scenario datapoints are materialised, executed via a single evaluatorq job, and scored via adapted evaluators. This brings auto-upload, OTel tracing, the results table, CI gating, and dataset-id support to the simulation entry points "for free". The bespoke parallelism loop was removed; `simulation/upload.py` is kept as a standalone helper for direct callers but is no longer invoked from `simulate()` (RES-594).
+- `simulate()` accepts a new `dataset_id=` parameter — when set, simulation datapoints are streamed from the named Orq dataset (each row's `inputs` must already match a simulation input shape) instead of being passed inline. Mutually exclusive with `datapoints` and `personas`/`scenarios` (RES-594).
+- `simulate()` and `generate_and_simulate()` accept a new `exit_on_failure=` parameter, **default `True`**, matching `evaluatorq()`'s framework default. Score-based failures exit via `sys.exit(1)`; dropped jobs raise `RuntimeError`. Pass `exit_on_failure=False` for interactive / exploratory runs where you want failures surfaced as warnings + error metadata instead of a non-zero exit (RES-594).
 
 ### Bug Fixes
 
