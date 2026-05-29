@@ -3,27 +3,19 @@
 Mirrors ``redteam.reports``: ``sections.py`` builds renderer-agnostic
 ``ReportSection`` objects; ``export_md`` / ``export_html`` render them via
 the shared dispatch in ``evaluatorq.common.reports``.
+
+These modules import only first-party code at module load time. Plotly /
+kaleido are imported lazily inside the chart helpers in
+``evaluatorq.common.reports.html_helpers`` and degrade to an empty
+string when absent, so no ``try/except ImportError`` is needed here —
+adding one would only swallow genuine packaging errors (typos, circular
+imports) and turn them into ``AttributeError`` at the call site with no
+traceback.
 """
 
-from loguru import logger
-
-try:  # noqa: RUF067
-    from evaluatorq.simulation.reports.export_html import export_html
-except ImportError:
-    logger.debug("HTML export unavailable: missing optional dependency (e.g. plotly)")
-    export_html = None  # type: ignore[assignment]
-
-try:  # noqa: RUF067
-    from evaluatorq.simulation.reports.export_md import export_markdown
-except ImportError:
-    logger.debug("Markdown export unavailable: missing optional dependency")
-    export_markdown = None  # type: ignore[assignment]
-
-try:  # noqa: RUF067
-    from evaluatorq.simulation.reports.sections import build_report_sections
-except ImportError:
-    logger.debug("Report sections unavailable: missing optional dependency")
-    build_report_sections = None  # type: ignore[assignment]
+from evaluatorq.simulation.reports.export_html import export_html
+from evaluatorq.simulation.reports.export_md import export_markdown
+from evaluatorq.simulation.reports.sections import build_report_sections
 
 
 __all__ = [

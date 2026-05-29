@@ -31,7 +31,6 @@ def _make_empty_report() -> RedTeamReport:
 
 def test_redteam_export_markdown_smoke():
     """Smoke: redteam export_markdown produces a usable Markdown document."""
-    assert export_markdown is not None, "export_markdown should be importable"
     md = export_markdown(_make_empty_report())
     assert "# Red Team Security Report" in md
     assert "Executive Summary" in md
@@ -41,7 +40,6 @@ def test_redteam_export_markdown_smoke():
 
 def test_redteam_export_html_smoke():
     """Smoke: redteam export_html produces a self-contained HTML document."""
-    assert export_html is not None, "export_html should be importable"
     html = export_html(_make_empty_report())
     assert html.startswith("<!DOCTYPE html>")
     assert "<title>Red Team Security Report</title>" in html
