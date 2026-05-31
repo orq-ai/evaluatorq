@@ -17,13 +17,31 @@ from typing import TYPE_CHECKING, Any, Protocol, TypedDict, runtime_checkable
 
 from loguru import logger
 
-from evaluatorq.redteam.contracts import PipelineStage
+from evaluatorq.redteam.contracts import AgentCapability, PipelineStage
 from evaluatorq.redteam.reports.display import print_report_summary
 
 if TYPE_CHECKING:
     from rich.console import Console as RichConsole
 
     from evaluatorq.redteam.contracts import RedTeamReport
+
+
+# Capabilities that meaningfully expand an agent's blast radius. Surfaced
+# in bold red in the detected-capabilities table so operators notice them
+# before approving an expensive red-team run.
+_HIGH_RISK_CAPS: frozenset[AgentCapability] = frozenset({
+    AgentCapability.CODE_EXECUTION,
+    AgentCapability.SHELL_ACCESS,
+    AgentCapability.FILE_SYSTEM,
+    AgentCapability.DATABASE,
+    AgentCapability.PAYMENT,
+    AgentCapability.EMAIL,
+    AgentCapability.MESSAGING,
+})
+
+# Pre-computed string values for membership checks in the per-tag render
+# loop — avoids rebuilding the set for every tag of every resource.
+_HIGH_RISK_CAP_VALUES: frozenset[str] = frozenset(c.value for c in _HIGH_RISK_CAPS)
 
 # ---------------------------------------------------------------------------
 # Stage label mapping
@@ -278,6 +296,33 @@ class RichHooks:
 
     def on_stage_end(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
         if stage == PipelineStage.CONTEXT_RETRIEVAL:
+            # Per RES-716: surface the classifier output for this target
+            # immediately after context retrieval. The runner places the
+            # classified caps (and any classifier error) on the meta dict.
+            # The table's caption absorbs the resource-type breakdown that
+            # _render_context_summary used to print, so we skip the one-liner
+            # when an agent_context is present. The trailing "completed in
+            # X.Xs" line is also suppressed for this stage — between
+            # multi-target tables it just adds noise, and the timing is
+            # already recorded as a span attribute on the trace.
+            agent_context = meta.get("agent_context")
+            agent_capabilities = meta.get("agent_capabilities")
+            if agent_context is not None:
+                # Each target's output is wrapped in a Panel with the target
+                # label embedded in the top border (lazydocker / nethogs
+                # idiom). The panel acts as the visual container so the
+                # inner table only needs a header separator — no full grid.
+                self._render_agent_capabilities(
+                    agent_context,
+                    classified=agent_capabilities,
+                    target_label=meta.get("target", ""),
+                    classification_error=meta.get("classification_error"),
+                    classification_available=meta.get("classification_available", True),
+                )
+                return
+            # Static mode / non-redteam callers: no agent context to
+            # classify, but a target was still resolved — keep the
+            # one-liner so they get *some* signal.
             self._render_context_summary(meta)
 
         elapsed = meta.get("elapsed_s")
@@ -353,18 +398,9 @@ class RichHooks:
 
         self._console.print(table)
 
-        # ── Agent capabilities panel(s) ────────────────────────────────
-        agent_contexts = payload.get("agent_contexts")
-        if agent_contexts and len(agent_contexts) > 1:
-            for target_str, ctx in agent_contexts.items():
-                self._render_agent_capabilities(ctx, title=f"Agent Capabilities — {target_str}")
-        elif agent_contexts:
-            ctx = next(iter(agent_contexts.values()))
-            self._render_agent_capabilities(ctx)
-        else:
-            agent_context = payload.get("agent_context")
-            if agent_context is not None:
-                self._render_agent_capabilities(agent_context)
+        # Detected capabilities tables are rendered earlier, in
+        # on_stage_end(CONTEXT_RETRIEVAL), so the operator sees per-resource
+        # classification before reaching this confirmation step.
 
         # ── Filtering metadata ──────────────────────────────────────────
         filtering_metadata = payload.get("filtering_metadata")
@@ -384,43 +420,166 @@ class RichHooks:
 
         return typer.confirm("Proceed with this run?", default=True)
 
-    def _render_agent_capabilities(self, agent_context: dict[str, Any], title: str = "Agent Capabilities") -> None:
-        """Render an agent capabilities panel."""
+    def _render_agent_capabilities(
+        self,
+        agent_context: dict[str, Any],
+        *,
+        classified: dict[str, Any] | None = None,
+        target_label: str = "",
+        classification_error: str | None = None,
+        classification_available: bool = True,
+    ) -> None:
+        """Render a per-target table of detected agent capabilities, wrapped
+        in a Rich Panel with the target label embedded in the top border.
+
+        The Panel acts as the visual container (lazydocker / nethogs idiom)
+        so the inner Table only needs a header separator, not a full grid.
+        Border color shifts to signal status: cyan = classified cleanly,
+        yellow = classifier failed, blue = no tags detected, grey50 = no client.
+
+        Args:
+            agent_context: Serialized AgentContext (model_dump).
+            classified: Serialized AgentCapabilities (model_dump) for this
+                target, or None when classification was skipped.
+            target_label: e.g. ``"agent:shop-bot"``. Embedded in the panel
+                top border. Empty string falls back to ``"Capabilities"``.
+            classification_error: Concrete error string captured when the
+                classifier raised; shown verbatim under the table so the
+                operator can tell auth / network / model errors apart from
+                an empty result.
+            classification_available: ``False`` when no LLM client could be
+                resolved, so the "disabled" hint should be shown instead of
+                the failure hint.
+        """
+        from rich import box
+        from rich.console import Group
+        from rich.panel import Panel
+        from rich.table import Table
+        from rich.text import Text
+
         tools = agent_context.get("tools") or []
         memory_stores = agent_context.get("memory_stores") or []
         knowledge_bases = agent_context.get("knowledge_bases") or []
 
-        lines: list[str] = []
+        # Build (resource_key, resource_type, display_name) triples in a stable
+        # order so the table layout is deterministic across runs.
+        resources: list[tuple[str, str, str]] = []
+        for t in tools:
+            name = t.get("name") if isinstance(t, dict) else str(t)
+            display = name or "unknown"
+            resources.append((display, "tool", display))
+        for m in memory_stores:
+            ident = (m.get("key") or m.get("id") or "unknown") if isinstance(m, dict) else str(m)
+            resources.append((f"memory:{ident}", "memory", str(ident)))
+        for kb in knowledge_bases:
+            ident = (kb.get("key") or kb.get("name") or kb.get("id") or "unknown") if isinstance(kb, dict) else str(kb)
+            resources.append((f"knowledge:{ident}", "knowledge", str(ident)))
 
-        if tools:
-            tool_names = ", ".join(
-                t.get("name", str(t)) if isinstance(t, dict) else str(t) for t in tools[:10]
-            )
-            suffix = f" (+{len(tools) - 10} more)" if len(tools) > 10 else ""
-            lines.append(f"Tools ({len(tools)}): {tool_names}{suffix}")
-        else:
-            lines.append("Tools: none")
+        panel_title = f"[bold cyan]{target_label}[/bold cyan]" if target_label else "[bold cyan]Capabilities[/bold cyan]"
 
-        if memory_stores:
-            store_ids = ", ".join(
-                m.get("key") or m.get("id", str(m)) if isinstance(m, dict) else str(m)
-                for m in memory_stores[:5]
+        # Empty agent: panel wraps a single dim line, no table at all.
+        if not resources:
+            self._console.print(
+                Panel(
+                    Text("No tools, memory stores, or knowledge bases configured", style="dim italic"),
+                    title=panel_title,
+                    title_align="left",
+                    border_style="dim",
+                    box=box.ROUNDED,
+                    padding=(0, 1),
+                )
             )
-            lines.append(f"Memory Stores ({len(memory_stores)}): {store_ids}")
-        else:
-            lines.append("Memory: none")
+            return
 
-        if knowledge_bases:
-            kb_ids = ", ".join(
-                kb.get("name") or kb.get("key") or kb.get("id", str(kb)) if isinstance(kb, dict) else str(kb)
-                for kb in knowledge_bases[:5]
-            )
-            lines.append(f"Knowledge Bases ({len(knowledge_bases)}): {kb_ids}")
-        else:
-            lines.append("Knowledge Bases: none")
+        caps_map: dict[str, list[str]] = {}
+        classification_failed = False
+        if classified is not None:
+            caps_map = classified.get("capabilities") or {}
+            classification_failed = bool(classified.get("classification_failed"))
+
+        n_tools = sum(1 for _, rtype, _ in resources if rtype == "tool")
+        n_memory = sum(1 for _, rtype, _ in resources if rtype == "memory")
+        n_knowledge = sum(1 for _, rtype, _ in resources if rtype == "knowledge")
+
+        # Inner table: header divider only (SIMPLE_HEAD), no outer edges —
+        # the panel border is the container, and the SIMPLE_HEAD divider
+        # gives us the header underline like the Household Tasks reference.
+        table = Table(
+            show_header=True,
+            header_style="bold magenta",
+            box=box.SIMPLE_HEAD,
+            pad_edge=False,
+            show_edge=False,
+            expand=True,
+        )
+        table.add_column("Resource", style="white", overflow="fold", no_wrap=False)
+        table.add_column("Type", style="dim", width=10)
+        table.add_column("Capabilities", overflow="fold")
+
+        # Type cell uses a small status colour so the eye picks out the
+        # resource kinds when scanning a long list.
+        type_styles = {"tool": "cyan", "memory": "magenta", "knowledge": "blue"}
+
+        unique_caps: set[str] = set()
+        for key, rtype, display in resources:
+            tags = caps_map.get(key) or []
+            unique_caps.update(tags)
+            cell_parts: list[str] = []
+            for tag in tags:
+                style = "bold red" if tag in _HIGH_RISK_CAP_VALUES else "green"
+                cell_parts.append(f"[{style}]{tag}[/{style}]")
+            cap_cell = ", ".join(cell_parts) if cell_parts else "[dim]—[/dim]"
+            type_cell = f"[{type_styles.get(rtype, 'dim')}]{rtype}[/{type_styles.get(rtype, 'dim')}]"
+            table.add_row(display, type_cell, cap_cell)
+
+        # Footer summary lives inside the panel as a Group sibling — this
+        # absorbs both the resource-type breakdown (formerly
+        # _render_context_summary) and the capability counts. Counts
+        # *distinct* high-risk capability kinds, not tag occurrences.
+        n_high_risk_kinds = len(unique_caps & _HIGH_RISK_CAP_VALUES)
+        breakdown_bits: list[str] = []
+        if n_tools:
+            breakdown_bits.append(f"{n_tools} tool{'s' if n_tools != 1 else ''}")
+        if n_memory:
+            breakdown_bits.append(f"{n_memory} memory")
+        if n_knowledge:
+            breakdown_bits.append(f"{n_knowledge} KB")
+        cap_bits = [f"{len(unique_caps)} capabilit{'ies' if len(unique_caps) != 1 else 'y'}"]
+        if n_high_risk_kinds:
+            cap_bits.append(f"[bold red]{n_high_risk_kinds} high-risk[/bold red]")
+        summary_line = "[dim]" + " · ".join(breakdown_bits) + "[/dim]  ·  " + " · ".join(cap_bits)
+
+        # Status hint goes inside the panel as the last line. Four cases:
+        #   * classifier failed             → yellow inline message
+        #   * no llm_client                 → dim disabled hint
+        #   * classifier ran, no tags found → dim "no tags detected"
+        #   * classifier ran, tags found    → no hint, border stays cyan
+        hint: str | None = None
+        border_style = "cyan"
+        if classification_failed:
+            border_style = "yellow"
+            err_suffix = f" — {classification_error}" if classification_error else ""
+            hint = f"[yellow]⚠ classifier failed{err_suffix} (strategies included optimistically)[/yellow]"
+        elif not classification_available or classified is None:
+            border_style = "grey50"
+            hint = "[dim]∅ classifier disabled (no llm_client)[/dim]"
+        elif not caps_map:
+            border_style = "blue"
+            hint = "[blue]∅ no capability tags detected for this agent[/blue]"
+
+        renderables: list[Any] = [table, Text.from_markup(summary_line, justify="center")]
+        if hint is not None:
+            renderables.append(Text.from_markup(hint))
 
         self._console.print(
-            self._make_panel("\n".join(lines), title=title)
+            Panel(
+                Group(*renderables),
+                title=panel_title,
+                title_align="left",
+                border_style=border_style,
+                box=box.ROUNDED,
+                padding=(0, 1),
+            )
         )
 
     def _render_filtering_metadata(self, filtering_metadata: dict[str, Any]) -> None:

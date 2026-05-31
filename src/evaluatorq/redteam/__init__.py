@@ -44,6 +44,10 @@ from evaluatorq.redteam.adaptive.strategy_registry import (
     list_available_categories as list_categories,
 )
 from evaluatorq.redteam.backends.openai import OpenAIModelTarget
+from evaluatorq.redteam.backends.openresponses import (
+    OpenResponsesAgentTarget,
+    OpenResponsesTargetFactory,
+)
 from evaluatorq.redteam.backends.registry import register_backend
 from evaluatorq.redteam.contracts import (
     SEVERITY_DEFINITIONS,
@@ -110,6 +114,25 @@ from evaluatorq.redteam.hooks import (
     PipelineHooks,
     RichHooks,
 )
+from evaluatorq.redteam.openresponses_adapter import (
+    agent_response_from_openresponses,
+    agent_response_to_openresponses,
+    append_assistant_turn,
+    append_user_followup,
+    build_openresponses_request,
+    load_openresponses_dataset,
+    messages_from_openresponses_input,
+    orchestrator_result_to_openresponses_input,
+    record_openresponses_request,
+    record_openresponses_response,
+    redteam_sample_from_openresponses,
+    turns_to_openresponses_input,
+)
+from evaluatorq.redteam.parsing import (
+    extract_assistant_text,
+    extract_reasoning,
+    extract_tool_calls,
+)
 from evaluatorq.redteam.reports.converters import merge_reports
 from evaluatorq.redteam.reports.display import print_report_summary
 from evaluatorq.redteam.runner import red_team
@@ -164,6 +187,8 @@ __all__ = [
     "MemoryStoreInfo",
     "Message",
     "OpenAIModelTarget",
+    "OpenResponsesAgentTarget",
+    "OpenResponsesTargetFactory",
     # Result models
     "OrchestratorResult",
     "Pipeline",
@@ -205,6 +230,22 @@ __all__ = [
     "VulnerabilityDef",
     "VulnerabilityDomain",
     "VulnerabilitySummary",
+    # OpenResponses adapter (RES-540)
+    "agent_response_from_openresponses",
+    "agent_response_to_openresponses",
+    "append_assistant_turn",
+    "append_user_followup",
+    "build_openresponses_request",
+    "extract_assistant_text",
+    "extract_reasoning",
+    "extract_tool_calls",
+    "load_openresponses_dataset",
+    "messages_from_openresponses_input",
+    "orchestrator_result_to_openresponses_input",
+    "record_openresponses_request",
+    "record_openresponses_response",
+    "redteam_sample_from_openresponses",
+    "turns_to_openresponses_input",
     "get_category_info",
     "get_vulnerability_name",
     # Vulnerability introspection
