@@ -11,9 +11,11 @@ Public API:
     DefaultHooks      — loguru baseline (the default when no hooks passed)
     RichHooks         — Rich per-datapoint progress (CLI / interactive)
 
-All hooks are SYNCHRONOUS (parity with redteam). They run on the async event
-loop; keep them fast and non-blocking — a slow sync hook stalls every
-concurrent simulation.
+Hooks are ASYNC (parity with redteam). Sync implementations are still supported
+at runtime (driven via ``evaluatorq.common.async_utils.await_maybe``) but emit a
+one-time ``DeprecationWarning`` — define hooks as ``async def``. A slow blocking
+hook stalls every concurrent simulation; offload blocking work with
+``asyncio.to_thread``.
 """
 
 from __future__ import annotations
@@ -52,9 +54,10 @@ class SimulationHooks(Protocol):
     """Protocol for simulation lifecycle hooks.
 
     Implementations are injected via ``simulate(hooks=...)`` or
-    ``SimulationRunner(hooks=...)``. All methods are synchronous; they run on
-    the async event loop, so keep them fast — a slow sync hook stalls every
-    concurrent simulation.
+    ``SimulationRunner(hooks=...)``. Methods are ``async def``; sync (``def``)
+    implementations still work at runtime (via ``await_maybe``) but emit a
+    ``DeprecationWarning``. Either way they run on the async event loop, so keep
+    them fast — offload blocking work with ``asyncio.to_thread``.
 
     Exception policy: only ``on_turn_complete`` is exception-guarded by the
     runner — it fires inside ``run()``'s catch-all, which would otherwise
@@ -88,18 +91,16 @@ class SimulationHooks(Protocol):
     list if failure occurred before any results were collected.
     """
 
-    def on_confirm(self, meta: SimulationRunMeta) -> bool: ...
-    def on_run_start(self, meta: SimulationRunMeta) -> None: ...
-    def on_datapoint_start(self, datapoint: Datapoint) -> None: ...
-    def on_turn_complete(self, datapoint_id: str, metrics: TurnMetrics) -> None: ...
-    def on_datapoint_complete(self, result: SimulationResult) -> None: ...
-    def on_evaluator_complete(
+    async def on_confirm(self, meta: SimulationRunMeta) -> bool: ...
+    async def on_run_start(self, meta: SimulationRunMeta) -> None: ...
+    async def on_datapoint_start(self, datapoint: Datapoint) -> None: ...
+    async def on_turn_complete(self, datapoint_id: str, metrics: TurnMetrics) -> None: ...
+    async def on_datapoint_complete(self, result: SimulationResult) -> None: ...
+    async def on_evaluator_complete(
         self, datapoint_id: str, name: str, score: float, result: SimulationResult
     ) -> None: ...
-    def on_datapoint_error(
-        self, datapoint: Datapoint, exception: BaseException
-    ) -> None: ...
-    def on_run_complete(self, results: list[SimulationResult]) -> None: ...
+    async def on_datapoint_error(self, datapoint: Datapoint, exception: BaseException) -> None: ...
+    async def on_run_complete(self, results: list[SimulationResult]) -> None: ...
 
 
 class DefaultHooks:
@@ -110,54 +111,42 @@ class DefaultHooks:
     at WARNING. ``on_confirm`` never blocks, so ``hooks=None`` is
     control-flow-identical to supplying no hooks (it does still log)."""
 
-    def on_confirm(self, meta: SimulationRunMeta) -> bool:
+    async def on_confirm(self, meta: SimulationRunMeta) -> bool:
         # Library default: never block. Interactive prompt lives in the CLI
         # (RES-845) which overrides this.
         return True
 
-    def on_run_start(self, meta: SimulationRunMeta) -> None:
+    async def on_run_start(self, meta: SimulationRunMeta) -> None:
         logger.info(
-            f"[simulation] Run start: {meta['num_datapoints']} datapoints | "
-            f"model={meta['model']!r} | max_turns={meta['max_turns']} | "
-            f"parallelism={meta['parallelism']} | "
-            f"evaluators={meta['evaluator_names']}"
+            f'[simulation] Run start: {meta["num_datapoints"]} datapoints | '
+            f'model={meta["model"]!r} | max_turns={meta["max_turns"]} | '
+            f'parallelism={meta["parallelism"]} | '
+            f'evaluators={meta["evaluator_names"]}'
         )
 
-    def on_datapoint_start(self, datapoint: Datapoint) -> None:
-        logger.debug(f"[simulation] Datapoint start: {datapoint.id}")
+    async def on_datapoint_start(self, datapoint: Datapoint) -> None:
+        logger.debug(f'[simulation] Datapoint start: {datapoint.id}')
 
-    def on_turn_complete(self, datapoint_id: str, metrics: TurnMetrics) -> None:
+    async def on_turn_complete(self, datapoint_id: str, metrics: TurnMetrics) -> None:
+        logger.debug(f'[simulation] {datapoint_id} turn {metrics.turn_number} complete')
+
+    async def on_datapoint_complete(self, result: SimulationResult) -> None:
+        dp_id = result.metadata.get('datapoint_id', '?')
         logger.debug(
-            f"[simulation] {datapoint_id} turn {metrics.turn_number} complete"
+            f'[simulation] Datapoint complete: {dp_id} terminated_by={result.terminated_by} goal={result.goal_achieved}'
         )
 
-    def on_datapoint_complete(self, result: SimulationResult) -> None:
-        dp_id = result.metadata.get("datapoint_id", "?")
-        logger.debug(
-            f"[simulation] Datapoint complete: {dp_id} "
-            f"terminated_by={result.terminated_by} goal={result.goal_achieved}"
-        )
+    async def on_evaluator_complete(self, datapoint_id: str, name: str, score: float, result: SimulationResult) -> None:
+        logger.debug(f'[simulation] {datapoint_id} evaluator {name!r} -> {score}')
 
-    def on_evaluator_complete(
-        self, datapoint_id: str, name: str, score: float, result: SimulationResult
-    ) -> None:
-        logger.debug(
-            f"[simulation] {datapoint_id} evaluator {name!r} -> {score}"
-        )
+    async def on_datapoint_error(self, datapoint: Datapoint, exception: BaseException) -> None:
+        logger.warning(f'[simulation] Datapoint error: {datapoint.id} {type(exception).__name__}: {exception}')
 
-    def on_datapoint_error(
-        self, datapoint: Datapoint, exception: BaseException
-    ) -> None:
-        logger.warning(
-            f"[simulation] Datapoint error: {datapoint.id} "
-            f"{type(exception).__name__}: {exception}"
-        )
-
-    def on_run_complete(self, results: list[SimulationResult]) -> None:
+    async def on_run_complete(self, results: list[SimulationResult]) -> None:
         """Terminal hook. Always fires exactly once after ``on_run_start``, even
         on failure. ``results`` may be an empty list if failure occurred before
         any results were collected."""
-        logger.info(f"[simulation] Run complete: {len(results)} results")
+        logger.info(f'[simulation] Run complete: {len(results)} results')
 
 
 class RichHooks:
@@ -184,7 +173,7 @@ class RichHooks:
         self._max_turns: int | None = None
         self._completed = 0
 
-    def on_confirm(self, meta: SimulationRunMeta) -> bool:
+    async def on_confirm(self, meta: SimulationRunMeta) -> bool:
         # Core RichHooks does not prompt (no typer dep). The interactive
         # confirm table + typer.confirm lands in the CLI override (RES-845).
         return True
@@ -202,9 +191,9 @@ class RichHooks:
 
         self._progress = Progress(
             SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
+            TextColumn('[progress.description]{task.description}'),
             BarColumn(),
-            TextColumn("{task.completed}/{task.total}"),
+            TextColumn('{task.completed}/{task.total}'),
             TimeElapsedColumn(),
             console=self._console,
         )
@@ -217,25 +206,23 @@ class RichHooks:
         self._completed = 0
         self._max_turns = None
 
-    def on_run_start(self, meta: SimulationRunMeta) -> None:
+    async def on_run_start(self, meta: SimulationRunMeta) -> None:
         self._reset_run_state()
         self._ensure_started()
-        self._max_turns = meta["max_turns"]
-        self._overall_task_id = self._progress.add_task(
-            "[bold cyan]Simulations", total=meta["num_datapoints"]
-        )
+        self._max_turns = meta['max_turns']
+        self._overall_task_id = self._progress.add_task('[bold cyan]Simulations', total=meta['num_datapoints'])
 
-    def on_datapoint_start(self, datapoint: Datapoint) -> None:
+    async def on_datapoint_start(self, datapoint: Datapoint) -> None:
         from rich.markup import escape
 
         self._ensure_started()
         if datapoint.id in self._tasks:
             return
         self._tasks[datapoint.id] = self._progress.add_task(
-            f"  {escape(datapoint.scenario.name)}", total=self._max_turns
+            f'  {escape(datapoint.scenario.name)}', total=self._max_turns
         )
 
-    def on_turn_complete(self, datapoint_id: str, metrics: TurnMetrics) -> None:
+    async def on_turn_complete(self, datapoint_id: str, metrics: TurnMetrics) -> None:
         if self._progress is None:
             return
         task_id = self._tasks.get(datapoint_id)
@@ -243,31 +230,27 @@ class RichHooks:
             return
         self._progress.update(task_id, completed=metrics.turn_number)
 
-    def on_datapoint_complete(self, result: SimulationResult) -> None:
+    async def on_datapoint_complete(self, result: SimulationResult) -> None:
         if self._progress is None:
             return
         from rich.markup import escape
 
-        dp_id = result.metadata.get("datapoint_id")
+        dp_id = result.metadata.get('datapoint_id')
         task_id = self._tasks.get(dp_id) if dp_id else None
         if dp_id and task_id is not None:
             self._progress.update(
                 task_id,
-                description=f"  [green]{escape(dp_id)}[/green] {result.terminated_by}",
+                description=f'  [green]{escape(dp_id)}[/green] {result.terminated_by}',
             )
         self._completed += 1
         if self._overall_task_id is not None:
             self._progress.update(self._overall_task_id, completed=self._completed)
 
-    def on_evaluator_complete(
-        self, datapoint_id: str, name: str, score: float, result: SimulationResult
-    ) -> None:
+    async def on_evaluator_complete(self, datapoint_id: str, name: str, score: float, result: SimulationResult) -> None:
         # No per-event render.
         return
 
-    def on_datapoint_error(
-        self, datapoint: Datapoint, exception: BaseException
-    ) -> None:
+    async def on_datapoint_error(self, datapoint: Datapoint, exception: BaseException) -> None:
         if self._progress is None:
             return
         from rich.markup import escape
@@ -276,10 +259,10 @@ class RichHooks:
         if task_id is not None:
             self._progress.update(
                 task_id,
-                description=f"  [red]{escape(datapoint.id)} ERROR[/red]",
+                description=f'  [red]{escape(datapoint.id)} ERROR[/red]',
             )
 
-    def on_run_complete(self, results: list[SimulationResult]) -> None:
+    async def on_run_complete(self, results: list[SimulationResult]) -> None:
         """Terminal hook. Always fires exactly once after ``on_run_start``, even
         on failure. ``results`` may be an empty list if failure occurred before
         any results were collected. Safe to call more than once (idempotent via
@@ -288,7 +271,4 @@ class RichHooks:
             self._progress.stop()
             self._progress = None
             achieved = sum(1 for r in results if r.goal_achieved)
-            self._console.print(
-                f"[bold green]Done[/bold green]: {len(results)} simulations, "
-                f"{achieved} goal-achieved"
-            )
+            self._console.print(f'[bold green]Done[/bold green]: {len(results)} simulations, {achieved} goal-achieved')

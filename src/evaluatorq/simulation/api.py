@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 async def simulate(
     *,
-    evaluation_name: str = "",
+    evaluation_name: str = '',
     agent_key: str | None = None,
     target_callback: Callable[[list[Message]], str | Awaitable[str]] | None = None,
     target: Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = None,
@@ -73,11 +73,11 @@ async def simulate(
 
     try:
         async with with_simulation_span(
-            "orq.simulation.pipeline",
+            'orq.simulation.pipeline',
             {
-                "orq.simulation.evaluation_name": evaluation_name,
-                "orq.simulation.max_turns": max_turns,
-                "orq.simulation.parallelism": parallelism,
+                'orq.simulation.evaluation_name': evaluation_name,
+                'orq.simulation.max_turns': max_turns,
+                'orq.simulation.parallelism': parallelism,
             },
         ) as pipeline_span:
             return await _simulate_core(
@@ -122,6 +122,7 @@ async def _simulate_core(
     """Core simulation logic (runs inside the orq.simulation.pipeline span)."""
     from openai import AsyncOpenAI
 
+    from evaluatorq.common.async_utils import await_maybe
     from evaluatorq.simulation.adapters import from_orq_deployment
     from evaluatorq.simulation.evaluators import get_evaluator
     from evaluatorq.simulation.exceptions import SimulationCancelledError
@@ -131,73 +132,64 @@ async def _simulate_core(
     from evaluatorq.simulation.tracing import record_token_usage, set_span_attrs
 
     # Validate evaluator names early
-    resolved_evaluator_names = evaluator_names or ["goal_achieved", "criteria_met"]
+    resolved_evaluator_names = evaluator_names or ['goal_achieved', 'criteria_met']
     scorers = [(name, get_evaluator(name)) for name in resolved_evaluator_names]
 
     # Build datapoints from personas x scenarios if not provided
     if datapoints is None:
         if personas is None or scenarios is None:
-            raise ValueError(
-                "Either provide 'datapoints' or both 'personas' and 'scenarios'"
-            )
+            raise ValueError("Either provide 'datapoints' or both 'personas' and 'scenarios'")
         if not personas or not scenarios:
             raise ValueError("'personas' and 'scenarios' arrays must both be non-empty")
 
-        api_key = os.environ.get("ORQ_API_KEY")
+        api_key = os.environ.get('ORQ_API_KEY')
         if not api_key:
-            raise ValueError(
-                "ORQ_API_KEY environment variable is not set. Set it before calling simulate()."
-            )
+            raise ValueError('ORQ_API_KEY environment variable is not set. Set it before calling simulate().')
 
         shared_client = AsyncOpenAI(
             api_key=api_key,
-            base_url=f"{os.environ.get('ORQ_BASE_URL', 'https://api.orq.ai')}/v2/router",
+            base_url=f'{os.environ.get("ORQ_BASE_URL", "https://api.orq.ai")}/v2/router',
         )
 
         first_msg_gen = FirstMessageGenerator(model=model, client=shared_client)
 
         try:
-            pairs = [
-                (persona, scenario) for persona in personas for scenario in scenarios
-            ]
+            pairs = [(persona, scenario) for persona in personas for scenario in scenarios]
 
             generated_datapoints: list[Datapoint] = []
             batch_size = 5
             for i in range(0, len(pairs), batch_size):
                 batch = pairs[i : i + batch_size]
-                batch_results = await asyncio.gather(
-                    *[
-                        _generate_single_datapoint(first_msg_gen, persona, scenario)
-                        for persona, scenario in batch
-                    ]
-                )
+                batch_results = await asyncio.gather(*[
+                    _generate_single_datapoint(first_msg_gen, persona, scenario) for persona, scenario in batch
+                ])
                 generated_datapoints.extend(batch_results)
             datapoints = generated_datapoints
         finally:
             await shared_client.close()
 
     if not datapoints:
-        raise ValueError(
-            "No datapoints to simulate — persona or scenario generation may have failed"
-        )
+        raise ValueError('No datapoints to simulate — persona or scenario generation may have failed')
 
     set_span_attrs(
         pipeline_span,
-        {"orq.simulation.datapoints_count": len(datapoints)},
+        {'orq.simulation.datapoints_count': len(datapoints)},
     )
 
     resolved_hooks = hooks or DefaultHooks()
+    # The sync-hook deprecation nudge fires once in SimulationRunner.__init__
+    # (the single choke point both this path and direct runner use share).
     run_meta: SimulationRunMeta = {
-        "num_datapoints": len(datapoints),
-        "model": model,
-        "max_turns": max_turns,
-        "parallelism": parallelism,
-        "evaluation_name": evaluation_name,
-        "evaluator_names": resolved_evaluator_names,
+        'num_datapoints': len(datapoints),
+        'model': model,
+        'max_turns': max_turns,
+        'parallelism': parallelism,
+        'evaluation_name': evaluation_name,
+        'evaluator_names': resolved_evaluator_names,
     }
     # Gate first — cheap, before any allocation. A decline is a clean abort.
-    if not resolved_hooks.on_confirm(run_meta):
-        raise SimulationCancelledError("Simulation run declined by on_confirm hook")
+    if not await await_maybe(resolved_hooks.on_confirm(run_meta)):
+        raise SimulationCancelledError('Simulation run declined by on_confirm hook')
 
     # Resolve the target and construct the runner BEFORE on_run_start, so a
     # setup ValueError raises without an unpaired run-level start hook.
@@ -212,7 +204,7 @@ async def _simulate_core(
         resolved_callback = from_orq_deployment(agent_key)
 
     if target_agent is None and not resolved_callback:
-        raise ValueError("Either target_callback (or target) or agent_key is required")
+        raise ValueError('Either target_callback (or target) or agent_key is required')
 
     # Create simulation runner before on_run_start so construction errors
     # don't leave an unpaired run-level start hook.
@@ -228,7 +220,7 @@ async def _simulate_core(
 
     # Render-init only after confirm + construction succeed.
     results: list[SimulationResult] = []
-    resolved_hooks.on_run_start(run_meta)
+    await await_maybe(resolved_hooks.on_run_start(run_meta))
     try:
         # Run simulations
         results = await runner.run_batch(
@@ -239,23 +231,19 @@ async def _simulate_core(
 
         # Apply evaluators to results
         for result in results:
-            datapoint_id = result.metadata.get("datapoint_id", "")
+            datapoint_id = result.metadata.get('datapoint_id', '')
             scores: dict[str, float] = {}
             for scorer_name, fn in scorers:
                 score = fn(result)
                 scores[scorer_name] = score
-                resolved_hooks.on_evaluator_complete(
-                    datapoint_id, scorer_name, score, result
-                )
-            result.metadata["evaluator_scores"] = scores
+                await await_maybe(resolved_hooks.on_evaluator_complete(datapoint_id, scorer_name, score, result))
+            result.metadata['evaluator_scores'] = scores
             if evaluation_name:
-                result.metadata["evaluation_name"] = evaluation_name
+                result.metadata['evaluation_name'] = evaluation_name
 
         # Aggregate token usage onto the pipeline span
         total_prompt = sum((r.token_usage.prompt_tokens or 0) for r in results)
-        total_completion = sum(
-            (r.token_usage.completion_tokens or 0) for r in results
-        )
+        total_completion = sum((r.token_usage.completion_tokens or 0) for r in results)
         total_total = sum((r.token_usage.total_tokens or 0) for r in results)
         record_token_usage(
             pipeline_span,
@@ -266,10 +254,8 @@ async def _simulate_core(
         set_span_attrs(
             pipeline_span,
             {
-                "orq.simulation.results_count": len(results),
-                "orq.simulation.goal_achieved_count": sum(
-                    1 for r in results if r.goal_achieved
-                ),
+                'orq.simulation.results_count': len(results),
+                'orq.simulation.goal_achieved_count': sum(1 for r in results if r.goal_achieved),
             },
         )
 
@@ -281,31 +267,29 @@ async def _simulate_core(
         # guarantees runner/target close even if the hook raises, so a misbehaving
         # terminal hook can never leak a resource-owning target's HTTP client.
         try:
-            resolved_hooks.on_run_complete(results)
+            await await_maybe(resolved_hooks.on_run_complete(results))
         finally:
             await runner.close()
             # Close the target if it owns resources (e.g. OrqResponsesTarget
             # built its own AsyncOpenAI client). Plain callables / functions
             # have no close(); duck-type to avoid coupling to the concrete type.
-            target_close = getattr(target_agent or resolved_callback, "close", None)
+            target_close = getattr(target_agent or resolved_callback, 'close', None)
             if callable(target_close):
                 maybe = target_close()
                 if inspect.isawaitable(maybe):
                     await maybe
 
 
-async def _generate_single_datapoint(
-    gen: FirstMessageGenerator, persona: Persona, scenario: Scenario
-) -> Datapoint:
+async def _generate_single_datapoint(gen: FirstMessageGenerator, persona: Persona, scenario: Scenario) -> Datapoint:
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.simulation.utils.prompt_builders import generate_datapoint
 
     async with with_simulation_span(
-        "orq.simulation.first_message_generation",
+        'orq.simulation.first_message_generation',
         {
-            "orq.simulation.persona": persona.name,
-            "orq.simulation.scenario": scenario.name,
-            "orq.simulation.model": getattr(gen, "_model", None),
+            'orq.simulation.persona': persona.name,
+            'orq.simulation.scenario': scenario.name,
+            'orq.simulation.model': getattr(gen, '_model', None),
         },
     ):
         first_message = await gen.generate(persona, scenario)
@@ -314,7 +298,7 @@ async def _generate_single_datapoint(
 
 async def generate_and_simulate(
     *,
-    evaluation_name: str = "",
+    evaluation_name: str = '',
     agent_description: str,
     agent_key: str | None = None,
     target_callback: Callable[[list[Message]], str | Awaitable[str]] | None = None,
@@ -344,38 +328,32 @@ async def generate_and_simulate(
 
     # Resolve target. ``target`` takes precedence over ``target_callback``;
     # AgentTarget instances are passed through and routed by ``_simulate_core``.
-    resolved_target: (
-        Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None
-    ) = target or target_callback
+    resolved_target: Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = target or target_callback
     if not resolved_target and agent_key:
         resolved_target = from_orq_deployment(agent_key)
 
     if not resolved_target:
-        raise ValueError(
-            "Either target (or target_callback) or agent_key is required for generate_and_simulate"
-        )
+        raise ValueError('Either target (or target_callback) or agent_key is required for generate_and_simulate')
 
-    api_key = os.environ.get("ORQ_API_KEY")
+    api_key = os.environ.get('ORQ_API_KEY')
     if not api_key:
-        raise ValueError(
-            "ORQ_API_KEY environment variable is not set. Set it before calling generate_and_simulate()."
-        )
+        raise ValueError('ORQ_API_KEY environment variable is not set. Set it before calling generate_and_simulate().')
 
     try:
         async with with_simulation_span(
-            "orq.simulation.pipeline",
+            'orq.simulation.pipeline',
             {
-                "orq.simulation.evaluation_name": evaluation_name,
-                "orq.simulation.mode": "generate_and_simulate",
-                "orq.simulation.num_personas": num_personas,
-                "orq.simulation.num_scenarios": num_scenarios,
-                "orq.simulation.max_turns": max_turns,
-                "orq.simulation.parallelism": parallelism,
+                'orq.simulation.evaluation_name': evaluation_name,
+                'orq.simulation.mode': 'generate_and_simulate',
+                'orq.simulation.num_personas': num_personas,
+                'orq.simulation.num_scenarios': num_scenarios,
+                'orq.simulation.max_turns': max_turns,
+                'orq.simulation.parallelism': parallelism,
             },
         ) as pipeline_span:
             shared_client = AsyncOpenAI(
                 api_key=api_key,
-                base_url=f"{os.environ.get('ORQ_BASE_URL', 'https://api.orq.ai')}/v2/router",
+                base_url=f'{os.environ.get("ORQ_BASE_URL", "https://api.orq.ai")}/v2/router',
             )
 
             try:
