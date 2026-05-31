@@ -121,3 +121,16 @@ def test_status_badge_classes():
 	assert 'status-badge--pass' in h.status_badge('ACHIEVED', 'pass')
 	assert 'status-badge--fail' in h.status_badge('NOT ACHIEVED', 'fail')
 	assert 'NOT ACHIEVED' in h.status_badge('NOT ACHIEVED', 'fail')
+
+
+from evaluatorq.common.reports.html_helpers import load_css
+
+
+def test_report_css_has_new_design_tokens():
+	css = load_css()
+	for token in [
+		'.hero', '.kpi-band', '.kpi-card', '.report-card', '.chart-card',
+		'.status-badge--pass', '.status-badge--fail', '.heatmap-table',
+		'.heatmap-cell', '.sparkline', '@media',
+	]:
+		assert token in css, f'missing {token}'
