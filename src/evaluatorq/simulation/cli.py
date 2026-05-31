@@ -272,7 +272,9 @@ def run(
             help=(
                 "Model for the user-simulator and judge. Provider resolved from "
                 "env: ORQ_API_KEY -> Orq router, else OPENAI_API_KEY "
-                "(+ OPENAI_BASE_URL) -> OpenAI-compatible endpoint."
+                "(+ OPENAI_BASE_URL) -> OpenAI-compatible endpoint. The default "
+                "targets the Orq router; for OpenAI-direct pass a bare model "
+                "name (e.g. 'gpt-5.4-mini', no provider prefix)."
             ),
         ),
     ] = DEFAULT_MODEL,
@@ -437,7 +439,9 @@ def generate(
                 "Model for the user-simulator, the judge, and persona/scenario/"
                 "first-message generation. Provider resolved from env: "
                 "ORQ_API_KEY -> Orq router, else OPENAI_API_KEY (+ OPENAI_BASE_URL) "
-                "-> OpenAI-compatible endpoint."
+                "-> OpenAI-compatible endpoint. The default targets the Orq "
+                "router; for OpenAI-direct pass a bare model name "
+                "(e.g. 'gpt-5.4-mini', no provider prefix)."
             ),
         ),
     ] = DEFAULT_MODEL,

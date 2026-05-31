@@ -420,6 +420,34 @@ def test_run_forwards_flags(tmp_path: Path) -> None:
     assert kwargs["evaluation_name"] == "My Run"
 
 
+def test_run_impl_forwards_sim_model_to_simulate(tmp_path: Path, monkeypatch) -> None:
+    # Covers the _run_impl -> simulate leg (test_run_forwards_flags stops at _run_impl).
+    dp_file = _make_datapoints_file(tmp_path)
+    captured = {}
+
+    async def fake_simulate(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr("evaluatorq.simulation.api.simulate", fake_simulate)
+    with patch("evaluatorq.simulation.cli._resolve_target") as mock_target:
+        mock_target.return_value = MagicMock()
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--datapoints", str(dp_file),
+                "--openai-model", "gpt-4o",
+                "--sim-model", "custom-model",
+                "--no-save",
+            ],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    assert captured["sim_model"] == "custom-model"
+
+
 def test_run_evaluator_absent_forwards_none(tmp_path: Path) -> None:
     dp_file = _make_datapoints_file(tmp_path)
     with (
