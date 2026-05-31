@@ -67,6 +67,32 @@ def _is_errored(result: SimulationResult) -> bool:
     return bool(_error_message(result)) or result.terminated_by.value == "error"
 
 
+def _criteria_meta(result: SimulationResult) -> list[dict]:
+    raw = result.metadata.get('criteria_meta')
+    if isinstance(raw, list):
+        return [c for c in raw if isinstance(c, dict)]
+    # Fallback to lossy criteria_results (no ids/type).
+    cr = result.criteria_results or {}
+    return [
+        {'id': f'criteria_{i}', 'description': desc, 'type': None, 'passed': bool(passed)}
+        for i, (desc, passed) in enumerate(cr.items())
+    ]
+
+
+def _criteria_rows(result: SimulationResult) -> list[dict]:
+    rows = []
+    for c in _criteria_meta(result):
+        is_safety = (c.get('type') == 'must_not_happen') and not c.get('passed', True)
+        rows.append({
+            'id': c['id'],
+            'description': c.get('description', c['id']),
+            'type': c.get('type'),
+            'passed': bool(c.get('passed', True)),
+            'safety': is_safety,
+        })
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # Section builders
 # ---------------------------------------------------------------------------
@@ -80,6 +106,7 @@ def _build_summary_section(results: list[SimulationResult]) -> ReportSection:
     avg_turns = sum(r.turn_count for r in results) / total if total else 0.0
     total_tokens = sum(r.token_usage.total_tokens for r in results)
     success_rate = (achieved / total) if total else 0.0
+    verdict = 'pass' if success_rate >= 0.8 else ('warn' if success_rate >= 0.5 else 'fail')
 
     if success_rate >= 0.80:
         confidence = "HIGH"
@@ -105,6 +132,7 @@ def _build_summary_section(results: list[SimulationResult]) -> ReportSection:
             "total_tokens": total_tokens,
             "confidence": confidence,
             "confidence_note": confidence_note,
+            "verdict": verdict,
         },
     )
 

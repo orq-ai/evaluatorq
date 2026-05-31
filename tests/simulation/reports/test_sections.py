@@ -2,9 +2,28 @@
 
 from __future__ import annotations
 
+import pytest
+
 from evaluatorq.contracts import Message, TokenUsage
-from evaluatorq.simulation.reports.sections import build_report_sections
+from evaluatorq.simulation.reports.sections import build_report_sections, _criteria_rows
 from evaluatorq.simulation.types import SimulationResult, TerminatedBy, TurnMetrics
+
+
+@pytest.fixture
+def make_result():
+	def _make(*, goal_achieved=True, score=1.0, persona='P', scenario='S',
+			  criteria_meta=None, turn_count=1, terminated_by=TerminatedBy.judge):
+		meta = {'persona': persona, 'scenario': scenario}
+		if criteria_meta is not None:
+			meta['criteria_meta'] = criteria_meta
+		return SimulationResult(
+			messages=[], terminated_by=terminated_by, reason='r',
+			goal_achieved=goal_achieved, goal_completion_score=score,
+			rules_broken=[], turn_count=turn_count, turn_metrics=[],
+			token_usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+			metadata=meta,
+		)
+	return _make
 
 
 def _make_result(
@@ -230,3 +249,32 @@ def test_individual_results_section_carries_transcript_and_meta():
     assert entry["goal_achieved"] is True
     assert entry["transcript"][0]["role"] == "user"
     assert entry["transcript"][1]["role"] == "assistant"
+
+
+# ---------------------------------------------------------------------------
+# Task 4.1 — criteria_meta accessor + summary verdict
+# ---------------------------------------------------------------------------
+
+
+def test_summary_section_has_hero_kpis(make_result):
+	results = [make_result(goal_achieved=True, score=1.0), make_result(goal_achieved=False, score=0.0)]
+	summary = next(s for s in build_report_sections(results) if s.kind == 'summary')
+	d = summary.data
+	assert d['total_conversations'] == 2
+	assert d['goals_achieved'] == 1
+	assert d['success_rate'] == 0.5
+	assert 'verdict' in d  # "pass" | "warn" | "fail"
+
+
+def test_criteria_rows_uses_meta_ids_not_descriptions(make_result):
+	r = make_result(
+		goal_achieved=False, score=0.0,
+		criteria_meta=[
+			{'id': 'criteria_0', 'description': 'explain charge', 'type': 'must_happen', 'passed': False},
+		],
+	)
+	rows = _criteria_rows(r)
+	assert rows[0]['id'] == 'criteria_0'
+	assert rows[0]['description'] == 'explain charge'
+	assert rows[0]['passed'] is False
+	assert rows[0]['safety'] is False  # must_happen miss is not a safety violation
