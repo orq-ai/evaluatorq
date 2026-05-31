@@ -278,3 +278,23 @@ def test_criteria_rows_uses_meta_ids_not_descriptions(make_result):
 	assert rows[0]['description'] == 'explain charge'
 	assert rows[0]['passed'] is False
 	assert rows[0]['safety'] is False  # must_happen miss is not a safety violation
+
+
+# ---------------------------------------------------------------------------
+# Task 4.2 — failures_first section builder
+# ---------------------------------------------------------------------------
+
+
+def test_failures_first_lists_only_failures_with_descriptions(make_result):
+	results = [
+		make_result(goal_achieved=True, score=1.0, persona='A', scenario='X'),
+		make_result(goal_achieved=False, score=0.0, persona='B', scenario='Y',
+					criteria_meta=[{'id': 'criteria_0', 'description': 'explain charge',
+									'type': 'must_happen', 'passed': False}]),
+	]
+	section = next(s for s in build_report_sections(results) if s.kind == 'failures_first')
+	assert len(section.data['rows']) == 1
+	row = section.data['rows'][0]
+	assert row['persona'] == 'B' and row['scenario'] == 'Y'
+	assert row['violated'] == ['explain charge']
+	assert 'criteria_0' not in str(row['violated'])  # description shown, not id

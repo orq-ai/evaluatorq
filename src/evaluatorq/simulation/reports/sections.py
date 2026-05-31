@@ -137,6 +137,25 @@ def _build_summary_section(results: list[SimulationResult]) -> ReportSection:
     )
 
 
+def _build_failures_first_section(results: list[SimulationResult]) -> ReportSection:
+    rows = []
+    for idx, r in enumerate(results):
+        if r.goal_achieved or _is_errored(r):
+            continue
+        violated = [c['description'] for c in _criteria_rows(r) if not c['passed']]
+        rows.append({
+            'index': idx + 1,
+            'persona': _persona_name(r),
+            'scenario': _scenario_name(r),
+            'violated': violated,
+            'has_safety': any(c['safety'] for c in _criteria_rows(r)),
+            'terminated_by': r.terminated_by.value,
+            'score': r.goal_completion_score,
+            'anchor': f'conv-{idx + 1}',
+        })
+    return ReportSection(kind='failures_first', title='Failures', data={'rows': rows})
+
+
 def _build_persona_breakdown_section(results: list[SimulationResult]) -> ReportSection:
     by_persona: dict[str, list[SimulationResult]] = defaultdict(list)
     for r in results:
@@ -332,6 +351,7 @@ def build_report_sections(results: list[SimulationResult]) -> list[ReportSection
     """Produce the ordered list of report sections from simulation results."""
     sections: list[ReportSection] = []
     sections.append(_build_summary_section(results))
+    sections.append(_build_failures_first_section(results))
     sections.append(_build_persona_breakdown_section(results))
     sections.append(_build_scenario_breakdown_section(results))
     sections.append(_build_judge_verdicts_section(results))
