@@ -610,6 +610,7 @@ def test_rich_hooks_reusable_across_runs():
 
     # Run 2: state must reset
     hooks.on_run_start(meta)
+    # white-box: assert per-run reset contract directly
     assert hooks._completed == 0
     assert hooks._tasks == {}
     assert hooks._overall_task_id is not None  # fresh overall task created

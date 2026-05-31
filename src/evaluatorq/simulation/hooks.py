@@ -211,9 +211,11 @@ class RichHooks:
         self._progress.start()
 
     def _reset_run_state(self) -> None:
+        """Clear per-run mutable state so one instance can drive sequential runs."""
         self._tasks = {}
         self._overall_task_id = None
         self._completed = 0
+        self._max_turns = None
 
     def on_run_start(self, meta: SimulationRunMeta) -> None:
         self._reset_run_state()
