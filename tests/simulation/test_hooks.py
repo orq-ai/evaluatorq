@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 
 import pytest
 
@@ -584,3 +585,31 @@ async def test_missing_target_raises_before_on_run_start(datapoint_factory):
             hooks=hooks,
         )
     assert hooks.started is False  # no unpaired on_run_start
+
+
+def test_rich_hooks_reusable_across_runs():
+    from rich.console import Console
+
+    from evaluatorq.simulation.hooks import RichHooks
+
+    hooks = RichHooks(console=Console(file=io.StringIO(), force_terminal=False))
+    meta: SimulationRunMeta = SimulationRunMeta(
+        num_datapoints=2,
+        model="m",
+        max_turns=3,
+        parallelism=2,
+        evaluation_name="",
+        evaluator_names=["goal_achieved"],
+    )
+
+    hooks.on_run_start(meta)
+    assert hooks._completed == 0
+    # simulate one completion in run 1
+    hooks._completed = 2
+    hooks.on_run_complete([])
+
+    # Run 2: state must reset
+    hooks.on_run_start(meta)
+    assert hooks._completed == 0
+    assert hooks._tasks == {}
+    assert hooks._overall_task_id is not None  # fresh overall task created

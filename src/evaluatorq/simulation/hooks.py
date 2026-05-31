@@ -210,7 +210,13 @@ class RichHooks:
         )
         self._progress.start()
 
+    def _reset_run_state(self) -> None:
+        self._tasks = {}
+        self._overall_task_id = None
+        self._completed = 0
+
     def on_run_start(self, meta: SimulationRunMeta) -> None:
+        self._reset_run_state()
         self._ensure_started()
         self._max_turns = meta["max_turns"]
         self._overall_task_id = self._progress.add_task(
