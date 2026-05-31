@@ -401,7 +401,7 @@ def test_run_forwards_flags(tmp_path: Path) -> None:
                 "run",
                 "--datapoints", str(dp_file),
                 "--openai-model", "gpt-4o",
-                "--model", "custom-model",
+                "--sim-model", "custom-model",
                 "--max-turns", "7",
                 "--parallelism", "3",
                 "--evaluator", "goal_achieved",
@@ -413,7 +413,7 @@ def test_run_forwards_flags(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     kwargs = mock_impl.call_args.kwargs
-    assert kwargs["model"] == "custom-model"
+    assert kwargs["sim_model"] == "custom-model"
     assert kwargs["max_turns"] == 7
     assert kwargs["parallelism"] == 3
     assert kwargs["evaluator_names"] == ["goal_achieved"]
@@ -602,3 +602,56 @@ def test_generate_forwards_flags(tmp_path: Path) -> None:
     assert kwargs["num_personas"] == 2
     assert kwargs["num_scenarios"] == 4
     assert kwargs["max_turns"] == 6
+
+
+# ---------------------------------------------------------------------------
+# --sim-model flag (renamed from --model in Task 5)
+# ---------------------------------------------------------------------------
+
+
+def test_generate_forwards_sim_model(monkeypatch):
+    from typer.testing import CliRunner
+
+    from evaluatorq.simulation import cli as sim_cli
+
+    captured = {}
+
+    async def fake_generate_and_simulate(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(
+        "evaluatorq.simulation.api.generate_and_simulate", fake_generate_and_simulate
+    )
+    result = CliRunner().invoke(
+        sim_cli.app,
+        [
+            "generate",
+            "--agent-description", "x",
+            "--openai-model", "gpt-5.4-mini",
+            "--sim-model", "gpt-5.4-mini",
+            "--num-personas", "1",
+            "--num-scenarios", "1",
+            "--no-save",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["sim_model"] == "gpt-5.4-mini"
+
+
+def test_old_model_flag_rejected(monkeypatch):
+    from typer.testing import CliRunner
+
+    from evaluatorq.simulation import cli as sim_cli
+
+    # Typer >=0.16 renders usage errors via Rich to the real stderr, which the
+    # Click test runner does not capture. Disable Rich markup so the error
+    # falls back to Click's native rendering on the captured stream.
+    monkeypatch.setattr(sim_cli.app, "rich_markup_mode", None)
+
+    result = CliRunner().invoke(
+        sim_cli.app,
+        ["generate", "--agent-description", "x", "--model", "gpt-4o"],
+    )
+    assert result.exit_code != 0
+    assert "No such option" in result.output or "Got unexpected" in result.output

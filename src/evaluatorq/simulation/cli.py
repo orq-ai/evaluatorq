@@ -265,9 +265,16 @@ def run(
         str,
         typer.Option("--name", "-n", help="Run name for the run-store entry."),
     ] = "sim",
-    model: Annotated[
+    sim_model: Annotated[
         str,
-        typer.Option("--model", help="User-simulator and judge model."),
+        typer.Option(
+            "--sim-model",
+            help=(
+                "Model for the user-simulator and judge. Provider resolved from "
+                "env: ORQ_API_KEY -> Orq router, else OPENAI_API_KEY "
+                "(+ OPENAI_BASE_URL) -> OpenAI-compatible endpoint."
+            ),
+        ),
     ] = DEFAULT_MODEL,
     max_turns: Annotated[
         int,
@@ -320,7 +327,7 @@ def run(
             _run_impl(
                 datapoints_path=datapoints,
                 target=target,
-                model=model,
+                sim_model=sim_model,
                 max_turns=max_turns,
                 parallelism=parallelism,
                 evaluator_names=evaluator_names,
@@ -357,7 +364,7 @@ async def _run_impl(
     *,
     datapoints_path: Path,
     target: Any,
-    model: str,
+    sim_model: str,
     max_turns: int,
     parallelism: int,
     evaluator_names: list[str] | None,
@@ -373,7 +380,7 @@ async def _run_impl(
     return await simulate(
         datapoints=loaded,
         target=target,
-        model=model,
+        sim_model=sim_model,
         max_turns=max_turns,
         parallelism=parallelism,
         evaluator_names=evaluator_names,
@@ -422,9 +429,17 @@ def generate(
         str,
         typer.Option("--name", "-n", help="Run name for the run-store entry."),
     ] = "sim",
-    model: Annotated[
+    sim_model: Annotated[
         str,
-        typer.Option("--model", help="User-simulator, judge, and generation model."),
+        typer.Option(
+            "--sim-model",
+            help=(
+                "Model for the user-simulator, the judge, and persona/scenario/"
+                "first-message generation. Provider resolved from env: "
+                "ORQ_API_KEY -> Orq router, else OPENAI_API_KEY (+ OPENAI_BASE_URL) "
+                "-> OpenAI-compatible endpoint."
+            ),
+        ),
     ] = DEFAULT_MODEL,
     max_turns: Annotated[
         int,
@@ -482,7 +497,7 @@ def generate(
             _generate_impl(
                 agent_description=agent_description,
                 target=target,
-                model=model,
+                sim_model=sim_model,
                 max_turns=max_turns,
                 parallelism=parallelism,
                 num_personas=num_personas,
@@ -521,7 +536,7 @@ async def _generate_impl(
     *,
     agent_description: str,
     target: Any,
-    model: str,
+    sim_model: str,
     max_turns: int,
     parallelism: int,
     num_personas: int,
@@ -534,7 +549,7 @@ async def _generate_impl(
     return await generate_and_simulate(
         agent_description=agent_description,
         target=target,
-        model=model,
+        sim_model=sim_model,
         max_turns=max_turns,
         parallelism=parallelism,
         num_personas=num_personas,
