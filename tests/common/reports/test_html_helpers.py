@@ -75,3 +75,32 @@ def test_render_heatmap_safety_flag_uses_hot_class():
 		value_fmt=lambda v: 'FAIL', safety_mask=[[True]],
 	)
 	assert 'heatmap-cell--safety' in html
+
+
+def test_render_histogram_bins():
+	html = h.render_histogram(values=[0.0, 0.1, 0.9, 1.0], bins=2, title='Score distribution')
+	assert html.startswith('<figure')
+	assert html.count('<rect') == 2
+	assert 'Score distribution' in html
+
+
+def test_render_line_chart_series():
+	html = h.render_line_chart(
+		x_labels=['1', '2', '3'],
+		series=[('response_quality', [0.5, 0.7, 0.9])],
+		title='Turn quality',
+	)
+	assert html.startswith('<figure')
+	assert '<polyline' in html
+	assert 'response_quality' in html
+	assert 'Turn quality' in html
+
+
+def test_render_sparkline_minibars():
+	svg = h.render_sparkline([1, 3, 2])
+	assert svg.startswith('<svg') and svg.endswith('</svg>')
+	assert svg.count('<rect') == 3
+
+
+def test_render_sparkline_empty():
+	assert h.render_sparkline([]) == ''
