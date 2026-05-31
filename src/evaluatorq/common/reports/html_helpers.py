@@ -30,9 +30,9 @@ from evaluatorq.common.reports.palette import COLORS
 # STATUS_COLORS uses report-level keys (success/warning/failure) distinct from
 # palette.STATUS_COLORS which uses vulnerability-level keys (vulnerable/resistant/error).
 STATUS_COLORS: dict[str, str] = {
-    "success": COLORS["success_400"],
-    "warning": COLORS["yellow_400"],
-    "failure": COLORS["red_400"],
+    'success': COLORS['success_400'],
+    'warning': COLORS['yellow_400'],
+    'failure': COLORS['red_400'],
 }
 
 
@@ -57,11 +57,11 @@ def load_css(css_path: Path | None = None) -> str:
     Returns:
         The CSS text with brand colors substituted in.
     """
-    path = css_path or Path(__file__).with_name("report.css")
+    path = css_path or Path(__file__).with_name('report.css')
     cached = _CSS_CACHE.get(path)
     if cached is not None:
         return cached
-    text = Template(path.read_text(encoding="utf-8")).safe_substitute(COLORS)
+    text = Template(path.read_text(encoding='utf-8')).safe_substitute(COLORS)
     _CSS_CACHE[path] = text
     return text
 
@@ -78,27 +78,27 @@ def esc(text: str) -> str:
 
 def pct(rate: float) -> str:
     """Format a float rate as a percentage string."""
-    return f"{rate:.0%}"
+    return f'{rate:.0%}'
 
 
 def truncate(text: str, max_chars: int = 800) -> str:
     """Truncate long text with a plain-text marker (no Markdown)."""
     if len(text) <= max_chars:
         return text
-    return text[:max_chars] + "\n\n[truncated — full text in report JSON]"
+    return text[:max_chars] + '\n\n[truncated — full text in report JSON]'
 
 
 def html_table(headers: list[str], rows: list[list[str]]) -> str:
     """Render an HTML table. Cell strings may contain inline HTML (e.g. badges)."""
-    parts = ["<table>", "<thead><tr>"]
-    parts.extend(f"<th>{esc(h)}</th>" for h in headers)
-    parts.append("</tr></thead><tbody>")
+    parts = ['<table>', '<thead><tr>']
+    parts.extend(f'<th>{esc(h)}</th>' for h in headers)
+    parts.append('</tr></thead><tbody>')
     for row in rows:
-        parts.append("<tr>")
-        parts.extend(f"<td>{cell}</td>" for cell in row)
-        parts.append("</tr>")
-    parts.append("</tbody></table>")
-    return "".join(parts)
+        parts.append('<tr>')
+        parts.extend(f'<td>{cell}</td>' for cell in row)
+        parts.append('</tr>')
+    parts.append('</tbody></table>')
+    return ''.join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +111,7 @@ def charts_available() -> bool:
     try:
         import kaleido  # noqa: F401
         import plotly  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -119,8 +120,8 @@ def charts_available() -> bool:
 def try_render_svg(fig: Any) -> str | None:
     """Render a Plotly figure as inline SVG, or ``None`` on failure."""
     try:
-        svg_bytes = fig.to_image(format="svg", engine="kaleido")
-        return svg_bytes.decode("utf-8") if isinstance(svg_bytes, bytes) else svg_bytes
+        svg_bytes = fig.to_image(format='svg', engine='kaleido')
+        return svg_bytes.decode('utf-8') if isinstance(svg_bytes, bytes) else svg_bytes
     except Exception:
         return None
 
@@ -138,33 +139,38 @@ def render_donut_chart(
     or the SVG render fails.
     """
     if not charts_available():
-        return ""
+        return ''
 
     filtered = [(lbl, v, c) for lbl, v, c in zip(labels, values, colors, strict=False) if v > 0]
     if not filtered:
-        return ""
+        return ''
     labels_f, values_f, colors_f = zip(*filtered, strict=False)
 
     import plotly.graph_objects as go
 
-    fig = go.Figure(data=[go.Pie(
-        labels=list(labels_f),
-        values=list(values_f),
-        hole=0.5,
-        marker=dict(colors=list(colors_f)),
-        textinfo="label+percent",
-        textfont=dict(size=12),
-    )])
+    fig = go.Figure(
+        data=[
+            go.Pie(
+                labels=list(labels_f),
+                values=list(values_f),
+                hole=0.5,
+                marker=dict(colors=list(colors_f)),
+                textinfo='label+percent',
+                textfont=dict(size=12),
+            )
+        ]
+    )
     fig.update_layout(
-        width=400, height=300,
+        width=400,
+        height=300,
         margin=dict(t=30, b=30, l=30, r=30),
         showlegend=False,
         title=dict(text=title, font=dict(size=14)),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
     )
     svg = try_render_svg(fig)
-    return f'<div class="chart-container">{svg}</div>' if svg else ""
+    return f'<div class="chart-container">{svg}</div>' if svg else ''
 
 
 def render_horizontal_bar_chart(
@@ -174,34 +180,39 @@ def render_horizontal_bar_chart(
     color: str,
     title: str,
     x_title: str,
-    value_suffix: str = "",
+    value_suffix: str = '',
 ) -> str:
     """Render a horizontal bar chart with values displayed outside the bars."""
     if not charts_available() or not labels:
-        return ""
+        return ''
 
     import plotly.graph_objects as go
 
-    fig = go.Figure(data=[go.Bar(
-        y=labels,
-        x=values,
-        orientation="h",
-        marker_color=color,
-        text=[f"{v:.0f}{value_suffix}" for v in values],
-        textposition="outside",
-    )])
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                y=labels,
+                x=values,
+                orientation='h',
+                marker_color=color,
+                text=[f'{v:.0f}{value_suffix}' for v in values],
+                textposition='outside',
+            )
+        ]
+    )
     fig.update_layout(
-        width=500, height=max(250, len(labels) * 35 + 80),
+        width=500,
+        height=max(250, len(labels) * 35 + 80),
         margin=dict(t=40, b=40, l=80, r=50),
         title=dict(text=title, font=dict(size=14)),
         xaxis_title=x_title,
         xaxis=dict(range=[0, max(max(values) * 1.2, 5) if values else 100]),
-        yaxis=dict(autorange="reversed"),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
+        yaxis=dict(autorange='reversed'),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
     )
     svg = try_render_svg(fig)
-    return f'<div class="chart-container">{svg}</div>' if svg else ""
+    return f'<div class="chart-container">{svg}</div>' if svg else ''
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +225,7 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 
 
-def _rgb_to_hex(rgb: tuple[int, int, int]) -> str:
+def _rgb_to_hex(rgb: tuple[float, float, float]) -> str:
     return '#{:02x}{:02x}{:02x}'.format(*(max(0, min(255, round(c))) for c in rgb))
 
 
@@ -234,14 +245,20 @@ def scale_color(value: float, scale: list[list[float | str]]) -> str:
             t = (v - lo_pos) / span
             lo = _hex_to_rgb(lo_color)
             hi = _hex_to_rgb(hi_color)
-            return _rgb_to_hex(tuple(lo[c] + (hi[c] - lo[c]) * t for c in range(3)))
+            return _rgb_to_hex((
+                lo[0] + (hi[0] - lo[0]) * t,
+                lo[1] + (hi[1] - lo[1]) * t,
+                lo[2] + (hi[2] - lo[2]) * t,
+            ))
     return stops[-1][1]
 
 
 def _arc_path(cx: float, cy: float, r_outer: float, r_inner: float, a0: float, a1: float) -> str:
     """SVG path for a donut segment between angles a0..a1 (radians, 0 = top, clockwise)."""
+
     def pt(r: float, a: float) -> tuple[float, float]:
         return cx + r * math.sin(a), cy - r * math.cos(a)
+
     large = 1 if (a1 - a0) > math.pi else 0
     x0o, y0o = pt(r_outer, a0)
     x1o, y1o = pt(r_outer, a1)
@@ -306,6 +323,7 @@ def svg_bar(
     if not rows:
         return ''
     from evaluatorq.common.reports.palette import COLORS as _COLORS
+
     bar_color = color or _COLORS['teal_400']
     label_w = 130
     max_val = max((v for _, v in rows), default=0) or 1
@@ -358,15 +376,18 @@ def render_heatmap(
         tds = ['<td class="heatmap-row-label"><strong>' + esc(ylabel) + '</strong></td>']
         for xi in range(len(x_labels)):
             value = float(cells[yi][xi])
-            if value < 0:
-                color = '#e4e2df'  # neutral grey (matches --c-border); absent / N-A
-            else:
-                color = scale_color(value, scale)
+            # value < 0 marks an absent cell -> neutral grey (matches --c-border), not the scale.
+            color = '#e4e2df' if value < 0 else scale_color(value, scale)
             is_safety = bool(safety_mask and safety_mask[yi][xi])
             cls = 'heatmap-cell heatmap-cell--safety' if is_safety else 'heatmap-cell'
             tds.append(
-                '<td><span class="' + cls + '" style="background:' + color + '">'
-                + esc(value_fmt(value)) + '</span></td>'
+                '<td><span class="'
+                + cls
+                + '" style="background:'
+                + color
+                + '">'
+                + esc(value_fmt(value))
+                + '</span></td>'
             )
         body_rows.append('<tr>' + ''.join(tds) + '</tr>')
     return (
@@ -382,6 +403,7 @@ def render_histogram(*, values: list[float], bins: int, title: str, width: int =
     if not values or bins <= 0:
         return ''
     from evaluatorq.common.reports.palette import COLORS as _COLORS
+
     counts = [0] * bins
     for v in values:
         idx = min(bins - 1, max(0, int(float(v) * bins)))
@@ -402,21 +424,25 @@ def render_histogram(*, values: list[float], bins: int, title: str, width: int =
         )
         if c:
             parts.append(
-                f'<text x="{x + bar_w / 2:.1f}" y="{y - 4:.1f}" text-anchor="middle" '
-                f'class="bar-value">{c}</text>'
+                f'<text x="{x + bar_w / 2:.1f}" y="{y - 4:.1f}" text-anchor="middle" class="bar-value">{c}</text>'
             )
     parts.append('</svg>')
     return f'<figure class="chart-card"><figcaption>{esc(title)}</figcaption>{"".join(parts)}</figure>'
 
 
 def render_line_chart(
-    *, x_labels: list[str], series: list[tuple[str, list[float]]], title: str,
-    width: int = 460, height: int = 220,
+    *,
+    x_labels: list[str],
+    series: list[tuple[str, list[float]]],
+    title: str,
+    width: int = 460,
+    height: int = 220,
 ) -> str:
     """Multi-series line chart (values in [0, 1]) as hand-authored SVG."""
     if not x_labels or not series:
         return ''
     from evaluatorq.common.reports.palette import QUALITATIVE
+
     pad = 32
     plot_w = width - pad * 2
     plot_h = height - pad * 2
@@ -427,6 +453,7 @@ def render_line_chart(
 
     def y_at(v: float) -> float:
         return pad + (1 - max(0.0, min(1.0, v))) * plot_h
+
     parts = [f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="{esc(title)}">']
     # axes
     parts.extend([
@@ -454,6 +481,7 @@ def render_sparkline(values: list[float], *, width: int = 80, height: int = 20) 
     if not values:
         return ''
     from evaluatorq.common.reports.palette import COLORS as _COLORS
+
     max_val = max(values) or 1
     bar_w = width / len(values)
     parts = [f'<svg class="sparkline" viewBox="0 0 {width} {height}" preserveAspectRatio="none">']

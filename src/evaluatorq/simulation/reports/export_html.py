@@ -9,6 +9,7 @@ whether or not plotly/kaleido are installed (this module imports no plotly).
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from evaluatorq.common.reports import (
     esc as _esc,
@@ -53,9 +54,11 @@ from evaluatorq.common.reports import (
     svg_donut as _svg_donut,
 )
 from evaluatorq.common.reports.palette import COLORS
-from evaluatorq.contracts import ReportSection
 from evaluatorq.simulation.reports.sections import build_report_sections
-from evaluatorq.simulation.types import SimulationResult
+
+if TYPE_CHECKING:
+    from evaluatorq.contracts import ReportSection
+    from evaluatorq.simulation.types import SimulationResult
 
 # Heatmap colour direction:
 # ``ORQ_SCALE_GOOD_BAD`` is green at 0.0 -> red at 1.0 (i.e. good == low).
@@ -216,8 +219,7 @@ def _render_judge_verdicts_html(section: ReportSection) -> str:
 
     if terminated_by:
         rows = [[_esc(r), str(c)] for r, c in sorted(terminated_by.items(), key=lambda kv: -kv[1])]
-        parts.append('<h3>Terminated By</h3>')
-        parts.append(_html_table(['Reason', 'Count'], rows))
+        parts.extend(('<h3>Terminated By</h3>', _html_table(['Reason', 'Count'], rows)))
 
     parts.append('</section>')
     return ''.join(parts)
@@ -235,22 +237,13 @@ def _render_turn_metrics_html(section: ReportSection) -> str:
             rows=[(f'{t} turns', float(c)) for t, c in dist.items()],
             title='Conversations by Turn Count',
         )
-        parts.append(bar)
-        parts.append(
-            _html_table(
-                ['Turns', 'Conversations'],
-                [[str(t), str(c)] for t, c in dist.items()],
-            )
-        )
+        parts.extend((bar, _html_table(['Turns', 'Conversations'], [[str(t), str(c)] for t, c in dist.items()])))
 
     if qualities:
-        parts.append('<h3>Average Per-Turn Quality Metrics</h3>')
-        parts.append(
-            _html_table(
-                ['Metric', 'Avg Score'],
-                [[_esc(k), f'{v:.2f}'] for k, v in qualities.items()],
-            )
-        )
+        parts.extend((
+            '<h3>Average Per-Turn Quality Metrics</h3>',
+            _html_table(['Metric', 'Avg Score'], [[_esc(k), f'{v:.2f}'] for k, v in qualities.items()]),
+        ))
 
     parts.append('</section>')
     return ''.join(parts)
@@ -335,8 +328,7 @@ def _render_individual_results_html(section: ReportSection) -> str:
         model = entry.get('target_model')
         if model:
             meta_rows.append(['Model', _esc(model)])
-        meta_rows.append(['Terminated by', _esc(entry['terminated_by'])])
-        meta_rows.append(['Tokens', f'{entry["total_tokens"]:,}'])
+        meta_rows.extend((['Terminated by', _esc(entry['terminated_by'])], ['Tokens', f'{entry["total_tokens"]:,}']))
 
         criteria_rows = entry.get('criteria', [])
         if criteria_rows:

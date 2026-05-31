@@ -10,11 +10,13 @@ wrapping, and document header — modules own the per-section logic.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from datetime import datetime
+from typing import TYPE_CHECKING
 
 from evaluatorq.common.reports.md_helpers import details_block
 from evaluatorq.contracts import ReportSection
 
+if TYPE_CHECKING:
+    from datetime import datetime
 
 RendererRegistry = dict[str, Callable[[ReportSection], str]]
 """Map a ``ReportSection.kind`` to a function rendering it as a string."""
@@ -32,14 +34,14 @@ def render_header_md(
         rows: Ordered ``(label, value)`` pairs rendered as ``**Label:** value``
             lines (one per line, with a trailing two-space hard break).
     """
-    lines = [f"# {title}", ""]
-    lines.extend(f"**{label}:** {value}  " for label, value in rows)
-    return "\n".join(lines)
+    lines = [f'# {title}', '']
+    lines.extend(f'**{label}:** {value}  ' for label, value in rows)
+    return '\n'.join(lines)
 
 
 def format_date(dt: datetime | None) -> str:
     """Format a datetime as ``'YYYY-MM-DD HH:MM UTC'`` or ``'unknown'``."""
-    return dt.strftime("%Y-%m-%d %H:%M UTC") if dt else "unknown"
+    return dt.strftime('%Y-%m-%d %H:%M UTC') if dt else 'unknown'
 
 
 def render_markdown(
@@ -47,8 +49,8 @@ def render_markdown(
     *,
     renderers: RendererRegistry,
     collapsed_kinds: set[str] | None = None,
-    header: str = "",
-    footer: str = "",
+    header: str = '',
+    footer: str = '',
 ) -> str:
     """Render a list of sections as a Markdown document.
 
@@ -70,7 +72,7 @@ def render_markdown(
     collapsed_kinds = collapsed_kinds or set()
     parts: list[str] = []
     if header:
-        parts.extend((header, ""))
+        parts.extend((header, ''))
 
     for section in sections:
         renderer = renderers.get(section.kind)
@@ -80,25 +82,25 @@ def render_markdown(
         if not rendered:
             continue
         if section.kind in collapsed_kinds:
-            heading_prefix = f"## {section.title}\n"
+            heading_prefix = f'## {section.title}\n'
             if rendered.startswith(heading_prefix):
-                rendered = rendered[len(heading_prefix):].lstrip("\n")
+                rendered = rendered[len(heading_prefix) :].lstrip('\n')
             rendered = details_block(section.title, rendered)
-        parts.extend((rendered, ""))
+        parts.extend((rendered, ''))
 
     if footer:
         parts.append(footer)
 
-    return "\n".join(parts)
+    return '\n'.join(parts)
 
 
 def render_html(
     sections: list[ReportSection],
     *,
     renderers: RendererRegistry,
-    head: str = "",
-    body_header: str = "",
-    body_footer: str = "",
+    head: str = '',
+    body_header: str = '',
+    body_footer: str = '',
 ) -> str:
     """Render a list of sections as an HTML document.
 
@@ -130,9 +132,9 @@ def render_html(
         body_parts.append(body_footer)
 
     return (
-        "<!DOCTYPE html>\n"
-        "<html lang=\"en\">\n"
-        f"<head>\n{head}\n</head>\n"
-        f"<body>\n{chr(10).join(body_parts)}\n</body>\n"
-        "</html>\n"
+        '<!DOCTYPE html>\n'
+        '<html lang="en">\n'
+        f'<head>\n{head}\n</head>\n'
+        f'<body>\n{chr(10).join(body_parts)}\n</body>\n'
+        '</html>\n'
     )

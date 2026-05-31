@@ -25,7 +25,6 @@ from typing import TYPE_CHECKING, Any
 
 from evaluatorq.contracts import ReportSection
 
-
 if TYPE_CHECKING:
     from evaluatorq.simulation.types import SimulationResult
 
@@ -36,26 +35,26 @@ if TYPE_CHECKING:
 
 
 def _persona_name(result: SimulationResult) -> str:
-    return str(result.metadata.get("persona", "unknown"))
+    return str(result.metadata.get('persona', 'unknown'))
 
 
 def _scenario_name(result: SimulationResult) -> str:
-    return str(result.metadata.get("scenario", "unknown"))
+    return str(result.metadata.get('scenario', 'unknown'))
 
 
 def _model_name(result: SimulationResult) -> str:
-    return str(result.metadata.get("model", "unknown"))
+    return str(result.metadata.get('model', 'unknown'))
 
 
 def _evaluator_scores(result: SimulationResult) -> dict[str, float]:
-    raw = result.metadata.get("evaluator_scores")
+    raw = result.metadata.get('evaluator_scores')
     if not isinstance(raw, dict):
         return {}
     return {str(k): float(v) for k, v in raw.items() if isinstance(v, int | float)}
 
 
 def _error_message(result: SimulationResult) -> str | None:
-    err = result.metadata.get("error")
+    err = result.metadata.get('error')
     return str(err) if err else None
 
 
@@ -64,10 +63,10 @@ def _is_errored(result: SimulationResult) -> bool:
     it due to an error. Shared between the summary and errors sections so the
     "errors" counts agree across the report.
     """
-    return bool(_error_message(result)) or result.terminated_by.value == "error"
+    return bool(_error_message(result)) or result.terminated_by.value == 'error'
 
 
-def _criteria_meta(result: SimulationResult) -> list[dict]:
+def _criteria_meta(result: SimulationResult) -> list[dict[str, Any]]:
     raw = result.metadata.get('criteria_meta')
     if isinstance(raw, list):
         return [c for c in raw if isinstance(c, dict)]
@@ -79,7 +78,7 @@ def _criteria_meta(result: SimulationResult) -> list[dict]:
     ]
 
 
-def _criteria_rows(result: SimulationResult) -> list[dict]:
+def _criteria_rows(result: SimulationResult) -> list[dict[str, Any]]:
     rows = []
     for c in _criteria_meta(result):
         is_safety = (c.get('type') == 'must_not_happen') and not c.get('passed', True)
@@ -109,30 +108,30 @@ def _build_summary_section(results: list[SimulationResult]) -> ReportSection:
     verdict = 'pass' if success_rate >= 0.8 else ('warn' if success_rate >= 0.5 else 'fail')
 
     if success_rate >= 0.80:
-        confidence = "HIGH"
-        confidence_note = f"{achieved}/{total} goals achieved"
+        confidence = 'HIGH'
+        confidence_note = f'{achieved}/{total} goals achieved'
     elif success_rate >= 0.50:
-        confidence = "MEDIUM"
-        confidence_note = f"{achieved}/{total} goals achieved"
+        confidence = 'MEDIUM'
+        confidence_note = f'{achieved}/{total} goals achieved'
     else:
-        confidence = "LOW"
-        confidence_note = f"only {achieved}/{total} goals achieved"
+        confidence = 'LOW'
+        confidence_note = f'only {achieved}/{total} goals achieved'
 
     return ReportSection(
-        kind="summary",
-        title="Executive Summary",
+        kind='summary',
+        title='Executive Summary',
         data={
-            "total_conversations": total,
-            "goals_achieved": achieved,
-            "goals_failed": total - achieved - errored,
-            "errors": errored,
-            "success_rate": success_rate,
-            "avg_goal_completion_score": avg_score,
-            "avg_turn_count": avg_turns,
-            "total_tokens": total_tokens,
-            "confidence": confidence,
-            "confidence_note": confidence_note,
-            "verdict": verdict,
+            'total_conversations': total,
+            'goals_achieved': achieved,
+            'goals_failed': total - achieved - errored,
+            'errors': errored,
+            'success_rate': success_rate,
+            'avg_goal_completion_score': avg_score,
+            'avg_turn_count': avg_turns,
+            'total_tokens': total_tokens,
+            'confidence': confidence,
+            'confidence_note': confidence_note,
+            'verdict': verdict,
         },
     )
 
@@ -168,18 +167,18 @@ def _build_persona_breakdown_section(results: list[SimulationResult]) -> ReportS
         avg_score = sum(r.goal_completion_score for r in items) / total
         tokens = sum(r.token_usage.total_tokens for r in items)
         rows.append({
-            "persona": name,
-            "conversations": total,
-            "goals_achieved": achieved,
-            "success_rate": achieved / total,
-            "avg_goal_completion_score": avg_score,
-            "total_tokens": tokens,
+            'persona': name,
+            'conversations': total,
+            'goals_achieved': achieved,
+            'success_rate': achieved / total,
+            'avg_goal_completion_score': avg_score,
+            'total_tokens': tokens,
         })
-    rows.sort(key=operator.itemgetter("success_rate"))
+    rows.sort(key=operator.itemgetter('success_rate'))
     return ReportSection(
-        kind="persona_breakdown",
-        title="Per-Persona Breakdown",
-        data={"rows": rows},
+        kind='persona_breakdown',
+        title='Per-Persona Breakdown',
+        data={'rows': rows},
     )
 
 
@@ -195,18 +194,18 @@ def _build_scenario_breakdown_section(results: list[SimulationResult]) -> Report
         avg_score = sum(r.goal_completion_score for r in items) / total
         avg_turns = sum(r.turn_count for r in items) / total
         rows.append({
-            "scenario": name,
-            "conversations": total,
-            "goals_achieved": achieved,
-            "success_rate": achieved / total,
-            "avg_goal_completion_score": avg_score,
-            "avg_turn_count": avg_turns,
+            'scenario': name,
+            'conversations': total,
+            'goals_achieved': achieved,
+            'success_rate': achieved / total,
+            'avg_goal_completion_score': avg_score,
+            'avg_turn_count': avg_turns,
         })
-    rows.sort(key=operator.itemgetter("success_rate"))
+    rows.sort(key=operator.itemgetter('success_rate'))
     return ReportSection(
-        kind="scenario_breakdown",
-        title="Per-Scenario Breakdown",
-        data={"rows": rows},
+        kind='scenario_breakdown',
+        title='Per-Scenario Breakdown',
+        data={'rows': rows},
     )
 
 
@@ -217,12 +216,12 @@ def _build_judge_verdicts_section(results: list[SimulationResult]) -> ReportSect
         all_rules_broken.update(r.rules_broken)
 
     return ReportSection(
-        kind="judge_verdicts",
-        title="Judge Verdicts",
+        kind='judge_verdicts',
+        title='Judge Verdicts',
         data={
-            "terminated_by": dict(by_terminated_by),
-            "rules_broken": dict(all_rules_broken.most_common(15)),
-            "total_rules_broken_instances": sum(all_rules_broken.values()),
+            'terminated_by': dict(by_terminated_by),
+            'rules_broken': dict(all_rules_broken.most_common(15)),
+            'total_rules_broken_instances': sum(all_rules_broken.values()),
         },
     )
 
@@ -233,19 +232,18 @@ def _build_turn_metrics_section(results: list[SimulationResult]) -> ReportSectio
     qualities: dict[str, list[float]] = defaultdict(list)
     for r in results:
         for tm in r.turn_metrics:
-            for field_name in ("response_quality", "hallucination_risk",
-                               "tone_appropriateness", "factual_accuracy"):
+            for field_name in ('response_quality', 'hallucination_risk', 'tone_appropriateness', 'factual_accuracy'):
                 value = getattr(tm, field_name, None)
                 if isinstance(value, int | float):
                     qualities[field_name].append(float(value))
     avg_qualities = {k: sum(v) / len(v) for k, v in qualities.items() if v}
 
     return ReportSection(
-        kind="turn_metrics",
-        title="Turn Metrics",
+        kind='turn_metrics',
+        title='Turn Metrics',
         data={
-            "turn_count_distribution": dict(sorted(turn_counts.items())),
-            "avg_quality_metrics": avg_qualities,
+            'turn_count_distribution': dict(sorted(turn_counts.items())),
+            'avg_quality_metrics': avg_qualities,
         },
     )
 
@@ -259,19 +257,19 @@ def _build_evaluator_scores_section(results: list[SimulationResult]) -> ReportSe
         return None
     rows = [
         {
-            "evaluator": name,
-            "runs": len(values),
-            "mean_score": sum(values) / len(values),
-            "min_score": min(values),
-            "max_score": max(values),
+            'evaluator': name,
+            'runs': len(values),
+            'mean_score': sum(values) / len(values),
+            'min_score': min(values),
+            'max_score': max(values),
         }
         for name, values in by_evaluator.items()
     ]
-    rows.sort(key=operator.itemgetter("evaluator"))
+    rows.sort(key=operator.itemgetter('evaluator'))
     return ReportSection(
-        kind="evaluator_scores",
-        title="Evaluator Scores",
-        data={"rows": rows},
+        kind='evaluator_scores',
+        title='Evaluator Scores',
+        data={'rows': rows},
     )
 
 
@@ -281,15 +279,15 @@ def _build_token_usage_section(results: list[SimulationResult]) -> ReportSection
     total = sum(r.token_usage.total_tokens for r in results)
     n = len(results) or 1
     return ReportSection(
-        kind="token_usage",
-        title="Token Usage",
+        kind='token_usage',
+        title='Token Usage',
         data={
-            "prompt_tokens": prompt,
-            "completion_tokens": completion,
-            "total_tokens": total,
-            "avg_total_per_conversation": total / n,
-            "avg_prompt_per_conversation": prompt / n,
-            "avg_completion_per_conversation": completion / n,
+            'prompt_tokens': prompt,
+            'completion_tokens': completion,
+            'total_tokens': total,
+            'avg_total_per_conversation': total / n,
+            'avg_prompt_per_conversation': prompt / n,
+            'avg_completion_per_conversation': completion / n,
         },
     )
 
@@ -297,32 +295,29 @@ def _build_token_usage_section(results: list[SimulationResult]) -> ReportSection
 def _build_individual_results_section(results: list[SimulationResult]) -> ReportSection:
     entries: list[dict[str, Any]] = []
     for idx, r in enumerate(results):
-        target_model = r.metadata.get("target_model")
+        target_model = r.metadata.get('target_model')
         entries.append({
-            "index": idx,
-            "persona": _persona_name(r),
-            "scenario": _scenario_name(r),
-            "model": _model_name(r),
-            "target_model": str(target_model) if target_model else None,
-            "terminated_by": r.terminated_by.value,
-            "goal_achieved": r.goal_achieved,
-            "goal_completion_score": r.goal_completion_score,
-            "rules_broken": list(r.rules_broken),
-            "criteria": _criteria_rows(r),
-            "turn_count": r.turn_count,
-            "total_tokens": r.token_usage.total_tokens,
-            "judge_reason": r.reason,
-            "error": _error_message(r),
-            "evaluator_scores": _evaluator_scores(r),
-            "transcript": [
-                {"role": m.role, "content": m.content or ""}
-                for m in r.messages
-            ],
+            'index': idx,
+            'persona': _persona_name(r),
+            'scenario': _scenario_name(r),
+            'model': _model_name(r),
+            'target_model': str(target_model) if target_model else None,
+            'terminated_by': r.terminated_by.value,
+            'goal_achieved': r.goal_achieved,
+            'goal_completion_score': r.goal_completion_score,
+            'rules_broken': list(r.rules_broken),
+            'criteria': _criteria_rows(r),
+            'turn_count': r.turn_count,
+            'total_tokens': r.token_usage.total_tokens,
+            'judge_reason': r.reason,
+            'error': _error_message(r),
+            'evaluator_scores': _evaluator_scores(r),
+            'transcript': [{'role': m.role, 'content': m.content or ''} for m in r.messages],
         })
     return ReportSection(
-        kind="individual_results",
-        title="Individual Conversations",
-        data={"entries": entries},
+        kind='individual_results',
+        title='Individual Conversations',
+        data={'entries': entries},
     )
 
 
@@ -330,17 +325,14 @@ def _build_errors_section(results: list[SimulationResult]) -> ReportSection | No
     errored = [r for r in results if _is_errored(r)]
     if not errored:
         return None
-    err_messages = [
-        (_error_message(r) or r.reason or "unknown")
-        for r in errored
-    ]
+    err_messages = [(_error_message(r) or r.reason or 'unknown') for r in errored]
     by_message: Counter[str] = Counter(err_messages)
     return ReportSection(
-        kind="errors",
-        title="Errors",
+        kind='errors',
+        title='Errors',
         data={
-            "total_errored": len(errored),
-            "by_message": dict(by_message.most_common(10)),
+            'total_errored': len(errored),
+            'by_message': dict(by_message.most_common(10)),
         },
     )
 
@@ -370,9 +362,15 @@ def _build_criteria_heatmap_section(results: list[SimulationResult]) -> ReportSe
         cells.append(row_vals)
         safety.append(row_safe)
     return ReportSection(
-        kind='criteria_heatmap', title='Criteria Pass/Fail',
-        data={'x_labels': col_labels, 'y_ids': order,
-              'y_labels': [by_id[i] for i in order], 'cells': cells, 'safety': safety},
+        kind='criteria_heatmap',
+        title='Criteria Pass/Fail',
+        data={
+            'x_labels': col_labels,
+            'y_ids': order,
+            'y_labels': [by_id[i] for i in order],
+            'cells': cells,
+            'safety': safety,
+        },
     )
 
 
@@ -388,19 +386,20 @@ def _build_persona_scenario_heatmap_section(results: list[SimulationResult]) -> 
             scenarios.append(s)
         agg[p, s].append(r.goal_achieved)
     cells = [
-        {'persona': p, 'scenario': s,
-         'success_rate': (sum(v) / len(v)) if v else 0.0, 'n': len(v)}
+        {'persona': p, 'scenario': s, 'success_rate': (sum(v) / len(v)) if v else 0.0, 'n': len(v)}
         for (p, s), v in agg.items()
     ]
     return ReportSection(
-        kind='persona_scenario_heatmap', title='Persona x Scenario Success',
+        kind='persona_scenario_heatmap',
+        title='Persona x Scenario Success',
         data={'personas': personas, 'scenarios': scenarios, 'cells': cells},
     )
 
 
 def _build_score_distribution_section(results: list[SimulationResult]) -> ReportSection:
     return ReportSection(
-        kind='score_distribution', title='Goal Score Distribution',
+        kind='score_distribution',
+        title='Goal Score Distribution',
         data={'scores': [r.goal_completion_score for r in results]},
     )
 
@@ -415,15 +414,10 @@ def _build_turn_quality_timeline_section(results: list[SimulationResult]) -> Rep
                 if val is not None:
                     by_turn[tm.turn_number][m].append(val)
     turns = sorted(by_turn)
-    series = {
-        m: [
-            (sum(by_turn[t][m]) / len(by_turn[t][m])) if by_turn[t][m] else 0.0
-            for t in turns
-        ]
-        for m in metrics
-    }
+    series = {m: [(sum(by_turn[t][m]) / len(by_turn[t][m])) if by_turn[t][m] else 0.0 for t in turns] for m in metrics}
     return ReportSection(
-        kind='turn_quality_timeline', title='Turn Quality Timeline',
+        kind='turn_quality_timeline',
+        title='Turn Quality Timeline',
         data={'turns': turns, 'series': series},
     )
 
@@ -436,9 +430,10 @@ def _build_failure_mode_section(results: list[SimulationResult]) -> ReportSectio
         scen = _scenario_name(r)
         for c in _criteria_rows(r):
             if not c['passed']:
-                counts[f"{scen}: {c['description']}"] += 1
+                counts[f'{scen}: {c["description"]}'] += 1
     return ReportSection(
-        kind='failure_mode', title='Failure Modes',
+        kind='failure_mode',
+        title='Failure Modes',
         data={'rows': counts.most_common(15)},
     )
 
@@ -451,17 +446,19 @@ def _build_failure_mode_section(results: list[SimulationResult]) -> ReportSectio
 def build_report_sections(results: list[SimulationResult]) -> list[ReportSection]:
     """Produce the ordered list of report sections from simulation results."""
     sections: list[ReportSection] = []
-    sections.append(_build_summary_section(results))
-    sections.append(_build_failures_first_section(results))
-    sections.append(_build_persona_scenario_heatmap_section(results))
-    sections.append(_build_criteria_heatmap_section(results))
-    sections.append(_build_score_distribution_section(results))
-    sections.append(_build_turn_quality_timeline_section(results))
-    sections.append(_build_persona_breakdown_section(results))
-    sections.append(_build_scenario_breakdown_section(results))
-    sections.append(_build_judge_verdicts_section(results))
-    sections.append(_build_turn_metrics_section(results))
-    sections.append(_build_failure_mode_section(results))
+    sections.extend((
+        _build_summary_section(results),
+        _build_failures_first_section(results),
+        _build_persona_scenario_heatmap_section(results),
+        _build_criteria_heatmap_section(results),
+        _build_score_distribution_section(results),
+        _build_turn_quality_timeline_section(results),
+        _build_persona_breakdown_section(results),
+        _build_scenario_breakdown_section(results),
+        _build_judge_verdicts_section(results),
+        _build_turn_metrics_section(results),
+        _build_failure_mode_section(results),
+    ))
     evaluator = _build_evaluator_scores_section(results)
     if evaluator is not None:
         sections.append(evaluator)
