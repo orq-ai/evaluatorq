@@ -481,7 +481,7 @@ class _RunLevelRecorder(DefaultHooks):
 
 
 @pytest.mark.asyncio
-async def test_on_run_complete_fires_when_batch_errors(datapoint_factory):
+async def test_on_run_complete_fires_when_a_datapoint_errors(datapoint_factory):
     hooks = _RunLevelRecorder()
 
     async def boom(messages):
@@ -500,6 +500,31 @@ async def test_on_run_complete_fires_when_batch_errors(datapoint_factory):
     assert hooks.started is True
     assert hooks.completed_with is not None  # terminal fired
     assert len(results) == 1  # errored datapoint still returned
+
+
+@pytest.mark.asyncio
+async def test_on_run_complete_fires_when_scoring_raises(datapoint_factory):
+    """on_run_complete must still fire via the finally block even when the scoring
+    stage raises (on_evaluator_complete is unguarded), and the original exception
+    must propagate out of simulate()."""
+
+    class _ScoringBoom(_RunLevelRecorder):
+        def on_evaluator_complete(self, datapoint_id, name, score, result) -> None:
+            raise RuntimeError("scoring blew up")
+
+    hooks = _ScoringBoom()
+    with pytest.raises(RuntimeError, match="scoring blew up"):
+        await simulate(
+            datapoints=[datapoint_factory("dp-1")],
+            target=_ok_target,
+            user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+            judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+            max_turns=1,
+            evaluator_names=["goal_achieved"],
+            hooks=hooks,
+        )
+    assert hooks.started is True
+    assert hooks.completed_with is not None  # on_run_complete fired via finally even though scoring raised
 
 
 @pytest.mark.asyncio

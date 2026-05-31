@@ -276,6 +276,8 @@ async def _simulate_core(
         return results
     finally:
         # Terminal hook always pairs with on_run_start; results is [] on early failure.
+        # NOTE: on_run_complete is unguarded — a raising hook masks any in-flight exception
+        # and skips runner.close()/target-close below; cleanup is intentionally best-effort.
         resolved_hooks.on_run_complete(results)
         await runner.close()
         # Close the target if it owns resources (e.g. OrqResponsesTarget
