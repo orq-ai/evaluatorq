@@ -50,3 +50,28 @@ def test_svg_bar_renders_labeled_bars():
 
 def test_svg_bar_empty_when_no_rows():
 	assert h.svg_bar(rows=[], title='t') == ''
+
+
+def test_render_heatmap_cells_and_labels():
+	html = h.render_heatmap(
+		x_labels=['c1', 'c2'],
+		y_labels=['must explain charge', 'must not be rude'],
+		cells=[[1.0, 0.0], [1.0, 1.0]],  # row-major: y by x
+		scale=ORQ_SCALE_GOOD_BAD,
+		title='Criteria pass/fail',
+		value_fmt=lambda v: 'PASS' if v >= 0.5 else 'FAIL',
+	)
+	assert 'class="heatmap-table"' in html
+	assert html.count('<td') >= 4
+	assert 'must explain charge' in html
+	assert 'PASS' in html and 'FAIL' in html
+	assert 'Criteria pass/fail' in html
+
+
+def test_render_heatmap_safety_flag_uses_hot_class():
+	html = h.render_heatmap(
+		x_labels=['c1'], y_labels=['no PII leak'], cells=[[0.0]],
+		scale=ORQ_SCALE_GOOD_BAD, title='t',
+		value_fmt=lambda v: 'FAIL', safety_mask=[[True]],
+	)
+	assert 'heatmap-cell--safety' in html

@@ -350,22 +350,22 @@ def render_heatmap(
 	head = ''.join(f'<th>{esc(x)}</th>' for x in x_labels)
 	body_rows: list[str] = []
 	for yi, ylabel in enumerate(y_labels):
-		tds = [f"<td class='heatmap-row-label'><strong>{esc(ylabel)}</strong></td>"]
+		tds = ['<td class="heatmap-row-label"><strong>' + esc(ylabel) + '</strong></td>']
 		for xi in range(len(x_labels)):
 			value = float(cells[yi][xi])
 			color = scale_color(value, scale)
 			is_safety = bool(safety_mask and safety_mask[yi][xi])
 			cls = 'heatmap-cell heatmap-cell--safety' if is_safety else 'heatmap-cell'
 			tds.append(
-				f"<td><span class='{cls}' style='background:{color}'>"
-				f'{esc(value_fmt(value))}</span></td>'
+				'<td><span class="' + cls + '" style="background:' + color + '">'
+				+ esc(value_fmt(value)) + '</span></td>'
 			)
 		body_rows.append('<tr>' + ''.join(tds) + '</tr>')
 	return (
-		f"<figure class='chart-card'><figcaption>{esc(title)}</figcaption>"
-		f"<div style='overflow-x:auto'><table class='heatmap-table'>"
-		f"<thead><tr><th></th>{head}</tr></thead>"
-		f"<tbody>{''.join(body_rows)}</tbody></table></div></figure>"
+		'<figure class="chart-card"><figcaption>' + esc(title) + '</figcaption>'
+		'<div style="overflow-x:auto"><table class="heatmap-table">'
+		'<thead><tr><th></th>' + head + '</tr></thead>'
+		'<tbody>' + ''.join(body_rows) + '</tbody></table></div></figure>'
 	)
 
 
