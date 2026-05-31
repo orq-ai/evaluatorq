@@ -16,3 +16,22 @@ def test_scale_color_midpoint_is_between():
 	r = int(mid[0:2], 16)
 	# midpoint is the yellow stop (#f2b600) -> red channel high
 	assert r > 200
+
+
+def test_svg_donut_renders_slices_and_center():
+	svg = h.svg_donut(
+		labels=['Achieved', 'Failed'],
+		values=[1, 3],
+		colors=['#2ebd85', '#d92d20'],
+		center_label='25%',
+		title='Goal Outcomes',
+	)
+	assert svg.startswith('<figure')
+	assert '<svg' in svg and '</svg>' in svg
+	assert svg.count('<path') == 2  # one arc per non-zero slice
+	assert '25%' in svg
+	assert 'Goal Outcomes' in svg
+
+
+def test_svg_donut_empty_when_all_zero():
+	assert h.svg_donut(labels=['a'], values=[0], colors=['#000'], center_label='', title='t') == ''
