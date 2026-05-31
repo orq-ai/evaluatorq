@@ -466,3 +466,52 @@ def test_hooks_exported_from_package():
         "SimulationCancelledError",
     ):
         assert name in sim.__all__
+
+
+class _RunLevelRecorder(DefaultHooks):
+    def __init__(self) -> None:
+        self.started = False
+        self.completed_with: list[SimulationResult] | None = None
+
+    def on_run_start(self, meta) -> None:
+        self.started = True
+
+    def on_run_complete(self, results) -> None:
+        self.completed_with = results
+
+
+@pytest.mark.asyncio
+async def test_on_run_complete_fires_when_batch_errors(datapoint_factory):
+    hooks = _RunLevelRecorder()
+
+    async def boom(messages):
+        raise RuntimeError("target down")
+
+    dp = datapoint_factory("dp-err")
+    results = await simulate(
+        datapoints=[dp],
+        target=boom,
+        user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+        judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+        max_turns=1,
+        evaluator_names=["goal_achieved"],
+        hooks=hooks,
+    )
+    assert hooks.started is True
+    assert hooks.completed_with is not None  # terminal fired
+    assert len(results) == 1  # errored datapoint still returned
+
+
+@pytest.mark.asyncio
+async def test_missing_target_raises_before_on_run_start(datapoint_factory):
+    hooks = _RunLevelRecorder()
+    with pytest.raises(ValueError):
+        await simulate(
+            datapoints=[datapoint_factory("dp-1")],
+            user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+            judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+            max_turns=1,
+            evaluator_names=["goal_achieved"],
+            hooks=hooks,
+        )
+    assert hooks.started is False  # no unpaired on_run_start

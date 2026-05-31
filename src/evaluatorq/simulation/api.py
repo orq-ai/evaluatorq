@@ -195,16 +195,12 @@ async def _simulate_core(
         "evaluation_name": evaluation_name,
         "evaluator_names": resolved_evaluator_names,
     }
-    # Gate first. Nothing is allocated yet, so a decline is a clean abort.
+    # Gate first — cheap, before any allocation. A decline is a clean abort.
     if not resolved_hooks.on_confirm(run_meta):
         raise SimulationCancelledError("Simulation run declined by on_confirm hook")
-    # Render-init only after confirmation passes.
-    resolved_hooks.on_run_start(run_meta)
 
-    # Resolve the target. ``target`` takes precedence over ``target_callback``
-    # when both are given. An AgentTarget instance is routed to the runner's
-    # target_agent path (it speaks respond(messages), not the callable shape);
-    # plain callables and the agent_key bridge are unchanged.
+    # Resolve the target and construct the runner BEFORE on_run_start, so a
+    # setup ValueError raises without an unpaired run-level start hook.
     from evaluatorq.contracts import AgentTarget
 
     target_agent: AgentTarget | None = None
@@ -218,7 +214,8 @@ async def _simulate_core(
     if target_agent is None and not resolved_callback:
         raise ValueError("Either target_callback (or target) or agent_key is required")
 
-    # Create simulation runner
+    # Create simulation runner before on_run_start so construction errors
+    # don't leave an unpaired run-level start hook.
     runner = SimulationRunner(
         target_callback=resolved_callback,
         target_agent=target_agent,
@@ -229,6 +226,9 @@ async def _simulate_core(
         hooks=resolved_hooks,
     )
 
+    # Render-init only after confirm + construction succeed.
+    results: list[SimulationResult] = []
+    resolved_hooks.on_run_start(run_meta)
     try:
         # Run simulations
         results = await runner.run_batch(
@@ -273,9 +273,10 @@ async def _simulate_core(
             },
         )
 
-        resolved_hooks.on_run_complete(results)
         return results
     finally:
+        # Terminal hook always pairs with on_run_start; results is [] on early failure.
+        resolved_hooks.on_run_complete(results)
         await runner.close()
         # Close the target if it owns resources (e.g. OrqResponsesTarget
         # built its own AsyncOpenAI client). Plain callables / functions

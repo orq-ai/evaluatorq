@@ -66,11 +66,17 @@ class SimulationHooks(Protocol):
     ``on_confirm`` is the single pre-run gate (reuses the ``SimulationRunMeta``
     payload). It fires before the runner/target exist; returning ``False``
     aborts the run via ``SimulationCancelledError``. ``on_run_start`` fires only
-    after ``on_confirm`` returns truthy — gate first, then render-init. Note:
-    for ``generate_and_simulate`` the gate fires AFTER persona/scenario/
+    after ``on_confirm`` returns truthy and target resolution + runner
+    construction succeed — gate first, then render-init. Note: for
+    ``generate_and_simulate`` the gate fires AFTER persona/scenario/
     first-message generation, so those generation tokens are already spent when
     ``on_confirm`` is called — the gate protects the simulation batch, not
     generation.
+
+    ``on_run_complete`` is the terminal hook. It always fires exactly once after
+    a successful ``on_confirm`` + ``on_run_start`` pair, even on failure (e.g.
+    a batch error or an exception during scoring). ``results`` may be an empty
+    list if failure occurred before any results were collected.
     """
 
     def on_confirm(self, meta: SimulationRunMeta) -> bool: ...
@@ -139,6 +145,9 @@ class DefaultHooks:
         )
 
     def on_run_complete(self, results: list[SimulationResult]) -> None:
+        """Terminal hook. Always fires exactly once after ``on_run_start``, even
+        on failure. ``results`` may be an empty list if failure occurred before
+        any results were collected."""
         logger.info(f"[simulation] Run complete: {len(results)} results")
 
 
@@ -254,6 +263,10 @@ class RichHooks:
             )
 
     def on_run_complete(self, results: list[SimulationResult]) -> None:
+        """Terminal hook. Always fires exactly once after ``on_run_start``, even
+        on failure. ``results`` may be an empty list if failure occurred before
+        any results were collected. Safe to call more than once (idempotent via
+        the ``_progress is None`` guard)."""
         if self._progress is not None:
             self._progress.stop()
             self._progress = None
