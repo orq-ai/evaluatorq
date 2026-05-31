@@ -58,10 +58,19 @@ class SimulationHooks(Protocol):
 
     Exception policy: only ``on_turn_complete`` is exception-guarded by the
     runner — it fires inside ``run()``'s catch-all, which would otherwise
-    mis-attribute a hook bug as a simulation error. All other hooks
-    (``on_confirm``, ``on_run_start``, ``on_datapoint_start``/``_complete``/
-    ``_error``, ``on_evaluator_complete``, ``on_run_complete``) are NOT
-    guarded: a raising hook propagates and aborts the run/batch.
+    mis-attribute a hook bug as a simulation error.
+
+    ``on_datapoint_start`` fires inside the per-datapoint ``run_single`` task
+    (gathered with ``return_exceptions=True``), so a raise is captured as that
+    datapoint's error result and surfaces via ``on_datapoint_error`` +
+    ``on_datapoint_complete`` for that datapoint only — it does NOT abort the
+    batch. This is the same isolation behaviour as a failing target or ``run()``
+    call.
+
+    ``on_confirm`` and ``on_run_start`` run before the gather and are NOT
+    guarded: a raise there propagates and aborts the entire run. All other
+    per-datapoint hooks (``on_datapoint_complete``/``_error``,
+    ``on_evaluator_complete``) are also unguarded.
 
     ``on_confirm`` is the single pre-run gate (reuses the ``SimulationRunMeta``
     payload). It fires before the runner/target exist; returning ``False``

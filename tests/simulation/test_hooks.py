@@ -559,10 +559,10 @@ async def test_on_datapoint_start_respects_concurrency(datapoint_factory):
 
     async def run():
         task = asyncio.create_task(
-            runner.run_batch(dps, max_concurrency=2, timeout_per_simulation=0)
+            runner.run_batch(dps, max_concurrency=2, timeout_per_simulation=0)  # timeout_per_simulation=0 disables the per-sim timeout so the gate controls timing
         )
         await asyncio.sleep(0.1)
-        assert peak <= 2  # only concurrency-many started before any complete
+        assert peak == 2  # exactly concurrency-many live before gate opens (6 parked, cap=2)
         gate.set()
         return await task
 
