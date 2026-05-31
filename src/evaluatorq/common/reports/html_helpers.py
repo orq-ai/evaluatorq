@@ -17,6 +17,8 @@ from pathlib import Path
 from string import Template
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
@@ -123,6 +125,7 @@ def try_render_svg(fig: Any) -> str | None:
         svg_bytes = fig.to_image(format='svg', engine='kaleido')
         return svg_bytes.decode('utf-8') if isinstance(svg_bytes, bytes) else svg_bytes
     except Exception:
+        logger.warning('Plotly SVG render failed (kaleido engine); chart omitted', exc_info=True)
         return None
 
 
@@ -294,6 +297,24 @@ def svg_donut(
         if value <= 0:
             continue
         frac = value / total
+        if frac >= 1.0:
+            # A single slice covering the whole circle would produce a degenerate
+            # arc (start == end), which SVG drops entirely. Emit a full annulus as
+            # two half-arc paths so the ring stays visible.
+            mid = angle + math.pi
+            end = angle + 2 * math.pi
+            parts.extend([
+                (
+                    f'<path d="{_arc_path(cx, cy, r_outer, r_inner, angle, mid)}" '
+                    f'fill="{color}"><title>{esc(label)}: {value:g}</title></path>'
+                ),
+                (
+                    f'<path d="{_arc_path(cx, cy, r_outer, r_inner, mid, end)}" '
+                    f'fill="{color}"><title>{esc(label)}: {value:g}</title></path>'
+                ),
+            ])
+            angle = end
+            continue
         a1 = angle + frac * 2 * math.pi
         parts.append(
             f'<path d="{_arc_path(cx, cy, r_outer, r_inner, angle, a1)}" '

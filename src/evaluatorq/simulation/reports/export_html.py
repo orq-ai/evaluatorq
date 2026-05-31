@@ -90,7 +90,8 @@ def _render_summary_html(section: ReportSection) -> str:
         center_label=_pct(data.get('success_rate', 0.0)),
         title='Goal Outcomes',
     )
-    return f'<section class="report-card"><h2>{_esc(section.title)}</h2>{donut}</section>'
+    body = donut or '<p>No conversations to summarize.</p>'
+    return f'<section class="report-card"><h2>{_esc(section.title)}</h2>{body}</section>'
 
 
 def _render_failures_first_html(section: ReportSection) -> str:
@@ -332,9 +333,7 @@ def _render_individual_results_html(section: ReportSection) -> str:
 
         criteria_rows = entry.get('criteria', [])
         if criteria_rows:
-            badges = ' '.join(
-                _status_badge(_esc(c['description']), 'pass' if c['passed'] else 'fail') for c in criteria_rows
-            )
+            badges = ' '.join(_status_badge(c['description'], 'pass' if c['passed'] else 'fail') for c in criteria_rows)
             meta_rows.append(['Criteria', badges])
 
         if entry['evaluator_scores']:

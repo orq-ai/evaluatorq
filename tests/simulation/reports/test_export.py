@@ -148,6 +148,31 @@ def test_html_heatmap_pass_is_green_fail_is_red(sample_results):
     assert '—' in html
 
 
+def test_html_criterion_description_single_escaped(make_result):
+    """Criterion descriptions are escaped exactly once (status_badge escapes
+    internally), so special chars must not be double-encoded."""
+    r = make_result(
+        goal_achieved=True,
+        criteria_meta=[
+            {'id': 'criteria_0', 'description': 'fees & "charges"', 'type': 'must_happen', 'passed': True},
+        ],
+    )
+    html = export_html([r], target='t')
+    # Correct single escaping.
+    assert '&amp;' in html
+    assert '&quot;' in html
+    # Not double-escaped.
+    assert '&amp;amp;' not in html
+    assert '&amp;quot;' not in html
+
+
+def test_html_summary_empty_state_message():
+    """The summary card shows a no-data message instead of an empty card when
+    there are no conversations (donut renders '')."""
+    html = export_html([], target='t')
+    assert 'No conversations to summarize.' in html
+
+
 def test_html_omits_model_row_when_unknown(make_result):
     r = make_result(goal_achieved=True)  # no target_model in metadata
     html = export_html([r], target='t')

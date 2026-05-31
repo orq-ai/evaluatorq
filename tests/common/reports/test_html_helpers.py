@@ -18,6 +18,53 @@ def test_scale_color_midpoint_is_between():
     assert r > 200
 
 
+def test_scale_color_interpolates_between_stops():
+    """A value not on any stop must lerp strictly between the two bounding
+    stops' colors (exercises the lo+(hi-lo)*t interpolation)."""
+    lo = (0x2e, 0xbd, 0x85)  # #2ebd85 (green stop at 0.0)
+    hi = (0xf2, 0xb6, 0x00)  # #f2b600 (yellow stop at 0.5)
+    c = h.scale_color(0.25, ORQ_SCALE_GOOD_BAD).lstrip('#')
+    r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+    # At least one channel strictly between the two stops' channels.
+    between = [
+        min(lo[i], hi[i]) < ch < max(lo[i], hi[i])
+        for i, ch in enumerate((r, g, b))
+    ]
+    assert any(between), f'#{c} is not strictly between {lo} and {hi}'
+
+
+def test_render_histogram_empty_guards():
+    assert h.render_histogram(values=[], bins=10, title='t') == ''
+    assert h.render_histogram(values=[0.5], bins=0, title='t') == ''
+
+
+def test_render_line_chart_empty_guard():
+    assert h.render_line_chart(x_labels=[], series=[], title='t') == ''
+
+
+def test_render_heatmap_empty_guards():
+    assert (
+        h.render_heatmap(
+            x_labels=[],
+            y_labels=['r1'],
+            cells=[[]],
+            scale=ORQ_SCALE_GOOD_BAD,
+            title='t',
+        )
+        == ''
+    )
+    assert (
+        h.render_heatmap(
+            x_labels=['c1'],
+            y_labels=[],
+            cells=[],
+            scale=ORQ_SCALE_GOOD_BAD,
+            title='t',
+        )
+        == ''
+    )
+
+
 def test_svg_donut_renders_slices_and_center():
     svg = h.svg_donut(
         labels=['Achieved', 'Failed'],
@@ -35,6 +82,23 @@ def test_svg_donut_renders_slices_and_center():
 
 def test_svg_donut_empty_when_all_zero():
     assert h.svg_donut(labels=['a'], values=[0], colors=['#000'], center_label='', title='t') == ''
+
+
+def test_svg_donut_full_circle_single_slice():
+    """A single slice covering the whole circle must still render a visible
+    ring (a degenerate full-circle arc would otherwise vanish)."""
+    svg = h.svg_donut(
+        labels=['Achieved'],
+        values=[4],
+        colors=['#2ebd85'],
+        center_label='100%',
+        title='Goal Outcomes',
+    )
+    assert svg.startswith('<figure')
+    assert '<svg' in svg and '</svg>' in svg
+    # Full annulus emitted as two half-arc paths (not one degenerate arc).
+    assert svg.count('<path') == 2
+    assert '100%' in svg
 
 
 def test_svg_bar_renders_labeled_bars():

@@ -23,6 +23,8 @@ import operator
 from collections import Counter, defaultdict
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
+
 from evaluatorq.contracts import ReportSection
 
 if TYPE_CHECKING:
@@ -70,7 +72,9 @@ def _criteria_meta(result: SimulationResult) -> list[dict[str, Any]]:
     raw = result.metadata.get('criteria_meta')
     if isinstance(raw, list):
         return [c for c in raw if isinstance(c, dict)]
-    # Fallback to lossy criteria_results (no ids/type).
+    # Fallback to lossy criteria_results (no ids/type). The safety classification
+    # (must_not_happen) is unavailable here, so make the degradation visible.
+    logger.debug('criteria_meta absent; safety classification unavailable, falling back to criteria_results')
     cr = result.criteria_results or {}
     return [
         {'id': f'criteria_{i}', 'description': desc, 'type': None, 'passed': bool(passed)}
@@ -141,13 +145,14 @@ def _build_failures_first_section(results: list[SimulationResult]) -> ReportSect
     for idx, r in enumerate(results):
         if r.goal_achieved or _is_errored(r):
             continue
-        violated = [c['description'] for c in _criteria_rows(r) if not c['passed']]
+        rows_c = _criteria_rows(r)
+        violated = [c['description'] for c in rows_c if not c['passed']]
         rows.append({
             'index': idx + 1,
             'persona': _persona_name(r),
             'scenario': _scenario_name(r),
             'violated': violated,
-            'has_safety': any(c['safety'] for c in _criteria_rows(r)),
+            'has_safety': any(c['safety'] for c in rows_c),
             'terminated_by': r.terminated_by.value,
             'score': r.goal_completion_score,
             'anchor': f'conv-{idx + 1}',

@@ -118,3 +118,5 @@ def test_redteam_html_renders_without_plotly(
     monkeypatch.setattr(builtins, '__import__', no_plotly)
     html = export_html(redteam_report)
     assert '<html' in html and '</html>' in html
+    # Degrades to data tables (not empty chart shells) when charts are absent.
+    assert '<table' in html
