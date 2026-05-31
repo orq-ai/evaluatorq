@@ -69,30 +69,6 @@ details pre { background: #f5f5f5; padding: 1rem; border-radius: 4px; overflow-x
     gap: .8rem;
     margin: 1rem 0 1.5rem;
 }
-.kpi-card {
-    flex: 1 1 140px;
-    min-width: 120px;
-    background: white;
-    border: 1px solid var(--sand-400);
-    border-radius: 8px;
-    padding: .9rem 1rem;
-    box-shadow: 0 1px 3px rgba(0,0,0,.06);
-    text-align: center;
-}
-.kpi-card .kpi-value {
-    font-size: 1.9rem;
-    font-weight: 700;
-    color: var(--teal-400);
-    line-height: 1.1;
-}
-.kpi-card .kpi-label {
-    font-size: .8rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: .04em;
-    color: #666;
-    margin-top: .3rem;
-}
 .kpi-card .kpi-subtitle {
     font-size: .75rem;
     color: #999;
@@ -120,17 +96,6 @@ details pre { background: #f5f5f5; padding: 1rem; border-radius: 4px; overflow-x
     border-radius: 4px;
 }
 .error-bar-count { font-size: .85em; font-weight: 600; min-width: 30px; text-align: right; }
-.heatmap-table td { text-align: center; }
-.heatmap-table th { text-align: center; }
-.heatmap-cell {
-    display: inline-block;
-    width: 52px;
-    padding: 4px 0;
-    border-radius: 4px;
-    font-size: .78em;
-    font-weight: 600;
-    color: white;
-}
 .agent-cards-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -217,7 +182,7 @@ details pre { background: #f5f5f5; padding: 1rem; border-radius: 4px; overflow-x
 .heatmap-table th, .heatmap-table td { padding: 2px; }
 .heatmap-row-label { text-align: right; padding-right: 8px !important; white-space: nowrap; }
 .heatmap-cell { display: block; min-width: 48px; padding: 6px 8px; border-radius: 4px; color: #fff;
-  text-align: center; font-weight: 600; }
+  text-align: center; font-weight: 600; font-size: .78em; }
 .heatmap-cell--safety { outline: 2px solid var(--c-ink); outline-offset: -2px; }
 .sparkline { width: 80px; height: 20px; vertical-align: middle; }
 td .sparkline rect, th .sparkline rect { shape-rendering: crispEdges; }
