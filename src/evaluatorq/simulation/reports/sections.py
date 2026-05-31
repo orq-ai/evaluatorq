@@ -342,6 +342,104 @@ def _build_errors_section(results: list[SimulationResult]) -> ReportSection | No
     )
 
 
+def _build_criteria_heatmap_section(results: list[SimulationResult]) -> ReportSection:
+    # rows = unique (id, description); cols = conversations
+    col_labels = [f'#{i + 1}' for i in range(len(results))]
+    by_id: dict[str, str] = {}
+    order: list[str] = []
+    for r in results:
+        for c in _criteria_rows(r):
+            if c['id'] not in by_id:
+                by_id[c['id']] = c['description']
+                order.append(c['id'])
+    cells = []
+    safety = []
+    for cid in order:
+        row_vals, row_safe = [], []
+        for r in results:
+            match = next((c for c in _criteria_rows(r) if c['id'] == cid), None)
+            if match is None:
+                row_vals.append(-1.0)
+                row_safe.append(False)
+            else:
+                row_vals.append(1.0 if match['passed'] else 0.0)
+                row_safe.append(match['safety'])
+        cells.append(row_vals)
+        safety.append(row_safe)
+    return ReportSection(
+        kind='criteria_heatmap', title='Criteria Pass/Fail',
+        data={'x_labels': col_labels, 'y_ids': order,
+              'y_labels': [by_id[i] for i in order], 'cells': cells, 'safety': safety},
+    )
+
+
+def _build_persona_scenario_heatmap_section(results: list[SimulationResult]) -> ReportSection:
+    personas: list[str] = []
+    scenarios: list[str] = []
+    agg: dict[tuple[str, str], list[bool]] = defaultdict(list)
+    for r in results:
+        p, s = _persona_name(r), _scenario_name(r)
+        if p not in personas:
+            personas.append(p)
+        if s not in scenarios:
+            scenarios.append(s)
+        agg[p, s].append(r.goal_achieved)
+    cells = [
+        {'persona': p, 'scenario': s,
+         'success_rate': (sum(v) / len(v)) if v else 0.0, 'n': len(v)}
+        for (p, s), v in agg.items()
+    ]
+    return ReportSection(
+        kind='persona_scenario_heatmap', title='Persona x Scenario Success',
+        data={'personas': personas, 'scenarios': scenarios, 'cells': cells},
+    )
+
+
+def _build_score_distribution_section(results: list[SimulationResult]) -> ReportSection:
+    return ReportSection(
+        kind='score_distribution', title='Goal Score Distribution',
+        data={'scores': [r.goal_completion_score for r in results]},
+    )
+
+
+def _build_turn_quality_timeline_section(results: list[SimulationResult]) -> ReportSection:
+    metrics = ('response_quality', 'hallucination_risk', 'tone_appropriateness', 'factual_accuracy')
+    by_turn: dict[int, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+    for r in results:
+        for tm in r.turn_metrics:
+            for m in metrics:
+                val = getattr(tm, m, None)
+                if val is not None:
+                    by_turn[tm.turn_number][m].append(val)
+    turns = sorted(by_turn)
+    series = {
+        m: [
+            (sum(by_turn[t][m]) / len(by_turn[t][m])) if by_turn[t][m] else 0.0
+            for t in turns
+        ]
+        for m in metrics
+    }
+    return ReportSection(
+        kind='turn_quality_timeline', title='Turn Quality Timeline',
+        data={'turns': turns, 'series': series},
+    )
+
+
+def _build_failure_mode_section(results: list[SimulationResult]) -> ReportSection:
+    counts: Counter[str] = Counter()
+    for r in results:
+        if r.goal_achieved:
+            continue
+        scen = _scenario_name(r)
+        for c in _criteria_rows(r):
+            if not c['passed']:
+                counts[f"{scen}: {c['description']}"] += 1
+    return ReportSection(
+        kind='failure_mode', title='Failure Modes',
+        data={'rows': counts.most_common(15)},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public entrypoint
 # ---------------------------------------------------------------------------
@@ -352,10 +450,15 @@ def build_report_sections(results: list[SimulationResult]) -> list[ReportSection
     sections: list[ReportSection] = []
     sections.append(_build_summary_section(results))
     sections.append(_build_failures_first_section(results))
+    sections.append(_build_persona_scenario_heatmap_section(results))
+    sections.append(_build_criteria_heatmap_section(results))
+    sections.append(_build_score_distribution_section(results))
+    sections.append(_build_turn_quality_timeline_section(results))
     sections.append(_build_persona_breakdown_section(results))
     sections.append(_build_scenario_breakdown_section(results))
     sections.append(_build_judge_verdicts_section(results))
     sections.append(_build_turn_metrics_section(results))
+    sections.append(_build_failure_mode_section(results))
     evaluator = _build_evaluator_scores_section(results)
     if evaluator is not None:
         sections.append(evaluator)

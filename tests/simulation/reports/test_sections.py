@@ -298,3 +298,33 @@ def test_failures_first_lists_only_failures_with_descriptions(make_result):
 	assert row['persona'] == 'B' and row['scenario'] == 'Y'
 	assert row['violated'] == ['explain charge']
 	assert 'criteria_0' not in str(row['violated'])  # description shown, not id
+
+
+# ---------------------------------------------------------------------------
+# Task 4.3 — 5 new section builders
+# ---------------------------------------------------------------------------
+
+
+def test_new_section_kinds_present(make_result):
+	results = [
+		make_result(goal_achieved=False, score=0.2, persona='A', scenario='X',
+					criteria_meta=[{'id': 'criteria_0', 'description': 'd0', 'type': 'must_happen', 'passed': False}]),
+		make_result(goal_achieved=True, score=0.9, persona='A', scenario='Y', criteria_meta=[]),
+	]
+	kinds = {s.kind for s in build_report_sections(results)}
+	for k in ['criteria_heatmap', 'persona_scenario_heatmap', 'score_distribution',
+			  'turn_quality_timeline', 'failure_mode']:
+		assert k in kinds
+
+
+def test_persona_scenario_heatmap_matrix(make_result):
+	results = [
+		make_result(goal_achieved=True, persona='A', scenario='X'),
+		make_result(goal_achieved=False, persona='A', scenario='Y'),
+	]
+	s = next(x for x in build_report_sections(results) if x.kind == 'persona_scenario_heatmap')
+	assert s.data['personas'] == ['A']
+	assert set(s.data['scenarios']) == {'X', 'Y'}
+	# success-rate cell for (A, X) == 1.0, (A, Y) == 0.0
+	cell = {(c['persona'], c['scenario']): c['success_rate'] for c in s.data['cells']}
+	assert cell[('A', 'X')] == 1.0 and cell[('A', 'Y')] == 0.0
