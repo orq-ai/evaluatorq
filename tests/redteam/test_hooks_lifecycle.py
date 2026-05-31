@@ -49,31 +49,59 @@ class SpyHooks:
         self.received_complete_output_dir: str | None = None
 
     def on_stage_start(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
-        self.calls.append(("on_stage_start", stage, meta))
+        self.calls.append(('on_stage_start', stage, meta))
 
     def on_stage_end(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
-        self.calls.append(("on_stage_end", stage, meta))
+        self.calls.append(('on_stage_end', stage, meta))
 
     def on_confirm(self, payload: ConfirmPayload) -> bool:
-        self.calls.append(("on_confirm", payload))
+        self.calls.append(('on_confirm', payload))
         self.received_confirm_payload = payload
         return self.confirm_result
 
-    def on_complete(self, report: RedTeamReport, *, output_dir: str | None = None, auto_save_path: str | None = None) -> None:
-        self.calls.append(("on_complete", report, output_dir))
+    def on_complete(
+        self, report: RedTeamReport, *, output_dir: str | None = None, auto_save_path: str | None = None
+    ) -> None:
+        self.calls.append(('on_complete', report, output_dir))
         self.received_complete_report = report
         self.received_complete_output_dir = output_dir
 
     # ── Convenience query helpers ─────────────────────────────────────────
 
     def stage_starts(self) -> list[PipelineStage | str]:
-        return [args[0] for name, *args in self.calls if name == "on_stage_start"]
+        return [args[0] for name, *args in self.calls if name == 'on_stage_start']
 
     def stage_ends(self) -> list[PipelineStage | str]:
-        return [args[0] for name, *args in self.calls if name == "on_stage_end"]
+        return [args[0] for name, *args in self.calls if name == 'on_stage_end']
 
     def method_names(self) -> list[str]:
         return [name for name, *_ in self.calls]
+
+
+class AsyncSpyHooks(SpyHooks):
+    """Async twin of SpyHooks — every hook is ``async def``.
+
+    Proves an async hook flows through the production ``await_maybe`` call sites
+    in the real runner (not just sync). Reuses SpyHooks' recording/query helpers.
+    """
+
+    async def on_stage_start(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
+        self.calls.append(('on_stage_start', stage, meta))
+
+    async def on_stage_end(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
+        self.calls.append(('on_stage_end', stage, meta))
+
+    async def on_confirm(self, payload: ConfirmPayload) -> bool:
+        self.calls.append(('on_confirm', payload))
+        self.received_confirm_payload = payload
+        return self.confirm_result
+
+    async def on_complete(
+        self, report: RedTeamReport, *, output_dir: str | None = None, auto_save_path: str | None = None
+    ) -> None:
+        self.calls.append(('on_complete', report, output_dir))
+        self.received_complete_report = report
+        self.received_complete_output_dir = output_dir
 
 
 # ---------------------------------------------------------------------------
@@ -85,11 +113,11 @@ def _make_report(**kwargs: Any) -> RedTeamReport:
     """Build a minimal RedTeamReport suitable for use as a mock return value."""
     defaults: dict[str, Any] = dict(
         created_at=datetime.now(tz=timezone.utc),
-        description="Test report",
+        description='Test report',
         pipeline=Pipeline.DYNAMIC,
         framework=None,
-        categories_tested=["ASI01"],
-        tested_agents=["agent:gpt-4o-mini"],
+        categories_tested=['ASI01'],
+        tested_agents=['agent:gpt-4o-mini'],
         total_results=0,
         results=[],
         summary=ReportSummary(),
@@ -100,7 +128,7 @@ def _make_report(**kwargs: Any) -> RedTeamReport:
 
 def _make_agent_context() -> AgentContext:
     """Minimal AgentContext with no tools/memory so strategy count is low."""
-    return AgentContext(key="test-agent", tools=[], memory_stores=[])
+    return AgentContext(key='test-agent', tools=[], memory_stores=[])
 
 
 # ---------------------------------------------------------------------------
@@ -115,37 +143,32 @@ class TestStaticPipelineHooks:
         """Create minimal DataPoint stubs for the static evaluatorq mock."""
         from evaluatorq import DataPoint
 
-        return [
-            DataPoint(inputs={"id": str(i), "category": "ASI01", "messages": []})
-            for i in range(n)
-        ]
+        return [DataPoint(inputs={'id': str(i), 'category': 'ASI01', 'messages': []}) for i in range(n)]
 
     def _static_patches(self, datapoints: list[Any]) -> list[Any]:
         """Return the context manager patches common to static pipeline tests."""
         return [
             patch(
-                "evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.load_owasp_agentic_dataset",
+                'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.load_owasp_agentic_dataset',
                 return_value=datapoints,
             ),
             patch(
-                "evaluatorq.redteam.frameworks.owasp.evaluators.get_evaluator_for_category",
+                'evaluatorq.redteam.frameworks.owasp.evaluators.get_evaluator_for_category',
                 return_value=MagicMock(),
             ),
             patch(
-                "evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.create_owasp_evaluator",
+                'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.create_owasp_evaluator',
                 return_value=MagicMock(),
             ),
-            patch("evaluatorq.redteam.runtime.jobs.create_model_job", return_value=MagicMock()),
-            patch("evaluatorq.evaluatorq", new_callable=AsyncMock, return_value=[]),
+            patch('evaluatorq.redteam.runtime.jobs.create_model_job', return_value=MagicMock()),
+            patch('evaluatorq.evaluatorq', new_callable=AsyncMock, return_value=[]),
             patch(
-                "evaluatorq.redteam.reports.converters.static_evaluatorq_results_to_reports",
+                'evaluatorq.redteam.reports.converters.static_evaluatorq_results_to_reports',
                 return_value={},
             ),
             patch(
-                "evaluatorq.redteam.runner.resolve_backend",
-                return_value=MagicMock(
-                    resolve_context=AsyncMock(return_value=_make_agent_context())
-                ),
+                'evaluatorq.redteam.runner.resolve_backend',
+                return_value=MagicMock(resolve_context=AsyncMock(return_value=_make_agent_context())),
             ),
         ]
 
@@ -166,52 +189,52 @@ class TestStaticPipelineHooks:
         # hooks in the same order as the real implementation, but without
         # needing a real LLM or dataset.
         async def _fake_run_static(**kwargs: Any) -> RedTeamReport:
-            h = kwargs.get("hooks")
+            h = kwargs.get('hooks')
             if h is not None:
-                h.on_confirm(
-                    {
-                        "num_datapoints": 2,
-                        "mode": "static",
-                        "categories": ["ASI01"],
-                        "attack_model": "",
-                        "evaluator_model": "gpt-4o-mini",
-                        "max_turns": 1,
-                        "parallelism": 1,
-                        "target": "agent:gpt-4o-mini",
-                        "dataset_path": None,
-                        "vulnerabilities": [],
-                        "agent_context": None,
-                        "num_dynamic": None,
-                        "num_static": 2,
-                        "filtering_metadata": None,
-                    }
+                h.on_confirm({
+                    'num_datapoints': 2,
+                    'mode': 'static',
+                    'categories': ['ASI01'],
+                    'attack_model': '',
+                    'evaluator_model': 'gpt-4o-mini',
+                    'max_turns': 1,
+                    'parallelism': 1,
+                    'target': 'agent:gpt-4o-mini',
+                    'dataset_path': None,
+                    'vulnerabilities': [],
+                    'agent_context': None,
+                    'num_dynamic': None,
+                    'num_static': 2,
+                    'filtering_metadata': None,
+                })
+                h.on_stage_start(
+                    PipelineStage.ATTACK_EXECUTION, {'num_datapoints': 2, 'targets': ['agent:gpt-4o-mini']}
                 )
-                h.on_stage_start(PipelineStage.ATTACK_EXECUTION, {"num_datapoints": 2, "targets": ["agent:gpt-4o-mini"]})
-                h.on_stage_end(PipelineStage.ATTACK_EXECUTION, {"num_results": 0})
-                h.on_stage_start(PipelineStage.REPORT_GENERATION, {"num_results": 0})
-                h.on_stage_end(PipelineStage.REPORT_GENERATION, {"resistance_rate": 1.0, "elapsed_s": 0.1})
+                h.on_stage_end(PipelineStage.ATTACK_EXECUTION, {'num_results': 0})
+                h.on_stage_start(PipelineStage.REPORT_GENERATION, {'num_results': 0})
+                h.on_stage_end(PipelineStage.REPORT_GENERATION, {'resistance_rate': 1.0, 'elapsed_s': 0.1})
             return mock_report
 
         from evaluatorq.redteam.runner import red_team
 
-        with patch("evaluatorq.redteam.runner._run_static", side_effect=_fake_run_static):
-            await red_team("agent:gpt-4o-mini", mode="static", hooks=spy)
+        with patch('evaluatorq.redteam.runner._run_static', side_effect=_fake_run_static):
+            await red_team('agent:gpt-4o-mini', mode='static', hooks=spy)
 
         starts = spy.stage_starts()
         ends = spy.stage_ends()
 
         # on_confirm must come before any attack execution stages
-        confirm_idx = next(i for i, (name, *_) in enumerate(spy.calls) if name == "on_confirm")
+        confirm_idx = next(i for i, (name, *_) in enumerate(spy.calls) if name == 'on_confirm')
         first_attack_start_idx = next(
             (
                 i
                 for i, (name, *args) in enumerate(spy.calls)
-                if name == "on_stage_start" and args[0] == PipelineStage.ATTACK_EXECUTION
+                if name == 'on_stage_start' and args[0] == PipelineStage.ATTACK_EXECUTION
             ),
             None,
         )
-        assert first_attack_start_idx is not None, "ATTACK_EXECUTION start not found"
-        assert confirm_idx < first_attack_start_idx, "on_confirm must precede ATTACK_EXECUTION start"
+        assert first_attack_start_idx is not None, 'ATTACK_EXECUTION start not found'
+        assert confirm_idx < first_attack_start_idx, 'on_confirm must precede ATTACK_EXECUTION start'
 
         # ATTACK_EXECUTION must appear before REPORT_GENERATION
         assert PipelineStage.ATTACK_EXECUTION in starts
@@ -219,10 +242,10 @@ class TestStaticPipelineHooks:
         assert starts.index(PipelineStage.ATTACK_EXECUTION) < starts.index(PipelineStage.REPORT_GENERATION)
 
         # Every start must have a matching end
-        assert set(starts) == set(ends), "Mismatched stage starts vs ends"
+        assert set(starts) == set(ends), 'Mismatched stage starts vs ends'
 
         # on_complete must be the last recorded hook call (fired by red_team())
-        assert spy.method_names()[-1] == "on_complete"
+        assert spy.method_names()[-1] == 'on_complete'
 
     @pytest.mark.asyncio
     async def test_confirm_payload_structure_static(self) -> None:
@@ -232,60 +255,58 @@ class TestStaticPipelineHooks:
 
         with (
             patch(
-                "evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.load_owasp_agentic_dataset",
+                'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.load_owasp_agentic_dataset',
                 return_value=datapoints,
             ),
             patch(
-                "evaluatorq.redteam.frameworks.owasp.evaluators.get_evaluator_for_category",
+                'evaluatorq.redteam.frameworks.owasp.evaluators.get_evaluator_for_category',
                 return_value=MagicMock(),
             ),
             patch(
-                "evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.create_owasp_evaluator",
+                'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.create_owasp_evaluator',
                 return_value=MagicMock(),
             ),
-            patch("evaluatorq.redteam.runtime.jobs.create_model_job", return_value=MagicMock()),
-            patch("evaluatorq.evaluatorq", new_callable=AsyncMock, return_value=[]),
+            patch('evaluatorq.redteam.runtime.jobs.create_model_job', return_value=MagicMock()),
+            patch('evaluatorq.evaluatorq', new_callable=AsyncMock, return_value=[]),
             patch(
-                "evaluatorq.redteam.reports.converters.static_evaluatorq_results_to_reports",
+                'evaluatorq.redteam.reports.converters.static_evaluatorq_results_to_reports',
                 return_value={},
             ),
             patch(
-                "evaluatorq.redteam.runner.resolve_backend",
-                return_value=MagicMock(
-                    resolve_context=AsyncMock(return_value=_make_agent_context())
-                ),
+                'evaluatorq.redteam.runner.resolve_backend',
+                return_value=MagicMock(resolve_context=AsyncMock(return_value=_make_agent_context())),
             ),
         ):
             from evaluatorq.redteam.runner import _run_static
 
             await _run_static(
-                targets=["agent:gpt-4o-mini"],
-                categories=["ASI01"],
-                evaluator_model="gpt-4o-mini",
+                targets=['agent:gpt-4o-mini'],
+                categories=['ASI01'],
+                evaluator_model='gpt-4o-mini',
                 parallelism=2,
                 max_static_datapoints=None,
                 dataset=None,
-                description="test",
+                description='test',
                 hooks=spy,
             )
 
         payload = spy.received_confirm_payload
-        assert payload is not None, "on_confirm was never called"
+        assert payload is not None, 'on_confirm was never called'
 
         # Required keys for static mode
-        assert "num_datapoints" in payload
-        assert "mode" in payload
-        assert payload["mode"] == "static"
-        assert "categories" in payload
-        assert "evaluator_model" in payload
-        assert "parallelism" in payload
-        assert "target" in payload
+        assert 'num_datapoints' in payload
+        assert 'mode' in payload
+        assert payload['mode'] == 'static'
+        assert 'categories' in payload
+        assert 'evaluator_model' in payload
+        assert 'parallelism' in payload
+        assert 'target' in payload
 
         # num_datapoints must match the stub dataset size
-        assert payload["num_datapoints"] == 3
+        assert payload['num_datapoints'] == 3
 
         # parallelism passes through correctly
-        assert payload["parallelism"] == 2
+        assert payload['parallelism'] == 2
 
     @pytest.mark.asyncio
     async def test_confirm_rejection_aborts_static(self) -> None:
@@ -295,36 +316,141 @@ class TestStaticPipelineHooks:
 
         with (
             patch(
-                "evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.load_owasp_agentic_dataset",
+                'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.load_owasp_agentic_dataset',
                 return_value=datapoints,
             ),
             patch(
-                "evaluatorq.redteam.frameworks.owasp.evaluators.get_evaluator_for_category",
+                'evaluatorq.redteam.frameworks.owasp.evaluators.get_evaluator_for_category',
                 return_value=MagicMock(),
             ),
             patch(
-                "evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.create_owasp_evaluator",
+                'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.create_owasp_evaluator',
                 return_value=MagicMock(),
             ),
-            patch("evaluatorq.redteam.runtime.jobs.create_model_job", return_value=MagicMock()),
-            patch("evaluatorq.evaluatorq", new_callable=AsyncMock, return_value=[]) as mock_eval,
+            patch('evaluatorq.redteam.runtime.jobs.create_model_job', return_value=MagicMock()),
+            patch('evaluatorq.evaluatorq', new_callable=AsyncMock, return_value=[]) as mock_eval,
         ):
             from evaluatorq.redteam.runner import _run_static
 
-            with pytest.raises(CancelledError, match="cancelled by confirmation callback"):
+            with pytest.raises(CancelledError, match='cancelled by confirmation callback'):
                 await _run_static(
-                    targets=["agent:gpt-4o-mini"],
-                    categories=["ASI01"],
-                    evaluator_model="gpt-4o-mini",
+                    targets=['agent:gpt-4o-mini'],
+                    categories=['ASI01'],
+                    evaluator_model='gpt-4o-mini',
                     parallelism=1,
                     max_static_datapoints=None,
                     dataset=None,
-                    description="test",
+                    description='test',
                     hooks=spy,
                 )
 
             # Pipeline must have aborted before reaching evaluatorq()
             mock_eval.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_async_on_confirm_rejection_aborts_static(self) -> None:
+        """Async twin: an async on_confirm returning False aborts via the real
+        runner's await_maybe gate (not the sync path)."""
+        spy = AsyncSpyHooks(confirm_result=False)
+        datapoints = self._make_datapoints(1)
+
+        with (
+            patch(
+                'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.load_owasp_agentic_dataset',
+                return_value=datapoints,
+            ),
+            patch(
+                'evaluatorq.redteam.frameworks.owasp.evaluators.get_evaluator_for_category',
+                return_value=MagicMock(),
+            ),
+            patch(
+                'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.create_owasp_evaluator',
+                return_value=MagicMock(),
+            ),
+            patch('evaluatorq.redteam.runtime.jobs.create_model_job', return_value=MagicMock()),
+            patch('evaluatorq.evaluatorq', new_callable=AsyncMock, return_value=[]) as mock_eval,
+        ):
+            from evaluatorq.redteam.runner import _run_static
+
+            with pytest.raises(CancelledError, match='cancelled by confirmation callback'):
+                await _run_static(
+                    targets=['agent:gpt-4o-mini'],
+                    categories=['ASI01'],
+                    evaluator_model='gpt-4o-mini',
+                    parallelism=1,
+                    max_static_datapoints=None,
+                    dataset=None,
+                    description='test',
+                    hooks=spy,
+                )
+
+            mock_eval.assert_not_awaited()
+            assert 'on_confirm' in spy.method_names()  # async hook actually ran
+
+    @pytest.mark.asyncio
+    async def test_async_hooks_drive_full_static_run(self) -> None:
+        """An async hook flows through the real _run_static: async on_confirm
+        (True) + paired on_stage_start/end all fire via await_maybe."""
+        spy = AsyncSpyHooks(confirm_result=True)
+        datapoints = self._make_datapoints(2)
+
+        with (
+            patch(
+                'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.load_owasp_agentic_dataset',
+                return_value=datapoints,
+            ),
+            patch(
+                'evaluatorq.redteam.frameworks.owasp.evaluators.get_evaluator_for_category',
+                return_value=MagicMock(),
+            ),
+            patch(
+                'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.create_owasp_evaluator',
+                return_value=MagicMock(),
+            ),
+            patch('evaluatorq.redteam.runtime.jobs.create_model_job', return_value=MagicMock()),
+            patch('evaluatorq.evaluatorq', new_callable=AsyncMock, return_value=[]),
+            patch(
+                'evaluatorq.redteam.runner.resolve_backend',
+                return_value=MagicMock(resolve_context=AsyncMock(return_value=_make_agent_context())),
+            ),
+        ):
+            from evaluatorq.redteam.runner import _run_static
+
+            await _run_static(
+                targets=['agent:gpt-4o-mini'],
+                categories=['ASI01'],
+                evaluator_model='gpt-4o-mini',
+                parallelism=1,
+                max_static_datapoints=None,
+                dataset=None,
+                description='test',
+                hooks=spy,
+            )
+
+        names = spy.method_names()
+        assert names[0] == 'on_confirm'  # async gate ran first
+        assert 'on_stage_start' in names and 'on_stage_end' in names
+        # Stages are balanced (each start has a matching end).
+        assert names.count('on_stage_start') == names.count('on_stage_end')
+
+    @pytest.mark.asyncio
+    async def test_async_on_complete_fires_via_red_team(self) -> None:
+        """red_team awaits an async on_complete through await_maybe and hands it
+        the final report."""
+        from evaluatorq.redteam.runner import red_team
+
+        mock_report = _make_report(pipeline=Pipeline.STATIC)
+        spy = AsyncSpyHooks()
+        with patch(
+            'evaluatorq.redteam.runner._run_static',
+            new_callable=AsyncMock,
+            return_value=mock_report,
+        ):
+            result = await red_team('agent:gpt-4o-mini', mode='static', hooks=spy, output_dir=None)
+
+        assert result is mock_report
+        assert spy.received_complete_report is mock_report
+        assert spy.method_names()[-1] == 'on_complete'
 
     @pytest.mark.asyncio
     async def test_on_complete_static_no_output_dir(self) -> None:
@@ -334,14 +460,14 @@ class TestStaticPipelineHooks:
         mock_report = _make_report(pipeline=Pipeline.STATIC)
 
         with patch(
-            "evaluatorq.redteam.runner._run_static",
+            'evaluatorq.redteam.runner._run_static',
             new_callable=AsyncMock,
             return_value=mock_report,
         ):
             spy = SpyHooks()
             result = await red_team(
-                "agent:gpt-4o-mini",
-                mode="static",
+                'agent:gpt-4o-mini',
+                mode='static',
                 hooks=spy,
                 output_dir=None,
             )
@@ -358,14 +484,14 @@ class TestStaticPipelineHooks:
         mock_report = _make_report(pipeline=Pipeline.STATIC)
 
         with patch(
-            "evaluatorq.redteam.runner._run_static",
+            'evaluatorq.redteam.runner._run_static',
             new_callable=AsyncMock,
             return_value=mock_report,
         ):
             spy = SpyHooks()
             result = await red_team(
-                "agent:gpt-4o-mini",
-                mode="static",
+                'agent:gpt-4o-mini',
+                mode='static',
                 hooks=spy,
                 output_dir=str(tmp_path),
             )
@@ -398,11 +524,11 @@ class TestDynamicPipelineHooksViaRunner:
         spy = SpyHooks()
 
         with patch(
-            "evaluatorq.redteam.runner._run_dynamic_or_hybrid",
+            'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
             new_callable=AsyncMock,
             return_value=mock_report,
         ):
-            result = await red_team("agent:gpt-4o-mini", mode="dynamic", hooks=spy)
+            result = await red_team('agent:gpt-4o-mini', mode='dynamic', hooks=spy)
 
         assert result is mock_report
         assert spy.received_complete_report is mock_report
@@ -416,11 +542,11 @@ class TestDynamicPipelineHooksViaRunner:
         spy = SpyHooks()
 
         with patch(
-            "evaluatorq.redteam.runner._run_dynamic_or_hybrid",
+            'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
             new_callable=AsyncMock,
             return_value=mock_report,
         ):
-            await red_team("agent:gpt-4o-mini", mode="dynamic", hooks=spy)
+            await red_team('agent:gpt-4o-mini', mode='dynamic', hooks=spy)
 
         assert isinstance(spy.received_complete_report, RedTeamReport)
 
@@ -433,13 +559,13 @@ class TestDynamicPipelineHooksViaRunner:
         spy = SpyHooks()
 
         with patch(
-            "evaluatorq.redteam.runner._run_dynamic_or_hybrid",
+            'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
             new_callable=AsyncMock,
             return_value=mock_report,
         ):
-            await red_team("agent:gpt-4o-mini", mode="dynamic", hooks=spy)
+            await red_team('agent:gpt-4o-mini', mode='dynamic', hooks=spy)
 
-        assert spy.method_names()[-1] == "on_complete"
+        assert spy.method_names()[-1] == 'on_complete'
 
 
 # ---------------------------------------------------------------------------
@@ -469,82 +595,82 @@ class TestDynamicInternalStageOrdering:
 
         spy = SpyHooks()
         agent_ctx = _make_agent_context()
-        datapoints = [DataPoint(inputs={"id": "1", "category": "ASI01", "messages": []})]
+        datapoints = [DataPoint(inputs={'id': '1', 'category': 'ASI01', 'messages': []})]
         mock_report = _make_report()
         backend_mock = self._build_backend_mock(agent_ctx)
 
         with (
             patch(
-                "evaluatorq.redteam.runner.resolve_backend",
+                'evaluatorq.redteam.runner.resolve_backend',
                 return_value=backend_mock,
             ),
             patch(
-                "evaluatorq.redteam.adaptive.strategy_registry.select_applicable_strategies_for_vulnerability",
+                'evaluatorq.redteam.adaptive.strategy_registry.select_applicable_strategies_for_vulnerability',
                 return_value=[],
             ),
             patch(
-                "evaluatorq.redteam.adaptive.strategy_registry.select_applicable_strategies",
+                'evaluatorq.redteam.adaptive.strategy_registry.select_applicable_strategies',
                 return_value=[],
             ),
             patch(
-                "evaluatorq.redteam.adaptive.pipeline.generate_dynamic_datapoints_for_vulnerabilities",
+                'evaluatorq.redteam.adaptive.pipeline.generate_dynamic_datapoints_for_vulnerabilities',
                 new_callable=AsyncMock,
                 return_value=(datapoints, {}),
             ),
             patch(
-                "evaluatorq.redteam.adaptive.pipeline.generate_dynamic_datapoints",
+                'evaluatorq.redteam.adaptive.pipeline.generate_dynamic_datapoints',
                 new_callable=AsyncMock,
                 return_value=(datapoints, {}),
             ),
             patch(
-                "evaluatorq.redteam.adaptive.pipeline.create_dynamic_redteam_job",
-                return_value=AsyncMock(return_value={"name": "test", "output": "ok"}),
+                'evaluatorq.redteam.adaptive.pipeline.create_dynamic_redteam_job',
+                return_value=AsyncMock(return_value={'name': 'test', 'output': 'ok'}),
             ),
             patch(
-                "evaluatorq.redteam.adaptive.pipeline.create_dynamic_evaluator",
+                'evaluatorq.redteam.adaptive.pipeline.create_dynamic_evaluator',
                 return_value=MagicMock(),
             ),
             patch(
-                "evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.create_owasp_evaluator",
+                'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.create_owasp_evaluator',
                 return_value=MagicMock(),
             ),
-            patch("evaluatorq.evaluatorq", new_callable=AsyncMock, return_value=[]),
+            patch('evaluatorq.evaluatorq', new_callable=AsyncMock, return_value=[]),
             patch(
-                "evaluatorq.redteam.adaptive.orchestrator.ProgressDisplay",
+                'evaluatorq.redteam.adaptive.orchestrator.ProgressDisplay',
                 return_value=MagicMock(
                     __aenter__=AsyncMock(return_value=None),
                     __aexit__=AsyncMock(return_value=None),
                 ),
             ),
             patch(
-                "evaluatorq.redteam.reports.converters.dynamic_evaluatorq_results_to_report",
+                'evaluatorq.redteam.reports.converters.dynamic_evaluatorq_results_to_report',
                 return_value=mock_report,
             ),
             patch(
-                "evaluatorq.redteam.reports.converters.merge_reports",
+                'evaluatorq.redteam.reports.converters.merge_reports',
                 return_value=mock_report,
             ),
             patch(
-                "evaluatorq.redteam.reports.converters.static_results_to_report",
+                'evaluatorq.redteam.reports.converters.static_results_to_report',
                 return_value=mock_report,
             ),
-            patch("evaluatorq.tracing.init_tracing_if_needed", new_callable=AsyncMock),
-            patch("evaluatorq.tracing.capture_parent_context", new_callable=AsyncMock, return_value=None),
+            patch('evaluatorq.tracing.init_tracing_if_needed', new_callable=AsyncMock),
+            patch('evaluatorq.tracing.capture_parent_context', new_callable=AsyncMock, return_value=None),
             patch(
-                "evaluatorq.redteam.tracing.with_redteam_span",
+                'evaluatorq.redteam.tracing.with_redteam_span',
                 return_value=MagicMock(
                     __aenter__=AsyncMock(return_value=MagicMock()),
                     __aexit__=AsyncMock(return_value=None),
                 ),
             ),
-            patch("evaluatorq.redteam.runner._send_cleaned_results", new_callable=AsyncMock),
+            patch('evaluatorq.redteam.runner._send_cleaned_results', new_callable=AsyncMock),
         ):
             await _run_dynamic_or_hybrid(
-                targets=["agent:gpt-4o-mini"],
+                targets=['agent:gpt-4o-mini'],
                 mode=Pipeline.DYNAMIC,
-                categories=["ASI01"],
-                attack_model="gpt-4o-mini",
-                evaluator_model="gpt-4o-mini",
+                categories=['ASI01'],
+                attack_model='gpt-4o-mini',
+                evaluator_model='gpt-4o-mini',
                 resolved_vulns=None,
                 max_turns=1,
                 max_per_category=1,
@@ -555,7 +681,7 @@ class TestDynamicInternalStageOrdering:
                 max_static_datapoints=None,
                 cleanup_memory=False,
                 llm_client=MagicMock(),
-                description="test",
+                description='test',
                 dataset=None,
                 hooks=spy,
                 output_dir=None,
@@ -573,8 +699,8 @@ class TestDynamicInternalStageOrdering:
             PipelineStage.REPORT_GENERATION,
         }
         for stage in required_stages:
-            assert stage in starts, f"{stage} missing from on_stage_start calls"
-            assert stage in ends, f"{stage} missing from on_stage_end calls"
+            assert stage in starts, f'{stage} missing from on_stage_start calls'
+            assert stage in ends, f'{stage} missing from on_stage_end calls'
 
         # Every start must have a matching end
         assert set(starts) == set(ends)
@@ -587,82 +713,82 @@ class TestDynamicInternalStageOrdering:
 
         spy = SpyHooks()
         agent_ctx = _make_agent_context()
-        datapoints = [DataPoint(inputs={"id": "1", "category": "ASI01", "messages": []})]
+        datapoints = [DataPoint(inputs={'id': '1', 'category': 'ASI01', 'messages': []})]
         mock_report = _make_report()
         backend_mock = self._build_backend_mock(agent_ctx)
 
         with (
             patch(
-                "evaluatorq.redteam.runner.resolve_backend",
+                'evaluatorq.redteam.runner.resolve_backend',
                 return_value=backend_mock,
             ),
             patch(
-                "evaluatorq.redteam.adaptive.strategy_registry.select_applicable_strategies_for_vulnerability",
+                'evaluatorq.redteam.adaptive.strategy_registry.select_applicable_strategies_for_vulnerability',
                 return_value=[],
             ),
             patch(
-                "evaluatorq.redteam.adaptive.strategy_registry.select_applicable_strategies",
+                'evaluatorq.redteam.adaptive.strategy_registry.select_applicable_strategies',
                 return_value=[],
             ),
             patch(
-                "evaluatorq.redteam.adaptive.pipeline.generate_dynamic_datapoints_for_vulnerabilities",
+                'evaluatorq.redteam.adaptive.pipeline.generate_dynamic_datapoints_for_vulnerabilities',
                 new_callable=AsyncMock,
                 return_value=(datapoints, {}),
             ),
             patch(
-                "evaluatorq.redteam.adaptive.pipeline.generate_dynamic_datapoints",
+                'evaluatorq.redteam.adaptive.pipeline.generate_dynamic_datapoints',
                 new_callable=AsyncMock,
                 return_value=(datapoints, {}),
             ),
             patch(
-                "evaluatorq.redteam.adaptive.pipeline.create_dynamic_redteam_job",
-                return_value=AsyncMock(return_value={"name": "test", "output": "ok"}),
+                'evaluatorq.redteam.adaptive.pipeline.create_dynamic_redteam_job',
+                return_value=AsyncMock(return_value={'name': 'test', 'output': 'ok'}),
             ),
             patch(
-                "evaluatorq.redteam.adaptive.pipeline.create_dynamic_evaluator",
+                'evaluatorq.redteam.adaptive.pipeline.create_dynamic_evaluator',
                 return_value=MagicMock(),
             ),
             patch(
-                "evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.create_owasp_evaluator",
+                'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.create_owasp_evaluator',
                 return_value=MagicMock(),
             ),
-            patch("evaluatorq.evaluatorq", new_callable=AsyncMock, return_value=[]),
+            patch('evaluatorq.evaluatorq', new_callable=AsyncMock, return_value=[]),
             patch(
-                "evaluatorq.redteam.adaptive.orchestrator.ProgressDisplay",
+                'evaluatorq.redteam.adaptive.orchestrator.ProgressDisplay',
                 return_value=MagicMock(
                     __aenter__=AsyncMock(return_value=None),
                     __aexit__=AsyncMock(return_value=None),
                 ),
             ),
             patch(
-                "evaluatorq.redteam.reports.converters.dynamic_evaluatorq_results_to_report",
+                'evaluatorq.redteam.reports.converters.dynamic_evaluatorq_results_to_report',
                 return_value=mock_report,
             ),
             patch(
-                "evaluatorq.redteam.reports.converters.merge_reports",
+                'evaluatorq.redteam.reports.converters.merge_reports',
                 return_value=mock_report,
             ),
             patch(
-                "evaluatorq.redteam.reports.converters.static_results_to_report",
+                'evaluatorq.redteam.reports.converters.static_results_to_report',
                 return_value=mock_report,
             ),
-            patch("evaluatorq.tracing.init_tracing_if_needed", new_callable=AsyncMock),
-            patch("evaluatorq.tracing.capture_parent_context", new_callable=AsyncMock, return_value=None),
+            patch('evaluatorq.tracing.init_tracing_if_needed', new_callable=AsyncMock),
+            patch('evaluatorq.tracing.capture_parent_context', new_callable=AsyncMock, return_value=None),
             patch(
-                "evaluatorq.redteam.tracing.with_redteam_span",
+                'evaluatorq.redteam.tracing.with_redteam_span',
                 return_value=MagicMock(
                     __aenter__=AsyncMock(return_value=MagicMock()),
                     __aexit__=AsyncMock(return_value=None),
                 ),
             ),
-            patch("evaluatorq.redteam.runner._send_cleaned_results", new_callable=AsyncMock),
+            patch('evaluatorq.redteam.runner._send_cleaned_results', new_callable=AsyncMock),
         ):
             await _run_dynamic_or_hybrid(
-                targets=["agent:gpt-4o-mini"],
+                targets=['agent:gpt-4o-mini'],
                 mode=Pipeline.DYNAMIC,
-                categories=["ASI01"],
-                attack_model="gpt-4o-mini",
-                evaluator_model="gpt-4o-mini",
+                categories=['ASI01'],
+                attack_model='gpt-4o-mini',
+                evaluator_model='gpt-4o-mini',
                 resolved_vulns=None,
                 max_turns=1,
                 max_per_category=1,
@@ -673,7 +799,7 @@ class TestDynamicInternalStageOrdering:
                 max_static_datapoints=None,
                 cleanup_memory=False,
                 llm_client=MagicMock(),
-                description="test",
+                description='test',
                 dataset=None,
                 hooks=spy,
                 output_dir=None,
@@ -700,7 +826,7 @@ class TestDynamicConfirmPayload:
 
         spy = SpyHooks()
         agent_ctx = _make_agent_context()
-        datapoints = [DataPoint(inputs={"id": "1", "category": "ASI01", "messages": []})]
+        datapoints = [DataPoint(inputs={'id': '1', 'category': 'ASI01', 'messages': []})]
         mock_report = _make_report()
         backend_mock = MagicMock(
             resolve_context=AsyncMock(return_value=agent_ctx),
@@ -709,72 +835,72 @@ class TestDynamicConfirmPayload:
 
         with (
             patch(
-                "evaluatorq.redteam.runner.resolve_backend",
+                'evaluatorq.redteam.runner.resolve_backend',
                 return_value=backend_mock,
             ),
             patch(
-                "evaluatorq.redteam.adaptive.strategy_registry.select_applicable_strategies_for_vulnerability",
+                'evaluatorq.redteam.adaptive.strategy_registry.select_applicable_strategies_for_vulnerability',
                 return_value=[],
             ),
             patch(
-                "evaluatorq.redteam.adaptive.strategy_registry.select_applicable_strategies",
+                'evaluatorq.redteam.adaptive.strategy_registry.select_applicable_strategies',
                 return_value=[],
             ),
             patch(
-                "evaluatorq.redteam.adaptive.pipeline.generate_dynamic_datapoints_for_vulnerabilities",
+                'evaluatorq.redteam.adaptive.pipeline.generate_dynamic_datapoints_for_vulnerabilities',
                 new_callable=AsyncMock,
                 return_value=(datapoints, {}),
             ),
             patch(
-                "evaluatorq.redteam.adaptive.pipeline.generate_dynamic_datapoints",
+                'evaluatorq.redteam.adaptive.pipeline.generate_dynamic_datapoints',
                 new_callable=AsyncMock,
                 return_value=(datapoints, {}),
             ),
             patch(
-                "evaluatorq.redteam.adaptive.pipeline.create_dynamic_redteam_job",
-                return_value=AsyncMock(return_value={"name": "test", "output": "ok"}),
+                'evaluatorq.redteam.adaptive.pipeline.create_dynamic_redteam_job',
+                return_value=AsyncMock(return_value={'name': 'test', 'output': 'ok'}),
             ),
             patch(
-                "evaluatorq.redteam.adaptive.pipeline.create_dynamic_evaluator",
+                'evaluatorq.redteam.adaptive.pipeline.create_dynamic_evaluator',
                 return_value=MagicMock(),
             ),
-            patch("evaluatorq.evaluatorq", new_callable=AsyncMock, return_value=[]),
+            patch('evaluatorq.evaluatorq', new_callable=AsyncMock, return_value=[]),
             patch(
-                "evaluatorq.redteam.adaptive.orchestrator.ProgressDisplay",
+                'evaluatorq.redteam.adaptive.orchestrator.ProgressDisplay',
                 return_value=MagicMock(
                     __aenter__=AsyncMock(return_value=None),
                     __aexit__=AsyncMock(return_value=None),
                 ),
             ),
             patch(
-                "evaluatorq.redteam.reports.converters.dynamic_evaluatorq_results_to_report",
+                'evaluatorq.redteam.reports.converters.dynamic_evaluatorq_results_to_report',
                 return_value=mock_report,
             ),
             patch(
-                "evaluatorq.redteam.reports.converters.merge_reports",
+                'evaluatorq.redteam.reports.converters.merge_reports',
                 return_value=mock_report,
             ),
             patch(
-                "evaluatorq.redteam.reports.converters.static_results_to_report",
+                'evaluatorq.redteam.reports.converters.static_results_to_report',
                 return_value=mock_report,
             ),
-            patch("evaluatorq.tracing.init_tracing_if_needed", new_callable=AsyncMock),
-            patch("evaluatorq.tracing.capture_parent_context", new_callable=AsyncMock, return_value=None),
+            patch('evaluatorq.tracing.init_tracing_if_needed', new_callable=AsyncMock),
+            patch('evaluatorq.tracing.capture_parent_context', new_callable=AsyncMock, return_value=None),
             patch(
-                "evaluatorq.redteam.tracing.with_redteam_span",
+                'evaluatorq.redteam.tracing.with_redteam_span',
                 return_value=MagicMock(
                     __aenter__=AsyncMock(return_value=MagicMock()),
                     __aexit__=AsyncMock(return_value=None),
                 ),
             ),
-            patch("evaluatorq.redteam.runner._send_cleaned_results", new_callable=AsyncMock),
+            patch('evaluatorq.redteam.runner._send_cleaned_results', new_callable=AsyncMock),
         ):
             await _run_dynamic_or_hybrid(
-                targets=["agent:gpt-4o-mini"],
+                targets=['agent:gpt-4o-mini'],
                 mode=Pipeline.DYNAMIC,
-                categories=["ASI01"],
-                attack_model="gpt-4o-mini",
-                evaluator_model="gpt-4o-mini",
+                categories=['ASI01'],
+                attack_model='gpt-4o-mini',
+                evaluator_model='gpt-4o-mini',
                 resolved_vulns=None,
                 max_turns=3,
                 max_per_category=2,
@@ -785,7 +911,7 @@ class TestDynamicConfirmPayload:
                 max_static_datapoints=None,
                 cleanup_memory=False,
                 llm_client=MagicMock(),
-                description="test",
+                description='test',
                 dataset=None,
                 hooks=spy,
                 output_dir=None,
@@ -793,34 +919,34 @@ class TestDynamicConfirmPayload:
             )
 
         payload = spy.received_confirm_payload
-        assert payload is not None, "on_confirm was never called"
+        assert payload is not None, 'on_confirm was never called'
 
         # Mandatory keys present in the dynamic ConfirmPayload
         required_keys = {
-            "num_datapoints",
-            "categories",
-            "attack_model",
-            "evaluator_model",
-            "max_turns",
-            "parallelism",
-            "mode",
-            "target",
+            'num_datapoints',
+            'categories',
+            'attack_model',
+            'evaluator_model',
+            'max_turns',
+            'parallelism',
+            'mode',
+            'target',
         }
         for key in required_keys:
-            assert key in payload, f"ConfirmPayload missing key: {key!r}"
+            assert key in payload, f'ConfirmPayload missing key: {key!r}'
 
         # Cast to plain dict so item access is type-safe after the membership checks above.
         payload_dict: dict[str, Any] = dict(payload)
 
         # mode must be "dynamic"
-        assert payload_dict["mode"] == "dynamic"
+        assert payload_dict['mode'] == 'dynamic'
 
         # parallelism and max_turns pass through unchanged
-        assert payload_dict["parallelism"] == 4
-        assert payload_dict["max_turns"] == 3
+        assert payload_dict['parallelism'] == 4
+        assert payload_dict['max_turns'] == 3
 
         # target reflects the input target string
-        assert "gpt-4o-mini" in payload_dict["target"]
+        assert 'gpt-4o-mini' in payload_dict['target']
 
     @pytest.mark.asyncio
     async def test_dynamic_confirm_rejection_aborts_before_datapoint_generation(self) -> None:
@@ -838,42 +964,42 @@ class TestDynamicConfirmPayload:
 
         with (
             patch(
-                "evaluatorq.redteam.runner.resolve_backend",
+                'evaluatorq.redteam.runner.resolve_backend',
                 return_value=backend_mock,
             ),
             patch(
-                "evaluatorq.redteam.adaptive.strategy_registry.select_applicable_strategies_for_vulnerability",
+                'evaluatorq.redteam.adaptive.strategy_registry.select_applicable_strategies_for_vulnerability',
                 return_value=[],
             ),
             patch(
-                "evaluatorq.redteam.adaptive.strategy_registry.select_applicable_strategies",
+                'evaluatorq.redteam.adaptive.strategy_registry.select_applicable_strategies',
                 return_value=[],
             ),
             patch(
-                "evaluatorq.redteam.adaptive.pipeline.generate_dynamic_datapoints_for_vulnerabilities",
+                'evaluatorq.redteam.adaptive.pipeline.generate_dynamic_datapoints_for_vulnerabilities',
                 gen_mock,
             ),
             patch(
-                "evaluatorq.redteam.adaptive.pipeline.generate_dynamic_datapoints",
+                'evaluatorq.redteam.adaptive.pipeline.generate_dynamic_datapoints',
                 gen_mock,
             ),
-            patch("evaluatorq.tracing.init_tracing_if_needed", new_callable=AsyncMock),
-            patch("evaluatorq.tracing.capture_parent_context", new_callable=AsyncMock, return_value=None),
+            patch('evaluatorq.tracing.init_tracing_if_needed', new_callable=AsyncMock),
+            patch('evaluatorq.tracing.capture_parent_context', new_callable=AsyncMock, return_value=None),
             patch(
-                "evaluatorq.redteam.tracing.with_redteam_span",
+                'evaluatorq.redteam.tracing.with_redteam_span',
                 return_value=MagicMock(
                     __aenter__=AsyncMock(return_value=MagicMock()),
                     __aexit__=AsyncMock(return_value=None),
                 ),
             ),
         ):
-            with pytest.raises(CancelledError, match="cancelled by confirmation callback"):
+            with pytest.raises(CancelledError, match='cancelled by confirmation callback'):
                 await _run_dynamic_or_hybrid(
-                    targets=["agent:gpt-4o-mini"],
+                    targets=['agent:gpt-4o-mini'],
                     mode=Pipeline.DYNAMIC,
-                    categories=["ASI01"],
-                    attack_model="gpt-4o-mini",
-                    evaluator_model="gpt-4o-mini",
+                    categories=['ASI01'],
+                    attack_model='gpt-4o-mini',
+                    evaluator_model='gpt-4o-mini',
                     resolved_vulns=None,
                     max_turns=1,
                     max_per_category=1,
@@ -884,7 +1010,7 @@ class TestDynamicConfirmPayload:
                     max_static_datapoints=None,
                     cleanup_memory=False,
                     llm_client=MagicMock(),
-                    description="test",
+                    description='test',
                     dataset=None,
                     hooks=spy,
                     output_dir=None,
@@ -902,7 +1028,7 @@ class TestDynamicConfirmPayload:
 
         spy = SpyHooks()
         agent_ctx = _make_agent_context()
-        datapoints = [DataPoint(inputs={"id": "1", "category": "ASI01", "messages": []})]
+        datapoints = [DataPoint(inputs={'id': '1', 'category': 'ASI01', 'messages': []})]
         mock_report = _make_report()
         backend_mock = MagicMock(
             resolve_context=AsyncMock(return_value=agent_ctx),
@@ -911,68 +1037,68 @@ class TestDynamicConfirmPayload:
 
         with (
             patch(
-                "evaluatorq.redteam.runner.resolve_backend",
+                'evaluatorq.redteam.runner.resolve_backend',
                 return_value=backend_mock,
             ),
             patch(
-                "evaluatorq.redteam.adaptive.strategy_registry.select_applicable_strategies_for_vulnerability",
+                'evaluatorq.redteam.adaptive.strategy_registry.select_applicable_strategies_for_vulnerability',
                 return_value=[],
             ),
             patch(
-                "evaluatorq.redteam.adaptive.strategy_registry.select_applicable_strategies",
+                'evaluatorq.redteam.adaptive.strategy_registry.select_applicable_strategies',
                 return_value=[],
             ),
             patch(
-                "evaluatorq.redteam.adaptive.pipeline.generate_dynamic_datapoints",
+                'evaluatorq.redteam.adaptive.pipeline.generate_dynamic_datapoints',
                 new_callable=AsyncMock,
                 return_value=(datapoints, {}),
             ),
             patch(
-                "evaluatorq.redteam.adaptive.pipeline.generate_dynamic_datapoints_for_vulnerabilities",
+                'evaluatorq.redteam.adaptive.pipeline.generate_dynamic_datapoints_for_vulnerabilities',
                 new_callable=AsyncMock,
                 return_value=(datapoints, {}),
             ),
             patch(
-                "evaluatorq.redteam.adaptive.pipeline.create_dynamic_redteam_job",
-                return_value=AsyncMock(return_value={"name": "test", "output": "ok"}),
+                'evaluatorq.redteam.adaptive.pipeline.create_dynamic_redteam_job',
+                return_value=AsyncMock(return_value={'name': 'test', 'output': 'ok'}),
             ),
             patch(
-                "evaluatorq.redteam.adaptive.pipeline.create_dynamic_evaluator",
+                'evaluatorq.redteam.adaptive.pipeline.create_dynamic_evaluator',
                 return_value=MagicMock(),
             ),
-            patch("evaluatorq.evaluatorq", new_callable=AsyncMock, return_value=[]),
+            patch('evaluatorq.evaluatorq', new_callable=AsyncMock, return_value=[]),
             patch(
-                "evaluatorq.redteam.adaptive.orchestrator.ProgressDisplay",
+                'evaluatorq.redteam.adaptive.orchestrator.ProgressDisplay',
                 return_value=MagicMock(
                     __aenter__=AsyncMock(return_value=None),
                     __aexit__=AsyncMock(return_value=None),
                 ),
             ),
             patch(
-                "evaluatorq.redteam.reports.converters.static_results_to_report",
+                'evaluatorq.redteam.reports.converters.static_results_to_report',
                 return_value=mock_report,
             ),
             patch(
-                "evaluatorq.redteam.reports.converters.merge_reports",
+                'evaluatorq.redteam.reports.converters.merge_reports',
                 return_value=mock_report,
             ),
-            patch("evaluatorq.tracing.init_tracing_if_needed", new_callable=AsyncMock),
-            patch("evaluatorq.tracing.capture_parent_context", new_callable=AsyncMock, return_value=None),
+            patch('evaluatorq.tracing.init_tracing_if_needed', new_callable=AsyncMock),
+            patch('evaluatorq.tracing.capture_parent_context', new_callable=AsyncMock, return_value=None),
             patch(
-                "evaluatorq.redteam.tracing.with_redteam_span",
+                'evaluatorq.redteam.tracing.with_redteam_span',
                 return_value=MagicMock(
                     __aenter__=AsyncMock(return_value=MagicMock()),
                     __aexit__=AsyncMock(return_value=None),
                 ),
             ),
-            patch("evaluatorq.redteam.runner._send_cleaned_results", new_callable=AsyncMock),
+            patch('evaluatorq.redteam.runner._send_cleaned_results', new_callable=AsyncMock),
         ):
             await _run_dynamic_or_hybrid(
-                targets=["agent:gpt-4o-mini"],
+                targets=['agent:gpt-4o-mini'],
                 mode=Pipeline.DYNAMIC,
-                categories=["ASI01"],
-                attack_model="gpt-4o-mini",
-                evaluator_model="gpt-4o-mini",
+                categories=['ASI01'],
+                attack_model='gpt-4o-mini',
+                evaluator_model='gpt-4o-mini',
                 resolved_vulns=None,
                 max_turns=1,
                 max_per_category=None,
@@ -983,7 +1109,7 @@ class TestDynamicConfirmPayload:
                 max_static_datapoints=None,
                 cleanup_memory=False,
                 llm_client=MagicMock(),
-                description="test",
+                description='test',
                 dataset=None,
                 hooks=spy,
                 output_dir=None,
@@ -993,7 +1119,7 @@ class TestDynamicConfirmPayload:
         payload = spy.received_confirm_payload
         assert payload is not None
         # 'vulnerabilities' key must be present (value may be None when no vulns resolved)
-        assert "vulnerabilities" in payload
+        assert 'vulnerabilities' in payload
 
 
 # ---------------------------------------------------------------------------
@@ -1010,13 +1136,13 @@ class TestSpyHooksProtocol:
 
     def test_on_stage_start_records_call(self) -> None:
         spy = SpyHooks()
-        spy.on_stage_start(PipelineStage.ATTACK_EXECUTION, {"key": "value"})
-        assert ("on_stage_start", PipelineStage.ATTACK_EXECUTION, {"key": "value"}) in spy.calls
+        spy.on_stage_start(PipelineStage.ATTACK_EXECUTION, {'key': 'value'})
+        assert ('on_stage_start', PipelineStage.ATTACK_EXECUTION, {'key': 'value'}) in spy.calls
 
     def test_on_stage_end_records_call(self) -> None:
         spy = SpyHooks()
-        spy.on_stage_end(PipelineStage.REPORT_GENERATION, {"elapsed_s": 1.5})
-        assert ("on_stage_end", PipelineStage.REPORT_GENERATION, {"elapsed_s": 1.5}) in spy.calls
+        spy.on_stage_end(PipelineStage.REPORT_GENERATION, {'elapsed_s': 1.5})
+        assert ('on_stage_end', PipelineStage.REPORT_GENERATION, {'elapsed_s': 1.5}) in spy.calls
 
     def test_on_confirm_returns_true_by_default(self) -> None:
         spy = SpyHooks()
@@ -1031,6 +1157,6 @@ class TestSpyHooksProtocol:
     def test_on_complete_records_report_and_output_dir(self) -> None:
         spy = SpyHooks()
         report = _make_report()
-        spy.on_complete(report, output_dir="/tmp/run")
+        spy.on_complete(report, output_dir='/tmp/run')
         assert spy.received_complete_report is report
-        assert spy.received_complete_output_dir == "/tmp/run"
+        assert spy.received_complete_output_dir == '/tmp/run'

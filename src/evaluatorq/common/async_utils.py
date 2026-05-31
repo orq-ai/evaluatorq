@@ -9,19 +9,34 @@ from __future__ import annotations
 
 import inspect
 import warnings
-from typing import Any
+from collections.abc import Awaitable
+from typing import TypeAlias, TypeVar
+
+_T = TypeVar('_T')
+
+MaybeAsync: TypeAlias = _T | Awaitable[_T]
+"""A value that may be returned directly or as an awaitable.
+
+Use as a hook/callback return annotation so both sync and async implementations
+type-check, e.g. ``def on_confirm(self, ...) -> MaybeAsync[bool]: ...``. Drive
+it with :func:`await_maybe`.
+"""
 
 
-async def await_maybe(value: Any) -> Any:
+async def await_maybe(value: MaybeAsync[_T]) -> _T:
     """Await ``value`` if it is awaitable, else return it unchanged.
 
     Lets one call site drive both sync and async implementations: a sync hook
     returns its result directly, an async hook returns a coroutine that is
-    awaited here. Exceptions propagate identically either way.
+    awaited here. The return type is the resolved ``_T`` either way, so the
+    caller keeps the real type (e.g. ``bool`` for an ``on_confirm`` gate).
+    Exceptions propagate identically for both shapes.
     """
     if inspect.isawaitable(value):
         return await value
-    return value
+    # isawaitable is False here, so value is the bare _T; the checker cannot
+    # narrow the union via isawaitable, hence the cast-free ignore.
+    return value  # type: ignore[return-value]
 
 
 def warn_if_sync_hooks(hooks: object, method_names: tuple[str, ...]) -> None:

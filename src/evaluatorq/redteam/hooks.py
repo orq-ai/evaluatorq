@@ -3,6 +3,10 @@
 Provides a ``PipelineHooks`` protocol that separates rendering concerns from
 pipeline logic.  Hook implementations are injected via ``red_team(hooks=...)``.
 
+Hooks may be sync or async (driven via ``await_maybe``); ``async def`` is
+preferred — a sync implementation works but emits a one-time
+``DeprecationWarning``.  Offload blocking work with ``asyncio.to_thread``.
+
 Public API:
     PipelineHooks  — runtime-checkable Protocol
     ConfirmPayload — TypedDict for on_confirm payload
@@ -24,6 +28,7 @@ from evaluatorq.redteam.reports.display import print_report_summary
 if TYPE_CHECKING:
     from rich.console import Console as RichConsole
 
+    from evaluatorq.common.async_utils import MaybeAsync
     from evaluatorq.redteam.contracts import RedTeamReport
 
 # ---------------------------------------------------------------------------
@@ -107,12 +112,13 @@ class PipelineHooks(Protocol):
     """Protocol for pipeline lifecycle hooks.
 
     Implementations are injected into ``red_team()`` via ``hooks=...``.
-    Methods are ``async def``; sync (``def``) implementations still work at
-    runtime (via ``await_maybe``) but emit a ``DeprecationWarning``. If a hook
-    raises, the pipeline breaks.  Offload blocking work with ``asyncio.to_thread``.
+    Methods may be sync or async (declared with ``MaybeAsync`` returns and driven
+    via ``await_maybe``); ``async def`` is preferred — a sync implementation works
+    but emits a ``DeprecationWarning``. If a hook raises, the pipeline breaks.
+    Offload blocking work with ``asyncio.to_thread``.
     """
 
-    async def on_stage_start(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
+    def on_stage_start(self, stage: PipelineStage | str, meta: dict[str, Any]) -> MaybeAsync[None]:
         """Called when a pipeline stage begins.
 
         Args:
@@ -121,7 +127,7 @@ class PipelineHooks(Protocol):
         """
         ...
 
-    async def on_stage_end(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
+    def on_stage_end(self, stage: PipelineStage | str, meta: dict[str, Any]) -> MaybeAsync[None]:
         """Called when a pipeline stage completes.
 
         Args:
@@ -130,7 +136,7 @@ class PipelineHooks(Protocol):
         """
         ...
 
-    async def on_confirm(self, payload: ConfirmPayload) -> bool:
+    def on_confirm(self, payload: ConfirmPayload) -> MaybeAsync[bool]:
         """Called before execution begins to confirm the run plan.
 
         Args:
@@ -141,14 +147,16 @@ class PipelineHooks(Protocol):
         """
         ...
 
-    async def on_complete(
+    def on_complete(
         self, report: RedTeamReport, *, output_dir: str | None = None, auto_save_path: str | None = None
-    ) -> None:
+    ) -> MaybeAsync[None]:
         """Called once with the final merged report after all targets complete.
 
         Args:
             report: The final ``RedTeamReport``.
             output_dir: Directory where the report JSON was saved (if any).
+            auto_save_path: Path the report was auto-saved to when no explicit
+                output_dir was given.
         """
         ...
 

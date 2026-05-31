@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import warnings
 
 import pytest
 
@@ -651,3 +652,165 @@ def test_rich_hooks_reusable_across_runs():
     assert hooks._completed == 0
     assert hooks._tasks == {}
     assert hooks._overall_task_id is not None  # fresh overall task created
+
+
+# ---------------------------------------------------------------------------
+# Async hook implementations driving full runs (support-both contract).
+# These are the async twins of the sync integration tests above: they prove an
+# `async def` hook flows through the real `await_maybe` call sites, that an
+# async declining `on_confirm` aborts, and that async-raising hooks keep their
+# guard/cleanup semantics. A dropped `await` would make these fail (a coroutine
+# would be created and silently never run) where the sync twins cannot catch it.
+# ---------------------------------------------------------------------------
+
+
+def _sync_hook_deprecation_warnings(records) -> list:
+    """Filter a warning record list down to our sync-hook nudge."""
+    return [w for w in records if issubclass(w.category, DeprecationWarning) and 'sync hook(s)' in str(w.message)]
+
+
+@pytest.mark.asyncio
+async def test_simulate_fires_run_level_hooks_async(datapoint_factory):
+    """An async custom hook drives the full simulate() run and fires no
+    sync-hook DeprecationWarning."""
+
+    class AsyncRunLevelRecorder(DefaultHooks):
+        def __init__(self) -> None:
+            self.confirmed: list[int] = []
+            self.run_started: list[int] = []
+            self.evaluator_events: list[tuple[str, str, float]] = []
+            self.run_completed = 0
+
+        async def on_confirm(self, meta):
+            self.confirmed.append(meta['num_datapoints'])
+            return True
+
+        async def on_run_start(self, meta):
+            self.run_started.append(meta['num_datapoints'])
+
+        async def on_evaluator_complete(self, datapoint_id, name, score, result):
+            self.evaluator_events.append((datapoint_id, name, score))
+
+        async def on_run_complete(self, results):
+            self.run_completed += 1
+
+    async def _ok_target(messages):
+        return 'fine'
+
+    hooks = AsyncRunLevelRecorder()
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter('always')
+        results = await simulate(
+            target=_ok_target,
+            datapoints=[datapoint_factory('dp1'), datapoint_factory('dp2')],
+            max_turns=1,
+            evaluator_names=['goal_achieved'],
+            user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+            judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+            hooks=hooks,
+        )
+    # Side effects observed -> the async hook actually ran (awaited), not dropped.
+    assert hooks.confirmed == [2]
+    assert hooks.run_started == [2]
+    assert hooks.run_completed == 1
+    assert {e[0] for e in hooks.evaluator_events} == {'dp1', 'dp2'}
+    assert len(results) == 2
+    # Async hook -> no deprecation nudge.
+    assert _sync_hook_deprecation_warnings(records) == []
+
+
+@pytest.mark.asyncio
+async def test_async_on_confirm_false_aborts(datapoint_factory):
+    """An async on_confirm returning False aborts the real runner before any
+    target call (the awaited bool gate works, not just sync)."""
+    from evaluatorq.simulation.exceptions import SimulationCancelledError
+
+    class AsyncDecliningHooks(DefaultHooks):
+        def __init__(self) -> None:
+            self.run_started = 0
+
+        async def on_confirm(self, meta):
+            return False
+
+        async def on_run_start(self, meta):
+            self.run_started += 1
+
+    calls = []
+
+    async def _spy_target(messages):
+        calls.append(1)
+        return 'fine'
+
+    hooks = AsyncDecliningHooks()
+    with pytest.raises(SimulationCancelledError):
+        await simulate(
+            target=_spy_target,
+            datapoints=[datapoint_factory('dp1')],
+            max_turns=1,
+            evaluator_names=['goal_achieved'],
+            user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+            judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+            hooks=hooks,
+        )
+    assert hooks.run_started == 0
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_async_on_turn_complete_guard_does_not_corrupt_result(datapoint_factory):
+    """An async-raising on_turn_complete (raises mid-await, inside await_maybe)
+    is still swallowed by the runner guard and must not error the result."""
+
+    class AsyncRaisingHooks(DefaultHooks):
+        async def on_turn_complete(self, datapoint_id, metrics):
+            raise RuntimeError('async hook boom')
+
+    runner = SimulationRunner(
+        target_callback=_ok_target,
+        model='gpt-4o-mini',
+        max_turns=1,
+        user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+        judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+        hooks=AsyncRaisingHooks(),
+    )
+    result = await runner.run(datapoint=datapoint_factory('dp1'))
+    assert result.terminated_by != TerminatedBy.error
+
+
+@pytest.mark.asyncio
+async def test_async_target_closed_when_on_run_complete_raises(datapoint_factory):
+    """An async on_run_complete that raises mid-await still propagates, and the
+    nested finally still closes the resource-owning target."""
+
+    class _ClosableTarget:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def __call__(self, messages):
+            return 'fine'
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class AsyncCompleteBoom(DefaultHooks):
+        def __init__(self) -> None:
+            self.completed = False
+
+        async def on_run_complete(self, results) -> None:
+            self.completed = True
+            raise RuntimeError('async complete blew up')
+
+    target = _ClosableTarget()
+    hooks = AsyncCompleteBoom()
+    with pytest.raises(RuntimeError, match='async complete blew up'):
+        await simulate(
+            datapoints=[datapoint_factory('dp-1')],
+            target=target,  # pyright: ignore[reportArgumentType]
+            user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+            judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+            max_turns=1,
+            evaluator_names=['goal_achieved'],
+            hooks=hooks,
+        )
+    assert hooks.completed is True  # terminal still fired
+    assert target.closed is True  # cleanup ran despite the raising async hook

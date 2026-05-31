@@ -11,10 +11,10 @@ Public API:
     DefaultHooks      — loguru baseline (the default when no hooks passed)
     RichHooks         — Rich per-datapoint progress (CLI / interactive)
 
-Hooks are ASYNC (parity with redteam). Sync implementations are still supported
-at runtime (driven via ``evaluatorq.common.async_utils.await_maybe``) but emit a
-one-time ``DeprecationWarning`` — define hooks as ``async def``. A slow blocking
-hook stalls every concurrent simulation; offload blocking work with
+Hooks may be sync or async (parity with redteam), driven via
+``evaluatorq.common.async_utils.await_maybe``. ``async def`` is preferred — a
+sync implementation works but emits a one-time ``DeprecationWarning``. A slow
+blocking hook stalls every concurrent simulation; offload blocking work with
 ``asyncio.to_thread``.
 """
 
@@ -27,6 +27,7 @@ from loguru import logger
 if TYPE_CHECKING:
     from rich.console import Console as RichConsole
 
+    from evaluatorq.common.async_utils import MaybeAsync
     from evaluatorq.simulation.types import (
         Datapoint,
         SimulationResult,
@@ -54,10 +55,11 @@ class SimulationHooks(Protocol):
     """Protocol for simulation lifecycle hooks.
 
     Implementations are injected via ``simulate(hooks=...)`` or
-    ``SimulationRunner(hooks=...)``. Methods are ``async def``; sync (``def``)
-    implementations still work at runtime (via ``await_maybe``) but emit a
-    ``DeprecationWarning``. Either way they run on the async event loop, so keep
-    them fast — offload blocking work with ``asyncio.to_thread``.
+    ``SimulationRunner(hooks=...)``. Methods may be sync or async (declared with
+    ``MaybeAsync`` returns and driven via ``await_maybe``); ``async def`` is
+    preferred — a sync implementation works but emits a ``DeprecationWarning``.
+    Either way they run on the async event loop, so keep them fast — offload
+    blocking work with ``asyncio.to_thread``.
 
     Exception policy: only ``on_turn_complete`` is exception-guarded by the
     runner — it fires inside ``run()``'s catch-all, which would otherwise
@@ -91,16 +93,16 @@ class SimulationHooks(Protocol):
     list if failure occurred before any results were collected.
     """
 
-    async def on_confirm(self, meta: SimulationRunMeta) -> bool: ...
-    async def on_run_start(self, meta: SimulationRunMeta) -> None: ...
-    async def on_datapoint_start(self, datapoint: Datapoint) -> None: ...
-    async def on_turn_complete(self, datapoint_id: str, metrics: TurnMetrics) -> None: ...
-    async def on_datapoint_complete(self, result: SimulationResult) -> None: ...
-    async def on_evaluator_complete(
+    def on_confirm(self, meta: SimulationRunMeta) -> MaybeAsync[bool]: ...
+    def on_run_start(self, meta: SimulationRunMeta) -> MaybeAsync[None]: ...
+    def on_datapoint_start(self, datapoint: Datapoint) -> MaybeAsync[None]: ...
+    def on_turn_complete(self, datapoint_id: str, metrics: TurnMetrics) -> MaybeAsync[None]: ...
+    def on_datapoint_complete(self, result: SimulationResult) -> MaybeAsync[None]: ...
+    def on_evaluator_complete(
         self, datapoint_id: str, name: str, score: float, result: SimulationResult
-    ) -> None: ...
-    async def on_datapoint_error(self, datapoint: Datapoint, exception: BaseException) -> None: ...
-    async def on_run_complete(self, results: list[SimulationResult]) -> None: ...
+    ) -> MaybeAsync[None]: ...
+    def on_datapoint_error(self, datapoint: Datapoint, exception: BaseException) -> MaybeAsync[None]: ...
+    def on_run_complete(self, results: list[SimulationResult]) -> MaybeAsync[None]: ...
 
 
 class DefaultHooks:
