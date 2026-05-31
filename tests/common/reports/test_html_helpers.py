@@ -104,3 +104,20 @@ def test_render_sparkline_minibars():
 
 def test_render_sparkline_empty():
 	assert h.render_sparkline([]) == ''
+
+
+def test_kpi_cards_renders_each_card_with_status():
+	html = h.kpi_cards([
+		{'label': 'Success Rate', 'value': '25%', 'status': 'fail'},
+		{'label': 'Conversations', 'value': '4', 'status': 'neutral'},
+	])
+	assert 'class="kpi-band"' in html
+	assert html.count('kpi-card') >= 2
+	assert 'Success Rate' in html and '25%' in html
+	assert 'kpi-card--fail' in html
+
+
+def test_status_badge_classes():
+	assert 'status-badge--pass' in h.status_badge('ACHIEVED', 'pass')
+	assert 'status-badge--fail' in h.status_badge('NOT ACHIEVED', 'fail')
+	assert 'NOT ACHIEVED' in h.status_badge('NOT ACHIEVED', 'fail')
