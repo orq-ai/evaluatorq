@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from evaluatorq.contracts import Message, StrEnum, TokenUsage
 
-DEFAULT_MODEL = "azure/gpt-4o-mini"
+DEFAULT_MODEL = "openai/gpt-5.4-mini"
 
 # Default evaluators applied when none are explicitly requested. Single source
 # of truth shared by ``api.simulate`` and the CLI run-store record.
