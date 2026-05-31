@@ -7,7 +7,7 @@ import inspect
 import os
 from typing import TYPE_CHECKING
 
-from evaluatorq.simulation.types import DEFAULT_MODEL
+from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MODEL
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -125,7 +125,7 @@ async def _simulate_core(
     from evaluatorq.simulation.tracing import record_token_usage, set_span_attrs
 
     # Validate evaluator names early
-    resolved_evaluator_names = evaluator_names or ["goal_achieved", "criteria_met"]
+    resolved_evaluator_names = evaluator_names or DEFAULT_EVALUATOR_NAMES
     scorers = [(name, get_evaluator(name)) for name in resolved_evaluator_names]
 
     # Build datapoints from personas x scenarios if not provided

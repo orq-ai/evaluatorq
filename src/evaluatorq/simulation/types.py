@@ -14,6 +14,10 @@ from evaluatorq.contracts import Message, StrEnum, TokenUsage
 
 DEFAULT_MODEL = "azure/gpt-4o-mini"
 
+# Default evaluators applied when none are explicitly requested. Single source
+# of truth shared by ``api.simulate`` and the CLI run-store record.
+DEFAULT_EVALUATOR_NAMES = ["goal_achieved", "criteria_met"]
+
 
 # ---------------------------------------------------------------------------
 # Literal union types (StrEnum for Python 3.10 compat)

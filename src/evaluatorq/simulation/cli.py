@@ -22,7 +22,7 @@ from typing import Annotated, Any
 
 import typer
 
-from evaluatorq.simulation.types import DEFAULT_MODEL
+from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MODEL
 
 app = typer.Typer(
     name="sim",
@@ -225,27 +225,6 @@ def _infer_target_kind(
 
 
 # ---------------------------------------------------------------------------
-# Progress callback (pre-RichHooks)
-# ---------------------------------------------------------------------------
-
-
-def _make_progress_callback(total: int) -> Any:
-    """Simple per-result progress printer.
-
-    When RES-847 lands, replace this with:
-        from evaluatorq.simulation.hooks import RichHooks
-        return RichHooks()
-    """
-    completed = [0]
-
-    def on_result(_result: Any) -> None:
-        completed[0] += 1
-        typer.echo(f"  [{completed[0]}/{total}] simulation completed", err=True)
-
-    return on_result
-
-
-# ---------------------------------------------------------------------------
 # run
 # ---------------------------------------------------------------------------
 
@@ -346,7 +325,7 @@ def run(
             run_name=name,
             mode="run",
             target_kind=target_kind,
-            evaluator_names=evaluator_names or ["goal_achieved", "criteria_met"],
+            evaluator_names=evaluator_names or DEFAULT_EVALUATOR_NAMES,
             results=results,
         )
         typer.echo(f"Run saved: {run_path}", err=True)
@@ -488,7 +467,7 @@ def generate(
             run_name=name,
             mode="generate",
             target_kind=target_kind,
-            evaluator_names=evaluator_names or ["goal_achieved", "criteria_met"],
+            evaluator_names=evaluator_names or DEFAULT_EVALUATOR_NAMES,
             results=results,
         )
         typer.echo(f"Run saved: {run_path}", err=True)
@@ -656,6 +635,8 @@ def runs(
             malformed += 1
 
     try:
+        import io
+
         from rich.console import Console
         from rich.table import Table
 
@@ -672,7 +653,18 @@ def runs(
                 row["scores"],
                 row["file"],
             )
-        Console().print(table)
+        # Render through an explicit buffer + typer.echo rather than letting
+        # Rich write straight to its own stdout handle: this keeps output on
+        # the Click/Typer stream so redirection and test capture both see it.
+        # Width is taken from the real terminal (falling back to 80 when there
+        # is no tty) so layout still adapts instead of being pinned to a
+        # constant.
+        import shutil
+
+        width = shutil.get_terminal_size(fallback=(80, 24)).columns
+        buffer = io.StringIO()
+        Console(file=buffer, width=width).print(table)
+        typer.echo(buffer.getvalue(), nl=False)
     except ImportError:
         header = f"{'Name':<20} {'Date':<20} {'Mode':<10} {'Target':<16} {'N':>4}  {'Scores':<30} File"
         typer.echo(header)
