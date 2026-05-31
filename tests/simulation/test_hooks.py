@@ -528,6 +528,50 @@ async def test_on_run_complete_fires_when_scoring_raises(datapoint_factory):
 
 
 @pytest.mark.asyncio
+async def test_on_datapoint_start_respects_concurrency(datapoint_factory):
+    gate = asyncio.Event()
+    live = 0
+    peak = 0
+
+    class _PeakHooks(DefaultHooks):
+        def on_datapoint_start(self, datapoint) -> None:
+            nonlocal live, peak
+            live += 1
+            peak = max(peak, live)
+
+        def on_datapoint_complete(self, result) -> None:
+            nonlocal live
+            live -= 1
+
+    async def slow_target(messages):
+        await gate.wait()
+        return "fine"
+
+    runner = SimulationRunner(
+        target_callback=slow_target,
+        model="gpt-4o-mini",
+        max_turns=1,
+        user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+        judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+        hooks=_PeakHooks(),
+    )
+    dps = [datapoint_factory(f"dp-{i}") for i in range(6)]
+
+    async def run():
+        task = asyncio.create_task(
+            runner.run_batch(dps, max_concurrency=2, timeout_per_simulation=0)
+        )
+        await asyncio.sleep(0.1)
+        assert peak <= 2  # only concurrency-many started before any complete
+        gate.set()
+        return await task
+
+    results = await asyncio.wait_for(run(), timeout=5)
+    await runner.close()
+    assert len(results) == 6
+
+
+@pytest.mark.asyncio
 async def test_missing_target_raises_before_on_run_start(datapoint_factory):
     hooks = _RunLevelRecorder()
     with pytest.raises(ValueError):

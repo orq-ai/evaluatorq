@@ -608,12 +608,11 @@ class SimulationRunner:
 
         async def run_single(dp: Datapoint) -> SimulationResult:
             async with semaphore:
+                self._hooks.on_datapoint_start(dp)
                 return await self._run_with_timeout(
                     dp, max_turns, timeout_per_simulation
                 )
 
-        for dp in datapoints:
-            self._hooks.on_datapoint_start(dp)
         tasks = [run_single(dp) for dp in datapoints]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
