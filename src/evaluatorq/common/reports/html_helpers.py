@@ -358,7 +358,10 @@ def render_heatmap(
         tds = ['<td class="heatmap-row-label"><strong>' + esc(ylabel) + '</strong></td>']
         for xi in range(len(x_labels)):
             value = float(cells[yi][xi])
-            color = scale_color(value, scale)
+            if value < 0:
+                color = '#e4e2df'  # neutral grey (matches --c-border); absent / N-A
+            else:
+                color = scale_color(value, scale)
             is_safety = bool(safety_mask and safety_mask[yi][xi])
             cls = 'heatmap-cell heatmap-cell--safety' if is_safety else 'heatmap-cell'
             tds.append(

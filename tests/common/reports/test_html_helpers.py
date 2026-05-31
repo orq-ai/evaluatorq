@@ -77,6 +77,15 @@ def test_render_heatmap_safety_flag_uses_hot_class():
 	assert 'heatmap-cell--safety' in html
 
 
+def test_render_heatmap_absent_cell_is_neutral():
+	html = h.render_heatmap(
+		x_labels=['c1'], y_labels=['r1'], cells=[[-1.0]],
+		scale=ORQ_SCALE_GOOD_BAD, title='t', value_fmt=lambda v: '—' if v < 0 else 'x',
+	)
+	assert 'background:#e4e2df' in html
+	assert '—' in html
+
+
 def test_render_histogram_bins():
 	html = h.render_histogram(values=[0.0, 0.1, 0.9, 1.0], bins=2, title='Score distribution')
 	assert html.startswith('<figure')

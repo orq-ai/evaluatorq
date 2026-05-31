@@ -140,16 +140,15 @@ def test_html_heatmap_pass_is_green_fail_is_red(sample_results):
 
     sections = build_report_sections(sample_results)
     heat = next(s for s in sections if s.kind == "criteria_heatmap")
-    html = _render_criteria_heatmap_html(heat)
-    # A passing cell renders green-ish, a failing cell red-ish: distinct colours.
-    assert "PASS" in html and "FAIL" in html
-    # Green channel dominates for the green (pass) background; red for fail.
-    assert "#2ebd85" in html.lower() or "background:#" in html  # sanity
-    # pass and fail must not share the same background colour
-    import re
-
-    bgs = re.findall(r"background:(#[0-9a-fA-F]{6})", html)
-    assert len(set(bgs)) >= 2
+    html = _render_criteria_heatmap_html(heat).lower()
+    assert "pass" in html and "fail" in html
+    # PASS (value 1.0) must be the success green, FAIL (value 0.0) the error red.
+    assert "background:#2ebd85" in html  # pass -> green
+    assert "background:#d92d20" in html  # fail -> red
+    # sample_results' first conversation has no criteria_1, so that cell is
+    # absent and must render neutral grey, NOT red.
+    assert "background:#e4e2df" in html  # absent -> neutral, not a failure
+    assert "—" in html
 
 
 def test_html_omits_model_row_when_unknown(make_result):
