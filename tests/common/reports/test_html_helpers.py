@@ -35,3 +35,18 @@ def test_svg_donut_renders_slices_and_center():
 
 def test_svg_donut_empty_when_all_zero():
 	assert h.svg_donut(labels=['a'], values=[0], colors=['#000'], center_label='', title='t') == ''
+
+
+def test_svg_bar_renders_labeled_bars():
+	svg = h.svg_bar(
+		rows=[('1 turn', 3), ('2 turns', 1)],
+		title='Conversations by turn count',
+	)
+	assert svg.startswith('<figure')
+	assert svg.count('<rect') == 2
+	assert '1 turn' in svg and '3' in svg
+	assert 'Conversations by turn count' in svg
+
+
+def test_svg_bar_empty_when_no_rows():
+	assert h.svg_bar(rows=[], title='t') == ''
