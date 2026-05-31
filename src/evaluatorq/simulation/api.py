@@ -276,18 +276,22 @@ async def _simulate_core(
         return results
     finally:
         # Terminal hook always pairs with on_run_start; results is [] on early failure.
-        # NOTE: on_run_complete is unguarded — a raising hook masks any in-flight exception
-        # and skips runner.close()/target-close below; cleanup is intentionally best-effort.
-        resolved_hooks.on_run_complete(results)
-        await runner.close()
-        # Close the target if it owns resources (e.g. OrqResponsesTarget
-        # built its own AsyncOpenAI client). Plain callables / functions
-        # have no close(); duck-type to avoid coupling to the concrete type.
-        target_close = getattr(target_agent or resolved_callback, "close", None)
-        if callable(target_close):
-            maybe = target_close()
-            if inspect.isawaitable(maybe):
-                await maybe
+        # on_run_complete is unguarded (a raising hook propagates, per the hook
+        # exception policy), but cleanup must run regardless — a nested finally
+        # guarantees runner/target close even if the hook raises, so a misbehaving
+        # terminal hook can never leak a resource-owning target's HTTP client.
+        try:
+            resolved_hooks.on_run_complete(results)
+        finally:
+            await runner.close()
+            # Close the target if it owns resources (e.g. OrqResponsesTarget
+            # built its own AsyncOpenAI client). Plain callables / functions
+            # have no close(); duck-type to avoid coupling to the concrete type.
+            target_close = getattr(target_agent or resolved_callback, "close", None)
+            if callable(target_close):
+                maybe = target_close()
+                if inspect.isawaitable(maybe):
+                    await maybe
 
 
 async def _generate_single_datapoint(
