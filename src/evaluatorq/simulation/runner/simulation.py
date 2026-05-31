@@ -140,6 +140,24 @@ def _build_criteria_results(
     return results
 
 
+def _build_criteria_meta(scenario: Scenario, judgment: Judgment) -> list[dict[str, object]]:
+    """Id-keyed criteria detail for the report. Stable ids avoid the
+    description-collision data loss that ``criteria_results`` (dict-by-description)
+    suffers when two criteria share a description."""
+    criteria = scenario.criteria or []
+    rules_broken = set(judgment.rules_broken)
+    meta: list[dict[str, object]] = []
+    for i, criterion in enumerate(criteria):
+        criterion_id = f'criteria_{i}'
+        meta.append({
+            'id': criterion_id,
+            'description': criterion.description,
+            'type': criterion.type,
+            'passed': criterion_id not in rules_broken,
+        })
+    return meta
+
+
 def _max_turns_result(
     max_turns: int,
     messages: list[Message],
@@ -151,6 +169,11 @@ def _max_turns_result(
 ) -> SimulationResult:
     criteria_results = (
         _build_criteria_results(scenario, last_judgment)
+        if scenario and last_judgment
+        else None
+    )
+    criteria_meta = (
+        _build_criteria_meta(scenario, last_judgment)
         if scenario and last_judgment
         else None
     )
@@ -170,6 +193,7 @@ def _max_turns_result(
         metadata={
             "persona": persona.name if persona else None,
             "scenario": scenario.name if scenario else None,
+            "criteria_meta": criteria_meta,
         },
     )
 
@@ -542,6 +566,9 @@ class SimulationRunner:
                     metadata={
                         "persona": persona.name if persona else None,
                         "scenario": scenario.name if scenario else None,
+                        "criteria_meta": _build_criteria_meta(scenario, last_judgment)
+                        if scenario
+                        else None,
                     },  # type: ignore[union-attr]
                 )
 
