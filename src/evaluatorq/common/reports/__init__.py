@@ -6,6 +6,7 @@ This package provides the renderer-agnostic helpers and dispatch loop;
 builders and per-section render functions.
 """
 
+from evaluatorq.common.reports import palette
 from evaluatorq.common.reports.html_helpers import (
     COLORS,
     STATUS_COLORS,
@@ -26,6 +27,14 @@ from evaluatorq.common.reports.md_helpers import (
     pct,
     truncate,
 )
+from evaluatorq.common.reports.palette import (
+    QUALITATIVE,
+    SEVERITY_COLORS,
+    SEVERITY_ORDER,
+    ORQ_SCALE_AGENT,
+    ORQ_SCALE_GOOD_BAD,
+    ORQ_SCALE_HEAT,
+)
 from evaluatorq.common.reports.render import (
     RendererRegistry,
     format_date,
@@ -37,8 +46,14 @@ from evaluatorq.common.reports.render import (
 
 __all__ = [
     "COLORS",
+    "QUALITATIVE",
     "RendererRegistry",
+    "SEVERITY_COLORS",
+    "SEVERITY_ORDER",
     "STATUS_COLORS",
+    "ORQ_SCALE_AGENT",
+    "ORQ_SCALE_GOOD_BAD",
+    "ORQ_SCALE_HEAT",
     "bar",
     "bold_bar",
     "center_table",
@@ -49,6 +64,7 @@ __all__ = [
     "html_table",
     "load_css",
     "md_table",
+    "palette",
     "pct",
     "render_donut_chart",
     "render_header_md",

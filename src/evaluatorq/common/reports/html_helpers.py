@@ -13,25 +13,16 @@ from pathlib import Path
 from string import Template
 from typing import Any
 
+from evaluatorq.common.reports.palette import COLORS
+
 
 # ---------------------------------------------------------------------------
 # Brand colors
 # ---------------------------------------------------------------------------
 
-COLORS: dict[str, str] = {
-    "orange_300": "#ff8f34",
-    "teal_400": "#025558",
-    "teal_500": "#01483d",
-    "ink_700": "#25232e",
-    "ink_800": "#1a1921",
-    "sand_100": "#f9f8f6",
-    "sand_400": "#e4e2df",
-    "success_400": "#2ebd85",
-    "yellow_400": "#f2b600",
-    "red_400": "#d92d20",
-    "blue_400": "#4fd2ff",
-}
-
+# COLORS is re-exported from palette so existing callers keep working.
+# STATUS_COLORS uses report-level keys (success/warning/failure) distinct from
+# palette.STATUS_COLORS which uses vulnerability-level keys (vulnerable/resistant/error).
 STATUS_COLORS: dict[str, str] = {
     "success": COLORS["success_400"],
     "warning": COLORS["yellow_400"],
