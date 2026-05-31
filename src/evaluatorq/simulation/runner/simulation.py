@@ -166,6 +166,7 @@ def _max_turns_result(
     persona: Persona | None = None,
     scenario: Scenario | None = None,
     last_judgment: Judgment | None = None,
+    target_model: str | None = None,
 ) -> SimulationResult:
     criteria_results = (
         _build_criteria_results(scenario, last_judgment)
@@ -177,6 +178,13 @@ def _max_turns_result(
         if scenario and last_judgment
         else None
     )
+    metadata: dict[str, Any] = {
+        "persona": persona.name if persona else None,
+        "scenario": scenario.name if scenario else None,
+        "criteria_meta": criteria_meta,
+    }
+    if target_model is not None:
+        metadata["target_model"] = target_model
     return SimulationResult(
         messages=messages,
         terminated_by=TerminatedBy.max_turns,
@@ -190,11 +198,7 @@ def _max_turns_result(
         turn_metrics=turn_metrics,
         token_usage=token_usage,
         criteria_results=criteria_results,
-        metadata={
-            "persona": persona.name if persona else None,
-            "scenario": scenario.name if scenario else None,
-            "criteria_meta": criteria_meta,
-        },
+        metadata=metadata,
     )
 
 
@@ -426,6 +430,9 @@ class SimulationRunner:
             )
 
         target_usage_acc: dict[str, TokenUsage] = {"acc": ZERO_USAGE.model_copy()}
+        # Lazily captured on the first turn that reports a model identity.
+        # NEVER set this from self._model — that is the user-simulator/judge model.
+        target_model_holder: dict[str, str | None] = {"model": None}
 
         def _get_total_usage() -> TokenUsage:
             usage = user_simulator.get_usage()
@@ -497,9 +504,13 @@ class SimulationRunner:
                         target_span,
                         [{"role": m.role, "content": m.content or ""} for m in messages],
                     )
-                    agent_response_text, agent_response_usage = await self._get_target_response(messages)
+                    agent_response_text, agent_response_usage, agent_response_model = await self._get_target_response(messages)
                     if agent_response_usage is not None:
                         target_usage_acc["acc"] = target_usage_acc["acc"] + agent_response_usage
+                    # Capture the first non-None model the target reports; it
+                    # should be stable across turns for a given target.
+                    if agent_response_model is not None and target_model_holder["model"] is None:
+                        target_model_holder["model"] = agent_response_model
                     record_llm_output(target_span, agent_response_text)
                 messages.append(Message(role="assistant", content=agent_response_text))
 
@@ -548,6 +559,15 @@ class SimulationRunner:
                         "orq.simulation.turn_count": turn + 1,
                     },
                 )
+                _judge_metadata: dict[str, Any] = {
+                    "persona": persona.name if persona else None,
+                    "scenario": scenario.name if scenario else None,
+                    "criteria_meta": _build_criteria_meta(scenario, last_judgment)
+                    if scenario
+                    else None,
+                }
+                if target_model_holder["model"] is not None:
+                    _judge_metadata["target_model"] = target_model_holder["model"]
                 return SimulationResult(
                     messages=messages,
                     terminated_by=TerminatedBy.judge,
@@ -563,13 +583,7 @@ class SimulationRunner:
                     )
                     if scenario
                     else None,  # type: ignore[arg-type]
-                    metadata={
-                        "persona": persona.name if persona else None,
-                        "scenario": scenario.name if scenario else None,
-                        "criteria_meta": _build_criteria_meta(scenario, last_judgment)
-                        if scenario
-                        else None,
-                    },  # type: ignore[union-attr]
+                    metadata=_judge_metadata,  # type: ignore[union-attr]
                 )
 
         # Max turns reached
@@ -598,6 +612,7 @@ class SimulationRunner:
             persona,
             scenario,
             last_judgment,
+            target_model=target_model_holder["model"],
         )
 
     async def run_batch(
@@ -650,15 +665,25 @@ class SimulationRunner:
     # Private helpers
     # ---------------------------------------------------------------------------
 
-    async def _get_target_response(self, messages: list[Message]) -> tuple[str, TokenUsage | None]:
+    async def _get_target_response(
+        self, messages: list[Message]
+    ) -> tuple[str, TokenUsage | None, str | None]:
+        """Return (text, usage, target_model).
+
+        ``target_model`` is the model identifier reported by the target itself
+        (via ``AgentResponse.model``).  It is ``None`` for plain callbacks,
+        which may call any provider and have no way to report a model.
+        NEVER substitute ``self._model`` here — that is the user-simulator /
+        judge model, not the evaluated target.
+        """
         if self._target_agent:
             resp = await self._target_agent.respond(messages)
-            return resp.text, resp.usage
+            return resp.text, resp.usage, resp.model
         if self._target_callback:
             result = self._target_callback(messages)
             if inspect.isawaitable(result):
-                return await result, None
-            return result, None
+                return await result, None, None
+            return result, None, None
         raise RuntimeError("No target agent or callback configured")
 
     @staticmethod
