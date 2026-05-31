@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from evaluatorq.common.sanitize import delimit
@@ -18,6 +16,9 @@ from evaluatorq.simulation.types import (
     StartingEmotion,
 )
 from evaluatorq.simulation.utils.structured_output import generate_structured
+
+if TYPE_CHECKING:
+    from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -189,18 +190,9 @@ class ScenarioGenerator:
         api_key: str | None = None,
     ) -> None:
         self._model = model
-        if client is not None:
-            self._client = client
-        else:
-            resolved_key = api_key or os.environ.get("ORQ_API_KEY")
-            if not resolved_key:
-                raise ValueError(
-                    "ORQ_API_KEY environment variable is not set. Set it or pass api_key/client."
-                )
-            self._client = AsyncOpenAI(
-                base_url=f"{os.environ.get('ORQ_BASE_URL', 'https://api.orq.ai')}/v2/router",
-                api_key=resolved_key,
-            )
+        from evaluatorq.simulation._client import build_simulation_client
+
+        self._client, _ = build_simulation_client(client, extra_api_key=api_key)
 
     async def generate(
         self,
