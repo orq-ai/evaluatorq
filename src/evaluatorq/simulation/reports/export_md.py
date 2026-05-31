@@ -141,8 +141,6 @@ def _render_scenario_breakdown_section(section: ReportSection) -> str:
 def _render_judge_verdicts_section(section: ReportSection) -> str:
     data = section.data
     terminated_by = data.get("terminated_by", {})
-    rules_broken = data.get("rules_broken", {})
-    total_broken = data.get("total_rules_broken_instances", 0)
 
     lines = [f"## {section.title}", ""]
 
@@ -154,18 +152,11 @@ def _render_judge_verdicts_section(section: ReportSection) -> str:
         lines.append("**Terminated By:**")
         lines.append("")
         lines.append(_md_table(["Reason", "Count"], term_rows, right_align={1}))
-        lines.append("")
-
-    if rules_broken:
-        rule_rows = [
-            [rule, str(count)] for rule, count in rules_broken.items()
-        ]
-        lines.append(f"**Rules Broken** (total instances: {total_broken}):")
-        lines.append("")
-        lines.append(_md_table(["Rule", "Count"], rule_rows, right_align={1}))
     else:
-        lines.append("No rules broken across any conversation.")
+        lines.append("No termination data.")
 
+    # Note: raw criteria IDs are intentionally omitted here; see Failure Modes
+    # and Failures sections for criteria-by-description breakdowns.
     return "\n".join(lines)
 
 
@@ -239,6 +230,128 @@ def _render_errors_section(section: ReportSection) -> str:
     return "\n".join(lines)
 
 
+def _render_failures_first_section(section: ReportSection) -> str:
+    rows = section.data.get('rows', [])
+    if not rows:
+        return f'## {section.title}\n\nNo failed conversations.'
+    table_rows = []
+    for r in rows:
+        violated = ', '.join(r['violated']) if r['violated'] else '—'
+        if r['has_safety']:
+            violated += ' ⚠️'
+        table_rows.append([
+            f'[#{r["index"]}](#{r["anchor"]})',
+            r['persona'],
+            r['scenario'],
+            violated,
+            f'{r["score"]:.2f}',
+            r['terminated_by'],
+        ])
+    table = _md_table(
+        ['#', 'Persona', 'Scenario', 'Violated criteria', 'Score', 'Ended'],
+        table_rows,
+    )
+    return f'## {section.title}\n\n{table}'
+
+
+def _render_persona_scenario_heatmap_section(section: ReportSection) -> str:
+    d = section.data
+    personas = d.get('personas', [])
+    scenarios = d.get('scenarios', [])
+    if not personas or not scenarios:
+        return f'## {section.title}\n\nNo data.'
+    lookup = {(c['persona'], c['scenario']): c['success_rate'] for c in d.get('cells', [])}
+    headers = ['Scenario', *personas]
+    table_rows = []
+    for s in scenarios:
+        row = [s]
+        for p in personas:
+            rate = lookup.get((p, s))
+            row.append(f'{rate:.0%}' if rate is not None else '—')
+        table_rows.append(row)
+    table = _md_table(headers, table_rows)
+    return f'## {section.title}\n\n{table}'
+
+
+def _render_criteria_heatmap_section(section: ReportSection) -> str:
+    d = section.data
+    y_labels = d.get('y_labels', [])
+    x_labels = d.get('x_labels', [])
+    cells = d.get('cells', [])
+    safety = d.get('safety', [])
+    if not y_labels or not x_labels:
+        return f'## {section.title}\n\nNo criteria data.'
+    headers = ['Criterion', *x_labels]
+    table_rows = []
+    for yi, label in enumerate(y_labels):
+        row = [label]
+        for xi in range(len(x_labels)):
+            val = cells[yi][xi] if yi < len(cells) and xi < len(cells[yi]) else -1.0
+            is_safe = (safety[yi][xi] if yi < len(safety) and xi < len(safety[yi]) else False)
+            if val < 0:
+                cell = '—'
+            elif val >= 0.5:
+                cell = '✓'
+            else:
+                cell = '✗⚠️' if is_safe else '✗'
+            row.append(cell)
+        table_rows.append(row)
+    table = _md_table(headers, table_rows)
+    return f'## {section.title}\n\n{table}'
+
+
+def _render_score_distribution_section(section: ReportSection) -> str:
+    scores = section.data.get('scores', [])
+    if not scores:
+        return f'## {section.title}\n\nNo scores.'
+    bins = 10
+    counts = [0] * bins
+    for v in scores:
+        idx = min(bins - 1, max(0, int(float(v) * bins)))
+        counts[idx] += 1
+    max_count = max(counts) or 1
+    bar_width = 20
+    lines = [f'## {section.title}', '']
+    for i, c in enumerate(counts):
+        lo = i / bins
+        hi = (i + 1) / bins
+        filled = round((c / max_count) * bar_width)
+        bar = '█' * filled + '░' * (bar_width - filled)
+        lines.append(f'`{lo:.1f}-{hi:.1f}` {bar} {c}')
+    return '\n'.join(lines)
+
+
+def _render_turn_quality_timeline_section(section: ReportSection) -> str:
+    d = section.data
+    turns = d.get('turns', [])
+    series = d.get('series', {})
+    if not turns or not series:
+        return f'## {section.title}\n\nNo turn data.'
+    metric_names = [m for m, vals in series.items() if any(v != 0.0 for v in vals)]
+    if not metric_names:
+        metric_names = list(series.keys())
+    headers = ['Turn', *metric_names]
+    table_rows = []
+    for i, t in enumerate(turns):
+        row = [str(t)]
+        for m in metric_names:
+            vals = series.get(m, [])
+            v = vals[i] if i < len(vals) else 0.0
+            row.append(f'{v:.2f}')
+        table_rows.append(row)
+    table = _md_table(headers, table_rows, right_align=set(range(1, len(metric_names) + 1)))
+    return f'## {section.title}\n\n{table}'
+
+
+def _render_failure_mode_section(section: ReportSection) -> str:
+    rows = section.data.get('rows', [])
+    if not rows:
+        return f'## {section.title}\n\nNo failure modes.'
+    table_rows = [[label, str(count)] for label, count in rows]
+    table = _md_table(['Scenario: Criterion', 'Count'], table_rows, right_align={1})
+    return f'## {section.title}\n\n{table}'
+
+
 def _render_individual_results_section(section: ReportSection) -> str:
     entries = section.data.get("entries", [])
     if not entries:
@@ -254,12 +367,18 @@ def _render_individual_results_section(section: ReportSection) -> str:
         )
 
         body_lines: list[str] = []
-        body_lines.append(f"- **Model:** {entry['model']}")
+        # Only render model when target_model is known and truthy
+        target_model = entry.get('target_model')
+        if target_model:
+            body_lines.append(f"- **Model:** {target_model}")
         body_lines.append(f"- **Terminated by:** {entry['terminated_by']}")
         body_lines.append(f"- **Tokens:** {entry['total_tokens']:,}")
-        if entry["rules_broken"]:
+        # Render violated criteria by description, not raw ids
+        criteria = entry.get('criteria', [])
+        failed_criteria = [c['description'] for c in criteria if not c.get('passed', True)]
+        if failed_criteria:
             body_lines.append(
-                "- **Rules broken:** " + ", ".join(entry["rules_broken"])
+                "- **Criteria violated:** " + ", ".join(failed_criteria)
             )
         if entry["evaluator_scores"]:
             scores_str = ", ".join(
@@ -288,6 +407,12 @@ def _render_individual_results_section(section: ReportSection) -> str:
 
 _SECTION_RENDERERS = {
     "summary": _render_summary_section,
+    "failures_first": _render_failures_first_section,
+    "persona_scenario_heatmap": _render_persona_scenario_heatmap_section,
+    "criteria_heatmap": _render_criteria_heatmap_section,
+    "score_distribution": _render_score_distribution_section,
+    "turn_quality_timeline": _render_turn_quality_timeline_section,
+    "failure_mode": _render_failure_mode_section,
     "persona_breakdown": _render_persona_breakdown_section,
     "scenario_breakdown": _render_scenario_breakdown_section,
     "judge_verdicts": _render_judge_verdicts_section,

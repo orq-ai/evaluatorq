@@ -293,3 +293,17 @@ def test_export_markdown_collapses_token_usage_and_individual_results():
     assert "<details>" in md
     assert "<summary>Token Usage</summary>" in md
     assert "<summary>Individual Conversations</summary>" in md
+
+
+def test_md_has_new_sections_and_no_raw_ids(sample_results):
+    md = export_markdown(sample_results, target="t")
+    assert "Failures" in md
+    assert "Persona x Scenario" in md or "Persona × Scenario" in md
+    assert "Goal Score Distribution" in md
+    assert "Turn Quality Timeline" in md
+    assert "criteria_0" not in md and "criteria_1" not in md
+
+
+def test_md_omits_model_when_unknown(make_result):
+    md = export_markdown([make_result(goal_achieved=True)], target="t")
+    assert "Model:** unknown" not in md
