@@ -4,9 +4,164 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from evaluatorq.contracts import Message, TokenUsage
 from evaluatorq.simulation.reports import export_html, export_markdown
 from evaluatorq.simulation.types import SimulationResult, TerminatedBy, TurnMetrics
+
+
+def _make_result(
+    *,
+    goal_achieved=True,
+    score=1.0,
+    persona="P",
+    scenario="S",
+    criteria_meta=None,
+    turn_count=1,
+    terminated_by=TerminatedBy.judge,
+    target_model=None,
+    turn_metrics=None,
+) -> SimulationResult:
+    meta = {"persona": persona, "scenario": scenario}
+    if criteria_meta is not None:
+        meta["criteria_meta"] = criteria_meta
+    if target_model is not None:
+        meta["target_model"] = target_model
+    if turn_metrics is None:
+        turn_metrics = [
+            TurnMetrics(
+                turn_number=1,
+                token_usage=TokenUsage(),
+                judge_reason="ok",
+                response_quality=0.8,
+            )
+        ]
+    return SimulationResult(
+        messages=[
+            Message(role="user", content="hi"),
+            Message(role="assistant", content="response"),
+        ],
+        terminated_by=terminated_by,
+        reason="judge decided",
+        goal_achieved=goal_achieved,
+        goal_completion_score=score,
+        rules_broken=[] if goal_achieved else ["criteria_0"],
+        turn_count=turn_count,
+        token_usage=TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        turn_metrics=turn_metrics,
+        metadata=meta,
+    )
+
+
+@pytest.fixture
+def make_result():
+    return _make_result
+
+
+@pytest.fixture
+def sample_results():
+    return [
+        _make_result(
+            goal_achieved=True,
+            score=0.95,
+            persona="Alice",
+            scenario="Billing",
+            target_model="gpt-4o-mini",
+            criteria_meta=[
+                {"id": "criteria_0", "description": "explain charge",
+                 "type": "must_happen", "passed": True},
+            ],
+        ),
+        _make_result(
+            goal_achieved=False,
+            score=0.1,
+            persona="Bob",
+            scenario="Refund",
+            criteria_meta=[
+                {"id": "criteria_0", "description": "explain charge",
+                 "type": "must_happen", "passed": False},
+                {"id": "criteria_1", "description": "no rudeness",
+                 "type": "must_not_happen", "passed": False},
+            ],
+        ),
+    ]
+
+
+def test_html_has_hero_kpis_and_cards(sample_results):
+    html = export_html(sample_results, target="Acme support agent")
+    assert 'class="hero"' in html
+    assert 'class="kpi-band"' in html
+    assert 'class="report-card"' in html
+    assert "Acme support agent" in html
+
+
+def test_html_no_raw_criteria_id_leak(sample_results):
+    html = export_html(sample_results, target="t")
+    assert "criteria_0" not in html
+    assert "criteria_1" not in html
+
+
+def test_html_renders_without_plotly(sample_results, monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_plotly(name, *a, **k):
+        if name.startswith("plotly") or name == "kaleido":
+            raise ImportError(name)
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", no_plotly)
+    html = export_html(sample_results, target="t")
+    assert "<svg" in html  # charts still render (hand-SVG)
+
+
+def test_html_renders_new_charts(sample_results):
+    html = export_html(sample_results, target="t")
+    assert "heatmap-table" in html  # criteria + persona/scenario heatmaps
+    assert "Goal Score Distribution" in html
+    assert "Turn Quality Timeline" in html
+    assert "Failures" in html
+    # achieved/failed rendered as semantic badges, not plain text
+    assert "status-badge--fail" in html
+
+
+def test_html_persona_rows_have_sparklines(sample_results):
+    html = export_html(sample_results, target="t")
+    assert "sparkline" in html
+
+
+def test_html_heatmap_pass_is_green_fail_is_red(sample_results):
+    from evaluatorq.simulation.reports.export_html import (
+        _render_criteria_heatmap_html,
+    )
+    from evaluatorq.simulation.reports.sections import build_report_sections
+
+    sections = build_report_sections(sample_results)
+    heat = next(s for s in sections if s.kind == "criteria_heatmap")
+    html = _render_criteria_heatmap_html(heat)
+    # A passing cell renders green-ish, a failing cell red-ish: distinct colours.
+    assert "PASS" in html and "FAIL" in html
+    # Green channel dominates for the green (pass) background; red for fail.
+    assert "#2ebd85" in html.lower() or "background:#" in html  # sanity
+    # pass and fail must not share the same background colour
+    import re
+
+    bgs = re.findall(r"background:(#[0-9a-fA-F]{6})", html)
+    assert len(set(bgs)) >= 2
+
+
+def test_html_omits_model_row_when_unknown(make_result):
+    r = make_result(goal_achieved=True)  # no target_model in metadata
+    html = export_html([r], target="t")
+    assert "Model:</strong> unknown" not in html
+    assert ">unknown<" not in html  # no stray "unknown" model cell
+
+
+def test_html_full_transcript_no_json_note(sample_results):
+    html = export_html(sample_results, target="t")
+    assert "full text in report JSON" not in html
 
 
 def _result(persona: str, *, achieved: bool, score: float, turns: int = 1) -> SimulationResult:

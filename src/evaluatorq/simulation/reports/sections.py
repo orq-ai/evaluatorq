@@ -297,15 +297,18 @@ def _build_token_usage_section(results: list[SimulationResult]) -> ReportSection
 def _build_individual_results_section(results: list[SimulationResult]) -> ReportSection:
     entries: list[dict[str, Any]] = []
     for idx, r in enumerate(results):
+        target_model = r.metadata.get("target_model")
         entries.append({
             "index": idx,
             "persona": _persona_name(r),
             "scenario": _scenario_name(r),
             "model": _model_name(r),
+            "target_model": str(target_model) if target_model else None,
             "terminated_by": r.terminated_by.value,
             "goal_achieved": r.goal_achieved,
             "goal_completion_score": r.goal_completion_score,
             "rules_broken": list(r.rules_broken),
+            "criteria": _criteria_rows(r),
             "turn_count": r.turn_count,
             "total_tokens": r.token_usage.total_tokens,
             "judge_reason": r.reason,
