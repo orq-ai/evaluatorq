@@ -539,7 +539,7 @@ def _build_simulation_job_and_cache(
     from evaluatorq.common.async_utils import await_maybe
     from evaluatorq.simulation.convert import to_open_responses
     from evaluatorq.simulation.hooks import DefaultHooks
-    from evaluatorq.simulation.runner.simulation import SimulationRunner
+    from evaluatorq.simulation.runner.simulation import SimulationRunner, _error_result
     from evaluatorq.simulation.types import TerminatedBy
 
     runner = SimulationRunner(
@@ -572,7 +572,21 @@ def _build_simulation_job_and_cache(
         # internally. A raising per-datapoint hook surfaces as this job's
         # failure (evaluatorq captures it per-row), matching run_batch's
         # gather(return_exceptions=True) isolation.
-        await await_maybe(resolved_hooks.on_datapoint_start(sim_dp))
+        #
+        # on_datapoint_start is wrapped so a raise still surfaces via
+        # on_datapoint_error + on_datapoint_complete for this datapoint (the
+        # guarantee in SimulationHooks' docstring), mirroring run_batch — then
+        # re-raised so evaluatorq records the job failure. Without this a
+        # RichHooks task created in on_datapoint_start would never advance.
+        try:
+            await await_maybe(resolved_hooks.on_datapoint_start(sim_dp))
+        except Exception as start_err:
+            err = _error_result(str(start_err), sim_dp.persona, sim_dp.scenario)
+            err.metadata['datapoint_id'] = sim_dp.id
+            result_cache[id(data)] = err
+            await await_maybe(resolved_hooks.on_datapoint_error(sim_dp, start_err))
+            await await_maybe(resolved_hooks.on_datapoint_complete(err))
+            raise
         result = await runner.run(datapoint=sim_dp, max_turns=max_turns)
         result.metadata['datapoint_id'] = sim_dp.id
         result_cache[id(data)] = result
@@ -786,6 +800,11 @@ async def _stamp_evaluator_scores(
         if sim_result is None or not dp_result.job_results:
             continue
         datapoint_id = sim_result.metadata.get('datapoint_id', '')
+        # Stamp evaluation_name before firing on_evaluator_complete so a hook
+        # reading result.metadata['evaluation_name'] sees it (the hook receives
+        # sim_result as its 4th arg).
+        if evaluation_name:
+            sim_result.metadata['evaluation_name'] = evaluation_name
         scores_dict = sim_result.metadata.setdefault('evaluator_scores', {})
         for job_result in dp_result.job_results:
             for score in job_result.evaluator_scores or []:
@@ -795,5 +814,3 @@ async def _stamp_evaluator_scores(
                 if isinstance(scores_dict, dict):
                     scores_dict[score.evaluator_name] = value
                 await await_maybe(hooks.on_evaluator_complete(datapoint_id, score.evaluator_name, value, sim_result))
-        if evaluation_name:
-            sim_result.metadata['evaluation_name'] = evaluation_name

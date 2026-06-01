@@ -391,6 +391,49 @@ async def test_simulate_fires_run_level_hooks(datapoint_factory):
 
 
 @pytest.mark.asyncio
+async def test_on_datapoint_start_raise_surfaces_error_and_complete(datapoint_factory):
+    """A raising on_datapoint_start in the simulate() path still fires
+    on_datapoint_error + on_datapoint_complete for that datapoint (the guarantee
+    in SimulationHooks' docstring), mirroring run_batch — the job fails but the
+    error result is cached and the batch is not aborted."""
+
+    class StartBoom(DefaultHooks):
+        def __init__(self) -> None:
+            self.errors: list[tuple[str, str]] = []
+            self.completed: list[str | None] = []
+
+        def on_datapoint_start(self, datapoint):
+            raise RuntimeError(f'boom-{datapoint.id}')
+
+        def on_datapoint_error(self, datapoint, exception):
+            self.errors.append((datapoint.id, str(exception)))
+
+        def on_datapoint_complete(self, result):
+            self.completed.append(result.metadata.get('datapoint_id'))
+
+    async def _ok_target(messages):
+        return 'fine'
+
+    hooks = StartBoom()
+    results = await simulate(
+        target=_ok_target,
+        datapoints=[datapoint_factory('dp1')],
+        max_turns=1,
+        evaluator_names=['goal_achieved'],
+        user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+        judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+        hooks=hooks,
+        exit_on_failure=False,
+    )
+    # Both per-datapoint hooks fired despite on_datapoint_start raising.
+    assert hooks.errors == [('dp1', 'boom-dp1')]
+    assert hooks.completed == ['dp1']
+    # The cached error result is returned; the target was never invoked.
+    assert len(results) == 1
+    assert results[0].terminated_by == TerminatedBy.error
+
+
+@pytest.mark.asyncio
 async def test_on_confirm_false_aborts_before_running(datapoint_factory):
     """A declining on_confirm aborts via SimulationCancelledError; on_run_start
     never fires and no simulation runs."""
