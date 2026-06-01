@@ -42,6 +42,7 @@ def test_injected_client_used_as_is(gen_cls, monkeypatch):
     injected = AsyncOpenAI(api_key="sk-x", base_url="https://example.test/v1")
     gen = gen_cls(client=injected)
     assert gen._client is injected
+    assert gen._client_owned is False  # caller owns the lifecycle; generator must not close it
 
 
 def test_datapoint_generator_openai_key_only(monkeypatch):
