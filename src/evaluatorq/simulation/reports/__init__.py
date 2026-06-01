@@ -17,7 +17,6 @@ from evaluatorq.simulation.reports.export_html import export_html
 from evaluatorq.simulation.reports.export_md import export_markdown
 from evaluatorq.simulation.reports.sections import build_report_sections
 
-
 __all__ = [
     "build_report_sections",
     "export_html",

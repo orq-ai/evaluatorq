@@ -476,6 +476,13 @@ ReportSectionKind = Literal[
     "individual_results",
     "agent_context",
     # Simulation-specific
+    "overview",
+    "failures_first",
+    "failure_mode",
+    "persona_scenario_heatmap",
+    "criteria_heatmap",
+    "score_distribution",
+    "turn_quality_timeline",
     "persona_breakdown",
     "scenario_breakdown",
     "judge_verdicts",
