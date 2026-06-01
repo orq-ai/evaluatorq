@@ -39,13 +39,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-
-class SimulationDroppedError(RuntimeError):
-    """Raised when simulation job(s) produced no result and were dropped.
-
-    Distinct subclass of RuntimeError so callers can grep/catch the
-    cache-miss path specifically rather than matching on the message.
-    """
+# Re-exported from here for back-compat (``simulation.__init__`` imports it from
+# api); the canonical definition lives in ``simulation.exceptions``.
+from evaluatorq.simulation.exceptions import SimulationDroppedError
 
 
 async def simulate(
@@ -367,6 +363,11 @@ async def _simulate_core(
             evaluator_scores = r.metadata.get('evaluator_scores') or {}
             for evaluator_name, score in evaluator_scores.items():
                 await await_maybe(resolved_hooks.on_evaluator_complete(dp_id, evaluator_name, score, r))
+    except SimulationDroppedError as dropped:
+        # exit_on_failure aborted the run, but the rows that succeeded are real
+        # results — hand them to on_run_complete (via the finally) instead of [].
+        results = dropped.partial_results
+        raise
     finally:
         await await_maybe(resolved_hooks.on_run_complete(results))
     return results
@@ -749,6 +750,11 @@ async def _simulate_via_evaluatorq(
     # stamped scores, after results is assembled.
     _stamp_evaluator_scores(eq_results, result_cache, evaluation_name)
 
+    # Build the results from the successful rows BEFORE the missing-rows check,
+    # so a SimulationDroppedError can still carry the partial results through to
+    # on_run_complete instead of leaving the caller with an empty list.
+    results = [result_cache[id(eq)] for eq in eq_datapoints if id(eq) in result_cache]
+
     expected = len(eq_datapoints)
     missing = [i for i, eq in enumerate(eq_datapoints) if id(eq) not in result_cache]
     if missing:
@@ -757,10 +763,8 @@ async def _simulate_via_evaluatorq(
             f'and produced no result (missing rows: {missing})'
         )
         if exit_on_failure:
-            raise SimulationDroppedError(msg)
+            raise SimulationDroppedError(msg, partial_results=results)
         logger.warning(msg)
-
-    results = [result_cache[id(eq)] for eq in eq_datapoints if id(eq) in result_cache]
 
     # Aggregate token usage onto the pipeline span.
     total_prompt = sum((r.token_usage.prompt_tokens or 0) for r in results)

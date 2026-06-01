@@ -576,6 +576,81 @@ async def test_on_run_complete_fires_when_scoring_raises(datapoint_factory):
 
 
 @pytest.mark.asyncio
+async def test_on_run_complete_gets_partial_results_when_a_row_is_dropped(datapoint_factory, monkeypatch):
+    """exit_on_failure aborts via SimulationDroppedError when a row produces no
+    result, but the rows that *did* succeed must still reach on_run_complete —
+    not an empty list (the partial_results path)."""
+    from evaluatorq.simulation.api import SimulationDroppedError, simulate
+    from evaluatorq.simulation.runner.simulation import SimulationRunner
+
+    def _good_result() -> SimulationResult:
+        return SimulationResult(
+            messages=[],
+            terminated_by=TerminatedBy.max_turns,
+            reason='',
+            goal_achieved=True,
+            goal_completion_score=1.0,
+            rules_broken=[],
+            turn_count=1,
+            token_usage=TokenUsage(),
+            turn_metrics=[],
+        )
+
+    async def fake_run(self, *, datapoint, max_turns):
+        # 'dp-bad' raises uncaught so its job is recorded with no cached result
+        # (a dropped row); 'dp-good' returns a real result.
+        if datapoint.id == 'dp-bad':
+            raise RuntimeError('runner exploded')
+        return _good_result()
+
+    monkeypatch.setattr(SimulationRunner, 'run', fake_run)
+
+    hooks = _RunLevelRecorder()
+    with pytest.raises(SimulationDroppedError):
+        await simulate(
+            datapoints=[datapoint_factory('dp-good'), datapoint_factory('dp-bad')],
+            target=_ok_target,
+            user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+            judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+            max_turns=1,
+            evaluator_names=['goal_achieved'],
+            hooks=hooks,
+        )
+    assert hooks.completed_with is not None  # terminal fired despite the drop
+    assert len(hooks.completed_with) == 1  # the successful row, not []
+    assert hooks.completed_with[0].goal_achieved is True
+
+
+@pytest.mark.asyncio
+async def test_simulation_dropped_error_is_simulation_error():
+    """SimulationDroppedError must be catchable as SimulationError and carry the
+    partial results passed to it."""
+    from evaluatorq.simulation.api import SimulationDroppedError
+    from evaluatorq.simulation.exceptions import SimulationError
+
+    partial = [_sim_result_for_drop_test()]
+    err = SimulationDroppedError('2 of 3 dropped', partial_results=partial)
+    assert isinstance(err, SimulationError)
+    assert err.partial_results == partial
+    # Default keeps it an empty list, never None.
+    assert SimulationDroppedError('boom').partial_results == []
+
+
+def _sim_result_for_drop_test() -> SimulationResult:
+    return SimulationResult(
+        messages=[],
+        terminated_by=TerminatedBy.max_turns,
+        reason='',
+        goal_achieved=True,
+        goal_completion_score=1.0,
+        rules_broken=[],
+        turn_count=1,
+        token_usage=TokenUsage(),
+        turn_metrics=[],
+    )
+
+
+@pytest.mark.asyncio
 async def test_target_closed_when_on_run_complete_raises(datapoint_factory):
     """A raising on_run_complete must not leak a resource-owning target: the
     nested finally still closes the runner/target even though the unguarded
