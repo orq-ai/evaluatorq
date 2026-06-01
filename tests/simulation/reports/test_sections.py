@@ -5,7 +5,11 @@ from __future__ import annotations
 import pytest
 
 from evaluatorq.contracts import Message, TokenUsage
-from evaluatorq.simulation.reports.sections import build_report_sections, _criteria_rows
+from evaluatorq.simulation.reports.sections import (
+    _build_criteria_heatmap_section,
+    _criteria_rows,
+    build_report_sections,
+)
 from evaluatorq.simulation.types import SimulationResult, TerminatedBy, TurnMetrics
 
 
@@ -382,3 +386,28 @@ def test_persona_scenario_heatmap_matrix(make_result):
     # success-rate cell for (A, X) == 1.0, (A, Y) == 0.0
     cell = {(c['persona'], c['scenario']): c['success_rate'] for c in s.data['cells']}
     assert cell[('A', 'X')] == 1.0 and cell[('A', 'Y')] == 0.0
+
+
+def test_criteria_heatmap_does_not_collide_across_scenarios(make_result):
+    # Two scenarios, each with a positional criteria_0 of DIFFERENT meaning.
+    billing = make_result(
+        persona='A', scenario='Billing',
+        criteria_meta=[{'id': 'criteria_0', 'description': 'explains charge',
+                        'type': 'must_happen', 'passed': True}],
+    )
+    outage = make_result(
+        persona='A', scenario='Outage',
+        criteria_meta=[{'id': 'criteria_0', 'description': 'offers next step',
+                        'type': 'must_happen', 'passed': False}],
+    )
+    section = _build_criteria_heatmap_section([billing, outage])
+    labels = section.data['y_labels']
+    # Both criteria appear as distinct rows (no collapse onto one row).
+    assert any('explains charge' in lbl for lbl in labels)
+    assert any('offers next step' in lbl for lbl in labels)
+    assert len(labels) == 2
+    # The billing row has a value only for the billing conversation; the outage
+    # conversation is absent (-1.0) on that row.
+    rows = {lbl: cells for lbl, cells in zip(section.data['y_labels'], section.data['cells'], strict=True)}
+    billing_row = next(c for lbl, c in rows.items() if 'explains charge' in lbl)
+    assert billing_row == [1.0, -1.0]  # billing pass, outage absent
