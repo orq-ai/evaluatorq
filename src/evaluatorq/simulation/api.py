@@ -14,7 +14,7 @@ import inspect
 import logging
 import os
 import uuid
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from evaluatorq.simulation.types import DEFAULT_MODEL
 
@@ -357,6 +357,16 @@ async def _simulate_core(
             pipeline_span=pipeline_span,
             hooks=resolved_hooks,
         )
+        # Fire on_evaluator_complete here — AFTER results is assigned and
+        # OUTSIDE evaluatorq's per-scorer try/except — so an unguarded hook
+        # raise propagates (per the contract) while on_run_complete in the
+        # finally still receives the real results, not []. Scores were stamped
+        # onto each result's metadata by _stamp_evaluator_scores.
+        for r in results:
+            dp_id = r.metadata.get('datapoint_id', '')
+            evaluator_scores = r.metadata.get('evaluator_scores') or {}
+            for evaluator_name, score in evaluator_scores.items():
+                await await_maybe(resolved_hooks.on_evaluator_complete(dp_id, evaluator_name, score, r))
     finally:
         await await_maybe(resolved_hooks.on_run_complete(results))
     return results
@@ -735,11 +745,9 @@ async def _simulate_via_evaluatorq(
     # Mirror evaluator scores onto SimulationResult.metadata once, from the
     # final evaluatorq result, so the scorer stays pure (no side-effects mid-run)
     # and callers inspecting SimulationResult.metadata still find evaluator_scores.
-    # Also fires on_evaluator_complete per (datapoint, evaluator) — done here,
-    # outside evaluatorq's per-scorer try/except, so an unguarded hook raise
-    # propagates (caught by _simulate_core's finally, which still fires
-    # on_run_complete before re-raising).
-    await _stamp_evaluator_scores(eq_results, result_cache, evaluation_name, hooks)
+    # on_evaluator_complete is fired by the caller (_simulate_core) from these
+    # stamped scores, after results is assembled.
+    _stamp_evaluator_scores(eq_results, result_cache, evaluation_name)
 
     expected = len(eq_datapoints)
     missing = [i for i, eq in enumerate(eq_datapoints) if id(eq) not in result_cache]
@@ -775,42 +783,30 @@ async def _simulate_via_evaluatorq(
     return results
 
 
-async def _stamp_evaluator_scores(
+def _stamp_evaluator_scores(
     eq_results: list[DataPointResult],
     result_cache: dict[int, SimulationResult],
     evaluation_name: str,
-    hooks: SimulationHooks,
 ) -> None:
-    """Walk the evaluatorq result, stamp each evaluator score onto the matching
-    SimulationResult.metadata["evaluator_scores"], and fire on_evaluator_complete.
+    """Walk the evaluatorq result and stamp each evaluator score onto the
+    matching SimulationResult.metadata["evaluator_scores"].
 
     Matches by ``id(data_point)`` — on success evaluatorq returns the same
     DataPoint instance the job cached against. Error rows carry a placeholder
     DataPoint whose id won't match, so they're skipped.
 
-    ``on_evaluator_complete`` is fired here (not in the scorer) because this runs
-    outside evaluatorq's per-scorer try/except, so an unguarded hook raise
-    propagates instead of being swallowed as a scorer error. Driven via
-    ``await_maybe`` for sync-or-async hooks.
+    ``on_evaluator_complete`` is NOT fired here — the caller (_simulate_core)
+    fires it from the stamped scores after ``results`` is assembled, so an
+    unguarded hook raise still leaves the real results for ``on_run_complete``.
     """
-    from evaluatorq.common.async_utils import await_maybe
-
     for dp_result in eq_results:
         sim_result = result_cache.get(id(dp_result.data_point))
         if sim_result is None or not dp_result.job_results:
             continue
-        datapoint_id = sim_result.metadata.get('datapoint_id', '')
-        # Stamp evaluation_name before firing on_evaluator_complete so a hook
-        # reading result.metadata['evaluation_name'] sees it (the hook receives
-        # sim_result as its 4th arg).
-        if evaluation_name:
-            sim_result.metadata['evaluation_name'] = evaluation_name
         scores_dict = sim_result.metadata.setdefault('evaluator_scores', {})
         for job_result in dp_result.job_results:
             for score in job_result.evaluator_scores or []:
-                # Simulation scorers always produce a numeric value (see
-                # _adapt_simulation_scorer -> EvaluationResult(value=float)).
-                value = cast('float', score.score.value)
                 if isinstance(scores_dict, dict):
-                    scores_dict[score.evaluator_name] = value
-                await await_maybe(hooks.on_evaluator_complete(datapoint_id, score.evaluator_name, value, sim_result))
+                    scores_dict[score.evaluator_name] = score.score.value
+        if evaluation_name:
+            sim_result.metadata['evaluation_name'] = evaluation_name

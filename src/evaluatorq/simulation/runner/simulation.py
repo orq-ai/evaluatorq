@@ -599,6 +599,10 @@ class SimulationRunner:
             dp = datapoints[i]
             if isinstance(result, SimulationResult):
                 result.metadata['datapoint_id'] = dp.id
+                # Append before firing the unguarded on_datapoint_error so a
+                # raising hook doesn't drop the result from final_results —
+                # matches the BaseException branch's ordering below.
+                final_results.append(result)
                 if result.terminated_by in (TerminatedBy.error, TerminatedBy.timeout):
                     # The original exception was already swallowed into the error
                     # result by run(); its type is in metadata["error_type"]. Hooks
@@ -606,7 +610,6 @@ class SimulationRunner:
                     # BaseException branch below).
                     reason = result.metadata.get('error') or result.reason
                     await await_maybe(self._hooks.on_datapoint_error(dp, RuntimeError(reason)))
-                final_results.append(result)
                 await await_maybe(self._hooks.on_datapoint_complete(result))
             elif isinstance(result, BaseException):
                 error_msg = f'{type(result).__name__}: {result}'

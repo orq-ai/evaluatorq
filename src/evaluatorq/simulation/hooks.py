@@ -240,9 +240,13 @@ class RichHooks:
         dp_id = result.metadata.get('datapoint_id')
         task_id = self._tasks.get(dp_id) if dp_id else None
         if dp_id and task_id is not None:
+            # Fill the per-task bar to 100% — a judge-terminated run stops before
+            # max_turns, leaving the bar at e.g. 3/10. When _max_turns is None
+            # (lazy-start path, task total=None) this is a no-op.
             self._progress.update(
                 task_id,
                 description=f'  [green]{escape(dp_id)}[/green] {result.terminated_by}',
+                completed=self._max_turns,
             )
         self._completed += 1
         if self._overall_task_id is not None:

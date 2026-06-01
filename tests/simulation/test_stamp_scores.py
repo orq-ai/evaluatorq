@@ -7,10 +7,7 @@ mirror still lands the same data, keyed by DataPoint identity.
 
 from __future__ import annotations
 
-import asyncio
-
 from evaluatorq.simulation.api import _stamp_evaluator_scores
-from evaluatorq.simulation.hooks import DefaultHooks
 from evaluatorq.simulation.types import (
     SimulationResult,
     TerminatedBy,
@@ -65,7 +62,7 @@ def test_stamps_scores_onto_matching_result_by_identity():
         )
     ]
 
-    asyncio.run(_stamp_evaluator_scores(eq_results, cache, 'my-run', DefaultHooks()))
+    _stamp_evaluator_scores(eq_results, cache, 'my-run')
 
     assert sim.metadata['evaluator_scores'] == {
         'goal_achieved': 1.0,
@@ -80,4 +77,4 @@ def test_skips_rows_with_no_cached_result():
     eq_results = [DataPointResult(data_point=placeholder, error='boom')]
 
     # No cache entry, no job_results — must not raise.
-    asyncio.run(_stamp_evaluator_scores(eq_results, {}, '', DefaultHooks()))
+    _stamp_evaluator_scores(eq_results, {}, '')
