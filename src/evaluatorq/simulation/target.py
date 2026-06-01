@@ -14,7 +14,7 @@ from evaluatorq.simulation.tracing import (
     with_llm_span,
 )
 from evaluatorq.common.fields import get_field as _get_field
-from evaluatorq.simulation.utils.retry import with_retry
+from evaluatorq.common.retry import with_retry
 
 if TYPE_CHECKING:
     from collections.abc import Iterable

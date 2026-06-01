@@ -425,7 +425,7 @@ class TestOrqResponsesTargetRetry:
         from openai import APIStatusError
 
         monkeypatch.setattr(
-            "evaluatorq.simulation.utils.retry.asyncio.sleep",
+            "evaluatorq.common.retry.asyncio.sleep",
             AsyncMock(return_value=None),
         )
 
@@ -449,7 +449,7 @@ class TestOrqResponsesTargetRetry:
         from openai import APIStatusError
 
         sleep_mock = AsyncMock(return_value=None)
-        monkeypatch.setattr("evaluatorq.simulation.utils.retry.asyncio.sleep", sleep_mock)
+        monkeypatch.setattr("evaluatorq.common.retry.asyncio.sleep", sleep_mock)
 
         client = _make_client()
         bad_request = APIStatusError(

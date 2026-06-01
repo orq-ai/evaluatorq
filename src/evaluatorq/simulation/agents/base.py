@@ -21,7 +21,7 @@ from evaluatorq.simulation.tracing import (
     with_llm_span,
 )
 from evaluatorq.simulation.types import DEFAULT_MODEL, Message, TokenUsage
-from evaluatorq.simulation.utils.retry import with_retry
+from evaluatorq.common.retry import with_retry
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
