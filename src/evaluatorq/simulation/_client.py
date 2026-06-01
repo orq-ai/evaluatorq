@@ -13,7 +13,7 @@ from evaluatorq.common.fields import get_field as _get_field
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
-    from evaluatorq.simulation.types import TokenUsage
+    from evaluatorq.contracts import TokenUsage
 
 
 def build_simulation_client(
@@ -67,8 +67,7 @@ def extract_responses_output(response: object) -> tuple[list[Any], TokenUsage | 
     Uses the correct ``item.type`` discriminator (``"message"`` for text,
     ``"function_call"`` for tool calls) rather than fragile ``hasattr`` checks.
     """
-    from evaluatorq.contracts import TextOutputItem, ToolCallOutputItem
-    from evaluatorq.simulation.types import TokenUsage
+    from evaluatorq.contracts import TextOutputItem, ToolCallOutputItem, TokenUsage
 
     items: list[Any] = []
     for item in _get_field(response, "output") or []:

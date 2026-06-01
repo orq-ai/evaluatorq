@@ -4,7 +4,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from evaluatorq.simulation.types import DEFAULT_MODEL, Message, SimulationResult, TerminatedBy, TokenUsage
+from evaluatorq.contracts import TokenUsage
+from evaluatorq.simulation.types import DEFAULT_MODEL, Message, SimulationResult, TerminatedBy
 from evaluatorq.simulation._datapoint_io import _validate_shape
 from evaluatorq.simulation.wrap_agent import wrap_simulation_agent
 from evaluatorq.types import DataPoint

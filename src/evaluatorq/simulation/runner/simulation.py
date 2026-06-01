@@ -7,6 +7,7 @@ import inspect
 import logging
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
 from evaluatorq.simulation.agents.user_simulator import (
     UserSimulatorAgent,
@@ -28,7 +29,6 @@ from evaluatorq.simulation.types import (
     Scenario,
     SimulationResult,
     TerminatedBy,
-    TokenUsage,
     TurnMetrics,
 )
 from evaluatorq.simulation.utils.prompt_builders import (

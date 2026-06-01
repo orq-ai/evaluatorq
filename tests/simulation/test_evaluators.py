@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.evaluators import (
     conversation_quality_scorer,
     criteria_met_scorer,
@@ -15,7 +16,6 @@ from evaluatorq.simulation.evaluators import (
 from evaluatorq.simulation.types import (
     SimulationResult,
     TerminatedBy,
-    TokenUsage,
 )
 
 

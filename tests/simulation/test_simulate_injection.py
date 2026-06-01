@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.runner.simulation import SimulationRunner
 from evaluatorq.simulation.types import (
     CommunicationStyle,
@@ -23,7 +24,6 @@ from evaluatorq.simulation.types import (
     Persona,
     Scenario,
     TerminatedBy,
-    TokenUsage,
 )
 
 # ---------------------------------------------------------------------------

@@ -162,7 +162,7 @@ class TestCallResponsesApiTokenUsage:
 
     @pytest.mark.asyncio
     async def test_token_usage_is_populated_from_response(self):
-        from evaluatorq.simulation.types import TokenUsage
+        from evaluatorq.contracts import TokenUsage
 
         mock_response = MagicMock()
         mock_response.id = "resp-123"

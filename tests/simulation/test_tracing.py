@@ -561,6 +561,7 @@ async def test_end_to_end_simulation_produces_full_span_tree(
 
     monkeypatch.setenv("ORQ_API_KEY", "test-key")
 
+    from evaluatorq.contracts import TokenUsage
     from evaluatorq.simulation.runner.simulation import SimulationRunner
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.simulation.types import (
@@ -569,7 +570,6 @@ async def test_end_to_end_simulation_produces_full_span_tree(
         Message,
         Persona,
         Scenario,
-        TokenUsage,
     )
 
     # Build mock judge: should_terminate after the 2nd turn
@@ -915,6 +915,7 @@ async def test_run_span_records_error_metadata_and_usage(
 
     monkeypatch.setenv("ORQ_API_KEY", "test-key")
 
+    from evaluatorq.contracts import TokenUsage
     from evaluatorq.simulation.runner.simulation import SimulationRunner
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.simulation.types import (
@@ -924,7 +925,6 @@ async def test_run_span_records_error_metadata_and_usage(
         Persona,
         Scenario,
         TerminatedBy,
-        TokenUsage,
     )
 
     judge = MagicMock()
@@ -997,7 +997,7 @@ async def test_target_agent_usage_aggregated_into_run_result(
 
     monkeypatch.setenv("ORQ_API_KEY", "test-key")
 
-    from evaluatorq.contracts import AgentResponse, AgentTarget, Message
+    from evaluatorq.contracts import AgentResponse, AgentTarget, Message, TokenUsage
     from evaluatorq.simulation.runner.simulation import SimulationRunner
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.simulation.types import (
@@ -1005,7 +1005,6 @@ async def test_target_agent_usage_aggregated_into_run_result(
         Datapoint,
         Persona,
         Scenario,
-        TokenUsage,
     )
 
     class _FakeAgentTarget(AgentTarget):
@@ -1110,6 +1109,7 @@ async def test_run_span_records_cancellation_metadata_and_usage(
 
     monkeypatch.setenv("ORQ_API_KEY", "test-key")
 
+    from evaluatorq.contracts import TokenUsage
     from evaluatorq.simulation.runner.simulation import SimulationRunner
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.simulation.types import (
@@ -1118,7 +1118,6 @@ async def test_run_span_records_cancellation_metadata_and_usage(
         Message,
         Persona,
         Scenario,
-        TokenUsage,
     )
 
     judge = MagicMock()

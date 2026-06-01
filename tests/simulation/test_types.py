@@ -1,5 +1,6 @@
 """Tests for simulation types."""
 
+from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.types import (
     CommunicationStyle,
     ConversationStrategy,
@@ -14,7 +15,6 @@ from evaluatorq.simulation.types import (
     SimulationResult,
     StartingEmotion,
     TerminatedBy,
-    TokenUsage,
     EMOTIONAL_ARC_INSTRUCTIONS,
     CULTURAL_CONTEXT_INSTRUCTIONS,
     STRATEGY_INSTRUCTIONS,

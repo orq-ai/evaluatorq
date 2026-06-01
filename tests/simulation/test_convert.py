@@ -1,11 +1,11 @@
 """Tests for SimulationResult → OpenResponses conversion."""
 
+from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.convert import to_open_responses
 from evaluatorq.simulation.types import (
     Message,
     SimulationResult,
     TerminatedBy,
-    TokenUsage,
 )
 
 

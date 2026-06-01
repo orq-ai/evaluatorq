@@ -25,7 +25,7 @@ from evaluatorq.simulation.types import DEFAULT_MODEL
 logger = logging.getLogger(__name__)  # noqa: RUF067
 
 if TYPE_CHECKING:
-    from evaluatorq.contracts import AgentTarget, LLMCallConfig
+    from evaluatorq.contracts import AgentTarget, LLMCallConfig, TokenUsage
     from evaluatorq.simulation.adapters import (
         from_chat_completions,
         from_orq_deployment,
@@ -69,7 +69,6 @@ if TYPE_CHECKING:
         SimulationResult,
         StartingEmotion,
         TerminatedBy,
-        TokenUsage,
         TurnMetrics,
     )
     from evaluatorq.simulation.utils.dataset_export import (
@@ -157,7 +156,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
     "SimulationResult": ("evaluatorq.simulation.types", "SimulationResult"),
     "StartingEmotion": ("evaluatorq.simulation.types", "StartingEmotion"),
     "TerminatedBy": ("evaluatorq.simulation.types", "TerminatedBy"),
-    "TokenUsage": ("evaluatorq.simulation.types", "TokenUsage"),
+    "TokenUsage": ("evaluatorq.contracts", "TokenUsage"),
     "TurnMetrics": ("evaluatorq.simulation.types", "TurnMetrics"),
     "export_datapoints_to_jsonl": (
         "evaluatorq.simulation.utils.dataset_export",

@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from evaluatorq.contracts import LLMCallConfig, TextOutputItem, ToolCallOutputItem
+from evaluatorq.contracts import LLMCallConfig, TextOutputItem, ToolCallOutputItem, TokenUsage
 from evaluatorq.simulation._client import build_simulation_client, extract_responses_output
 from evaluatorq.simulation.tracing import (
     get_trace_context_headers,
@@ -20,7 +20,7 @@ from evaluatorq.simulation.tracing import (
     record_llm_response,
     with_llm_span,
 )
-from evaluatorq.simulation.types import DEFAULT_MODEL, Message, TokenUsage
+from evaluatorq.simulation.types import DEFAULT_MODEL, Message
 from evaluatorq.common.retry import with_retry
 
 if TYPE_CHECKING:
