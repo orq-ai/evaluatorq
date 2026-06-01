@@ -544,8 +544,8 @@ def test_auto_save_collision_suffix(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         "evaluator_names": [],
         "results": results,
     }
-    path1 = _auto_save_run(**kwargs)  # type: ignore[arg-type]
-    path2 = _auto_save_run(**kwargs)  # type: ignore[arg-type]
+    path1 = _auto_save_run(**kwargs)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+    path2 = _auto_save_run(**kwargs)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
     assert path1 != path2
     assert path2.name.endswith("_001.json")
 

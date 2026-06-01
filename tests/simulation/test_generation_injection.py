@@ -74,9 +74,12 @@ async def test_simulate_first_message_uses_generation_client_without_orq(monkeyp
 @pytest.mark.asyncio
 async def test_sim_model_is_the_public_param(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    # Pass the old name dynamically so the static type checker doesn't flag the
+    # deliberately-invalid kwarg; we assert the *runtime* rejection of `model`.
+    bad_kwargs: dict[str, object] = {
+        "datapoints": [],
+        "target": lambda messages: "ok",
+        "model": "x",
+    }
     with pytest.raises(TypeError):
-        await simulate(
-            datapoints=[],
-            target=lambda messages: "ok",
-            model="x",  # old name removed -> unexpected kwarg
-        )
+        await simulate(**bad_kwargs)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
