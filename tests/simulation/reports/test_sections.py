@@ -7,6 +7,7 @@ import pytest
 from evaluatorq.contracts import Message, TokenUsage
 from evaluatorq.simulation.reports.sections import (
     _build_criteria_heatmap_section,
+    _build_overview_section,
     _criteria_rows,
     build_report_sections,
 )
@@ -411,3 +412,30 @@ def test_criteria_heatmap_does_not_collide_across_scenarios(make_result):
     rows = {lbl: cells for lbl, cells in zip(section.data['y_labels'], section.data['cells'], strict=True)}
     billing_row = next(c for lbl, c in rows.items() if 'explains charge' in lbl)
     assert billing_row == [1.0, -1.0]  # billing pass, outage absent
+
+
+def test_overview_section_includes_traits_and_goal_when_present():
+    from evaluatorq.simulation.types import SimulationResult, TerminatedBy, TokenUsage
+
+    r = SimulationResult(
+        messages=[], terminated_by=TerminatedBy.judge, reason='r',
+        goal_achieved=True, goal_completion_score=1.0, rules_broken=[],
+        turn_count=1, turn_metrics=[],
+        token_usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        metadata={
+            'persona': 'Frustrated Customer', 'scenario': 'Billing',
+            'persona_traits': {'patience': 0.2, 'assertiveness': 0.8,
+                               'politeness': 0.4, 'technical_level': 0.3,
+                               'communication_style': 'casual', 'background': 'Annoyed.'},
+            'scenario_goal': 'Explain the invoice', 'scenario_context': 'Unexpected charge.',
+            'criteria_meta': [{'id': 'criteria_0', 'description': 'explains charge',
+                               'type': 'must_happen', 'passed': True}],
+        },
+    )
+    section = _build_overview_section([r])
+    persona = section.data['personas'][0]
+    assert persona['traits']['patience'] == 0.2
+    assert persona['background'] == 'Annoyed.'
+    scenario = section.data['scenarios'][0]
+    assert scenario['goal'] == 'Explain the invoice'
+    assert scenario['context'] == 'Unexpected charge.'

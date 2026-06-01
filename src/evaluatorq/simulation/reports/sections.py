@@ -141,29 +141,40 @@ def _build_summary_section(results: list[SimulationResult]) -> ReportSection:
 
 
 def _build_overview_section(results: list[SimulationResult]) -> ReportSection:
-    """Introductory framing: which personas and scenarios were exercised.
-
-    Persona traits and scenario goals aren't persisted on results, so we list
-    persona names (with conversation counts) and per-scenario criteria, which
-    are recoverable from ``criteria_meta``.
-    """
-    personas: dict[str, int] = {}
+    """Introductory framing: which personas (with traits) and scenarios (with
+    goals + criteria) were exercised. Traits/goals are read from metadata when
+    persisted; older results fall back to names + recovered criteria only."""
+    personas: dict[str, dict[str, Any]] = {}
     for r in results:
-        personas[_persona_name(r)] = personas.get(_persona_name(r), 0) + 1
+        name = _persona_name(r)
+        if name not in personas:
+            traits = r.metadata.get('persona_traits')
+            personas[name] = {
+                'name': name,
+                'conversations': 0,
+                'traits': traits if isinstance(traits, dict) else None,
+                'background': (traits or {}).get('background') if isinstance(traits, dict) else None,
+            }
+        personas[name]['conversations'] += 1
 
-    scenarios: dict[str, list[dict[str, Any]]] = {}
+    scenarios: dict[str, dict[str, Any]] = {}
     for r in results:
         name = _scenario_name(r)
         if name not in scenarios:
-            scenarios[name] = [{'description': c['description'], 'type': c['type']} for c in _criteria_rows(r)]
+            scenarios[name] = {
+                'name': name,
+                'goal': r.metadata.get('scenario_goal'),
+                'context': r.metadata.get('scenario_context'),
+                'criteria': [{'description': c['description'], 'type': c['type']} for c in _criteria_rows(r)],
+            }
 
     return ReportSection(
         kind='overview',
         title='Overview',
         data={
             'total_conversations': len(results),
-            'personas': [{'name': n, 'conversations': c} for n, c in personas.items()],
-            'scenarios': [{'name': n, 'criteria': crit} for n, crit in scenarios.items()],
+            'personas': list(personas.values()),
+            'scenarios': list(scenarios.values()),
         },
     )
 

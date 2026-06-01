@@ -429,10 +429,31 @@ def _render_overview_section(section: ReportSection) -> str:
         '**Personas**',
         '',
     ]
-    lines.extend(f'- {p["name"]} ({p["conversations"]} conv.)' for p in personas)
+    for p in personas:
+        lines.append(f'- {p["name"]} ({p["conversations"]} conv.)')
+        traits = p.get('traits')
+        if isinstance(traits, dict):
+            trait_parts = [
+                f'patience {traits.get("patience", "?")}',
+                f'assertiveness {traits.get("assertiveness", "?")}',
+                f'politeness {traits.get("politeness", "?")}',
+                f'technical {traits.get("technical_level", "?")}',
+            ]
+            if traits.get('communication_style'):
+                trait_parts.append(str(traits['communication_style']))
+            lines.append(f'  - _traits_: {" · ".join(trait_parts)}')
+        background = p.get('background')
+        if background:
+            lines.append(f'  - _background_: {background}')
     lines.extend(['', '**Scenarios**', ''])
     for s in scenarios:
         lines.append(f'- {s["name"]}')
+        goal = s.get('goal')
+        if goal:
+            lines.append(f'  - **Goal:** {goal}')
+        context = s.get('context')
+        if context:
+            lines.append(f'  - **Context:** {context}')
         for c in s.get('criteria', []):
             marker = 'must NOT' if c['type'] == 'must_not_happen' else 'must'
             lines.append(f'  - _{marker}_: {c["description"]}')

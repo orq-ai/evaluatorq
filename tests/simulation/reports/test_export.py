@@ -335,3 +335,61 @@ def test_md_has_new_sections_and_no_raw_ids(sample_results):
 def test_md_omits_model_when_unknown(make_result):
     md = export_markdown([make_result(goal_achieved=True)], target='t')
     assert 'Model:** unknown' not in md
+
+
+def test_overview_html_and_md_show_traits_and_goal():
+    from evaluatorq.simulation.reports import export_html, export_markdown
+    from evaluatorq.simulation.types import SimulationResult, TerminatedBy, TokenUsage
+
+    r = SimulationResult(
+        messages=[], terminated_by=TerminatedBy.judge, reason='r',
+        goal_achieved=True, goal_completion_score=1.0, rules_broken=[],
+        turn_count=1, turn_metrics=[],
+        token_usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        metadata={
+            'persona': 'Frustrated Customer', 'scenario': 'Billing',
+            'persona_traits': {'patience': 0.2, 'assertiveness': 0.8, 'politeness': 0.4,
+                               'technical_level': 0.3, 'communication_style': 'casual',
+                               'background': 'Annoyed.'},
+            'scenario_goal': 'Explain the invoice', 'scenario_context': 'Unexpected charge.',
+            'criteria_meta': [{'id': 'criteria_0', 'description': 'explains charge',
+                               'type': 'must_happen', 'passed': True}],
+        },
+    )
+    html = export_html([r], target='Agent')
+    md = export_markdown([r], target='Agent')
+    assert 'Explain the invoice' in html and 'Explain the invoice' in md
+    assert 'Annoyed.' in html and 'Annoyed.' in md
+
+
+def test_overview_renders_zero_trait_and_fallback_without_metadata():
+    from evaluatorq.simulation.reports import export_html, export_markdown
+    from evaluatorq.simulation.types import SimulationResult, TerminatedBy, TokenUsage
+
+    def _result(metadata):
+        return SimulationResult(
+            messages=[], terminated_by=TerminatedBy.judge, reason='r',
+            goal_achieved=True, goal_completion_score=1.0, rules_broken=[],
+            turn_count=1, turn_metrics=[],
+            token_usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            metadata=metadata,
+        )
+
+    # patience 0.0 must NOT be dropped by a truthiness guard
+    with_zero = _result({
+        'persona': 'P', 'scenario': 'S',
+        'persona_traits': {'patience': 0.0, 'assertiveness': 0.8, 'politeness': 0.4,
+                           'technical_level': 0.3, 'communication_style': 'casual',
+                           'background': 'bg'},
+        'scenario_goal': 'g',
+    })
+    html = export_html([with_zero], target='Agent')
+    md = export_markdown([with_zero], target='Agent')
+    assert 'patience 0.0' in html and 'patience 0.0' in md
+
+    # older result: no traits/goal -> name-only, no empty "Goal:" label, no stray separators
+    legacy = _result({'persona': 'Old', 'scenario': 'Leg'})
+    html2 = export_html([legacy], target='Agent')
+    md2 = export_markdown([legacy], target='Agent')
+    assert 'Old' in html2 and 'Old' in md2
+    assert 'Goal:' not in html2 and '**Goal:**' not in md2

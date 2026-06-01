@@ -176,20 +176,48 @@ def _render_overview_html(section: ReportSection) -> str:
         'In each, a simulated user (the persona) pursues the scenario goal while a judge '
         'scores success criteria and per-turn quality. The sections below lead with failures.</p>'
     )
-    persona_items = ''.join(
-        f'<li>{_esc(p["name"])} <span class="intro-count">· {p["conversations"]} conv.</span></li>' for p in personas
-    )
-    scenario_items = ''.join(
-        '<li>{name}<div>{tags}</div></li>'.format(
-            name=_esc(s['name']),
-            tags=''.join(
-                f'<span class="crit-tag crit-tag--{"mustnot" if c["type"] == "must_not_happen" else "must"}">'
-                f'{"✗ must not" if c["type"] == "must_not_happen" else "✓ must"}: {_esc(c["description"])}</span>'
-                for c in s.get('criteria', [])
-            ),
+
+    def _persona_item(p: dict[str, Any]) -> str:
+        traits = p.get('traits')
+        background = p.get('background')
+        parts = [f'<li>{_esc(p["name"])} <span class="intro-count">· {p["conversations"]} conv.</span>']
+        if isinstance(traits, dict):
+            trait_parts = [
+                f'patience {traits.get("patience", "?")}',
+                f'assertiveness {traits.get("assertiveness", "?")}',
+                f'politeness {traits.get("politeness", "?")}',
+                f'technical {traits.get("technical_level", "?")}',
+            ]
+            if traits.get('communication_style'):
+                trait_parts.append(_esc(str(traits['communication_style'])))
+            trait_line = ' · '.join(trait_parts)
+            parts.append(f'<div class="intro-meta">{trait_line}</div>')
+        if background:
+            parts.append(f'<div class="intro-meta">{_esc(str(background))}</div>')
+        parts.append('</li>')
+        return ''.join(parts)
+
+    persona_items = ''.join(_persona_item(p) for p in personas)
+
+    def _scenario_item(s: dict[str, Any]) -> str:
+        goal = s.get('goal')
+        context = s.get('context')
+        tags = ''.join(
+            f'<span class="crit-tag crit-tag--{"mustnot" if c["type"] == "must_not_happen" else "must"}">'
+            f'{"✗ must not" if c["type"] == "must_not_happen" else "✓ must"}: {_esc(c["description"])}</span>'
+            for c in s.get('criteria', [])
         )
-        for s in scenarios
-    )
+        parts = [f'<li>{_esc(s["name"])}']
+        if goal:
+            parts.append(f'<div class="intro-meta"><strong>Goal:</strong> {_esc(str(goal))}</div>')
+        if context:
+            parts.append(f'<div class="intro-meta"><strong>Context:</strong> {_esc(str(context))}</div>')
+        if tags:
+            parts.append(f'<div>{tags}</div>')
+        parts.append('</li>')
+        return ''.join(parts)
+
+    scenario_items = ''.join(_scenario_item(s) for s in scenarios)
     grid = (
         '<div class="intro-grid">'
         f'<div><h3>Personas</h3><ul class="intro-list">{persona_items}</ul></div>'
