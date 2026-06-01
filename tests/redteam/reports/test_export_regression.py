@@ -10,6 +10,7 @@ break the redteam HTML export path.  Two cases:
 from __future__ import annotations
 
 import builtins
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 
 import pytest
@@ -110,10 +111,16 @@ def test_redteam_html_renders_without_plotly(
     """export_html degrades gracefully (tables only) when plotly/kaleido are absent."""
     real_import = builtins.__import__
 
-    def no_plotly(name: str, *args: object, **kwargs: object) -> object:
+    def no_plotly(
+        name: str,
+        globals_: Mapping[str, object] | None = None,
+        locals_: Mapping[str, object] | None = None,
+        fromlist: Sequence[str] = (),
+        level: int = 0,
+    ) -> object:
         if name.startswith('plotly') or name == 'kaleido':
             raise ImportError(name)
-        return real_import(name, *args, **kwargs)
+        return real_import(name, globals_, locals_, fromlist, level)
 
     monkeypatch.setattr(builtins, '__import__', no_plotly)
     html = export_html(redteam_report)
