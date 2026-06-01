@@ -174,20 +174,15 @@ def _auto_save_run(
     ts = datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M%S")
     safe_name = _sanitise_run_name(run_name)
     base = f"{safe_name}_{ts}"
-    target_path = runs_dir / f"{base}.json"
 
-    # Collision handling
-    counter = 0
-    while target_path.exists():
-        counter += 1
-        target_path = runs_dir / f"{base}_{counter:03d}.json"
-
-    # Aggregate scorer averages
+    # Aggregate scorer averages. Guard against non-numeric scores from a
+    # misbehaving evaluator so a single bad entry can't crash the whole save.
     scorer_totals: dict[str, list[float]] = {}
     for result in results:
         scores: dict[str, float] = (result.metadata or {}).get("evaluator_scores", {})
         for scorer_name, score in scores.items():
-            scorer_totals.setdefault(scorer_name, []).append(score)
+            if isinstance(score, (int, float)):
+                scorer_totals.setdefault(scorer_name, []).append(float(score))
 
     scorer_averages = {
         k: sum(v) / len(v) for k, v in scorer_totals.items() if v
@@ -203,12 +198,22 @@ def _auto_save_run(
         scorer_averages=scorer_averages,
         results=results,
     )
+    payload = run.model_dump_json(indent=2)
 
-    target_path.write_text(
-        run.model_dump_json(indent=2),
-        encoding="utf-8",
+    # Exclusive-create write: avoids the TOCTOU race between an exists() check
+    # and a later write, and bounds the collision search.
+    target_path = runs_dir / f"{base}.json"
+    for counter in range(1000):
+        try:
+            with target_path.open("x", encoding="utf-8") as fh:
+                _ = fh.write(payload)
+        except FileExistsError:  # noqa: PERF203 — exclusive-create retry is the point
+            target_path = runs_dir / f"{base}_{counter + 1:03d}.json"
+        else:
+            return target_path
+    raise RuntimeError(
+        f"Could not find a free run-store filename for {base!r} after 1000 attempts"
     )
-    return target_path
 
 
 def _infer_target_kind(
@@ -296,7 +301,6 @@ def run(
     ] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging.")] = False,  # noqa: FBT002
     quiet: Annotated[bool, typer.Option("--quiet", "-q", help="Warning-only logging.")] = False,  # noqa: FBT002
-    yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation prompts.")] = False,  # noqa: FBT002
 ) -> None:
     """Run simulations from a pre-built datapoints file.
 
@@ -471,7 +475,6 @@ def generate(
     ] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging.")] = False,  # noqa: FBT002
     quiet: Annotated[bool, typer.Option("--quiet", "-q", help="Warning-only logging.")] = False,  # noqa: FBT002
-    yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation prompts.")] = False,  # noqa: FBT002
 ) -> None:
     """Generate personas and scenarios, then run simulations.
 

@@ -89,7 +89,14 @@ class FirstMessageGenerator:
         self._model = model
         from evaluatorq.simulation._client import build_simulation_client
 
-        self._client, _ = build_simulation_client(client, extra_api_key=api_key)
+        self._client, self._client_owned = build_simulation_client(
+            client, extra_api_key=api_key
+        )
+
+    async def close(self) -> None:
+        """Close the HTTP client (only if this generator built it)."""
+        if self._client_owned:
+            await self._client.close()
 
     async def generate(self, persona: Persona, scenario: Scenario) -> str:
         """Generate a first message for a simulation."""

@@ -361,6 +361,7 @@ def test_run_writes_output_file(tmp_path: Path) -> None:
         )
 
     assert result.exit_code == 0, result.output
+    mock_export.assert_called_once()
 
 
 def test_run_rejects_three_targets(tmp_path: Path) -> None:
