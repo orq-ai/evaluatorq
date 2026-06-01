@@ -662,6 +662,7 @@ def test_generate_forwards_sim_model(monkeypatch):
             "--num-scenarios", "1",
             "--no-save",
         ],
+        env={"OPENAI_API_KEY": "test-key"},
     )
     assert result.exit_code == 0, result.output
     assert captured["sim_model"] == "gpt-5.4-mini"
