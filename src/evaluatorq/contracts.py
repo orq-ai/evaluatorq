@@ -480,7 +480,6 @@ ReportSectionKind = Literal[
     "failures_first",
     "failure_mode",
     "persona_scenario_heatmap",
-    "criteria_heatmap",
     "score_distribution",
     "turn_quality_timeline",
     "persona_breakdown",

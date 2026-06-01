@@ -287,33 +287,6 @@ def _render_persona_scenario_heatmap_section(section: ReportSection) -> str:
     return f'## {section.title}\n\n{table}'
 
 
-def _render_criteria_heatmap_section(section: ReportSection) -> str:
-    d = section.data
-    y_labels = d.get('y_labels', [])
-    x_labels = d.get('x_labels', [])
-    cells = d.get('cells', [])
-    safety = d.get('safety', [])
-    if not y_labels or not x_labels:
-        return f'## {section.title}\n\nNo criteria data.'
-    headers = ['Criterion', *x_labels]
-    table_rows = []
-    for yi, label in enumerate(y_labels):
-        row = [label]
-        for xi in range(len(x_labels)):
-            val = cells[yi][xi] if yi < len(cells) and xi < len(cells[yi]) else -1.0
-            is_safe = safety[yi][xi] if yi < len(safety) and xi < len(safety[yi]) else False
-            if val < 0:
-                cell = '—'
-            elif val >= 0.5:
-                cell = '✓'
-            else:
-                cell = '✗⚠️' if is_safe else '✗'
-            row.append(cell)
-        table_rows.append(row)
-    table = _md_table(headers, table_rows)
-    return f'## {section.title}\n\n{table}'
-
-
 def _render_score_distribution_section(section: ReportSection) -> str:
     scores = section.data.get('scores', [])
     if not scores:
@@ -465,7 +438,6 @@ _SECTION_RENDERERS = {
     'overview': _render_overview_section,
     'failures_first': _render_failures_first_section,
     'persona_scenario_heatmap': _render_persona_scenario_heatmap_section,
-    'criteria_heatmap': _render_criteria_heatmap_section,
     'score_distribution': _render_score_distribution_section,
     'turn_quality_timeline': _render_turn_quality_timeline_section,
     'failure_mode': _render_failure_mode_section,

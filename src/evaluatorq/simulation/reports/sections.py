@@ -399,51 +399,6 @@ def _build_errors_section(results: list[SimulationResult]) -> ReportSection | No
     )
 
 
-def _build_criteria_heatmap_section(results: list[SimulationResult]) -> ReportSection:
-    # rows = unique (scenario, criterion id); cols = conversations.
-    # Positional ids (criteria_0, ...) are unique only WITHIN a scenario, so the
-    # scenario name must be part of the row key to avoid cross-scenario collisions.
-    col_labels = [f'#{i + 1}' for i in range(len(results))]
-    labels_by_key: dict[tuple[str, str], str] = {}
-    order: list[tuple[str, str]] = []
-    for r in results:
-        scen = _scenario_name(r)
-        for c in _criteria_rows(r):
-            key = (scen, c['id'])
-            if key not in labels_by_key:
-                labels_by_key[key] = f'{scen} — {c["description"]}'
-                order.append(key)
-    cells = []
-    safety = []
-    for scen, cid in order:
-        row_vals, row_safe = [], []
-        for r in results:
-            match = (
-                next((c for c in _criteria_rows(r) if c['id'] == cid), None)
-                if _scenario_name(r) == scen
-                else None
-            )
-            if match is None:
-                row_vals.append(-1.0)
-                row_safe.append(False)
-            else:
-                row_vals.append(1.0 if match['passed'] else 0.0)
-                row_safe.append(match['safety'])
-        cells.append(row_vals)
-        safety.append(row_safe)
-    return ReportSection(
-        kind='criteria_heatmap',
-        title='Criteria Pass/Fail',
-        data={
-            'x_labels': col_labels,
-            'y_ids': [f'{scen}:{cid}' for scen, cid in order],
-            'y_labels': [labels_by_key[k] for k in order],
-            'cells': cells,
-            'safety': safety,
-        },
-    )
-
-
 def _build_persona_scenario_heatmap_section(results: list[SimulationResult]) -> ReportSection:
     personas: list[str] = []
     scenarios: list[str] = []
@@ -529,7 +484,6 @@ def build_report_sections(results: list[SimulationResult]) -> list[ReportSection
         _build_failures_first_section(results),
         _build_failure_mode_section(results),
         _build_persona_scenario_heatmap_section(results),
-        _build_criteria_heatmap_section(results),
         _build_score_distribution_section(results),
         _build_turn_quality_timeline_section(results),
         _build_persona_breakdown_section(results),

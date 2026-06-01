@@ -132,26 +132,6 @@ def test_html_persona_rows_show_success_rate_not_sparkline(sample_results):
     assert 'Success' in html  # the success-rate column header remains
 
 
-def test_html_heatmap_pass_is_green_fail_is_red(sample_results):
-    from evaluatorq.simulation.reports.export_html import (
-        _render_criteria_heatmap_html,
-    )
-    from evaluatorq.simulation.reports.sections import build_report_sections
-
-    sections = build_report_sections(sample_results)
-    heat = next(s for s in sections if s.kind == 'criteria_heatmap')
-    html = _render_criteria_heatmap_html(heat).lower()
-    assert 'pass' in html and 'fail' in html
-    # PASS (value 1.0) must be the success green, FAIL (value 0.0) the error red.
-    # Green is darkened to #157f57 for WCAG AA contrast (white text on the cell).
-    assert 'background:#157f57' in html  # pass -> green
-    assert 'background:#d92d20' in html  # fail -> red
-    # sample_results' first conversation has no criteria_1, so that cell is
-    # absent and must render neutral grey, NOT red.
-    assert 'background:#e4e2df' in html  # absent -> neutral, not a failure
-    assert '—' in html
-
-
 def test_html_criterion_description_single_escaped(make_result):
     """Criterion descriptions are escaped exactly once (status_badge escapes
     internally), so special chars must not be double-encoded."""

@@ -258,31 +258,6 @@ def _render_failures_first_html(section: ReportSection) -> str:
     return f'<section class="report-card"><h2>Failures</h2>{table}{note}</section>'
 
 
-def _render_criteria_heatmap_html(section: ReportSection) -> str:
-    d = section.data
-    criteria = d.get('y_labels', [])
-    convs = d.get('x_labels', [])
-    if not criteria:
-        return ''
-    # Transpose so conversations are ROWS and criteria are columns: the report
-    # has few criteria but conversation count grows, so vertical growth avoids
-    # the heatmap overflowing its card horizontally.
-    cells = d['cells']
-    safety = d.get('safety') or []
-    cells_t = [[cells[ci][xi] for ci in range(len(criteria))] for xi in range(len(convs))]
-    safety_t = [[safety[ci][xi] for ci in range(len(criteria))] for xi in range(len(convs))] if safety else None
-    heat = _render_heatmap(
-        x_labels=criteria,
-        y_labels=convs,
-        cells=cells_t,
-        scale=_SCALE_GREEN_HIGH,
-        title=section.title,
-        value_fmt=lambda v: '—' if v < 0 else ('PASS' if v >= 0.5 else 'FAIL'),
-        safety_mask=safety_t,
-    )
-    return f'<section class="report-card">{heat}</section>'
-
-
 def _render_persona_scenario_heatmap_html(section: ReportSection) -> str:
     d = section.data
     personas, scenarios = d['personas'], d['scenarios']
@@ -564,7 +539,6 @@ _SECTION_RENDERERS = {
     'overview': _render_overview_html,
     'failures_first': _render_failures_first_html,
     'persona_scenario_heatmap': _render_persona_scenario_heatmap_html,
-    'criteria_heatmap': _render_criteria_heatmap_html,
     'score_distribution': _render_score_distribution_html,
     'turn_quality_timeline': _render_turn_quality_timeline_html,
     'persona_breakdown': _render_persona_breakdown_html,

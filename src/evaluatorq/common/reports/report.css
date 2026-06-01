@@ -162,8 +162,9 @@ details pre { background: #f5f5f5; padding: 1rem; border-radius: 4px; overflow-x
 .kpi-card--warn { border-left-color: var(--c-warn); }
 .kpi-value { font-size: 1.9rem; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; }
 .kpi-label { font-size: .82rem; color: #666; margin-top: .35rem; }
-.report-card { background: #fff; border: 1px solid var(--c-border); border-radius: 12px;
-  padding: 1.25rem 1.5rem; margin: 1.25rem 0; box-shadow: 0 1px 3px rgba(0,0,0,.04); }
+.report-card { background: #fff; border: 1px solid #cfccc5; border-radius: 12px;
+  padding: 1.25rem 1.5rem; margin: 1.5rem 0;
+  box-shadow: 0 1px 2px rgba(0,0,0,.06), 0 6px 16px rgba(0,0,0,.07); }
 .report-card > h2 { margin-top: 0; }
 .chart-card { margin: 1rem 0; text-align: center; }
 .chart-card figcaption { font-weight: 600; font-size: .9rem; margin-bottom: .5rem; color: #444; }
