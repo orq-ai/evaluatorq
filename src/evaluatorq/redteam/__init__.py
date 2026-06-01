@@ -32,6 +32,16 @@ _check_redteam_deps()  # noqa: RUF067
 
 
 from evaluatorq.contracts import AgentTarget
+from evaluatorq.openresponses import (
+    append_assistant_turn,
+    append_user_followup,
+    build_openresponses_request,
+    load_openresponses_dataset,
+    messages_from_openresponses_input,
+    orchestrator_result_to_openresponses_input,
+    redteam_sample_from_openresponses,
+    turns_to_openresponses_input,
+)
 from evaluatorq.redteam.adaptive.orchestrator import (
     ADVERSARIAL_ANALYSIS_PROMPT,
     ADVERSARIAL_INITIAL_USER_PROMPT,
@@ -205,6 +215,15 @@ __all__ = [
     "VulnerabilityDef",
     "VulnerabilityDomain",
     "VulnerabilitySummary",
+    # OpenResponses dataset helpers (RES-540)
+    "append_assistant_turn",
+    "append_user_followup",
+    "build_openresponses_request",
+    "load_openresponses_dataset",
+    "messages_from_openresponses_input",
+    "orchestrator_result_to_openresponses_input",
+    "redteam_sample_from_openresponses",
+    "turns_to_openresponses_input",
     "get_category_info",
     "get_vulnerability_name",
     # Vulnerability introspection

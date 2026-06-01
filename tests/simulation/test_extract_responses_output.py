@@ -131,3 +131,28 @@ class TestExtractResponsesOutput:
         assert isinstance(items[2], TextOutputItem)
         assert items[0].text == "before"
         assert items[2].text == "after"
+
+    def test_accepts_dict_shaped_response_items(self):
+        response = {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "hello"}],
+                },
+                {
+                    "type": "function_call",
+                    "name": "lookup",
+                    "arguments": {"q": "x"},
+                    "call_id": "call_1",
+                },
+            ],
+            "usage": {"input_tokens": 4, "output_tokens": 3},
+        }
+        items, usage = extract_responses_output(response)
+        assert len(items) == 2
+        assert isinstance(items[0], TextOutputItem)
+        assert items[0].text == "hello"
+        assert isinstance(items[1], ToolCallOutputItem)
+        assert json.loads(items[1].arguments) == {"q": "x"}
+        assert usage is not None
+        assert usage.total_tokens == 7

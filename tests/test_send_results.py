@@ -2,11 +2,14 @@
 
 import json
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any
 
+import httpx
 import pytest
 from pydantic import BaseModel
 
+from evaluatorq.send_results import SendResultsError, send_results_to_orq
 from evaluatorq.types import (
     DataPoint,
     DataPointResult,
@@ -269,3 +272,105 @@ class TestSendResultsDefaults:
         es = payload["results"][0]["jobResults"][0]["evaluatorScores"][0]
         assert "error" in es
         assert es["error"] == ""
+
+
+class TestSendResultsUploadFailures:
+    @pytest.mark.asyncio
+    async def test_non_success_response_raises(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        build_results: Callable[..., list[DataPointResult]],
+    ):
+        async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
+            request = httpx.Request("POST", "https://api.orq.ai/v2/spreadsheets/evaluations/receive")
+            return httpx.Response(
+                401,
+                request=request,
+                json={"error": "unauthorized"},
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+        with pytest.raises(SendResultsError, match="401 Unauthorized"):
+            await send_results_to_orq(
+                api_key="bad-key",
+                evaluation_name="eval",
+                evaluation_description=None,
+                dataset_id=None,
+                results=build_results(0.5),
+                start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+                raise_on_error=True,
+            )
+
+    @pytest.mark.asyncio
+    async def test_network_error_is_not_swallowed(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        build_results: Callable[..., list[DataPointResult]],
+    ):
+        async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
+            request = httpx.Request("POST", "https://api.orq.ai/v2/spreadsheets/evaluations/receive")
+            raise httpx.RequestError("connection failed", request=request)
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+        with pytest.raises(httpx.RequestError, match="connection failed"):
+            await send_results_to_orq(
+                api_key="key",
+                evaluation_name="eval",
+                evaluation_description=None,
+                dataset_id=None,
+                results=build_results(0.5),
+                start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+                raise_on_error=True,
+            )
+
+    @pytest.mark.asyncio
+    async def test_non_success_response_returns_none_when_raise_on_error_false(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        build_results: Callable[..., list[DataPointResult]],
+    ):
+        async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
+            request = httpx.Request("POST", "https://api.orq.ai/v2/spreadsheets/evaluations/receive")
+            return httpx.Response(503, request=request, json={"error": "service unavailable"})
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+        result = await send_results_to_orq(
+            api_key="key",
+            evaluation_name="eval",
+            evaluation_description=None,
+            dataset_id=None,
+            results=build_results(0.5),
+            start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+            raise_on_error=False,
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_network_error_returns_none_when_raise_on_error_false(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        build_results: Callable[..., list[DataPointResult]],
+    ):
+        async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
+            request = httpx.Request("POST", "https://api.orq.ai/v2/spreadsheets/evaluations/receive")
+            raise httpx.RequestError("connection failed", request=request)
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+        result = await send_results_to_orq(
+            api_key="key",
+            evaluation_name="eval",
+            evaluation_description=None,
+            dataset_id=None,
+            results=build_results(0.5),
+            start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+            raise_on_error=False,
+        )
+        assert result is None

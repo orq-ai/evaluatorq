@@ -15,7 +15,12 @@ import importlib
 import logging
 from typing import TYPE_CHECKING, Any
 
-from evaluatorq.simulation.api import generate_and_simulate, simulate
+from evaluatorq.simulation.api import (
+    SimulationDroppedError,
+    generate,
+    generate_and_simulate,
+    simulate,
+)
 from evaluatorq.simulation.types import DEFAULT_MODEL
 
 logger = logging.getLogger(__name__)  # noqa: RUF067
@@ -36,11 +41,21 @@ if TYPE_CHECKING:
         get_all_evaluators,
         get_evaluator,
     )
+    from evaluatorq.simulation.exceptions import (
+        SimulationCancelledError,
+        SimulationError,
+    )
     from evaluatorq.simulation.generators import (
         DatapointGenerator,
         FirstMessageGenerator,
         PersonaGenerator,
         ScenarioGenerator,
+    )
+    from evaluatorq.simulation.hooks import (
+        DefaultHooks,
+        RichHooks,
+        SimulationHooks,
+        SimulationRunMeta,
     )
     from evaluatorq.simulation.quality.message_perturbation import (
         PerturbationType,
@@ -63,6 +78,7 @@ if TYPE_CHECKING:
         Persona,
         Scenario,
         SimulationResult,
+        SimulationRun,
         StartingEmotion,
         TerminatedBy,
         TokenUsage,
@@ -85,119 +101,129 @@ if TYPE_CHECKING:
 
 
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
-    "LLMCallConfig": ("evaluatorq.contracts", "LLMCallConfig"),
-    "from_chat_completions": ("evaluatorq.simulation.adapters", "from_chat_completions"),
-    "from_orq_deployment": ("evaluatorq.simulation.adapters", "from_orq_deployment"),
-    "AgentConfig": ("evaluatorq.simulation.agents.base", "AgentConfig"),
-    "BaseAgent": ("evaluatorq.simulation.agents.base", "BaseAgent"),
-    "OrqResponsesTarget": ("evaluatorq.simulation.target", "OrqResponsesTarget"),
-    "JudgeAgent": ("evaluatorq.simulation.agents.judge", "JudgeAgent"),
-    "UserSimulatorAgent": (
-        "evaluatorq.simulation.agents.user_simulator",
-        "UserSimulatorAgent",
+    'LLMCallConfig': ('evaluatorq.contracts', 'LLMCallConfig'),
+    'from_chat_completions': ('evaluatorq.simulation.adapters', 'from_chat_completions'),
+    'from_orq_deployment': ('evaluatorq.simulation.adapters', 'from_orq_deployment'),
+    'AgentConfig': ('evaluatorq.simulation.agents.base', 'AgentConfig'),
+    'BaseAgent': ('evaluatorq.simulation.agents.base', 'BaseAgent'),
+    'OrqResponsesTarget': ('evaluatorq.simulation.target', 'OrqResponsesTarget'),
+    'JudgeAgent': ('evaluatorq.simulation.agents.judge', 'JudgeAgent'),
+    'UserSimulatorAgent': (
+        'evaluatorq.simulation.agents.user_simulator',
+        'UserSimulatorAgent',
     ),
-    "to_open_responses": ("evaluatorq.simulation.convert", "to_open_responses"),
-    "SIMULATION_EVALUATORS": (
-        "evaluatorq.simulation.evaluators",
-        "SIMULATION_EVALUATORS",
+    'to_open_responses': ('evaluatorq.simulation.convert', 'to_open_responses'),
+    'SIMULATION_EVALUATORS': (
+        'evaluatorq.simulation.evaluators',
+        'SIMULATION_EVALUATORS',
     ),
-    "SimulationScorer": ("evaluatorq.simulation.evaluators", "SimulationScorer"),
-    "get_all_evaluators": ("evaluatorq.simulation.evaluators", "get_all_evaluators"),
-    "get_evaluator": ("evaluatorq.simulation.evaluators", "get_evaluator"),
-    "DatapointGenerator": (
-        "evaluatorq.simulation.generators",
-        "DatapointGenerator",
+    'SimulationScorer': ('evaluatorq.simulation.evaluators', 'SimulationScorer'),
+    'get_all_evaluators': ('evaluatorq.simulation.evaluators', 'get_all_evaluators'),
+    'get_evaluator': ('evaluatorq.simulation.evaluators', 'get_evaluator'),
+    'DatapointGenerator': (
+        'evaluatorq.simulation.generators',
+        'DatapointGenerator',
     ),
-    "FirstMessageGenerator": (
-        "evaluatorq.simulation.generators",
-        "FirstMessageGenerator",
+    'FirstMessageGenerator': (
+        'evaluatorq.simulation.generators',
+        'FirstMessageGenerator',
     ),
-    "PersonaGenerator": ("evaluatorq.simulation.generators", "PersonaGenerator"),
-    "ScenarioGenerator": ("evaluatorq.simulation.generators", "ScenarioGenerator"),
-    "PerturbationType": (
-        "evaluatorq.simulation.quality.message_perturbation",
-        "PerturbationType",
+    'PersonaGenerator': ('evaluatorq.simulation.generators', 'PersonaGenerator'),
+    'ScenarioGenerator': ('evaluatorq.simulation.generators', 'ScenarioGenerator'),
+    'PerturbationType': (
+        'evaluatorq.simulation.quality.message_perturbation',
+        'PerturbationType',
     ),
-    "apply_perturbation": (
-        "evaluatorq.simulation.quality.message_perturbation",
-        "apply_perturbation",
+    'apply_perturbation': (
+        'evaluatorq.simulation.quality.message_perturbation',
+        'apply_perturbation',
     ),
-    "apply_perturbations_batch": (
-        "evaluatorq.simulation.quality.message_perturbation",
-        "apply_perturbations_batch",
+    'apply_perturbations_batch': (
+        'evaluatorq.simulation.quality.message_perturbation',
+        'apply_perturbations_batch',
     ),
-    "apply_random_perturbation": (
-        "evaluatorq.simulation.quality.message_perturbation",
-        "apply_random_perturbation",
+    'apply_random_perturbation': (
+        'evaluatorq.simulation.quality.message_perturbation',
+        'apply_random_perturbation',
     ),
-    "SimulationRunner": (
-        "evaluatorq.simulation.runner.simulation",
-        "SimulationRunner",
+    'SimulationRunner': (
+        'evaluatorq.simulation.runner.simulation',
+        'SimulationRunner',
     ),
-    "AgentTarget": ("evaluatorq.contracts", "AgentTarget"),
-    "DEFAULT_MODEL": ("evaluatorq.simulation.types", "DEFAULT_MODEL"),
-    "CommunicationStyle": ("evaluatorq.simulation.types", "CommunicationStyle"),
-    "ConversationStrategy": (
-        "evaluatorq.simulation.types",
-        "ConversationStrategy",
+    'SimulationHooks': ('evaluatorq.simulation.hooks', 'SimulationHooks'),
+    'DefaultHooks': ('evaluatorq.simulation.hooks', 'DefaultHooks'),
+    'RichHooks': ('evaluatorq.simulation.hooks', 'RichHooks'),
+    'SimulationRunMeta': ('evaluatorq.simulation.hooks', 'SimulationRunMeta'),
+    'SimulationError': ('evaluatorq.simulation.exceptions', 'SimulationError'),
+    'SimulationCancelledError': (
+        'evaluatorq.simulation.exceptions',
+        'SimulationCancelledError',
     ),
-    "Criterion": ("evaluatorq.simulation.types", "Criterion"),
-    "CulturalContext": ("evaluatorq.simulation.types", "CulturalContext"),
-    "Datapoint": ("evaluatorq.simulation.types", "Datapoint"),
-    "EmotionalArc": ("evaluatorq.simulation.types", "EmotionalArc"),
-    "InputFormat": ("evaluatorq.simulation.types", "InputFormat"),
-    "Judgment": ("evaluatorq.simulation.types", "Judgment"),
-    "Message": ("evaluatorq.simulation.types", "Message"),
-    "Persona": ("evaluatorq.simulation.types", "Persona"),
-    "Scenario": ("evaluatorq.simulation.types", "Scenario"),
-    "SimulationResult": ("evaluatorq.simulation.types", "SimulationResult"),
-    "StartingEmotion": ("evaluatorq.simulation.types", "StartingEmotion"),
-    "TerminatedBy": ("evaluatorq.simulation.types", "TerminatedBy"),
-    "TokenUsage": ("evaluatorq.simulation.types", "TokenUsage"),
-    "TurnMetrics": ("evaluatorq.simulation.types", "TurnMetrics"),
-    "export_datapoints_to_jsonl": (
-        "evaluatorq.simulation.utils.dataset_export",
-        "export_datapoints_to_jsonl",
+    'AgentTarget': ('evaluatorq.contracts', 'AgentTarget'),
+    'DEFAULT_MODEL': ('evaluatorq.simulation.types', 'DEFAULT_MODEL'),
+    'CommunicationStyle': ('evaluatorq.simulation.types', 'CommunicationStyle'),
+    'ConversationStrategy': (
+        'evaluatorq.simulation.types',
+        'ConversationStrategy',
     ),
-    "export_results_to_jsonl": (
-        "evaluatorq.simulation.utils.dataset_export",
-        "export_results_to_jsonl",
+    'Criterion': ('evaluatorq.simulation.types', 'Criterion'),
+    'CulturalContext': ('evaluatorq.simulation.types', 'CulturalContext'),
+    'Datapoint': ('evaluatorq.simulation.types', 'Datapoint'),
+    'EmotionalArc': ('evaluatorq.simulation.types', 'EmotionalArc'),
+    'InputFormat': ('evaluatorq.simulation.types', 'InputFormat'),
+    'Judgment': ('evaluatorq.simulation.types', 'Judgment'),
+    'Message': ('evaluatorq.simulation.types', 'Message'),
+    'Persona': ('evaluatorq.simulation.types', 'Persona'),
+    'Scenario': ('evaluatorq.simulation.types', 'Scenario'),
+    'SimulationResult': ('evaluatorq.simulation.types', 'SimulationResult'),
+    'SimulationRun': ('evaluatorq.simulation.types', 'SimulationRun'),
+    'StartingEmotion': ('evaluatorq.simulation.types', 'StartingEmotion'),
+    'TerminatedBy': ('evaluatorq.simulation.types', 'TerminatedBy'),
+    'TokenUsage': ('evaluatorq.simulation.types', 'TokenUsage'),
+    'TurnMetrics': ('evaluatorq.simulation.types', 'TurnMetrics'),
+    'export_datapoints_to_jsonl': (
+        'evaluatorq.simulation.utils.dataset_export',
+        'export_datapoints_to_jsonl',
     ),
-    "load_datapoints_from_jsonl": (
-        "evaluatorq.simulation.utils.dataset_export",
-        "load_datapoints_from_jsonl",
+    'export_results_to_jsonl': (
+        'evaluatorq.simulation.utils.dataset_export',
+        'export_results_to_jsonl',
     ),
-    "parse_jsonl": ("evaluatorq.simulation.utils.dataset_export", "parse_jsonl"),
-    "results_to_jsonl": (
-        "evaluatorq.simulation.utils.dataset_export",
-        "results_to_jsonl",
+    'load_datapoints_from_jsonl': (
+        'evaluatorq.simulation.utils.dataset_export',
+        'load_datapoints_from_jsonl',
     ),
-    "build_datapoint_system_prompt": (
-        "evaluatorq.simulation.utils.prompt_builders",
-        "build_datapoint_system_prompt",
+    'parse_jsonl': ('evaluatorq.simulation.utils.dataset_export', 'parse_jsonl'),
+    'results_to_jsonl': (
+        'evaluatorq.simulation.utils.dataset_export',
+        'results_to_jsonl',
     ),
-    "build_persona_system_prompt": (
-        "evaluatorq.simulation.utils.prompt_builders",
-        "build_persona_system_prompt",
+    'build_datapoint_system_prompt': (
+        'evaluatorq.simulation.utils.prompt_builders',
+        'build_datapoint_system_prompt',
     ),
-    "build_scenario_user_context": (
-        "evaluatorq.simulation.utils.prompt_builders",
-        "build_scenario_user_context",
+    'build_persona_system_prompt': (
+        'evaluatorq.simulation.utils.prompt_builders',
+        'build_persona_system_prompt',
     ),
-    "generate_datapoint": (
-        "evaluatorq.simulation.utils.prompt_builders",
-        "generate_datapoint",
+    'build_scenario_user_context': (
+        'evaluatorq.simulation.utils.prompt_builders',
+        'build_scenario_user_context',
     ),
-    "wrap_simulation_agent": (
-        "evaluatorq.simulation.wrap_agent",
-        "wrap_simulation_agent",
+    'generate_datapoint': (
+        'evaluatorq.simulation.utils.prompt_builders',
+        'generate_datapoint',
+    ),
+    'wrap_simulation_agent': (
+        'evaluatorq.simulation.wrap_agent',
+        'wrap_simulation_agent',
     ),
 }
 
 
 def __getattr__(name: str) -> Any:
     if name not in _LAZY_IMPORTS:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+        raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
 
     module_name, attr_name = _LAZY_IMPORTS[name]
     value = getattr(importlib.import_module(module_name), attr_name)
@@ -207,68 +233,79 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     # Types
-    "DEFAULT_MODEL",
+    'DEFAULT_MODEL',
     # Evaluators
-    "SIMULATION_EVALUATORS",
+    'SIMULATION_EVALUATORS',
     # Agents
-    "AgentConfig",
-    "AgentTarget",
-    "BaseAgent",
-    "CommunicationStyle",
-    "ConversationStrategy",
-    "Criterion",
-    "CulturalContext",
-    "Datapoint",
+    'AgentConfig',
+    'AgentTarget',
+    'BaseAgent',
+    'CommunicationStyle',
+    'ConversationStrategy',
+    'Criterion',
+    'CulturalContext',
+    'Datapoint',
     # Generators
-    "DatapointGenerator",
-    "EmotionalArc",
-    "FirstMessageGenerator",
-    "InputFormat",
-    "JudgeAgent",
-    "Judgment",
+    'DatapointGenerator',
+    # Hooks
+    'DefaultHooks',
+    'EmotionalArc',
+    'FirstMessageGenerator',
+    'InputFormat',
+    'JudgeAgent',
+    'Judgment',
     # Config (re-exported for user convenience)
-    "LLMCallConfig",
-    "Message",
+    'LLMCallConfig',
+    'Message',
     # Target implementations
-    "OrqResponsesTarget",
-    "Persona",
-    "PersonaGenerator",
+    'OrqResponsesTarget',
+    'Persona',
+    'PersonaGenerator',
     # Quality
-    "PerturbationType",
-    "Scenario",
-    "ScenarioGenerator",
-    "SimulationResult",
+    'PerturbationType',
+    'RichHooks',
+    'Scenario',
+    'ScenarioGenerator',
+    # Exceptions
+    'SimulationCancelledError',
+    'SimulationDroppedError',
+    'SimulationError',
+    'SimulationHooks',
+    'SimulationResult',
+    'SimulationRun',
     # Runner
-    "SimulationRunner",
-    "SimulationScorer",
-    "StartingEmotion",
-    "TerminatedBy",
-    "TokenUsage",
-    "TurnMetrics",
-    "UserSimulatorAgent",
-    "apply_perturbation",
-    "apply_perturbations_batch",
-    "apply_random_perturbation",
+    'SimulationRunMeta',
+    'SimulationRunner',
+    'SimulationScorer',
+    'StartingEmotion',
+    'TerminatedBy',
+    'TokenUsage',
+    'TurnMetrics',
+    'UserSimulatorAgent',
+    'apply_perturbation',
+    'apply_perturbations_batch',
+    'apply_random_perturbation',
     # Utils
-    "build_datapoint_system_prompt",
-    "build_persona_system_prompt",
-    "build_scenario_user_context",
-    "export_datapoints_to_jsonl",
-    "export_results_to_jsonl",
+    'build_datapoint_system_prompt',
+    'build_persona_system_prompt',
+    'build_scenario_user_context',
+    'export_datapoints_to_jsonl',
+    'export_results_to_jsonl',
     # Adapters
-    "from_chat_completions",
-    "from_orq_deployment",
-    "generate_and_simulate",
-    "generate_datapoint",
-    "get_all_evaluators",
-    "get_evaluator",
-    "load_datapoints_from_jsonl",
-    "parse_jsonl",
-    "results_to_jsonl",
+    'from_chat_completions',
+    'from_orq_deployment',
+    'generate',
+    'generate_and_simulate',
+    'generate_datapoint',
+    'get_all_evaluators',
+    'get_evaluator',
+    'load_datapoints_from_jsonl',
+    'parse_jsonl',
+    'results_to_jsonl',
     # High-level API
-    "simulate",
+    'simulate',
     # Conversion
-    "to_open_responses",
+    'to_open_responses',
     # Job wrapper
-    "wrap_simulation_agent",
+    'wrap_simulation_agent',
 ]

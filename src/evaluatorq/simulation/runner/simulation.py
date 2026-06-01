@@ -7,6 +7,7 @@ import inspect
 import logging
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
 from evaluatorq.simulation.agents.user_simulator import (
     UserSimulatorAgent,
@@ -45,6 +46,7 @@ if TYPE_CHECKING:
 
     from evaluatorq.contracts import AgentTarget
     from evaluatorq.simulation.agents.base import BaseAgent
+    from evaluatorq.simulation.hooks import SimulationHooks
 
 logger = logging.getLogger(__name__)
 
@@ -233,6 +235,7 @@ class SimulationRunner:
         max_turns: int = 10,
         user_simulator: BaseAgent | None = None,
         judge: BaseAgent | None = None,
+        hooks: SimulationHooks | None = None,
     ) -> None:
         if not target_agent and not target_callback:
             raise ValueError('Must provide either target_agent or target_callback')
@@ -259,6 +262,28 @@ class SimulationRunner:
         # Injected agents (may be None; resolved lazily in run() when None)
         self._injected_user_simulator: BaseAgent | None = user_simulator
         self._injected_judge: BaseAgent | None = judge
+
+        from evaluatorq.common.async_utils import warn_if_sync_hooks
+        from evaluatorq.simulation.hooks import DefaultHooks
+
+        # Single resolution: _simulate_core passes an already-resolved instance,
+        # so a RichHooks is never re-instantiated (no double progress display).
+        self._hooks: SimulationHooks = hooks or DefaultHooks()
+        # Single choke point for both entry paths (simulate() and direct
+        # SimulationRunner use): nudge sync hooks toward async exactly once.
+        warn_if_sync_hooks(
+            self._hooks,
+            (
+                'on_confirm',
+                'on_run_start',
+                'on_datapoint_start',
+                'on_turn_complete',
+                'on_datapoint_complete',
+                'on_evaluator_complete',
+                'on_datapoint_error',
+                'on_run_complete',
+            ),
+        )
 
     def _get_shared_client(self) -> AsyncOpenAI:
         if not self._shared_client:
@@ -289,6 +314,8 @@ class SimulationRunner:
                 scenario,
             )
 
+        datapoint_id = datapoint.id if datapoint else ''
+
         effective_max_turns = max_turns or self._max_turns
         messages: list[Message] = []
         turn_metrics_list: list[TurnMetrics] = []
@@ -310,6 +337,7 @@ class SimulationRunner:
                     return await self._run_inner(
                         persona=persona,
                         scenario=scenario,
+                        datapoint_id=datapoint_id,
                         first_message=first_message,
                         effective_max_turns=effective_max_turns,
                         messages=messages,
@@ -370,6 +398,7 @@ class SimulationRunner:
         *,
         persona: Persona | None,
         scenario: Scenario | None,
+        datapoint_id: str,
         first_message: str | None,
         effective_max_turns: int,
         messages: list[Message],
@@ -519,6 +548,14 @@ class SimulationRunner:
                     judgment = await judge.evaluate(messages)
 
                 turn_metrics_list.append(_build_turn_metrics(turn + 1, judgment, usage_before))
+                try:
+                    await await_maybe(self._hooks.on_turn_complete(datapoint_id, turn_metrics_list[-1]))
+                except Exception:
+                    logger.warning(
+                        'on_turn_complete hook raised for datapoint %s; ignoring',
+                        datapoint_id,
+                        exc_info=True,
+                    )
                 last_judgment = judgment
 
                 set_span_attrs(
@@ -616,6 +653,7 @@ class SimulationRunner:
 
         async def run_single(dp: Datapoint) -> SimulationResult:
             async with semaphore:
+                await await_maybe(self._hooks.on_datapoint_start(dp))
                 return await self._run_with_timeout(dp, max_turns, timeout_per_simulation)
 
         tasks = [run_single(dp) for dp in datapoints]
@@ -623,11 +661,28 @@ class SimulationRunner:
 
         final_results: list[SimulationResult] = []
         for i, result in enumerate(results):
+            dp = datapoints[i]
             if isinstance(result, SimulationResult):
+                result.metadata['datapoint_id'] = dp.id
+                # Append before firing the unguarded on_datapoint_error so a
+                # raising hook doesn't drop the result from final_results —
+                # matches the BaseException branch's ordering below.
                 final_results.append(result)
+                if result.terminated_by in (TerminatedBy.error, TerminatedBy.timeout):
+                    # The original exception was already swallowed into the error
+                    # result by run(); its type is in metadata["error_type"]. Hooks
+                    # get a reconstructed RuntimeError here (real exc only on the
+                    # BaseException branch below).
+                    reason = result.metadata.get('error') or result.reason
+                    await await_maybe(self._hooks.on_datapoint_error(dp, RuntimeError(reason)))
+                await await_maybe(self._hooks.on_datapoint_complete(result))
             elif isinstance(result, BaseException):
                 error_msg = f'{type(result).__name__}: {result}'
-                final_results.append(_error_result(error_msg, datapoints[i].persona, datapoints[i].scenario))
+                err = _error_result(error_msg, dp.persona, dp.scenario)
+                err.metadata['datapoint_id'] = dp.id
+                final_results.append(err)
+                await await_maybe(self._hooks.on_datapoint_error(dp, result))
+                await await_maybe(self._hooks.on_datapoint_complete(err))
             else:
                 raise TypeError(f'Unexpected result type from gather: {type(result).__name__}')
 
@@ -681,6 +736,11 @@ class SimulationRunner:
                 timeout=timeout_s,
             )
         except asyncio.TimeoutError:
+            logger.warning(
+                'Simulation for datapoint %s timed out after %ss; returning timeout result',
+                datapoint.id,
+                timeout_s,
+            )
             # The inner run() never throws (returns error result), so a
             # TimeoutError means asyncio cancelled the task mid-flight.
             # We cannot recover partial messages from the cancelled coroutine,

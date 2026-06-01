@@ -1,5 +1,7 @@
 """Tests for simulation types."""
 
+from datetime import datetime
+
 from evaluatorq.simulation.types import (
     CommunicationStyle,
     ConversationStrategy,
@@ -12,6 +14,7 @@ from evaluatorq.simulation.types import (
     Persona,
     Scenario,
     SimulationResult,
+    SimulationRun,
     StartingEmotion,
     TerminatedBy,
     TokenUsage,
@@ -121,3 +124,20 @@ def test_datapoint_model():
     assert dp.id == "dp_abc123"
     assert dp.persona.name == "User"
     assert dp.first_message == "Hello"
+
+
+def test_simulation_run_tolerates_legacy_generate_mode():
+    """Legacy run-store files written before the verb rename used mode="generate".
+    SimulationRun must still validate them so existing persisted records are not broken."""
+    record = {
+        "run_name": "old-run",
+        "created_at": datetime(2025, 1, 1).isoformat(),
+        "mode": "generate",
+        "target_kind": "openai_model",
+        "evaluator_names": [],
+        "total_results": 0,
+        "scorer_averages": {},
+        "results": [],
+    }
+    run = SimulationRun.model_validate(record)
+    assert run.mode == "generate"

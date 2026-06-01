@@ -297,7 +297,9 @@ class TestConfirmCallback:
         from evaluatorq.redteam.hooks import DefaultHooks
 
         class FalseConfirmHooks(DefaultHooks):
-            def on_confirm(self, payload) -> bool:
+            # Sync override of the now-async DefaultHooks.on_confirm — intentional:
+            # exercises the sync-hook compatibility path (driven via await_maybe).
+            def on_confirm(self, payload) -> bool:  # pyright: ignore[reportIncompatibleMethodOverride]
                 return False
 
         with (

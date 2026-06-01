@@ -115,6 +115,65 @@ redteam/
 - **Pluggable backends** — ORQ backend for production agents, OpenAI for raw models, or bring your own `AsyncOpenAI`-compatible client.
 - **Parallel-safe** — each attack gets a unique memory entity ID, preventing cross-contamination. Post-run cleanup removes test data.
 
+## OpenResponses backend (RES-540)
+
+Target agents and deployments through the platform's `/responses` API in the
+OpenResponses request shape:
+
+```python
+from evaluatorq.redteam import red_team
+from evaluatorq.redteam.backends.registry import resolve_backend
+
+bundle = resolve_backend("openresponses")
+target = bundle.target_factory.create_target("my-agent-id")
+
+report = await red_team(target, vulnerabilities=["prompt_injection"])
+```
+
+Every attack the orchestrator runs is sent over the wire as:
+
+```json
+{"model": "my-agent-id",
+ "input": [{"role": "user", "content": "<adversarial prompt>"}]}
+```
+
+The backend reuses `evaluatorq.simulation.target.OrqResponsesTarget`, so
+redteam and simulation share retry behavior, `previous_response_id` threading,
+output parsing, and token-usage extraction.
+
+Trace spans use `gen_ai.*` attributes plus `orq.openresponses.request` /
+`orq.openresponses.response` so observability surfaces the exact payload that
+went over the wire.
+
+### Dataset helpers
+
+For consumers that need to build OpenResponses payloads or load redteam static
+datasets authored in OpenResponses input shape:
+
+```python
+from evaluatorq.openresponses import (
+    build_openresponses_request,
+    load_openresponses_dataset,
+    turns_to_openresponses_input,
+    redteam_sample_from_openresponses,
+)
+```
+
+- `build_openresponses_request(model=..., prompt=..., conversation=...)` — assemble the wire payload.
+- `load_openresponses_dataset(path)` — load a JSON / JSONL static redteam dataset authored as OpenResponses input arrays.
+- `turns_to_openresponses_input(orchestrator_result.turns)` — convert an executed attack back into the OpenResponses input array (useful for replay, dataset capture, debugging).
+- `redteam_sample_from_openresponses(input=..., openresponses_input=...)` — load datasets authored in OpenResponses format into the existing `RedTeamSample` schema.
+
+### Registry shortcut
+
+The backend is also registered for resolution via the standard registry, so it
+slots into the same machinery as the ORQ / OpenAI backends:
+
+```python
+from evaluatorq.redteam.backends.registry import resolve_backend
+bundle = resolve_backend("openresponses")
+```
+
 ## Convention
 
 Throughout this package: `passed=True` / `vulnerable=False` means the agent **resisted** the attack (good). `passed=False` / `vulnerable=True` means the agent was **vulnerable** (bad).

@@ -42,14 +42,23 @@ async def plan_strategies_for_vulnerabilities(
     attacker_instructions: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     pipeline_config: LLMConfig | None = None,
+    agent_capabilities: AgentCapabilities | None = None,
 ) -> tuple[dict[Vulnerability, list[AttackStrategy]], dict[Vulnerability, dict[str, Any]], AgentCapabilities]:
     """Build per-vulnerability strategy plans for dynamic red teaming.
 
     This is the primary planning function keyed by Vulnerability enum values.
     Use plan_strategies_for_categories() for backwards-compatible category-string-keyed output.
+
+    Args:
+        agent_capabilities: Pre-classified capabilities. When provided, the
+            in-function classifier call is skipped — useful when the caller
+            (e.g. the runner) already classified for confirm-time display
+            and wants to avoid a duplicate LLM round-trip.
     """
     cfg = pipeline_config or PIPELINE_CONFIG
-    if llm_client is not None:
+    if agent_capabilities is not None:
+        logger.debug('Using pre-classified agent capabilities (skipping classifier call)')
+    elif llm_client is not None:
         async with with_redteam_span("orq.redteam.capability_classification", {
             "orq.redteam.num_tools": len(agent_context.tools) if agent_context.tools else 0,
             "orq.redteam.model": attack_model,
@@ -71,12 +80,21 @@ async def plan_strategies_for_vulnerabilities(
     all_hardcoded_by_vuln: dict[Vulnerability, list[AttackStrategy]] = {}
     applicable_hardcoded_by_vuln: dict[Vulnerability, list[AttackStrategy]] = {}
 
+    # Pass the classified caps to filtering only when they reflect a real
+    # classification result. An empty AgentCapabilities() means classification
+    # was skipped (no llm_client) — strategy_registry treats `None` as
+    # "include optimistically", which is the desired behaviour there.
+    caps_for_filter = (
+        agent_capabilities
+        if agent_capabilities and agent_capabilities.capabilities
+        else None
+    )
     for vuln in vulnerabilities:
         all_hardcoded = get_strategies_for_vulnerability(vuln)
         applicable_hardcoded = select_applicable_strategies_for_vulnerability(
             vuln=vuln,
             agent_context=agent_context,
-            agent_capabilities=agent_capabilities if llm_client is not None else None,
+            agent_capabilities=caps_for_filter,
         )
         all_hardcoded_by_vuln[vuln] = all_hardcoded
         applicable_hardcoded_by_vuln[vuln] = applicable_hardcoded
@@ -175,6 +193,7 @@ async def plan_strategies_for_categories(
     attacker_instructions: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     pipeline_config: LLMConfig | None = None,
+    agent_capabilities: AgentCapabilities | None = None,
 ) -> tuple[dict[str, list[AttackStrategy]], dict[str, dict[str, Any]], AgentCapabilities]:
     """Build per-category strategy plans for dynamic red teaming.
 
@@ -184,6 +203,11 @@ async def plan_strategies_for_categories(
 
     Categories that cannot be resolved (unknown codes) fall back to direct
     category-based lookup so legacy behaviour is preserved.
+
+    Args:
+        agent_capabilities: Pre-classified capabilities; forwarded to
+            :func:`plan_strategies_for_vulnerabilities` to skip a duplicate
+            classifier call when the runner has already classified pre-confirm.
     """
     # Resolve each category to a Vulnerability, preserving order and mapping back
     # to original category strings for the return value.
@@ -213,6 +237,7 @@ async def plan_strategies_for_categories(
         attacker_instructions=attacker_instructions,
         llm_kwargs=llm_kwargs,
         pipeline_config=pipeline_config,
+        agent_capabilities=agent_capabilities,
     )
 
     # Remap results back to original category strings
