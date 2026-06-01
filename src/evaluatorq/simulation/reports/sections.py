@@ -273,12 +273,18 @@ def _build_judge_verdicts_section(results: list[SimulationResult]) -> ReportSect
 def _build_turn_metrics_section(results: list[SimulationResult]) -> ReportSection:
     turn_counts: Counter[int] = Counter(r.turn_count for r in results)
     # Aggregate per-turn quality metrics (averages across all runs that reported them).
+    # Use direct attribute access on TurnMetrics so a future rename surfaces
+    # as AttributeError instead of silently dropping the field from the report.
     qualities: dict[str, list[float]] = defaultdict(list)
     for r in results:
         for tm in r.turn_metrics:
-            for field_name in ('response_quality', 'hallucination_risk', 'tone_appropriateness', 'factual_accuracy'):
-                value = getattr(tm, field_name, None)
-                if isinstance(value, int | float):
+            for field_name, value in (
+                ('response_quality', tm.response_quality),
+                ('hallucination_risk', tm.hallucination_risk),
+                ('tone_appropriateness', tm.tone_appropriateness),
+                ('factual_accuracy', tm.factual_accuracy),
+            ):
+                if value is not None:
                     qualities[field_name].append(float(value))
     avg_qualities = {k: sum(v) / len(v) for k, v in qualities.items() if v}
 

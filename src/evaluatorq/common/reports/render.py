@@ -12,6 +12,8 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING
 
+from loguru import logger
+
 from evaluatorq.common.reports.md_helpers import details_block
 from evaluatorq.contracts import ReportSection
 
@@ -77,6 +79,11 @@ def render_markdown(
     for section in sections:
         renderer = renderers.get(section.kind)
         if renderer is None:
+            logger.warning(
+                "No renderer registered for section kind {!r}; the section "
+                "will be missing from the markdown report.",
+                section.kind,
+            )
             continue
         rendered = renderer(section)
         if not rendered:
@@ -124,6 +131,11 @@ def render_html(
     for section in sections:
         renderer = renderers.get(section.kind)
         if renderer is None:
+            logger.warning(
+                "No renderer registered for section kind {!r}; the section "
+                "will be missing from the HTML report.",
+                section.kind,
+            )
             continue
         rendered = renderer(section)
         if rendered:

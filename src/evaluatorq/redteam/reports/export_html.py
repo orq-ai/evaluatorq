@@ -13,19 +13,17 @@ from __future__ import annotations
 import operator
 from typing import TYPE_CHECKING, Any
 
-from evaluatorq.common.reports import (
-    COLORS as _COLORS,
-    STATUS_COLORS as _STATUS_COLORS_BASE,
-    charts_available as _charts_available,
-    esc as _esc,
-    html_table as _html_table,
-    load_css as _load_css_common,
-    pct as _pct,
-    render_donut_chart as _render_donut_chart_common,
-    render_horizontal_bar_chart as _render_horizontal_bar_chart_common,
-    truncate as _truncate,
-    try_render_svg as _try_render_svg_chart,
-)
+from evaluatorq.common.reports import COLORS as _COLORS
+from evaluatorq.common.reports import STATUS_COLORS as _STATUS_COLORS_BASE
+from evaluatorq.common.reports import charts_available as _charts_available
+from evaluatorq.common.reports import esc as _esc
+from evaluatorq.common.reports import format_date as _format_date
+from evaluatorq.common.reports import html_table as _html_table
+from evaluatorq.common.reports import load_css as _load_css_common
+from evaluatorq.common.reports import pct as _pct
+from evaluatorq.common.reports import render_donut_chart as _render_donut_chart_common
+from evaluatorq.common.reports import truncate as _truncate
+from evaluatorq.common.reports import try_render_svg as _try_render_svg_chart
 from evaluatorq.contracts import ReportSection
 from evaluatorq.redteam.reports.sections import build_report_sections
 
@@ -284,7 +282,7 @@ def _render_header_html(data: dict[str, Any]) -> str:
     pipeline = _esc(data.get("pipeline", "unknown"))
     created_at = data.get("created_at")
     vulnerability_rate = data.get("vulnerability_rate", 0.0)
-    date_str = created_at.strftime("%Y-%m-%d %H:%M UTC") if created_at else "unknown"
+    date_str = _format_date(created_at)
 
     return (
         f"<h1>Red Team Security Report</h1>\n"

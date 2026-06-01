@@ -257,6 +257,46 @@ def test_export_html_handles_empty_results():
     assert '<!DOCTYPE html>' in html
 
 
+def test_export_html_escapes_user_controlled_metadata():
+    """Persona/scenario/transcript content must be HTML-escaped.
+
+    Regression: a future refactor dropping an _esc() call in the renderers
+    would silently introduce HTML injection. Lock it in with a test
+    asserting that script tags from user-controlled fields don't appear
+    raw in the output.
+    """
+    nasty = "<script>alert('xss')</script>"
+    result = SimulationResult(
+        messages=[
+            Message(role="user", content=nasty),
+            Message(role="assistant", content="hi"),
+        ],
+        terminated_by=TerminatedBy.judge,
+        reason="ok " + nasty,
+        goal_achieved=False,
+        goal_completion_score=0.5,
+        rules_broken=[nasty],
+        turn_count=1,
+        token_usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        turn_metrics=[],
+        metadata={
+            "persona": nasty,
+            "scenario": "S&T",
+            "model": "m & m",
+            "evaluator_scores": {nasty: 1.0},
+            "error": nasty,
+        },
+    )
+    html = export_html([result], target=nasty)
+    # The raw script tag must NEVER appear in HTML output.
+    assert "<script>alert" not in html
+    assert nasty not in html
+    # And the escaped form should be there at least once (in the persona field).
+    assert "&lt;script&gt;" in html
+    # Ampersands also escaped (e.g., persona "S&T", model "m & m").
+    assert "S&amp;T" in html or "m &amp; m" in html
+
+
 def test_export_html_css_has_no_double_percent_artifacts():
     """The CSS must not contain ``%%`` (a leftover from the old %-format era).
 
