@@ -637,6 +637,47 @@ def test_run_forwards_flags(tmp_path: Path) -> None:
     assert kwargs["max_turns"] == 6
 
 
+def test_run_runtime_error_is_clean(tmp_path: Path) -> None:
+    # RuntimeError (e.g. SimulationDroppedError / no datapoints) surfaces as a
+    # one-line error with exit 1, not a traceback — symmetry with generate.
+    with (
+        patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
+        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
+    ):
+        mock_target.return_value = MagicMock()
+        mock_impl.side_effect = RuntimeError("simulation job(s) produced no result")
+
+        result = runner.invoke(
+            app,
+            ["run", "--agent-description", "bot", "--openai-model", "gpt-4o", "--no-save"],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 1
+    assert "Error:" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_simulate_runtime_error_is_clean(tmp_path: Path) -> None:
+    dp_file = _make_datapoints_file(tmp_path)
+    with (
+        patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
+        patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock) as mock_impl,
+    ):
+        mock_target.return_value = MagicMock()
+        mock_impl.side_effect = RuntimeError("simulation job(s) produced no result")
+
+        result = runner.invoke(
+            app,
+            ["simulate", "--datapoints", str(dp_file), "--openai-model", "gpt-4o", "--no-save"],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 1
+    assert "Error:" in result.output
+    assert "Traceback" not in result.output
+
+
 # ---------------------------------------------------------------------------
 # generate command (datapoints only, no simulation)
 # ---------------------------------------------------------------------------

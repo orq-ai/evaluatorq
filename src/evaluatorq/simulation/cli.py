@@ -359,7 +359,10 @@ def simulate(
     except asyncio.CancelledError:
         typer.echo("^C aborted.", err=True)
         raise typer.Exit(130) from None
-    except ValueError as exc:
+    except (ValueError, RuntimeError) as exc:
+        # RuntimeError covers "no datapoints produced" (generation) and
+        # SimulationDroppedError (dropped jobs) — surface as one line, not a
+        # traceback. Exit 1 keeps the CI-gate behaviour (still non-zero).
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1) from None
 
@@ -543,7 +546,10 @@ def run(
     except asyncio.CancelledError:
         typer.echo("^C aborted.", err=True)
         raise typer.Exit(130) from None
-    except ValueError as exc:
+    except (ValueError, RuntimeError) as exc:
+        # RuntimeError covers "no datapoints produced" (generation) and
+        # SimulationDroppedError (dropped jobs) — surface as one line, not a
+        # traceback. Exit 1 keeps the CI-gate behaviour (still non-zero).
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1) from None
 
