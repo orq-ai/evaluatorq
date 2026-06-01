@@ -572,6 +572,7 @@ async def test_on_run_complete_fires_when_scoring_raises(datapoint_factory):
         )
     assert hooks.started is True
     assert hooks.completed_with is not None  # on_run_complete fired via finally even though scoring raised
+    assert len(hooks.completed_with) == 1  # real results (not []) passed through despite scoring raise
 
 
 @pytest.mark.asyncio
