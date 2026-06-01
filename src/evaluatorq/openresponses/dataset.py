@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.simulation.utils.fields import get_field as _get_field
+from evaluatorq.common.fields import get_field as _get_field
 
 if TYPE_CHECKING:
     from evaluatorq.redteam.contracts import RedTeamInput, RedTeamSample, StaticDataset, Turn

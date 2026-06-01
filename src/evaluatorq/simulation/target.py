@@ -13,7 +13,7 @@ from evaluatorq.simulation.tracing import (
     record_openresponses_response,
     with_llm_span,
 )
-from evaluatorq.simulation.utils.fields import get_field as _get_field
+from evaluatorq.common.fields import get_field as _get_field
 from evaluatorq.simulation.utils.retry import with_retry
 
 if TYPE_CHECKING:
