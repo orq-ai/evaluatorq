@@ -335,7 +335,7 @@ class Datapoint(BaseModel):
 class SimulationRun(BaseModel):
     run_name: str
     created_at: datetime
-    mode: Literal["run", "simulate"]
+    mode: Literal["run", "simulate", "generate"]
     target_kind: Literal["orq_deployment", "vercel", "openai_model"]
     evaluator_names: list[str]
     total_results: int
