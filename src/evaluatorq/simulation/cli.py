@@ -31,11 +31,14 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 
 from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MODEL
+
+if TYPE_CHECKING:
+    from evaluatorq.simulation.types import SimulationRun
 
 app = typer.Typer(
     name="sim",
@@ -177,7 +180,7 @@ def _build_simulation_run(
     target_kind: str,
     evaluator_names: list[str],
     results: list[Any],
-) -> Any:
+) -> SimulationRun:
     """Build the full ``SimulationRun`` report model from results.
 
     Aggregates per-scorer averages, guarding against non-numeric scores from a
@@ -206,7 +209,7 @@ def _build_simulation_run(
     )
 
 
-def _auto_save_run(*, run: Any, run_name: str) -> Path:
+def _auto_save_run(*, run: SimulationRun, run_name: str) -> Path:
     """Persist a prebuilt ``SimulationRun`` to .evaluatorq/sim-runs/ under an
     auto-generated, collision-free `<name>_<timestamp>.json` filename."""
     runs_dir = _get_sim_runs_dir()
@@ -232,7 +235,7 @@ def _auto_save_run(*, run: Any, run_name: str) -> Path:
     )
 
 
-def _write_report(run: Any, output: Path) -> None:
+def _write_report(run: SimulationRun, output: Path) -> None:
     """Write the full ``SimulationRun`` report JSON to an explicit path.
 
     Unlike :func:`_auto_save_run` (auto-named, collision-avoiding, fixed dir),
