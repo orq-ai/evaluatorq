@@ -1046,6 +1046,47 @@ def test_run_save_datapoints_writes_inputs(tmp_path: Path) -> None:
     assert "Datapoints saved" in result.output
 
 
+def test_run_save_datapoints_echoes_even_when_simulation_fails(tmp_path: Path) -> None:
+    """The save confirmation must survive a later simulation failure.
+
+    Datapoints are written (and emit_datapoints called) before simulation runs,
+    so a RuntimeError from simulation must not swallow the "Datapoints saved"
+    message — those frozen inputs are exactly what you re-feed to `sim simulate`.
+    """
+    dp_file = tmp_path / "dp.jsonl"
+
+    async def fake_generate_and_simulate(**kwargs: Any) -> list[Any]:
+        emit = kwargs.get("emit_datapoints")
+        if emit is not None:
+            emit(_make_datapoints(2))
+        raise RuntimeError("simulation produced no datapoints")
+
+    with (
+        patch(
+            "evaluatorq.simulation.api.generate_and_simulate",
+            side_effect=fake_generate_and_simulate,
+        ),
+        patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
+    ):
+        mock_target.return_value = MagicMock()
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--agent-description", "x",
+                "--openai-model", "gpt-4o",
+                "--save-datapoints", str(dp_file),
+                "--no-save",
+            ],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 1, result.output
+    assert dp_file.exists(), "Datapoints file should be written before sim runs"
+    assert "Datapoints saved" in result.output
+    assert "Error: simulation produced no datapoints" in result.output
+
+
 def test_run_without_save_datapoints_writes_no_file(tmp_path: Path) -> None:
     """When --save-datapoints is omitted, emit_datapoints=None is passed and no file is created."""
     captured_emit: dict[str, Any] = {}

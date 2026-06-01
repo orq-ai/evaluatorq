@@ -327,11 +327,11 @@ def simulate(
     ] = DEFAULT_MODEL,
     max_turns: Annotated[
         int,
-        typer.Option("--max-turns", help="Maximum conversation turns."),
+        typer.Option("--max-turns", min=1, help="Maximum conversation turns."),
     ] = 10,
     parallelism: Annotated[
         int,
-        typer.Option("--parallelism", help="Concurrent simulations."),
+        typer.Option("--parallelism", min=1, help="Concurrent simulations."),
     ] = 5,
     evaluator: Annotated[
         list[str] | None,
@@ -514,19 +514,19 @@ def run(
     ] = DEFAULT_MODEL,
     max_turns: Annotated[
         int,
-        typer.Option("--max-turns", help="Maximum conversation turns."),
+        typer.Option("--max-turns", min=1, help="Maximum conversation turns."),
     ] = 10,
     parallelism: Annotated[
         int,
-        typer.Option("--parallelism", help="Concurrent simulations."),
+        typer.Option("--parallelism", min=1, help="Concurrent simulations."),
     ] = 5,
     num_personas: Annotated[
         int,
-        typer.Option("--num-personas", help="Number of personas to generate."),
+        typer.Option("--num-personas", min=1, help="Number of personas to generate."),
     ] = 5,
     num_scenarios: Annotated[
         int,
-        typer.Option("--num-scenarios", help="Number of scenarios to generate."),
+        typer.Option("--num-scenarios", min=1, help="Number of scenarios to generate."),
     ] = 5,
     evaluator: Annotated[
         list[str] | None,
@@ -605,9 +605,6 @@ def run(
     if output:
         _write_results(results, output)
 
-    if save_datapoints is not None:
-        typer.echo(f"Datapoints saved: {save_datapoints}", err=True)
-
     run = _build_simulation_run(
         run_name=name,
         mode="run",
@@ -645,7 +642,11 @@ async def _run_impl(
         save_path = save_datapoints
 
         def _emit(dps: list[Any]) -> None:
+            # Echo at write time, not after the run succeeds: the file lands on
+            # disk before simulation, so a later sim failure must not swallow the
+            # confirmation — the saved datapoints are exactly what you re-feed.
             _write_datapoints(dps, save_path)
+            typer.echo(f"Datapoints saved: {save_path}", err=True)
 
         emit = _emit
 
