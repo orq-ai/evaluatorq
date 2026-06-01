@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from evaluatorq.simulation.api import generate, generate_and_simulate, simulate
-from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario
+from evaluatorq.simulation.types import CommunicationStyle, Datapoint, Persona, Scenario
 
 
 def _persona() -> Persona:
@@ -106,3 +106,51 @@ async def test_sim_model_is_the_public_param(monkeypatch):
     }
     with pytest.raises(TypeError):
         await simulate(**bad_kwargs)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+
+
+def _make_datapoint(dp_id: str = "dp-0") -> Datapoint:
+    return Datapoint(
+        id=dp_id,
+        persona=_persona(),
+        scenario=_scenario(),
+        user_system_prompt="You are a user.",
+        first_message="Hello",
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_and_simulate_emit_datapoints_called_once(monkeypatch):
+    """emit_datapoints is invoked exactly once with the generated list[Datapoint]."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    fake_datapoints = [_make_datapoint("dp-0"), _make_datapoint("dp-1")]
+
+    emitted: list[list[Datapoint]] = []
+
+    def sink(dps: list[Datapoint]) -> None:
+        emitted.append(dps)
+
+    with (
+        patch(
+            "evaluatorq.simulation.api._generate_personas_scenarios",
+            new=AsyncMock(return_value=([_persona()], [_scenario()])),
+        ),
+        patch(
+            "evaluatorq.simulation.api._resolve_or_generate_datapoints",
+            new=AsyncMock(return_value=fake_datapoints),
+        ),
+        patch(
+            "evaluatorq.simulation.api._simulate_core",
+            new=AsyncMock(return_value=[]),
+        ),
+    ):
+        await generate_and_simulate(
+            agent_description="test agent",
+            target=lambda messages: "ok",
+            emit_datapoints=sink,
+        )
+
+    assert len(emitted) == 1, f"sink called {len(emitted)} times (expected 1)"
+    assert emitted[0] is fake_datapoints
+    assert isinstance(emitted[0], list)
+    assert all(isinstance(dp, Datapoint) for dp in emitted[0])

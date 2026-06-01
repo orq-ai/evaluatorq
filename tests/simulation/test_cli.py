@@ -863,3 +863,83 @@ def test_old_model_flag_rejected(monkeypatch):
     )
     assert result.exit_code != 0
     assert "No such option" in result.output or "Got unexpected" in result.output
+
+
+# ---------------------------------------------------------------------------
+# run --save-datapoints  (Task 3)
+# ---------------------------------------------------------------------------
+
+
+def test_run_save_datapoints_writes_inputs(tmp_path: Path) -> None:
+    """--save-datapoints writes the simulate inputs as JSONL and echoes a status message."""
+    from evaluatorq.simulation.utils.dataset_export import load_datapoints_from_jsonl
+
+    dp_file = tmp_path / "dp.jsonl"
+
+    async def fake_generate_and_simulate(**kwargs: Any) -> list[Any]:
+        emit = kwargs.get("emit_datapoints")
+        if emit is not None:
+            emit(_make_datapoints(2))
+        return []
+
+    with (
+        patch(
+            "evaluatorq.simulation.api.generate_and_simulate",
+            side_effect=fake_generate_and_simulate,
+        ),
+        patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
+    ):
+        mock_target.return_value = MagicMock()
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--agent-description", "x",
+                "--openai-model", "gpt-4o",
+                "--save-datapoints", str(dp_file),
+                "--no-save",
+            ],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    assert dp_file.exists(), "Datapoints file was not created"
+    loaded = load_datapoints_from_jsonl(str(dp_file))
+    assert len(loaded) == 2
+    assert [dp.id for dp in loaded] == ["dp-0", "dp-1"]
+    # Status message echoed to stderr (mix_stderr=True is typer runner default)
+    assert "Datapoints saved" in result.output
+
+
+def test_run_without_save_datapoints_writes_no_file(tmp_path: Path) -> None:
+    """When --save-datapoints is omitted, emit_datapoints=None is passed and no file is created."""
+    captured_emit: dict[str, Any] = {}
+
+    async def fake_generate_and_simulate(**kwargs: Any) -> list[Any]:
+        captured_emit["emit"] = kwargs.get("emit_datapoints")
+        return []
+
+    with (
+        patch(
+            "evaluatorq.simulation.api.generate_and_simulate",
+            side_effect=fake_generate_and_simulate,
+        ),
+        patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
+    ):
+        mock_target.return_value = MagicMock()
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--agent-description", "x",
+                "--openai-model", "gpt-4o",
+                "--no-save",
+            ],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    assert captured_emit["emit"] is None
+    # No stray JSONL files created under tmp_path
+    stray = list(tmp_path.glob("*.jsonl"))
+    assert stray == [], f"Unexpected JSONL files: {stray}"

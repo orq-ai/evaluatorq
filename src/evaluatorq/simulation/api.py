@@ -37,6 +37,8 @@ if TYPE_CHECKING:
     )
     from evaluatorq.types import DataPoint, DataPointResult, Evaluator
 
+    EmitDatapoints = Callable[[list[Datapoint]], None]
+
 logger = logging.getLogger(__name__)
 
 
@@ -175,6 +177,7 @@ async def generate_and_simulate(
     evaluation_description: str | None = None,
     path: str | None = None,
     exit_on_failure: bool = True,
+    emit_datapoints: EmitDatapoints | None = None,
 ) -> list[SimulationResult]:
     """Generate personas/scenarios, then run simulations via evaluatorq().
 
@@ -189,6 +192,10 @@ async def generate_and_simulate(
     it to ``False`` to skip uploading the final experiment. ``exit_on_failure``
     defaults to ``True``; see :func:`simulate` for the full semantics of the
     CI-gate behaviour and how to opt out.
+
+    ``emit_datapoints``: Optional callback invoked with the generated datapoints
+    before simulation — used by the CLI's ``--save-datapoints`` to persist the
+    exact inputs.
     """
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
@@ -215,15 +222,27 @@ async def generate_and_simulate(
                 generation_client=generation_client,
             )
 
+            datapoints = await _resolve_or_generate_datapoints(
+                caller="generate_and_simulate",
+                datapoints=None,
+                personas=gen_personas,
+                scenarios=gen_scenarios,
+                dataset_id=None,
+                model=sim_model,
+                generation_client=generation_client,
+            )
+            if emit_datapoints is not None:
+                emit_datapoints(datapoints)
+
             return await _simulate_core(
                 caller="generate_and_simulate",
                 evaluation_name=evaluation_name,
                 agent_key=agent_key,
                 target_callback=target_callback,
                 target=target,
-                personas=gen_personas,
-                scenarios=gen_scenarios,
-                datapoints=None,
+                personas=None,
+                scenarios=None,
+                datapoints=datapoints,
                 dataset_id=None,
                 max_turns=max_turns,
                 model=sim_model,

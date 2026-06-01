@@ -479,6 +479,16 @@ def run(
         bool,
         typer.Option("--no-save", help="Skip writing to .evaluatorq/sim-runs/."),
     ] = False,
+    save_datapoints: Annotated[
+        Path | None,
+        typer.Option(
+            "--save-datapoints",
+            help=(
+                "Also write the generated datapoints (the simulate inputs) to this "
+                "JSONL path, for reproducible re-runs via `sim simulate --datapoints`."
+            ),
+        ),
+    ] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging.")] = False,  # noqa: FBT002
     quiet: Annotated[bool, typer.Option("--quiet", "-q", help="Warning-only logging.")] = False,  # noqa: FBT002
 ) -> None:
@@ -517,6 +527,7 @@ def run(
                 num_scenarios=num_scenarios,
                 evaluator_names=evaluator_names,
                 evaluation_name=name,
+                save_datapoints=save_datapoints,
             )
         )
     except KeyboardInterrupt:
@@ -533,6 +544,9 @@ def run(
 
     if output:
         _write_results(results, output)
+
+    if save_datapoints is not None:
+        typer.echo(f"Datapoints saved: {save_datapoints}", err=True)
 
     if not no_save:
         run_path = _auto_save_run(
@@ -556,8 +570,18 @@ async def _run_impl(
     num_scenarios: int,
     evaluator_names: list[str] | None,
     evaluation_name: str,
+    save_datapoints: Path | None = None,
 ) -> list[Any]:
     from evaluatorq.simulation.api import generate_and_simulate
+
+    emit = None
+    if save_datapoints is not None:
+        save_path = save_datapoints
+
+        def _emit(dps: list[Any]) -> None:
+            _write_datapoints(dps, save_path)
+
+        emit = _emit
 
     return await generate_and_simulate(
         agent_description=agent_description,
@@ -569,6 +593,7 @@ async def _run_impl(
         num_scenarios=num_scenarios,
         evaluator_names=evaluator_names,
         evaluation_name=evaluation_name,
+        emit_datapoints=emit,
     )
 
 
