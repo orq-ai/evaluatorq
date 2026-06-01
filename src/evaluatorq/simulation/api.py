@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from evaluatorq.simulation.agents.base import BaseAgent
     from evaluatorq.simulation.evaluators.scorers import SimulationScorer
     from evaluatorq.simulation.generators import FirstMessageGenerator
+    from evaluatorq.simulation.hooks import SimulationHooks
     from evaluatorq.simulation.types import (
         Datapoint,
         Message,
@@ -41,18 +42,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-
-class SimulationDroppedError(RuntimeError):
-    """Raised when simulation job(s) produced no result and were dropped.
-
-    Distinct subclass of RuntimeError so callers can grep/catch the
-    cache-miss path specifically rather than matching on the message.
-    """
+# Re-exported from here for back-compat (``simulation.__init__`` imports it from
+# api); the canonical definition lives in ``simulation.exceptions``.
+from evaluatorq.simulation.exceptions import SimulationDroppedError
 
 
 async def simulate(
     *,
-    evaluation_name: str = "",
+    evaluation_name: str = '',
     agent_key: str | None = None,
     target_callback: Callable[[list[Message]], str | Awaitable[str]] | None = None,
     target: Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = None,
@@ -66,6 +63,7 @@ async def simulate(
     parallelism: int = 5,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
+    hooks: SimulationHooks | None = None,
     generation_client: AsyncOpenAI | None = None,
     upload_results: bool = True,
     evaluation_description: str | None = None,
@@ -91,6 +89,10 @@ async def simulate(
             ``sim_model``. ``sim_model`` drives the user-simulator, the judge,
             and datapoint generators.
         judge: Pre-constructed ``BaseAgent`` used to evaluate each turn.
+        hooks: Optional ``SimulationHooks`` for run/datapoint/turn lifecycle
+            events. Sync or async; ``async def`` is preferred (a sync hook
+            works but emits a one-time ``DeprecationWarning``). Defaults to
+            ``DefaultHooks`` (loguru baseline).
         generation_client: Optional pre-built ``AsyncOpenAI`` used for datapoint
             generation (first-message). When omitted, generation falls back to
             the same env-based provider resolution as
@@ -123,15 +125,15 @@ async def simulate(
 
     try:
         async with with_simulation_span(
-            "orq.simulation.pipeline",
+            'orq.simulation.pipeline',
             {
-                "orq.simulation.evaluation_name": evaluation_name,
-                "orq.simulation.max_turns": max_turns,
-                "orq.simulation.parallelism": parallelism,
+                'orq.simulation.evaluation_name': evaluation_name,
+                'orq.simulation.max_turns': max_turns,
+                'orq.simulation.parallelism': parallelism,
             },
         ) as pipeline_span:
             return await _simulate_core(
-                caller="simulate",
+                caller='simulate',
                 evaluation_name=evaluation_name,
                 agent_key=agent_key,
                 target_callback=target_callback,
@@ -152,6 +154,7 @@ async def simulate(
                 path=path,
                 exit_on_failure=exit_on_failure,
                 pipeline_span=pipeline_span,
+                hooks=hooks,
             )
     finally:
         await flush_tracing()
@@ -159,7 +162,7 @@ async def simulate(
 
 async def generate_and_simulate(
     *,
-    evaluation_name: str = "",
+    evaluation_name: str = '',
     agent_description: str,
     agent_key: str | None = None,
     target_callback: Callable[[list[Message]], str | Awaitable[str]] | None = None,
@@ -172,6 +175,7 @@ async def generate_and_simulate(
     parallelism: int = 5,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
+    hooks: SimulationHooks | None = None,
     generation_client: AsyncOpenAI | None = None,
     upload_results: bool = True,
     evaluation_description: str | None = None,
@@ -191,7 +195,10 @@ async def generate_and_simulate(
     user-simulator, and the judge. ``upload_results`` defaults to ``True``; set
     it to ``False`` to skip uploading the final experiment. ``exit_on_failure``
     defaults to ``True``; see :func:`simulate` for the full semantics of the
-    CI-gate behaviour and how to opt out.
+    CI-gate behaviour and how to opt out. ``hooks`` mirrors :func:`simulate`;
+    note the ``on_confirm`` gate fires AFTER persona/scenario/first-message
+    generation, so those generation tokens are already spent when the gate is
+    consulted.
 
     ``emit_datapoints``: Optional callback invoked with the generated datapoints
     before simulation — used by the CLI's ``--save-datapoints`` to persist the
@@ -204,14 +211,14 @@ async def generate_and_simulate(
 
     try:
         async with with_simulation_span(
-            "orq.simulation.pipeline",
+            'orq.simulation.pipeline',
             {
-                "orq.simulation.evaluation_name": evaluation_name,
-                "orq.simulation.mode": "generate_and_simulate",
-                "orq.simulation.num_personas": num_personas,
-                "orq.simulation.num_scenarios": num_scenarios,
-                "orq.simulation.max_turns": max_turns,
-                "orq.simulation.parallelism": parallelism,
+                'orq.simulation.evaluation_name': evaluation_name,
+                'orq.simulation.mode': 'generate_and_simulate',
+                'orq.simulation.num_personas': num_personas,
+                'orq.simulation.num_scenarios': num_scenarios,
+                'orq.simulation.max_turns': max_turns,
+                'orq.simulation.parallelism': parallelism,
             },
         ) as pipeline_span:
             gen_personas, gen_scenarios = await _generate_personas_scenarios(
@@ -235,7 +242,7 @@ async def generate_and_simulate(
                 emit_datapoints(datapoints)
 
             return await _simulate_core(
-                caller="generate_and_simulate",
+                caller='generate_and_simulate',
                 evaluation_name=evaluation_name,
                 agent_key=agent_key,
                 target_callback=target_callback,
@@ -256,6 +263,7 @@ async def generate_and_simulate(
                 path=path,
                 exit_on_failure=exit_on_failure,
                 pipeline_span=pipeline_span,
+                hooks=hooks,
             )
     finally:
         await flush_tracing()
@@ -396,19 +404,23 @@ async def _simulate_core(
     path: str | None,
     exit_on_failure: bool,
     pipeline_span: Span | None,
+    hooks: SimulationHooks | None = None,
 ) -> list[SimulationResult]:
     """Core simulation logic (runs inside the orq.simulation.pipeline span).
 
     Resolves the target (callable, ``AgentTarget``, or ``agent_key`` bridge),
-    resolves/generates the datapoints, then routes execution through
-    ``_simulate_via_evaluatorq`` so the run inherits evaluatorq's upload,
-    CI gating, and results display.
+    resolves/generates the datapoints, then drives the run-level lifecycle
+    hooks (``on_confirm`` gate → ``on_run_start`` → ``on_run_complete``) around
+    ``_simulate_via_evaluatorq``, which routes execution through evaluatorq's
+    upload, CI gating, and results display. Per-datapoint / per-turn hooks fire
+    inside ``SimulationRunner``.
     """
+    from evaluatorq.common.async_utils import await_maybe
+    from evaluatorq.simulation.exceptions import SimulationCancelledError
+    from evaluatorq.simulation.hooks import DefaultHooks, SimulationRunMeta
     from evaluatorq.simulation.tracing import set_span_attrs
 
-    target_callback_resolved, target_agent = _resolve_target(
-        target, target_callback, agent_key
-    )
+    target_callback_resolved, target_agent = _resolve_target(target, target_callback, agent_key)
 
     sim_datapoints = await _resolve_or_generate_datapoints(
         caller=caller,
@@ -422,27 +434,69 @@ async def _simulate_core(
 
     set_span_attrs(
         pipeline_span,
-        {"orq.simulation.datapoints_count": len(sim_datapoints)},
+        {'orq.simulation.datapoints_count': len(sim_datapoints)},
     )
 
-    return await _simulate_via_evaluatorq(
-        caller=caller,
-        evaluation_name=evaluation_name,
-        target_callback=target_callback_resolved,
-        target_agent=target_agent,
-        sim_datapoints=sim_datapoints,
-        max_turns=max_turns,
-        model=model,
-        evaluator_names=evaluator_names,
-        parallelism=parallelism,
-        user_simulator=user_simulator,
-        judge=judge,
-        upload_results=upload_results,
-        evaluation_description=evaluation_description,
-        path=path,
-        exit_on_failure=exit_on_failure,
-        pipeline_span=pipeline_span,
-    )
+    resolved_hooks = hooks or DefaultHooks()
+    # The sync-hook deprecation nudge fires once in SimulationRunner.__init__
+    # (the single choke point both this path and direct runner use share).
+    resolved_evaluator_names = evaluator_names if evaluator_names is not None else ['goal_achieved', 'criteria_met']
+    run_meta: SimulationRunMeta = {
+        'num_datapoints': len(sim_datapoints),
+        'model': model,
+        'max_turns': max_turns,
+        'parallelism': parallelism,
+        'evaluation_name': evaluation_name,
+        'evaluator_names': resolved_evaluator_names,
+    }
+    # Gate first — before the evaluatorq run is built. A decline is a clean abort.
+    if not await await_maybe(resolved_hooks.on_confirm(run_meta)):
+        raise SimulationCancelledError('Simulation run declined by on_confirm hook')
+
+    # Terminal hook always pairs with on_run_start; results is [] on early
+    # failure. on_run_complete is unguarded (a raising hook propagates, per the
+    # hook exception policy); runner/target cleanup lives inside
+    # _simulate_via_evaluatorq's own finally, so it runs regardless.
+    results: list[SimulationResult] = []
+    await await_maybe(resolved_hooks.on_run_start(run_meta))
+    try:
+        results = await _simulate_via_evaluatorq(
+            caller=caller,
+            evaluation_name=evaluation_name,
+            target_callback=target_callback_resolved,
+            target_agent=target_agent,
+            sim_datapoints=sim_datapoints,
+            max_turns=max_turns,
+            model=model,
+            evaluator_names=evaluator_names,
+            parallelism=parallelism,
+            user_simulator=user_simulator,
+            judge=judge,
+            upload_results=upload_results,
+            evaluation_description=evaluation_description,
+            path=path,
+            exit_on_failure=exit_on_failure,
+            pipeline_span=pipeline_span,
+            hooks=resolved_hooks,
+        )
+        # Fire on_evaluator_complete here — AFTER results is assigned and
+        # OUTSIDE evaluatorq's per-scorer try/except — so an unguarded hook
+        # raise propagates (per the contract) while on_run_complete in the
+        # finally still receives the real results, not []. Scores were stamped
+        # onto each result's metadata by _stamp_evaluator_scores.
+        for r in results:
+            dp_id = r.metadata.get('datapoint_id', '')
+            evaluator_scores = r.metadata.get('evaluator_scores') or {}
+            for evaluator_name, score in evaluator_scores.items():
+                await await_maybe(resolved_hooks.on_evaluator_complete(dp_id, evaluator_name, score, r))
+    except SimulationDroppedError as dropped:
+        # exit_on_failure aborted the run, but the rows that succeeded are real
+        # results — hand them to on_run_complete (via the finally) instead of [].
+        results = dropped.partial_results
+        raise
+    finally:
+        await await_maybe(resolved_hooks.on_run_complete(results))
+    return results
 
 
 def _resolve_target(
@@ -466,18 +520,14 @@ def _resolve_target(
     if not resolved and agent_key:
         resolved = from_orq_deployment(agent_key)
     if not resolved:
-        raise ValueError(
-            "Either target_callback (or target) or agent_key is required"
-        )
+        raise ValueError('Either target_callback (or target) or agent_key is required')
     return resolved, None
 
 
 def _require_orq_api_key(caller: str) -> str:
-    api_key = os.environ.get("ORQ_API_KEY")
+    api_key = os.environ.get('ORQ_API_KEY')
     if not api_key:
-        raise ValueError(
-            f"ORQ_API_KEY environment variable is not set. Set it before calling {caller}()."
-        )
+        raise ValueError(f'ORQ_API_KEY environment variable is not set. Set it before calling {caller}().')
     return api_key
 
 
@@ -499,15 +549,13 @@ async def _resolve_or_generate_datapoints(
     API-key error message points the user at the right function.
     """
     sources = [
-        ("dataset_id", dataset_id is not None),
-        ("datapoints", datapoints is not None),
-        ("personas/scenarios", personas is not None or scenarios is not None),
+        ('dataset_id', dataset_id is not None),
+        ('datapoints', datapoints is not None),
+        ('personas/scenarios', personas is not None or scenarios is not None),
     ]
     chosen = [name for name, present in sources if present]
     if len(chosen) > 1:
-        raise ValueError(
-            f"Pass exactly one of dataset_id, datapoints, or personas+scenarios; got: {', '.join(chosen)}"
-        )
+        raise ValueError(f'Pass exactly one of dataset_id, datapoints, or personas+scenarios; got: {", ".join(chosen)}')
 
     if dataset_id is not None:
         api_key = _require_orq_api_key(caller)
@@ -519,9 +567,7 @@ async def _resolve_or_generate_datapoints(
         return datapoints
 
     if personas is None or scenarios is None:
-        raise ValueError(
-            "Either provide 'dataset_id', 'datapoints', or both 'personas' and 'scenarios'"
-        )
+        raise ValueError("Either provide 'dataset_id', 'datapoints', or both 'personas' and 'scenarios'")
     if not personas or not scenarios:
         raise ValueError("'personas' and 'scenarios' arrays must both be non-empty")
 
@@ -544,7 +590,7 @@ async def _resolve_or_generate_datapoints(
             for (p, s), outcome in zip(batch, batch_results, strict=True):
                 if isinstance(outcome, BaseException):
                     logger.warning(
-                        "first-message generation failed for persona=%r scenario=%r: %r — skipping",
+                        'first-message generation failed for persona=%r scenario=%r: %r — skipping',
                         p.name,
                         s.name,
                         outcome,
@@ -552,18 +598,14 @@ async def _resolve_or_generate_datapoints(
                     continue
                 generated.append(outcome)
         if not generated:
-            raise RuntimeError(
-                "first-message generation produced no datapoints — every persona×scenario pair failed"
-            )
+            raise RuntimeError('first-message generation produced no datapoints — every persona×scenario pair failed')
         return generated
     finally:
         if gen_owned:
             await gen_client.close()
 
 
-async def _fetch_simulation_datapoints_from_orq(
-    api_key: str, dataset_id: str
-) -> list[Datapoint]:
+async def _fetch_simulation_datapoints_from_orq(api_key: str, dataset_id: str) -> list[Datapoint]:
     """Stream the named Orq dataset and parse each row into a simulation
     Datapoint via the same shape-tolerant extractor used by the inline path.
     """
@@ -580,29 +622,23 @@ async def _fetch_simulation_datapoints_from_orq(
             try:
                 out.append(_extract_single_datapoint(eq_dp))
             except (ValueError, ValidationError) as e:
-                raise ValueError(
-                    f"dataset {dataset_id!r} row {row}: {e}"
-                ) from e
+                raise ValueError(f'dataset {dataset_id!r} row {row}: {e}') from e
             row += 1
     if not out:
-        raise ValueError(
-            f"Dataset {dataset_id!r} returned zero simulation-compatible datapoints"
-        )
+        raise ValueError(f'Dataset {dataset_id!r} returned zero simulation-compatible datapoints')
     return out
 
 
-async def _generate_single_datapoint(
-    gen: FirstMessageGenerator, persona: Persona, scenario: Scenario
-) -> Datapoint:
+async def _generate_single_datapoint(gen: FirstMessageGenerator, persona: Persona, scenario: Scenario) -> Datapoint:
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.simulation.utils.prompt_builders import generate_datapoint
 
     async with with_simulation_span(
-        "orq.simulation.first_message_generation",
+        'orq.simulation.first_message_generation',
         {
-            "orq.simulation.persona": persona.name,
-            "orq.simulation.scenario": scenario.name,
-            "orq.simulation.model": getattr(gen, "_model", None),
+            'orq.simulation.persona': persona.name,
+            'orq.simulation.scenario': scenario.name,
+            'orq.simulation.model': getattr(gen, '_model', None),
         },
     ):
         first_message = await gen.generate(persona, scenario)
@@ -619,6 +655,7 @@ def _build_simulation_job_and_cache(
     max_turns: int,
     user_simulator: BaseAgent | None,
     judge: BaseAgent | None,
+    hooks: SimulationHooks | None,
 ) -> tuple[
     Callable[[DataPoint, int], Awaitable[dict[str, Any]]],
     dict[int, SimulationResult],
@@ -633,8 +670,11 @@ def _build_simulation_job_and_cache(
     call lifetime. This avoids polluting the UI inputs column with a synthetic
     index key and removes a pydantic re-parse per datapoint.
     """
+    from evaluatorq.common.async_utils import await_maybe
     from evaluatorq.simulation.convert import to_open_responses
-    from evaluatorq.simulation.runner.simulation import SimulationRunner
+    from evaluatorq.simulation.hooks import DefaultHooks
+    from evaluatorq.simulation.runner.simulation import SimulationRunner, _error_result
+    from evaluatorq.simulation.types import TerminatedBy
 
     runner = SimulationRunner(
         target_callback=target_callback,
@@ -643,20 +683,52 @@ def _build_simulation_job_and_cache(
         max_turns=max_turns,
         user_simulator=user_simulator,
         judge=judge,
+        hooks=hooks,
     )
+    # _simulate_core always passes a resolved hooks; the fallback only guards
+    # the (internal-only) direct-call path. A user-supplied hooks object is the
+    # same instance the runner uses, so per-datapoint and per-turn hooks share
+    # one object. The deprecation nudge still fires once, in the runner ctor.
+    resolved_hooks: SimulationHooks = hooks or DefaultHooks()
     result_cache: dict[int, SimulationResult] = {}
 
     async def job_fn(data: DataPoint, _row: int) -> dict[str, Any]:
         sim_dp = sim_dp_by_id.get(id(data))
         if sim_dp is None:
             raise RuntimeError(
-                "DataPoint instance not found in sim_dp_by_id — "
+                'DataPoint instance not found in sim_dp_by_id — '
                 "simulate()'s scorer/result wiring requires the same "
-                "DataPoint instance evaluatorq was given"
+                'DataPoint instance evaluatorq was given'
             )
+        # evaluatorq parallelises datapoints and calls runner.run() per row, so
+        # the per-datapoint lifecycle hooks (which live in run_batch, bypassed
+        # here) are fired from the job instead. run() fires on_turn_complete
+        # internally. A raising per-datapoint hook surfaces as this job's
+        # failure (evaluatorq captures it per-row), matching run_batch's
+        # gather(return_exceptions=True) isolation.
+        #
+        # on_datapoint_start is wrapped so a raise still surfaces via
+        # on_datapoint_error + on_datapoint_complete for this datapoint (the
+        # guarantee in SimulationHooks' docstring), mirroring run_batch — then
+        # re-raised so evaluatorq records the job failure. Without this a
+        # RichHooks task created in on_datapoint_start would never advance.
+        try:
+            await await_maybe(resolved_hooks.on_datapoint_start(sim_dp))
+        except Exception as start_err:
+            err = _error_result(str(start_err), sim_dp.persona, sim_dp.scenario)
+            err.metadata['datapoint_id'] = sim_dp.id
+            result_cache[id(data)] = err
+            await await_maybe(resolved_hooks.on_datapoint_error(sim_dp, start_err))
+            await await_maybe(resolved_hooks.on_datapoint_complete(err))
+            raise
         result = await runner.run(datapoint=sim_dp, max_turns=max_turns)
+        result.metadata['datapoint_id'] = sim_dp.id
         result_cache[id(data)] = result
-        return {"name": job_name, "output": to_open_responses(result, model)}
+        if result.terminated_by in (TerminatedBy.error, TerminatedBy.timeout):
+            reason = result.metadata.get('error') or result.reason
+            await await_maybe(resolved_hooks.on_datapoint_error(sim_dp, RuntimeError(reason)))
+        await await_maybe(resolved_hooks.on_datapoint_complete(result))
+        return {'name': job_name, 'output': to_open_responses(result, model)}
 
     return job_fn, result_cache, runner
 
@@ -671,6 +743,13 @@ def _adapt_simulation_scorer(
     The evaluatorq scorer receives ``{data: DataPoint, output: Output}``;
     it recovers the raw ``SimulationResult`` from ``result_cache`` keyed by
     ``id(data)`` — the same DataPoint instance the upstream job cached against.
+
+    Note: ``on_evaluator_complete`` is NOT fired here. evaluatorq's
+    ``process_evaluator`` wraps this scorer in a try/except, so a hook raising
+    inside it would be swallowed (recorded as a scorer error) rather than
+    propagating. The hook is fired from :func:`_stamp_evaluator_scores`, which
+    runs outside evaluatorq's guard, preserving the unguarded-propagation
+    contract.
     """
     from evaluatorq.types import EvaluationResult, ScorerParameter
 
@@ -679,28 +758,25 @@ def _adapt_simulation_scorer(
         # evaluatorq's process_evaluator catches and records the error on
         # the EvaluatorScore, so callers (and exit_on_failure) see a real
         # failure instead of mistaking a degenerate score for a low result.
-        data = params["data"]
+        data = params['data']
         sim_result = result_cache.get(id(data))
         if sim_result is None:
             logger.error(
-                "scorer %r: no SimulationResult cached for DataPoint id=%r — "
-                "upstream simulation job failed or did not run",
+                'scorer %r: no SimulationResult cached for DataPoint id=%r — '
+                'upstream simulation job failed or did not run',
                 name,
                 id(data),
             )
-            raise RuntimeError(
-                f"missing simulation result for DataPoint id={id(data)} "
-                f"(scorer={name!r})"
-            )
+            raise RuntimeError(f'missing simulation result for DataPoint id={id(data)} (scorer={name!r})')
         try:
             value = sim_scorer(sim_result)
         except Exception as e:
-            logger.exception("scorer %r raised on DataPoint id=%s", name, id(data))
-            sim_result.metadata.setdefault("scorer_errors", {})[name] = repr(e)
+            logger.exception('scorer %r raised on DataPoint id=%s', name, id(data))
+            sim_result.metadata.setdefault('scorer_errors', {})[name] = repr(e)
             raise
         return EvaluationResult(value=value)
 
-    return {"name": name, "scorer": scorer}
+    return {'name': name, 'scorer': scorer}
 
 
 async def _simulate_via_evaluatorq(
@@ -721,6 +797,7 @@ async def _simulate_via_evaluatorq(
     path: str | None,
     exit_on_failure: bool,
     pipeline_span: Span | None,
+    hooks: SimulationHooks,
 ) -> list[SimulationResult]:
     """Wrap simulation Datapoints as evaluatorq DataPoints and run."""
     from datetime import datetime, timezone
@@ -735,19 +812,14 @@ async def _simulate_via_evaluatorq(
     )
     scorers = [(name, get_evaluator(name)) for name in resolved_evaluator_names]
 
-    eq_datapoints = [
-        DataPoint(inputs={"datapoint": dp.model_dump(mode="json")})
-        for dp in sim_datapoints
-    ]
+    eq_datapoints = [DataPoint(inputs={'datapoint': dp.model_dump(mode='json')}) for dp in sim_datapoints]
     # Map the evaluatorq DataPoint instance back to its source simulation
     # Datapoint by identity, so the job can run the source directly without
     # re-parsing inputs["datapoint"] on every run.
-    sim_dp_by_id = {
-        id(eq): sim for eq, sim in zip(eq_datapoints, sim_datapoints, strict=True)
-    }
+    sim_dp_by_id = {id(eq): sim for eq, sim in zip(eq_datapoints, sim_datapoints, strict=True)}
 
     job_fn, result_cache, runner = _build_simulation_job_and_cache(
-        job_name="simulation",
+        job_name='simulation',
         sim_dp_by_id=sim_dp_by_id,
         target_callback=target_callback,
         target_agent=target_agent,
@@ -755,17 +827,13 @@ async def _simulate_via_evaluatorq(
         max_turns=max_turns,
         user_simulator=user_simulator,
         judge=judge,
+        hooks=hooks,
     )
 
-    evaluators = [
-        _adapt_simulation_scorer(name, fn, result_cache) for name, fn in scorers
-    ]
+    evaluators = [_adapt_simulation_scorer(name, fn, result_cache) for name, fn in scorers]
 
     start = datetime.now(tz=timezone.utc)
-    run_name = (
-        evaluation_name
-        or f"simulation-{start.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
-    )
+    run_name = evaluation_name or f'simulation-{start.strftime("%Y%m%d-%H%M%S")}-{uuid.uuid4().hex[:8]}'
 
     try:
         eq_results = await evaluatorq(
@@ -788,8 +856,8 @@ async def _simulate_via_evaluatorq(
         except Exception:
             # Don't let runner-cleanup errors mask the primary exception
             # from evaluatorq() if there was one.
-            logger.exception("SimulationRunner.close() raised during cleanup")
-        target_close = getattr(target_agent or target_callback, "close", None)
+            logger.exception('SimulationRunner.close() raised during cleanup')
+        target_close = getattr(target_agent or target_callback, 'close', None)
         if callable(target_close):
             try:
                 maybe = target_close()
@@ -798,29 +866,30 @@ async def _simulate_via_evaluatorq(
             except Exception:
                 # Same guard as runner.close(): a target raising on close
                 # must not mask the primary exception from evaluatorq().
-                logger.exception("target close() raised during cleanup")
+                logger.exception('target close() raised during cleanup')
 
     # Mirror evaluator scores onto SimulationResult.metadata once, from the
     # final evaluatorq result, so the scorer stays pure (no side-effects mid-run)
     # and callers inspecting SimulationResult.metadata still find evaluator_scores.
+    # on_evaluator_complete is fired by the caller (_simulate_core) from these
+    # stamped scores, after results is assembled.
     _stamp_evaluator_scores(eq_results, result_cache, evaluation_name)
 
+    # Build the results from the successful rows BEFORE the missing-rows check,
+    # so a SimulationDroppedError can still carry the partial results through to
+    # on_run_complete instead of leaving the caller with an empty list.
+    results = [result_cache[id(eq)] for eq in eq_datapoints if id(eq) in result_cache]
+
     expected = len(eq_datapoints)
-    missing = [
-        i for i, eq in enumerate(eq_datapoints) if id(eq) not in result_cache
-    ]
+    missing = [i for i, eq in enumerate(eq_datapoints) if id(eq) not in result_cache]
     if missing:
         msg = (
-            f"{caller}(): {len(missing)} of {expected} simulation job(s) failed "
-            f"and produced no result (missing rows: {missing})"
+            f'{caller}(): {len(missing)} of {expected} simulation job(s) failed '
+            f'and produced no result (missing rows: {missing})'
         )
         if exit_on_failure:
-            raise SimulationDroppedError(msg)
+            raise SimulationDroppedError(msg, partial_results=results)
         logger.warning(msg)
-
-    results = [
-        result_cache[id(eq)] for eq in eq_datapoints if id(eq) in result_cache
-    ]
 
     # Aggregate token usage onto the pipeline span.
     total_prompt = sum((r.token_usage.prompt_tokens or 0) for r in results)
@@ -835,10 +904,8 @@ async def _simulate_via_evaluatorq(
     set_span_attrs(
         pipeline_span,
         {
-            "orq.simulation.results_count": len(results),
-            "orq.simulation.goal_achieved_count": sum(
-                1 for r in results if r.goal_achieved
-            ),
+            'orq.simulation.results_count': len(results),
+            'orq.simulation.goal_achieved_count': sum(1 for r in results if r.goal_achieved),
         },
     )
 
@@ -856,15 +923,19 @@ def _stamp_evaluator_scores(
     Matches by ``id(data_point)`` — on success evaluatorq returns the same
     DataPoint instance the job cached against. Error rows carry a placeholder
     DataPoint whose id won't match, so they're skipped.
+
+    ``on_evaluator_complete`` is NOT fired here — the caller (_simulate_core)
+    fires it from the stamped scores after ``results`` is assembled, so an
+    unguarded hook raise still leaves the real results for ``on_run_complete``.
     """
     for dp_result in eq_results:
         sim_result = result_cache.get(id(dp_result.data_point))
         if sim_result is None or not dp_result.job_results:
             continue
-        scores_dict = sim_result.metadata.setdefault("evaluator_scores", {})
-        if isinstance(scores_dict, dict):
-            for job_result in dp_result.job_results:
-                for score in job_result.evaluator_scores or []:
+        scores_dict = sim_result.metadata.setdefault('evaluator_scores', {})
+        for job_result in dp_result.job_results:
+            for score in job_result.evaluator_scores or []:
+                if isinstance(scores_dict, dict):
                     scores_dict[score.evaluator_name] = score.score.value
         if evaluation_name:
-            sim_result.metadata["evaluation_name"] = evaluation_name
+            sim_result.metadata['evaluation_name'] = evaluation_name

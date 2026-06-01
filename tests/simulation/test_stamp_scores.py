@@ -26,7 +26,7 @@ def _sim_result() -> SimulationResult:
     return SimulationResult(
         messages=[],
         terminated_by=TerminatedBy.max_turns,
-        reason="",
+        reason='',
         goal_achieved=True,
         goal_completion_score=1.0,
         rules_broken=[],
@@ -37,7 +37,7 @@ def _sim_result() -> SimulationResult:
 
 
 def test_stamps_scores_onto_matching_result_by_identity():
-    dp = DataPoint(inputs={"datapoint": {}})
+    dp = DataPoint(inputs={'datapoint': {}})
     sim = _sim_result()
     cache = {id(dp): sim}
     eq_results = [
@@ -45,15 +45,15 @@ def test_stamps_scores_onto_matching_result_by_identity():
             data_point=dp,
             job_results=[
                 JobResult(
-                    job_name="simulation",
+                    job_name='simulation',
                     output=None,
                     evaluator_scores=[
                         EvaluatorScore(
-                            evaluator_name="goal_achieved",
+                            evaluator_name='goal_achieved',
                             score=EvaluationResult(value=1.0),
                         ),
                         EvaluatorScore(
-                            evaluator_name="criteria_met",
+                            evaluator_name='criteria_met',
                             score=EvaluationResult(value=0.0),
                         ),
                     ],
@@ -62,19 +62,19 @@ def test_stamps_scores_onto_matching_result_by_identity():
         )
     ]
 
-    _stamp_evaluator_scores(eq_results, cache, "my-run")
+    _stamp_evaluator_scores(eq_results, cache, 'my-run')
 
-    assert sim.metadata["evaluator_scores"] == {
-        "goal_achieved": 1.0,
-        "criteria_met": 0.0,
+    assert sim.metadata['evaluator_scores'] == {
+        'goal_achieved': 1.0,
+        'criteria_met': 0.0,
     }
-    assert sim.metadata["evaluation_name"] == "my-run"
+    assert sim.metadata['evaluation_name'] == 'my-run'
 
 
 def test_skips_rows_with_no_cached_result():
     """Error rows carry a placeholder DataPoint whose id isn't in the cache."""
     placeholder = DataPoint(inputs={})
-    eq_results = [DataPointResult(data_point=placeholder, error="boom")]
+    eq_results = [DataPointResult(data_point=placeholder, error='boom')]
 
     # No cache entry, no job_results — must not raise.
-    _stamp_evaluator_scores(eq_results, {}, "")
+    _stamp_evaluator_scores(eq_results, {}, '')

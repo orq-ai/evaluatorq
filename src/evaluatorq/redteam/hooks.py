@@ -3,6 +3,10 @@
 Provides a ``PipelineHooks`` protocol that separates rendering concerns from
 pipeline logic.  Hook implementations are injected via ``red_team(hooks=...)``.
 
+Hooks may be sync or async (driven via ``await_maybe``); ``async def`` is
+preferred — a sync implementation works but emits a one-time
+``DeprecationWarning``.  Offload blocking work with ``asyncio.to_thread``.
+
 Public API:
     PipelineHooks  — runtime-checkable Protocol
     ConfirmPayload — TypedDict for on_confirm payload
@@ -12,6 +16,7 @@ Public API:
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict, runtime_checkable
 
@@ -23,6 +28,7 @@ from evaluatorq.redteam.reports.display import print_report_summary
 if TYPE_CHECKING:
     from rich.console import Console as RichConsole
 
+    from evaluatorq.common.async_utils import MaybeAsync
     from evaluatorq.redteam.contracts import RedTeamReport
 
 
@@ -124,10 +130,13 @@ class PipelineHooks(Protocol):
     """Protocol for pipeline lifecycle hooks.
 
     Implementations are injected into ``red_team()`` via ``hooks=...``.
-    All methods are synchronous.  If a hook raises, the pipeline breaks.
+    Methods may be sync or async (declared with ``MaybeAsync`` returns and driven
+    via ``await_maybe``); ``async def`` is preferred — a sync implementation works
+    but emits a ``DeprecationWarning``. If a hook raises, the pipeline breaks.
+    Offload blocking work with ``asyncio.to_thread``.
     """
 
-    def on_stage_start(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
+    def on_stage_start(self, stage: PipelineStage | str, meta: dict[str, Any]) -> MaybeAsync[None]:
         """Called when a pipeline stage begins.
 
         Args:
@@ -136,7 +145,7 @@ class PipelineHooks(Protocol):
         """
         ...
 
-    def on_stage_end(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
+    def on_stage_end(self, stage: PipelineStage | str, meta: dict[str, Any]) -> MaybeAsync[None]:
         """Called when a pipeline stage completes.
 
         Args:
@@ -145,7 +154,7 @@ class PipelineHooks(Protocol):
         """
         ...
 
-    def on_confirm(self, payload: ConfirmPayload) -> bool:
+    def on_confirm(self, payload: ConfirmPayload) -> MaybeAsync[bool]:
         """Called before execution begins to confirm the run plan.
 
         Args:
@@ -156,12 +165,16 @@ class PipelineHooks(Protocol):
         """
         ...
 
-    def on_complete(self, report: RedTeamReport, *, output_dir: str | None = None, auto_save_path: str | None = None) -> None:
+    def on_complete(
+        self, report: RedTeamReport, *, output_dir: str | None = None, auto_save_path: str | None = None
+    ) -> MaybeAsync[None]:
         """Called once with the final merged report after all targets complete.
 
         Args:
             report: The final ``RedTeamReport``.
             output_dir: Directory where the report JSON was saved (if any).
+            auto_save_path: Path the report was auto-saved to when no explicit
+                output_dir was given.
         """
         ...
 
@@ -179,81 +192,77 @@ class DefaultHooks:
     prompt).
     """
 
-    def on_stage_start(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
+    async def on_stage_start(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
         label = _STAGE_LABELS.get(stage, str(stage))
-        logger.info(f"[redteam] Stage started: {stage} — {label} | meta={meta}")
+        logger.info(f'[redteam] Stage started: {stage} — {label} | meta={meta}')
 
-    def on_stage_end(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
+    async def on_stage_end(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
         if stage == PipelineStage.DATAPOINT_GENERATION:
-            num_dp = meta.get("num_datapoints")
-            num_dyn = meta.get("num_dynamic")
-            num_sta = meta.get("num_static")
+            num_dp = meta.get('num_datapoints')
+            num_dyn = meta.get('num_dynamic')
+            num_sta = meta.get('num_static')
             # Prefer the dynamic/static breakdown when both are present (hybrid
             # mode emits all three keys); fall back to the total otherwise.
             if num_dyn is not None and num_sta is not None:
                 total = (num_dyn or 0) + (num_sta or 0)
                 logger.info(
-                    f"[redteam] \U0001f4ca Generated {total} datapoints "
-                    f"({num_dyn or 0} dynamic + {num_sta or 0} static)"
+                    f'[redteam] \U0001f4ca Generated {total} datapoints '
+                    f'({num_dyn or 0} dynamic + {num_sta or 0} static)'
                 )
             elif num_dp is not None:
-                logger.info(f"[redteam] \U0001f4ca Generated {num_dp} datapoints")
+                logger.info(f'[redteam] \U0001f4ca Generated {num_dp} datapoints')
         label = _STAGE_LABELS.get(stage, str(stage))
-        logger.info(f"[redteam] Stage complete: {stage} — {label} | meta={meta}")
+        logger.info(f'[redteam] Stage complete: {stage} — {label} | meta={meta}')
 
-    def on_confirm(self, payload: ConfirmPayload) -> bool:
+    async def on_confirm(self, payload: ConfirmPayload) -> bool:
         """Log plan details and always approve."""
-        num_dp = payload.get("num_datapoints", "?")
-        num_dyn = payload.get("num_dynamic")
-        num_sta = payload.get("num_static")
-        categories = payload.get("categories") or []
-        attack_model = payload.get("attack_model", "?")
-        evaluator_model = payload.get("evaluator_model", "?")
-        target = payload.get("target", "?")
-        mode = payload.get("mode", "?")
-        cat_word = "category" if len(categories) == 1 else "categories"
+        num_dp = payload.get('num_datapoints', '?')
+        num_dyn = payload.get('num_dynamic')
+        num_sta = payload.get('num_static')
+        categories = payload.get('categories') or []
+        attack_model = payload.get('attack_model', '?')
+        evaluator_model = payload.get('evaluator_model', '?')
+        target = payload.get('target', '?')
+        mode = payload.get('mode', '?')
+        cat_word = 'category' if len(categories) == 1 else 'categories'
         if num_dyn is not None and num_sta is not None:
-            dp_detail = f"{num_dp} datapoints ({num_dyn} dynamic + {num_sta} static)"
+            dp_detail = f'{num_dp} datapoints ({num_dyn} dynamic + {num_sta} static)'
         else:
-            dp_detail = f"{num_dp} datapoints"
+            dp_detail = f'{num_dp} datapoints'
         logger.info(
-            f"[redteam] \U0001f4ca Run plan: {dp_detail} | "
-            f"{len(categories)} {cat_word} | mode={mode!r} | target={target!r} | "
-            f"attack_model={attack_model!r} | evaluator_model={evaluator_model!r}"
+            f'[redteam] \U0001f4ca Run plan: {dp_detail} | '
+            f'{len(categories)} {cat_word} | mode={mode!r} | target={target!r} | '
+            f'attack_model={attack_model!r} | evaluator_model={evaluator_model!r}'
         )
         return True
 
-    def on_complete(self, report: RedTeamReport, *, output_dir: str | None = None, auto_save_path: str | None = None) -> None:
+    async def on_complete(
+        self, report: RedTeamReport, *, output_dir: str | None = None, auto_save_path: str | None = None
+    ) -> None:
         """Log a brief summary and UI hint."""
         for warning in report.pipeline_warnings:
             logger.warning(f'[redteam] PIPELINE WARNING: {warning}')
 
         summary = report.summary
         logger.info(
-            f"[redteam] Run complete — resistance_rate={summary.resistance_rate:.0%} "
-            f"vulnerabilities={summary.vulnerabilities_found} "
-            f"attacks={summary.total_attacks}"
+            f'[redteam] Run complete — resistance_rate={summary.resistance_rate:.0%} '
+            f'vulnerabilities={summary.vulnerabilities_found} '
+            f'attacks={summary.total_attacks}'
         )
         if output_dir:
             try:
-                report_path = str(Path(output_dir, "03_summary_report.json").relative_to(Path.cwd()))
+                report_path = str(Path(output_dir, '03_summary_report.json').relative_to(Path.cwd()))
             except ValueError:
-                report_path = f"{output_dir}/03_summary_report.json"
-            logger.info(
-                f'[redteam] Tip: visualise results with  "evaluatorq redteam ui {report_path}"'
-            )
+                report_path = f'{output_dir}/03_summary_report.json'
+            logger.info(f'[redteam] Tip: visualise results with  "evaluatorq redteam ui {report_path}"')
         elif auto_save_path:
             try:
                 report_path = str(Path(auto_save_path).relative_to(Path.cwd()))
             except ValueError:
                 report_path = auto_save_path
-            logger.info(
-                f'[redteam] Tip: visualise results with  "evaluatorq redteam ui {report_path}"'
-            )
+            logger.info(f'[redteam] Tip: visualise results with  "evaluatorq redteam ui {report_path}"')
         else:
-            logger.info(
-                '[redteam] Tip: visualise results with  "evaluatorq redteam ui <report.json>"'
-            )
+            logger.info('[redteam] Tip: visualise results with  "evaluatorq redteam ui <report.json>"')
 
 
 # ---------------------------------------------------------------------------
@@ -286,15 +295,15 @@ class RichHooks:
     # on_stage_start
     # ------------------------------------------------------------------
 
-    def on_stage_start(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
+    async def on_stage_start(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
         label = _STAGE_LABELS.get(stage, str(stage).replace('_', ' ').title())
-        self._console.rule(f"[bold cyan]{label}[/bold cyan]")
+        self._console.rule(f'[bold cyan]{label}[/bold cyan]')
 
     # ------------------------------------------------------------------
     # on_stage_end
     # ------------------------------------------------------------------
 
-    def on_stage_end(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
+    async def on_stage_end(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
         if stage == PipelineStage.CONTEXT_RETRIEVAL:
             # Per RES-716: surface the classifier output for this target
             # immediately after context retrieval. The runner places the
@@ -305,8 +314,8 @@ class RichHooks:
             # X.Xs" line is also suppressed for this stage — between
             # multi-target tables it just adds noise, and the timing is
             # already recorded as a span attribute on the trace.
-            agent_context = meta.get("agent_context")
-            agent_capabilities = meta.get("agent_capabilities")
+            agent_context = meta.get('agent_context')
+            agent_capabilities = meta.get('agent_capabilities')
             if agent_context is not None:
                 # Each target's output is wrapped in a Panel with the target
                 # label embedded in the top border (lazydocker / nethogs
@@ -315,9 +324,9 @@ class RichHooks:
                 self._render_agent_capabilities(
                     agent_context,
                     classified=agent_capabilities,
-                    target_label=meta.get("target", ""),
-                    classification_error=meta.get("classification_error"),
-                    classification_available=meta.get("classification_available", True),
+                    target_label=meta.get('target', ''),
+                    classification_error=meta.get('classification_error'),
+                    classification_available=meta.get('classification_available', True),
                 )
                 return
             # Static mode / non-redteam callers: no agent context to
@@ -325,76 +334,76 @@ class RichHooks:
             # one-liner so they get *some* signal.
             self._render_context_summary(meta)
 
-        elapsed = meta.get("elapsed_s")
+        elapsed = meta.get('elapsed_s')
         if elapsed is not None:
-            self._console.print(f"[dim]  completed in {elapsed:.1f}s[/dim]")
+            self._console.print(f'[dim]  completed in {elapsed:.1f}s[/dim]')
 
     def _render_context_summary(self, meta: dict[str, Any]) -> None:
         """Print a one-line per-target summary after agent context retrieval."""
-        target = meta.get("target", "?")
-        num_tools = meta.get("num_tools", 0)
-        num_memory = meta.get("num_memory_stores", 0)
-        num_kb = meta.get("num_knowledge_bases", 0)
+        target = meta.get('target', '?')
+        num_tools = meta.get('num_tools', 0)
+        num_memory = meta.get('num_memory_stores', 0)
+        num_kb = meta.get('num_knowledge_bases', 0)
 
         parts: list[str] = []
-        parts.append(f"{num_tools} tool{'s' if num_tools != 1 else ''}")
+        parts.append(f'{num_tools} tool{"s" if num_tools != 1 else ""}')
         if num_memory:
-            parts.append(f"{num_memory} memory store{'s' if num_memory != 1 else ''}")
+            parts.append(f'{num_memory} memory store{"s" if num_memory != 1 else ""}')
         if num_kb:
-            parts.append(f"{num_kb} knowledge base{'s' if num_kb != 1 else ''}")
+            parts.append(f'{num_kb} knowledge base{"s" if num_kb != 1 else ""}')
 
-        self._console.print(f"  [cyan]{target}[/cyan]: {', '.join(parts)}")
+        self._console.print(f'  [cyan]{target}[/cyan]: {", ".join(parts)}')
 
     # ------------------------------------------------------------------
     # on_confirm
     # ------------------------------------------------------------------
 
-    def on_confirm(self, payload: ConfirmPayload) -> bool:
+    async def on_confirm(self, payload: ConfirmPayload) -> bool:
         """Render a detailed run plan and prompt for confirmation."""
         from rich import box
         from rich.table import Table
 
         # ── Run parameters table ────────────────────────────────────────
-        table = Table(title="Run Plan", show_header=True, header_style="bold", box=box.ROUNDED)
-        table.add_column("Parameter", style="white", min_width=20)
-        table.add_column("Value", style="cyan")
+        table = Table(title='Run Plan', show_header=True, header_style='bold', box=box.ROUNDED)
+        table.add_column('Parameter', style='white', min_width=20)
+        table.add_column('Value', style='cyan')
 
-        target = payload.get("target", "?")
-        mode = payload.get("mode", "?")
-        num_dp = payload.get("num_datapoints")
-        categories = payload.get("categories") or []
-        attack_model = payload.get("attack_model", "?")
-        evaluator_model = payload.get("evaluator_model", "?")
-        max_turns = payload.get("max_turns", "?")
-        parallelism = payload.get("parallelism", "?")
-        dataset_path = payload.get("dataset_path")
-        num_dynamic = payload.get("num_dynamic")
-        num_static = payload.get("num_static")
+        target = payload.get('target', '?')
+        mode = payload.get('mode', '?')
+        num_dp = payload.get('num_datapoints')
+        categories = payload.get('categories') or []
+        attack_model = payload.get('attack_model', '?')
+        evaluator_model = payload.get('evaluator_model', '?')
+        max_turns = payload.get('max_turns', '?')
+        parallelism = payload.get('parallelism', '?')
+        dataset_path = payload.get('dataset_path')
+        num_dynamic = payload.get('num_dynamic')
+        num_static = payload.get('num_static')
 
-        table.add_row("Target", str(target))
-        table.add_row("Mode", str(mode))
+        table.add_row('Target', str(target))
+        table.add_row('Mode', str(mode))
 
         # Compute target count from agent_contexts or comma-separated target string
-        agent_contexts_raw = payload.get("agent_contexts") or {}
+        agent_contexts_raw = payload.get('agent_contexts') or {}
         num_targets = len(agent_contexts_raw) or 1
 
         if num_dp is not None:
-            table.add_row("Datapoints", str(num_dp))
+            table.add_row('Datapoints', str(num_dp))
             if num_targets > 1:
                 total_attacks = num_dp * num_targets
                 table.add_row(
-                    "Total Attacks",
+                    'Total Attacks',
                     f'{total_attacks} ({num_dp} datapoints × {num_targets} targets)',  # noqa: RUF001
                 )
 
-        table.add_row("Categories", str(len(categories)))
-        table.add_row("Attack Model", str(attack_model))
-        table.add_row("Evaluator Model", str(evaluator_model))
-        table.add_row("Max Turns", str(max_turns))
-        table.add_row("Parallelism", str(parallelism))
+        table.add_row('Categories', str(len(categories)))
+        table.add_row('Attack Model', str(attack_model))
+        table.add_row('Evaluator Model', str(evaluator_model))
+        table.add_row('Max Turns', str(max_turns))
+        table.add_row('Parallelism', str(parallelism))
 
         if dataset_path:
-            table.add_row("Dataset", str(dataset_path))
+            table.add_row('Dataset', str(dataset_path))
 
         self._console.print(table)
 
@@ -403,12 +412,12 @@ class RichHooks:
         # classification before reaching this confirmation step.
 
         # ── Filtering metadata ──────────────────────────────────────────
-        filtering_metadata = payload.get("filtering_metadata")
+        filtering_metadata = payload.get('filtering_metadata')
         if filtering_metadata:
             self._render_filtering_metadata(filtering_metadata)
 
         # ── Strategy breakdown ─────────────────────────────────────────
-        strategy_breakdown = payload.get("strategy_breakdown")
+        strategy_breakdown = payload.get('strategy_breakdown')
         if strategy_breakdown:
             self._render_strategy_breakdown(strategy_breakdown, num_dynamic=num_dynamic, num_static=num_static)
 
@@ -418,14 +427,16 @@ class RichHooks:
 
         import typer
 
-        return typer.confirm("Proceed with this run?", default=True)
+        # typer.confirm is a blocking stdin read; offload it so the event loop
+        # is not pinned while waiting for the keypress.
+        return await asyncio.to_thread(typer.confirm, 'Proceed with this run?', default=True)
 
     def _render_agent_capabilities(
         self,
         agent_context: dict[str, Any],
         *,
         classified: dict[str, Any] | None = None,
-        target_label: str = "",
+        target_label: str = '',
         classification_error: str | None = None,
         classification_available: bool = True,
     ) -> None:
@@ -457,34 +468,36 @@ class RichHooks:
         from rich.table import Table
         from rich.text import Text
 
-        tools = agent_context.get("tools") or []
-        memory_stores = agent_context.get("memory_stores") or []
-        knowledge_bases = agent_context.get("knowledge_bases") or []
+        tools = agent_context.get('tools') or []
+        memory_stores = agent_context.get('memory_stores') or []
+        knowledge_bases = agent_context.get('knowledge_bases') or []
 
         # Build (resource_key, resource_type, display_name) triples in a stable
         # order so the table layout is deterministic across runs.
         resources: list[tuple[str, str, str]] = []
         for t in tools:
-            name = t.get("name") if isinstance(t, dict) else str(t)
-            display = name or "unknown"
-            resources.append((display, "tool", display))
+            name = t.get('name') if isinstance(t, dict) else str(t)
+            display = name or 'unknown'
+            resources.append((display, 'tool', display))
         for m in memory_stores:
-            ident = (m.get("key") or m.get("id") or "unknown") if isinstance(m, dict) else str(m)
-            resources.append((f"memory:{ident}", "memory", str(ident)))
+            ident = (m.get('key') or m.get('id') or 'unknown') if isinstance(m, dict) else str(m)
+            resources.append((f'memory:{ident}', 'memory', str(ident)))
         for kb in knowledge_bases:
-            ident = (kb.get("key") or kb.get("name") or kb.get("id") or "unknown") if isinstance(kb, dict) else str(kb)
-            resources.append((f"knowledge:{ident}", "knowledge", str(ident)))
+            ident = (kb.get('key') or kb.get('name') or kb.get('id') or 'unknown') if isinstance(kb, dict) else str(kb)
+            resources.append((f'knowledge:{ident}', 'knowledge', str(ident)))
 
-        panel_title = f"[bold cyan]{target_label}[/bold cyan]" if target_label else "[bold cyan]Capabilities[/bold cyan]"
+        panel_title = (
+            f'[bold cyan]{target_label}[/bold cyan]' if target_label else '[bold cyan]Capabilities[/bold cyan]'
+        )
 
         # Empty agent: panel wraps a single dim line, no table at all.
         if not resources:
             self._console.print(
                 Panel(
-                    Text("No tools, memory stores, or knowledge bases configured", style="dim italic"),
+                    Text('No tools, memory stores, or knowledge bases configured', style='dim italic'),
                     title=panel_title,
-                    title_align="left",
-                    border_style="dim",
+                    title_align='left',
+                    border_style='dim',
                     box=box.ROUNDED,
                     padding=(0, 1),
                 )
@@ -494,31 +507,31 @@ class RichHooks:
         caps_map: dict[str, list[str]] = {}
         classification_failed = False
         if classified is not None:
-            caps_map = classified.get("capabilities") or {}
-            classification_failed = bool(classified.get("classification_failed"))
+            caps_map = classified.get('capabilities') or {}
+            classification_failed = bool(classified.get('classification_failed'))
 
-        n_tools = sum(1 for _, rtype, _ in resources if rtype == "tool")
-        n_memory = sum(1 for _, rtype, _ in resources if rtype == "memory")
-        n_knowledge = sum(1 for _, rtype, _ in resources if rtype == "knowledge")
+        n_tools = sum(1 for _, rtype, _ in resources if rtype == 'tool')
+        n_memory = sum(1 for _, rtype, _ in resources if rtype == 'memory')
+        n_knowledge = sum(1 for _, rtype, _ in resources if rtype == 'knowledge')
 
         # Inner table: header divider only (SIMPLE_HEAD), no outer edges —
         # the panel border is the container, and the SIMPLE_HEAD divider
         # gives us the header underline like the Household Tasks reference.
         table = Table(
             show_header=True,
-            header_style="bold magenta",
+            header_style='bold magenta',
             box=box.SIMPLE_HEAD,
             pad_edge=False,
             show_edge=False,
             expand=True,
         )
-        table.add_column("Resource", style="white", overflow="fold", no_wrap=False)
-        table.add_column("Type", style="dim", width=10)
-        table.add_column("Capabilities", overflow="fold")
+        table.add_column('Resource', style='white', overflow='fold', no_wrap=False)
+        table.add_column('Type', style='dim', width=10)
+        table.add_column('Capabilities', overflow='fold')
 
         # Type cell uses a small status colour so the eye picks out the
         # resource kinds when scanning a long list.
-        type_styles = {"tool": "cyan", "memory": "magenta", "knowledge": "blue"}
+        type_styles = {'tool': 'cyan', 'memory': 'magenta', 'knowledge': 'blue'}
 
         unique_caps: set[str] = set()
         for key, rtype, display in resources:
@@ -526,10 +539,10 @@ class RichHooks:
             unique_caps.update(tags)
             cell_parts: list[str] = []
             for tag in tags:
-                style = "bold red" if tag in _HIGH_RISK_CAP_VALUES else "green"
-                cell_parts.append(f"[{style}]{tag}[/{style}]")
-            cap_cell = ", ".join(cell_parts) if cell_parts else "[dim]—[/dim]"
-            type_cell = f"[{type_styles.get(rtype, 'dim')}]{rtype}[/{type_styles.get(rtype, 'dim')}]"
+                style = 'bold red' if tag in _HIGH_RISK_CAP_VALUES else 'green'
+                cell_parts.append(f'[{style}]{tag}[/{style}]')
+            cap_cell = ', '.join(cell_parts) if cell_parts else '[dim]—[/dim]'
+            type_cell = f'[{type_styles.get(rtype, "dim")}]{rtype}[/{type_styles.get(rtype, "dim")}]'
             table.add_row(display, type_cell, cap_cell)
 
         # Footer summary lives inside the panel as a Group sibling — this
@@ -539,15 +552,15 @@ class RichHooks:
         n_high_risk_kinds = len(unique_caps & _HIGH_RISK_CAP_VALUES)
         breakdown_bits: list[str] = []
         if n_tools:
-            breakdown_bits.append(f"{n_tools} tool{'s' if n_tools != 1 else ''}")
+            breakdown_bits.append(f'{n_tools} tool{"s" if n_tools != 1 else ""}')
         if n_memory:
-            breakdown_bits.append(f"{n_memory} memory")
+            breakdown_bits.append(f'{n_memory} memory')
         if n_knowledge:
-            breakdown_bits.append(f"{n_knowledge} KB")
-        cap_bits = [f"{len(unique_caps)} capabilit{'ies' if len(unique_caps) != 1 else 'y'}"]
+            breakdown_bits.append(f'{n_knowledge} KB')
+        cap_bits = [f'{len(unique_caps)} capabilit{"ies" if len(unique_caps) != 1 else "y"}']
         if n_high_risk_kinds:
-            cap_bits.append(f"[bold red]{n_high_risk_kinds} high-risk[/bold red]")
-        summary_line = "[dim]" + " · ".join(breakdown_bits) + "[/dim]  ·  " + " · ".join(cap_bits)
+            cap_bits.append(f'[bold red]{n_high_risk_kinds} high-risk[/bold red]')
+        summary_line = '[dim]' + ' · '.join(breakdown_bits) + '[/dim]  ·  ' + ' · '.join(cap_bits)
 
         # Status hint goes inside the panel as the last line. Four cases:
         #   * classifier failed             → yellow inline message
@@ -555,19 +568,19 @@ class RichHooks:
         #   * classifier ran, no tags found → dim "no tags detected"
         #   * classifier ran, tags found    → no hint, border stays cyan
         hint: str | None = None
-        border_style = "cyan"
+        border_style = 'cyan'
         if classification_failed:
-            border_style = "yellow"
-            err_suffix = f" — {classification_error}" if classification_error else ""
-            hint = f"[yellow]⚠ classifier failed{err_suffix} (strategies included optimistically)[/yellow]"
+            border_style = 'yellow'
+            err_suffix = f' — {classification_error}' if classification_error else ''
+            hint = f'[yellow]⚠ classifier failed{err_suffix} (strategies included optimistically)[/yellow]'
         elif not classification_available or classified is None:
-            border_style = "grey50"
-            hint = "[dim]∅ classifier disabled (no llm_client)[/dim]"
+            border_style = 'grey50'
+            hint = '[dim]∅ classifier disabled (no llm_client)[/dim]'
         elif not caps_map:
-            border_style = "blue"
-            hint = "[blue]∅ no capability tags detected for this agent[/blue]"
+            border_style = 'blue'
+            hint = '[blue]∅ no capability tags detected for this agent[/blue]'
 
-        renderables: list[Any] = [table, Text.from_markup(summary_line, justify="center")]
+        renderables: list[Any] = [table, Text.from_markup(summary_line, justify='center')]
         if hint is not None:
             renderables.append(Text.from_markup(hint))
 
@@ -575,7 +588,7 @@ class RichHooks:
             Panel(
                 Group(*renderables),
                 title=panel_title,
-                title_align="left",
+                title_align='left',
                 border_style=border_style,
                 box=box.ROUNDED,
                 padding=(0, 1),
@@ -590,36 +603,36 @@ class RichHooks:
         # filtering_metadata is keyed by category, each value is a dict with
         # count fields plus full strategy objects — only show the counts.
         _COUNT_KEYS = (
-            "all_hardcoded_count",
-            "applicable_count",
-            "generated_count",
-            "filtered_count",
-            "total_selected",
+            'all_hardcoded_count',
+            'applicable_count',
+            'generated_count',
+            'filtered_count',
+            'total_selected',
         )
 
         table = Table(
-            title="Dynamic Strategy Filtering",
+            title='Dynamic Strategy Filtering',
             show_header=True,
-            header_style="bold",
+            header_style='bold',
             box=box.ROUNDED,
         )
-        table.add_column("Category", style="white")
-        table.add_column("Hardcoded", style="cyan", justify="right")
-        table.add_column("Applicable", style="cyan", justify="right")
-        table.add_column("Generated", style="cyan", justify="right")
-        table.add_column("Filtered", style="yellow", justify="right")
-        table.add_column("Selected", style="bold green", justify="right")
+        table.add_column('Category', style='white')
+        table.add_column('Hardcoded', style='cyan', justify='right')
+        table.add_column('Applicable', style='cyan', justify='right')
+        table.add_column('Generated', style='cyan', justify='right')
+        table.add_column('Filtered', style='yellow', justify='right')
+        table.add_column('Selected', style='bold green', justify='right')
 
         for category, info in filtering_metadata.items():
             if not isinstance(info, dict):
                 continue
             table.add_row(
                 category.upper(),
-                str(info.get("all_hardcoded_count", "?")),
-                str(info.get("applicable_count", "?")),
-                str(info.get("generated_count", "?")),
-                str(info.get("filtered_count", "?")),
-                str(info.get("total_selected", "?")),
+                str(info.get('all_hardcoded_count', '?')),
+                str(info.get('applicable_count', '?')),
+                str(info.get('generated_count', '?')),
+                str(info.get('filtered_count', '?')),
+                str(info.get('total_selected', '?')),
             )
 
         self._console.print(table)
@@ -635,25 +648,22 @@ class RichHooks:
         from rich.table import Table
 
         # Detect if any category has a 'capped' key (round-robin allocation was applied)
-        has_cap = any(
-            isinstance(info, dict) and 'capped' in info
-            for info in strategy_breakdown.values()
-        )
+        has_cap = any(isinstance(info, dict) and 'capped' in info for info in strategy_breakdown.values())
 
         table = Table(
-            title="Datapoint Breakdown (per target)",
+            title='Datapoint Breakdown (per target)',
             show_header=True,
-            header_style="bold",
+            header_style='bold',
             box=box.ROUNDED,
         )
-        table.add_column("Category", style="white")
-        table.add_column("Hardcoded", style="cyan", justify="right")
-        table.add_column("Applicable", style="cyan", justify="right")
-        table.add_column("Filtered", style="yellow", justify="right")
-        table.add_column("Generated", style="cyan", justify="right")
-        table.add_column("Selected", style="bold green", justify="right")
+        table.add_column('Category', style='white')
+        table.add_column('Hardcoded', style='cyan', justify='right')
+        table.add_column('Applicable', style='cyan', justify='right')
+        table.add_column('Filtered', style='yellow', justify='right')
+        table.add_column('Generated', style='cyan', justify='right')
+        table.add_column('Selected', style='bold green', justify='right')
         if has_cap:
-            table.add_column("Capped", style="bold yellow", justify="right")
+            table.add_column('Capped', style='bold yellow', justify='right')
 
         total_hardcoded = 0
         total_applicable = 0
@@ -729,7 +739,9 @@ class RichHooks:
     # on_complete
     # ------------------------------------------------------------------
 
-    def on_complete(self, report: RedTeamReport, *, output_dir: str | None = None, auto_save_path: str | None = None) -> None:
+    async def on_complete(
+        self, report: RedTeamReport, *, output_dir: str | None = None, auto_save_path: str | None = None
+    ) -> None:
         """Render the full report summary and a UI hint."""
         from rich.panel import Panel
 
@@ -741,12 +753,12 @@ class RichHooks:
 
         print_report_summary(report, console=self._console)
         self._console.print()
-        self._console.rule("[bold green]Run Complete[/bold green]")
+        self._console.rule('[bold green]Run Complete[/bold green]')
         if output_dir:
             try:
-                report_path = str(Path(output_dir, "03_summary_report.json").relative_to(Path.cwd()))
+                report_path = str(Path(output_dir, '03_summary_report.json').relative_to(Path.cwd()))
             except ValueError:
-                report_path = f"{output_dir}/03_summary_report.json"
+                report_path = f'{output_dir}/03_summary_report.json'
         elif auto_save_path:
             try:
                 report_path = str(Path(auto_save_path).relative_to(Path.cwd()))
