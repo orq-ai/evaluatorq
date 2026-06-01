@@ -11,9 +11,11 @@ from typer.testing import CliRunner
 
 from evaluatorq.simulation.cli import (
     _auto_save_run,
+    _build_simulation_run,
     _format_scorer_averages,
     _infer_target_kind,
     _sanitise_run_name,
+    _write_report,
     app,
 )
 
@@ -368,6 +370,76 @@ def test_simulate_writes_output_file(tmp_path: Path) -> None:
     mock_export.assert_called_once()
 
 
+def test_simulate_report_output_writes_full_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    dp_file = _make_datapoints_file(tmp_path)
+    report = tmp_path / "out" / "report.json"
+
+    with (
+        patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
+        patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock) as mock_impl,
+    ):
+        mock_target.return_value = MagicMock()
+        mock_impl.return_value = [_make_result(scorer_scores={"goal_achieved": 1.0})]
+
+        result = runner.invoke(
+            app,
+            [
+                "simulate",
+                "--datapoints", str(dp_file),
+                "--openai-model", "gpt-4o",
+                "--report-output", str(report),
+                "--no-save",
+            ],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "Report saved" in result.output
+    assert report.exists()
+    data = json.loads(report.read_text())
+    assert data["mode"] == "simulate"
+    assert data["total_results"] == 1
+    assert data["scorer_averages"]["goal_achieved"] == 1.0
+    # --no-save: the auto-save run-store dir must NOT be created.
+    assert not (tmp_path / ".evaluatorq" / "sim-runs").exists()
+
+
+def test_run_report_output_and_autosave_both_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Without --no-save, --report-output writes the explicit file AND the
+    # auto-save still lands under .evaluatorq/sim-runs/ (independent sinks).
+    monkeypatch.chdir(tmp_path)
+    report = tmp_path / "report.json"
+
+    with (
+        patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
+        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
+    ):
+        mock_target.return_value = MagicMock()
+        mock_impl.return_value = [_make_result()]
+
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--agent-description", "bot",
+                "--openai-model", "gpt-4o",
+                "--report-output", str(report),
+            ],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    assert report.exists()
+    assert json.loads(report.read_text())["mode"] == "run"
+    run_store = list((tmp_path / ".evaluatorq" / "sim-runs").glob("*.json"))
+    assert len(run_store) == 1
+
+
 def test_simulate_rejects_three_targets(tmp_path: Path) -> None:
     dp_file = _make_datapoints_file(tmp_path)
     result = runner.invoke(
@@ -509,13 +581,14 @@ def test_auto_save_scorer_averages_mixed(tmp_path: Path, monkeypatch: pytest.Mon
         _make_result(scorer_scores={"goal_achieved": 1.0, "criteria_met": 0.5}),
         _make_result(scorer_scores={"goal_achieved": 0.0}),  # criteria_met absent here
     ]
-    path = _auto_save_run(
+    run = _build_simulation_run(
         run_name="agg",
         mode="run",
         target_kind="openai_model",
         evaluator_names=["goal_achieved", "criteria_met"],
         results=results,
     )
+    path = _auto_save_run(run=run, run_name="agg")
     data = json.loads(path.read_text())
     # goal_achieved present in both -> mean(1.0, 0.0) = 0.5
     assert data["scorer_averages"]["goal_achieved"] == 0.5
@@ -526,13 +599,14 @@ def test_auto_save_scorer_averages_mixed(tmp_path: Path, monkeypatch: pytest.Mon
 
 def test_auto_save_empty_results(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
-    path = _auto_save_run(
+    run = _build_simulation_run(
         run_name="empty",
         mode="run",
         target_kind="openai_model",
         evaluator_names=[],
         results=[],
     )
+    path = _auto_save_run(run=run, run_name="empty")
     data = json.loads(path.read_text())
     assert data["scorer_averages"] == {}
     assert data["total_results"] == 0
@@ -540,33 +614,53 @@ def test_auto_save_empty_results(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
 def test_auto_save_collision_suffix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
-    results = [_make_result()]
-    kwargs = {
-        "run_name": "collide",
-        "mode": "run",
-        "target_kind": "openai_model",
-        "evaluator_names": [],
-        "results": results,
-    }
-    path1 = _auto_save_run(**kwargs)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
-    path2 = _auto_save_run(**kwargs)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+    run = _build_simulation_run(
+        run_name="collide",
+        mode="run",
+        target_kind="openai_model",
+        evaluator_names=[],
+        results=[_make_result()],
+    )
+    path1 = _auto_save_run(run=run, run_name="collide")
+    path2 = _auto_save_run(run=run, run_name="collide")
     assert path1 != path2
     assert path2.name.endswith("_001.json")
 
 
 def test_auto_save_sanitises_filename(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
-    path = _auto_save_run(
+    run = _build_simulation_run(
         run_name="weird / name",
         mode="run",
         target_kind="openai_model",
         evaluator_names=[],
         results=[_make_result()],
     )
+    path = _auto_save_run(run=run, run_name="weird / name")
     # Raw name preserved in payload, filename sanitised.
     assert json.loads(path.read_text())["run_name"] == "weird / name"
     assert "/" not in path.name
     assert path.name.startswith("weird_name_")
+
+
+def test_write_report_writes_full_run_to_explicit_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    run = _build_simulation_run(
+        run_name="rep",
+        mode="run",
+        target_kind="openai_model",
+        evaluator_names=["goal_achieved"],
+        results=[_make_result(scorer_scores={"goal_achieved": 1.0})],
+    )
+    out = tmp_path / "nested" / "report.json"
+    _write_report(run, out)
+    assert out.exists()  # parent dir created
+    data = json.loads(out.read_text())
+    assert data["run_name"] == "rep"
+    assert data["total_results"] == 1
+    assert data["scorer_averages"]["goal_achieved"] == 1.0
 
 
 # ---------------------------------------------------------------------------

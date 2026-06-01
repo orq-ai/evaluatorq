@@ -170,26 +170,21 @@ def _get_sim_runs_dir() -> Path:
     return Path.cwd() / _SIM_RUNS_DIR_NAME
 
 
-def _auto_save_run(
+def _build_simulation_run(
     *,
     run_name: str,
     mode: str,
     target_kind: str,
     evaluator_names: list[str],
     results: list[Any],
-) -> Path:
-    """Persist a SimulationRun JSON to .evaluatorq/sim-runs/."""
+) -> Any:
+    """Build the full ``SimulationRun`` report model from results.
+
+    Aggregates per-scorer averages, guarding against non-numeric scores from a
+    misbehaving evaluator so a single bad entry can't crash the build.
+    """
     from evaluatorq.simulation.types import SimulationRun
 
-    runs_dir = _get_sim_runs_dir()
-    runs_dir.mkdir(parents=True, exist_ok=True)
-
-    ts = datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M%S")
-    safe_name = _sanitise_run_name(run_name)
-    base = f"{safe_name}_{ts}"
-
-    # Aggregate scorer averages. Guard against non-numeric scores from a
-    # misbehaving evaluator so a single bad entry can't crash the whole save.
     scorer_totals: dict[str, list[float]] = {}
     for result in results:
         scores: dict[str, float] = (result.metadata or {}).get("evaluator_scores", {})
@@ -197,11 +192,9 @@ def _auto_save_run(
             if isinstance(score, (int, float)):
                 scorer_totals.setdefault(scorer_name, []).append(float(score))
 
-    scorer_averages = {
-        k: sum(v) / len(v) for k, v in scorer_totals.items() if v
-    }
+    scorer_averages = {k: sum(v) / len(v) for k, v in scorer_totals.items() if v}
 
-    run = SimulationRun(
+    return SimulationRun(
         run_name=run_name,
         created_at=datetime.now(tz=timezone.utc),
         mode=mode,  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
@@ -211,6 +204,16 @@ def _auto_save_run(
         scorer_averages=scorer_averages,
         results=results,
     )
+
+
+def _auto_save_run(*, run: Any, run_name: str) -> Path:
+    """Persist a prebuilt ``SimulationRun`` to .evaluatorq/sim-runs/ under an
+    auto-generated, collision-free `<name>_<timestamp>.json` filename."""
+    runs_dir = _get_sim_runs_dir()
+    runs_dir.mkdir(parents=True, exist_ok=True)
+
+    ts = datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M%S")
+    base = f"{_sanitise_run_name(run_name)}_{ts}"
     payload = run.model_dump_json(indent=2)
 
     # Exclusive-create write: avoids the TOCTOU race between an exists() check
@@ -227,6 +230,17 @@ def _auto_save_run(
     raise RuntimeError(
         f"Could not find a free run-store filename for {base!r} after 1000 attempts"
     )
+
+
+def _write_report(run: Any, output: Path) -> None:
+    """Write the full ``SimulationRun`` report JSON to an explicit path.
+
+    Unlike :func:`_auto_save_run` (auto-named, collision-avoiding, fixed dir),
+    this honours the user-supplied ``--report-output`` path verbatim, creating
+    parent dirs and overwriting — mirroring ``--output``/``--save-datapoints``.
+    """
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(run.model_dump_json(indent=2), encoding="utf-8")
 
 
 def _infer_target_kind(
@@ -278,6 +292,18 @@ def simulate(
     output: Annotated[
         Path | None,
         typer.Option("--output", "-o", help="Path to write results JSONL."),
+    ] = None,
+    report_output: Annotated[
+        Path | None,
+        typer.Option(
+            "--report-output",
+            help=(
+                "Path to write the full SimulationRun report JSON (results + "
+                "scorer averages + metadata) to an explicit location, instead of "
+                "only the auto-named file under .evaluatorq/sim-runs/. The "
+                "auto-save still happens unless --no-save."
+            ),
+        ),
     ] = None,
     name: Annotated[
         str,
@@ -371,14 +397,20 @@ def simulate(
     if output:
         _write_results(results, output)
 
+    run = _build_simulation_run(
+        run_name=name,
+        mode="simulate",
+        target_kind=target_kind,
+        evaluator_names=evaluator_names or DEFAULT_EVALUATOR_NAMES,
+        results=results,
+    )
+
+    if report_output is not None:
+        _write_report(run, report_output)
+        typer.echo(f"Report saved: {report_output}", err=True)
+
     if not no_save:
-        run_path = _auto_save_run(
-            run_name=name,
-            mode="simulate",
-            target_kind=target_kind,
-            evaluator_names=evaluator_names or DEFAULT_EVALUATOR_NAMES,
-            results=results,
-        )
+        run_path = _auto_save_run(run=run, run_name=name)
         typer.echo(f"Run saved: {run_path}", err=True)
 
 
@@ -446,6 +478,18 @@ def run(
     output: Annotated[
         Path | None,
         typer.Option("--output", "-o", help="Path to write results JSONL."),
+    ] = None,
+    report_output: Annotated[
+        Path | None,
+        typer.Option(
+            "--report-output",
+            help=(
+                "Path to write the full SimulationRun report JSON (results + "
+                "scorer averages + metadata) to an explicit location, instead of "
+                "only the auto-named file under .evaluatorq/sim-runs/. The "
+                "auto-save still happens unless --no-save."
+            ),
+        ),
     ] = None,
     name: Annotated[
         str,
@@ -561,14 +605,20 @@ def run(
     if save_datapoints is not None:
         typer.echo(f"Datapoints saved: {save_datapoints}", err=True)
 
+    run = _build_simulation_run(
+        run_name=name,
+        mode="run",
+        target_kind=target_kind,
+        evaluator_names=evaluator_names or DEFAULT_EVALUATOR_NAMES,
+        results=results,
+    )
+
+    if report_output is not None:
+        _write_report(run, report_output)
+        typer.echo(f"Report saved: {report_output}", err=True)
+
     if not no_save:
-        run_path = _auto_save_run(
-            run_name=name,
-            mode="run",
-            target_kind=target_kind,
-            evaluator_names=evaluator_names or DEFAULT_EVALUATOR_NAMES,
-            results=results,
-        )
+        run_path = _auto_save_run(run=run, run_name=name)
         typer.echo(f"Run saved: {run_path}", err=True)
 
 
