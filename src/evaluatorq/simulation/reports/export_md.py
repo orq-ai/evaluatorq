@@ -341,7 +341,8 @@ def _render_turn_quality_timeline_section(section: ReportSection) -> str:
     series = d.get('series', {})
     if not turns or not series:
         return f'## {section.title}\n\nNo turn data.'
-    metric_names = [m for m, vals in series.items() if any(v != 0.0 for v in vals)]
+    # None = "not measured" -> rendered as a dash, not 0.00.
+    metric_names = [m for m, vals in series.items() if any(v is not None for v in vals)]
     if not metric_names:
         metric_names = list(series.keys())
     headers = ['Turn', *metric_names]
@@ -350,8 +351,8 @@ def _render_turn_quality_timeline_section(section: ReportSection) -> str:
         row = [str(t)]
         for m in metric_names:
             vals = series.get(m, [])
-            v = vals[i] if i < len(vals) else 0.0
-            row.append(f'{v:.2f}')
+            v = vals[i] if i < len(vals) else None
+            row.append(f'{v:.2f}' if v is not None else '—')
         table_rows.append(row)
     table = _md_table(headers, table_rows, right_align=set(range(1, len(metric_names) + 1)))
     return f'## {section.title}\n\n{table}'
@@ -409,8 +410,38 @@ def _render_individual_results_section(section: ReportSection) -> str:
     return '\n'.join(lines)
 
 
+def _render_overview_section(section: ReportSection) -> str:
+    d = section.data
+    personas = d.get('personas', [])
+    scenarios = d.get('scenarios', [])
+    if not personas and not scenarios:
+        return ''
+    lines = [
+        f'## {section.title}',
+        '',
+        (
+            f'This report evaluates the target agent across **{len(personas)}** persona(s) and '
+            f'**{len(scenarios)}** scenario(s), for **{d.get("total_conversations", 0)}** simulated '
+            'conversation(s). In each, a simulated user (the persona) pursues the scenario goal '
+            'while a judge scores success criteria and per-turn quality.'
+        ),
+        '',
+        '**Personas**',
+        '',
+    ]
+    lines.extend(f'- {p["name"]} ({p["conversations"]} conv.)' for p in personas)
+    lines.extend(['', '**Scenarios**', ''])
+    for s in scenarios:
+        lines.append(f'- {s["name"]}')
+        for c in s.get('criteria', []):
+            marker = 'must NOT' if c['type'] == 'must_not_happen' else 'must'
+            lines.append(f'  - _{marker}_: {c["description"]}')
+    return '\n'.join(lines)
+
+
 _SECTION_RENDERERS = {
     'summary': _render_summary_section,
+    'overview': _render_overview_section,
     'failures_first': _render_failures_first_section,
     'persona_scenario_heatmap': _render_persona_scenario_heatmap_section,
     'criteria_heatmap': _render_criteria_heatmap_section,

@@ -21,15 +21,12 @@ def test_scale_color_midpoint_is_between():
 def test_scale_color_interpolates_between_stops():
     """A value not on any stop must lerp strictly between the two bounding
     stops' colors (exercises the lo+(hi-lo)*t interpolation)."""
-    lo = (0x2e, 0xbd, 0x85)  # #2ebd85 (green stop at 0.0)
-    hi = (0xf2, 0xb6, 0x00)  # #f2b600 (yellow stop at 0.5)
+    lo = (0x2E, 0xBD, 0x85)  # #2ebd85 (green stop at 0.0)
+    hi = (0xF2, 0xB6, 0x00)  # #f2b600 (yellow stop at 0.5)
     c = h.scale_color(0.25, ORQ_SCALE_GOOD_BAD).lstrip('#')
     r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
     # At least one channel strictly between the two stops' channels.
-    between = [
-        min(lo[i], hi[i]) < ch < max(lo[i], hi[i])
-        for i, ch in enumerate((r, g, b))
-    ]
+    between = [min(lo[i], hi[i]) < ch < max(lo[i], hi[i]) for i, ch in enumerate((r, g, b))]
     assert any(between), f'#{c} is not strictly between {lo} and {hi}'
 
 
@@ -175,6 +172,30 @@ def test_render_line_chart_series():
     assert '<polyline' in html
     assert 'response_quality' in html
     assert 'Turn quality' in html
+
+
+def test_render_line_chart_none_is_gap_not_zero():
+    # A None value is "not measured": the line must break across it and draw no
+    # marker there, instead of plotting 0.0.
+    html = h.render_line_chart(
+        x_labels=['1', '2', '3'],
+        series=[('factual_accuracy', [0.8, None, 0.6])],
+        title='t',
+    )
+    # No marker tooltip at the gap; markers only for the two measured points.
+    assert html.count('<title>') == 2
+    # Two isolated points can't form a 2-point polyline across the gap.
+    assert '<polyline' not in html
+
+
+def test_render_line_chart_none_segments_connect_runs():
+    html = h.render_line_chart(
+        x_labels=['1', '2', '3', '4'],
+        series=[('m', [0.2, 0.4, None, 0.9])],
+        title='t',
+    )
+    # One contiguous run of 2 points -> exactly one polyline segment.
+    assert html.count('<polyline') == 1
 
 
 def test_render_sparkline_minibars():

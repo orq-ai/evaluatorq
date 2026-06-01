@@ -97,7 +97,12 @@ def html_table(headers: list[str], rows: list[list[str]]) -> str:
     parts.append('</tr></thead><tbody>')
     for row in rows:
         parts.append('<tr>')
-        parts.extend(f'<td>{cell}</td>' for cell in row)
+        # data-label carries the column name so the mobile card layout
+        # (td::before { content: attr(data-label) }) stays labeled.
+        parts.extend(
+            f'<td data-label="{esc(headers[i])}">{cell}</td>' if i < len(headers) else f'<td>{cell}</td>'
+            for i, cell in enumerate(row)
+        )
         parts.append('</tr>')
     parts.append('</tbody></table>')
     return ''.join(parts)
@@ -291,7 +296,9 @@ def svg_donut(
     cx = cy = size / 2
     r_outer = size / 2 - 4
     r_inner = r_outer * 0.62
-    parts: list[str] = [f'<svg viewBox="0 0 {size} {size}" role="img" aria-label="{esc(title)}">']
+    parts: list[str] = [
+        f'<svg viewBox="0 0 {size} {size}" width="{size}" height="{size}" role="img" aria-label="{esc(title)}">'
+    ]
     angle = 0.0
     for label, value, color in zip(labels, values, colors, strict=False):
         if value <= 0:
@@ -336,36 +343,61 @@ def svg_bar(
     rows: list[tuple[str, float]],
     title: str,
     color: str | None = None,
-    width: int = 420,
-    bar_height: int = 22,
-    gap: int = 10,
+    width: int = 460,
+    bar_height: int = 24,
+    gap: int = 12,
+    label_w: int = 150,
+    value_fmt: Callable[[float], str] | None = None,
 ) -> str:
-    """Horizontal bar chart as hand-authored SVG. Returns '' when no rows."""
+    """Horizontal bar chart as hand-authored SVG. Returns '' when no rows.
+
+    Each bar sits on a faint full-width track so the value reads against the
+    maximum at a glance; vertical gridlines mark quarter steps. Row labels
+    longer than the label gutter are truncated with the full text kept in a
+    ``<title>`` tooltip. ``label_w`` widens the gutter for long labels.
+    """
     if not rows:
         return ''
     from evaluatorq.common.reports.palette import COLORS as _COLORS
 
     bar_color = color or _COLORS['teal_400']
-    label_w = 130
+    fmt = value_fmt or (lambda v: f'{v:g}')
+    pad_r = 52  # room for the value label past the bar end
+    axis_h = 18
+    max_label_chars = max(6, int((label_w - 12) / 7))  # ~7px per char at .75rem
     max_val = max((v for _, v in rows), default=0) or 1
-    plot_w = width - label_w - 48
-    height = len(rows) * (bar_height + gap) + gap
-    parts = [f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="{esc(title)}">']
+    plot_w = width - label_w - pad_r
+    plot_h = len(rows) * (bar_height + gap) + gap
+    height = plot_h + axis_h
+    parts = [
+        f'<svg viewBox="0 0 {width} {height}" width="{width}" height="{height}" role="img" aria-label="{esc(title)}">'
+    ]
+    # quarter-step vertical gridlines spanning the plotting band
+    for t in range(5):
+        gx = label_w + plot_w * t / 4
+        parts.append(f'<line x1="{gx:.1f}" y1="{gap}" x2="{gx:.1f}" y2="{plot_h}" class="chart-grid"/>')
     y = gap
     for label, value in rows:
+        mid = y + bar_height / 2
         bar_w = (value / max_val) * plot_w
+        shown = label if len(label) <= max_label_chars else label[: max_label_chars - 1] + '…'
+        title_tag = f'<title>{esc(label)}</title>' if shown != label else ''
         parts.extend([
             (
-                f'<text x="{label_w - 8}" y="{y + bar_height / 2}" text-anchor="end" '
-                f'dominant-baseline="central" class="bar-label">{esc(label)}</text>'
+                f'<text x="{label_w - 8}" y="{mid}" text-anchor="end" '
+                f'dominant-baseline="central" class="bar-label">{esc(shown)}{title_tag}</text>'
+            ),
+            (
+                f'<line x1="{label_w}" y1="{mid}" x2="{label_w + plot_w}" y2="{mid}" '
+                f'class="bar-track" stroke-width="{bar_height}"/>'
             ),
             (
                 f'<rect x="{label_w}" y="{y}" width="{bar_w:.1f}" height="{bar_height}" '
-                f'rx="3" fill="{bar_color}"></rect>'
+                f'rx="4" fill="{bar_color}"></rect>'
             ),
             (
-                f'<text x="{label_w + bar_w + 6:.1f}" y="{y + bar_height / 2}" '
-                f'dominant-baseline="central" class="bar-value">{value:g}</text>'
+                f'<text x="{label_w + bar_w + 8:.1f}" y="{mid}" '
+                f'dominant-baseline="central" class="bar-value">{esc(fmt(value))}</text>'
             ),
         ])
         y += bar_height + gap
@@ -419,8 +451,12 @@ def render_heatmap(
     )
 
 
-def render_histogram(*, values: list[float], bins: int, title: str, width: int = 420, height: int = 180) -> str:
-    """Histogram of values in [0, 1] as hand-authored SVG. Returns '' when empty."""
+def render_histogram(*, values: list[float], bins: int, title: str, width: int = 460, height: int = 220) -> str:
+    """Histogram of values in [0, 1] as hand-authored SVG. Returns '' when empty.
+
+    Includes y-axis count gridlines, an x-axis scored 0..1, and a dashed mean
+    marker so the centre of the distribution is obvious.
+    """
     if not values or bins <= 0:
         return ''
     from evaluatorq.common.reports.palette import COLORS as _COLORS
@@ -430,15 +466,35 @@ def render_histogram(*, values: list[float], bins: int, title: str, width: int =
         idx = min(bins - 1, max(0, int(float(v) * bins)))
         counts[idx] += 1
     max_count = max(counts) or 1
-    pad = 28
-    plot_w = width - pad * 2
-    plot_h = height - pad * 2
+    # Integer y-axis: evenly-spaced ticks at a whole-number step so bar heights
+    # read honestly off the gridlines. axis_top is the topmost tick (>= max).
+    tick_step = max(1, math.ceil(max_count / 4))
+    axis_top = tick_step * math.ceil(max_count / tick_step)
+    pad_l, pad_r, pad_t, pad_b = 34, 14, 16, 30
+    plot_w = width - pad_l - pad_r
+    plot_h = height - pad_t - pad_b
+    base_y = pad_t + plot_h
     bar_w = plot_w / bins
-    parts = [f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="{esc(title)}">']
+    parts = [
+        f'<svg viewBox="0 0 {width} {height}" width="{width}" height="{height}" role="img" aria-label="{esc(title)}">'
+    ]
+    # horizontal gridlines + integer count ticks
+    tick = 0
+    while tick <= axis_top:
+        gy = base_y - (tick / axis_top) * plot_h
+        parts.extend((
+            f'<line x1="{pad_l}" y1="{gy:.1f}" x2="{pad_l + plot_w}" y2="{gy:.1f}" class="chart-grid"/>',
+            (
+                f'<text x="{pad_l - 6}" y="{gy:.1f}" text-anchor="end" dominant-baseline="central" '
+                f'class="tick-label">{tick}</text>'
+            ),
+        ))
+        tick += tick_step
+    # bars
     for i, c in enumerate(counts):
-        bar_h = (c / max_count) * plot_h
-        x = pad + i * bar_w
-        y = pad + (plot_h - bar_h)
+        bar_h = (c / axis_top) * plot_h
+        x = pad_l + i * bar_w
+        y = base_y - bar_h
         parts.append(
             f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w - 3:.1f}" height="{bar_h:.1f}" '
             f'rx="2" fill="{_COLORS["teal_400"]}"><title>{i / bins:.1f}-{(i + 1) / bins:.1f}: {c}</title></rect>'
@@ -447,48 +503,142 @@ def render_histogram(*, values: list[float], bins: int, title: str, width: int =
             parts.append(
                 f'<text x="{x + bar_w / 2:.1f}" y="{y - 4:.1f}" text-anchor="middle" class="bar-value">{c}</text>'
             )
-    parts.append('</svg>')
+    # x-axis baseline + 0 / .5 / 1 ticks
+    parts.append(f'<line x1="{pad_l}" y1="{base_y}" x2="{pad_l + plot_w}" y2="{base_y}" class="axis"/>')
+    for frac in (0.0, 0.5, 1.0):
+        tx = pad_l + frac * plot_w
+        parts.append(f'<text x="{tx:.1f}" y="{base_y + 16}" text-anchor="middle" class="tick-label">{frac:g}</text>')
+    # dashed mean marker
+    mean = sum(float(v) for v in values) / len(values)
+    mx = pad_l + max(0.0, min(1.0, mean)) * plot_w
+    parts.extend((
+        (
+            f'<line x1="{mx:.1f}" y1="{pad_t}" x2="{mx:.1f}" y2="{base_y}" class="mean-line"/>'
+            f'<text x="{mx:.1f}" y="{pad_t - 4}" text-anchor="middle" class="tick-label">mean {mean:.2f}</text>'
+        ),
+        '</svg>',
+    ))
     return f'<figure class="chart-card"><figcaption>{esc(title)}</figcaption>{"".join(parts)}</figure>'
+
+
+_LEGEND_SHAPE_GLYPH = {
+    'circle': '●',
+    'square': '■',
+    'triangle': '▲',
+    'diamond': '◆',
+    'cross': '✚',
+}
+
+
+def _svg_marker(shape: str, cx: float, cy: float, color: str, title: str = '') -> str:
+    """A small data-point marker whose SHAPE (not just colour) identifies the series."""
+    r = 3.5
+    if shape == 'square':
+        body = f'<rect x="{cx - r:.1f}" y="{cy - r:.1f}" width="{2 * r}" height="{2 * r}" fill="#fff" stroke="{color}" stroke-width="2">'
+        return body + title + '</rect>'
+    if shape == 'triangle':
+        pts = f'{cx:.1f},{cy - r - 0.5:.1f} {cx - r:.1f},{cy + r:.1f} {cx + r:.1f},{cy + r:.1f}'
+        return f'<polygon points="{pts}" fill="#fff" stroke="{color}" stroke-width="2">{title}</polygon>'
+    if shape == 'diamond':
+        pts = f'{cx:.1f},{cy - r - 0.5:.1f} {cx + r + 0.5:.1f},{cy:.1f} {cx:.1f},{cy + r + 0.5:.1f} {cx - r - 0.5:.1f},{cy:.1f}'
+        return f'<polygon points="{pts}" fill="#fff" stroke="{color}" stroke-width="2">{title}</polygon>'
+    if shape == 'cross':
+        return (
+            f'<path d="M{cx - r:.1f},{cy:.1f} H{cx + r:.1f} M{cx:.1f},{cy - r:.1f} V{cy + r:.1f}" '
+            f'stroke="{color}" stroke-width="2.5">{title}</path>'
+        )
+    return f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{r}" fill="#fff" stroke="{color}" stroke-width="2">{title}</circle>'
 
 
 def render_line_chart(
     *,
     x_labels: list[str],
-    series: list[tuple[str, list[float]]],
+    series: list[tuple[str, list[float | None]]],
     title: str,
     width: int = 460,
     height: int = 220,
 ) -> str:
-    """Multi-series line chart (values in [0, 1]) as hand-authored SVG."""
+    """Multi-series line chart (values in [0, 1]) as hand-authored SVG.
+
+    A ``None`` in a series is a gap (not measured) — the line breaks across it
+    and no marker is drawn, rather than dropping to zero.
+    """
     if not x_labels or not series:
         return ''
     from evaluatorq.common.reports.palette import QUALITATIVE
 
-    pad = 32
-    plot_w = width - pad * 2
-    plot_h = height - pad * 2
+    pad_l, pad_r, pad_t, pad_b = 38, 14, 16, 28
+    plot_w = width - pad_l - pad_r
+    plot_h = height - pad_t - pad_b
+    base_y = pad_t + plot_h
     n = max(1, len(x_labels) - 1)
 
     def x_at(i: int) -> float:
-        return pad + (i / n) * plot_w
+        return pad_l + (i / n) * plot_w
 
     def y_at(v: float) -> float:
-        return pad + (1 - max(0.0, min(1.0, v))) * plot_h
+        return pad_t + (1 - max(0.0, min(1.0, v))) * plot_h
 
-    parts = [f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="{esc(title)}">']
+    parts = [
+        f'<svg viewBox="0 0 {width} {height}" width="{width}" height="{height}" role="img" aria-label="{esc(title)}">'
+    ]
+    # horizontal gridlines + y ticks at 0/25/50/75/100%
+    for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
+        gy = y_at(frac)
+        parts.extend((
+            f'<line x1="{pad_l}" y1="{gy:.1f}" x2="{pad_l + plot_w}" y2="{gy:.1f}" class="chart-grid"/>',
+            (
+                f'<text x="{pad_l - 6}" y="{gy:.1f}" text-anchor="end" dominant-baseline="central" '
+                f'class="tick-label">{frac:.0%}</text>'
+            ),
+        ))
     # axes
     parts.extend([
-        f'<line x1="{pad}" y1="{pad}" x2="{pad}" y2="{pad + plot_h}" class="axis"/>',
-        f'<line x1="{pad}" y1="{pad + plot_h}" x2="{pad + plot_w}" y2="{pad + plot_h}" class="axis"/>',
+        f'<line x1="{pad_l}" y1="{pad_t}" x2="{pad_l}" y2="{base_y}" class="axis"/>',
+        f'<line x1="{pad_l}" y1="{base_y}" x2="{pad_l + plot_w}" y2="{base_y}" class="axis"/>',
     ])
+    # x tick labels (thin out when many points to avoid crowding)
+    step = max(1, len(x_labels) // 8)
+    for i, lab in enumerate(x_labels):
+        if i % step == 0 or i == len(x_labels) - 1:
+            parts.append(
+                f'<text x="{x_at(i):.1f}" y="{base_y + 15}" text-anchor="middle" class="tick-label">{esc(lab)}</text>'
+            )
+    # Distinguish series by dash pattern AND marker shape, not colour alone, so
+    # the chart survives greyscale / colour-blind viewing.
+    dashes = ['none', '7 3', '2 3', '9 3 2 3', '1 4']
+    shapes = ['circle', 'square', 'triangle', 'diamond', 'cross']
     legend = []
     for si, (name, ys) in enumerate(series):
         color = QUALITATIVE[si % len(QUALITATIVE)]
-        pts = ' '.join(f'{x_at(i):.1f},{y_at(v):.1f}' for i, v in enumerate(ys))
-        parts.append(f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="2"/>')
+        dash = dashes[si % len(dashes)]
+        shape = shapes[si % len(shapes)]
+        # Break the line across None values (gaps = "not measured", not zero):
+        # emit one polyline per contiguous run of measured points.
+        segment: list[str] = []
+        for i, v in enumerate(ys):
+            if v is None:
+                if len(segment) > 1:
+                    parts.append(
+                        f'<polyline points="{" ".join(segment)}" fill="none" stroke="{color}" '
+                        f'stroke-width="2.5" stroke-dasharray="{dash}"/>'
+                    )
+                segment = []
+                continue
+            segment.append(f'{x_at(i):.1f},{y_at(v):.1f}')
+        if len(segment) > 1:
+            parts.append(
+                f'<polyline points="{" ".join(segment)}" fill="none" stroke="{color}" '
+                f'stroke-width="2.5" stroke-dasharray="{dash}"/>'
+            )
+        for i, v in enumerate(ys):
+            if v is None:
+                continue
+            tip = f'<title>{esc(name)} @ {esc(x_labels[i])}: {v:.2f}</title>'
+            parts.append(_svg_marker(shape, x_at(i), y_at(v), color, tip))
         legend.append(
             f'<span class="legend-item"><span class="legend-swatch" style="background:{color}"></span>'
-            f'{esc(name)}</span>'
+            f'{esc(name)} {_LEGEND_SHAPE_GLYPH[shape]}</span>'
         )
     parts.append('</svg>')
     return (

@@ -124,9 +124,12 @@ def test_html_renders_new_charts(sample_results):
     assert 'status-badge--fail' in html
 
 
-def test_html_persona_rows_have_sparklines(sample_results):
+def test_html_persona_rows_show_success_rate_not_sparkline(sample_results):
+    # Sparklines were dropped: a [rate, 1-rate] minibar in one colour misled
+    # (100% could look weaker than 33%) and duplicated the Success % column.
     html = export_html(sample_results, target='t')
-    assert 'sparkline' in html
+    assert 'class="sparkline"' not in html
+    assert 'Success' in html  # the success-rate column header remains
 
 
 def test_html_heatmap_pass_is_green_fail_is_red(sample_results):
@@ -140,7 +143,8 @@ def test_html_heatmap_pass_is_green_fail_is_red(sample_results):
     html = _render_criteria_heatmap_html(heat).lower()
     assert 'pass' in html and 'fail' in html
     # PASS (value 1.0) must be the success green, FAIL (value 0.0) the error red.
-    assert 'background:#2ebd85' in html  # pass -> green
+    # Green is darkened to #157f57 for WCAG AA contrast (white text on the cell).
+    assert 'background:#157f57' in html  # pass -> green
     assert 'background:#d92d20' in html  # fail -> red
     # sample_results' first conversation has no criteria_1, so that cell is
     # absent and must render neutral grey, NOT red.
@@ -167,10 +171,13 @@ def test_html_criterion_description_single_escaped(make_result):
 
 
 def test_html_summary_empty_state_message():
-    """The summary card shows a no-data message instead of an empty card when
-    there are no conversations (donut renders '')."""
+    """With no conversations the summary section still surfaces a no-data note
+    so the report never looks truncated (the headline numbers otherwise live in
+    the hero KPI band, so the summary renders no standalone card)."""
     html = export_html([], target='t')
     assert 'No conversations to summarize.' in html
+    # The pass-rate donut was dropped — its data duplicates the KPI band.
+    assert 'Goal Outcomes' not in html
 
 
 def test_html_omits_model_row_when_unknown(make_result):

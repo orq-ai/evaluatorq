@@ -131,6 +131,31 @@ def test_persona_breakdown_aggregates_per_persona():
     assert rows['B']['success_rate'] == 1.0
 
 
+def test_overview_section_lists_personas_and_scenario_criteria(make_result):
+    results = [
+        make_result(
+            persona='A',
+            scenario='X',
+            criteria_meta=[
+                {'id': 'c0', 'description': 'must do', 'type': 'must_happen', 'passed': True},
+                {'id': 'c1', 'description': 'must not', 'type': 'must_not_happen', 'passed': True},
+            ],
+        ),
+        make_result(persona='A', scenario='X'),
+        make_result(persona='B', scenario='Y'),
+    ]
+    sections = build_report_sections(results)
+    overview = next(s for s in sections if s.kind == 'overview')
+    assert overview.data['total_conversations'] == 3
+    personas = {p['name']: p['conversations'] for p in overview.data['personas']}
+    assert personas == {'A': 2, 'B': 1}
+    scenario_names = {s['name'] for s in overview.data['scenarios']}
+    assert scenario_names == {'X', 'Y'}
+    x = next(s for s in overview.data['scenarios'] if s['name'] == 'X')
+    types = {c['type'] for c in x['criteria']}
+    assert types == {'must_happen', 'must_not_happen'}
+
+
 def test_judge_verdicts_section_counts_terminated_by_and_rules():
     results = [
         _make_result(terminated_by=TerminatedBy.judge, rules_broken=['rude', 'off-topic']),

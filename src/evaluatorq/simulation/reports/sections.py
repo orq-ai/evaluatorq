@@ -140,6 +140,34 @@ def _build_summary_section(results: list[SimulationResult]) -> ReportSection:
     )
 
 
+def _build_overview_section(results: list[SimulationResult]) -> ReportSection:
+    """Introductory framing: which personas and scenarios were exercised.
+
+    Persona traits and scenario goals aren't persisted on results, so we list
+    persona names (with conversation counts) and per-scenario criteria, which
+    are recoverable from ``criteria_meta``.
+    """
+    personas: dict[str, int] = {}
+    for r in results:
+        personas[_persona_name(r)] = personas.get(_persona_name(r), 0) + 1
+
+    scenarios: dict[str, list[dict[str, Any]]] = {}
+    for r in results:
+        name = _scenario_name(r)
+        if name not in scenarios:
+            scenarios[name] = [{'description': c['description'], 'type': c['type']} for c in _criteria_rows(r)]
+
+    return ReportSection(
+        kind='overview',
+        title='Overview',
+        data={
+            'total_conversations': len(results),
+            'personas': [{'name': n, 'conversations': c} for n, c in personas.items()],
+            'scenarios': [{'name': n, 'criteria': crit} for n, crit in scenarios.items()],
+        },
+    )
+
+
 def _build_failures_first_section(results: list[SimulationResult]) -> ReportSection:
     rows = []
     for idx, r in enumerate(results):
@@ -243,10 +271,22 @@ def _build_turn_metrics_section(results: list[SimulationResult]) -> ReportSectio
                     qualities[field_name].append(float(value))
     avg_qualities = {k: sum(v) / len(v) for k, v in qualities.items() if v}
 
+    # Per-conversation turn counts, longest first, for the horizontal bar.
+    per_conversation = [
+        {
+            'index': idx + 1,
+            'label': f'#{idx + 1} {_persona_name(r)} · {_scenario_name(r)}',
+            'turns': r.turn_count,
+        }
+        for idx, r in enumerate(results)
+    ]
+    per_conversation.sort(key=operator.itemgetter('turns'), reverse=True)
+
     return ReportSection(
         kind='turn_metrics',
         title='Turn Metrics',
         data={
+            'per_conversation': per_conversation,
             'turn_count_distribution': dict(sorted(turn_counts.items())),
             'avg_quality_metrics': avg_qualities,
         },
@@ -419,7 +459,11 @@ def _build_turn_quality_timeline_section(results: list[SimulationResult]) -> Rep
                 if val is not None:
                     by_turn[tm.turn_number][m].append(val)
     turns = sorted(by_turn)
-    series = {m: [(sum(by_turn[t][m]) / len(by_turn[t][m])) if by_turn[t][m] else 0.0 for t in turns] for m in metrics}
+    # None (not 0.0) for turns with no measurement — e.g. factual_accuracy is
+    # only scored when ground truth exists, so unmeasured turns must read as a
+    # gap, not a zero score. Series with no data at all are dropped entirely.
+    series = {m: [(sum(vals) / len(vals)) if (vals := by_turn[t][m]) else None for t in turns] for m in metrics}
+    series = {m: vals for m, vals in series.items() if any(v is not None for v in vals)}
     return ReportSection(
         kind='turn_quality_timeline',
         title='Turn Quality Timeline',
@@ -451,9 +495,14 @@ def _build_failure_mode_section(results: list[SimulationResult]) -> ReportSectio
 def build_report_sections(results: list[SimulationResult]) -> list[ReportSection]:
     """Produce the ordered list of report sections from simulation results."""
     sections: list[ReportSection] = []
+    # Order tells the story worst-first: verdict -> what failed -> how it failed
+    # -> where (heatmaps) -> distributions/trends -> breakdowns -> diagnostics.
+    # Token usage is operational trivia, so it sinks near the transcripts.
     sections.extend((
         _build_summary_section(results),
+        _build_overview_section(results),
         _build_failures_first_section(results),
+        _build_failure_mode_section(results),
         _build_persona_scenario_heatmap_section(results),
         _build_criteria_heatmap_section(results),
         _build_score_distribution_section(results),
@@ -462,14 +511,15 @@ def build_report_sections(results: list[SimulationResult]) -> list[ReportSection
         _build_scenario_breakdown_section(results),
         _build_judge_verdicts_section(results),
         _build_turn_metrics_section(results),
-        _build_failure_mode_section(results),
     ))
     evaluator = _build_evaluator_scores_section(results)
     if evaluator is not None:
         sections.append(evaluator)
-    sections.append(_build_token_usage_section(results))
     errors = _build_errors_section(results)
     if errors is not None:
         sections.append(errors)
-    sections.append(_build_individual_results_section(results))
+    sections.extend((
+        _build_token_usage_section(results),
+        _build_individual_results_section(results),
+    ))
     return sections
