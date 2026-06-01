@@ -12,8 +12,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from evaluatorq.contracts import LLMCallConfig, TextOutputItem, ToolCallOutputItem, TokenUsage
-from evaluatorq.simulation._client import build_simulation_client, extract_responses_output
+from evaluatorq.contracts import AgentResponse, LLMCallConfig, TextOutputItem, ToolCallOutputItem, TokenUsage
+from evaluatorq.simulation._client import build_simulation_client
 from evaluatorq.simulation.tracing import (
     get_trace_context_headers,
     record_llm_input,
@@ -345,11 +345,13 @@ class BaseAgent(ABC):
                     timeout=timeout_s,
                 )
 
-                output_items, usage = extract_responses_output(response)
+                agent_response = AgentResponse.from_openresponses(response)
+                output_items = agent_response.output
+                usage = agent_response.usage
 
                 record_llm_response(span, response)
 
-                # Accumulate token usage (extract_responses_output returns calls=0, add 1)
+                # Accumulate token usage (from_openresponses leaves calls=0, add 1)
                 if usage is not None:
                     self._usage = self._usage + usage.model_copy(update={"calls": 1})
 

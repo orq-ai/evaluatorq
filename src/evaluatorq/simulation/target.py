@@ -7,13 +7,12 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, LLMCallConfig, Message
-from evaluatorq.simulation._client import build_simulation_client, extract_responses_output
+from evaluatorq.simulation._client import build_simulation_client
 from evaluatorq.simulation.tracing import (
     record_openresponses_request,
     record_openresponses_response,
     with_llm_span,
 )
-from evaluatorq.common.fields import get_field as _get_field
 from evaluatorq.common.retry import with_retry
 
 if TYPE_CHECKING:
@@ -143,26 +142,17 @@ class OrqResponsesTarget(AgentTarget):
                 )
                 record_openresponses_response(span, response)
 
-            output_items, usage = extract_responses_output(response)
-            if not output_items:
+            agent_response = AgentResponse.from_openresponses(response)
+            if not agent_response.output:
                 raise RuntimeError(
                     f"OrqResponsesTarget: response contained no extractable "
                     f"output items (model={self.config.model}). This likely indicates "
                     f"an API error or unexpected response format."
                 )
-            finish_reason = _get_field(response, "status")
-            response_model = _get_field(response, "model")
-
-            # extract_responses_output returns calls=0; this was one API call.
-            # Bump it so usage aggregation stays consistent with the other targets.
-            if usage is not None:
-                usage = usage.model_copy(update={"calls": 1})
-            return AgentResponse(
-                output=output_items,
-                usage=usage,
-                model=response_model if isinstance(response_model, str) else self.config.model,
-                finish_reason=finish_reason if isinstance(finish_reason, str) else None,
-            )
+            updates: dict[str, Any] = {"model": agent_response.model or self.config.model}
+            if agent_response.usage is not None:
+                updates["usage"] = agent_response.usage.model_copy(update={"calls": 1})
+            return agent_response.model_copy(update=updates)
 
         try:
             retry_kwargs: dict[str, Any] = {}

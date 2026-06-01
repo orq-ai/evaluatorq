@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias
 
+from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 if sys.version_info >= (3, 11):
@@ -337,6 +339,80 @@ class AgentResponse(BaseModel):
     def tool_calls(self) -> list[ToolCallOutputItem]:
         """Return the tool call items from ``.output`` in order."""
         return [item for item in self.output if isinstance(item, ToolCallOutputItem)]
+
+    @classmethod
+    def from_openresponses(cls, response: Any) -> AgentResponse:
+        """Build a full AgentResponse from a Responses API response object.
+
+        Single parse path for the OpenResponses wire format. Populates
+        ``output`` + ``usage`` + ``model`` + ``finish_reason`` + ``response_id``.
+
+        ``usage`` is ``None`` when the response carries no ``usage`` block —
+        callers must distinguish "no usage reported" from "zero tokens used" so
+        cost reports stay honest. ``usage.calls`` is intentionally left at 0:
+        this is a pure parse; per-call-site accounting (``calls=1`` / ``+1``) is
+        applied by callers to the returned object's ``usage``.
+        """
+        from evaluatorq.common.fields import get_field as _gf
+
+        items: list[OutputMessage] = []
+        for item in _gf(response, "output") or []:
+            item_type = _gf(item, "type")
+            if item_type == "message":
+                for part in _gf(item, "content") or []:
+                    if _gf(part, "type") == "output_text" and _gf(part, "text"):
+                        items.append(
+                            TextOutputItem(
+                                type="output_text",
+                                text=_gf(part, "text"),
+                                annotations=[],
+                                logprobs=[],
+                            )
+                        )
+            elif item_type == "function_call":
+                raw_args = _gf(item, "arguments") or "{}"
+                call_id = _gf(item, "call_id") or _gf(item, "id") or ""
+                result = _gf(item, "result")
+                items.append(
+                    ToolCallOutputItem(
+                        type="function_call",
+                        name=str(_gf(item, "name") or ""),
+                        call_id=str(call_id),
+                        arguments=raw_args if isinstance(raw_args, str) else json.dumps(raw_args),
+                        result=str(result) if result is not None else None,
+                    )
+                )
+            elif item_type == "reasoning":
+                pass  # o1/o3/o4-mini reasoning steps intentionally excluded
+            else:
+                logger.warning("AgentResponse.from_openresponses: skipping unknown item type={!r}", item_type)
+
+        usage_obj = _gf(response, "usage")
+        if usage_obj is None:
+            logger.warning(
+                "AgentResponse.from_openresponses: response.usage is None; usage left "
+                "None so cost reports do not record fake-zero usage for billed calls"
+            )
+            usage = None
+        else:
+            input_toks = int(_gf(usage_obj, "input_tokens", 0) or 0)
+            output_toks = int(_gf(usage_obj, "output_tokens", 0) or 0)
+            usage = TokenUsage(
+                prompt_tokens=input_toks,
+                completion_tokens=output_toks,
+                total_tokens=input_toks + output_toks,
+            )
+
+        model = _gf(response, "model")
+        status = _gf(response, "status")
+        response_id = _gf(response, "id")
+        return cls(
+            output=items,
+            usage=usage,
+            model=model if isinstance(model, str) else None,
+            finish_reason=status if isinstance(status, str) else None,
+            response_id=response_id if isinstance(response_id, str) else None,
+        )
 
 
 # ---------------------------------------------------------------------------
