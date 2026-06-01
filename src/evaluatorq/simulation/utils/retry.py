@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import random
 from typing import TYPE_CHECKING, TypeVar
 
+from loguru import logger
 from openai import APIStatusError
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-
-logger = logging.getLogger(__name__)
+    from collections.abc import Awaitable, Callable, Iterable
 
 MAX_RETRY_ATTEMPTS = 5
 RETRY_MIN_WAIT_S = 2.0
@@ -30,17 +28,25 @@ _RETRYABLE_NETWORK_ERRORS = (
 )
 
 
-def _is_retryable_status(status: int | None) -> bool:
+def _is_retryable_status(
+    status: int | None,
+    retry_statuses: set[int] | None = None,
+) -> bool:
     if status is None:
         return False
+    if retry_statuses is not None:
+        return status in retry_statuses
     return status == 429 or status >= 500
 
 
-def _is_retryable_error(err: Exception) -> bool:
+def _is_retryable_error(
+    err: Exception,
+    retry_statuses: set[int] | None = None,
+) -> bool:
     """Check if an error is retryable (API status or network error)."""
     # API errors with retryable status codes
     if isinstance(err, APIStatusError):
-        return _is_retryable_status(err.status_code)
+        return _is_retryable_status(err.status_code, retry_statuses)
 
     # Network/connection errors from httpx (used by openai SDK)
     err_type = type(err).__name__
@@ -60,6 +66,7 @@ async def with_retry(
     fn: Callable[[], Awaitable[T]],
     *,
     max_attempts: int = MAX_RETRY_ATTEMPTS,
+    retry_statuses: Iterable[int] | None = None,
     label: str = "API call",
 ) -> T:
     """Execute an async callable with exponential backoff on retryable errors.
@@ -68,7 +75,10 @@ async def with_retry(
     (connection reset, timeout, DNS). All other errors are raised immediately.
     ``asyncio.TimeoutError`` and ``asyncio.CancelledError`` are never retried.
     """
+    if max_attempts < 1:
+        raise ValueError(f"with_retry: max_attempts must be >= 1, got {max_attempts}")
     last_error: Exception = RuntimeError("with_retry: no attempts made")
+    retry_status_set = set(retry_statuses) if retry_statuses is not None else None
 
     for attempt in range(1, max_attempts + 1):
         try:
@@ -78,7 +88,7 @@ async def with_retry(
         except Exception as err:
             last_error = err
 
-            if not _is_retryable_error(err):
+            if not _is_retryable_error(err, retry_status_set):
                 raise
 
             if attempt < max_attempts:
@@ -86,7 +96,7 @@ async def with_retry(
                 wait_s = min(base_wait, RETRY_MAX_WAIT_S)
                 jitter = random.uniform(0, wait_s * 0.25)
                 logger.warning(
-                    "%s: attempt %d/%d failed (%s), retrying in %.1fs",
+                    "{}: attempt {}/{} failed ({}), retrying in {:.1f}s",
                     label,
                     attempt,
                     max_attempts,

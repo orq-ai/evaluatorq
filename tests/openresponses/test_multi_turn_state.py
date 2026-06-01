@@ -10,14 +10,14 @@ from __future__ import annotations
 from typing import Any
 
 from evaluatorq.contracts import AgentResponse, TextOutputItem, ToolCallOutputItem
-from evaluatorq.redteam.contracts import AttackerResponse, Turn
-from evaluatorq.redteam.openresponses_adapter import (
+from evaluatorq.openresponses import (
     append_assistant_turn,
     append_user_followup,
     build_openresponses_request,
     turns_to_openresponses_input,
     user_input_item,
 )
+from evaluatorq.redteam.contracts import AttackerResponse, Turn
 
 
 def _agent_text(text: str) -> AgentResponse:
@@ -33,7 +33,7 @@ def _turn(attacker_prompt: str, agent_text: str) -> Turn:
 
 class TestAppendAssistantTurn:
     def test_appends_assistant_text_item(self):
-        input_array: list[dict[str, Any]] =[user_input_item("initial attack")]
+        input_array: list[dict[str, Any]] = [user_input_item("initial attack")]
         append_assistant_turn(input_array, _agent_text("agent response"))
         assert input_array == [
             {"role": "user", "content": "initial attack"},
@@ -41,24 +41,9 @@ class TestAppendAssistantTurn:
         ]
 
     def test_appends_nothing_when_response_has_no_text(self):
-        input_array: list[dict[str, Any]] =[user_input_item("x")]
+        input_array: list[dict[str, Any]] = [user_input_item("x")]
         append_assistant_turn(input_array, AgentResponse(output=[]))
         assert input_array == [{"role": "user", "content": "x"}]
-
-    def test_function_calls_appended_as_function_call_items(self):
-        resp = AgentResponse(output=[
-            TextOutputItem(text="I'll check that.", annotations=[]),
-            ToolCallOutputItem(name="search", call_id="call_1", arguments='{"q": "x"}'),
-        ])
-        input_array: list[dict[str, Any]] =[]
-        append_assistant_turn(input_array, resp)
-        assert input_array[0] == {"role": "assistant", "content": "I'll check that."}
-        assert input_array[1] == {
-            "type": "function_call",
-            "name": "search",
-            "arguments": '{"q": "x"}',
-            "call_id": "call_1",
-        }
 
     def test_accepts_openresponses_resource_dict(self):
         response_resource = {
@@ -71,14 +56,38 @@ class TestAppendAssistantTurn:
                 "content": [{"type": "output_text", "text": "ok"}],
             }],
         }
-        input_array: list[dict[str, Any]] =[]
+        input_array: list[dict[str, Any]] = []
         append_assistant_turn(input_array, response_resource)
         assert input_array == [{"role": "assistant", "content": "ok"}]
+
+    def test_preserves_assistant_tool_calls(self):
+        input_array: list[dict[str, Any]] = [user_input_item("use a tool")]
+        response = AgentResponse(
+            output=[
+                ToolCallOutputItem(
+                    name="lookup",
+                    arguments='{"query":"x"}',
+                    call_id="call-1",
+                )
+            ]
+        )
+
+        append_assistant_turn(input_array, response)
+
+        assert input_array == [
+            {"role": "user", "content": "use a tool"},
+            {
+                "type": "function_call",
+                "name": "lookup",
+                "arguments": '{"query":"x"}',
+                "call_id": "call-1",
+            },
+        ]
 
 
 class TestAppendUserFollowup:
     def test_appends_user_role_item(self):
-        input_array: list[dict[str, Any]] =[
+        input_array: list[dict[str, Any]] = [
             user_input_item("initial attack"),
             {"role": "assistant", "content": "agent response"},
         ]
