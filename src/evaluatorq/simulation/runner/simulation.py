@@ -104,6 +104,9 @@ def _error_result(
     *,
     error_type: str | None = None,
 ) -> SimulationResult:
+    # NB: 'unknown' (not None) and no traits/goal — error results predate
+    # persona/scenario resolution; deliberately NOT routed through
+    # _build_simulation_metadata.
     metadata: dict[str, Any] = {
         'persona': persona.name if persona else 'unknown',
         'scenario': scenario.name if scenario else 'unknown',
@@ -154,6 +157,37 @@ def _build_criteria_meta(scenario: Scenario, judgment: Judgment) -> list[dict[st
     return meta
 
 
+def _build_simulation_metadata(
+    persona: Persona | None,
+    scenario: Scenario | None,
+    criteria_meta: list[dict[str, object]] | None,
+    target_model: str | None,
+) -> dict[str, Any]:
+    """Single source of truth for SimulationResult.metadata so every
+    construction site persists the same fields. Traits/goal/context are
+    additive — absent keys keep older results valid."""
+    metadata: dict[str, Any] = {
+        'persona': persona.name if persona else None,
+        'scenario': scenario.name if scenario else None,
+        'criteria_meta': criteria_meta,
+    }
+    if persona is not None:
+        metadata['persona_traits'] = {
+            'patience': persona.patience,
+            'assertiveness': persona.assertiveness,
+            'politeness': persona.politeness,
+            'technical_level': persona.technical_level,
+            'communication_style': persona.communication_style.value,
+            'background': persona.background,
+        }
+    if scenario is not None:
+        metadata['scenario_goal'] = scenario.goal
+        metadata['scenario_context'] = scenario.context
+    if target_model is not None:
+        metadata['target_model'] = target_model
+    return metadata
+
+
 def _max_turns_result(
     max_turns: int,
     messages: list[Message],
@@ -166,13 +200,7 @@ def _max_turns_result(
 ) -> SimulationResult:
     criteria_results = _build_criteria_results(scenario, last_judgment) if scenario and last_judgment else None
     criteria_meta = _build_criteria_meta(scenario, last_judgment) if scenario and last_judgment else None
-    metadata: dict[str, Any] = {
-        'persona': persona.name if persona else None,
-        'scenario': scenario.name if scenario else None,
-        'criteria_meta': criteria_meta,
-    }
-    if target_model is not None:
-        metadata['target_model'] = target_model
+    metadata = _build_simulation_metadata(persona, scenario, criteria_meta, target_model)
     return SimulationResult(
         messages=messages,
         terminated_by=TerminatedBy.max_turns,
@@ -526,13 +554,12 @@ class SimulationRunner:
                         'orq.simulation.turn_count': turn + 1,
                     },
                 )
-                judge_metadata: dict[str, Any] = {
-                    'persona': persona.name if persona else None,
-                    'scenario': scenario.name if scenario else None,
-                    'criteria_meta': _build_criteria_meta(scenario, last_judgment) if scenario else None,
-                }
-                if target_model_holder['model'] is not None:
-                    judge_metadata['target_model'] = target_model_holder['model']
+                judge_metadata = _build_simulation_metadata(
+                    persona,
+                    scenario,
+                    _build_criteria_meta(scenario, last_judgment) if scenario else None,
+                    target_model_holder['model'],
+                )
                 return SimulationResult(
                     messages=messages,
                     terminated_by=TerminatedBy.judge,
