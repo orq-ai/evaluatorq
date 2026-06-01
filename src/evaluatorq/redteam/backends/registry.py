@@ -14,8 +14,8 @@ if TYPE_CHECKING:
 
     from openai import AsyncOpenAI
 
+    from evaluatorq.contracts import AgentContext, AgentTarget
     from evaluatorq.redteam.backends.base import Backend
-    from evaluatorq.redteam.backends.openresponses import OpenResponsesBackend
     from evaluatorq.redteam.contracts import LLMCallConfig, LLMConfig, TargetConfig
 
 
@@ -127,19 +127,21 @@ def _create_openresponses_backend(
     llm_client: AsyncOpenAI | None = None,
     target_config: TargetConfig | None = None,
     pipeline_config: LLMConfig | None = None,
-    **kwargs: object,
-) -> OpenResponsesBackend:
-    from evaluatorq.redteam.backends.openresponses import (
-        OpenResponsesBackend,
-        create_openresponses_client,
-    )
+    **_: object,  # absorbs unknown kwargs from resolve_backend's uniform signature
+) -> Backend:
+    from evaluatorq.redteam.backends.openresponses import OpenResponsesBackend
+
     instructions = target_config.system_prompt if target_config else None
     timeout_ms = pipeline_config.target_agent_timeout_ms if pipeline_config else None
-    client = llm_client or create_openresponses_client()
+    # retry_count is the number of *retries*; OrqResponsesTarget wants total attempts (initial + retries), hence the +1.
+    retry_attempts = pipeline_config.retry_count + 1 if pipeline_config else None
+    retry_statuses = pipeline_config.retry_on_codes if pipeline_config else None
     return OpenResponsesBackend(
-        client=client,
+        client=llm_client,
         instructions=instructions,
         timeout_ms=timeout_ms,
+        retry_attempts=retry_attempts,
+        retry_statuses=retry_statuses,
     )
 
 

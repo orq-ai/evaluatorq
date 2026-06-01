@@ -5,13 +5,18 @@ Uses Pydantic models for maximum compatibility with generators/runner/agents.
 
 from __future__ import annotations
 
+from datetime import datetime  # noqa: TC003
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from evaluatorq.contracts import Message, StrEnum, TokenUsage
 
-DEFAULT_MODEL = "azure/gpt-4o-mini"
+DEFAULT_MODEL = "openai/gpt-5.4-mini"
+
+# Default evaluators applied when none are explicitly requested. Single source
+# of truth shared by ``api.simulate`` and the CLI run-store record.
+DEFAULT_EVALUATOR_NAMES = ["goal_achieved", "criteria_met"]
 
 
 # ---------------------------------------------------------------------------
@@ -320,3 +325,19 @@ class Datapoint(BaseModel):
     """Cached/serialized system prompt. Used for export only — the runner
     always rebuilds from persona + scenario via ``build_datapoint_system_prompt``."""
     first_message: str
+
+
+# ---------------------------------------------------------------------------
+# SimulationRun  (run-store record)
+# ---------------------------------------------------------------------------
+
+
+class SimulationRun(BaseModel):
+    run_name: str
+    created_at: datetime
+    mode: Literal["run", "simulate", "generate"]
+    target_kind: Literal["orq_deployment", "vercel", "openai_model"]
+    evaluator_names: list[str]
+    total_results: int
+    scorer_averages: dict[str, float]
+    results: list[SimulationResult]

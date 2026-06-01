@@ -7,17 +7,20 @@ messages) without re-authoring.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
+from evaluatorq.openresponses import (
+    load_openresponses_dataset,
+    messages_from_openresponses_input,
+    redteam_sample_from_openresponses,
+)
 from evaluatorq.redteam.contracts import (
     RedTeamInput,
     Severity,
     TurnType,
     VulnerabilityDomain,
-)
-from evaluatorq.redteam.openresponses_adapter import (
-    messages_from_openresponses_input,
-    redteam_sample_from_openresponses,
 )
 
 
@@ -30,6 +33,13 @@ def _input() -> RedTeamInput:
         turn_type=TurnType.SINGLE,
         source="unit-test",
     )
+
+
+def _dataset_row() -> dict[str, object]:
+    return {
+        "input": _input().model_dump(mode="json"),
+        "openresponses_input": [{"role": "user", "content": "attack"}],
+    }
 
 
 class TestMessagesFromOpenResponsesInput:
@@ -126,3 +136,81 @@ class TestRedTeamSampleFromOpenResponses:
                     {"type": "function_call", "name": "x", "arguments": "{}"},
                 ],
             )
+
+
+class TestLoadOpenResponsesDataset:
+    def test_loads_top_level_json_list(self, tmp_path):
+        path = tmp_path / "samples.json"
+        path.write_text(json.dumps([_dataset_row()]), encoding="utf-8")
+
+        dataset = load_openresponses_dataset(path)
+
+        assert len(dataset.samples) == 1
+        assert dataset.samples[0].input.id == "s1"
+        assert dataset.samples[0].messages[0].content == "attack"
+
+    def test_loads_samples_wrapper(self, tmp_path):
+        path = tmp_path / "samples.json"
+        path.write_text(json.dumps({"samples": [_dataset_row()]}), encoding="utf-8")
+
+        dataset = load_openresponses_dataset(path)
+
+        assert len(dataset.samples) == 1
+
+    def test_loads_jsonl_and_skips_blank_lines(self, tmp_path):
+        path = tmp_path / "samples.jsonl"
+        path.write_text(
+            "\n".join([json.dumps(_dataset_row()), "", json.dumps(_dataset_row())]),
+            encoding="utf-8",
+        )
+
+        dataset = load_openresponses_dataset(path)
+
+        assert len(dataset.samples) == 2
+
+    def test_malformed_jsonl_reports_line_number(self, tmp_path):
+        path = tmp_path / "samples.jsonl"
+        path.write_text(f"{json.dumps(_dataset_row())}\n{{bad json", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="line 2"):
+            load_openresponses_dataset(path)
+
+    def test_missing_file_raises_file_not_found(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            load_openresponses_dataset(tmp_path / "missing.json")
+
+    def test_invalid_row_type_raises_value_error(self, tmp_path):
+        path = tmp_path / "samples.json"
+        path.write_text(json.dumps([123]), encoding="utf-8")
+
+        with pytest.raises(ValueError, match="row 0 is not an object"):
+            load_openresponses_dataset(path)
+
+    def test_invalid_input_metadata_raises_value_error(self, tmp_path):
+        row = _dataset_row()
+        row["input"] = {"id": "bad"}
+        path = tmp_path / "samples.json"
+        path.write_text(json.dumps([row]), encoding="utf-8")
+
+        with pytest.raises(ValueError, match="metadata failed validation"):
+            load_openresponses_dataset(path)
+
+    def test_accepts_legacy_input_messages(self, tmp_path):
+        row = _dataset_row()
+        row["input_messages"] = row.pop("openresponses_input")
+        path = tmp_path / "samples.json"
+        path.write_text(json.dumps([row]), encoding="utf-8")
+
+        dataset = load_openresponses_dataset(path)
+
+        assert dataset.samples[0].messages[0].content == "attack"
+
+    def test_reads_utf8_non_ascii_content(self, tmp_path):
+        row = _dataset_row()
+        row["openresponses_input"] = [{"role": "user", "content": "olá"}]
+        path = tmp_path / "samples.json"
+        path.write_text(json.dumps([row], ensure_ascii=False), encoding="utf-8")
+
+        dataset = load_openresponses_dataset(path)
+
+        assert dataset.samples[0].messages[0].content == "olá"

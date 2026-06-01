@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from evaluatorq.simulation.utils.fields import get_field as _field
 from evaluatorq.tracing.setup import get_tracer
 
 if TYPE_CHECKING:
@@ -49,8 +50,10 @@ async def with_simulation_span(  # noqa: RUF029
 ) -> AsyncGenerator[Span | None, None]:
     """Execute a block within a simulation span (SpanKind.INTERNAL).
 
-    Yields ``None`` when tracing is not enabled. Records exceptions and sets
-    span status automatically.
+    Records exceptions and sets span status automatically.
+
+    Yields:
+        The active span, or ``None`` when tracing is disabled.
     """
     tracer = get_tracer()
     if tracer is None:
@@ -105,6 +108,9 @@ async def with_llm_span(  # noqa: RUF029
     Follows OTel GenAI semantic conventions for client inference spans. Span
     name is ``"{operation} {model}"``. Use ``operation="chat"`` for Chat
     Completions and ``operation="responses"`` for the OpenAI Responses API.
+
+    Yields:
+        The active span, or ``None`` when tracing is disabled.
     """
     tracer = get_tracer()
     if tracer is None:
@@ -224,11 +230,9 @@ def _serialize_tool_call_content(tool_calls: list[dict[str, Any]]) -> str:
 def _extract_chat_tool_call_payloads(tool_calls: Any) -> list[dict[str, str]]:
     payloads: list[dict[str, str]] = []
     for tool_call in tool_calls or []:
-        function = getattr(tool_call, "function", None)
-        name = getattr(function, "name", None) or getattr(tool_call, "name", None)
-        arguments = getattr(function, "arguments", None) or getattr(
-            tool_call, "arguments", None
-        )
+        function = _field(tool_call, "function")
+        name = _field(function, "name") or _field(tool_call, "name")
+        arguments = _field(function, "arguments") or _field(tool_call, "arguments")
         payload: dict[str, str] = {}
         if name:
             payload["name"] = str(name)
@@ -242,9 +246,9 @@ def _extract_chat_tool_call_payloads(tool_calls: Any) -> list[dict[str, str]]:
 def _extract_response_tool_call_payloads(output_items: list[Any]) -> list[dict[str, str]]:
     payloads: list[dict[str, str]] = []
     for item in output_items:
-        call_id = getattr(item, "call_id", None)
-        name = getattr(item, "name", None)
-        arguments = getattr(item, "arguments", None)
+        call_id = _field(item, "call_id")
+        name = _field(item, "name")
+        arguments = _field(item, "arguments")
         if call_id or name or arguments is not None:
             payload: dict[str, str] = {}
             if call_id:
@@ -315,24 +319,26 @@ def record_llm_response(span: Span | None, response: Any) -> None:
     if span is None:
         return
 
-    response_id = getattr(response, "id", None)
+    response_id = _field(response, "id")
     if response_id:
         span.set_attribute("gen_ai.response.id", response_id)
-    response_model = getattr(response, "model", None)
+    response_model = _field(response, "model")
     if response_model:
         span.set_attribute("gen_ai.response.model", response_model)
 
-    usage = getattr(response, "usage", None)
+    usage = _field(response, "usage")
     if usage is not None:
-        prompt = getattr(usage, "prompt_tokens", None)
+        prompt = _field(usage, "prompt_tokens")
         if prompt is None:
-            prompt = getattr(usage, "input_tokens", None)
-        completion = getattr(usage, "completion_tokens", None)
+            prompt = _field(usage, "input_tokens")
+        completion = _field(usage, "completion_tokens")
         if completion is None:
-            completion = getattr(usage, "output_tokens", None)
-        total = getattr(usage, "total_tokens", None)
-        details = getattr(usage, "prompt_tokens_details", None)
-        cache_read = getattr(details, "cached_tokens", None) if details else None
+            completion = _field(usage, "output_tokens")
+        total = _field(usage, "total_tokens")
+        details = _field(usage, "prompt_tokens_details")
+        if details is None:
+            details = _field(usage, "input_tokens_details")
+        cache_read = _field(details, "cached_tokens") if details else None
         record_token_usage(
             span,
             prompt_tokens=prompt,
@@ -343,20 +349,20 @@ def record_llm_response(span: Span | None, response: Any) -> None:
 
     if _capture_message_content():
         output_messages: list[dict[str, str]] = []
-        choices = getattr(response, "choices", None)
+        choices = _field(response, "choices")
         if choices:
             for choice in choices:
-                message = getattr(choice, "message", None)
-                content = getattr(message, "content", None) if message else None
+                message = _field(choice, "message")
+                content = _field(message, "content") if message else None
                 if content:
-                    role = getattr(message, "role", None) or "assistant"
+                    role = _field(message, "role") or "assistant"
                     output_messages.append({"role": role, "content": content})
                     continue
                 tool_payloads = _extract_chat_tool_call_payloads(
-                    getattr(message, "tool_calls", None) if message else None
+                    _field(message, "tool_calls") if message else None
                 )
                 if tool_payloads:
-                    role = getattr(message, "role", None) or "assistant"
+                    role = _field(message, "role") or "assistant"
                     output_messages.append(
                         {
                             "role": role,
@@ -368,23 +374,23 @@ def record_llm_response(span: Span | None, response: Any) -> None:
             # Prefer the SDK helper response.output_text when available,
             # else descend into item.content[*].text for "message" items
             # and fall back to a flat .text attribute for older shapes.
-            output_text = getattr(response, "output_text", None)
+            output_text = _field(response, "output_text")
             if isinstance(output_text, str) and output_text:
                 output_messages.append(
                     {"role": "assistant", "content": output_text}
                 )
             else:
-                output_items = getattr(response, "output", None) or []
+                output_items = _field(response, "output") or []
                 parts: list[str] = []
                 for item in output_items:
-                    content = getattr(item, "content", None)
+                    content = _field(item, "content")
                     if content:
                         for part in content:
-                            text = getattr(part, "text", None)
+                            text = _field(part, "text")
                             if isinstance(text, str) and text:
                                 parts.append(text)
                     else:
-                        text = getattr(item, "text", None)
+                        text = _field(item, "text")
                         if isinstance(text, str) and text:
                             parts.append(text)
                 joined = "".join(parts)
@@ -408,20 +414,62 @@ def record_llm_response(span: Span | None, response: Any) -> None:
             span.set_attribute("output", serialized)
 
     finish_reasons: list[str] = []
-    finish_choices = getattr(response, "choices", None)
+    finish_choices = _field(response, "choices")
     if finish_choices:
         for choice in finish_choices:
-            reason = getattr(choice, "finish_reason", None)
+            reason = _field(choice, "finish_reason")
             if reason:
                 finish_reasons.append(reason)
     else:
         # Responses API uses response.status (e.g. "completed", "failed",
         # "incomplete") in place of choices[*].finish_reason.
-        status = getattr(response, "status", None)
+        status = _field(response, "status")
         if isinstance(status, str) and status:
             finish_reasons.append(status)
     if finish_reasons:
         span.set_attribute("gen_ai.response.finish_reasons", finish_reasons)
+
+
+def record_openresponses_request(span: Span | None, payload: dict[str, Any]) -> None:
+    """Record a Responses API request with both generic and Orq-specific attrs."""
+    if span is None:
+        return
+    model = payload.get("model")
+    if model:
+        span.set_attribute("gen_ai.request.model", str(model))
+    max_output_tokens = payload.get("max_output_tokens")
+    if isinstance(max_output_tokens, int):
+        span.set_attribute("gen_ai.request.max_tokens", max_output_tokens)
+    if not _capture_message_content():
+        return
+    input_items = payload.get("input") or []
+    serialized_input = _truncate(json.dumps(input_items, ensure_ascii=False, default=str))
+    span.set_attribute("gen_ai.input.messages", serialized_input)
+    span.set_attribute("input", serialized_input)
+    span.set_attribute(
+        "orq.openresponses.request",
+        _truncate(json.dumps(payload, ensure_ascii=False, default=str)),
+    )
+
+
+def record_openresponses_response(span: Span | None, response: Any) -> None:
+    """Record a Responses API response with the shared simulation trace schema."""
+    if span is None:
+        return
+    record_llm_response(span, response)
+    try:
+        payload = response.model_dump(mode="json") if hasattr(response, "model_dump") else response
+    except Exception as exc:
+        logger.debug(
+            "record_openresponses_response: model_dump failed ({}); falling back to repr",
+            exc,
+        )
+        payload = repr(response)
+    if _capture_message_content():
+        span.set_attribute(
+            "orq.openresponses.response",
+            _truncate(json.dumps(payload, ensure_ascii=False, default=str)),
+        )
 
 
 def set_span_attrs(span: Span | None, attrs: AttrMap) -> None:

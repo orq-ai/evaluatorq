@@ -35,6 +35,13 @@ def main() -> None:
     except ImportError:
         pass
 
+    try:
+        from evaluatorq.simulation.cli import app as sim_app
+
+        app.add_typer(sim_app, name="sim", help="Agent simulation commands.")
+    except ImportError:
+        pass
+
     app()
 
 

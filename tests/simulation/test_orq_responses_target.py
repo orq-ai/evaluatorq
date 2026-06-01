@@ -18,6 +18,8 @@ import pytest
 from evaluatorq.contracts import AgentResponse, LLMCallConfig, Message
 from evaluatorq.simulation.target import OrqResponsesTarget
 
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -55,6 +57,26 @@ def _make_response(
     response.usage = usage
     response.output = [msg_item]
     return response
+
+
+def _make_dict_response(
+    text: str = "hello",
+    response_id: str = "resp-dict",
+    input_tokens: int = 10,
+    output_tokens: int = 5,
+) -> dict[str, Any]:
+    return {
+        "id": response_id,
+        "model": "gpt-4o",
+        "status": "completed",
+        "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+        "output": [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": text}],
+            }
+        ],
+    }
 
 
 def _make_target(
@@ -178,13 +200,17 @@ class TestOrqResponsesTargetRespond:
     @pytest.mark.asyncio
     async def test_respond_with_single_user_message(self):
         client = _make_client()
-        client.responses.create = AsyncMock(return_value=_make_response(text="I'm fine"))
+        response = _make_response(text="I'm fine")
+        response.model = "gpt-4o"
+        client.responses.create = AsyncMock(return_value=response)
         target = _make_target(client=client)
 
         result = await target.respond([Message(role="user", content="hello")])
 
         assert isinstance(result, AgentResponse)
         assert result.text == "I'm fine"
+        assert result.usage is not None
+        assert result.model == "gpt-4o"
 
     @pytest.mark.asyncio
     async def test_respond_wraps_single_user_message(self):
@@ -202,6 +228,22 @@ class TestOrqResponsesTargetRespond:
 # ---------------------------------------------------------------------------
 # new()
 # ---------------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_dict_response_usage_is_returned(self):
+        """respond() with a dict-shaped response returns correct usage."""
+        client = _make_client()
+        client.responses.create = AsyncMock(
+            return_value=_make_dict_response(text="one", response_id="resp-dict-1")
+        )
+        target = _make_target(client=client)
+
+        result = await target.respond(_make_messages("turn 1"))
+
+        assert result.text == "one"
+        assert result.usage is not None
+        assert result.usage.prompt_tokens == 10
+        assert result.usage.completion_tokens == 5
 
 
 class TestOrqResponsesTargetNew:

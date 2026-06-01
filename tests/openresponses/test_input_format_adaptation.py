@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from evaluatorq.redteam.openresponses_adapter import (
+from evaluatorq.openresponses import (
     assistant_input_item,
     build_openresponses_request,
     system_input_item,
