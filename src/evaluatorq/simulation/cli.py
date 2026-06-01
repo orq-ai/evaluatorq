@@ -3,12 +3,19 @@
 Three execution verbs:
     generate  — datapoints only (no simulation)
     simulate  — simulate pre-built datapoints
-    run       — generate + simulate in one shot
+    run       — generate then simulate in one shot
+
+``run`` is a convenience: it generates datapoints in-process and simulates them
+under a single pipeline span (via ``generate_and_simulate``). It is not a literal
+``generate`` + ``simulate`` pipe — it does not require an intermediate file. To
+capture the exact generated inputs for reproducible re-runs, pass
+``--save-datapoints PATH`` (then re-feed that file to ``sim simulate --datapoints``).
 
 Usage:
     evaluatorq sim generate --agent-description "..." --output dp.jsonl
     evaluatorq sim simulate --datapoints dp.jsonl --agent-key my-agent
     evaluatorq sim run --agent-description "..." --openai-model gpt-4o-mini
+    evaluatorq sim run --agent-description "..." --agent-key my-agent --save-datapoints dp.jsonl
     evaluatorq sim export --input results.jsonl --output payload.json
     evaluatorq sim validate-dataset dp.jsonl
     evaluatorq sim runs
