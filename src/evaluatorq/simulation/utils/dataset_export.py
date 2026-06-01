@@ -78,6 +78,13 @@ def load_datapoints_from_jsonl(input_path: str) -> list[Datapoint]:
             )
             continue
 
+        # Raw ``Datapoint`` line (what ``sim generate`` writes): top-level
+        # persona/scenario dicts and an id. Parse directly so the id and all
+        # fields round-trip unchanged.
+        if isinstance(data.get("persona"), dict) and isinstance(data.get("scenario"), dict):
+            datapoints.append(Datapoint.model_validate(data))
+            continue
+
         inputs = data.get("inputs", {})
 
         # Reconstruct persona

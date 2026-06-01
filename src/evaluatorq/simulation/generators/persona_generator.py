@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import logging
-import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.simulation.types import DEFAULT_MODEL, CommunicationStyle, Persona
 from evaluatorq.simulation.utils.structured_output import generate_structured
+
+if TYPE_CHECKING:
+    from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -87,18 +88,16 @@ class PersonaGenerator:
         api_key: str | None = None,
     ) -> None:
         self._model = model
-        if client is not None:
-            self._client = client
-        else:
-            resolved_key = api_key or os.environ.get("ORQ_API_KEY")
-            if not resolved_key:
-                raise ValueError(
-                    "ORQ_API_KEY environment variable is not set. Set it or pass api_key/client."
-                )
-            self._client = AsyncOpenAI(
-                base_url=f"{os.environ.get('ORQ_BASE_URL', 'https://api.orq.ai')}/v2/router",
-                api_key=resolved_key,
-            )
+        from evaluatorq.simulation._client import build_simulation_client
+
+        self._client, self._client_owned = build_simulation_client(
+            client, extra_api_key=api_key
+        )
+
+    async def close(self) -> None:
+        """Close the HTTP client (only if this generator built it)."""
+        if self._client_owned:
+            await self._client.close()
 
     @staticmethod
     def _parse_personas(content: str) -> list[Persona]:

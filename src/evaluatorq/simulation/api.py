@@ -16,11 +16,12 @@ import os
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from evaluatorq.simulation.types import DEFAULT_MODEL
+from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MODEL
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from openai import AsyncOpenAI
     from opentelemetry.trace import Span
 
     from evaluatorq.contracts import AgentTarget
@@ -35,6 +36,8 @@ if TYPE_CHECKING:
         SimulationResult,
     )
     from evaluatorq.types import DataPoint, DataPointResult, Evaluator
+
+    EmitDatapoints = Callable[[list[Datapoint]], None]
 
 logger = logging.getLogger(__name__)
 
@@ -58,11 +61,12 @@ async def simulate(
     datapoints: list[Datapoint] | None = None,
     dataset_id: str | None = None,
     max_turns: int = 10,
-    model: str = DEFAULT_MODEL,
+    sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
     parallelism: int = 5,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
+    generation_client: AsyncOpenAI | None = None,
     upload_results: bool = True,
     evaluation_description: str | None = None,
     path: str | None = None,
@@ -83,8 +87,14 @@ async def simulate(
             supplied. May also be an ``AgentTarget`` instance, which is routed
             to the runner's ``target_agent`` path (it speaks ``respond(messages)``).
         user_simulator: Pre-constructed ``BaseAgent`` to drive the user side.
-            When omitted a default ``UserSimulatorAgent`` is built from ``model``.
+            When omitted a default ``UserSimulatorAgent`` is built from
+            ``sim_model``. ``sim_model`` drives the user-simulator, the judge,
+            and datapoint generators.
         judge: Pre-constructed ``BaseAgent`` used to evaluate each turn.
+        generation_client: Optional pre-built ``AsyncOpenAI`` used for datapoint
+            generation (first-message). When omitted, generation falls back to
+            the same env-based provider resolution as
+            :func:`generate_and_simulate` (``ORQ_API_KEY`` → ``OPENAI_API_KEY``).
         dataset_id: When set, fetch simulation datapoints from the named Orq
             dataset instead of taking them inline. Mutually exclusive with
             ``datapoints``, ``personas``, ``scenarios``. Each dataset row's
@@ -131,11 +141,12 @@ async def simulate(
                 datapoints=datapoints,
                 dataset_id=dataset_id,
                 max_turns=max_turns,
-                model=model,
+                model=sim_model,
                 evaluator_names=evaluator_names,
                 parallelism=parallelism,
                 user_simulator=user_simulator,
                 judge=judge,
+                generation_client=generation_client,
                 upload_results=upload_results,
                 evaluation_description=evaluation_description,
                 path=path,
@@ -156,35 +167,40 @@ async def generate_and_simulate(
     num_personas: int = 5,
     num_scenarios: int = 5,
     max_turns: int = 10,
-    model: str = DEFAULT_MODEL,
+    sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
     parallelism: int = 5,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
+    generation_client: AsyncOpenAI | None = None,
     upload_results: bool = True,
     evaluation_description: str | None = None,
     path: str | None = None,
     exit_on_failure: bool = True,
+    emit_datapoints: EmitDatapoints | None = None,
 ) -> list[SimulationResult]:
     """Generate personas/scenarios, then run simulations via evaluatorq().
 
     Accepts the same ``target`` shapes as :func:`simulate` — a plain callable,
     an ``AgentTarget`` instance, or an ``agent_key`` for the Orq deployment
-    bridge. ``ORQ_API_KEY`` is required because persona/scenario/first-message
-    generation calls the Orq router. ``upload_results`` defaults to ``True``;
-    set it to ``False`` to skip uploading the final experiment.
-    ``exit_on_failure`` defaults to ``True``; see :func:`simulate` for the
-    full semantics of the CI-gate behaviour and how to opt out.
-    """
-    from openai import AsyncOpenAI
+    bridge. Persona/scenario/first-message generation resolves its provider via
+    the shared factory: an injected ``generation_client`` → ``ORQ_API_KEY``
+    (Orq router) → ``OPENAI_API_KEY`` (with optional ``OPENAI_BASE_URL`` for an
+    OpenAI-compatible endpoint). No API key is needed when a client is injected.
+    ``sim_model`` drives persona/scenario/first-message generation, the
+    user-simulator, and the judge. ``upload_results`` defaults to ``True``; set
+    it to ``False`` to skip uploading the final experiment. ``exit_on_failure``
+    defaults to ``True``; see :func:`simulate` for the full semantics of the
+    CI-gate behaviour and how to opt out.
 
-    from evaluatorq.simulation.generators import PersonaGenerator, ScenarioGenerator
+    ``emit_datapoints``: Optional callback invoked with the generated datapoints
+    before simulation — used by the CLI's ``--save-datapoints`` to persist the
+    exact inputs.
+    """
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
 
     await init_tracing_if_needed()
-
-    api_key = _require_orq_api_key("generate_and_simulate")
 
     try:
         async with with_simulation_span(
@@ -198,25 +214,25 @@ async def generate_and_simulate(
                 "orq.simulation.parallelism": parallelism,
             },
         ) as pipeline_span:
-            shared_client = AsyncOpenAI(
-                api_key=api_key,
-                base_url=f"{os.environ.get('ORQ_BASE_URL', 'https://api.orq.ai')}/v2/router",
+            gen_personas, gen_scenarios = await _generate_personas_scenarios(
+                agent_description=agent_description,
+                num_personas=num_personas,
+                num_scenarios=num_scenarios,
+                model=sim_model,
+                generation_client=generation_client,
             )
-            try:
-                persona_gen = PersonaGenerator(model=model, client=shared_client)
-                scenario_gen = ScenarioGenerator(model=model, client=shared_client)
-                gen_personas, gen_scenarios = await asyncio.gather(
-                    persona_gen.generate(
-                        agent_description=agent_description,
-                        num_personas=num_personas,
-                    ),
-                    scenario_gen.generate(
-                        agent_description=agent_description,
-                        num_scenarios=num_scenarios,
-                    ),
-                )
-            finally:
-                await shared_client.close()
+
+            datapoints = await _resolve_or_generate_datapoints(
+                caller="generate_and_simulate",
+                datapoints=None,
+                personas=gen_personas,
+                scenarios=gen_scenarios,
+                dataset_id=None,
+                model=sim_model,
+                generation_client=generation_client,
+            )
+            if emit_datapoints is not None:
+                emit_datapoints(datapoints)
 
             return await _simulate_core(
                 caller="generate_and_simulate",
@@ -224,16 +240,17 @@ async def generate_and_simulate(
                 agent_key=agent_key,
                 target_callback=target_callback,
                 target=target,
-                personas=gen_personas,
-                scenarios=gen_scenarios,
-                datapoints=None,
+                personas=None,
+                scenarios=None,
+                datapoints=datapoints,
                 dataset_id=None,
                 max_turns=max_turns,
-                model=model,
+                model=sim_model,
                 evaluator_names=evaluator_names,
                 parallelism=parallelism,
                 user_simulator=user_simulator,
                 judge=judge,
+                generation_client=generation_client,
                 upload_results=upload_results,
                 evaluation_description=evaluation_description,
                 path=path,
@@ -244,9 +261,116 @@ async def generate_and_simulate(
         await flush_tracing()
 
 
+async def generate(
+    *,
+    agent_description: str,
+    num_personas: int = 5,
+    num_scenarios: int = 5,
+    sim_model: str = DEFAULT_MODEL,
+    generation_client: AsyncOpenAI | None = None,
+) -> list[Datapoint]:
+    """Generate ready-to-run simulation ``Datapoint``s from an agent description.
+
+    Produces personas and scenarios, then builds one ``Datapoint`` per
+    persona×scenario pair (each with a generated first message). Returns the
+    datapoints without running any simulation — feed them to :func:`simulate`
+    via ``datapoints=...``, or persist them (e.g. JSONL) and reuse.
+
+    This freezes the simulation *inputs* (personas, scenarios, first messages)
+    so every :func:`simulate` run scores the same fixed dataset — useful for
+    apples-to-apples comparison across agent versions. It does **not** make
+    simulation deterministic: the agent under test, the user-simulator, and the
+    judge remain stochastic at simulate time, so scores still vary run to run.
+
+    Provider resolution matches :func:`generate_and_simulate`: an injected
+    ``generation_client`` → ``ORQ_API_KEY`` (Orq router) → ``OPENAI_API_KEY``
+    (with optional ``OPENAI_BASE_URL`` for an OpenAI-compatible endpoint).
+    ``sim_model`` drives persona/scenario/first-message generation.
+    """
+    from evaluatorq.simulation._client import build_simulation_client
+    from evaluatorq.simulation.tracing import with_simulation_span
+    from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
+
+    await init_tracing_if_needed()
+
+    try:
+        async with with_simulation_span(
+            "orq.simulation.generate",
+            {
+                "orq.simulation.mode": "generate",
+                "orq.simulation.num_personas": num_personas,
+                "orq.simulation.num_scenarios": num_scenarios,
+            },
+        ):
+            # Build one client and inject it into both the persona/scenario and
+            # first-message stages so the generation path constructs a single
+            # AsyncOpenAI client (injected → owned=False downstream), closing it
+            # once here.
+            gen_client, gen_owned = build_simulation_client(generation_client)
+            try:
+                gen_personas, gen_scenarios = await _generate_personas_scenarios(
+                    agent_description=agent_description,
+                    num_personas=num_personas,
+                    num_scenarios=num_scenarios,
+                    model=sim_model,
+                    generation_client=gen_client,
+                )
+                return await _resolve_or_generate_datapoints(
+                    caller="generate",
+                    datapoints=None,
+                    personas=gen_personas,
+                    scenarios=gen_scenarios,
+                    dataset_id=None,
+                    model=sim_model,
+                    generation_client=gen_client,
+                )
+            finally:
+                if gen_owned:
+                    await gen_client.close()
+    finally:
+        await flush_tracing()
+
+
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
+
+
+async def _generate_personas_scenarios(
+    *,
+    agent_description: str,
+    num_personas: int,
+    num_scenarios: int,
+    model: str,
+    generation_client: AsyncOpenAI | None,
+) -> tuple[list[Persona], list[Scenario]]:
+    """Generate personas and scenarios concurrently from an agent description.
+
+    Shared by :func:`generate` and :func:`generate_and_simulate`. Provider is
+    resolved via the shared factory; the client is closed only when owned here
+    (i.e. not injected).
+    """
+    from evaluatorq.simulation._client import build_simulation_client
+    from evaluatorq.simulation.generators import PersonaGenerator, ScenarioGenerator
+
+    gen_client, gen_owned = build_simulation_client(generation_client)
+    try:
+        persona_gen = PersonaGenerator(model=model, client=gen_client)
+        scenario_gen = ScenarioGenerator(model=model, client=gen_client)
+        gen_personas, gen_scenarios = await asyncio.gather(
+            persona_gen.generate(
+                agent_description=agent_description,
+                num_personas=num_personas,
+            ),
+            scenario_gen.generate(
+                agent_description=agent_description,
+                num_scenarios=num_scenarios,
+            ),
+        )
+    finally:
+        if gen_owned:
+            await gen_client.close()
+    return gen_personas, gen_scenarios
 
 
 async def _simulate_core(
@@ -266,6 +390,7 @@ async def _simulate_core(
     parallelism: int,
     user_simulator: BaseAgent | None,
     judge: BaseAgent | None,
+    generation_client: AsyncOpenAI | None,
     upload_results: bool,
     evaluation_description: str | None,
     path: str | None,
@@ -292,6 +417,7 @@ async def _simulate_core(
         scenarios=scenarios,
         dataset_id=dataset_id,
         model=model,
+        generation_client=generation_client,
     )
 
     set_span_attrs(
@@ -363,6 +489,7 @@ async def _resolve_or_generate_datapoints(
     scenarios: list[Scenario] | None,
     dataset_id: str | None,
     model: str,
+    generation_client: AsyncOpenAI | None,
 ) -> list[Datapoint]:
     """Return ready-to-run Datapoints.
 
@@ -398,17 +525,12 @@ async def _resolve_or_generate_datapoints(
     if not personas or not scenarios:
         raise ValueError("'personas' and 'scenarios' arrays must both be non-empty")
 
-    from openai import AsyncOpenAI
-
+    from evaluatorq.simulation._client import build_simulation_client
     from evaluatorq.simulation.generators import FirstMessageGenerator
 
-    api_key = _require_orq_api_key(caller)
-    shared_client = AsyncOpenAI(
-        api_key=api_key,
-        base_url=f"{os.environ.get('ORQ_BASE_URL', 'https://api.orq.ai')}/v2/router",
-    )
+    gen_client, gen_owned = build_simulation_client(generation_client)
     try:
-        first_msg_gen = FirstMessageGenerator(model=model, client=shared_client)
+        first_msg_gen = FirstMessageGenerator(model=model, client=gen_client)
         pairs = [(p, s) for p in personas for s in scenarios]
 
         generated: list[Datapoint] = []
@@ -435,7 +557,8 @@ async def _resolve_or_generate_datapoints(
             )
         return generated
     finally:
-        await shared_client.close()
+        if gen_owned:
+            await gen_client.close()
 
 
 async def _fetch_simulation_datapoints_from_orq(
@@ -608,7 +731,7 @@ async def _simulate_via_evaluatorq(
     from evaluatorq.types import DataPoint
 
     resolved_evaluator_names = (
-        evaluator_names if evaluator_names is not None else ["goal_achieved", "criteria_met"]
+        evaluator_names if evaluator_names is not None else DEFAULT_EVALUATOR_NAMES
     )
     scorers = [(name, get_evaluator(name)) for name in resolved_evaluator_names]
 
