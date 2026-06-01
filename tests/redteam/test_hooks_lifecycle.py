@@ -10,6 +10,9 @@ Test scenarios:
 4. on_complete receives the final RedTeamReport with correct output_dir
 """
 
+# SpyHooks et al. are sync subclasses of the now-async DefaultHooks, exercising
+# the sync-hook compatibility path; the override mismatch is intentional.
+# pyright: reportIncompatibleMethodOverride=false
 from __future__ import annotations
 
 from datetime import datetime, timezone

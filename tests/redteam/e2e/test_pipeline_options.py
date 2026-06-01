@@ -24,7 +24,9 @@ class _CancellingHooks(DefaultHooks):
     def __init__(self) -> None:
         self.confirm_payload: ConfirmPayload | None = None
 
-    def on_confirm(self, payload: ConfirmPayload) -> bool:
+    # Sync override of the now-async DefaultHooks.on_confirm — intentional:
+    # exercises the sync-hook compatibility path (driven via await_maybe).
+    def on_confirm(self, payload: ConfirmPayload) -> bool:  # pyright: ignore[reportIncompatibleMethodOverride]
         self.confirm_payload = payload
         return False
 

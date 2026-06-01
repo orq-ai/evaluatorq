@@ -1,3 +1,7 @@
+# This suite deliberately defines sync hook classes (subclassing the now-async
+# DefaultHooks/RichHooks) to exercise the sync-hook compatibility path. The
+# sync-vs-async override mismatch is the point, not a bug.
+# pyright: reportIncompatibleMethodOverride=false
 from __future__ import annotations
 
 import asyncio
