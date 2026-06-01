@@ -217,6 +217,28 @@ def test_rich_hooks_full_lifecycle(datapoint_factory):
     asyncio.run(hooks.on_run_complete([_result()]))  # double-call safe, no raise
 
 
+def test_rich_hooks_error_row_stays_red_after_complete(datapoint_factory):
+    """on_datapoint_complete must not overwrite on_datapoint_error's red label
+    with green for error/timeout results."""
+    from rich.console import Console
+
+    from evaluatorq.simulation.hooks import RichHooks
+
+    hooks = RichHooks(console=Console())
+    asyncio.run(hooks.on_run_start(_meta()))
+    dp = datapoint_factory('dp1')
+    asyncio.run(hooks.on_datapoint_start(dp))
+    asyncio.run(hooks.on_datapoint_error(dp, RuntimeError('boom')))
+
+    err = _result()
+    err.terminated_by = TerminatedBy.error
+    err.metadata['datapoint_id'] = 'dp1'
+    asyncio.run(hooks.on_datapoint_complete(err))
+
+    desc = hooks._progress.tasks[hooks._tasks['dp1']].description
+    assert '[red]' in desc and '[green]' not in desc
+
+
 def test_rich_hooks_escapes_markup_in_names(datapoint_factory):
     """A scenario name / id containing rich markup must not raise."""
     from rich.console import Console

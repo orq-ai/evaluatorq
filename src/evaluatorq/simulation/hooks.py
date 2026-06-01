@@ -237,15 +237,20 @@ class RichHooks:
             return
         from rich.markup import escape
 
+        from evaluatorq.simulation.types import TerminatedBy
+
         dp_id = result.metadata.get('datapoint_id')
         task_id = self._tasks.get(dp_id) if dp_id else None
         if dp_id and task_id is not None:
-            # Fill the per-task bar to 100% — a judge-terminated run stops before
-            # max_turns, leaving the bar at e.g. 3/10. When _max_turns is None
-            # (lazy-start path, task total=None) this is a no-op.
+            # Keep error/timeout rows red (on_datapoint_error already set that),
+            # don't overwrite with green — otherwise a failed run reads as a green
+            # success labelled "error". Fill the per-task bar to 100%: a
+            # judge-terminated run stops before max_turns, leaving e.g. 3/10. When
+            # _max_turns is None (lazy-start path, task total=None) this is a no-op.
+            color = 'red' if result.terminated_by in (TerminatedBy.error, TerminatedBy.timeout) else 'green'
             self._progress.update(
                 task_id,
-                description=f'  [green]{escape(dp_id)}[/green] {result.terminated_by}',
+                description=f'  [{color}]{escape(dp_id)}[/{color}] {result.terminated_by}',
                 completed=self._max_turns,
             )
         self._completed += 1
