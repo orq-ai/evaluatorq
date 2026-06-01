@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
     from evaluatorq.redteam.backends.base import Backend
+    from evaluatorq.redteam.backends.openresponses import OpenResponsesBackend
     from evaluatorq.redteam.contracts import LLMCallConfig, LLMConfig, TargetConfig
 
 
@@ -122,5 +123,26 @@ def _create_orq_backend(
     return ORQBackend(timeout_ms=timeout_ms)
 
 
+def _create_openresponses_backend(
+    llm_client: AsyncOpenAI | None = None,
+    target_config: TargetConfig | None = None,
+    pipeline_config: LLMConfig | None = None,
+    **kwargs: object,
+) -> OpenResponsesBackend:
+    from evaluatorq.redteam.backends.openresponses import (
+        OpenResponsesBackend,
+        create_openresponses_client,
+    )
+    instructions = target_config.system_prompt if target_config else None
+    timeout_ms = pipeline_config.target_agent_timeout_ms if pipeline_config else None
+    client = llm_client or create_openresponses_client()
+    return OpenResponsesBackend(
+        client=client,
+        instructions=instructions,
+        timeout_ms=timeout_ms,
+    )
+
+
 register_backend("openai", _create_openai_backend)
 register_backend("orq", _create_orq_backend)
+register_backend("openresponses", _create_openresponses_backend)

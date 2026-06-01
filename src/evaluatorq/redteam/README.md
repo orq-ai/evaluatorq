@@ -88,7 +88,10 @@ redteam/
 ├── backends/                 # Pluggable target backends
 │   ├── orq.py                #   ORQ platform agent target (default)
 │   ├── openai.py             #   Direct OpenAI model target
+│   ├── openresponses.py      #   OpenResponses /responses API target (RES-540)
 │   └── registry.py           #   Backend resolution + LLM client factory
+├── openresponses_adapter.py  # OpenResponses format helpers (RES-540)
+├── parsing.py                # OpenResponses output parsing (RES-540)
 ├── frameworks/               # Framework-specific strategy libraries
 │   ├── owasp_asi.py          #   ASI01–ASI10 attack strategies
 │   ├── owasp_llm.py          #   LLM01–LLM09 attack strategies
@@ -114,6 +117,67 @@ redteam/
 - **Adaptive attacks** — the adversarial LLM observes defenses and adjusts strategy mid-conversation.
 - **Pluggable backends** — ORQ backend for production agents, OpenAI for raw models, or bring your own `AsyncOpenAI`-compatible client.
 - **Parallel-safe** — each attack gets a unique memory entity ID, preventing cross-contamination. Post-run cleanup removes test data.
+
+## OpenResponses backend (RES-540)
+
+Target agents and deployments through the platform's `/responses` API in the
+OpenResponses request shape:
+
+```python
+from evaluatorq.redteam import OpenResponsesAgentTarget, red_team
+
+target = OpenResponsesAgentTarget(
+    agent_id="my-agent-id",
+    instructions="You are a helpful support agent.",  # optional
+)
+
+report = await red_team(target, vulnerabilities=["prompt_injection"])
+```
+
+Every attack the orchestrator runs is sent over the wire as:
+
+```json
+{"model": "my-agent-id",
+ "input": [{"role": "user", "content": "<adversarial prompt>"}]}
+```
+
+Multi-turn attacks thread via `previous_response_id` (server-side, preferred);
+when the server omits a response id the target falls back to client-side
+threading by sending the growing `input` array on each call.
+
+Trace spans use `gen_ai.*` attributes plus `orq.openresponses.request` /
+`orq.openresponses.response` so observability surfaces the exact payload that
+went over the wire — no translation back into chat-completions shape.
+
+### Adapter helpers
+
+For consumers that need to build OpenResponses payloads or parse responses
+outside the backend:
+
+```python
+from evaluatorq.redteam import (
+    build_openresponses_request,
+    turns_to_openresponses_input,
+    extract_assistant_text,
+    extract_tool_calls,
+    redteam_sample_from_openresponses,
+)
+```
+
+- `build_openresponses_request(model=..., prompt=..., conversation=...)` — assemble the wire payload.
+- `turns_to_openresponses_input(orchestrator_result.turns)` — convert an executed attack back into the OpenResponses input array (useful for replay, dataset capture, debugging).
+- `extract_assistant_text(response)` / `extract_tool_calls(response)` — pull the agent's reply from either an `AgentResponse` or a raw `ResponseResource` dict.
+- `redteam_sample_from_openresponses(input=..., openresponses_input=...)` — load datasets authored in OpenResponses format into the existing `RedTeamSample` schema.
+
+### Registry shortcut
+
+The backend is also registered for resolution via the standard registry, so it
+slots into the same machinery as the ORQ / OpenAI backends:
+
+```python
+from evaluatorq.redteam.backends.registry import resolve_backend
+bundle = resolve_backend("openresponses")
+```
 
 ## Convention
 

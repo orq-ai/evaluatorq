@@ -49,6 +49,7 @@ def _make_confirm_payload(**kwargs) -> ConfirmPayload:
 
     payload: ConfirmPayload = {
         'agent_context': kwargs.get('agent_context', None),
+        'agent_contexts': kwargs.get('agent_contexts', None),
         'num_datapoints': kwargs.get('num_datapoints', 20),
         'num_dynamic': kwargs.get('num_dynamic', None),
         'num_static': kwargs.get('num_static', None),
@@ -187,19 +188,228 @@ class TestRichHooks:
         output = buf.getvalue()
         assert '30' in output or 'Datapoint' in output
 
-    def test_rich_on_confirm_renders_agent_capabilities(self):
-        """on_confirm should render agent capabilities when agent_context is provided."""
-        hooks, buf = self._make_rich_hooks(skip_confirm=True)
+    def _stage_end_meta(
+        self,
+        *,
+        target: str = 'agent:test',
+        agent_context: dict[str, Any] | None = None,
+        agent_capabilities: dict[str, Any] | None = None,
+        classification_error: str | None = None,
+        classification_available: bool = True,
+    ) -> dict[str, Any]:
+        ctx = agent_context or {'tools': [], 'memory_stores': [], 'knowledge_bases': []}
+        return {
+            'target': target,
+            'num_tools': len(ctx.get('tools') or []),
+            'num_memory_stores': len(ctx.get('memory_stores') or []),
+            'num_knowledge_bases': len(ctx.get('knowledge_bases') or []),
+            'agent_context': ctx,
+            'agent_capabilities': agent_capabilities,
+            'classification_error': classification_error,
+            'classification_available': classification_available,
+        }
+
+    def test_rich_on_stage_end_renders_agent_capabilities(self):
+        """on_stage_end(CONTEXT_RETRIEVAL) should render the per-target capability table."""
+        from evaluatorq.redteam.contracts import PipelineStage
+
+        hooks, buf = self._make_rich_hooks()
         agent_ctx = {
             'tools': [{'name': 'search_web'}, {'name': 'send_email'}],
-            'memory_stores': [{'store_id': 'mem1'}],
+            'memory_stores': [{'key': 'user_prefs'}],
             'knowledge_bases': [],
         }
-        payload = _make_confirm_payload(agent_context=agent_ctx)
-        asyncio.run(hooks.on_confirm(payload))
+        asyncio.run(
+            hooks.on_stage_end(
+                PipelineStage.CONTEXT_RETRIEVAL,
+                self._stage_end_meta(target='agent:bot', agent_context=agent_ctx),
+            )
+        )
         output = buf.getvalue()
-        # Should render tools count or memory info
-        assert 'search_web' in output or '2' in output or 'tool' in output.lower()
+        assert 'search_web' in output
+        assert 'send_email' in output
+        assert 'user_prefs' in output
+        assert 'tool' in output
+        assert 'memory' in output
+        # The target label is printed as a heading above the table so
+        # multi-target runs are distinguishable.
+        assert 'agent:bot' in output
+
+    def test_rich_on_stage_end_renders_classified_caps(self):
+        """When agent_capabilities is supplied, classified tags appear in the table."""
+        from evaluatorq.redteam.contracts import PipelineStage
+
+        hooks, buf = self._make_rich_hooks()
+        agent_ctx = {
+            'tools': [{'name': 'run_python'}, {'name': 'search_web'}],
+            'memory_stores': [],
+            'knowledge_bases': [],
+        }
+        caps = {
+            'capabilities': {
+                'run_python': ['code_execution'],
+                'search_web': ['web_request'],
+            },
+            'classification_failed': False,
+        }
+        asyncio.run(
+            hooks.on_stage_end(
+                PipelineStage.CONTEXT_RETRIEVAL,
+                self._stage_end_meta(
+                    target='agent:bot',
+                    agent_context=agent_ctx,
+                    agent_capabilities=caps,
+                ),
+            )
+        )
+        output = buf.getvalue()
+        assert 'code_execution' in output
+        assert 'web_request' in output
+        # Caption counts distinct high-risk capability kinds, not occurrences.
+        # Collapse whitespace because Rich may wrap the caption on narrow consoles.
+        collapsed = ' '.join(output.split())
+        assert '1 high-risk' in collapsed
+
+    def test_rich_on_stage_end_multi_target(self):
+        """Multi-target runs emit on_stage_end once per target; both tables must render."""
+        from evaluatorq.redteam.contracts import PipelineStage
+
+        hooks, buf = self._make_rich_hooks()
+        ctx_a = {'tools': [{'name': 'tool_a'}], 'memory_stores': [], 'knowledge_bases': []}
+        ctx_b = {'tools': [{'name': 'tool_b'}], 'memory_stores': [], 'knowledge_bases': []}
+        caps_a = {'capabilities': {'tool_a': ['web_request']}, 'classification_failed': False}
+        caps_b = {'capabilities': {'tool_b': ['file_system']}, 'classification_failed': False}
+        asyncio.run(
+            hooks.on_stage_end(
+                PipelineStage.CONTEXT_RETRIEVAL,
+                self._stage_end_meta(target='agent:a', agent_context=ctx_a, agent_capabilities=caps_a),
+            )
+        )
+        asyncio.run(
+            hooks.on_stage_end(
+                PipelineStage.CONTEXT_RETRIEVAL,
+                self._stage_end_meta(target='agent:b', agent_context=ctx_b, agent_capabilities=caps_b),
+            )
+        )
+        output = buf.getvalue()
+        assert 'agent:a' in output
+        assert 'agent:b' in output
+        assert 'tool_a' in output
+        assert 'tool_b' in output
+
+    def test_rich_on_stage_end_classification_failed_shows_error(self):
+        """classification_failed=True renders the yellow hint AND the reason."""
+        from evaluatorq.redteam.contracts import PipelineStage
+
+        hooks, buf = self._make_rich_hooks()
+        agent_ctx = {'tools': [{'name': 'tool_x'}], 'memory_stores': [], 'knowledge_bases': []}
+        caps = {'capabilities': {}, 'classification_failed': True}
+        asyncio.run(
+            hooks.on_stage_end(
+                PipelineStage.CONTEXT_RETRIEVAL,
+                self._stage_end_meta(
+                    target='agent:x',
+                    agent_context=agent_ctx,
+                    agent_capabilities=caps,
+                    classification_error='AuthenticationError: 401 invalid JWT',
+                ),
+            )
+        )
+        output = buf.getvalue()
+        assert 'classifier failed' in output.lower()
+        # The actual error string is surfaced so the operator can diagnose
+        # auth / network / model failures without re-running with debug logs.
+        assert 'AuthenticationError' in output
+        assert 'invalid JWT' in output
+
+    def test_rich_on_stage_end_no_llm_client_shows_disabled_hint(self):
+        """classification_available=False renders the 'disabled' hint, not the failure hint."""
+        from evaluatorq.redteam.contracts import PipelineStage
+
+        hooks, buf = self._make_rich_hooks()
+        agent_ctx = {'tools': [{'name': 'tool_x'}], 'memory_stores': [], 'knowledge_bases': []}
+        asyncio.run(
+            hooks.on_stage_end(
+                PipelineStage.CONTEXT_RETRIEVAL,
+                self._stage_end_meta(
+                    target='agent:x',
+                    agent_context=agent_ctx,
+                    agent_capabilities=None,
+                    classification_available=False,
+                ),
+            )
+        )
+        output = buf.getvalue()
+        assert 'tool_x' in output
+        assert 'classifier disabled' in output.lower()
+
+    def test_rich_on_stage_end_empty_agent_collapsed(self):
+        """No tools/memory/KB → single placeholder row, not three empty sections."""
+        from evaluatorq.redteam.contracts import PipelineStage
+
+        hooks, buf = self._make_rich_hooks()
+        empty_ctx = {'tools': [], 'memory_stores': [], 'knowledge_bases': []}
+        asyncio.run(
+            hooks.on_stage_end(
+                PipelineStage.CONTEXT_RETRIEVAL,
+                self._stage_end_meta(target='agent:empty', agent_context=empty_ctx),
+            )
+        )
+        output = buf.getvalue()
+        assert 'No tools' in output
+
+    def test_rich_on_stage_end_classifier_ran_but_no_tags(self):
+        """Classifier ran, didn't fail, but returned an empty capabilities map →
+        the 'no tags detected' hint, NOT the misleading 'disabled' hint."""
+        from evaluatorq.redteam.contracts import PipelineStage
+
+        hooks, buf = self._make_rich_hooks()
+        agent_ctx = {'tools': [{'name': 'unknown_thing'}], 'memory_stores': [], 'knowledge_bases': []}
+        # Classifier produced no recognised tags for any resource.
+        caps = {'capabilities': {}, 'classification_failed': False}
+        asyncio.run(
+            hooks.on_stage_end(
+                PipelineStage.CONTEXT_RETRIEVAL,
+                self._stage_end_meta(
+                    target='agent:unknown',
+                    agent_context=agent_ctx,
+                    agent_capabilities=caps,
+                    classification_available=True,
+                ),
+            )
+        )
+        output = buf.getvalue()
+        assert 'no capability tags detected' in output.lower()
+        # Must NOT show the disabled hint, which would be factually wrong here.
+        assert 'classifier disabled' not in output.lower()
+
+    def test_rich_on_stage_end_skips_context_summary_when_table_renders(self):
+        """When agent_context is present the per-target one-liner is folded
+        into the table caption; the standalone summary line must not appear
+        (would be redundant)."""
+        from evaluatorq.redteam.contracts import PipelineStage
+
+        hooks, buf = self._make_rich_hooks()
+        agent_ctx = {
+            'tools': [{'name': 'search_web'}],
+            'memory_stores': [{'key': 'kv'}],
+            'knowledge_bases': [],
+        }
+        asyncio.run(
+            hooks.on_stage_end(
+                PipelineStage.CONTEXT_RETRIEVAL,
+                self._stage_end_meta(target='agent:bot', agent_context=agent_ctx),
+            )
+        )
+        output = buf.getvalue()
+        # The standalone summary line is "agent:bot: 1 tool, 1 memory store"
+        # and was the old _render_context_summary output. The caption now
+        # carries the same breakdown, so the standalone line is suppressed.
+        collapsed = ' '.join(output.split())
+        assert 'agent:bot: 1 tool' not in collapsed
+        # But the breakdown should still appear *somewhere* (in the caption).
+        assert '1 tool' in collapsed
+        assert '1 memory' in collapsed
 
     def test_rich_on_confirm_renders_filtering_metadata(self):
         """on_confirm should render filtering metadata (strategy counts)."""

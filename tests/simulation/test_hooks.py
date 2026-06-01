@@ -664,7 +664,7 @@ def test_rich_hooks_reusable_across_runs():
 # ---------------------------------------------------------------------------
 
 
-def _sync_hook_deprecation_warnings(records) -> list:
+def _sync_hook_deprecation_warnings(records) -> list[object]:
     """Filter a warning record list down to our sync-hook nudge."""
     return [w for w in records if issubclass(w.category, DeprecationWarning) and 'sync hook(s)' in str(w.message)]
 
