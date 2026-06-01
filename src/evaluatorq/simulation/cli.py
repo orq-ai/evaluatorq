@@ -638,7 +638,7 @@ def validate_dataset(
             dp = Datapoint.model_validate_json(line)
             valid_datapoints.append(dp)
         except Exception as exc:  # noqa: PERF203
-                    typer.echo(f"Line {i}: {exc}", err=True)
+            typer.echo(f"Line {i}: {exc}", err=True)
             bad_count += 1
 
     if bad_count:
