@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from evaluatorq.simulation.api import (
     SimulationDroppedError,
+    generate,
     generate_and_simulate,
     simulate,
 )
@@ -266,6 +267,7 @@ __all__ = [
     # Adapters
     "from_chat_completions",
     "from_orq_deployment",
+    "generate",
     "generate_and_simulate",
     "generate_datapoint",
     "get_all_evaluators",

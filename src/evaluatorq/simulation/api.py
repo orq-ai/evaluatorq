@@ -190,8 +190,6 @@ async def generate_and_simulate(
     defaults to ``True``; see :func:`simulate` for the full semantics of the
     CI-gate behaviour and how to opt out.
     """
-    from evaluatorq.simulation._client import build_simulation_client
-    from evaluatorq.simulation.generators import PersonaGenerator, ScenarioGenerator
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
 
@@ -209,23 +207,13 @@ async def generate_and_simulate(
                 "orq.simulation.parallelism": parallelism,
             },
         ) as pipeline_span:
-            gen_client, gen_owned = build_simulation_client(generation_client)
-            try:
-                persona_gen = PersonaGenerator(model=sim_model, client=gen_client)
-                scenario_gen = ScenarioGenerator(model=sim_model, client=gen_client)
-                gen_personas, gen_scenarios = await asyncio.gather(
-                    persona_gen.generate(
-                        agent_description=agent_description,
-                        num_personas=num_personas,
-                    ),
-                    scenario_gen.generate(
-                        agent_description=agent_description,
-                        num_scenarios=num_scenarios,
-                    ),
-                )
-            finally:
-                if gen_owned:
-                    await gen_client.close()
+            gen_personas, gen_scenarios = await _generate_personas_scenarios(
+                agent_description=agent_description,
+                num_personas=num_personas,
+                num_scenarios=num_scenarios,
+                model=sim_model,
+                generation_client=generation_client,
+            )
 
             return await _simulate_core(
                 caller="generate_and_simulate",
@@ -254,9 +242,116 @@ async def generate_and_simulate(
         await flush_tracing()
 
 
+async def generate(
+    *,
+    agent_description: str,
+    num_personas: int = 5,
+    num_scenarios: int = 5,
+    sim_model: str = DEFAULT_MODEL,
+    generation_client: AsyncOpenAI | None = None,
+) -> list[Datapoint]:
+    """Generate ready-to-run simulation ``Datapoint``s from an agent description.
+
+    Produces personas and scenarios, then builds one ``Datapoint`` per
+    persona×scenario pair (each with a generated first message). Returns the
+    datapoints without running any simulation — feed them to :func:`simulate`
+    via ``datapoints=...``, or persist them (e.g. JSONL) and reuse.
+
+    This freezes the simulation *inputs* (personas, scenarios, first messages)
+    so every :func:`simulate` run scores the same fixed dataset — useful for
+    apples-to-apples comparison across agent versions. It does **not** make
+    simulation deterministic: the agent under test, the user-simulator, and the
+    judge remain stochastic at simulate time, so scores still vary run to run.
+
+    Provider resolution matches :func:`generate_and_simulate`: an injected
+    ``generation_client`` → ``ORQ_API_KEY`` (Orq router) → ``OPENAI_API_KEY``
+    (with optional ``OPENAI_BASE_URL`` for an OpenAI-compatible endpoint).
+    ``sim_model`` drives persona/scenario/first-message generation.
+    """
+    from evaluatorq.simulation._client import build_simulation_client
+    from evaluatorq.simulation.tracing import with_simulation_span
+    from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
+
+    await init_tracing_if_needed()
+
+    try:
+        async with with_simulation_span(
+            "orq.simulation.generate",
+            {
+                "orq.simulation.mode": "generate",
+                "orq.simulation.num_personas": num_personas,
+                "orq.simulation.num_scenarios": num_scenarios,
+            },
+        ):
+            # Build one client and inject it into both the persona/scenario and
+            # first-message stages so the generation path constructs a single
+            # AsyncOpenAI client (injected → owned=False downstream), closing it
+            # once here.
+            gen_client, gen_owned = build_simulation_client(generation_client)
+            try:
+                gen_personas, gen_scenarios = await _generate_personas_scenarios(
+                    agent_description=agent_description,
+                    num_personas=num_personas,
+                    num_scenarios=num_scenarios,
+                    model=sim_model,
+                    generation_client=gen_client,
+                )
+                return await _resolve_or_generate_datapoints(
+                    caller="generate",
+                    datapoints=None,
+                    personas=gen_personas,
+                    scenarios=gen_scenarios,
+                    dataset_id=None,
+                    model=sim_model,
+                    generation_client=gen_client,
+                )
+            finally:
+                if gen_owned:
+                    await gen_client.close()
+    finally:
+        await flush_tracing()
+
+
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
+
+
+async def _generate_personas_scenarios(
+    *,
+    agent_description: str,
+    num_personas: int,
+    num_scenarios: int,
+    model: str,
+    generation_client: AsyncOpenAI | None,
+) -> tuple[list[Persona], list[Scenario]]:
+    """Generate personas and scenarios concurrently from an agent description.
+
+    Shared by :func:`generate` and :func:`generate_and_simulate`. Provider is
+    resolved via the shared factory; the client is closed only when owned here
+    (i.e. not injected).
+    """
+    from evaluatorq.simulation._client import build_simulation_client
+    from evaluatorq.simulation.generators import PersonaGenerator, ScenarioGenerator
+
+    gen_client, gen_owned = build_simulation_client(generation_client)
+    try:
+        persona_gen = PersonaGenerator(model=model, client=gen_client)
+        scenario_gen = ScenarioGenerator(model=model, client=gen_client)
+        gen_personas, gen_scenarios = await asyncio.gather(
+            persona_gen.generate(
+                agent_description=agent_description,
+                num_personas=num_personas,
+            ),
+            scenario_gen.generate(
+                agent_description=agent_description,
+                num_scenarios=num_scenarios,
+            ),
+        )
+    finally:
+        if gen_owned:
+            await gen_client.close()
+    return gen_personas, gen_scenarios
 
 
 async def _simulate_core(

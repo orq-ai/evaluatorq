@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from evaluatorq.simulation.api import generate_and_simulate, simulate
+from evaluatorq.simulation.api import generate, generate_and_simulate, simulate
 from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario
 
 
@@ -38,6 +38,29 @@ async def test_generate_and_simulate_accepts_generation_client_without_orq(monke
             await generate_and_simulate(
                 agent_description="a test agent",
                 target=lambda messages: "ok",
+                num_personas=1,
+                num_scenarios=1,
+                generation_client=injected,
+            )
+
+
+@pytest.mark.asyncio
+async def test_generate_accepts_generation_client_without_orq(monkeypatch):
+    # SDK generate() runs the same env-free path with an injected client and
+    # reaches persona/scenario generation (symmetry with generate_and_simulate).
+    monkeypatch.delenv("ORQ_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    from openai import AsyncOpenAI
+
+    injected = AsyncOpenAI(api_key="sk-test", base_url="https://example.test/v1")
+
+    with patch(
+        "evaluatorq.simulation.generators.PersonaGenerator.generate",
+        new=AsyncMock(side_effect=RuntimeError("reached-generation")),
+    ):
+        with pytest.raises(RuntimeError, match="reached-generation"):
+            await generate(
+                agent_description="a test agent",
                 num_personas=1,
                 num_scenarios=1,
                 generation_client=injected,

@@ -1,8 +1,14 @@
 """CLI for evaluatorq agent simulation.
 
+Three execution verbs:
+    generate  — datapoints only (no simulation)
+    simulate  — simulate pre-built datapoints
+    run       — generate + simulate in one shot
+
 Usage:
-    evaluatorq sim run --datapoints dp.jsonl --agent-key my-agent
-    evaluatorq sim generate --agent-description "..." --openai-model gpt-4o-mini
+    evaluatorq sim generate --agent-description "..." --output dp.jsonl
+    evaluatorq sim simulate --datapoints dp.jsonl --agent-key my-agent
+    evaluatorq sim run --agent-description "..." --openai-model gpt-4o-mini
     evaluatorq sim export --input results.jsonl --output payload.json
     evaluatorq sim validate-dataset dp.jsonl
     evaluatorq sim runs
@@ -230,12 +236,12 @@ def _infer_target_kind(
 
 
 # ---------------------------------------------------------------------------
-# run
+# simulate
 # ---------------------------------------------------------------------------
 
 
 @app.command(no_args_is_help=True)
-def run(
+def simulate(
     datapoints: Annotated[
         Path,
         typer.Option("--datapoints", "-d", help="Path to datapoints JSONL file."),
@@ -330,7 +336,7 @@ def run(
 
     try:
         results = asyncio.run(
-            _run_impl(
+            _simulate_impl(
                 datapoints_path=datapoints,
                 target=target,
                 sim_model=sim_model,
@@ -358,7 +364,7 @@ def run(
     if not no_save:
         run_path = _auto_save_run(
             run_name=name,
-            mode="run",
+            mode="simulate",
             target_kind=target_kind,
             evaluator_names=evaluator_names or DEFAULT_EVALUATOR_NAMES,
             results=results,
@@ -366,7 +372,7 @@ def run(
         typer.echo(f"Run saved: {run_path}", err=True)
 
 
-async def _run_impl(
+async def _simulate_impl(
     *,
     datapoints_path: Path,
     target: Any,
@@ -395,12 +401,12 @@ async def _run_impl(
 
 
 # ---------------------------------------------------------------------------
-# generate
+# run  (generate + simulate)
 # ---------------------------------------------------------------------------
 
 
 @app.command(no_args_is_help=True)
-def generate(
+def run(
     agent_description: Annotated[
         str,
         typer.Option("--agent-description", help="Free-text description of the agent under test."),
@@ -476,7 +482,7 @@ def generate(
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging.")] = False,  # noqa: FBT002
     quiet: Annotated[bool, typer.Option("--quiet", "-q", help="Warning-only logging.")] = False,  # noqa: FBT002
 ) -> None:
-    """Generate personas and scenarios, then run simulations.
+    """Generate personas and scenarios, then run simulations (generate + simulate).
 
     Targets (provide exactly one):
 
@@ -501,7 +507,7 @@ def generate(
 
     try:
         results = asyncio.run(
-            _generate_impl(
+            _run_impl(
                 agent_description=agent_description,
                 target=target,
                 sim_model=sim_model,
@@ -531,7 +537,7 @@ def generate(
     if not no_save:
         run_path = _auto_save_run(
             run_name=name,
-            mode="generate",
+            mode="run",
             target_kind=target_kind,
             evaluator_names=evaluator_names or DEFAULT_EVALUATOR_NAMES,
             results=results,
@@ -539,7 +545,7 @@ def generate(
         typer.echo(f"Run saved: {run_path}", err=True)
 
 
-async def _generate_impl(
+async def _run_impl(
     *,
     agent_description: str,
     target: Any,
@@ -563,6 +569,98 @@ async def _generate_impl(
         num_scenarios=num_scenarios,
         evaluator_names=evaluator_names,
         evaluation_name=evaluation_name,
+    )
+
+
+# ---------------------------------------------------------------------------
+# generate  (datapoints only, no simulation)
+# ---------------------------------------------------------------------------
+
+
+@app.command(no_args_is_help=True)
+def generate(
+    agent_description: Annotated[
+        str,
+        typer.Option("--agent-description", help="Free-text description of the agent under test."),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", help="Path to write the generated datapoints JSONL."),
+    ],
+    sim_model: Annotated[
+        str,
+        typer.Option(
+            "--sim-model",
+            help=(
+                "Model for persona/scenario/first-message generation. Provider "
+                "resolved from env: ORQ_API_KEY -> Orq router, else "
+                "OPENAI_API_KEY (+ OPENAI_BASE_URL) -> OpenAI-compatible "
+                "endpoint. The default targets the Orq router; for OpenAI-direct "
+                "pass a bare model name (e.g. 'gpt-5.4-mini', no provider prefix)."
+            ),
+        ),
+    ] = DEFAULT_MODEL,
+    num_personas: Annotated[
+        int,
+        typer.Option("--num-personas", min=1, help="Number of personas to generate."),
+    ] = 5,
+    num_scenarios: Annotated[
+        int,
+        typer.Option("--num-scenarios", min=1, help="Number of scenarios to generate."),
+    ] = 5,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging.")] = False,  # noqa: FBT002
+    quiet: Annotated[bool, typer.Option("--quiet", "-q", help="Warning-only logging.")] = False,  # noqa: FBT002
+) -> None:
+    """Generate simulation datapoints from an agent description (no simulation).
+
+    Builds personas × scenarios with generated first messages and writes them
+    as a datapoints JSONL file. Feed that file to ``sim simulate --datapoints``
+    to run — splitting generation out keeps the datapoint set frozen across
+    simulate runs. No agent target is contacted; only the ``--sim-model``
+    generator is called.
+    """
+    _configure_logging(verbose=verbose, quiet=quiet)
+
+    try:
+        datapoints = asyncio.run(
+            _generate_impl(
+                agent_description=agent_description,
+                sim_model=sim_model,
+                num_personas=num_personas,
+                num_scenarios=num_scenarios,
+            )
+        )
+    except KeyboardInterrupt:
+        typer.echo("^C aborted.", err=True)
+        raise typer.Exit(130) from None
+    except asyncio.CancelledError:
+        typer.echo("^C aborted.", err=True)
+        raise typer.Exit(130) from None
+    except (ValueError, RuntimeError) as exc:
+        # RuntimeError covers "first-message generation produced no datapoints"
+        # from _resolve_or_generate_datapoints — surface as one line, not a
+        # traceback (per the spec error-handling contract).
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from None
+
+    _write_datapoints(datapoints, output)
+    typer.echo(f"Generated {len(datapoints)} datapoint(s) -> {output}", err=True)
+
+
+async def _generate_impl(
+    *,
+    agent_description: str,
+    sim_model: str,
+    num_personas: int,
+    num_scenarios: int,
+) -> list[Any]:
+    from evaluatorq.simulation.api import generate
+
+    return await generate(
+        agent_description=agent_description,
+        num_personas=num_personas,
+        num_scenarios=num_scenarios,
+        sim_model=sim_model,
     )
 
 
@@ -778,6 +876,19 @@ def _write_results(results: list[Any], output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     export_results_to_jsonl(results, str(output))
     typer.echo(f"Results written to {output}")
+
+
+def _write_datapoints(datapoints: list[Any], output: Path) -> None:
+    """Write datapoints as raw ``Datapoint`` JSONL — one ``model_dump_json()``
+    per line. This is the canonical local handoff format: it preserves the
+    datapoint ``id``, round-trips through ``load_datapoints_from_jsonl`` (which
+    ``simulate`` uses), and validates under ``validate-dataset``. The Orq-dataset
+    *envelope* exporter (``export_datapoints_to_jsonl``) is a separate upload
+    format and is intentionally not used here.
+    """
+    output.parent.mkdir(parents=True, exist_ok=True)
+    lines = [dp.model_dump_json() for dp in datapoints]
+    output.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

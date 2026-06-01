@@ -52,7 +52,7 @@ def _make_result(
     )
 
 
-def _make_datapoints_file(tmp_path: Path, count: int = 2) -> Path:
+def _make_datapoints(count: int = 2) -> list[Any]:
     from evaluatorq.simulation.types import (
         CommunicationStyle,
         Datapoint,
@@ -60,10 +60,8 @@ def _make_datapoints_file(tmp_path: Path, count: int = 2) -> Path:
         Scenario,
     )
 
-    out = tmp_path / "datapoints.jsonl"
-    lines = []
-    for i in range(count):
-        dp = Datapoint(
+    return [
+        Datapoint(
             id=f"dp-{i}",
             persona=Persona(
                 name=f"User{i}",
@@ -78,7 +76,13 @@ def _make_datapoints_file(tmp_path: Path, count: int = 2) -> Path:
             user_system_prompt="You are a user.",
             first_message="Hello",
         )
-        lines.append(dp.model_dump_json())
+        for i in range(count)
+    ]
+
+
+def _make_datapoints_file(tmp_path: Path, count: int = 2) -> Path:
+    out = tmp_path / "datapoints.jsonl"
+    lines = [dp.model_dump_json() for dp in _make_datapoints(count)]
     out.write_text("\n".join(lines), encoding="utf-8")
     return out
 
@@ -250,22 +254,22 @@ def test_runs_skips_malformed(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# run command — target validation
+# simulate command — target validation  (datapoints in, no generation)
 # ---------------------------------------------------------------------------
 
 
-def test_run_requires_target(tmp_path: Path) -> None:
+def test_simulate_requires_target(tmp_path: Path) -> None:
     dp_file = _make_datapoints_file(tmp_path)
-    result = runner.invoke(app, ["run", "--datapoints", str(dp_file)])
+    result = runner.invoke(app, ["simulate", "--datapoints", str(dp_file)])
     assert result.exit_code != 0
 
 
-def test_run_rejects_multiple_targets(tmp_path: Path) -> None:
+def test_simulate_rejects_multiple_targets(tmp_path: Path) -> None:
     dp_file = _make_datapoints_file(tmp_path)
     result = runner.invoke(
         app,
         [
-            "run",
+            "simulate",
             "--datapoints", str(dp_file),
             "--agent-key", "k",
             "--openai-model", "gpt-4o",
@@ -275,11 +279,11 @@ def test_run_rejects_multiple_targets(tmp_path: Path) -> None:
     assert result.exit_code != 0
 
 
-def test_run_missing_datapoints_file(tmp_path: Path) -> None:
+def test_simulate_missing_datapoints_file(tmp_path: Path) -> None:
     result = runner.invoke(
         app,
         [
-            "run",
+            "simulate",
             "--datapoints", str(tmp_path / "no.jsonl"),
             "--openai-model", "gpt-4o",
         ],
@@ -288,12 +292,12 @@ def test_run_missing_datapoints_file(tmp_path: Path) -> None:
     assert result.exit_code != 0
 
 
-def test_run_unknown_evaluator(tmp_path: Path) -> None:
+def test_simulate_unknown_evaluator(tmp_path: Path) -> None:
     dp_file = _make_datapoints_file(tmp_path)
     result = runner.invoke(
         app,
         [
-            "run",
+            "simulate",
             "--datapoints", str(dp_file),
             "--openai-model", "gpt-4o",
             "--evaluator", "nonexistent_evaluator_xyz",
@@ -304,17 +308,17 @@ def test_run_unknown_evaluator(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# run command — success path (mocked simulate)
+# simulate command — success path (mocked _simulate_impl)
 # ---------------------------------------------------------------------------
 
 
-def test_run_success_no_save(tmp_path: Path) -> None:
+def test_simulate_success_no_save(tmp_path: Path) -> None:
     dp_file = _make_datapoints_file(tmp_path)
     results = [_make_result(scorer_scores={"goal_achieved": 1.0})]
 
     with (
         patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
-        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
+        patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock) as mock_impl,
     ):
         mock_target.return_value = MagicMock()
         mock_impl.return_value = results
@@ -322,7 +326,7 @@ def test_run_success_no_save(tmp_path: Path) -> None:
         result = runner.invoke(
             app,
             [
-                "run",
+                "simulate",
                 "--datapoints", str(dp_file),
                 "--openai-model", "gpt-4o",
                 "--no-save",
@@ -334,14 +338,14 @@ def test_run_success_no_save(tmp_path: Path) -> None:
     assert "1 simulations" in result.stdout
 
 
-def test_run_writes_output_file(tmp_path: Path) -> None:
+def test_simulate_writes_output_file(tmp_path: Path) -> None:
     dp_file = _make_datapoints_file(tmp_path)
     out_file = tmp_path / "out.jsonl"
     results = [_make_result()]
 
     with (
         patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
-        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
+        patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock) as mock_impl,
         patch("evaluatorq.simulation.utils.dataset_export.export_results_to_jsonl") as mock_export,
     ):
         mock_target.return_value = MagicMock()
@@ -351,7 +355,7 @@ def test_run_writes_output_file(tmp_path: Path) -> None:
         result = runner.invoke(
             app,
             [
-                "run",
+                "simulate",
                 "--datapoints", str(dp_file),
                 "--openai-model", "gpt-4o",
                 "--output", str(out_file),
@@ -364,12 +368,12 @@ def test_run_writes_output_file(tmp_path: Path) -> None:
     mock_export.assert_called_once()
 
 
-def test_run_rejects_three_targets(tmp_path: Path) -> None:
+def test_simulate_rejects_three_targets(tmp_path: Path) -> None:
     dp_file = _make_datapoints_file(tmp_path)
     result = runner.invoke(
         app,
         [
-            "run",
+            "simulate",
             "--datapoints", str(dp_file),
             "--agent-key", "k",
             "--vercel-url", "http://x",
@@ -383,15 +387,15 @@ def test_run_rejects_three_targets(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# run command — flag forwarding (kwarg capture via patched _run_impl)
+# simulate command — flag forwarding (kwarg capture via patched _simulate_impl)
 # ---------------------------------------------------------------------------
 
 
-def test_run_forwards_flags(tmp_path: Path) -> None:
+def test_simulate_forwards_flags(tmp_path: Path) -> None:
     dp_file = _make_datapoints_file(tmp_path)
     with (
         patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
-        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
+        patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock) as mock_impl,
     ):
         mock_target.return_value = MagicMock()
         mock_impl.return_value = []
@@ -399,7 +403,7 @@ def test_run_forwards_flags(tmp_path: Path) -> None:
         result = runner.invoke(
             app,
             [
-                "run",
+                "simulate",
                 "--datapoints", str(dp_file),
                 "--openai-model", "gpt-4o",
                 "--sim-model", "custom-model",
@@ -421,8 +425,8 @@ def test_run_forwards_flags(tmp_path: Path) -> None:
     assert kwargs["evaluation_name"] == "My Run"
 
 
-def test_run_impl_forwards_sim_model_to_simulate(tmp_path: Path, monkeypatch) -> None:
-    # Covers the _run_impl -> simulate leg (test_run_forwards_flags stops at _run_impl).
+def test_simulate_impl_forwards_sim_model_to_simulate(tmp_path: Path, monkeypatch) -> None:
+    # Covers the _simulate_impl -> simulate leg (test_simulate_forwards_flags stops at _simulate_impl).
     dp_file = _make_datapoints_file(tmp_path)
     captured = {}
 
@@ -436,7 +440,7 @@ def test_run_impl_forwards_sim_model_to_simulate(tmp_path: Path, monkeypatch) ->
         result = runner.invoke(
             app,
             [
-                "run",
+                "simulate",
                 "--datapoints", str(dp_file),
                 "--openai-model", "gpt-4o",
                 "--sim-model", "custom-model",
@@ -449,18 +453,18 @@ def test_run_impl_forwards_sim_model_to_simulate(tmp_path: Path, monkeypatch) ->
     assert captured["sim_model"] == "custom-model"
 
 
-def test_run_evaluator_absent_forwards_none(tmp_path: Path) -> None:
+def test_simulate_evaluator_absent_forwards_none(tmp_path: Path) -> None:
     dp_file = _make_datapoints_file(tmp_path)
     with (
         patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
-        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
+        patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock) as mock_impl,
     ):
         mock_target.return_value = MagicMock()
         mock_impl.return_value = []
 
         result = runner.invoke(
             app,
-            ["run", "--datapoints", str(dp_file), "--openai-model", "gpt-4o", "--no-save"],
+            ["simulate", "--datapoints", str(dp_file), "--openai-model", "gpt-4o", "--no-save"],
             env={"OPENAI_API_KEY": "test-key"},
         )
 
@@ -468,11 +472,11 @@ def test_run_evaluator_absent_forwards_none(tmp_path: Path) -> None:
     assert mock_impl.call_args.kwargs["evaluator_names"] is None
 
 
-def test_run_evaluator_repeated_forwards_list(tmp_path: Path) -> None:
+def test_simulate_evaluator_repeated_forwards_list(tmp_path: Path) -> None:
     dp_file = _make_datapoints_file(tmp_path)
     with (
         patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
-        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
+        patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock) as mock_impl,
     ):
         mock_target.return_value = MagicMock()
         mock_impl.return_value = []
@@ -480,7 +484,7 @@ def test_run_evaluator_repeated_forwards_list(tmp_path: Path) -> None:
         result = runner.invoke(
             app,
             [
-                "run",
+                "simulate",
                 "--datapoints", str(dp_file),
                 "--openai-model", "gpt-4o",
                 "--evaluator", "goal_achieved",
@@ -566,24 +570,24 @@ def test_auto_save_sanitises_filename(tmp_path: Path, monkeypatch: pytest.Monkey
 
 
 # ---------------------------------------------------------------------------
-# generate command — target validation
+# run command (generate + simulate) — target validation
 # ---------------------------------------------------------------------------
 
 
-def test_generate_requires_target() -> None:
+def test_run_requires_target() -> None:
     result = runner.invoke(
         app,
-        ["generate", "--agent-description", "A helpful bot"],
+        ["run", "--agent-description", "A helpful bot"],
     )
     assert result.exit_code != 0
 
 
-def test_generate_success_no_save(tmp_path: Path) -> None:
+def test_run_success_no_save(tmp_path: Path) -> None:
     results = [_make_result()]
 
     with (
         patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
-        patch("evaluatorq.simulation.cli._generate_impl", new_callable=AsyncMock) as mock_impl,
+        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
     ):
         mock_target.return_value = MagicMock()
         mock_impl.return_value = results
@@ -591,7 +595,7 @@ def test_generate_success_no_save(tmp_path: Path) -> None:
         result = runner.invoke(
             app,
             [
-                "generate",
+                "run",
                 "--agent-description", "A helpful bot",
                 "--openai-model", "gpt-4o",
                 "--no-save",
@@ -603,10 +607,10 @@ def test_generate_success_no_save(tmp_path: Path) -> None:
     assert "1 simulations" in result.stdout
 
 
-def test_generate_forwards_flags(tmp_path: Path) -> None:
+def test_run_forwards_flags(tmp_path: Path) -> None:
     with (
         patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
-        patch("evaluatorq.simulation.cli._generate_impl", new_callable=AsyncMock) as mock_impl,
+        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
     ):
         mock_target.return_value = MagicMock()
         mock_impl.return_value = [_make_result()]
@@ -614,7 +618,7 @@ def test_generate_forwards_flags(tmp_path: Path) -> None:
         result = runner.invoke(
             app,
             [
-                "generate",
+                "run",
                 "--agent-description", "A helpful bot",
                 "--openai-model", "gpt-4o",
                 "--num-personas", "2",
@@ -634,11 +638,156 @@ def test_generate_forwards_flags(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# generate command (datapoints only, no simulation)
+# ---------------------------------------------------------------------------
+
+
+def test_generate_requires_output(tmp_path: Path) -> None:
+    # --output is required: gen-only must write the datapoints somewhere.
+    result = runner.invoke(
+        app,
+        ["generate", "--agent-description", "A helpful bot"],
+    )
+    assert result.exit_code != 0
+
+
+def test_generate_writes_datapoints(tmp_path: Path) -> None:
+    # Exercises REAL serialization (no export mock) so the generate -> file
+    # handoff is verified, not faked.
+    out_file = tmp_path / "dp.jsonl"
+    datapoints = _make_datapoints(3)
+
+    with patch("evaluatorq.simulation.cli._generate_impl", new_callable=AsyncMock) as mock_impl:
+        mock_impl.return_value = datapoints
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                "--agent-description", "A helpful bot",
+                "--output", str(out_file),
+            ],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "Generated 3 datapoint" in result.output
+    assert out_file.exists()
+    assert len([ln for ln in out_file.read_text().splitlines() if ln.strip()]) == 3
+
+
+def test_generate_output_roundtrips_through_simulate_loader(tmp_path: Path) -> None:
+    # The whole point of gen-only: the file `generate` writes must load back
+    # via the same loader `simulate --datapoints` uses, with id + fields intact.
+    from evaluatorq.simulation.utils.dataset_export import load_datapoints_from_jsonl
+
+    out_file = tmp_path / "dp.jsonl"
+    datapoints = _make_datapoints(2)
+
+    with patch("evaluatorq.simulation.cli._generate_impl", new_callable=AsyncMock) as mock_impl:
+        mock_impl.return_value = datapoints
+        result = runner.invoke(
+            app,
+            ["generate", "--agent-description", "bot", "--output", str(out_file)],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    loaded = load_datapoints_from_jsonl(str(out_file))
+    assert [dp.id for dp in loaded] == ["dp-0", "dp-1"]  # id round-trips (not re-fabricated)
+    assert [dp.persona.name for dp in loaded] == ["User0", "User1"]
+    assert [dp.scenario.name for dp in loaded] == ["Scenario0", "Scenario1"]
+    assert all(dp.first_message == "Hello" for dp in loaded)
+
+
+def test_generate_output_passes_validate_dataset(tmp_path: Path) -> None:
+    # generate's output must validate under the tool's own validate-dataset.
+    out_file = tmp_path / "dp.jsonl"
+    with patch("evaluatorq.simulation.cli._generate_impl", new_callable=AsyncMock) as mock_impl:
+        mock_impl.return_value = _make_datapoints(2)
+        gen = runner.invoke(
+            app,
+            ["generate", "--agent-description", "bot", "--output", str(out_file)],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+    assert gen.exit_code == 0, gen.output
+
+    validated = runner.invoke(app, ["validate-dataset", str(out_file)])
+    assert validated.exit_code == 0, validated.output
+    assert "2 valid datapoint" in validated.output
+
+
+def test_generate_no_datapoints_runtime_error_is_clean(tmp_path: Path) -> None:
+    # RuntimeError from generation (e.g. every persona×scenario pair failed)
+    # surfaces as a one-line error, not a traceback.
+    out_file = tmp_path / "dp.jsonl"
+    with patch("evaluatorq.simulation.cli._generate_impl", new_callable=AsyncMock) as mock_impl:
+        mock_impl.side_effect = RuntimeError("first-message generation produced no datapoints")
+        result = runner.invoke(
+            app,
+            ["generate", "--agent-description", "bot", "--output", str(out_file)],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 1
+    assert "Error:" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_generate_rejects_zero_personas(tmp_path: Path) -> None:
+    out_file = tmp_path / "dp.jsonl"
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            "--agent-description", "bot",
+            "--output", str(out_file),
+            "--num-personas", "0",
+        ],
+        env={"OPENAI_API_KEY": "test-key"},
+    )
+    assert result.exit_code != 0
+
+
+def test_generate_forwards_flags(tmp_path: Path) -> None:
+    out_file = tmp_path / "dp.jsonl"
+    with (
+        patch("evaluatorq.simulation.cli._generate_impl", new_callable=AsyncMock) as mock_impl,
+        patch("evaluatorq.simulation.cli._write_datapoints") as mock_write,
+        patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
+    ):
+        mock_impl.return_value = [object()]
+        mock_write.return_value = None
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                "--agent-description", "A helpful bot",
+                "--output", str(out_file),
+                "--sim-model", "custom-model",
+                "--num-personas", "2",
+                "--num-scenarios", "4",
+            ],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    # Gen-only never contacts an agent target.
+    mock_target.assert_not_called()
+    kwargs = mock_impl.call_args.kwargs
+    assert kwargs["agent_description"] == "A helpful bot"
+    assert kwargs["sim_model"] == "custom-model"
+    assert kwargs["num_personas"] == 2
+    assert kwargs["num_scenarios"] == 4
+
+
+# ---------------------------------------------------------------------------
 # --sim-model flag (renamed from --model in Task 5)
 # ---------------------------------------------------------------------------
 
 
-def test_generate_forwards_sim_model(monkeypatch):
+def test_run_forwards_sim_model(monkeypatch):
     from typer.testing import CliRunner
 
     from evaluatorq.simulation import cli as sim_cli
@@ -655,13 +804,42 @@ def test_generate_forwards_sim_model(monkeypatch):
     result = CliRunner().invoke(
         sim_cli.app,
         [
-            "generate",
+            "run",
             "--agent-description", "x",
             "--openai-model", "gpt-5.4-mini",
             "--sim-model", "gpt-5.4-mini",
             "--num-personas", "1",
             "--num-scenarios", "1",
             "--no-save",
+        ],
+        env={"OPENAI_API_KEY": "test-key"},
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["sim_model"] == "gpt-5.4-mini"
+
+
+def test_generate_forwards_sim_model(monkeypatch):
+    from typer.testing import CliRunner
+
+    from evaluatorq.simulation import cli as sim_cli
+
+    captured = {}
+
+    async def fake_generate(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr("evaluatorq.simulation.api.generate", fake_generate)
+    monkeypatch.setattr("evaluatorq.simulation.cli._write_datapoints", lambda *a, **k: None)
+    result = CliRunner().invoke(
+        sim_cli.app,
+        [
+            "generate",
+            "--agent-description", "x",
+            "--output", "dp.jsonl",
+            "--sim-model", "gpt-5.4-mini",
+            "--num-personas", "1",
+            "--num-scenarios", "1",
         ],
         env={"OPENAI_API_KEY": "test-key"},
     )
@@ -681,7 +859,7 @@ def test_old_model_flag_rejected(monkeypatch):
 
     result = CliRunner().invoke(
         sim_cli.app,
-        ["generate", "--agent-description", "x", "--model", "gpt-4o"],
+        ["run", "--agent-description", "x", "--model", "gpt-4o"],
     )
     assert result.exit_code != 0
     assert "No such option" in result.output or "Got unexpected" in result.output
