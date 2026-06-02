@@ -12,7 +12,7 @@ from evaluatorq.redteam.backends._errors import (
     extract_status_code,
 )
 from evaluatorq.redteam.backends.base import Backend
-from evaluatorq.simulation.target import OrqResponsesTarget
+from evaluatorq.openresponses.target import OrqResponsesTarget
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI

@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from evaluatorq.contracts import AgentResponse, LLMCallConfig, Message
-from evaluatorq.simulation.target import OrqResponsesTarget
+from evaluatorq.openresponses.target import OrqResponsesTarget
 
 
 def _make_response(text: str) -> MagicMock:

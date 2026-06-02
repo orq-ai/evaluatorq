@@ -53,7 +53,7 @@ if TYPE_CHECKING:
         apply_random_perturbation,
     )
     from evaluatorq.simulation.runner.simulation import SimulationRunner
-    from evaluatorq.simulation.target import OrqResponsesTarget
+    from evaluatorq.openresponses.target import OrqResponsesTarget
     from evaluatorq.simulation.types import (
         CommunicationStyle,
         ConversationStrategy,
@@ -93,7 +93,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
     "from_orq_deployment": ("evaluatorq.simulation.adapters", "from_orq_deployment"),
     "AgentConfig": ("evaluatorq.simulation.agents.base", "AgentConfig"),
     "BaseAgent": ("evaluatorq.simulation.agents.base", "BaseAgent"),
-    "OrqResponsesTarget": ("evaluatorq.simulation.target", "OrqResponsesTarget"),
+    "OrqResponsesTarget": ("evaluatorq.openresponses.target", "OrqResponsesTarget"),
     "JudgeAgent": ("evaluatorq.simulation.agents.judge", "JudgeAgent"),
     "UserSimulatorAgent": (
         "evaluatorq.simulation.agents.user_simulator",

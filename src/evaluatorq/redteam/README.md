@@ -137,7 +137,7 @@ Every attack the orchestrator runs is sent over the wire as:
  "input": [{"role": "user", "content": "<adversarial prompt>"}]}
 ```
 
-The backend reuses `evaluatorq.simulation.target.OrqResponsesTarget`, so
+The backend reuses `evaluatorq.openresponses.target.OrqResponsesTarget`, so
 redteam and simulation share retry behavior, `previous_response_id` threading,
 output parsing, and token-usage extraction.
 

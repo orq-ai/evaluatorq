@@ -13,7 +13,7 @@ import pytest
 from evaluatorq.contracts import AgentResponse
 from evaluatorq.redteam.backends.registry import resolve_backend
 from evaluatorq.redteam.contracts import AgentContext, LLMConfig, TargetConfig
-from evaluatorq.simulation.target import OrqResponsesTarget
+from evaluatorq.openresponses.target import OrqResponsesTarget
 
 
 class TestResolveBackendOpenResponses:

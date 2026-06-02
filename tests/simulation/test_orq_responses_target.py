@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from evaluatorq.contracts import AgentResponse, LLMCallConfig, Message
-from evaluatorq.simulation.target import OrqResponsesTarget
+from evaluatorq.openresponses.target import OrqResponsesTarget
 
 
 
@@ -389,7 +389,7 @@ class TestOrqResponsesTargetTimeout:
         target = OrqResponsesTarget(config, client=client)
 
         with patch(
-            "evaluatorq.simulation.target.asyncio.wait_for", wraps=asyncio.wait_for
+            "evaluatorq.openresponses.target.asyncio.wait_for", wraps=asyncio.wait_for
         ) as mock_wait:
             await target.respond(_make_messages())
 
@@ -475,7 +475,7 @@ class TestOrqResponsesTargetRetry:
 class TestOrqResponsesTargetClose:
     @pytest.mark.asyncio
     async def test_close_closes_owned_client(self, monkeypatch):
-        from evaluatorq.simulation import target as target_mod
+        import evaluatorq.openresponses.target as target_mod
 
         owned_client = MagicMock()
         owned_client.close = AsyncMock()
@@ -501,7 +501,7 @@ class TestOrqResponsesTargetClose:
 
     @pytest.mark.asyncio
     async def test_close_is_idempotent(self, monkeypatch):
-        from evaluatorq.simulation import target as target_mod
+        import evaluatorq.openresponses.target as target_mod
 
         owned_client = MagicMock()
         owned_client.close = AsyncMock()
@@ -518,7 +518,7 @@ class TestOrqResponsesTargetClose:
 
     @pytest.mark.asyncio
     async def test_async_context_manager_closes_owned_client(self, monkeypatch):
-        from evaluatorq.simulation import target as target_mod
+        import evaluatorq.openresponses.target as target_mod
 
         owned_client = MagicMock()
         owned_client.close = AsyncMock()
