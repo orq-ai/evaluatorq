@@ -7,7 +7,7 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, LLMCallConfig, Message
-from evaluatorq.simulation._client import build_simulation_client
+from evaluatorq.openresponses.client import build_simulation_client
 from evaluatorq.simulation.tracing import (
     record_openresponses_request,
     record_openresponses_response,

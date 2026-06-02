@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.contracts import AgentResponse, LLMCallConfig, TextOutputItem, ToolCallOutputItem, TokenUsage
-from evaluatorq.simulation._client import build_simulation_client
+from evaluatorq.openresponses.client import build_simulation_client
 from evaluatorq.simulation.tracing import (
     get_trace_context_headers,
     record_llm_input,
@@ -151,7 +151,7 @@ class BaseAgent(ABC):
     def _build_client(self, api_key: str | None = None) -> AsyncOpenAI:
         """Construct (or reuse) an ``AsyncOpenAI`` client from ``self.config``.
 
-        Delegates to :func:`evaluatorq.simulation._client.build_simulation_client`.
+        Delegates to :func:`evaluatorq.openresponses.client.build_simulation_client`.
 
         Resolution order:
         1. ``self.config.client`` — injected client, used as-is (not owned).

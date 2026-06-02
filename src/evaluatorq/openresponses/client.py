@@ -1,4 +1,4 @@
-"""Shared AsyncOpenAI client construction for simulation components."""
+"""Shared AsyncOpenAI client construction for OpenResponses targets."""
 
 from __future__ import annotations
 

@@ -224,7 +224,7 @@ class SimulationRunner:
 
     def _get_shared_client(self) -> AsyncOpenAI:
         if not self._shared_client:
-            from evaluatorq.simulation._client import build_simulation_client
+            from evaluatorq.openresponses.client import build_simulation_client
             self._shared_client, self._client_owned = build_simulation_client()
         return self._shared_client
 
