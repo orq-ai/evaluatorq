@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
-from openai import APIStatusError, AsyncOpenAI
+from openai import APIStatusError
 from openai.types.chat import ChatCompletionMessageParam
+
+if TYPE_CHECKING:
+    from openai import AsyncOpenAI
 
 from evaluatorq.simulation.tracing import (
     get_trace_context_headers,
@@ -85,18 +87,16 @@ class FirstMessageGenerator:
         api_key: str | None = None,
     ) -> None:
         self._model = model
-        if client is not None:
-            self._client = client
-        else:
-            resolved_key = api_key or os.environ.get("ORQ_API_KEY")
-            if not resolved_key:
-                raise ValueError(
-                    "ORQ_API_KEY environment variable is not set. Set it or pass api_key/client."
-                )
-            self._client = AsyncOpenAI(
-                base_url=f"{os.environ.get('ORQ_BASE_URL', 'https://api.orq.ai')}/v2/router",
-                api_key=resolved_key,
-            )
+        from evaluatorq.openresponses.client import build_simulation_client
+
+        self._client, self._client_owned = build_simulation_client(
+            client, extra_api_key=api_key
+        )
+
+    async def close(self) -> None:
+        """Close the HTTP client (only if this generator built it)."""
+        if self._client_owned:
+            await self._client.close()
 
     async def generate(self, persona: Persona, scenario: Scenario) -> str:
         """Generate a first message for a simulation."""

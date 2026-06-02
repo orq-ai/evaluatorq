@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias
 
 from loguru import logger
@@ -539,6 +540,74 @@ class AgentTarget(ABC):
         return None
 
 
+# ---------------------------------------------------------------------------
+# Reporting
+# ---------------------------------------------------------------------------
+
+
+ReportSectionKind = Literal[
+    # Shared
+    "summary",
+    "token_usage",
+    "individual_results",
+    "agent_context",
+    # Simulation-specific
+    "overview",
+    "failures_first",
+    "failure_mode",
+    "persona_scenario_heatmap",
+    "score_distribution",
+    "turn_quality_timeline",
+    "persona_breakdown",
+    "scenario_breakdown",
+    "judge_verdicts",
+    "turn_metrics",
+    "evaluator_scores",
+    "errors",
+    # Red-team-specific
+    "focus_areas",
+    "vulnerability_breakdown",
+    "category_breakdown",
+    "technique_breakdown",
+    "delivery_breakdown",
+    "error_analysis",
+    "attack_heatmap",
+    "agent_comparison",
+    "agent_disagreements",
+    "framework_breakdown",
+    "turn_scope_breakdown",
+    "turn_depth_analysis",
+    "source_distribution",
+    "severity_definitions",
+    "methodology",
+]
+"""Closed set of known report section kinds across simulation and red-team."""
+
+
+@dataclass(frozen=True)
+class ReportSection:
+    """Renderer-agnostic section of a report.
+
+    Section builders (in ``redteam.reports`` / ``simulation.reports``) emit a
+    list of these; renderers (in ``evaluatorq.common.reports``) consume them and
+    dispatch by ``kind`` to a module-specific render function.
+
+    Frozen so the ``kind`` / ``title`` identity is fixed once built. ``data``
+    is itself mutable — red-team's HTML renderer enriches the summary
+    section's data dict with values derived from the full report object,
+    which would be awkward to thread through the section builders.
+
+    Attributes:
+        kind: Machine-readable section identifier (e.g. ``"summary"``).
+        title: Human-readable section title.
+        data: Free-form dict of section data consumed by renderers.
+    """
+
+    kind: ReportSectionKind
+    title: str
+    data: dict[str, Any] = field(default_factory=dict)
+
+
 __all__ = [
     "DEFAULT_PIPELINE_MODEL",
     "DEFAULT_TARGET_MAX_TOKENS",
@@ -554,6 +623,8 @@ __all__ = [
     "Message",
     "OutputMessage",
     "ReasoningOutputItem",
+    "ReportSection",
+    "ReportSectionKind",
     "StrategyToolCall",
     "TextOutputItem",
     "TokenUsage",

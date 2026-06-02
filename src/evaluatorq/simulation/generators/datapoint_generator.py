@@ -7,11 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from itertools import starmap
 from typing import Any
-
-from openai import AsyncOpenAI
 
 from evaluatorq.simulation.generators.first_message_generator import (
     FirstMessageGenerator,
@@ -51,23 +48,17 @@ class DatapointGenerator:
         self._rate_limit_delay = rate_limit_delay
         self._semaphore = asyncio.Semaphore(max_concurrent_calls)
 
-        resolved_key = os.environ.get("ORQ_API_KEY")
-        if not resolved_key:
-            raise ValueError(
-                "ORQ_API_KEY environment variable is not set. "
-                "Set it before creating a DatapointGenerator."
-            )
-        self._shared_client = AsyncOpenAI(
-            base_url=f"{os.environ.get('ORQ_BASE_URL', 'https://api.orq.ai')}/v2/router",
-            api_key=resolved_key,
-        )
+        from evaluatorq.openresponses.client import build_simulation_client
+
+        self._shared_client, self._client_owned = build_simulation_client(None)
         self._persona_generator = PersonaGenerator(model=model, client=self._shared_client)
         self._scenario_generator = ScenarioGenerator(model=model, client=self._shared_client)
         self._first_message_generator = FirstMessageGenerator(model=model, client=self._shared_client)
 
     async def close(self) -> None:
-        """Close the shared HTTP client."""
-        await self._shared_client.close()
+        """Close the shared HTTP client (only if this generator owns it)."""
+        if self._client_owned:
+            await self._shared_client.close()
 
     async def generate_from_description(
         self,

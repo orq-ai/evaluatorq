@@ -1,24 +1,18 @@
-"""Reporting and result conversion utilities for red teaming."""
+"""Reporting and result conversion utilities for red teaming.
 
-from loguru import logger
+These modules import only first-party code at module load time. Plotly /
+kaleido (used by the HTML chart helpers) are imported lazily inside
+``evaluatorq.common.reports.html_helpers`` and degrade to an empty
+string when absent, so no ``try/except ImportError`` is needed here —
+adding one would only swallow genuine packaging errors (typos, circular
+imports) and turn them into ``AttributeError`` at the call site with no
+traceback.
+"""
 
-try:  # noqa: RUF067
-    from evaluatorq.redteam.reports.export_html import export_html
-except ImportError:
-    logger.debug("HTML export unavailable: missing optional dependency (e.g. jinja2)")
-    export_html = None  # type: ignore[assignment]
+from evaluatorq.redteam.reports.export_html import export_html
+from evaluatorq.redteam.reports.export_md import export_markdown
+from evaluatorq.redteam.reports.sections import build_report_sections
 
-try:  # noqa: RUF067
-    from evaluatorq.redteam.reports.export_md import export_markdown
-except ImportError:
-    logger.debug("Markdown export unavailable: missing optional dependency")
-    export_markdown = None  # type: ignore[assignment]
-
-try:  # noqa: RUF067
-    from evaluatorq.redteam.reports.sections import build_report_sections
-except ImportError:
-    logger.debug("Report sections unavailable: missing optional dependency")
-    build_report_sections = None  # type: ignore[assignment]
 
 __all__ = [
     "build_report_sections",

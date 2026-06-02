@@ -10,33 +10,29 @@ to a tables-only layout.
 
 from __future__ import annotations
 
-import html
 import operator
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from evaluatorq.redteam.reports.sections import ReportSection, build_report_sections
+from evaluatorq.common.reports import COLORS as _COLORS
+from evaluatorq.common.reports import STATUS_COLORS as _STATUS_COLORS_BASE
+from evaluatorq.common.reports import charts_available as _charts_available
+from evaluatorq.common.reports import esc as _esc
+from evaluatorq.common.reports import format_date as _format_date
+from evaluatorq.common.reports import html_table as _html_table
+from evaluatorq.common.reports import load_css as _load_css_common
+from evaluatorq.common.reports import pct as _pct
+from evaluatorq.common.reports import render_donut_chart as _render_donut_chart_common
+from evaluatorq.common.reports import truncate as _truncate
+from evaluatorq.common.reports import try_render_svg as _try_render_svg_chart
+from evaluatorq.contracts import ReportSection
+from evaluatorq.redteam.reports.sections import build_report_sections
 
 if TYPE_CHECKING:
     from evaluatorq.redteam.contracts import RedTeamReport
 
 # ---------------------------------------------------------------------------
-# Brand colors (inline to avoid hard dependency on ui package at import time)
+# Red-team-specific palette and helpers
 # ---------------------------------------------------------------------------
-
-_COLORS = {
-    "orange_300": "#ff8f34",
-    "teal_400": "#025558",
-    "teal_500": "#01483d",
-    "ink_700": "#25232e",
-    "ink_800": "#1a1921",
-    "sand_100": "#f9f8f6",
-    "sand_400": "#e4e2df",
-    "success_400": "#2ebd85",
-    "yellow_400": "#f2b600",
-    "red_400": "#d92d20",
-    "blue_400": "#4fd2ff",
-}
 
 _SEVERITY_COLORS = {
     "critical": _COLORS["red_400"],
@@ -45,96 +41,45 @@ _SEVERITY_COLORS = {
     "low": _COLORS["success_400"],
 }
 
+# Status names mapped to the generic palette (red-team semantics).
 _STATUS_COLORS = {
-    "vulnerable": _COLORS["red_400"],
-    "resistant": _COLORS["success_400"],
-    "error": _COLORS["yellow_400"],
+    "vulnerable": _STATUS_COLORS_BASE["failure"],
+    "resistant": _STATUS_COLORS_BASE["success"],
+    "error": _STATUS_COLORS_BASE["warning"],
 }
 
-# Canonical order for severity labels in charts
+# Canonical order for severity labels in charts.
 _SEVERITY_ORDER = ["critical", "high", "medium", "low"]
-
-# ---------------------------------------------------------------------------
-# CSS (loaded from report.css, with color placeholders interpolated)
-# ---------------------------------------------------------------------------
-
-_CSS_PATH = Path(__file__).with_name("report.css")
-_CSS: str | None = None
 
 
 def _load_css() -> str:
-    global _CSS
-    if _CSS is None:
-        _CSS = _CSS_PATH.read_text(encoding="utf-8") % _COLORS  # pyright: ignore[reportConstantRedefinition]
-    return _CSS
-
-
-# ---------------------------------------------------------------------------
-# Chart rendering helpers
-# ---------------------------------------------------------------------------
-
-
-def _try_render_svg_chart(fig: Any) -> str | None:
-    """Attempt to render a Plotly figure as inline SVG."""
-    try:
-        svg_bytes = fig.to_image(format="svg", engine="kaleido")
-        return svg_bytes.decode("utf-8") if isinstance(svg_bytes, bytes) else svg_bytes
-    except Exception:
-        return None
-
-
-def _charts_available() -> bool:
-    """Check if plotly and kaleido are importable."""
-    try:
-        import kaleido  # noqa: F401
-        import plotly  # noqa: F401
-        return True
-    except ImportError:
-        return False
+    """Red-team CSS = the shared common stylesheet (kept thin for parity with sim)."""
+    return _load_css_common()
 
 
 def _render_donut_chart(summary_data: dict[str, Any]) -> str:
-    """Render a donut chart: resistant vs vulnerable vs errors."""
-    if not _charts_available():
-        return ""
-    import plotly.graph_objects as go
-
+    """Donut: resistant vs vulnerable vs errors for the executive summary."""
     vuln = summary_data.get("vulnerabilities_found", 0)
     total = summary_data.get("total_attacks", 0)
     errors = summary_data.get("total_errors", 0)
     resistant = max(0, total - vuln - errors)
-
     if total == 0:
         return ""
-
-    labels = ["Resistant", "Vulnerable", "Error"]
-    values = [resistant, vuln, errors]
-    colors = [_STATUS_COLORS["resistant"], _STATUS_COLORS["vulnerable"], _STATUS_COLORS["error"]]
-
-    # Remove zero-value segments
-    filtered = [(lbl, v, c) for lbl, v, c in zip(labels, values, colors, strict=False) if v > 0]
-    if not filtered:
-        return ""
-    labels, values, colors = zip(*filtered, strict=False)
-
-    fig = go.Figure(data=[go.Pie(
-        labels=list(labels),
-        values=list(values),
-        hole=0.5,
-        marker=dict(colors=list(colors)),
-        textinfo="label+percent",
-        textfont=dict(size=12),
-    )])
-    fig.update_layout(
-        width=400, height=300,
-        margin=dict(t=30, b=30, l=30, r=30),
-        showlegend=False,
-        title=dict(text="Overall Results", font=dict(size=14)),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
+    return _render_donut_chart_common(
+        labels=["Resistant", "Vulnerable", "Error"],
+        values=[resistant, vuln, errors],
+        colors=[
+            _STATUS_COLORS["resistant"],
+            _STATUS_COLORS["vulnerable"],
+            _STATUS_COLORS["error"],
+        ],
+        title="Overall Results",
     )
-    svg = _try_render_svg_chart(fig)
-    return f'<div class="chart-container">{svg}</div>' if svg else ""
+
+
+# ---------------------------------------------------------------------------
+# Red-team-specific chart renderers
+# ---------------------------------------------------------------------------
 
 
 def _render_severity_bar_chart(by_severity: dict[str, Any]) -> str:
@@ -328,38 +273,6 @@ def _render_vulnerability_bar_chart(rows: list[dict[str, Any]]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Formatting helpers
-# ---------------------------------------------------------------------------
-
-
-def _esc(text: str) -> str:
-    """HTML-escape text."""
-    return html.escape(str(text))
-
-
-def _pct(rate: float) -> str:
-    return f"{rate:.0%}"
-
-
-def _truncate(text: str, max_chars: int = 800) -> str:
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars] + "\n\n[truncated — full text in report JSON]"
-
-
-def _html_table(headers: list[str], rows: list[list[str]]) -> str:
-    parts = ["<table>", "<thead><tr>"]
-    parts.extend(f"<th>{_esc(h)}</th>" for h in headers)
-    parts.append("</tr></thead><tbody>")
-    for row in rows:
-        parts.append("<tr>")
-        parts.extend(f"<td>{cell}</td>" for cell in row)  # cell may contain HTML (badges)
-        parts.append("</tr>")
-    parts.append("</tbody></table>")
-    return "".join(parts)
-
-
-# ---------------------------------------------------------------------------
 # Section renderers
 # ---------------------------------------------------------------------------
 
@@ -369,7 +282,7 @@ def _render_header_html(data: dict[str, Any]) -> str:
     pipeline = _esc(data.get("pipeline", "unknown"))
     created_at = data.get("created_at")
     vulnerability_rate = data.get("vulnerability_rate", 0.0)
-    date_str = created_at.strftime("%Y-%m-%d %H:%M UTC") if created_at else "unknown"
+    date_str = _format_date(created_at)
 
     return (
         f"<h1>Red Team Security Report</h1>\n"
