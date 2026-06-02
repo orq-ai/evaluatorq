@@ -12,7 +12,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from evaluatorq.contracts import AgentResponse, LLMCallConfig, TextOutputItem, ToolCallOutputItem, TokenUsage
+from evaluatorq.common.retry import with_retry
+from evaluatorq.contracts import AgentResponse, LLMCallConfig, TextOutputItem, TokenUsage, ToolCallOutputItem
 from evaluatorq.openresponses.client import build_simulation_client
 from evaluatorq.simulation.tracing import (
     get_trace_context_headers,
@@ -21,7 +22,6 @@ from evaluatorq.simulation.tracing import (
     with_llm_span,
 )
 from evaluatorq.simulation.types import DEFAULT_MODEL, Message
-from evaluatorq.common.retry import with_retry
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI

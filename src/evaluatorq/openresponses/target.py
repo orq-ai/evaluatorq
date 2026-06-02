@@ -6,6 +6,7 @@ import asyncio
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from evaluatorq.common.retry import with_retry
 from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, LLMCallConfig, Message
 from evaluatorq.openresponses.client import build_simulation_client
 from evaluatorq.simulation.tracing import (
@@ -13,7 +14,6 @@ from evaluatorq.simulation.tracing import (
     record_openresponses_response,
     with_llm_span,
 )
-from evaluatorq.common.retry import with_retry
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -191,8 +191,6 @@ class OrqResponsesTarget(AgentTarget):
                 d["name"] = m.name
             result.append(d)
         return result
-
-
 
 
 __all__ = ["OrqResponsesTarget"]
