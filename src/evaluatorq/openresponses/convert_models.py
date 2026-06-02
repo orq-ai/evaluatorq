@@ -97,6 +97,8 @@ class OutputTextContent(BaseModel):
 
 
 class FunctionCall(BaseModel):
+    """OpenResponses wire-format function call (Responses API spec) — distinct from contracts.FunctionCall (internal canonical, chat-completions shape: name/args only)."""
+
     model_config = ConfigDict(frozen=True)
 
     type: Literal["function_call"] = Field(
@@ -189,6 +191,8 @@ class FunctionCallOutput(BaseModel):
 
 
 class Message(BaseModel):
+    """OpenResponses wire-format message (Responses API spec: type/id/status/role) — distinct from contracts.Message (internal canonical, chat-completions shape)."""
+
     type: Annotated[
         Literal["message"],
         Field(description="The type of the message. Always set to `message`."),
@@ -230,6 +234,8 @@ class OutputTokensDetails(BaseModel):
 
 
 class Usage(BaseModel):
+    """OpenResponses wire-format token usage (Responses API spec: input/output/total + detail fields) — distinct from contracts.TokenUsage (internal canonical, carries calls count)."""
+
     input_tokens: Annotated[
         int,
         Field(
