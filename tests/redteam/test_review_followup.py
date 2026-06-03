@@ -135,7 +135,7 @@ class TestSpanMaxTextCharsCacheMemoization:
         # @lru_cache(maxsize=1) is load-bearing: without it every span
         # attribute write would re-os.getenv and re-parse. Verify a runtime
         # env change does NOT take effect without explicit cache_clear().
-        from evaluatorq.redteam.tracing import _default_span_max_text_chars
+        from evaluatorq.common.tracing import _default_span_max_text_chars
 
         _default_span_max_text_chars.cache_clear()
 

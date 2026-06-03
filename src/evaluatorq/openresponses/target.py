@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 from evaluatorq.common.retry import with_retry
 from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, LLMCallConfig, Message
 from evaluatorq.openresponses.client import build_simulation_client
-from evaluatorq.simulation.tracing import (
+from evaluatorq.openresponses.tracing import (
     record_openresponses_request,
     record_openresponses_response,
     with_llm_span,

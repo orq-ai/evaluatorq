@@ -212,16 +212,16 @@ async def test_record_llm_input_truncates_long_content(
 ):
     from evaluatorq.simulation.tracing import record_llm_input, with_llm_span
 
-    long_content = "x" * 5000
+    long_content = "x" * 10000
     async with with_llm_span(model="openai/gpt-4o") as span:
         record_llm_input(span, [{"role": "user", "content": long_content}])
 
     a = _attrs(_find(span_collector, "chat openai/gpt-4o"))
     serialized = a["gen_ai.input.messages"]
     parsed = json.loads(serialized)
-    # Content gets truncated to MAX_CONTENT_LEN (2000) + ellipsis
-    assert len(parsed[0]["content"]) <= 2001
-    assert parsed[0]["content"].endswith("…")
+    # Content gets truncated to EVALUATORQ_SPAN_MAX_TEXT_CHARS (8192 default)
+    assert len(parsed[0]["content"]) <= 8192
+    assert parsed[0]["content"].endswith("... [truncated]")
 
 
 @pytest.mark.asyncio
@@ -334,7 +334,8 @@ async def test_record_llm_response_dict_responses_api_shape(
 async def test_record_openresponses_request_sets_max_tokens(
     span_collector: _CollectingExporter,
 ):
-    from evaluatorq.simulation.tracing import record_openresponses_request, with_llm_span
+    from evaluatorq.openresponses.tracing import record_openresponses_request
+    from evaluatorq.simulation.tracing import with_llm_span
 
     async with with_llm_span(
         model="openai/gpt-4o", operation="responses"

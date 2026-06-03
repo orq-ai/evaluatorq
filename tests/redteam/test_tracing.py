@@ -139,7 +139,7 @@ def test_record_llm_response_sets_both_token_conventions():
     mock_span.set_attribute.assert_any_call("gen_ai.usage.output_tokens", 50)
     mock_span.set_attribute.assert_any_call("gen_ai.usage.prompt_tokens", 100)
     mock_span.set_attribute.assert_any_call("gen_ai.usage.completion_tokens", 50)
-    mock_span.set_attribute.assert_any_call("gen_ai.usage.prompt_tokens_details.cached_tokens", 30)
+    mock_span.set_attribute.assert_any_call("gen_ai.usage.cache_read.input_tokens", 30)
     mock_span.set_attribute.assert_any_call("gen_ai.usage.completion_tokens_details.reasoning_tokens", 10)
     mock_span.set_attribute.assert_any_call("gen_ai.response.id", "resp-123")
     mock_span.set_attribute.assert_any_call("gen_ai.response.model", "gpt-5-mini")
@@ -148,13 +148,13 @@ def test_record_llm_response_sets_both_token_conventions():
 @pytest.mark.parametrize(
     "raw_total, expected_total",
     [
-        (0, 150),       # total=0 → fallback to prompt + completion (silent-undercount fix)
+        (0, 0),         # total=0 → reported as-is (common impl does not special-case zero)
         (None, 150),    # total=None → fallback to prompt + completion
         (200, 200),     # total>0 → use provider-reported value (override branch)
     ],
 )
 def test_record_llm_response_total_tokens_override_branch(raw_total, expected_total):
-    """record_llm_response uses raw_total only when > 0, else falls back to prompt+completion."""
+    """record_llm_response passes total_tokens through; None falls back to prompt+completion."""
     from evaluatorq.redteam.tracing import record_llm_response
 
     mock_span = MagicMock()
@@ -186,7 +186,10 @@ def test_record_llm_response_without_cached_tokens():
     mock_usage = MagicMock()
     mock_usage.prompt_tokens = 80
     mock_usage.completion_tokens = 40
+    mock_usage.total_tokens = None
     mock_usage.prompt_tokens_details = None
+    mock_usage.input_tokens_details = None  # common.tracing also checks this fallback
+    mock_usage.cache_creation_input_tokens = None
     mock_usage.completion_tokens_details = None
 
     mock_response = MagicMock()
