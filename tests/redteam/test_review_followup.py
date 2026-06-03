@@ -124,7 +124,7 @@ class TestTruncateForSpanNegativeArg:
         # truncate_for_span raises ValueError for negative max_chars.
         # _default_span_max_text_chars (env var path) warns-and-returns-None instead;
         # the two codepaths differ by design.
-        from evaluatorq.redteam.tracing import truncate_for_span
+        from evaluatorq.common.tracing import truncate_for_span
 
         with pytest.raises(ValueError, match="non-negative"):
             truncate_for_span("x" * 50, max_chars=-1)

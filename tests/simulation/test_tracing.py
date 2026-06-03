@@ -167,7 +167,8 @@ async def test_llm_span_responses_operation(span_collector: _CollectingExporter)
 async def test_record_token_usage_sets_genai_and_aliases(
     span_collector: _CollectingExporter,
 ):
-    from evaluatorq.simulation.tracing import record_token_usage, with_llm_span
+    from evaluatorq.common.tracing import record_token_usage
+    from evaluatorq.simulation.tracing import with_llm_span
 
     async with with_llm_span(model="openai/gpt-4o") as span:
         record_token_usage(
@@ -188,7 +189,8 @@ async def test_record_token_usage_sets_genai_and_aliases(
 async def test_record_llm_input_serializes_messages(
     span_collector: _CollectingExporter,
 ):
-    from evaluatorq.simulation.tracing import record_llm_input, with_llm_span
+    from evaluatorq.common.tracing import record_llm_input
+    from evaluatorq.simulation.tracing import with_llm_span
 
     async with with_llm_span(model="openai/gpt-4o") as span:
         record_llm_input(
@@ -210,7 +212,8 @@ async def test_record_llm_input_serializes_messages(
 async def test_record_llm_input_truncates_long_content(
     span_collector: _CollectingExporter,
 ):
-    from evaluatorq.simulation.tracing import record_llm_input, with_llm_span
+    from evaluatorq.common.tracing import record_llm_input
+    from evaluatorq.simulation.tracing import with_llm_span
 
     long_content = "x" * 10000
     async with with_llm_span(model="openai/gpt-4o") as span:
@@ -230,7 +233,8 @@ async def test_record_token_usage_preserves_zero_prompt_tokens(
 ):
     """Zero prompt_tokens (e.g. fully-cached request) must not fall back to
     input_tokens. Regression guard for the falsy-or chain bug."""
-    from evaluatorq.simulation.tracing import record_llm_response, with_llm_span
+    from evaluatorq.common.tracing import record_llm_response
+    from evaluatorq.simulation.tracing import with_llm_span
 
     class _Usage:
         prompt_tokens = 0
@@ -260,7 +264,8 @@ async def test_record_llm_response_responses_api_shape(
 ):
     """recordLLMResponse with a Responses API-shaped object: output items
     have content[].text, not flat .text on the item."""
-    from evaluatorq.simulation.tracing import record_llm_response, with_llm_span
+    from evaluatorq.common.tracing import record_llm_response
+    from evaluatorq.simulation.tracing import with_llm_span
 
     class _ContentPart:
         text = "hello world"
@@ -300,7 +305,8 @@ async def test_record_llm_response_responses_api_shape(
 async def test_record_llm_response_dict_responses_api_shape(
     span_collector: _CollectingExporter,
 ):
-    from evaluatorq.simulation.tracing import record_llm_response, with_llm_span
+    from evaluatorq.common.tracing import record_llm_response
+    from evaluatorq.simulation.tracing import with_llm_span
 
     response = {
         "id": "resp_dict",
@@ -358,7 +364,8 @@ async def test_record_openresponses_request_sets_max_tokens(
 async def test_record_llm_response_tool_call_only_chat_output(
     span_collector: _CollectingExporter,
 ):
-    from evaluatorq.simulation.tracing import record_llm_response, with_llm_span
+    from evaluatorq.common.tracing import record_llm_response
+    from evaluatorq.simulation.tracing import with_llm_span
 
     class _Function:
         name = "finish_conversation"
@@ -476,7 +483,8 @@ async def test_record_llm_response_chat_completions(
     span_collector: _CollectingExporter,
 ):
     """recordLLMResponse with a Chat Completions-shaped object."""
-    from evaluatorq.simulation.tracing import record_llm_response, with_llm_span
+    from evaluatorq.common.tracing import record_llm_response
+    from evaluatorq.simulation.tracing import with_llm_span
 
     class _Usage:
         prompt_tokens = 7
@@ -1203,11 +1211,13 @@ async def test_concurrent_runs_share_pipeline_parent(
 
 @pytest.mark.asyncio
 async def test_helpers_noop_when_tracing_disabled():
-    from evaluatorq.simulation.tracing import (
+    from evaluatorq.common.tracing import (
         get_trace_context_headers,
         record_llm_input,
         record_llm_response,
         record_token_usage,
+    )
+    from evaluatorq.simulation.tracing import (
         with_llm_span,
         with_simulation_span,
     )

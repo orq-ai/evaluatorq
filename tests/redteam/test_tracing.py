@@ -46,7 +46,7 @@ async def test_span_records_exception():
 
 def test_set_span_attrs_noop():
     """set_span_attrs(None, ...) is a safe no-op."""
-    from evaluatorq.redteam.tracing import set_span_attrs
+    from evaluatorq.common.tracing import set_span_attrs
 
     # Should not raise when span is None
     set_span_attrs(None, {"key": "value", "number": 42})
@@ -54,7 +54,7 @@ def test_set_span_attrs_noop():
 
 def test_set_span_attrs_with_span():
     """set_span_attrs sets attributes on a real span, skipping None values."""
-    from evaluatorq.redteam.tracing import set_span_attrs
+    from evaluatorq.common.tracing import set_span_attrs
 
     mock_span = MagicMock()
     set_span_attrs(
@@ -73,7 +73,7 @@ def test_set_span_attrs_with_span():
 
 def test_record_token_usage_noop():
     """record_token_usage(None, ...) is a safe no-op."""
-    from evaluatorq.redteam.tracing import record_token_usage
+    from evaluatorq.common.tracing import record_token_usage
 
     # Should not raise when span is None
     record_token_usage(None, prompt_tokens=100, completion_tokens=50, total_tokens=150, calls=1)
@@ -81,7 +81,7 @@ def test_record_token_usage_noop():
 
 def test_record_token_usage_with_span():
     """record_token_usage sets all token attributes on a span (both naming conventions)."""
-    from evaluatorq.redteam.tracing import record_token_usage
+    from evaluatorq.common.tracing import record_token_usage
 
     mock_span = MagicMock()
     record_token_usage(mock_span, prompt_tokens=100, completion_tokens=50, total_tokens=150, calls=2)
@@ -98,7 +98,7 @@ def test_record_token_usage_with_span():
 
 def test_record_token_usage_calls_zero_omits_calls_attribute():
     """When calls=0, gen_ai.usage.calls is NOT set (conditional branch)."""
-    from evaluatorq.redteam.tracing import record_token_usage
+    from evaluatorq.common.tracing import record_token_usage
 
     mock_span = MagicMock()
     record_token_usage(mock_span, prompt_tokens=10, completion_tokens=5, total_tokens=15, calls=0)
@@ -112,7 +112,7 @@ def test_record_token_usage_calls_zero_omits_calls_attribute():
 
 def test_record_llm_response_sets_both_token_conventions():
     """record_llm_response sets both OTel and OpenAI-style token attributes."""
-    from evaluatorq.redteam.tracing import record_llm_response
+    from evaluatorq.common.tracing import record_llm_response
 
     mock_span = MagicMock()
 
@@ -155,7 +155,7 @@ def test_record_llm_response_sets_both_token_conventions():
 )
 def test_record_llm_response_total_tokens_override_branch(raw_total, expected_total):
     """record_llm_response passes total_tokens through; None falls back to prompt+completion."""
-    from evaluatorq.redteam.tracing import record_llm_response
+    from evaluatorq.common.tracing import record_llm_response
 
     mock_span = MagicMock()
     mock_usage = MagicMock()
@@ -179,7 +179,7 @@ def test_record_llm_response_total_tokens_override_branch(raw_total, expected_to
 
 def test_record_llm_response_without_cached_tokens():
     """record_llm_response works when usage has no detailed breakdowns."""
-    from evaluatorq.redteam.tracing import record_llm_response
+    from evaluatorq.common.tracing import record_llm_response
 
     mock_span = MagicMock()
 

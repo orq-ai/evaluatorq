@@ -218,7 +218,8 @@ async def test_redteam_span_kind_is_internal(span_collector: _CollectingExporter
 async def test_record_llm_response_on_real_span(span_collector: _CollectingExporter):
     """record_llm_response sets gen_ai.response.* attributes on real spans."""
     from types import SimpleNamespace
-    from evaluatorq.redteam.tracing import with_llm_span, record_llm_response
+    from evaluatorq.redteam.tracing import with_llm_span
+    from evaluatorq.common.tracing import record_llm_response
 
     mock_response = SimpleNamespace(
         id="resp-abc",
@@ -277,7 +278,8 @@ async def test_nested_redteam_and_llm_spans(span_collector: _CollectingExporter)
 @pytest.mark.asyncio
 async def test_set_span_attrs_on_real_span(span_collector: _CollectingExporter):
     """set_span_attrs works on real spans (not mocks)."""
-    from evaluatorq.redteam.tracing import with_redteam_span, set_span_attrs
+    from evaluatorq.redteam.tracing import with_redteam_span
+    from evaluatorq.common.tracing import set_span_attrs
 
     async with with_redteam_span("orq.redteam.target_call") as span:
         set_span_attrs(span, {
