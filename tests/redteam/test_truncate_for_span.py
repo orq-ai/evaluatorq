@@ -16,8 +16,8 @@ class TestTruncateForSpanExplicitMaxChars:
         from evaluatorq.common.tracing import (
             _DEFAULT_SPAN_MAX_TEXT_CHARS,
             _default_span_max_text_chars,
+            truncate_for_span,
         )
-        from evaluatorq.redteam.tracing import truncate_for_span
 
         monkeypatch.delenv("EVALUATORQ_SPAN_MAX_TEXT_CHARS", raising=False)
         _default_span_max_text_chars.cache_clear()
@@ -29,7 +29,7 @@ class TestTruncateForSpanExplicitMaxChars:
             _default_span_max_text_chars.cache_clear()
 
     def test_max_chars_zero_returns_input_unchanged(self) -> None:
-        from evaluatorq.redteam.tracing import truncate_for_span
+        from evaluatorq.common.tracing import truncate_for_span
 
         text = "x" * 1000
         assert truncate_for_span(text, max_chars=0) == text
@@ -39,7 +39,7 @@ class TestTruncateForSpanExplicitMaxChars:
     ) -> None:
         """max_chars=None falls through to the env-derived default (8192)."""
         from evaluatorq.common.tracing import _default_span_max_text_chars
-        from evaluatorq.redteam.tracing import truncate_for_span
+        from evaluatorq.common.tracing import truncate_for_span
 
         monkeypatch.delenv("EVALUATORQ_SPAN_MAX_TEXT_CHARS", raising=False)
         _default_span_max_text_chars.cache_clear()
@@ -51,21 +51,21 @@ class TestTruncateForSpanExplicitMaxChars:
 
     def test_short_input_unchanged(self) -> None:
         """Input shorter than max_chars is returned unchanged."""
-        from evaluatorq.redteam.tracing import truncate_for_span
+        from evaluatorq.common.tracing import truncate_for_span
 
         text = "hello"
         assert truncate_for_span(text, max_chars=100) == text
 
     def test_exact_length_input_unchanged(self) -> None:
         """Input exactly max_chars long is returned unchanged."""
-        from evaluatorq.redteam.tracing import truncate_for_span
+        from evaluatorq.common.tracing import truncate_for_span
 
         text = "x" * 50
         assert truncate_for_span(text, max_chars=50) == text
 
     def test_long_input_truncated_to_max_chars(self) -> None:
         """Output is exactly max_chars long when input exceeds max_chars."""
-        from evaluatorq.redteam.tracing import truncate_for_span
+        from evaluatorq.common.tracing import truncate_for_span
 
         text = "x" * 200
         result = truncate_for_span(text, max_chars=100)
@@ -74,7 +74,7 @@ class TestTruncateForSpanExplicitMaxChars:
     def test_long_input_ends_with_marker(self) -> None:
         """Truncated output ends with '... [truncated]' marker."""
         from evaluatorq.common.tracing import _TRUNCATION_MARKER
-        from evaluatorq.redteam.tracing import truncate_for_span
+        from evaluatorq.common.tracing import truncate_for_span
 
         text = "x" * 200
         result = truncate_for_span(text, max_chars=100)
@@ -82,7 +82,7 @@ class TestTruncateForSpanExplicitMaxChars:
 
     def test_output_never_exceeds_max_chars(self) -> None:
         """Output length is always <= max_chars."""
-        from evaluatorq.redteam.tracing import truncate_for_span
+        from evaluatorq.common.tracing import truncate_for_span
 
         for max_chars in [1, 5, 15, 16, 50, 100]:
             text = "a" * (max_chars * 2)
@@ -92,7 +92,7 @@ class TestTruncateForSpanExplicitMaxChars:
     def test_degenerate_max_chars_at_or_below_marker_length(self) -> None:
         """When max_chars <= len(marker), return marker truncated to max_chars so truncation is signalled."""
         from evaluatorq.common.tracing import _TRUNCATION_MARKER
-        from evaluatorq.redteam.tracing import truncate_for_span
+        from evaluatorq.common.tracing import truncate_for_span
 
         marker_len = len(_TRUNCATION_MARKER)
         text = "x" * 100
@@ -110,7 +110,7 @@ class TestTruncateForSpanExplicitMaxChars:
     def test_degenerate_max_chars_one_returns_first_marker_char(self) -> None:
         """With max_chars=1, return the first character of the truncation marker."""
         from evaluatorq.common.tracing import _TRUNCATION_MARKER
-        from evaluatorq.redteam.tracing import truncate_for_span
+        from evaluatorq.common.tracing import truncate_for_span
 
         text = "x" * 100
         result = truncate_for_span(text, max_chars=1)
@@ -118,20 +118,20 @@ class TestTruncateForSpanExplicitMaxChars:
         assert len(result) == 1
 
     def test_negative_max_chars_raises_value_error(self) -> None:
-        from evaluatorq.redteam.tracing import truncate_for_span
+        from evaluatorq.common.tracing import truncate_for_span
 
         with pytest.raises(ValueError, match="non-negative"):
             truncate_for_span("hello", max_chars=-1)
 
     def test_large_negative_max_chars_raises_value_error(self) -> None:
-        from evaluatorq.redteam.tracing import truncate_for_span
+        from evaluatorq.common.tracing import truncate_for_span
 
         with pytest.raises(ValueError):
             truncate_for_span("hello", max_chars=-999)
 
     def test_non_string_input_coerced_via_str(self) -> None:
         """Non-string input is coerced via str() before truncation."""
-        from evaluatorq.redteam.tracing import truncate_for_span
+        from evaluatorq.common.tracing import truncate_for_span
 
         result = truncate_for_span(123, max_chars=10)
         assert result == "123"
@@ -139,7 +139,7 @@ class TestTruncateForSpanExplicitMaxChars:
     def test_non_string_large_coerced_and_truncated(self) -> None:
         """Non-string values that stringify longer than max_chars are truncated."""
         from evaluatorq.common.tracing import _TRUNCATION_MARKER
-        from evaluatorq.redteam.tracing import truncate_for_span
+        from evaluatorq.common.tracing import truncate_for_span
 
         long_list = list(range(1000))
         result = truncate_for_span(long_list, max_chars=50)
@@ -153,7 +153,7 @@ class TestTruncateForSpanEnvOverride:
     ) -> None:
         """EVALUATORQ_SPAN_MAX_TEXT_CHARS env var caps output length."""
         from evaluatorq.common.tracing import _TRUNCATION_MARKER, _default_span_max_text_chars
-        from evaluatorq.redteam.tracing import truncate_for_span
+        from evaluatorq.common.tracing import truncate_for_span
 
         monkeypatch.setenv("EVALUATORQ_SPAN_MAX_TEXT_CHARS", "20")
         _default_span_max_text_chars.cache_clear()
@@ -169,7 +169,7 @@ class TestTruncateForSpanEnvOverride:
     ) -> None:
         """EVALUATORQ_SPAN_MAX_TEXT_CHARS=0 means unlimited."""
         from evaluatorq.common.tracing import _default_span_max_text_chars
-        from evaluatorq.redteam.tracing import truncate_for_span
+        from evaluatorq.common.tracing import truncate_for_span
 
         monkeypatch.setenv("EVALUATORQ_SPAN_MAX_TEXT_CHARS", "0")
         _default_span_max_text_chars.cache_clear()
@@ -251,7 +251,7 @@ class TestTruncateForSpanEnvOverride:
     ) -> None:
         """Explicit max_chars parameter overrides env var."""
         from evaluatorq.common.tracing import _default_span_max_text_chars
-        from evaluatorq.redteam.tracing import truncate_for_span
+        from evaluatorq.common.tracing import truncate_for_span
 
         monkeypatch.setenv("EVALUATORQ_SPAN_MAX_TEXT_CHARS", "10")
         _default_span_max_text_chars.cache_clear()
