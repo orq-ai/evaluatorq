@@ -2206,9 +2206,9 @@ async def _run_static(
                 ctx = await static_backend.resolve_context(value)
                 agent_contexts[value] = ctx
             except Exception:
-                logger.debug(f'Could not retrieve agent context for {value} — skipping')
+                logger.warning(f'Could not retrieve agent context for {value!r} — proceeding without it')
     except Exception:
-        logger.debug('Could not resolve backend for agent context retrieval — skipping')
+        logger.warning('Could not resolve backend for agent context retrieval — proceeding without context')
 
     # Pull agent context from AgentTarget objects that expose it.
     for at in resolved_agent_targets:
@@ -2219,7 +2219,7 @@ async def _run_static(
         try:
             agent_contexts[label] = await cast('Any', provider)()
         except Exception:
-            logger.debug(f'Could not retrieve agent context for {label} — skipping')
+            logger.warning(f'Could not retrieve agent context for {label!r} — proceeding without it')
 
     all_job_reports = list(per_job_reports.values())
     if not all_job_reports:

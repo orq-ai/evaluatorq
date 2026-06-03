@@ -249,7 +249,8 @@ def redteam_sample_from_openresponses(
     openresponses_input: list[dict[str, Any]],
 ) -> RedTeamSample:
     """Build a RedTeamSample from OpenResponses input items."""
-    from evaluatorq.redteam.contracts import Message, RedTeamSample
+    from evaluatorq.contracts import Message
+    from evaluatorq.redteam.contracts import RedTeamSample
 
     messages_data = messages_from_openresponses_input(openresponses_input)
     if not messages_data:

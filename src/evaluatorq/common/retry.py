@@ -34,8 +34,8 @@ def _is_retryable_status(
 ) -> bool:
     if status is None:
         return False
-    if retry_statuses is not None:
-        return status in retry_statuses
+    if status in (retry_statuses or set()):
+        return True
     return status == 429 or status >= 500
 
 

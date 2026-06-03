@@ -221,50 +221,59 @@ async def generate_and_simulate(
                 'orq.simulation.parallelism': parallelism,
             },
         ) as pipeline_span:
-            gen_personas, gen_scenarios = await _generate_personas_scenarios(
-                agent_description=agent_description,
-                num_personas=num_personas,
-                num_scenarios=num_scenarios,
-                model=sim_model,
-                generation_client=generation_client,
-            )
+            # Build one shared client for all generation steps so the three
+            # sub-functions don't each construct their own AsyncOpenAI pool.
+            # Mirrors the pattern used in generate().
+            from evaluatorq.openresponses.client import build_simulation_client
+            gen_client, gen_owned = build_simulation_client(generation_client)
+            try:
+                gen_personas, gen_scenarios = await _generate_personas_scenarios(
+                    agent_description=agent_description,
+                    num_personas=num_personas,
+                    num_scenarios=num_scenarios,
+                    model=sim_model,
+                    generation_client=gen_client,
+                )
 
-            datapoints = await _resolve_or_generate_datapoints(
-                caller="generate_and_simulate",
-                datapoints=None,
-                personas=gen_personas,
-                scenarios=gen_scenarios,
-                dataset_id=None,
-                model=sim_model,
-                generation_client=generation_client,
-            )
-            if emit_datapoints is not None:
-                emit_datapoints(datapoints)
+                datapoints = await _resolve_or_generate_datapoints(
+                    caller="generate_and_simulate",
+                    datapoints=None,
+                    personas=gen_personas,
+                    scenarios=gen_scenarios,
+                    dataset_id=None,
+                    model=sim_model,
+                    generation_client=gen_client,
+                )
+                if emit_datapoints is not None:
+                    emit_datapoints(datapoints)
 
-            return await _simulate_core(
-                caller='generate_and_simulate',
-                evaluation_name=evaluation_name,
-                agent_key=agent_key,
-                target_callback=target_callback,
-                target=target,
-                personas=None,
-                scenarios=None,
-                datapoints=datapoints,
-                dataset_id=None,
-                max_turns=max_turns,
-                model=sim_model,
-                evaluator_names=evaluator_names,
-                parallelism=parallelism,
-                user_simulator=user_simulator,
-                judge=judge,
-                generation_client=generation_client,
-                upload_results=upload_results,
-                evaluation_description=evaluation_description,
-                path=path,
-                exit_on_failure=exit_on_failure,
-                pipeline_span=pipeline_span,
-                hooks=hooks,
-            )
+                return await _simulate_core(
+                    caller='generate_and_simulate',
+                    evaluation_name=evaluation_name,
+                    agent_key=agent_key,
+                    target_callback=target_callback,
+                    target=target,
+                    personas=None,
+                    scenarios=None,
+                    datapoints=datapoints,
+                    dataset_id=None,
+                    max_turns=max_turns,
+                    model=sim_model,
+                    evaluator_names=evaluator_names,
+                    parallelism=parallelism,
+                    user_simulator=user_simulator,
+                    judge=judge,
+                    generation_client=gen_client,
+                    upload_results=upload_results,
+                    evaluation_description=evaluation_description,
+                    path=path,
+                    exit_on_failure=exit_on_failure,
+                    pipeline_span=pipeline_span,
+                    hooks=hooks,
+                )
+            finally:
+                if gen_owned:
+                    await gen_client.close()
     finally:
         await flush_tracing()
 
