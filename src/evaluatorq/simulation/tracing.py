@@ -21,35 +21,13 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.common.tracing import (
-	AttrMap,
-	AttrValue,
-	get_trace_context_headers,
-	record_llm_input,
-	record_llm_output,
-	record_llm_response,
-	record_token_usage,
-	set_span_attrs,
-)
+from evaluatorq.common.tracing import AttrMap, AttrValue
 from evaluatorq.tracing.setup import get_tracer
 
 if TYPE_CHECKING:
 	from collections.abc import AsyncGenerator
 
 	from opentelemetry.trace import Span
-
-__all__ = [
-	"AttrMap",
-	"AttrValue",
-	"get_trace_context_headers",
-	"record_llm_input",
-	"record_llm_output",
-	"record_llm_response",
-	"record_token_usage",
-	"set_span_attrs",
-	"with_llm_span",
-	"with_simulation_span",
-]
 
 _otel_import_warned = False
 

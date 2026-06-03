@@ -37,27 +37,13 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.common.tracing import (
-	record_llm_response,
-	record_token_usage,
-	set_span_attrs,
-	truncate_for_span,
-)
+from evaluatorq.common.tracing import truncate_for_span
 from evaluatorq.tracing.setup import get_tracer
 
 if TYPE_CHECKING:
 	from collections.abc import AsyncGenerator
 
 	from opentelemetry.trace import Span
-
-__all__ = [
-	"record_llm_response",
-	"record_token_usage",
-	"set_span_attrs",
-	"truncate_for_span",
-	"with_llm_span",
-	"with_redteam_span",
-]
 
 
 def _derive_provider(model: str) -> str:
