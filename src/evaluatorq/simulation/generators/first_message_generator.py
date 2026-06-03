@@ -12,12 +12,8 @@ from openai.types.chat import ChatCompletionMessageParam
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
-from evaluatorq.simulation.tracing import (
-    get_trace_context_headers,
-    record_llm_input,
-    record_llm_response,
-    with_llm_span,
-)
+from evaluatorq.common.tracing import get_trace_context_headers, record_llm_input, record_llm_response
+from evaluatorq.simulation.tracing import with_llm_span
 from evaluatorq.simulation.types import DEFAULT_MODEL, Persona, Scenario
 from evaluatorq.simulation.utils.prompt_builders import (
     build_persona_system_prompt,

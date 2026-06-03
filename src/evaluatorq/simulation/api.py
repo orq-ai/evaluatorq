@@ -418,7 +418,7 @@ async def _simulate_core(
     from evaluatorq.common.async_utils import await_maybe
     from evaluatorq.simulation.exceptions import SimulationCancelledError
     from evaluatorq.simulation.hooks import DefaultHooks, SimulationRunMeta
-    from evaluatorq.simulation.tracing import set_span_attrs
+    from evaluatorq.common.tracing import set_span_attrs
 
     target_callback_resolved, target_agent = _resolve_target(target, target_callback, agent_key)
 
@@ -804,7 +804,7 @@ async def _simulate_via_evaluatorq(
 
     from evaluatorq.evaluatorq import evaluatorq
     from evaluatorq.simulation.evaluators import get_evaluator
-    from evaluatorq.simulation.tracing import record_token_usage, set_span_attrs
+    from evaluatorq.common.tracing import record_token_usage, set_span_attrs
     from evaluatorq.types import DataPoint
 
     resolved_evaluator_names = (
