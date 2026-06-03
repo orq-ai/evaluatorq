@@ -19,7 +19,8 @@ from evaluatorq.redteam.adaptive.strategy_registry import (
     select_applicable_strategies_for_vulnerability,
 )
 from evaluatorq.redteam.contracts import PIPELINE_CONFIG, LLMConfig, TurnType, Vulnerability
-from evaluatorq.redteam.tracing import set_span_attrs, with_redteam_span
+from evaluatorq.common.tracing import set_span_attrs
+from evaluatorq.redteam.tracing import with_redteam_span
 from evaluatorq.redteam.vulnerability_registry import resolve_category
 
 if TYPE_CHECKING:

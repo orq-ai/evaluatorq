@@ -60,7 +60,8 @@ from evaluatorq.redteam.hooks import ConfirmPayload, DefaultHooks, PipelineHooks
 from evaluatorq.redteam.reports.recommendations import generate_focus_area_recommendations
 from evaluatorq.redteam.runtime.jobs import _build_messages, create_model_job
 from evaluatorq.redteam.runtime.orq_agent_job import _sanitize_job_name
-from evaluatorq.redteam.tracing import set_span_attrs, with_redteam_span
+from evaluatorq.common.tracing import set_span_attrs
+from evaluatorq.redteam.tracing import with_redteam_span
 from evaluatorq.redteam.vulnerability_registry import get_primary_category, resolve_vulnerabilities
 from evaluatorq.send_results import send_results_to_orq
 from evaluatorq.tracing import capture_parent_context, init_tracing_if_needed

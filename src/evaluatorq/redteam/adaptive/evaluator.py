@@ -21,7 +21,8 @@ from evaluatorq.redteam.contracts import (
     Vulnerability,
 )
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category, get_evaluator_for_vulnerability
-from evaluatorq.redteam.tracing import record_llm_response, with_llm_span
+from evaluatorq.common.tracing import record_llm_response
+from evaluatorq.redteam.tracing import with_llm_span
 from evaluatorq.redteam.vulnerability_registry import resolve_category_safe
 
 if TYPE_CHECKING:
