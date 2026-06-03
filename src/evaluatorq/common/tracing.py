@@ -284,12 +284,14 @@ def record_llm_response(
 		if details is None:
 			details = _field(usage, "input_tokens_details")
 		cache_read = _field(details, "cached_tokens") if details else None
+		cache_creation = _field(usage, "cache_creation_input_tokens")
 		record_token_usage(
 			span,
 			prompt_tokens=prompt,
 			completion_tokens=completion,
 			total_tokens=total,
 			cache_read_input_tokens=cache_read,
+			cache_creation_input_tokens=cache_creation,
 		)
 		completion_details = _field(usage, "completion_tokens_details")
 		if completion_details is not None:
