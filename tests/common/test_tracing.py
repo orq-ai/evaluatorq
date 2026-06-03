@@ -454,3 +454,66 @@ async def test_get_trace_context_headers_returns_dict() -> None:
     from evaluatorq.common.tracing import get_trace_context_headers
     headers = await get_trace_context_headers()
     assert isinstance(headers, dict)
+
+
+# ---------------------------------------------------------------------------
+# record_token_usage — cache_creation_input_tokens
+# ---------------------------------------------------------------------------
+
+def test_record_token_usage_cache_creation_attr() -> None:
+	"""cache_creation_input_tokens attr (from simulation impl) survives in unified version."""
+	from unittest.mock import MagicMock
+	from evaluatorq.common.tracing import record_token_usage
+
+	span = MagicMock()
+	record_token_usage(span, prompt_tokens=5, cache_creation_input_tokens=7)
+
+	set_attrs: dict[str, Any] = {
+		call.args[0]: call.args[1]
+		for call in span.set_attribute.call_args_list
+	}
+	assert set_attrs["gen_ai.usage.cache_creation.input_tokens"] == 7
+
+
+# ---------------------------------------------------------------------------
+# record_llm_response — tool_calls output
+# ---------------------------------------------------------------------------
+
+def test_record_llm_response_tool_call_output() -> None:
+	"""Tool-call-only Chat Completions output is serialized into gen_ai.output.messages."""
+	from unittest.mock import MagicMock
+	from evaluatorq.common.tracing import record_llm_response
+
+	class _Function:
+		name = "search"
+		arguments = '{"query": "test"}'
+
+	class _ToolCall:
+		function = _Function()
+
+	class _Msg:
+		role = "assistant"
+		content = None
+		tool_calls = [_ToolCall()]
+
+	class _Choice:
+		finish_reason = "tool_calls"
+		message = _Msg()
+
+	class _Resp:
+		id = "r"
+		model = "m"
+		usage = None
+		choices = [_Choice()]
+
+	span = MagicMock()
+	record_llm_response(span, _Resp())
+	set_attrs: dict[str, Any] = {
+		call.args[0]: call.args[1]
+		for call in span.set_attribute.call_args_list
+	}
+	assert "gen_ai.output.messages" in set_attrs
+	parsed = json.loads(set_attrs["gen_ai.output.messages"])
+	assert parsed[0]["role"] == "assistant"
+	payload = json.loads(parsed[0]["content"])
+	assert payload["tool_calls"] == [{"name": "search", "arguments": '{"query": "test"}'}]
