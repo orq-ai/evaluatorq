@@ -446,7 +446,8 @@ async def test_record_llm_response_responses_api_finish_reason(
 ):
     """gen_ai.response.finish_reasons must be set from response.status when
     the response has no .choices (Responses API shape)."""
-    from evaluatorq.simulation.tracing import record_llm_response, with_llm_span
+    from evaluatorq.common.tracing import record_llm_response
+    from evaluatorq.simulation.tracing import with_llm_span
 
     class _Resp:
         id = "resp_x"
