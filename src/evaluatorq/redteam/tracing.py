@@ -148,6 +148,13 @@ async def with_llm_span(  # noqa: RUF029
 		genai_attrs["input"] = serialized
 	if attributes:
 		genai_attrs.update(attributes)
+	# Dual-emit the domain-neutral purpose key (parity with simulation/openresponses
+	# with_llm_span) so cross-domain `orq.llm.purpose` queries include redteam spans.
+	# Redteam callers pass purpose via the open `attributes` dict as
+	# `orq.redteam.llm_purpose`; mirror it onto `orq.llm.purpose` when not already set.
+	redteam_purpose = genai_attrs.get("orq.redteam.llm_purpose")
+	if redteam_purpose is not None and "orq.llm.purpose" not in genai_attrs:
+		genai_attrs["orq.llm.purpose"] = redteam_purpose
 
 	with tracer.start_as_current_span(
 		span_name,

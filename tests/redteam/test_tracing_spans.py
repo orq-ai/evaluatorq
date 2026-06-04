@@ -184,6 +184,9 @@ async def test_llm_span_with_all_genai_attrs(span_collector: _CollectingExporter
     assert attrs["gen_ai.request.temperature"] == 0.7
     assert attrs["gen_ai.request.max_tokens"] == 500
     assert attrs["orq.redteam.llm_purpose"] == "adversarial"
+    # Domain-neutral key is mirrored from orq.redteam.llm_purpose (parity with
+    # simulation/openresponses with_llm_span) for cross-domain queries.
+    assert attrs["orq.llm.purpose"] == "adversarial"
 
     # Verify input messages are JSON-serialized
     input_msgs = json.loads(attrs["gen_ai.input.messages"])
