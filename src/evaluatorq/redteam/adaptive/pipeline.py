@@ -48,7 +48,8 @@ from evaluatorq.redteam.contracts import (
     TurnType,
     Vulnerability,
 )
-from evaluatorq.redteam.tracing import set_span_attrs, truncate_for_span, with_redteam_span
+from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
+from evaluatorq.redteam.tracing import with_redteam_span
 from evaluatorq.redteam.vulnerability_registry import (
     get_primary_category,
     resolve_category_safe,

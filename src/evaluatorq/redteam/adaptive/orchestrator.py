@@ -34,13 +34,8 @@ from evaluatorq.redteam.contracts import (
     classify_error_type,
     turns_to_messages,
 )
-from evaluatorq.redteam.tracing import (
-    record_llm_response,
-    set_span_attrs,
-    truncate_for_span,
-    with_llm_span,
-    with_redteam_span,
-)
+from evaluatorq.common.tracing import record_llm_response, set_span_attrs, truncate_for_span
+from evaluatorq.redteam.tracing import with_llm_span, with_redteam_span
 from evaluatorq.redteam.utils import safe_substitute
 
 if TYPE_CHECKING:

@@ -67,6 +67,7 @@ class LLMCallConfig(BaseModel):
 # match OpenResponses wire format, making downstream conversion to
 # ResponseResource straightforward.
 
+from evaluatorq.common.fields import get_field as _gf
 from evaluatorq.openresponses.convert_models import (
     FunctionCall as ToolCallOutputItem,
 )
@@ -354,8 +355,6 @@ class AgentResponse(BaseModel):
         this is a pure parse; per-call-site accounting (``calls=1`` / ``+1``) is
         applied by callers to the returned object's ``usage``.
         """
-        from evaluatorq.common.fields import get_field as _gf
-
         items: list[OutputMessage] = []
         for item in _gf(response, "output") or []:
             item_type = _gf(item, "type")

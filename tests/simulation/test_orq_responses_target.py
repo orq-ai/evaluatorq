@@ -300,6 +300,18 @@ class TestOrqResponsesTargetNew:
         target = OrqResponsesTarget(LLMCallConfig(model="gpt-4o"), tools=tools, client=client)
         assert target.new().tools == target.tools
 
+    def test_new_preserves_retry_settings(self):
+        client = _make_client()
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o"),
+            client=client,
+            retry_attempts=7,
+            retry_statuses={503, 504},
+        )
+        fresh = target.new()
+        assert fresh.retry_attempts == 7
+        assert fresh.retry_statuses == {503, 504}
+
     def test_new_does_not_share_self_owned_client(self, monkeypatch):
         monkeypatch.setenv("ORQ_API_KEY", "orq-test-key")
 

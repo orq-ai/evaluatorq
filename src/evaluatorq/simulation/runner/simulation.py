@@ -14,13 +14,8 @@ from evaluatorq.simulation.agents.user_simulator import (
     UserSimulatorAgent,
     UserSimulatorAgentConfig,
 )
-from evaluatorq.simulation.tracing import (
-    record_llm_input,
-    record_llm_output,
-    record_token_usage,
-    set_span_attrs,
-    with_simulation_span,
-)
+from evaluatorq.common.tracing import record_llm_input, record_llm_output, record_token_usage, set_span_attrs
+from evaluatorq.simulation.tracing import with_simulation_span
 from evaluatorq.simulation.types import (
     DEFAULT_MODEL,
     Datapoint,

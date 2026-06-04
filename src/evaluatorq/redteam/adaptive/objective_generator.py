@@ -27,7 +27,8 @@ from evaluatorq.redteam.contracts import (
     TurnType,
     Vulnerability,
 )
-from evaluatorq.redteam.tracing import record_llm_response, with_llm_span
+from evaluatorq.common.tracing import record_llm_response
+from evaluatorq.redteam.tracing import with_llm_span
 from evaluatorq.redteam.utils import safe_substitute
 from evaluatorq.redteam.vulnerability_registry import (
     VULNERABILITY_DEFS,

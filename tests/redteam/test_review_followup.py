@@ -4,7 +4,7 @@ Groups:
 - SendResult equality and metadata field propagation
 - TokenUsage __radd__ NotImplemented fallthrough, ge=0 validation,
   from_completion zero-total fallback
-- truncate_for_span negative-arg warn-and-return path
+- truncate_for_span negative-arg capture-all path
 - _default_span_max_text_chars LRU memoization (no re-read without cache_clear)
 - OpenAI backend response_id / finish_reason / model propagation
 - Vercel _parse_data_stream all-zeros usage guard
@@ -27,28 +27,28 @@ from evaluatorq.redteam.contracts import SendResult, TokenUsage
 # ---------------------------------------------------------------------------
 class TestSendResultEquality:
     def test_equal_when_fields_match(self) -> None:
-        a = SendResult(text="hi", usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, calls=1))
-        b = SendResult(text="hi", usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, calls=1))
+        a = SendResult(text='hi', usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, calls=1))
+        b = SendResult(text='hi', usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, calls=1))
         assert a == b
 
     def test_not_equal_when_text_differs(self) -> None:
-        assert SendResult(text="a") != SendResult(text="b")
+        assert SendResult(text='a') != SendResult(text='b')
 
     def test_not_equal_when_usage_differs(self) -> None:
-        a = SendResult(text="x", usage=TokenUsage(prompt_tokens=1))
-        b = SendResult(text="x", usage=TokenUsage(prompt_tokens=2))
+        a = SendResult(text='x', usage=TokenUsage(prompt_tokens=1))
+        b = SendResult(text='x', usage=TokenUsage(prompt_tokens=2))
         assert a != b
 
     def test_metadata_fields_round_trip(self) -> None:
         result = SendResult(
-            text="ok",
-            model="gpt-4o",
-            response_id="resp-123",
-            finish_reason="stop",
+            text='ok',
+            model='gpt-4o',
+            response_id='resp-123',
+            finish_reason='stop',
         )
-        assert result.model == "gpt-4o"
-        assert result.response_id == "resp-123"
-        assert result.finish_reason == "stop"
+        assert result.model == 'gpt-4o'
+        assert result.response_id == 'resp-123'
+        assert result.finish_reason == 'stop'
 
 
 # ---------------------------------------------------------------------------
@@ -61,7 +61,7 @@ class TestTokenUsageArithmeticEdges:
         # NotImplemented so Python can fall back to the left operand's
         # __add__ (and ultimately TypeError) instead of silently producing
         # a misleading result.
-        assert usage.__radd__("not a number") is NotImplemented  # pyright: ignore[reportArgumentType]
+        assert usage.__radd__('not a number') is NotImplemented  # pyright: ignore[reportArgumentType]
 
     def test_radd_returns_notimplemented_for_nonzero_int(self) -> None:
         usage = TokenUsage(prompt_tokens=1)
@@ -72,8 +72,8 @@ class TestTokenUsageArithmeticEdges:
 
 class TestTokenUsageValidation:
     @pytest.mark.parametrize(
-        "field",
-        ["prompt_tokens", "completion_tokens", "total_tokens", "calls"],
+        'field',
+        ['prompt_tokens', 'completion_tokens', 'total_tokens', 'calls'],
     )
     def test_negative_values_rejected(self, field: str) -> None:
         # ge=0 invariant: a buggy provider returning negative counts must be
@@ -88,12 +88,12 @@ class TestTokenUsageFromCompletion:
         # (e.g. some providers return 0 instead of None when omitted).
         # Mirror the > 0 guard used by other integrations and fall back
         # to prompt+completion rather than propagating the zero.
-        usage_obj = MagicMock(spec=["prompt_tokens", "completion_tokens", "total_tokens"])
+        usage_obj = MagicMock(spec=['prompt_tokens', 'completion_tokens', 'total_tokens'])
         usage_obj.prompt_tokens = 10
         usage_obj.completion_tokens = 5
         usage_obj.total_tokens = 0
 
-        completion = MagicMock(spec=["usage"])
+        completion = MagicMock(spec=['usage'])
         completion.usage = usage_obj
 
         result = TokenUsage.from_completion(completion)
@@ -103,12 +103,12 @@ class TestTokenUsageFromCompletion:
     def test_provider_total_preserved_when_positive(self) -> None:
         # Provider-reported total > 0 wins, even when it doesn't equal
         # prompt+completion (e.g. cached/reasoning tokens not broken out).
-        usage_obj = MagicMock(spec=["prompt_tokens", "completion_tokens", "total_tokens"])
+        usage_obj = MagicMock(spec=['prompt_tokens', 'completion_tokens', 'total_tokens'])
         usage_obj.prompt_tokens = 10
         usage_obj.completion_tokens = 5
         usage_obj.total_tokens = 42
 
-        completion = MagicMock(spec=["usage"])
+        completion = MagicMock(spec=['usage'])
         completion.usage = usage_obj
 
         result = TokenUsage.from_completion(completion)
@@ -120,14 +120,14 @@ class TestTokenUsageFromCompletion:
 # truncate_for_span + _default_span_max_text_chars
 # ---------------------------------------------------------------------------
 class TestTruncateForSpanNegativeArg:
-    def test_negative_max_chars_raises(self) -> None:
-        # truncate_for_span raises ValueError for negative max_chars.
-        # _default_span_max_text_chars (env var path) warns-and-returns-None instead;
-        # the two codepaths differ by design.
-        from evaluatorq.redteam.tracing import truncate_for_span
+    def test_negative_max_chars_captures_all(self) -> None:
+        # Negative max_chars (e.g. -1) means capture-all — input returned
+        # unchanged, no raise. Matches the env var path where -1 disables
+        # truncation.
+        from evaluatorq.common.tracing import truncate_for_span
 
-        with pytest.raises(ValueError, match="non-negative"):
-            truncate_for_span("x" * 50, max_chars=-1)
+        text = 'x' * 50
+        assert truncate_for_span(text, max_chars=-1) == text
 
 
 class TestSpanMaxTextCharsCacheMemoization:
@@ -135,16 +135,16 @@ class TestSpanMaxTextCharsCacheMemoization:
         # @lru_cache(maxsize=1) is load-bearing: without it every span
         # attribute write would re-os.getenv and re-parse. Verify a runtime
         # env change does NOT take effect without explicit cache_clear().
-        from evaluatorq.redteam.tracing import _default_span_max_text_chars
+        from evaluatorq.common.tracing import _default_span_max_text_chars
 
         _default_span_max_text_chars.cache_clear()
 
-        monkeypatch.setenv("EVALUATORQ_SPAN_MAX_TEXT_CHARS", "100")
+        monkeypatch.setenv('EVALUATORQ_SPAN_MAX_TEXT_CHARS', '100')
         first = _default_span_max_text_chars()
         assert first == 100
 
         # Change the env without clearing — cached value must stick.
-        monkeypatch.setenv("EVALUATORQ_SPAN_MAX_TEXT_CHARS", "999")
+        monkeypatch.setenv('EVALUATORQ_SPAN_MAX_TEXT_CHARS', '999')
         second = _default_span_max_text_chars()
         assert second == 100  # cached, not re-read
 
@@ -162,18 +162,18 @@ class TestOpenAIBackendMetadataPropagation:
         client = MagicMock()
         client.chat.completions.create = AsyncMock(
             return_value=MagicMock(
-                choices=[MagicMock(message=MagicMock(content="hi"), finish_reason="length")],
+                choices=[MagicMock(message=MagicMock(content='hi'), finish_reason='length')],
                 usage=MagicMock(prompt_tokens=2, completion_tokens=3, total_tokens=5),
-                id="resp-abc",
-                model="gpt-from-server",
+                id='resp-abc',
+                model='gpt-from-server',
             )
         )
-        target = OpenAIModelTarget(model="gpt-x", client=client)
-        result = await target.respond([Message(role="user", content="hi")])
-        assert result.response_id == "resp-abc"
-        assert result.finish_reason == "length"
+        target = OpenAIModelTarget(model='gpt-x', client=client)
+        result = await target.respond([Message(role='user', content='hi')])
+        assert result.response_id == 'resp-abc'
+        assert result.finish_reason == 'length'
         # backend prefers server-reported model over the configured one
-        assert result.model == "gpt-from-server"
+        assert result.model == 'gpt-from-server'
 
 
 # ---------------------------------------------------------------------------
@@ -188,10 +188,7 @@ class TestVercelDataStreamZeroUsageGuard:
             _parse_data_stream,
         )
 
-        body = (
-            '0:"hello"\n'
-            'd:{"usage":{"promptTokens":0,"completionTokens":0,"totalTokens":0}}\n'
-        )
+        body = '0:"hello"\nd:{"usage":{"promptTokens":0,"completionTokens":0,"totalTokens":0}}\n'
         text, usage = _parse_data_stream(body)
-        assert text == "hello"
+        assert text == 'hello'
         assert usage is None  # no spurious zero entry

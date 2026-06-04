@@ -19,7 +19,8 @@ from evaluatorq.redteam.contracts import (
     AgentContext,
     LLMConfig,
 )
-from evaluatorq.redteam.tracing import record_llm_response, with_llm_span
+from evaluatorq.common.tracing import record_llm_response
+from evaluatorq.redteam.tracing import with_llm_span
 from evaluatorq.redteam.utils import safe_substitute
 
 if TYPE_CHECKING:

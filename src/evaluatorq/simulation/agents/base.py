@@ -15,12 +15,8 @@ from typing import TYPE_CHECKING, Any
 from evaluatorq.common.retry import with_retry
 from evaluatorq.contracts import AgentResponse, LLMCallConfig, TextOutputItem, TokenUsage, ToolCallOutputItem
 from evaluatorq.openresponses.client import build_simulation_client
-from evaluatorq.simulation.tracing import (
-    get_trace_context_headers,
-    record_llm_input,
-    record_llm_response,
-    with_llm_span,
-)
+from evaluatorq.common.tracing import get_trace_context_headers, record_llm_input, record_llm_response
+from evaluatorq.simulation.tracing import with_llm_span
 from evaluatorq.simulation.types import DEFAULT_MODEL, Message
 
 if TYPE_CHECKING:

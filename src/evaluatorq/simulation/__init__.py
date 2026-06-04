@@ -7,6 +7,21 @@ with the evaluatorq evaluation pipeline.
 Example::
 
     from evaluatorq.simulation import simulate, generate_and_simulate
+
+Tracing & PII:
+    Simulation emits OpenTelemetry spans for every LLM call, including the
+    message content (conversation turns) by default so the Orq dashboard can
+    render input/output panels. Two env vars control this (shared with red
+    teaming via ``evaluatorq.common.tracing``):
+
+    - ``EVALUATORQ_CAPTURE_MESSAGE_CONTENT`` (default ``true``) — set to
+      ``false`` / ``0`` to keep raw message text (inputs and outputs) off
+      spans while still recording token usage, model, and latency. Use when
+      exporting to a third-party backend or when content may contain PII.
+    - ``EVALUATORQ_SPAN_MAX_TEXT_CHARS`` (default: capture all) — max
+      characters of message text (inputs and outputs) per span attribute
+      before truncation. Set a positive integer (e.g. ``8192``) to cap;
+      ``-1`` / ``0`` / unset all mean capture all.
 """
 
 from __future__ import annotations

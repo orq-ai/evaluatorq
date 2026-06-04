@@ -14,12 +14,8 @@ from typing import Any, TypeVar, cast
 from openai import APIStatusError, AsyncOpenAI
 from pydantic import BaseModel
 
-from evaluatorq.simulation.tracing import (
-    get_trace_context_headers,
-    record_llm_input,
-    record_llm_response,
-    with_llm_span,
-)
+from evaluatorq.common.tracing import get_trace_context_headers, record_llm_input, record_llm_response
+from evaluatorq.simulation.tracing import with_llm_span
 from evaluatorq.common.retry import with_retry
 
 logger = logging.getLogger(__name__)

@@ -58,7 +58,8 @@ from evaluatorq.redteam.contracts import (
     ToolCallOutputItem,
     ToolInfo,
 )
-from evaluatorq.redteam.tracing import record_token_usage, set_span_attrs, truncate_for_span, with_redteam_span
+from evaluatorq.common.tracing import record_token_usage, set_span_attrs, truncate_for_span
+from evaluatorq.redteam.tracing import with_redteam_span
 
 
 async def _orq_cleanup_memory(orq_client: Any, ctx: AgentContext, entity_ids: list[str]) -> None:

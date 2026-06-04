@@ -21,7 +21,8 @@ from evaluatorq.redteam.contracts import (
     TokenUsage,
     ToolCallOutputItem,
 )
-from evaluatorq.redteam.tracing import record_llm_response, with_llm_span
+from evaluatorq.common.tracing import record_llm_response
+from evaluatorq.redteam.tracing import with_llm_span
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
