@@ -191,6 +191,25 @@ async def test_llm_span_with_all_genai_attrs(span_collector: _CollectingExporter
 
 
 @pytest.mark.asyncio
+async def test_llm_span_input_messages_suppressed_by_capture_gate(
+    span_collector: _CollectingExporter, monkeypatch: pytest.MonkeyPatch
+):
+    """input_messages are NOT attached when the PII capture gate is off."""
+    monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "false")
+    from evaluatorq.redteam.tracing import with_llm_span
+
+    async with with_llm_span(
+        model="gpt-5-mini",
+        input_messages=[{"role": "user", "content": "secret prompt"}],
+    ) as span:
+        pass
+
+    attrs = _attrs(span_collector.spans[0])
+    assert "gen_ai.input.messages" not in attrs
+    assert "input" not in attrs
+
+
+@pytest.mark.asyncio
 async def test_llm_span_kind_is_client(span_collector: _CollectingExporter):
     """LLM spans use SpanKind.CLIENT per OTel GenAI spec."""
     from evaluatorq.redteam.tracing import with_llm_span

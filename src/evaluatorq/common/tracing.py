@@ -82,16 +82,21 @@ def truncate_for_span(text: object, *, max_chars: int | None = None) -> str:
 	return s[: max_chars - marker_len] + _TRUNCATION_MARKER
 
 
-def _capture_message_content() -> bool:
+def capture_message_content() -> bool:
 	"""Honor OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT.
 
 	Defaults to True (matches TypeScript impl, RES-595). Set the env var to
-	'false' to opt out when exporting to a third-party backend.
+	'false' to opt out when exporting to a third-party backend. Public so domain
+	span builders (redteam/openresponses) can gate input-message capture too.
 	"""
 	flag = os.environ.get("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT")
 	if flag is None:
 		return True
 	return flag.lower() == "true" or flag == "1"
+
+
+# Back-compat private alias (pre-existing callers/tests import the underscored name).
+_capture_message_content = capture_message_content
 
 
 def _serialize_messages(messages: list[dict[str, Any]]) -> str:

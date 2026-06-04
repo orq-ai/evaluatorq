@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq.common.tracing import (
-	_capture_message_content,
+	capture_message_content,
 	record_llm_response,
 	truncate_for_span,
 )
@@ -83,6 +83,10 @@ async def with_llm_span(  # noqa: RUF029
 	if max_tokens is not None:
 		attrs["gen_ai.request.max_tokens"] = max_tokens
 	if purpose:
+		# Domain-neutral key (this builder serves both simulation and redteam
+		# Responses-API targets). The legacy `orq.simulation.llm_purpose` is
+		# emitted alongside for dashboard back-compat.
+		attrs["orq.llm.purpose"] = purpose
 		attrs["orq.simulation.llm_purpose"] = purpose
 
 	with tracer.start_as_current_span(span_name, kind=SpanKind.CLIENT, attributes=attrs) as span:
@@ -106,7 +110,7 @@ def record_openresponses_request(span: Span | None, payload: dict[str, Any]) -> 
 	max_output_tokens = payload.get("max_output_tokens")
 	if isinstance(max_output_tokens, int):
 		span.set_attribute("gen_ai.request.max_tokens", max_output_tokens)
-	if not _capture_message_content():
+	if not capture_message_content():
 		return
 	input_items = payload.get("input") or []
 	serialized_input = truncate_for_span(
@@ -136,8 +140,10 @@ def record_openresponses_response(span: Span | None, response: Any) -> None:
 			"record_openresponses_response: model_dump failed ({}); falling back to repr",
 			exc,
 		)
-		payload = repr(response)
-	if _capture_message_content():
+		# Wrap in a dict so json.dumps produces {"repr": "..."} rather than
+		# double-encoding a bare string into '"..."' (extra outer quotes).
+		payload = {"repr": repr(response)}
+	if capture_message_content():
 		span.set_attribute(
 			"orq.openresponses.response",
 			truncate_for_span(json.dumps(payload, ensure_ascii=False, default=str)),

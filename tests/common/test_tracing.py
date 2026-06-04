@@ -5,6 +5,7 @@ Required by RES-899: prove that the unified record_llm_response covers
 all attributes emitted by both the former redteam and simulation impls,
 for both Chat Completions and Responses API shapes.
 """
+
 from __future__ import annotations
 
 import json
@@ -35,8 +36,8 @@ def span_collector():
     exporter = _Exporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    tracer = provider.get_tracer("test")
-    with patch("evaluatorq.simulation.tracing.get_tracer", return_value=tracer):
+    tracer = provider.get_tracer('test')
+    with patch('evaluatorq.simulation.tracing.get_tracer', return_value=tracer):
         yield exporter, tracer
     provider.shutdown()
 
@@ -54,27 +55,32 @@ def _attrs(span: ReadableSpan) -> dict[str, Any]:
 # truncate_for_span
 # ---------------------------------------------------------------------------
 
+
 def test_truncate_for_span_short_unchanged() -> None:
     from evaluatorq.common.tracing import truncate_for_span
-    assert truncate_for_span("hello", max_chars=100) == "hello"
+
+    assert truncate_for_span('hello', max_chars=100) == 'hello'
 
 
 def test_truncate_for_span_long_ends_with_marker() -> None:
     from evaluatorq.common.tracing import _TRUNCATION_MARKER, truncate_for_span
-    result = truncate_for_span("x" * 200, max_chars=50)
+
+    result = truncate_for_span('x' * 200, max_chars=50)
     assert len(result) == 50
     assert result.endswith(_TRUNCATION_MARKER)
 
 
 def test_truncate_for_span_zero_disables() -> None:
     from evaluatorq.common.tracing import truncate_for_span
-    text = "x" * 1000
+
+    text = 'x' * 1000
     assert truncate_for_span(text, max_chars=0) == text
 
 
 def test_truncate_for_span_non_string_coerced() -> None:
     from evaluatorq.common.tracing import truncate_for_span
-    assert truncate_for_span(42, max_chars=100) == "42"
+
+    assert truncate_for_span(42, max_chars=100) == '42'
 
 
 def test_truncate_default_is_8192(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -83,10 +89,11 @@ def test_truncate_default_is_8192(monkeypatch: pytest.MonkeyPatch) -> None:
         _default_span_max_text_chars,
         truncate_for_span,
     )
-    monkeypatch.delenv("EVALUATORQ_SPAN_MAX_TEXT_CHARS", raising=False)
+
+    monkeypatch.delenv('EVALUATORQ_SPAN_MAX_TEXT_CHARS', raising=False)
     _default_span_max_text_chars.cache_clear()
     try:
-        result = truncate_for_span("x" * 10_000)
+        result = truncate_for_span('x' * 10_000)
         assert len(result) == _DEFAULT_SPAN_MAX_TEXT_CHARS == 8192
     finally:
         _default_span_max_text_chars.cache_clear()
@@ -96,21 +103,25 @@ def test_truncate_default_is_8192(monkeypatch: pytest.MonkeyPatch) -> None:
 # _capture_message_content
 # ---------------------------------------------------------------------------
 
+
 def test_capture_message_content_default_true(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False)
+    monkeypatch.delenv('OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT', raising=False)
     from evaluatorq.common.tracing import _capture_message_content
+
     assert _capture_message_content() is True
 
 
 def test_capture_message_content_false_when_opt_out(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "false")
+    monkeypatch.setenv('OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT', 'false')
     from evaluatorq.common.tracing import _capture_message_content
+
     assert _capture_message_content() is False
 
 
 # ---------------------------------------------------------------------------
 # record_token_usage — superset: all attrs from both impls
 # ---------------------------------------------------------------------------
+
 
 def test_record_token_usage_superset_attrs() -> None:
     """Unified record_token_usage emits every attribute both impls used to emit."""
@@ -120,26 +131,23 @@ def test_record_token_usage_superset_attrs() -> None:
     span = MagicMock()
     record_token_usage(span, prompt_tokens=10, completion_tokens=20, total_tokens=30, calls=2)
 
-    set_attrs: dict[str, Any] = {
-        call.args[0]: call.args[1]
-        for call in span.set_attribute.call_args_list
-    }
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
     # OTel GenAI semantic convention
-    assert set_attrs["gen_ai.usage.input_tokens"] == 10
-    assert set_attrs["gen_ai.usage.output_tokens"] == 20
-    assert set_attrs["gen_ai.usage.total_tokens"] == 30
+    assert set_attrs['gen_ai.usage.input_tokens'] == 10
+    assert set_attrs['gen_ai.usage.output_tokens'] == 20
+    assert set_attrs['gen_ai.usage.total_tokens'] == 30
     # Aliases (from redteam impl)
-    assert set_attrs["gen_ai.usage.prompt_tokens"] == 10
-    assert set_attrs["gen_ai.usage.completion_tokens"] == 20
+    assert set_attrs['gen_ai.usage.prompt_tokens'] == 10
+    assert set_attrs['gen_ai.usage.completion_tokens'] == 20
     # Bare keys (platform compat)
-    assert set_attrs["prompt_tokens"] == 10
-    assert set_attrs["completion_tokens"] == 20
-    assert set_attrs["input_tokens"] == 10
-    assert set_attrs["output_tokens"] == 20
-    assert set_attrs["total_tokens"] == 30
+    assert set_attrs['prompt_tokens'] == 10
+    assert set_attrs['completion_tokens'] == 20
+    assert set_attrs['input_tokens'] == 10
+    assert set_attrs['output_tokens'] == 20
+    assert set_attrs['total_tokens'] == 30
     # Call count (from redteam impl)
-    assert set_attrs["gen_ai.usage.calls"] == 2
-    assert set_attrs["calls"] == 2
+    assert set_attrs['gen_ai.usage.calls'] == 2
+    assert set_attrs['calls'] == 2
 
 
 def test_record_token_usage_cache_attrs() -> None:
@@ -150,11 +158,8 @@ def test_record_token_usage_cache_attrs() -> None:
     span = MagicMock()
     record_token_usage(span, prompt_tokens=5, cache_read_input_tokens=3)
 
-    set_attrs: dict[str, Any] = {
-        call.args[0]: call.args[1]
-        for call in span.set_attribute.call_args_list
-    }
-    assert set_attrs["gen_ai.usage.cache_read.input_tokens"] == 3
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert set_attrs['gen_ai.usage.cache_read.input_tokens'] == 3
 
 
 def test_record_token_usage_zero_prompt_preserved() -> None:
@@ -164,17 +169,15 @@ def test_record_token_usage_zero_prompt_preserved() -> None:
 
     span = MagicMock()
     record_token_usage(span, prompt_tokens=0, completion_tokens=5, total_tokens=5)
-    set_attrs: dict[str, Any] = {
-        call.args[0]: call.args[1]
-        for call in span.set_attribute.call_args_list
-    }
-    assert set_attrs["gen_ai.usage.input_tokens"] == 0
-    assert set_attrs["gen_ai.usage.output_tokens"] == 5
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert set_attrs['gen_ai.usage.input_tokens'] == 0
+    assert set_attrs['gen_ai.usage.output_tokens'] == 5
 
 
 # ---------------------------------------------------------------------------
 # record_llm_response — superset: chat-completions shape
 # ---------------------------------------------------------------------------
+
 
 def test_record_llm_response_chat_completions_attr_set() -> None:
     """Unified record_llm_response emits all attrs for Chat Completions shape."""
@@ -189,48 +192,45 @@ def test_record_llm_response_chat_completions_attr_set() -> None:
         completion_tokens_details = None
 
     class _Msg:
-        role = "assistant"
-        content = "hello"
+        role = 'assistant'
+        content = 'hello'
         tool_calls = None
 
     class _Choice:
-        finish_reason = "stop"
+        finish_reason = 'stop'
         message = _Msg()
 
     class _Resp:
-        id = "resp-123"
-        model = "azure/gpt-4o-mini"
+        id = 'resp-123'
+        model = 'azure/gpt-4o-mini'
         usage = _Usage()
         choices = [_Choice()]
 
     span = MagicMock()
     record_llm_response(span, _Resp())
 
-    set_attrs: dict[str, Any] = {
-        call.args[0]: call.args[1]
-        for call in span.set_attribute.call_args_list
-    }
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
     # Response metadata
-    assert set_attrs["gen_ai.response.id"] == "resp-123"
-    assert set_attrs["gen_ai.response.model"] == "azure/gpt-4o-mini"
+    assert set_attrs['gen_ai.response.id'] == 'resp-123'
+    assert set_attrs['gen_ai.response.model'] == 'azure/gpt-4o-mini'
     # Token attrs (via record_token_usage — both OTel and aliases)
-    assert set_attrs["gen_ai.usage.input_tokens"] == 7
-    assert set_attrs["gen_ai.usage.output_tokens"] == 11
-    assert set_attrs["gen_ai.usage.prompt_tokens"] == 7
-    assert set_attrs["gen_ai.usage.completion_tokens"] == 11
-    assert set_attrs["gen_ai.usage.total_tokens"] == 18
-    assert set_attrs["prompt_tokens"] == 7
-    assert set_attrs["completion_tokens"] == 11
-    assert set_attrs["input_tokens"] == 7
-    assert set_attrs["output_tokens"] == 11
-    assert set_attrs["total_tokens"] == 18
+    assert set_attrs['gen_ai.usage.input_tokens'] == 7
+    assert set_attrs['gen_ai.usage.output_tokens'] == 11
+    assert set_attrs['gen_ai.usage.prompt_tokens'] == 7
+    assert set_attrs['gen_ai.usage.completion_tokens'] == 11
+    assert set_attrs['gen_ai.usage.total_tokens'] == 18
+    assert set_attrs['prompt_tokens'] == 7
+    assert set_attrs['completion_tokens'] == 11
+    assert set_attrs['input_tokens'] == 7
+    assert set_attrs['output_tokens'] == 11
+    assert set_attrs['total_tokens'] == 18
     # Finish reason
-    assert set_attrs["gen_ai.response.finish_reasons"] == ["stop"]
+    assert set_attrs['gen_ai.response.finish_reasons'] == ['stop']
     # Output content (capture gate default=True)
-    assert "gen_ai.output.messages" in set_attrs
-    parsed = json.loads(set_attrs["gen_ai.output.messages"])
-    assert parsed == [{"role": "assistant", "content": "hello"}]
-    assert set_attrs["output"] == set_attrs["gen_ai.output.messages"]
+    assert 'gen_ai.output.messages' in set_attrs
+    parsed = json.loads(set_attrs['gen_ai.output.messages'])
+    assert parsed == [{'role': 'assistant', 'content': 'hello'}]
+    assert set_attrs['output'] == set_attrs['gen_ai.output.messages']
 
 
 def test_record_llm_response_reasoning_tokens_attr() -> None:
@@ -249,23 +249,21 @@ def test_record_llm_response_reasoning_tokens_attr() -> None:
         completion_tokens_details = _CompDetails()
 
     class _Resp:
-        id = "r"
-        model = "gpt-5"
+        id = 'r'
+        model = 'gpt-5'
         usage = _Usage()
         choices = []
 
     span = MagicMock()
     record_llm_response(span, _Resp())
-    set_attrs: dict[str, Any] = {
-        call.args[0]: call.args[1]
-        for call in span.set_attribute.call_args_list
-    }
-    assert set_attrs["gen_ai.usage.completion_tokens_details.reasoning_tokens"] == 42
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert set_attrs['gen_ai.usage.completion_tokens_details.reasoning_tokens'] == 42
 
 
 # ---------------------------------------------------------------------------
 # record_llm_response — superset: Responses API shape
 # ---------------------------------------------------------------------------
+
 
 def test_record_llm_response_responses_api_attr_set() -> None:
     """Unified record_llm_response emits all attrs for Responses API shape."""
@@ -273,7 +271,7 @@ def test_record_llm_response_responses_api_attr_set() -> None:
     from evaluatorq.common.tracing import record_llm_response
 
     class _ContentPart:
-        text = "hello world"
+        text = 'hello world'
 
     class _OutputItem:
         content = [_ContentPart()]
@@ -286,33 +284,30 @@ def test_record_llm_response_responses_api_attr_set() -> None:
         completion_tokens_details = None
 
     class _Resp:
-        id = "resp_api_1"
-        model = "openai/gpt-4o"
+        id = 'resp_api_1'
+        model = 'openai/gpt-4o'
         usage = _Usage()
         output = [_OutputItem()]
-        status = "completed"
+        status = 'completed'
 
     span = MagicMock()
     record_llm_response(span, _Resp())
 
-    set_attrs: dict[str, Any] = {
-        call.args[0]: call.args[1]
-        for call in span.set_attribute.call_args_list
-    }
-    assert set_attrs["gen_ai.response.id"] == "resp_api_1"
-    assert set_attrs["gen_ai.response.model"] == "openai/gpt-4o"
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert set_attrs['gen_ai.response.id'] == 'resp_api_1'
+    assert set_attrs['gen_ai.response.model'] == 'openai/gpt-4o'
     # Falls back to input_tokens / output_tokens when prompt_tokens absent
-    assert set_attrs["gen_ai.usage.input_tokens"] == 4
-    assert set_attrs["gen_ai.usage.output_tokens"] == 2
+    assert set_attrs['gen_ai.usage.input_tokens'] == 4
+    assert set_attrs['gen_ai.usage.output_tokens'] == 2
     # Bare aliases
-    assert set_attrs["prompt_tokens"] == 4
-    assert set_attrs["completion_tokens"] == 2
+    assert set_attrs['prompt_tokens'] == 4
+    assert set_attrs['completion_tokens'] == 2
     # Finish reason from .status
-    assert set_attrs["gen_ai.response.finish_reasons"] == ["completed"]
+    assert set_attrs['gen_ai.response.finish_reasons'] == ['completed']
     # Output content
-    assert "gen_ai.output.messages" in set_attrs
-    parsed = json.loads(set_attrs["gen_ai.output.messages"])
-    assert parsed == [{"role": "assistant", "content": "hello world"}]
+    assert 'gen_ai.output.messages' in set_attrs
+    parsed = json.loads(set_attrs['gen_ai.output.messages'])
+    assert parsed == [{'role': 'assistant', 'content': 'hello world'}]
 
 
 def test_record_llm_response_dict_shape() -> None:
@@ -321,21 +316,18 @@ def test_record_llm_response_dict_shape() -> None:
     from evaluatorq.common.tracing import record_llm_response
 
     response = {
-        "id": "dict_resp",
-        "model": "gpt-4o",
-        "status": "completed",
-        "usage": {"input_tokens": 3, "output_tokens": 5, "total_tokens": 8},
-        "output": [{"content": [{"text": "hi dict"}]}],
+        'id': 'dict_resp',
+        'model': 'gpt-4o',
+        'status': 'completed',
+        'usage': {'input_tokens': 3, 'output_tokens': 5, 'total_tokens': 8},
+        'output': [{'content': [{'text': 'hi dict'}]}],
     }
     span = MagicMock()
     record_llm_response(span, response)
-    set_attrs: dict[str, Any] = {
-        call.args[0]: call.args[1]
-        for call in span.set_attribute.call_args_list
-    }
-    assert set_attrs["gen_ai.response.id"] == "dict_resp"
-    parsed = json.loads(set_attrs["gen_ai.output.messages"])
-    assert parsed[0]["content"] == "hi dict"
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert set_attrs['gen_ai.response.id'] == 'dict_resp'
+    parsed = json.loads(set_attrs['gen_ai.output.messages'])
+    assert parsed[0]['content'] == 'hi dict'
 
 
 def test_record_llm_response_output_content_override() -> None:
@@ -344,92 +336,92 @@ def test_record_llm_response_output_content_override() -> None:
     from evaluatorq.common.tracing import record_llm_response
 
     class _Resp:
-        id = "r"
-        model = "m"
+        id = 'r'
+        model = 'm'
         usage = None
         choices = []
 
     span = MagicMock()
-    record_llm_response(span, _Resp(), output_content="my explicit output")
-    set_attrs: dict[str, Any] = {
-        call.args[0]: call.args[1]
-        for call in span.set_attribute.call_args_list
-    }
-    assert "gen_ai.output.messages" in set_attrs
-    parsed = json.loads(set_attrs["gen_ai.output.messages"])
-    assert parsed[0]["content"] == "my explicit output"
+    record_llm_response(span, _Resp(), output_content='my explicit output')
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert 'gen_ai.output.messages' in set_attrs
+    parsed = json.loads(set_attrs['gen_ai.output.messages'])
+    assert parsed[0]['content'] == 'my explicit output'
 
 
 def test_record_llm_response_suppressed_by_capture_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     """When OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false, no output recorded."""
-    monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "false")
+    monkeypatch.setenv('OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT', 'false')
     from unittest.mock import MagicMock
     from evaluatorq.common.tracing import record_llm_response
 
     class _Msg:
-        role = "assistant"
-        content = "secret"
+        role = 'assistant'
+        content = 'secret'
         tool_calls = None
 
     class _Choice:
-        finish_reason = "stop"
+        finish_reason = 'stop'
         message = _Msg()
 
     class _Resp:
-        id = "r"
-        model = "m"
+        id = 'r'
+        model = 'm'
         usage = None
         choices = [_Choice()]
 
     span = MagicMock()
     record_llm_response(span, _Resp())
     set_attr_keys = {call.args[0] for call in span.set_attribute.call_args_list}
-    assert "gen_ai.output.messages" not in set_attr_keys
-    assert "output" not in set_attr_keys
+    assert 'gen_ai.output.messages' not in set_attr_keys
+    assert 'output' not in set_attr_keys
 
 
 # ---------------------------------------------------------------------------
 # set_span_attrs
 # ---------------------------------------------------------------------------
 
+
 def test_set_span_attrs_skips_none() -> None:
     from unittest.mock import MagicMock
     from evaluatorq.common.tracing import set_span_attrs
 
     span = MagicMock()
-    set_span_attrs(span, {"key": "val", "skip": None})
+    set_span_attrs(span, {'key': 'val', 'skip': None})
     calls = {c.args[0] for c in span.set_attribute.call_args_list}
-    assert "key" in calls
-    assert "skip" not in calls
+    assert 'key' in calls
+    assert 'skip' not in calls
 
 
 def test_set_span_attrs_noop_on_none_span() -> None:
     from evaluatorq.common.tracing import set_span_attrs
-    set_span_attrs(None, {"key": "val"})  # must not raise
+
+    set_span_attrs(None, {'key': 'val'})  # must not raise
 
 
 # ---------------------------------------------------------------------------
 # record_llm_input / record_llm_output
 # ---------------------------------------------------------------------------
 
+
 def test_record_llm_input_serializes_and_gates() -> None:
     from unittest.mock import MagicMock
     from evaluatorq.common.tracing import record_llm_input
 
     span = MagicMock()
-    record_llm_input(span, [{"role": "user", "content": "hello"}])
+    record_llm_input(span, [{'role': 'user', 'content': 'hello'}])
     set_attrs = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
-    assert "gen_ai.input.messages" in set_attrs
-    assert set_attrs["input"] == set_attrs["gen_ai.input.messages"]
+    assert 'gen_ai.input.messages' in set_attrs
+    assert set_attrs['input'] == set_attrs['gen_ai.input.messages']
 
 
 def test_record_llm_input_suppressed_by_gate(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "false")
+    monkeypatch.setenv('OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT', 'false')
     from unittest.mock import MagicMock
     from evaluatorq.common.tracing import record_llm_input
 
     span = MagicMock()
-    record_llm_input(span, [{"role": "user", "content": "secret"}])
+    record_llm_input(span, [{'role': 'user', 'content': 'secret'}])
     assert span.set_attribute.call_count == 0
 
 
@@ -438,20 +430,22 @@ def test_record_llm_output_serializes() -> None:
     from evaluatorq.common.tracing import record_llm_output
 
     span = MagicMock()
-    record_llm_output(span, "response text")
+    record_llm_output(span, 'response text')
     set_attrs = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
-    assert "gen_ai.output.messages" in set_attrs
-    parsed = json.loads(set_attrs["gen_ai.output.messages"])
-    assert parsed == [{"role": "assistant", "content": "response text"}]
+    assert 'gen_ai.output.messages' in set_attrs
+    parsed = json.loads(set_attrs['gen_ai.output.messages'])
+    assert parsed == [{'role': 'assistant', 'content': 'response text'}]
 
 
 # ---------------------------------------------------------------------------
 # get_trace_context_headers
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_get_trace_context_headers_returns_dict() -> None:
     from evaluatorq.common.tracing import get_trace_context_headers
+
     headers = await get_trace_context_headers()
     assert isinstance(headers, dict)
 
@@ -460,168 +454,202 @@ async def test_get_trace_context_headers_returns_dict() -> None:
 # record_token_usage — cache_creation_input_tokens
 # ---------------------------------------------------------------------------
 
+
 def test_record_token_usage_cache_creation_attr() -> None:
-	"""cache_creation_input_tokens attr (from simulation impl) survives in unified version."""
-	from unittest.mock import MagicMock
-	from evaluatorq.common.tracing import record_token_usage
+    """cache_creation_input_tokens attr (from simulation impl) survives in unified version."""
+    from unittest.mock import MagicMock
+    from evaluatorq.common.tracing import record_token_usage
 
-	span = MagicMock()
-	record_token_usage(span, prompt_tokens=5, cache_creation_input_tokens=7)
+    span = MagicMock()
+    record_token_usage(span, prompt_tokens=5, cache_creation_input_tokens=7)
 
-	set_attrs: dict[str, Any] = {
-		call.args[0]: call.args[1]
-		for call in span.set_attribute.call_args_list
-	}
-	assert set_attrs["gen_ai.usage.cache_creation.input_tokens"] == 7
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert set_attrs['gen_ai.usage.cache_creation.input_tokens'] == 7
 
 
 # ---------------------------------------------------------------------------
 # record_llm_response — tool_calls output
 # ---------------------------------------------------------------------------
 
+
 def test_record_llm_response_tool_call_output() -> None:
-	"""Tool-call-only Chat Completions output is serialized into gen_ai.output.messages."""
-	from unittest.mock import MagicMock
-	from evaluatorq.common.tracing import record_llm_response
+    """Tool-call-only Chat Completions output is serialized into gen_ai.output.messages."""
+    from unittest.mock import MagicMock
+    from evaluatorq.common.tracing import record_llm_response
 
-	class _Function:
-		name = "search"
-		arguments = '{"query": "test"}'
+    class _Function:
+        name = 'search'
+        arguments = '{"query": "test"}'
 
-	class _ToolCall:
-		function = _Function()
+    class _ToolCall:
+        function = _Function()
 
-	class _Msg:
-		role = "assistant"
-		content = None
-		tool_calls = [_ToolCall()]
+    class _Msg:
+        role = 'assistant'
+        content = None
+        tool_calls = [_ToolCall()]
 
-	class _Choice:
-		finish_reason = "tool_calls"
-		message = _Msg()
+    class _Choice:
+        finish_reason = 'tool_calls'
+        message = _Msg()
 
-	class _Resp:
-		id = "r"
-		model = "m"
-		usage = None
-		choices = [_Choice()]
+    class _Resp:
+        id = 'r'
+        model = 'm'
+        usage = None
+        choices = [_Choice()]
 
-	span = MagicMock()
-	record_llm_response(span, _Resp())
-	set_attrs: dict[str, Any] = {
-		call.args[0]: call.args[1]
-		for call in span.set_attribute.call_args_list
-	}
-	assert "gen_ai.output.messages" in set_attrs
-	parsed = json.loads(set_attrs["gen_ai.output.messages"])
-	assert parsed[0]["role"] == "assistant"
-	payload = json.loads(parsed[0]["content"])
-	assert payload["tool_calls"] == [{"name": "search", "arguments": '{"query": "test"}'}]
+    span = MagicMock()
+    record_llm_response(span, _Resp())
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert 'gen_ai.output.messages' in set_attrs
+    parsed = json.loads(set_attrs['gen_ai.output.messages'])
+    assert parsed[0]['role'] == 'assistant'
+    payload = json.loads(parsed[0]['content'])
+    assert payload['tool_calls'] == [{'name': 'search', 'arguments': '{"query": "test"}'}]
 
 
 # ---------------------------------------------------------------------------
 # record_openresponses_response
 # ---------------------------------------------------------------------------
 
+
 def test_record_openresponses_response_sets_gen_ai_attrs() -> None:
-	"""record_openresponses_response sets gen_ai.* attrs via record_llm_response."""
-	from unittest.mock import MagicMock
-	from evaluatorq.openresponses.tracing import record_openresponses_response
+    """record_openresponses_response sets gen_ai.* attrs via record_llm_response."""
+    from unittest.mock import MagicMock
+    from evaluatorq.openresponses.tracing import record_openresponses_response
 
-	class _Usage:
-		input_tokens = 5
-		output_tokens = 3
-		total_tokens = 8
-		prompt_tokens_details = None
-		completion_tokens_details = None
-		cache_creation_input_tokens = None
+    class _Usage:
+        input_tokens = 5
+        output_tokens = 3
+        total_tokens = 8
+        prompt_tokens_details = None
+        completion_tokens_details = None
+        cache_creation_input_tokens = None
 
-	class _ContentPart:
-		text = "hello from openresponses"
+    class _ContentPart:
+        text = 'hello from openresponses'
 
-	class _OutputItem:
-		content = [_ContentPart()]
+    class _OutputItem:
+        content = [_ContentPart()]
 
-	class _Resp:
-		id = "or_resp_1"
-		model = "openai/gpt-4o"
-		usage = _Usage()
-		output = [_OutputItem()]
-		status = "completed"
+    class _Resp:
+        id = 'or_resp_1'
+        model = 'openai/gpt-4o'
+        usage = _Usage()
+        output = [_OutputItem()]
+        status = 'completed'
 
-		def model_dump(self, *, mode: str = "json") -> dict[str, Any]:
-			return {"id": self.id, "model": self.model, "status": self.status}
+        def model_dump(self, *, mode: str = 'json') -> dict[str, Any]:
+            return {'id': self.id, 'model': self.model, 'status': self.status}
 
-	span = MagicMock()
-	record_openresponses_response(span, _Resp())
+    span = MagicMock()
+    record_openresponses_response(span, _Resp())
 
-	set_attrs: dict[str, Any] = {
-		call.args[0]: call.args[1]
-		for call in span.set_attribute.call_args_list
-	}
-	# gen_ai.* attrs from record_llm_response
-	assert set_attrs["gen_ai.response.id"] == "or_resp_1"
-	assert set_attrs["gen_ai.response.model"] == "openai/gpt-4o"
-	assert set_attrs["gen_ai.usage.input_tokens"] == 5
-	assert set_attrs["gen_ai.usage.output_tokens"] == 3
-	# orq.openresponses.response payload attr
-	assert "orq.openresponses.response" in set_attrs
-	import json as _json
-	payload = _json.loads(set_attrs["orq.openresponses.response"])
-	assert payload["id"] == "or_resp_1"
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    # gen_ai.* attrs from record_llm_response
+    assert set_attrs['gen_ai.response.id'] == 'or_resp_1'
+    assert set_attrs['gen_ai.response.model'] == 'openai/gpt-4o'
+    assert set_attrs['gen_ai.usage.input_tokens'] == 5
+    assert set_attrs['gen_ai.usage.output_tokens'] == 3
+    # orq.openresponses.response payload attr
+    assert 'orq.openresponses.response' in set_attrs
+    import json as _json
+
+    payload = _json.loads(set_attrs['orq.openresponses.response'])
+    assert payload['id'] == 'or_resp_1'
 
 
 def test_record_openresponses_response_respects_capture_gate(monkeypatch: pytest.MonkeyPatch) -> None:
-	"""orq.openresponses.response attr suppressed when capture gate is off."""
-	monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "false")
-	from unittest.mock import MagicMock
-	from evaluatorq.openresponses.tracing import record_openresponses_response
+    """orq.openresponses.response attr suppressed when capture gate is off."""
+    monkeypatch.setenv('OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT', 'false')
+    from unittest.mock import MagicMock
+    from evaluatorq.openresponses.tracing import record_openresponses_response
 
-	class _Resp:
-		id = "r"
-		model = "m"
-		usage = None
-		output = []
-		status = "completed"
+    class _Resp:
+        id = 'r'
+        model = 'm'
+        usage = None
+        output = []
+        status = 'completed'
 
-		def model_dump(self, *, mode: str = "json") -> dict[str, Any]:
-			return {"id": self.id}
+        def model_dump(self, *, mode: str = 'json') -> dict[str, Any]:
+            return {'id': self.id}
 
-	span = MagicMock()
-	record_openresponses_response(span, _Resp())
-	set_attr_keys = {call.args[0] for call in span.set_attribute.call_args_list}
-	assert "orq.openresponses.response" not in set_attr_keys
+    span = MagicMock()
+    record_openresponses_response(span, _Resp())
+    set_attr_keys = {call.args[0] for call in span.set_attribute.call_args_list}
+    assert 'orq.openresponses.response' not in set_attr_keys
 
 
 # ---------------------------------------------------------------------------
 # cache_creation_input_tokens path through record_llm_response
 # ---------------------------------------------------------------------------
 
+
 def test_record_llm_response_extracts_cache_creation_tokens() -> None:
-	"""cache_creation_input_tokens from usage object is recorded via record_llm_response."""
-	from unittest.mock import MagicMock
-	from evaluatorq.common.tracing import record_llm_response
+    """cache_creation_input_tokens from usage object is recorded via record_llm_response."""
+    from unittest.mock import MagicMock
+    from evaluatorq.common.tracing import record_llm_response
 
-	class _Usage:
-		prompt_tokens = 10
-		completion_tokens = 5
-		total_tokens = 15
-		prompt_tokens_details = None
-		input_tokens_details = None
-		completion_tokens_details = None
-		cache_creation_input_tokens = 99  # the field being tested
+    class _Usage:
+        prompt_tokens = 10
+        completion_tokens = 5
+        total_tokens = 15
+        prompt_tokens_details = None
+        input_tokens_details = None
+        completion_tokens_details = None
+        cache_creation_input_tokens = 99  # the field being tested
 
-	class _Resp:
-		id = "r"
-		model = "m"
-		usage = _Usage()
-		choices = []
+    class _Resp:
+        id = 'r'
+        model = 'm'
+        usage = _Usage()
+        choices = []
 
-	span = MagicMock()
-	record_llm_response(span, _Resp())
+    span = MagicMock()
+    record_llm_response(span, _Resp())
 
-	set_attrs: dict[str, Any] = {
-		call.args[0]: call.args[1]
-		for call in span.set_attribute.call_args_list
-	}
-	assert set_attrs["gen_ai.usage.cache_creation.input_tokens"] == 99
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert set_attrs['gen_ai.usage.cache_creation.input_tokens'] == 99
+
+
+def test_record_token_usage_emits_legacy_cached_tokens_alias() -> None:
+    """cache_read emits both the OTel semconv key and the legacy redteam key."""
+    from unittest.mock import MagicMock
+    from evaluatorq.common.tracing import record_token_usage
+
+    span = MagicMock()
+    record_token_usage(span, prompt_tokens=5, cache_read_input_tokens=12)
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert set_attrs['gen_ai.usage.cache_read.input_tokens'] == 12
+    # Legacy attribute the former redteam impl wrote — kept for dashboard compat.
+    assert set_attrs['gen_ai.usage.prompt_tokens_details.cached_tokens'] == 12
+
+
+# ---------------------------------------------------------------------------
+# openresponses with_llm_span — purpose attribute
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_openresponses_llm_span_emits_neutral_and_legacy_purpose() -> None:
+    """purpose emits both the domain-neutral key and the legacy simulation key."""
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
+    from evaluatorq.openresponses.tracing import with_llm_span
+
+    exporter = _Exporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer('test')
+    try:
+        with patch('evaluatorq.openresponses.tracing.get_tracer', return_value=tracer):
+            async with with_llm_span(model='openai/gpt-4o', operation='responses', purpose='target'):
+                pass
+        attrs = _attrs(_span(exporter))
+        assert attrs['orq.llm.purpose'] == 'target'
+        assert attrs['orq.simulation.llm_purpose'] == 'target'
+    finally:
+        provider.shutdown()

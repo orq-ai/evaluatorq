@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.common.tracing import truncate_for_span
+from evaluatorq.common.tracing import capture_message_content, truncate_for_span
 from evaluatorq.tracing.setup import get_tracer
 
 if TYPE_CHECKING:
@@ -47,6 +47,10 @@ if TYPE_CHECKING:
 
 
 def _derive_provider(model: str) -> str:
+	# NOTE: intentionally does NOT expand provider aliases (e.g. azure ->
+	# azure.ai.openai) the way simulation/openresponses do, so `azure/gpt-4o`
+	# yields gen_ai.system="azure" on redteam spans. Pre-existing divergence
+	# tracked separately; aligning would itself be an observability delta.
 	if "/" in model:
 		return model.split("/", 1)[0]
 	return "openai"
@@ -136,7 +140,7 @@ async def with_llm_span(  # noqa: RUF029
 		genai_attrs["gen_ai.request.temperature"] = float(temperature)
 	if max_tokens is not None:
 		genai_attrs["gen_ai.request.max_tokens"] = max_tokens
-	if input_messages is not None:
+	if input_messages is not None and capture_message_content():
 		serialized = json.dumps(
 			_sanitize_messages(input_messages), ensure_ascii=False
 		)
