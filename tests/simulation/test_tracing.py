@@ -223,7 +223,8 @@ async def test_record_llm_input_truncates_long_content(
     serialized = a["gen_ai.input.messages"]
     parsed = json.loads(serialized)
     # Content gets truncated to EVALUATORQ_SPAN_MAX_TEXT_CHARS (8192 default)
-    assert len(parsed[0]["content"]) <= 8192
+    from evaluatorq.common.tracing import _DEFAULT_SPAN_MAX_TEXT_CHARS
+    assert len(parsed[0]["content"]) == _DEFAULT_SPAN_MAX_TEXT_CHARS
     assert parsed[0]["content"].endswith("... [truncated]")
 
 

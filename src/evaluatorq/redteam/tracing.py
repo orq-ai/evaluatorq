@@ -86,7 +86,7 @@ async def with_redteam_span(  # noqa: RUF029
 		try:
 			yield span
 			span.set_status(Status(StatusCode.OK))
-		except Exception as e:
+		except BaseException as e:
 			span.set_attribute("error.type", type(e).__name__)
 			span.set_status(Status(StatusCode.ERROR, str(e)))
 			span.record_exception(e)
@@ -154,7 +154,7 @@ async def with_llm_span(  # noqa: RUF029
 		try:
 			yield span
 			span.set_status(Status(StatusCode.OK))
-		except Exception as e:
+		except BaseException as e:
 			span.set_attribute("error.type", type(e).__name__)
 			span.set_status(Status(StatusCode.ERROR, str(e)))
 			span.record_exception(e)

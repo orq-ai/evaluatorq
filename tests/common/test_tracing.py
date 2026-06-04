@@ -517,3 +517,111 @@ def test_record_llm_response_tool_call_output() -> None:
 	assert parsed[0]["role"] == "assistant"
 	payload = json.loads(parsed[0]["content"])
 	assert payload["tool_calls"] == [{"name": "search", "arguments": '{"query": "test"}'}]
+
+
+# ---------------------------------------------------------------------------
+# record_openresponses_response
+# ---------------------------------------------------------------------------
+
+def test_record_openresponses_response_sets_gen_ai_attrs() -> None:
+	"""record_openresponses_response sets gen_ai.* attrs via record_llm_response."""
+	from unittest.mock import MagicMock
+	from evaluatorq.openresponses.tracing import record_openresponses_response
+
+	class _Usage:
+		input_tokens = 5
+		output_tokens = 3
+		total_tokens = 8
+		prompt_tokens_details = None
+		completion_tokens_details = None
+		cache_creation_input_tokens = None
+
+	class _ContentPart:
+		text = "hello from openresponses"
+
+	class _OutputItem:
+		content = [_ContentPart()]
+
+	class _Resp:
+		id = "or_resp_1"
+		model = "openai/gpt-4o"
+		usage = _Usage()
+		output = [_OutputItem()]
+		status = "completed"
+
+		def model_dump(self, *, mode: str = "json") -> dict[str, Any]:
+			return {"id": self.id, "model": self.model, "status": self.status}
+
+	span = MagicMock()
+	record_openresponses_response(span, _Resp())
+
+	set_attrs: dict[str, Any] = {
+		call.args[0]: call.args[1]
+		for call in span.set_attribute.call_args_list
+	}
+	# gen_ai.* attrs from record_llm_response
+	assert set_attrs["gen_ai.response.id"] == "or_resp_1"
+	assert set_attrs["gen_ai.response.model"] == "openai/gpt-4o"
+	assert set_attrs["gen_ai.usage.input_tokens"] == 5
+	assert set_attrs["gen_ai.usage.output_tokens"] == 3
+	# orq.openresponses.response payload attr
+	assert "orq.openresponses.response" in set_attrs
+	import json as _json
+	payload = _json.loads(set_attrs["orq.openresponses.response"])
+	assert payload["id"] == "or_resp_1"
+
+
+def test_record_openresponses_response_respects_capture_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""orq.openresponses.response attr suppressed when capture gate is off."""
+	monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "false")
+	from unittest.mock import MagicMock
+	from evaluatorq.openresponses.tracing import record_openresponses_response
+
+	class _Resp:
+		id = "r"
+		model = "m"
+		usage = None
+		output = []
+		status = "completed"
+
+		def model_dump(self, *, mode: str = "json") -> dict[str, Any]:
+			return {"id": self.id}
+
+	span = MagicMock()
+	record_openresponses_response(span, _Resp())
+	set_attr_keys = {call.args[0] for call in span.set_attribute.call_args_list}
+	assert "orq.openresponses.response" not in set_attr_keys
+
+
+# ---------------------------------------------------------------------------
+# cache_creation_input_tokens path through record_llm_response
+# ---------------------------------------------------------------------------
+
+def test_record_llm_response_extracts_cache_creation_tokens() -> None:
+	"""cache_creation_input_tokens from usage object is recorded via record_llm_response."""
+	from unittest.mock import MagicMock
+	from evaluatorq.common.tracing import record_llm_response
+
+	class _Usage:
+		prompt_tokens = 10
+		completion_tokens = 5
+		total_tokens = 15
+		prompt_tokens_details = None
+		input_tokens_details = None
+		completion_tokens_details = None
+		cache_creation_input_tokens = 99  # the field being tested
+
+	class _Resp:
+		id = "r"
+		model = "m"
+		usage = _Usage()
+		choices = []
+
+	span = MagicMock()
+	record_llm_response(span, _Resp())
+
+	set_attrs: dict[str, Any] = {
+		call.args[0]: call.args[1]
+		for call in span.set_attribute.call_args_list
+	}
+	assert set_attrs["gen_ai.usage.cache_creation.input_tokens"] == 99

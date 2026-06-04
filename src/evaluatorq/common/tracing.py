@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq.common.fields import get_field as _field
-from evaluatorq.tracing.setup import get_tracer
 
 if TYPE_CHECKING:
 	from opentelemetry.trace import Span
@@ -244,6 +243,8 @@ def record_token_usage(
 		span.set_attribute("calls", calls)
 	if cache_read_input_tokens is not None:
 		span.set_attribute("gen_ai.usage.cache_read.input_tokens", cache_read_input_tokens)
+		# Legacy attribute name emitted by the former redteam impl — kept for platform dashboard compat.
+		span.set_attribute("gen_ai.usage.prompt_tokens_details.cached_tokens", cache_read_input_tokens)
 	if cache_creation_input_tokens is not None:
 		span.set_attribute("gen_ai.usage.cache_creation.input_tokens", cache_creation_input_tokens)
 
