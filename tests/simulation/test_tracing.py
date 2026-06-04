@@ -141,6 +141,8 @@ async def test_llm_span_name_and_attrs(span_collector: _CollectingExporter):
     assert a['gen_ai.request.temperature'] == 0.7
     assert a['gen_ai.request.max_tokens'] == 512
     assert a['orq.simulation.llm_purpose'] == 'judge'
+    # Domain-neutral key is dual-emitted (parity with openresponses.with_llm_span).
+    assert a['orq.llm.purpose'] == 'judge'
 
 
 @pytest.mark.asyncio

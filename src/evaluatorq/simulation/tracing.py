@@ -136,6 +136,10 @@ async def with_llm_span(  # noqa: RUF029
 	if max_tokens is not None:
 		attrs["gen_ai.request.max_tokens"] = max_tokens
 	if purpose:
+		# Domain-neutral key (parity with openresponses.with_llm_span) so the
+		# platform can query orq.llm.purpose across all domains; the legacy
+		# orq.simulation.llm_purpose is emitted alongside for dashboard back-compat.
+		attrs["orq.llm.purpose"] = purpose
 		attrs["orq.simulation.llm_purpose"] = purpose
 
 	with tracer.start_as_current_span(span_name, kind=SpanKind.CLIENT, attributes=attrs) as span:
