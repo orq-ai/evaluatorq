@@ -8,7 +8,7 @@ All notable changes to `evaluatorq` are documented here.
 
 ### Notable defaults
 
-- `EVALUATORQ_SPAN_MAX_TEXT_CHARS` now defaults to `8192` (previously unlimited). Most OTLP exporters cap attribute values between 4 and 32 KB, so unlimited payloads were being dropped silently in real deployments. Set the env var to `0` to disable truncation or to a larger integer to raise the cap (RES-715).
+- `EVALUATORQ_SPAN_MAX_TEXT_CHARS` defaults to **capturing all message content** (no truncation), in both the Python and TypeScript tracing layers. Set the env var to a positive integer (canonical: `8192`) to cap span text at that many characters (marker `... [truncated]`); `-1`, `0`, or unset all mean capture all. The cap applies uniformly to input **and** output message content. (RES-715 introduced an `8192` default; RES-899 reverts to capture-all and unifies the TS path, which previously hardcoded a separate `2000`-char cap.)
 - `loguru` is now a core dependency (previously gated behind the `[redteam]` extra). This slightly widens the install footprint for non-redteam consumers but unifies the logging stack across the package.
 
 ### Breaking Changes
@@ -150,3 +150,20 @@ response = await target.respond([Message(role="user", content="Hello")])
 - **`turns_to_messages(turns, *, skip_errors=False)`** — helper exported from `evaluatorq.redteam.contracts` that converts a list of completed turns into a flat `list[Message]`, optionally dropping turns whose response carries an `AgentResponseError`.
 - **`classify_error_type(error, *, existing_type=None)`** — exported from `evaluatorq.redteam.contracts`; infers a coarse `error_type` (`content_filter`, `rate_limit`, `timeout`, `network_error`, `server_error`, `client_error`, or `unknown`) from an error string. Shared by the orchestrator and report converters. On a per-response `AgentResponseError`, the orchestrator records an unmatched (`unknown`) result as `target_error`, so that field never carries `unknown`.
 - **Tool-call fidelity on replay** — the transcript replayed to a target now preserves assistant `tool_calls` and `tool` results across turns (`OpenAIModelTarget` as OpenAI chat params, `VercelAISdkTarget` as AI SDK CoreMessage `tool-call`/`tool-result` parts, `OpenAIAgentTarget` as Responses-API `function_call`/`function_call_output` items), so multi-turn tool-using agents see their prior tool context. `VercelAISdkTarget` accepts `message_format="v5"` (default) or `"v4"` to match the endpoint's AI SDK version (`input`/`output:{type,value}` vs `args`/`result`). Errored turns recorded by the orchestrator now carry a classified `AgentResponseError.error_type` instead of a flat `target_error`.
+
+---
+
+<!-- RES-899 -->
+
+### Internal (RES-899)
+
+- **Unified tracing layer**: the generic OTel span-recording helpers previously duplicated across `redteam/tracing.py` and `simulation/tracing.py` now live in a single `evaluatorq.common.tracing` module (`truncate_for_span`, `capture_message_content`, `record_token_usage`, `record_llm_response`, `record_llm_input/output`, `set_span_attrs`, `get_trace_context_headers`). Domain-specific span builders (`with_redteam_span`, `with_simulation_span`, `with_llm_span`) stay in their domain modules and import the shared helpers. The common module never imports from `redteam`, `simulation`, or `openresponses`.
+
+### Changed (RES-899)
+
+- **Span PII gate env var renamed** to `EVALUATORQ_CAPTURE_MESSAGE_CONTENT` (default `true`), replacing the previous `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`. The same name now gates both the Python and TypeScript simulation/red-team tracing layers. Set `false` / `0` to keep raw prompt and response text off spans (token usage, model, finish reason, and latency are still recorded).
+- **Span text truncation defaults to capture-all** in both Python and TypeScript. `EVALUATORQ_SPAN_MAX_TEXT_CHARS` is unset by default (no truncation); set a positive integer (canonical: `8192`) to cap input **and** output message content, with the shared `... [truncated]` marker. `-1` / `0` / unset all mean capture all. The TypeScript path previously hardcoded a separate `2000`-char cap with a `…` marker — both are gone.
+
+### Fixed (RES-899)
+
+- **`retry_statuses` augments the default set again**: passing a custom set (e.g. `{429}`) no longer silently drops the built-in `429 + 5xx` retries — the custom statuses are added to the defaults, not substituted for them. (This restores the intended RES-897 review behavior, which was lost when #150 merged without the fix.)
