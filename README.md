@@ -549,6 +549,8 @@ for result in results:
 - `OTEL_EXPORTER_OTLP_HEADERS`: Headers for OTEL exporter (format: `key1=value1,key2=value2`)
 - `ORQ_DISABLE_TRACING`: Set to `1` or `true` to disable automatic tracing
 - `ORQ_DEBUG`: Enable debug logging for tracing setup
+- `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`: Whether to write LLM message text (prompts + responses) onto trace spans. **Defaults to `true`** so the Orq dashboard's input/output panels render. Set to `false` (or `0`) to keep raw message content — including any PII — out of traces while still recording token usage, model, and latency. Applies to both agent simulation and red teaming spans.
+- `EVALUATORQ_SPAN_MAX_TEXT_CHARS`: Max characters of message text stored per span attribute before truncation (marker `... [truncated]`). Default `8192`. Set to `0` to disable truncation.
 
 ### Evaluation Parameters
 

@@ -105,14 +105,14 @@ def test_truncate_default_is_8192(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_capture_message_content_default_true(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv('OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT', raising=False)
+    monkeypatch.delenv('EVALUATORQ_CAPTURE_MESSAGE_CONTENT', raising=False)
     from evaluatorq.common.tracing import _capture_message_content
 
     assert _capture_message_content() is True
 
 
 def test_capture_message_content_false_when_opt_out(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv('OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT', 'false')
+    monkeypatch.setenv('EVALUATORQ_CAPTURE_MESSAGE_CONTENT', 'false')
     from evaluatorq.common.tracing import _capture_message_content
 
     assert _capture_message_content() is False
@@ -350,8 +350,8 @@ def test_record_llm_response_output_content_override() -> None:
 
 
 def test_record_llm_response_suppressed_by_capture_gate(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false, no output recorded."""
-    monkeypatch.setenv('OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT', 'false')
+    """When EVALUATORQ_CAPTURE_MESSAGE_CONTENT=false, no output recorded."""
+    monkeypatch.setenv('EVALUATORQ_CAPTURE_MESSAGE_CONTENT', 'false')
     from unittest.mock import MagicMock
     from evaluatorq.common.tracing import record_llm_response
 
@@ -416,7 +416,7 @@ def test_record_llm_input_serializes_and_gates() -> None:
 
 
 def test_record_llm_input_suppressed_by_gate(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv('OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT', 'false')
+    monkeypatch.setenv('EVALUATORQ_CAPTURE_MESSAGE_CONTENT', 'false')
     from unittest.mock import MagicMock
     from evaluatorq.common.tracing import record_llm_input
 
@@ -562,7 +562,7 @@ def test_record_openresponses_response_sets_gen_ai_attrs() -> None:
 
 def test_record_openresponses_response_respects_capture_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     """orq.openresponses.response attr suppressed when capture gate is off."""
-    monkeypatch.setenv('OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT', 'false')
+    monkeypatch.setenv('EVALUATORQ_CAPTURE_MESSAGE_CONTENT', 'false')
     from unittest.mock import MagicMock
     from evaluatorq.openresponses.tracing import record_openresponses_response
 

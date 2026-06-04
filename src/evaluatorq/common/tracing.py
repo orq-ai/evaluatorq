@@ -83,13 +83,21 @@ def truncate_for_span(text: object, *, max_chars: int | None = None) -> str:
 
 
 def capture_message_content() -> bool:
-	"""Honor OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT.
+	"""Whether to write LLM message text (prompts + responses) onto spans.
 
-	Defaults to True (matches TypeScript impl, RES-595). Set the env var to
-	'false' to opt out when exporting to a third-party backend. Public so domain
-	span builders (redteam/openresponses) can gate input-message capture too.
+	Controlled by the ``EVALUATORQ_CAPTURE_MESSAGE_CONTENT`` env var.
+
+	**Defaults to True** so the Orq dashboard's input/output panels render out of
+	the box. Set it to ``"false"`` / ``"0"`` to keep raw message content out of
+	traces (e.g. when exporting spans to a third-party backend, or to avoid
+	capturing PII) while still recording token usage, model, and latency.
+
+	Gates ``gen_ai.input.messages``, ``gen_ai.output.messages``, the bare
+	``input`` / ``output`` keys, and the ``orq.openresponses.request/response``
+	payloads. Public so domain span builders (redteam/openresponses) can gate
+	input-message capture too.
 	"""
-	flag = os.environ.get("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT")
+	flag = os.environ.get("EVALUATORQ_CAPTURE_MESSAGE_CONTENT")
 	if flag is None:
 		return True
 	return flag.lower() == "true" or flag == "1"

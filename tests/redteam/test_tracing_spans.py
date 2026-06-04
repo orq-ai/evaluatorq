@@ -195,7 +195,7 @@ async def test_llm_span_input_messages_suppressed_by_capture_gate(
     span_collector: _CollectingExporter, monkeypatch: pytest.MonkeyPatch
 ):
     """input_messages are NOT attached when the PII capture gate is off."""
-    monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "false")
+    monkeypatch.setenv("EVALUATORQ_CAPTURE_MESSAGE_CONTENT", "false")
     from evaluatorq.redteam.tracing import with_llm_span
 
     async with with_llm_span(
