@@ -359,7 +359,8 @@ def test_md_omits_model_when_unknown(make_result):
 
 def test_overview_html_and_md_show_traits_and_goal():
     from evaluatorq.simulation.reports import export_html, export_markdown
-    from evaluatorq.simulation.types import SimulationResult, TerminatedBy, TokenUsage
+    from evaluatorq.contracts import TokenUsage
+    from evaluatorq.simulation.types import SimulationResult, TerminatedBy
 
     r = SimulationResult(
         messages=[], terminated_by=TerminatedBy.judge, reason='r',
@@ -384,7 +385,8 @@ def test_overview_html_and_md_show_traits_and_goal():
 
 def test_overview_renders_zero_trait_and_fallback_without_metadata():
     from evaluatorq.simulation.reports import export_html, export_markdown
-    from evaluatorq.simulation.types import SimulationResult, TerminatedBy, TokenUsage
+    from evaluatorq.contracts import TokenUsage
+    from evaluatorq.simulation.types import SimulationResult, TerminatedBy
 
     def _result(metadata):
         return SimulationResult(

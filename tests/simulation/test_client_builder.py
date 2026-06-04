@@ -41,7 +41,7 @@ def _build(monkeypatch, *, orq_key=None, openai_key=None, base_url=None, **kwarg
     else:
         monkeypatch.delenv("ORQ_BASE_URL", raising=False)
 
-    from evaluatorq.simulation._client import build_simulation_client
+    from evaluatorq.openresponses.client import build_simulation_client
 
     return build_simulation_client(**kwargs)
 
@@ -59,7 +59,7 @@ class TestConfigClientPassthrough:
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
         mock_client = MagicMock()
-        from evaluatorq.simulation._client import build_simulation_client
+        from evaluatorq.openresponses.client import build_simulation_client
 
         client, owned = build_simulation_client(mock_client)
 
@@ -74,7 +74,7 @@ class TestConfigClientPassthrough:
         mock_client = MagicMock()
 
         with patch("openai.AsyncOpenAI") as MockAsyncOpenAI:
-            from evaluatorq.simulation._client import build_simulation_client
+            from evaluatorq.openresponses.client import build_simulation_client
 
             build_simulation_client(mock_client)
 
@@ -100,7 +100,7 @@ class TestExtraApiKey:
             return MagicMock()
 
         with patch("openai.AsyncOpenAI", side_effect=fake_async_openai):
-            from evaluatorq.simulation._client import build_simulation_client
+            from evaluatorq.openresponses.client import build_simulation_client
 
             _, owned = build_simulation_client(extra_api_key="sk-extra-key")
 
@@ -121,7 +121,7 @@ class TestExtraApiKey:
             return MagicMock()
 
         with patch("openai.AsyncOpenAI", side_effect=fake_async_openai):
-            from evaluatorq.simulation._client import build_simulation_client
+            from evaluatorq.openresponses.client import build_simulation_client
 
             build_simulation_client(extra_api_key="sk-extra-key")
 
@@ -147,7 +147,7 @@ class TestOrqApiKeyEnv:
             return MagicMock()
 
         with patch("openai.AsyncOpenAI", side_effect=fake_async_openai):
-            from evaluatorq.simulation._client import build_simulation_client
+            from evaluatorq.openresponses.client import build_simulation_client
 
             _, owned = build_simulation_client()
 
@@ -175,7 +175,7 @@ class TestOpenAIApiKeyEnv:
             return MagicMock()
 
         with patch("openai.AsyncOpenAI", side_effect=fake_async_openai):
-            from evaluatorq.simulation._client import build_simulation_client
+            from evaluatorq.openresponses.client import build_simulation_client
 
             _, owned = build_simulation_client()
 
@@ -203,7 +203,7 @@ class TestOrqTakesPrecedenceOverOpenAI:
             return MagicMock()
 
         with patch("openai.AsyncOpenAI", side_effect=fake_async_openai):
-            from evaluatorq.simulation._client import build_simulation_client
+            from evaluatorq.openresponses.client import build_simulation_client
 
             _, owned = build_simulation_client()
 
@@ -224,7 +224,7 @@ class TestNoCredentialsRaisesValueError:
         monkeypatch.delenv("ORQ_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-        from evaluatorq.simulation._client import build_simulation_client
+        from evaluatorq.openresponses.client import build_simulation_client
 
         with pytest.raises(ValueError, match="ORQ_API_KEY"):
             build_simulation_client()
@@ -234,7 +234,7 @@ class TestNoCredentialsRaisesValueError:
         monkeypatch.delenv("ORQ_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-        from evaluatorq.simulation._client import build_simulation_client
+        from evaluatorq.openresponses.client import build_simulation_client
 
         with pytest.raises(ValueError, match="OPENAI_API_KEY"):
             build_simulation_client()
@@ -259,7 +259,7 @@ class TestCustomOrqBaseUrl:
             return MagicMock()
 
         with patch("openai.AsyncOpenAI", side_effect=fake_async_openai):
-            from evaluatorq.simulation._client import build_simulation_client
+            from evaluatorq.openresponses.client import build_simulation_client
 
             build_simulation_client()
 
@@ -278,7 +278,7 @@ class TestCustomOrqBaseUrl:
             return MagicMock()
 
         with patch("openai.AsyncOpenAI", side_effect=fake_async_openai):
-            from evaluatorq.simulation._client import build_simulation_client
+            from evaluatorq.openresponses.client import build_simulation_client
 
             build_simulation_client()
 

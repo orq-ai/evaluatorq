@@ -388,7 +388,8 @@ def test_persona_scenario_heatmap_matrix(make_result):
 
 
 def test_overview_section_includes_traits_and_goal_when_present():
-    from evaluatorq.simulation.types import SimulationResult, TerminatedBy, TokenUsage
+    from evaluatorq.contracts import TokenUsage
+    from evaluatorq.simulation.types import SimulationResult, TerminatedBy
 
     r = SimulationResult(
         messages=[], terminated_by=TerminatedBy.judge, reason='r',

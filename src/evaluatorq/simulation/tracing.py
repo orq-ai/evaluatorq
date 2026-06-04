@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.simulation.utils.fields import get_field as _field
+from evaluatorq.common.fields import get_field as _field
 from evaluatorq.tracing.setup import get_tracer
 
 if TYPE_CHECKING:

@@ -12,16 +12,16 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from evaluatorq.contracts import LLMCallConfig, TextOutputItem, ToolCallOutputItem
-from evaluatorq.simulation._client import build_simulation_client, extract_responses_output
+from evaluatorq.common.retry import with_retry
+from evaluatorq.contracts import AgentResponse, LLMCallConfig, TextOutputItem, TokenUsage, ToolCallOutputItem
+from evaluatorq.openresponses.client import build_simulation_client
 from evaluatorq.simulation.tracing import (
     get_trace_context_headers,
     record_llm_input,
     record_llm_response,
     with_llm_span,
 )
-from evaluatorq.simulation.types import DEFAULT_MODEL, Message, TokenUsage
-from evaluatorq.simulation.utils.retry import with_retry
+from evaluatorq.simulation.types import DEFAULT_MODEL, Message
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -151,7 +151,7 @@ class BaseAgent(ABC):
     def _build_client(self, api_key: str | None = None) -> AsyncOpenAI:
         """Construct (or reuse) an ``AsyncOpenAI`` client from ``self.config``.
 
-        Delegates to :func:`evaluatorq.simulation._client.build_simulation_client`.
+        Delegates to :func:`evaluatorq.openresponses.client.build_simulation_client`.
 
         Resolution order:
         1. ``self.config.client`` — injected client, used as-is (not owned).
@@ -345,11 +345,13 @@ class BaseAgent(ABC):
                     timeout=timeout_s,
                 )
 
-                output_items, usage = extract_responses_output(response)
+                agent_response = AgentResponse.from_openresponses(response)
+                output_items = agent_response.output
+                usage = agent_response.usage
 
                 record_llm_response(span, response)
 
-                # Accumulate token usage (extract_responses_output returns calls=0, add 1)
+                # Accumulate token usage (from_openresponses leaves calls=0, add 1)
                 if usage is not None:
                     self._usage = self._usage + usage.model_copy(update={"calls": 1})
 

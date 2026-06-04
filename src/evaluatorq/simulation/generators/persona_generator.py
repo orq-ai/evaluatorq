@@ -88,7 +88,7 @@ class PersonaGenerator:
         api_key: str | None = None,
     ) -> None:
         self._model = model
-        from evaluatorq.simulation._client import build_simulation_client
+        from evaluatorq.openresponses.client import build_simulation_client
 
         self._client, self._client_owned = build_simulation_client(
             client, extra_api_key=api_key

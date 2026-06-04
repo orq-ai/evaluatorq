@@ -2,6 +2,7 @@
 
 from datetime import datetime
 
+from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.types import (
     CommunicationStyle,
     ConversationStrategy,
@@ -17,7 +18,6 @@ from evaluatorq.simulation.types import (
     SimulationRun,
     StartingEmotion,
     TerminatedBy,
-    TokenUsage,
     EMOTIONAL_ARC_INSTRUCTIONS,
     CULTURAL_CONTEXT_INSTRUCTIONS,
     STRATEGY_INSTRUCTIONS,

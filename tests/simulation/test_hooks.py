@@ -15,6 +15,7 @@ from evaluatorq.simulation.hooks import (
     SimulationHooks,
     SimulationRunMeta,
 )
+from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.types import (
     CommunicationStyle,
     Datapoint,
@@ -22,7 +23,6 @@ from evaluatorq.simulation.types import (
     Scenario,
     SimulationResult,
     TerminatedBy,
-    TokenUsage,
     TurnMetrics,
 )
 
@@ -87,7 +87,7 @@ def _turn_metrics() -> TurnMetrics:
 
 from evaluatorq.simulation.runner.simulation import SimulationRunner
 from evaluatorq.simulation.types import Judgment, Message
-from evaluatorq.simulation.types import TokenUsage as _TU
+from evaluatorq.contracts import TokenUsage as _TU
 
 
 class _StubUserSim:

@@ -22,7 +22,7 @@ from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario
 @pytest.fixture(autouse=True)
 def _mock_retry_sleep():
     """Strip real sleeps from the retry helper so 5xx tests don't burn 30s."""
-    with patch("evaluatorq.simulation.utils.retry.asyncio.sleep", new=AsyncMock()):
+    with patch("evaluatorq.common.retry.asyncio.sleep", new=AsyncMock()):
         yield
 
 

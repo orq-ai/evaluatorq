@@ -34,10 +34,10 @@ def _make_result(
     rules_broken: list[str] | None = None,
     scorer_scores: dict[str, float] | None = None,
 ) -> Any:
+    from evaluatorq.contracts import TokenUsage
     from evaluatorq.simulation.types import (
         SimulationResult,
         TerminatedBy,
-        TokenUsage,
     )
 
     return SimulationResult(

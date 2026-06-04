@@ -295,7 +295,7 @@ async def generate(
     (with optional ``OPENAI_BASE_URL`` for an OpenAI-compatible endpoint).
     ``sim_model`` drives persona/scenario/first-message generation.
     """
-    from evaluatorq.simulation._client import build_simulation_client
+    from evaluatorq.openresponses.client import build_simulation_client
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
 
@@ -358,7 +358,7 @@ async def _generate_personas_scenarios(
     resolved via the shared factory; the client is closed only when owned here
     (i.e. not injected).
     """
-    from evaluatorq.simulation._client import build_simulation_client
+    from evaluatorq.openresponses.client import build_simulation_client
     from evaluatorq.simulation.generators import PersonaGenerator, ScenarioGenerator
 
     gen_client, gen_owned = build_simulation_client(generation_client)
@@ -571,7 +571,7 @@ async def _resolve_or_generate_datapoints(
     if not personas or not scenarios:
         raise ValueError("'personas' and 'scenarios' arrays must both be non-empty")
 
-    from evaluatorq.simulation._client import build_simulation_client
+    from evaluatorq.openresponses.client import build_simulation_client
     from evaluatorq.simulation.generators import FirstMessageGenerator
 
     gen_client, gen_owned = build_simulation_client(generation_client)

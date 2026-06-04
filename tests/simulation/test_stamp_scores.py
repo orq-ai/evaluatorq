@@ -7,11 +7,11 @@ mirror still lands the same data, keyed by DataPoint identity.
 
 from __future__ import annotations
 
+from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.api import _stamp_evaluator_scores
 from evaluatorq.simulation.types import (
     SimulationResult,
     TerminatedBy,
-    TokenUsage,
 )
 from evaluatorq.types import (
     DataPoint,

@@ -8,6 +8,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from evaluatorq.common.async_utils import await_maybe
+from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
 from evaluatorq.simulation.agents.user_simulator import (
     UserSimulatorAgent,
@@ -29,7 +30,6 @@ from evaluatorq.simulation.types import (
     Scenario,
     SimulationResult,
     TerminatedBy,
-    TokenUsage,
     TurnMetrics,
 )
 from evaluatorq.simulation.utils.prompt_builders import (
@@ -287,7 +287,7 @@ class SimulationRunner:
 
     def _get_shared_client(self) -> AsyncOpenAI:
         if not self._shared_client:
-            from evaluatorq.simulation._client import build_simulation_client
+            from evaluatorq.openresponses.client import build_simulation_client
 
             self._shared_client, self._client_owned = build_simulation_client()
         return self._shared_client

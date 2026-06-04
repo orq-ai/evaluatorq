@@ -15,7 +15,7 @@ import os
 import pytest
 
 from evaluatorq.contracts import AgentResponse, LLMCallConfig, Message
-from evaluatorq.simulation.target import OrqResponsesTarget
+from evaluatorq.openresponses.target import OrqResponsesTarget
 
 
 @pytest.mark.integration

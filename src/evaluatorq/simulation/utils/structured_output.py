@@ -20,7 +20,7 @@ from evaluatorq.simulation.tracing import (
     record_llm_response,
     with_llm_span,
 )
-from evaluatorq.simulation.utils.retry import with_retry
+from evaluatorq.common.retry import with_retry
 
 logger = logging.getLogger(__name__)
 

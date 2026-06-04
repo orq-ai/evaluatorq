@@ -23,7 +23,7 @@ from evaluatorq.simulation.utils.prompt_builders import (
     build_persona_system_prompt,
     build_scenario_user_context,
 )
-from evaluatorq.simulation.utils.retry import with_retry
+from evaluatorq.common.retry import with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +87,7 @@ class FirstMessageGenerator:
         api_key: str | None = None,
     ) -> None:
         self._model = model
-        from evaluatorq.simulation._client import build_simulation_client
+        from evaluatorq.openresponses.client import build_simulation_client
 
         self._client, self._client_owned = build_simulation_client(
             client, extra_api_key=api_key

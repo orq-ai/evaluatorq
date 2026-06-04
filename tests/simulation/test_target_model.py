@@ -16,13 +16,13 @@ import pytest
 
 from evaluatorq.contracts import AgentResponse, AgentTarget, Message
 from evaluatorq.simulation.runner.simulation import SimulationRunner
+from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.types import (
     CommunicationStyle,
     Datapoint,
     Persona,
     Scenario,
     TerminatedBy,
-    TokenUsage,
 )
 
 

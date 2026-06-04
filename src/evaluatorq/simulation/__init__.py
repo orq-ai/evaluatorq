@@ -26,7 +26,7 @@ from evaluatorq.simulation.types import DEFAULT_MODEL
 logger = logging.getLogger(__name__)  # noqa: RUF067
 
 if TYPE_CHECKING:
-    from evaluatorq.contracts import AgentTarget, LLMCallConfig
+    from evaluatorq.contracts import AgentTarget, LLMCallConfig, TokenUsage
     from evaluatorq.simulation.adapters import (
         from_chat_completions,
         from_orq_deployment,
@@ -64,7 +64,7 @@ if TYPE_CHECKING:
         apply_random_perturbation,
     )
     from evaluatorq.simulation.runner.simulation import SimulationRunner
-    from evaluatorq.simulation.target import OrqResponsesTarget
+    from evaluatorq.openresponses.target import OrqResponsesTarget
     from evaluatorq.simulation.types import (
         CommunicationStyle,
         ConversationStrategy,
@@ -81,7 +81,6 @@ if TYPE_CHECKING:
         SimulationRun,
         StartingEmotion,
         TerminatedBy,
-        TokenUsage,
         TurnMetrics,
     )
     from evaluatorq.simulation.utils.dataset_export import (
@@ -106,7 +105,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
     'from_orq_deployment': ('evaluatorq.simulation.adapters', 'from_orq_deployment'),
     'AgentConfig': ('evaluatorq.simulation.agents.base', 'AgentConfig'),
     'BaseAgent': ('evaluatorq.simulation.agents.base', 'BaseAgent'),
-    'OrqResponsesTarget': ('evaluatorq.simulation.target', 'OrqResponsesTarget'),
+    'OrqResponsesTarget': ('evaluatorq.openresponses.target', 'OrqResponsesTarget'),
     'JudgeAgent': ('evaluatorq.simulation.agents.judge', 'JudgeAgent'),
     'UserSimulatorAgent': (
         'evaluatorq.simulation.agents.user_simulator',
@@ -179,7 +178,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
     'SimulationRun': ('evaluatorq.simulation.types', 'SimulationRun'),
     'StartingEmotion': ('evaluatorq.simulation.types', 'StartingEmotion'),
     'TerminatedBy': ('evaluatorq.simulation.types', 'TerminatedBy'),
-    'TokenUsage': ('evaluatorq.simulation.types', 'TokenUsage'),
+    'TokenUsage': ('evaluatorq.contracts', 'TokenUsage'),
     'TurnMetrics': ('evaluatorq.simulation.types', 'TurnMetrics'),
     'export_datapoints_to_jsonl': (
         'evaluatorq.simulation.utils.dataset_export',
