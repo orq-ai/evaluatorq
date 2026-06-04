@@ -18,8 +18,10 @@ Tracing & PII:
       ``false`` / ``0`` to keep raw message text (inputs and outputs) off
       spans while still recording token usage, model, and latency. Use when
       exporting to a third-party backend or when content may contain PII.
-    - ``EVALUATORQ_SPAN_MAX_TEXT_CHARS`` (default ``8192``) — max characters
-      of message text per span attribute before truncation; ``0`` disables.
+    - ``EVALUATORQ_SPAN_MAX_TEXT_CHARS`` (default: capture all) — max
+      characters of message text (inputs and outputs) per span attribute
+      before truncation. Set a positive integer (e.g. ``8192``) to cap;
+      ``-1`` / ``0`` / unset all mean capture all.
 """
 
 from __future__ import annotations

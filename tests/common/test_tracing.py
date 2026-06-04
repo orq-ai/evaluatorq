@@ -83,9 +83,8 @@ def test_truncate_for_span_non_string_coerced() -> None:
     assert truncate_for_span(42, max_chars=100) == '42'
 
 
-def test_truncate_default_is_8192(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_truncate_default_captures_all(monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.common.tracing import (
-        _DEFAULT_SPAN_MAX_TEXT_CHARS,
         _default_span_max_text_chars,
         truncate_for_span,
     )
@@ -93,8 +92,9 @@ def test_truncate_default_is_8192(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv('EVALUATORQ_SPAN_MAX_TEXT_CHARS', raising=False)
     _default_span_max_text_chars.cache_clear()
     try:
-        result = truncate_for_span('x' * 10_000)
-        assert len(result) == _DEFAULT_SPAN_MAX_TEXT_CHARS == 8192
+        long_text = 'x' * 10_000
+        # Default is capture-all (no truncation).
+        assert truncate_for_span(long_text) == long_text
     finally:
         _default_span_max_text_chars.cache_clear()
 

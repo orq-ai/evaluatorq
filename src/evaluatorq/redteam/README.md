@@ -181,7 +181,7 @@ Red teaming emits OpenTelemetry spans for every LLM call (attacker generation, t
 Because attack transcripts can contain sensitive target data, content capture is gated by an env var:
 
 - `EVALUATORQ_CAPTURE_MESSAGE_CONTENT` — **default `true`**. Set to `false` (or `0`) to suppress message text on spans (both inputs and outputs) while still recording token usage, model, finish reason, and latency. Use this when exporting traces to a third-party backend or when prompts/responses may contain PII.
-- `EVALUATORQ_SPAN_MAX_TEXT_CHARS` — max characters of message text per span attribute before truncation (`... [truncated]` marker). Default `8192`; set `0` to disable.
+- `EVALUATORQ_SPAN_MAX_TEXT_CHARS` — max characters of message text (inputs and outputs) per span attribute before truncation (`... [truncated]` marker). **Defaults to capturing all content (no truncation).** Set a positive integer (e.g. `8192`) to cap; `-1` / `0` / unset all mean capture all.
 
 These are shared with agent simulation — the same tracing layer (`evaluatorq.common.tracing`) backs both.
 
