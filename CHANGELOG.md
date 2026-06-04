@@ -96,6 +96,7 @@ from evaluatorq.contracts import AgentTarget   # replaces the simulation TargetA
 
 ### New Features
 
+- **`OWASP_LLM_TOP_10`** and **`OWASP_ASI_TOP_10`** — public `list[str]` constants exported from `evaluatorq.redteam`. Pass them to `red_team(categories=OWASP_LLM_TOP_10)` to run a full framework sweep without spelling out individual category codes (RES-815).
 - `simulate()` and `generate_and_simulate()` accept a new opt-in `upload_results=` flag (default `False`). When set to `True`, results are uploaded to the Orq platform after the run, surfacing as an experiment when `ORQ_API_KEY` is configured. Upload errors are logged but never fail the call. Both functions also accept `evaluation_description=` and `path=` parameters mirroring `evaluatorq()` (RES-598).
 - **`LLMCallConfig`** — per-role LLM configuration with `model`, `temperature`, `max_tokens`, `timeout_ms`, `extra_kwargs`, and `client` fields
 - **`LLMConfig`** — now role-based via `attacker: LLMCallConfig` and `evaluator: LLMCallConfig`; retry, cleanup, and target-agent timeout settings retained at top level
