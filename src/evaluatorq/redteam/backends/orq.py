@@ -38,9 +38,9 @@ def _get_orq_api_key() -> str:
 
 
 def _get_orq_server_url() -> str:
-    """Read ORQ_BASE_URL from environment and strip /v2/router for SDK use."""
+    """Read ORQ_BASE_URL from environment and strip /v3/router for SDK use."""
     url = os.environ.get('ORQ_BASE_URL', ORQ_DEFAULT_BASE_URL)
-    return url.rstrip('/').removesuffix('/v2/router')
+    return url.rstrip('/').removesuffix('/v3/router')
 
 
 from evaluatorq.contracts import AgentTarget, Message

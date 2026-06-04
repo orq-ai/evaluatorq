@@ -37,7 +37,7 @@ The pipeline auto-detects which API to use based on your environment:
 | Environment | LLM calls route through | Models |
 |---|---|---|
 | `OPENAI_API_KEY` only | OpenAI directly | `gpt-5-mini`, `gpt-4.1-mini`, etc. |
-| `ORQ_API_KEY` only | ORQ router (`my.orq.ai/v2/router`) | Auto-prefixed: `openai/gpt-5-mini` |
+| `ORQ_API_KEY` only | ORQ router (`my.orq.ai/v3/router`) | Auto-prefixed: `openai/gpt-5-mini` |
 | Both set | OpenAI directly (takes precedence) | `gpt-5-mini` |
 
 When using the ORQ router, model IDs are automatically prefixed with their provider (e.g. `gpt-5-mini` → `openai/gpt-5-mini`). You never need to add the prefix manually.

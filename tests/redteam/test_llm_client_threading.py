@@ -74,7 +74,7 @@ class TestCreateAsyncLlmClientPriority:
         create_async_llm_client()
         mock_cls.assert_called_once_with(
             api_key='orq-key',
-            base_url='https://my.orq.ai/v2/router',
+            base_url='https://my.orq.ai/v3/router',
         )
 
     @patch.dict('os.environ', {}, clear=True)

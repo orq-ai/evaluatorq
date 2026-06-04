@@ -14,7 +14,7 @@ def test_openai_key_only_uses_openai_base_url(gen_cls, monkeypatch):
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     gen = gen_cls()
     assert "api.openai.com" in str(gen._client.base_url)
-    assert "/v2/router" not in str(gen._client.base_url)
+    assert "/v3/router" not in str(gen._client.base_url)
 
 
 @pytest.mark.parametrize("gen_cls", GEN_CLASSES)
@@ -22,7 +22,7 @@ def test_orq_key_wins_when_both_set(gen_cls, monkeypatch):
     monkeypatch.setenv("ORQ_API_KEY", "orq-test")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     gen = gen_cls()
-    assert str(gen._client.base_url).rstrip("/").endswith("/v2/router")
+    assert str(gen._client.base_url).rstrip("/").endswith("/v3/router")
 
 
 @pytest.mark.parametrize("gen_cls", GEN_CLASSES)

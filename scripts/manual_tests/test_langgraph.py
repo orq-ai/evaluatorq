@@ -26,7 +26,7 @@ load_dotenv()
 
 # Route OpenAI calls through the orq router
 os.environ.setdefault("OPENAI_API_KEY", os.environ.get("ORQ_API_KEY", ""))
-os.environ.setdefault("OPENAI_BASE_URL", "https://api.orq.ai/v2/router")
+os.environ.setdefault("OPENAI_BASE_URL", "https://api.orq.ai/v3/router")
 
 passed = 0
 failed = 0
@@ -46,7 +46,7 @@ def make_graph() -> CompiledStateGraph:  # pyright: ignore[reportMissingTypeArgu
     api_key = os.environ["ORQ_API_KEY"]
     model = ChatOpenAI(
         model="openai/gpt-4o-mini",
-        base_url="https://api.orq.ai/v2/router",
+        base_url="https://api.orq.ai/v3/router",
         api_key=api_key,  # pyright: ignore[reportArgumentType]
     )
     return create_react_agent(model, tools=[], checkpointer=MemorySaver())

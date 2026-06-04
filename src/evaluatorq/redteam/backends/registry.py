@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 
 ORQ_DEFAULT_BASE_URL = "https://my.orq.ai"
-_ROUTER_SUFFIX = "/v2/router"
+_ROUTER_SUFFIX = "/v3/router"
 
 
 def create_async_llm_client(role_config: LLMCallConfig | None = None) -> AsyncOpenAI:
@@ -34,7 +34,7 @@ def create_async_llm_client(role_config: LLMCallConfig | None = None) -> AsyncOp
     2. Standard OpenAI env (``OPENAI_API_KEY`` + optional ``OPENAI_BASE_URL``)
     3. ORQ env (``ORQ_API_KEY`` + optional ``ORQ_BASE_URL``, defaults to https://my.orq.ai)
 
-    When using ORQ, the router suffix ``/v2/router`` is appended automatically
+    When using ORQ, the router suffix ``/v3/router`` is appended automatically
     to produce the OpenAI-compatible completions endpoint.
     """
     if role_config is not None and role_config.client is not None:

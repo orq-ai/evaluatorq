@@ -2,8 +2,8 @@
 
 Covers all resolution branches:
 1. config_client passed → returns (client, owned=False), no env reads
-2. extra_api_key arg → routes via ORQ_BASE_URL/v2/router, owned=True
-3. ORQ_API_KEY env only → routes via ORQ_BASE_URL/v2/router, owned=True
+2. extra_api_key arg → routes via ORQ_BASE_URL/v3/router, owned=True
+3. ORQ_API_KEY env only → routes via ORQ_BASE_URL/v3/router, owned=True
 4. OPENAI_API_KEY env only (no ORQ_API_KEY) → base_url=None (OpenAI default), owned=True
 5. Both ORQ and OPENAI env vars → ORQ wins (precedence)
 6. Neither env var nor client → raises ValueError with helpful message
@@ -105,7 +105,7 @@ class TestExtraApiKey:
             _, owned = build_simulation_client(extra_api_key="sk-extra-key")
 
         assert owned is True
-        assert captured.get("base_url") == "https://api.orq.ai/v2/router"
+        assert captured.get("base_url") == "https://api.orq.ai/v3/router"
         assert captured.get("api_key") == "sk-extra-key"
 
     def test_extra_api_key_uses_custom_orq_base_url(self, monkeypatch):
@@ -125,7 +125,7 @@ class TestExtraApiKey:
 
             build_simulation_client(extra_api_key="sk-extra-key")
 
-        assert captured.get("base_url") == "https://custom.example.com/v2/router"
+        assert captured.get("base_url") == "https://custom.example.com/v3/router"
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +152,7 @@ class TestOrqApiKeyEnv:
             _, owned = build_simulation_client()
 
         assert owned is True
-        assert captured.get("base_url") == "https://api.orq.ai/v2/router"
+        assert captured.get("base_url") == "https://api.orq.ai/v3/router"
         assert captured.get("api_key") == "orq-env-key"
 
 
@@ -209,7 +209,7 @@ class TestOrqTakesPrecedenceOverOpenAI:
 
         assert owned is True
         # Must route via ORQ, not OpenAI default
-        assert captured.get("base_url") == "https://api.orq.ai/v2/router"
+        assert captured.get("base_url") == "https://api.orq.ai/v3/router"
         assert captured.get("api_key") == "orq-wins"
 
 
@@ -263,7 +263,7 @@ class TestCustomOrqBaseUrl:
 
             build_simulation_client()
 
-        assert captured.get("base_url") == "https://staging.orq.ai/v2/router"
+        assert captured.get("base_url") == "https://staging.orq.ai/v3/router"
 
     def test_custom_base_url_not_used_when_openai_key_only(self, monkeypatch):
         """ORQ_BASE_URL must NOT affect routing when only OPENAI_API_KEY is set."""

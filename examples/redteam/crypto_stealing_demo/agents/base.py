@@ -92,7 +92,7 @@ class DemoAgent(AgentTarget):
     model: str = "openai/gpt-5.4-mini"
 
     def __init__(self) -> None:
-        base_url = os.environ.get("ORQ_BASE_URL", "https://my.orq.ai").rstrip("/") + "/v2/router"
+        base_url = os.environ.get("ORQ_BASE_URL", "https://my.orq.ai").rstrip("/") + "/v3/router"
         self.client = AsyncOpenAI(base_url=base_url, api_key=os.environ["ORQ_API_KEY"])
         self.memory_entity_id: str | None = None
         self._conversation: list[dict[str, Any]] = []

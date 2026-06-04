@@ -154,7 +154,7 @@ class BaseAgent(ABC):
         2. ``api_key`` argument (extracted from legacy ``AgentConfig.api_key``),
            treated as an ORQ key and routed through the Orq router.
         3. ``ORQ_API_KEY`` env var — routes through
-           ``ORQ_BASE_URL/v2/router`` (default: ``https://api.orq.ai/v2/router``).
+           ``ORQ_BASE_URL/v3/router`` (default: ``https://api.orq.ai/v3/router``).
         4. ``OPENAI_API_KEY`` env var — uses the OpenAI SDK default base URL so
            traffic goes to OpenAI directly, not to the Orq router.
         """
