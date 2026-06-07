@@ -168,18 +168,37 @@ async def test_evaluator_extra_kwargs_merged(
 
 
 @pytest.mark.asyncio
-async def test_extra_body_is_retry_config(
+async def test_extra_body_carries_retry_hints_for_router_client(
     mock_client_and_capture: tuple[Any, dict[str, Any]],
 ) -> None:
-    """``extra_body`` is sourced from ``cfg.retry_config`` (router-specific retry hints)."""
+    """``extra_body`` carries router retry hints when the client routes through the Orq router."""
     client, captured = mock_client_and_capture
+    client.base_url = 'https://my.orq.ai/v3/router'
     cfg = LLMConfig()
 
     await generate_focus_area_recommendations(
         _empty_report(), client, model='openai/gpt-5-mini', cfg=cfg
     )
 
-    assert captured['extra_body'] == cfg.retry_config
+    assert captured['extra_body'] == {
+        'retry': {'count': cfg.retry_count, 'on_codes': cfg.retry_on_codes}
+    }
+
+
+@pytest.mark.asyncio
+async def test_extra_body_empty_for_non_router_client(
+    mock_client_and_capture: tuple[Any, dict[str, Any]],
+) -> None:
+    """No ORQ-specific ``retry`` is sent to a plain OpenAI client (decision: gate on base_url)."""
+    client, captured = mock_client_and_capture
+    client.base_url = 'https://api.openai.com/v1'
+    cfg = LLMConfig()
+
+    await generate_focus_area_recommendations(
+        _empty_report(), client, model='gpt-5-mini', cfg=cfg
+    )
+
+    assert captured['extra_body'] == {}
 
 
 @pytest.mark.asyncio

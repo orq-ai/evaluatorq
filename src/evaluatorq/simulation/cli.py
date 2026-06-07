@@ -284,11 +284,11 @@ def simulate(
             "--openai-model",
             help=(
                 "OpenAI-compatible model name. Provider is resolved from env: "
-                "OPENAI_API_KEY (+ optional OPENAI_BASE_URL for vLLM/OpenRouter/"
-                "Azure-compatible/local endpoints), otherwise ORQ_API_KEY routes "
-                "via the Orq AI Router (ORQ_BASE_URL overrides the host). OpenAI "
-                "wins if both keys are set; namespace the model accordingly "
-                "(e.g. 'gpt-4o-mini' for OpenAI, 'openai/gpt-4o-mini' for the Orq router)."
+                "ORQ_API_KEY routes via the Orq AI Router (ORQ_BASE_URL overrides "
+                "the host), otherwise OPENAI_API_KEY (+ optional OPENAI_BASE_URL for "
+                "vLLM/OpenRouter/Azure-compatible/local endpoints). ORQ wins if both "
+                "keys are set; namespace the model accordingly "
+                "(e.g. 'openai/gpt-4o-mini' for the Orq router, 'gpt-4o-mini' for OpenAI)."
             ),
         ),
     ] = None,
@@ -351,8 +351,8 @@ def simulate(
     - --agent-key KEY    Orq deployment/agent (requires ORQ_API_KEY).
     - --vercel-url URL   Vercel AI SDK HTTP endpoint.
     - --openai-model M   OpenAI-compatible model. Provider from env:
-      OPENAI_API_KEY (+ optional OPENAI_BASE_URL for vLLM/OpenRouter/local),
-      else ORQ_API_KEY for the Orq AI Router. OpenAI wins if both set.
+      ORQ_API_KEY for the Orq AI Router, else OPENAI_API_KEY
+      (+ optional OPENAI_BASE_URL for vLLM/OpenRouter/local). ORQ wins if both set.
 
     Note: --agent-key targets an Orq *agent*; --openai-model with ORQ_API_KEY
     targets a raw model via the Orq *router*. They are different surfaces.
@@ -470,11 +470,11 @@ def run(
             "--openai-model",
             help=(
                 "OpenAI-compatible model name. Provider is resolved from env: "
-                "OPENAI_API_KEY (+ optional OPENAI_BASE_URL for vLLM/OpenRouter/"
-                "Azure-compatible/local endpoints), otherwise ORQ_API_KEY routes "
-                "via the Orq AI Router (ORQ_BASE_URL overrides the host). OpenAI "
-                "wins if both keys are set; namespace the model accordingly "
-                "(e.g. 'gpt-4o-mini' for OpenAI, 'openai/gpt-4o-mini' for the Orq router)."
+                "ORQ_API_KEY routes via the Orq AI Router (ORQ_BASE_URL overrides "
+                "the host), otherwise OPENAI_API_KEY (+ optional OPENAI_BASE_URL for "
+                "vLLM/OpenRouter/Azure-compatible/local endpoints). ORQ wins if both "
+                "keys are set; namespace the model accordingly "
+                "(e.g. 'openai/gpt-4o-mini' for the Orq router, 'gpt-4o-mini' for OpenAI)."
             ),
         ),
     ] = None,
@@ -556,8 +556,8 @@ def run(
     - --agent-key KEY    Orq deployment/agent (requires ORQ_API_KEY).
     - --vercel-url URL   Vercel AI SDK HTTP endpoint.
     - --openai-model M   OpenAI-compatible model. Provider from env:
-      OPENAI_API_KEY (+ optional OPENAI_BASE_URL for vLLM/OpenRouter/local),
-      else ORQ_API_KEY for the Orq AI Router. OpenAI wins if both set.
+      ORQ_API_KEY for the Orq AI Router, else OPENAI_API_KEY
+      (+ optional OPENAI_BASE_URL for vLLM/OpenRouter/local). ORQ wins if both set.
 
     Note: --agent-key targets an Orq *agent*; --openai-model with ORQ_API_KEY
     targets a raw model via the Orq *router*. They are different surfaces.

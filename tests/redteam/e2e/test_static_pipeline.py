@@ -2,31 +2,42 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 from typing import cast
+from unittest.mock import patch
 
 import pytest
 from openai import AsyncOpenAI
 
 from evaluatorq.redteam import OpenAIModelTarget, red_team
 
-from .conftest import DeterministicAsyncOpenAI, validate_report_structure
+from .conftest import DeterministicAsyncOpenAI, MockBackend, validate_report_structure
+
+
+@contextmanager
+def _static_patches(mock_backend_bundle: MockBackend):
+    """Patch resolve_backend so static agent: targets use MockBackend (no creds needed)."""
+    with patch("evaluatorq.redteam.runner.resolve_backend", return_value=mock_backend_bundle):
+        yield
 
 
 @pytest.mark.asyncio
 async def test_full_static_run(
     mock_llm_client: DeterministicAsyncOpenAI,
+    mock_backend_bundle: MockBackend,
     static_dataset_path: Path,
 ) -> None:
     """Full static pipeline run with 3 dataset samples."""
-    report = await red_team(
-        "agent:e2e-static-model",
-        mode="static",
-        parallelism=2,
-        dataset=str(static_dataset_path),
-        llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
-        description="E2E static test",
-    )
+    with _static_patches(mock_backend_bundle):
+        report = await red_team(
+            "agent:e2e-static-model",
+            mode="static",
+            parallelism=2,
+            dataset=str(static_dataset_path),
+            llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
+            description="E2E static test",
+        )
 
     errors = validate_report_structure(report, expected_pipeline="static", min_results=3)
     assert not errors, f"Report validation errors: {errors}"
@@ -69,17 +80,19 @@ async def test_static_vulnerability_detection(
 @pytest.mark.asyncio
 async def test_static_category_filtering(
     mock_llm_client: DeterministicAsyncOpenAI,
+    mock_backend_bundle: MockBackend,
     static_dataset_path: Path,
 ) -> None:
     """Filtering to ASI01 should yield only ASI01 results."""
-    report = await red_team(
-        "agent:e2e-static-model",
-        mode="static",
-        categories=["ASI01"],
-        parallelism=2,
-        dataset=str(static_dataset_path),
-        llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
-    )
+    with _static_patches(mock_backend_bundle):
+        report = await red_team(
+            "agent:e2e-static-model",
+            mode="static",
+            categories=["ASI01"],
+            parallelism=2,
+            dataset=str(static_dataset_path),
+            llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
+        )
 
     assert report.total_results >= 1
     result_categories = {r.attack.category for r in report.results}
@@ -89,16 +102,18 @@ async def test_static_category_filtering(
 @pytest.mark.asyncio
 async def test_static_datapoint_capping(
     mock_llm_client: DeterministicAsyncOpenAI,
+    mock_backend_bundle: MockBackend,
     static_dataset_path: Path,
 ) -> None:
     """max_static_datapoints=1 should yield exactly 1 result."""
-    report = await red_team(
-        "agent:e2e-static-model",
-        mode="static",
-        max_static_datapoints=1,
-        parallelism=2,
-        dataset=str(static_dataset_path),
-        llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
-    )
+    with _static_patches(mock_backend_bundle):
+        report = await red_team(
+            "agent:e2e-static-model",
+            mode="static",
+            max_static_datapoints=1,
+            parallelism=2,
+            dataset=str(static_dataset_path),
+            llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
+        )
 
     assert report.total_results == 1

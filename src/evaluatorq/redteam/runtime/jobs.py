@@ -12,30 +12,32 @@ from evaluatorq.redteam.adaptive.orchestrator import _get_active_progress
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import Message, TokenUsage
 from evaluatorq.redteam.exceptions import CredentialError
-from evaluatorq.redteam.runtime.orq_agent_job import _sanitize_job_name, create_orq_platform_agent_job
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
 
+def _sanitize_job_name(value: str) -> str:
+    """Sanitize a value for use in job names (alphanumeric, dash, underscore)."""
+    return ''.join(ch if ch.isalnum() or ch in {'-', '_'} else '-' for ch in value).strip('-') or 'unknown'
+
+
 def create_model_job(
     model: str | None = None,
     deployment_key: str | None = None,
-    agent_key: str | None = None,
     llm_client: AsyncOpenAI | None = None,
     system_prompt: str | None = None,
     max_tokens: int = 5000,
 ) -> Job:
-    """Create an evaluatorq job for router model, deployment, or ORQ agent.
+    """Create an evaluatorq job for a router model or ORQ deployment.
 
     ``max_tokens`` is applied to direct model calls (router jobs).
-    Agent and deployment targets manage their own token limits via platform
-    configuration, so ``max_tokens`` is ignored for those paths.
+    Deployment targets manage their own token limits via platform configuration,
+    so ``max_tokens`` is ignored for that path.
 
     Args:
         model: Model name for direct LLM calls via the ORQ router or OpenAI.
         deployment_key: ORQ deployment key for deployment-based inference.
-        agent_key: ORQ platform agent key (``max_tokens`` is not applied).
         max_tokens: Maximum tokens for direct model responses (default 5000).
 
     Returns:
@@ -44,9 +46,6 @@ def create_model_job(
     Raises:
         ValueError: If no target parameter is provided.
     """
-    if agent_key:
-        return create_orq_platform_agent_job(agent_key)
-
     if deployment_key:
         safe_key = _sanitize_job_name(deployment_key)
 
@@ -86,7 +85,7 @@ def create_model_job(
         return deployment_job
 
     if model is None:
-        msg = "Provide one of: 'model', 'deployment_key', or 'agent_key'"
+        msg = "Provide one of: 'model' or 'deployment_key'"
         raise ValueError(msg)
 
     safe_model = _sanitize_job_name(model)

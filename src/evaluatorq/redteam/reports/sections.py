@@ -81,8 +81,6 @@ def _build_summary_section(report: RedTeamReport) -> ReportSection:
         targets = sorted(set(report.tested_agents))
     elif report.agent_contexts:
         targets = sorted(report.agent_contexts.keys())
-    elif report.agent_context:
-        targets = [report.agent_context.display_name or report.agent_context.key or "unknown"]
     else:
         # Last resort: extract from individual results
         agent_names = [r.agent.key or r.agent.display_name or r.agent.model or 'unknown' for r in report.results if r.agent]
@@ -623,10 +621,9 @@ def _build_framework_breakdown_section(report: RedTeamReport) -> ReportSection:
 def _build_agent_context_section(report: RedTeamReport) -> ReportSection | None:
     """Build agent context capability cards.
 
-    Prefers ``report.agent_contexts`` (dict keyed by agent key) over
-    ``report.agent_context`` (single context).  Falls back to building
-    minimal stubs from ``report.tested_agents`` when no AgentContext objects
-    are available at all.
+    Uses ``report.agent_contexts`` (dict keyed by agent key).  Falls back to
+    building minimal stubs from ``report.tested_agents`` when no AgentContext
+    objects are available at all.
 
     Returns ``None`` when there is no agent information to display.
     """
@@ -643,17 +640,6 @@ def _build_agent_context_section(report: RedTeamReport) -> ReportSection | None:
                 "memory_stores": [ms.key or ms.id for ms in ctx.memory_stores],
                 "knowledge_bases": [kb.name or kb.key or kb.id for kb in ctx.knowledge_bases],
             })
-    elif report.agent_context:
-        ctx = report.agent_context
-        agents.append({
-            "key": ctx.key,
-            "display_name": ctx.display_name or ctx.key,
-            "model": ctx.model or "",
-            "description": ctx.description or "",
-            "tools": [t.name for t in ctx.tools],
-            "memory_stores": [ms.key or ms.id for ms in ctx.memory_stores],
-            "knowledge_bases": [kb.name or kb.key or kb.id for kb in ctx.knowledge_bases],
-        })
     elif report.tested_agents:
         # Minimal stubs — no detailed AgentContext available
         agents.extend({

@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
-from evaluatorq.contracts import AgentTarget, Message, message_to_chat_param
+from evaluatorq.common.tracing import record_llm_response
+from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.backends._errors import extract_provider_error_code, extract_status_code
 from evaluatorq.redteam.backends.base import Backend
 from evaluatorq.redteam.contracts import (
@@ -21,7 +22,6 @@ from evaluatorq.redteam.contracts import (
     TokenUsage,
     ToolCallOutputItem,
 )
-from evaluatorq.common.tracing import record_llm_response
 from evaluatorq.redteam.tracing import with_llm_span
 
 if TYPE_CHECKING:
@@ -92,7 +92,7 @@ class OpenAIModelTarget(AgentTarget):
         prepended, so any leading ``system`` messages in ``messages`` are
         stripped to avoid a double system prompt. Assistant ``tool_calls`` and
         ``tool`` results in the transcript are preserved (rendered as OpenAI
-        chat params via :func:`~evaluatorq.contracts.message_to_chat_param`), so
+        chat params via :meth:`~evaluatorq.contracts.Message.to_chat_completion`), so
         multi-turn tool-using transcripts replay faithfully.
         """
         user_visible = [m for m in messages if m.role != 'system']
@@ -100,7 +100,7 @@ class OpenAIModelTarget(AgentTarget):
             'list[ChatCompletionMessageParam]',
             [
                 {'role': 'system', 'content': self.system_prompt},
-                *[message_to_chat_param(m) for m in user_visible],
+                *[m.to_chat_completion() for m in user_visible],
             ],
         )
         async with with_llm_span(

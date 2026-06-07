@@ -17,6 +17,8 @@ from loguru import logger
 from evaluatorq.contracts import AgentResponse
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from evaluatorq.contracts import AgentContext, AgentTarget
 
 
@@ -89,6 +91,70 @@ class Backend(ABC):
         ctx = await probe.get_agent_context()
         self._ctx_cache[agent_key] = ctx
         return ctx
+
+
+class HybridAgentBackend(Backend):
+    """Composite backend for ORQ agent targets: ORQ SDK for context + cleanup,
+    OrqResponses for execution.
+
+    ``create_target`` prefixes the key with ``agent/`` so the OrqResponses
+    Responses API invokes the hosted agent (server-side tools/memory/KB are then
+    applied automatically). Context retrieval and memory cleanup stay on the ORQ
+    SDK backend, which can actually introspect and delete.
+    """
+
+    def __init__(
+        self,
+        *,
+        context_backend: Backend | None = None,
+        context_backend_factory: Callable[[], Backend] | None = None,
+        exec_backend: Backend,
+    ) -> None:
+        # Keyword-only: context and exec are the same type (Backend), so positional
+        # args would let a caller silently swap them — routing cleanup to the exec
+        # backend and execution to the SDK backend.
+        #
+        # The context backend may be supplied lazily via ``context_backend_factory``:
+        # execution (``create_target``/``map_error``) never touches it, so a static
+        # ``agent:`` run can avoid constructing the ORQ SDK backend entirely (and
+        # thus avoid requiring ``orq-ai-sdk``). It is built on first context use.
+        if (context_backend is None) == (context_backend_factory is None):
+            raise ValueError("provide exactly one of context_backend / context_backend_factory")
+        super().__init__(name="hybrid-agent")
+        self._context_cached = context_backend
+        self._context_factory = context_backend_factory
+        self._exec = exec_backend
+
+    @property
+    def _context(self) -> Backend:
+        """Resolve (and cache) the context backend, building it lazily if needed."""
+        cached = self._context_cached
+        if cached is not None:
+            return cached
+        factory = self._context_factory
+        if factory is None:  # unreachable: __init__ guarantees exactly one source
+            raise RuntimeError("HybridAgentBackend has no context backend configured")
+        cached = factory()
+        self._context_cached = cached
+        return cached
+
+    def create_target(self, agent_key: str) -> AgentTarget:
+        """Delegate to exec backend with ``agent/`` prefix for OrqResponses routing."""
+        # Strip any existing prefix first so an already-prefixed key does not become
+        # ``agent/agent/<key>``.
+        return self._exec.create_target(f"agent/{agent_key.removeprefix('agent/')}")
+
+    async def resolve_context(self, agent_key: str) -> AgentContext:
+        """Delegate context resolution to the ORQ SDK backend (has its own cache)."""
+        return await self._context.resolve_context(agent_key)
+
+    async def cleanup_memory(self, ctx: AgentContext, entity_ids: list[str]) -> None:
+        """Delegate memory cleanup to the ORQ SDK backend."""
+        await self._context.cleanup_memory(ctx, entity_ids)
+
+    def map_error(self, exc: Exception) -> tuple[str, str]:
+        """Delegate error taxonomy to the exec backend."""
+        return self._exec.map_error(exc)
 
 
 class BareTargetBackend(Backend):

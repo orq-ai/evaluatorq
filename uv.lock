@@ -542,6 +542,7 @@ dependencies = [
     { name = "loguru" },
     { name = "pydantic" },
     { name = "rich" },
+    { name = "typer" },
 ]
 
 [package.optional-dependencies]
@@ -558,9 +559,8 @@ all = [
     { name = "opentelemetry-semantic-conventions" },
     { name = "orq-ai-sdk" },
     { name = "plotly" },
-    { name = "python-dotenv" },
     { name = "streamlit" },
-    { name = "typer" },
+    { name = "watchdog" },
 ]
 export = [
     { name = "kaleido" },
@@ -586,16 +586,13 @@ otel = [
 redteam = [
     { name = "huggingface-hub" },
     { name = "openai" },
-    { name = "python-dotenv" },
-    { name = "typer" },
+    { name = "plotly" },
+    { name = "streamlit" },
+    { name = "watchdog" },
 ]
 simulation = [
     { name = "openai" },
     { name = "orq-ai-sdk" },
-]
-ui = [
-    { name = "plotly" },
-    { name = "streamlit" },
 ]
 
 [package.dev-dependencies]
@@ -614,7 +611,6 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
-    { name = "python-dotenv" },
     { name = "ruff" },
     { name = "typer" },
     { name = "watchdog" },
@@ -622,7 +618,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "evaluatorq", extras = ["orq", "otel", "langchain", "langgraph", "openai-agents", "redteam", "simulation", "ui", "export"], marker = "extra == 'all'" },
+    { name = "evaluatorq", extras = ["orq", "otel", "langchain", "langgraph", "openai-agents", "redteam", "simulation", "export"], marker = "extra == 'all'" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "huggingface-hub", marker = "extra == 'redteam'", specifier = ">=0.20.0" },
     { name = "kaleido", marker = "extra == 'export'", specifier = ">=0.2.1" },
@@ -638,14 +634,14 @@ requires-dist = [
     { name = "opentelemetry-semantic-conventions", marker = "extra == 'otel'", specifier = ">=0.41b0" },
     { name = "orq-ai-sdk", marker = "extra == 'orq'", specifier = ">=4.4.7" },
     { name = "orq-ai-sdk", marker = "extra == 'simulation'", specifier = ">=4.4.7" },
-    { name = "plotly", marker = "extra == 'ui'", specifier = ">=5.18.0" },
+    { name = "plotly", marker = "extra == 'redteam'", specifier = ">=5.18.0" },
     { name = "pydantic", specifier = ">=2.0" },
-    { name = "python-dotenv", marker = "extra == 'redteam'", specifier = ">=1.0.0" },
     { name = "rich", specifier = ">=14.2.0" },
-    { name = "streamlit", marker = "extra == 'ui'", specifier = ">=1.30.0" },
-    { name = "typer", marker = "extra == 'redteam'", specifier = ">=0.12.0" },
+    { name = "streamlit", marker = "extra == 'redteam'", specifier = ">=1.30.0" },
+    { name = "typer", specifier = ">=0.12.0" },
+    { name = "watchdog", marker = "extra == 'redteam'", specifier = ">=4.0.0" },
 ]
-provides-extras = ["orq", "otel", "langchain", "langgraph", "openai-agents", "redteam", "simulation", "ui", "export", "all"]
+provides-extras = ["orq", "otel", "langchain", "langgraph", "openai-agents", "redteam", "simulation", "export", "all"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -663,7 +659,6 @@ dev = [
     { name = "pytest", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", specifier = ">=1.2.0" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
-    { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "ruff", specifier = ">=0.14.3" },
     { name = "typer", specifier = ">=0.12.0" },
     { name = "watchdog", specifier = ">=4.0.0" },

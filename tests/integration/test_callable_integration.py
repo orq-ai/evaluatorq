@@ -17,8 +17,8 @@ class TestCallableIntegration:
         """A callable with state that tracks conversation history."""
         history: list[str] = []
 
-        async def stateful_agent(prompt: str) -> str:
-            history.append(prompt)
+        async def stateful_agent(messages: list[Message]) -> str:
+            history.append(messages[-1].content or "")
             return f"You said {len(history)} things so far."
 
         def reset() -> None:
@@ -38,11 +38,26 @@ class TestCallableIntegration:
         assert "1" in r3.text  # Back to 1 after reset
 
     @pytest.mark.asyncio
+    async def test_callable_sees_full_conversation(self) -> None:
+        """A stateless callable can reconstruct context from the forwarded transcript."""
+
+        async def echo_history(messages: list[Message]) -> str:
+            return f"turns={len(messages)} last={messages[-1].content}"
+
+        target = CallableTarget(echo_history)
+        result = await target.respond([
+            Message(role="user", content="one"),
+            Message(role="assistant", content="ack"),
+            Message(role="user", content="two"),
+        ])
+        assert result.text == "turns=3 last=two"
+
+    @pytest.mark.asyncio
     async def test_clone_gets_independent_state(self) -> None:
         """Cloned callable targets should not share state."""
         call_count = 0
 
-        def counting_agent(prompt: str) -> str:
+        def counting_agent(messages: list[Message]) -> str:
             nonlocal call_count
             call_count += 1
             return f"Call #{call_count}"
@@ -50,7 +65,6 @@ class TestCallableIntegration:
         target = CallableTarget(counting_agent)
         cloned = target.new()
 
-        from evaluatorq.redteam.contracts import SendResult
         r1 = await target.respond([Message(role="user", content="a")])
         r2 = await cloned.respond([Message(role="user", content="b")])
 

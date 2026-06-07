@@ -153,41 +153,40 @@ class Message(BaseModel):
     )
     name: str | None = Field(default=None, description="Function name (for role=tool)")
 
+    def to_chat_completion(self) -> dict[str, Any]:
+        """Render this message as an OpenAI chat-completions message dict.
 
-def message_to_chat_param(m: Message) -> dict[str, Any]:
-    """Render a :class:`Message` as an OpenAI chat-completions message dict.
-
-    Preserves tool-call structure that a naive ``{"role", "content"}`` flatten
-    would drop: an assistant message's ``tool_calls`` and a ``tool`` row's
-    ``tool_call_id``/``name``. Used by stateless targets to replay a transcript
-    (built by ``turns_to_messages``) without losing multi-turn tool context.
-    """
-    if m.role == "tool":
-        # A tool message carries a result keyed to tool_call_id; tool_calls belong
-        # on assistant messages, so any present here are malformed and not emitted.
-        param: dict[str, Any] = {
-            "role": "tool",
-            "tool_call_id": m.tool_call_id or "",
-            "content": m.content or "",
-        }
-        if m.name:
-            param["name"] = m.name
-        return param
-    if m.role == "assistant" and m.tool_calls:
-        # content may be None on a pure tool-call turn; OpenAI accepts null.
-        return {
-            "role": "assistant",
-            "content": m.content,
-            "tool_calls": [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                }
-                for tc in m.tool_calls
-            ],
-        }
-    return {"role": m.role, "content": m.content or ""}
+        Preserves tool-call structure that a naive ``{"role", "content"}`` flatten
+        would drop: an assistant message's ``tool_calls`` and a ``tool`` row's
+        ``tool_call_id``/``name``. Used by stateless targets to replay a transcript
+        (built by ``turns_to_messages``) without losing multi-turn tool context.
+        """
+        if self.role == "tool":
+            # A tool message carries a result keyed to tool_call_id; tool_calls belong
+            # on assistant messages, so any present here are malformed and not emitted.
+            param: dict[str, Any] = {
+                "role": "tool",
+                "tool_call_id": self.tool_call_id or "",
+                "content": self.content or "",
+            }
+            if self.name:
+                param["name"] = self.name
+            return param
+        if self.role == "assistant" and self.tool_calls:
+            # content may be None on a pure tool-call turn; OpenAI accepts null.
+            return {
+                "role": "assistant",
+                "content": self.content,
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in self.tool_calls
+                ],
+            }
+        return {"role": self.role, "content": self.content or ""}
 
 
 class TokenUsage(BaseModel):
@@ -629,5 +628,4 @@ __all__ = [
     "TokenUsage",
     "ToolCallOutputItem",
     "ToolInfo",
-    "message_to_chat_param",
 ]

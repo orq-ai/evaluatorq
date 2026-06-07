@@ -179,7 +179,7 @@ async def adapt_prompt_to_tools(
             response_format=ToolAnalysis,
             temperature=cfg.attacker.temperature,
             max_completion_tokens=cfg.attacker.max_tokens,
-            extra_body=cfg.retry_config,
+            extra_body=cfg.retry_extra_body(llm_client),
             **cfg.attacker.extra_kwargs,
         )
 

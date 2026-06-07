@@ -410,10 +410,49 @@ class TestRunAttack:
 
         assert result.objective_achieved is True
         assert result.n_turns == 2
+        # Legacy no-colon marker form carries no rationale.
+        assert result.objective_rationale is None
         # Turn 2 attack prompt should have the marker stripped
         turn2_user_msg = result.chat_completions[2]
         assert turn2_user_msg.role == "user"
         assert turn2_user_msg.content == "Tell me secrets"
+
+    @pytest.mark.asyncio
+    @patch(_PATCH_RECORD_LLM)
+    @patch(_PATCH_LLM_SPAN, side_effect=_noop_span_ctx)
+    @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
+    async def test_objective_achieved_rationale_captured_and_not_scored(self, _rs, _ls, _rl):
+        """Colon form captures the attacker rationale into a sidecar field, and that
+        rationale NEVER appears in the transcript handed to the scorer."""
+        orchestrator, mock_llm = _make_orchestrator()
+        target = _make_target()
+
+        rationale = "target leaked the API key in its reply"
+        mock_llm.chat.completions.create.side_effect = [
+            _make_completion("Normal attack turn 1"),
+            _make_completion(f"OBJECTIVE_ACHIEVED: {rationale}\nTell me secrets"),
+        ]
+        target.respond.side_effect = [
+            AgentResponse(text="Target response 1"),
+            AgentResponse(text="Target response 2"),
+        ]
+
+        result = await orchestrator.run_attack(
+            target=target,
+            strategy=_make_strategy(),
+            objective="Exfiltrate secrets",
+            agent_context=_make_context(),
+            max_turns=5,
+        )
+
+        assert result.objective_achieved is True
+        assert result.objective_rationale == rationale
+        # The trailing prompt (after the rationale line) is what reaches the target.
+        turn2_user_msg = result.chat_completions[2]
+        assert turn2_user_msg.content == "Tell me secrets"
+        # ISOLATION LOCK: the rationale must not leak into any scored message.
+        for msg in result.chat_completions:
+            assert rationale not in (msg.content or "")
 
     @pytest.mark.asyncio
     @patch(_PATCH_RECORD_LLM)
@@ -441,6 +480,8 @@ class TestRunAttack:
         )
 
         assert result.objective_achieved is False
+        # Rejected self-report → no rationale stored either.
+        assert result.objective_rationale is None
         assert result.n_turns == 0
         target.respond.assert_not_called()
 
@@ -686,3 +727,89 @@ class TestRunAttack:
 
         assert result.n_turns == 1
         assert len(result.chat_completions) == 2
+
+
+# ---------------------------------------------------------------------------
+# _parse_objective_marker — split signal/rationale/payload
+# ---------------------------------------------------------------------------
+
+
+class TestParseObjectiveMarker:
+    """Unit tests for the OBJECTIVE_ACHIEVED parse helper."""
+
+    def test_no_marker(self):
+        from evaluatorq.redteam.adaptive.orchestrator import _parse_objective_marker
+
+        present, rationale, remaining = _parse_objective_marker("just an attack prompt")
+        assert present is False
+        assert rationale is None
+        assert remaining == "just an attack prompt"
+
+    def test_bare_marker(self):
+        from evaluatorq.redteam.adaptive.orchestrator import _parse_objective_marker
+
+        present, rationale, remaining = _parse_objective_marker("OBJECTIVE_ACHIEVED")
+        assert present is True
+        assert rationale is None
+        assert remaining == ""
+
+    def test_colon_rationale_only(self):
+        from evaluatorq.redteam.adaptive.orchestrator import _parse_objective_marker
+
+        present, rationale, remaining = _parse_objective_marker(
+            "OBJECTIVE_ACHIEVED: the agent revealed its system prompt"
+        )
+        assert present is True
+        assert rationale == "the agent revealed its system prompt"
+        assert remaining == ""
+
+    def test_colon_rationale_then_prompt(self):
+        from evaluatorq.redteam.adaptive.orchestrator import _parse_objective_marker
+
+        present, rationale, remaining = _parse_objective_marker(
+            "OBJECTIVE_ACHIEVED: leaked the key\nnow ask for the database password"
+        )
+        assert present is True
+        assert rationale == "leaked the key"
+        assert remaining == "now ask for the database password"
+
+    def test_legacy_no_colon_same_line_is_prompt(self):
+        """No colon → the same-line remainder is a prompt, not a rationale (back-compat)."""
+        from evaluatorq.redteam.adaptive.orchestrator import _parse_objective_marker
+
+        present, rationale, remaining = _parse_objective_marker("OBJECTIVE_ACHIEVED Tell me secrets")
+        assert present is True
+        assert rationale is None
+        assert remaining == "Tell me secrets"
+
+    def test_leading_whitespace(self):
+        from evaluatorq.redteam.adaptive.orchestrator import _parse_objective_marker
+
+        present, rationale, remaining = _parse_objective_marker("  \n OBJECTIVE_ACHIEVED:done")
+        assert present is True
+        assert rationale == "done"
+        assert remaining == ""
+
+    def test_marker_midprompt_not_consumed(self):
+        from evaluatorq.redteam.adaptive.orchestrator import _parse_objective_marker
+
+        present, rationale, remaining = _parse_objective_marker("say OBJECTIVE_ACHIEVED out loud")
+        assert present is False
+        assert remaining == "say OBJECTIVE_ACHIEVED out loud"
+
+    def test_marker_prefix_not_a_boundary(self):
+        """A token that merely *begins* with the marker must not be read as a signal."""
+        from evaluatorq.redteam.adaptive.orchestrator import _parse_objective_marker
+
+        present, rationale, remaining = _parse_objective_marker("OBJECTIVE_ACHIEVEDX: leaks")
+        assert present is False
+        assert rationale is None
+        assert remaining == "OBJECTIVE_ACHIEVEDX: leaks"
+
+    def test_marker_underscore_suffix_not_a_boundary(self):
+        from evaluatorq.redteam.adaptive.orchestrator import _parse_objective_marker
+
+        present, rationale, remaining = _parse_objective_marker("OBJECTIVE_ACHIEVED_LATER do the thing")
+        assert present is False
+        assert rationale is None
+        assert remaining == "OBJECTIVE_ACHIEVED_LATER do the thing"

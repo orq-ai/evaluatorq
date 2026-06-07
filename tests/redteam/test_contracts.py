@@ -101,11 +101,12 @@ class TestDynamicFixture:
 
     def test_agent_context_present(self, dynamic_report_data: dict[str, Any]) -> None:
         report = RedTeamReport.model_validate(dynamic_report_data)
-        assert report.agent_context is not None
-        assert isinstance(report.agent_context, AgentContext)
-        assert report.agent_context.key == "domain-search-assistant"
-        assert report.agent_context.has_tools
-        assert report.agent_context.has_memory
+        assert report.agent_contexts
+        ctx = report.agent_contexts["domain-search-assistant"]
+        assert isinstance(ctx, AgentContext)
+        assert ctx.key == "domain-search-assistant"
+        assert ctx.has_tools
+        assert ctx.has_memory
 
     def test_result_attack_info(self, dynamic_report_data: dict[str, Any]) -> None:
         report = RedTeamReport.model_validate(dynamic_report_data)

@@ -36,7 +36,7 @@ async def main() -> None:
     from evaluatorq.contracts import Message
 
     api_key = os.environ["ORQ_API_KEY"]
-    base_url = f"{os.environ.get('ORQ_BASE_URL', 'https://api.orq.ai')}/v3/router"
+    base_url = f"{os.environ.get('ORQ_BASE_URL', 'https://my.orq.ai')}/v3/router"
     client = AsyncOpenAI(api_key=api_key, base_url=base_url)
 
     system = (

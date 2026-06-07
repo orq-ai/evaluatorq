@@ -34,13 +34,16 @@ async def main() -> None:
     #   - A self-hosted model:    base_url="http://my-model:8000/v1"
     #   - Azure OpenAI:           base_url="https://<resource>.openai.azure.com/..."
     #   - The ORQ router:         base_url="https://my.orq.ai/v3/router"
-    # Use OPENAI_API_KEY if available, otherwise fall back to ORQ_API_KEY with the ORQ router.
-    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("ORQ_API_KEY")
+    # Prefer ORQ_API_KEY (Orq router); fall back to OPENAI_API_KEY. Mirrors the
+    # library default — ORQ_API_KEY wins when both are set.
+    api_key = os.environ.get("ORQ_API_KEY") or os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        raise RuntimeError("Set OPENAI_API_KEY or ORQ_API_KEY in your environment")
-    using_openai = bool(os.environ.get("OPENAI_API_KEY"))
-    base_url = os.environ.get("OPENAI_BASE_URL") or (
-        "https://api.openai.com/v1" if using_openai else os.environ.get("ORQ_BASE_URL", "https://my.orq.ai/v3/router")
+        raise RuntimeError("Set ORQ_API_KEY or OPENAI_API_KEY in your environment")
+    using_orq = bool(os.environ.get("ORQ_API_KEY"))
+    base_url = (
+        os.environ.get("ORQ_BASE_URL", "https://my.orq.ai").rstrip("/") + "/v3/router"
+        if using_orq
+        else os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1"
     )
     client = AsyncOpenAI(api_key=api_key, base_url=base_url)
 

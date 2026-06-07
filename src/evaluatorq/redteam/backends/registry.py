@@ -19,57 +19,45 @@ if TYPE_CHECKING:
     from evaluatorq.redteam.contracts import LLMCallConfig, LLMConfig, TargetConfig
 
 
+# Retained for backward-compatible imports; canonical values live in common.llm_client.
 ORQ_DEFAULT_BASE_URL = "https://my.orq.ai"
-_ROUTER_SUFFIX = "/v3/router"
 
 
 def create_async_llm_client(role_config: LLMCallConfig | None = None) -> AsyncOpenAI:
     """Create an OpenAI-compatible async client.
 
-    If role_config.client is set, returns it directly.
-    Otherwise auto-detects from environment variables.
+    Thin red-team wrapper over :func:`evaluatorq.common.llm_client.resolve_llm_client`
+    (the single source of truth for env-var precedence). If ``role_config.client``
+    is set it is returned directly; otherwise the client is auto-detected.
 
     Preference order:
     1. ``role_config.client`` if provided
-    2. Standard OpenAI env (``OPENAI_API_KEY`` + optional ``OPENAI_BASE_URL``)
-    3. ORQ env (``ORQ_API_KEY`` + optional ``ORQ_BASE_URL``, defaults to https://my.orq.ai)
+    2. ORQ env (``ORQ_API_KEY`` + optional ``ORQ_BASE_URL``, defaults to https://my.orq.ai)
+    3. Standard OpenAI env (``OPENAI_API_KEY`` + optional ``OPENAI_BASE_URL``)
 
     When using ORQ, the router suffix ``/v3/router`` is appended automatically
     to produce the OpenAI-compatible completions endpoint.
     """
-    if role_config is not None and role_config.client is not None:
-        return role_config.client
+    from evaluatorq.common.llm_client import MissingLLMCredentialsError, resolve_llm_client
 
+    if os.getenv("ROUTER_BASE_URL") and not os.getenv("ORQ_BASE_URL"):
+        logger.warning("ROUTER_BASE_URL is no longer supported; rename it to ORQ_BASE_URL")
+
+    config_client = role_config.client if role_config is not None else None
     try:
-        from openai import AsyncOpenAI
+        return resolve_llm_client(
+            config_client,
+            default_orq_host=ORQ_DEFAULT_BASE_URL,
+            honor_openai_base_url=True,
+        ).client
     except ImportError as exc:
         msg = (
             "openai package is required for LLM-based attack generation. "
             "Install it with: pip install openai"
         )
         raise BackendError(msg) from exc
-
-    if os.getenv("ROUTER_BASE_URL") and not os.getenv("ORQ_BASE_URL"):
-        logger.warning("ROUTER_BASE_URL is no longer supported; rename it to ORQ_BASE_URL")
-
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-    if openai_api_key:
-        openai_base_url = os.getenv("OPENAI_BASE_URL")
-        if openai_base_url:
-            return AsyncOpenAI(api_key=openai_api_key, base_url=openai_base_url)
-        return AsyncOpenAI(api_key=openai_api_key)
-
-    orq_api_key = os.getenv("ORQ_API_KEY")
-    if orq_api_key:
-        base_url = os.getenv("ORQ_BASE_URL", ORQ_DEFAULT_BASE_URL).rstrip("/")
-        router_url = f"{base_url}{_ROUTER_SUFFIX}"
-        return AsyncOpenAI(api_key=orq_api_key, base_url=router_url)
-
-    msg = (
-        "Missing LLM credentials. Set either OPENAI_API_KEY (optionally OPENAI_BASE_URL) "
-        "or ORQ_API_KEY (optionally ORQ_BASE_URL)."
-    )
-    raise CredentialError(msg)
+    except MissingLLMCredentialsError as exc:
+        raise CredentialError(str(exc)) from exc
 
 
 _BACKEND_REGISTRY: dict[str, Callable[..., Backend]] = {}

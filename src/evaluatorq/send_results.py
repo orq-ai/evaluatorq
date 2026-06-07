@@ -88,7 +88,7 @@ async def send_results_to_orq(
         )
 
         # Get base URL from environment or use default.
-        base_url = os.getenv("ORQ_BASE_URL", "https://api.orq.ai").rstrip("/")
+        base_url = os.getenv("ORQ_BASE_URL", "https://my.orq.ai").rstrip("/")
 
         # Serialize with aliases, stripping None on optional fields (the API
         # rejects null for ``error``, ``explanation``, etc.) but keeping
@@ -108,6 +108,10 @@ async def send_results_to_orq(
                 for es in jr.get("evaluatorScores") or []:
                     if "score" in es:
                         es["score"].setdefault("explanation", "")
+                        # Evaluator-cost metadata is for local reports only; never
+                        # upload the judge's token usage or raw response to the platform.
+                        es["score"].pop("token_usage", None)
+                        es["score"].pop("raw_output", None)
                     es.setdefault("error", "")
 
         async with httpx.AsyncClient(timeout=30.0) as client:

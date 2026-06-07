@@ -24,6 +24,11 @@ class OpenResponsesBackend(Backend):
     Targets are server-side stateful via ``previous_response_id`` threading,
     but the server owns the memory lifecycle — ``cleanup_memory`` is a no-op
     because we cannot delete prior responses by id.
+
+    This backend exclusively serves hosted ORQ ``agent/<key>`` targets, whose
+    model id only resolves on the Orq router. ``require_orq`` therefore defaults
+    to True: when no client is injected and the target builds its own from the
+    env, an ``OPENAI_API_KEY`` left in the environment must never capture it.
     """
 
     def __init__(
@@ -34,6 +39,7 @@ class OpenResponsesBackend(Backend):
         timeout_ms: int | None = None,
         retry_attempts: int | None = None,
         retry_statuses: list[int] | None = None,
+        require_orq: bool = True,
     ) -> None:
         super().__init__(name="openresponses")
         self._client = client
@@ -41,6 +47,7 @@ class OpenResponsesBackend(Backend):
         self._timeout_ms = timeout_ms
         self._retry_attempts = retry_attempts
         self._retry_statuses = retry_statuses
+        self._require_orq = require_orq
 
     def create_target(self, agent_key: str) -> OrqResponsesTarget:
         # OrqResponsesTarget picks up the client from the explicit ``client=``
@@ -57,6 +64,7 @@ class OpenResponsesBackend(Backend):
             client=self._client,
             retry_attempts=self._retry_attempts,
             retry_statuses=self._retry_statuses,
+            require_orq=self._require_orq,
         )
 
     async def cleanup_memory(self, ctx: AgentContext, entity_ids: list[str]) -> None:

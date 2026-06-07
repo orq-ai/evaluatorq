@@ -32,15 +32,14 @@ python 10_orq_agent.py
 
 ## Credential Routing
 
-The pipeline auto-detects which API to use based on your environment:
+The pipeline auto-detects which API to use based on your environment. `ORQ_API_KEY` takes precedence when both are set:
 
 | Environment | LLM calls route through | Models |
 |---|---|---|
-| `OPENAI_API_KEY` only | OpenAI directly | `gpt-5-mini`, `gpt-4.1-mini`, etc. |
-| `ORQ_API_KEY` only | ORQ router (`my.orq.ai/v3/router`) | Auto-prefixed: `openai/gpt-5-mini` |
-| Both set | OpenAI directly (takes precedence) | `gpt-5-mini` |
+| `ORQ_API_KEY` (incl. both set) | ORQ router (`my.orq.ai/v3/router`) | `openai/gpt-5-mini`, etc. |
+| `OPENAI_API_KEY` only | OpenAI directly (or `OPENAI_BASE_URL`) | `gpt-5-mini`, `gpt-4.1-mini`, etc. |
 
-When using the ORQ router, model IDs are automatically prefixed with their provider (e.g. `gpt-5-mini` → `openai/gpt-5-mini`). You never need to add the prefix manually.
+Model IDs are passed to the endpoint unchanged — there is no automatic prefixing. Use whatever id the target endpoint expects (the Orq router uses provider-namespaced ids such as `openai/gpt-5-mini`).
 
 ## Examples
 

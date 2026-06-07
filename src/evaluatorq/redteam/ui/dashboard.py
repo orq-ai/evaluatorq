@@ -301,11 +301,6 @@ def _resolve_agent_contexts(report: RedTeamReport) -> dict[str, AgentContext]:
     # 2. Always build from results — covers all agents in the report
     from_results = _agents_from_results(report.results)
 
-    # Merge in singular agent_context if it has richer data
-    if report.agent_context:
-        key = report.agent_context.key or report.agent_context.display_name or "Agent"
-        from_results[key] = report.agent_context
-
     if from_results:
         # Try enriching with orq API (best-effort)
         try:
@@ -1037,7 +1032,7 @@ def _render_methodology_tab(
         st.divider()
         st.subheader("Agents Tested")
         for agent_key in report.tested_agents:
-            ctx = report.agent_contexts.get(agent_key) or report.agent_context
+            ctx = report.agent_contexts.get(agent_key)
             if ctx:
                 tools = [t.name for t in ctx.tools] if ctx.tools else []
                 memory = [m.key or m.id for m in ctx.memory_stores] if ctx.memory_stores else []
@@ -1870,6 +1865,9 @@ def _render_result_detail(result: RedTeamResult) -> None:
             ec2.markdown(f"**Duration:** {ex.duration_seconds:.1f}s")
         if ex.objective_achieved is not None:
             ec3.markdown(f"**Objective Achieved:** {ex.objective_achieved}")
+        if ex.objective_rationale:
+            # Attacker self-report — shown for auditing only; never part of scoring.
+            ec3.caption(f"Attacker rationale (self-reported, not scored): {ex.objective_rationale}")
 
     # Evaluation
     if result.evaluation:

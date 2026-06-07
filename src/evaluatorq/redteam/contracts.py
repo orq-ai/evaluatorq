@@ -9,10 +9,9 @@ Semantic convention:
     ``passed=False`` → the agent is VULNERABLE (attack succeeded)
 """
 
-import os
 import re
 from datetime import datetime
-from typing import Any, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from pydantic import (
     BaseModel,
@@ -23,6 +22,9 @@ from pydantic import (
 )
 
 from evaluatorq.contracts import StrEnum
+
+if TYPE_CHECKING:
+    from openai import AsyncOpenAI
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -526,26 +528,21 @@ class LLMConfig(BaseModel):
         description='Max client-driven tool-result continuation rounds for ORQ agents that emit pending_tool_calls.',
     )
 
-    @property
-    def retry_config(self) -> dict[str, Any]:
-        """ORQ retry config dict for ``extra_body``.
+    def retry_extra_body(self, client: "AsyncOpenAI | None") -> dict[str, Any]:
+        """ORQ retry config dict for ``extra_body``, gated on the actual client.
 
-        Returns empty dict when using the OpenAI API directly (the
-        ``retry`` parameter is ORQ-specific and rejected by OpenAI).
+        The ``retry`` parameter is ORQ-specific and rejected by a plain OpenAI
+        endpoint, so it is emitted only when ``client`` actually routes through
+        the Orq router (``…/v3/router``). Gating on the client's ``base_url``
+        rather than on ``ORQ_API_KEY`` avoids sending ``retry`` to an injected
+        OpenAI client just because ``ORQ_API_KEY`` is in the environment for
+        tracing/result-upload.
         """
-        if os.getenv('OPENAI_API_KEY') or not os.getenv('ORQ_API_KEY'):
+        from evaluatorq.common.llm_client import client_routes_through_orq
+
+        if not client_routes_through_orq(client):
             return {}
         return {'retry': {'count': self.retry_count, 'on_codes': self.retry_on_codes}}
-
-    @property
-    def uses_orq_router(self) -> bool:
-        """True when LLM calls route through the ORQ router.
-
-        The ORQ router is used when no ``OPENAI_API_KEY`` is set but
-        ``ORQ_API_KEY`` is available. Controls base_url selection only —
-        does not transform model names.
-        """
-        return not os.getenv('OPENAI_API_KEY') and bool(os.getenv('ORQ_API_KEY'))
 
 
 # Module-level default used by internal pipeline components.
@@ -830,6 +827,14 @@ class OrchestratorResult(BaseModel):
     objective_achieved: bool = Field(
         default=False, description='Whether adversarial LLM self-reported objective achieved'
     )
+    objective_rationale: str | None = Field(
+        default=None,
+        description=(
+            "Attacker LLM's self-reported reason for declaring success. SIGNAL ONLY — "
+            'never fed to the scorer/judge; excluded from the transcript via '
+            'turns_to_messages (which reads only Turn fields, not this one).'
+        ),
+    )
     duration_seconds: float = Field(default=0.0, description='Elapsed time in seconds')
     token_usage: TokenUsage | None = Field(default=None, description='Aggregated token usage across attack execution')
     token_usage_adversarial: TokenUsage | None = Field(
@@ -964,7 +969,12 @@ class AttackEvaluationResult(BaseModel):
     explanation: str = Field(description='Evaluator explanation')
     evaluator_id: str = Field(description='Evaluator identifier used')
     token_usage: TokenUsage | None = Field(default=None, description='Token usage and cost for this evaluation call')
-    raw_output: dict[str, Any] | None = Field(default=None, description='Raw evaluator output')
+    raw_output: dict[str, Any] | None = Field(
+        default=None,
+        description="Verbatim model output for inspection: {'raw_content': <str>} on "
+        "success, {'error': <str>, ...} on failure. Display/debug only — consumers "
+        "must read the parsed verdict from passed/explanation, not from here.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1039,7 +1049,13 @@ class UnifiedEvaluationResult(BaseModel):
     evaluator_id: str | None = None
     evaluator_name: str | None = None
     token_usage: TokenUsage | None = None
-    raw_output: dict[str, Any] | None = None
+    raw_output: dict[str, Any] | None = Field(
+        default=None,
+        description="Verbatim model output for inspection: {'raw_content': <str>} on "
+        "success, {'error': <str>, ...} on failure. Display/debug only (serialized into "
+        "the local report JSON, not uploaded) — consumers must read the parsed verdict "
+        "from passed/explanation, not from here.",
+    )
 
 
 class EvaluationPayload(BaseModel):
@@ -1052,6 +1068,13 @@ class EvaluationPayload(BaseModel):
     passed: bool | None = None
     error: str | None = None
     token_usage: TokenUsage | None = None
+    raw_output: dict[str, Any] | None = Field(
+        default=None,
+        description="Verbatim model output for inspection: {'raw_content': <str>} on "
+        "success, {'error': <str>, ...} on failure. Display/debug only (serialized into "
+        "the local report JSON, not uploaded) — consumers must read the parsed verdict "
+        "from passed/explanation, not from here.",
+    )
 
 
 class JobOutputPayload(BaseModel):
@@ -1066,6 +1089,7 @@ class JobOutputPayload(BaseModel):
     turns: int | None = None
     max_turns: int | None = None
     objective_achieved: bool | None = None
+    objective_rationale: str | None = None
     duration_seconds: float | None = None
     token_usage: TokenUsage | None = None
     token_usage_adversarial: TokenUsage | None = None
@@ -1101,6 +1125,10 @@ class ExecutionDetails(BaseModel):
     objective_achieved: bool | None = Field(
         default=None,
         description='Adversarial LLM self-report (multi-turn)',
+    )
+    objective_rationale: str | None = Field(
+        default=None,
+        description="Attacker's self-reported reason (multi-turn); signal only, never scored",
     )
     token_usage: TokenUsage | None = None
 
@@ -1266,7 +1294,6 @@ class RedTeamReport(BaseModel):
     tested_agents: list[str] = Field(default_factory=list, description='Names/keys of tested agents in this report')
     total_results: int
 
-    agent_context: AgentContext | None = None
     agent_contexts: dict[str, AgentContext] = Field(default_factory=dict, description='Per-agent context keyed by agent key')
 
     results: list[RedTeamResult]
@@ -1350,6 +1377,7 @@ class DynamicAttackResultRow(BaseModel):
     final_response: str = ''
     turns: int = 1
     objective_achieved: bool | None = None
+    objective_rationale: str | None = None
     duration_seconds: float | None = None
     token_usage: TokenUsage | None = None
     token_usage_adversarial: TokenUsage | None = None

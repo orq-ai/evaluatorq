@@ -71,6 +71,9 @@ def _set_attack_span_attrs(span: Any, result: AttackOutput) -> None:
         'orq.redteam.actual_turns': result.n_turns,
         'orq.redteam.duration_seconds': result.duration_seconds,
     })
+    if result.objective_rationale:
+        # Attacker self-report (signal, not evidence) — recorded for auditing only.
+        set_span_attrs(span, {'orq.redteam.objective_rationale': result.objective_rationale[:500]})
     if result.error:
         set_span_attrs(span, {
             'orq.redteam.error_type': result.error_type,
@@ -618,19 +621,21 @@ def create_dynamic_evaluator(
                 'output': eval_result.explanation or '',
             })
 
-        raw_value = None
-        if isinstance(eval_result.raw_output, dict):
-            raw_value = eval_result.raw_output.get('value')
-        if raw_value is not None:
-            result_value: str | int | float | bool = raw_value
-        elif eval_result.passed is not None:
-            result_value = bool(eval_result.passed)
-        else:
-            result_value = 'inconclusive'
+        # ``passed`` is the judge's boolean verdict (RESISTANT/VULNERABLE); surface it
+        # as the score value, or 'inconclusive' when the judge errored.
+        result_value: str | int | float | bool = (
+            bool(eval_result.passed) if eval_result.passed is not None else 'inconclusive'
+        )
         return EvaluationResult.model_validate({
             "value": result_value,
             "explanation": eval_result.explanation,
             "pass": eval_result.passed,
+            # Carry the judge's cost + raw response so the report layer can surface
+            # and aggregate evaluator token usage. They are kept in local result
+            # dumps but stripped from the Orq platform upload at the send boundary
+            # (see evaluatorq.send_results).
+            "token_usage": eval_result.token_usage,
+            "raw_output": eval_result.raw_output,
         })
 
     return {'name': 'owasp-dynamic-security', 'scorer': scorer}

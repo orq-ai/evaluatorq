@@ -466,6 +466,66 @@ class TestReportLevelAggregation:
         summary = compute_report_summary(results)
 
         assert summary.token_usage_total is not None
-        # Bug: only execution_usage flows in. Expected: execution + evaluator.
+        # Execution + evaluator usage both flow into the grand total.
         assert summary.token_usage_total.calls == 2
         assert summary.token_usage_total.total_tokens == 21
+
+
+class TestEvaluatorTokenUsageForwarded:
+    """The dynamic scorer must carry the LLM judge's usage onto the EvaluationResult.
+
+    Regression: the judge captured token_usage on AttackEvaluationResult, but the
+    scorer dropped it when building the core EvaluationResult, so the per-attack
+    evaluation surfaced ``token_usage: null``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_scorer_forwards_evaluator_token_usage_and_raw_output(self, monkeypatch) -> None:
+        from types import SimpleNamespace
+
+        from evaluatorq.redteam.adaptive import pipeline as pipeline_mod
+        from evaluatorq.redteam.adaptive.pipeline import create_dynamic_evaluator
+        from evaluatorq.redteam.contracts import AttackEvaluationResult, AttackOutput
+
+        usage = TokenUsage(prompt_tokens=4, completion_tokens=2, total_tokens=6, calls=1)
+        fake_eval = MagicMock()
+        fake_eval.evaluate_vulnerability = AsyncMock(
+            return_value=AttackEvaluationResult(
+                passed=True,
+                explanation="resistant",
+                evaluator_id="owasp_asi01_goal_hijacking",
+                token_usage=usage,
+                raw_output={"raw_content": '{"value": true, "explanation": "resistant"}'},
+            )
+        )
+        monkeypatch.setattr(pipeline_mod, "OWASPEvaluator", lambda **_: fake_eval)
+
+        scorer = create_dynamic_evaluator()["scorer"]
+        output = AttackOutput(category="ASI01", vulnerability="goal_hijacking")
+        data = SimpleNamespace(inputs={"category": "ASI01", "vulnerability": "goal_hijacking"})
+
+        result = await scorer({"data": data, "output": output})
+
+        assert result.pass_ is True
+        # The scorer forwards the judge's usage + raw output verbatim onto the score.
+        assert result.token_usage == usage
+        assert result.raw_output == {"raw_content": '{"value": true, "explanation": "resistant"}'}
+
+    def test_token_usage_and_raw_output_kept_in_local_dumps(self) -> None:
+        """The evaluator-cost fields stay in normal model_dump (so they land in local
+        result dumps like 02_attack_results.json). They are stripped only at the Orq
+        upload boundary (see test_send_results), not via field-level exclusion."""
+        from evaluatorq import EvaluationResult
+
+        result = EvaluationResult.model_validate({
+            "value": True,
+            "explanation": "resistant",
+            "pass": True,
+            "token_usage": TokenUsage(prompt_tokens=4, completion_tokens=2, total_tokens=6, calls=1),
+            "raw_output": {"raw_content": "{}"},
+        })
+        assert result.token_usage is not None
+        assert result.raw_output is not None
+        dumped = result.model_dump(mode="json")
+        assert dumped["token_usage"]["total_tokens"] == 6
+        assert dumped["raw_output"] == {"raw_content": "{}"}

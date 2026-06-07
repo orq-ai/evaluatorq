@@ -105,7 +105,7 @@ class TestExtraApiKey:
             _, owned = build_simulation_client(extra_api_key="sk-extra-key")
 
         assert owned is True
-        assert captured.get("base_url") == "https://api.orq.ai/v3/router"
+        assert captured.get("base_url") == "https://my.orq.ai/v3/router"
         assert captured.get("api_key") == "sk-extra-key"
 
     def test_extra_api_key_uses_custom_orq_base_url(self, monkeypatch):
@@ -152,7 +152,7 @@ class TestOrqApiKeyEnv:
             _, owned = build_simulation_client()
 
         assert owned is True
-        assert captured.get("base_url") == "https://api.orq.ai/v3/router"
+        assert captured.get("base_url") == "https://my.orq.ai/v3/router"
         assert captured.get("api_key") == "orq-env-key"
 
 
@@ -209,7 +209,7 @@ class TestOrqTakesPrecedenceOverOpenAI:
 
         assert owned is True
         # Must route via ORQ, not OpenAI default
-        assert captured.get("base_url") == "https://api.orq.ai/v3/router"
+        assert captured.get("base_url") == "https://my.orq.ai/v3/router"
         assert captured.get("api_key") == "orq-wins"
 
 
@@ -284,3 +284,51 @@ class TestCustomOrqBaseUrl:
 
         # ORQ_BASE_URL must be ignored; base_url stays None for direct OpenAI routing
         assert captured.get("base_url") is None
+
+
+# ---------------------------------------------------------------------------
+# require_orq: ORQ-agent targets must never fall back to OPENAI_API_KEY
+# ---------------------------------------------------------------------------
+
+
+class TestRequireOrq:
+    def test_openai_fallback_disabled_raises(self, monkeypatch):
+        """require_orq=True + only OPENAI_API_KEY → raise, never route to OpenAI."""
+        from evaluatorq.common.llm_client import MissingLLMCredentialsError
+
+        with patch("openai.AsyncOpenAI") as MockAsyncOpenAI:
+            with pytest.raises(MissingLLMCredentialsError):
+                _build(monkeypatch, openai_key="sk-openai", require_orq=True)
+
+        # No client of any kind may be constructed when ORQ routing is required.
+        MockAsyncOpenAI.assert_not_called()
+
+    def test_orq_key_still_routes_through_router(self, monkeypatch):
+        """require_orq=True + ORQ_API_KEY → normal Orq router routing."""
+        captured: dict[str, Any] = {}
+
+        def fake_async_openai(**kwargs):
+            captured.update(kwargs)
+            return MagicMock()
+
+        with patch("openai.AsyncOpenAI", side_effect=fake_async_openai):
+            _, owned = _build(
+                monkeypatch, orq_key="sk-orq", openai_key="sk-openai", require_orq=True
+            )
+
+        assert owned is True
+        assert captured.get("base_url") == "https://my.orq.ai/v3/router"
+        assert captured.get("api_key") == "sk-orq"
+
+    def test_injected_client_still_honored(self, monkeypatch):
+        """require_orq=True never overrides an explicitly injected client."""
+        monkeypatch.delenv("ORQ_API_KEY", raising=False)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+
+        mock_client = MagicMock()
+        from evaluatorq.openresponses.client import build_simulation_client
+
+        client, owned = build_simulation_client(mock_client, require_orq=True)
+
+        assert client is mock_client
+        assert owned is False

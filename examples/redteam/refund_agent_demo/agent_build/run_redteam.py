@@ -27,7 +27,7 @@ from openai import AsyncOpenAI
 from agent_build.build_agent import AGENTS
 from agent_build.refund_target import RefundAgentTarget
 
-ORQ_ROUTER_BASE_URL = os.environ.get('ROUTER_BASE_URL', 'https://api.orq.ai/v3/router')
+ORQ_ROUTER_BASE_URL = os.environ.get('ROUTER_BASE_URL', 'https://my.orq.ai/v3/router')
 
 # Models used by the pipeline. Override via CLI flags below.
 DEFAULT_ATTACKER_MODEL = 'google/gemini-3-flash-preview'

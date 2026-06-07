@@ -10,7 +10,7 @@ Tracing can be explicitly disabled by setting:
 
 When ORQ_API_KEY is provided:
 - Uses ORQ_BASE_URL with /v2/otel path appended for the OTEL endpoint
-- Falls back to https://api.orq.ai/v2/otel if ORQ_BASE_URL is not set
+- Falls back to https://my.orq.ai/v2/otel if ORQ_BASE_URL is not set
 - Authorization header is automatically added with the API key
 
 Set ORQ_DEBUG=1 to enable debug logging for tracing setup.
@@ -57,7 +57,7 @@ def _get_otlp_endpoint() -> str | None:
     Priority:
     1. OTEL_EXPORTER_OTLP_ENDPOINT - explicit endpoint override
     2. ORQ_BASE_URL - use as-is with /v2/otel path appended
-    3. Default to production api.orq.ai when only ORQ_API_KEY is set
+    3. Default to production my.orq.ai when only ORQ_API_KEY is set
     """
     # Explicit endpoint takes precedence
     explicit_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
@@ -68,12 +68,12 @@ def _get_otlp_endpoint() -> str | None:
     if os.environ.get("ORQ_API_KEY"):
         base_url = os.environ.get("ORQ_BASE_URL")
         if base_url:
-            # Transform my.*.orq.ai → api.*.orq.ai (matches TS tracing setup)
-            import re
-            base_url = re.sub(r"^(https?://)my\.", r"\1api.", base_url.rstrip("/"))
-            return f"{base_url}/v2/otel"
-        # Default to production endpoint
-        return "https://api.orq.ai/v2/otel"
+            # Use ORQ_BASE_URL as-is; OTEL ingest is served on the same my.orq.ai
+            # host as the rest of the Orq API (verified end-to-end: spans POSTed to
+            # my.orq.ai/v2/otel return 200 and are queryable). No my.→api. rewrite.
+            return f"{base_url.rstrip('/')}/v2/otel"
+        # Default to production endpoint (unified my.orq.ai host).
+        return "https://my.orq.ai/v2/otel"
 
     return None
 

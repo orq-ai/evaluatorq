@@ -29,7 +29,7 @@ def test_orq_key_wins_when_both_set(gen_cls, monkeypatch):
 def test_no_keys_raises(gen_cls, monkeypatch):
     monkeypatch.delenv("ORQ_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    with pytest.raises(ValueError, match="No API key found"):
+    with pytest.raises(ValueError, match="Missing LLM credentials"):
         gen_cls()
 
 
@@ -61,5 +61,5 @@ def test_datapoint_generator_no_keys_raises(monkeypatch):
 
     monkeypatch.delenv("ORQ_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    with pytest.raises(ValueError, match="No API key found"):
+    with pytest.raises(ValueError, match="Missing LLM credentials"):
         DatapointGenerator()

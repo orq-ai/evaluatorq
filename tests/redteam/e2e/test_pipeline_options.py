@@ -104,20 +104,22 @@ async def test_hooks_on_confirm_cancels_hybrid(
 @pytest.mark.asyncio
 async def test_static_output_artifacts(
     mock_llm_client: DeterministicAsyncOpenAI,
+    mock_backend_bundle: MockBackend,
     static_dataset_path: Path,
     tmp_path: Path,
 ) -> None:
     """Static mode should write numbered artifact files."""
     output_dir = tmp_path / "static_artifacts"
-    await red_team(
-        "agent:e2e-static-model",
-        mode="static",
-        parallelism=2,
-        dataset=str(static_dataset_path),
-        llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
-        output_dir=output_dir,
-        save=SaveMode.DETAIL,
-    )
+    with _dynamic_patches(mock_backend_bundle):
+        await red_team(
+            "agent:e2e-static-model",
+            mode="static",
+            parallelism=2,
+            dataset=str(static_dataset_path),
+            llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
+            output_dir=output_dir,
+            save=SaveMode.DETAIL,
+        )
 
     assert (output_dir / "01_datapoints.json").exists()
     assert (output_dir / "02_attack_results.json").exists()

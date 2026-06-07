@@ -101,8 +101,7 @@ redteam/
 │   ├── recommendations.py    #   LLM-generated remediation advice
 │   └── sections.py           #   Report section builders
 ├── runtime/                  # Job execution
-│   ├── jobs.py               #   Async job runner
-│   └── orq_agent_job.py      #   ORQ agent job implementation
+│   └── jobs.py               #   Async job runner + job-name sanitizer
 └── ui/                       # Streamlit interactive dashboard
     └── dashboard.py
 ```

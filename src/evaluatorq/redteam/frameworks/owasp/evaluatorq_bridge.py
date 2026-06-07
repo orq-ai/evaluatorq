@@ -13,8 +13,17 @@ from pydantic import BaseModel, ValidationError
 
 from evaluatorq import DataPoint, EvaluationResult
 from evaluatorq.redteam.backends.registry import create_async_llm_client
-from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, LLMCallConfig, PIPELINE_CONFIG, EvaluatorConfig, RedTeamInput, StaticDataset
+from evaluatorq.redteam.contracts import (
+    DEFAULT_PIPELINE_MODEL,
+    PIPELINE_CONFIG,
+    EvaluatorConfig,
+    LLMCallConfig,
+    RedTeamInput,
+    StaticDataset,
+    TokenUsage,
+)
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category
+from evaluatorq.redteam.frameworks.owasp.prompt_render import render_owasp_evaluator_prompt
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -149,14 +158,13 @@ def create_owasp_evaluator(
             })
 
         output_text = output.get('response', '') if isinstance(output, dict) else str(output)
-        prompt = evaluator_entity.prompt
-        # Replace {{input.all_messages}} BEFORE inserting untrusted output_text so that
-        # a crafted response containing "{{input.all_messages}}" cannot expand the template.
-        prompt = prompt.replace(
-            '{{input.all_messages}}',
-            json.dumps(data.inputs.get('messages', []), indent=2),
+        tool_calls_raw = output.get('tool_calls') if isinstance(output, dict) else None
+        prompt = render_owasp_evaluator_prompt(
+            evaluator_entity.prompt,
+            messages=data.inputs.get('messages', []),
+            response=output_text,
+            tool_calls=tool_calls_raw,
         )
-        prompt = prompt.replace('{{output.response}}', output_text)
 
         resolved_cfg = cfg or PIPELINE_CONFIG.evaluator
         client = llm_client or resolved_cfg.client or create_async_llm_client()
@@ -185,6 +193,12 @@ def create_owasp_evaluator(
                 ),
                 timeout=resolved_cfg.timeout_ms / 1000.0,
             )
+            # Extract usage + content inside the guard: an empty ``choices`` list
+            # (e.g. a content-filter block) would otherwise raise IndexError past the
+            # error handling and lose the clean inconclusive result. ``usage`` is
+            # captured so the report can surface and aggregate evaluator cost.
+            usage = TokenUsage.from_completion(response)
+            content = response.choices[0].message.content or '{}'
         except asyncio.TimeoutError:
             logger.error(
                 f'Evaluator timed out for category {category} after {resolved_cfg.timeout_ms}ms'
@@ -202,7 +216,6 @@ def create_owasp_evaluator(
                 "pass": None,
             })
 
-        content = response.choices[0].message.content or '{}'
         try:
             parsed = EvaluatorResponsePayload.model_validate_json(content)
             value = parsed.value
@@ -213,12 +226,16 @@ def create_owasp_evaluator(
                 "value": "error",
                 "explanation": f"Failed to parse evaluator response: {content[:200]}",
                 "pass": None,
+                "token_usage": usage,
+                "raw_output": {"raw_content": content},
             })
 
         return EvaluationResult.model_validate({
             "value": value,
             "explanation": explanation,
             "pass": value,
+            "token_usage": usage,
+            "raw_output": {"raw_content": content},
         })
 
     return {'name': 'owasp-agentic-security', 'scorer': scorer}

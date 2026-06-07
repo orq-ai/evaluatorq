@@ -192,7 +192,7 @@ async def generate_focus_area_recommendations(
             # platform-conditional basedpyright Iterable[Omit] checks on
             # OpenAI's ``create()`` overload (CI Linux vs local Darwin).
             merged_kwargs: Any = {
-                'extra_body': cfg.retry_config,
+                'extra_body': cfg.retry_extra_body(llm_client),
                 **cfg.evaluator.extra_kwargs,
                 **(llm_kwargs or {}),
             }

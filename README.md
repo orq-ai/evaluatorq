@@ -808,11 +808,13 @@ LangChain agents are covered by the integrations above — no separate target is
 - **Custom chains or legacy `AgentExecutor`** → wrap with `CallableTarget`:
 
 ```python
+from evaluatorq.contracts import Message
 from evaluatorq.integrations.callable_integration import CallableTarget
 
-# Any LangChain chain or AgentExecutor
-async def run_chain(prompt: str) -> str:
-    result = await chain.ainvoke({"input": prompt})
+# Any LangChain chain or AgentExecutor. The callable receives the full
+# conversation as typed Message objects; read the latest turn off the end.
+async def run_chain(messages: list[Message]) -> str:
+    result = await chain.ainvoke({"input": messages[-1].content})
     return result["output"]
 
 target = CallableTarget(run_chain)
@@ -847,34 +849,40 @@ target = OpenAIAgentTarget(agent, run_kwargs={"max_turns": 10})
 
 ### Custom Callable (Escape Hatch)
 
-For frameworks without a dedicated integration, wrap any function that takes a prompt and returns a response:
+For frameworks without a dedicated integration, wrap any function that takes the
+conversation and returns a response. The callable receives the full transcript as
+a list of typed `Message` objects, so it works for both single- and multi-turn
+attacks — even when the callable is stateless:
 
 ```python
+from evaluatorq.contracts import Message
 from evaluatorq.integrations.callable_integration import CallableTarget
 from evaluatorq.redteam import red_team
 
-# Async function
-async def my_agent(prompt: str) -> str:
-    result = await some_framework.run(prompt)
+# Async function — gets the whole conversation, can replay it statelessly
+async def my_agent(messages: list[Message]) -> str:
+    result = await some_framework.run(messages)
     return result.text
 
 target = CallableTarget(my_agent)
 
-# With state management
-history = []
+# Or just read the latest turn off the end
+async def last_turn_agent(messages: list[Message]) -> str:
+    return await some_framework.run(messages[-1].content)
 
-async def stateful_agent(prompt: str) -> str:
-    history.append({"role": "user", "content": prompt})
-    response = await my_llm.chat(history)
-    history.append({"role": "assistant", "content": response})
-    return response
+target = CallableTarget(last_turn_agent)
 
-target = CallableTarget(stateful_agent, reset_fn=lambda: history.clear())
+# Need OpenAI chat-completion dicts? Convert at the boundary yourself:
+async def openai_agent(messages: list[Message]) -> str:
+    chat = [m.to_chat_completion() for m in messages]
+    return (await client.chat.completions.create(model="gpt-4o", messages=chat)).choices[0].message.content
+
+target = CallableTarget(openai_agent)
 
 report = await red_team(target=target)
 ```
 
-Sync functions are also supported — they are automatically run in a thread to avoid blocking the event loop.
+Sync functions are also supported — they are automatically run in a thread to avoid blocking the event loop. If your callable holds its own state, pass `reset_fn` to clear it between attacks.
 
 ## 📚 API Reference
 
@@ -1053,20 +1061,51 @@ evaluatorq --install-completion
 eq --install-completion
 ```
 
+### Install the CLI as a standalone tool (`uv tool`)
+
+The red teaming (`eq redteam`) and agent simulation (`eq sim`) commands are exposed through the `eq` / `evaluatorq` binary. Install them as an isolated [`uv` tool](https://docs.astral.sh/uv/concepts/tools/) so the CLI is on your `PATH` globally without polluting your current project's environment:
+
+```bash
+# Red teaming CLI
+uv tool install "evaluatorq[redteam]"
+
+# Agent simulation CLI
+uv tool install "evaluatorq[simulation]"
+
+# Both at once
+uv tool install "evaluatorq[redteam,simulation]"
+```
+
+Then call the CLI from anywhere:
+
+```bash
+eq redteam run -t "agent:my-agent-key" -c LLM01 -y
+eq sim run --help
+```
+
+Prefer not to install at all? Run it one-off with `uvx` (downloads to a cache, nothing added to `PATH`):
+
+```bash
+uvx --from "evaluatorq[redteam]" eq redteam run -t "agent:my-agent-key" -c LLM01 -y
+uvx --from "evaluatorq[simulation]" eq sim run --help
+```
+
+Upgrade or remove later with `uv tool upgrade evaluatorq` / `uv tool uninstall evaluatorq`.
+
 #### Test an LLM (OpenAI)
 
 ```python
 import asyncio
-from evaluatorq.redteam import TargetConfig, red_team
+from evaluatorq.redteam import OpenAIModelTarget, red_team
 
 report = asyncio.run(red_team(
-    "llm:gpt-5-mini",
+    OpenAIModelTarget(
+        "gpt-5-mini",
+        system_prompt="You are a helpful customer support assistant.",
+    ),
     categories=["LLM01", "LLM07"],
     max_dynamic_datapoints=5,
     max_turns=2,
-    target_config=TargetConfig(
-        system_prompt="You are a helpful customer support assistant."
-    ),
 ))
 print(f"Resistance rate: {report.summary.resistance_rate:.0%}")
 ```
@@ -1093,20 +1132,20 @@ report = asyncio.run(red_team(
 
 ### Target Types
 
-- **`llm:<model>`** — Test an LLM directly via OpenAI API. Provide a system prompt via `TargetConfig`.
 - **`agent:<key>`** — Test an ORQ platform agent. Auto-discovers tools, memory, and system prompt.
 - **`deployment:<key>`** — Test an ORQ deployment.
+- **`OpenAIModelTarget(<model>)`** — Test an OpenAI model directly (Python API only). Pass `system_prompt=` for the target's system prompt.
 
-`agent:` and `deployment:` targets automatically use the ORQ backend.
+`agent:` and `deployment:` string targets automatically use the ORQ backend. The removed `llm:`/`openai:` string prefixes raise an error — use `OpenAIModelTarget` instead.
 
 ### LLM Client Configuration
 
-Red teaming needs an OpenAI-compatible LLM for attack generation and evaluation. `OPENAI_*` variables take priority over `ORQ_*`:
+Red teaming needs an OpenAI-compatible LLM for attack generation and evaluation. `ORQ_*` variables take priority over `OPENAI_*`:
 
 | Priority | Variables | Description |
 |----------|-----------|-------------|
-| 1st | `OPENAI_API_KEY` + `OPENAI_BASE_URL` (optional) | Direct OpenAI or any compatible endpoint |
-| 2nd | `ORQ_API_KEY` + `ORQ_BASE_URL` (optional) | ORQ router |
+| 1st | `ORQ_API_KEY` + `ORQ_BASE_URL` (optional) | ORQ router |
+| 2nd | `OPENAI_API_KEY` + `OPENAI_BASE_URL` (optional) | Direct OpenAI or any compatible endpoint |
 
 Or pass a custom client: `red_team(..., llm_client=AsyncOpenAI(api_key="sk-..."))`.
 
@@ -1114,18 +1153,17 @@ Or pass a custom client: `red_team(..., llm_client=AsyncOpenAI(api_key="sk-...")
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `target` | `str \| list[str]` | **required** | Target identifier(s) |
+| `target` | `str \| AgentTarget \| list` | **required** | Target(s): `"agent:<key>"`, `"deployment:<key>"`, or an `AgentTarget` such as `OpenAIModelTarget(...)` |
 | `mode` | `str` | `"dynamic"` | `"dynamic"`, `"static"`, or `"hybrid"` |
 | `categories` | `list[str] \| None` | all | OWASP categories (e.g. `["ASI01", "LLM07"]`) |
+| `vulnerabilities` | `list[str] \| None` | `None` | Specific vulnerability IDs to test |
 | `max_turns` | `int` | `5` | Max conversation turns per attack |
 | `max_dynamic_datapoints` | `int \| None` | `None` | Cap generated attack datapoints |
-| `attack_model` | `str` | `"gpt-5-mini"` | Model for adversarial prompt generation |
-| `evaluator_model` | `str` | `"gpt-5-mini"` | Model for evaluation scoring |
-| `parallelism` | `int` | `5` | Max concurrent jobs |
-| `name` | `str \| None` | `"red-team"` | Experiment name |
-| `backend` | `str` | `"openai"` | `"openai"` or `"orq"` (auto-detected for agent targets) |
+| `llm_config` | `LLMConfig \| None` | `None` | Per-role attacker/evaluator model config (replaces the old `attack_model`/`evaluator_model`) |
+| `parallelism` | `int` | `10` | Max concurrent jobs |
+| `name` | `str \| None` | `None` | Experiment name (defaults to `"red-team"`) |
 | `llm_client` | `AsyncOpenAI \| None` | `None` | Custom LLM client |
-| `dataset_path` | `str \| None` | `None` | Path to local static dataset |
+| `dataset` | `Path \| str \| None` | `None` | Path to local static dataset |
 
 ### CLI
 
@@ -1133,8 +1171,8 @@ Or pass a custom client: `red_team(..., llm_client=AsyncOpenAI(api_key="sk-...")
 # Show all options
 eq redteam run --help
 
-# Test an LLM with a system prompt
-eq redteam run -t "llm:gpt-5-mini" \
+# Test an ORQ agent with a system prompt
+eq redteam run -t "agent:my-agent-key" \
   --system-prompt "You are a helpful assistant." \
   -c LLM01 -c LLM07 --max-turns 2 --max-dynamic-datapoints 5 -y
 
@@ -1143,16 +1181,18 @@ eq redteam run -t "agent:my-agent-key" \
   -c ASI01 -c LLM07 --max-turns 3 -y
 
 # Multi-target comparison
-eq redteam run -t "llm:gpt-5-mini" -t "llm:gpt-4o" \
+eq redteam run -t "agent:my-agent-key" -t "deployment:my-deployment-key" \
   -c LLM07 --max-turns 2 --max-dynamic-datapoints 3 -y
 
 # Export reports
-eq redteam run -t "llm:gpt-5-mini" \
+eq redteam run -t "agent:my-agent-key" \
   --save-report report.json --export-md ./reports --export-html ./reports -y
 
 # List previous runs
 eq redteam runs
 ```
+
+The CLI accepts `agent:` and `deployment:` targets only. To red-team an OpenAI model directly, use `OpenAIModelTarget` in the Python API.
 
 See [examples/redteam/](examples/redteam/) for complete Python examples covering both backends.
 

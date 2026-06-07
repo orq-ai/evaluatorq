@@ -44,6 +44,7 @@ class OrqResponsesTarget(AgentTarget):
         client: AsyncOpenAI | None = None,
         retry_attempts: int | None = None,
         retry_statuses: Iterable[int] | None = None,
+        require_orq: bool = False,
     ) -> None:
         super().__init__(memory_entity_id=memory_entity_id)
         self.config = config
@@ -51,11 +52,16 @@ class OrqResponsesTarget(AgentTarget):
         self.tools = tools
         self.retry_attempts = retry_attempts
         self.retry_statuses = set(retry_statuses) if retry_statuses is not None else None
+        # ORQ-agent targets set this so a self-built env client never falls back to
+        # OPENAI_API_KEY — an ``agent/<key>`` model only resolves on the Orq router.
+        self.require_orq = require_orq
         if client is not None:
             self._client = client
             self._client_owned = False
         else:
-            self._client, self._client_owned = build_simulation_client(config.client)
+            self._client, self._client_owned = build_simulation_client(
+                config.client, require_orq=require_orq
+            )
 
     async def respond(self, messages: list[Message]) -> AgentResponse:
         """Stateless: send the full message list, return the response."""
@@ -83,6 +89,7 @@ class OrqResponsesTarget(AgentTarget):
             client=self._client if not self._client_owned else None,
             retry_attempts=self.retry_attempts,
             retry_statuses=self.retry_statuses,
+            require_orq=self.require_orq,
         )
 
     async def get_agent_context(self) -> AgentContext:

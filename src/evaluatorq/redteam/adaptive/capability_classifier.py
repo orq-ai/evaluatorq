@@ -210,7 +210,7 @@ async def _infer_resource_capabilities(
                 response_format=ResourceCapabilityInference,
                 temperature=cfg.attacker.temperature,
                 max_completion_tokens=cfg.attacker.max_tokens,
-                extra_body=cfg.retry_config,
+                extra_body=cfg.retry_extra_body(llm_client),
                 **cfg.attacker.extra_kwargs,
             )
             parsed = response.choices[0].message.parsed
@@ -270,7 +270,7 @@ async def _classify_tools(
                 response_format=ToolCapabilitiesResponse,
                 temperature=cfg.attacker.temperature,
                 max_completion_tokens=cfg.attacker.max_tokens,
-                extra_body=cfg.retry_config,
+                extra_body=cfg.retry_extra_body(llm_client),
                 **cfg.attacker.extra_kwargs,
             )
             record_llm_response(

@@ -23,7 +23,7 @@ def _msgs(content: str = "hi") -> list[Message]:
 async def test_callable_target_respond_returns_agent_response():
     from evaluatorq.integrations.callable_integration import CallableTarget
 
-    target = CallableTarget(lambda prompt: f"echo: {prompt}")
+    target = CallableTarget(lambda messages: f"echo: {messages[-1].content}")
     assert isinstance(target, AgentTarget)
 
     result = await target.respond(_msgs("hello"))
@@ -32,12 +32,13 @@ async def test_callable_target_respond_returns_agent_response():
 
 
 @pytest.mark.asyncio
-async def test_callable_target_respond_rejects_non_user_last():
+async def test_callable_target_respond_accepts_non_user_last():
+    """CallableTarget forwards the whole transcript; it imposes no last-turn-role guard."""
     from evaluatorq.integrations.callable_integration import CallableTarget
 
-    target = CallableTarget(lambda prompt: prompt)
-    with pytest.raises(ValueError, match="messages\\[-1\\].role"):
-        await target.respond([Message(role="assistant", content="x")])
+    target = CallableTarget(lambda messages: messages[-1].content or "")
+    result = await target.respond([Message(role="assistant", content="x")])
+    assert result.text == "x"
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,8 @@ from typing import Any, ClassVar
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
 from typing_extensions import TypedDict
 
+from evaluatorq.contracts import TokenUsage
+
 # Keep output permissive: OpenResponses payloads are dict-shaped and should
 # pass through unchanged alongside arbitrary job payloads.
 Output = str | int | float | bool | dict[str, Any] | None
@@ -38,6 +40,13 @@ class EvaluationResult(BaseModel):
     value: str | int | float | bool | EvaluationResultCell | dict[str, Any]
     explanation: str | None = None
     pass_: bool | None = Field(default=None, alias="pass")
+    # Optional evaluator-cost metadata: a scorer that calls an LLM judge can report
+    # the judge's token usage and raw response here. The red-team report layer reads
+    # them off the live score object, and they are kept in local result dumps
+    # (e.g. 02_attack_results.json). They are intentionally stripped from the Orq
+    # platform upload at the send boundary (see evaluatorq.send_results), not here.
+    token_usage: TokenUsage | None = None
+    raw_output: dict[str, Any] | None = None
 
     @field_serializer("value", when_used="json")
     def serialize_value(

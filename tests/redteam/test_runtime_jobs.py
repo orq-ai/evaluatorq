@@ -1,4 +1,4 @@
-"""Unit tests for runtime/jobs.py and runtime/orq_agent_job.py."""
+"""Unit tests for runtime/jobs.py."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from evaluatorq.redteam.contracts import Message, TokenUsage
 
 
 # ===========================================================================
-# runtime/orq_agent_job.py — _sanitize_job_name
+# runtime/jobs.py — _sanitize_job_name
 # ===========================================================================
 
 
@@ -19,251 +19,54 @@ class TestSanitizeJobName:
     """Tests for _sanitize_job_name()."""
 
     def test_alphanumeric_passthrough(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _sanitize_job_name
+        from evaluatorq.redteam.runtime.jobs import _sanitize_job_name
 
         assert _sanitize_job_name("abc123") == "abc123"
 
     def test_dash_and_underscore_preserved(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _sanitize_job_name
+        from evaluatorq.redteam.runtime.jobs import _sanitize_job_name
 
         assert _sanitize_job_name("my-agent_key") == "my-agent_key"
 
     def test_special_chars_replaced_with_dash(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _sanitize_job_name
+        from evaluatorq.redteam.runtime.jobs import _sanitize_job_name
 
         result = _sanitize_job_name("my.agent/key@v2")
         assert result == "my-agent-key-v2"
 
     def test_leading_trailing_dashes_stripped(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _sanitize_job_name
+        from evaluatorq.redteam.runtime.jobs import _sanitize_job_name
 
         result = _sanitize_job_name(".leading-trailing.")
         assert not result.startswith("-")
         assert not result.endswith("-")
 
     def test_empty_string_returns_unknown(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _sanitize_job_name
+        from evaluatorq.redteam.runtime.jobs import _sanitize_job_name
 
         assert _sanitize_job_name("") == "unknown"
 
     def test_all_special_chars_becomes_unknown(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _sanitize_job_name
+        from evaluatorq.redteam.runtime.jobs import _sanitize_job_name
 
         # All special chars → all dashes → strip → empty → 'unknown'
         result = _sanitize_job_name("@@@")
         assert result == "unknown"
 
     def test_spaces_replaced(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _sanitize_job_name
+        from evaluatorq.redteam.runtime.jobs import _sanitize_job_name
 
         result = _sanitize_job_name("my agent key")
         assert " " not in result
 
     def test_model_with_slash(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _sanitize_job_name
+        from evaluatorq.redteam.runtime.jobs import _sanitize_job_name
 
         result = _sanitize_job_name("azure/gpt-4o-mini")
         assert "/" not in result
         assert "azure" in result
         assert "gpt" in result
 
-
-# ===========================================================================
-# runtime/orq_agent_job.py — _message_content_to_text
-# ===========================================================================
-
-
-class TestMessageContentToText:
-    """Tests for _message_content_to_text()."""
-
-    def test_string_content_passthrough(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _message_content_to_text
-
-        assert _message_content_to_text("Hello world") == "Hello world"
-
-    def test_list_of_text_parts_joined(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _message_content_to_text
-
-        parts = [
-            {"type": "text", "text": "First part"},
-            {"type": "text", "text": "Second part"},
-        ]
-        result = _message_content_to_text(parts)
-        assert "First part" in result
-        assert "Second part" in result
-
-    def test_list_filters_non_text_parts(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _message_content_to_text
-
-        parts = [
-            {"type": "image_url", "url": "http://example.com/img.png"},
-            {"type": "text", "text": "Only this"},
-        ]
-        result = _message_content_to_text(parts)
-        assert result == "Only this"
-        assert "image_url" not in result
-
-    def test_none_content_returns_empty_string(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _message_content_to_text
-
-        assert _message_content_to_text(None) == ""
-
-    def test_other_types_stringified(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _message_content_to_text
-
-        result = _message_content_to_text(42)
-        assert result == "42"
-
-    def test_empty_list_returns_empty_string(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _message_content_to_text
-
-        assert _message_content_to_text([]) == ""
-
-
-# ===========================================================================
-# runtime/orq_agent_job.py — _normalize_message
-# ===========================================================================
-
-
-class TestNormalizeMessage:
-    """Tests for _normalize_message()."""
-
-    def test_message_object_passthrough(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _normalize_message
-
-        msg = Message(role="user", content="Hello")
-        result = _normalize_message(msg)
-        assert result is msg
-
-    def test_valid_dict_parsed_to_message(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _normalize_message
-
-        raw = {"role": "user", "content": "Hello"}
-        result = _normalize_message(raw)
-        assert isinstance(result, Message)
-        assert result.role == "user"
-        assert result.content == "Hello"
-
-    def test_invalid_dict_kept_as_dict(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _normalize_message
-
-        # Role 'unknown' is not a valid literal → validation fails → returns raw dict
-        raw = {"role": "unknown_role", "content": "Something"}
-        result = _normalize_message(raw)
-        assert isinstance(result, dict)
-        assert result["role"] == "unknown_role"
-
-    def test_non_dict_non_message_becomes_user_dict(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _normalize_message
-
-        result = _normalize_message("some plain string")
-        assert isinstance(result, dict)
-        assert result["role"] == "user"
-        assert result["content"] == "some plain string"
-
-    def test_integer_becomes_user_dict(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _normalize_message
-
-        result = _normalize_message(42)
-        assert isinstance(result, dict)
-        assert result["role"] == "user"
-        assert result["content"] == "42"
-
-
-# ===========================================================================
-# runtime/orq_agent_job.py — _extract_agent_response_text
-# ===========================================================================
-
-
-class TestExtractAgentResponseText:
-    """Tests for _extract_agent_response_text()."""
-
-    def _make_response(self, items: list[Any]) -> MagicMock:
-        """Create a mock response with .output list."""
-        response = MagicMock()
-        response.output = items
-        return response
-
-    def _make_agent_item(self, texts: list[str]) -> MagicMock:
-        """Create an output item with role='agent' and text parts."""
-        item = MagicMock()
-        item.role = "agent"
-        parts = []
-        for t in texts:
-            part = MagicMock()
-            part.kind = "text"
-            part.text = t
-            parts.append(part)
-        item.parts = parts
-        return item
-
-    def _make_non_agent_item(self, text: str = "tool output") -> MagicMock:
-        """Create an output item with role='tool'."""
-        item = MagicMock()
-        item.role = "tool"
-        part = MagicMock()
-        part.kind = "text"
-        part.text = text
-        item.parts = [part]
-        return item
-
-    def test_extracts_agent_text_parts(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _extract_agent_response_text
-
-        response = self._make_response([self._make_agent_item(["Hello", " World"])])
-        result = _extract_agent_response_text(response)
-        assert "Hello" in result
-        assert "World" in result
-
-    def test_skips_non_agent_role(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _extract_agent_response_text
-
-        response = self._make_response([self._make_non_agent_item("tool output")])
-        result = _extract_agent_response_text(response)
-        assert result == ""
-
-    def test_empty_output_returns_empty_string(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _extract_agent_response_text
-
-        response = self._make_response([])
-        result = _extract_agent_response_text(response)
-        assert result == ""
-
-    def test_multiple_agent_items_joined(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _extract_agent_response_text
-
-        response = self._make_response([
-            self._make_agent_item(["Part one"]),
-            self._make_agent_item(["Part two"]),
-        ])
-        result = _extract_agent_response_text(response)
-        assert "Part one" in result
-        assert "Part two" in result
-
-    def test_ignores_non_text_parts(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _extract_agent_response_text
-
-        item = MagicMock()
-        item.role = "agent"
-        non_text_part = MagicMock()
-        non_text_part.kind = "tool_call"
-        non_text_part.text = "should not appear"
-        item.parts = [non_text_part]
-
-        response = self._make_response([item])
-        result = _extract_agent_response_text(response)
-        assert result == ""
-
-    def test_mixed_agent_and_non_agent(self):
-        from evaluatorq.redteam.runtime.orq_agent_job import _extract_agent_response_text
-
-        response = self._make_response([
-            self._make_non_agent_item("tool result"),
-            self._make_agent_item(["Final answer"]),
-        ])
-        result = _extract_agent_response_text(response)
-        assert "Final answer" in result
-        assert "tool result" not in result
 
 
 # ===========================================================================
@@ -478,5 +281,5 @@ class TestCreateModelJob:
     def test_raises_value_error_when_no_params(self):
         from evaluatorq.redteam.runtime.jobs import create_model_job
 
-        with pytest.raises(ValueError, match="Provide one of"):
+        with pytest.raises(ValueError, match="Provide one of: 'model' or 'deployment_key'"):
             create_model_job()

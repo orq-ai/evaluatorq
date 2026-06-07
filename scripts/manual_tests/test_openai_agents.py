@@ -21,7 +21,7 @@ load_dotenv()
 
 # Route OpenAI calls through the orq router
 os.environ.setdefault("OPENAI_API_KEY", os.environ.get("ORQ_API_KEY", ""))
-os.environ.setdefault("OPENAI_BASE_URL", "https://api.orq.ai/v3/router")
+os.environ.setdefault("OPENAI_BASE_URL", "https://my.orq.ai/v3/router")
 
 # Disable OpenAI Agents SDK tracing (orq key is not valid for OpenAI's trace endpoint)
 os.environ["OPENAI_AGENTS_DISABLE_TRACING"] = "1"
@@ -44,7 +44,7 @@ def make_agent() -> Agent:
     api_key = os.environ["ORQ_API_KEY"]
     client = AsyncOpenAI(
         api_key=api_key,
-        base_url="https://api.orq.ai/v3/router",
+        base_url="https://my.orq.ai/v3/router",
     )
     return Agent(
         name="test-agent",

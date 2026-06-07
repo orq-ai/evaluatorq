@@ -167,6 +167,8 @@ def serialize_with_fixup(results: list[DataPointResult]) -> dict[str, Any]:
             for es in jr.get("evaluatorScores") or []:
                 if "score" in es:
                     es["score"].setdefault("explanation", "")
+                    es["score"].pop("token_usage", None)
+                    es["score"].pop("raw_output", None)
                 es.setdefault("error", "")
 
     return payload_dict
@@ -198,6 +200,42 @@ class TestSendResultsDefaults:
         jr = payload["results"][0]["jobResults"][0]
         assert "output" in jr
         assert jr["output"] is None
+
+    def test_evaluator_token_usage_and_raw_output_stripped_from_upload(self):
+        # Evaluator-cost metadata is kept in local result dumps but must NOT be
+        # uploaded to the platform — the send-boundary fixup strips it.
+        from evaluatorq.contracts import TokenUsage
+
+        results = [
+            DataPointResult(
+                data_point=DataPoint(inputs={"text": "hello"}),
+                job_results=[
+                    JobResult(
+                        job_name="job1",
+                        output="result",
+                        evaluator_scores=[
+                            EvaluatorScore(
+                                evaluator_name="eval1",
+                                score=EvaluationResult(
+                                    value=True,
+                                    explanation="resistant",
+                                    token_usage=TokenUsage(
+                                        prompt_tokens=4, completion_tokens=2, total_tokens=6, calls=1
+                                    ),
+                                    raw_output={"raw_content": "{}"},
+                                ),
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ]
+        # Plain serialize keeps them (local dumps like 02_attack_results.json).
+        assert "token_usage" in extract_score(serialize(results))
+        # The upload fixup strips them.
+        score = extract_score(serialize_with_fixup(results))
+        assert "token_usage" not in score
+        assert "raw_output" not in score
 
     def test_null_error_becomes_empty_string(self):
         # error=None on JobResult is stripped by exclude_none; the fixup must restore it as ""
@@ -282,7 +320,7 @@ class TestSendResultsUploadFailures:
         build_results: Callable[..., list[DataPointResult]],
     ):
         async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
-            request = httpx.Request("POST", "https://api.orq.ai/v2/spreadsheets/evaluations/receive")
+            request = httpx.Request("POST", "https://my.orq.ai/v2/spreadsheets/evaluations/receive")
             return httpx.Response(
                 401,
                 request=request,
@@ -310,7 +348,7 @@ class TestSendResultsUploadFailures:
         build_results: Callable[..., list[DataPointResult]],
     ):
         async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
-            request = httpx.Request("POST", "https://api.orq.ai/v2/spreadsheets/evaluations/receive")
+            request = httpx.Request("POST", "https://my.orq.ai/v2/spreadsheets/evaluations/receive")
             raise httpx.RequestError("connection failed", request=request)
 
         monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
@@ -334,7 +372,7 @@ class TestSendResultsUploadFailures:
         build_results: Callable[..., list[DataPointResult]],
     ):
         async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
-            request = httpx.Request("POST", "https://api.orq.ai/v2/spreadsheets/evaluations/receive")
+            request = httpx.Request("POST", "https://my.orq.ai/v2/spreadsheets/evaluations/receive")
             return httpx.Response(503, request=request, json={"error": "service unavailable"})
 
         monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
@@ -352,13 +390,84 @@ class TestSendResultsUploadFailures:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_evaluator_metadata_absent_from_posted_payload(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        # End-to-end guard on the real upload boundary: token_usage/raw_output must
+        # never reach the platform. Exercises the prod strip in send_results_to_orq
+        # (not the test-local fixup), so deleting those .pop()s fails this test.
+        from evaluatorq.contracts import TokenUsage
+
+        captured: dict[str, Any] = {}
+
+        async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
+            captured["json"] = kwargs["json"]
+            request = httpx.Request("POST", "https://my.orq.ai/v2/spreadsheets/evaluations/receive")
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "sheet_id": "s1",
+                    "manifest_id": "m1",
+                    "experiment_name": "eval",
+                    "rows_created": 1,
+                },
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+        results = [
+            DataPointResult(
+                data_point=DataPoint(inputs={"text": "hello"}),
+                job_results=[
+                    JobResult(
+                        job_name="job1",
+                        output="result",
+                        evaluator_scores=[
+                            EvaluatorScore(
+                                evaluator_name="eval1",
+                                score=EvaluationResult(
+                                    value=True,
+                                    explanation="resistant",
+                                    token_usage=TokenUsage(
+                                        prompt_tokens=4, completion_tokens=2, total_tokens=6, calls=1
+                                    ),
+                                    raw_output={"raw_content": "{}"},
+                                ),
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ]
+
+        await send_results_to_orq(
+            api_key="key",
+            evaluation_name="eval",
+            evaluation_description=None,
+            dataset_id=None,
+            results=results,
+            start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+            raise_on_error=True,
+        )
+
+        score = extract_score(captured["json"])
+        assert "token_usage" not in score
+        assert "raw_output" not in score
+        # Required fields survive the strip.
+        assert score["explanation"] == "resistant"
+        assert captured["json"]["results"][0]["jobResults"][0]["output"] == "result"
+
+    @pytest.mark.asyncio
     async def test_network_error_returns_none_when_raise_on_error_false(
         self,
         monkeypatch: pytest.MonkeyPatch,
         build_results: Callable[..., list[DataPointResult]],
     ):
         async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
-            request = httpx.Request("POST", "https://api.orq.ai/v2/spreadsheets/evaluations/receive")
+            request = httpx.Request("POST", "https://my.orq.ai/v2/spreadsheets/evaluations/receive")
             raise httpx.RequestError("connection failed", request=request)
 
         monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)

@@ -94,6 +94,21 @@ from evaluatorq.contracts import Message      # ChatMessage was an alias of Mess
 from evaluatorq.contracts import AgentTarget   # replaces the simulation TargetAgent Protocol
 ```
 
+- **`CallableTarget` forwards the full transcript**: the wrapped callable now receives the entire conversation as a `list[Message]` (previously only the last user turn as a `str`), so stateless callables retain context across multi-turn attacks. The callable signature changes from `(prompt: str)` to `(messages: list[Message])`, and `usage_fn` from `(prompt: str, response: str)` to `(messages: list[Message], response: str)`. The former last-turn-must-be-user guard is dropped (matching the other stateless targets). Callables that need OpenAI chat-completion dicts can call `Message.to_chat_completion()` per element.
+
+**Migration:**
+
+```python
+from evaluatorq.contracts import Message
+from evaluatorq.integrations.callable_integration import CallableTarget
+
+# Before
+target = CallableTarget(lambda prompt: my_agent(prompt))
+
+# After — read the last turn off the transcript
+target = CallableTarget(lambda messages: my_agent(messages[-1].content or ""))
+```
+
 ### New Features
 
 - **`OWASP_LLM_TOP_10`** and **`OWASP_ASI_TOP_10`** — public `list[str]` constants exported from `evaluatorq.redteam`. Pass them to `red_team(categories=OWASP_LLM_TOP_10)` to run a full framework sweep without spelling out individual category codes (RES-815).

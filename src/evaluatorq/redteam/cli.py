@@ -316,10 +316,6 @@ def run(
     ] = None,
 ) -> None:
     """Run red teaming against one or more targets."""
-    from dotenv import load_dotenv
-
-    load_dotenv(override=False)
-
     if quiet:
         verbose = -1
     _configure_logging(verbose)
@@ -473,8 +469,9 @@ def ui(
         import streamlit  # noqa: F401
     except ImportError:
         typer.echo(
-            "Streamlit is not installed. Install the ui extras:\n"
-            '  pip install "evaluatorq[ui]"',
+            "Streamlit is not installed. Install the redteam extras:\n"
+            '  uv pip install "evaluatorq[redteam]"\n'
+            '  pip install "evaluatorq[redteam]"',
             err=True,
         )
         raise typer.Exit(code=1)

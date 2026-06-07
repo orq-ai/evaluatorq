@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -20,8 +19,12 @@ from evaluatorq.redteam.contracts import (
     ToolCallOutputItem,
     Vulnerability,
 )
-from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category, get_evaluator_for_vulnerability
 from evaluatorq.common.tracing import record_llm_response
+from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category, get_evaluator_for_vulnerability
+from evaluatorq.redteam.frameworks.owasp.prompt_render import (
+    _sanitize_placeholders,  # noqa: F401 — re-exported for backwards-compat test imports
+    render_owasp_evaluator_prompt,
+)
 from evaluatorq.redteam.tracing import with_llm_span
 from evaluatorq.redteam.vulnerability_registry import resolve_category_safe
 
@@ -146,21 +149,12 @@ class OWASPEvaluator:
         """Execute an evaluator entity against a conversation and return a typed result."""
         raw_content = '{}'
         try:
-            prompt = evaluator.prompt
-            # Replace template variables in a safe order. Trusted internal data first,
-            # then adversary-controlled values last so no later substitution can re-expand them.
-            # Tool call data (names, arguments) is adversary-influenced and is sanitized with
-            # _sanitize_placeholders before embedding to prevent cross-expansion attacks.
-            prompt = prompt.replace('{{input.all_messages}}', _sanitize_placeholders(json.dumps(_serialize_messages(messages), indent=2)))
-            prompt = prompt.replace(
-                '{{output.tool_calls}}',
-                _sanitize_placeholders(json.dumps(
-                    [{'name': tc.name, 'arguments': tc.arguments_dict, 'result': tc.result, 'id': tc.id} for tc in (tool_calls or [])],
-                    indent=2,
-                    default=str,
-                )),
+            prompt = render_owasp_evaluator_prompt(
+                evaluator.prompt,
+                messages=messages,
+                response=response or '',
+                tool_calls=tool_calls,
             )
-            prompt = prompt.replace('{{output.response}}', response or '')
 
             eval_messages: list[ChatCompletionMessageParam] = [
                 {
@@ -202,11 +196,10 @@ class OWASPEvaluator:
                 explanation=parsed.explanation,
                 evaluator_id=evaluator_id,
                 token_usage=usage,
-                raw_output={
-                    'value': parsed.value,
-                    'explanation': parsed.explanation,
-                    'raw_content': raw_content,
-                },
+                # raw_output carries only the verbatim model output; the parsed
+                # verdict/explanation already live on the top-level passed/explanation
+                # fields above.
+                raw_output={'raw_content': raw_content},
             )
         except ValidationError as e:
             logger.error(f'Evaluator model returned malformed JSON for {evaluator_id}: {e}. Raw: {raw_content!r:.500}')
@@ -261,22 +254,7 @@ async def evaluate_attack(
     return await evaluator.evaluate(category, messages, response, tool_calls=tool_calls)
 
 
-def _serialize_messages(messages: list[dict[str, Any]] | list[Message]) -> list[dict[str, Any]]:
-    """Normalize messages to plain role/content dicts for prompt interpolation."""
-    serialized: list[dict[str, Any]] = []
-    for msg in messages:
-        if isinstance(msg, dict):
-            serialized.append({'role': str(msg.get('role', '')), 'content': str(msg.get('content', ''))})
-            continue
-        serialized.append({'role': str(msg.role), 'content': str(msg.content or '')})
-    return serialized
-
-
-def _sanitize_placeholders(text: str) -> str:
-    """Neutralize template placeholder markers in adversary-controlled content.
-
-    Replaces ``{{`` with ``{ {`` so that crafted tool call names or argument values
-    containing placeholder strings (e.g. ``{{output.response}}``) cannot be expanded
-    by a subsequent ``.replace()`` call in the evaluator prompt pipeline.
-    """
-    return text.replace('{{', '{ {')
+# _sanitize_placeholders is imported from prompt_render (above) and re-exported
+# from this module's namespace so existing tests that do
+#   ``from evaluatorq.redteam.adaptive.evaluator import _sanitize_placeholders``
+# continue to work without modification.

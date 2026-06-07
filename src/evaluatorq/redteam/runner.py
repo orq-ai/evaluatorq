@@ -19,6 +19,7 @@ from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, job
 from evaluatorq.common.async_utils import await_maybe, warn_if_sync_hooks
+from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities, classify_agent_capabilities
 from evaluatorq.redteam.adaptive.orchestrator import ProgressDisplay, _get_active_progress
@@ -39,6 +40,7 @@ from evaluatorq.redteam.adaptive.strategy_registry import (
 from evaluatorq.redteam.backends.base import (
     Backend,
     BareTargetBackend,
+    HybridAgentBackend,
     _coerce_to_agent_response,
 )
 from evaluatorq.redteam.backends.registry import create_async_llm_client, resolve_backend
@@ -58,8 +60,7 @@ from evaluatorq.redteam.contracts import (
 from evaluatorq.redteam.exceptions import CancelledError, CredentialError
 from evaluatorq.redteam.hooks import ConfirmPayload, DefaultHooks, PipelineHooks
 from evaluatorq.redteam.reports.recommendations import generate_focus_area_recommendations
-from evaluatorq.redteam.runtime.jobs import _build_messages, create_model_job
-from evaluatorq.redteam.runtime.orq_agent_job import _sanitize_job_name
+from evaluatorq.redteam.runtime.jobs import _build_messages, _sanitize_job_name, create_model_job
 from evaluatorq.common.tracing import set_span_attrs
 from evaluatorq.redteam.tracing import with_redteam_span
 from evaluatorq.redteam.vulnerability_registry import get_primary_category, resolve_vulnerabilities
@@ -696,31 +697,27 @@ def _extract_static_prompt(data: DataPoint) -> str:
     messages = _build_messages(data)
     user_parts: list[str] = []
     for m in messages:
-        role = m.get('role')
-        content = m.get('content')
-        if role == 'system' or content is None:
+        if m.get('role') == 'system' or m.get('content') is None:
             continue
-        if isinstance(content, list):
-            content = '\n'.join(
-                str(part.get('text', '')) for part in content if isinstance(part, dict) and part.get('type') == 'text'
-            )
-        user_parts.append(str(content))
+        user_parts.append(coerce_content_text(m.get('content')))
     return '\n\n'.join(p for p in user_parts if p)
 
 
-def _create_static_job_for_agent_target(at: Any, label: str) -> Any:
+def _create_static_job_for_agent_target(target_factory: Callable[[], Any], label: str) -> Any:
     """Create an evaluatorq static job that drives an :class:`AgentTarget`.
 
-    The job extracts the datapoint's messages as a single prompt, creates
-    an isolated target via ``at.new()`` for each attack, and returns the
-    response in the dict shape expected by the OWASP evaluator.
+    ``target_factory`` mints a fresh, isolated target per attack; the job closes
+    it afterwards (a no-op for externally-injected, caller-owned clients). Callers
+    that own the target lifecycle pass ``at.new``; the internal ``agent:`` path
+    passes a factory that builds an owned target per row, so no long-lived parent
+    target (and its unused HTTP client) is left dangling.
     """
     safe = _sanitize_job_name(label)
 
     @job(f'redteam:static:{safe}')
     async def agent_target_job(data: DataPoint, _row: int) -> dict[str, Any]:
         prompt = _extract_static_prompt(data)
-        target = at.new()
+        target = target_factory()
         try:
             raw_response = await target.respond([Message(role='user', content=prompt)])
             result = _coerce_to_agent_response(raw_response)
@@ -731,7 +728,10 @@ def _create_static_job_for_agent_target(at: Any, label: str) -> Any:
 
             return {
                 'response': result.text,
+                'tool_calls': result.tool_calls,
                 'token_usage': result.usage,
+                'finish_reason': result.finish_reason,
+                'model': result.model,
             }
         finally:
             target_close = getattr(target, 'close', None)
@@ -786,7 +786,11 @@ def _create_job_for_target(
     kind, value = _parse_target(target)
     common = dict(llm_client=llm_client, system_prompt=system_prompt)
     if kind == TargetKind.AGENT:
-        return create_model_job(agent_key=value, **common)
+        tcfg = TargetConfig(system_prompt=system_prompt)
+        backend = _make_agent_backend(target_config=tcfg, pipeline_config=cfg)
+        # Build a fresh owned target per row (composite prefixes -> model
+        # "agent/<value>"); no long-lived parent target/client is left dangling.
+        return _create_static_job_for_agent_target(lambda: backend.create_target(value), label=value)
     if kind == TargetKind.DEPLOYMENT:
         return create_model_job(deployment_key=value, **common)
     return create_model_job(model=value, **common)
@@ -795,6 +799,30 @@ def _create_job_for_target(
 # ---------------------------------------------------------------------------
 # Per-target preparation (dynamic and hybrid)
 # ---------------------------------------------------------------------------
+
+
+def _make_agent_backend(*, target_config: TargetConfig | None, pipeline_config: LLMConfig | None) -> Backend:
+    """Composite backend for ORQ agent targets: ORQ SDK for context+cleanup,
+    OrqResponses (Responses API) for execution.
+
+    The exec backend is built with ``llm_client=None`` on purpose: the
+    OpenResponses backend forwards its client to OrqResponsesTarget, and the
+    attacker LLM client must NOT become the *target* client — passing None lets
+    the target build its own env client routed to /v3/router. The OpenResponses
+    backend defaults to ``require_orq=True``, so that self-built client never
+    falls back to ``OPENAI_API_KEY``: an ``agent/<key>`` model only resolves on
+    the Orq router.
+    """
+    # Build the ORQ SDK context backend lazily: a static ``agent:`` run only ever
+    # calls exec (create_target), so deferring this avoids importing/requiring
+    # ``orq-ai-sdk`` for targets that never touch context resolution or memory cleanup.
+    exec_backend = resolve_backend('openresponses', llm_client=None, target_config=target_config, pipeline_config=pipeline_config)
+    return HybridAgentBackend(
+        context_backend_factory=lambda: resolve_backend(
+            'orq', target_config=target_config, pipeline_config=pipeline_config
+        ),
+        exec_backend=exec_backend,
+    )
 
 
 async def _prepare_target(
@@ -850,9 +878,12 @@ async def _prepare_target(
     target_kind, target_value = _parse_target(target)
     safe_target = _make_safe_target(target_value)
 
-    backend = resolve_backend(
-        'orq', llm_client=llm_client, target_config=target_config, pipeline_config=pipeline_config
-    )
+    if target_kind == TargetKind.AGENT:
+        backend = _make_agent_backend(target_config=target_config, pipeline_config=pipeline_config)
+    else:
+        backend = resolve_backend(
+            'orq', llm_client=llm_client, target_config=target_config, pipeline_config=pipeline_config
+        )
 
     # Context retrieval (skip if already fetched for the confirm step)
     if prefetched_agent_context is not None:
@@ -1123,13 +1154,25 @@ async def _run_dynamic_or_hybrid(
 
     resolved_agent_targets = agent_targets or []
     all_target_labels, agent_target_labels = _deduplicate_target_labels(targets, resolved_agent_targets)
+    if targets:
+        target_kinds = {_parse_target(t)[0] for t in targets}
+        if target_kinds == {TargetKind.AGENT}:
+            backend_label = 'openresponses'
+        elif TargetKind.AGENT not in target_kinds:
+            backend_label = 'orq'
+        else:
+            backend_label = 'mixed'
+    else:
+        # No string targets: a pure bring-your-own AgentTarget run uses
+        # BareTargetBackend, not the ORQ SDK — label it accordingly.
+        backend_label = 'direct' if resolved_agent_targets else 'orq'
     async with with_redteam_span(
         'orq.redteam.pipeline',
         attributes={
             'orq.trace_type': 'evaluatorq',
             'orq.redteam.targets': ', '.join(all_target_labels),
             'orq.redteam.mode': mode,
-            'orq.redteam.backend': 'orq',
+            'orq.redteam.backend': backend_label,
             'orq.redteam.max_turns': max_turns,
             'orq.redteam.parallelism': parallelism,
         },
@@ -1139,17 +1182,22 @@ async def _run_dynamic_or_hybrid(
         # capabilities per target so the on_stage_end(CONTEXT_RETRIEVAL) signal
         # for each target carries the classifier output. Hook implementations
         # render the per-target capability table from that meta payload.
-        orq_backend = resolve_backend(
-            'orq', llm_client=llm_client, target_config=target_config, pipeline_config=pipeline_config
-        )
         all_agent_contexts: dict[str, AgentContext] = {}
         await await_maybe(
             resolved_hooks.on_stage_start(PipelineStage.CONTEXT_RETRIEVAL, {'targets': all_target_labels})
         )
-        for target_str in targets:
-            _kind, value = _parse_target(target_str)
-            ctx = await orq_backend.resolve_context(value)
-            all_agent_contexts[target_str] = ctx
+        # Only build the ORQ SDK backend when there are string targets to resolve
+        # context for. A pure bring-your-own AgentTarget run never touches it, so this
+        # avoids importing/requiring orq-ai-sdk for those runs (mirrors the lazy factory
+        # in _make_agent_backend for the static path).
+        if targets:
+            orq_backend = resolve_backend(
+                'orq', llm_client=llm_client, target_config=target_config, pipeline_config=pipeline_config
+            )
+            for target_str in targets:
+                _kind, value = _parse_target(target_str)
+                ctx = await orq_backend.resolve_context(value)
+                all_agent_contexts[target_str] = ctx
         # Pre-fetch contexts for AgentTarget objects (they may provide their own context)
         at_contexts: dict[int, AgentContext] = {}
         for at in resolved_agent_targets:
@@ -1602,7 +1650,9 @@ async def _run_dynamic_or_hybrid(
                         """Send a static datapoint to the AgentTarget via respond."""
                         messages = _build_messages(data)
                         prompt = '\n'.join(
-                            content for m in messages if m.get('role') == 'user' and (content := m.get('content'))
+                            text
+                            for m in messages
+                            if m.get('role') == 'user' and (text := coerce_content_text(m.get('content')))
                         )
                         if not prompt:
                             sample_id = data.inputs.get('id', 'unknown')
@@ -1616,7 +1666,13 @@ async def _run_dynamic_or_hybrid(
                         active_progress = _get_active_progress()
                         if active_progress is not None:
                             await active_progress.finish_attack(None)
-                        return {'response': result.text, 'token_usage': result.usage}
+                        return {
+                            'response': result.text,
+                            'tool_calls': result.tool_calls,
+                            'token_usage': result.usage,
+                            'finish_reason': result.finish_reason,
+                            'model': result.model,
+                        }
 
                     @job(f'redteam:hybrid:{at_safe}')
                     async def at_target_job(
@@ -2087,7 +2143,9 @@ async def _run_static(
     jobs: list[Any] = [
         _create_job_for_target(t, llm_client, sys_prompt, pipeline_config=pipeline_config) for t in targets
     ]
-    jobs.extend(_create_static_job_for_agent_target(at, agent_target_labels[id(at)]) for at in resolved_agent_targets)
+    jobs.extend(
+        _create_static_job_for_agent_target(at.new, agent_target_labels[id(at)]) for at in resolved_agent_targets
+    )
 
     from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
 

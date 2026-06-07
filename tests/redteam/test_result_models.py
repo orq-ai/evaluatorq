@@ -212,7 +212,11 @@ class TestStaticConversion:
         assert result.evaluation is not None
         assert result.evaluation.passed is True
         assert result.agent.model == 'azure/gpt-5-mini'
-        assert result.execution is None
+        # Static results carry a single-turn execution slot; with no target-generation
+        # usage in the sample its token_usage is None.
+        assert result.execution is not None
+        assert result.execution.turns == 1
+        assert result.execution.token_usage is None
 
     def test_category_normalization(self):
         sample = _make_static_sample(category='OWASP-ASI01')

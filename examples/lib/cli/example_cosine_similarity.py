@@ -33,7 +33,7 @@ def create_openai_client() -> AsyncOpenAI:
     openai_api_key = os.environ.get("OPENAI_API_KEY")
 
     if orq_api_key:
-        base_url = os.environ.get("ORQ_BASE_URL", "https://api.orq.ai")
+        base_url = os.environ.get("ORQ_BASE_URL", "https://my.orq.ai")
         return AsyncOpenAI(
             base_url=f"{base_url}/v2/proxy",
             api_key=orq_api_key,
