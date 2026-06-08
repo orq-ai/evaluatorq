@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, Job, job
+from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentResponse, Message
 from evaluatorq.redteam.adaptive.attack_generator import generate_attack_prompt, generate_objective
 from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
@@ -48,7 +49,6 @@ from evaluatorq.redteam.contracts import (
     TurnType,
     Vulnerability,
 )
-from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
 from evaluatorq.redteam.tracing import with_redteam_span
 from evaluatorq.redteam.vulnerability_registry import (
     get_primary_category,
@@ -66,19 +66,25 @@ if TYPE_CHECKING:
 
 def _set_attack_span_attrs(span: Any, result: AttackOutput) -> None:
     """Set common tracing attributes on an attack span from an AttackOutput."""
-    set_span_attrs(span, {
-        'orq.redteam.objective_achieved': result.objective_achieved,
-        'orq.redteam.actual_turns': result.n_turns,
-        'orq.redteam.duration_seconds': result.duration_seconds,
-    })
+    set_span_attrs(
+        span,
+        {
+            'orq.redteam.objective_achieved': result.objective_achieved,
+            'orq.redteam.actual_turns': result.n_turns,
+            'orq.redteam.duration_seconds': result.duration_seconds,
+        },
+    )
     if result.objective_rationale:
         # Attacker self-report (signal, not evidence) — recorded for auditing only.
         set_span_attrs(span, {'orq.redteam.objective_rationale': result.objective_rationale[:500]})
     if result.error:
-        set_span_attrs(span, {
-            'orq.redteam.error_type': result.error_type,
-            'orq.redteam.error_code': result.error_code,
-        })
+        set_span_attrs(
+            span,
+            {
+                'orq.redteam.error_type': result.error_type,
+                'orq.redteam.error_code': result.error_code,
+            },
+        )
 
 
 async def generate_dynamic_datapoints_for_vulnerabilities(
@@ -133,9 +139,7 @@ async def generate_dynamic_datapoints_for_vulnerabilities(
     )
 
     # Convert Vulnerability-keyed metadata to string keys for external consumption
-    filtering_metadata: dict[str, Any] = {
-        vuln.value: meta for vuln, meta in filtering_metadata_by_vuln.items()
-    }
+    filtering_metadata: dict[str, Any] = {vuln.value: meta for vuln, meta in filtering_metadata_by_vuln.items()}
 
     datapoints: list[DataPoint] = []
     for vuln in vulnerabilities:
@@ -200,7 +204,9 @@ async def generate_dynamic_datapoints(
     try:
         resolved_vulnerabilities = resolve_vulnerabilities(categories)
     except ValueError as exc:
-        logger.warning(f'Could not resolve all categories to vulnerabilities, falling back to category-based path: {exc}')
+        logger.warning(
+            f'Could not resolve all categories to vulnerabilities, falling back to category-based path: {exc}'
+        )
         resolved_vulnerabilities = None
 
     if resolved_vulnerabilities is not None:
@@ -308,9 +314,7 @@ def create_dynamic_redteam_job(
         backend: Backend for creating targets and mapping errors. Defaults to ORQ.
     """
     cfg = pipeline_config or PIPELINE_CONFIG
-    resolved_backend: Backend = (
-        backend if backend is not None else resolve_backend('orq', pipeline_config=cfg)
-    )
+    resolved_backend: Backend = backend if backend is not None else resolve_backend('orq', pipeline_config=cfg)
     safe_agent_key = ''.join(ch if ch.isalnum() or ch in {'-', '_'} else '-' for ch in agent_key).strip('-')
     job_name = f'redteam:dynamic:{safe_agent_key or "agent"}'
 
@@ -324,16 +328,19 @@ def create_dynamic_redteam_job(
         vulnerability = str(inputs.get('vulnerability', ''))
         effective_max_turns = 1 if strategy.turn_type == TurnType.SINGLE else max_turns
 
-        async with with_redteam_span(
-            'orq.redteam.attack',
-            {
-                'orq.redteam.category': category,
-                'orq.redteam.vulnerability': vulnerability,
-                'orq.redteam.strategy_name': strategy.name,
-                'orq.redteam.turn_type': strategy.turn_type.value,
-                'orq.redteam.max_turns': effective_max_turns,
-            },
-        ) as attack_span, contextlib.AsyncExitStack() as cleanup_stack:
+        async with (
+            with_redteam_span(
+                'orq.redteam.attack',
+                {
+                    'orq.redteam.category': category,
+                    'orq.redteam.vulnerability': vulnerability,
+                    'orq.redteam.strategy_name': strategy.name,
+                    'orq.redteam.turn_type': strategy.turn_type.value,
+                    'orq.redteam.max_turns': effective_max_turns,
+                },
+            ) as attack_span,
+            contextlib.AsyncExitStack() as cleanup_stack,
+        ):
             target = resolved_backend.create_target(agent_key=agent_key)
             # Register HTTP-client cleanup for targets that own a client
             # (e.g. OrqResponsesTarget). Plain callable targets have no
@@ -369,29 +376,34 @@ def create_dynamic_redteam_job(
                 target_timeout_s = cfg.target_agent_timeout_ms / 1000.0
                 try:
                     async with with_redteam_span(
-                        "orq.redteam.target_call",
+                        'orq.redteam.target_call',
                         {
-                            "orq.redteam.category": category,
-                            "orq.redteam.strategy_name": strategy.name,
-                            "orq.redteam.turn": 1,
-                            "input": truncate_for_span(prompt),
-                            "orq.redteam.input": truncate_for_span(prompt),
+                            'orq.redteam.category': category,
+                            'orq.redteam.strategy_name': strategy.name,
+                            'orq.redteam.turn': 1,
+                            'input': truncate_for_span(prompt),
+                            'orq.redteam.input': truncate_for_span(prompt),
                         },
                     ) as tgt_span:
                         raw = await asyncio.wait_for(
-                            target.respond([Message(role="user", content=prompt)]),
+                            target.respond([Message(role='user', content=prompt)]),
                             timeout=target_timeout_s,
                         )
                         agent_resp = _coerce_to_agent_response(raw)
                         response = agent_resp.text
                         token_usage: TokenUsage | None = agent_resp.usage
-                        _resp_text = truncate_for_span(response or "")
-                        set_span_attrs(tgt_span, {
-                            "output": _resp_text,
-                            "orq.redteam.output": _resp_text,
-                        })
+                        resp_text = truncate_for_span(response or '')
+                        set_span_attrs(
+                            tgt_span,
+                            {
+                                'output': resp_text,
+                                'orq.redteam.output': resp_text,
+                            },
+                        )
                 except asyncio.TimeoutError:
-                    logger.error(f'Single-turn attack timed out for {category}/{strategy.name} after {target_timeout_s:.0f}s')
+                    logger.error(
+                        f'Single-turn attack timed out for {category}/{strategy.name} after {target_timeout_s:.0f}s'
+                    )
                     response = f'[ERROR: Target agent timed out after {target_timeout_s:.0f}s]'
                     error = f'Target agent timed out after {target_timeout_s:.0f}s'
                     error_type = 'target_error'
@@ -415,12 +427,16 @@ def create_dynamic_redteam_job(
                         'raw_message': str(e),
                     }
                 result_dict = AttackOutput(
-                    turns=[Turn(
-                        attacker=AttackerResponse(generated_prompt=prompt),
-                        target=agent_resp if agent_resp.output else AgentResponse(
-                            output=[TextOutputItem(text=response or '', annotations=[])],
-                        ),
-                    )],
+                    turns=[
+                        Turn(
+                            attacker=AttackerResponse(generated_prompt=prompt),
+                            target=agent_resp
+                            if agent_resp.output
+                            else AgentResponse(
+                                output=[TextOutputItem(text=response or '', annotations=[])],
+                            ),
+                        )
+                    ],
                     objective_achieved=False,
                     duration_seconds=time.time() - t0,
                     token_usage=token_usage,
@@ -436,10 +452,13 @@ def create_dynamic_redteam_job(
                     vulnerability=vulnerability,
                 )
 
-                set_span_attrs(attack_span, {
-                    'input': truncate_for_span(prompt),
-                    'output': truncate_for_span(response or ''),
-                })
+                set_span_attrs(
+                    attack_span,
+                    {
+                        'input': truncate_for_span(prompt),
+                        'output': truncate_for_span(response or ''),
+                    },
+                )
                 _set_attack_span_attrs(attack_span, result_dict)
 
                 # Advance the global progress bar for template single-turn attacks
@@ -541,7 +560,9 @@ def create_dynamic_evaluator(
     value=True means RESISTANT (consistent with OWASP evaluatorq scoring and
     EvaluationResult.passed convention).
     """
-    owasp_evaluator = OWASPEvaluator(evaluator_model=evaluator_model, llm_client=llm_client, llm_kwargs=llm_kwargs, cfg=cfg)
+    owasp_evaluator = OWASPEvaluator(
+        evaluator_model=evaluator_model, llm_client=llm_client, llm_kwargs=llm_kwargs, cfg=cfg
+    )
 
     async def scorer(params: ScorerParameter) -> EvaluationResult:
         """Evaluate the attack output using OWASPEvaluator and return a scored EvaluationResult."""
@@ -556,9 +577,9 @@ def create_dynamic_evaluator(
                 inputs = getattr(data, 'inputs', {}) or {}
                 logger.error(
                     'Failed to parse job output as AttackOutput '
-                    f"(datapoint_id={inputs.get('id', '<unknown>')!r}, "
-                    f"category={inputs.get('category', '<unknown>')!r}, "
-                    f"strategy_name={inputs.get('strategy_name', '<unknown>')!r}): {e}"
+                    f'(datapoint_id={inputs.get("id", "<unknown>")!r}, '
+                    f'category={inputs.get("category", "<unknown>")!r}, '
+                    f'strategy_name={inputs.get("strategy_name", "<unknown>")!r}): {e}'
                 )
                 return EvaluationResult(
                     value='error',
@@ -578,12 +599,10 @@ def create_dynamic_evaluator(
                 explanation=f'Skipped: target returned error — {output.error}',
             )
 
-        conversation = output.chat_completions
-        final_response = output.final_response
         category = output.category or data.inputs.get('category', '')
         vulnerability = output.vulnerability or data.inputs.get('vulnerability', '')
-        # Flatten all tool calls across turns so the evaluator can optionally inspect them
-        all_tool_calls = [tc for t in output.turns for tc in t.target.tool_calls]
+        input_messages = [{'role': 'user', 'content': t.attacker.generated_prompt} for t in output.turns]
+        output_messages = [item for t in output.turns for item in t.target.output]
 
         # Prefer vulnerability-first path when a valid Vulnerability enum can be resolved
         resolved_vuln: Vulnerability | None = None
@@ -604,22 +623,23 @@ def create_dynamic_evaluator(
             if resolved_vuln is not None:
                 eval_result = await owasp_evaluator.evaluate_vulnerability(
                     vuln=resolved_vuln,
-                    messages=conversation,
-                    response=final_response,
-                    tool_calls=all_tool_calls or None,
+                    messages=input_messages,
+                    output_messages=output_messages,
                 )
             else:
                 eval_result = await owasp_evaluator.evaluate(
                     category=category,
-                    messages=conversation,
-                    response=final_response,
-                    tool_calls=all_tool_calls or None,
+                    messages=input_messages,
+                    output_messages=output_messages,
                 )
-            set_span_attrs(eval_span, {
-                'orq.redteam.passed': eval_result.passed,
-                'input': final_response or '',
-                'output': eval_result.explanation or '',
-            })
+            set_span_attrs(
+                eval_span,
+                {
+                    'orq.redteam.passed': eval_result.passed,
+                    'input': output.final_response or '',
+                    'output': eval_result.explanation or '',
+                },
+            )
 
         # ``passed`` is the judge's boolean verdict (RESISTANT/VULNERABLE); surface it
         # as the score value, or 'inconclusive' when the judge errored.
@@ -627,15 +647,15 @@ def create_dynamic_evaluator(
             bool(eval_result.passed) if eval_result.passed is not None else 'inconclusive'
         )
         return EvaluationResult.model_validate({
-            "value": result_value,
-            "explanation": eval_result.explanation,
-            "pass": eval_result.passed,
+            'value': result_value,
+            'explanation': eval_result.explanation,
+            'pass': eval_result.passed,
             # Carry the judge's cost + raw response so the report layer can surface
             # and aggregate evaluator token usage. They are kept in local result
             # dumps but stripped from the Orq platform upload at the send boundary
             # (see evaluatorq.send_results).
-            "token_usage": eval_result.token_usage,
-            "raw_output": eval_result.raw_output,
+            'token_usage': eval_result.token_usage,
+            'raw_output': eval_result.raw_output,
         })
 
     return {'name': 'owasp-dynamic-security', 'scorer': scorer}

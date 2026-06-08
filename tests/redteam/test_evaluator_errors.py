@@ -12,6 +12,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -19,6 +20,7 @@ import httpx
 import pytest
 from openai import APIConnectionError, APIStatusError
 
+from evaluatorq.contracts import TextOutputItem
 from evaluatorq.redteam.contracts import AttackEvaluationResult, LLMCallConfig, Vulnerability
 
 
@@ -46,17 +48,18 @@ def _make_llm_client(content: str | None = None) -> AsyncMock:
 
 
 def _patch_tracing():
-    """Context-manager factory that suppresses tracing side-effects."""
-    import contextlib
+    """Return a list of patches that suppress tracing side-effects in judge + llm_call."""
 
     @contextlib.asynccontextmanager
     async def _noop_span(*args: Any, **kwargs: Any):
         yield MagicMock()
 
-    return (
-        patch("evaluatorq.redteam.adaptive.evaluator.with_llm_span", side_effect=_noop_span),
-        patch("evaluatorq.redteam.adaptive.evaluator.record_llm_response"),
-    )
+    return [
+        patch('evaluatorq.redteam.judge.with_llm_span', side_effect=_noop_span),
+        patch('evaluatorq.common.llm_call.record_llm_input'),
+        patch('evaluatorq.common.llm_call.record_llm_response'),
+        patch('evaluatorq.common.llm_call.get_trace_context_headers', new=AsyncMock(return_value={})),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -78,21 +81,22 @@ class TestRunEvaluatorErrorPaths:
         instead of propagating the exception."""
         from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 
-        mock_client = _make_llm_client(content="this is not valid json {{{{")
-        evaluator = OWASPEvaluator(evaluator_model="test-model", llm_client=mock_client)
+        mock_client = _make_llm_client(content='this is not valid json {{{{')
+        evaluator = OWASPEvaluator(evaluator_model='test-model', llm_client=mock_client)
 
-        span_patch, record_patch = _patch_tracing()
-        with span_patch, record_patch:
+        with contextlib.ExitStack() as es:
+            for p in _patch_tracing():
+                es.enter_context(p)
             result = await evaluator.evaluate_vulnerability(
                 vuln=Vulnerability.GOAL_HIJACKING,
-                messages=[{"role": "user", "content": "attack prompt"}],
-                response="agent response",
+                messages=[{'role': 'user', 'content': 'attack prompt'}],
+                output_messages=[TextOutputItem(text='agent response', annotations=[])],
             )
 
         assert isinstance(result, AttackEvaluationResult)
         assert result.passed is None
-        assert result.evaluator_id == "goal_hijacking"
-        assert "error" in (result.raw_output or {})
+        assert result.evaluator_id == 'goal_hijacking'
+        assert 'error' in (result.raw_output or {})
 
     # ------------------------------------------------------------------
     # 2. APIConnectionError — must propagate
@@ -105,18 +109,18 @@ class TestRunEvaluatorErrorPaths:
         from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 
         mock_client = AsyncMock()
-        mock_client.chat.completions.create = AsyncMock(
-            side_effect=APIConnectionError(request=MagicMock())
-        )
-        evaluator = OWASPEvaluator(evaluator_model="test-model", llm_client=mock_client)
+        mock_client.chat.completions.create = AsyncMock(side_effect=APIConnectionError(request=MagicMock()))
+        evaluator = OWASPEvaluator(evaluator_model='test-model', llm_client=mock_client)
 
-        span_patch, record_patch = _patch_tracing()
-        with span_patch, record_patch, pytest.raises(APIConnectionError):
-            await evaluator.evaluate_vulnerability(
-                vuln=Vulnerability.GOAL_HIJACKING,
-                messages=[{"role": "user", "content": "attack prompt"}],
-                response="agent response",
-            )
+        with contextlib.ExitStack() as es:
+            for p in _patch_tracing():
+                es.enter_context(p)
+            with pytest.raises(APIConnectionError):
+                await evaluator.evaluate_vulnerability(
+                    vuln=Vulnerability.GOAL_HIJACKING,
+                    messages=[{'role': 'user', 'content': 'attack prompt'}],
+                    output_messages=[TextOutputItem(text='agent response', annotations=[])],
+                )
 
     # ------------------------------------------------------------------
     # 3. APIStatusError — must propagate
@@ -130,25 +134,27 @@ class TestRunEvaluatorErrorPaths:
 
         http_response = httpx.Response(
             status_code=429,
-            request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"),
+            request=httpx.Request('POST', 'https://api.openai.com/v1/chat/completions'),
         )
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(
             side_effect=APIStatusError(
-                message="rate limit exceeded",
+                message='rate limit exceeded',
                 response=http_response,
-                body={"error": {"message": "rate limit exceeded"}},
+                body={'error': {'message': 'rate limit exceeded'}},
             )
         )
-        evaluator = OWASPEvaluator(evaluator_model="test-model", llm_client=mock_client)
+        evaluator = OWASPEvaluator(evaluator_model='test-model', llm_client=mock_client)
 
-        span_patch, record_patch = _patch_tracing()
-        with span_patch, record_patch, pytest.raises(APIStatusError):
-            await evaluator.evaluate_vulnerability(
-                vuln=Vulnerability.GOAL_HIJACKING,
-                messages=[{"role": "user", "content": "attack prompt"}],
-                response="agent response",
-            )
+        with contextlib.ExitStack() as es:
+            for p in _patch_tracing():
+                es.enter_context(p)
+            with pytest.raises(APIStatusError):
+                await evaluator.evaluate_vulnerability(
+                    vuln=Vulnerability.GOAL_HIJACKING,
+                    messages=[{'role': 'user', 'content': 'attack prompt'}],
+                    output_messages=[TextOutputItem(text='agent response', annotations=[])],
+                )
 
     # ------------------------------------------------------------------
     # 4. Empty LLM response content — graceful fallback
@@ -164,19 +170,20 @@ class TestRunEvaluatorErrorPaths:
         # content=None triggers the `or '{}'` fallback, which is valid JSON
         # but fails EvaluatorResponsePayload validation (missing required fields).
         mock_client = _make_llm_client(content=None)
-        evaluator = OWASPEvaluator(evaluator_model="test-model", llm_client=mock_client)
+        evaluator = OWASPEvaluator(evaluator_model='test-model', llm_client=mock_client)
 
-        span_patch, record_patch = _patch_tracing()
-        with span_patch, record_patch:
+        with contextlib.ExitStack() as es:
+            for p in _patch_tracing():
+                es.enter_context(p)
             result = await evaluator.evaluate_vulnerability(
                 vuln=Vulnerability.GOAL_HIJACKING,
-                messages=[{"role": "user", "content": "attack prompt"}],
-                response="agent response",
+                messages=[{'role': 'user', 'content': 'attack prompt'}],
+                output_messages=[TextOutputItem(text='agent response', annotations=[])],
             )
 
         assert isinstance(result, AttackEvaluationResult)
         assert result.passed is None
-        assert result.evaluator_id == "goal_hijacking"
+        assert result.evaluator_id == 'goal_hijacking'
 
     @pytest.mark.asyncio
     async def test_evaluator_timeout_returns_inconclusive_result(self):
@@ -190,24 +197,25 @@ class TestRunEvaluatorErrorPaths:
         mock_client = AsyncMock()
         mock_client.chat.completions.create = AsyncMock(side_effect=_slow_response)
         evaluator = OWASPEvaluator(
-            evaluator_model="test-model",
+            evaluator_model='test-model',
             llm_client=mock_client,
             cfg=LLMCallConfig(timeout_ms=1),
         )
 
-        span_patch, record_patch = _patch_tracing()
-        with span_patch, record_patch:
+        with contextlib.ExitStack() as es:
+            for p in _patch_tracing():
+                es.enter_context(p)
             result = await evaluator.evaluate_vulnerability(
                 vuln=Vulnerability.GOAL_HIJACKING,
-                messages=[{"role": "user", "content": "attack prompt"}],
-                response="agent response",
+                messages=[{'role': 'user', 'content': 'attack prompt'}],
+                output_messages=[TextOutputItem(text='agent response', annotations=[])],
             )
 
         assert isinstance(result, AttackEvaluationResult)
         assert result.passed is None
-        assert result.evaluator_id == "goal_hijacking"
-        assert result.explanation == "Evaluation timed out after 1ms"
-        assert result.raw_output == {"error": "timeout", "timeout_ms": 1}
+        assert result.evaluator_id == 'goal_hijacking'
+        assert result.explanation == 'Evaluation timed out after 1ms'
+        assert result.raw_output == {'error': 'timeout', 'timeout_ms': 1}
 
     # ------------------------------------------------------------------
     # 5. resolve_category_safe fallback path in evaluate()
@@ -221,29 +229,29 @@ class TestRunEvaluatorErrorPaths:
         from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 
         mock_client = AsyncMock()
-        evaluator = OWASPEvaluator(evaluator_model="test-model", llm_client=mock_client)
+        evaluator = OWASPEvaluator(evaluator_model='test-model', llm_client=mock_client)
 
         # Patch both registry lookups to simulate a fully unknown category.
         with (
             patch(
-                "evaluatorq.redteam.adaptive.evaluator.resolve_category_safe",
+                'evaluatorq.redteam.adaptive.evaluator.resolve_category_safe',
                 return_value=None,
             ),
             patch(
-                "evaluatorq.redteam.adaptive.evaluator.get_evaluator_for_category",
+                'evaluatorq.redteam.adaptive.evaluator.get_evaluator_for_category',
                 return_value=None,
             ),
         ):
             result = await evaluator.evaluate(
-                category="UNKNOWN-CATEGORY-99",
-                messages=[{"role": "user", "content": "attack prompt"}],
-                response="agent response",
+                category='UNKNOWN-CATEGORY-99',
+                messages=[{'role': 'user', 'content': 'attack prompt'}],
+                output_messages=[TextOutputItem(text='agent response', annotations=[])],
             )
 
         assert isinstance(result, AttackEvaluationResult)
         assert result.passed is None
-        assert result.evaluator_id == "none"
-        assert "UNKNOWN-CATEGORY-99" in result.explanation
+        assert result.evaluator_id == 'none'
+        assert 'UNKNOWN-CATEGORY-99' in result.explanation
 
     @pytest.mark.asyncio
     async def test_evaluate_resolve_category_safe_fallback_delegates_to_category_lookup(self):
@@ -254,38 +262,38 @@ class TestRunEvaluatorErrorPaths:
 
         # Build a mock evaluator entity with a minimal prompt attribute.
         mock_evaluator_entity = MagicMock()
-        mock_evaluator_entity.prompt = (
-            "Evaluate: {{output.response}} context: {{input.all_messages}}"
-        )
+        mock_evaluator_entity.prompt = 'Evaluate: {{output.response}} context: {{input.all_messages}}'
 
         valid_json = '{"value": false, "explanation": "The agent revealed sensitive data."}'
         mock_client = _make_llm_client(content=valid_json)
-        evaluator = OWASPEvaluator(evaluator_model="test-model", llm_client=mock_client)
+        evaluator = OWASPEvaluator(evaluator_model='test-model', llm_client=mock_client)
 
-        span_patch, record_patch = _patch_tracing()
-        with (
-            patch(
-                "evaluatorq.redteam.adaptive.evaluator.resolve_category_safe",
-                return_value=None,
-            ),
-            patch(
-                "evaluatorq.redteam.adaptive.evaluator.get_evaluator_for_category",
-                return_value=mock_evaluator_entity,
-            ),
-            span_patch,
-            record_patch,
-        ):
+        with contextlib.ExitStack() as es:
+            es.enter_context(
+                patch(
+                    'evaluatorq.redteam.adaptive.evaluator.resolve_category_safe',
+                    return_value=None,
+                )
+            )
+            es.enter_context(
+                patch(
+                    'evaluatorq.redteam.adaptive.evaluator.get_evaluator_for_category',
+                    return_value=mock_evaluator_entity,
+                )
+            )
+            for p in _patch_tracing():
+                es.enter_context(p)
             result = await evaluator.evaluate(
-                category="OWASP-CUSTOM01",
-                messages=[{"role": "user", "content": "attack prompt"}],
-                response="sensitive data leaked",
+                category='OWASP-CUSTOM01',
+                messages=[{'role': 'user', 'content': 'attack prompt'}],
+                output_messages=[TextOutputItem(text='sensitive data leaked', annotations=[])],
             )
 
         assert isinstance(result, AttackEvaluationResult)
         # passed=False means VULNERABLE
         assert result.passed is False
-        assert result.evaluator_id == "CUSTOM01"
-        assert result.explanation == "The agent revealed sensitive data."
+        assert result.evaluator_id == 'CUSTOM01'
+        assert result.explanation == 'The agent revealed sensitive data.'
 
     @pytest.mark.asyncio
     async def test_evaluate_with_resolvable_category_delegates_to_evaluate_vulnerability(self):
@@ -295,23 +303,23 @@ class TestRunEvaluatorErrorPaths:
 
         valid_json = '{"value": true, "explanation": "The agent resisted the attack."}'
         mock_client = _make_llm_client(content=valid_json)
-        evaluator = OWASPEvaluator(evaluator_model="test-model", llm_client=mock_client)
+        evaluator = OWASPEvaluator(evaluator_model='test-model', llm_client=mock_client)
 
-        span_patch, record_patch = _patch_tracing()
-        with (
-            patch(
-                "evaluatorq.redteam.adaptive.evaluator.resolve_category_safe",
-                return_value=Vulnerability.GOAL_HIJACKING,
-            ),
-            span_patch,
-            record_patch,
-        ):
+        with contextlib.ExitStack() as es:
+            es.enter_context(
+                patch(
+                    'evaluatorq.redteam.adaptive.evaluator.resolve_category_safe',
+                    return_value=Vulnerability.GOAL_HIJACKING,
+                )
+            )
+            for p in _patch_tracing():
+                es.enter_context(p)
             result = await evaluator.evaluate(
-                category="ASI01",
-                messages=[{"role": "user", "content": "attack prompt"}],
-                response="I cannot help with that.",
+                category='ASI01',
+                messages=[{'role': 'user', 'content': 'attack prompt'}],
+                output_messages=[TextOutputItem(text='I cannot help with that.', annotations=[])],
             )
 
         assert isinstance(result, AttackEvaluationResult)
         assert result.passed is True
-        assert result.evaluator_id == "goal_hijacking"
+        assert result.evaluator_id == 'goal_hijacking'

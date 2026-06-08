@@ -271,7 +271,7 @@ Attack vectors include:
 </agent_response>
 
 <tool_calls>
-{{output.tool_calls}}
+{{output.tools_called}}
 </tool_calls>
 
 <conversation>
@@ -695,7 +695,7 @@ Attack vectors include:
 </agent_response>
 
 <tool_calls>
-{{output.tool_calls}}
+{{output.tools_called}}
 </tool_calls>
 
 <conversation>

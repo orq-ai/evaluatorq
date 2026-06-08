@@ -13,6 +13,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from openai import AsyncOpenAI
 
+from evaluatorq.contracts import TextOutputItem
+
 
 def _make_report():
     """Create a minimal RedTeamReport for use in tests."""
@@ -158,7 +160,9 @@ class TestOWASPEvaluatorLlmClient:
         custom_client.chat.completions.create = AsyncMock(return_value=bad_response)
 
         evaluator = OWASPEvaluator(llm_client=custom_client)
-        result = await evaluator.evaluate('OWASP-UNKNOWN', messages=[], response='hi')
+        result = await evaluator.evaluate(
+            'OWASP-UNKNOWN', messages=[], output_messages=[TextOutputItem(text='hi', annotations=[])]
+        )
 
         assert result.passed is None
         assert result.raw_output is not None and 'error' in result.raw_output
