@@ -20,6 +20,7 @@ from evaluatorq.common.reports import esc as _esc
 from evaluatorq.common.reports import format_date as _format_date
 from evaluatorq.common.reports import html_table as _html_table
 from evaluatorq.common.reports import load_css as _load_css_common
+from evaluatorq.common.reports import load_logo_svg as _load_logo_svg
 from evaluatorq.common.reports import pct as _pct
 from evaluatorq.common.reports import render_donut_chart as _render_donut_chart_common
 from evaluatorq.common.reports import truncate as _truncate
@@ -284,7 +285,16 @@ def _render_header_html(data: dict[str, Any]) -> str:
     vulnerability_rate = data.get("vulnerability_rate", 0.0)
     date_str = _format_date(created_at)
 
+    logo_svg = _load_logo_svg()
+    logo_html = (
+        f'<div class="report-brand-logo">{logo_svg}</div>'
+        if logo_svg else ""
+    )
+
     return (
+        f'<div class="report-page-header">\n'
+        f"{logo_html}\n"
+        f"</div>\n"
         f"<h1>Red Team Security Report</h1>\n"
         f'<p class="meta">'
         f"<strong>Target:</strong> {target} &nbsp;|&nbsp; "
@@ -377,7 +387,7 @@ def _render_focus_areas_html(section: ReportSection) -> str:
 
         card_lines = [
             '<div class="card">',
-            f"<h3>{i}. {cat} — {cat_name}</h3>",
+            f"<h3>{i}. {cat}: {cat_name}</h3>",
             (f"<p><strong>Vulnerabilities:</strong> {vuln} ({vuln_rate} of attacks succeeded) "
             f"&nbsp;|&nbsp; <strong>Risk Score:</strong> {risk_score:.2f}</p>"),
         ]
@@ -387,7 +397,7 @@ def _render_focus_areas_html(section: ReportSection) -> str:
         agent_remediation = area.get("agent_specific_remediation", "")
         if agent_remediation:
             card_lines.append(
-                f'<div style="margin-top:8px;padding:8px 12px;background:{_COLORS["sand_100"]};border-left:3px solid {_COLORS["orange_300"]};border-radius:4px">'
+                f'<div class="callout warn">'
                 f'<strong>Agent-specific:</strong> {_esc(agent_remediation)}</div>'
             )
 
@@ -441,7 +451,7 @@ def _render_category_breakdown_html(section: ReportSection) -> str:
     chart = _render_category_bar_chart(rows)
     table_rows = [
         [
-            _esc(f"{r['category']} — {r['category_name']}"),
+            _esc(f"{r['category']}: {r['category_name']}"),
             _esc(str(r["total_attacks"])),
             _esc(str(r["vulnerabilities_found"])),
             _pct(r["vulnerability_rate"]),
@@ -649,7 +659,7 @@ def _render_attack_heatmap_html(section: ReportSection) -> str:
     def _heatmap_color(asr: float, total: int) -> str:
         """Interpolate from success_400 (0%) to red_400 (100%)."""
         if total == 0:
-            return "#e0e0e0"
+            return "var(--gray-300)"  # absent cell — neutral border grey
         # success_400: #2ebd85, red_400: #d92d20 via yellow_400 #f2b600 at 50%
         if asr <= 0.5:
             t = asr / 0.5
@@ -680,7 +690,7 @@ def _render_attack_heatmap_html(section: ReportSection) -> str:
                     f'<td><span class="heatmap-cell" style="background:{color}">{_esc(label)}</span></td>'
                 )
             else:
-                row_parts.append('<td><span class="heatmap-cell" style="background:#e0e0e0;color:#999">—</span></td>')
+                row_parts.append('<td><span class="heatmap-cell" style="background:var(--gray-300);color:var(--gray-500)">-</span></td>')
         body_rows.append("<tr>" + "".join(row_parts) + "</tr>")
 
     table_html = (
@@ -691,7 +701,7 @@ def _render_attack_heatmap_html(section: ReportSection) -> str:
     )
 
     legend = (
-        '<p style="font-size:.8em;color:#888;margin-top:.5rem">'
+        '<p style="font-size:.8em;color:var(--gray-500);margin-top:.5rem">'
         "Cell color: green = low ASR (resistant), yellow = medium, red = high ASR (vulnerable). "
         "Grey = no attacks for that combination."
         "</p>"
@@ -807,7 +817,7 @@ def _render_agent_context_html(section: ReportSection) -> str:
         chip_groups: list[str] = []
         if tools:
             tool_chips = "".join(
-                f'<span style="display:inline-block;background:#e8f4f8;border:1px solid #b3d9ea;'
+                f'<span style="display:inline-block;background:var(--clay-tint);border:1px solid var(--clay);'
                 f'border-radius:12px;padding:.15rem .6rem;font-size:.8em;margin:.15rem .15rem .15rem 0">'
                 f"{_esc(t)}</span>"
                 for t in tools
@@ -815,7 +825,7 @@ def _render_agent_context_html(section: ReportSection) -> str:
             chip_groups.append(f"<p><strong>Tools:</strong> {tool_chips}</p>")
         if memory_stores:
             mem_chips = "".join(
-                f'<span style="display:inline-block;background:#f0f8e8;border:1px solid #c3e0a0;'
+                f'<span style="display:inline-block;background:var(--olive-tint);border:1px solid var(--olive);'
                 f'border-radius:12px;padding:.15rem .6rem;font-size:.8em;margin:.15rem .15rem .15rem 0">'
                 f"{_esc(m)}</span>"
                 for m in memory_stores
@@ -823,7 +833,7 @@ def _render_agent_context_html(section: ReportSection) -> str:
             chip_groups.append(f"<p><strong>Memory:</strong> {mem_chips}</p>")
         if knowledge_bases:
             kb_chips = "".join(
-                f'<span style="display:inline-block;background:#fdf0e8;border:1px solid #f0c080;'
+                f'<span style="display:inline-block;background:var(--gray-100);border:1px solid var(--gray-300);'
                 f'border-radius:12px;padding:.15rem .6rem;font-size:.8em;margin:.15rem .15rem .15rem 0">'
                 f"{_esc(k)}</span>"
                 for k in knowledge_bases
@@ -1301,7 +1311,7 @@ def _render_agent_comparison_html(section: ReportSection) -> str:
         asr_class = "kpi-alert" if asr >= 0.5 else ("kpi-warn" if asr >= 0.2 else "")
         parts.append(
             f'<div class="kpi-card {asr_class}" style="flex:1 1 160px;">'
-            f'<div class="kpi-label" style="font-size:.9em;color:var(--teal-400);">{agent_name}</div>'
+            f'<div class="kpi-label" style="font-size:.9em;color:var(--clay);">{agent_name}</div>'
             f'<div class="kpi-value">{_pct(asr)}</div>'
             f'<div class="kpi-subtitle">'
             f'{_esc(str(am["vulnerabilities_found"]))} vulns / {_esc(str(am["total_attacks"]))} attacks'
@@ -1330,7 +1340,7 @@ def _render_agent_comparison_html(section: ReportSection) -> str:
                     cell_text = text_matrix[row_idx][col_idx] if text_matrix else f"{asr_pct:.0f}%"
                 except IndexError:
                     asr_pct = 0.0
-                    cell_text = "\u2014"
+                    cell_text = "-"
                 bg = _asr_cell_color(asr_pct)
                 text_color = "white" if asr_pct >= 30 else _COLORS["ink_700"]
                 tbl_parts.append(
@@ -1396,7 +1406,7 @@ def _render_agent_disagreements_html(section: ReportSection) -> str:
 
         sev_cls = f"severity-{_esc(severity)}" if severity else ""
         summary_label = (
-            f"#{i} &nbsp; {attack_id} &mdash; {vulnerability} / {technique}"
+            f"#{i} &nbsp; {attack_id} &nbsp; {vulnerability} / {technique}"
             + (f" &nbsp; <span class=\"{sev_cls}\">[{_esc(severity)}]</span>" if severity else "")
         )
 
@@ -1561,11 +1571,11 @@ def _render_methodology_html(section: ReportSection) -> str:
     untested_html = ""
     if untested:
         items = "".join(
-            f"<li><strong>{_esc(cat)}</strong> — {_esc(untested_names.get(cat, cat))}</li>"
+            f"<li><strong>{_esc(cat)}</strong>: {_esc(untested_names.get(cat, cat))}</li>"
             for cat in untested
         )
         untested_html = (
-            f'<div style="margin-top:16px;padding:12px;background:#fff3cd;border-left:3px solid #ffc107;border-radius:4px">'
+            f'<div class="callout warn" style="margin-top:16px">'
             f'<strong>{len(untested)} supported categories not tested:</strong>'
             f'<ul style="margin:8px 0 0 0">{items}</ul></div>'
         )
@@ -1647,7 +1657,7 @@ def _render_risk_banner(
     if confidence:
         confidence_html = (
             f'<div style="margin-top:.5rem;font-size:.82em;opacity:.8">'
-            f'<strong>Confidence: {_esc(confidence)}</strong> — {_esc(confidence_note)}</div>'
+            f'<strong>Confidence: {_esc(confidence)}</strong>: {_esc(confidence_note)}</div>'
         )
 
     return (
@@ -1735,10 +1745,17 @@ def export_html(report: RedTeamReport) -> str:
             # Wrap each section in a div with an anchor ID for TOC navigation
             anchor = f"section-{section.kind}"
             rendered = renderer(section)
+            # Inject section-rule divider after the opening h2 of each section
+            rendered = rendered.replace("</h2>", '</h2>\n<hr class="section-rule">', 1)
             body_parts.append(f'<div id="{anchor}">{rendered}</div>')
 
+    logo_svg = _load_logo_svg()
+    logo_footer = (
+        f'<span class="footer-logo">{logo_svg}</span>'
+        if logo_svg else ""
+    )
     body_parts.append(
-        '<p class="footer">Generated by evaluatorq red team suite.</p>'
+        f'<p class="footer">{logo_footer}Generated by evaluatorq red team suite.</p>'
     )
 
     body_html = "\n\n".join(body_parts)
@@ -1753,7 +1770,9 @@ def export_html(report: RedTeamReport) -> str:
         f"<style>\n{_load_css()}</style>\n"
         "</head>\n"
         "<body>\n"
+        '<div class="container">\n'
         f"{body_html}\n"
+        "</div>\n"
         "</body>\n"
         "</html>\n"
     )

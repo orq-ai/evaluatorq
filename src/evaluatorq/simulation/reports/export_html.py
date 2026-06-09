@@ -136,7 +136,7 @@ def _build_verdict_line(sections: list[ReportSection], sd: dict[str, Any]) -> st
         w = min(rows, key=lambda r: r.get('success_rate', 0.0))
         return f'{w[key]} {_pct(w.get("success_rate", 0.0))}'
 
-    bits = [f'{word} — {_pct(sd.get("success_rate", 0.0))} success ({achieved}/{total})']
+    bits = [f'{word}: {_pct(sd.get("success_rate", 0.0))} success ({achieved}/{total})']
     worst_persona = _worst('persona_breakdown', 'persona')
     worst_scenario = _worst('scenario_breakdown', 'scenario')
     weak = [b for b in (worst_persona, worst_scenario) if b]
@@ -233,7 +233,7 @@ def _render_failures_first_html(section: ReportSection) -> str:
         return '<section class="report-card"><h2>Failures</h2><p>No failed conversations.</p></section>'
     trs = []
     for r in rows:
-        badges = ''.join(_status_badge(v, 'fail') for v in r['violated']) or '—'
+        badges = ''.join(_status_badge(v, 'fail') for v in r['violated']) or '-'
         safety = _status_badge('SAFETY', 'fail') if r['has_safety'] else ''
         trs.append(
             f'<tr><td><a href="#{r["anchor"]}">#{r["index"]}</a></td>'
@@ -251,7 +251,7 @@ def _render_failures_first_html(section: ReportSection) -> str:
     if len(rows) > _FAILURES_SCROLL_AFTER:
         table = f'<div class="scroll-table">{table}</div>'
     note = (
-        f'<p class="chart-note">{len(rows)} failures — scroll within the box.</p>'
+        f'<p class="chart-note">{len(rows)} failures, scroll within the box.</p>'
         if len(rows) > _FAILURES_SCROLL_AFTER
         else ''
     )
@@ -272,7 +272,7 @@ def _render_persona_scenario_heatmap_html(section: ReportSection) -> str:
         cells=cells,
         scale=_SCALE_GREEN_HIGH,
         title=section.title,
-        value_fmt=lambda v: '—' if v < 0 else f'{v:.0%}',
+        value_fmt=lambda v: '-' if v < 0 else f'{v:.0%}',
     )
     return f'<section class="report-card">{heat}</section>'
 
@@ -486,7 +486,7 @@ def _render_individual_results_html(section: ReportSection) -> str:
         badge = _status_badge(verdict, 'pass' if entry['goal_achieved'] else 'fail')
         title = (
             f'#{entry["index"] + 1}: {_esc(entry["persona"])} / '
-            f'{_esc(entry["scenario"])} — {badge}'
+            f'{_esc(entry["scenario"])} {badge}'
             f' ({entry["turn_count"]} turns, '
             f'score {entry["goal_completion_score"]:.2f})'
         )
