@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from evaluatorq import DataPoint, EvaluationResult
-from evaluatorq.contracts import TextOutputItem, ToolCallOutputItem
+from evaluatorq.contracts import JURY_RAW_OUTPUT_KEY, TextOutputItem, ToolCallOutputItem
 from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import (
     _adapt_static_output,
     _adapt_tool_call,
@@ -134,6 +134,52 @@ class TestStaticOWASPScorerToolCalls:
         # The evaluator returned VULNERABLE (value=False → pass=False)
         assert isinstance(result, EvaluationResult)
         assert result.value is False
+
+    @pytest.mark.asyncio
+    async def test_scorer_with_judges_emits_jury_raw_output(self) -> None:
+        """Static OWASP scoring should use the same jury carrier as dynamic scoring."""
+        from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
+
+        mock_evaluator_entity = MagicMock()
+        mock_evaluator_entity.prompt = 'response: {{output.response}}'
+
+        async def _create(**kwargs: Any) -> MagicMock:
+            model = kwargs['model']
+            value = model == 'judge-a'
+            mock_msg = MagicMock()
+            mock_msg.content = json.dumps({'value': value, 'explanation': f'{model} verdict'})
+            mock_choice = MagicMock()
+            mock_choice.message = mock_msg
+            mock_resp = MagicMock()
+            mock_resp.choices = [mock_choice]
+            return mock_resp
+
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create = AsyncMock(side_effect=_create)
+
+        with patch(
+            'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.get_evaluator_for_category',
+            return_value=mock_evaluator_entity,
+        ):
+            evaluator_config = create_owasp_evaluator(
+                evaluator_model='judge-a',
+                llm_client=mock_client,
+                judges=['judge-b'],
+            )
+            result = await evaluator_config['scorer']({
+                'data': DataPoint(inputs={'category': 'ASI01', 'messages': []}),
+                'output': {'response': 'target output'},
+            })
+
+        assert result.pass_ is False
+        assert result.raw_output is not None
+        assert JURY_RAW_OUTPUT_KEY in result.raw_output
+        jury = result.raw_output[JURY_RAW_OUTPUT_KEY]
+        assert jury['judges_configured'] == 2
+        assert jury['judges_succeeded'] == 2
+        assert jury['tie'] is True
+        assert '[jury: 2/2 judges, raw agreement 50%, TIE (tie-break applied)]' in (result.explanation or '')
+        assert mock_client.chat.completions.create.await_count == 2
 
     @pytest.mark.asyncio
     async def test_scorer_with_no_tool_calls_still_works(self) -> None:

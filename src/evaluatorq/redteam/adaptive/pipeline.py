@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, Job, job
+from evaluatorq.common.jury import append_jury_summary
 from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentResponse, Message
 from evaluatorq.redteam.adaptive.attack_generator import generate_attack_prompt, generate_objective
@@ -35,11 +36,14 @@ from evaluatorq.redteam.backends.base import Backend, _coerce_to_agent_response
 from evaluatorq.redteam.backends.registry import create_async_llm_client, resolve_backend
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
+    JURY_RAW_OUTPUT_KEY,
     PIPELINE_CONFIG,
     AttackerResponse,
     AttackOutput,
     AttackStrategy,
     EvaluatorConfig,
+    EvaluatorqEvaluatorConfig,
+    JuryResult,
     LLMCallConfig,
     LLMConfig,
     OrchestratorResult,
@@ -549,19 +553,50 @@ def create_dynamic_redteam_job(
     return dynamic_job
 
 
+def _append_jury_summary(explanation: str, jury: JuryResult | None) -> str:
+    """Append a compact jury reliability summary to the evaluator explanation.
+
+    Surfaces inter-judge agreement in the results table when a jury ran (RES-739).
+    Returns the explanation unchanged for single-judge runs.
+    """
+    return append_jury_summary(explanation, jury)
+
+
 def create_dynamic_evaluator(
     evaluator_model: str = DEFAULT_PIPELINE_MODEL,
     llm_client: AsyncOpenAI | None = None,
     llm_kwargs: dict[str, Any] | None = None,
-    cfg: LLMCallConfig | None = None,
-) -> EvaluatorConfig:
+    cfg: LLMCallConfig | EvaluatorConfig | None = None,
+    judges: list[str] | None = None,
+    judge_repetitions: int = 1,
+    replacement_judges: list[str] | None = None,
+    min_successful_judges: int = 1,
+    target_models: list[str] | None = None,
+    *,
+    strict_panel: bool = False,
+) -> EvaluatorqEvaluatorConfig:
     """Create an evaluator that uses OWASPEvaluator on the attack conversation.
 
     value=True means RESISTANT (consistent with OWASP evaluatorq scoring and
     EvaluationResult.passed convention).
+
+    ``judges`` adds panel models alongside ``evaluator_model``; ``judge_repetitions``
+    runs each judge N times with majority voting; ``replacement_judges`` stand in for
+    failed judges; ``min_successful_judges`` is the decisive-verdict floor (RES-739).
+    ``target_models`` (known direct-model targets only) drives the self-judge/family
+    warning; ``strict_panel`` upgrades composition warnings to hard errors.
     """
     owasp_evaluator = OWASPEvaluator(
-        evaluator_model=evaluator_model, llm_client=llm_client, llm_kwargs=llm_kwargs, cfg=cfg
+        evaluator_model=evaluator_model,
+        llm_client=llm_client,
+        llm_kwargs=llm_kwargs,
+        cfg=cfg,
+        judges=judges,
+        repetitions=judge_repetitions,
+        replacement_judges=replacement_judges,
+        min_successful_judges=min_successful_judges,
+        target_models=target_models,
+        strict_panel=strict_panel,
     )
 
     async def scorer(params: ScorerParameter) -> EvaluationResult:
@@ -632,30 +667,44 @@ def create_dynamic_evaluator(
                     messages=input_messages,
                     output_messages=output_messages,
                 )
-            set_span_attrs(
-                eval_span,
-                {
-                    'orq.redteam.passed': eval_result.passed,
-                    'input': output.final_response or '',
-                    'output': eval_result.explanation or '',
-                },
-            )
+            span_attrs: dict[str, Any] = {
+                'orq.redteam.passed': eval_result.passed,
+                'input': output.final_response or '',
+                'output': eval_result.explanation or '',
+            }
+            if eval_result.jury is not None:
+                span_attrs['orq.redteam.jury.raw_agreement'] = eval_result.jury.raw_agreement
+                span_attrs['orq.redteam.jury.tie'] = eval_result.jury.tie
+                span_attrs['orq.redteam.jury.judges_succeeded'] = eval_result.jury.judges_succeeded
+            set_span_attrs(eval_span, span_attrs)
 
         # ``passed`` is the judge's boolean verdict (RESISTANT/VULNERABLE); surface it
         # as the score value, or 'inconclusive' when the judge errored.
         result_value: str | int | float | bool = (
             bool(eval_result.passed) if eval_result.passed is not None else 'inconclusive'
         )
+        # The generic EvaluationResult is framework-agnostic, so the structured jury
+        # breakdown rides through raw_output (the judge's-raw-response passthrough)
+        # rather than as a typed field; the red-team converters lift it back onto
+        # UnifiedEvaluationResult.jury so per-judge votes + agreement reach the report
+        # (RES-739 DoD), not just the OTel span + inline explanation text.
+        # Only materialize a dict when there is jury data to inject; otherwise
+        # pass raw_output through untouched so a pre-existing ``None`` stays
+        # ``null`` in serialized reports (consumers distinguish null from {}).
+        scored_raw_output: dict[str, Any] | None = eval_result.raw_output
+        if eval_result.jury is not None:
+            scored_raw_output = dict(eval_result.raw_output or {})
+            scored_raw_output[JURY_RAW_OUTPUT_KEY] = eval_result.jury.model_dump(mode='json')
         return EvaluationResult.model_validate({
             'value': result_value,
-            'explanation': eval_result.explanation,
+            'explanation': _append_jury_summary(eval_result.explanation, eval_result.jury),
             'pass': eval_result.passed,
             # Carry the judge's cost + raw response so the report layer can surface
             # and aggregate evaluator token usage. They are kept in local result
             # dumps but stripped from the Orq platform upload at the send boundary
             # (see evaluatorq.send_results).
             'token_usage': eval_result.token_usage,
-            'raw_output': eval_result.raw_output,
+            'raw_output': scored_raw_output,
         })
 
     return {'name': 'owasp-dynamic-security', 'scorer': scorer}

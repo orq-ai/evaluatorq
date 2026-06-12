@@ -125,6 +125,7 @@ def _build_summary_section(report: RedTeamReport) -> ReportSection:
             "by_severity": {k: v.model_dump(mode="json") for k, v in s.by_severity.items()},
             "confidence": confidence,
             "confidence_note": confidence_note,
+            "jury_reliability": s.jury_reliability.model_dump(mode="json") if s.jury_reliability else None,
         },
     )
 

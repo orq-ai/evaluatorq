@@ -424,6 +424,8 @@ def _make_fake_eval_result() -> MagicMock:
     result.token_usage = None
     result.evaluator_id = 'test'
     result.raw_output = {}
+    # Single-judge fake: no jury, so the scorer's jury-summary/stash paths no-op.
+    result.jury = None
     return result
 
 

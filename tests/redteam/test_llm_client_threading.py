@@ -181,14 +181,36 @@ class TestCreateDynamicEvaluatorLlmClient:
 
         custom_client = MagicMock(spec=AsyncOpenAI)
         create_dynamic_evaluator(llm_client=custom_client)
-        mock_cls.assert_called_once_with(evaluator_model='gpt-5-mini', llm_client=custom_client, llm_kwargs=None, cfg=None)
+        mock_cls.assert_called_once_with(
+            evaluator_model='gpt-5-mini',
+            llm_client=custom_client,
+            llm_kwargs=None,
+            cfg=None,
+            judges=None,
+            repetitions=1,
+            replacement_judges=None,
+            min_successful_judges=1,
+            target_models=None,
+            strict_panel=False,
+        )
 
     @patch('evaluatorq.redteam.adaptive.pipeline.OWASPEvaluator')
     def test_passes_none_when_no_client(self, mock_cls):
         from evaluatorq.redteam.adaptive.pipeline import create_dynamic_evaluator
 
         create_dynamic_evaluator()
-        mock_cls.assert_called_once_with(evaluator_model='gpt-5-mini', llm_client=None, llm_kwargs=None, cfg=None)
+        mock_cls.assert_called_once_with(
+            evaluator_model='gpt-5-mini',
+            llm_client=None,
+            llm_kwargs=None,
+            cfg=None,
+            judges=None,
+            repetitions=1,
+            replacement_judges=None,
+            min_successful_judges=1,
+            target_models=None,
+            strict_panel=False,
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -11,18 +11,20 @@ from loguru import logger
 from pydantic import ValidationError
 
 from evaluatorq import DataPoint, EvaluationResult
-from evaluatorq.contracts import OutputMessage, TextOutputItem, ToolCallOutputItem
+from evaluatorq.common.judge import JudgeError, build_eval_replacements, run_judge
+from evaluatorq.common.jury import Prediction, VerdictKind, _panel_composition_messages, append_jury_summary, run_jury
+from evaluatorq.contracts import JURY_RAW_OUTPUT_KEY, OutputMessage, TextOutputItem, ToolCallOutputItem
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
     PIPELINE_CONFIG,
     EvaluatorConfig,
+    EvaluatorqEvaluatorConfig,
     LLMCallConfig,
     RedTeamInput,
     StaticDataset,
 )
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category
-from evaluatorq.redteam.judge import JudgeError, build_eval_replacements, run_judge
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -167,8 +169,15 @@ def create_owasp_evaluator(
     evaluator_model: str = DEFAULT_PIPELINE_MODEL,
     llm_client: AsyncOpenAI | None = None,
     llm_kwargs: dict[str, Any] | None = None,
-    cfg: LLMCallConfig | None = None,
-) -> EvaluatorConfig:
+    cfg: LLMCallConfig | EvaluatorConfig | None = None,
+    judges: list[str] | None = None,
+    judge_repetitions: int = 1,
+    replacement_judges: list[str] | None = None,
+    min_successful_judges: int = 1,
+    target_models: list[str] | None = None,
+    *,
+    strict_panel: bool = False,
+) -> EvaluatorqEvaluatorConfig:
     """Create an evaluatorq scorer that routes by OWASP category."""
     # Build the client + merged cfg ONCE here (not per datapoint). Creating them
     # inside scorer() would spin up a fresh AsyncOpenAI connection pool for every
@@ -180,6 +189,23 @@ def create_owasp_evaluator(
             'extra_kwargs': {**resolved_cfg.extra_kwargs, **(llm_kwargs or {})},
         }
     )
+    call_cfg = merged_cfg.as_call_config() if isinstance(merged_cfg, EvaluatorConfig) else merged_cfg
+    panel = [evaluator_model]
+    for judge in judges or []:
+        if judge and judge not in panel:
+            panel.append(judge)
+    replacements = [r for r in (replacement_judges or []) if r and r not in panel]
+    repetitions = max(1, judge_repetitions)
+    min_success = max(1, min_successful_judges)
+    if min_success > len(panel):
+        raise ValueError(
+            f'min_successful_judges ({min_success}) exceeds the effective panel size ({len(panel)}) '
+            f'after de-duplication; panel={panel}'
+        )
+    for issue in _panel_composition_messages(panel, target_models or [], strict=strict_panel):
+        if strict_panel:
+            raise ValueError(issue)
+        logger.warning(issue)
 
     async def scorer(params: ScorerParameter) -> EvaluationResult:
         data = params['data']
@@ -196,32 +222,71 @@ def create_owasp_evaluator(
 
         output_messages = _adapt_static_output(output)
 
-        outcome = await run_judge(
-            client=client,
-            model=evaluator_model,
-            cfg=merged_cfg,
-            prompt_template=evaluator_entity.prompt,
-            replacements=build_eval_replacements(
-                input_messages=data.inputs.get('messages', []),
-                output_messages=output_messages,
-            ),
+        eval_replacements = build_eval_replacements(
+            input_messages=data.inputs.get('messages', []),
+            output_messages=output_messages,
         )
 
-        # Static path swallows ALL errors into an inconclusive row (never re-raises).
-        if outcome.error_kind is JudgeError.TIMEOUT:
-            return _error_result(f'Evaluation timed out after {outcome.timeout_ms}ms')
-        if outcome.error_kind is not None or outcome.payload is None:
-            return _error_result(f'Evaluation error: {outcome.error_message}')
+        if len(panel) == 1 and repetitions == 1 and not replacements:
+            outcome = await run_judge(
+                client=client,
+                model=evaluator_model,
+                cfg=call_cfg,
+                prompt_template=evaluator_entity.prompt,
+                replacements=eval_replacements,
+            )
 
-        # Carry the judge's cost + raw response so the report layer can surface and
-        # aggregate evaluator token usage (stripped from the platform upload at the
-        # send boundary; see evaluatorq.send_results).
+            # Static path swallows ALL errors into an inconclusive row (never re-raises).
+            if outcome.error_kind is JudgeError.TIMEOUT:
+                return _error_result(f'Evaluation timed out after {outcome.timeout_ms}ms')
+            if outcome.error_kind is not None or outcome.payload is None:
+                return _error_result(f'Evaluation error: {outcome.error_message}')
+
+            return EvaluationResult.model_validate({
+                'value': outcome.payload.value,
+                'explanation': outcome.payload.explanation,
+                'pass': outcome.payload.value if isinstance(outcome.payload.value, bool) else None,
+                'token_usage': outcome.token_usage,
+                'raw_output': {'raw_content': outcome.raw_content},
+            })
+
+        async def judge_fn(model: str) -> Prediction:
+            outcome = await run_judge(
+                client=client,
+                model=model,
+                cfg=call_cfg,
+                prompt_template=evaluator_entity.prompt,
+                replacements=eval_replacements,
+            )
+            if outcome.error_kind is not None or outcome.payload is None:
+                return Prediction(error=outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'error'))
+            return Prediction(
+                value=outcome.payload.value,
+                explanation=outcome.payload.explanation,
+                token_usage=outcome.token_usage,
+                abstained=outcome.payload.abstain,
+            )
+
+        deliberation = await run_jury(
+            judge_fn=judge_fn,
+            panel=panel,
+            repetitions=repetitions,
+            replacement_judges=replacements,
+            min_successful_judges=min_success,
+            verdict_kind=VerdictKind.CATEGORICAL,
+            tie_break=lambda _values: False,
+        )
+        passed = deliberation.verdict if isinstance(deliberation.verdict, bool) else None
         return EvaluationResult.model_validate({
-            'value': outcome.payload.value,
-            'explanation': outcome.payload.explanation,
-            'pass': outcome.payload.value,
-            'token_usage': outcome.token_usage,
-            'raw_output': {'raw_content': outcome.raw_content},
+            'value': passed if passed is not None else 'inconclusive',
+            'explanation': append_jury_summary(deliberation.explanation, deliberation.jury),
+            'pass': passed,
+            'token_usage': deliberation.token_usage,
+            'raw_output': {
+                'value': passed,
+                'explanation': deliberation.explanation,
+                JURY_RAW_OUTPUT_KEY: deliberation.jury.model_dump(mode='json'),
+            },
         })
 
     return {'name': 'owasp-agentic-security', 'scorer': scorer}

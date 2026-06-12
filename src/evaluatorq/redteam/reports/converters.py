@@ -6,8 +6,10 @@ from datetime import datetime, timezone
 from typing import Any, cast
 
 from loguru import logger as _converters_logger
+from pydantic import ValidationError
 
 from evaluatorq.redteam.contracts import (
+    JURY_RAW_OUTPUT_KEY,
     OWASP_CATEGORY_NAMES,
     AgentContext,
     AgentInfo,
@@ -24,6 +26,8 @@ from evaluatorq.redteam.contracts import (
     Framework,
     FrameworkSummary,
     JobOutputPayload,
+    JuryReliability,
+    JuryResult,
     Pipeline,
     RedTeamReport,
     RedTeamResult,
@@ -51,6 +55,35 @@ from evaluatorq.redteam.vulnerability_registry import (
 # Error classification lives in evaluatorq.redteam.contracts so the orchestrator
 # can share it without importing the report layer. Alias kept for call sites here.
 _classify_error = classify_error_type
+
+
+def _extract_jury(raw_output: Any) -> JuryResult | None:
+    """Lift the panel-of-judges breakdown out of the scorer's ``raw_output``.
+
+    The dynamic scorer stashes the jury under ``raw_output[JURY_RAW_OUTPUT_KEY]``
+    (the generic EvaluationResult has no typed field for it); here it is
+    reconstructed onto the typed report model so per-judge votes + agreement reach
+    the report (RES-739). Returns None for single-judge runs or malformed payloads.
+    """
+    if not isinstance(raw_output, dict):
+        return None
+    jury_data = raw_output.get(JURY_RAW_OUTPUT_KEY)
+    if not isinstance(jury_data, dict):
+        return None
+    try:
+        return JuryResult.model_validate(jury_data)
+    except ValidationError as e:
+        _converters_logger.warning(f'Discarding malformed jury payload in report conversion: {e}')
+        return None
+
+
+def _raw_output_without_jury(raw_output: Any) -> dict[str, Any] | None:
+    """Return ``raw_output`` minus the stashed jury, which is lifted to the typed
+    ``jury`` field — so the per-judge breakdown is not serialized twice (RES-739).
+    """
+    if not isinstance(raw_output, dict) or JURY_RAW_OUTPUT_KEY not in raw_output:
+        return raw_output
+    return {k: v for k, v in raw_output.items() if k != JURY_RAW_OUTPUT_KEY}
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +319,8 @@ def static_sample_to_result(
                 'evaluator_name', evaluator_meta.get('evaluator_name', OWASP_CATEGORY_NAMES.get(category))
             ),
             token_usage=evaluation_usage,
-            raw_output=eval_dict.get('raw_output'),
+            raw_output=_raw_output_without_jury(eval_dict.get('raw_output')),
+            jury=_extract_jury(eval_dict.get('raw_output')),
         )
 
     # Determine vulnerability status
@@ -446,7 +480,8 @@ def dynamic_evaluatorq_results_to_report(
             evaluator_id=evaluator_id,
             evaluator_name=evaluator_name,
             token_usage=evaluation_usage,
-            raw_output=evaluation_raw,
+            raw_output=_raw_output_without_jury(evaluation_raw),
+            jury=_extract_jury(evaluation_raw),
         )
 
         execution = ExecutionDetails(
@@ -635,6 +670,61 @@ def _aggregate_token_usage(results: list[RedTeamResult]) -> TokenUsage | None:
             total = total + r.evaluation.token_usage
             found = True
     return total if found else None
+
+
+def _krippendorff_alpha_binary(units: list[list[bool]]) -> tuple[float | None, int]:
+    """Nominal Krippendorff's alpha for binary verdicts across samples.
+
+    ``units`` is one list of judge verdicts per sample. Only samples with >=2
+    verdicts are pairable. For two nominal categories the coincidence form reduces
+    to a closed expression:
+
+        alpha = 1 - (n - 1) * O01 / (n0 * n1)
+
+    where ``O01 = sum over units of c0*c1/(m-1)`` (m verdicts on the unit, c0/c1
+    the per-category counts), and ``n0``/``n1`` are the total per-category verdicts
+    across pairable units. Returns ``(alpha, pairable_sample_count)``; alpha is
+    ``None`` when undefined — fewer than two pairable verdicts, or every verdict
+    identical (n0*n1 == 0, no expected disagreement to correct against).
+    """
+    o01 = 0.0
+    n0 = 0
+    n1 = 0
+    pairable = 0
+    for ratings in units:
+        m = len(ratings)
+        if m < 2:
+            continue
+        pairable += 1
+        c1 = sum(1 for r in ratings if r)
+        c0 = m - c1
+        o01 += (c0 * c1) / (m - 1)
+        n0 += c0
+        n1 += c1
+    n = n0 + n1
+    if n < 2 or n0 * n1 == 0:
+        return None, pairable
+    return 1.0 - (n - 1) * o01 / (n0 * n1), pairable
+
+
+def _compute_jury_reliability(results: list[RedTeamResult]) -> JuryReliability | None:
+    """Aggregate per-sample jury verdicts into a run-level reliability statistic.
+
+    Returns None when no sample carried a multi-judge jury (single-judge runs),
+    so the field stays absent for the common path.
+    """
+    units: list[list[bool]] = []
+    for r in results:
+        jury = r.evaluation.jury if r.evaluation else None
+        if jury is None:
+            continue
+        verdicts = [v.value for v in jury.votes if v.success and not v.abstained and isinstance(v.value, bool)]
+        if len(verdicts) >= 2:
+            units.append(verdicts)
+    if not units:
+        return None
+    alpha, samples = _krippendorff_alpha_binary(units)
+    return JuryReliability(krippendorff_alpha=alpha, samples=samples)
 
 
 def compute_report_summary(results: list[RedTeamResult]) -> ReportSummary:
@@ -897,6 +987,7 @@ def compute_report_summary(results: list[RedTeamResult]) -> ReportSummary:
         by_turn_type=by_turn_type,
         by_domain=by_domain,
         by_framework=by_framework,
+        jury_reliability=_compute_jury_reliability(results),
     )
 
 

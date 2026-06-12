@@ -20,6 +20,7 @@ app = typer.Typer(
     name="redteam",
     help="Red teaming CLI for evaluatorq.",
     no_args_is_help=True,
+    rich_markup_mode=None,
 )
 
 
@@ -321,7 +322,7 @@ def run(
     _configure_logging(verbose)
 
     from evaluatorq.redteam import red_team
-    from evaluatorq.redteam.contracts import LLMCallConfig, LLMConfig, TargetConfig
+    from evaluatorq.redteam.contracts import EvaluatorConfig, LLMCallConfig, LLMConfig, TargetConfig
     from evaluatorq.redteam.exceptions import CancelledError, RedTeamError
     from evaluatorq.redteam.hooks import RichHooks
 
@@ -345,7 +346,7 @@ def run(
     # Build LLMConfig from CLI flags
     config = LLMConfig(
         attacker=LLMCallConfig(model=attack_model),
-        evaluator=LLMCallConfig(model=evaluator_model),
+        evaluator=EvaluatorConfig(model=evaluator_model),
     )
 
     try:

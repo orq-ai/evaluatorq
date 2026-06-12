@@ -96,6 +96,18 @@ def print_report_summary(report: RedTeamReport, *, console: Console | None = Non
     if summary.total_errors:
         stats.add_row("Errors", Text(str(summary.total_errors), style="red"))
 
+    # Panel-of-judges reliability (RES-739) — only present for multi-judge runs.
+    rel = summary.jury_reliability
+    if rel is not None:
+        if rel.krippendorff_alpha is None:
+            value = Text(f"n/a ({rel.samples} samples)", style="dim")
+        else:
+            value = Text(
+                f"alpha={rel.krippendorff_alpha:.2f} ({rel.samples} samples)",
+                style=_rate_style(rel.krippendorff_alpha),
+            )
+        stats.add_row("Jury Agreement", value)
+
     # Datapoint breakdown (hybrid runs)
     breakdown = summary.datapoint_breakdown
     if breakdown:

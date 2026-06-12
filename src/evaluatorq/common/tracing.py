@@ -1,8 +1,9 @@
 """Generic OTel span-recording utilities shared by all evaluatorq domains.
 
-Domain-specific span builders (with_simulation_span, with_redteam_span,
-with_llm_span) stay in their respective domain tracing modules and may import
-from here. This module must not import from redteam, simulation, or openresponses.
+``with_llm_span`` lives here and is the canonical implementation for all domains.
+Domain tracing modules (redteam/tracing.py, etc.) delegate to this function
+rather than duplicating the body. This module must not import from redteam,
+simulation, or openresponses.
 """
 
 from __future__ import annotations
@@ -10,13 +11,17 @@ from __future__ import annotations
 import functools
 import json
 import os
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from evaluatorq.common.fields import get_field as _field
+from evaluatorq.tracing.setup import get_tracer
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
     from opentelemetry.trace import Span
 
 AttrValue = str | int | float | bool
@@ -362,6 +367,91 @@ def record_llm_output(span: Span | None, output: str) -> None:
     serialized = _serialize_messages([{'role': 'assistant', 'content': output}])
     span.set_attribute('gen_ai.output.messages', serialized)
     span.set_attribute('output', serialized)
+
+
+def _derive_provider(model: str) -> str:
+    if "/" in model:
+        return model.split("/", 1)[0]
+    return "openai"
+
+
+@asynccontextmanager
+async def with_llm_span(  # noqa: RUF029
+    *,
+    model: str,
+    operation: str = "chat",
+    provider: str | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    input_messages: list[Any] | None = None,
+    attributes: dict[str, Any] | None = None,
+    parent_context: Any | None = None,
+) -> AsyncGenerator[Span | None, None]:
+    """Execute code within a generic GenAI LLM span.
+
+    Yields:
+        The active span when tracing is enabled, otherwise None.
+    """
+    tracer = get_tracer()
+    if tracer is None:
+        yield None
+        return
+
+    try:
+        from opentelemetry import context as otel_context
+        from opentelemetry.trace import SpanKind, Status, StatusCode
+    except ImportError:
+        yield None
+        return
+
+    ctx = parent_context or otel_context.get_current()
+    resolved_provider = provider or _derive_provider(model)
+    span_name = f"{operation} {model}"
+
+    genai_attrs: dict[str, Any] = {
+        "gen_ai.operation.name": operation,
+        "gen_ai.system": resolved_provider,
+        "gen_ai.provider.name": resolved_provider,
+        "gen_ai.request.model": model,
+    }
+    if temperature is not None:
+        genai_attrs["gen_ai.request.temperature"] = float(temperature)
+    if max_tokens is not None:
+        genai_attrs["gen_ai.request.max_tokens"] = max_tokens
+    if input_messages is not None:
+        recordable = [
+            {
+                "role": str(m.get("role", "") if isinstance(m, dict) else getattr(m, "role", "")),
+                "content": truncate_for_span(
+                    m.get("content", "") if isinstance(m, dict) else getattr(m, "content", "")
+                ),
+            }
+            for m in input_messages
+        ]
+        if capture_message_content():
+            serialized = json.dumps(recordable, ensure_ascii=False)
+            genai_attrs["gen_ai.input.messages"] = serialized
+            genai_attrs["input"] = serialized
+    if attributes:
+        genai_attrs.update(attributes)
+    # Domain-specific key mapping (e.g. orq.redteam.llm_purpose -> orq.llm.purpose)
+    # is the responsibility of the domain's own tracing wrapper before delegating here.
+    # Common only handles the neutral orq.llm.purpose key set by callers via attributes.
+
+    with tracer.start_as_current_span(
+        span_name,
+        context=ctx,
+        kind=SpanKind.CLIENT,
+        attributes=genai_attrs,
+    ) as span:
+        try:
+            yield span
+            span.set_status(Status(StatusCode.OK))
+        except BaseException as e:
+            span.set_attribute("error.type", type(e).__name__)
+            span.set_status(Status(StatusCode.ERROR, str(e)))
+            span.record_exception(e)
+            raise
 
 
 async def get_trace_context_headers() -> dict[str, str]:  # noqa: RUF029

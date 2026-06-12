@@ -22,8 +22,8 @@ from evaluatorq.redteam.contracts import (
     AttackInfo,
     AttackTechnique,
     DeliveryMethod,
+    EvaluatorConfig,
     Framework,
-    LLMCallConfig,
     LLMConfig,
     Message,
     Pipeline,
@@ -140,7 +140,7 @@ async def test_explicit_evaluator_temperature_is_forwarded(
 ) -> None:
     """Caller-supplied ``cfg.evaluator.temperature`` is passed through verbatim."""
     client, captured = mock_client_and_capture
-    cfg = LLMConfig(evaluator=LLMCallConfig(model='openai/gpt-4o-mini', temperature=0.0))
+    cfg = LLMConfig(evaluator=EvaluatorConfig(model='openai/gpt-4o-mini', temperature=0.0))
 
     await generate_focus_area_recommendations(
         _empty_report(), client, model='openai/gpt-4o-mini', cfg=cfg
@@ -156,7 +156,7 @@ async def test_evaluator_extra_kwargs_merged(
     """``cfg.evaluator.extra_kwargs`` are merged into the call."""
     client, captured = mock_client_and_capture
     cfg = LLMConfig(
-        evaluator=LLMCallConfig(temperature=1.0, extra_kwargs={'seed': 42}),
+        evaluator=EvaluatorConfig(temperature=1.0, extra_kwargs={'seed': 42}),
     )
 
     await generate_focus_area_recommendations(
@@ -213,7 +213,7 @@ async def test_llm_kwargs_override_evaluator_extra_kwargs(
     """
     client, captured = mock_client_and_capture
     cfg = LLMConfig(
-        evaluator=LLMCallConfig(extra_kwargs={'seed': 1}),
+        evaluator=EvaluatorConfig(extra_kwargs={'seed': 1}),
     )
 
     await generate_focus_area_recommendations(

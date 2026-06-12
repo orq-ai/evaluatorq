@@ -113,6 +113,13 @@ def _render_summary_section(section: ReportSection) -> str:
     ]
     if total_errors:
         detail_rows.append(["Errors", str(total_errors)])
+    # Panel-of-judges reliability (RES-739) — chance-corrected inter-judge agreement.
+    reliability = data.get("jury_reliability")
+    if reliability:
+        alpha = reliability.get("krippendorff_alpha")
+        samples = reliability.get("samples", 0)
+        cell = "n/a" if alpha is None else f"alpha = {alpha:.2f}"
+        detail_rows.append(["Jury Agreement (Krippendorff alpha)", f"{cell} ({samples} multi-judge samples)"])
     duration_seconds = data.get("duration_seconds")
     if duration_seconds is not None:
         mins, secs = divmod(int(duration_seconds), 60)

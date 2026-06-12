@@ -31,29 +31,16 @@ Span hierarchy:
 
 from __future__ import annotations
 
-import json
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
-from loguru import logger
-
-from evaluatorq.common.tracing import capture_message_content, truncate_for_span
+from evaluatorq.common.tracing import with_llm_span as _common_with_llm_span
 from evaluatorq.tracing.setup import get_tracer
 
 if TYPE_CHECKING:
 	from collections.abc import AsyncGenerator
 
 	from opentelemetry.trace import Span
-
-
-def _derive_provider(model: str) -> str:
-	# NOTE: intentionally does NOT expand provider aliases (e.g. azure ->
-	# azure.ai.openai) the way simulation/openresponses do, so `azure/gpt-4o`
-	# yields gen_ai.system="azure" on redteam spans. Pre-existing divergence
-	# tracked separately; aligning would itself be an observability delta.
-	if "/" in model:
-		return model.split("/", 1)[0]
-	return "openai"
 
 
 @asynccontextmanager
@@ -111,76 +98,25 @@ async def with_llm_span(  # noqa: RUF029
 ) -> AsyncGenerator[Span | None, None]:
 	"""Execute code within a GenAI LLM span (SpanKind.CLIENT).
 
-	Span name is "{operation} {model}". input_messages are serialized to
-	gen_ai.input.messages and input attributes.
+	Delegates to ``evaluatorq.common.tracing.with_llm_span`` after mapping the
+	redteam-specific ``orq.redteam.llm_purpose`` key onto the neutral
+	``orq.llm.purpose`` key so cross-domain purpose queries include redteam spans.
 	"""
-	tracer = get_tracer()
-	if tracer is None:
-		yield None
-		return
+	# Map the redteam-domain key onto the neutral key before passing attributes
+	# to common. This is the only redteam-specific behaviour; common must not do it.
+	resolved_attrs: dict[str, Any] = dict(attributes or {})
+	redteam_purpose = resolved_attrs.get("orq.redteam.llm_purpose")
+	if redteam_purpose is not None and "orq.llm.purpose" not in resolved_attrs:
+		resolved_attrs["orq.llm.purpose"] = redteam_purpose
 
-	try:
-		from opentelemetry import context as otel_context
-		from opentelemetry.trace import SpanKind, Status, StatusCode
-	except ImportError:
-		yield None
-		return
-
-	ctx = parent_context or otel_context.get_current()
-	resolved_provider = provider or _derive_provider(model)
-	span_name = f"{operation} {model}"
-
-	genai_attrs: dict[str, Any] = {
-		"gen_ai.operation.name": operation,
-		"gen_ai.system": resolved_provider,
-		"gen_ai.provider.name": resolved_provider,
-		"gen_ai.request.model": model,
-	}
-	if temperature is not None:
-		genai_attrs["gen_ai.request.temperature"] = float(temperature)
-	if max_tokens is not None:
-		genai_attrs["gen_ai.request.max_tokens"] = max_tokens
-	if input_messages is not None and capture_message_content():
-		serialized = json.dumps(
-			_sanitize_messages(input_messages), ensure_ascii=False
-		)
-		genai_attrs["gen_ai.input.messages"] = serialized
-		genai_attrs["input"] = serialized
-	if attributes:
-		genai_attrs.update(attributes)
-	# Dual-emit the domain-neutral purpose key (parity with simulation/openresponses
-	# with_llm_span) so cross-domain `orq.llm.purpose` queries include redteam spans.
-	# Redteam callers pass purpose via the open `attributes` dict as
-	# `orq.redteam.llm_purpose`; mirror it onto `orq.llm.purpose` when not already set.
-	redteam_purpose = genai_attrs.get("orq.redteam.llm_purpose")
-	if redteam_purpose is not None and "orq.llm.purpose" not in genai_attrs:
-		genai_attrs["orq.llm.purpose"] = redteam_purpose
-
-	with tracer.start_as_current_span(
-		span_name,
-		context=ctx,
-		kind=SpanKind.CLIENT,
-		attributes=genai_attrs,
+	async with _common_with_llm_span(
+		model=model,
+		operation=operation,
+		provider=provider,
+		temperature=temperature,
+		max_tokens=max_tokens,
+		input_messages=input_messages,
+		attributes=resolved_attrs,
+		parent_context=parent_context,
 	) as span:
-		try:
-			yield span
-			span.set_status(Status(StatusCode.OK))
-		except BaseException as e:
-			span.set_attribute("error.type", type(e).__name__)
-			span.set_status(Status(StatusCode.ERROR, str(e)))
-			span.record_exception(e)
-			raise
-
-
-def _sanitize_messages(messages: list[Any]) -> list[dict[str, str]]:
-	"""JSON-safe list of {role, content} for gen_ai.input.messages."""
-	sanitized: list[dict[str, str]] = []
-	for msg in messages:
-		if hasattr(msg, "get") and callable(msg.get):
-			role = msg.get("role", "")
-			content = msg.get("content", "")
-		else:
-			role = getattr(msg, "role", "")
-			content = getattr(msg, "content", "")
-		sanitized.append({"role": str(role), "content": truncate_for_span(content)})
-	return sanitized
+		yield span

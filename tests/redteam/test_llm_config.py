@@ -1,9 +1,15 @@
 # tests/redteam/test_llm_config.py
-import os
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from evaluatorq.redteam.contracts import LLMCallConfig, LLMConfig, PIPELINE_CONFIG, DEFAULT_PIPELINE_MODEL
+
+from evaluatorq.redteam.contracts import (
+    DEFAULT_PIPELINE_MODEL,
+    PIPELINE_CONFIG,
+    EvaluatorConfig,
+    LLMCallConfig,
+    LLMConfig,
+)
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -30,7 +36,7 @@ def test_llm_call_config_custom_values():
 def test_llm_config_has_role_based_fields():
     cfg = LLMConfig()
     assert isinstance(cfg.attacker, LLMCallConfig)
-    assert isinstance(cfg.evaluator, LLMCallConfig)
+    assert isinstance(cfg.evaluator, EvaluatorConfig)
     assert cfg.attacker.model == DEFAULT_PIPELINE_MODEL
     assert cfg.evaluator.model == DEFAULT_PIPELINE_MODEL
 
@@ -38,7 +44,7 @@ def test_llm_config_has_role_based_fields():
 def test_llm_config_custom_roles():
     cfg = LLMConfig(
         attacker=LLMCallConfig(model='anthropic/claude-3-5-sonnet', temperature=0.9),
-        evaluator=LLMCallConfig(model='openai/gpt-4o-mini', temperature=0.0),
+        evaluator=EvaluatorConfig(model='openai/gpt-4o-mini', temperature=0.0),
     )
     assert cfg.attacker.model == 'anthropic/claude-3-5-sonnet'
     assert cfg.attacker.temperature == 0.9
@@ -121,6 +127,5 @@ async def test_red_team_accepts_legacy_config_keyword(monkeypatch):
     monkeypatch.delenv('OPENAI_API_KEY', raising=False)
     monkeypatch.delenv('ORQ_API_KEY', raising=False)
 
-    with pytest.deprecated_call(match='config= is deprecated'):
-        with pytest.raises(CredentialError):
-            await red_team('agent:test', config=LLMConfig())
+    with pytest.deprecated_call(match='config= is deprecated'), pytest.raises(CredentialError):
+        await red_team('agent:test', config=LLMConfig())

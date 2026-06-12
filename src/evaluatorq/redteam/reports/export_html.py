@@ -346,6 +346,20 @@ def _render_kpi_cards(data: dict[str, Any]) -> str:
         f"</div>"),
     ]
 
+    # Panel-of-judges reliability (RES-739) — only for multi-judge runs.
+    reliability = data.get("jury_reliability")
+    if reliability:
+        alpha = reliability.get("krippendorff_alpha")
+        samples = reliability.get("samples", 0)
+        alpha_text = "n/a" if alpha is None else f"{alpha:.2f}"
+        cards.append(
+            f'<div class="kpi-card">'
+            f'<div class="kpi-value">{_esc(alpha_text)}</div>'
+            f'<div class="kpi-label">Jury Agreement (Krippendorff alpha)</div>'
+            f'<div class="kpi-subtitle">{_esc(str(samples))} multi-judge samples</div>'
+            f"</div>"
+        )
+
     return '<div class="kpi-row">' + "".join(cards) + "</div>"
 
 

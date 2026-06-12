@@ -39,8 +39,11 @@ def span_collector():
 
     tracer = provider.get_tracer("evaluatorq-test")
 
-    # Patch get_tracer to return our test tracer
-    with patch("evaluatorq.redteam.tracing.get_tracer", return_value=tracer):
+    # Patch both get_tracer locations: common (for with_llm_span) and redteam (for with_redteam_span)
+    with (
+        patch("evaluatorq.common.tracing.get_tracer", return_value=tracer),
+        patch("evaluatorq.redteam.tracing.get_tracer", return_value=tracer),
+    ):
         yield exporter
 
     provider.shutdown()

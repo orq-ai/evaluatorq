@@ -244,7 +244,7 @@ async def test_llm_span_name_is_operation_space_model():
     mock_tracer = MagicMock()
     mock_tracer.start_as_current_span.return_value = mock_context_manager
 
-    with patch("evaluatorq.redteam.tracing.get_tracer", return_value=mock_tracer):
+    with patch("evaluatorq.common.tracing.get_tracer", return_value=mock_tracer):
         from evaluatorq.redteam.tracing import with_llm_span
 
         async with with_llm_span(model="gpt-5-mini") as span:
@@ -271,7 +271,7 @@ async def test_llm_span_name_with_provider_prefix():
     mock_tracer = MagicMock()
     mock_tracer.start_as_current_span.return_value = mock_context_manager
 
-    with patch("evaluatorq.redteam.tracing.get_tracer", return_value=mock_tracer):
+    with patch("evaluatorq.common.tracing.get_tracer", return_value=mock_tracer):
         from evaluatorq.redteam.tracing import with_llm_span
 
         async with with_llm_span(model="azure/gpt-5-mini") as span:
@@ -296,7 +296,7 @@ async def test_llm_span_error_type_on_exception():
     mock_tracer = MagicMock()
     mock_tracer.start_as_current_span.return_value = mock_context_manager
 
-    with patch("evaluatorq.redteam.tracing.get_tracer", return_value=mock_tracer):
+    with patch("evaluatorq.common.tracing.get_tracer", return_value=mock_tracer):
         from evaluatorq.redteam.tracing import with_llm_span
 
         with pytest.raises(RuntimeError, match="llm failed"):
@@ -310,7 +310,7 @@ async def test_llm_span_error_type_on_exception():
 @pytest.mark.asyncio
 async def test_llm_span_noop_without_otel():
     """with_llm_span yields None when get_tracer() returns None."""
-    with patch("evaluatorq.redteam.tracing.get_tracer", return_value=None):
+    with patch("evaluatorq.common.tracing.get_tracer", return_value=None):
         from evaluatorq.redteam.tracing import with_llm_span
 
         async with with_llm_span(model="gpt-5-mini") as span:

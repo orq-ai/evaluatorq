@@ -22,9 +22,9 @@ else:
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
-    _ClientT: TypeAlias = AsyncOpenAI | None
+    _Client: TypeAlias = AsyncOpenAI | None
 else:
-    _ClientT = Any
+    _Client = Any
 
 # ---------------------------------------------------------------------------
 # Pipeline defaults (mirrored from redteam.contracts for shared use)
@@ -56,7 +56,7 @@ class LLMCallConfig(BaseModel):
     max_tokens: int = Field(default=DEFAULT_TARGET_MAX_TOKENS, gt=0)
     timeout_ms: int = Field(default=90_000, gt=0)
     extra_kwargs: dict[str, Any] = Field(default_factory=dict)
-    client: _ClientT = None
+    client: _Client = None
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +241,125 @@ class TokenUsage(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Generic jury contracts
+# ---------------------------------------------------------------------------
+
+
+# Key under which scorer implementations stash the serialized JuryResult inside
+# EvaluationResult.raw_output, and under which converters lift it back onto typed
+# result models. Shared so writers/readers cannot drift.
+JURY_RAW_OUTPUT_KEY = "jury"
+
+
+class JuryVote(BaseModel):
+    """A single judge's aggregate vote within a jury.
+
+    ``abstained`` is a first-class successful non-verdict: the judge returned
+    cleanly but declined to choose a label. It is distinct from ``success=False``
+    failures and is excluded from decisive tallies.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    model: str = Field(description="Judge model ID")
+    replacement: bool = Field(default=False, description="True if this judge stood in for a failed configured judge")
+    success: bool = Field(description="True if the judge completed without a mechanical failure")
+    abstained: bool = Field(default=False, description="True when the judge explicitly declined to choose a verdict")
+    value: bool | float | str | None = Field(default=None, description="Judge verdict")
+    explanation: str = Field(default="", description="Explanation from a representative pass")
+    error: str | None = Field(default=None, description="Failure reason when success is False")
+    repetitions: list[bool | float | str | None] = Field(
+        default_factory=list,
+        description="Raw per-repetition verdicts in call order; None includes abstain/error passes",
+    )
+    repetitions_failed: int = Field(
+        default=0,
+        ge=0,
+        description="Count of repetitions that raised an error (non-decisive due to error); independent of success/abstained",
+    )
+
+    @model_validator(mode="after")
+    def _check_vote_consistency(self) -> JuryVote:
+        if self.success and self.value is None and not self.abstained:
+            raise ValueError("successful JuryVote must have a non-null value unless abstained=True")
+        if self.abstained and self.value is not None:
+            raise ValueError("abstained JuryVote must have a null value")
+        if not self.success and self.value is not None:
+            raise ValueError("failed JuryVote must have a null value")
+        if not self.success and self.abstained:
+            raise ValueError("failed JuryVote cannot also be abstained")
+        return self
+
+
+class JuryStats(BaseModel):
+    """Distribution statistics for judge verdicts."""
+
+    model_config = ConfigDict(frozen=True)
+
+    mean: float = Field(description="Mean judge verdict value")
+    std: float = Field(ge=0.0, description="Population standard deviation of judge verdict values")
+
+
+class JuryResult(BaseModel):
+    """Aggregated panel-of-judges result."""
+
+    model_config = ConfigDict(frozen=True)
+
+    judges_configured: int = Field(ge=0, description="Number of configured non-replacement judges")
+    judges_succeeded: int = Field(
+        ge=0, description="Number of judges that produced a decisive non-abstain verdict"
+    )
+    judges_failed: int = Field(
+        ge=0,
+        description=(
+            "Number of configured judges that failed mechanically. Replacement-vote outcomes are stored in votes."
+        ),
+    )
+    replacements_used: int = Field(default=0, ge=0, description="Number of replacement judges invoked")
+    tie: bool = Field(default=False, description="True when decisive votes tied and a caller tie policy was applied")
+    inconclusive: bool = Field(
+        default=False,
+        description="True when too few decisive judges produced a verdict; stats/raw_agreement are None",
+    )
+    votes: list[JuryVote] = Field(default_factory=list, description="Per-judge votes")
+    stats: JuryStats | None = Field(default=None, description="Verdict distribution; None when inconclusive")
+    raw_agreement: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Raw fraction of decisive judges in the largest verdict bloc; None when inconclusive",
+    )
+
+    @model_validator(mode="after")
+    def _check_jury_consistency(self) -> JuryResult:
+        decisive_successes = sum(1 for v in self.votes if v.success and not v.abstained)
+        if self.judges_succeeded != decisive_successes:
+            raise ValueError(
+                f"judges_succeeded ({self.judges_succeeded}) does not match decisive successful votes "
+                f"({decisive_successes})"
+            )
+        if self.judges_failed > self.judges_configured:
+            raise ValueError(
+                f"judges_failed ({self.judges_failed}) exceeds judges_configured ({self.judges_configured})"
+            )
+        replacement_votes = sum(1 for v in self.votes if v.replacement)
+        if self.replacements_used != replacement_votes:
+            raise ValueError(
+                f"replacements_used ({self.replacements_used}) does not match replacement votes ({replacement_votes})"
+            )
+        if len(self.votes) != self.judges_configured + self.replacements_used:
+            raise ValueError(
+                f"vote count ({len(self.votes)}) != judges_configured + replacements_used "
+                f"({self.judges_configured} + {self.replacements_used})"
+            )
+        if self.tie and self.inconclusive:
+            raise ValueError("jury result cannot be both tie and inconclusive")
+        if self.inconclusive and (self.stats is not None or self.raw_agreement is not None):
+            raise ValueError("inconclusive jury result must not include stats/raw_agreement")
+        return self
+
+
+# ---------------------------------------------------------------------------
 # AgentResponseError
 # ---------------------------------------------------------------------------
 
@@ -358,16 +477,16 @@ class AgentResponse(BaseModel):
         for item in _gf(response, "output") or []:
             item_type = _gf(item, "type")
             if item_type == "message":
-                for part in _gf(item, "content") or []:
-                    if _gf(part, "type") == "output_text" and _gf(part, "text"):
-                        items.append(
-                            TextOutputItem(
-                                type="output_text",
-                                text=_gf(part, "text"),
-                                annotations=[],
-                                logprobs=[],
-                            )
-                        )
+                items.extend(
+                    TextOutputItem(
+                        type="output_text",
+                        text=_gf(part, "text"),
+                        annotations=[],
+                        logprobs=[],
+                    )
+                    for part in _gf(item, "content") or []
+                    if _gf(part, "type") == "output_text" and _gf(part, "text")
+                )
             elif item_type == "function_call":
                 raw_args = _gf(item, "arguments") or "{}"
                 call_id = _gf(item, "call_id") or _gf(item, "id") or ""
@@ -610,11 +729,15 @@ __all__ = [
     "DEFAULT_PIPELINE_MODEL",
     "DEFAULT_TARGET_MAX_TOKENS",
     "DEFAULT_TARGET_TIMEOUT_MS",
+    "JURY_RAW_OUTPUT_KEY",
     "AgentContext",
     "AgentResponse",
     "AgentResponseError",
     "AgentTarget",
     "FunctionCall",
+    "JuryResult",
+    "JuryStats",
+    "JuryVote",
     "KnowledgeBaseInfo",
     "LLMCallConfig",
     "MemoryStoreInfo",
