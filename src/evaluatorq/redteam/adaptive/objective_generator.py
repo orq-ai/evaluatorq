@@ -13,6 +13,8 @@ from loguru import logger
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI
 from pydantic import BaseModel, Field
 
+from evaluatorq.common.content_filter import is_content_filter_error, regenerate_on_content_filter
+from evaluatorq.common.tracing import record_llm_response
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
     OWASP_CATEGORY_NAMES,
@@ -27,7 +29,6 @@ from evaluatorq.redteam.contracts import (
     TurnType,
     Vulnerability,
 )
-from evaluatorq.common.tracing import record_llm_response
 from evaluatorq.redteam.tracing import with_llm_span
 from evaluatorq.redteam.utils import safe_substitute
 from evaluatorq.redteam.vulnerability_registry import (
@@ -192,6 +193,20 @@ async def _call_llm_for_objectives_single(
     try:
         prompt = prompt_template.replace('{count}', str(count))
         gen_messages: list[ChatCompletionMessageParam] = [{'role': 'user', 'content': prompt}]
+
+        async def _generate(attempt: int) -> Any:
+            if attempt > 0:
+                logger.debug(f'Regenerating objectives for {log_label} (attempt {attempt + 1})')
+            return await llm_client.chat.completions.parse(
+                model=model,
+                messages=gen_messages,
+                response_format=GeneratedObjectives,
+                temperature=cfg.attacker.temperature,
+                max_completion_tokens=cfg.attacker.max_tokens,
+                extra_body=cfg.retry_extra_body(llm_client),
+                **cfg.attacker.extra_kwargs,
+            )
+
         async with with_llm_span(
             model=model,
             temperature=cfg.attacker.temperature,
@@ -203,14 +218,12 @@ async def _call_llm_for_objectives_single(
                 **span_attributes,
             },
         ) as gen_span:
-            response = await llm_client.chat.completions.parse(
-                model=model,
-                messages=gen_messages,
-                response_format=GeneratedObjectives,
-                temperature=cfg.attacker.temperature,
-                max_completion_tokens=cfg.attacker.max_tokens,
-                extra_body=cfg.retry_extra_body(llm_client),
-                **cfg.attacker.extra_kwargs,
+            # Regenerate on a provider content-filter block, reusing the shared retry
+            # budget (max_content_filter_retries) instead of a private constant.
+            response = await regenerate_on_content_filter(
+                _generate,
+                max_attempts=max(1, cfg.max_content_filter_retries + 1),
+                label=f'Objective generation for {log_label}',
             )
             record_llm_response(
                 gen_span, response,
@@ -224,7 +237,13 @@ async def _call_llm_for_objectives_single(
             logger.debug(f'Generated {len(result.objectives)} objectives for {log_label}')
             return result.objectives[:count]
 
-    except (asyncio.CancelledError, APIConnectionError, APIStatusError):
+    except (asyncio.CancelledError, APIConnectionError, APIStatusError) as e:
+        # A content filter that surfaced as an error survived the retries above — drop
+        # this vulnerability's objectives rather than failing the whole run. Other
+        # transport/status errors propagate to the caller's own retry/handling.
+        if is_content_filter_error(e):
+            logger.error(f'Objective generation content-filtered after retries for {log_label!r}; returning no objectives')
+            return []
         raise
     except Exception as e:
         logger.error(f'Objective generation failed for {log_label!r} ({type(e).__name__}): {e}')

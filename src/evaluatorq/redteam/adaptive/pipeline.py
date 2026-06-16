@@ -627,11 +627,27 @@ def create_dynamic_evaluator(
                 explanation=f'Unexpected job output type: {type(raw_output).__name__}',
             )
 
-        # Skip evaluation when the target returned an error
+        # Skip evaluation when the run errored — UNLESS the failure happened during
+        # adversarial generation on a late turn (turn > 1). In that case the earlier,
+        # fully-completed turns are intact real target responses and may already
+        # demonstrate the vulnerability, so judge them (conversation truncated) rather
+        # than discarding a real finding. Turn-1 failures and target-side errors have
+        # nothing trustworthy to evaluate and are still skipped.
         if output.error:
-            return EvaluationResult(
-                value='error',
-                explanation=f'Skipped: target returned error — {output.error}',
+            late_adversarial_failure = (
+                output.error_stage == 'adversarial_generation'
+                and (output.error_turn or 0) > 1
+                and bool(output.turns)
+            )
+            if not late_adversarial_failure:
+                return EvaluationResult(
+                    value='error',
+                    explanation=f'Skipped: target returned error — {output.error}',
+                )
+            logger.warning(
+                f'Adversarial generation failed at turn {output.error_turn} '
+                f'({output.error_code}); judging {len(output.turns)} completed turn(s) '
+                '(conversation truncated).'
             )
 
         category = output.category or data.inputs.get('category', '')

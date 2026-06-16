@@ -578,6 +578,16 @@ class AgentContext(BaseModel):
     memory_stores: list[MemoryStoreInfo] = Field(default_factory=list, description='Memory stores')
     knowledge_bases: list[KnowledgeBaseInfo] = Field(default_factory=list, description='Knowledge bases')
     model: str | None = Field(default=None, description='Primary model')
+    is_multi_agent: bool = Field(
+        default=False,
+        description=(
+            'Whether the target orchestrates, delegates to, or hands off to other agents '
+            '(a multi-agent system). Inferred during capability classification. Gates '
+            'multi-agent-only attack categories (ASI07 Inter-Agent Communication, '
+            'ASI08 Cascading Failures), which are skipped for single-agent targets. '
+            'Defaults to False (conservative: do not run multi-agent attacks unless confirmed).'
+        ),
+    )
 
     @property
     def has_tools(self) -> bool:

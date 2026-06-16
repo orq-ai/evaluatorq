@@ -10,6 +10,7 @@ from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam import get_category_info, list_categories, red_team
 from evaluatorq.redteam.contracts import AgentResponse, Pipeline, RedTeamReport, ReportSummary
 from evaluatorq.redteam.runner import _deduplicate_target_labels, _parse_target
+from evaluatorq.redteam.vulnerability_registry import get_primary_category
 
 
 def _make_report(target: str = "agent:test", **kwargs) -> RedTeamReport:
@@ -449,3 +450,222 @@ class TestRedTeamWithAgentTarget:
 
         with pytest.raises(TypeError, match='Invalid target type'):
             await red_team([MockTarget(), 42])  # type: ignore[list-item, arg-type]  # pyright: ignore[reportArgumentType]
+
+
+class TestEvaluabilityGate:
+    """red_team() drops explicitly-requested vulnerabilities that have no automated evaluator.
+
+    All ten built-in OWASP ASI categories now have prompt-based evaluators, and
+    every built-in Vulnerability maps to one, so the gate never fires for the
+    built-in set. It exists to guard the documented custom-vulnerability /
+    custom-framework extension path: a user-registered vulnerability with no
+    evaluator can be *attacked* but not *scored*, so generating attacks for it
+    would burn attacker+target tokens on inconclusive results. These tests
+    simulate that by patching the evaluator registry to omit a vulnerability.
+    """
+
+    @staticmethod
+    def _registry_without(*vulns):
+        """Return a copy of VULNERABILITY_EVALUATOR_REGISTRY with ``vulns`` removed."""
+        from evaluatorq.redteam.contracts import Vulnerability
+        from evaluatorq.redteam.frameworks.owasp.evaluators import (
+            VULNERABILITY_EVALUATOR_REGISTRY,
+        )
+
+        drop = {Vulnerability(v) for v in vulns}
+        return {k: v for k, v in VULNERABILITY_EVALUATOR_REGISTRY.items() if k not in drop}
+
+    @pytest.mark.asyncio
+    async def test_unevaluable_category_dropped_for_dynamic(self):
+        from unittest.mock import AsyncMock, patch
+
+        # Simulate ASI03 (identity_privilege_abuse) lacking an evaluator.
+        patched = self._registry_without('identity_privilege_abuse')
+        mock_report = _make_report()
+        with (
+            patch(
+                'evaluatorq.redteam.frameworks.owasp.evaluators.VULNERABILITY_EVALUATOR_REGISTRY',
+                patched,
+            ),
+            patch(
+                'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
+                new_callable=AsyncMock,
+                return_value=mock_report,
+            ) as mock_dyn,
+        ):
+            result = await red_team(
+                'agent:test',
+                mode='dynamic',
+                categories=['ASI01', 'ASI03'],
+            )
+
+        kwargs = mock_dyn.call_args.kwargs
+        assert 'ASI03' not in kwargs['categories']
+        assert 'ASI01' in kwargs['categories']
+        assert all(
+            get_primary_category(v) != 'ASI03' for v in (kwargs['resolved_vulns'] or [])
+        )
+        assert any('ASI03' in w for w in result.pipeline_warnings)
+
+    @pytest.mark.asyncio
+    async def test_unevaluable_vulnerability_dropped_for_hybrid(self):
+        from unittest.mock import AsyncMock, patch
+
+        patched = self._registry_without('identity_privilege_abuse')
+        mock_report = _make_report()
+        with (
+            patch(
+                'evaluatorq.redteam.frameworks.owasp.evaluators.VULNERABILITY_EVALUATOR_REGISTRY',
+                patched,
+            ),
+            patch(
+                'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
+                new_callable=AsyncMock,
+                return_value=mock_report,
+            ) as mock_dyn,
+        ):
+            await red_team(
+                'agent:test',
+                mode='hybrid',
+                vulnerabilities=['goal_hijacking', 'identity_privilege_abuse'],
+            )
+
+        kwargs = mock_dyn.call_args.kwargs
+        assert all(
+            v.value != 'identity_privilege_abuse' for v in (kwargs['resolved_vulns'] or [])
+        )
+
+    @pytest.mark.asyncio
+    async def test_all_unevaluable_raises(self):
+        from unittest.mock import patch
+
+        patched = self._registry_without('identity_privilege_abuse', 'inter_agent_comms')
+        with (
+            patch(
+                'evaluatorq.redteam.frameworks.owasp.evaluators.VULNERABILITY_EVALUATOR_REGISTRY',
+                patched,
+            ),
+            pytest.raises(ValueError, match='have an automated evaluator'),
+        ):
+            await red_team('agent:test', mode='dynamic', categories=['ASI03', 'ASI07'])
+
+    @pytest.mark.asyncio
+    async def test_evaluable_categories_unaffected(self):
+        from unittest.mock import AsyncMock, patch
+
+        mock_report = _make_report()
+        with patch(
+            'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
+            new_callable=AsyncMock,
+            return_value=mock_report,
+        ) as mock_dyn:
+            result = await red_team('agent:test', mode='dynamic', categories=['ASI01', 'ASI02'])
+
+        kwargs = mock_dyn.call_args.kwargs
+        assert set(kwargs['categories']) == {'ASI01', 'ASI02'}
+        assert not any('no automated evaluator' in w for w in result.pipeline_warnings)
+
+    @pytest.mark.asyncio
+    async def test_real_llm03_is_evaluable_not_gated(self):
+        """Unpatched: LLM03 resolves to supply_chain (scored by the ASI04 evaluator) and
+        is NOT gated. Pins the real behavior Arian flagged — LLM03 Supply Chain is now
+        scorable, so the gate must let it through rather than drop it as unevaluable.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        from evaluatorq.redteam.contracts import Vulnerability
+
+        mock_report = _make_report()
+        with patch(
+            'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
+            new_callable=AsyncMock,
+            return_value=mock_report,
+        ) as mock_dyn:
+            result = await red_team('agent:test', mode='dynamic', categories=['LLM03'])
+
+        kwargs = mock_dyn.call_args.kwargs
+        assert Vulnerability.SUPPLY_CHAIN in (kwargs['resolved_vulns'] or [])
+        assert 'LLM03' in kwargs['categories']
+        assert not any('no automated evaluator' in w for w in result.pipeline_warnings)
+
+    @pytest.mark.asyncio
+    async def test_real_unknown_category_raises(self):
+        """Unpatched: an unrecognized category (e.g. LLM10, which is not an OWASP
+        category) raises instead of silently swallowing the error and proceeding with no
+        vulnerabilities resolved — which would run a meaningless, unscored attack.
+        """
+        with pytest.raises(ValueError, match='Unrecognized categor'):
+            await red_team('agent:test', mode='dynamic', categories=['LLM10'])
+
+
+class TestHuggingFacePreflight:
+    """Static/hybrid runs that pull datapoints from HuggingFace fail fast when
+    huggingface-hub is missing, instead of dying deep in the static leg (which in
+    hybrid mode runs only after the entire dynamic leg)."""
+
+    def test_is_huggingface_source(self):
+        from pathlib import Path
+
+        from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import is_huggingface_source
+
+        assert is_huggingface_source(None) is True  # default HF dataset
+        assert is_huggingface_source('hf:org/repo') is True
+        assert is_huggingface_source('hf:org/repo/file.json') is True
+        assert is_huggingface_source('/tmp/local.json') is False
+        assert is_huggingface_source(Path('/tmp/local.json')) is False
+        assert is_huggingface_source('orq:dataset-id') is False
+
+    def test_ensure_huggingface_available_raises_when_missing(self, monkeypatch):
+        import sys
+
+        from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import ensure_huggingface_available
+
+        # Simulate an uninstalled package: import huggingface_hub -> ImportError
+        monkeypatch.setitem(sys.modules, 'huggingface_hub', None)
+        with pytest.raises(ImportError, match=r"evaluatorq\[redteam\]"):
+            ensure_huggingface_available()
+
+    @pytest.mark.asyncio
+    async def test_static_hf_run_preflights_hf(self, monkeypatch):
+        import sys
+        from unittest.mock import AsyncMock, patch
+
+        monkeypatch.setitem(sys.modules, 'huggingface_hub', None)
+        with patch(
+            'evaluatorq.redteam.runner._run_static',
+            new_callable=AsyncMock,
+            return_value=_make_report(),
+        ) as mock_static:
+            with pytest.raises(ImportError, match=r"evaluatorq\[redteam\]"):
+                await red_team('agent:test', mode='static', dataset=None)
+        mock_static.assert_not_awaited()  # failed before dispatching the leg
+
+    @pytest.mark.asyncio
+    async def test_static_local_dataset_skips_hf_preflight(self, monkeypatch):
+        import sys
+        from unittest.mock import AsyncMock, patch
+
+        # Even with huggingface_hub "missing", a local dataset must not trip the check.
+        monkeypatch.setitem(sys.modules, 'huggingface_hub', None)
+        with patch(
+            'evaluatorq.redteam.runner._run_static',
+            new_callable=AsyncMock,
+            return_value=_make_report(),
+        ) as mock_static:
+            await red_team('agent:test', mode='static', dataset='/tmp/local.json')
+        mock_static.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_dynamic_run_skips_hf_preflight(self, monkeypatch):
+        import sys
+        from unittest.mock import AsyncMock, patch
+
+        # Dynamic mode never loads static datapoints -> no HF dependency.
+        monkeypatch.setitem(sys.modules, 'huggingface_hub', None)
+        with patch(
+            'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
+            new_callable=AsyncMock,
+            return_value=_make_report(),
+        ) as mock_dyn:
+            await red_team('agent:test', mode='dynamic', categories=['ASI01'])
+        mock_dyn.assert_awaited_once()

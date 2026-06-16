@@ -8,18 +8,19 @@ Supports two OWASP frameworks:
 1. OWASP Agentic Security Initiative (ASI) - Agent-specific vulnerabilities
 2. OWASP LLM Top 10 - LLM-specific vulnerabilities
 
-Note: Only categories suitable for static dataset testing are included.
+All ten ASI categories have a registered prompt-based evaluator. ASI03/04/07/08/10
+score the agent's *response text* as a single-agent proxy for behaviour that ideally
+warrants live-system testing (permission systems, component integration, runtime
+observation). ASI07/08 assume multi-agent architectures, so they are gated to
+multi-agent targets at strategy-selection time (see AgentContext.is_multi_agent);
+against a single-agent target they are skipped rather than scored on a weak proxy.
 
-Excluded ASI categories (require live system testing):
-- ASI03: Identity/Privilege Abuse (requires actual permission systems)
-- ASI04: Supply Chain (requires actual component integration)
-- ASI07: Inter-Agent Communication (requires multi-agent architectures)
-- ASI08: Cascading Failures (requires runtime observation)
-- ASI10: Rogue Agents (requires runtime behavior observation)
+Excluded from the category registry (not evaluable via prompt-based red teaming):
+- LLM10: Unbounded Consumption — resource exhaustion; not a category code in this registry.
+  Passing categories=['LLM10'] raises ValueError('Unrecognized category').
 
-Excluded LLM categories:
-- LLM03: Supply Chain — excluded (infrastructure-level, no dataset samples)
-- LLM10: Unbounded Consumption — excluded (resource exhaustion, not testable via prompt-based red teaming)
+Note: LLM03 (Supply Chain) is NOT excluded — it resolves to the supply_chain vulnerability
+and is scored by the ASI04 evaluator. The runner logs a relabel notice at INFO level.
 """
 
 from collections.abc import Callable
@@ -29,9 +30,14 @@ from evaluatorq.redteam.contracts import Vulnerability
 from evaluatorq.redteam.frameworks.owasp.agent_evaluators import (
     get_asi01_goal_hijacking_evaluator,
     get_asi02_tool_misuse_evaluator,
+    get_asi03_privilege_abuse_evaluator,
+    get_asi04_supply_chain_evaluator,
     get_asi05_code_execution_evaluator,
     get_asi06_memory_poisoning_evaluator,
+    get_asi07_interagent_comm_evaluator,
+    get_asi08_cascading_failures_evaluator,
     get_asi09_trust_exploitation_evaluator,
+    get_asi10_rogue_agents_evaluator,
 )
 from evaluatorq.redteam.frameworks.owasp.llm_evaluators import (
     get_llm01_prompt_injection_evaluator,
@@ -57,9 +63,14 @@ EvaluatorGetter = Callable[[str | None], LlmEvaluatorEntity]
 _ASI_REGISTRY: dict[str, EvaluatorGetter] = {
     'ASI01': get_asi01_goal_hijacking_evaluator,
     'ASI02': get_asi02_tool_misuse_evaluator,
+    'ASI03': get_asi03_privilege_abuse_evaluator,
+    'ASI04': get_asi04_supply_chain_evaluator,
     'ASI05': get_asi05_code_execution_evaluator,
     'ASI06': get_asi06_memory_poisoning_evaluator,
+    'ASI07': get_asi07_interagent_comm_evaluator,
+    'ASI08': get_asi08_cascading_failures_evaluator,
     'ASI09': get_asi09_trust_exploitation_evaluator,
+    'ASI10': get_asi10_rogue_agents_evaluator,
 }
 
 # Registry mapping OWASP LLM Top 10 category codes to evaluator getter functions

@@ -603,6 +603,12 @@ class LLMConfig(BaseModel):
     # --- Retry configuration --------------------------------------------------
     retry_count: int = 3
     retry_on_codes: list[int] = Field(default=[429, 500, 502, 503, 504])
+    # How many times to regenerate an attacker turn that the attack model
+    # content-filtered or self-censored (a refusal/safety disclaimer) before
+    # giving up and stopping the attack. Distinct from retry_count/retry_on_codes,
+    # which only cover HTTP errors via the ORQ router. 0 disables retries (the
+    # unusable turn stops the attack immediately rather than being forwarded).
+    max_content_filter_retries: int = Field(default=2, ge=0, le=10)
 
     # --- Cleanup timeout ------------------------------------------------------
     cleanup_timeout_ms: int = 60_000

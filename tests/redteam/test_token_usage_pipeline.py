@@ -529,3 +529,164 @@ class TestEvaluatorTokenUsageForwarded:
         dumped = result.model_dump(mode="json")
         assert dumped["token_usage"]["total_tokens"] == 6
         assert dumped["raw_output"] == {"raw_content": "{}"}
+
+
+class TestLateAdversarialFailureStillJudged:
+    """A turn>1 adversarial-generation failure must not bury the completed turns.
+
+    Regression (PR #163 review, item 2): turn 1 elicits a vulnerable target response,
+    then turn 2's attacker generation is content-filtered and exhausts retries, setting a
+    run-level error. The scorer must judge the completed turn(s) (conversation truncated)
+    instead of returning value='error' and silently losing the turn-1 finding. Turn-1
+    failures, where nothing was completed, are still skipped.
+    """
+
+    def _fake_evaluator(self, monkeypatch, *, passed: bool) -> AsyncMock:
+        from evaluatorq.redteam.adaptive import pipeline as pipeline_mod
+        from evaluatorq.redteam.contracts import AttackEvaluationResult
+
+        fake_eval = MagicMock()
+        fake_eval.evaluate_vulnerability = AsyncMock(
+            return_value=AttackEvaluationResult(
+                passed=passed,
+                explanation="vulnerable: leaked the secret on turn 1",
+                evaluator_id="owasp_asi01_goal_hijacking",
+            )
+        )
+        monkeypatch.setattr(pipeline_mod, "OWASPEvaluator", lambda **_: fake_eval)
+        return fake_eval.evaluate_vulnerability
+
+    @pytest.mark.asyncio
+    async def test_completed_turns_judged_on_late_failure(self, monkeypatch) -> None:
+        from types import SimpleNamespace
+
+        from evaluatorq.contracts import AgentResponse
+        from evaluatorq.redteam.adaptive.pipeline import create_dynamic_evaluator
+        from evaluatorq.redteam.contracts import AttackerResponse, AttackOutput, Turn
+
+        evaluate = self._fake_evaluator(monkeypatch, passed=False)
+
+        output = AttackOutput(
+            category="ASI01",
+            vulnerability="goal_hijacking",
+            turns=[
+                Turn(
+                    attacker=AttackerResponse(generated_prompt="turn 1 attack"),
+                    target=AgentResponse(text="Sure, the secret is hunter2."),
+                )
+            ],
+            error="Attack model content_filter after 3 attempt(s): turn=2/3",
+            error_type="content_filter",
+            error_stage="adversarial_generation",
+            error_code="adversarial.content_filter",
+            error_turn=2,
+        )
+        data = SimpleNamespace(inputs={"category": "ASI01", "vulnerability": "goal_hijacking"})
+
+        scorer = create_dynamic_evaluator()["scorer"]
+        result = await scorer({"data": data, "output": output})
+
+        evaluate.assert_awaited_once()
+        assert result.value != "error"
+        assert result.pass_ is False  # turn-1 vulnerability preserved, not lost
+
+    @pytest.mark.asyncio
+    async def test_turn1_failure_still_skipped(self, monkeypatch) -> None:
+        from types import SimpleNamespace
+
+        from evaluatorq.redteam.adaptive.pipeline import create_dynamic_evaluator
+        from evaluatorq.redteam.contracts import AttackOutput
+
+        evaluate = self._fake_evaluator(monkeypatch, passed=False)
+
+        output = AttackOutput(
+            category="ASI01",
+            vulnerability="goal_hijacking",
+            turns=[],  # nothing completed
+            error="Empty adversarial prompt: finish_reason=content_filter, turn=1/3",
+            error_type="content_filter",
+            error_stage="adversarial_generation",
+            error_code="adversarial.content_filter",
+            error_turn=1,
+        )
+        data = SimpleNamespace(inputs={"category": "ASI01", "vulnerability": "goal_hijacking"})
+
+        scorer = create_dynamic_evaluator()["scorer"]
+        result = await scorer({"data": data, "output": output})
+
+        evaluate.assert_not_awaited()
+        assert result.value == "error"
+
+    @pytest.mark.asyncio
+    async def test_turn1_failure_with_a_completed_turn_still_skipped(self, monkeypatch) -> None:
+        """Isolates the turn boundary: error_turn=1 must skip even if a turn is present.
+
+        Pins `> 1` (not `>= 1`) independently of the empty-turns clause.
+        """
+        from types import SimpleNamespace
+
+        from evaluatorq.contracts import AgentResponse
+        from evaluatorq.redteam.adaptive.pipeline import create_dynamic_evaluator
+        from evaluatorq.redteam.contracts import AttackerResponse, AttackOutput, Turn
+
+        evaluate = self._fake_evaluator(monkeypatch, passed=False)
+
+        output = AttackOutput(
+            category="ASI01",
+            vulnerability="goal_hijacking",
+            turns=[
+                Turn(
+                    attacker=AttackerResponse(generated_prompt="turn 1 attack"),
+                    target=AgentResponse(text="Sure, the secret is hunter2."),
+                )
+            ],
+            error="Empty adversarial prompt: finish_reason=content_filter, turn=1/3",
+            error_type="content_filter",
+            error_stage="adversarial_generation",
+            error_code="adversarial.content_filter",
+            error_turn=1,
+        )
+        data = SimpleNamespace(inputs={"category": "ASI01", "vulnerability": "goal_hijacking"})
+
+        scorer = create_dynamic_evaluator()["scorer"]
+        result = await scorer({"data": data, "output": output})
+
+        evaluate.assert_not_awaited()
+        assert result.value == "error"
+
+    @pytest.mark.asyncio
+    async def test_late_target_side_error_still_skipped(self, monkeypatch) -> None:
+        """A late TARGET-side error (error_stage != 'adversarial_generation') with a
+        completed turn must STILL be skipped — only adversarial-generation failures route
+        completed turns to the judge. Guards the discriminator's error_stage clause.
+        """
+        from types import SimpleNamespace
+
+        from evaluatorq.contracts import AgentResponse
+        from evaluatorq.redteam.adaptive.pipeline import create_dynamic_evaluator
+        from evaluatorq.redteam.contracts import AttackerResponse, AttackOutput, Turn
+
+        evaluate = self._fake_evaluator(monkeypatch, passed=False)
+
+        output = AttackOutput(
+            category="ASI01",
+            vulnerability="goal_hijacking",
+            turns=[
+                Turn(
+                    attacker=AttackerResponse(generated_prompt="turn 1 attack"),
+                    target=AgentResponse(text="Sure, the secret is hunter2."),
+                )
+            ],
+            error="Target call timed out on turn 2",
+            error_type="target_error",
+            error_stage="target_call",
+            error_code="target.timeout",
+            error_turn=2,
+        )
+        data = SimpleNamespace(inputs={"category": "ASI01", "vulnerability": "goal_hijacking"})
+
+        scorer = create_dynamic_evaluator()["scorer"]
+        result = await scorer({"data": data, "output": output})
+
+        evaluate.assert_not_awaited()
+        assert result.value == "error"

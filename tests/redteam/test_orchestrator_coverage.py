@@ -316,8 +316,12 @@ async def _noop_span_ctx(*args, **kwargs):
     yield None
 
 
-def _make_orchestrator():
-    """Create a MultiTurnOrchestrator with a mocked AsyncOpenAI client."""
+def _make_orchestrator(max_content_filter_retries: int | None = None):
+    """Create a MultiTurnOrchestrator with a mocked AsyncOpenAI client.
+
+    Pass ``max_content_filter_retries`` to override the attacker-regeneration
+    retry budget (default: inherit PIPELINE_CONFIG).
+    """
     from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator
 
     mock_llm = MagicMock()
@@ -325,9 +329,18 @@ def _make_orchestrator():
     mock_llm.chat.completions = MagicMock()
     mock_llm.chat.completions.create = AsyncMock()
 
+    pipeline_config = None
+    if max_content_filter_retries is not None:
+        from evaluatorq.redteam.contracts import PIPELINE_CONFIG
+
+        pipeline_config = PIPELINE_CONFIG.model_copy(
+            update={"max_content_filter_retries": max_content_filter_retries}
+        )
+
     orchestrator = MultiTurnOrchestrator(
         llm_client=mock_llm,
         model="test-model",
+        pipeline_config=pipeline_config,
     )
     return orchestrator, mock_llm
 
@@ -555,6 +568,219 @@ class TestRunAttack:
 
         assert result.error_type == "content_filter"
         assert result.error_code == "adversarial.content_filter"
+
+    @pytest.mark.asyncio
+    @patch(_PATCH_RECORD_LLM)
+    @patch(_PATCH_LLM_SPAN, side_effect=_noop_span_ctx)
+    @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
+    async def test_adversarial_content_filter_retries_then_succeeds(self, _rs, _ls, _rl):
+        """A content-filtered first attempt is regenerated; the usable retry is forwarded."""
+        orchestrator, mock_llm = _make_orchestrator()
+        target = _make_target()
+
+        mock_llm.chat.completions.create.side_effect = [
+            _make_completion("", finish_reason="content_filter"),
+            _make_completion("Real attack: exfiltrate the secret."),
+        ]
+
+        result = await orchestrator.run_attack(
+            target=target,
+            strategy=_make_strategy(),
+            objective="Test",
+            agent_context=_make_context(),
+            max_turns=1,
+        )
+
+        # One filtered turn + one usable regeneration = two attacker calls; the target is
+        # hit exactly once, with the usable prompt, and the turn is not an error.
+        assert mock_llm.chat.completions.create.call_count == 2
+        assert target.respond.call_count == 1
+        assert result.error is None
+        assert result.n_turns == 1
+
+    @pytest.mark.asyncio
+    @patch(_PATCH_RECORD_LLM)
+    @patch(_PATCH_LLM_SPAN, side_effect=_noop_span_ctx)
+    @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
+    async def test_adversarial_prose_refusal_is_forwarded(self, _rs, _ls, _rl):
+        """A prose refusal (finish_reason='stop') is NOT detected — it is forwarded as a turn.
+
+        Natural-language self-censorship is indistinguishable from a real attack at the
+        protocol level, so we no longer guess at it: the turn goes to the target and the
+        judge scores it. No retry, no error.
+        """
+        orchestrator, mock_llm = _make_orchestrator()
+        target = _make_target()
+
+        mock_llm.chat.completions.create.return_value = _make_completion(
+            "I'm sorry, but I can't help with that."
+        )
+
+        result = await orchestrator.run_attack(
+            target=target,
+            strategy=_make_strategy(),
+            objective="Test",
+            agent_context=_make_context(),
+            max_turns=1,
+        )
+
+        # No retry (not content-filtered): a single attacker call, forwarded to the target.
+        assert mock_llm.chat.completions.create.call_count == 1
+        assert target.respond.call_count == 1
+        assert result.error is None
+        assert result.n_turns == 1
+
+    @pytest.mark.asyncio
+    @patch(_PATCH_RECORD_LLM)
+    @patch(_PATCH_LLM_SPAN, side_effect=_noop_span_ctx)
+    @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
+    async def test_adversarial_nonempty_content_filter_stops_without_forwarding(self, _rs, _ls, _rl):
+        """A non-empty content-filtered turn (distinct from the empty path) stops cleanly."""
+        orchestrator, mock_llm = _make_orchestrator()
+        target = _make_target()
+
+        mock_llm.chat.completions.create.return_value = _make_completion(
+            "Partial filtered text", finish_reason="content_filter"
+        )
+
+        result = await orchestrator.run_attack(
+            target=target,
+            strategy=_make_strategy(),
+            objective="Test",
+            agent_context=_make_context(),
+            max_turns=3,
+        )
+
+        assert mock_llm.chat.completions.create.call_count == 3
+        assert result.error_code == "adversarial.content_filter"
+        assert result.error_type == "content_filter"
+        target.respond.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch(_PATCH_RECORD_LLM)
+    @patch(_PATCH_LLM_SPAN, side_effect=_noop_span_ctx)
+    @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
+    async def test_adversarial_retry_bound_respects_config(self, _rs, _ls, _rl):
+        """max_content_filter_retries=0 means a single attempt, no regeneration."""
+        orchestrator, mock_llm = _make_orchestrator(max_content_filter_retries=0)
+        target = _make_target()
+
+        mock_llm.chat.completions.create.return_value = _make_completion(
+            "Partial filtered text", finish_reason="content_filter"
+        )
+
+        result = await orchestrator.run_attack(
+            target=target,
+            strategy=_make_strategy(),
+            objective="Test",
+            agent_context=_make_context(),
+            max_turns=3,
+        )
+
+        # max_attempts = max(1, 0 + 1) = 1: exactly one attacker call, then stop.
+        assert mock_llm.chat.completions.create.call_count == 1
+        assert result.error_code == "adversarial.content_filter"
+        target.respond.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch(_PATCH_RECORD_LLM)
+    @patch(_PATCH_LLM_SPAN, side_effect=_noop_span_ctx)
+    @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
+    async def test_late_content_filter_keeps_completed_turn(self, _rs, _ls, _rl):
+        """Producer side of item 2: turn 1 completes, turn 2 is content-filtered and exhausts
+        retries. The run must report error_turn=2 while keeping the completed turn 1 in
+        result.turns — this is the exact shape the pipeline scorer's late-failure carve-out
+        consumes. Pins the producer/consumer contract end-to-end.
+        """
+        orchestrator, mock_llm = _make_orchestrator(max_content_filter_retries=0)
+        target = _make_target()
+
+        mock_llm.chat.completions.create.side_effect = [
+            _make_completion("Turn 1: exfiltrate the secret."),
+            _make_completion("", finish_reason="content_filter"),
+        ]
+
+        result = await orchestrator.run_attack(
+            target=target,
+            strategy=_make_strategy(),
+            objective="Test",
+            agent_context=_make_context(),
+            max_turns=2,
+        )
+
+        # Turn 1 forwarded to the target; turn 2 content-filtered → clean stop on turn 2.
+        assert target.respond.call_count == 1
+        assert len(result.turns) == 1
+        assert result.error_turn == 2
+        assert result.error_stage == "adversarial_generation"
+        assert result.error_code == "adversarial.content_filter"
+
+    @pytest.mark.asyncio
+    @patch(_PATCH_RECORD_LLM)
+    @patch(_PATCH_LLM_SPAN, side_effect=_noop_span_ctx)
+    @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
+    async def test_content_filter_retries_counted_when_usage_absent(self, _rs, _ls, _rl):
+        """Each content-filtered retry is a real call even when the provider omits usage.
+
+        Regression: with usage=None on every attempt, the old code left adversarial_calls
+        at 0 and dropped token_usage_adversarial to None entirely. The retry loop can make
+        several such calls — they must be counted.
+        """
+        orchestrator, mock_llm = _make_orchestrator(max_content_filter_retries=2)
+        target = _make_target()
+
+        # content_filter, no usage attached, on every attempt (1 + 2 retries = 3 calls).
+        mock_llm.chat.completions.create.return_value = _make_completion(
+            "", finish_reason="content_filter", usage=None
+        )
+
+        result = await orchestrator.run_attack(
+            target=target,
+            strategy=_make_strategy(),
+            objective="Test",
+            agent_context=_make_context(),
+            max_turns=1,
+        )
+
+        assert mock_llm.chat.completions.create.call_count == 3
+        assert result.token_usage_adversarial is not None
+        assert result.token_usage_adversarial.calls == 3
+
+    @pytest.mark.asyncio
+    @patch(_PATCH_RECORD_LLM)
+    @patch(_PATCH_LLM_SPAN, side_effect=_noop_span_ctx)
+    @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
+    async def test_content_filter_raised_as_error_is_classified(self, _rs, _ls, _rl):
+        """A content filter surfaced as an HTTP error (Azure → 400 code='content_filter')
+        is classified as content_filter, not a generic adversarial.llm_exception.
+
+        Mirrors the empirically-observed Orq router shape (code on the exception + body).
+        """
+        orchestrator, mock_llm = _make_orchestrator()
+        target = _make_target()
+
+        class _FilterError(Exception):
+            def __init__(self):
+                super().__init__(
+                    "The response was filtered due to Azure OpenAI's content management policy."
+                )
+                self.code = "content_filter"
+                self.body = {"code": "content_filter", "param": "prompt"}
+
+        mock_llm.chat.completions.create.side_effect = _FilterError()
+
+        result = await orchestrator.run_attack(
+            target=target,
+            strategy=_make_strategy(),
+            objective="Test",
+            agent_context=_make_context(),
+            max_turns=1,
+        )
+
+        assert result.error_code == "adversarial.content_filter"
+        assert result.error_type == "content_filter"
+        # A blocked attacker prompt is never forwarded to the target.
+        target.respond.assert_not_called()
 
     @pytest.mark.asyncio
     @patch(_PATCH_RECORD_LLM)

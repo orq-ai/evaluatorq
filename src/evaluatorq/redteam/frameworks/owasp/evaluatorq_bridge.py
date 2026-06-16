@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -23,10 +24,14 @@ from evaluatorq.redteam.contracts import (
     LLMCallConfig,
     RedTeamInput,
     StaticDataset,
+    normalize_category,
 )
+from evaluatorq.redteam.exceptions import DatasetError
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from openai import AsyncOpenAI
 
     from evaluatorq.types import ScorerParameter
@@ -72,6 +77,32 @@ def _adapt_static_output(output: Any) -> list[OutputMessage]:
     elif output:
         items.append(TextOutputItem(text=str(output), annotations=[]))
     return items
+
+
+def _filter_by_categories(
+    items: list[Any],
+    categories: list[str],
+    category_of: Callable[[Any], str],
+) -> list[Any]:
+    """Filter ``items`` to the requested OWASP categories.
+
+    Logs the aggregate post-filter count, and — critically — emits a per-category
+    ``WARNING`` for each requested category that has zero matching datapoints, so a
+    silently-empty category (e.g. one the dataset has no entries for) is visible
+    rather than mistaken for a genuine 0% attack-success result. Shared by both the
+    file loader and the platform-datapoint path so the warning behaviour is identical.
+    """
+    requested = {normalize_category(c.upper()) for c in categories}
+    present = Counter(normalize_category(category_of(it).upper()) for it in items)
+    filtered = [it for it in items if normalize_category(category_of(it).upper()) in requested]
+    logger.info(f'Filtered to categories: {sorted(requested)} ({len(filtered)} samples)')
+    for cat in sorted(requested):
+        if present[cat] == 0:
+            logger.warning(
+                f'Requested category {cat}: 0 static datapoints available in the dataset '
+                '(it will contribute no static results).'
+            )
+    return filtered
 
 
 def _normalize_num_samples(num_samples: int | None) -> int | None:
@@ -259,7 +290,9 @@ def create_owasp_evaluator(
                 replacements=eval_replacements,
             )
             if outcome.error_kind is not None or outcome.payload is None:
-                return Prediction(error=outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'error'))
+                return Prediction(
+                    error=outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'error')
+                )
             return Prediction(
                 value=outcome.payload.value,
                 explanation=outcome.payload.explanation,
@@ -292,6 +325,42 @@ def create_owasp_evaluator(
     return {'name': 'owasp-agentic-security', 'scorer': scorer}
 
 
+_HF_MISSING_MSG = (
+    'Loading static datapoints from HuggingFace requires the huggingface-hub package. '
+    "Install the redteam extra: pip install 'evaluatorq[redteam]' "
+    "(or: uv pip install 'evaluatorq[redteam]'). "
+    'Alternatively pass a local --dataset path, or use --mode dynamic to skip static datapoints.'
+)
+
+
+def is_huggingface_source(dataset: str | Path | None) -> bool:
+    """Return True when ``dataset`` resolves to a HuggingFace fetch.
+
+    ``None`` (the default ``orq/redteam-vulnerabilities`` dataset) and any
+    ``hf:`` specifier require huggingface-hub; local paths and ``orq:`` dataset
+    IDs do not.
+    """
+    if dataset is None:
+        return True
+    if isinstance(dataset, Path):
+        return False
+    return str(dataset).startswith('hf:')
+
+
+def ensure_huggingface_available() -> None:
+    """Raise a clear ``ImportError`` if huggingface-hub is needed but not installed.
+
+    Use this as a fail-fast preflight before a static/hybrid run that will pull
+    datapoints from HuggingFace, so the failure surfaces immediately rather than
+    deep in the static leg (which, in hybrid mode, runs only after the entire
+    dynamic leg has completed).
+    """
+    try:
+        import huggingface_hub  # noqa: F401
+    except ImportError as e:
+        raise ImportError(_HF_MISSING_MSG) from e
+
+
 def _fetch_from_huggingface(
     repo: str = DEFAULT_HF_REPO,
     filename: str = DEFAULT_HF_FILENAME,
@@ -302,18 +371,26 @@ def _fetch_from_huggingface(
     try:
         from huggingface_hub import hf_hub_download
     except ImportError as e:
-        msg = (
-            'Loading datasets from HuggingFace requires the huggingface-hub package. '
-            'Install it with: pip install evaluatorq[redteam]'
-        )
-        raise ImportError(msg) from e
+        raise ImportError(_HF_MISSING_MSG) from e
 
     logger.info(f'Downloading dataset from HuggingFace: {repo}/{filename}...')
-    local_path = hf_hub_download(
-        repo_id=repo,
-        filename=filename,
-        repo_type='dataset',
-    )
+    try:
+        local_path = hf_hub_download(
+            repo_id=repo,
+            filename=filename,
+            repo_type='dataset',
+        )
+    except Exception as e:
+        # Network failure, auth/401, gated-or-missing repo, etc. Surface an
+        # actionable message instead of a raw huggingface_hub traceback. The run
+        # CLI catches RedTeamError and prints it cleanly.
+        msg = (
+            f'Failed to download red team dataset from HuggingFace ({repo}/{filename}): {e}. '
+            'Check your network connection, that the repository and file exist, and that you '
+            'have access (set HF_TOKEN for gated or private datasets). Alternatively pass a '
+            'local --dataset path, or use --mode dynamic to skip static datapoints.'
+        )
+        raise DatasetError(msg) from e
     datapoints = _load_from_file(local_path, num_samples=num_samples, categories=categories)
     logger.info(f'Loaded {len(datapoints)} samples from HuggingFace ({repo})')
     return datapoints
@@ -385,16 +462,23 @@ def _load_from_file(
 ) -> list[DataPoint]:
     """Load OWASP dataset from a local JSON file in ``{"samples": [...]}`` format."""
     path = Path(path)
-    with path.open() as f:
-        raw = json.load(f)
-
-    dataset = StaticDataset.model_validate(raw)
+    try:
+        with path.open() as f:
+            raw = json.load(f)
+        dataset = StaticDataset.model_validate(raw)
+    except (OSError, json.JSONDecodeError, ValidationError) as e:
+        # Unreadable file, malformed JSON, or a payload that is not the expected
+        # ``{"samples": [...]}`` shape. Surface a RedTeamError the run CLI prints
+        # cleanly instead of a raw traceback (mirrors the HuggingFace path above).
+        msg = (
+            f'Failed to load red team dataset from {path}: {e}. '
+            'Check that the file exists and contains valid JSON in {"samples": [...]} format.'
+        )
+        raise DatasetError(msg) from e
     samples = dataset.samples
 
     if categories:
-        normalized = {c.upper().replace('OWASP-', '') for c in categories}
-        samples = [s for s in samples if s.input.category.upper().replace('OWASP-', '') in normalized]
-        logger.info(f'Filtered to categories: {sorted(normalized)} ({len(samples)} samples)')
+        samples = _filter_by_categories(samples, categories, category_of=lambda s: s.input.category)
 
     num_samples = _normalize_num_samples(num_samples)
     if num_samples is not None:
@@ -420,11 +504,7 @@ def _apply_filters(
 ) -> list[DataPoint]:
     """Apply category and sample-count filters to datapoints."""
     if categories:
-        normalized = {c.upper().replace('OWASP-', '') for c in categories}
-        datapoints = [
-            dp for dp in datapoints if dp.inputs.get('category', '').upper().replace('OWASP-', '') in normalized
-        ]
-        logger.info(f'Filtered to categories: {sorted(normalized)} ({len(datapoints)} samples)')
+        datapoints = _filter_by_categories(datapoints, categories, category_of=lambda dp: dp.inputs.get('category', ''))
 
     num_samples = _normalize_num_samples(num_samples)
     if num_samples is not None:

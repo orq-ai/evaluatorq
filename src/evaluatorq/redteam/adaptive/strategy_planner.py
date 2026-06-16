@@ -29,6 +29,11 @@ if TYPE_CHECKING:
     from evaluatorq.redteam.contracts import AgentContext, AttackStrategy
 
 
+# Vulnerabilities that only make sense against a multi-agent system. Skipped for
+# single-agent targets (see AgentContext.is_multi_agent).
+_MULTI_AGENT_ONLY_VULNS = {Vulnerability.INTER_AGENT_COMMS, Vulnerability.CASCADING_FAILURES}
+
+
 async def plan_strategies_for_vulnerabilities(
     *,
     agent_context: AgentContext,
@@ -60,10 +65,13 @@ async def plan_strategies_for_vulnerabilities(
     if agent_capabilities is not None:
         logger.debug('Using pre-classified agent capabilities (skipping classifier call)')
     elif llm_client is not None:
-        async with with_redteam_span("orq.redteam.capability_classification", {
-            "orq.redteam.num_tools": len(agent_context.tools) if agent_context.tools else 0,
-            "orq.redteam.model": attack_model,
-        }) as cap_span:
+        async with with_redteam_span(
+            'orq.redteam.capability_classification',
+            {
+                'orq.redteam.num_tools': len(agent_context.tools) if agent_context.tools else 0,
+                'orq.redteam.model': attack_model,
+            },
+        ) as cap_span:
             agent_capabilities = await classify_agent_capabilities(
                 agent_context=agent_context,
                 llm_client=llm_client,
@@ -71,12 +79,35 @@ async def plan_strategies_for_vulnerabilities(
                 llm_kwargs=llm_kwargs,
                 pipeline_config=cfg,
             )
-            set_span_attrs(cap_span, {
-                "orq.redteam.num_capabilities": len(agent_capabilities.all_capabilities()),
-            })
+            set_span_attrs(
+                cap_span,
+                {
+                    'orq.redteam.num_capabilities': len(agent_capabilities.all_capabilities()),
+                },
+            )
     else:
         agent_capabilities = AgentCapabilities()
         logger.debug('Skipping capability classification: no llm_client provided')
+
+    # Gate multi-agent-only vulnerabilities (ASI07 Inter-Agent Communication,
+    # ASI08 Cascading Failures) for single-agent targets. These assume a
+    # multi-agent system; against a single agent the planner would otherwise emit
+    # generated strategies that degrade to single-agent social engineering. The
+    # is_multi_agent flag is set during capability classification (default False,
+    # so an unclassified or unconfirmed target is treated as single-agent).
+    if not agent_context.is_multi_agent:
+        multi_only = [v for v in vulnerabilities if v in _MULTI_AGENT_ONLY_VULNS]
+        if multi_only:
+            logger.warning(
+                'Skipping %d multi-agent-only vulnerabilit%s for single-agent target %s: %s. '
+                'ASI07/ASI08 assume a multi-agent system and cannot be meaningfully tested '
+                'against a single agent.',
+                len(multi_only),
+                'y' if len(multi_only) == 1 else 'ies',
+                agent_context.key,
+                ', '.join(v.value for v in multi_only),
+            )
+            vulnerabilities = [v for v in vulnerabilities if v not in _MULTI_AGENT_ONLY_VULNS]
 
     all_hardcoded_by_vuln: dict[Vulnerability, list[AttackStrategy]] = {}
     applicable_hardcoded_by_vuln: dict[Vulnerability, list[AttackStrategy]] = {}
@@ -85,11 +116,7 @@ async def plan_strategies_for_vulnerabilities(
     # classification result. An empty AgentCapabilities() means classification
     # was skipped (no llm_client) — strategy_registry treats `None` as
     # "include optimistically", which is the desired behaviour there.
-    caps_for_filter = (
-        agent_capabilities
-        if agent_capabilities and agent_capabilities.capabilities
-        else None
-    )
+    caps_for_filter = agent_capabilities if agent_capabilities and agent_capabilities.capabilities else None
     for vuln in vulnerabilities:
         all_hardcoded = get_strategies_for_vulnerability(vuln)
         applicable_hardcoded = select_applicable_strategies_for_vulnerability(
@@ -106,13 +133,18 @@ async def plan_strategies_for_vulnerabilities(
     generation_errors: dict[Vulnerability, str | None] = {vuln: None for vuln in vulnerabilities}
 
     if generate_additional_strategies and llm_client is not None and generated_strategy_count > 0:
-        async with with_redteam_span("orq.redteam.strategy_planning", {
-            "orq.redteam.num_vulnerabilities": len(vulnerabilities),
-        }) as strat_span:
+        async with with_redteam_span(
+            'orq.redteam.strategy_planning',
+            {
+                'orq.redteam.num_vulnerabilities': len(vulnerabilities),
+            },
+        ) as strat_span:
             effective_parallelism = max(1, generation_parallelism or len(vulnerabilities) or 1)
             semaphore = asyncio.Semaphore(effective_parallelism)
 
-            async def _generate_for_vulnerability(vuln: Vulnerability) -> tuple[Vulnerability, list[AttackStrategy], str | None]:
+            async def _generate_for_vulnerability(
+                vuln: Vulnerability,
+            ) -> tuple[Vulnerability, list[AttackStrategy], str | None]:
                 try:
                     async with semaphore:
                         generated = await generate_strategies_for_vulnerability(
@@ -147,7 +179,7 @@ async def plan_strategies_for_vulnerabilities(
                     f'({len(generated_single)} single-turn, {len(generated_multi)} multi-turn)'
                 )
             total_generated = sum(len(v) for v in generated_by_vuln.values())
-            set_span_attrs(strat_span, {"orq.redteam.generated_count": total_generated})
+            set_span_attrs(strat_span, {'orq.redteam.generated_count': total_generated})
 
     all_vuln_strategies: dict[Vulnerability, list[AttackStrategy]] = {}
     strategy_selection: dict[Vulnerability, dict[str, Any]] = {}

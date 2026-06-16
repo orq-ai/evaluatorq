@@ -63,7 +63,11 @@ from evaluatorq.redteam.hooks import ConfirmPayload, DefaultHooks, PipelineHooks
 from evaluatorq.redteam.reports.recommendations import generate_focus_area_recommendations
 from evaluatorq.redteam.runtime.jobs import _build_messages, _sanitize_job_name, create_model_job
 from evaluatorq.redteam.tracing import with_redteam_span
-from evaluatorq.redteam.vulnerability_registry import get_primary_category, resolve_vulnerabilities
+from evaluatorq.redteam.vulnerability_registry import (
+    get_primary_category,
+    resolve_category_safe,
+    resolve_vulnerabilities,
+)
 from evaluatorq.send_results import send_results_to_orq
 from evaluatorq.tracing import capture_parent_context, init_tracing_if_needed
 
@@ -476,24 +480,108 @@ async def red_team(
             'Set OPENAI_API_KEY for direct OpenAI access, or ORQ_API_KEY to use the ORQ router.'
         )
 
+    # Fail fast: static/hybrid runs that pull static datapoints from HuggingFace
+    # need huggingface-hub. Check now rather than deep in the static leg — in
+    # hybrid mode that leg runs only after the entire dynamic leg, so a missing
+    # dependency would otherwise surface after minutes of (now wasted) work.
+    if resolved_mode in (Pipeline.STATIC, Pipeline.HYBRID):
+        from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import (
+            ensure_huggingface_available,
+            is_huggingface_source,
+        )
+
+        if is_huggingface_source(dataset):
+            ensure_huggingface_available()
+
     resolved_vulns: list[Vulnerability] | None
     if vulnerabilities:
         resolved_vulns = resolve_vulnerabilities(vulnerabilities)
         resolved_categories = [get_primary_category(v) for v in resolved_vulns]
     elif categories:
-        # Resolve category strings to vulnerabilities so the pipeline can use the
-        # vulnerability-first path; fall back gracefully if any code is unknown.
+        # Surface unrecognized codes instead of silently swallowing the ValueError and
+        # proceeding with resolved_vulns=None — that skips the evaluability gate and runs
+        # a meaningless attack with no scoring.
         try:
             resolved_vulns = resolve_vulnerabilities(categories)
         except ValueError:
-            resolved_vulns = None
+            # Mirror resolve_vulnerabilities, which accepts BOTH vulnerability IDs and
+            # category codes — a code is unknown only when it is neither. Using
+            # resolve_category_safe alone would mislabel a valid vulnerability ID (e.g.
+            # 'goal_hijacking') as unrecognized in a mixed list.
+            valid_vuln_ids = {v.value for v in Vulnerability}
+            unknown = [
+                c for c in categories if c not in valid_vuln_ids and resolve_category_safe(c) is None
+            ]
+            raise ValueError(
+                f'Unrecognized categor{"y" if len(unknown) == 1 else "ies"}: '
+                f'{", ".join(unknown)}. Valid categories: {", ".join(list_available_categories())}.'
+            ) from None
         resolved_categories = categories
+        # A cross-framework code (e.g. LLM03) resolves to a vulnerability whose canonical
+        # label lives in another framework (supply_chain → ASI04); results are reported
+        # under that label. Log the relabel so it isn't surprising in the report.
+        for c in categories:
+            v = resolve_category_safe(c)
+            primary = get_primary_category(v) if v is not None else None
+            if primary is not None and primary != c:
+                logger.info(
+                    'Category %s is scored by the %s evaluator and reported under %s.',
+                    c,
+                    v.value,  # pyright: ignore[reportOptionalMemberAccess] - v is not None here
+                    primary,
+                )
     else:
         resolved_categories = list_available_categories()
         try:
             resolved_vulns = resolve_vulnerabilities(resolved_categories)
         except ValueError:
             resolved_vulns = None
+
+    # Evaluability gate (forward-looking guard): a requested vulnerability with no
+    # registered automated evaluator can be *attacked* but not *scored* by prompt-based
+    # red teaming. Without this gate the dynamic leg would burn attacker and target
+    # tokens generating attacks that always return inconclusive, and the summary could
+    # not distinguish "unmeasured" from "resisted" (resistance_rate defaults to 0.0 at
+    # zero evaluation coverage, which reads as fully vulnerable). Such vulnerabilities
+    # are pruned up front; if NONE of the requested ones are scorable, we raise.
+    #
+    # As of this writing every vulnerability in the registry HAS an evaluator (all ten
+    # ASI categories plus the LLM Top 10 mappings — e.g. LLM03 Supply Chain resolves to
+    # the supply_chain vulnerability, scored by the ASI04 evaluator), so this gate is
+    # currently inert. It is retained deliberately: it is the safety net that stops a
+    # future vulnerability shipped without an evaluator from being silently reported as
+    # resisted. The default category set from list_available_categories() is already
+    # evaluator-backed, so it only ever affects explicit user selections; the static leg
+    # keeps its own datapoint-level coverage guard in _run_static().
+    unevaluable_codes: list[str] = []
+    if resolved_vulns is not None:
+        from evaluatorq.redteam.frameworks.owasp.evaluators import VULNERABILITY_EVALUATOR_REGISTRY
+
+        evaluable_vulns = [v for v in resolved_vulns if v in VULNERABILITY_EVALUATOR_REGISTRY]
+        dropped_vulns = [v for v in resolved_vulns if v not in VULNERABILITY_EVALUATOR_REGISTRY]
+        if dropped_vulns:
+            unevaluable_codes = [get_primary_category(v) for v in dropped_vulns]
+            if not evaluable_vulns:
+                raise ValueError(
+                    'None of the requested categories/vulnerabilities have an automated '
+                    f'evaluator: {", ".join(unevaluable_codes)}. They cannot be scored by '
+                    'prompt-based red teaming. Pick evaluator-backed categories '
+                    f'({", ".join(list_available_categories())}), or test these with a '
+                    'custom AgentTarget + evaluator via the SDK.'
+                )
+            dropped_set = set(dropped_vulns)
+            resolved_categories = [
+                c for c in resolved_categories if resolve_category_safe(c) not in dropped_set
+            ]
+            resolved_vulns = evaluable_vulns
+            logger.warning(
+                'Skipping %d requested categor%s with no automated evaluator: %s. '
+                'These require live-system testing and cannot be scored by prompt-based '
+                'red teaming — they would only produce inconclusive results.',
+                len(unevaluable_codes),
+                'y' if len(unevaluable_codes) == 1 else 'ies',
+                ', '.join(unevaluable_codes),
+            )
 
     if resolved_mode in (Pipeline.DYNAMIC, Pipeline.HYBRID):
         report = await _run_dynamic_or_hybrid(
@@ -543,6 +631,17 @@ async def red_team(
     else:
         msg = f'Invalid mode {mode!r}. Must be "dynamic", "static", or "hybrid".'
         raise ValueError(msg)
+
+    # Record categories dropped by the evaluability gate so the report is honest
+    # about reduced scope (rather than silently testing fewer categories).
+    if unevaluable_codes:
+        report.pipeline_warnings.insert(
+            0,
+            f'Skipped {len(unevaluable_codes)} requested categor'
+            f'{"y" if len(unevaluable_codes) == 1 else "ies"} with no automated '
+            f'evaluator ({", ".join(unevaluable_codes)}): not scoreable via '
+            'prompt-based red teaming (requires live-system testing).',
+        )
 
     # Generate LLM-based recommendations for focus areas (opt-in)
     if generate_recommendations:
