@@ -13,22 +13,32 @@ if TYPE_CHECKING:
 
     from langchain_core.messages import BaseMessage
     from langgraph.graph.state import CompiledStateGraph
-    from pydantic import BaseModel
 
     from evaluatorq.types import DataPoint
 
 
 def _extract_schema_parameters(
-    schema_obj: type[BaseModel] | dict[str, Any] | None,
+    schema_obj: Any,
 ) -> dict[str, Any] | None:
-    """Extract JSON schema from Pydantic model or dict schema."""
+    """Extract JSON schema from a Pydantic model or dict schema.
+
+    Typed as ``Any`` because langchain-core's ``BaseTool.args_schema`` is
+    ``ArgsSchema | None`` (a union of ``type[BaseModel]``, a dict, and a
+    Pydantic v1 model class) — we branch on the concrete type at runtime.
+    """
     if schema_obj is None:
         return None
     # Already a dict schema
     if isinstance(schema_obj, dict):
         return schema_obj
-    # Pydantic model class - use model_json_schema (Pydantic v2)
-    return schema_obj.model_json_schema()
+    # Pydantic v2 model class
+    if hasattr(schema_obj, "model_json_schema"):
+        return schema_obj.model_json_schema()
+    # Pydantic v1 model class
+    if hasattr(schema_obj, "schema") and callable(schema_obj.schema):
+        schema = schema_obj.schema()
+        return schema if isinstance(schema, dict) else None
+    return None
 
 
 def _normalize_message(msg: Any) -> dict[str, Any]:

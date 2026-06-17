@@ -32,11 +32,13 @@ from urllib.parse import quote_plus
 
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
+
+# NOTE: langgraph < 2.0 path. create_react_agent moved to `langchain.agents.create_agent`
+# in langgraph V1.0 and is removed in V2.0 — update this import when bumping to langgraph 2.x.
 from langgraph.prebuilt import create_react_agent
 
 from evaluatorq import DataPoint, ScorerParameter, evaluatorq
 from evaluatorq.integrations.langchain_integration import wrap_langgraph_agent
-
 
 
 # ────────────────────────────────────────────────

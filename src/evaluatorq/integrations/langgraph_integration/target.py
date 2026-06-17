@@ -99,6 +99,10 @@ class LangGraphTarget(AgentTarget):
 
     Usage::
 
+        # NOTE: langgraph < 2.0 path. create_react_agent moved to
+        # `langchain.agents.create_agent` in langgraph V1.0 and is removed in V2.0.
+        # LangGraphTarget wraps whatever compiled graph you pass, so no change is
+        # needed here — only update this import when you bump to langgraph 2.x.
         from langgraph.prebuilt import create_react_agent
         from evaluatorq.integrations.langgraph_integration import LangGraphTarget
 

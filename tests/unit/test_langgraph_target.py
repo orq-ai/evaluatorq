@@ -253,6 +253,10 @@ class TestLangGraphTargetAgentContext:
         """Tools bound via create_react_agent show up in the agent context."""
         from langchain_core.tools import tool
         from langchain_openai import ChatOpenAI
+
+        # NOTE: langgraph < 2.0 path. create_react_agent moved to
+        # `langchain.agents.create_agent` in langgraph V1.0 and is removed in V2.0 —
+        # update this import when bumping to langgraph 2.x.
         from langgraph.prebuilt import create_react_agent
 
         monkeypatch.setenv('OPENAI_API_KEY', 'sk-test-stub')
