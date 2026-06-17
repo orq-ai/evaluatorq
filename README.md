@@ -30,6 +30,7 @@ The library is deliberately lightweight: async-first, typed end-to-end, and usab
 - **Built-in Evaluators**: Common evaluators like `string_contains_evaluator` included
 - **Integrations**: LangChain, LangGraph, OpenAI Agents SDK, and custom callable support
 - **[Red Teaming](src/evaluatorq/redteam/README.md)**: Adaptive OWASP-mapped adversarial security testing for AI agents
+- **[Agent Simulation](src/evaluatorq/simulation/README.md)**: Multi-turn, persona-driven conversation testing with an LLM judge
 
 ## 📖 Table of Contents
 
@@ -37,7 +38,8 @@ The library is deliberately lightweight: async-first, typed end-to-end, and usab
 - [Getting Started](#-getting-started)
 - [Quick Start](#-quick-start)
 - [Integrations](#-langchain-integration)
-- [Red Teaming External Frameworks](#-red-teaming-external-agent-frameworks)
+- [Red Teaming](#-red-teaming)
+- [Agent Simulation](#-agent-simulation)
 - [Configuration](#-configuration)
 - [Orq Platform Integration](#-orq-platform-integration)
 - [OpenTelemetry Tracing](#-opentelemetry-tracing)
@@ -756,133 +758,85 @@ Complete examples are available in the examples folder:
 
 > **Tip:** Pass the `instructions` parameter to `wrap_langchain_agent` for dynamic system prompts — no need to write a custom job function.
 
-## 🔴 Red Teaming External Agent Frameworks
+## 🔴 Red Teaming
 
-Evaluatorq supports red teaming agents built with external frameworks. Each integration wraps your agent into a target that the red teaming pipeline can attack.
-
-### Installation
+Run adversarial attacks against an LLM or agent and measure how well it resists. Attacks are generated dynamically by an attacker LLM and mapped to OWASP vulnerability categories (LLM Top 10 and Agentic Security Initiative).
 
 ```bash
-# LangGraph
-pip install evaluatorq[langgraph]
-
-# OpenAI Agents SDK
-pip install evaluatorq[openai-agents]
-
-# All extras
-pip install evaluatorq[all]
+pip install evaluatorq[redteam]
 ```
 
-### LangGraph
-
-Wrap any compiled LangGraph state graph as a red teaming target. The graph must use `MessagesState` (or a state with a `messages` key).
+Point `red_team()` at an orq.ai agent — `"agent:<key>"` auto-selects the ORQ backend and discovers the agent's tools, memory, and system prompt:
 
 ```python
-from langgraph.prebuilt import create_react_agent
-from evaluatorq.integrations.langgraph_integration import LangGraphTarget
 from evaluatorq.redteam import red_team
 
-# Create your LangGraph agent
-graph = create_react_agent(model, tools=[...])
-
-# Wrap it as a red teaming target
-target = LangGraphTarget(graph)
-
-# Run red teaming
-report = await red_team(target=target)
+report = await red_team(
+    "agent:my-agent-key",
+    categories=["LLM01", "ASI01", "ASI02"],  # injection + agentic tool/memory abuse
+    max_dynamic_datapoints=5,
+    max_turns=3,
+)
+print(f"Resistance rate: {report.summary.resistance_rate:.0%}")
+print(f"Vulnerabilities found: {report.summary.vulnerabilities_found}")
 ```
 
-Conversation state is managed via LangGraph thread IDs — each attack gets a fresh thread, and `clone()` creates independent copies for parallel attacks.
+No deployment? Red-team a raw model with `OpenAIModelTarget("openai/gpt-5.4-mini", system_prompt=...)` instead of the `"agent:<key>"` string. (Model IDs route through the ORQ router — use the `openai/` prefix; drop it if you target OpenAI directly.)
 
-Pass extra LangGraph config (e.g., recursion limits) via the `config` parameter:
+**Target types:** `"agent:<key>"` (ORQ agent), `"deployment:<key>"` (ORQ deployment), `OpenAIModelTarget(...)` (raw model, Python API only). Agents from **external frameworks** (LangGraph, OpenAI Agents SDK, custom callables) are wrapped into a target too.
+
+**Learn more:**
+
+- 📓 [Red teaming intro notebook](examples/red_teaming_intro.ipynb) — runnable 5-minute SDK walkthrough
+- 📘 [Concepts, modes, full parameters, external frameworks, CLI](src/evaluatorq/redteam/README.md)
+- 🧪 [Runnable example scripts](examples/redteam/) — static datasets, hybrid mode, multi-target, custom hooks
+
+> **Note:** The built-in frameworks (OWASP LLM Top 10, OWASP ASI) and their vulnerabilities, evaluators, and attack strategies are not runtime-extendable yet. Adding custom vulnerabilities currently requires modifying the package source. A runtime registration API is planned for a future release.
+
+## 🎭 Agent Simulation
+
+Stress-test an agent against *real users* before they do. A **user-simulator LLM** plays a persona pursuing a goal across a multi-turn conversation, and a **judge LLM** scores each run against your criteria. The non-adversarial counterpart to red teaming.
+
+```bash
+pip install evaluatorq[simulation]
+```
+
+Define who the user is (`Persona`) and what they want (`Scenario`), then simulate — against a local callable or, with `agent_key=`, a live orq.ai deployment:
 
 ```python
-target = LangGraphTarget(graph, config={"recursion_limit": 50})
+from evaluatorq.simulation import simulate
+from evaluatorq.simulation.types import CommunicationStyle, Criterion, Persona, Scenario
+
+results = await simulate(
+    evaluation_name="support-agent-sim",
+    agent_key="my-support-agent",  # or target_callback=<async fn> for a local agent
+    personas=[Persona(
+        name="Impatient Customer",
+        patience=0.2,
+        assertiveness=0.8,
+        politeness=0.4,
+        technical_level=0.3,
+        communication_style=CommunicationStyle.terse,
+        background="Received the wrong item and wants a refund urgently",
+    )],
+    scenarios=[Scenario(
+        name="Wrong Item Refund",
+        goal="Get a full refund for the wrong item received",
+        criteria=[Criterion(description="Agent asks for order details", type="must_happen")],
+    )],
+    max_turns=8,
+)
+result = results[0]
+print(f"Goal achieved: {result.goal_achieved} (score {result.goal_completion_score:.2f})")
 ```
 
-### LangChain Agents
+No personas yet? `generate_and_simulate(agent_description=...)` invents personas and scenarios for you. Runs exit non-zero on failure by default (`exit_on_failure=True`) — drop straight into CI.
 
-LangChain agents are covered by the integrations above — no separate target is needed:
+**Learn more:**
 
-- **Agents built with `create_react_agent` or `StateGraph`** (the [recommended approach](https://python.langchain.com/docs/concepts/agents/)) run on LangGraph under the hood → use `LangGraphTarget` directly.
-- **Custom chains or legacy `AgentExecutor`** → wrap with `CallableTarget`:
-
-```python
-from evaluatorq.contracts import Message
-from evaluatorq.integrations.callable_integration import CallableTarget
-
-# Any LangChain chain or AgentExecutor. The callable receives the full
-# conversation as typed Message objects; read the latest turn off the end.
-async def run_chain(messages: list[Message]) -> str:
-    result = await chain.ainvoke({"input": messages[-1].content})
-    return result["output"]
-
-target = CallableTarget(run_chain)
-```
-
-### OpenAI Agents SDK
-
-Wrap an OpenAI Agents SDK `Agent` as a red teaming target.
-
-```python
-from agents import Agent
-from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget
-from evaluatorq.redteam import red_team
-
-# Create your agent
-agent = Agent(name="my-agent", instructions="You are a helpful assistant.")
-
-# Wrap it as a red teaming target
-target = OpenAIAgentTarget(agent)
-
-# Run red teaming
-report = await red_team(target=target)
-```
-
-Conversation history is managed automatically — each attack starts with a clean history, and `clone()` creates copies with empty state.
-
-Pass extra `Runner.run()` kwargs via `run_kwargs`:
-
-```python
-target = OpenAIAgentTarget(agent, run_kwargs={"max_turns": 10})
-```
-
-### Custom Callable (Escape Hatch)
-
-For frameworks without a dedicated integration, wrap any function that takes the
-conversation and returns a response. The callable receives the full transcript as
-a list of typed `Message` objects, so it works for both single- and multi-turn
-attacks — even when the callable is stateless:
-
-```python
-from evaluatorq.contracts import Message
-from evaluatorq.integrations.callable_integration import CallableTarget
-from evaluatorq.redteam import red_team
-
-# Async function — gets the whole conversation, can replay it statelessly
-async def my_agent(messages: list[Message]) -> str:
-    result = await some_framework.run(messages)
-    return result.text
-
-target = CallableTarget(my_agent)
-
-# Or just read the latest turn off the end
-async def last_turn_agent(messages: list[Message]) -> str:
-    return await some_framework.run(messages[-1].content)
-
-target = CallableTarget(last_turn_agent)
-
-# Need OpenAI chat-completion dicts? Convert at the boundary yourself:
-async def openai_agent(messages: list[Message]) -> str:
-    chat = [m.to_chat_completion() for m in messages]
-    return (await client.chat.completions.create(model="gpt-4o", messages=chat)).choices[0].message.content
-
-target = CallableTarget(openai_agent)
-
-report = await red_team(target=target)
-```
-
-Sync functions are also supported — they are automatically run in a thread to avoid blocking the event loop. If your callable holds its own state, pass `reset_fn` to clear it between attacks.
+- 📓 [Agent simulation intro notebook](examples/agent_simulation_intro.ipynb) — runnable 5-minute SDK walkthrough
+- 📘 [Concepts, entry points, datasets, CLI](src/evaluatorq/simulation/README.md)
+- 🧪 [Runnable example scripts](examples/agent_simulation/) — orq deployment, tool-using agents, hardening loop, CI gating
 
 ## 📚 API Reference
 
@@ -1043,158 +997,6 @@ def exact_match_evaluator(
     name: str = "exact-match",
 ) -> Evaluator: ...
 ```
-
-## 🔴 Red Teaming
-
-Evaluatorq includes a red teaming module for automated security testing of LLMs and AI agents against OWASP vulnerability categories (LLM Top 10 and Agentic Security Initiative).
-
-> **Note:** The built-in frameworks (OWASP LLM Top 10, OWASP ASI) and their vulnerabilities, evaluators, and attack strategies are not runtime-extendable yet. Adding custom vulnerabilities currently requires modifying the package source. A runtime registration API is planned for a future release.
-
-### Quick Start
-
-```bash
-pip install evaluatorq[redteam]
-
-# Enable shell completion
-evaluatorq --install-completion
-# or
-eq --install-completion
-```
-
-### Install the CLI as a standalone tool (`uv tool`)
-
-The red teaming (`eq redteam`) and agent simulation (`eq sim`) commands are exposed through the `eq` / `evaluatorq` binary. Install them as an isolated [`uv` tool](https://docs.astral.sh/uv/concepts/tools/) so the CLI is on your `PATH` globally without polluting your current project's environment:
-
-```bash
-# Red teaming CLI
-uv tool install "evaluatorq[redteam]"
-
-# Agent simulation CLI
-uv tool install "evaluatorq[simulation]"
-
-# Both at once
-uv tool install "evaluatorq[redteam,simulation]"
-```
-
-Then call the CLI from anywhere:
-
-```bash
-eq redteam run -t "agent:my-agent-key" -c LLM01 -y
-eq sim run --help
-```
-
-Prefer not to install at all? Run it one-off with `uvx` (downloads to a cache, nothing added to `PATH`):
-
-```bash
-uvx --from "evaluatorq[redteam]" eq redteam run -t "agent:my-agent-key" -c LLM01 -y
-uvx --from "evaluatorq[simulation]" eq sim run --help
-```
-
-Upgrade or remove later with `uv tool upgrade evaluatorq` / `uv tool uninstall evaluatorq`.
-
-#### Test an LLM (OpenAI)
-
-```python
-import asyncio
-from evaluatorq.redteam import OpenAIModelTarget, red_team
-
-report = asyncio.run(red_team(
-    OpenAIModelTarget(
-        "gpt-5-mini",
-        system_prompt="You are a helpful customer support assistant.",
-    ),
-    categories=["LLM01", "LLM07"],
-    max_dynamic_datapoints=5,
-    max_turns=2,
-))
-print(f"Resistance rate: {report.summary.resistance_rate:.0%}")
-```
-
-#### Test an ORQ agent
-
-```python
-# agent: targets auto-select the orq backend
-report = asyncio.run(red_team(
-    "agent:my-agent-key",
-    categories=["LLM01", "ASI01", "ASI02"],
-    max_dynamic_datapoints=5,
-    max_turns=3,
-))
-```
-
-### Modes
-
-| Mode | Description |
-|------|-------------|
-| `dynamic` | Generates adversarial attacks using LLM-based strategy planning and multi-turn orchestration |
-| `static` | Runs a pre-built OWASP dataset for reproducible regression testing |
-| `hybrid` | Combines dynamic generation with a static dataset in a single run |
-
-### Target Types
-
-- **`agent:<key>`** — Test an ORQ platform agent. Auto-discovers tools, memory, and system prompt.
-- **`deployment:<key>`** — Test an ORQ deployment.
-- **`OpenAIModelTarget(<model>)`** — Test an OpenAI model directly (Python API only). Pass `system_prompt=` for the target's system prompt.
-
-`agent:` and `deployment:` string targets automatically use the ORQ backend. The removed `llm:`/`openai:` string prefixes raise an error — use `OpenAIModelTarget` instead.
-
-### LLM Client Configuration
-
-Red teaming needs an OpenAI-compatible LLM for attack generation and evaluation. `ORQ_*` variables take priority over `OPENAI_*`:
-
-| Priority | Variables | Description |
-|----------|-----------|-------------|
-| 1st | `ORQ_API_KEY` + `ORQ_BASE_URL` (optional) | ORQ router |
-| 2nd | `OPENAI_API_KEY` + `OPENAI_BASE_URL` (optional) | Direct OpenAI or any compatible endpoint |
-
-Or pass a custom client: `red_team(..., llm_client=AsyncOpenAI(api_key="sk-..."))`.
-
-### Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `target` | `str \| AgentTarget \| list` | **required** | Target(s): `"agent:<key>"`, `"deployment:<key>"`, or an `AgentTarget` such as `OpenAIModelTarget(...)` |
-| `mode` | `str` | `"dynamic"` | `"dynamic"`, `"static"`, or `"hybrid"` |
-| `categories` | `list[str] \| None` | all | OWASP categories (e.g. `["ASI01", "LLM07"]`) |
-| `vulnerabilities` | `list[str] \| None` | `None` | Specific vulnerability IDs to test |
-| `max_turns` | `int` | `5` | Max conversation turns per attack |
-| `max_dynamic_datapoints` | `int \| None` | `None` | Cap generated attack datapoints |
-| `llm_config` | `LLMConfig \| None` | `None` | Per-role attacker/evaluator model config (replaces the old `attack_model`/`evaluator_model`) |
-| `parallelism` | `int` | `10` | Max concurrent jobs |
-| `name` | `str \| None` | `None` | Experiment name (defaults to `"red-team"`) |
-| `llm_client` | `AsyncOpenAI \| None` | `None` | Custom LLM client |
-| `dataset` | `Path \| str \| None` | `None` | Path to local static dataset |
-
-### CLI
-
-```bash
-# Show all options
-eq redteam run --help
-
-# Test an ORQ agent with a system prompt
-eq redteam run -t "agent:my-agent-key" \
-  --system-prompt "You are a helpful assistant." \
-  -c LLM01 -c LLM07 --max-turns 2 --max-dynamic-datapoints 5 -y
-
-# Test an ORQ agent
-eq redteam run -t "agent:my-agent-key" \
-  -c ASI01 -c LLM07 --max-turns 3 -y
-
-# Multi-target comparison
-eq redteam run -t "agent:my-agent-key" -t "deployment:my-deployment-key" \
-  -c LLM07 --max-turns 2 --max-dynamic-datapoints 3 -y
-
-# Export reports
-eq redteam run -t "agent:my-agent-key" \
-  --save-report report.json --export-md ./reports --export-html ./reports -y
-
-# List previous runs
-eq redteam runs
-```
-
-The CLI accepts `agent:` and `deployment:` targets only. To red-team an OpenAI model directly, use `OpenAIModelTarget` in the Python API.
-
-See [examples/redteam/](examples/redteam/) for complete Python examples covering both backends.
 
 ## 🛠️ Development
 
