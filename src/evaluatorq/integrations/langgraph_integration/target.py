@@ -40,10 +40,7 @@ class _TokenUsageCollector(BaseCallbackHandler):
 
     def __init__(self) -> None:
         super().__init__()
-        self.prompt_tokens: int = 0
-        self.completion_tokens: int = 0
-        self.total_tokens: int = 0
-        self.calls: int = 0
+        self._usage: TokenUsage = TokenUsage()
 
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
         """Accumulate token usage from a completed LLM call."""
@@ -54,53 +51,42 @@ class _TokenUsageCollector(BaseCallbackHandler):
                 # Only read first candidate — higher-n sampling reuses the same
                 # underlying API call; iterating all candidates would multiply-count.
                 gen = inner[0]
-                meta = getattr(getattr(gen, "message", None), "usage_metadata", None)
+                meta = getattr(getattr(gen, 'message', None), 'usage_metadata', None)
                 if meta is None:
                     # Provider/integration didn't surface usage metadata on this
                     # generation. Real call still happened — log so cost dashboards
                     # showing zeros are diagnosable. Once per generation is fine
                     # since LangGraph chains rarely emit hundreds.
                     logger.debug(
-                        "_TokenUsageCollector: generation has no usage_metadata; "
-                        "tokens for this call will not be captured"
+                        '_TokenUsageCollector: generation has no usage_metadata; '
+                        'tokens for this call will not be captured'
                     )
                     continue
-                input_tokens = meta.get("input_tokens")
-                prompt = int(input_tokens) if input_tokens is not None else 0
-                output_tokens = meta.get("output_tokens")
-                completion = int(output_tokens) if output_tokens is not None else 0
-                raw_total = meta.get("total_tokens")
-                # CRITICAL: use `is not None`, not truthiness — total_tokens=0 is valid.
-                total = int(raw_total) if raw_total is not None else prompt + completion
-                self.prompt_tokens += prompt
-                self.completion_tokens += completion
-                self.total_tokens += total
-                self.calls += 1
+                # Shared extractor carries cached/reasoning from input_token_details /
+                # output_token_details and applies the unified total fallback.
+                delta = TokenUsage.extract(meta, calls=1)
+                if delta is not None:
+                    self._usage = self._usage + delta
             except Exception as exc:
-                logger.warning("_TokenUsageCollector.on_llm_end: failed to extract usage: %s", exc)
+                logger.warning('_TokenUsageCollector.on_llm_end: failed to extract usage: %s', exc)
 
     def on_llm_error(self, error: BaseException, **kwargs: Any) -> None:
         """Handle LLM errors — try to extract partial usage, otherwise no-op."""
         try:
             # Some providers attach a partial LLMResult / usage on the exception.
-            response = getattr(error, "response", None)
+            response = getattr(error, 'response', None)
             if response is not None:
-                partial_result = getattr(response, "llm_result", None) or getattr(response, "llm_output", None)
+                partial_result = getattr(response, 'llm_result', None) or getattr(response, 'llm_output', None)
                 if isinstance(partial_result, LLMResult):
                     self.on_llm_end(partial_result)
         except Exception as exc:
-            logger.warning("_TokenUsageCollector.on_llm_error: failed to extract partial usage: %s", exc)
+            logger.warning('_TokenUsageCollector.on_llm_error: failed to extract partial usage: %s', exc)
 
     def to_token_usage(self) -> TokenUsage | None:
         """Return aggregated usage, or None if no calls were recorded."""
-        if self.calls == 0:
+        if self._usage.calls == 0:
             return None
-        return TokenUsage(
-            prompt_tokens=self.prompt_tokens,
-            completion_tokens=self.completion_tokens,
-            total_tokens=self.total_tokens,
-            calls=self.calls,
-        )
+        return self._usage
 
 
 class LangGraphTarget(AgentTarget):
@@ -151,20 +137,20 @@ class LangGraphTarget(AgentTarget):
         # Not safe for concurrent respond() calls on the same instance —
         # use .new() to get independent instances for parallel use.
         self._prev_msg_count: int = 0
-        graph_name: str = getattr(graph, "name", None) or "langgraph_target"
-        self._key = f"{graph_name}_{uuid4().hex[:8]}"
+        graph_name: str = getattr(graph, 'name', None) or 'langgraph_target'
+        self._key = f'{graph_name}_{uuid4().hex[:8]}'
         # Guard against spamming the log on every respond() call when
         # an unknown callbacks type is encountered (hot path).
         self._warned_unknown_callbacks: bool = False
 
     def _build_config(self) -> RunnableConfig:
         """Build the RunnableConfig with the current thread_id."""
-        extra = {k: v for k, v in self._extra_config.items() if k != "configurable"}
+        extra = {k: v for k, v in self._extra_config.items() if k != 'configurable'}
         return RunnableConfig(
             **extra,
             configurable={
-                **self._extra_config.get("configurable", {}),
-                "thread_id": self.memory_entity_id,
+                **self._extra_config.get('configurable', {}),
+                'thread_id': self.memory_entity_id,
             },
         )
 
@@ -176,19 +162,19 @@ class LangGraphTarget(AgentTarget):
         collected via a per-call ``_TokenUsageCollector`` callback, drained in a
         ``finally:`` block so partial spend on error paths is preserved.
         """
-        if not messages or messages[-1].role != "user":
+        if not messages or messages[-1].role != 'user':
             raise ValueError("LangGraphTarget.respond requires messages[-1].role == 'user'")
-        prompt = messages[-1].content or ""
+        prompt = messages[-1].content or ''
         collector = _TokenUsageCollector()
 
         base_config = self._build_config()
-        existing = base_config.get("callbacks")
+        existing = base_config.get('callbacks')
 
         if existing is None:
             new_callbacks: Any = [collector]
         elif isinstance(existing, list):
             new_callbacks = [*existing, collector]
-        elif isinstance(existing, BaseCallbackManager) and hasattr(existing, "copy"):
+        elif isinstance(existing, BaseCallbackManager) and hasattr(existing, 'copy'):
             # Copy before mutating — avoid accumulating stale collectors on the
             # original manager across repeated respond() calls and .new() clones.
             manager_copy = existing.copy()
@@ -198,20 +184,20 @@ class LangGraphTarget(AgentTarget):
             # Unknown type — wrap alongside existing without mutating.
             if not self._warned_unknown_callbacks:
                 logger.warning(
-                    "LangGraphTarget: unrecognised callbacks type %s; wrapping in list. "
-                    "Pass a list or BaseCallbackManager instead.",
+                    'LangGraphTarget: unrecognised callbacks type %s; wrapping in list. '
+                    'Pass a list or BaseCallbackManager instead.',
                     type(existing).__name__,
                 )
                 self._warned_unknown_callbacks = True
             new_callbacks = [existing, collector]
 
-        new_config: RunnableConfig = {**base_config, "callbacks": new_callbacks}
+        new_config: RunnableConfig = {**base_config, 'callbacks': new_callbacks}
 
         prev_count = self._prev_msg_count
         usage: TokenUsage | None = None
         try:
             result = await self._graph.ainvoke(
-                {"messages": [{"role": "user", "content": prompt}]},
+                {'messages': [{'role': 'user', 'content': prompt}]},
                 config=new_config,
             )
         except Exception:
@@ -220,17 +206,16 @@ class LangGraphTarget(AgentTarget):
         finally:
             usage = collector.to_token_usage()
 
-        result_messages = result.get("messages")
+        result_messages = result.get('messages')
         if result_messages is None:
             raise ValueError(
                 "LangGraphTarget requires a graph whose state has a 'messages' key "
-                "(e.g. built with MessagesState). Got state keys: "
-                + str(list(result.keys()))
+                '(e.g. built with MessagesState). Got state keys: ' + str(list(result.keys()))
             )
         if not result_messages:
             raise ValueError(
                 "LangGraphTarget: graph returned an empty 'messages' list. "
-                "Ensure every execution path appends at least one AI message."
+                'Ensure every execution path appends at least one AI message.'
             )
         # Build output items directly from messages added in this turn, preserving
         # interleaving of text and tool calls (ReAct-style: text -> tool_call -> text).
@@ -239,28 +224,28 @@ class LangGraphTarget(AgentTarget):
         # Build ToolCallOutputItem directly (not via the .tool_calls view) so
         # interleaved text/tool ordering is preserved in .output.
         output_items: list[OutputMessage] = []
-        sliced = result_messages[self._prev_msg_count:]
+        sliced = result_messages[self._prev_msg_count :]
         if not sliced and self._prev_msg_count > 0:
             # Graph may use a trimming reducer; fall back to the full result set
             # so the caller receives the current turn's response, not silence.
             logger.warning(
-                "LangGraphTarget: _prev_msg_count (%d) exceeds result len (%d); "
-                "graph may be trimming messages. Falling back to full result.",
+                'LangGraphTarget: _prev_msg_count (%d) exceeds result len (%d); '
+                'graph may be trimming messages. Falling back to full result.',
                 self._prev_msg_count,
                 len(result_messages),
             )
             sliced = result_messages
         for msg in sliced:
             if isinstance(msg, dict):
-                if msg.get("role") != "assistant":
+                if msg.get('role') != 'assistant':
                     continue
-                msg_content = msg.get("content", "")
-                tool_calls_iter = msg.get("tool_calls") or []
+                msg_content = msg.get('content', '')
+                tool_calls_iter = msg.get('tool_calls') or []
             else:
                 if not isinstance(msg, AIMessage):
                     continue
-                msg_content = getattr(msg, "content", "")
-                tool_calls_iter = getattr(msg, "tool_calls", None) or []
+                msg_content = getattr(msg, 'content', '')
+                tool_calls_iter = getattr(msg, 'tool_calls', None) or []
 
             if not isinstance(msg_content, str):
                 msg_content = str(msg_content)
@@ -268,9 +253,9 @@ class LangGraphTarget(AgentTarget):
                 output_items.append(TextOutputItem(text=msg_content, annotations=[]))
 
             for tc in tool_calls_iter:
-                call_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
-                name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
-                args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
+                call_id = tc.get('id', '') if isinstance(tc, dict) else getattr(tc, 'id', '')
+                name = tc.get('name', '') if isinstance(tc, dict) else getattr(tc, 'name', '')
+                args = tc.get('args', {}) if isinstance(tc, dict) else getattr(tc, 'args', {})
                 args_str = json.dumps(args if isinstance(args, dict) else {}, default=str)
                 output_items.append(
                     ToolCallOutputItem(name=str(name), arguments=args_str, id=call_id, call_id=call_id)
@@ -286,10 +271,10 @@ class LangGraphTarget(AgentTarget):
         if not any(isinstance(item, TextOutputItem) for item in output_items):
             last = result_messages[-1]
             logger.warning(
-                "LangGraphTarget: no AIMessage text in turn; falling back to last message content (type=%s)",
+                'LangGraphTarget: no AIMessage text in turn; falling back to last message content (type=%s)',
                 type(last).__name__,
             )
-            last_content = last.get("content", "") if isinstance(last, dict) else getattr(last, "content", "")
+            last_content = last.get('content', '') if isinstance(last, dict) else getattr(last, 'content', '')
             if not isinstance(last_content, str):
                 last_content = str(last_content)
             output_items.append(TextOutputItem(text=last_content, annotations=[]))
@@ -326,7 +311,7 @@ class LangGraphTarget(AgentTarget):
 
         return AgentContext(
             key=self._key,
-            description="LangGraph compiled state graph target",
+            description='LangGraph compiled state graph target',
             tools=tools,
             memory_stores=memory_stores,
         )
@@ -353,12 +338,12 @@ def _introspect_tools(graph: CompiledStateGraph[Any, Any, Any, Any]) -> list[Too
     """
     tools: list[ToolInfo] = []
     seen: set[str] = set()
-    nodes = getattr(graph, "nodes", None)
+    nodes = getattr(graph, 'nodes', None)
     if not nodes:
         return tools
     for node in nodes.values():
-        bound = getattr(node, "bound", None)
-        tools_by_name = getattr(bound, "tools_by_name", None)
+        bound = getattr(node, 'bound', None)
+        tools_by_name = getattr(bound, 'tools_by_name', None)
         if not isinstance(tools_by_name, dict):
             continue
         for name, tool in tools_by_name.items():
@@ -369,24 +354,22 @@ def _introspect_tools(graph: CompiledStateGraph[Any, Any, Any, Any]) -> list[Too
             tools.append(
                 ToolInfo(
                     name=name_str,
-                    description=getattr(tool, "description", None),
+                    description=getattr(tool, 'description', None),
                     parameters=None,
                 )
             )
     return tools
 
 
-def _introspect_memory_stores(
-    graph: CompiledStateGraph[Any, Any, Any, Any], thread_id: str
-) -> list[MemoryStoreInfo]:
+def _introspect_memory_stores(graph: CompiledStateGraph[Any, Any, Any, Any], thread_id: str) -> list[MemoryStoreInfo]:
     """Return a single synthetic memory store entry when a checkpointer is attached."""
-    checkpointer = getattr(graph, "checkpointer", None)
+    checkpointer = getattr(graph, 'checkpointer', None)
     if checkpointer is None:
         return []
     return [
         MemoryStoreInfo(
             id=thread_id,
-            key="langgraph_checkpointer",
-            description=f"LangGraph checkpointer ({type(checkpointer).__name__})",
+            key='langgraph_checkpointer',
+            description=f'LangGraph checkpointer ({type(checkpointer).__name__})',
         )
     ]

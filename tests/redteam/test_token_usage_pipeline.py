@@ -57,14 +57,14 @@ TARGET_COMPLETION = 13
 TARGET_TOTAL = 36  # = 23 + 13
 
 
-def _make_chat_completion(content: str = "next attack prompt") -> MagicMock:
+def _make_chat_completion(content: str = 'next attack prompt') -> MagicMock:
     """Build a fake ``ChatCompletion`` with deterministic usage."""
     choice = MagicMock()
     choice.message.content = content
-    choice.finish_reason = "stop"
+    choice.finish_reason = 'stop'
     response = MagicMock()
     response.choices = [choice]
-    response.model = "fake/model"
+    response.model = 'fake/model'
     usage = MagicMock()
     usage.prompt_tokens = ADVERSARIAL_PROMPT
     usage.completion_tokens = ADVERSARIAL_COMPLETION
@@ -83,28 +83,28 @@ class _FakeTarget(AgentTarget):
 
     async def respond(self, messages: list[Message]) -> AgentResponse:
         self.call_count += 1
-        return AgentResponse(text=f"target reply {self.call_count}", usage=self._usage)
+        return AgentResponse(text=f'target reply {self.call_count}', usage=self._usage)
 
-    def new(self) -> "_FakeTarget":
+    def new(self) -> '_FakeTarget':
         return _FakeTarget(self._usage)
 
 
 def _make_strategy() -> AttackStrategy:
     return AttackStrategy(
-        category="ASI01",
-        name="token-usage-pipeline-test",
-        description="Token-usage pipeline test strategy",
+        category='ASI01',
+        name='token-usage-pipeline-test',
+        description='Token-usage pipeline test strategy',
         attack_technique=AttackTechnique.INDIRECT_INJECTION,
         delivery_methods=[DeliveryMethod.CRESCENDO],
         turn_type=TurnType.MULTI,
-        objective_template="Validate token accounting",
+        objective_template='Validate token accounting',
     )
 
 
 def _make_orchestrator(create_mock: Any) -> MultiTurnOrchestrator:
     llm = AsyncMock()
     llm.chat.completions.create = create_mock
-    return MultiTurnOrchestrator(llm_client=llm, model="fake/model")
+    return MultiTurnOrchestrator(llm_client=llm, model='fake/model')
 
 
 # ---------------------------------------------------------------------------
@@ -136,8 +136,8 @@ class TestPipelineTokenUsageAggregation:
         result = await orchestrator.run_attack(
             target=target,
             strategy=_make_strategy(),
-            objective="Test",
-            agent_context=AgentContext(key="fake_agent"),
+            objective='Test',
+            agent_context=AgentContext(key='fake_agent'),
             max_turns=max_turns,
         )
 
@@ -187,8 +187,8 @@ class TestPipelineTokenUsageAggregation:
         result = await orchestrator.run_attack(
             target=target,
             strategy=_make_strategy(),
-            objective="Test",
-            agent_context=AgentContext(key="fake_agent"),
+            objective='Test',
+            agent_context=AgentContext(key='fake_agent'),
             max_turns=max_turns,
         )
 
@@ -230,8 +230,8 @@ class TestPipelineTokenUsageAggregation:
         result = await orchestrator.run_attack(
             target=target,
             strategy=_make_strategy(),
-            objective="Test",
-            agent_context=AgentContext(key="fake_agent"),
+            objective='Test',
+            agent_context=AgentContext(key='fake_agent'),
             max_turns=max_turns,
         )
 
@@ -262,9 +262,9 @@ class TestPipelineTokenUsageAggregation:
 
             async def respond(self, messages: list[Message]) -> AgentResponse:
                 self.attempts += 1
-                raise RuntimeError("target down")
+                raise RuntimeError('target down')
 
-            def new(self) -> "_FailingTarget":
+            def new(self) -> '_FailingTarget':
                 return _FailingTarget()
 
         target = _FailingTarget()
@@ -273,14 +273,14 @@ class TestPipelineTokenUsageAggregation:
         result = await orchestrator.run_attack(
             target=target,
             strategy=_make_strategy(),
-            objective="Test",
-            agent_context=AgentContext(key="fake_agent"),
+            objective='Test',
+            agent_context=AgentContext(key='fake_agent'),
             max_turns=max_turns,
         )
 
         # Aborted with a target error after 2 consecutive failures.
         assert result.error is not None
-        assert result.error_type == "target_error"
+        assert result.error_type == 'target_error'
         assert target.attempts == 2
 
         # Adversarial LLM was called once per attempted turn (2 turns before abort).
@@ -319,8 +319,8 @@ class TestPipelineTokenUsageAggregation:
         result = await orchestrator.run_attack(
             target=target,
             strategy=_make_strategy(),
-            objective="Test",
-            agent_context=AgentContext(key="fake_agent"),
+            objective='Test',
+            agent_context=AgentContext(key='fake_agent'),
             max_turns=max_turns,
         )
 
@@ -356,36 +356,35 @@ class TestPipelineTokenUsageAggregation:
 
 def _make_result(
     *,
-    category: str = "ASI01",
+    category: str = 'ASI01',
     execution_usage: TokenUsage | None,
     evaluation_usage: TokenUsage | None = None,
     has_execution: bool = True,
     vulnerable: bool = False,
+    source: str = AttackSource.TEMPLATE_DYNAMIC,
 ) -> RedTeamResult:
     """Build a minimal :class:`RedTeamResult` with explicit usage on each layer."""
     attack = AttackInfo(
-        id=f"{category}-test",
-        vulnerability="goal_hijacking",
+        id=f'{category}-test',
+        vulnerability='goal_hijacking',
         category=category,
         framework=Framework.OWASP_ASI,
         attack_technique=AttackTechnique.INDIRECT_INJECTION,
         delivery_methods=[DeliveryMethod.CRESCENDO],
         turn_type=TurnType.MULTI,
         severity=Severity.MEDIUM,
-        source=AttackSource.TEMPLATE_DYNAMIC,
-        strategy_name="agg-test",
+        source=source,
+        strategy_name='agg-test',
     )
-    execution = (
-        ExecutionDetails(turns=1, token_usage=execution_usage) if has_execution else None
-    )
+    execution = ExecutionDetails(turns=1, token_usage=execution_usage) if has_execution else None
     evaluation = UnifiedEvaluationResult(
         passed=not vulnerable,
-        evaluator_id="test",
+        evaluator_id='test',
         token_usage=evaluation_usage,
     )
     return RedTeamResult(
         attack=attack,
-        agent=AgentInfo(key="fake"),
+        agent=AgentInfo(key='fake'),
         messages=[],
         evaluation=evaluation,
         vulnerable=vulnerable,
@@ -453,15 +452,9 @@ class TestReportLevelAggregation:
 
     def test_summary_includes_evaluator_token_usage(self) -> None:
         """Evaluator tokens must be included in the grand total alongside execution."""
-        execution_usage = TokenUsage(
-            prompt_tokens=10, completion_tokens=5, total_tokens=15, calls=1
-        )
-        evaluator_usage = TokenUsage(
-            prompt_tokens=4, completion_tokens=2, total_tokens=6, calls=1
-        )
-        results = [
-            _make_result(execution_usage=execution_usage, evaluation_usage=evaluator_usage)
-        ]
+        execution_usage = TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15, calls=1)
+        evaluator_usage = TokenUsage(prompt_tokens=4, completion_tokens=2, total_tokens=6, calls=1)
+        results = [_make_result(execution_usage=execution_usage, evaluation_usage=evaluator_usage)]
 
         summary = compute_report_summary(results)
 
@@ -469,6 +462,38 @@ class TestReportLevelAggregation:
         # Execution + evaluator usage both flow into the grand total.
         assert summary.token_usage_total.calls == 2
         assert summary.token_usage_total.total_tokens == 21
+
+    def test_by_source_sums_to_total(self) -> None:
+        """token_usage_by_source partitions the grand total by datapoint source (RES-906)."""
+        results = [
+            _make_result(
+                execution_usage=TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15, calls=1),
+                evaluation_usage=TokenUsage(prompt_tokens=2, completion_tokens=1, total_tokens=3, calls=1),
+                source=AttackSource.TEMPLATE_DYNAMIC,
+            ),
+            _make_result(
+                execution_usage=TokenUsage(prompt_tokens=20, completion_tokens=8, total_tokens=28, calls=2),
+                source=AttackSource.TEMPLATE_DYNAMIC,
+            ),
+            _make_result(
+                execution_usage=TokenUsage(prompt_tokens=7, completion_tokens=3, total_tokens=10, calls=1),
+                source=AttackSource.GENERATED_DYNAMIC,
+            ),
+        ]
+
+        summary = compute_report_summary(results)
+
+        assert summary.token_usage_total is not None
+        by_source = summary.token_usage_by_source
+        assert set(by_source) == {AttackSource.TEMPLATE_DYNAMIC, AttackSource.GENERATED_DYNAMIC}
+        # template_dynamic = result 1 (exec+eval) + result 2 (exec): 15+3+28 totals, 4 calls
+        assert by_source[AttackSource.TEMPLATE_DYNAMIC].total_tokens == 15 + 3 + 28
+        assert by_source[AttackSource.TEMPLATE_DYNAMIC].calls == 4
+        assert by_source[AttackSource.GENERATED_DYNAMIC].total_tokens == 10
+        # the partition reconciles exactly with the grand total
+        summed = sum(by_source.values(), start=TokenUsage())
+        assert summed.total_tokens == summary.token_usage_total.total_tokens
+        assert summed.calls == summary.token_usage_total.calls
 
 
 class TestEvaluatorTokenUsageForwarded:
@@ -492,24 +517,24 @@ class TestEvaluatorTokenUsageForwarded:
         fake_eval.evaluate_vulnerability = AsyncMock(
             return_value=AttackEvaluationResult(
                 passed=True,
-                explanation="resistant",
-                evaluator_id="owasp_asi01_goal_hijacking",
+                explanation='resistant',
+                evaluator_id='owasp_asi01_goal_hijacking',
                 token_usage=usage,
-                raw_output={"raw_content": '{"value": true, "explanation": "resistant"}'},
+                raw_output={'raw_content': '{"value": true, "explanation": "resistant"}'},
             )
         )
-        monkeypatch.setattr(pipeline_mod, "OWASPEvaluator", lambda **_: fake_eval)
+        monkeypatch.setattr(pipeline_mod, 'OWASPEvaluator', lambda **_: fake_eval)
 
-        scorer = create_dynamic_evaluator()["scorer"]
-        output = AttackOutput(category="ASI01", vulnerability="goal_hijacking")
-        data = SimpleNamespace(inputs={"category": "ASI01", "vulnerability": "goal_hijacking"})
+        scorer = create_dynamic_evaluator()['scorer']
+        output = AttackOutput(category='ASI01', vulnerability='goal_hijacking')
+        data = SimpleNamespace(inputs={'category': 'ASI01', 'vulnerability': 'goal_hijacking'})
 
-        result = await scorer({"data": data, "output": output})
+        result = await scorer({'data': data, 'output': output})
 
         assert result.pass_ is True
         # The scorer forwards the judge's usage + raw output verbatim onto the score.
         assert result.token_usage == usage
-        assert result.raw_output == {"raw_content": '{"value": true, "explanation": "resistant"}'}
+        assert result.raw_output == {'raw_content': '{"value": true, "explanation": "resistant"}'}
 
     def test_token_usage_and_raw_output_kept_in_local_dumps(self) -> None:
         """The evaluator-cost fields stay in normal model_dump (so they land in local
@@ -518,17 +543,17 @@ class TestEvaluatorTokenUsageForwarded:
         from evaluatorq import EvaluationResult
 
         result = EvaluationResult.model_validate({
-            "value": True,
-            "explanation": "resistant",
-            "pass": True,
-            "token_usage": TokenUsage(prompt_tokens=4, completion_tokens=2, total_tokens=6, calls=1),
-            "raw_output": {"raw_content": "{}"},
+            'value': True,
+            'explanation': 'resistant',
+            'pass': True,
+            'token_usage': TokenUsage(prompt_tokens=4, completion_tokens=2, total_tokens=6, calls=1),
+            'raw_output': {'raw_content': '{}'},
         })
         assert result.token_usage is not None
         assert result.raw_output is not None
-        dumped = result.model_dump(mode="json")
-        assert dumped["token_usage"]["total_tokens"] == 6
-        assert dumped["raw_output"] == {"raw_content": "{}"}
+        dumped = result.model_dump(mode='json')
+        assert dumped['token_usage']['total_tokens'] == 6
+        assert dumped['raw_output'] == {'raw_content': '{}'}
 
 
 class TestLateAdversarialFailureStillJudged:
@@ -549,11 +574,11 @@ class TestLateAdversarialFailureStillJudged:
         fake_eval.evaluate_vulnerability = AsyncMock(
             return_value=AttackEvaluationResult(
                 passed=passed,
-                explanation="vulnerable: leaked the secret on turn 1",
-                evaluator_id="owasp_asi01_goal_hijacking",
+                explanation='vulnerable: leaked the secret on turn 1',
+                evaluator_id='owasp_asi01_goal_hijacking',
             )
         )
-        monkeypatch.setattr(pipeline_mod, "OWASPEvaluator", lambda **_: fake_eval)
+        monkeypatch.setattr(pipeline_mod, 'OWASPEvaluator', lambda **_: fake_eval)
         return fake_eval.evaluate_vulnerability
 
     @pytest.mark.asyncio
@@ -567,27 +592,27 @@ class TestLateAdversarialFailureStillJudged:
         evaluate = self._fake_evaluator(monkeypatch, passed=False)
 
         output = AttackOutput(
-            category="ASI01",
-            vulnerability="goal_hijacking",
+            category='ASI01',
+            vulnerability='goal_hijacking',
             turns=[
                 Turn(
-                    attacker=AttackerResponse(generated_prompt="turn 1 attack"),
-                    target=AgentResponse(text="Sure, the secret is hunter2."),
+                    attacker=AttackerResponse(generated_prompt='turn 1 attack'),
+                    target=AgentResponse(text='Sure, the secret is hunter2.'),
                 )
             ],
-            error="Attack model content_filter after 3 attempt(s): turn=2/3",
-            error_type="content_filter",
-            error_stage="adversarial_generation",
-            error_code="adversarial.content_filter",
+            error='Attack model content_filter after 3 attempt(s): turn=2/3',
+            error_type='content_filter',
+            error_stage='adversarial_generation',
+            error_code='adversarial.content_filter',
             error_turn=2,
         )
-        data = SimpleNamespace(inputs={"category": "ASI01", "vulnerability": "goal_hijacking"})
+        data = SimpleNamespace(inputs={'category': 'ASI01', 'vulnerability': 'goal_hijacking'})
 
-        scorer = create_dynamic_evaluator()["scorer"]
-        result = await scorer({"data": data, "output": output})
+        scorer = create_dynamic_evaluator()['scorer']
+        result = await scorer({'data': data, 'output': output})
 
         evaluate.assert_awaited_once()
-        assert result.value != "error"
+        assert result.value != 'error'
         assert result.pass_ is False  # turn-1 vulnerability preserved, not lost
 
     @pytest.mark.asyncio
@@ -600,22 +625,22 @@ class TestLateAdversarialFailureStillJudged:
         evaluate = self._fake_evaluator(monkeypatch, passed=False)
 
         output = AttackOutput(
-            category="ASI01",
-            vulnerability="goal_hijacking",
+            category='ASI01',
+            vulnerability='goal_hijacking',
             turns=[],  # nothing completed
-            error="Empty adversarial prompt: finish_reason=content_filter, turn=1/3",
-            error_type="content_filter",
-            error_stage="adversarial_generation",
-            error_code="adversarial.content_filter",
+            error='Empty adversarial prompt: finish_reason=content_filter, turn=1/3',
+            error_type='content_filter',
+            error_stage='adversarial_generation',
+            error_code='adversarial.content_filter',
             error_turn=1,
         )
-        data = SimpleNamespace(inputs={"category": "ASI01", "vulnerability": "goal_hijacking"})
+        data = SimpleNamespace(inputs={'category': 'ASI01', 'vulnerability': 'goal_hijacking'})
 
-        scorer = create_dynamic_evaluator()["scorer"]
-        result = await scorer({"data": data, "output": output})
+        scorer = create_dynamic_evaluator()['scorer']
+        result = await scorer({'data': data, 'output': output})
 
         evaluate.assert_not_awaited()
-        assert result.value == "error"
+        assert result.value == 'error'
 
     @pytest.mark.asyncio
     async def test_turn1_failure_with_a_completed_turn_still_skipped(self, monkeypatch) -> None:
@@ -632,27 +657,27 @@ class TestLateAdversarialFailureStillJudged:
         evaluate = self._fake_evaluator(monkeypatch, passed=False)
 
         output = AttackOutput(
-            category="ASI01",
-            vulnerability="goal_hijacking",
+            category='ASI01',
+            vulnerability='goal_hijacking',
             turns=[
                 Turn(
-                    attacker=AttackerResponse(generated_prompt="turn 1 attack"),
-                    target=AgentResponse(text="Sure, the secret is hunter2."),
+                    attacker=AttackerResponse(generated_prompt='turn 1 attack'),
+                    target=AgentResponse(text='Sure, the secret is hunter2.'),
                 )
             ],
-            error="Empty adversarial prompt: finish_reason=content_filter, turn=1/3",
-            error_type="content_filter",
-            error_stage="adversarial_generation",
-            error_code="adversarial.content_filter",
+            error='Empty adversarial prompt: finish_reason=content_filter, turn=1/3',
+            error_type='content_filter',
+            error_stage='adversarial_generation',
+            error_code='adversarial.content_filter',
             error_turn=1,
         )
-        data = SimpleNamespace(inputs={"category": "ASI01", "vulnerability": "goal_hijacking"})
+        data = SimpleNamespace(inputs={'category': 'ASI01', 'vulnerability': 'goal_hijacking'})
 
-        scorer = create_dynamic_evaluator()["scorer"]
-        result = await scorer({"data": data, "output": output})
+        scorer = create_dynamic_evaluator()['scorer']
+        result = await scorer({'data': data, 'output': output})
 
         evaluate.assert_not_awaited()
-        assert result.value == "error"
+        assert result.value == 'error'
 
     @pytest.mark.asyncio
     async def test_late_target_side_error_still_skipped(self, monkeypatch) -> None:
@@ -669,24 +694,24 @@ class TestLateAdversarialFailureStillJudged:
         evaluate = self._fake_evaluator(monkeypatch, passed=False)
 
         output = AttackOutput(
-            category="ASI01",
-            vulnerability="goal_hijacking",
+            category='ASI01',
+            vulnerability='goal_hijacking',
             turns=[
                 Turn(
-                    attacker=AttackerResponse(generated_prompt="turn 1 attack"),
-                    target=AgentResponse(text="Sure, the secret is hunter2."),
+                    attacker=AttackerResponse(generated_prompt='turn 1 attack'),
+                    target=AgentResponse(text='Sure, the secret is hunter2.'),
                 )
             ],
-            error="Target call timed out on turn 2",
-            error_type="target_error",
-            error_stage="target_call",
-            error_code="target.timeout",
+            error='Target call timed out on turn 2',
+            error_type='target_error',
+            error_stage='target_call',
+            error_code='target.timeout',
             error_turn=2,
         )
-        data = SimpleNamespace(inputs={"category": "ASI01", "vulnerability": "goal_hijacking"})
+        data = SimpleNamespace(inputs={'category': 'ASI01', 'vulnerability': 'goal_hijacking'})
 
-        scorer = create_dynamic_evaluator()["scorer"]
-        result = await scorer({"data": data, "output": output})
+        scorer = create_dynamic_evaluator()['scorer']
+        result = await scorer({'data': data, 'output': output})
 
         evaluate.assert_not_awaited()
-        assert result.value == "error"
+        assert result.value == 'error'

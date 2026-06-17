@@ -66,25 +66,22 @@ class OpenAIAgentTarget(AgentTarget):
         except (asyncio.CancelledError, asyncio.TimeoutError):
             raise
         except Exception as exc:
-            raise RuntimeError(
-                f"OpenAIAgentTarget: Runner.run() raised an error: {exc}"
-            ) from exc
+            raise RuntimeError(f'OpenAIAgentTarget: Runner.run() raised an error: {exc}') from exc
 
         if result.final_output is None:
             raise ValueError(
-                "OpenAIAgentTarget: Runner.run() returned final_output=None. "
-                "Ensure the agent produces a text response."
+                'OpenAIAgentTarget: Runner.run() returned final_output=None. Ensure the agent produces a text response.'
             )
 
         full_list = result.to_input_list()
         if full_list[:prev_len] != input_data:
             logger.warning(
-                "OpenAIAgentTarget: Runner.to_input_list() no longer echoes the input "
-                "items 1:1 at the front (sent prev_len={n}, prefix differs); the "
-                "new-items slice may misalign. Treat response output as approximate.",
+                'OpenAIAgentTarget: Runner.to_input_list() no longer echoes the input '
+                'items 1:1 at the front (sent prev_len={n}, prefix differs); the '
+                'new-items slice may misalign. Treat response output as approximate.',
                 n=prev_len,
             )
-        new_items = full_list[min(prev_len, len(full_list)):]
+        new_items = full_list[min(prev_len, len(full_list)) :]
         return self._build_response(new_items, result)
 
     def _build_response(self, new_items: list[Any], result: Any) -> AgentResponse:
@@ -122,56 +119,58 @@ class OpenAIAgentTarget(AgentTarget):
                 return
             existing = output_items[idx]
             if isinstance(existing, ToolCallOutputItem):
-                output_items[idx] = existing.model_copy(update={"result": output})
+                output_items[idx] = existing.model_copy(update={'result': output})
 
         for item in new_items:
             # Agents SDK to_input_list() returns Responses API items for tool calls,
             # e.g. {"type": "function_call", "id": "fc_...", "call_id": "call_...", "name": "...", "arguments": "..."}.
-            if isinstance(item, dict) and item.get("type") == "function_call":
-                item_id = item.get("id", "")
-                call_id = item.get("call_id", "")
-                name = str(item.get("name", ""))
-                arguments = _normalize_args_str(item.get("arguments", "{}"))
+            if isinstance(item, dict) and item.get('type') == 'function_call':
+                item_id = item.get('id', '')
+                call_id = item.get('call_id', '')
+                name = str(item.get('name', ''))
+                arguments = _normalize_args_str(item.get('arguments', '{}'))
                 _record_tool_call(name, arguments, item_id, call_id)
             # function_call_output items appear after their matching function_call in
             # ``result.to_input_list()`` and carry the tool's result. Merge into the
             # prior ToolCallOutputItem so transcript replay preserves the result.
-            elif isinstance(item, dict) and item.get("type") == "function_call_output":
-                call_id = item.get("call_id", "")
-                output_str = _extract_function_call_output(item.get("output"))
+            elif isinstance(item, dict) and item.get('type') == 'function_call_output':
+                call_id = item.get('call_id', '')
+                output_str = _extract_function_call_output(item.get('output'))
                 _attach_tool_output(call_id, output_str)
             # Handle dict format (standard OpenAI message format)
-            elif isinstance(item, dict) and item.get("role") == "assistant":
-                text = _extract_assistant_text(item.get("content"))
+            elif isinstance(item, dict) and item.get('role') == 'assistant':
+                text = _extract_assistant_text(item.get('content'))
                 if text:
                     output_items.append(TextOutputItem(text=text, annotations=[]))
-                for tc in (item.get("tool_calls") or []):
+                for tc in item.get('tool_calls') or []:
                     if isinstance(tc, dict):
-                        func = tc.get("function", {})
-                        name = func.get("name", "") if isinstance(func, dict) else ""
-                        args_raw = _normalize_args_str(func.get("arguments", "{}") if isinstance(func, dict) else "{}")
-                        tc_id = tc.get("id", "")
+                        func = tc.get('function', {})
+                        name = func.get('name', '') if isinstance(func, dict) else ''
+                        args_raw = _normalize_args_str(func.get('arguments', '{}') if isinstance(func, dict) else '{}')
+                        tc_id = tc.get('id', '')
                         _record_tool_call(name, args_raw, tc_id, tc_id)
             # Handle typed SDK objects (future-proofing if to_input_list() returns non-dict items)
             elif not isinstance(item, dict):
-                if getattr(item, "type", None) == "function_call":
-                    item_id = getattr(item, "id", "")
-                    call_id = getattr(item, "call_id", "")
-                    name = str(getattr(item, "name", ""))
-                    arguments = _normalize_args_str(getattr(item, "arguments", "{}"))
+                if getattr(item, 'type', None) == 'function_call':
+                    item_id = getattr(item, 'id', '')
+                    call_id = getattr(item, 'call_id', '')
+                    name = str(getattr(item, 'name', ''))
+                    arguments = _normalize_args_str(getattr(item, 'arguments', '{}'))
                     _record_tool_call(name, arguments, item_id, call_id)
-                elif getattr(item, "type", None) == "function_call_output":
-                    call_id = getattr(item, "call_id", "")
-                    output_str = _extract_function_call_output(getattr(item, "output", None))
+                elif getattr(item, 'type', None) == 'function_call_output':
+                    call_id = getattr(item, 'call_id', '')
+                    output_str = _extract_function_call_output(getattr(item, 'output', None))
                     _attach_tool_output(call_id, output_str)
-                elif getattr(item, "role", None) == "assistant":
-                    text = _extract_assistant_text(getattr(item, "content", None))
+                elif getattr(item, 'role', None) == 'assistant':
+                    text = _extract_assistant_text(getattr(item, 'content', None))
                     if text:
                         output_items.append(TextOutputItem(text=text, annotations=[]))
-                    for tc in (getattr(item, "tool_calls", None) or []):
-                        tc_name = getattr(tc, "name", None) or getattr(getattr(tc, "function", None), "name", "") or ""
-                        tc_args_raw = _normalize_args_str(getattr(tc, "arguments", None) or getattr(getattr(tc, "function", None), "arguments", "{}"))
-                        tc_id = getattr(tc, "id", "")
+                    for tc in getattr(item, 'tool_calls', None) or []:
+                        tc_name = getattr(tc, 'name', None) or getattr(getattr(tc, 'function', None), 'name', '') or ''
+                        tc_args_raw = _normalize_args_str(
+                            getattr(tc, 'arguments', None) or getattr(getattr(tc, 'function', None), 'arguments', '{}')
+                        )
+                        tc_id = getattr(tc, 'id', '')
                         _record_tool_call(str(tc_name), tc_args_raw, tc_id, tc_id)
 
         # Ensure final_output is reflected as a TextOutputItem. Avoid duplicating
@@ -184,23 +183,9 @@ class OpenAIAgentTarget(AgentTarget):
         if last_text != final_text:
             output_items.append(TextOutputItem(text=final_text, annotations=[]))
 
-        usage: TokenUsage | None = None
         ctx = getattr(result, 'context_wrapper', None)
         agent_usage = getattr(ctx, 'usage', None) if ctx is not None else None
-        if agent_usage is not None:
-            prompt_tokens = int(getattr(agent_usage, 'input_tokens', 0) or 0)
-            completion_tokens = int(getattr(agent_usage, 'output_tokens', 0) or 0)
-            total = getattr(agent_usage, 'total_tokens', None)
-            if total is not None and int(total) > 0:
-                total_tokens = int(total)
-            else:
-                total_tokens = prompt_tokens + completion_tokens
-            usage = TokenUsage(
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=total_tokens,
-                calls=1,
-            )
+        usage = TokenUsage.extract(agent_usage, calls=1)
 
         return AgentResponse(output=output_items, usage=usage)
 
@@ -213,28 +198,28 @@ class OpenAIAgentTarget(AgentTarget):
         There is no server-side memory, so ``memory_stores`` stays empty.
         """
         agent = self._agent
-        key = str(getattr(agent, "name", None) or "openai_agent")
-        instructions = getattr(agent, "instructions", None)
+        key = str(getattr(agent, 'name', None) or 'openai_agent')
+        instructions = getattr(agent, 'instructions', None)
         system_prompt = instructions if isinstance(instructions, str) else None
 
-        model_attr = getattr(agent, "model", None)
+        model_attr = getattr(agent, 'model', None)
         if isinstance(model_attr, str):
             model = model_attr
         elif model_attr is None:
             model = None
         else:
-            model = getattr(model_attr, "model", None) or str(model_attr)
+            model = getattr(model_attr, 'model', None) or str(model_attr)
 
         tools: list[ToolInfo] = []
-        for tool in getattr(agent, "tools", []) or []:
-            name = getattr(tool, "name", None) or getattr(tool, "__name__", None)
+        for tool in getattr(agent, 'tools', []) or []:
+            name = getattr(tool, 'name', None) or getattr(tool, '__name__', None)
             if not name:
                 continue
-            params = getattr(tool, "params_json_schema", None)
+            params = getattr(tool, 'params_json_schema', None)
             tools.append(
                 ToolInfo(
                     name=str(name),
-                    description=getattr(tool, "description", None),
+                    description=getattr(tool, 'description', None),
                     parameters=params if isinstance(params, dict) else None,
                 )
             )
@@ -242,7 +227,7 @@ class OpenAIAgentTarget(AgentTarget):
         return AgentContext(
             key=key,
             display_name=key,
-            description="OpenAI Agents SDK target",
+            description='OpenAI Agents SDK target',
             system_prompt=system_prompt,
             tools=tools,
             model=model,
@@ -265,7 +250,7 @@ def _extract_assistant_text(content: Any) -> str:
     Returns the concatenated text, or empty string if none found.
     """
     if content is None:
-        return ""
+        return ''
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -274,15 +259,15 @@ def _extract_assistant_text(content: Any) -> str:
             if isinstance(part, str):
                 parts.append(part)
             elif isinstance(part, dict):
-                text = part.get("text")
+                text = part.get('text')
                 if isinstance(text, str):
                     parts.append(text)
             else:
-                text = getattr(part, "text", None)
+                text = getattr(part, 'text', None)
                 if isinstance(text, str):
                     parts.append(text)
-        return "".join(parts)
-    return ""
+        return ''.join(parts)
+    return ''
 
 
 def _normalize_args_str(raw: Any) -> str:
@@ -296,12 +281,12 @@ def _normalize_args_str(raw: Any) -> str:
     if isinstance(raw, dict):
         return json.dumps(raw)
     if not isinstance(raw, str):
-        return "{}"
+        return '{}'
     try:
         json.loads(raw)
         return raw
     except (json.JSONDecodeError, ValueError):
-        return json.dumps({"raw": raw})
+        return json.dumps({'raw': raw})
 
 
 def _extract_function_call_output(raw: Any) -> str:
@@ -313,7 +298,7 @@ def _extract_function_call_output(raw: Any) -> str:
     and the Responses API's ``function_call_output`` expects ``output: str``.
     """
     if raw is None:
-        return ""
+        return ''
     if isinstance(raw, str):
         return raw
     try:
@@ -332,23 +317,23 @@ def _message_to_responses_input_items(m: Message) -> list[dict[str, Any]]:
     message. This preserves multi-turn tool context that a naive flatten drops,
     matching what the SDK's ``to_input_list()`` round-trips.
     """
-    if m.role == "tool":
-        return [{"type": "function_call_output", "call_id": m.tool_call_id or "", "output": m.content or ""}]
-    if m.role == "assistant" and m.tool_calls:
+    if m.role == 'tool':
+        return [{'type': 'function_call_output', 'call_id': m.tool_call_id or '', 'output': m.content or ''}]
+    if m.role == 'assistant' and m.tool_calls:
         items: list[dict[str, Any]] = []
         if m.content:
-            items.append({"role": "assistant", "content": m.content})
+            items.append({'role': 'assistant', 'content': m.content})
         for tc in m.tool_calls:
             fc: dict[str, Any] = {
-                "type": "function_call",
-                "call_id": tc.id,
-                "name": tc.function.name,
-                "arguments": tc.function.arguments,
+                'type': 'function_call',
+                'call_id': tc.id,
+                'name': tc.function.name,
+                'arguments': tc.function.arguments,
             }
             # Echo the Responses-API item id (fc_*) when available so the
             # function_call item round-trips intact across turns.
             if tc.item_id:
-                fc["id"] = tc.item_id
+                fc['id'] = tc.item_id
             items.append(fc)
         return items
-    return [{"role": m.role, "content": m.content or ""}]
+    return [{'role': m.role, 'content': m.content or ''}]

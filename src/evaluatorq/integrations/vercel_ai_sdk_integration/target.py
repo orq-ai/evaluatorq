@@ -22,7 +22,7 @@ import httpx
 from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.contracts import AgentContext, AgentResponse, OutputMessage, TextOutputItem, TokenUsage
 
-AISdkMessageFormat = Literal["v4", "v5"]
+AISdkMessageFormat = Literal['v4', 'v5']
 """AI SDK tool-message wire format. v5 (current) vs v4 (legacy) differ on tool
 field names — see :func:`_message_to_ai_sdk_message`."""
 
@@ -59,7 +59,7 @@ class VercelAISdkTarget(AgentTarget):
         extra_body: dict[str, Any] | None = None,
         timeout: float = 120.0,
         agent_context: AgentContext | None = None,
-        message_format: AISdkMessageFormat = "v5",
+        message_format: AISdkMessageFormat = 'v5',
     ) -> None:
         """Create a Vercel AI SDK red teaming target.
 
@@ -106,14 +106,14 @@ class VercelAISdkTarget(AgentTarget):
         ``{"role", "content"}`` shape.
         """
         body: dict[str, Any] = {
-            "messages": [_message_to_ai_sdk_message(m, version=self._message_format) for m in messages],
+            'messages': [_message_to_ai_sdk_message(m, version=self._message_format) for m in messages],
             **self._extra_body,
         }
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             response = await client.post(
                 self._url,
                 json=body,
-                headers={"Content-Type": "application/json", **self._headers},
+                headers={'Content-Type': 'application/json', **self._headers},
             )
             response.raise_for_status()
 
@@ -129,10 +129,10 @@ class VercelAISdkTarget(AgentTarget):
         # into logs/reports, and to keep the key free of URL-reserved chars
         # that may break downstream consumers (file naming, dict keying).
         parsed = urlparse(self._url)
-        host = parsed.hostname or parsed.netloc.split("@")[-1]
-        port = f":{parsed.port}" if parsed.port else ""
-        safe_key = f"{parsed.scheme}://{host}{port}{parsed.path}".rstrip("/") or self._url
-        return AgentContext(key=safe_key, description="opaque Vercel AI SDK HTTP target")
+        host = parsed.hostname or parsed.netloc.split('@')[-1]
+        port = f':{parsed.port}' if parsed.port else ''
+        safe_key = f'{parsed.scheme}://{host}{port}{parsed.path}'.rstrip('/') or self._url
+        return AgentContext(key=safe_key, description='opaque Vercel AI SDK HTTP target')
 
     def new(self) -> VercelAISdkTarget:
         """Return an independent instance for parallel red teaming jobs."""
@@ -162,22 +162,22 @@ class VercelAISdkTarget(AgentTarget):
             A ``(text, usage)`` tuple. ``usage`` is ``None`` when the response
             does not contain token counts.
         """
-        content_type = response.headers.get("content-type", "")
+        content_type = response.headers.get('content-type', '')
         raw = response.text
 
         # AI SDK Data Stream Protocol: lines prefixed with type codes
-        if "text/plain" in content_type or raw.startswith("0:"):
+        if 'text/plain' in content_type or raw.startswith('0:'):
             return _parse_data_stream(raw)
 
         # JSON response (e.g. {"message": {"content": "..."}} or {"text": "..."})
-        if "application/json" in content_type:
+        if 'application/json' in content_type:
             return _parse_json_response(raw)
 
         # Fallback: treat as plain text
         return raw.strip(), None
 
 
-def _message_to_ai_sdk_message(m: Message, *, version: AISdkMessageFormat = "v5") -> dict[str, Any]:
+def _message_to_ai_sdk_message(m: Message, *, version: AISdkMessageFormat = 'v5') -> dict[str, Any]:
     """Render a :class:`Message` as an AI SDK ModelMessage (v5 default, or v4).
 
     Plain turns stay ``{"role", "content"}`` (structurally equivalent for text
@@ -193,38 +193,36 @@ def _message_to_ai_sdk_message(m: Message, *, version: AISdkMessageFormat = "v5"
     - tool-result value: v5 ``output: {type: "text", value}`` vs v4 bare
       ``result``.
     """
-    if m.role == "tool":
+    if m.role == 'tool':
         result_part: dict[str, Any] = {
-            "type": "tool-result",
-            "toolCallId": m.tool_call_id or "",
-            "toolName": m.name or "",
+            'type': 'tool-result',
+            'toolCallId': m.tool_call_id or '',
+            'toolName': m.name or '',
         }
-        if version == "v4":
-            result_part["result"] = m.content or ""
+        if version == 'v4':
+            result_part['result'] = m.content or ''
         else:
-            result_part["output"] = {"type": "text", "value": m.content or ""}
-        return {"role": "tool", "content": [result_part]}
-    if m.role == "assistant" and m.tool_calls:
+            result_part['output'] = {'type': 'text', 'value': m.content or ''}
+        return {'role': 'tool', 'content': [result_part]}
+    if m.role == 'assistant' and m.tool_calls:
         parts: list[dict[str, Any]] = []
         if m.content:
-            parts.append({"type": "text", "text": m.content})
-        input_key = "args" if version == "v4" else "input"
+            parts.append({'type': 'text', 'text': m.content})
+        input_key = 'args' if version == 'v4' else 'input'
         for tc in m.tool_calls:
             try:
                 tool_input: Any = json.loads(tc.function.arguments)
             except (json.JSONDecodeError, TypeError):
                 # payload is typed `unknown`; keep the raw string on parse failure
                 tool_input = tc.function.arguments
-            parts.append(
-                {
-                    "type": "tool-call",
-                    "toolCallId": tc.id,
-                    "toolName": tc.function.name,
-                    input_key: tool_input,
-                }
-            )
-        return {"role": "assistant", "content": parts}
-    return {"role": m.role, "content": m.content or ""}
+            parts.append({
+                'type': 'tool-call',
+                'toolCallId': tc.id,
+                'toolName': tc.function.name,
+                input_key: tool_input,
+            })
+        return {'role': 'assistant', 'content': parts}
+    return {'role': m.role, 'content': m.content or ''}
 
 
 def _parse_data_stream(raw: str) -> tuple[str, TokenUsage | None]:
@@ -255,17 +253,10 @@ def _parse_data_stream(raw: str) -> tuple[str, TokenUsage | None]:
                 continue
             u = obj.get('usage') if isinstance(obj, dict) else None
             if isinstance(u, dict):
-                p = int(u.get('promptTokens', 0) or 0)
-                c = int(u.get('completionTokens', 0) or 0)
-                if p > 0 or c > 0:
-                    t = u.get('totalTokens')
-                    total = int(t) if isinstance(t, (int, float)) and t > 0 else p + c
-                    usage = TokenUsage(
-                        prompt_tokens=p,
-                        completion_tokens=c,
-                        total_tokens=total,
-                        calls=1,
-                    )
+                extracted = TokenUsage.extract(u, calls=1)
+                # Only the final frame carries real usage; skip empty interim frames.
+                if extracted is not None and (extracted.input_tokens > 0 or extracted.output_tokens > 0):
+                    usage = extracted
     return ''.join(parts), usage
 
 
@@ -290,42 +281,31 @@ def _parse_json_response(raw: str) -> tuple[str, TokenUsage | None]:
     if isinstance(data, dict):
         # Extract usage if present — support both OpenAI shape
         # (prompt_tokens/completion_tokens) and Vercel shape (promptTokens/completionTokens)
-        u = data.get("usage")
+        # extract() handles both OpenAI (prompt/completion_tokens) and Vercel
+        # camelCase (promptTokens/completionTokens) shapes in one pass.
+        u = data.get('usage')
         if isinstance(u, dict):
-            # OpenAI-compat shape
-            p = int(u.get("prompt_tokens", 0) or 0)
-            c = int(u.get("completion_tokens", 0) or 0)
-            # Fall back to Vercel camelCase shape when snake_case is absent
-            if p == 0 and c == 0:
-                p = int(u.get("promptTokens", 0) or 0)
-                c = int(u.get("completionTokens", 0) or 0)
-            t = u.get("total_tokens") or u.get("totalTokens")
-            total = int(t) if isinstance(t, (int, float)) and t > 0 else p + c
-            if p > 0 or c > 0:
-                usage = TokenUsage(
-                    prompt_tokens=p,
-                    completion_tokens=c,
-                    total_tokens=total,
-                    calls=1,
-                )
+            extracted = TokenUsage.extract(u, calls=1)
+            if extracted is not None and (extracted.input_tokens > 0 or extracted.output_tokens > 0):
+                usage = extracted
 
         # {"message": {"content": "..."}} or {"message": "..."}
-        msg = data.get("message")
+        msg = data.get('message')
         if isinstance(msg, dict):
-            return str(msg.get("content", "")), usage
+            return str(msg.get('content', '')), usage
         if isinstance(msg, str):
             return msg, usage
 
         # {"text": "..."} or {"content": "..."}
-        for key in ("text", "content", "response", "output"):
+        for key in ('text', 'content', 'response', 'output'):
             if key in data and isinstance(data[key], str):
                 return data[key], usage
 
         # {"choices": [{"message": {"content": "..."}}]} (OpenAI-compat)
-        choices = data.get("choices")
+        choices = data.get('choices')
         if isinstance(choices, list) and choices:
-            choice_msg = choices[0].get("message", {})
+            choice_msg = choices[0].get('message', {})
             if isinstance(choice_msg, dict):
-                return str(choice_msg.get("content", "")), usage
+                return str(choice_msg.get('content', '')), usage
 
     return raw.strip(), usage

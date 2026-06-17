@@ -52,10 +52,7 @@ def create_model_job(
         try:
             from orq_ai_sdk import Orq
         except ImportError as e:
-            msg = (
-                'Deployment jobs require the orq-ai-sdk package. '
-                'Install it with: pip install evaluatorq[orq]'
-            )
+            msg = 'Deployment jobs require the orq-ai-sdk package. Install it with: pip install evaluatorq[orq]'
             raise ImportError(msg) from e
 
         api_key = os.environ.get('ORQ_API_KEY')
@@ -139,7 +136,9 @@ def _build_messages(data: DataPoint) -> list[dict[str, Any]]:
                 logger.debug(f'Message validation failed, using raw dict: {e}')
                 messages.append(dict(raw))
             continue
-        logger.warning(f'Unexpected message type {type(raw).__name__} in DataPoint, coercing to string: {str(raw)[:100]}')
+        logger.warning(
+            f'Unexpected message type {type(raw).__name__} in DataPoint, coercing to string: {str(raw)[:100]}'
+        )
         messages.append({'role': 'user', 'content': str(raw)})
     return messages
 
@@ -167,22 +166,15 @@ def _extract_deployment_content(completion: object) -> str:
     return ''
 
 
-def _safe_int(value: Any) -> int:
-    """Convert to int, returning 0 for non-numeric values."""
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
 def _normalize_usage(raw_usage: Any) -> TokenUsage | None:
-    """Normalize usage payloads to TokenUsage."""
+    """Normalize usage payloads to TokenUsage via the shared extractor.
+
+    Accepts both the new (``input/output_tokens``) and legacy
+    (``prompt/completion_tokens``) shapes, carries cached/reasoning/cost, and
+    honours a ``calls`` count already present in the payload (no longer hardcoded).
+    """
     if isinstance(raw_usage, TokenUsage):
         return raw_usage
     if not isinstance(raw_usage, dict):
         return None
-
-    prompt = _safe_int(raw_usage.get('prompt_tokens', raw_usage.get('prompt', 0)))
-    completion = _safe_int(raw_usage.get('completion_tokens', raw_usage.get('completion', 0)))
-    total = _safe_int(raw_usage.get('total_tokens', raw_usage.get('total', prompt + completion)))
-    return TokenUsage(prompt_tokens=prompt, completion_tokens=completion, total_tokens=total, calls=1)
+    return TokenUsage.extract(raw_usage)

@@ -520,7 +520,7 @@ class EvaluatorConfig(BaseModel):
     judges: list[str] = Field(
         default_factory=lambda: [DEFAULT_PIPELINE_MODEL],
         min_length=1,
-        description="Judge model IDs. judges[0] is the primary evaluator model.",
+        description='Judge model IDs. judges[0] is the primary evaluator model.',
     )
     api: Literal['chat_completions', 'responses'] = 'chat_completions'
     temperature: float = Field(default=1.0, ge=0.0, le=2.0)
@@ -1400,6 +1400,10 @@ class ReportSummary(BaseModel):
     total_errors: int = 0
     errors_by_type: dict[str, int] = Field(default_factory=dict, description='Error counts grouped by type')
     token_usage_total: TokenUsage | None = Field(default=None, description='Aggregated token usage across all results')
+    token_usage_by_source: dict[str, TokenUsage] = Field(
+        default_factory=dict,
+        description='Token usage grouped by datapoint source (static/template_dynamic/generated_dynamic); sums to token_usage_total',
+    )
     by_vulnerability: dict[str, VulnerabilitySummary] = Field(default_factory=dict)
     by_category: dict[str, CategorySummary] = Field(default_factory=dict)
     by_technique: dict[str, TechniqueSummary] = Field(default_factory=dict)

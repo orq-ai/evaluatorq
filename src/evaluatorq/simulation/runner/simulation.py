@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-ZERO_USAGE = TokenUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+ZERO_USAGE = TokenUsage()
 
 
 def _invert_roles_for_simulator(messages: list[Message]) -> list[Message]:
@@ -464,17 +464,8 @@ class SimulationRunner:
         target_model_holder: dict[str, str | None] = {'model': None}
 
         def _get_total_usage() -> TokenUsage:
-            usage = user_simulator.get_usage()
-            judge_usage = judge.get_usage()
-            target_usage = target_usage_acc['acc']
-            return TokenUsage(
-                prompt_tokens=usage.prompt_tokens + judge_usage.prompt_tokens + target_usage.prompt_tokens,
-                completion_tokens=usage.completion_tokens
-                + judge_usage.completion_tokens
-                + target_usage.completion_tokens,
-                total_tokens=usage.total_tokens + judge_usage.total_tokens + target_usage.total_tokens,
-                calls=usage.calls + judge_usage.calls + target_usage.calls,
-            )
+            # __add__ carries cached/reasoning/cost across all three sources.
+            return user_simulator.get_usage() + judge.get_usage() + target_usage_acc['acc']
 
         # Expose to the outer run() except path so it can report partial usage.
         usage_holder['get_total_usage'] = _get_total_usage
@@ -483,12 +474,7 @@ class SimulationRunner:
             usage_after = _get_total_usage()
             return TurnMetrics(
                 turn_number=turn_num,
-                token_usage=TokenUsage(
-                    prompt_tokens=usage_after.prompt_tokens - usage_before.prompt_tokens,
-                    completion_tokens=usage_after.completion_tokens - usage_before.completion_tokens,
-                    total_tokens=usage_after.total_tokens - usage_before.total_tokens,
-                    calls=usage_after.calls - usage_before.calls,
-                ),
+                token_usage=usage_after - usage_before,
                 response_quality=judgment.response_quality,
                 hallucination_risk=judgment.hallucination_risk,
                 tone_appropriateness=judgment.tone_appropriateness,

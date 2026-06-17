@@ -21,52 +21,51 @@ class TestSanitizeJobName:
     def test_alphanumeric_passthrough(self):
         from evaluatorq.redteam.runtime.jobs import _sanitize_job_name
 
-        assert _sanitize_job_name("abc123") == "abc123"
+        assert _sanitize_job_name('abc123') == 'abc123'
 
     def test_dash_and_underscore_preserved(self):
         from evaluatorq.redteam.runtime.jobs import _sanitize_job_name
 
-        assert _sanitize_job_name("my-agent_key") == "my-agent_key"
+        assert _sanitize_job_name('my-agent_key') == 'my-agent_key'
 
     def test_special_chars_replaced_with_dash(self):
         from evaluatorq.redteam.runtime.jobs import _sanitize_job_name
 
-        result = _sanitize_job_name("my.agent/key@v2")
-        assert result == "my-agent-key-v2"
+        result = _sanitize_job_name('my.agent/key@v2')
+        assert result == 'my-agent-key-v2'
 
     def test_leading_trailing_dashes_stripped(self):
         from evaluatorq.redteam.runtime.jobs import _sanitize_job_name
 
-        result = _sanitize_job_name(".leading-trailing.")
-        assert not result.startswith("-")
-        assert not result.endswith("-")
+        result = _sanitize_job_name('.leading-trailing.')
+        assert not result.startswith('-')
+        assert not result.endswith('-')
 
     def test_empty_string_returns_unknown(self):
         from evaluatorq.redteam.runtime.jobs import _sanitize_job_name
 
-        assert _sanitize_job_name("") == "unknown"
+        assert _sanitize_job_name('') == 'unknown'
 
     def test_all_special_chars_becomes_unknown(self):
         from evaluatorq.redteam.runtime.jobs import _sanitize_job_name
 
         # All special chars → all dashes → strip → empty → 'unknown'
-        result = _sanitize_job_name("@@@")
-        assert result == "unknown"
+        result = _sanitize_job_name('@@@')
+        assert result == 'unknown'
 
     def test_spaces_replaced(self):
         from evaluatorq.redteam.runtime.jobs import _sanitize_job_name
 
-        result = _sanitize_job_name("my agent key")
-        assert " " not in result
+        result = _sanitize_job_name('my agent key')
+        assert ' ' not in result
 
     def test_model_with_slash(self):
         from evaluatorq.redteam.runtime.jobs import _sanitize_job_name
 
-        result = _sanitize_job_name("azure/gpt-4o-mini")
-        assert "/" not in result
-        assert "azure" in result
-        assert "gpt" in result
-
+        result = _sanitize_job_name('azure/gpt-4o-mini')
+        assert '/' not in result
+        assert 'azure' in result
+        assert 'gpt' in result
 
 
 # ===========================================================================
@@ -80,60 +79,60 @@ class TestBuildMessages:
     def _make_datapoint(self, messages: list[Any]) -> MagicMock:
         """Create a mock DataPoint with an inputs['messages'] list."""
         dp = MagicMock()
-        dp.inputs = {"messages": messages}
+        dp.inputs = {'messages': messages}
         return dp
 
     def test_from_message_objects(self):
         from evaluatorq.redteam.runtime.jobs import _build_messages
 
         dp = self._make_datapoint([
-            Message(role="user", content="Hello"),
-            Message(role="assistant", content="Hi there"),
+            Message(role='user', content='Hello'),
+            Message(role='assistant', content='Hi there'),
         ])
         result = _build_messages(dp)
         assert len(result) == 2
-        assert result[0]["role"] == "user"
-        assert result[0]["content"] == "Hello"
-        assert result[1]["role"] == "assistant"
+        assert result[0]['role'] == 'user'
+        assert result[0]['content'] == 'Hello'
+        assert result[1]['role'] == 'assistant'
 
     def test_from_valid_dicts(self):
         from evaluatorq.redteam.runtime.jobs import _build_messages
 
         dp = self._make_datapoint([
-            {"role": "user", "content": "What is the weather?"},
+            {'role': 'user', 'content': 'What is the weather?'},
         ])
         result = _build_messages(dp)
         assert len(result) == 1
-        assert result[0]["role"] == "user"
-        assert result[0]["content"] == "What is the weather?"
+        assert result[0]['role'] == 'user'
+        assert result[0]['content'] == 'What is the weather?'
 
     def test_from_invalid_dicts_kept_as_raw(self):
         from evaluatorq.redteam.runtime.jobs import _build_messages
 
         # Invalid role → validation fails → raw dict kept
         dp = self._make_datapoint([
-            {"role": "invalid_role", "content": "Something"},
+            {'role': 'invalid_role', 'content': 'Something'},
         ])
         result = _build_messages(dp)
         assert len(result) == 1
-        assert result[0]["role"] == "invalid_role"
+        assert result[0]['role'] == 'invalid_role'
 
     def test_from_plain_strings(self):
         from evaluatorq.redteam.runtime.jobs import _build_messages
 
-        dp = self._make_datapoint(["Just a plain string"])
+        dp = self._make_datapoint(['Just a plain string'])
         result = _build_messages(dp)
         assert len(result) == 1
-        assert result[0]["role"] == "user"
-        assert result[0]["content"] == "Just a plain string"
+        assert result[0]['role'] == 'user'
+        assert result[0]['content'] == 'Just a plain string'
 
     def test_mixed_types(self):
         from evaluatorq.redteam.runtime.jobs import _build_messages
 
         dp = self._make_datapoint([
-            Message(role="system", content="System"),
-            {"role": "user", "content": "Dict user"},
-            "plain string",
+            Message(role='system', content='System'),
+            {'role': 'user', 'content': 'Dict user'},
+            'plain string',
         ])
         result = _build_messages(dp)
         assert len(result) == 3
@@ -160,58 +159,58 @@ class TestExtractDeploymentContent:
     def test_string_content_returned_directly(self):
         from evaluatorq.redteam.runtime.jobs import _extract_deployment_content
 
-        completion = self._make_completion("Hello world")
-        assert _extract_deployment_content(completion) == "Hello world"
+        completion = self._make_completion('Hello world')
+        assert _extract_deployment_content(completion) == 'Hello world'
 
     def test_list_content_text_parts_joined(self):
         from evaluatorq.redteam.runtime.jobs import _extract_deployment_content
 
         part1 = MagicMock()
-        part1.type = "text"
-        part1.text = "First"
+        part1.type = 'text'
+        part1.text = 'First'
         part2 = MagicMock()
-        part2.type = "text"
-        part2.text = "Second"
+        part2.type = 'text'
+        part2.text = 'Second'
 
         completion = self._make_completion([part1, part2])
         result = _extract_deployment_content(completion)
-        assert "First" in result
-        assert "Second" in result
+        assert 'First' in result
+        assert 'Second' in result
 
     def test_list_content_non_text_parts_filtered(self):
         from evaluatorq.redteam.runtime.jobs import _extract_deployment_content
 
         text_part = MagicMock()
-        text_part.type = "text"
-        text_part.text = "Visible"
+        text_part.type = 'text'
+        text_part.text = 'Visible'
         image_part = MagicMock()
-        image_part.type = "image"
-        image_part.text = "Hidden"
+        image_part.type = 'image'
+        image_part.text = 'Hidden'
 
         completion = self._make_completion([image_part, text_part])
         result = _extract_deployment_content(completion)
-        assert "Visible" in result
-        assert "Hidden" not in result
+        assert 'Visible' in result
+        assert 'Hidden' not in result
 
     def test_empty_choices_returns_empty_string(self):
         from evaluatorq.redteam.runtime.jobs import _extract_deployment_content
 
         completion = MagicMock()
         completion.choices = []
-        assert _extract_deployment_content(completion) == ""
+        assert _extract_deployment_content(completion) == ''
 
     def test_none_choices_returns_empty_string(self):
         from evaluatorq.redteam.runtime.jobs import _extract_deployment_content
 
         completion = MagicMock()
         completion.choices = None
-        assert _extract_deployment_content(completion) == ""
+        assert _extract_deployment_content(completion) == ''
 
     def test_none_content_returns_empty_string(self):
         from evaluatorq.redteam.runtime.jobs import _extract_deployment_content
 
         completion = self._make_completion(None)
-        assert _extract_deployment_content(completion) == ""
+        assert _extract_deployment_content(completion) == ''
 
 
 # ===========================================================================
@@ -232,7 +231,7 @@ class TestNormalizeUsage:
     def test_dict_with_standard_keys(self):
         from evaluatorq.redteam.runtime.jobs import _normalize_usage
 
-        raw = {"prompt_tokens": 5, "completion_tokens": 15, "total_tokens": 20}
+        raw = {'prompt_tokens': 5, 'completion_tokens': 15, 'total_tokens': 20}
         result = _normalize_usage(raw)
         assert result is not None
         assert result.prompt_tokens == 5
@@ -242,7 +241,7 @@ class TestNormalizeUsage:
     def test_dict_with_short_keys(self):
         from evaluatorq.redteam.runtime.jobs import _normalize_usage
 
-        raw = {"prompt": 3, "completion": 7, "total": 10}
+        raw = {'prompt': 3, 'completion': 7, 'total': 10}
         result = _normalize_usage(raw)
         assert result is not None
         assert result.prompt_tokens == 3
@@ -257,17 +256,15 @@ class TestNormalizeUsage:
     def test_non_dict_non_token_usage_returns_none(self):
         from evaluatorq.redteam.runtime.jobs import _normalize_usage
 
-        assert _normalize_usage("not a dict") is None
+        assert _normalize_usage('not a dict') is None
         assert _normalize_usage(42) is None
 
-    def test_empty_dict_returns_zeros(self):
+    def test_empty_dict_returns_none(self):
+        """An empty usage dict carries no signal: extract returns None rather than a
+        fabricated billed-zero record (see TokenUsage.extract gate)."""
         from evaluatorq.redteam.runtime.jobs import _normalize_usage
 
-        result = _normalize_usage({})
-        assert result is not None
-        assert result.prompt_tokens == 0
-        assert result.completion_tokens == 0
-        assert result.total_tokens == 0
+        assert _normalize_usage({}) is None
 
 
 # ===========================================================================
