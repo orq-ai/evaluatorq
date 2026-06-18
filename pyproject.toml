@@ -173,6 +173,8 @@ dependencies = [
   langchain = [ "langchain>=1.0.0, <2.0.0" ]
   langgraph = [ "langgraph>=0.2.0" ]
   openai-agents = [ "openai-agents>=0.1.0" ]
+  pydantic-ai = [ "pydantic-ai-slim[openai]>=1.0.0" ]
+  crewai = [ "crewai>=0.70.0; python_version >= '3.11'" ]
   redteam = [
   "openai>=1.0.0,<3.0.0",
   "huggingface-hub>=0.20.0",
@@ -189,7 +191,7 @@ dependencies = [
 ]
   export = [ "kaleido>=0.2.1" ]
   all = [
-  "evaluatorq[orq,otel,langchain,langgraph,openai-agents,redteam,simulation,export]"
+  "evaluatorq[orq,otel,langchain,langgraph,openai-agents,pydantic-ai,crewai,redteam,simulation,export]"
 ]
 
   [project.scripts]

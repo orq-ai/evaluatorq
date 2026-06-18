@@ -59,6 +59,42 @@ When `ORQ_API_KEY` is set, the run also prints an Experiment URL on `my.orq.ai`.
 | `03_tool_simulation.py` (preview) | Testing tool-calling agents with `MockToolRegistry` — needs `agent-simulation` |
 | `04_hardening_loop.py` (preview) | Iterative instruction improvement with `HardeningLoop` — needs `agent-simulation` |
 | `05_wrap_and_experiment.py` | Production pattern: `wrap_simulation_agent()` + `evaluatorq()` for Experiment upload and CI gating |
+| `06_langgraph_simulation.py` | Simulating a LangGraph `StateGraph` via `LangGraphTarget` — needs `evaluatorq[langgraph]` |
+| `07_openai_agents_simulation.py` | Simulating an OpenAI Agents SDK `Agent` via `OpenAIAgentTarget` — needs `evaluatorq[openai-agents]` |
+| `08_pydantic_ai_simulation.py` | Simulating a Pydantic AI `Agent` via `PydanticAITarget` — needs `evaluatorq[pydantic-ai]` |
+| `09_crewai_simulation.py` | Simulating a CrewAI `Crew` via `CrewAITarget` — needs `evaluatorq[crewai]` |
+
+## External agent frameworks
+
+Agent Simulation is framework-agnostic: any agent that implements the unified
+`AgentTarget` protocol (`async respond(messages) -> AgentResponse`) runs through
+the same three-part loop (user simulator -> agent under test -> judge). Pass the
+target via `target=` to `simulate()` / `generate_and_simulate()`.
+
+Examples 06-09 show the four supported frameworks. Each adapter handles that
+framework's quirks:
+
+| Framework | Adapter | Quirks handled |
+|-----------|---------|----------------|
+| LangGraph | `LangGraphTarget` | Owns thread state (forwards only the latest user turn); tool calls preserved; tokens via callback |
+| OpenAI Agents SDK | `OpenAIAgentTarget` | Stateless per run (renders full transcript to Responses-API items); tool calls + results round-trip |
+| Pydantic AI | `PydanticAITarget` | Threads typed `message_history` internally; tool calls extracted from message parts; usage has no total (derived) |
+| CrewAI | `CrewAITarget` | Sync `kickoff` run off-thread; transcript flattened to one `{conversation}` input; final crew output is "the response" |
+
+> **Python 3.10 note:** the `crewai` extra is gated to Python >= 3.11 (its
+> `onnxruntime` dependency ships no 3.10 wheels), so `evaluatorq[crewai]` is
+> silently unavailable on 3.10. The other three frameworks support 3.10+.
+
+```python
+from evaluatorq.integrations.langgraph_integration import LangGraphTarget
+from evaluatorq.simulation import simulate
+
+results = await simulate(target=LangGraphTarget(graph), personas=[...], scenarios=[...])
+```
+
+Custom framework not listed? Wrap any `fn(messages) -> str` with
+`CallableTarget` (`evaluatorq.integrations.callable_integration`), or pass a
+plain `target_callback`.
 
 ## Environment
 
