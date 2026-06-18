@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import re
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -466,40 +465,10 @@ def ui(
             typer.echo(f"Error: {report_path} does not exist.", err=True)
             raise typer.Exit(code=1)
 
+    from evaluatorq.common.ui.launch import launch_streamlit
+
     dashboard_script = Path(__file__).parent / "ui" / "dashboard.py"
-    if not dashboard_script.exists():
-        typer.echo("Error: Dashboard module not found.", err=True)
-        raise typer.Exit(code=1)
-
-    try:
-        import streamlit  # noqa: F401
-    except ImportError:
-        typer.echo(
-            "Streamlit is not installed. Install the redteam extras:\n"
-            '  uv pip install "evaluatorq[redteam]"\n'
-            '  pip install "evaluatorq[redteam]"',
-            err=True,
-        )
-        raise typer.Exit(code=1)
-
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "streamlit",
-            "run",
-            str(dashboard_script),
-            "--server.port",
-            str(port),
-            "--server.address",
-            host,
-            "--browser.gatherUsageStats",
-            "false",
-            "--",
-            str(report_path),
-        ],
-    )
-    raise typer.Exit(code=result.returncode)
+    launch_streamlit(dashboard_script, report_path, port=port, host=host, extra="redteam")
 
 
 @app.command()

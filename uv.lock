@@ -593,6 +593,9 @@ redteam = [
 simulation = [
     { name = "openai" },
     { name = "orq-ai-sdk" },
+    { name = "plotly" },
+    { name = "streamlit" },
+    { name = "watchdog" },
 ]
 
 [package.dev-dependencies]
@@ -635,11 +638,14 @@ requires-dist = [
     { name = "orq-ai-sdk", marker = "extra == 'orq'", specifier = ">=4.4.7" },
     { name = "orq-ai-sdk", marker = "extra == 'simulation'", specifier = ">=4.4.7" },
     { name = "plotly", marker = "extra == 'redteam'", specifier = ">=5.18.0" },
+    { name = "plotly", marker = "extra == 'simulation'", specifier = ">=5.18.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "rich", specifier = ">=14.2.0" },
     { name = "streamlit", marker = "extra == 'redteam'", specifier = ">=1.30.0" },
+    { name = "streamlit", marker = "extra == 'simulation'", specifier = ">=1.30.0" },
     { name = "typer", specifier = ">=0.12.0" },
     { name = "watchdog", marker = "extra == 'redteam'", specifier = ">=4.0.0" },
+    { name = "watchdog", marker = "extra == 'simulation'", specifier = ">=4.0.0" },
 ]
 provides-extras = ["orq", "otel", "langchain", "langgraph", "openai-agents", "redteam", "simulation", "export", "all"]
 

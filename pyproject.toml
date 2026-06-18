@@ -115,7 +115,7 @@ src = [ "src" ]
 ]
 
 [tool.basedpyright]
-exclude = [ "examples", "scripts", ".venv", "src/evaluatorq/redteam/ui" ]
+exclude = [ "examples", "scripts", ".venv", "src/evaluatorq/redteam/ui", "src/evaluatorq/simulation/ui" ]
 reportIncompatibleVariableOverride = "none"
 reportExplicitAny = "none"
 reportMissingImports = "none"
@@ -180,7 +180,13 @@ dependencies = [
   "plotly>=5.18.0",
   "watchdog>=4.0.0"
 ]
-  simulation = [ "openai>=1.0.0,<3.0.0", "orq-ai-sdk>=4.4.7" ]
+  simulation = [
+  "openai>=1.0.0,<3.0.0",
+  "orq-ai-sdk>=4.4.7",
+  "streamlit>=1.30.0",
+  "plotly>=5.18.0",
+  "watchdog>=4.0.0"
+]
   export = [ "kaleido>=0.2.1" ]
   all = [
   "evaluatorq[orq,otel,langchain,langgraph,openai-agents,redteam,simulation,export]"
