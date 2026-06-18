@@ -751,6 +751,17 @@ class AttackStrategy(BaseModel):
     # Metadata
     is_generated: bool = Field(default=False, description='Whether this strategy was LLM-generated')
 
+    # Behaviour flags
+    decompose_tool_chain: bool = Field(
+        default=False,
+        description=(
+            'When True, the orchestrator decomposes the objective into individually-benign '
+            'per-tool-call steps (AgentLAB tool-chaining pattern) and injects the verified plan '
+            'into the adversarial system prompt. Requires the agent to have tools; falls back to '
+            'a plan-free attack otherwise.'
+        ),
+    )
+
 
 # ---------------------------------------------------------------------------
 # Token usage — re-exported from evaluatorq.contracts (RES-596)

@@ -26,6 +26,11 @@ from evaluatorq.common.content_filter import (
 from evaluatorq.common.sanitize import xml_escape
 from evaluatorq.common.tracing import record_llm_response, set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentResponse, AgentResponseError, AgentTarget, Message, TextOutputItem
+from evaluatorq.redteam.adaptive.tool_chaining import (
+    ToolChainingPlanner,
+    ToolChainingVerifier,
+    format_plan_for_prompt,
+)
 from evaluatorq.redteam.backends.base import Backend, _coerce_to_agent_response
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
@@ -306,8 +311,14 @@ def _build_adversarial_system_prompt(
     agent_context: AgentContext,
     max_turns: int,
     attacker_instructions: str | None = None,
+    tool_chain_plan: str | None = None,
 ) -> str:
-    """Build the adversarial system prompt from agent context."""
+    """Build the adversarial system prompt from agent context.
+
+    When ``tool_chain_plan`` is supplied (tool-chaining strategies), the verified
+    per-call decomposition is appended so the adversarial LLM elicits one tool
+    call per turn following the plan instead of improvising the whole chain.
+    """
     tools_str = ', '.join(t.name for t in agent_context.tools) if agent_context.tools else 'None'
     memory_str = (
         ', '.join(m.key or m.id for m in agent_context.memory_stores) if agent_context.memory_stores else 'None'
@@ -325,6 +336,9 @@ def _build_adversarial_system_prompt(
             '{max_turns}': str(max_turns),
         },
     )
+
+    if tool_chain_plan:
+        prompt += f'\n\n{tool_chain_plan}'
 
     if attacker_instructions:
         prompt += f'\n\n## Additional Context from Operator\n{attacker_instructions}'
@@ -454,6 +468,82 @@ class MultiTurnOrchestrator:
         logger.debug(f'Generated dynamic single-turn prompt for {strategy.name}: {prompt[:100]}...')
         return prompt, usage, system_prompt
 
+    async def _plan_tool_chain(
+        self,
+        strategy: AttackStrategy,
+        objective: str,
+        agent_context: AgentContext,
+        max_turns: int,
+    ) -> tuple[str | None, TokenUsage | None]:
+        """Decompose a tool-chaining objective into a verified per-call plan.
+
+        Returns ``(plan_text, planner_usage)``. Both are ``None`` when the strategy
+        is not a tool-chaining strategy, the agent has no tools, or any step fails —
+        the caller then runs a normal plan-free adaptive attack. This is deliberately
+        fail-open: a planner/verifier error must never abort the attack.
+
+        The plan is capped to ``max_turns`` steps: only the first ``max_turns`` can
+        ever be elicited (one tool call per turn), so listing more would promise the
+        attacker turns it does not have.
+        """
+        if not strategy.decompose_tool_chain:
+            return None, None
+
+        tool_names = agent_context.get_tool_names()
+        if not tool_names:
+            logger.debug(
+                f'Tool-chaining strategy {strategy.name} on a tool-less agent — '
+                'skipping decomposition, falling back to adaptive attack'
+            )
+            return None, None
+
+        # Track planner usage outside the try so an exception raised after decompose()
+        # has already billed tokens (verify/format are pure Python, so the window is
+        # narrow) still folds that cost into the adversarial totals.
+        planner_usage: TokenUsage | None = None
+        try:
+            async with with_redteam_span(
+                'orq.redteam.tool_chain_decomposition',
+                {'orq.redteam.strategy_name': strategy.name},
+            ):
+                planner = ToolChainingPlanner(
+                    client=self.llm_client,
+                    model=self.model,
+                    pipeline_config=self._cfg,
+                )
+                decomposition = await planner.decompose(
+                    objective=objective,
+                    agent_name=agent_context.display_name or agent_context.key,
+                    agent_description=agent_context.description or 'An AI assistant',
+                    available_tools=tool_names,
+                )
+                planner_usage = decomposition.token_usage
+                # Schema-only verification against the agent's real tool list — no
+                # extra LLM cost, deterministic, and drops steps naming unknown tools.
+                verifier = ToolChainingVerifier(available_tools=tool_names)
+                valid_steps, _ = verifier.verify_all(decomposition.steps)
+                if not valid_steps:
+                    logger.warning(
+                        f'Tool-chaining: no steps survived verification for {strategy.name}; '
+                        'falling back to adaptive attack'
+                    )
+                    return None, planner_usage
+                # Cap to the turn budget — steps beyond max_turns can never be reached.
+                if len(valid_steps) > max_turns:
+                    logger.debug(
+                        f'Tool-chaining: capping {len(valid_steps)} steps to max_turns={max_turns}'
+                    )
+                    valid_steps = valid_steps[:max_turns]
+                return format_plan_for_prompt(valid_steps), planner_usage
+        except Exception as e:
+            # repr-style detail: str(asyncio.TimeoutError()) is '' on 3.10+, so log
+            # the type to keep timeouts/cancellations identifiable in the fallback.
+            logger.warning(
+                f'Tool-chaining decomposition failed for {strategy.name} '
+                f'({type(e).__name__}: {e}); falling back to adaptive attack'
+            )
+            return None, planner_usage
+
     async def run_attack(
         self,
         target: AgentTarget,
@@ -478,6 +568,15 @@ class MultiTurnOrchestrator:
         # TokenUsage accumulators so cached/reasoning/cost carry through, not just totals.
         adversarial_usage_acc = TokenUsage()
 
+        # Tool-chaining strategies decompose the objective into individually-benign
+        # per-call steps and inject the verified plan into the system prompt. The
+        # planner/verifier are adversarial-side LLM cost, so their usage is folded
+        # into the adversarial counters below. Failures fall back to a plan-free
+        # attack (tool_chain_plan stays None) so the strategy still runs.
+        tool_chain_plan, plan_usage = await self._plan_tool_chain(strategy, objective, agent_context, max_turns)
+        if plan_usage is not None:
+            adversarial_usage_acc = adversarial_usage_acc + plan_usage
+
         # Build adversarial system prompt
         system_prompt = _build_adversarial_system_prompt(
             objective,
@@ -485,6 +584,7 @@ class MultiTurnOrchestrator:
             agent_context,
             max_turns=max_turns,
             attacker_instructions=self.attacker_instructions,
+            tool_chain_plan=tool_chain_plan,
         )
 
         # Adversarial LLM conversation

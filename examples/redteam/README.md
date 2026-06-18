@@ -73,6 +73,7 @@ When your application is an ORQ agent, the pipeline auto-discovers its tools, me
 | 12 | `12_vulnerability_filter.py` | Target specific vulnerability IDs instead of broad categories |
 | 13 | `13_attacker_instructions.py` | Domain-specific context to generate more targeted attacks |
 | 14 | `14_recommendations_and_artifacts.py` | LLM-generated remediation advice + debug artifacts |
+| 15 | `15_tool_chaining.py` | Tool-chaining attack (ASI02) — per-call decomposition + verifier on a tool-declaring target |
 
 ## LLMConfig
 
