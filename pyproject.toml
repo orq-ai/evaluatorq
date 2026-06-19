@@ -203,6 +203,38 @@ dependencies = [
   Repository = "https://github.com/orq-ai/orqkit/tree/main/packages/evaluatorq-py"
   Documentation = "https://github.com/orq-ai/orqkit/tree/main/packages/evaluatorq-py"
 
+[tool.semantic_release]
+# PSR v8+ config: version_toml points at the standard [project] version field.
+# hatchling reads version from the same field, so PSR and hatchling are
+# compatible — no version_source = "tag" or poetry-specific workarounds needed.
+version_toml = ["pyproject.toml:project.version"]
+branch = "main"
+commit_parser = "conventional"
+build_command = "uv build"
+# Suppress PSR's own build step (we run `uv build` separately in the workflow)
+# so that the action only handles versioning, changelog, and tagging.
+upload_to_vcs_release = true
+
+[tool.semantic_release.branches.main]
+match = "main"
+
+[tool.semantic_release.commit_parser_options]
+allowed_tags = [
+  "build",
+  "chore",
+  "ci",
+  "docs",
+  "feat",
+  "fix",
+  "perf",
+  "refactor",
+  "revert",
+  "style",
+  "test",
+]
+minor_tags = ["feat"]
+patch_tags = ["fix", "perf"]
+
 [dependency-groups]
 dev = [
   "pytest>=8.0.0",
