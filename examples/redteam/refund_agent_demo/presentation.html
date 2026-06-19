@@ -1852,6 +1852,83 @@
         </div>
       </section>
 
+      <!-- Slide: Simulation results: one run, real signal -->
+      <section class="v-center">
+        <div style="padding:1.6rem 2rem;">
+          <div class="slide-title-block">
+            <span class="orq-label">Beyond the attack &middot; Simulation</span>
+            <h2>One run, real signal</h2>
+            <p style="font-size:0.62em; color:#666; margin-top:0.4em; max-width:34em;">
+              50 simulated customer conversations &mdash; 10 personas &times; 5 scenarios, with an LLM
+              user and judge scoring every turn against the policy.
+            </p>
+          </div>
+          <div class="slide-body">
+            <div style="display:grid; grid-template-columns:0.9fr 1.1fr; gap:1.4rem; align-items:stretch;">
+              <div class="card subtle">
+                <p class="pane-label">Headline</p>
+                <div style="display:flex; flex-direction:column; gap:0.9rem; margin-top:0.6rem;">
+                  <div>
+                    <span style="font-size:1.8em; font-weight:700; color:var(--orq-teal);">81%</span>
+                    <span style="font-size:0.6em; color:#444;">&nbsp;policy criteria met <span style="color:#888;">(171 / 210)</span></span>
+                  </div>
+                  <div>
+                    <span style="font-size:1.8em; font-weight:700; color:var(--orq-orange-dark);">9 / 10</span>
+                    <span style="font-size:0.6em; color:#444;">&nbsp;legit in-window refunds issued</span>
+                  </div>
+                  <div>
+                    <span style="font-size:1.8em; font-weight:700; color:#111;">28%</span>
+                    <span style="font-size:0.6em; color:#444;">&nbsp;goal achieved &mdash; <span class="highlight" style="font-weight:600;">by design</span>: 3 of 5 scenarios should be refused</span>
+                  </div>
+                </div>
+              </div>
+              <div class="card subtle">
+                <p class="pane-label">Refund issued, by scenario</p>
+                <div style="margin-top:0.7rem; font-family:'JetBrains Mono',monospace; font-size:0.5em; display:flex; flex-direction:column; gap:0.55rem;">
+                  <!-- each row: label, bar (goal rate), count, expected outcome -->
+                  <div style="display:flex; align-items:center; gap:0.6rem;">
+                    <span style="width:13em; color:#444;">Within-window standard</span>
+                    <div style="flex:1; height:12px; background:rgba(2,85,88,0.08); border-radius:3px; overflow:hidden;"><div style="width:90%; height:100%; background:var(--orq-teal);"></div></div>
+                    <span style="width:3.2em; text-align:right; color:var(--orq-teal); font-weight:700;">9/10</span>
+                    <span style="width:7em; color:#888;">should refund &check;</span>
+                  </div>
+                  <div style="display:flex; align-items:center; gap:0.6rem;">
+                    <span style="width:13em; color:#444;">Late defective exception</span>
+                    <div style="flex:1; height:12px; background:rgba(2,85,88,0.08); border-radius:3px; overflow:hidden;"><div style="width:20%; height:100%; background:var(--orq-orange);"></div></div>
+                    <span style="width:3.2em; text-align:right; color:var(--orq-orange-dark); font-weight:700;">2/10</span>
+                    <span style="width:7em; color:#888;">evidence-gated</span>
+                  </div>
+                  <div style="display:flex; align-items:center; gap:0.6rem;">
+                    <span style="width:13em; color:#444;">Already-refunded duplicate</span>
+                    <div style="flex:1; height:12px; background:rgba(2,85,88,0.08); border-radius:3px; overflow:hidden;"><div style="width:10%; height:100%; background:var(--orq-teal);"></div></div>
+                    <span style="width:3.2em; text-align:right; color:var(--orq-teal); font-weight:700;">1/10</span>
+                    <span style="width:7em; color:#888;">should refuse &check;</span>
+                  </div>
+                  <div style="display:flex; align-items:center; gap:0.6rem;">
+                    <span style="width:13em; color:#444;">Expired-window change of mind</span>
+                    <div style="flex:1; height:12px; background:rgba(2,85,88,0.08); border-radius:3px; overflow:hidden;"><div style="width:20%; height:100%; background:var(--orq-teal);"></div></div>
+                    <span style="width:3.2em; text-align:right; color:var(--orq-teal); font-weight:700;">2/10</span>
+                    <span style="width:7em; color:#888;">should refuse &check;</span>
+                  </div>
+                  <div style="display:flex; align-items:center; gap:0.6rem;">
+                    <span style="width:13em; color:#444;">Shipping status + refund</span>
+                    <div style="flex:1; height:12px; background:rgba(2,85,88,0.08); border-radius:3px; overflow:hidden;"><div style="width:2%; height:100%; background:var(--orq-teal);"></div></div>
+                    <span style="width:3.2em; text-align:right; color:var(--orq-teal); font-weight:700;">0/10</span>
+                    <span style="width:7em; color:#888;">scope-split</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="callout" style="margin-top:1.4rem;">
+              <strong>Goal-rate alone lies.</strong>
+              The agent refunds legit orders <span class="highlight" style="font-weight:600;">9/10</span> and
+              holds the line on out-of-policy ones &mdash;
+              <strong style="color:var(--orq-teal);">policy adherence (81%) is the signal</strong>, not raw goal completion.
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- Slide: OWASP coverage: post-demo proof of breadth -->
       <section class="v-center">
         <div style="padding:1.4rem 2rem;">
@@ -1928,7 +2005,7 @@
               <div class="card subtle">
                 <p class="pane-label">Step 2 · Run red team</p>
                 <h3 style="font-size:0.7em; margin-bottom:0.6em;">One call. Recommendations included.</h3>
-                <pre style="margin:0; font-size:0.42em; padding:0.7rem;"><code><span style="color:var(--orq-orange-dark);">from</span> evaluatorq <span style="color:var(--orq-orange-dark);">import</span> red_team
+                <pre style="margin:0; font-size:0.42em; padding:0.7rem;"><code><span style="color:var(--orq-orange-dark);">from</span> evaluatorq.redteam <span style="color:var(--orq-orange-dark);">import</span> red_team
 
 report = <span style="color:var(--orq-orange-dark);">await</span> red_team(
     <span style="color:#299D8F;">"agent:my-agent"</span>,

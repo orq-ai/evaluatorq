@@ -10,7 +10,10 @@ wraps with ``with_retry`` if desired), or parsing/result-shaping.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING, Any
+
+from openai import BadRequestError
 
 from evaluatorq.common.tracing import (
     get_trace_context_headers,
@@ -23,6 +26,8 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
     from openai.types.chat import ChatCompletion
     from opentelemetry.trace import Span
+
+logger = logging.getLogger(__name__)
 
 
 async def execute_chat_completion(
@@ -70,6 +75,18 @@ async def execute_chat_completion(
             existing = params.get('extra_headers') or {}
             params['extra_headers'] = {**existing, **headers}
 
-    response = await asyncio.wait_for(client.chat.completions.create(**params), timeout=timeout_s)
+    try:
+        response = await asyncio.wait_for(client.chat.completions.create(**params), timeout=timeout_s)
+    except BadRequestError as exc:
+        # "where possible": endpoints that don't support reasoning_effort 400 on
+        # it — drop the param and retry once rather than failing the call. Gate on
+        # the error body so an unrelated 400 (bad tools schema, context length, …)
+        # isn't silently masked by a reasoning-stripped retry.
+        err_body = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
+        if 'reasoning_effort' not in params or 'reasoning' not in err_body:
+            raise
+        logger.warning('Model %s rejected reasoning_effort; dropping it and retrying once', model)
+        params.pop('reasoning_effort', None)
+        response = await asyncio.wait_for(client.chat.completions.create(**params), timeout=timeout_s)
     record_llm_response(span, response)
     return response, TokenUsage.from_completion(response)

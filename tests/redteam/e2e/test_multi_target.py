@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
 from openai import AsyncOpenAI
 
 from evaluatorq.redteam import OpenAIModelTarget, red_team
+
+if TYPE_CHECKING:
+    from evaluatorq.contracts import AgentTarget
 
 from .conftest import DeterministicAsyncOpenAI, validate_report_structure
 
@@ -54,7 +57,10 @@ async def test_multi_target_empty_delivery_filter_hard_fails(
     from evaluatorq.redteam.exceptions import RedTeamError
 
     client = cast(AsyncOpenAI, cast(object, mock_llm_client))
-    targets = [OpenAIModelTarget("model-a", client=client), OpenAIModelTarget("model-b", client=client)]
+    targets: list[str | AgentTarget] = [
+        OpenAIModelTarget("model-a", client=client),
+        OpenAIModelTarget("model-b", client=client),
+    ]
 
     with pytest.raises(RedTeamError, match="zero datapoints"):
         await red_team(

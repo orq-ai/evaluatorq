@@ -5,9 +5,17 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+from openai import BadRequestError
 
 from evaluatorq.common.llm_call import execute_chat_completion
+
+
+def _bad_request(message: str) -> BadRequestError:
+    request = httpx.Request('POST', 'https://example/v1/chat/completions')
+    response = httpx.Response(400, request=request)
+    return BadRequestError(message, response=response, body={'error': {'message': message}})
 
 
 def _fake_response() -> MagicMock:
@@ -160,6 +168,66 @@ async def test_records_input_and_response_on_span(monkeypatch: pytest.MonkeyPatc
     )
     record_input.assert_called_once()
     record_response.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_drops_reasoning_effort_and_retries_when_model_rejects_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(
+        side_effect=[_bad_request('Unknown parameter: reasoning_effort'), _fake_response()]
+    )
+
+    response, _ = await execute_chat_completion(
+        client=client,
+        model='m',
+        messages=[{'role': 'user', 'content': 'x'}],
+        span=None,
+        timeout_s=5.0,
+        extra_kwargs={'reasoning_effort': 'low'},
+    )
+
+    assert response.choices[0].message.content == 'ok'
+    assert client.chat.completions.create.await_count == 2
+    # The retry must not carry reasoning_effort.
+    assert client.chat.completions.create.await_args is not None
+    assert 'reasoning_effort' not in client.chat.completions.create.await_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_reraises_unrelated_400_without_stripping_reasoning_effort(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(side_effect=_bad_request('Invalid tools schema'))
+
+    with pytest.raises(BadRequestError, match='Invalid tools schema'):
+        await execute_chat_completion(
+            client=client,
+            model='m',
+            messages=[{'role': 'user', 'content': 'x'}],
+            span=None,
+            timeout_s=5.0,
+            extra_kwargs={'reasoning_effort': 'low'},
+        )
+    # No reasoning-stripped retry — an unrelated 400 is not masked.
+    assert client.chat.completions.create.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_reraises_400_when_reasoning_effort_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(side_effect=_bad_request('reasoning not supported'))
+
+    with pytest.raises(BadRequestError):
+        await execute_chat_completion(
+            client=client,
+            model='m',
+            messages=[{'role': 'user', 'content': 'x'}],
+            span=None,
+            timeout_s=5.0,
+        )
+    assert client.chat.completions.create.await_count == 1
 
 
 @pytest.mark.asyncio

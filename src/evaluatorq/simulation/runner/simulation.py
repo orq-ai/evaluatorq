@@ -8,13 +8,13 @@ import logging
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from evaluatorq.common.async_utils import await_maybe
+from evaluatorq.common.tracing import record_llm_input, record_llm_output, record_token_usage, set_span_attrs
 from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
 from evaluatorq.simulation.agents.user_simulator import (
     UserSimulatorAgent,
     UserSimulatorAgentConfig,
 )
-from evaluatorq.common.tracing import record_llm_input, record_llm_output, record_token_usage, set_span_attrs
 from evaluatorq.simulation.tracing import with_simulation_span
 from evaluatorq.simulation.types import (
     DEFAULT_MODEL,
@@ -231,6 +231,7 @@ class SimulationRunner:
         user_simulator: BaseAgent | None = None,
         judge: BaseAgent | None = None,
         hooks: SimulationHooks | None = None,
+        llm_client: AsyncOpenAI | None = None,
     ) -> None:
         if not target_agent and not target_callback:
             raise ValueError('Must provide either target_agent or target_callback')
@@ -252,7 +253,7 @@ class SimulationRunner:
         self._target_callback = target_callback
         self._model = model
         self._max_turns = max_turns
-        self._shared_client: AsyncOpenAI | None = None
+        self._shared_client: AsyncOpenAI | None = llm_client
         self._client_owned: bool = False
         # Injected agents (may be None; resolved lazily in run() when None)
         self._injected_user_simulator: BaseAgent | None = user_simulator

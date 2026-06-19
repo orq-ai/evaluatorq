@@ -16,6 +16,11 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+# Eager-load pandas before plotly. plotly 6 imports pandas lazily during array
+# validation; under Streamlit's ScriptRunner threads that lazy import can hit a
+# partially-initialized pandas ("module 'pandas' has no attribute 'Series'").
+# Forcing the import here completes it once on the main import pass.
+import pandas  # noqa: F401
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st

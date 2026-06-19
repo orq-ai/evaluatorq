@@ -336,7 +336,7 @@ class SimulationRun(BaseModel):
     run_name: str
     created_at: datetime
     mode: Literal["run", "simulate", "generate"]
-    target_kind: Literal["orq_deployment", "vercel", "openai_model"]
+    target_kind: Literal["orq_agent", "orq_deployment", "vercel", "openai_model", "callback"]
     evaluator_names: list[str]
     total_results: int
     scorer_averages: dict[str, float]

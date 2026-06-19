@@ -111,4 +111,11 @@ def handle_get_policy(*, orq_client: Any | None, topic: str) -> dict:
 def _serialize_order(order: Any) -> dict:
     d = asdict(order)
     d['created_at'] = order.created_at.isoformat()
+    # The agent (an LLM) has no reliable "today" — left to compute the window
+    # from a raw date it uses its own wall-clock and wrongly expires in-window
+    # orders. Hand it the window facts directly, derived from the same frozen
+    # NOW that handle_issue_refund enforces against, so both clocks agree.
+    days_ago = (NOW - order.created_at).days
+    d['delivered_days_ago'] = days_ago
+    d['within_standard_window'] = days_ago <= WINDOW_DAYS
     return d

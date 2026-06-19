@@ -63,6 +63,7 @@ class RefundAgentTarget:
             KB_KEY,
             TOOL_SCHEMAS,
         )
+        from agent_build.prompts import AGENT_DESCRIPTION
 
         prompt_by_key = {key: prompt for key, _display, prompt in AGENTS}
         display_by_key = {key: display for key, display, _prompt in AGENTS}
@@ -81,7 +82,7 @@ class RefundAgentTarget:
         return AgentContext(
             key=self.agent_key,
             display_name=display_by_key.get(self.agent_key, self.agent_key),
-            description='Customer service refund agent (red-teaming demo).',
+            description=AGENT_DESCRIPTION,
             instructions=prompt_by_key[self.agent_key],
             tools=tools,
             knowledge_bases=[KnowledgeBaseInfo(id=KB_KEY, key=KB_KEY, name='Refund policy KB')],

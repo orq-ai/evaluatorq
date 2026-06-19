@@ -44,7 +44,7 @@ from orq_ai_sdk.models.createtoolop import (
     RequestBodyParameters,
 )
 
-from agent_build.prompts import FIXED_PROMPT, VULNERABLE_PROMPT
+from agent_build.prompts import AGENT_DESCRIPTION, FIXED_PROMPT, VULNERABLE_PROMPT
 
 PROJECT_PATH = 'agent'
 KB_KEY = 'refund_policy'
@@ -231,7 +231,7 @@ def _ensure_agents(client: Orq) -> None:
                 key=key,
                 display_name=display_name,
                 role='Customer Service Refund Agent',
-                description='Demo refund agent for red-teaming webinar.',
+                description=AGENT_DESCRIPTION,
                 instructions=prompt,
                 path=PROJECT_PATH,
                 model=model,
@@ -247,7 +247,7 @@ def _ensure_agents(client: Orq) -> None:
                     agent_key=key,
                     display_name=display_name,
                     role='Customer Service Refund Agent',
-                    description='Demo refund agent for red-teaming webinar.',
+                    description=AGENT_DESCRIPTION,
                     instructions=prompt,
                     path=PROJECT_PATH,
                     model={

@@ -14,9 +14,11 @@ import inspect
 import logging
 import os
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MODEL
+from evaluatorq.simulation.utils.run_store import auto_save_run, build_simulation_run, write_report
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -67,12 +69,14 @@ async def simulate(
     generation_client: AsyncOpenAI | None = None,
     upload_results: bool = True,
     evaluation_description: str | None = None,
-    path: str | None = None,
+    orq_results_path: str | None = None,
     exit_on_failure: bool = True,
+    save: bool = False,
+    run_output: str | Path | None = None,
 ) -> list[SimulationResult]:
     """Run agent simulations through the evaluatorq() framework.
 
-    Builds simulation Datapoints (cartesian persona × scenario when needed),
+    Builds simulation Datapoints (cartesian persona x scenario when needed),
     wraps them as evaluatorq ``DataPoint``s, and delegates execution,
     parallelism, tracing, results display, and (by default) upload to
     ``evaluatorq()``. Returns the raw ``SimulationResult`` list so existing
@@ -107,7 +111,7 @@ async def simulate(
             ``False`` to suppress the upload (e.g. for local-only runs).
         evaluation_description: Optional description attached to the
             experiment. Mirrors ``evaluatorq()``.
-        path: Optional Orq folder path (e.g. ``"MyProject/MyFolder"``).
+        orq_results_path: Optional Orq folder path (e.g. ``"MyProject/MyFolder"``).
         exit_on_failure: When ``True`` (the default), exit non-zero if any
             datapoint or evaluator produced a failure — this is the "CI
             gating for free" benefit of routing through ``evaluatorq()``.
@@ -151,8 +155,10 @@ async def simulate(
                 generation_client=generation_client,
                 upload_results=upload_results,
                 evaluation_description=evaluation_description,
-                path=path,
+                orq_results_path=orq_results_path,
                 exit_on_failure=exit_on_failure,
+                save=save,
+                run_output=run_output,
                 pipeline_span=pipeline_span,
                 hooks=hooks,
             )
@@ -179,9 +185,11 @@ async def generate_and_simulate(
     generation_client: AsyncOpenAI | None = None,
     upload_results: bool = True,
     evaluation_description: str | None = None,
-    path: str | None = None,
+    orq_results_path: str | None = None,
     exit_on_failure: bool = True,
     emit_datapoints: EmitDatapoints | None = None,
+    save: bool = False,
+    run_output: str | Path | None = None,
 ) -> list[SimulationResult]:
     """Generate personas/scenarios, then run simulations via evaluatorq().
 
@@ -266,8 +274,10 @@ async def generate_and_simulate(
                     generation_client=gen_client,
                     upload_results=upload_results,
                     evaluation_description=evaluation_description,
-                    path=path,
+                    orq_results_path=orq_results_path,
                     exit_on_failure=exit_on_failure,
+                    save=save,
+                    run_output=run_output,
                     pipeline_span=pipeline_span,
                     hooks=hooks,
                 )
@@ -289,7 +299,7 @@ async def generate(
     """Generate ready-to-run simulation ``Datapoint``s from an agent description.
 
     Produces personas and scenarios, then builds one ``Datapoint`` per
-    persona×scenario pair (each with a generated first message). Returns the
+    persona x scenario pair (each with a generated first message). Returns the
     datapoints without running any simulation — feed them to :func:`simulate`
     via ``datapoints=...``, or persist them (e.g. JSONL) and reuse.
 
@@ -390,6 +400,15 @@ async def _generate_personas_scenarios(
     return gen_personas, gen_scenarios
 
 
+def _log_saved_run(path: Path) -> None:
+    """Log a saved run with a cwd-relative path + the dashboard-load hint."""
+    try:
+        display = path.relative_to(Path.cwd())
+    except ValueError:
+        display = path
+    logger.info(f'Run saved: {display} — load with: evaluatorq sim ui "{display}"')
+
+
 async def _simulate_core(
     *,
     caller: str,
@@ -410,10 +429,12 @@ async def _simulate_core(
     generation_client: AsyncOpenAI | None,
     upload_results: bool,
     evaluation_description: str | None,
-    path: str | None,
+    orq_results_path: str | None,
     exit_on_failure: bool,
     pipeline_span: Span | None,
     hooks: SimulationHooks | None = None,
+    save: bool = False,
+    run_output: str | Path | None = None,
 ) -> list[SimulationResult]:
     """Core simulation logic (runs inside the orq.simulation.pipeline span).
 
@@ -425,9 +446,9 @@ async def _simulate_core(
     inside ``SimulationRunner``.
     """
     from evaluatorq.common.async_utils import await_maybe
+    from evaluatorq.common.tracing import set_span_attrs
     from evaluatorq.simulation.exceptions import SimulationCancelledError
     from evaluatorq.simulation.hooks import DefaultHooks, SimulationRunMeta
-    from evaluatorq.common.tracing import set_span_attrs
 
     target_callback_resolved, target_agent = _resolve_target(target, target_callback, agent_key)
 
@@ -449,7 +470,7 @@ async def _simulate_core(
     resolved_hooks = hooks or DefaultHooks()
     # The sync-hook deprecation nudge fires once in SimulationRunner.__init__
     # (the single choke point both this path and direct runner use share).
-    resolved_evaluator_names = evaluator_names if evaluator_names is not None else ['goal_achieved', 'criteria_met']
+    resolved_evaluator_names = evaluator_names if evaluator_names is not None else DEFAULT_EVALUATOR_NAMES
     run_meta: SimulationRunMeta = {
         'num_datapoints': len(sim_datapoints),
         'model': model,
@@ -481,9 +502,10 @@ async def _simulate_core(
             parallelism=parallelism,
             user_simulator=user_simulator,
             judge=judge,
+            generation_client=generation_client,
             upload_results=upload_results,
             evaluation_description=evaluation_description,
-            path=path,
+            orq_results_path=orq_results_path,
             exit_on_failure=exit_on_failure,
             pipeline_span=pipeline_span,
             hooks=resolved_hooks,
@@ -505,6 +527,46 @@ async def _simulate_core(
         raise
     finally:
         await await_maybe(resolved_hooks.on_run_complete(results))
+
+    # Persist only on the success path (an aborted run re-raised above). target_agent
+    # / agent_key resolve the target_kind the dashboard reads.
+    # TODO(RES-963): inline because on_run_complete carries no run metadata and
+    # hooks aren't yet composable; move to a save hook once that lands.
+    if save:
+        # Mirror _resolve_target's precedence: target/target_callback win over
+        # agent_key, so a callable passed alongside agent_key is a 'callback'
+        # run, not an 'orq_deployment' one.
+        if target_agent is not None:
+            target_kind = 'orq_agent'
+        elif target is not None or target_callback is not None:
+            target_kind = 'callback'
+        elif agent_key is not None:
+            target_kind = 'orq_deployment'
+        else:
+            target_kind = 'callback'
+        # A persistence failure (disk full, read-only .evaluatorq/, perms, or the
+        # collision-exhaustion RuntimeError) must NOT discard a completed, paid-for
+        # run. Log and still return results — the saved file is a convenience.
+        try:
+            run = build_simulation_run(
+                run_name=evaluation_name or 'sim',
+                mode='simulate' if caller == 'simulate' else 'run',
+                target_kind=target_kind,
+                evaluator_names=resolved_evaluator_names,
+                results=results,
+            )
+            if run_output is not None:
+                write_report(run, Path(run_output))
+                saved_path = Path(run_output)
+            else:
+                saved_path = auto_save_run(run=run, run_name=run.run_name)
+            _log_saved_run(saved_path)
+        except Exception as exc:  # noqa: BLE001 — deliberate; see comment
+            # Broad by design: this guards a disk-write side-effect that must
+            # never discard already-completed work. Covers OSError, the
+            # collision RuntimeError, and pydantic serialization errors
+            # (PydanticSerializationError <: ValueError) from model_dump_json.
+            logger.error(f'Failed to save simulation run (results still returned): {exc}')
     return results
 
 
@@ -552,7 +614,7 @@ async def _resolve_or_generate_datapoints(
 ) -> list[Datapoint]:
     """Return ready-to-run Datapoints.
 
-    Resolution precedence: ``dataset_id`` → ``datapoints`` → persona × scenario
+    Resolution precedence: ``dataset_id`` -> ``datapoints`` -> persona x scenario
     cartesian product (with first-message generation). The three sources are
     mutually exclusive. ``caller`` names the public entry point so any
     API-key error message points the user at the right function.
@@ -607,7 +669,7 @@ async def _resolve_or_generate_datapoints(
                     continue
                 generated.append(outcome)
         if not generated:
-            raise RuntimeError('first-message generation produced no datapoints — every persona×scenario pair failed')
+            raise RuntimeError('first-message generation produced no datapoints - every persona x scenario pair failed')
         return generated
     finally:
         if gen_owned:
@@ -664,6 +726,7 @@ def _build_simulation_job_and_cache(
     max_turns: int,
     user_simulator: BaseAgent | None,
     judge: BaseAgent | None,
+    generation_client: AsyncOpenAI | None,
     hooks: SimulationHooks | None,
 ) -> tuple[
     Callable[[DataPoint, int], Awaitable[dict[str, Any]]],
@@ -692,6 +755,7 @@ def _build_simulation_job_and_cache(
         max_turns=max_turns,
         user_simulator=user_simulator,
         judge=judge,
+        llm_client=generation_client,
         hooks=hooks,
     )
     # _simulate_core always passes a resolved hooks; the fallback only guards
@@ -801,9 +865,10 @@ async def _simulate_via_evaluatorq(
     parallelism: int,
     user_simulator: BaseAgent | None,
     judge: BaseAgent | None,
+    generation_client: AsyncOpenAI | None,
     upload_results: bool,
     evaluation_description: str | None,
-    path: str | None,
+    orq_results_path: str | None,
     exit_on_failure: bool,
     pipeline_span: Span | None,
     hooks: SimulationHooks,
@@ -811,9 +876,9 @@ async def _simulate_via_evaluatorq(
     """Wrap simulation Datapoints as evaluatorq DataPoints and run."""
     from datetime import datetime, timezone
 
+    from evaluatorq.common.tracing import record_token_usage, set_span_attrs
     from evaluatorq.evaluatorq import evaluatorq
     from evaluatorq.simulation.evaluators import get_evaluator
-    from evaluatorq.common.tracing import record_token_usage, set_span_attrs
     from evaluatorq.types import DataPoint
 
     resolved_evaluator_names = (
@@ -836,6 +901,7 @@ async def _simulate_via_evaluatorq(
         max_turns=max_turns,
         user_simulator=user_simulator,
         judge=judge,
+        generation_client=generation_client,
         hooks=hooks,
     )
 
@@ -852,7 +918,7 @@ async def _simulate_via_evaluatorq(
             evaluators=evaluators,
             parallelism=parallelism,
             description=evaluation_description,
-            path=path,
+            path=orq_results_path,
             _send_results=upload_results,
             _exit_on_failure=exit_on_failure,
         )

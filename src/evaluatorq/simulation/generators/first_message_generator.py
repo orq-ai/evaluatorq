@@ -7,11 +7,12 @@ import re
 from typing import TYPE_CHECKING, Any, cast
 
 from openai import APIStatusError
-from openai.types.chat import ChatCompletionMessageParam
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
+    from openai.types.chat import ChatCompletionMessageParam
 
+from evaluatorq.common.retry import with_retry
 from evaluatorq.common.tracing import get_trace_context_headers, record_llm_input, record_llm_response
 from evaluatorq.simulation.tracing import with_llm_span
 from evaluatorq.simulation.types import DEFAULT_MODEL, Persona, Scenario
@@ -19,7 +20,6 @@ from evaluatorq.simulation.utils.prompt_builders import (
     build_persona_system_prompt,
     build_scenario_user_context,
 )
-from evaluatorq.common.retry import with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +110,7 @@ The message should immediately convey their goal and emotional state.
 Keep it natural - this is how they would actually open a conversation."""
 
         messages: list[ChatCompletionMessageParam] = cast(
-            list[ChatCompletionMessageParam],
+            "list[ChatCompletionMessageParam]",
             [
                 {"role": "system", "content": _FIRST_MESSAGE_PROMPT},
                 {"role": "user", "content": user_prompt},
@@ -136,24 +136,33 @@ Keep it natural - this is how they would actually open a conversation."""
                 extra: dict[str, Any] = (
                     {"extra_headers": trace_headers} if trace_headers else {}
                 )
-                response = await with_retry(
-                    lambda: self._client.chat.completions.create(  # pyright: ignore[reportUnknownLambdaType]
-                        model=self._model,
-                        messages=messages,
-                        temperature=_TEMPERATURE_FIRST_MESSAGE,
-                        max_tokens=500,
-                        **extra,
-                    ),
-                    label="FirstMessageGenerator.generate",
-                )
-                record_llm_response(span, response)
+                for attempt in range(2):
+                    response = await with_retry(
+                        lambda: self._client.chat.completions.create(  # pyright: ignore[reportUnknownLambdaType]
+                            model=self._model,
+                            messages=messages,
+                            temperature=_TEMPERATURE_FIRST_MESSAGE,
+                            max_tokens=500,
+                            **extra,
+                        ),
+                        label="FirstMessageGenerator.generate",
+                    )
+                    record_llm_response(span, response)
 
-            message = response.choices[0].message.content if response.choices else ""
-            message = re.sub(r'^["\']|["\']$', "", (message or "").strip())
+                    message = response.choices[0].message.content if response.choices else ""
+                    message = re.sub(r'^["\']|["\']$', "", (message or "").strip())
+                    if message:
+                        break
+                    if attempt == 0:
+                        logger.info(
+                            "FirstMessageGenerator: LLM returned empty content, retrying once"
+                        )
+                else:
+                    message = ""
 
             if not message:
                 logger.warning(
-                    "FirstMessageGenerator: LLM returned empty content, using generic fallback"
+                    "FirstMessageGenerator: LLM returned empty content after retry, using generic fallback"
                 )
                 return f"Hi, I need help with: {scenario.goal}"
 
@@ -161,11 +170,18 @@ Keep it natural - this is how they would actually open a conversation."""
             return message
 
         except APIStatusError as e:
-            # Re-throw auth errors
-            if e.status_code in (401, 403):
+            # Re-raise client errors (auth, bad request, model-not-found, …) —
+            # those are real misconfigurations, not transient, and a canned
+            # message would silently mask them. Only fall back for persistent
+            # server (5xx) / rate-limit (429) errors that survived with_retry, so
+            # a long run isn't aborted by an infra blip; log loudly so the
+            # degraded input is visible.
+            if e.status_code < 500 and e.status_code != 429:
                 raise
             logger.warning(
-                "FirstMessageGenerator: API call failed, using generic fallback. Error: %s",
+                "FirstMessageGenerator: generation failed after retries (HTTP %s); "
+                "using a generic first message for this datapoint. Error: %s",
+                e.status_code,
                 e,
             )
             return f"Hi, I need help with: {scenario.goal}"

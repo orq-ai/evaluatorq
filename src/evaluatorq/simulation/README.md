@@ -43,11 +43,17 @@ A runnable, narrated walkthrough lives in
 
 ## Targets
 
-The agent under test is supplied one of three ways (mutually exclusive):
+The agent under test is supplied one of these ways (mutually exclusive):
 
 - **`target_callback=` / `target=`** — any `async`/sync callable `(list[Message]) -> str`. The simplest path; great for local mocks and quick checks.
 - **`target=<AgentTarget>`** — an `AgentTarget` instance (e.g. `OrqResponsesTarget`) that speaks `respond(messages)`.
 - **`agent_key="..."`** — bridges to a live **orq.ai** deployment. Requires `ORQ_API_KEY`.
+
+On the CLI, prefer `--target` to mirror red teaming:
+
+- **`--target agent:<key>`** or bare **`--target <key>`** — invokes a hosted Orq agent through the stateless Responses API target.
+- **`--target deployment:<key>`** — uses the legacy deployment callback bridge.
+- **`--agent-key <key>`** — deprecated CLI alias for deployment behavior.
 
 ## Personas & scenarios
 
@@ -105,6 +111,14 @@ usage:
 uv tool install "evaluatorq[simulation]"
 eq sim run --help
 eq sim generate --help
+```
+
+Examples:
+
+```bash
+eq sim run --target agent:refund-agent-fixed
+eq sim generate --target refund-agent-fixed --output dp.jsonl
+eq sim simulate --datapoints dp.jsonl --target deployment:legacy-refund-agent
 ```
 
 See [`examples/agent_simulation/README.md`](../../../examples/agent_simulation/README.md)

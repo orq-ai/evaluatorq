@@ -9,6 +9,7 @@ behavior for unknown names, unmatched delivery methods, and empty intersections.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -43,7 +44,7 @@ async def _plan(vulns, **kwargs):
     """Invoke the planner with the shared no-LLM defaults used across these tests."""
     from evaluatorq.redteam.adaptive.strategy_planner import plan_strategies_for_vulnerabilities
 
-    base = dict(
+    base: dict[str, Any] = dict(
         agent_context=_capable_agent_context(),
         vulnerabilities=vulns,
         llm_client=None,
@@ -193,7 +194,7 @@ def _capture_warnings(fn) -> list[str]:
     return msgs
 
 
-def _static_dps(*methods: str) -> list:
+def _static_dps(*methods: str) -> list[Any]:
     """Static (dataset-shaped) datapoints with a singular `delivery_method` field."""
     from evaluatorq import DataPoint
 
@@ -203,7 +204,7 @@ def _static_dps(*methods: str) -> list:
 class TestCheckFilterResults:
     """Runner-level warn + hard-fail behavior shared by single/multi-target paths."""
 
-    def _dps(self, *names: str, methods: list[str] | None = None) -> list:
+    def _dps(self, *names: str, methods: list[str] | None = None) -> list[Any]:
         from evaluatorq import DataPoint
 
         return [
@@ -435,7 +436,7 @@ class TestBridgeDeliveryFilter:
         # Pattern A: known value -> DeliveryMethod enum (usable as-is); unknown -> raw str.
         from evaluatorq.redteam.contracts import RedTeamInput, Severity, TurnType, VulnerabilityDomain
 
-        base = dict(
+        base: dict[str, Any] = dict(
             id='t1', category='ASI01', severity=Severity.MEDIUM,
             vulnerability_domain=next(iter(VulnerabilityDomain)), turn_type=TurnType.SINGLE, source='test',
         )

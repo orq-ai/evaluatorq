@@ -11,12 +11,12 @@ from __future__ import annotations
 import logging
 from typing import Any, TypeVar, cast
 
-from openai import APIStatusError, AsyncOpenAI
+from openai import APIStatusError, AsyncOpenAI, LengthFinishReasonError
 from pydantic import BaseModel
 
+from evaluatorq.common.retry import with_retry
 from evaluatorq.common.tracing import get_trace_context_headers, record_llm_input, record_llm_response
 from evaluatorq.simulation.tracing import with_llm_span
-from evaluatorq.common.retry import with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +96,18 @@ async def generate_structured(
             #   orq.simulation.structured_output.fallback=true
             # once a get_current_span() helper is wired into this module.
             if span is not None:
-                span.set_attribute("orq.simulation.structured_output.fallback", True)
+                fallback = True
+                span.set_attribute("orq.simulation.structured_output.fallback", fallback)
+        except LengthFinishReasonError as exc:
+            # Length-truncated structured output is unusable — the JSON is cut
+            # off mid-string. Falling back to json_object would truncate at the
+            # same budget, so fail loudly with an actionable message instead.
+            logger.error("%s: structured output truncated at the token limit (max_tokens=%s)", label, max_tokens)
+            raise RuntimeError(
+                f"{label}: the model hit the token limit (max_tokens={max_tokens}) and the "
+                f"structured output was truncated, so the result is unusable. Raise the budget "
+                f"via EVALUATORQ_LLM_MAX_TOKENS and retry."
+            ) from exc
 
         # 2. Fallback: json_object mode
         fallback_response = await with_retry(

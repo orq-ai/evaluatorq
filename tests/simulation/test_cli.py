@@ -12,8 +12,11 @@ from typer.testing import CliRunner
 from evaluatorq.simulation.cli import (
     _auto_save_run,
     _build_simulation_run,
+    _configure_logging,
     _format_scorer_averages,
     _infer_target_kind,
+    _resolve_agent_description,
+    _resolve_target,
     _sanitise_run_name,
     _write_report,
     app,
@@ -100,6 +103,46 @@ def _make_results_file(tmp_path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# logging
+# ---------------------------------------------------------------------------
+
+
+def test_configure_logging_aligns_with_redteam_and_does_not_enable_http_client_info_logs() -> None:
+    import logging
+
+    root = logging.getLogger()
+    previous_root_level = root.level
+    previous_evaluatorq_level = logging.getLogger("evaluatorq").level
+    previous_levels = {
+        name: logging.getLogger(name).level for name in ("httpx", "httpcore", "openai")
+    }
+    root.setLevel(logging.INFO)
+    for name in previous_levels:
+        logging.getLogger(name).setLevel(logging.NOTSET)
+
+    try:
+        _configure_logging(0)
+        assert logging.getLogger("evaluatorq").level == logging.WARNING
+        assert logging.getLogger("httpx").level == logging.NOTSET
+        assert logging.getLogger("httpcore").level == logging.NOTSET
+        assert logging.getLogger("openai").level == logging.NOTSET
+
+        _configure_logging(1)
+        assert logging.getLogger("evaluatorq").level == logging.INFO
+
+        _configure_logging(2)
+        assert logging.getLogger("evaluatorq").level == logging.DEBUG
+
+        _configure_logging(-1)
+        assert logging.getLogger("evaluatorq").level == logging.ERROR
+    finally:
+        root.setLevel(previous_root_level)
+        logging.getLogger("evaluatorq").setLevel(previous_evaluatorq_level)
+        for name, level in previous_levels.items():
+            logging.getLogger(name).setLevel(level)
+
+
+# ---------------------------------------------------------------------------
 # _sanitise_run_name
 # ---------------------------------------------------------------------------
 
@@ -132,15 +175,85 @@ def test_sanitise_run_name_strips_leading_trailing_underscores() -> None:
 
 
 def test_infer_target_kind_agent_key() -> None:
-    assert _infer_target_kind(agent_key="k", vercel_url=None, openai_model=None) == "orq_deployment"
+    assert _infer_target_kind(target=None, agent_key="k", vercel_url=None, openai_model=None) == "orq_deployment"
+
+
+def test_infer_target_kind_agent_target() -> None:
+    assert _infer_target_kind(target="agent:k", agent_key=None, vercel_url=None, openai_model=None) == "orq_agent"
+
+
+def test_infer_target_kind_bare_target_defaults_agent() -> None:
+    assert _infer_target_kind(target="k", agent_key=None, vercel_url=None, openai_model=None) == "orq_agent"
+
+
+def test_infer_target_kind_deployment_target() -> None:
+    assert _infer_target_kind(target="deployment:k", agent_key=None, vercel_url=None, openai_model=None) == "orq_deployment"
 
 
 def test_infer_target_kind_vercel() -> None:
-    assert _infer_target_kind(agent_key=None, vercel_url="http://x", openai_model=None) == "vercel"
+    assert _infer_target_kind(target=None, agent_key=None, vercel_url="http://x", openai_model=None) == "vercel"
 
 
 def test_infer_target_kind_openai() -> None:
-    assert _infer_target_kind(agent_key=None, vercel_url=None, openai_model="gpt-4o") == "openai_model"
+    assert _infer_target_kind(target=None, agent_key=None, vercel_url=None, openai_model="gpt-4o") == "openai_model"
+
+
+# ---------------------------------------------------------------------------
+# target resolution
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_target_agent_prefix_uses_openresponses_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORQ_API_KEY", "test-key")
+    target = _resolve_target(target="agent:refund-agent-fixed", agent_key=None, vercel_url=None, openai_model=None)
+
+    assert target.config.model == "agent/refund-agent-fixed"
+    assert target.require_orq is True
+
+
+def test_resolve_target_bare_value_defaults_to_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORQ_API_KEY", "test-key")
+    target = _resolve_target(target="refund-agent-fixed", agent_key=None, vercel_url=None, openai_model=None)
+
+    assert target.config.model == "agent/refund-agent-fixed"
+
+
+def test_resolve_target_deployment_prefix_uses_deployment_callback(monkeypatch: pytest.MonkeyPatch) -> None:
+    marker = object()
+    monkeypatch.setenv("ORQ_API_KEY", "test-key")
+    with patch("evaluatorq.simulation.adapters.from_orq_deployment", return_value=marker) as factory:
+        target = _resolve_target(target="deployment:refund-agent-fixed", agent_key=None, vercel_url=None, openai_model=None)
+
+    assert target is marker
+    factory.assert_called_once_with("refund-agent-fixed")
+
+
+@pytest.mark.asyncio
+async def test_resolve_agent_description_fetches_agent_context_description() -> None:
+    from evaluatorq.contracts import AgentContext
+
+    backend = MagicMock()
+    backend.resolve_context = AsyncMock(
+        return_value=AgentContext(key="refund-agent-fixed", description="Handles refunds.")
+    )
+    with patch("evaluatorq.simulation.cli._make_sim_agent_backend", return_value=backend):
+        description = await _resolve_agent_description(
+            agent_description=None,
+            target="agent:refund-agent-fixed",
+        )
+
+    assert description == "Handles refunds."
+    backend.resolve_context.assert_awaited_once_with("refund-agent-fixed")
+
+
+@pytest.mark.asyncio
+async def test_resolve_agent_description_explicit_value_wins() -> None:
+    description = await _resolve_agent_description(
+        agent_description="Explicit bot description.",
+        target="agent:refund-agent-fixed",
+    )
+
+    assert description == "Explicit bot description."
 
 
 # ---------------------------------------------------------------------------
@@ -358,8 +471,8 @@ def test_simulate_rejects_multiple_targets(tmp_path: Path) -> None:
         [
             "simulate",
             "--datapoints", str(dp_file),
+            "--target", "agent:k",
             "--agent-key", "k",
-            "--openai-model", "gpt-4o",
         ],
         env={"ORQ_API_KEY": "test-key"},
     )
@@ -761,6 +874,105 @@ def test_run_requires_target() -> None:
     assert result.exit_code != 0
 
 
+def test_run_target_agent_uses_context_description_when_omitted(tmp_path: Path) -> None:
+    results = [_make_result()]
+
+    with (
+        patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
+        patch(
+            "evaluatorq.simulation.cli._resolve_agent_description",
+            new_callable=AsyncMock,
+        ) as mock_description,
+        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
+    ):
+        mock_target.return_value = MagicMock()
+        mock_description.return_value = "Context description"
+        mock_impl.return_value = results
+
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--target", "agent:refund-agent-fixed",
+                "--no-save",
+            ],
+            env={"ORQ_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_description.assert_awaited_once_with(
+        agent_description=None,
+        target="agent:refund-agent-fixed",
+    )
+    assert mock_impl.call_args.kwargs["agent_description"] == "Context description"
+
+
+def test_run_explicit_agent_description_does_not_resolve_context(tmp_path: Path) -> None:
+    results = [_make_result()]
+
+    with (
+        patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
+        patch(
+            "evaluatorq.simulation.cli._resolve_agent_description",
+            new_callable=AsyncMock,
+        ) as mock_description,
+        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
+    ):
+        mock_target.return_value = MagicMock()
+        mock_description.return_value = "Explicit description"
+        mock_impl.return_value = results
+
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--target", "agent:refund-agent-fixed",
+                "--agent-description", "Explicit description",
+                "--no-save",
+            ],
+            env={"ORQ_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_description.assert_awaited_once_with(
+        agent_description="Explicit description",
+        target="agent:refund-agent-fixed",
+    )
+    assert mock_impl.call_args.kwargs["agent_description"] == "Explicit description"
+
+
+def test_run_requires_description_for_non_agent_target() -> None:
+    with patch("evaluatorq.simulation.cli._resolve_target") as mock_target:
+        result = runner.invoke(
+            app,
+            ["run", "--target", "deployment:refund-agent-fixed", "--no-save"],
+            env={"ORQ_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 1
+    assert "requires --agent-description" in result.output
+    mock_target.assert_not_called()
+
+
+def test_simulate_invalid_target_prefix_is_clean(tmp_path: Path) -> None:
+    dp_file = _make_datapoints_file(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "simulate",
+            "--datapoints", str(dp_file),
+            "--target", "unknown:refund-agent-fixed",
+            "--no-save",
+        ],
+        env={"ORQ_API_KEY": "test-key"},
+    )
+
+    assert result.exit_code == 1
+    assert "Error:" in result.output
+    assert "Unknown target kind" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_run_success_no_save(tmp_path: Path) -> None:
     results = [_make_result()]
 
@@ -896,6 +1108,38 @@ def test_generate_writes_datapoints(tmp_path: Path) -> None:
     assert len([ln for ln in out_file.read_text().splitlines() if ln.strip()]) == 3
 
 
+def test_generate_target_agent_uses_context_description_when_omitted(tmp_path: Path) -> None:
+    out_file = tmp_path / "dp.jsonl"
+    datapoints = _make_datapoints(1)
+
+    with (
+        patch(
+            "evaluatorq.simulation.cli._resolve_agent_description",
+            new_callable=AsyncMock,
+        ) as mock_description,
+        patch("evaluatorq.simulation.cli._generate_impl", new_callable=AsyncMock) as mock_impl,
+    ):
+        mock_description.return_value = "Context description"
+        mock_impl.return_value = datapoints
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                "--target", "agent:refund-agent-fixed",
+                "--output", str(out_file),
+            ],
+            env={"ORQ_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_description.assert_awaited_once_with(
+        agent_description=None,
+        target="agent:refund-agent-fixed",
+    )
+    assert mock_impl.call_args.kwargs["agent_description"] == "Context description"
+
+
 def test_generate_output_roundtrips_through_simulate_loader(tmp_path: Path) -> None:
     # The whole point of gen-only: the file `generate` writes must load back
     # via the same loader `simulate --datapoints` uses, with id + fields intact.
@@ -938,7 +1182,7 @@ def test_generate_output_passes_validate_dataset(tmp_path: Path) -> None:
 
 
 def test_generate_no_datapoints_runtime_error_is_clean(tmp_path: Path) -> None:
-    # RuntimeError from generation (e.g. every persona×scenario pair failed)
+    # RuntimeError from generation (e.g. every persona x scenario pair failed)
     # surfaces as a one-line error, not a traceback.
     out_file = tmp_path / "dp.jsonl"
     with patch("evaluatorq.simulation.cli._generate_impl", new_callable=AsyncMock) as mock_impl:

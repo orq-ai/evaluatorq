@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from evaluatorq.simulation.api import generate, generate_and_simulate, simulate
-from evaluatorq.simulation.types import CommunicationStyle, Datapoint, Persona, Scenario
+from evaluatorq.simulation.types import CommunicationStyle, Datapoint, Judgment, Persona, Scenario
 
 
 def _persona() -> Persona:
@@ -154,3 +154,54 @@ async def test_generate_and_simulate_emit_datapoints_called_once(monkeypatch):
     assert emitted[0] is fake_datapoints
     assert isinstance(emitted[0], list)
     assert all(isinstance(dp, Datapoint) for dp in emitted[0])
+
+
+@pytest.mark.asyncio
+async def test_simulate_uses_generation_client_for_default_user_and_judge(monkeypatch):
+    monkeypatch.delenv("ORQ_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    from openai import AsyncOpenAI
+
+    injected = AsyncOpenAI(api_key="sk-test", base_url="https://example.test/v1")
+
+    async def fake_user_response(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        assert self._client is injected
+        return "next user message"
+
+    async def fake_judge_evaluate(self, messages):  # noqa: ANN001
+        assert self._client is injected
+        return Judgment(
+            should_terminate=True,
+            reason="done",
+            goal_achieved=True,
+            rules_broken=[],
+            goal_completion_score=1.0,
+        )
+
+    def fake_build_simulation_client(config_client=None, **kwargs):  # noqa: ANN001, ANN003
+        if config_client is not injected:
+            raise RuntimeError("runner built its own client")
+        return injected, False
+
+    with (
+        patch(
+            "evaluatorq.openresponses.client.build_simulation_client",
+            side_effect=fake_build_simulation_client,
+        ),
+        patch(
+            "evaluatorq.simulation.agents.user_simulator.UserSimulatorAgent.respond_async",
+            new=fake_user_response,
+        ),
+        patch(
+            "evaluatorq.simulation.agents.judge.JudgeAgent.evaluate",
+            new=fake_judge_evaluate,
+        ),
+    ):
+        results = await simulate(
+            datapoints=[_make_datapoint()],
+            target=lambda messages: "target reply",
+            generation_client=injected,
+            upload_results=False,
+        )
+
+    assert results[0].goal_achieved is True

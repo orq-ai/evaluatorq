@@ -45,7 +45,7 @@ def _make_result(
     passed: bool | None = True,
     agent_key: str = 'agent-a',
     technique: AttackTechnique = AttackTechnique.INDIRECT_INJECTION,
-    delivery_methods: list[DeliveryMethod] | None = None,
+    delivery_methods: list[DeliveryMethod | str] | None = None,
     turn_type: TurnType = TurnType.SINGLE,
     severity: Severity = Severity.MEDIUM,
     vulnerability_domain: VulnerabilityDomain | None = None,

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
-NOW = datetime(2026, 5, 16, tzinfo=UTC)
+NOW = datetime(2026, 5, 16, tzinfo=timezone.utc)
 SESSION_USER_ID = 'user_001'
 OTHER_USER_IDS = ('user_002', 'user_003')
 
@@ -61,3 +61,22 @@ class DemoState:
 
     def is_refunded(self, order_id: str) -> bool:
         return any(r.order_id == order_id for r in self.refunds)
+
+
+def session_order_lines() -> str:
+    """One line per session-user order, for sim scenario generation.
+
+    Feeds the generator the real, lookup-able order IDs so generated personas
+    reference orders that exist (otherwise lookup_order 404s and no refund goal
+    is achievable). Built from DemoState so it never drifts from the fixtures.
+    """
+    state = DemoState()
+    lines = []
+    for o in state.orders:
+        if o.owner_id != SESSION_USER_ID:
+            continue
+        age = (NOW - o.created_at).days
+        window = 'in 30-day window' if age <= 30 else 'outside 30-day window'
+        tag = ', already refunded' if state.is_refunded(o.id) else ''
+        lines.append(f'- {o.id}: EUR{o.amount:.2f}, delivered {age} days ago ({window}{tag})')
+    return '\n'.join(lines)

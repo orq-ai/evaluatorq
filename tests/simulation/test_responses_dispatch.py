@@ -8,7 +8,11 @@ Verifies that:
 
 from __future__ import annotations
 
+# ruff: noqa: S101, SLF001
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
+from openai import BadRequestError
 
 import pytest
 
@@ -46,6 +50,24 @@ def _make_client() -> MagicMock:
 
 def _make_messages() -> list[Message]:
     return [Message(role="user", content="hello")]
+
+
+def _chat_response(content: str | None) -> MagicMock:
+    mock_message = MagicMock()
+    mock_message.content = content
+    mock_message.tool_calls = None
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+    mock_response.usage = None
+    return mock_response
+
+
+def _bad_request(message: str) -> BadRequestError:
+    request = httpx.Request("POST", "https://example/v1/responses")
+    response = httpx.Response(400, request=request)
+    return BadRequestError(message, response=response, body={"error": {"message": message}})
 
 
 # ---------------------------------------------------------------------------
@@ -131,20 +153,60 @@ class TestCallLlmDispatch:
         client.chat.completions.create.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_responses_path_converts_function_tools_to_chat_style_result(self):
+        client = _make_client()
+
+        mock_response = MagicMock()
+        mock_response.output = [
+            {
+                "type": "function_call",
+                "call_id": "call_123",
+                "name": "finish_conversation",
+                "arguments": '{"done": true}',
+            }
+        ]
+        mock_response.usage = None
+        client.responses.create = AsyncMock(return_value=mock_response)
+
+        config = LLMCallConfig(model="gpt-4o", api="responses", client=client)
+        agent = _ConcreteAgent(config)
+
+        result = await agent._call_llm(
+            _make_messages(),
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "finish_conversation",
+                        "description": "finish",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+        )
+
+        assert client.responses.create.await_args is not None
+        sent = client.responses.create.await_args.kwargs
+        assert sent["tools"] == [
+            {
+                "type": "function",
+                "name": "finish_conversation",
+                "description": "finish",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ]
+        assert result.tool_calls is not None
+        assert result.tool_calls[0].id == "call_123"
+        assert result.tool_calls[0].function.name == "finish_conversation"
+        assert result.tool_calls[0].function.arguments == '{"done": true}'
+
+    @pytest.mark.asyncio
     async def test_chat_completions_path_via_real_sdk_mock(self):
         """End-to-end: _call_chat_completions uses client.chat.completions.create, not responses."""
         client = _make_client()
 
         # Build a minimal chat completion response
-        mock_message = MagicMock()
-        mock_message.content = "hello"
-        mock_message.tool_calls = None
-        mock_choice = MagicMock()
-        mock_choice.message = mock_message
-        mock_response = MagicMock()
-        mock_response.choices = [mock_choice]
-        mock_response.usage = None
-        client.chat.completions.create = AsyncMock(return_value=mock_response)
+        client.chat.completions.create = AsyncMock(return_value=_chat_response("hello"))
 
         config = LLMCallConfig(model="gpt-4o", api="chat_completions", client=client)
         agent = _ConcreteAgent(config)
@@ -153,3 +215,53 @@ class TestCallLlmDispatch:
 
         client.chat.completions.create.assert_awaited_once()
         client.responses.create.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_chat_completions_retries_once_on_empty_response(self):
+        client = _make_client()
+        client.chat.completions.create = AsyncMock(
+            side_effect=[_chat_response(""), _chat_response("second response")]
+        )
+
+        config = LLMCallConfig(model="gpt-4o", api="chat_completions", client=client)
+        agent = _ConcreteAgent(config)
+
+        result = await agent._call_llm(_make_messages())
+
+        assert result.content == "second response"
+        assert client.chat.completions.create.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_responses_drops_reasoning_and_retries_when_rejected(self, monkeypatch):
+        monkeypatch.setattr("evaluatorq.simulation.agents.base.DEFAULT_REASONING_EFFORT", "low")
+        client = _make_client()
+        ok = MagicMock()
+        ok.output = []
+        ok.usage = None
+        client.responses.create = AsyncMock(
+            side_effect=[_bad_request("Unsupported parameter: reasoning"), ok]
+        )
+
+        config = LLMCallConfig(model="gpt-4o", api="responses", client=client)
+        agent = _ConcreteAgent(config)
+
+        await agent._call_llm(_make_messages())
+
+        assert client.responses.create.await_count == 2
+        # The retry must not carry reasoning.
+        assert client.responses.create.await_args is not None
+        assert "reasoning" not in client.responses.create.await_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_responses_reraises_unrelated_400(self, monkeypatch):
+        monkeypatch.setattr("evaluatorq.simulation.agents.base.DEFAULT_REASONING_EFFORT", "low")
+        client = _make_client()
+        client.responses.create = AsyncMock(side_effect=_bad_request("Invalid tool schema"))
+
+        config = LLMCallConfig(model="gpt-4o", api="responses", client=client)
+        agent = _ConcreteAgent(config)
+
+        with pytest.raises(BadRequestError, match="Invalid tool schema"):
+            await agent._call_llm(_make_messages())
+        # No reasoning-stripped retry — an unrelated 400 is not masked.
+        assert client.responses.create.await_count == 1

@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)  # noqa: RUF067
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import AgentTarget, LLMCallConfig, TokenUsage
+    from evaluatorq.openresponses.target import OrqResponsesTarget
     from evaluatorq.simulation.adapters import (
         from_chat_completions,
         from_orq_deployment,
@@ -79,7 +80,6 @@ if TYPE_CHECKING:
         apply_random_perturbation,
     )
     from evaluatorq.simulation.runner.simulation import SimulationRunner
-    from evaluatorq.openresponses.target import OrqResponsesTarget
     from evaluatorq.simulation.types import (
         CommunicationStyle,
         ConversationStrategy,
@@ -110,6 +110,12 @@ if TYPE_CHECKING:
         build_persona_system_prompt,
         build_scenario_user_context,
         generate_datapoint,
+    )
+    from evaluatorq.simulation.utils.run_store import (
+        SIM_RUNS_DIR_NAME,
+        auto_save_run,
+        build_simulation_run,
+        get_sim_runs_dir,
     )
     from evaluatorq.simulation.wrap_agent import wrap_simulation_agent
 
@@ -212,6 +218,16 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
         'evaluatorq.simulation.utils.dataset_export',
         'results_to_jsonl',
     ),
+    'SIM_RUNS_DIR_NAME': (
+        'evaluatorq.simulation.utils.run_store',
+        'SIM_RUNS_DIR_NAME',
+    ),
+    'auto_save_run': ('evaluatorq.simulation.utils.run_store', 'auto_save_run'),
+    'build_simulation_run': (
+        'evaluatorq.simulation.utils.run_store',
+        'build_simulation_run',
+    ),
+    'get_sim_runs_dir': ('evaluatorq.simulation.utils.run_store', 'get_sim_runs_dir'),
     'build_datapoint_system_prompt': (
         'evaluatorq.simulation.utils.prompt_builders',
         'build_datapoint_system_prompt',
@@ -250,6 +266,8 @@ __all__ = [
     'DEFAULT_MODEL',
     # Evaluators
     'SIMULATION_EVALUATORS',
+    # Utils
+    'SIM_RUNS_DIR_NAME',
     # Agents
     'AgentConfig',
     'AgentTarget',
@@ -299,10 +317,11 @@ __all__ = [
     'apply_perturbation',
     'apply_perturbations_batch',
     'apply_random_perturbation',
-    # Utils
+    'auto_save_run',
     'build_datapoint_system_prompt',
     'build_persona_system_prompt',
     'build_scenario_user_context',
+    'build_simulation_run',
     'export_datapoints_to_jsonl',
     'export_results_to_jsonl',
     # Adapters
@@ -313,6 +332,7 @@ __all__ = [
     'generate_datapoint',
     'get_all_evaluators',
     'get_evaluator',
+    'get_sim_runs_dir',
     'load_datapoints_from_jsonl',
     'parse_jsonl',
     'results_to_jsonl',

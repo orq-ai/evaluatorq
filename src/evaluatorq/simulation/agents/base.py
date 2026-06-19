@@ -8,14 +8,25 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from openai import BadRequestError
+
 from evaluatorq.common.llm_call import execute_chat_completion
 from evaluatorq.common.retry import with_retry
 from evaluatorq.common.tracing import get_trace_context_headers, record_llm_input, record_llm_response
-from evaluatorq.contracts import AgentResponse, LLMCallConfig, TextOutputItem, TokenUsage, ToolCallOutputItem
+from evaluatorq.contracts import (
+    AgentResponse,
+    FunctionCall,
+    LLMCallConfig,
+    StrategyToolCall,
+    TextOutputItem,
+    TokenUsage,
+    ToolCallOutputItem,
+)
 from evaluatorq.openresponses.client import build_simulation_client
 from evaluatorq.simulation.tracing import with_llm_span
 from evaluatorq.simulation.types import DEFAULT_MODEL, Message
@@ -25,7 +36,43 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TIMEOUT_S = 60
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        raise ValueError(f'Environment variable {name}={raw!r} must be a number') from None
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        raise ValueError(f'Environment variable {name}={raw!r} must be an integer') from None
+
+
+# Per-LLM-call timeout. Self-hosted endpoints (e.g. a single-GPU tailscale box
+# under parallel load) can exceed the default; raise via EVALUATORQ_LLM_TIMEOUT_S.
+DEFAULT_TIMEOUT_S = _env_float('EVALUATORQ_LLM_TIMEOUT_S', 60.0)
+
+# Default completion-token budget. Reasoning models (e.g. gemma-4) spend tokens
+# on hidden reasoning before the tool call; too small a budget truncates the
+# response (finish_reason=length) before the tool call is emitted, surfacing as
+# "no text and no tool calls". Raise via EVALUATORQ_LLM_MAX_TOKENS for such models.
+DEFAULT_MAX_TOKENS = _env_int('EVALUATORQ_LLM_MAX_TOKENS', 8192)
+
+# Default reasoning effort for reasoning-capable models. "medium" keeps hidden
+# reasoning bounded (far fewer tokens than the model's default), which avoids
+# budget-exhaustion truncation. Endpoints that don't support it degrade
+# gracefully (the param is dropped on a 400). Set "" / "none" to omit it.
+_REASONING_EFFORT_RAW = os.environ.get('EVALUATORQ_REASONING_EFFORT', 'medium').strip().lower()
+DEFAULT_REASONING_EFFORT = _REASONING_EFFORT_RAW if _REASONING_EFFORT_RAW not in ('', 'none', 'off') else None
 
 
 @dataclass
@@ -209,7 +256,7 @@ class BaseAgent(ABC):
     ) -> LLMResult:
         """Call the LLM via the Chat Completions API with retry logic."""
         temp = temperature if temperature is not None else 0.7
-        max_tok = max_tokens or 2048
+        max_tok = max_tokens or DEFAULT_MAX_TOKENS
         timeout_s = timeout or DEFAULT_TIMEOUT_S
 
         full_messages: list[dict[str, Any]] = [
@@ -224,33 +271,52 @@ class BaseAgent(ABC):
             max_tokens=max_tok,
             purpose=llm_purpose,
         ) as span:
+            reasoning_kwargs = {'reasoning_effort': DEFAULT_REASONING_EFFORT} if DEFAULT_REASONING_EFFORT else None
 
             async def _do_call() -> LLMResult:
-                response, delta = await execute_chat_completion(
-                    client=self._client,
-                    model=self._model,
-                    messages=full_messages,
-                    span=span,
-                    timeout_s=timeout_s,
-                    temperature=temp,
-                    max_tokens=max_tok,
-                    tools=tools,
-                )
-                if delta is not None:
-                    self._usage = self._usage + delta
-
-                choice = response.choices[0] if response.choices else None
-                if not choice:
-                    raise RuntimeError(f'{self.name}: No choices in response')
-                message = choice.message
-                content = message.content
-                tool_calls = list(message.tool_calls or [])
-                if not content and not tool_calls:
-                    raise RuntimeError(
-                        f'{self.name}._call_chat_completions: LLM returned no text and no tool calls. '
-                        'Check model and prompt.'
+                finish_reason: str | None = None
+                for attempt in range(2):
+                    response, delta = await execute_chat_completion(
+                        client=self._client,
+                        model=self._model,
+                        messages=full_messages,
+                        span=span,
+                        timeout_s=timeout_s,
+                        temperature=temp,
+                        max_tokens=max_tok,
+                        tools=tools,
+                        extra_kwargs=reasoning_kwargs,
                     )
-                return LLMResult(content=content or '', tool_calls=tool_calls or None)
+                    if delta is not None:
+                        self._usage = self._usage + delta
+
+                    choice = response.choices[0] if response.choices else None
+                    if not choice:
+                        raise RuntimeError(f'{self.name}: No choices in response')
+                    message = choice.message
+                    content = message.content
+                    tool_calls = list(message.tool_calls or [])
+                    if content or tool_calls:
+                        return LLMResult(content=content or '', tool_calls=tool_calls or None)
+                    finish_reason = choice.finish_reason
+                    if attempt == 0:
+                        logger.info(
+                            '%s._call_chat_completions: empty response (finish_reason=%s), retrying once',
+                            self.name,
+                            finish_reason,
+                        )
+                # Truncated before the model could emit text/tool call. Common with
+                # reasoning models whose hidden reasoning exhausts the token budget.
+                if finish_reason == 'length':
+                    raise RuntimeError(
+                        f'{self.name}._call_chat_completions: response truncated (finish_reason=length, '
+                        f'max_tokens={max_tok}) before any text or tool call. The model — likely a reasoning '
+                        'model — ran out of tokens during reasoning. Raise the budget via EVALUATORQ_LLM_MAX_TOKENS.'
+                    )
+                raise RuntimeError(
+                    f'{self.name}._call_chat_completions: LLM returned no text and no tool calls after retry '
+                    f'(finish_reason={finish_reason}). Check model and prompt.'
+                )
 
             return await with_retry(_do_call, label=f'{self.name}._call_chat_completions')
 
@@ -282,13 +348,15 @@ class BaseAgent(ABC):
         }
 
         if tools:
-            params['tools'] = tools
+            params['tools'] = [_responses_tool_schema(tool) for tool in tools]
 
         if temperature is not None:
             params['temperature'] = temperature
 
-        if max_tokens is not None:
-            params['max_output_tokens'] = max_tokens
+        params['max_output_tokens'] = max_tokens or DEFAULT_MAX_TOKENS
+
+        if DEFAULT_REASONING_EFFORT:
+            params['reasoning'] = {'effort': DEFAULT_REASONING_EFFORT}
 
         async with with_llm_span(
             model=self._model,
@@ -310,10 +378,28 @@ class BaseAgent(ABC):
                 call_kwargs: dict[str, Any] = dict(params)
                 if trace_headers:
                     call_kwargs['extra_headers'] = trace_headers
-                response = await asyncio.wait_for(
-                    self._client.responses.create(**call_kwargs),
-                    timeout=timeout_s,
-                )
+                try:
+                    response = await asyncio.wait_for(
+                        self._client.responses.create(**call_kwargs),
+                        timeout=timeout_s,
+                    )
+                except BadRequestError as exc:
+                    # "where possible": drop reasoning and retry if the endpoint
+                    # rejects it, rather than failing the call. Gate on the error
+                    # body so an unrelated 400 isn't masked by a stripped retry.
+                    err_body = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
+                    if 'reasoning' not in call_kwargs or 'reasoning' not in err_body:
+                        raise
+                    logger.warning(
+                        '%s._call_responses: model %s rejected reasoning; dropping it and retrying once',
+                        self.name,
+                        self.config.model,
+                    )
+                    call_kwargs.pop('reasoning', None)
+                    response = await asyncio.wait_for(
+                        self._client.responses.create(**call_kwargs),
+                        timeout=timeout_s,
+                    )
 
                 agent_response = AgentResponse.from_openresponses(response)
                 output_items = agent_response.output
@@ -331,17 +417,42 @@ class BaseAgent(ABC):
                 tool_call_items = [i for i in output_items if isinstance(i, ToolCallOutputItem)]
 
                 if not text_items and not tool_call_items:
-                    # No text, no tool calls — warn but don't raise (redteam callers may handle empty)
+                    # No text, no tool calls — warn but don't raise (redteam callers
+                    # may handle empty). Surface the reason so it's clear to the user:
+                    # reason=max_output_tokens means the budget was too small.
+                    incomplete = getattr(response, 'incomplete_details', None)
+                    reason = getattr(incomplete, 'reason', None) if incomplete else getattr(response, 'status', None)
                     logger.warning(
-                        '%s._call_responses: no text or tool calls in response (model=%s)',
+                        '%s._call_responses: empty response — no text or tool calls (model=%s, reason=%s). '
+                        'If reason=max_output_tokens, raise the budget via EVALUATORQ_LLM_MAX_TOKENS.',
                         self.name,
                         self.config.model,
+                        reason,
                     )
 
                 text = ''.join(getattr(i, 'text', '') for i in text_items)
                 result = LLMResult(content=text)
                 if tool_call_items:
-                    result.tool_calls = tool_call_items
+                    result.tool_calls = [
+                        StrategyToolCall(
+                            id=item.call_id,
+                            function=FunctionCall(name=item.name, arguments=item.arguments),
+                        )
+                        for item in tool_call_items
+                    ]
                 return result
 
             return await with_retry(_do_call, label=f'{self.name}._call_responses')
+
+
+def _responses_tool_schema(tool: dict[str, Any]) -> dict[str, Any]:
+    """Convert chat-completions function tools to Responses function tools."""
+    if tool.get('type') == 'function' and isinstance(tool.get('function'), dict):
+        fn = tool['function']
+        return {
+            'type': 'function',
+            'name': fn.get('name'),
+            'description': fn.get('description'),
+            'parameters': fn.get('parameters') or {'type': 'object', 'properties': {}},
+        }
+    return tool

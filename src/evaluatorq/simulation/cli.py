@@ -27,18 +27,18 @@ import asyncio
 import json
 import logging
 import os
-import re
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import Annotated, Any, NoReturn
 
 import typer
 
 from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MODEL
-
-if TYPE_CHECKING:
-    from evaluatorq.simulation.types import SimulationRun
+from evaluatorq.simulation.utils.run_store import auto_save_run as _auto_save_run
+from evaluatorq.simulation.utils.run_store import build_simulation_run as _build_simulation_run
+from evaluatorq.simulation.utils.run_store import get_sim_runs_dir as _get_sim_runs_dir
+from evaluatorq.simulation.utils.run_store import sanitise_run_name as _sanitise_run_name  # noqa: F401
+from evaluatorq.simulation.utils.run_store import write_report as _write_report
 
 app = typer.Typer(
     name="sim",
@@ -46,32 +46,33 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
-_SIM_RUNS_DIR_NAME = Path(".evaluatorq") / "sim-runs"
-
 
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
 
 
-def _configure_logging(*, verbose: bool, quiet: bool) -> None:
-    if verbose:
-        level = logging.DEBUG
-    elif quiet:
+def _configure_logging(verbosity: int) -> None:
+    if verbosity < 0:
+        level = logging.ERROR
+    elif verbosity == 0:
         level = logging.WARNING
-    else:
+    elif verbosity == 1:
         level = logging.INFO
+    else:
+        level = logging.DEBUG
 
-    logging.basicConfig(
-        level=level,
-        format="%(levelname)s: %(message)s",
-        stream=sys.stderr,
-    )
+    logger = logging.getLogger("evaluatorq")
+    logger.setLevel(level)
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+        logger.addHandler(handler)
     try:
         from loguru import logger as loguru_logger
 
         loguru_logger.remove()
-        loguru_logger.add(sys.stderr, level=logging.getLevelName(level))
+        loguru_logger.add(sys.stderr, level=level)
     except ImportError:
         pass
 
@@ -83,6 +84,7 @@ def _configure_logging(*, verbose: bool, quiet: bool) -> None:
 
 def _resolve_target(
     *,
+    target: str | None,
     agent_key: str | None,
     vercel_url: str | None,
     openai_model: str | None,
@@ -92,6 +94,7 @@ def _resolve_target(
     Raises typer.BadParameter when zero or more than one flag is set.
     """
     supplied = {
+        "--target": target,
         "--agent-key": agent_key,
         "--vercel-url": vercel_url,
         "--openai-model": openai_model,
@@ -100,18 +103,28 @@ def _resolve_target(
 
     if len(active) == 0:
         raise typer.BadParameter(
-            "Provide exactly one of: --agent-key, --vercel-url, --openai-model"
+            "Provide exactly one of: --target, --agent-key, --vercel-url, --openai-model"
         )
     if len(active) > 1:
         raise typer.BadParameter(
             f"Only one target flag allowed; got: {', '.join(active)}"
         )
 
+    if target is not None:
+        from evaluatorq.redteam.contracts import TargetKind
+
+        kind, value = _parse_target_spec(target)
+        if kind == TargetKind.AGENT:
+            return _make_sim_agent_backend().create_target(value)
+        if kind == TargetKind.DEPLOYMENT:
+            _require_orq_api_key("--target deployment:<key>")
+            from evaluatorq.simulation.adapters import from_orq_deployment
+
+            return from_orq_deployment(value)
+        raise typer.BadParameter(f"Unsupported target kind for sim: {kind}")
+
     if agent_key is not None:
-        if not os.environ.get("ORQ_API_KEY"):
-            raise typer.BadParameter(
-                "--agent-key requires ORQ_API_KEY to be set in the environment."
-            )
+        _require_orq_api_key("--agent-key")
         from evaluatorq.simulation.adapters import from_orq_deployment
 
         return from_orq_deployment(agent_key)
@@ -130,6 +143,70 @@ def _resolve_target(
     from evaluatorq.redteam.backends.openai import OpenAIModelTarget
 
     return OpenAIModelTarget(model=openai_model)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+
+
+def _require_orq_api_key(flag: str) -> None:
+    if not os.environ.get("ORQ_API_KEY"):
+        raise typer.BadParameter(
+            f"{flag} requires ORQ_API_KEY to be set in the environment."
+        )
+
+
+def _parse_target_spec(target: str) -> tuple[Any, str]:
+    from evaluatorq.redteam.runner import _parse_target
+
+    return _parse_target(target)
+
+
+def _make_sim_agent_backend() -> Any:
+    from evaluatorq.redteam.contracts import LLMConfig, TargetConfig
+    from evaluatorq.redteam.runner import _make_agent_backend
+
+    return _make_agent_backend(
+        target_config=TargetConfig(system_prompt=None),
+        pipeline_config=LLMConfig(),
+    )
+
+
+async def _resolve_agent_description(
+    *,
+    agent_description: str | None,
+    target: str | None,
+) -> str:
+    if agent_description:
+        return agent_description
+    if target is None:
+        raise ValueError("This command requires --agent-description unless --target is an agent target")
+
+    from evaluatorq.redteam.contracts import TargetKind
+
+    kind, value = _parse_target_spec(target)
+    if kind != TargetKind.AGENT:
+        raise ValueError("This command requires --agent-description unless --target is an agent target")
+
+    ctx = await _make_sim_agent_backend().resolve_context(value)
+    if not ctx.description:
+        raise ValueError(
+            f"Agent {value!r} has no description; pass --agent-description explicitly."
+        )
+    return ctx.description
+
+
+def _handle_cli_error(exc: Exception) -> NoReturn:
+    typer.echo(f"Error: {exc}", err=True)
+    raise typer.Exit(1) from None
+
+
+def _clean_cli_error_types() -> tuple[type[Exception], ...]:
+    # Guard the lazy imports: this runs while evaluating an `except` clause, so a
+    # failed import here would replace the exception being handled with an
+    # ImportError. Fall back to the base types instead of masking the real error.
+    try:
+        from evaluatorq.common.llm_client import MissingLLMCredentialsError
+        from evaluatorq.redteam.exceptions import BackendError, CredentialError
+    except ImportError:
+        return (ValueError, RuntimeError)
+    return (ValueError, RuntimeError, BackendError, CredentialError, MissingLLMCredentialsError)
 
 
 # ---------------------------------------------------------------------------
@@ -157,101 +234,26 @@ def _resolve_evaluators(evaluators: list[str] | None) -> list[str] | None:
 
 
 # ---------------------------------------------------------------------------
-# Run store
+# Target / target-kind inference
 # ---------------------------------------------------------------------------
-
-
-def _sanitise_run_name(name: str) -> str:
-    sanitised = name.lower()
-    sanitised = re.sub(r"[^a-z0-9_-]", "_", sanitised)
-    sanitised = re.sub(r"_+", "_", sanitised)
-    sanitised = sanitised.strip("_")
-    return sanitised[:64] or "sim"
-
-
-def _get_sim_runs_dir() -> Path:
-    return Path.cwd() / _SIM_RUNS_DIR_NAME
-
-
-def _build_simulation_run(
-    *,
-    run_name: str,
-    mode: str,
-    target_kind: str,
-    evaluator_names: list[str],
-    results: list[Any],
-) -> SimulationRun:
-    """Build the full ``SimulationRun`` report model from results.
-
-    Aggregates per-scorer averages, guarding against non-numeric scores from a
-    misbehaving evaluator so a single bad entry can't crash the build.
-    """
-    from evaluatorq.simulation.types import SimulationRun
-
-    scorer_totals: dict[str, list[float]] = {}
-    for result in results:
-        scores: dict[str, float] = (result.metadata or {}).get("evaluator_scores", {})
-        for scorer_name, score in scores.items():
-            if isinstance(score, (int, float)):
-                scorer_totals.setdefault(scorer_name, []).append(float(score))
-
-    scorer_averages = {k: sum(v) / len(v) for k, v in scorer_totals.items() if v}
-
-    return SimulationRun(
-        run_name=run_name,
-        created_at=datetime.now(tz=timezone.utc),
-        mode=mode,  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
-        target_kind=target_kind,  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
-        evaluator_names=evaluator_names,
-        total_results=len(results),
-        scorer_averages=scorer_averages,
-        results=results,
-    )
-
-
-def _auto_save_run(*, run: SimulationRun, run_name: str) -> Path:
-    """Persist a prebuilt ``SimulationRun`` to .evaluatorq/sim-runs/ under an
-    auto-generated, collision-free `<name>_<timestamp>.json` filename."""
-    runs_dir = _get_sim_runs_dir()
-    runs_dir.mkdir(parents=True, exist_ok=True)
-
-    ts = datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M%S")
-    base = f"{_sanitise_run_name(run_name)}_{ts}"
-    payload = run.model_dump_json(indent=2)
-
-    # Exclusive-create write: avoids the TOCTOU race between an exists() check
-    # and a later write, and bounds the collision search.
-    target_path = runs_dir / f"{base}.json"
-    for counter in range(1000):
-        try:
-            with target_path.open("x", encoding="utf-8") as fh:
-                _ = fh.write(payload)
-        except FileExistsError:  # noqa: PERF203 — exclusive-create retry is the point
-            target_path = runs_dir / f"{base}_{counter + 1:03d}.json"
-        else:
-            return target_path
-    raise RuntimeError(
-        f"Could not find a free run-store filename for {base!r} after 1000 attempts"
-    )
-
-
-def _write_report(run: SimulationRun, output: Path) -> None:
-    """Write the full ``SimulationRun`` report JSON to an explicit path.
-
-    Unlike :func:`_auto_save_run` (auto-named, collision-avoiding, fixed dir),
-    this honours the user-supplied ``--report-output`` path verbatim, creating
-    parent dirs and overwriting — mirroring ``--output``/``--save-datapoints``.
-    """
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(run.model_dump_json(indent=2), encoding="utf-8")
 
 
 def _infer_target_kind(
     *,
+    target: str | None,
     agent_key: str | None,
     vercel_url: str | None,
     openai_model: str | None,
 ) -> str:
+    if target is not None:
+        from evaluatorq.redteam.contracts import TargetKind
+
+        kind, _ = _parse_target_spec(target)
+        if kind == TargetKind.AGENT:
+            return "orq_agent"
+        if kind == TargetKind.DEPLOYMENT:
+            return "orq_deployment"
+        return str(kind)
     if agent_key is not None:
         return "orq_deployment"
     if vercel_url is not None:
@@ -270,9 +272,22 @@ def simulate(
         Path,
         typer.Option("--datapoints", "-d", help="Path to datapoints JSONL file."),
     ],
+    target: Annotated[
+        str | None,
+        typer.Option(
+            "--target",
+            help=(
+                "Target to simulate: agent:<key> or deployment:<key>. "
+                "Bare values default to agent:<key>."
+            ),
+        ),
+    ] = None,
     agent_key: Annotated[
         str | None,
-        typer.Option("--agent-key", help="Orq deployment key (requires ORQ_API_KEY)."),
+        typer.Option(
+            "--agent-key",
+            help="Deprecated alias for Orq deployment key behavior (requires ORQ_API_KEY).",
+        ),
     ] = None,
     vercel_url: Annotated[
         str | None,
@@ -341,40 +356,60 @@ def simulate(
         bool,
         typer.Option("--no-save", help="Skip writing to .evaluatorq/sim-runs/."),
     ] = False,
-    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging.")] = False,  # noqa: FBT002
-    quiet: Annotated[bool, typer.Option("--quiet", "-q", help="Warning-only logging.")] = False,  # noqa: FBT002
+    verbose: Annotated[
+        int,
+        typer.Option(
+            "--verbose",
+            "-v",
+            count=True,
+            help="Increase verbosity (-v info logs, -vv debug logs).",
+        ),
+    ] = 0,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress non-error output."),
+    ] = False,
 ) -> None:
     """Run simulations from a pre-built datapoints file.
 
     Targets (provide exactly one):
 
-    - --agent-key KEY    Orq deployment/agent (requires ORQ_API_KEY).
+    - --target TARGET    agent:<key> (default for bare key) or deployment:<key>.
+    - --agent-key KEY    Deprecated alias for Orq deployment key behavior.
     - --vercel-url URL   Vercel AI SDK HTTP endpoint.
     - --openai-model M   OpenAI-compatible model. Provider from env:
       ORQ_API_KEY for the Orq AI Router, else OPENAI_API_KEY
       (+ optional OPENAI_BASE_URL for vLLM/OpenRouter/local). ORQ wins if both set.
 
-    Note: --agent-key targets an Orq *agent*; --openai-model with ORQ_API_KEY
-    targets a raw model via the Orq *router*. They are different surfaces.
+    Note: --target agent:<key> invokes a hosted Orq agent through the Responses
+    router. --agent-key / --target deployment:<key> use the legacy deployment
+    callback path.
     """
-    _configure_logging(verbose=verbose, quiet=quiet)
+    if quiet:
+        verbose = -1
+    _configure_logging(verbose)
 
     if not datapoints.exists():
         raise typer.BadParameter(f"Datapoints file not found: {datapoints}")
 
-    target = _resolve_target(
-        agent_key=agent_key, vercel_url=vercel_url, openai_model=openai_model
-    )
-    evaluator_names = _resolve_evaluators(evaluator)
-    target_kind = _infer_target_kind(
-        agent_key=agent_key, vercel_url=vercel_url, openai_model=openai_model
-    )
-
     try:
+        resolved_target = _resolve_target(
+            target=target,
+            agent_key=agent_key,
+            vercel_url=vercel_url,
+            openai_model=openai_model,
+        )
+        evaluator_names = _resolve_evaluators(evaluator)
+        target_kind = _infer_target_kind(
+            target=target,
+            agent_key=agent_key,
+            vercel_url=vercel_url,
+            openai_model=openai_model,
+        )
         results = asyncio.run(
             _simulate_impl(
                 datapoints_path=datapoints,
-                target=target,
+                target=resolved_target,
                 sim_model=sim_model,
                 max_turns=max_turns,
                 parallelism=parallelism,
@@ -388,12 +423,13 @@ def simulate(
     except asyncio.CancelledError:
         typer.echo("^C aborted.", err=True)
         raise typer.Exit(130) from None
-    except (ValueError, RuntimeError) as exc:
+    except typer.BadParameter:
+        raise
+    except _clean_cli_error_types() as exc:
         # RuntimeError covers "no datapoints produced" (generation) and
         # SimulationDroppedError (dropped jobs) — surface as one line, not a
         # traceback. Exit 1 keeps the CI-gate behaviour (still non-zero).
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(1) from None
+        _handle_cli_error(exc)
 
     _print_summary(results)
 
@@ -453,12 +489,25 @@ async def _simulate_impl(
 @app.command(no_args_is_help=True)
 def run(
     agent_description: Annotated[
-        str,
+        str | None,
         typer.Option("--agent-description", help="Free-text description of the agent under test."),
-    ],
+    ] = None,
+    target: Annotated[
+        str | None,
+        typer.Option(
+            "--target",
+            help=(
+                "Target to simulate: agent:<key> or deployment:<key>. "
+                "Bare values default to agent:<key>."
+            ),
+        ),
+    ] = None,
     agent_key: Annotated[
         str | None,
-        typer.Option("--agent-key", help="Orq deployment key (requires ORQ_API_KEY)."),
+        typer.Option(
+            "--agent-key",
+            help="Deprecated alias for Orq deployment key behavior (requires ORQ_API_KEY).",
+        ),
     ] = None,
     vercel_url: Annotated[
         str | None,
@@ -546,37 +595,59 @@ def run(
             ),
         ),
     ] = None,
-    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging.")] = False,  # noqa: FBT002
-    quiet: Annotated[bool, typer.Option("--quiet", "-q", help="Warning-only logging.")] = False,  # noqa: FBT002
+    verbose: Annotated[
+        int,
+        typer.Option(
+            "--verbose",
+            "-v",
+            count=True,
+            help="Increase verbosity (-v info logs, -vv debug logs).",
+        ),
+    ] = 0,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress non-error output."),
+    ] = False,
 ) -> None:
     """Generate personas and scenarios, then run simulations (generate + simulate).
 
     Targets (provide exactly one):
 
-    - --agent-key KEY    Orq deployment/agent (requires ORQ_API_KEY).
+    - --target TARGET    agent:<key> (default for bare key) or deployment:<key>.
+    - --agent-key KEY    Deprecated alias for Orq deployment key behavior.
     - --vercel-url URL   Vercel AI SDK HTTP endpoint.
     - --openai-model M   OpenAI-compatible model. Provider from env:
       ORQ_API_KEY for the Orq AI Router, else OPENAI_API_KEY
       (+ optional OPENAI_BASE_URL for vLLM/OpenRouter/local). ORQ wins if both set.
 
-    Note: --agent-key targets an Orq *agent*; --openai-model with ORQ_API_KEY
-    targets a raw model via the Orq *router*. They are different surfaces.
+    If --target is an agent target, --agent-description may be omitted and is
+    fetched from Orq agent context. Other targets require --agent-description.
     """
-    _configure_logging(verbose=verbose, quiet=quiet)
-
-    target = _resolve_target(
-        agent_key=agent_key, vercel_url=vercel_url, openai_model=openai_model
-    )
-    evaluator_names = _resolve_evaluators(evaluator)
-    target_kind = _infer_target_kind(
-        agent_key=agent_key, vercel_url=vercel_url, openai_model=openai_model
-    )
+    if quiet:
+        verbose = -1
+    _configure_logging(verbose)
 
     try:
+        resolved_agent_description = asyncio.run(
+            _resolve_agent_description(agent_description=agent_description, target=target)
+        )
+        resolved_target = _resolve_target(
+            target=target,
+            agent_key=agent_key,
+            vercel_url=vercel_url,
+            openai_model=openai_model,
+        )
+        evaluator_names = _resolve_evaluators(evaluator)
+        target_kind = _infer_target_kind(
+            target=target,
+            agent_key=agent_key,
+            vercel_url=vercel_url,
+            openai_model=openai_model,
+        )
         results = asyncio.run(
             _run_impl(
-                agent_description=agent_description,
-                target=target,
+                agent_description=resolved_agent_description,
+                target=resolved_target,
                 sim_model=sim_model,
                 max_turns=max_turns,
                 parallelism=parallelism,
@@ -593,12 +664,13 @@ def run(
     except asyncio.CancelledError:
         typer.echo("^C aborted.", err=True)
         raise typer.Exit(130) from None
-    except (ValueError, RuntimeError) as exc:
+    except typer.BadParameter:
+        raise
+    except _clean_cli_error_types() as exc:
         # RuntimeError covers "no datapoints produced" (generation) and
         # SimulationDroppedError (dropped jobs) — surface as one line, not a
         # traceback. Exit 1 keeps the CI-gate behaviour (still non-zero).
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(1) from None
+        _handle_cli_error(exc)
 
     _print_summary(results)
 
@@ -671,14 +743,24 @@ async def _run_impl(
 
 @app.command(no_args_is_help=True)
 def generate(
-    agent_description: Annotated[
-        str,
-        typer.Option("--agent-description", help="Free-text description of the agent under test."),
-    ],
     output: Annotated[
         Path,
         typer.Option("--output", "-o", help="Path to write the generated datapoints JSONL."),
     ],
+    agent_description: Annotated[
+        str | None,
+        typer.Option("--agent-description", help="Free-text description of the agent under test."),
+    ] = None,
+    target: Annotated[
+        str | None,
+        typer.Option(
+            "--target",
+            help=(
+                "Agent target used to fetch the description when --agent-description "
+                "is omitted. Accepts agent:<key>; bare values default to agent:<key>."
+            ),
+        ),
+    ] = None,
     sim_model: Annotated[
         str,
         typer.Option(
@@ -700,23 +782,40 @@ def generate(
         int,
         typer.Option("--num-scenarios", min=1, help="Number of scenarios to generate."),
     ] = 5,
-    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging.")] = False,  # noqa: FBT002
-    quiet: Annotated[bool, typer.Option("--quiet", "-q", help="Warning-only logging.")] = False,  # noqa: FBT002
+    verbose: Annotated[
+        int,
+        typer.Option(
+            "--verbose",
+            "-v",
+            count=True,
+            help="Increase verbosity (-v info logs, -vv debug logs).",
+        ),
+    ] = 0,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Suppress non-error output."),
+    ] = False,
 ) -> None:
     """Generate simulation datapoints from an agent description (no simulation).
 
-    Builds personas × scenarios with generated first messages and writes them
+    Builds personas x scenarios with generated first messages and writes them
     as a datapoints JSONL file. Feed that file to ``sim simulate --datapoints``
     to run — splitting generation out keeps the datapoint set frozen across
-    simulate runs. No agent target is contacted; only the ``--sim-model``
-    generator is called.
+    simulate runs. No execution target is contacted; ``--target agent:<key>``
+    is only used to fetch the agent description when ``--agent-description`` is
+    omitted.
     """
-    _configure_logging(verbose=verbose, quiet=quiet)
+    if quiet:
+        verbose = -1
+    _configure_logging(verbose)
 
     try:
+        resolved_agent_description = asyncio.run(
+            _resolve_agent_description(agent_description=agent_description, target=target)
+        )
         datapoints = asyncio.run(
             _generate_impl(
-                agent_description=agent_description,
+                agent_description=resolved_agent_description,
                 sim_model=sim_model,
                 num_personas=num_personas,
                 num_scenarios=num_scenarios,
@@ -728,12 +827,13 @@ def generate(
     except asyncio.CancelledError:
         typer.echo("^C aborted.", err=True)
         raise typer.Exit(130) from None
-    except (ValueError, RuntimeError) as exc:
+    except typer.BadParameter:
+        raise
+    except _clean_cli_error_types() as exc:
         # RuntimeError covers "first-message generation produced no datapoints"
         # from _resolve_or_generate_datapoints — surface as one line, not a
         # traceback (per the spec error-handling contract).
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(1) from None
+        _handle_cli_error(exc)
 
     _write_datapoints(datapoints, output)
     typer.echo(f"Generated {len(datapoints)} datapoint(s) -> {output}", err=True)
