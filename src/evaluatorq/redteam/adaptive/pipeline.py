@@ -41,6 +41,7 @@ from evaluatorq.redteam.contracts import (
     AttackerResponse,
     AttackOutput,
     AttackStrategy,
+    DeliveryMethod,
     EvaluatorConfig,
     EvaluatorqEvaluatorConfig,
     JuryResult,
@@ -106,6 +107,8 @@ async def generate_dynamic_datapoints_for_vulnerabilities(
     llm_kwargs: dict[str, Any] | None = None,
     pipeline_config: LLMConfig | None = None,
     agent_capabilities: AgentCapabilities | None = None,
+    strategy_names: set[str] | None = None,
+    delivery_methods: set[DeliveryMethod | str] | None = None,
 ) -> tuple[list[DataPoint], dict[str, Any]]:
     """Generate evaluatorq DataPoints for dynamic red teaming, keyed by Vulnerability enum.
 
@@ -140,6 +143,8 @@ async def generate_dynamic_datapoints_for_vulnerabilities(
         llm_kwargs=llm_kwargs,
         pipeline_config=cfg,
         agent_capabilities=agent_capabilities,
+        strategy_names=strategy_names,
+        delivery_methods=delivery_methods,
     )
 
     # Convert Vulnerability-keyed metadata to string keys for external consumption
@@ -181,6 +186,8 @@ async def generate_dynamic_datapoints(
     llm_kwargs: dict[str, Any] | None = None,
     pipeline_config: LLMConfig | None = None,
     agent_capabilities: AgentCapabilities | None = None,
+    strategy_names: set[str] | None = None,
+    delivery_methods: set[DeliveryMethod | str] | None = None,
 ) -> tuple[list[DataPoint], dict[str, Any]]:
     """Generate evaluatorq DataPoints for dynamic red teaming.
 
@@ -229,6 +236,8 @@ async def generate_dynamic_datapoints(
             llm_kwargs=llm_kwargs,
             pipeline_config=cfg,
             agent_capabilities=agent_capabilities,
+            strategy_names=strategy_names,
+            delivery_methods=delivery_methods,
         )
         # Remap metadata keys from vulnerability IDs back to original category strings
         # so callers that expect category-keyed metadata continue to work.
@@ -256,6 +265,8 @@ async def generate_dynamic_datapoints(
         llm_kwargs=llm_kwargs,
         pipeline_config=cfg,
         agent_capabilities=agent_capabilities,
+        strategy_names=strategy_names,
+        delivery_methods=delivery_methods,
     )
 
     datapoints = []

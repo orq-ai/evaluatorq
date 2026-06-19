@@ -42,3 +42,26 @@ async def test_multi_target_static_merge(
     agent_models = {r.agent.model for r in report.results}
     assert "model-a" in agent_models, f"Expected model-a in results, got {agent_models}"
     assert "model-b" in agent_models, f"Expected model-b in results, got {agent_models}"
+
+
+@pytest.mark.asyncio
+async def test_multi_target_empty_delivery_filter_hard_fails(
+    mock_llm_client: DeterministicAsyncOpenAI,
+    static_dataset_path: Path,
+) -> None:
+    """A delivery filter matching no rows hard-fails the whole multi-target run."""
+    from evaluatorq.redteam.contracts import DeliveryMethod
+    from evaluatorq.redteam.exceptions import RedTeamError
+
+    client = cast(AsyncOpenAI, cast(object, mock_llm_client))
+    targets = [OpenAIModelTarget("model-a", client=client), OpenAIModelTarget("model-b", client=client)]
+
+    with pytest.raises(RedTeamError, match="zero datapoints"):
+        await red_team(
+            targets,
+            mode="static",
+            delivery_methods=[DeliveryMethod.BASE64],  # no fixture row uses this
+            parallelism=2,
+            dataset=str(static_dataset_path),
+            llm_client=client,
+        )

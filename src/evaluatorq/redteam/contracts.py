@@ -372,7 +372,11 @@ class RedTeamInput(BaseModel):
     vulnerability: str = Field(default='', description='Vulnerability identifier (primary key in new format)')
     category: str = Field(default='', description='Attack category (framework-specific) — kept for backwards compat')
     attack_technique: str = Field(default='', description='Specific attack technique used')
-    delivery_method: str = Field(default='', description='Jailbreak/delivery technique used')
+    delivery_method: DeliveryMethod | str = Field(
+        default='',
+        description='Jailbreak/delivery technique. Coerced to the DeliveryMethod enum when it '
+        'matches a known value (exact); unknown values are kept as a raw string (open-set).',
+    )
     severity: Severity = Field(description='Attack severity level')
     vulnerability_domain: VulnerabilityDomain = Field(description='Vulnerability domain (where the fix belongs)')
     framework: Framework = Field(default=Framework.OWASP_AGENTIC, description='Security framework identifier')
@@ -431,6 +435,22 @@ class RedTeamInput(BaseModel):
         """Normalize framework string aliases to canonical Framework enum values."""
         if isinstance(value, str):
             return normalize_framework(value)
+        return value
+
+    @field_validator('delivery_method', mode='before')
+    @classmethod
+    def _coerce_delivery_method(cls, value: Any) -> Any:
+        """Coerce a known delivery method to the DeliveryMethod enum (exact match).
+
+        Unknown or empty values pass through as a raw string — the field is an
+        open set, so a dataset may carry a delivery method the enum doesn't list.
+        No fuzzy normalization: a value either equals a DeliveryMethod or it does not.
+        """
+        if isinstance(value, str) and value:
+            try:
+                return DeliveryMethod(value)
+            except ValueError:
+                return value
         return value
 
     @model_validator(mode='after')
@@ -1109,7 +1129,10 @@ class AttackInfo(BaseModel):
     category: str = Field(description="Short-form category code (e.g., 'ASI01', 'LLM01') — kept for backwards compat")
     framework: Framework = Field(description="OWASP framework ('OWASP-ASI' or 'OWASP-LLM')")
     attack_technique: AttackTechnique
-    delivery_methods: list[DeliveryMethod] = Field(description='Delivery methods (always a list)')
+    delivery_methods: list[DeliveryMethod | str] = Field(
+        description='Delivery methods (always a list). Open set: known values are DeliveryMethod '
+        'members, custom dataset values are kept as raw strings.'
+    )
     turn_type: TurnType
     severity: Severity
     vulnerability_domain: VulnerabilityDomain | None = Field(

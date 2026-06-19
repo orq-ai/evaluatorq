@@ -364,7 +364,7 @@ def _render_sidebar_filters(results: list[RedTeamResult]) -> list[RedTeamResult]
     all_categories = sorted({r.attack.category for r in results})
     all_severities = [s for s in SEVERITY_ORDER if any(r.attack.severity.value == s for r in results)]
     all_techniques = sorted({r.attack.attack_technique.value for r in results})
-    all_delivery = sorted({dm.value for r in results for dm in (r.attack.delivery_methods or [])})
+    all_delivery = sorted({getattr(dm, "value", dm) for r in results for dm in (r.attack.delivery_methods or [])})
     all_vulnerabilities = sorted({r.attack.vulnerability for r in results if r.attack.vulnerability})
     all_agents = sorted({r.agent.key or r.agent.display_name or "unknown" for r in results})
 
@@ -470,7 +470,11 @@ def _render_sidebar_filters(results: list[RedTeamResult]) -> list[RedTeamResult]
         filtered = [r for r in filtered if r.attack.attack_technique.value in sel_techniques]
 
     if all_delivery and set(sel_delivery) != set(all_delivery):
-        filtered = [r for r in filtered if any(dm.value in sel_delivery for dm in (r.attack.delivery_methods or []))]
+        filtered = [
+            r
+            for r in filtered
+            if any(getattr(dm, "value", dm) in sel_delivery for dm in (r.attack.delivery_methods or []))
+        ]
 
     if all_vulnerabilities and set(sel_vulnerabilities) != set(all_vulnerabilities):
         filtered = [r for r in filtered if r.attack.vulnerability in sel_vulnerabilities]
@@ -1321,7 +1325,7 @@ def _render_interactive_breakdown(results: list[RedTeamResult], summary: ReportS
         if dim == "attack_technique":
             return r.attack.attack_technique.value
         if dim == "delivery_method":
-            return r.attack.delivery_methods[0].value if r.attack.delivery_methods else "unknown"
+            return getattr(r.attack.delivery_methods[0], "value", r.attack.delivery_methods[0]) if r.attack.delivery_methods else "unknown"
         if dim == "turn_type":
             return r.attack.turn_type.value if r.attack.turn_type else "unknown"
         if dim == "source":
@@ -1854,7 +1858,7 @@ def _render_result_detail(result: RedTeamResult) -> None:
     mc5.markdown(f"**Turn Type:** {atk.turn_type.value}")
 
     if atk.delivery_methods:
-        st.markdown(f"**Delivery Methods:** {', '.join(dm.value for dm in atk.delivery_methods)}")
+        st.markdown(f"**Delivery Methods:** {', '.join(getattr(dm, 'value', dm) for dm in atk.delivery_methods)}")
 
     # Execution details
     if result.execution:

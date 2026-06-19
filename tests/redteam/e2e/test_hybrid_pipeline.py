@@ -56,6 +56,39 @@ async def test_full_hybrid_run(
 
 
 @pytest.mark.asyncio
+async def test_hybrid_delivery_filter_threads_to_static(
+    mock_llm_client: DeterministicAsyncOpenAI,
+    mock_backend_bundle: MockBackend,
+    static_dataset_path: Path,
+) -> None:
+    """A delivery filter threads through the hybrid static-load path without breaking it.
+
+    All fixture rows use 'direct-request', so filtering to it keeps the static
+    rows; the run must still succeed and include static datapoints (a dropped
+    delivery_methods kwarg at the hybrid load site would not regress this, but an
+    over-eager empty/hard-fail or a crash would).
+    """
+    from evaluatorq.redteam.contracts import DeliveryMethod
+
+    with _hybrid_patches(mock_backend_bundle):
+        report = await red_team(
+            "agent:e2e-test-agent",
+            mode="hybrid",
+            categories=["ASI01"],
+            generate_strategies=False,
+            delivery_methods=[DeliveryMethod.DIRECT_REQUEST],
+            parallelism=2,
+            llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
+            dataset=str(static_dataset_path),
+        )
+
+    errors = validate_report_structure(report, expected_pipeline="hybrid", min_results=1)
+    assert not errors, f"Report validation errors: {errors}"
+    breakdown = report.summary.datapoint_breakdown or {}
+    assert breakdown.get("static", 0) >= 1, f"Expected static rows to survive the filter, got {breakdown}"
+
+
+@pytest.mark.asyncio
 async def test_hybrid_independent_caps(
     mock_llm_client: DeterministicAsyncOpenAI,
     mock_backend_bundle: MockBackend,

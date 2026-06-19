@@ -116,6 +116,7 @@ def load_owasp_agentic_dataset(
     dataset: str | Path | None = None,
     num_samples: int | None = None,
     categories: list[str] | None = None,
+    delivery_methods: list[str] | None = None,
 ) -> list[DataPoint]:
     """Load red team dataset from various sources.
 
@@ -127,6 +128,9 @@ def load_owasp_agentic_dataset(
             - ``"hf:org/repo/filename.json"``: specific file in a HuggingFace repository
         num_samples: Maximum number of samples to load (None = all).
         categories: Filter to these OWASP category codes.
+        delivery_methods: Filter to rows whose ``delivery_method`` matches one of
+            these values (exact match — no case/punctuation folding). Applied
+            before the ``num_samples`` cap. ``None`` disables the filter.
 
     Returns:
         List of DataPoint instances ready for evaluatorq evaluation.
@@ -139,10 +143,11 @@ def load_owasp_agentic_dataset(
             filename=DEFAULT_HF_FILENAME,
             num_samples=num_samples,
             categories=categories,
+            delivery_methods=delivery_methods,
         )
 
     if isinstance(dataset, Path):
-        return _load_from_file(dataset, num_samples=num_samples, categories=categories)
+        return _load_from_file(dataset, num_samples=num_samples, categories=categories, delivery_methods=delivery_methods)
 
     s = str(dataset)
 
@@ -153,6 +158,7 @@ def load_owasp_agentic_dataset(
             filename=filename,
             num_samples=num_samples,
             categories=categories,
+            delivery_methods=delivery_methods,
         )
 
     if s.startswith('orq:'):
@@ -162,7 +168,9 @@ def load_owasp_agentic_dataset(
                 "Invalid dataset specifier 'orq:': provide a dataset ID after the colon, e.g. 'orq:my-dataset-id'"
             )
         datapoints = _fetch_all_datapoints(dataset_id)
-        datapoints = _apply_filters(datapoints, num_samples=num_samples, categories=categories)
+        datapoints = _apply_filters(
+            datapoints, num_samples=num_samples, categories=categories, delivery_methods=delivery_methods
+        )
         logger.info(f'Loaded {len(datapoints)} samples from ORQ dataset {dataset_id}')
         return datapoints
 
@@ -170,7 +178,7 @@ def load_owasp_agentic_dataset(
     path = Path(s)
     if not path.exists():
         raise FileNotFoundError(f'Dataset file not found: {path}. For HuggingFace datasets, use "hf:org/repo" format.')
-    return _load_from_file(path, num_samples=num_samples, categories=categories)
+    return _load_from_file(path, num_samples=num_samples, categories=categories, delivery_methods=delivery_methods)
 
 
 def _parse_hf_source(rest: str) -> tuple[str, str]:
@@ -366,6 +374,7 @@ def _fetch_from_huggingface(
     filename: str = DEFAULT_HF_FILENAME,
     num_samples: int | None = None,
     categories: list[str] | None = None,
+    delivery_methods: list[str] | None = None,
 ) -> list[DataPoint]:
     """Fetch red team samples from a HuggingFace dataset repository."""
     try:
@@ -391,7 +400,9 @@ def _fetch_from_huggingface(
             'local --dataset path, or use --mode dynamic to skip static datapoints.'
         )
         raise DatasetError(msg) from e
-    datapoints = _load_from_file(local_path, num_samples=num_samples, categories=categories)
+    datapoints = _load_from_file(
+        local_path, num_samples=num_samples, categories=categories, delivery_methods=delivery_methods
+    )
     logger.info(f'Loaded {len(datapoints)} samples from HuggingFace ({repo})')
     return datapoints
 
@@ -459,6 +470,7 @@ def _load_from_file(
     path: str | Path,
     num_samples: int | None = None,
     categories: list[str] | None = None,
+    delivery_methods: list[str] | None = None,
 ) -> list[DataPoint]:
     """Load OWASP dataset from a local JSON file in ``{"samples": [...]}`` format."""
     path = Path(path)
@@ -479,6 +491,11 @@ def _load_from_file(
 
     if categories:
         samples = _filter_by_categories(samples, categories, category_of=lambda s: s.input.category)
+
+    if delivery_methods:
+        selected = set(delivery_methods)
+        samples = [s for s in samples if s.input.delivery_method in selected]
+        logger.info(f'Filtered to delivery methods: {sorted(selected)} ({len(samples)} samples)')
 
     num_samples = _normalize_num_samples(num_samples)
     if num_samples is not None:
@@ -501,10 +518,21 @@ def _apply_filters(
     datapoints: list[DataPoint],
     num_samples: int | None = None,
     categories: list[str] | None = None,
+    delivery_methods: list[str] | None = None,
 ) -> list[DataPoint]:
-    """Apply category and sample-count filters to datapoints."""
+    """Apply category, delivery-method, and sample-count filters to datapoints.
+
+    Category and delivery-method filters run BEFORE the ``num_samples`` cap so the
+    cap limits the already-filtered set rather than slicing first and filtering the
+    remainder (which would yield fewer than ``num_samples`` rows).
+    """
     if categories:
         datapoints = _filter_by_categories(datapoints, categories, category_of=lambda dp: dp.inputs.get('category', ''))
+
+    if delivery_methods:
+        selected = set(delivery_methods)
+        datapoints = [dp for dp in datapoints if dp.inputs.get('delivery_method') in selected]
+        logger.info(f'Filtered to delivery methods: {sorted(selected)} ({len(datapoints)} samples)')
 
     num_samples = _normalize_num_samples(num_samples)
     if num_samples is not None:

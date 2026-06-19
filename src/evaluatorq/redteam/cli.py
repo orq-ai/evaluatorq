@@ -13,7 +13,7 @@ from typing import Annotated, Any
 
 import typer
 
-from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, SaveMode, Vulnerability
+from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, DeliveryMethod, SaveMode, Vulnerability
 
 app = typer.Typer(
     name="redteam",
@@ -21,6 +21,20 @@ app = typer.Typer(
     no_args_is_help=True,
     rich_markup_mode=None,
 )
+
+
+def _split_csv(values: list[str] | None) -> list[str] | None:
+    """Flatten comma-separated tokens within a repeatable CLI option.
+
+    Lets users write ``-d a,b``, ``-d a -d b``, or a mix of both. Blank tokens
+    (e.g. trailing commas or a bare ``-d ,``) are dropped; if nothing survives,
+    returns ``None`` so a malformed/empty filter reads as "flag omitted" rather
+    than the ambiguous empty-set, which would otherwise filter everything out.
+    """
+    if values is None:
+        return None
+    tokens = [item.strip() for value in values for item in value.split(",") if item.strip()]
+    return tokens or None
 
 
 def _configure_logging(verbosity: int) -> None:
@@ -183,7 +197,7 @@ def run(
         typer.Option(
             "--category",
             "-c",
-            help="OWASP categories to test (e.g. ASI01). Repeatable. Defaults to all.",
+            help="OWASP categories to test (e.g. ASI01). Repeatable and/or comma-separated. Defaults to all.",
         ),
     ] = None,
     vulnerabilities: Annotated[
@@ -193,9 +207,35 @@ def run(
             "-V",
             help=(
                 "Vulnerability IDs to test (e.g. 'goal_hijacking', 'prompt_injection'). "
-                "Repeatable. Also accepts OWASP codes (ASI01, LLM01). "
+                "Repeatable and/or comma-separated. Also accepts OWASP codes (ASI01, LLM01). "
                 "Takes precedence over --category. "
                 f"Available: {', '.join(v.value for v in Vulnerability)}."
+            ),
+        ),
+    ] = None,
+    strategies: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--strategy",
+            "-s",
+            help=(
+                "Restrict the run to attack strategies whose name matches one of "
+                "the supplied values. Repeatable and/or comma-separated "
+                "(-s a,b or -s a -s b). Filter applies to both registry and "
+                "LLM-generated strategies. Unknown registry names are rejected."
+            ),
+        ),
+    ] = None,
+    delivery_methods: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--delivery-method",
+            "-d",
+            help=(
+                "Restrict the run to attacks using one of the listed delivery "
+                "methods. Repeatable and/or comma-separated (-d a,b or -d a -d b). "
+                "Combines with --strategy as AND. "
+                f"Available: {', '.join(m.value for m in DeliveryMethod)}."
             ),
         ),
     ] = None,
@@ -325,6 +365,13 @@ def run(
     from evaluatorq.redteam.exceptions import CancelledError, RedTeamError
     from evaluatorq.redteam.hooks import RichHooks
 
+    # Allow comma-separated values within repeatable flags (-s a,b == -s a -s b).
+    # Done before validation so the checks below see individual tokens.
+    strategies = _split_csv(strategies)
+    delivery_tokens = _split_csv(delivery_methods)
+    categories = _split_csv(categories)
+    vulnerabilities = _split_csv(vulnerabilities)
+
     # Validate vulnerability IDs early for a clean error message
     if vulnerabilities:
         from evaluatorq.redteam.vulnerability_registry import CATEGORY_TO_VULNERABILITY
@@ -338,6 +385,35 @@ def run(
                     f"Unknown vulnerability ID: {v!r}. "
                     f"Valid IDs: {sorted(vi.value for vi in Vulnerability)}"
                 )
+
+    # Validate strategy names early: must be a registered strategy or a
+    # runtime-generated name (generated_* prefix). Mirrors --vulnerability.
+    if strategies:
+        from evaluatorq.redteam.adaptive.strategy_registry import known_strategy_names
+
+        known = known_strategy_names()
+        unknown = [s for s in strategies if s not in known and not s.startswith("generated_")]
+        if unknown:
+            raise typer.BadParameter(
+                f"Unknown strategy name(s): {unknown}. "
+                f"Valid names: {sorted(known)} (or a 'generated_*' name from a prior run)."
+            )
+
+    # Convert known delivery methods to the enum (parsed as plain strings to
+    # support comma-separated input, which typer's enum binding cannot do).
+    # Unknown values are an open set — kept as raw strings (so a dataset's custom
+    # delivery method is still filterable) with a warning, not a hard error.
+    resolved_delivery_methods: list[DeliveryMethod | str] | None = None
+    if delivery_tokens:
+        valid = {m.value for m in DeliveryMethod}
+        unknown = [d for d in delivery_tokens if d not in valid]
+        if unknown:
+            typer.echo(
+                f"Warning: delivery method(s) {unknown} are not in DeliveryMethod {sorted(valid)}; "
+                "filtering by them literally (they will only match a dataset row spelled exactly the same).",
+                err=True,
+            )
+        resolved_delivery_methods = [DeliveryMethod(d) if d in valid else d for d in delivery_tokens]
 
     target_config = TargetConfig(system_prompt=system_prompt) if system_prompt else None
     targets: list[str] | str = target if len(target) > 1 else target[0]
@@ -357,6 +433,8 @@ def run(
                 mode=mode,
                 categories=categories,
                 vulnerabilities=vulnerabilities,
+                strategies=strategies,
+                delivery_methods=resolved_delivery_methods,
                 max_turns=max_turns,
                 max_per_category=max_per_category,
                 parallelism=parallelism,

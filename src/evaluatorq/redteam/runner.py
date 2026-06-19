@@ -48,6 +48,7 @@ from evaluatorq.redteam.backends.registry import create_async_llm_client, resolv
 from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
     AgentContext,
+    DeliveryMethod,
     LLMConfig,
     Pipeline,
     PipelineStage,
@@ -58,7 +59,7 @@ from evaluatorq.redteam.contracts import (
     Vulnerability,
     normalize_category,
 )
-from evaluatorq.redteam.exceptions import CancelledError, CredentialError
+from evaluatorq.redteam.exceptions import CancelledError, CredentialError, RedTeamError
 from evaluatorq.redteam.hooks import ConfirmPayload, DefaultHooks, PipelineHooks
 from evaluatorq.redteam.reports.recommendations import generate_focus_area_recommendations
 from evaluatorq.redteam.runtime.jobs import _build_messages, _sanitize_job_name, create_model_job
@@ -298,6 +299,8 @@ async def red_team(
     mode: Pipeline | str = Pipeline.DYNAMIC,
     categories: list[str] | None = None,
     vulnerabilities: list[str] | None = None,
+    strategies: list[str] | None = None,
+    delivery_methods: list[DeliveryMethod | str] | None = None,
     max_turns: int = 5,
     max_per_category: int | None = None,
     parallelism: int = 10,
@@ -333,6 +336,23 @@ async def red_team(
             Defaults to all available categories. Ignored if ``vulnerabilities`` is set.
         vulnerabilities: Vulnerability IDs to test (e.g., ``["goal_hijacking", "prompt_injection"]``).
             Takes precedence over ``categories``.
+        strategies: Restrict the run to attack strategies whose ``name`` matches
+            one of the supplied values. Filtering applies to both registry
+            strategies and LLM-generated strategies, and runs before the
+            ``max_per_category`` cap so explicit selections survive the
+            per-category limit. Unknown registry names are rejected at the CLI
+            boundary; names that match no datapoint emit a warning. Does not
+            apply to static (dataset) datapoints, which carry no strategy name —
+            a warning is emitted if combined with ``static`` mode. ``None``
+            disables the filter.
+        delivery_methods: Restrict the run to attacks whose delivery method
+            overlaps the supplied selection. Applies to dynamic strategies
+            (``AttackStrategy.delivery_methods``) and to static datapoints
+            (``inputs['delivery_method']``). Combines with ``strategies`` using
+            AND semantics. Methods matching no datapoint emit a warning. ``None``
+            disables the filter. When a supplied filter leaves zero datapoints to
+            run, ``red_team`` raises :class:`RedTeamError` rather than silently
+            running nothing.
         max_turns: Maximum conversation turns for multi-turn attacks.
         max_per_category: Cap strategies per category (None = no cap).
         llm_config: Role-based LLM configuration. Use ``LLMConfig(attacker=LLMCallConfig(...),
@@ -493,6 +513,14 @@ async def red_team(
         if is_huggingface_source(dataset):
             ensure_huggingface_available()
 
+    # Convert filter inputs to sets for the planner. Unknown registry names are
+    # rejected at the CLI boundary; here we pass through verbatim and detect
+    # empty/unmatched intersections post-filter from the actually-matched set.
+    resolved_strategy_names: set[str] | None = set(strategies) if strategies is not None else None
+    resolved_delivery_methods: set[DeliveryMethod | str] | None = (
+        set(delivery_methods) if delivery_methods is not None else None
+    )
+
     resolved_vulns: list[Vulnerability] | None
     if vulnerabilities:
         resolved_vulns = resolve_vulnerabilities(vulnerabilities)
@@ -610,6 +638,8 @@ async def red_team(
             attacker_instructions=attacker_instructions,
             verbosity=verbosity,
             pipeline_config=config,
+            resolved_strategy_names=resolved_strategy_names,
+            resolved_delivery_methods=resolved_delivery_methods,
         )
     elif resolved_mode == Pipeline.STATIC:
         report = await _run_static(
@@ -627,6 +657,8 @@ async def red_team(
             output_dir=resolved_output_dir,
             target_config=target_config,
             pipeline_config=config,
+            resolved_strategy_names=resolved_strategy_names,
+            resolved_delivery_methods=resolved_delivery_methods,
         )
     else:
         msg = f'Invalid mode {mode!r}. Must be "dynamic", "static", or "hybrid".'
@@ -924,6 +956,91 @@ def _make_agent_backend(*, target_config: TargetConfig | None, pipeline_config: 
     )
 
 
+def _delivery_method_values(delivery_methods: set[DeliveryMethod | str] | None) -> list[str] | None:
+    """Convert a delivery-method selection to plain strings for the dataset loader.
+
+    The selection is an open set: known methods are :class:`DeliveryMethod` enum
+    members, unknown ones are raw strings. Both become their string value for the
+    loader (which filters by exact string match). Static rows are filtered inside
+    ``load_owasp_agentic_dataset`` before its ``num_samples`` cap. ``None`` stays
+    ``None`` so the loader leaves the filter disabled.
+    """
+    if delivery_methods is None:
+        return None
+    return [m.value if isinstance(m, DeliveryMethod) else m for m in delivery_methods]
+
+
+def _check_filter_results(
+    datapoints: list[DataPoint],
+    strategy_names: set[str] | None,
+    delivery_methods: set[DeliveryMethod | str] | None,
+    *,
+    names_apply: bool = True,
+    present_methods: list[str] | None = None,
+) -> None:
+    """Surface strategy/delivery-method filter mismatches; fail on an empty run.
+
+    Warns for any requested strategy name or delivery method that matched no
+    datapoint, then raises :class:`RedTeamError` when a user-supplied filter
+    leaves zero datapoints to run — a silent zero-attack run that still exits 0
+    is the worst outcome for an attack tool. Called on the *final* per-target
+    datapoint set (dynamic + static combined) so warnings and the empty-run
+    guard account for every path.
+
+    ``names_apply=False`` suppresses per-name warnings on paths whose datapoints
+    never carry a strategy name (static mode), where the caller warns once that
+    name filtering does not apply instead.
+
+    ``present_methods`` (static path) lists the ``delivery_method`` values
+    actually present in the dataset; when an empty run is caused by a delivery
+    filter, they are surfaced in the error so the user sees a spelling mismatch
+    (``you asked for 'crescendo', the dataset uses 'Crescendo attack'``) rather
+    than a bare "zero datapoints".
+    """
+    if strategy_names is None and delivery_methods is None:
+        return
+
+    matched_names: set[str] = set()
+    matched_methods: set[str] = set()
+    for dp in datapoints:
+        strategy = dp.inputs.get('strategy')
+        if isinstance(strategy, dict):
+            name = strategy.get('name')
+            if name:
+                matched_names.add(name)
+            matched_methods.update(strategy.get('delivery_methods') or [])
+        single = dp.inputs.get('delivery_method')  # static datapoint shape (singular)
+        if single:
+            matched_methods.add(single)
+
+    if strategy_names is not None and names_apply:
+        unmatched = sorted(strategy_names - matched_names)
+        if unmatched:
+            logger.warning(f'Unmatched strategy name(s): {unmatched} — no datapoints matched.')
+    if delivery_methods is not None:
+        unmatched_methods = sorted(set(_delivery_method_values(delivery_methods) or []) - matched_methods)
+        if unmatched_methods:
+            msg = f'Unmatched delivery method(s): {unmatched_methods} — no datapoints use them.'
+            # When some methods DID match, name what's actually present so a
+            # spelling/case mismatch is visible (matching is exact). On a fully
+            # empty run matched_methods is empty and the RedTeamError below reports
+            # the dataset's present methods instead.
+            if matched_methods:
+                msg += f' Present: {sorted(matched_methods)}.'
+            logger.warning(msg)
+
+    if not datapoints:
+        names_repr = sorted(strategy_names) if strategy_names else None
+        methods_repr = sorted(_delivery_method_values(delivery_methods) or []) if delivery_methods else None
+        msg = (
+            'Filter selection produced zero datapoints — nothing to run. '
+            f'(strategies={names_repr}, delivery_methods={methods_repr})'
+        )
+        if present_methods:
+            msg += f' Delivery methods present in the dataset: {present_methods}.'
+        raise RedTeamError(msg)
+
+
 async def _prepare_target(
     *,
     target: str,
@@ -951,6 +1068,8 @@ async def _prepare_target(
     prefetched_static_data: list[Any] | None = None,
     verbosity: int = 0,
     pipeline_config: LLMConfig | None = None,
+    resolved_strategy_names: set[str] | None = None,
+    resolved_delivery_methods: set[DeliveryMethod | str] | None = None,
 ) -> PreparedTarget:
     """Prepare all per-target state for a dynamic or hybrid run.
 
@@ -1037,6 +1156,8 @@ async def _prepare_target(
                 attacker_instructions=attacker_instructions,
                 pipeline_config=pipeline_config,
                 agent_capabilities=prefetched_agent_capabilities,
+                strategy_names=resolved_strategy_names,
+                delivery_methods=resolved_delivery_methods,
             )
         else:
             # Fallback: categories that could not be resolved to vulnerabilities
@@ -1053,6 +1174,8 @@ async def _prepare_target(
                 attacker_instructions=attacker_instructions,
                 pipeline_config=pipeline_config,
                 agent_capabilities=prefetched_agent_capabilities,
+                strategy_names=resolved_strategy_names,
+                delivery_methods=resolved_delivery_methods,
             )
 
         if (
@@ -1096,11 +1219,14 @@ async def _prepare_target(
             else:
                 from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import load_owasp_agentic_dataset
 
-                # Load static datapoints
+                # Load static datapoints. The delivery-method filter is applied inside
+                # the loader (before the num_samples cap); --strategy can't apply to
+                # static rows, which carry no strategy name.
                 static_datapoints = load_owasp_agentic_dataset(
                     dataset=dataset,
                     num_samples=max_static_datapoints,
                     categories=categories,
+                    delivery_methods=_delivery_method_values(resolved_delivery_methods),
                 )
 
             # Tag with hybrid_source only (no target_tag — datapoints are shared)
@@ -1122,6 +1248,7 @@ async def _prepare_target(
                     },
                 )
             )
+            _check_filter_results(all_datapoints, resolved_strategy_names, resolved_delivery_methods)
 
         # Build the static job via shared helper
         sys_prompt = target_config.system_prompt if target_config else None
@@ -1152,6 +1279,7 @@ async def _prepare_target(
             await await_maybe(
                 hooks.on_stage_end(PipelineStage.DATAPOINT_GENERATION, {'num_datapoints': len(all_datapoints)})
             )
+            _check_filter_results(all_datapoints, resolved_strategy_names, resolved_delivery_methods)
 
         # Build the dynamic dispatcher job
         @job(f'redteam:dynamic:{safe_target}')
@@ -1216,6 +1344,8 @@ async def _run_dynamic_or_hybrid(
     attacker_instructions: str | None = None,
     verbosity: int = 0,
     pipeline_config: LLMConfig | None = None,
+    resolved_strategy_names: set[str] | None = None,
+    resolved_delivery_methods: set[DeliveryMethod | str] | None = None,
 ) -> RedTeamReport:
     """Run dynamic or hybrid red teaming for multiple targets in a single evaluatorq call.
 
@@ -1534,10 +1664,14 @@ async def _run_dynamic_or_hybrid(
         if mode == Pipeline.HYBRID:
             from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import load_owasp_agentic_dataset
 
+            # The delivery-method filter is applied inside the loader (before the
+            # num_samples cap) so the shared dataset is consistent across every
+            # target; --strategy can't apply to static rows (no strategy name).
             static_data = load_owasp_agentic_dataset(
                 dataset=dataset,
                 num_samples=max_static_datapoints,
                 categories=categories,
+                delivery_methods=_delivery_method_values(resolved_delivery_methods),
             )
             est_static = len(static_data)
 
@@ -1591,6 +1725,8 @@ async def _run_dynamic_or_hybrid(
             attacker_instructions=attacker_instructions,
             verbosity=verbosity,
             pipeline_config=pipeline_config,
+            resolved_strategy_names=resolved_strategy_names,
+            resolved_delivery_methods=resolved_delivery_methods,
         )
 
         prepared_targets: list[PreparedTarget]
@@ -1671,6 +1807,7 @@ async def _run_dynamic_or_hybrid(
 
                 at_safe = _make_safe_target(at_label)
 
+                at_is_generating = shared_at_dps is None
                 if shared_at_dps is None:
                     # This is the first target overall — generate datapoints
                     await await_maybe(
@@ -1697,6 +1834,8 @@ async def _run_dynamic_or_hybrid(
                             attacker_instructions=attacker_instructions,
                             pipeline_config=pipeline_config,
                             agent_capabilities=at_pref_caps,
+                            strategy_names=resolved_strategy_names,
+                            delivery_methods=resolved_delivery_methods,
                         )
                     else:
                         at_dps, at_filter_meta = await generate_dynamic_datapoints(
@@ -1712,6 +1851,8 @@ async def _run_dynamic_or_hybrid(
                             attacker_instructions=attacker_instructions,
                             pipeline_config=pipeline_config,
                             agent_capabilities=at_pref_caps,
+                            strategy_names=resolved_strategy_names,
+                            delivery_methods=resolved_delivery_methods,
                         )
                     if (
                         max_dynamic_datapoints is not None
@@ -1798,6 +1939,9 @@ async def _run_dynamic_or_hybrid(
                     ) -> Any:
                         result = await _inner(data, row)
                         return result.get('output', result) if isinstance(result, dict) else result
+
+                if at_is_generating:
+                    _check_filter_results(at_all_dps, resolved_strategy_names, resolved_delivery_methods)
 
                 prepared_targets.append(
                     PreparedTarget(
@@ -2206,6 +2350,8 @@ async def _run_static(
     output_dir: Path | None = None,
     target_config: TargetConfig | None = None,
     pipeline_config: LLMConfig | None = None,
+    resolved_strategy_names: set[str] | None = None,
+    resolved_delivery_methods: set[DeliveryMethod | str] | None = None,
 ) -> RedTeamReport:
     """Run static red teaming for multiple targets in a single ``evaluatorq()`` call.
 
@@ -2236,6 +2382,7 @@ async def _run_static(
         dataset=dataset,
         num_samples=max_static_datapoints,
         categories=categories,
+        delivery_methods=_delivery_method_values(resolved_delivery_methods),
     )
 
     # Filter out datapoints whose category has no registered evaluator
@@ -2258,7 +2405,23 @@ async def _run_static(
             raise ValueError(msg)
         data = filtered_data  # type: ignore[assignment]
 
+    # The delivery-method filter was applied at load time (above). Strategy-name
+    # selection cannot apply to static rows (dataset records with no strategy
+    # name), so warn that it is ignored rather than silently dropping the flag.
+    if resolved_strategy_names is not None:
+        logger.warning(
+            '--strategy does not apply to static datapoints (dataset rows carry no strategy name); '
+            f'ignoring strategy filter {sorted(resolved_strategy_names)} in static mode.'
+        )
     if isinstance(data, list):
+        # On an empty delivery-filtered static run, reload unfiltered (cheap, error
+        # path only) to report the delivery_method values the dataset actually
+        # carries — surfacing spelling/format drift instead of a bare "zero datapoints".
+        present_methods: list[str] | None = None
+        if resolved_delivery_methods is not None and not data:
+            present_rows = load_owasp_agentic_dataset(dataset=dataset, categories=categories)
+            present_methods = sorted({m for dp in present_rows if (m := dp.inputs.get('delivery_method'))})
+        _check_filter_results(data, None, resolved_delivery_methods, names_apply=False, present_methods=present_methods)
         _save_stage(output_dir, '01_datapoints.json', json.dumps([dp.inputs for dp in data], indent=2, default=str))
 
     # Build one job per target using the shared helper

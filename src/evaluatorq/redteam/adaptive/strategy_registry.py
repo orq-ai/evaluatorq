@@ -18,6 +18,7 @@ from evaluatorq.redteam.contracts import (
     AgentCapability,
     AgentContext,
     AttackStrategy,
+    DeliveryMethod,
     TurnType,
     Vulnerability,
 )
@@ -195,6 +196,52 @@ def select_applicable_strategies_for_vulnerability(
         return []
 
     return _filter_applicable_strategies(all_strategies, vuln.value, agent_context, agent_capabilities)
+
+
+def _filter_by_method(
+    strategies: list[AttackStrategy],
+    names: set[str] | None,
+    delivery_methods: set[DeliveryMethod | str] | None,
+) -> list[AttackStrategy]:
+    """Filter strategies by name and/or delivery method.
+
+    Pure predicate — no logging, no I/O. Reusable from both the planner (for
+    hardcoded and generated strategies) and from future config-file loaders.
+    Selection semantics are AND when both filters are supplied.
+
+    Args:
+        strategies: Candidate strategies to filter.
+        names: Set of accepted `AttackStrategy.name` values. ``None`` disables
+            the name filter. Empty set filters out everything.
+        delivery_methods: Set of accepted :class:`DeliveryMethod` values. ``None``
+            disables the delivery-method filter. A strategy passes if any of
+            its `delivery_methods` overlaps the selection. Empty set filters
+            out everything.
+
+    Returns:
+        Strategies that pass both filters (AND semantics when both supplied).
+    """
+    if names is None and delivery_methods is None:
+        return list(strategies)
+
+    kept: list[AttackStrategy] = []
+    for strategy in strategies:
+        if names is not None and strategy.name not in names:
+            continue
+        if delivery_methods is not None and not (set(strategy.delivery_methods) & delivery_methods):
+            continue
+        kept.append(strategy)
+    return kept
+
+
+def known_strategy_names() -> set[str]:
+    """Return all strategy names registered in the hardcoded registry.
+
+    Used to validate user-supplied `--strategy` filters. Excludes runtime
+    LLM-generated strategy names, which carry a ``generated_`` prefix and
+    cannot be enumerated ahead of a run.
+    """
+    return {strategy.name for strategies in VULNERABILITY_STRATEGY_REGISTRY.values() for strategy in strategies}
 
 
 def _fallback_capability_check(required: list[AgentCapability], agent_context: AgentContext) -> bool:

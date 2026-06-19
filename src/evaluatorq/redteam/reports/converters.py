@@ -276,9 +276,11 @@ def static_sample_to_result(
     vuln = resolve_category_safe(category)
     vulnerability_str = vuln.value if vuln else ''
 
-    # Wrap singular delivery_method into list
+    # Wrap singular delivery_method into list. inp.delivery_method is already
+    # coerced (DeliveryMethod for known values, raw str for custom ones), so use
+    # it as-is — re-wrapping via DeliveryMethod() would crash on a custom value.
     dm = inp.delivery_method
-    delivery_methods: list[DeliveryMethod] = [DeliveryMethod(dm)] if dm else []
+    delivery_methods: list[DeliveryMethod | str] = [dm] if dm else []
     evaluator_meta = get_evaluator_metadata_for_category(category) or {}
 
     attack = AttackInfo(
@@ -462,7 +464,9 @@ def dynamic_evaluatorq_results_to_report(
             category=category,
             framework=cast('Framework', infer_framework(category)),
             attack_technique=strategy.attack_technique,
-            delivery_methods=strategy.delivery_methods,
+            # AttackInfo.delivery_methods is the open set (DeliveryMethod | str); a
+            # strategy's closed list[DeliveryMethod] is valid content (list is invariant).
+            delivery_methods=cast('list[DeliveryMethod | str]', strategy.delivery_methods),
             turn_type=strategy.turn_type,
             severity=strategy.severity,
             vulnerability_domain=vuln_def.domain if vuln_def else None,

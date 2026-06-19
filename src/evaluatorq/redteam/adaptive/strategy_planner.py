@@ -11,15 +11,16 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from evaluatorq.common.tracing import set_span_attrs
 from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities, classify_agent_capabilities
 from evaluatorq.redteam.adaptive.objective_generator import generate_strategies_for_vulnerability
 from evaluatorq.redteam.adaptive.strategy_registry import (
+    _filter_by_method,
     get_strategies_for_vulnerability,
     select_applicable_strategies,
     select_applicable_strategies_for_vulnerability,
 )
-from evaluatorq.redteam.contracts import PIPELINE_CONFIG, LLMConfig, TurnType, Vulnerability
-from evaluatorq.common.tracing import set_span_attrs
+from evaluatorq.redteam.contracts import PIPELINE_CONFIG, DeliveryMethod, LLMConfig, TurnType, Vulnerability
 from evaluatorq.redteam.tracing import with_redteam_span
 from evaluatorq.redteam.vulnerability_registry import resolve_category
 
@@ -49,6 +50,8 @@ async def plan_strategies_for_vulnerabilities(
     llm_kwargs: dict[str, Any] | None = None,
     pipeline_config: LLMConfig | None = None,
     agent_capabilities: AgentCapabilities | None = None,
+    strategy_names: set[str] | None = None,
+    delivery_methods: set[DeliveryMethod | str] | None = None,
 ) -> tuple[dict[Vulnerability, list[AttackStrategy]], dict[Vulnerability, dict[str, Any]], AgentCapabilities]:
     """Build per-vulnerability strategy plans for dynamic red teaming.
 
@@ -125,7 +128,14 @@ async def plan_strategies_for_vulnerabilities(
             agent_capabilities=caps_for_filter,
         )
         all_hardcoded_by_vuln[vuln] = all_hardcoded
-        applicable_hardcoded_by_vuln[vuln] = applicable_hardcoded
+        # Apply user-supplied strategy-name / delivery-method filter BEFORE the
+        # max_per_category cap (applied later) so explicit selections survive
+        # the per-category limit.
+        applicable_hardcoded_by_vuln[vuln] = _filter_by_method(
+            applicable_hardcoded,
+            names=strategy_names,
+            delivery_methods=delivery_methods,
+        )
 
     generated_by_vuln: dict[Vulnerability, list[AttackStrategy]] = {vuln: [] for vuln in vulnerabilities}
     generated_single_by_vuln: dict[Vulnerability, list[AttackStrategy]] = {vuln: [] for vuln in vulnerabilities}
@@ -168,6 +178,14 @@ async def plan_strategies_for_vulnerabilities(
 
             generation_results = await asyncio.gather(*(_generate_for_vulnerability(vuln) for vuln in vulnerabilities))
             for vuln, generated, generation_error in generation_results:
+                # Apply the same strategy-name / delivery-method filter to
+                # generated strategies, otherwise the LLM-side could silently
+                # bypass the caller's explicit selection.
+                generated = _filter_by_method(
+                    generated,
+                    names=strategy_names,
+                    delivery_methods=delivery_methods,
+                )
                 generated_by_vuln[vuln] = generated
                 generation_errors[vuln] = generation_error
                 generated_single = [s for s in generated if s.turn_type == TurnType.SINGLE]
@@ -227,6 +245,8 @@ async def plan_strategies_for_categories(
     llm_kwargs: dict[str, Any] | None = None,
     pipeline_config: LLMConfig | None = None,
     agent_capabilities: AgentCapabilities | None = None,
+    strategy_names: set[str] | None = None,
+    delivery_methods: set[DeliveryMethod | str] | None = None,
 ) -> tuple[dict[str, list[AttackStrategy]], dict[str, dict[str, Any]], AgentCapabilities]:
     """Build per-category strategy plans for dynamic red teaming.
 
@@ -271,6 +291,8 @@ async def plan_strategies_for_categories(
         llm_kwargs=llm_kwargs,
         pipeline_config=pipeline_config,
         agent_capabilities=agent_capabilities,
+        strategy_names=strategy_names,
+        delivery_methods=delivery_methods,
     )
 
     # Remap results back to original category strings
@@ -284,10 +306,15 @@ async def plan_strategies_for_categories(
             strategy_selection[category] = vuln_selection.get(vuln, {})
         else:
             # Fallback for unresolved categories: use filtered category lookup
-            all_category_strategies[category] = select_applicable_strategies(
+            fallback_strategies = select_applicable_strategies(
                 category=category,
                 agent_context=agent_context,
                 agent_capabilities=agent_capabilities,
+            )
+            all_category_strategies[category] = _filter_by_method(
+                fallback_strategies,
+                names=strategy_names,
+                delivery_methods=delivery_methods,
             )
             strategy_selection[category] = {
                 'all_hardcoded': [s.model_dump(mode='json') for s in all_category_strategies[category]],

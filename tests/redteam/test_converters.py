@@ -753,6 +753,19 @@ class TestStaticSampleToResult:
         assert result.evaluation.passed is True
         assert result.evaluation.explanation == 'Resistant'
 
+    def test_known_delivery_method_becomes_enum(self):
+        sample = self._base_sample()  # delivery_method='direct-request'
+        result = static_sample_to_result(sample, agent_key='my-agent')
+        assert result.attack.delivery_methods == [DeliveryMethod.DIRECT_REQUEST]
+
+    def test_custom_delivery_method_does_not_crash(self):
+        # Open set: a dataset row with a non-enum delivery_method must convert
+        # without raising (regression: DeliveryMethod('my-custom') used to crash).
+        sample = self._base_sample()
+        sample['input'] = {**sample['input'], 'delivery_method': 'my-custom-method'}
+        result = static_sample_to_result(sample, agent_key='my-agent')
+        assert result.attack.delivery_methods == ['my-custom-method']
+
     def test_no_value_evaluation_value_is_none(self):
         sample = self._base_sample()
         sample['evaluation_result'] = {'explanation': 'no score here'}
