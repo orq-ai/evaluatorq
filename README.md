@@ -1,4 +1,4 @@
-# evaluatorq-py
+# evaluatorq
 
 An evaluation framework library for Python that provides a flexible way to run parallel evaluations and optionally integrate with the Orq AI platform.
 
