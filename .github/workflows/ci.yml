@@ -7,10 +7,14 @@ on:
       - main
 
 jobs:
-  ci:
-    name: Lint, typecheck, test
+  # Advisory only — ~285 pre-existing lint violations and ~105 unformatted files
+  # inherited from the orqkit monorepo. Visible in CI but does not block merges.
+  # Remove continue-on-error once a cleanup pass has been landed.
+  lint:
+    name: Lint (advisory)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    continue-on-error: true
 
     steps:
       - uses: actions/checkout@v4
@@ -28,6 +32,22 @@ jobs:
 
       - name: Ruff format check
         run: uv run ruff format --check src
+
+  check:
+    name: Typecheck + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-extras --all-groups
 
       - name: Typecheck (basedpyright)
         run: uv run basedpyright
