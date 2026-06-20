@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  # Advisory only — ~285 pre-existing lint violations and ~105 unformatted files
+  # inherited from the orqkit monorepo (RES-967). Violations are printed in the
+  # logs but the steps use continue-on-error so the job stays green and does not
+  # block merges. Remove the per-step continue-on-error once the cleanup lands.
+  lint:
+    name: Lint (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-extras --all-groups
+
+      - name: Ruff lint
+        continue-on-error: true
+        run: uv run ruff check src
+
+      - name: Ruff format check
+        continue-on-error: true
+        run: uv run ruff format --check src
+
+  check:
+    name: Typecheck + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # Canonical dev version is 3.13; test backwards compat down to the
+        # minimum supported (requires-python = ">=3.10").
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "${{ matrix.python-version }}"
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-extras --all-groups
+
+      - name: Typecheck (basedpyright)
+        run: uv run basedpyright
+
+      - name: Test (unit only)
+        run: uv run pytest -m 'not integration'
