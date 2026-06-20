@@ -1,9 +1,14 @@
 name: Release
 
 on:
-  push:
-    branches:
-      - main
+  # Auto-release on merge to main is DISABLED until the PYPI_TOKEN secret is set.
+  # Without it, semantic-release would tag + create a GitHub Release and then fail
+  # at `uv publish`, leaving a release for a version never on PyPI. Re-enable by
+  # uncommenting the push trigger once PYPI_TOKEN exists (see migration tracker).
+  # push:
+  #   branches:
+  #     - main
+  workflow_dispatch:
 
 concurrency:
   group: release
