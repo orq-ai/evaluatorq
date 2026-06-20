@@ -89,6 +89,20 @@ class SimulationJudge(Protocol):
     async def evaluate(self, messages: list[Message]) -> Judgment: ...
 
 
+# Method names the injected agents must implement. Used by `_implements` for
+# duck-typed validation instead of `isinstance(x, <runtime_checkable Protocol>)`:
+# on Python 3.12+ the latter poisons a per-class negative cache, so a single
+# isinstance check against an incomplete mock breaks every later mock that
+# shares the same class (e.g. MagicMock). Duck typing avoids that entirely.
+_USER_SIMULATOR_METHODS = ('generate_first_message', 'respond_async', 'update_context')
+_JUDGE_METHODS = ('evaluate',)
+
+
+def _implements(obj: object, methods: tuple[str, ...]) -> bool:
+    """True if `obj` has a callable attribute for every name in `methods`."""
+    return all(callable(getattr(obj, name, None)) for name in methods)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -241,12 +255,12 @@ class SimulationRunner:
             raise ValueError('model must be a non-empty string')
 
         # Validate injected agents early to fail fast
-        if user_simulator is not None and not isinstance(user_simulator, SimulationUserSimulator):
+        if user_simulator is not None and not _implements(user_simulator, _USER_SIMULATOR_METHODS):
             raise TypeError(
                 'user_simulator must implement generate_first_message(), respond_async(), '
                 'and update_context(). Use UserSimulatorAgent or a subclass.'
             )
-        if judge is not None and not isinstance(judge, SimulationJudge):
+        if judge is not None and not _implements(judge, _JUDGE_METHODS):
             raise TypeError('judge must implement evaluate(). Use JudgeAgent or a subclass.')
 
         self._target_agent = target_agent
@@ -414,7 +428,7 @@ class SimulationRunner:
             # keeps the same reference, which would cross-contaminate per-sim counts.
             user_simulator: UserSimulatorAgent = copy.copy(self._injected_user_simulator)  # pyright: ignore[reportAssignmentType]
             user_simulator.reset_usage()
-            if isinstance(user_simulator, SimulationUserSimulator):
+            if _implements(user_simulator, _USER_SIMULATOR_METHODS):
                 try:
                     user_simulator.update_context(
                         persona_context=build_persona_system_prompt(persona)  # type: ignore[arg-type]
