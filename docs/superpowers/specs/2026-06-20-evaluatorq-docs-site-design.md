@@ -3,121 +3,203 @@
 **Date:** 2026-06-20
 **Repo:** `orq-ai/evaluatorq`
 **Branch:** `docs/mkdocs-site`
-**Status:** approved
+**Status:** approved (reworked after `/hate` review)
 
 ## Goal
 
 Publish a structured, public documentation site for the `evaluatorq` Python
-package on GitHub Pages. The site replaces the single 34 KB `README.md` as the
-primary user-facing documentation, adds task-oriented tutorials, and exposes an
-auto-generated API reference. The README slims down to a pitch + quick start +
-link to the site.
+package on GitHub Pages. The site becomes the primary user-facing documentation,
+**expands coverage to currently-undocumented subsystems**, adds CI-checked
+tutorials, and exposes an auto-generated API reference. The README slims to a
+pitch + an intentionally-mirrored quick start + a link to the site.
 
 ## Toolchain
 
-- **MkDocs** with the **Material** theme — markdown-native, so existing content
-  needs near-zero conversion.
-- **mkdocstrings[python]** (griffe backend) for the API reference, rendering
-  from **Google-style** docstrings + type hints.
-- **mkdocs-gen-files** + **mkdocs-literate-nav** to generate one API page per
-  public module from the package tree.
-- **mkdocs-section-index** so section landing pages work.
-- All added as a `docs` dependency group in `pyproject.toml`. Site config lives
-  in `mkdocs.yml` at the repo root.
+- **MkDocs** + **Material** theme — markdown-native; existing content needs no
+  format conversion.
+- **mkdocstrings[python]** (griffe) for the API reference, rendering from the
+  **Google-style** docstrings the codebase already uses (verified: 0 NumPy-style
+  docstrings; 216 Google `Args:`/`Returns:` blocks across 55 files).
+- **mkdocs-gen-files** generates the API stub pages and pulls out-of-tree
+  markdown into the build (see "Content ingestion"); **mkdocs-literate-nav**
+  assembles the API Reference nav subtree from a generated `SUMMARY.md`. The
+  rest of the nav is explicit in `mkdocs.yml`.
+- **mkdocs-section-index** for clickable section landing pages.
+- Added as a `docs` dependency group in `pyproject.toml`; config in `mkdocs.yml`
+  at the repo root. `docs_dir: docs`.
 
-Rejected alternatives: Sphinx (+autodoc / +MyST). Sphinx gives stronger
-autodoc edge-case handling, intersphinx, doctest-in-CI, and PDF/man output, but
-costs markdown→rst conversion and heavier config. None of those Sphinx-only
-capabilities are needed for a markdown-native, type-hinted public package. If
-executable doctests-in-CI ever become a required quality gate, revisit.
+Rejected: Sphinx (+autodoc / +MyST) — stronger autodoc edge cases, intersphinx,
+doctest-in-CI, PDF/man output, but costs markdown→rst conversion and heavier
+config. None of those are needed for a markdown-native, type-hinted package.
 
-## Docstring style migration (its own phase)
+## Docstring style (NOT a migration)
 
-The codebase today is **mostly NumPy-style** docstrings (~2325 `----------`
-section underlines) with ~100 Google-style (`Args:`) mixed in. The site
-standardises on **Google style** for readability and consistent mkdocstrings
-rendering.
+The `/hate` review corrected the earlier draft: there is **no NumPy→Google
+migration to do**. The codebase is already Google-style. The only work is:
 
-- Convert NumPy → Google across `src/evaluatorq/`.
-- Auto-converters (e.g. pyment) are unreliable; do it carefully, module by
-  module.
-- Each converted module is verified by (a) a clean `mkdocs build --strict`
-  (mkdocstrings resolves it) and (b) the existing test suite still passing.
-- griffe configured with `docstring_style: google`.
-- This phase is independent of the site scaffolding and can proceed in
-  parallel module batches.
+- Set mkdocstrings/griffe `docstring_style: google`.
+- Run `mkdocs build --strict` and fix the handful of docstrings it actually
+  warns about. A stray malformed docstring renders wrong **without** failing
+  `--strict`, so the build-strict gate is not sufficient on its own — the API
+  reference is spot-checked visually as an acceptance step (see Success
+  criteria).
 
-## Site structure (explicit nav)
+## Content ingestion (the real work)
+
+MkDocs only serves files under `docs_dir`. Several reused sources live elsewhere
+and use relative links to siblings/source/examples that would break the build:
+
+- `src/evaluatorq/redteam/README.md`, `src/evaluatorq/redteam/ARCHITECTURE.md`
+- `src/evaluatorq/simulation/README.md`
+- root `CONTRIBUTING.md`, `CHANGELOG.md`, `ROADMAP.md`
+- `docs/custom-evaluators-and-frameworks.md` (already in `docs/`)
+
+A `docs/gen_pages.py` (run by mkdocs-gen-files) copies each out-of-tree file
+into the virtual docs tree and **rewrites relative links** during the copy:
+links to source files → GitHub blob URLs at the pinned ref; links to `examples/`
+→ the corresponding tutorial/example page or a GitHub blob URL. There is **no
+`simulation/ARCHITECTURE.md`** (only redteam has one) — the simulation guide is
+sourced from its README plus new prose.
+
+## Expanded coverage (the "cover more" requirement)
+
+Reorganising the README is not enough. These subsystems have little or no prose
+today and get **new authored guide pages** (not just an API dump):
+
+- `openresponses/` — target + conversion layer
+- `redteam/backends/` — orq / openai / openresponses / base + registry
+- `redteam/adaptive/` — orchestrator, strategy planner, tool-chaining,
+  capability classifier (the attack engine)
+- simulation generators / quality / perturbation
+- hooks — redteam and simulation lifecycle hooks
+- CLIs — `evaluatorq` / `eq` console scripts, plus redteam and simulation CLIs
+
+## Site structure (explicit nav; API Reference subtree via literate-nav)
 
 ```
-Home                     slim intro, badges, install, link into docs
-Getting Started          install, optional extras, auth (ORQ_API_KEY), first eval
+Home                     pitch, badges, install, link into docs
+Getting Started          install, extras matrix, auth (ORQ_API_KEY), first eval
+Installation & extras    matrix of all 11 extras and what each enables
+Migrating from evaluatorq-py   monorepo path -> standalone repo (same PyPI name)
 Guides/
-  Core evaluation        jobs, @job decorator, evaluators, EvaluatorParams,
-                         parallelism, structured results
+  Core evaluation        jobs, @job, evaluators, EvaluatorParams, parallelism,
+                         structured results
   Orq platform           datasets, automatic result sending, result viz
   OpenTelemetry tracing  span hierarchy, auto-enable, custom endpoint, disable
-  Red teaming            from src/evaluatorq/redteam/README.md + ARCHITECTURE.md
-  Simulation             from src/evaluatorq/simulation/README.md + dashboard
-  Custom evaluators & frameworks   from docs/custom-evaluators-and-frameworks.md
-Tutorials/               NEW — task-oriented, runnable end-to-end
+  OpenResponses          target + conversion layer (NEW)
+  Red teaming            redteam/README.md + ARCHITECTURE.md
+  Red team backends      backends + registry (NEW)
+  Adaptive red teaming   adaptive engine internals (NEW)
+  Simulation             simulation/README.md + new prose
+  Hooks                  redteam + simulation lifecycle hooks (NEW)
+  Custom evaluators & frameworks   docs/custom-evaluators-and-frameworks.md
+  CLI reference          evaluatorq/eq + redteam/simulation CLIs (NEW)
+Tutorials/               task-oriented; code lives in examples/, CI-checked
   Your first evaluation
   Evaluating an Orq deployment
   Red-teaming an agent
   Simulating a multi-turn conversation
-Configuration            env vars reference, EvaluatorParams reference
-API Reference/           auto-generated (mkdocstrings), one page per module
-Contributing             reuse CONTRIBUTING.md
-Changelog                reuse CHANGELOG.md
-Roadmap                  reuse ROADMAP.md
+API Reference/           auto-generated (mkdocstrings), curated public modules
+Configuration            env vars, EvaluatorParams reference
+Contributing             CONTRIBUTING.md
+Changelog                CHANGELOG.md
+Roadmap                  ROADMAP.md
 ```
 
-Existing content sources mapped above are reorganised, not rewritten, except
-where splitting the monolithic README requires light editing for standalone
-page flow. `docs/superpowers/` (skill scratch: plans, specs) is excluded from
-the build via explicit nav + `exclude_docs`.
+`docs/superpowers/` (skill scratch: plans, specs) is kept out of the build with
+`exclude_docs` (not just explicit nav, which alone still warns).
 
-## API reference
+## API reference (curated, not a full auto-dump)
 
-A `docs/gen_ref_pages.py` script run by mkdocs-gen-files walks
-`src/evaluatorq/`, and for each public module emits a virtual stub page
-containing a `::: evaluatorq.<module>` mkdocstrings directive. mkdocs-literate-nav
-assembles the API nav tree from a generated `SUMMARY.md`. Private modules
-(leading underscore) and test helpers are skipped.
+`docs/gen_pages.py` emits `::: evaluatorq.<module>` pages from an **explicit
+allowlist of genuinely public modules**, not a blind tree walk. The leading-
+underscore filter is insufficient here: internal modules without underscores
+(`processings.py`, `send_results.py`, `table_display.py`, `fetch_data.py`,
+`progress.py`, `job_helper.py`) must be excluded so they are not published as
+public API. Integration submodules that import optional heavy deps are included
+only because docs CI installs all extras (below); otherwise they are covered by
+their guide pages.
 
-## Deployment
+## Build / CI / deploy
+
+**Import-failure fix (was a guaranteed `--strict` failure):** integration
+modules import optional deps unconditionally (e.g.
+`openai_agents_integration/target.py` → `from agents import ...`,
+langchain/langgraph targets). With only the `docs` group installed, mkdocstrings
+introspection raises `ModuleNotFoundError` and `--strict` fails. Docs CI
+therefore runs `uv sync --frozen --all-extras --group docs` (mirrors the main
+CI's `--all-extras --all-groups`) so every import resolves.
 
 `.github/workflows/docs.yml`:
 
-- **On pull request:** `mkdocs build --strict` only (no deploy) — catches
-  broken refs / nav before merge.
+- **On pull request:** `mkdocs build --strict` only (no deploy) — gates broken
+  refs/nav before merge.
 - **On push to `main`:** build + deploy to GitHub Pages.
-- Pages source = **GitHub Actions** (not a `gh-pages` branch).
-- `concurrency` guard so overlapping deploys cancel cleanly.
-- Uses `astral-sh/setup-uv` consistent with the existing CI; installs the
-  `docs` dependency group.
+- `permissions: { contents: read, pages: write, id-token: write }`.
+- `environment: github-pages`.
+- Steps use `astral-sh/setup-uv`, then `actions/configure-pages@v5` with
+  `enablement: true` (programmatically enables Pages — **no manual settings
+  toggle**, removing the top silent-failure risk), `actions/upload-pages-artifact`,
+  `actions/deploy-pages`.
+- `concurrency: { group: pages, cancel-in-progress: false }` — never cancel a
+  deploy mid-publish.
+- **Post-deploy verification step:** assert the deployed URL returns HTTP 200
+  (fail the job otherwise) so "Pages live" is a verified deliverable, not an
+  assumption.
 
-Repo settings prerequisite (manual, outside this work): enable GitHub Pages
-with source = GitHub Actions. Noted as a handoff item.
+## Tutorials (defined + CI-checked, with an honest ceiling)
+
+Each tutorial page documents: prerequisites + extras, the runnable script it is
+built from, expected output, and next steps. Tutorial code lives as real scripts
+under `examples/` (reuse the existing example scripts and the
+`red_teaming_intro` / `agent_simulation_intro` notebooks where they fit).
+
+CI gating, in two tiers:
+
+- **Per-PR (no secrets):** `python -m compileall` + import-smoke of the example
+  scripts, so a tutorial can never reference code that fails to parse/import.
+  `mkdocs build --strict` additionally guarantees every referenced snippet file
+  exists.
+- **Full execution needs `ORQ_API_KEY` / LLM access**, so genuine end-to-end
+  runs are a separate manual/nightly job, not the per-PR gate.
+  *ponytail: per-PR runs would need live API keys; compile+import smoke is the
+  honest gate, upgrade to a keyed nightly run if tutorials start breaking.*
 
 ## README
 
-Slim `README.md` to: one-paragraph pitch, badges, install (+ optional extras),
-a ~30-line quick start, and a prominent link to the docs site. All long-form
-content (advanced features, configuration tables, per-domain guides) lives in
-the site only — no duplication between README and site.
+Slim to: one-paragraph pitch, badges, install (+ extras one-liner), a ~30-line
+quick start, and a prominent link to the docs site. The quick start is
+**intentionally mirrored** on the Getting Started page (standard for the
+PyPI/GitHub landing page) — this is the one deliberate duplication. All other
+long-form content lives in the site only.
+
+## Coupled package-metadata fix
+
+`pyproject.toml` `[project.urls]` still point at the monorepo and must be
+rewritten as part of this work (also tracked under RES-949):
+
+- `Homepage = "https://github.com/orq-ai/orqkit"` → `https://github.com/orq-ai/evaluatorq`
+- `Repository = ".../orqkit/tree/main/packages/evaluatorq-py"` → repo root
+- `Documentation = ".../orqkit/tree/main/packages/evaluatorq-py"` → the Pages URL
 
 ## Out of scope (YAGNI — add when)
 
-- **Versioned docs (`mike`)** — add when a v2 with breaking changes ships.
-- **Doctest-in-CI** — add if docs code samples start drifting from the API.
-- **Custom domain** — add when marketing requests one; default
-  `orq-ai.github.io/evaluatorq` until then.
+- **Versioned docs (`mike`)** — add when a v2 with breaking changes ships. The
+  site footer still displays the current package version.
+- **Keyed end-to-end tutorial runs in per-PR CI** — add if tutorials drift;
+  nightly/manual for now.
+- **Custom domain** — default `orq-ai.github.io/evaluatorq` until marketing asks.
 
 ## Success criteria
 
 - `mkdocs build --strict` passes with no warnings.
-- Site deploys to GitHub Pages on merge to `main`; PR builds are gated.
-- API reference renders every public module from Google-style docstrings.
-- README is slim and links to the site; no content duplicated.
-- Existing test suite remains green after docstring migration.
+- Site deploys to GitHub Pages on merge to `main`; the post-deploy step confirms
+  the URL returns 200; PR builds are gated.
+- API reference renders the curated public modules; internal modules are absent.
+- **Every subsystem listed under "Expanded coverage" has a prose guide page**,
+  not only an API entry (spot-checked).
+- Tutorials reference scripts that pass the per-PR compile/import smoke.
+- README is slim, links to the site, and duplicates only the quick start.
+- `pyproject.toml` URLs point at the new repo / Pages site.
+- API reference rendering is visually spot-checked (catches malformed docstrings
+  that `--strict` does not).
