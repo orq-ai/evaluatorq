@@ -106,9 +106,6 @@ if TYPE_CHECKING:
         results_to_jsonl,
     )
     from evaluatorq.simulation.utils.prompt_builders import (
-        build_datapoint_system_prompt,
-        build_persona_system_prompt,
-        build_scenario_user_context,
         generate_datapoint,
     )
     from evaluatorq.simulation.utils.run_store import (
@@ -228,18 +225,6 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
         'build_simulation_run',
     ),
     'get_sim_runs_dir': ('evaluatorq.simulation.utils.run_store', 'get_sim_runs_dir'),
-    'build_datapoint_system_prompt': (
-        'evaluatorq.simulation.utils.prompt_builders',
-        'build_datapoint_system_prompt',
-    ),
-    'build_persona_system_prompt': (
-        'evaluatorq.simulation.utils.prompt_builders',
-        'build_persona_system_prompt',
-    ),
-    'build_scenario_user_context': (
-        'evaluatorq.simulation.utils.prompt_builders',
-        'build_scenario_user_context',
-    ),
     'generate_datapoint': (
         'evaluatorq.simulation.utils.prompt_builders',
         'generate_datapoint',
@@ -318,9 +303,6 @@ __all__ = [
     'apply_perturbations_batch',
     'apply_random_perturbation',
     'auto_save_run',
-    'build_datapoint_system_prompt',
-    'build_persona_system_prompt',
-    'build_scenario_user_context',
     'build_simulation_run',
     'export_datapoints_to_jsonl',
     'export_results_to_jsonl',

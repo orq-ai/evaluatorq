@@ -51,5 +51,11 @@ Thumbs.db
 .env.*
 !.env.example
 
+# Docs build output
+site/
+
 # Logs
 *.log
+
+# superpowers working dir (plans/specs)
+docs/superpowers/

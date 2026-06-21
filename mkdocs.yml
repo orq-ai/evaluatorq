@@ -1,0 +1,63 @@
+site_name: evaluatorq
+site_description: Evaluation framework Python Orq AI integration
+site_url: https://orq-ai.github.io/evaluatorq/
+repo_url: https://github.com/orq-ai/evaluatorq
+repo_name: orq-ai/evaluatorq
+docs_dir: docs
+
+# Keep skill scratch (plans/specs) out of build.
+exclude_docs: |
+  superpowers/
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - content.code.copy
+    - search.highlight
+  palette:
+    - scheme: default
+      toggle: { icon: material/brightness-7, name: Switch dark mode }
+    - scheme: slate
+      toggle: { icon: material/brightness-4, name: Switch light mode }
+
+plugins:
+  - search
+  - gen-files:
+      scripts:
+        - docs/gen_pages.py
+  - literate-nav:
+      nav_file: SUMMARY.md
+  - section-index
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google
+            show_source: false
+            show_root_heading: true
+            members_order: source
+            docstring_options:
+              warn_unknown_params: false
+              warn_missing_types: false
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - toc:
+      permalink: true
+
+# nav GROWS PER TASK. Each task appends pages it creates to keep a
+# green `mkdocs build --strict`. Never list a page before the task creates it
+# (mkdocs --strict fails on a nav entry whose file is missing). Task 1 ships
+# Home only; final nav shape recorded under "Target nav" in the File Structure.
+nav:
+  - Home: index.md
+  - API Reference: reference/
+  - Contributing: contributing.md
+  - Changelog: changelog.md
+  - Roadmap: roadmap.md

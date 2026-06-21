@@ -199,9 +199,9 @@ dependencies = [
   eq = "evaluatorq.cli:main"
 
   [project.urls]
-  Homepage = "https://github.com/orq-ai/orqkit"
-  Repository = "https://github.com/orq-ai/orqkit/tree/main/packages/evaluatorq-py"
-  Documentation = "https://github.com/orq-ai/orqkit/tree/main/packages/evaluatorq-py"
+  Homepage = "https://github.com/orq-ai/evaluatorq"
+  Repository = "https://github.com/orq-ai/evaluatorq"
+  Documentation = "https://orq-ai.github.io/evaluatorq/"
 
 [tool.semantic_release]
 # PSR v8+ config: version_toml points at the standard [project] version field.
@@ -237,6 +237,14 @@ minor_tags = ["feat"]
 patch_tags = ["fix", "perf"]
 
 [dependency-groups]
+docs = [
+  "mkdocs>=1.6.0",
+  "mkdocs-material>=9.5.0",
+  "mkdocstrings[python]>=0.26.0",
+  "mkdocs-gen-files>=0.5.0",
+  "mkdocs-literate-nav>=0.6.0",
+  "mkdocs-section-index>=0.3.0",
+]
 dev = [
   "pytest>=8.0.0",
   "pytest-asyncio>=1.2.0",
