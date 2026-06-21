@@ -70,6 +70,7 @@ if TYPE_CHECKING:
     from evaluatorq.simulation.hooks import (
         DefaultHooks,
         RichHooks,
+        SimStage,
         SimulationHooks,
         SimulationRunMeta,
     )
@@ -167,6 +168,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
         'evaluatorq.simulation.runner.simulation',
         'SimulationRunner',
     ),
+    'SimStage': ('evaluatorq.simulation.hooks', 'SimStage'),
     'SimulationHooks': ('evaluatorq.simulation.hooks', 'SimulationHooks'),
     'DefaultHooks': ('evaluatorq.simulation.hooks', 'DefaultHooks'),
     'RichHooks': ('evaluatorq.simulation.hooks', 'RichHooks'),
@@ -284,6 +286,7 @@ __all__ = [
     'Scenario',
     'ScenarioGenerator',
     # Exceptions
+    'SimStage',
     'SimulationCancelledError',
     'SimulationDroppedError',
     'SimulationError',

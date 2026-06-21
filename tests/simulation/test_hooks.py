@@ -12,6 +12,8 @@ import pytest
 
 from evaluatorq.simulation.hooks import (
     DefaultHooks,
+    RichHooks,
+    SimStage,
     SimulationHooks,
     SimulationRunMeta,
 )
@@ -959,3 +961,63 @@ async def test_async_target_closed_when_on_run_complete_raises(datapoint_factory
         )
     assert hooks.completed is True  # terminal still fired
     assert target.closed is True  # cleanup ran despite the raising async hook
+
+
+# ---------------------------------------------------------------------------
+# SimStage + on_stage_start/end hook tests (Task 4)
+# ---------------------------------------------------------------------------
+
+
+def test_stage_hooks_keep_protocol_satisfied():
+    """Adding on_stage_start/end to the Protocol must not break isinstance checks
+    as long as BOTH DefaultHooks and RichHooks implement the methods."""
+    from rich.console import Console
+
+    assert isinstance(DefaultHooks(), SimulationHooks)
+    assert isinstance(RichHooks(console=Console()), SimulationHooks)
+
+
+def test_rich_stage_start_renders_rule():
+    """RichHooks.on_stage_start must emit a console.rule containing the stage label."""
+    buf = io.StringIO()
+    h = RichHooks(console=__import__('rich.console', fromlist=['Console']).Console(file=buf, width=80, force_terminal=False))
+    asyncio.run(h.on_stage_start(SimStage.SIMULATE, {}))
+    assert 'Running Simulations' in buf.getvalue()
+
+
+def test_rich_stage_end_generate_prints_count():
+    """RichHooks.on_stage_end with GENERATE and num_datapoints in meta prints count."""
+    buf = io.StringIO()
+    from rich.console import Console
+
+    h = RichHooks(console=Console(file=buf, width=80, force_terminal=False))
+    asyncio.run(h.on_stage_end(SimStage.GENERATE, {'num_datapoints': 42}))
+    assert '42' in buf.getvalue()
+    assert 'datapoints' in buf.getvalue()
+
+
+def test_rich_stage_end_simulate_prints_nothing():
+    """RichHooks.on_stage_end with SIMULATE stage must not print."""
+    buf = io.StringIO()
+    from rich.console import Console
+
+    h = RichHooks(console=Console(file=buf, width=80, force_terminal=False))
+    asyncio.run(h.on_stage_end(SimStage.SIMULATE, {}))
+    assert buf.getvalue() == ''
+
+
+def test_default_hooks_stage_methods_are_silent():
+    """DefaultHooks.on_stage_start and on_stage_end run without raising."""
+    hooks = DefaultHooks()
+    asyncio.run(hooks.on_stage_start(SimStage.GENERATE, {}))
+    asyncio.run(hooks.on_stage_end(SimStage.GENERATE, {'num_datapoints': 5}))
+    asyncio.run(hooks.on_stage_start(SimStage.SIMULATE, {}))
+    asyncio.run(hooks.on_stage_end(SimStage.SIMULATE, {}))
+
+
+def test_simstage_exported_from_package():
+    """SimStage must be importable from evaluatorq.simulation."""
+    import evaluatorq.simulation as sim
+
+    assert sim.SimStage is not None
+    assert 'SimStage' in sim.__all__
