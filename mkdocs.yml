@@ -1,9 +1,10 @@
 site_name: evaluatorq
-site_description: Evaluation framework Python Orq AI integration
+site_description: Run LLM evaluations, red-team agents, and simulate multi-turn conversations in Python.
 site_url: https://orq-ai.github.io/evaluatorq/
 repo_url: https://github.com/orq-ai/evaluatorq
 repo_name: orq-ai/evaluatorq
 docs_dir: docs
+copyright: "© 2026 Orq AI · MIT License"
 
 # Keep skill scratch (plans/specs) out of build.
 exclude_docs: |
@@ -50,7 +51,7 @@ plugins:
           options:
             docstring_style: google
             show_source: false
-            show_root_heading: true
+            show_root_heading: false
             members_order: source
             docstring_options:
               warn_unknown_params: false
@@ -70,7 +71,10 @@ markdown_extensions:
 # Home only; final nav shape recorded under "Target nav" in the File Structure.
 nav:
   - Home: index.md
+  - Getting Started: guides/getting-started.md
   - Guides:
+      - Agent Simulation: guides/agent-simulation.md
+      - Red Teaming: guides/red-teaming.md
       - Custom Evaluators & Frameworks: custom-evaluators-and-frameworks.md
   - Examples: examples/
   - API Reference: reference/

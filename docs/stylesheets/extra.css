@@ -16,13 +16,16 @@
   --md-primary-fg-color--dark: #013a3c;
   --md-accent-fg-color: var(--orq-orange);
   --md-typeset-a-color: var(--orq-teal);
+  --md-code-bg-color: var(--orq-sand); /* warmer than Material default */
 }
 
 /* Dark scheme: lighten so teal stays legible on slate. */
 [data-md-color-scheme="slate"] {
   --md-primary-fg-color: var(--orq-teal-light);
+  --md-primary-fg-color--light: #3db8a8;
+  --md-primary-bg-color: #ffffff; /* text/icons on the primary header */
   --md-accent-fg-color: var(--orq-orange);
-  --md-typeset-a-color: var(--orq-cyan);
+  --md-typeset-a-color: var(--orq-teal-light); /* teal-light, not blinding cyan */
 }
 
 /* Headings in brand teal (light only — slate handles its own contrast). */
@@ -30,3 +33,16 @@
 [data-md-color-scheme="default"] .md-typeset h2 {
   color: var(--orq-teal);
 }
+
+/* Logo is wide-format (200×54): clamp height, let width scale. */
+.md-header__button.md-logo img,
+.md-nav__button.md-logo img {
+  height: 1.5rem;
+  width: auto;
+}
+
+/* ponytail: NOT overriding Material's sidebar-collapse breakpoint (76.25em).
+   A CSS-only override leaves a broken half-state — drawer-mode and sidebar-mode
+   render different DOM, so the rail shows the logo block, not the nav tree.
+   The fold is standard Material responsive behavior; widen the window past
+   ~1220px to get the permanent sidebar. */
