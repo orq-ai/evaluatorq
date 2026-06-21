@@ -7,6 +7,7 @@ builders and per-section render functions.
 """
 
 from evaluatorq.common.reports import palette
+from evaluatorq.common.reports.console import confirm_run_plan, write_text_report
 from evaluatorq.common.reports.html_helpers import (
     COLORS,
     STATUS_COLORS,
@@ -68,6 +69,7 @@ __all__ = [
     'bold_bar',
     'center_table',
     'charts_available',
+    'confirm_run_plan',
     'details_block',
     'esc',
     'format_date',
@@ -94,4 +96,5 @@ __all__ = [
     'svg_donut',
     'truncate',
     'try_render_svg',
+    'write_text_report',
 ]
