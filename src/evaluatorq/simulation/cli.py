@@ -365,9 +365,13 @@ def simulate(
             help="Increase verbosity (-v info logs, -vv debug logs).",
         ),
     ] = 0,
-    quiet: Annotated[
+    quiet: Annotated[  # noqa: FBT002
         bool,
         typer.Option("--quiet", "-q", help="Suppress non-error output."),
+    ] = False,
+    yes: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option("--yes", "-y", help="Skip interactive confirmation prompt."),
     ] = False,
 ) -> None:
     """Run simulations from a pre-built datapoints file.
@@ -388,6 +392,17 @@ def simulate(
     if quiet:
         verbose = -1
     _configure_logging(verbose)
+
+    hooks: Any = None
+    if not quiet:
+        from rich.console import Console
+
+        from evaluatorq.simulation.hooks import RichHooks
+
+        hooks = RichHooks(
+            console=Console(stderr=True),
+            skip_confirm=yes or not sys.stdin.isatty(),
+        )
 
     if not datapoints.exists():
         raise typer.BadParameter(f"Datapoints file not found: {datapoints}")
@@ -415,6 +430,7 @@ def simulate(
                 parallelism=parallelism,
                 evaluator_names=evaluator_names,
                 evaluation_name=name,
+                hooks=hooks,
             )
         )
     except KeyboardInterrupt:
@@ -430,8 +446,6 @@ def simulate(
         # SimulationDroppedError (dropped jobs) — surface as one line, not a
         # traceback. Exit 1 keeps the CI-gate behaviour (still non-zero).
         _handle_cli_error(exc)
-
-    _print_summary(results)
 
     if output:
         _write_results(results, output)
@@ -462,6 +476,7 @@ async def _simulate_impl(
     parallelism: int,
     evaluator_names: list[str] | None,
     evaluation_name: str,
+    hooks: Any = None,
 ) -> list[Any]:
     from evaluatorq.simulation.api import simulate
     from evaluatorq.simulation.utils.dataset_export import load_datapoints_from_jsonl
@@ -478,6 +493,7 @@ async def _simulate_impl(
         parallelism=parallelism,
         evaluator_names=evaluator_names,
         evaluation_name=evaluation_name,
+        hooks=hooks,
     )
 
 
@@ -604,9 +620,13 @@ def run(
             help="Increase verbosity (-v info logs, -vv debug logs).",
         ),
     ] = 0,
-    quiet: Annotated[
+    quiet: Annotated[  # noqa: FBT002
         bool,
         typer.Option("--quiet", "-q", help="Suppress non-error output."),
+    ] = False,
+    yes: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option("--yes", "-y", help="Skip interactive confirmation prompt."),
     ] = False,
 ) -> None:
     """Generate personas and scenarios, then run simulations (generate + simulate).
@@ -626,6 +646,17 @@ def run(
     if quiet:
         verbose = -1
     _configure_logging(verbose)
+
+    hooks: Any = None
+    if not quiet:
+        from rich.console import Console
+
+        from evaluatorq.simulation.hooks import RichHooks
+
+        hooks = RichHooks(
+            console=Console(stderr=True),
+            skip_confirm=yes or not sys.stdin.isatty(),
+        )
 
     try:
         resolved_agent_description = asyncio.run(
@@ -656,6 +687,7 @@ def run(
                 evaluator_names=evaluator_names,
                 evaluation_name=name,
                 save_datapoints=save_datapoints,
+                hooks=hooks,
             )
         )
     except KeyboardInterrupt:
@@ -671,8 +703,6 @@ def run(
         # SimulationDroppedError (dropped jobs) — surface as one line, not a
         # traceback. Exit 1 keeps the CI-gate behaviour (still non-zero).
         _handle_cli_error(exc)
-
-    _print_summary(results)
 
     if output:
         _write_results(results, output)
@@ -706,6 +736,7 @@ async def _run_impl(
     evaluator_names: list[str] | None,
     evaluation_name: str,
     save_datapoints: Path | None = None,
+    hooks: Any = None,
 ) -> list[Any]:
     from evaluatorq.simulation.api import generate_and_simulate
 
@@ -733,6 +764,7 @@ async def _run_impl(
         evaluator_names=evaluator_names,
         evaluation_name=evaluation_name,
         emit_datapoints=emit,
+        hooks=hooks,
     )
 
 
@@ -791,7 +823,7 @@ def generate(
             help="Increase verbosity (-v info logs, -vv debug logs).",
         ),
     ] = 0,
-    quiet: Annotated[
+    quiet: Annotated[  # noqa: FBT002
         bool,
         typer.Option("--quiet", "-q", help="Suppress non-error output."),
     ] = False,
@@ -1097,27 +1129,6 @@ def ui(
 
     dashboard_script = Path(__file__).parent / "ui" / "dashboard.py"
     launch_streamlit(dashboard_script, run_path, port=port, host=host, extra="simulation")
-
-
-# ---------------------------------------------------------------------------
-# Summary helper
-# ---------------------------------------------------------------------------
-
-
-def _print_summary(results: list[Any]) -> None:
-    total = len(results)
-    if total == 0:
-        typer.echo("No results.")
-        return
-
-    achieved = sum(1 for r in results if r.goal_achieved)
-    avg_turns = sum(r.turn_count for r in results) / total
-    total_broken = sum(len(r.rules_broken) for r in results)
-
-    typer.echo(f"\nResults: {total} simulations")
-    typer.echo(f"  Goal achieved:  {achieved}/{total} ({achieved / total:.0%})")
-    typer.echo(f"  Avg turns:      {avg_turns:.1f}")
-    typer.echo(f"  Rules broken:   {total_broken}")
 
 
 def _write_results(results: list[Any], output: Path) -> None:

@@ -535,7 +535,9 @@ def test_simulate_success_no_save(tmp_path: Path) -> None:
         )
 
     assert result.exit_code == 0, result.output
-    assert "1 simulations" in result.stdout
+    # summary now renders via on_run_complete (mocked away here); covered by
+    # tests/simulation/test_hooks.py and tests/simulation/reports/test_display.py.
+    assert result.exit_code == 0
 
 
 def test_simulate_writes_output_file(tmp_path: Path) -> None:
@@ -995,7 +997,9 @@ def test_run_success_no_save(tmp_path: Path) -> None:
         )
 
     assert result.exit_code == 0, result.output
-    assert "1 simulations" in result.stdout
+    # summary now renders via on_run_complete (mocked away here); covered by
+    # tests/simulation/test_hooks.py and tests/simulation/reports/test_display.py.
+    assert result.exit_code == 0
 
 
 def test_run_forwards_flags(tmp_path: Path) -> None:
@@ -1448,3 +1452,61 @@ def test_run_without_save_datapoints_writes_no_file(tmp_path: Path) -> None:
     # No stray JSONL files created under tmp_path
     stray = list(tmp_path.glob("*.jsonl"))
     assert stray == [], f"Unexpected JSONL files: {stray}"
+
+
+# ---------------------------------------------------------------------------
+# --yes / -y flag wiring tests (Task 7)
+# ---------------------------------------------------------------------------
+
+
+def test_simulate_yes_exits_clean(tmp_path: Path) -> None:
+    """--yes flag is accepted and wired correctly; CLI exits 0 with mocked impl."""
+    dp_file = _make_datapoints_file(tmp_path)
+    results = [_make_result()]
+
+    with (
+        patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
+        patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock) as mock_impl,
+    ):
+        mock_target.return_value = MagicMock()
+        mock_impl.return_value = results
+
+        result = runner.invoke(
+            app,
+            [
+                "simulate",
+                "--datapoints", str(dp_file),
+                "--openai-model", "gpt-4o",
+                "--yes",
+                "--no-save",
+            ],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+
+
+def test_run_yes_exits_clean(tmp_path: Path) -> None:
+    """--yes flag is accepted and wired correctly; CLI exits 0 with mocked impl."""
+    results = [_make_result()]
+
+    with (
+        patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
+        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
+    ):
+        mock_target.return_value = MagicMock()
+        mock_impl.return_value = results
+
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--agent-description", "A helpful bot",
+                "--openai-model", "gpt-4o",
+                "--yes",
+                "--no-save",
+            ],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
