@@ -13,9 +13,9 @@
 - Spec: `docs/superpowers/specs/2026-06-20-evaluatorq-docs-site-design.md`.
 - `docs_dir: docs`. Rendered output `site/` is git-ignored and never committed.
 - Docstrings are **already Google-style** (0 NumPy). No docstring migration. Set griffe `docstring_style: google`.
-- `mkdocs build --strict` MUST pass with no warnings at the end of every task that touches docs content or config.
-- Docs CI installs `uv sync --frozen --all-extras --group docs` so optional-dep imports (langchain, langgraph, `agents`, crewai, …) resolve during mkdocstrings introspection — otherwise `--strict` fails.
-- API reference is a **curated allowlist** of public modules; internal modules (`processings`, `send_results`, `table_display`, `fetch_data`, `progress`) are excluded.
+- The `nav` in `mkdocs.yml` **grows per task**: each task appends only the pages it creates and ends with a green `mkdocs build --strict` (no warnings). Never list a page before the task that creates it — `--strict` fails on a nav entry whose file is missing.
+- Docs CI installs `uv sync --frozen --all-extras --group docs` so optional-dep imports (langchain, langgraph, `agents`, crewai, …) resolve during mkdocstrings introspection — otherwise `--strict` fails. (The first local sync that adds the group omits `--frozen`; see Task 1 Step 3.)
+- API reference is **driven by `__all__`**: pages are generated per package and griffe documents exactly the members each package's `__init__.py` re-exports. Internal modules (`processings`, `send_results`, `table_display`, `fetch_data`, `progress`, `job_helper`) are not packages and are excluded automatically; the public `job` decorator is documented via the top-level `evaluatorq` `__all__`.
 - `docs/superpowers/` is excluded from the build via `exclude_docs`.
 - Pages enablement is programmatic (`actions/configure-pages` `enablement: true`); deploy concurrency `group: pages, cancel-in-progress: false`.
 - Work branch: `docs/mkdocs-site`. Commit frequently with conventional-commit messages (`docs:`, `ci:`, `build:`).
@@ -31,10 +31,12 @@
 - Create: `docs/guides/*.md` (core-evaluation, orq-platform, tracing, openresponses, red-teaming, redteam-backends, adaptive-red-teaming, simulation, hooks, custom-evaluators, cli.md).
 - Create: `docs/tutorials/*.md` (first-evaluation, orq-deployment, red-teaming-agent, simulation.md).
 - Create: `.github/workflows/docs.yml` — PR strict-build + deploy.
-- Create: `scripts/smoke_examples.py` — compile/import smoke for `examples/`.
+- Create: `scripts/smoke_examples.py` — compile smoke for `examples/`.
 - Modify: `pyproject.toml` — add `docs` dependency group, fix `[project.urls]`.
 - Modify: `.gitignore` — add `site/`.
 - Modify: `README.md` — slim to pitch + quick start + link.
+
+**Target nav (final shape, after all tasks):** Home → Getting Started → Installation & extras → Migrating → Guides (core-evaluation, orq-platform, tracing, openresponses, red-teaming, redteam-backends, adaptive-red-teaming, simulation, hooks, custom-evaluators, cli) → Tutorials (first-evaluation, orq-deployment, red-teaming-agent, simulation) → API Reference (`reference/`, literate-nav) → Configuration → Contributing → Changelog → Roadmap. Each task appends its slice (Task 1: Home; Task 2: API Reference + Contributing/Changelog/Roadmap; Task 3: Getting Started/Installation/Migrating/Configuration + core Guides; Task 4: remaining Guides; Task 5: Tutorials).
 
 ---
 
@@ -73,10 +75,14 @@ Add to `.gitignore`:
 site/
 ```
 
-- [ ] **Step 3: Sync the docs group**
+- [ ] **Step 3: Sync the docs group (regenerates the lock)**
 
-Run: `uv sync --frozen --all-extras --group docs`
-Expected: resolves and installs mkdocs + plugins (no error).
+Adding a dependency group invalidates `uv.lock`, so the first sync must NOT use
+`--frozen` (which forbids lock updates and would fail). Run without it once:
+
+Run: `uv sync --all-extras --group docs`
+Expected: updates `uv.lock` and installs mkdocs + plugins (no error). CI keeps
+`--frozen` (Task 6) because the regenerated lock is committed in Step 8.
 
 - [ ] **Step 4: Create a minimal `docs/index.md`**
 
@@ -135,62 +141,39 @@ plugins:
             show_root_heading: true
             members_order: source
 
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - toc:
+      permalink: true
+
+# nav GROWS PER TASK. Each task appends the pages it creates and ends with a
+# green `mkdocs build --strict`. Never list a page before the task that creates
+# it (mkdocs --strict fails on a nav entry whose file is missing). Task 1 ships
+# Home only; the final nav shape is recorded under "Target nav" in File Structure.
 nav:
   - Home: index.md
-  - Getting Started: getting-started.md
-  - Installation & extras: installation.md
-  - Migrating from evaluatorq-py: migrating.md
-  - Guides:
-      - Core evaluation: guides/core-evaluation.md
-      - Orq platform: guides/orq-platform.md
-      - OpenTelemetry tracing: guides/tracing.md
-      - OpenResponses: guides/openresponses.md
-      - Red teaming: guides/red-teaming.md
-      - Red team backends: guides/redteam-backends.md
-      - Adaptive red teaming: guides/adaptive-red-teaming.md
-      - Simulation: guides/simulation.md
-      - Hooks: guides/hooks.md
-      - Custom evaluators & frameworks: guides/custom-evaluators.md
-      - CLI reference: guides/cli.md
-  - Tutorials:
-      - Your first evaluation: tutorials/first-evaluation.md
-      - Evaluating an Orq deployment: tutorials/orq-deployment.md
-      - Red-teaming an agent: tutorials/red-teaming-agent.md
-      - Simulating a conversation: tutorials/simulation.md
-  - API Reference: reference/
-  - Configuration: configuration.md
-  - Contributing: contributing.md
-  - Changelog: changelog.md
-  - Roadmap: roadmap.md
-
-extra:
-  version:
-    provider: mike
 ```
 
-Note: `nav` references pages created in later tasks. Until Task 2 creates `docs/gen_pages.py`, the `gen-files` plugin will error — so this task's build check uses a temporary stub.
-
 - [ ] **Step 6: Create a temporary stub `docs/gen_pages.py`**
+
+The `gen-files` plugin runs this on every build; it must exist (even empty) or the build errors. Task 2 replaces it.
 
 ```python
 """Temporary stub — replaced in Task 2."""
 ```
 
-- [ ] **Step 7: Run the strict build (expected to FAIL on missing nav pages)**
+- [ ] **Step 7: Run the strict build (Home only → green)**
 
 Run: `uv run mkdocs build --strict`
-Expected: FAIL — warnings about nav referencing not-yet-created files (e.g. `getting-started.md`). This confirms the config loads and the plugin chain runs.
+Expected: PASS, no warnings. (Only `index.md` is in nav and it exists; the stub gen-files writes nothing.)
 
-- [ ] **Step 8: Temporarily reduce nav to only existing pages to confirm a clean build**
-
-Comment out every `nav` entry except `- Home: index.md`. Re-run:
-Run: `uv run mkdocs build --strict`
-Expected: PASS (no warnings). Then restore the full `nav` (the later tasks fill it in).
-
-- [ ] **Step 9: Commit**
+- [ ] **Step 8: Commit (include the regenerated lock)**
 
 ```bash
-git add pyproject.toml .gitignore mkdocs.yml docs/index.md docs/gen_pages.py
+git add pyproject.toml uv.lock .gitignore mkdocs.yml docs/index.md docs/gen_pages.py
 git commit -m "build: scaffold mkdocs material site (config, deps, index)"
 ```
 
@@ -223,42 +206,39 @@ REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "src" / "evaluatorq"
 BLOB = "https://github.com/orq-ai/evaluatorq/blob/main"
 
-# --- Curated public API allowlist (dotted module paths) ---------------------
-# Internal modules (processings, send_results, table_display, fetch_data,
-# progress) are intentionally absent.
-API_MODULES = [
-    "evaluatorq.evaluatorq",
-    "evaluatorq.evaluators",
-    "evaluatorq.job_helper",
-    "evaluatorq.deployment",
-    "evaluatorq.types",
-    "evaluatorq.contracts",
-    "evaluatorq.cli",
-    "evaluatorq.openresponses",
-    "evaluatorq.tracing",
+# --- Public API = packages that declare __all__ -----------------------------
+# Public surface is whatever each package's __init__.py __all__ re-exports;
+# griffe/mkdocstrings document exactly those members. This auto-excludes
+# internal modules (processings, send_results, table_display, fetch_data,
+# progress, job_helper) — they are not packages and their public symbols
+# (e.g. the `job` decorator) are re-exported through the top `evaluatorq`
+# __all__, so they appear there, documented once. Empty-__init__ subpackages
+# (redteam/backends, redteam/frameworks, redteam/runtime) have no __all__ and
+# are covered by prose guides (Task 4), not API pages.
+API_PACKAGES = [
+    "evaluatorq",
     "evaluatorq.redteam",
-    "evaluatorq.redteam.backends",
-    "evaluatorq.redteam.adaptive",
     "evaluatorq.simulation",
-    "evaluatorq.simulation.runner",
-    "evaluatorq.simulation.generators",
+    "evaluatorq.tracing",
+    "evaluatorq.openresponses",
+    "evaluatorq.integrations.callable_integration",
+    "evaluatorq.integrations.crewai_integration",
     "evaluatorq.integrations.langchain_integration",
     "evaluatorq.integrations.langgraph_integration",
     "evaluatorq.integrations.openai_agents_integration",
-    "evaluatorq.integrations.crewai_integration",
     "evaluatorq.integrations.pydantic_ai_integration",
-    "evaluatorq.integrations.callable_integration",
+    "evaluatorq.integrations.vercel_ai_sdk_integration",
 ]
 
 
 def write_api_pages() -> None:
     nav_lines = []
-    for dotted in API_MODULES:
-        page_path = Path("reference", *dotted.split(".")) .with_suffix(".md")
+    for dotted in API_PACKAGES:
+        page_path = Path("reference", *dotted.split(".")).with_suffix(".md")
         with mkdocs_gen_files.open(page_path, "w") as fd:
             fd.write(f"# `{dotted}`\n\n::: {dotted}\n")
         mkdocs_gen_files.set_edit_path(page_path, "gen_pages.py")
-        title = dotted.replace("evaluatorq.", "")
+        title = dotted.replace("evaluatorq.integrations.", "integrations/").replace("evaluatorq.", "") or "evaluatorq"
         nav_lines.append(f"- [{title}]({page_path.relative_to('reference').as_posix()})\n")
     with mkdocs_gen_files.open("reference/SUMMARY.md", "w") as fd:
         fd.writelines(nav_lines)
@@ -294,6 +274,8 @@ INGEST = [
 
 def ingest_markdown() -> None:
     for source, dest in INGEST:
+        if not source.exists():
+            raise FileNotFoundError(f"ingest source missing: {source}")  # fail loud, not a silent empty page
         text = source.read_text(encoding="utf-8")
         text = _rewrite_relative_links(text, source.parent)
         with mkdocs_gen_files.open(dest, "w") as fd:
@@ -305,25 +287,41 @@ write_api_pages()
 ingest_markdown()
 ```
 
-- [ ] **Step 2: Run the strict build for the reference + ingested pages**
+- [ ] **Step 2: Extend `nav` for the pages this task adds**
+
+Append to `mkdocs.yml` `nav` (literate-nav fills the API Reference subtree from
+the generated `reference/SUMMARY.md`):
+
+```yaml
+  - API Reference: reference/
+  - Contributing: contributing.md
+  - Changelog: changelog.md
+  - Roadmap: roadmap.md
+```
+
+- [ ] **Step 3: Run the strict build (green)**
 
 Run: `uv run mkdocs build --strict 2>&1 | tee /tmp/mkdocs.log`
-Expected: the `reference/` pages and `contributing/changelog/roadmap` render. Remaining `--strict` failures are only for guide/tutorial pages not yet created (Tasks 3–5). If there are mkdocstrings **import** errors, confirm `uv sync ... --all-extras --group docs` ran.
+Expected: PASS. The `reference/` pages and `contributing/changelog/roadmap`
+render; nav lists only pages that now exist. If there are mkdocstrings
+**import** errors, confirm `uv sync --all-extras --group docs` ran (all extras
+must be installed so optional-dep imports resolve). griffe documents exactly the
+members each package exports via `__all__`.
 
-- [ ] **Step 3: Verify no internal modules leaked**
+- [ ] **Step 4: Verify no internal modules leaked**
 
-Run: `grep -r "processings\|send_results\|table_display\|fetch_data" site/reference/ || echo "clean"`
-Expected: `clean`.
+Run: `grep -rE "processings|send_results|table_display|fetch_data|progress|job_helper" site/reference/ || echo "clean"`
+Expected: `clean` (the `job` decorator still appears, documented via the top-level `evaluatorq` package's `__all__`).
 
-- [ ] **Step 4: Visually spot-check one rendered API page**
+- [ ] **Step 5: Visually spot-check one rendered API page**
 
-Open `site/reference/evaluatorq/evaluators/index.html` (or serve with `uv run mkdocs serve`) and confirm Google-style `Args:`/`Returns:` render as structured sections, not a blob.
+Open `site/reference/evaluatorq/index.html` (or serve with `uv run mkdocs serve`) and confirm Google-style `Args:`/`Returns:` render as structured sections, not a blob, and that only `__all__` members appear.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add docs/gen_pages.py
-git commit -m "docs: generate curated API reference + ingest root markdown"
+git add docs/gen_pages.py mkdocs.yml
+git commit -m "docs: generate __all__-driven API reference + ingest root markdown"
 ```
 
 ---
@@ -356,15 +354,16 @@ A table of all 11 extras from `pyproject.toml` `[project.optional-dependencies]`
 
 Move the corresponding long-form `README.md` sections: core-evaluation = jobs / `@job` / built-in evaluators / `EvaluatorParams` / parallelism / structured results; orq-platform = datasets / automatic result sending / result viz; tracing = span hierarchy / auto-enable / custom OTEL endpoint / disable.
 
-- [ ] **Step 5: Create `docs/guides/custom-evaluators.md`**
+- [ ] **Step 5: Move the existing custom-evaluators doc into guides**
 
-Re-export the existing file content (it already lives in `docs/`):
+`docs/custom-evaluators-and-frameworks.md` already exists. Move it (don't use a
+snippet include — no `pymdownx.snippets` is configured):
 
-```markdown
---8<-- "custom-evaluators-and-frameworks.md"
+```bash
+git mv docs/custom-evaluators-and-frameworks.md docs/guides/custom-evaluators.md
 ```
 
-If the snippet/include syntax is not enabled, instead `git mv docs/custom-evaluators-and-frameworks.md docs/guides/custom-evaluators.md` and fix any relative links.
+Then fix any now-broken relative links inside it (it is under `docs/guides/`).
 
 - [ ] **Step 6: Author `docs/configuration.md`**
 
@@ -374,15 +373,31 @@ Env-var reference (`ORQ_API_KEY`, OTEL endpoint vars, tracing-disable var) + an 
 
 Reduce to: one-paragraph pitch, badges, `pip install evaluatorq`, extras one-liner, the ~30-line quick start (mirrored from Getting Started), and a prominent link to `https://orq-ai.github.io/evaluatorq/`. Remove the long-form sections now living in the site.
 
-- [ ] **Step 8: Run the strict build**
+- [ ] **Step 8: Extend `nav` for this task's pages**
+
+Append to `mkdocs.yml` `nav` (place Guides before API Reference for ordering):
+
+```yaml
+  - Getting Started: getting-started.md
+  - Installation & extras: installation.md
+  - Migrating from evaluatorq-py: migrating.md
+  - Guides:
+      - Core evaluation: guides/core-evaluation.md
+      - Orq platform: guides/orq-platform.md
+      - OpenTelemetry tracing: guides/tracing.md
+      - Custom evaluators & frameworks: guides/custom-evaluators.md
+  - Configuration: configuration.md
+```
+
+- [ ] **Step 9: Run the strict build (green)**
 
 Run: `uv run mkdocs build --strict`
-Expected: PASS for all Task-3 pages (guides/openresponses, redteam-backends, adaptive, simulation, hooks, cli and tutorials still missing → those remain the only failures).
+Expected: PASS — every nav entry now resolves to an existing page.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
-git add docs/ README.md
+git add docs/ mkdocs.yml README.md
 git commit -m "docs: reorganize core guides; slim README to pitch + quick start"
 ```
 
@@ -425,23 +440,44 @@ Each is fresh prose (these subsystems have no prose today). Required coverage:
 - `openresponses.md` — the `openresponses/` target + conversion layer: what it converts, when to use it. Link API: `reference/evaluatorq/openresponses/`.
 - `redteam-backends.md` — `redteam/backends/` (orq / openai / openresponses / base) + the registry: how a backend is selected and registered.
 - `adaptive-red-teaming.md` — `redteam/adaptive/`: orchestrator, strategy planner, tool-chaining, capability classifier — how an adaptive attack escalates.
-- `simulation.md` — lead prose + ingested simulation README; cover user-simulator/judge protocols, generators, quality, perturbation, the dashboard.
-- `hooks.md` — redteam + simulation lifecycle hooks: available hook points, sync-vs-async (note sync hooks are deprecated), a worked example.
+- `simulation.md` — lead prose + ingested simulation README, then a **distinct
+  section per subsystem** (the spec's "cover more" bar — not one grab-bag page):
+  user-simulator/judge protocols; generators (`simulation/generators/`:
+  datapoint, persona, scenario, first_message); quality + message perturbation
+  (`simulation/quality/message_perturbation.py`); the dashboard. Each section
+  links its API entry under `reference/evaluatorq/simulation/`.
+- `hooks.md` — redteam + simulation lifecycle hooks. Sources: `redteam/hooks.py`
+  AND `simulation/hooks.py` (both exist). Cover available hook points for each,
+  sync-vs-async (note sync hooks are deprecated), and a worked example per side.
 - `cli.md` — the `evaluatorq`/`eq` console scripts plus the redteam and simulation CLIs: commands, common flags.
 
-- [ ] **Step 4: Run the strict build**
+- [ ] **Step 4: Extend `nav` with the new guide pages**
+
+Add to the `Guides:` block in `mkdocs.yml` `nav`:
+
+```yaml
+      - OpenResponses: guides/openresponses.md
+      - Red teaming: guides/red-teaming.md
+      - Red team backends: guides/redteam-backends.md
+      - Adaptive red teaming: guides/adaptive-red-teaming.md
+      - Simulation: guides/simulation.md
+      - Hooks: guides/hooks.md
+      - CLI reference: guides/cli.md
+```
+
+- [ ] **Step 5: Run the strict build (green)**
 
 Run: `uv run mkdocs build --strict`
-Expected: PASS for all guides; only `tutorials/*` remain missing.
+Expected: PASS — all guide pages resolve; `_`-prefixed ingest pages are silenced by `not_in_nav`.
 
-- [ ] **Step 5: Spot-check coverage**
+- [ ] **Step 6: Spot-check coverage**
 
 Confirm each subsystem in the spec's "Expanded coverage" list has a guide page with real prose (not just an `:::` directive).
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add docs/
+git add docs/ mkdocs.yml
 git commit -m "docs: add guides for openresponses, redteam backends/adaptive, hooks, CLI, simulation"
 ```
 
@@ -467,10 +503,16 @@ Each page: prerequisites + required extras, the example script it is built from 
 
 - [ ] **Step 2: Write `scripts/smoke_examples.py`**
 
-```python
-"""Compile + import-smoke every example script (no network, no API keys).
+Compile-smoke only — byte-compiles every example (catches syntax errors, no
+network, no API keys). NOT an import-smoke: many examples import deps that live
+in no extra (e.g. `fastapi` in `examples/redteam/crypto_stealing_demo/webapp/`),
+so importing them would fail in CI. Compile is the honest gate.
 
-Guarantees tutorials never reference code that fails to parse or import.
+```python
+"""Byte-compile every example script (no imports, no network, no API keys).
+
+Catches syntax errors so a tutorial never references a script that won't parse.
+Does NOT import modules — examples pull in deps that are in no extra.
 """
 
 import compileall
@@ -498,16 +540,29 @@ if __name__ == "__main__":
 Run: `uv run python scripts/smoke_examples.py`
 Expected: `examples compile cleanly` and exit 0.
 
-- [ ] **Step 4: Run the strict build (now complete)**
+- [ ] **Step 4: Extend `nav` with the Tutorials section**
+
+Append to `mkdocs.yml` `nav`:
+
+```yaml
+  - Tutorials:
+      - Your first evaluation: tutorials/first-evaluation.md
+      - Evaluating an Orq deployment: tutorials/orq-deployment.md
+      - Red-teaming an agent: tutorials/red-teaming-agent.md
+      - Simulating a conversation: tutorials/simulation.md
+```
+
+- [ ] **Step 5: Run the strict build (now complete)**
 
 Run: `uv run mkdocs build --strict`
-Expected: PASS with no warnings — all nav pages now exist.
+Expected: PASS with no warnings — every nav page now exists. This is the full
+site; the nav is complete.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add docs/tutorials scripts/smoke_examples.py
-git commit -m "docs: add tutorials + example compile/import smoke check"
+git add docs/tutorials scripts/smoke_examples.py mkdocs.yml
+git commit -m "docs: add tutorials + example compile smoke check"
 ```
 
 ---
@@ -536,10 +591,6 @@ permissions:
   pages: write
   id-token: write
 
-concurrency:
-  group: pages
-  cancel-in-progress: false
-
 jobs:
   build:
     name: Build (strict) + example smoke
@@ -553,7 +604,7 @@ jobs:
           python-version: "3.13"
       - name: Install (all extras + docs)
         run: uv sync --frozen --all-extras --group docs
-      - name: Example compile/import smoke
+      - name: Example compile smoke
         run: uv run python scripts/smoke_examples.py
       - name: Build docs (strict)
         run: uv run mkdocs build --strict
@@ -573,6 +624,11 @@ jobs:
     if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
+    # Scope concurrency to the deploy job only, so PR builds never serialize
+    # behind a main deploy. Never cancel a deploy mid-publish.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -584,7 +640,8 @@ jobs:
         run: |
           url="${{ steps.deployment.outputs.page_url }}"
           echo "Checking $url"
-          code=$(curl -s -o /dev/null -w "%{http_code}" --retry 5 --retry-delay 5 "$url")
+          # First-ever Pages deploy can take a few minutes to propagate, so retry generously.
+          code=$(curl -s -o /dev/null -w "%{http_code}" --retry 10 --retry-delay 15 --retry-all-errors "$url")
           test "$code" = "200" || { echo "Pages returned $code"; exit 1; }
 ```
 
@@ -642,9 +699,11 @@ git commit -m "build: point project URLs at the standalone repo and docs site"
 ## Self-Review
 
 **Spec coverage:**
-- Toolchain → Task 1. Docstring style (griffe google, no migration) → Task 1 (mkdocs.yml) + Task 2 spot-check. Content ingestion + link rewriting → Task 2 + Task 4. Expanded coverage → Task 4. Site structure/nav → Task 1. Curated API ref → Task 2. Build/CI/deploy (extras install, permissions, configure-pages enablement, cancel-in-progress, 200 check) → Task 6. Tutorials + per-PR smoke → Task 5. README slim + intentional dup → Task 3. Coupled `[project.urls]` → Task 7. Out-of-scope (mike, keyed E2E, custom domain) → not implemented, as specified. Version footer → `extra.version.provider: mike` placeholder in mkdocs.yml (display only; mike wiring deferred per spec).
-- All success criteria map to a task gate (`--strict` build, 200 check, coverage spot-check, smoke).
+- Toolchain → Task 1. Docstring style (griffe google, no migration) → Task 1 (mkdocs.yml) + Task 2 spot-check. Content ingestion + link rewriting → Task 2 + Task 4. Expanded coverage → Task 4 (simulation broken into per-subsystem sections; sim hooks sourced from `simulation/hooks.py`). Site structure/nav (grows per task) → Tasks 1–5. `__all__`-driven API ref → Task 2. Build/CI/deploy (extras install, permissions, configure-pages enablement, deploy-scoped concurrency, 200 check) → Task 6. Tutorials + per-PR compile smoke → Task 5. README slim + intentional dup → Task 3. Coupled `[project.urls]` (RES-949) → Task 7. Out-of-scope (mike, keyed E2E, custom domain) → not implemented, as specified.
+- All success criteria map to a task gate (`--strict` build, 200 check, coverage spot-check, compile smoke).
+
+**Post-`/hate` fixes applied:** dropped the `mike` version provider (was half-wired, not installed) and the spec's "footer shows version" claim; fixed the `uv sync --frozen` ordering (first sync regenerates the lock); reconciled the API surface to `__all__` (dropped `job_helper`, added `vercel_ai_sdk_integration`); replaced the `--8<--` include with `git mv` for the existing custom-evaluators doc; removed the Task 1 nav comment/restore dance in favour of grow-per-task nav; corrected the smoke script claim to compile-only; scoped Pages concurrency to the deploy job.
 
 **Placeholder scan:** No "TBD"/"handle edge cases"/"write tests for the above". Content-authoring steps name exact source files and required sections (prose pages are not code, so no code block is required; config/script steps include full code).
 
-**Type consistency:** `gen_pages.py` `INGEST` list and `_rewrite_relative_links` referenced consistently across Tasks 2 and 4; `not_in_nav` added in Task 4 matches the `_`-prefixed ingest destinations; `scripts/smoke_examples.py` produced in Task 5 and consumed by the workflow in Task 6.
+**Type consistency:** `gen_pages.py` `API_PACKAGES`/`INGEST`/`_rewrite_relative_links` referenced consistently across Tasks 2 and 4; `not_in_nav` added in Task 4 matches the `_`-prefixed ingest destinations; `scripts/smoke_examples.py` produced in Task 5 and consumed by the workflow in Task 6; example script paths (`examples/redteam/01_basic_dynamic.py`, `examples/agent_simulation/01_basic_simulation.py`, `examples/agent_simulation/02_orq_deployment_simulation.py`) verified to exist.

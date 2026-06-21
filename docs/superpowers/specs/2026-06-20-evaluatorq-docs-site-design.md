@@ -99,7 +99,7 @@ Tutorials/               task-oriented; code lives in examples/, CI-checked
   Evaluating an Orq deployment
   Red-teaming an agent
   Simulating a multi-turn conversation
-API Reference/           auto-generated (mkdocstrings), curated public modules
+API Reference/           auto-generated (mkdocstrings), __all__-driven per package
 Configuration            env vars, EvaluatorParams reference
 Contributing             CONTRIBUTING.md
 Changelog                CHANGELOG.md
@@ -109,16 +109,19 @@ Roadmap                  ROADMAP.md
 `docs/superpowers/` (skill scratch: plans, specs) is kept out of the build with
 `exclude_docs` (not just explicit nav, which alone still warns).
 
-## API reference (curated, not a full auto-dump)
+## API reference (driven by `__all__`)
 
-`docs/gen_pages.py` emits `::: evaluatorq.<module>` pages from an **explicit
-allowlist of genuinely public modules**, not a blind tree walk. The leading-
-underscore filter is insufficient here: internal modules without underscores
-(`processings.py`, `send_results.py`, `table_display.py`, `fetch_data.py`,
-`progress.py`, `job_helper.py`) must be excluded so they are not published as
-public API. Integration submodules that import optional heavy deps are included
-only because docs CI installs all extras (below); otherwise they are covered by
-their guide pages.
+Public API = whatever each package's `__init__.py` `__all__` re-exports.
+`docs/gen_pages.py` emits one `::: evaluatorq.<package>` page per package that
+declares `__all__`, and griffe documents exactly those members. `__all__` is the
+single source of truth, so internal modules (`processings`, `send_results`,
+`table_display`, `fetch_data`, `progress`, `job_helper`) are excluded
+automatically — they are not packages, and their public symbols (e.g. the `job`
+decorator) surface through the top-level `evaluatorq` `__all__`, documented once.
+Empty-`__init__` subpackages (`redteam/backends`, `redteam/frameworks`,
+`redteam/runtime`) declare no `__all__` and are covered by prose guides, not API
+pages. Integration packages import optional heavy deps, so docs CI installs all
+extras (below) to let mkdocstrings introspect them.
 
 ## Build / CI / deploy
 
@@ -156,8 +159,9 @@ under `examples/` (reuse the existing example scripts and the
 
 CI gating, in two tiers:
 
-- **Per-PR (no secrets):** `python -m compileall` + import-smoke of the example
-  scripts, so a tutorial can never reference code that fails to parse/import.
+- **Per-PR (no secrets):** `python -m compileall` over the example scripts
+  (compile-only, NOT import — many examples import deps in no extra, e.g.
+  `fastapi`), so a tutorial can never reference a script that fails to parse.
   `mkdocs build --strict` additionally guarantees every referenced snippet file
   exists.
 - **Full execution needs `ORQ_API_KEY` / LLM access**, so genuine end-to-end
@@ -184,8 +188,9 @@ rewritten as part of this work (also tracked under RES-949):
 
 ## Out of scope (YAGNI — add when)
 
-- **Versioned docs (`mike`)** — add when a v2 with breaking changes ships. The
-  site footer still displays the current package version.
+- **Versioned docs (`mike`)** — add when a v2 with breaking changes ships. No
+  version selector/footer until then (the `mike` provider is NOT wired up — it
+  would render an empty selector without a mike deployment).
 - **Keyed end-to-end tutorial runs in per-PR CI** — add if tutorials drift;
   nightly/manual for now.
 - **Custom domain** — default `orq-ai.github.io/evaluatorq` until marketing asks.
