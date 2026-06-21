@@ -199,9 +199,9 @@ dependencies = [
   eq = "evaluatorq.cli:main"
 
   [project.urls]
-  Homepage = "https://github.com/orq-ai/orqkit"
-  Repository = "https://github.com/orq-ai/orqkit/tree/main/packages/evaluatorq-py"
-  Documentation = "https://github.com/orq-ai/orqkit/tree/main/packages/evaluatorq-py"
+  Homepage = "https://github.com/orq-ai/evaluatorq"
+  Repository = "https://github.com/orq-ai/evaluatorq"
+  Documentation = "https://orq-ai.github.io/evaluatorq/"
 
 [tool.semantic_release]
 # PSR v8+ config: version_toml points at the standard [project] version field.
