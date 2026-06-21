@@ -20,6 +20,7 @@ blocking hook stalls every concurrent simulation; offload blocking work with
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict, runtime_checkable
 
 from loguru import logger
@@ -33,6 +34,30 @@ if TYPE_CHECKING:
         SimulationResult,
         TurnMetrics,
     )
+
+
+class SimStage(str, Enum):
+    """Named pipeline stages used by ``on_stage_start`` / ``on_stage_end``.
+
+    Passed to stage hooks so concrete implementations can branch on the current
+    stage without string comparisons.  ``SimStage`` is ``str``-subclassed so
+    callers may also pass a plain string (forward-compat with future stages
+    added before a library update).
+    """
+
+    GENERATE = 'generate'
+    SIMULATE = 'simulate'
+
+
+_STAGE_LABELS: dict[str, str] = {
+    SimStage.GENERATE: 'Generating Datapoints',
+    SimStage.SIMULATE: 'Running Simulations',
+}
+
+
+def _stage_label(stage: SimStage | str) -> str:
+    """Return a human-readable label for *stage*, falling back to the raw value."""
+    return _STAGE_LABELS.get(stage, str(stage))  # type: ignore[arg-type]
 
 
 class SimulationRunMeta(TypedDict):
@@ -95,6 +120,8 @@ class SimulationHooks(Protocol):
 
     def on_confirm(self, meta: SimulationRunMeta) -> MaybeAsync[bool]: ...
     def on_run_start(self, meta: SimulationRunMeta) -> MaybeAsync[None]: ...
+    def on_stage_start(self, stage: SimStage | str, meta: dict[str, Any]) -> MaybeAsync[None]: ...
+    def on_stage_end(self, stage: SimStage | str, meta: dict[str, Any]) -> MaybeAsync[None]: ...
     def on_datapoint_start(self, datapoint: Datapoint) -> MaybeAsync[None]: ...
     def on_turn_complete(self, datapoint_id: str, metrics: TurnMetrics) -> MaybeAsync[None]: ...
     def on_datapoint_complete(self, result: SimulationResult) -> MaybeAsync[None]: ...
@@ -125,6 +152,12 @@ class DefaultHooks:
             f'parallelism={meta["parallelism"]} | '
             f'evaluators={meta["evaluator_names"]}'
         )
+
+    async def on_stage_start(self, stage: SimStage | str, meta: dict[str, Any]) -> None:
+        logger.info(f'[simulation] Stage start: {_stage_label(stage)}')
+
+    async def on_stage_end(self, stage: SimStage | str, meta: dict[str, Any]) -> None:
+        logger.info(f'[simulation] Stage end: {_stage_label(stage)}')
 
     async def on_datapoint_start(self, datapoint: Datapoint) -> None:
         logger.debug(f'[simulation] Datapoint start: {datapoint.id}')
@@ -179,6 +212,18 @@ class RichHooks:
         # Core RichHooks does not prompt (no typer dep). The interactive
         # confirm table + typer.confirm lands in the CLI override (RES-845).
         return True
+
+    # Ordering invariant: stage rules are emitted only BEFORE the live Progress
+    # region starts (on_run_start) and AFTER it stops (on_run_complete), never
+    # while the live region is active — that would tear the live render.  Task 5
+    # wiring calls on_stage_start / on_stage_end outside that live window.
+
+    async def on_stage_start(self, stage: SimStage | str, meta: dict[str, Any]) -> None:
+        self._console.rule(f'[bold cyan]{_stage_label(stage)}[/bold cyan]')
+
+    async def on_stage_end(self, stage: SimStage | str, meta: dict[str, Any]) -> None:
+        if stage == SimStage.GENERATE and 'num_datapoints' in meta:
+            self._console.print(f'[dim] {meta["num_datapoints"]} datapoints generated[/dim]')
 
     def _ensure_started(self) -> None:
         if self._progress is not None:
