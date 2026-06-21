@@ -1151,9 +1151,13 @@ def test_default_hooks_on_confirm_logs_plan_and_returns_true(caplog):
     import logging
 
     hooks = DefaultHooks()
-    with caplog.at_level(logging.INFO, logger='root'):
+    with caplog.at_level(logging.INFO, logger='evaluatorq.simulation.hooks'):
         result = asyncio.run(hooks.on_confirm(_meta_with_target()))
     assert result is True
+    assert 'Run plan' in caplog.text
+    assert 'agent:foo' in caplog.text
+    assert 'openai/gpt-5.4-mini' in caplog.text
+    assert any(r.levelname == 'INFO' for r in caplog.records)
 
 
 def test_default_hooks_on_run_complete_logs_structured(caplog, sim_result_factory):
@@ -1165,8 +1169,12 @@ def test_default_hooks_on_run_complete_logs_structured(caplog, sim_result_factor
         sim_result_factory(goal_achieved=True),
         sim_result_factory(goal_achieved=False),
     ]
-    with caplog.at_level(logging.INFO, logger='root'):
+    with caplog.at_level(logging.INFO, logger='evaluatorq.simulation.hooks'):
         asyncio.run(hooks.on_run_complete(results))
+    assert 'Run complete' in caplog.text
+    assert 'goal_achieved=1/2' in caplog.text
+    assert 'avg_turns=' in caplog.text
+    assert any(r.levelname == 'INFO' for r in caplog.records)
 
 
 def test_default_hooks_on_run_complete_warns_on_errors(caplog, sim_result_factory):
@@ -1175,5 +1183,7 @@ def test_default_hooks_on_run_complete_warns_on_errors(caplog, sim_result_factor
 
     hooks = DefaultHooks()
     results = [sim_result_factory(goal_achieved=False, error='oops')]
-    with caplog.at_level(logging.WARNING, logger='root'):
+    with caplog.at_level(logging.WARNING, logger='evaluatorq.simulation.hooks'):
         asyncio.run(hooks.on_run_complete(results))
+    assert any(r.levelname == 'WARNING' for r in caplog.records)
+    assert 'errored' in caplog.text.lower()
