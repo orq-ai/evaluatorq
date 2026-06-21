@@ -65,6 +65,10 @@ class SimulationRunMeta(TypedDict):
 
     One payload, double duty: built once in ``_simulate_core`` after datapoints
     are resolved, before the runner/target are allocated.
+
+    ``target`` is a human-readable label for the simulation target:
+    ``"agent:<key>"`` for ``AgentTarget`` instances, ``"deployment:<key>"`` for
+    ORQ deployment keys, or ``"callback"`` for plain callables.
     """
 
     num_datapoints: int
@@ -73,6 +77,7 @@ class SimulationRunMeta(TypedDict):
     parallelism: int
     evaluation_name: str
     evaluator_names: list[str]
+    target: str
 
 
 @runtime_checkable

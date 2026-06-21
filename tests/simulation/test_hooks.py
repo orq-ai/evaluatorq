@@ -61,6 +61,7 @@ def _meta() -> SimulationRunMeta:
         parallelism=1,
         evaluation_name='e',
         evaluator_names=['goal_achieved'],
+        target='callback',
     )
 
 
@@ -516,6 +517,60 @@ async def test_hooks_none_is_behaviour_identical(datapoint_factory):
     assert r.metadata['evaluator_scores']['goal_achieved'] in (0.0, 1.0)
     # DefaultHooks is silent at info-: result shape unchanged, datapoint_id set
     assert r.metadata['datapoint_id'] == 'dp1'
+
+
+@pytest.mark.asyncio
+async def test_simulate_emits_simulate_stage(datapoint_factory):
+    """simulate() must bracket execution with SIMULATE stage hooks."""
+    seen: list[str] = []
+
+    class Rec(DefaultHooks):
+        async def on_stage_start(self, stage, meta):
+            seen.append(f'start:{stage}')
+
+        async def on_stage_end(self, stage, meta):
+            seen.append(f'end:{stage}')
+
+    async def _ok_target(messages):
+        return 'fine'
+
+    await simulate(
+        datapoints=[datapoint_factory('dp1')],
+        target=_ok_target,
+        max_turns=1,
+        hooks=Rec(),
+        user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+        judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+        upload_results=False,
+    )
+    assert f'start:{SimStage.SIMULATE}' in seen
+    assert f'end:{SimStage.SIMULATE}' in seen
+
+
+@pytest.mark.asyncio
+async def test_meta_carries_target(datapoint_factory):
+    """SimulationRunMeta passed to on_confirm must carry 'target' field."""
+    captured: dict = {}
+
+    class Cap(DefaultHooks):
+        async def on_confirm(self, meta):
+            captured.update(meta)
+            return True
+
+    async def _ok_target(messages):
+        return 'fine'
+
+    await simulate(
+        datapoints=[datapoint_factory('dp1')],
+        target=_ok_target,
+        max_turns=1,
+        hooks=Cap(),
+        user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+        judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+        upload_results=False,
+    )
+    assert 'target' in captured
+    assert captured['target'] == 'callback'
 
 
 def test_hooks_exported_from_package():
