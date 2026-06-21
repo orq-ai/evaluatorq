@@ -12,30 +12,56 @@ exclude_docs: |
 
 theme:
   name: material
+  custom_dir: overrides
   logo: assets/logo.png
   favicon: assets/favicon.png
   font:
     text: Inter
     code: JetBrains Mono
+  # Feature set mirrors Pydantic's docs (Material for MkDocs), minus the
+  # Insiders-only ones (navigation.path, instant.prefetch/preview, tabs.sticky)
+  # that would fail `mkdocs build --strict` on the community edition.
   features:
+    - content.tabs.link
+    - content.code.annotate
+    - content.code.copy
+    - announce.dismiss
+    - navigation.tabs
+    - navigation.instant
+    - navigation.instant.progress
     - navigation.sections
     - navigation.indexes
     - navigation.top
-    - toc.follow
-    - content.code.copy
+    - navigation.tracking
+    - navigation.footer
+    - search.suggest
     - search.highlight
+    - toc.follow
+  # 3-way auto / light / dark toggle (same UX as Pydantic), Orq palette.
   palette:
-    - scheme: default
+    - media: "(prefers-color-scheme)"
       primary: custom
       accent: custom
-      toggle: { icon: material/brightness-7, name: Switch dark mode }
-    - scheme: slate
+      toggle: { icon: material/brightness-auto, name: Switch to light mode }
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
       primary: custom
       accent: custom
-      toggle: { icon: material/brightness-4, name: Switch light mode }
+      toggle: { icon: material/brightness-7, name: Switch to dark mode }
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle: { icon: material/brightness-4, name: Switch to system preference }
 
 extra_css:
   - stylesheets/extra.css
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/orq-ai/evaluatorq
+      name: evaluatorq on GitHub
 
 plugins:
   - search
@@ -58,10 +84,20 @@ plugins:
               warn_missing_types: false
 
 markdown_extensions:
+  - tables
+  - attr_list
+  - md_in_html
   - admonition
   - pymdownx.details
-  - pymdownx.highlight
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
   - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - toc:
       permalink: true
 
@@ -71,13 +107,14 @@ markdown_extensions:
 # Home only; final nav shape recorded under "Target nav" in the File Structure.
 nav:
   - Home: index.md
-  - Getting Started: guides/getting-started.md
-  - Guides:
+  - Get Started:
+      - Getting Started: guides/getting-started.md
       - Agent Simulation: guides/agent-simulation.md
       - Red Teaming: guides/red-teaming.md
       - Custom Evaluators & Frameworks: custom-evaluators-and-frameworks.md
   - Examples: examples/
   - API Reference: reference/
-  - Contributing: contributing.md
-  - Changelog: changelog.md
-  - Roadmap: roadmap.md
+  - About:
+      - Contributing: contributing.md
+      - Changelog: changelog.md
+      - Roadmap: roadmap.md

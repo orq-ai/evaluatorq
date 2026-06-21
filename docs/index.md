@@ -12,11 +12,36 @@ pip install "evaluatorq[redteam]"     # + red teaming / simulation
 
 ## What it does
 
-| | |
-|---|---|
-| **Evaluations** | Run jobs over inline data or Orq datasets in parallel; score with custom or built-in evaluators; gate CI on pass/fail. |
-| **Agent simulation** | A user-simulator LLM drives your agent across multi-turn conversations while a judge LLM scores whether it met its goals. |
-| **Red teaming** | Adaptive adversarial attacks mapped to the OWASP LLM Top 10 and Agentic Security Initiative, with auto-discovered tool and memory attack surfaces. |
+<div class="grid cards" markdown>
+
+-   :material-check-decagram:{ .lg .middle } __Evaluations__
+
+    ---
+
+    Run jobs over inline data or Orq datasets in parallel; score with custom or
+    built-in evaluators; gate CI on pass/fail.
+
+    [:octicons-arrow-right-24: Getting Started](guides/getting-started.md)
+
+-   :material-account-voice:{ .lg .middle } __Agent simulation__
+
+    ---
+
+    A user-simulator LLM drives your agent across multi-turn conversations while
+    a judge LLM scores whether it met its goals.
+
+    [:octicons-arrow-right-24: Agent simulation](guides/agent-simulation.md)
+
+-   :material-shield-sword:{ .lg .middle } __Red teaming__
+
+    ---
+
+    Adaptive adversarial attacks mapped to the OWASP LLM Top 10 and Agentic
+    Security Initiative, with auto-discovered tool and memory attack surfaces.
+
+    [:octicons-arrow-right-24: Red teaming](guides/red-teaming.md)
+
+</div>
 
 Works with LangGraph, OpenAI Agents SDK, PydanticAI, CrewAI, a plain async
 function, or an Orq deployment. The Orq platform is optional — for result
@@ -54,10 +79,7 @@ asyncio.run(main())
 ## Where to next
 
 - **[Getting Started](guides/getting-started.md)** — your first evaluation in five minutes.
-- **[Agent Simulation](guides/agent-simulation.md)** — drive multi-turn conversations with a simulated user.
-- **[Red Teaming](guides/red-teaming.md)** — OWASP security testing for agents.
-- **[Custom Evaluators & Frameworks](custom-evaluators-and-frameworks.md)** — extend the registries.
 - **[Examples](examples/index.md)** — runnable scripts across every capability.
+- **[Custom Evaluators & Frameworks](custom-evaluators-and-frameworks.md)** — extend the registries.
 - **[API Reference](reference/evaluatorq.md)** — the full public API.
 - **[Roadmap](roadmap.md)** — what's planned next.
-```
