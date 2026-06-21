@@ -146,8 +146,12 @@ class DefaultHooks:
     control-flow-identical to supplying no hooks (it does still log)."""
 
     async def on_confirm(self, meta: SimulationRunMeta) -> bool:
-        # Library default: never block. Interactive prompt lives in the CLI
-        # (RES-845) which overrides this.
+        logger.info(
+            f'[simulation] Run plan: target={meta.get("target", "?")} | '
+            f'{meta["num_datapoints"]} datapoints | model={meta["model"]!r} | '
+            f'max_turns={meta["max_turns"]} | parallelism={meta["parallelism"]} | '
+            f'evaluators={meta["evaluator_names"]}'
+        )
         return True
 
     async def on_run_start(self, meta: SimulationRunMeta) -> None:
@@ -186,7 +190,21 @@ class DefaultHooks:
         """Terminal hook. Always fires exactly once after ``on_run_start``, even
         on failure. ``results`` may be an empty list if failure occurred before
         any results were collected."""
-        logger.info(f'[simulation] Run complete: {len(results)} results')
+        total = len(results)
+        achieved = sum(1 for r in results if r.goal_achieved)
+        errored = sum(
+            1 for r in results if r.terminated_by.value == 'error' or r.metadata.get('error')
+        )
+        avg_turns = (sum(r.turn_count for r in results) / total) if total else 0.0
+        broken = sum(len(r.rules_broken) for r in results)
+        pct = (achieved / total) if total else 0.0
+        logger.info(
+            f'[simulation] Run complete: {total} simulations | goal_achieved={achieved}/{total} '
+            f'({pct:.0%}) | avg_turns={avg_turns:.1f} | rules_broken={broken}'
+        )
+        if errored:
+            logger.warning(f'[simulation] {errored}/{total} simulations errored')
+        logger.info('[simulation] Tip: explore results with "eq sim ui --latest"')
 
 
 class RichHooks:
@@ -201,12 +219,14 @@ class RichHooks:
         console: a ``rich.console.Console``; a new one is created when ``None``.
     """
 
-    def __init__(self, *, console: RichConsole | None = None) -> None:
+    def __init__(self, *, console: RichConsole | None = None, skip_confirm: bool = False) -> None:
         if console is None:
             from rich.console import Console
 
             console = Console()
         self._console = console
+        self._skip_confirm = skip_confirm
+        self._summary_rendered = False
         self._progress: Any = None  # rich.progress.Progress
         self._overall_task_id: Any = None  # rich.progress.TaskID | None
         self._tasks: dict[str, int] = {}  # datapoint_id -> rich TaskID
@@ -214,9 +234,23 @@ class RichHooks:
         self._completed = 0
 
     async def on_confirm(self, meta: SimulationRunMeta) -> bool:
-        # Core RichHooks does not prompt (no typer dep). The interactive
-        # confirm table + typer.confirm lands in the CLI override (RES-845).
-        return True
+        from evaluatorq.common.reports import confirm_run_plan
+
+        rows = [
+            ('Target', str(meta.get('target', '?'))),
+            ('Model', str(meta['model'])),
+            ('Datapoints', str(meta['num_datapoints'])),
+            ('Max Turns', str(meta['max_turns'])),
+            ('Parallelism', str(meta['parallelism'])),
+            ('Evaluators', ', '.join(meta['evaluator_names'])),
+        ]
+        return await confirm_run_plan(
+            self._console,
+            title='Run Plan',
+            rows=rows,
+            prompt=f'Simulate {meta["num_datapoints"]} datapoints?',
+            skip_confirm=self._skip_confirm,
+        )
 
     # Ordering invariant: stage rules are emitted only BEFORE the live Progress
     # region starts (on_run_start) and AFTER it stops (on_run_complete), never
@@ -257,6 +291,7 @@ class RichHooks:
         self._overall_task_id = None
         self._completed = 0
         self._max_turns = None
+        self._summary_rendered = False
 
     async def on_run_start(self, meta: SimulationRunMeta) -> None:
         self._reset_run_state()
@@ -327,9 +362,14 @@ class RichHooks:
         """Terminal hook. Always fires exactly once after ``on_run_start``, even
         on failure. ``results`` may be an empty list if failure occurred before
         any results were collected. Safe to call more than once (idempotent via
-        the ``_progress is None`` guard)."""
+        ``_summary_rendered`` guard)."""
         if self._progress is not None:
             self._progress.stop()
             self._progress = None
-            achieved = sum(1 for r in results if r.goal_achieved)
-            self._console.print(f'[bold green]Done[/bold green]: {len(results)} simulations, {achieved} goal-achieved')
+        if self._summary_rendered:
+            return
+        self._summary_rendered = True
+        from evaluatorq.simulation.reports.display import print_simulation_summary
+
+        print_simulation_summary(results, console=self._console)
+        self._console.print('[dim]Tip: explore results with "eq sim ui --latest"[/dim]')
