@@ -1076,3 +1076,104 @@ def test_simstage_exported_from_package():
 
     assert sim.SimStage is not None
     assert 'SimStage' in sim.__all__
+
+
+# ---------------------------------------------------------------------------
+# Task 6: Confirm gate + summary render in RichHooks; enriched DefaultHooks
+# ---------------------------------------------------------------------------
+
+
+def _meta_with_target(n: int = 2) -> SimulationRunMeta:
+    """Variant of _meta() with a non-trivial target for Task 6 tests."""
+    return SimulationRunMeta(
+        num_datapoints=n,
+        model='openai/gpt-5.4-mini',
+        max_turns=5,
+        parallelism=3,
+        evaluation_name='sim',
+        evaluator_names=['goal_achieved'],
+        target='agent:foo',
+    )
+
+
+def test_rich_confirm_skip_renders_plan_with_target():
+    """RichHooks.on_confirm with skip_confirm=True must render a Run Plan
+    table containing the target and model, then return True without prompting."""
+    from rich.console import Console
+
+    buf = io.StringIO()
+    h = RichHooks(console=Console(file=buf, width=90, force_terminal=False), skip_confirm=True)
+    assert asyncio.run(h.on_confirm(_meta_with_target())) is True
+    out = buf.getvalue()
+    assert 'Run Plan' in out
+    assert 'agent:foo' in out
+    assert 'openai/gpt-5.4-mini' in out
+
+
+def test_rich_run_complete_renders_once(sim_result_factory):
+    """RichHooks.on_run_complete must render the summary exactly once even if
+    called twice (idempotent guard on _summary_rendered)."""
+    from rich.console import Console
+
+    buf = io.StringIO()
+    h = RichHooks(console=Console(file=buf, width=90, force_terminal=False))
+    results = [sim_result_factory(goal_achieved=True)]
+    asyncio.run(h.on_run_complete(results))
+    asyncio.run(h.on_run_complete(results))   # second call must be a no-op
+    out = buf.getvalue()
+    assert out.count('SIMULATION SUMMARY') == 1
+    assert 'ui --latest' in out
+
+
+def test_rich_run_complete_summary_rendered_resets_on_new_run(sim_result_factory):
+    """_reset_run_state must clear _summary_rendered so a reused RichHooks
+    instance renders a fresh summary on the next on_run_start / on_run_complete
+    cycle."""
+    from rich.console import Console
+
+    buf = io.StringIO()
+    h = RichHooks(console=Console(file=buf, width=90, force_terminal=False))
+    results = [sim_result_factory(goal_achieved=True)]
+
+    # First run — renders once.
+    asyncio.run(h.on_run_start(_meta_with_target()))
+    asyncio.run(h.on_run_complete(results))
+    assert buf.getvalue().count('SIMULATION SUMMARY') == 1
+
+    # Second run — reset must clear the guard; summary must render again.
+    asyncio.run(h.on_run_start(_meta_with_target()))
+    asyncio.run(h.on_run_complete(results))
+    assert buf.getvalue().count('SIMULATION SUMMARY') == 2
+
+
+def test_default_hooks_on_confirm_logs_plan_and_returns_true(caplog):
+    """DefaultHooks.on_confirm must log the run plan at INFO and return True."""
+    import logging
+
+    hooks = DefaultHooks()
+    with caplog.at_level(logging.INFO, logger='root'):
+        result = asyncio.run(hooks.on_confirm(_meta_with_target()))
+    assert result is True
+
+
+def test_default_hooks_on_run_complete_logs_structured(caplog, sim_result_factory):
+    """DefaultHooks.on_run_complete must log goal_achieved count and avg_turns."""
+    import logging
+
+    hooks = DefaultHooks()
+    results = [
+        sim_result_factory(goal_achieved=True),
+        sim_result_factory(goal_achieved=False),
+    ]
+    with caplog.at_level(logging.INFO, logger='root'):
+        asyncio.run(hooks.on_run_complete(results))
+
+
+def test_default_hooks_on_run_complete_warns_on_errors(caplog, sim_result_factory):
+    """DefaultHooks.on_run_complete must emit a WARNING when any result errored."""
+    import logging
+
+    hooks = DefaultHooks()
+    results = [sim_result_factory(goal_achieved=False, error='oops')]
+    with caplog.at_level(logging.WARNING, logger='root'):
+        asyncio.run(hooks.on_run_complete(results))
