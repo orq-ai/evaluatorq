@@ -1,0 +1,32 @@
+/* Orq brand palette layered over Material defaults.
+   Brand source: orq-chart-style (teal primary, orange accent). */
+:root {
+  --orq-teal: #025558;
+  --orq-teal-light: #299d8f;
+  --orq-orange: #ff8f34;
+  --orq-cyan: #28ffe2;
+  --orq-ink: #25232e;
+  --orq-sand: #f9f8f6;
+}
+
+/* Light scheme: teal primary, orange accent. */
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: var(--orq-teal);
+  --md-primary-fg-color--light: var(--orq-teal-light);
+  --md-primary-fg-color--dark: #013a3c;
+  --md-accent-fg-color: var(--orq-orange);
+  --md-typeset-a-color: var(--orq-teal);
+}
+
+/* Dark scheme: lighten so teal stays legible on slate. */
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: var(--orq-teal-light);
+  --md-accent-fg-color: var(--orq-orange);
+  --md-typeset-a-color: var(--orq-cyan);
+}
+
+/* Headings in brand teal (light only — slate handles its own contrast). */
+[data-md-color-scheme="default"] .md-typeset h1,
+[data-md-color-scheme="default"] .md-typeset h2 {
+  color: var(--orq-teal);
+}

@@ -12,6 +12,7 @@ import mkdocs_gen_files
 
 REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "src" / "evaluatorq"
+EXAMPLES = REPO / "examples"
 BLOB = "https://github.com/orq-ai/evaluatorq/blob/main"
 
 # --- Public API packages driven by each package's __all__ ----------------
@@ -150,5 +151,65 @@ def write_api_pages() -> None:
         fd.writelines(nav_lines)
 
 
+def _pretty(stem: str) -> str:
+    """Filename/dir → readable title: drop a leading numeric prefix, title-case."""
+    return re.sub(r"^\d+[_-]", "", stem).replace("_", " ").title()
+
+
+def write_example_pages() -> None:
+    """Render each examples/*.py as a doc page (source embedded) + literate nav.
+
+    Pages are virtual; nothing is written under docs/. Source is fenced as-is
+    with a GitHub link so readers can copy or open the original.
+    """
+    files = sorted(
+        p
+        for p in EXAMPLES.rglob("*.py")
+        if p.name != "__init__.py" and "__pycache__" not in p.parts
+    )
+    tree: dict = {}
+    for f in files:
+        rel = f.relative_to(EXAMPLES)
+        page = Path("examples", rel).with_suffix(".md")
+        source = f.read_text(encoding="utf-8")
+        gh = f"{BLOB}/{f.relative_to(REPO).as_posix()}"
+        with mkdocs_gen_files.open(page, "w") as fd:
+            fd.write(f"# {_pretty(f.stem)}\n\n")
+            fd.write(f"[View on GitHub]({gh})\n\n")
+            fd.write("```python\n")
+            fd.write(source if source.endswith("\n") else source + "\n")
+            fd.write("```\n")
+        mkdocs_gen_files.set_edit_path(page, f.relative_to(REPO).as_posix())
+        node = tree
+        for part in rel.parts[:-1]:
+            node = node.setdefault(part, {})
+        node.setdefault("__files__", []).append(
+            (_pretty(f.stem), page.relative_to("examples").as_posix())
+        )
+
+    lines: list[str] = []
+
+    def emit(node: dict, depth: int) -> None:
+        indent = "    " * depth
+        for name in sorted(k for k in node if k != "__files__"):
+            lines.append(f"{indent}- {_pretty(name)}:\n")
+            emit(node[name], depth + 1)
+        for label, href in node.get("__files__", []):
+            lines.append(f"{indent}- [{label}]({href})\n")
+
+    emit(tree, 0)
+    # Section landing page (navigation.indexes uses the first SUMMARY entry).
+    cats = sorted(_pretty(k) for k in tree if k != "__files__")
+    with mkdocs_gen_files.open("examples/index.md", "w") as fd:
+        fd.write("# Examples\n\n")
+        fd.write(f"{len(files)} runnable scripts, grouped by area:\n\n")
+        for c in cats:
+            fd.write(f"- {c}\n")
+    with mkdocs_gen_files.open("examples/SUMMARY.md", "w") as fd:
+        fd.write("- [Overview](index.md)\n")
+        fd.writelines(lines)
+
+
 write_api_pages()
+write_example_pages()
 ingest_markdown()

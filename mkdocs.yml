@@ -11,17 +11,31 @@ exclude_docs: |
 
 theme:
   name: material
+  logo: assets/logo.png
+  favicon: assets/favicon.png
+  font:
+    text: Inter
+    code: JetBrains Mono
   features:
+    - navigation.tabs
     - navigation.sections
     - navigation.indexes
     - navigation.top
+    - toc.follow
     - content.code.copy
     - search.highlight
   palette:
     - scheme: default
+      primary: custom
+      accent: custom
       toggle: { icon: material/brightness-7, name: Switch dark mode }
     - scheme: slate
+      primary: custom
+      accent: custom
       toggle: { icon: material/brightness-4, name: Switch light mode }
+
+extra_css:
+  - stylesheets/extra.css
 
 plugins:
   - search
@@ -57,6 +71,9 @@ markdown_extensions:
 # Home only; final nav shape recorded under "Target nav" in the File Structure.
 nav:
   - Home: index.md
+  - Guides:
+      - Custom Evaluators & Frameworks: custom-evaluators-and-frameworks.md
+  - Examples: examples/
   - API Reference: reference/
   - Contributing: contributing.md
   - Changelog: changelog.md
