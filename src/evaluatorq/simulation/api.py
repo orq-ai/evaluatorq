@@ -212,6 +212,8 @@ async def generate_and_simulate(
     before simulation — used by the CLI's ``--save-datapoints`` to persist the
     exact inputs.
     """
+    from evaluatorq.common.async_utils import await_maybe
+    from evaluatorq.simulation.hooks import DefaultHooks, SimStage
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
 
@@ -235,6 +237,8 @@ async def generate_and_simulate(
             from evaluatorq.openresponses.client import build_simulation_client
             gen_client, gen_owned = build_simulation_client(generation_client)
             try:
+                gen_hooks = hooks or DefaultHooks()
+                await await_maybe(gen_hooks.on_stage_start(SimStage.GENERATE, {}))
                 gen_personas, gen_scenarios = await _generate_personas_scenarios(
                     agent_description=agent_description,
                     num_personas=num_personas,
@@ -254,6 +258,7 @@ async def generate_and_simulate(
                 )
                 if emit_datapoints is not None:
                     emit_datapoints(datapoints)
+                await await_maybe(gen_hooks.on_stage_end(SimStage.GENERATE, {'num_datapoints': len(datapoints)}))
 
                 return await _simulate_core(
                     caller='generate_and_simulate',
@@ -448,7 +453,7 @@ async def _simulate_core(
     from evaluatorq.common.async_utils import await_maybe
     from evaluatorq.common.tracing import set_span_attrs
     from evaluatorq.simulation.exceptions import SimulationCancelledError
-    from evaluatorq.simulation.hooks import DefaultHooks, SimulationRunMeta
+    from evaluatorq.simulation.hooks import DefaultHooks, SimStage, SimulationRunMeta
 
     target_callback_resolved, target_agent = _resolve_target(target, target_callback, agent_key)
 
@@ -471,6 +476,16 @@ async def _simulate_core(
     # The sync-hook deprecation nudge fires once in SimulationRunner.__init__
     # (the single choke point both this path and direct runner use share).
     resolved_evaluator_names = evaluator_names if evaluator_names is not None else DEFAULT_EVALUATOR_NAMES
+    # Derive a human-readable target label mirroring the save block's precedence:
+    # AgentTarget instances → "agent:<key>", agent_key deployments → "deployment:<key>",
+    # plain callables → "callback".
+    if target_agent is not None:
+        agent_key_attr = getattr(target_agent, 'agent_key', None)
+        target_label = f'agent:{agent_key_attr}' if agent_key_attr else 'agent'
+    elif agent_key is not None:
+        target_label = f'deployment:{agent_key}'
+    else:
+        target_label = 'callback'
     run_meta: SimulationRunMeta = {
         'num_datapoints': len(sim_datapoints),
         'model': model,
@@ -478,11 +493,17 @@ async def _simulate_core(
         'parallelism': parallelism,
         'evaluation_name': evaluation_name,
         'evaluator_names': resolved_evaluator_names,
+        'target': target_label,
     }
     # Gate first — before the evaluatorq run is built. A decline is a clean abort.
     if not await await_maybe(resolved_hooks.on_confirm(run_meta)):
         raise SimulationCancelledError('Simulation run declined by on_confirm hook')
 
+    # SIMULATE stage brackets the run: start fires after on_confirm passes and
+    # before on_run_start (which opens the live Progress region); end fires in the
+    # finally after on_run_complete (which closes it). Never emit between
+    # on_run_start and on_run_complete — that would tear the live render.
+    await await_maybe(resolved_hooks.on_stage_start(SimStage.SIMULATE, {}))
     # Terminal hook always pairs with on_run_start; results is [] on early
     # failure. on_run_complete is unguarded (a raising hook propagates, per the
     # hook exception policy); runner/target cleanup lives inside
@@ -527,6 +548,7 @@ async def _simulate_core(
         raise
     finally:
         await await_maybe(resolved_hooks.on_run_complete(results))
+        await await_maybe(resolved_hooks.on_stage_end(SimStage.SIMULATE, {}))
 
     # Persist only on the success path (an aborted run re-raised above). target_agent
     # / agent_key resolve the target_kind the dashboard reads.
