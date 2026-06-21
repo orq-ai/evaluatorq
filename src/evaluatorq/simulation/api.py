@@ -238,27 +238,31 @@ async def generate_and_simulate(
             gen_client, gen_owned = build_simulation_client(generation_client)
             try:
                 gen_hooks = hooks or DefaultHooks()
+                datapoints: list[Datapoint] = []
                 await await_maybe(gen_hooks.on_stage_start(SimStage.GENERATE, {}))
-                gen_personas, gen_scenarios = await _generate_personas_scenarios(
-                    agent_description=agent_description,
-                    num_personas=num_personas,
-                    num_scenarios=num_scenarios,
-                    model=sim_model,
-                    generation_client=gen_client,
-                )
+                try:
+                    gen_personas, gen_scenarios = await _generate_personas_scenarios(
+                        agent_description=agent_description,
+                        num_personas=num_personas,
+                        num_scenarios=num_scenarios,
+                        model=sim_model,
+                        generation_client=gen_client,
+                    )
 
-                datapoints = await _resolve_or_generate_datapoints(
-                    caller="generate_and_simulate",
-                    datapoints=None,
-                    personas=gen_personas,
-                    scenarios=gen_scenarios,
-                    dataset_id=None,
-                    model=sim_model,
-                    generation_client=gen_client,
-                )
-                if emit_datapoints is not None:
-                    emit_datapoints(datapoints)
-                await await_maybe(gen_hooks.on_stage_end(SimStage.GENERATE, {'num_datapoints': len(datapoints)}))
+                    datapoints = await _resolve_or_generate_datapoints(
+                        caller="generate_and_simulate",
+                        datapoints=None,
+                        personas=gen_personas,
+                        scenarios=gen_scenarios,
+                        dataset_id=None,
+                        model=sim_model,
+                        generation_client=gen_client,
+                    )
+                    if emit_datapoints is not None:
+                        emit_datapoints(datapoints)
+                finally:
+                    meta = {'num_datapoints': len(datapoints)} if datapoints else {}
+                    await await_maybe(gen_hooks.on_stage_end(SimStage.GENERATE, meta))
 
                 return await _simulate_core(
                     caller='generate_and_simulate',
@@ -548,7 +552,7 @@ async def _simulate_core(
         raise
     finally:
         await await_maybe(resolved_hooks.on_run_complete(results))
-        await await_maybe(resolved_hooks.on_stage_end(SimStage.SIMULATE, {}))
+        await await_maybe(resolved_hooks.on_stage_end(SimStage.SIMULATE, {'num_results': len(results)}))
 
     # Persist only on the success path (an aborted run re-raised above). target_agent
     # / agent_key resolve the target_kind the dashboard reads.
