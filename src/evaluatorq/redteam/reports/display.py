@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
+from evaluatorq.common.reports import rate_style
 from evaluatorq.redteam.contracts import OWASP_CATEGORY_NAMES, RedTeamReport
 from evaluatorq.redteam.vulnerability_registry import VULNERABILITY_DEFS, Vulnerability
 
@@ -34,24 +35,6 @@ def _format_category_label(category: str) -> str:
     if name:
         return f"{category} - {name}"
     return category
-
-
-def _rate_style(rate: float) -> str:
-    """Return a Rich color style for a resistance/coverage rate."""
-    if rate >= 0.8:
-        return "green"
-    if rate >= 0.5:
-        return "yellow"
-    return "red"
-
-
-def _asr_style(asr: float) -> str:
-    """Return a Rich color style for an ASR value (lower is better)."""
-    if asr <= 0.2:
-        return "green"
-    if asr <= 0.5:
-        return "yellow"
-    return "red"
 
 
 def print_report_summary(report: RedTeamReport, *, console: Console | None = None) -> None:
@@ -84,11 +67,11 @@ def print_report_summary(report: RedTeamReport, *, console: Console | None = Non
     )
     stats.add_row(
         "ASR",
-        Text(f"{summary.vulnerability_rate:.0%}", style=_asr_style(summary.vulnerability_rate)),
+        Text(f"{summary.vulnerability_rate:.0%}", style=rate_style(summary.vulnerability_rate, higher_is_better=False)),
     )
     stats.add_row(
         "Eval Coverage",
-        Text(f"{summary.evaluation_coverage:.0%}", style=_rate_style(summary.evaluation_coverage)),
+        Text(f"{summary.evaluation_coverage:.0%}", style=rate_style(summary.evaluation_coverage)),
     )
     if report.duration_seconds is not None:
         mins, secs = divmod(int(report.duration_seconds), 60)
@@ -104,7 +87,7 @@ def print_report_summary(report: RedTeamReport, *, console: Console | None = Non
         else:
             value = Text(
                 f"alpha={rel.krippendorff_alpha:.2f} ({rel.samples} samples)",
-                style=_rate_style(rel.krippendorff_alpha),
+                style=rate_style(rel.krippendorff_alpha),
             )
         stats.add_row("Jury Agreement", value)
 
@@ -152,7 +135,7 @@ def print_report_summary(report: RedTeamReport, *, console: Console | None = Non
                 ),
                 Text(
                     f"{asr:.0%}",
-                    style=_asr_style(asr),
+                    style=rate_style(asr, higher_is_better=False),
                 ),
             )
 
@@ -185,7 +168,7 @@ def print_report_summary(report: RedTeamReport, *, console: Console | None = Non
                 ),
                 Text(
                     f"{asr:.0%}",
-                    style=_asr_style(asr),
+                    style=rate_style(asr, higher_is_better=False),
                 ),
             )
 

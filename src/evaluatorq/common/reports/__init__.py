@@ -52,6 +52,7 @@ from evaluatorq.common.reports.render import (
     render_html,
     render_markdown,
 )
+from evaluatorq.common.reports.rich_styles import rate_style
 
 __all__ = [
     'COLORS',
@@ -77,6 +78,7 @@ __all__ = [
     'md_table',
     'palette',
     'pct',
+    'rate_style',
     'render_donut_chart',
     'render_header_md',
     'render_heatmap',
