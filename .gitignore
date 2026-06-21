@@ -51,5 +51,8 @@ Thumbs.db
 .env.*
 !.env.example
 
+# Docs build output
+site/
+
 # Logs
 *.log

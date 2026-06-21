@@ -236,6 +236,14 @@ minor_tags = ["feat"]
 patch_tags = ["fix", "perf"]
 
 [dependency-groups]
+docs = [
+  "mkdocs>=1.6.0",
+  "mkdocs-material>=9.5.0",
+  "mkdocstrings[python]>=0.26.0",
+  "mkdocs-gen-files>=0.5.0",
+  "mkdocs-literate-nav>=0.6.0",
+  "mkdocs-section-index>=0.3.0",
+]
 dev = [
   "pytest>=8.0.0",
   "pytest-asyncio>=1.2.0",
