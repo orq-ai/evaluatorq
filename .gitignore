@@ -56,3 +56,6 @@ site/
 
 # Logs
 *.log
+
+# superpowers working dir (plans/specs)
+docs/superpowers/
