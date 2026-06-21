@@ -1074,6 +1074,108 @@ def test_simulate_runtime_error_is_clean(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# --export-md / --export-html
+# ---------------------------------------------------------------------------
+
+
+def test_run_export_md_writes_dated_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--export-md writes exactly one *.md with non-empty content."""
+    monkeypatch.chdir(tmp_path)
+    results = [_make_result(scorer_scores={"goal_achieved": 1.0})]
+    export_dir = tmp_path / "exports"
+
+    with (
+        patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
+        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
+    ):
+        mock_target.return_value = MagicMock()
+        mock_impl.return_value = results
+
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--agent-description", "A helpful bot",
+                "--openai-model", "gpt-4o-mini",
+                "--yes",
+                "--no-save",
+                "--export-md", str(export_dir),
+            ],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    mds = list(export_dir.glob("*.md"))
+    assert len(mds) == 1, f"Expected 1 .md file, got {mds}"
+    assert mds[0].read_text().strip(), "Markdown file should be non-empty"
+
+
+def test_run_export_html_writes_dated_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--export-html writes exactly one *.html with non-empty content."""
+    monkeypatch.chdir(tmp_path)
+    results = [_make_result(scorer_scores={"goal_achieved": 1.0})]
+    export_dir = tmp_path / "exports"
+
+    with (
+        patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
+        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
+    ):
+        mock_target.return_value = MagicMock()
+        mock_impl.return_value = results
+
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--agent-description", "A helpful bot",
+                "--openai-model", "gpt-4o-mini",
+                "--yes",
+                "--no-save",
+                "--export-html", str(export_dir),
+            ],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    htmls = list(export_dir.glob("*.html"))
+    assert len(htmls) == 1, f"Expected 1 .html file, got {htmls}"
+    assert htmls[0].read_text().strip(), "HTML file should be non-empty"
+
+
+def test_simulate_export_md_writes_dated_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """simulate --export-md writes exactly one *.md with non-empty content."""
+    monkeypatch.chdir(tmp_path)
+    dp_file = _make_datapoints_file(tmp_path)
+    results = [_make_result(scorer_scores={"goal_achieved": 1.0})]
+    export_dir = tmp_path / "exports"
+
+    with (
+        patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
+        patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock) as mock_impl,
+    ):
+        mock_target.return_value = MagicMock()
+        mock_impl.return_value = results
+
+        result = runner.invoke(
+            app,
+            [
+                "simulate",
+                "--datapoints", str(dp_file),
+                "--openai-model", "gpt-4o-mini",
+                "--yes",
+                "--no-save",
+                "--export-md", str(export_dir),
+            ],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    mds = list(export_dir.glob("*.md"))
+    assert len(mds) == 1, f"Expected 1 .md file, got {mds}"
+    assert mds[0].read_text().strip(), "Markdown file should be non-empty"
+
+
+# ---------------------------------------------------------------------------
 # generate command (datapoints only, no simulation)
 # ---------------------------------------------------------------------------
 

@@ -37,7 +37,7 @@ from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run as _auto_save_run
 from evaluatorq.simulation.utils.run_store import build_simulation_run as _build_simulation_run
 from evaluatorq.simulation.utils.run_store import get_sim_runs_dir as _get_sim_runs_dir
-from evaluatorq.simulation.utils.run_store import sanitise_run_name as _sanitise_run_name  # noqa: F401
+from evaluatorq.simulation.utils.run_store import sanitise_run_name as _sanitise_run_name
 from evaluatorq.simulation.utils.run_store import write_report as _write_report
 
 app = typer.Typer(
@@ -373,6 +373,14 @@ def simulate(
         bool,
         typer.Option("--yes", "-y", help="Skip interactive confirmation prompt."),
     ] = False,
+    export_md: Annotated[
+        Path | None,
+        typer.Option("--export-md", help="Directory for an auto-named Markdown report."),
+    ] = None,
+    export_html: Annotated[
+        Path | None,
+        typer.Option("--export-html", help="Directory for an auto-named HTML report."),
+    ] = None,
 ) -> None:
     """Run simulations from a pre-built datapoints file.
 
@@ -457,6 +465,11 @@ def simulate(
         evaluator_names=evaluator_names or DEFAULT_EVALUATOR_NAMES,
         results=results,
     )
+
+    if export_md is not None:
+        _export_report(run, export_md, fmt="md")
+    if export_html is not None:
+        _export_report(run, export_html, fmt="html")
 
     if report_output is not None:
         _write_report(run, report_output)
@@ -628,6 +641,14 @@ def run(
         bool,
         typer.Option("--yes", "-y", help="Skip interactive confirmation prompt."),
     ] = False,
+    export_md: Annotated[
+        Path | None,
+        typer.Option("--export-md", help="Directory for an auto-named Markdown report."),
+    ] = None,
+    export_html: Annotated[
+        Path | None,
+        typer.Option("--export-html", help="Directory for an auto-named HTML report."),
+    ] = None,
 ) -> None:
     """Generate personas and scenarios, then run simulations (generate + simulate).
 
@@ -714,6 +735,11 @@ def run(
         evaluator_names=evaluator_names or DEFAULT_EVALUATOR_NAMES,
         results=results,
     )
+
+    if export_md is not None:
+        _export_report(run, export_md, fmt="md")
+    if export_html is not None:
+        _export_report(run, export_html, fmt="html")
 
     if report_output is not None:
         _write_report(run, report_output)
@@ -1129,6 +1155,20 @@ def ui(
 
     dashboard_script = Path(__file__).parent / "ui" / "dashboard.py"
     launch_streamlit(dashboard_script, run_path, port=port, host=host, extra="simulation")
+
+
+def _export_report(run: Any, directory: Path, *, fmt: str) -> None:
+    """Write an auto-named Markdown or HTML report for *run* into *directory*."""
+    from evaluatorq.common.reports import write_text_report
+    from evaluatorq.simulation.reports.export_html import export_html
+    from evaluatorq.simulation.reports.export_md import export_markdown
+
+    stem = f"sim-report-{_sanitise_run_name(run.run_name)}-{run.created_at:%Y%m%d-%H%M%S}"
+    if fmt == "md":
+        content = export_markdown(run.results, run_date=run.created_at)
+    else:
+        content = export_html(run.results, run_date=run.created_at)
+    write_text_report(directory, stem=stem, fmt=fmt, content=content)
 
 
 def _write_results(results: list[Any], output: Path) -> None:
