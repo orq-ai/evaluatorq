@@ -1,0 +1,64 @@
+name: Docs
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    name: Build (strict) + example smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+      - name: Install extras + docs
+        run: uv sync --frozen --all-extras --group docs
+      - name: Example compile smoke
+        run: uv run python scripts/smoke_examples.py
+      - name: Build docs (strict)
+        run: uv run mkdocs build --strict
+      - name: Configure Pages
+        if: github.ref == 'refs/heads/main'
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - name: Upload Pages artifact
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: Deploy GitHub Pages
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    # Scope concurrency to deploy job only; PR builds never wait
+    # behind deploy. Never cancel deploy mid-publish.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
+      - name: Verify Pages live (HTTP 200)
+        run: |
+          url="${{ steps.deployment.outputs.page_url }}"
+          status=$(curl -o /dev/null -s -w "%{http_code}" "$url")
+          echo "HTTP status: $status"
+          [ "$status" = "200" ]
