@@ -39,6 +39,9 @@ plugins:
             show_source: false
             show_root_heading: true
             members_order: source
+            docstring_options:
+              warn_unknown_params: false
+              warn_missing_types: false
 
 markdown_extensions:
   - admonition
@@ -54,3 +57,7 @@ markdown_extensions:
 # Home only; final nav shape recorded under "Target nav" in the File Structure.
 nav:
   - Home: index.md
+  - API Reference: reference/
+  - Contributing: contributing.md
+  - Changelog: changelog.md
+  - Roadmap: roadmap.md
