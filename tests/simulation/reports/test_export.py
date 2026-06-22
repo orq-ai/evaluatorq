@@ -99,19 +99,24 @@ def test_html_no_raw_criteria_id_leak(sample_results):
     assert 'criteria_1' not in html
 
 
-def test_html_renders_without_plotly(sample_results, monkeypatch):
+def test_html_renders_without_vl_convert(sample_results, monkeypatch):
     import builtins
 
     real_import = builtins.__import__
 
-    def no_plotly(name, *a, **k):
-        if name.startswith('plotly') or name == 'kaleido':
+    def no_vl_convert(name, *a, **k):
+        if name == 'vl_convert':
             raise ImportError(name)
         return real_import(name, *a, **k)
 
-    monkeypatch.setattr(builtins, '__import__', no_plotly)
+    monkeypatch.setattr(builtins, '__import__', no_vl_convert)
+    import evaluatorq.common.reports.vega as vega_mod
+
+    monkeypatch.setattr(vega_mod, 'vl_available', lambda: False)
+
     html = export_html(sample_results, target='t')
-    assert '<svg' in html  # charts still render (Vega-Lite SVG)
+    assert '<html' in html
+    assert '<table' in html  # degrades gracefully to tables when charts absent
 
 
 def test_html_renders_new_charts(sample_results):

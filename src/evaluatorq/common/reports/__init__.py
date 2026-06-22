@@ -27,7 +27,6 @@ from evaluatorq.common.reports.html_helpers import (
     status_badge,
     svg_bar,
     svg_donut,
-    try_render_svg,
 )
 from evaluatorq.common.reports.md_helpers import (
     bar,
@@ -98,6 +97,5 @@ __all__ = [
     'svg_bar',
     'svg_donut',
     'truncate',
-    'try_render_svg',
     'write_text_report',
 ]

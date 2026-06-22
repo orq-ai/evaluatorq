@@ -1,11 +1,12 @@
 """HTML formatting helpers shared across report renderers.
 
 Brand colors, the parameterized CSS loader, and small HTML primitives
-(``esc``, ``html_table``, ``pct``, ``truncate``) live here. Chart helpers
+(``esc``, ``html_table``, ``pct``, ``truncate``) live here. All chart helpers
 (``scale_color``, ``svg_donut``, ``svg_bar``, ``render_heatmap``,
 ``render_histogram``, ``render_line_chart``, ``render_sparkline``,
 ``render_donut_chart``, ``render_horizontal_bar_chart``, ``kpi_cards``,
 ``status_badge``) build Vega-Lite specs rendered to SVG via vl-convert.
+Charts degrade to ``''`` when ``vl-convert-python`` is not installed.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from __future__ import annotations
 import html
 from pathlib import Path
 from string import Template
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
@@ -122,7 +123,7 @@ def html_table(headers: list[str], rows: list[list[str]]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Chart helpers (Plotly + kaleido optional)
+# Chart availability helpers
 # ---------------------------------------------------------------------------
 
 
@@ -131,26 +132,6 @@ def charts_available() -> bool:
     from evaluatorq.common.reports.vega import vl_available
 
     return vl_available()
-
-
-def try_render_svg(fig: Any) -> str | None:
-    """Render a Plotly figure as inline SVG, or ``None`` on failure.
-
-    Failures here are not the "deps not installed" case (``charts_available``
-    has already gated the call). They are real render failures — missing
-    Chrome/Chromium runtime, OOM, version mismatch — and silently dropping
-    them produces "the report is broken and I don't know why" output. Log a
-    warning with the exception so the failure is observable.
-    """
-    try:
-        svg_bytes = fig.to_image(format='svg', engine='kaleido')
-        return svg_bytes.decode('utf-8') if isinstance(svg_bytes, bytes) else svg_bytes
-    except Exception:
-        logger.opt(exception=True).warning(
-            'Chart render failed; chart will be omitted from the report. '
-            'Check kaleido runtime (Chrome/Chromium) and plotly version.'
-        )
-        return None
 
 
 def render_donut_chart(

@@ -1,9 +1,9 @@
 """HTML renderer for agent simulation reports.
 
 ``export_html(results)`` produces a self-contained HTML document styled with
-the shared report CSS. All charts are hand-authored SVG/HTML primitives from
-``evaluatorq.common.reports`` so the simulation report renders identically
-whether or not plotly/kaleido are installed (this module imports no plotly).
+the shared report CSS. All charts are Vega-Lite specs rendered to SVG via
+``vl-convert-python``; when that package is absent charts are omitted and
+the report degrades to a tables-only layout (this module imports no plotly).
 """
 
 from __future__ import annotations
