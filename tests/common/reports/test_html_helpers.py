@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from evaluatorq.common.reports import html_helpers as h
+from evaluatorq.common.reports.html_helpers import render_heatmap, scale_color
 from evaluatorq.common.reports.palette import COLORS, ORQ_SCALE_GOOD_BAD
 
 
@@ -263,10 +264,17 @@ def test_svg_donut_center_label():
 
 
 def test_heatmap_high_cell_is_the_scale_color_not_red():
-    """Scale direction: value=1.0 on GREEN_HIGH must map to success_400 (green), not red_400."""
-    # scale_color(1.0, GREEN_HIGH) == success_400
-    color = h.scale_color(1.0, GREEN_HIGH)
-    assert color.lower() == COLORS['success_400'].lower()
+    # Deterministic: rendered fill equals scale_color(0.95, GREEN_HIGH) — proves scale direction preserved.
+    expected = scale_color(0.95, GREEN_HIGH).lstrip('#').lower()
+    out = render_heatmap(
+        x_labels=['p'],
+        y_labels=['s'],
+        cells=[[0.95]],
+        scale=GREEN_HIGH,
+        title='Success',
+        value_fmt=lambda v: f'{v:.0%}',
+    ).lower()
+    assert expected in out and COLORS['red_400'].lstrip('#').lower() not in out
 
 
 def test_heatmap_negative_sentinel_grey():

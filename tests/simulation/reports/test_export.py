@@ -111,7 +111,7 @@ def test_html_renders_without_plotly(sample_results, monkeypatch):
 
     monkeypatch.setattr(builtins, '__import__', no_plotly)
     html = export_html(sample_results, target='t')
-    assert '<svg' in html  # charts still render (hand-SVG)
+    assert '<svg' in html  # charts still render (Vega-Lite SVG)
 
 
 def test_html_renders_new_charts(sample_results):
