@@ -444,3 +444,35 @@ def test_overview_renders_zero_trait_and_fallback_without_metadata():
     md2 = export_markdown([legacy], target='Agent')
     assert 'Old' in html2 and 'Old' in md2
     assert 'Goal:' not in html2 and '**Goal:**' not in md2
+
+
+def test_heatmap_scale_direction_and_absent_sentinel(sim_result_factory):
+    """Regression: sim heatmap must use green-high scale (success=green, not red)
+    and absent persona x scenario cells must render the neutral grey sentinel #e4e2df.
+
+    Constructs a 2x2 grid (p1,p2 x s1,s2) with three results present:
+      - (p1,s1): fully successful -> success_rate 1.0 -> green high endpoint #157f57
+      - (p1,s2): fully successful -> success_rate 1.0 -> green high endpoint
+      - (p2,s1): fully successful -> success_rate 1.0 -> green high endpoint
+      - (p2,s2): ABSENT -> filled as -1.0 -> grey sentinel #e4e2df
+
+    The absent cell requires 2+ personas AND 2+ scenarios so the grid gap exists.
+    """
+    from evaluatorq.common.reports.html_helpers import scale_color
+    from evaluatorq.simulation.reports.export_html import _SCALE_GREEN_HIGH, export_html
+
+    results = [
+        sim_result_factory(goal_achieved=True, persona='p1', scenario='s1'),
+        sim_result_factory(goal_achieved=True, persona='p1', scenario='s2'),
+        sim_result_factory(goal_achieved=True, persona='p2', scenario='s1'),
+        # (p2, s2) intentionally absent — heatmap fills -1.0 -> grey sentinel
+    ]
+
+    out = export_html(results).lower()
+    # Deterministic green high endpoint (scale_color at 1.0, a scale endpoint)
+    full = scale_color(1.0, _SCALE_GREEN_HIGH).lstrip('#').lower()  # 157f57
+
+    # Green success cell and grey absent cell both appear, and charts rendered
+    assert full in out and '#e4e2df' in out and '<svg' in out
+    # Guard inversion bug: 1.0 cell must be the green endpoint (not red)
+    assert out.count(full) >= 1
