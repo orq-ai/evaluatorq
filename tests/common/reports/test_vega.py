@@ -88,6 +88,23 @@ def test_bar_h_empty():
     assert vl_bar_h(labels=[], values=[], color=COLORS['teal_400'], x_title='X') == {}
 
 
+def test_bar_h_per_bar_colors_are_literal_fills():
+    # colors= gives one literal hex per bar (color.scale=None, no re-map).
+    spec = vl_bar_h(
+        labels=['critical', 'low'],
+        values=[3, 1],
+        color=COLORS['teal_400'],
+        x_title='Count',
+        colors=[COLORS['red_400'], COLORS['success_400']],
+    )
+    fills = {r['fill'] for r in spec['data']['values']}
+    assert fills == {COLORS['red_400'], COLORS['success_400']}
+    bar_layer = spec['layer'][0]
+    assert bar_layer['encoding']['color']['scale'] is None
+    out = render_svg(spec).lower()
+    assert COLORS['red_400'].lower() in out and COLORS['success_400'].lower() in out
+
+
 def test_donut_center_label():
     spec = vl_donut(
         labels=['a', 'b'],
@@ -182,7 +199,7 @@ def test_grouped_bar_renders_multi_series():
         series=[('agent-a', [0.2, 0.5]), ('agent-b', [0.4, 0.1])],
         x_title='ASR',
     )
-    assert spec['encoding'].get('xOffset', {}).get('field') == 'series'
+    assert spec['encoding'].get('yOffset', {}).get('field') == 'series'
     assert '<svg' in render_svg(spec)
 
 

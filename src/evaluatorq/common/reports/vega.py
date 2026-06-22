@@ -117,8 +117,13 @@ def vl_bar_h(
     color: str,
     x_title: str,
     value_labels: list[str] | None = None,
+    colors: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Horizontal bar chart with an optional text-label overlay layer."""
+    """Horizontal bar chart with an optional text-label overlay layer.
+
+    ``colors`` gives one literal hex per bar (``color.scale=None``, no re-map) to
+    carry a per-bar signal such as severity; ``color`` is the uniform fallback.
+    """
     if not labels:
         return {}
     rows = [
@@ -126,6 +131,7 @@ def vl_bar_h(
             'label': label,
             'value': v,
             'text': value_labels[i] if value_labels else f'{v:g}',
+            'fill': colors[i] if colors else color,
         }
         for i, (label, v) in enumerate(zip(labels, values, strict=False))
     ]
@@ -139,10 +145,11 @@ def vl_bar_h(
         'height': {'step': 24},
     }
     bar_layer: dict[str, Any] = {
-        'mark': {'type': 'bar', 'color': color},
+        'mark': {'type': 'bar'},
         'encoding': {
             'y': {'field': 'label', 'type': 'nominal', 'sort': None, 'title': None},
             'x': {'field': 'value', 'type': 'quantitative', 'title': x_title},
+            'color': {'field': 'fill', 'type': 'nominal', 'scale': None, 'legend': None},
         },
     }
     text_layer: dict[str, Any] = {
@@ -346,7 +353,7 @@ def vl_grouped_bar(
 ) -> dict[str, Any]:
     """Grouped horizontal bar chart for multi-series agent-comparison.
 
-    Each series produces one bar per category, offset via ``xOffset``.
+    Each series produces one bar per category, offset via ``yOffset``.
     ``series`` is a list of ``(name, values_per_category)`` tuples.
     """
     if not categories or not series:
@@ -364,7 +371,6 @@ def vl_grouped_bar(
             'y': {'field': 'cat', 'type': 'nominal', 'sort': None, 'title': None},
             'x': {'field': 'value', 'type': 'quantitative', 'title': x_title},
             'yOffset': {'field': 'series', 'type': 'nominal'},
-            'xOffset': {'field': 'series', 'type': 'nominal'},
             'color': {'field': 'series', 'type': 'nominal', 'legend': {'title': None}},
         },
         'width': 420,
