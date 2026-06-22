@@ -101,6 +101,50 @@ def render_markdown(
     return '\n'.join(parts)
 
 
+def render_body(
+    sections: list[ReportSection],
+    *,
+    renderers: RendererRegistry,
+    body_header: str = '',
+    body_footer: str = '',
+) -> str:
+    """Render the section body as an HTML fragment (no ``<html>`` or ``<head>`` wrapper).
+
+    This is the shared dispatch loop used by both ``render_html`` and the
+    dashboard surface.  Callers that need a full standalone document should
+    use ``render_html``; callers that embed the output inside their own shell
+    (e.g. a FastHTML dashboard page) should use this function directly.
+
+    Args:
+        sections: Sections to render, in order.
+        renderers: ``kind -> render_fn`` lookup producing HTML fragments.
+            Sections whose kind is not registered are skipped silently.
+        body_header: HTML prepended before the section fragments.
+        body_footer: HTML appended after the section fragments.
+
+    Returns:
+        An HTML fragment string (no ``<!DOCTYPE>``, ``<html>``, or ``<head>``).
+    """
+    body_parts: list[str] = []
+    if body_header:
+        body_parts.append(body_header)
+    for section in sections:
+        renderer = renderers.get(section.kind)
+        if renderer is None:
+            logger.warning(
+                "No renderer registered for section kind {!r}; the section "
+                "will be missing from the HTML report.",
+                section.kind,
+            )
+            continue
+        rendered = renderer(section)
+        if rendered:
+            body_parts.append(rendered)
+    if body_footer:
+        body_parts.append(body_footer)
+    return chr(10).join(body_parts)
+
+
 def render_html(
     sections: list[ReportSection],
     *,
@@ -125,30 +169,14 @@ def render_html(
     Returns:
         A self-contained HTML5 document.
     """
-    body_parts: list[str] = []
-    if body_header:
-        body_parts.append(body_header)
-    for section in sections:
-        renderer = renderers.get(section.kind)
-        if renderer is None:
-            logger.warning(
-                "No renderer registered for section kind {!r}; the section "
-                "will be missing from the HTML report.",
-                section.kind,
-            )
-            continue
-        rendered = renderer(section)
-        if rendered:
-            body_parts.append(rendered)
-    if body_footer:
-        body_parts.append(body_footer)
+    body_html = render_body(sections, renderers=renderers, body_header=body_header, body_footer=body_footer)
 
     return (
         '<!DOCTYPE html>\n'
         '<html lang="en">\n'
         f'<head>\n{head}\n</head>\n'
         '<body>\n<div class="container">\n'
-        f'{chr(10).join(body_parts)}\n'
+        f'{body_html}\n'
         '</div>\n</body>\n'
         '</html>\n'
     )

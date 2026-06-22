@@ -48,6 +48,7 @@ from evaluatorq.common.reports.palette import (
 from evaluatorq.common.reports.render import (
     RendererRegistry,
     format_date,
+    render_body,
     render_header_md,
     render_html,
     render_markdown,
@@ -81,6 +82,7 @@ __all__ = [
     'palette',
     'pct',
     'rate_style',
+    'render_body',
     'render_donut_chart',
     'render_embed',
     'render_header_md',
