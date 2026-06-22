@@ -483,3 +483,84 @@ class TestSendResultsUploadFailures:
             raise_on_error=False,
         )
         assert result is None
+
+
+class TestSendResultsBaseUrl:
+    """RES-912: results upload to the same server used for inference."""
+
+    @staticmethod
+    def _ok_post(captured: dict[str, Any]):
+        async def fake_post(self: httpx.AsyncClient, url: str, *args: Any, **kwargs: Any) -> httpx.Response:
+            captured["url"] = url
+            request = httpx.Request("POST", url)
+            return httpx.Response(
+                200,
+                request=request,
+                json={"sheet_id": "s1", "manifest_id": "m1", "experiment_name": "eval", "rows_created": 1},
+            )
+
+        return fake_post
+
+    @pytest.mark.asyncio
+    async def test_base_url_kwarg_overrides_env(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        build_results: Callable[..., list[DataPointResult]],
+    ):
+        monkeypatch.setenv("ORQ_BASE_URL", "https://my.orq.ai")
+        captured: dict[str, Any] = {}
+        monkeypatch.setattr(httpx.AsyncClient, "post", self._ok_post(captured))
+
+        await send_results_to_orq(
+            api_key="key",
+            evaluation_name="eval",
+            evaluation_description=None,
+            dataset_id=None,
+            results=build_results(0.5),
+            start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+            base_url="https://my.staging.orq.ai",
+        )
+        assert captured["url"] == "https://my.staging.orq.ai/v2/spreadsheets/evaluations/receive"
+
+    @pytest.mark.asyncio
+    async def test_base_url_trailing_slash_normalized(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        build_results: Callable[..., list[DataPointResult]],
+    ):
+        captured: dict[str, Any] = {}
+        monkeypatch.setattr(httpx.AsyncClient, "post", self._ok_post(captured))
+
+        await send_results_to_orq(
+            api_key="key",
+            evaluation_name="eval",
+            evaluation_description=None,
+            dataset_id=None,
+            results=build_results(0.5),
+            start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+            base_url="https://my.staging.orq.ai/",
+        )
+        assert captured["url"] == "https://my.staging.orq.ai/v2/spreadsheets/evaluations/receive"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_env_when_base_url_not_supplied(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        build_results: Callable[..., list[DataPointResult]],
+    ):
+        monkeypatch.setenv("ORQ_BASE_URL", "https://my.staging.orq.ai")
+        captured: dict[str, Any] = {}
+        monkeypatch.setattr(httpx.AsyncClient, "post", self._ok_post(captured))
+
+        await send_results_to_orq(
+            api_key="key",
+            evaluation_name="eval",
+            evaluation_description=None,
+            dataset_id=None,
+            results=build_results(0.5),
+            start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+        )
+        assert captured["url"] == "https://my.staging.orq.ai/v2/spreadsheets/evaluations/receive"

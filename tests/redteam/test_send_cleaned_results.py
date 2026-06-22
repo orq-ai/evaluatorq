@@ -112,3 +112,45 @@ async def test_upload_exception_does_not_break_report() -> None:
             report=report,
         )
     assert report.experiment_url is None
+
+
+@pytest.mark.asyncio
+async def test_forwards_inference_client_base_url() -> None:
+    """RES-912: the Orq host used for inference is forwarded to the upload so
+    results land on the same server (e.g. staging)."""
+    from types import SimpleNamespace
+
+    report = _make_report()
+    spy = AsyncMock(return_value=None)
+    client = SimpleNamespace(base_url="https://my.staging.orq.ai/v3/router")
+    with (
+        patch.dict(os.environ, {"ORQ_API_KEY": "test"}),
+        patch("evaluatorq.redteam.runner.send_results_to_orq", spy),
+    ):
+        await _send_cleaned_results(
+            results=[_make_result()],
+            name="n",
+            description="d",
+            start_time=datetime.now(tz=timezone.utc),
+            report=report,
+            inference_client=client,  # type: ignore[arg-type]
+        )
+    assert spy.await_args.kwargs["base_url"] == "https://my.staging.orq.ai"
+
+
+@pytest.mark.asyncio
+async def test_base_url_falls_back_to_env_without_client() -> None:
+    report = _make_report()
+    spy = AsyncMock(return_value=None)
+    with (
+        patch.dict(os.environ, {"ORQ_API_KEY": "test", "ORQ_BASE_URL": "https://my.staging.orq.ai"}),
+        patch("evaluatorq.redteam.runner.send_results_to_orq", spy),
+    ):
+        await _send_cleaned_results(
+            results=[_make_result()],
+            name="n",
+            description="d",
+            start_time=datetime.now(tz=timezone.utc),
+            report=report,
+        )
+    assert spy.await_args.kwargs["base_url"] == "https://my.staging.orq.ai"
