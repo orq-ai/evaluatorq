@@ -24,6 +24,9 @@ Section kinds:
     - ``turn_depth_analysis``     — multi-turn ASR% by conversation depth
     - ``token_usage``             — token consumption summary
     - ``source_distribution``     — attack source counts
+
+Interactive views with no static-section equivalent are recorded as
+sanctioned dashboard-only in ``docs/redteam-dashboard-only-views.md``.
 """
 
 from __future__ import annotations
