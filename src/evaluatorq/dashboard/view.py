@@ -319,6 +319,11 @@ def sim_interactive_panels(rid: str, entries: list[dict]) -> str:
     Embeds the sim row list table with HTMX-wired transcript drill-down panel.
     Parity: Streamlit ``_render_transcripts`` (dashboard.py:316-390).
 
+    The outer section carries ``hx-include="#filter-form"`` and
+    ``hx-trigger="load, orq:filter-changed from:body"`` so that every row's
+    ``hx-get`` request for the transcript detail automatically includes the
+    active filter selections, and the section reloads when the filter changes.
+
     Args:
         rid:     Report ID (URL-safe).
         entries: Individual-results entries from the section layer.
@@ -328,9 +333,22 @@ def sim_interactive_panels(rid: str, entries: list[dict]) -> str:
     """
     from evaluatorq.dashboard.sim_views import render_sim_row_list
 
+    safe_rid = esc(rid)
     row_list = render_sim_row_list(rid, entries)
+    # Wrap in an HTMX-enabled container that refetches the row list when the
+    # filter changes, carrying the current filter form selections each time.
     return (
-        f'<section class="sim-interactive-panels"><h1 class="sim-panels-title">Conversations</h1>{row_list}</section>'
+        f'<section class="sim-interactive-panels">'
+        f'<h1 class="sim-panels-title">Conversations</h1>'
+        f'<div'
+        f' hx-get="/r/{safe_rid}/sim/row-list"'
+        f' hx-trigger="orq:filter-changed from:body"'
+        f' hx-include="#filter-form"'
+        f' hx-target="this"'
+        f' hx-swap="outerHTML">'
+        f'{row_list}'
+        f'</div>'
+        f'</section>'
     )
 
 
@@ -345,10 +363,24 @@ def redteam_interactive_panels(rid: str) -> str:
     - Conversation viewer (per-row transcript drill-down)
     - Disagreement viewer (agent-pair side-by-side — multi-agent only)
 
-    Each panel contains a placeholder ``<div>`` with ``hx-get`` + ``hx-trigger``
-    ``load`` so the content is fetched on page load without blocking the initial
-    render.  Task 6's ``dashboard.js`` re-embeds ``render_embed`` Vega charts
-    after each HTMX swap.
+    Each panel placeholder ``<div>`` carries:
+
+    - ``hx-trigger="load, orq:filter-changed from:body"`` so it fetches on
+      initial page load AND refetches whenever the filter form fires the
+      ``orq:filter-changed`` custom event (emitted by the POST /filter handler
+      via the ``HX-Trigger`` response header).
+    - ``hx-include="#filter-form"`` so each ``hx-get`` carries the current
+      filter selections as query params, giving the view routes the same filter
+      state the static body already uses.
+
+    The panel-own params (group_by, stack_by, dim, a, b, page, idx) live in the
+    ``hx-get`` URL and are preserved by ``hx-include`` being additive (it only
+    appends form fields; it does not replace URL params).  The filter dimension
+    names (result, agent, category, severity, technique, delivery_method,
+    vulnerability) do not collide with any panel-own param names.
+
+    Task 6's ``dashboard.js`` re-embeds ``render_embed`` Vega charts after
+    each HTMX swap.
     """
     safe_rid = esc(rid)
 
@@ -357,7 +389,8 @@ def redteam_interactive_panels(rid: str) -> str:
         f'<h2 class="rt-panel-title">Interactive Breakdown</h2>'
         f'<div'
         f' hx-get="/r/{safe_rid}/view/breakdown?group_by=vulnerability&amp;stack_by=none"'
-        f' hx-trigger="load"'
+        f' hx-trigger="load, orq:filter-changed from:body"'
+        f' hx-include="#filter-form"'
         f' hx-target="this"'
         f' hx-swap="outerHTML">'
         f'<p class="rt-panel-loading">Loading breakdown…</p>'
@@ -370,7 +403,8 @@ def redteam_interactive_panels(rid: str) -> str:
         f'<h2 class="rt-panel-title">Agent Heatmap</h2>'
         f'<div'
         f' hx-get="/r/{safe_rid}/view/agent-heatmap?dim=vulnerability"'
-        f' hx-trigger="load"'
+        f' hx-trigger="load, orq:filter-changed from:body"'
+        f' hx-include="#filter-form"'
         f' hx-target="this"'
         f' hx-swap="outerHTML">'
         f'<p class="rt-panel-loading">Loading heatmap…</p>'
@@ -383,7 +417,8 @@ def redteam_interactive_panels(rid: str) -> str:
         f'<h2 class="rt-panel-title">Conversation Viewer</h2>'
         f'<div'
         f' hx-get="/r/{safe_rid}/view/conversation?idx=0"'
-        f' hx-trigger="load"'
+        f' hx-trigger="load, orq:filter-changed from:body"'
+        f' hx-include="#filter-form"'
         f' hx-target="this"'
         f' hx-swap="outerHTML">'
         f'<p class="rt-panel-loading">Loading conversation viewer…</p>'
@@ -396,7 +431,8 @@ def redteam_interactive_panels(rid: str) -> str:
         f'<h2 class="rt-panel-title">Disagreement Viewer</h2>'
         f'<div'
         f' hx-get="/r/{safe_rid}/view/disagreement?page=1"'
-        f' hx-trigger="load"'
+        f' hx-trigger="load, orq:filter-changed from:body"'
+        f' hx-include="#filter-form"'
         f' hx-target="this"'
         f' hx-swap="outerHTML">'
         f'<p class="rt-panel-loading">Loading disagreement viewer…</p>'

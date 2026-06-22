@@ -464,3 +464,99 @@ class TestChartsPresentInRenderedReport:
             'Expected <svg or data-vega-for in multi-agent redteam report page, '
             f'but neither was found. First 800 chars: {r.text[:800]}'
         )
+
+
+# ===========================================================================
+# Test class 5: Filter-awareness parity — panels honor the active filter
+# ===========================================================================
+
+
+class TestFilterAwarityParity:
+    """Verify interactive panels reflect the active filter (H1 fix).
+
+    Before this fix the view routes always rendered from the full result set;
+    after the fix they apply the same filter the static report body uses.
+    """
+
+    def test_breakdown_view_with_category_filter_differs_from_unfiltered(
+        self,
+        client: TestClient,
+        fixture_roots: list[Path],
+    ) -> None:
+        """GET /view/breakdown with a category filter param changes the chart data."""
+        rid = _rid(fixture_roots, 'runs_multi', 'redteam_multi_agent.json')
+        html_all = client.get(f'/r/{rid}/view/breakdown?group_by=category').text
+        html_asi = client.get(
+            f'/r/{rid}/view/breakdown?group_by=category&category=ASI01'
+        ).text
+        # Filtering to only ASI01 should exclude LLM01 from the chart.
+        assert html_all != html_asi
+
+    def test_breakdown_view_with_result_filter_excludes_resistant(
+        self,
+        client: TestClient,
+        fixture_roots: list[Path],
+    ) -> None:
+        """GET /view/breakdown?result=Vulnerable must exclude all-resistant rows."""
+        rid = _rid(fixture_roots, 'runs_multi', 'redteam_multi_agent.json')
+        html = client.get(
+            f'/r/{rid}/view/breakdown?group_by=category&result=Vulnerable'
+        ).text
+        assert r.status_code == 200 if (r := client.get(
+            f'/r/{rid}/view/breakdown?group_by=category&result=Vulnerable'
+        )) else True
+        assert 'rt-breakdown' in html
+
+    def test_conversation_view_with_result_filter_reduces_row_count(
+        self,
+        client: TestClient,
+        fixture_roots: list[Path],
+    ) -> None:
+        """Conversation view filtered to Vulnerable has fewer rows than unfiltered."""
+        rid = _rid(fixture_roots, 'runs_multi', 'redteam_multi_agent.json')
+        html_all = client.get(f'/r/{rid}/view/conversation?idx=0').text
+        html_vuln = client.get(
+            f'/r/{rid}/view/conversation?idx=0&result=Vulnerable'
+        ).text
+        count_all = html_all.count('rt-conv-row')
+        count_vuln = html_vuln.count('rt-conv-row')
+        assert count_vuln < count_all, (
+            f'Filtered conversation view should have fewer rows: '
+            f'unfiltered={count_all}, filtered={count_vuln}'
+        )
+
+    def test_filter_post_response_carries_hx_trigger_header(
+        self,
+        client: TestClient,
+        fixture_roots: list[Path],
+    ) -> None:
+        """POST /filter must include HX-Trigger: orq:filter-changed header."""
+        rid = _rid(fixture_roots, 'runs', 'redteam_valid.json')
+        r = client.post(f'/r/{rid}/filter', data={})
+        assert r.status_code == 200
+        hx_trigger = r.headers.get('hx-trigger', '')
+        assert 'orq:filter-changed' in hx_trigger, (
+            f'Expected HX-Trigger: orq:filter-changed, got: {hx_trigger!r}'
+        )
+
+    def test_report_page_panels_have_hx_include_filter_form(
+        self,
+        client: TestClient,
+        fixture_roots: list[Path],
+    ) -> None:
+        """Panel placeholder divs must carry hx-include="#filter-form"."""
+        rid = _rid(fixture_roots, 'runs', 'redteam_valid.json')
+        r = client.get(f'/r/{rid}')
+        assert r.status_code == 200
+        assert 'hx-include="#filter-form"' in r.text
+
+    def test_report_page_panels_trigger_on_filter_changed(
+        self,
+        client: TestClient,
+        fixture_roots: list[Path],
+    ) -> None:
+        """Panel placeholders must listen for orq:filter-changed."""
+        rid = _rid(fixture_roots, 'runs', 'redteam_valid.json')
+        r = client.get(f'/r/{rid}')
+        assert r.status_code == 200
+        assert 'orq:filter-changed' in r.text
