@@ -908,10 +908,48 @@ def _render_agent_side(r: RedTeamResult, agent_name: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _parse_redteam_filter(req: Request) -> dict[str, list[str]]:
+    """Parse redteam filter selections from the request query-string.
+
+    Reads the same dimension names that ``FILTERS['redteam']`` uses so that
+    ``hx-include="#filter-form"`` on each panel container automatically
+    carries the current filter state into every panel ``hx-get`` request.
+
+    Returns an empty dict when no filter params are present (≡ "show all").
+    """
+    from evaluatorq.dashboard.filters import FILTERS
+
+    filter_def = FILTERS.get("redteam")
+    if filter_def is None:
+        return {}
+    selections: dict[str, list[str]] = {}
+    for dim in filter_def.dimensions:
+        vals = req.query_params.getlist(dim)
+        if vals:
+            selections[dim] = vals
+    return selections
+
+
+def _apply_redteam_filter(report: RedTeamReport, selections: dict[str, list[str]]) -> list[RedTeamResult]:
+    """Return the filtered result list; empty selections ≡ all results."""
+    from evaluatorq.dashboard.filters import FILTERS
+
+    filter_def = FILTERS.get("redteam")
+    if filter_def is None or not selections:
+        return list(report.results)
+    return filter_def.apply(report, selections)
+
+
 def register_redteam_view_routes(app: Any, roots: list[Any] | None = None) -> None:
     """Register the four /r/{rid}/view/* HTMX routes on *app*.
 
     Called from ``evaluatorq.dashboard.app.build_app`` after the main routes.
+
+    Each route reads the same filter dimension query params that the filter
+    form POSTs (carried via ``hx-include="#filter-form"`` on each panel
+    container), applies them to the loaded report, and renders the panel from
+    the filtered result set.  This gives filter parity with the static report
+    body that ``POST /r/{rid}/filter`` already handles correctly.
     """
     @app.get("/r/{rid}/view/breakdown")
     def view_breakdown(rid: str, req: Request) -> Response:
@@ -923,7 +961,14 @@ def register_redteam_view_routes(app: Any, roots: list[Any] | None = None) -> No
         if report is None:
             return Response(_404(f"Report {rid} not found"), status_code=404, media_type="text/html")
 
-        html = render_breakdown(report=report, group_by=group_by, stack_by=stack_by, rid=rid)
+        selections = _parse_redteam_filter(req)
+        filtered_results = _apply_redteam_filter(report, selections)
+        # Build a view of the report scoped to the filtered results.  RedTeamReport
+        # is a Pydantic model so we use model_copy(update=...) rather than
+        # dataclasses.replace.
+        filtered_report = report.model_copy(update={"results": filtered_results})
+
+        html = render_breakdown(report=filtered_report, group_by=group_by, stack_by=stack_by, rid=rid)
         return Response(html, media_type="text/html")
 
     @app.get("/r/{rid}/view/agent-heatmap")
@@ -934,7 +979,11 @@ def register_redteam_view_routes(app: Any, roots: list[Any] | None = None) -> No
         if report is None:
             return Response(_404(f"Report {rid} not found"), status_code=404, media_type="text/html")
 
-        html = render_agent_heatmap(report=report, dim=dim, rid=rid)
+        selections = _parse_redteam_filter(req)
+        filtered_results = _apply_redteam_filter(report, selections)
+        filtered_report = report.model_copy(update={"results": filtered_results})
+
+        html = render_agent_heatmap(report=filtered_report, dim=dim, rid=rid)
         return Response(html, media_type="text/html")
 
     @app.get("/r/{rid}/view/conversation")
@@ -948,7 +997,16 @@ def register_redteam_view_routes(app: Any, roots: list[Any] | None = None) -> No
         if report is None:
             return Response(_404(f"Report {rid} not found"), status_code=404, media_type="text/html")
 
-        html = render_conversation(report=report, idx=idx, rid=rid)
+        selections = _parse_redteam_filter(req)
+        filtered_results = _apply_redteam_filter(report, selections)
+        filtered_report = report.model_copy(update={"results": filtered_results})
+
+        # Clamp idx to the filtered set so a stale idx after a filter change
+        # shows index 0 rather than an empty detail pane.
+        if filtered_results and idx >= len(filtered_results):
+            idx = 0
+
+        html = render_conversation(report=filtered_report, idx=idx, rid=rid)
         return Response(html, media_type="text/html")
 
     @app.get("/r/{rid}/view/disagreement")
@@ -964,7 +1022,11 @@ def register_redteam_view_routes(app: Any, roots: list[Any] | None = None) -> No
         if report is None:
             return Response(_404(f"Report {rid} not found"), status_code=404, media_type="text/html")
 
+        selections = _parse_redteam_filter(req)
+        filtered_results = _apply_redteam_filter(report, selections)
+        filtered_report = report.model_copy(update={"results": filtered_results})
+
         html = render_disagreement(
-            report=report, agent_a=agent_a, agent_b=agent_b, page=page, rid=rid
+            report=filtered_report, agent_a=agent_a, agent_b=agent_b, page=page, rid=rid
         )
         return Response(html, media_type="text/html")

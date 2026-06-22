@@ -330,7 +330,16 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
             has_json=True,
             oob=True,
         )
-        return NotStr(fragment_html + oob_sidebar)
+        # Signal interactive panels to refetch with the new filter.  Panels
+        # that carry hx-trigger="load, orq:filter-changed from:body" and
+        # hx-include="#filter-form" will catch this event, re-issue their
+        # hx-get requests with the current form values, and re-render from the
+        # filtered result set.
+        return Response(
+            fragment_html + oob_sidebar,
+            media_type='text/html',
+            headers={'HX-Trigger': 'orq:filter-changed'},
+        )
 
     # ------------------------------------------------------------------
     # Route: GET /r/{rid}/export  (legacy alias) + export.html

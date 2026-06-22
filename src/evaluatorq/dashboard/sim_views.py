@@ -281,19 +281,105 @@ def render_transcript_fragment(entry: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _parse_sim_filter(req: Request) -> dict[str, list[str]]:
+    """Parse sim filter selections from the request query-string.
+
+    Reads the same dimension names that ``FILTERS['sim']`` uses so that
+    ``hx-include="#filter-form"`` on the sim panel container automatically
+    carries the current filter state into transcript ``hx-get`` requests.
+
+    Returns an empty dict when no filter params are present (≡ "show all").
+    """
+    from evaluatorq.dashboard.filters import FILTERS
+
+    filter_def = FILTERS.get('sim')
+    if filter_def is None:
+        return {}
+    selections: dict[str, list[str]] = {}
+    for dim in filter_def.dimensions:
+        vals = req.query_params.getlist(dim)
+        if vals:
+            selections[dim] = vals
+    return selections
+
+
+def _apply_sim_filter(run: Any, selections: dict[str, list[str]]) -> list[Any]:
+    """Return the filtered sim results; empty selections ≡ all results."""
+    from evaluatorq.dashboard.filters import FILTERS
+
+    filter_def = FILTERS.get('sim')
+    if filter_def is None or not selections:
+        return list(run.results)
+    return filter_def.apply(run, selections)
+
+
 def register_sim_view_routes(app: Any, roots: list[Any] | None = None) -> None:
     """Register simulation view routes on *app*.
 
     Called from ``evaluatorq.dashboard.app.build_app``.
+
+    Routes registered here:
+
+    - ``GET /r/{rid}/sim/transcript?idx=`` — transcript drill-down fragment.
+      Reads filter dimension query params (via ``hx-include="#filter-form"``)
+      and indexes into the FILTERED entry list so the transcript panel stays
+      consistent with the row-list.
+
+    - ``GET /r/{rid}/sim/row-list`` — filtered row list fragment.  Used by the
+      sim interactive panel container to refetch the conversation table when the
+      filter changes (``hx-trigger="orq:filter-changed from:body"``).
     """
+
+    @app.get('/r/{rid}/sim/row-list')
+    def sim_row_list(rid: str, req: Request) -> Response:
+        """Return the filtered sim conversation row-list fragment.
+
+        Called when the ``orq:filter-changed`` event fires so the row-list
+        table reflects the same filter state as the static report body.
+        """
+        run = _load_run(rid, roots)
+        if run is None:
+            return Response('Report not found.', status_code=404, media_type='text/html')
+
+        selections = _parse_sim_filter(req)
+        if selections:
+            filtered_results = _apply_sim_filter(run, selections)
+            from evaluatorq.simulation.reports.sections import build_report_sections
+
+            sections = build_report_sections(filtered_results)
+            entries: list[dict[str, Any]] = []
+            for s in sections:
+                if s.kind == 'individual_results':
+                    entries = s.data.get('entries', [])
+                    break
+        else:
+            entries = _entries_from_run(run)
+
+        html = render_sim_row_list(rid, entries)
+        # Return wrapped in the same container div that the sim_interactive_panels
+        # helper renders so the outerHTML swap replaces the correct element.
+        return Response(
+            f'<div'
+            f' hx-get="/r/{esc(rid)}/sim/row-list"'
+            f' hx-trigger="orq:filter-changed from:body"'
+            f' hx-include="#filter-form"'
+            f' hx-target="this"'
+            f' hx-swap="outerHTML">'
+            f'{html}'
+            f'</div>',
+            media_type='text/html',
+        )
 
     @app.get('/r/{rid}/sim/transcript')
     def sim_transcript(rid: str, req: Request) -> Response:
         """Return the transcript drill-down fragment for a sim result row.
 
-        Query param ``idx`` selects which entry in the ordered result list to
-        render (0-based, matching ``entry["index"]``).  Missing or out-of-range
-        ``idx`` returns a graceful empty message rather than a 500.
+        Query param ``idx`` selects which entry in the filtered result list to
+        render (0-based).  Filter dimensions from the active filter form are
+        read from the query-string via ``hx-include="#filter-form"`` and
+        applied before indexing, so the transcript panel stays consistent with
+        the row-list.  Missing or out-of-range ``idx`` returns a graceful
+        empty message rather than a 500.
         """
         try:
             idx = int(req.query_params.get('idx', '0'))
@@ -308,7 +394,25 @@ def register_sim_view_routes(app: Any, roots: list[Any] | None = None) -> None:
                 media_type='text/html',
             )
 
-        entries = _entries_from_run(run)
+        # Apply any active filter before building the entry list so the idx
+        # refers to a position in the same filtered ordering as the row-list.
+        selections = _parse_sim_filter(req)
+        if selections:
+            filtered_results = _apply_sim_filter(run, selections)
+            # Build entries from the filtered result set by temporarily
+            # replacing run.results with the filtered slice.  We use
+            # build_report_sections directly on the filtered list.
+            from evaluatorq.simulation.reports.sections import build_report_sections
+
+            sections = build_report_sections(filtered_results)
+            entries: list[dict[str, Any]] = []
+            for s in sections:
+                if s.kind == 'individual_results':
+                    entries = s.data.get('entries', [])
+                    break
+        else:
+            entries = _entries_from_run(run)
+
         if not entries or idx < 0 or idx >= len(entries):
             return Response(
                 '<p class="sim-empty">No conversation at that index.</p>',

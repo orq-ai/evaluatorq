@@ -380,3 +380,120 @@ class TestSimRowListOnReportPage:
         r = client.get(f"/r/{rid}")
         assert "alice" in r.text
         assert "bob" in r.text
+
+
+# ---------------------------------------------------------------------------
+# Filter-awareness: sim transcript and row-list honor filter query params
+# ---------------------------------------------------------------------------
+
+
+class TestSimFilterAwareness:
+    """Verify that the sim transcript route applies filter params from the query-string.
+
+    The filter dimensions (persona, scenario, terminated_by, goal_outcome) are
+    carried by hx-include="#filter-form" so each transcript hx-get request
+    automatically includes the active filter selections.
+    """
+
+    def test_transcript_with_persona_filter_returns_200(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        """Transcript route with a persona filter param must return 200."""
+        rid = report_id(_sim_path(roots))
+        r = client.get(f"/r/{rid}/sim/transcript?idx=0&persona=alice")
+        assert r.status_code == 200
+
+    def test_transcript_persona_filter_shows_matching_entry(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        """When filtering to persona=alice, idx=0 in the filtered list maps to alice."""
+        rid = report_id(_sim_path(roots))
+        r = client.get(f"/r/{rid}/sim/transcript?idx=0&persona=alice")
+        assert r.status_code == 200
+        assert "alice" in r.text
+
+    def test_transcript_filter_drops_non_matching_persona(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        """When filtering to persona=alice, bob should not appear in idx=0."""
+        rid = report_id(_sim_path(roots))
+        r = client.get(f"/r/{rid}/sim/transcript?idx=0&persona=alice")
+        assert r.status_code == 200
+        # With only alice in the filtered set, idx=0 is alice's entry.
+        assert "bob" not in r.text
+
+    def test_transcript_out_of_range_after_filter_is_graceful(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        """Filtering to a single persona leaves 1 entry; idx=1 must not 500."""
+        rid = report_id(_sim_path(roots))
+        r = client.get(f"/r/{rid}/sim/transcript?idx=1&persona=alice")
+        # Out-of-range idx after filtering → graceful empty, not 500.
+        assert r.status_code in (200, 404)
+        assert r.status_code != 500
+
+    def test_sim_row_list_route_returns_200(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        """GET /r/{rid}/sim/row-list must return 200 with row-list HTML."""
+        rid = report_id(_sim_path(roots))
+        r = client.get(f"/r/{rid}/sim/row-list")
+        assert r.status_code == 200
+        assert "sim-row" in r.text or "sim-transcript-panel" in r.text
+
+    def test_sim_row_list_with_filter_returns_fewer_rows(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        """Filtered row-list should contain fewer persona rows than unfiltered."""
+        rid = report_id(_sim_path(roots))
+        html_all = client.get(f"/r/{rid}/sim/row-list").text
+        html_alice = client.get(f"/r/{rid}/sim/row-list?persona=alice").text
+        # Count sim-row-item occurrences as proxy for number of rows.
+        all_count = html_all.count("sim-row-item")
+        alice_count = html_alice.count("sim-row-item")
+        assert alice_count < all_count, (
+            f"Expected fewer rows when filtering to persona=alice: "
+            f"unfiltered={all_count}, filtered={alice_count}"
+        )
+
+    def test_sim_row_list_missing_rid_returns_404(
+        self, client: TestClient
+    ) -> None:
+        """row-list route for an unknown rid must return 404."""
+        r = client.get("/r/nonexistent-sim/sim/row-list")
+        assert r.status_code == 404
+
+    def test_sim_panel_container_has_hx_include(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        """The sim interactive panel container must include hx-include='#filter-form'."""
+        rid = report_id(_sim_path(roots))
+        r = client.get(f"/r/{rid}")
+        assert r.status_code == 200
+        assert 'hx-include="#filter-form"' in r.text, (
+            "Expected hx-include=\"#filter-form\" on sim panel container so "
+            "filter selections are carried into transcript hx-get requests."
+        )
+
+    def test_sim_panel_container_triggers_on_filter_changed(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        """The sim panel container must listen for orq:filter-changed."""
+        rid = report_id(_sim_path(roots))
+        r = client.get(f"/r/{rid}")
+        assert r.status_code == 200
+        assert "orq:filter-changed" in r.text, (
+            "Expected 'orq:filter-changed' in hx-trigger on sim panel container."
+        )
+
+    def test_filter_post_emits_hx_trigger_for_sim(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        """POST /r/{rid}/filter for a sim report must return HX-Trigger header."""
+        rid = report_id(_sim_path(roots))
+        r = client.post(f"/r/{rid}/filter", data={})
+        assert r.status_code == 200
+        hx_trigger = r.headers.get("hx-trigger", "")
+        assert "orq:filter-changed" in hx_trigger, (
+            f"Expected HX-Trigger: orq:filter-changed, got: {hx_trigger!r}"
+        )

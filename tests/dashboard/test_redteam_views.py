@@ -597,3 +597,208 @@ class TestMountPoints:
         r = client.get(f"/r/{rid}")
         assert r.status_code == 200
         assert "/view/breakdown" in r.text or "/view/conversation" in r.text
+
+
+# ---------------------------------------------------------------------------
+# 6. Filter-awareness: view routes honor filter query params
+# ---------------------------------------------------------------------------
+
+
+class TestViewRoutesHonorFilter:
+    """Verify that each /view/* route applies the filter from the query-string.
+
+    The filter dimensions are carried by hx-include="#filter-form" on each
+    panel placeholder div, so every hx-get request automatically includes the
+    current filter selections as query params.  These tests confirm that the
+    view routes parse and apply those params.
+    """
+
+    def _filtered_report(self, tmp_path: Path) -> tuple[TestClient, str]:
+        """Build a report where filtering to 'Vulnerable' drops exactly half the rows."""
+        rt = tmp_path / "runs"
+        rt.mkdir()
+        # 4 results: 2 vulnerable (ASI01) + 2 resistant (LLM01)
+        results = [
+            _make_result(category="ASI01", passed=False, agent_key="agent-a", attack_id="v1"),
+            _make_result(category="ASI01", passed=False, agent_key="agent-a", attack_id="v2"),
+            _make_result(category="LLM01", passed=True, agent_key="agent-a", attack_id="r1"),
+            _make_result(category="LLM01", passed=True, agent_key="agent-a", attack_id="r2"),
+        ]
+        report = _make_report(results, tested_agents=["agent-a"])
+        rp = rt / "rt_filter_test_20260101.json"
+        rp.write_text(report.model_dump_json())
+        app = build_app(roots=[rt])
+        return TestClient(app, raise_server_exceptions=True), report_id(rp)
+
+    def test_breakdown_unfiltered_vs_filtered_differ(self, tmp_path: Path) -> None:
+        """Breakdown with result=Vulnerable drops resistant rows → different ASR values."""
+        client, rid = self._filtered_report(tmp_path)
+        html_all = client.get(f"/r/{rid}/view/breakdown?group_by=category").text
+        html_vuln = client.get(
+            f"/r/{rid}/view/breakdown?group_by=category&result=Vulnerable"
+        ).text
+        # The filtered response should not include LLM01 (all resistant) data.
+        # At minimum, the two responses should differ.
+        assert html_all != html_vuln
+
+    def test_breakdown_filter_drops_resistant_category(self, tmp_path: Path) -> None:
+        """Filtering to Vulnerable should exclude the all-resistant LLM01 category."""
+        import json
+
+        client, rid = self._filtered_report(tmp_path)
+        html = client.get(
+            f"/r/{rid}/view/breakdown?group_by=category&result=Vulnerable"
+        ).text
+        # The Vega spec is embedded as JSON; parse it to check LLM01 is absent.
+        # We look for the raw string "LLM01" in chart data — if filter worked it
+        # should not be in the breakdown (all LLM01 results are resistant).
+        assert "LLM01" not in html, (
+            "Expected LLM01 category to be absent when filtering to Vulnerable only"
+        )
+
+    def test_heatmap_unfiltered_vs_filtered_differ(self, tmp_path: Path) -> None:
+        """Heatmap with result=Vulnerable should differ from the unfiltered heatmap."""
+        rt = tmp_path / "runs"
+        rt.mkdir()
+        results = [
+            _make_result(category="ASI01", passed=False, agent_key="agent-a", attack_id="v1"),
+            _make_result(category="ASI01", passed=False, agent_key="agent-b", attack_id="v1"),
+            _make_result(category="LLM01", passed=True, agent_key="agent-a", attack_id="r1"),
+            _make_result(category="LLM01", passed=True, agent_key="agent-b", attack_id="r1"),
+        ]
+        report = _make_report(results, tested_agents=["agent-a", "agent-b"])
+        rp = rt / "rt_hm_filter_20260101.json"
+        rp.write_text(report.model_dump_json())
+        app = build_app(roots=[rt])
+        c = TestClient(app, raise_server_exceptions=True)
+        rid = report_id(rp)
+        html_all = c.get(f"/r/{rid}/view/agent-heatmap?dim=category").text
+        html_vuln = c.get(f"/r/{rid}/view/agent-heatmap?dim=category&result=Vulnerable").text
+        assert html_all != html_vuln
+
+    def test_conversation_filtered_has_fewer_rows(self, tmp_path: Path) -> None:
+        """Conversation list filtered to Vulnerable should show fewer rows than unfiltered."""
+        client, rid = self._filtered_report(tmp_path)
+        html_all = client.get(f"/r/{rid}/view/conversation?idx=0").text
+        html_vuln = client.get(
+            f"/r/{rid}/view/conversation?idx=0&result=Vulnerable"
+        ).text
+        # Count rt-conv-row occurrences as a proxy for list length.
+        count_all = html_all.count("rt-conv-row")
+        count_vuln = html_vuln.count("rt-conv-row")
+        assert count_vuln < count_all, (
+            f"Expected fewer conv rows when filtering to Vulnerable: "
+            f"unfiltered={count_all}, filtered={count_vuln}"
+        )
+
+    def test_conversation_stale_idx_clamped_after_filter(self, tmp_path: Path) -> None:
+        """An idx that falls outside the filtered set should be clamped to 0 (not 500)."""
+        client, rid = self._filtered_report(tmp_path)
+        # Unfiltered has 4 results (idx 0-3); filtered to Vulnerable has 2 (idx 0-1).
+        # idx=3 is out-of-range for the filtered set — must not 500.
+        r = client.get(f"/r/{rid}/view/conversation?idx=3&result=Vulnerable")
+        assert r.status_code == 200
+        assert "rt-conversation" in r.text
+
+    def test_disagreement_filtered_reduces_or_changes_set(self, tmp_path: Path) -> None:
+        """Filtering to a single category should change disagreement results."""
+        rt = tmp_path / "runs"
+        rt.mkdir()
+        results = [
+            # ASI01: agent-a vuln, agent-b resistant → disagreement
+            _make_result(category="ASI01", passed=False, agent_key="agent-a", attack_id="att-0"),
+            _make_result(category="ASI01", passed=True, agent_key="agent-b", attack_id="att-0"),
+            # LLM01: both agree (resistant) → no disagreement
+            _make_result(category="LLM01", passed=True, agent_key="agent-a", attack_id="att-1"),
+            _make_result(category="LLM01", passed=True, agent_key="agent-b", attack_id="att-1"),
+        ]
+        report = _make_report(results, tested_agents=["agent-a", "agent-b"])
+        rp = rt / "rt_dis_filter_20260101.json"
+        rp.write_text(report.model_dump_json())
+        app = build_app(roots=[rt])
+        c = TestClient(app, raise_server_exceptions=True)
+        rid = report_id(rp)
+        html_all = c.get(f"/r/{rid}/view/disagreement?a=agent-a&b=agent-b&page=1").text
+        # Filter to only LLM01: no disagreements → different (empty) output
+        html_llm = c.get(
+            f"/r/{rid}/view/disagreement?a=agent-a&b=agent-b&page=1&category=LLM01"
+        ).text
+        assert html_all != html_llm
+
+
+# ---------------------------------------------------------------------------
+# 7. Panel containers carry hx-include and hx-trigger for filter awareness
+# ---------------------------------------------------------------------------
+
+
+class TestPanelContainerFilterWiring:
+    """Verify the report page HTML wires panels to the filter form correctly.
+
+    These tests confirm the HTMX attributes needed for filter-parity are
+    present in the rendered report page so that browser-side HTMX can pick
+    them up without any JS changes.
+    """
+
+    def test_panel_containers_include_filter_form(
+        self, client: TestClient, rid: str
+    ) -> None:
+        """Each interactive panel placeholder must include #filter-form."""
+        r = client.get(f"/r/{rid}")
+        assert r.status_code == 200
+        html = r.text
+        assert 'hx-include="#filter-form"' in html, (
+            "Expected hx-include=\"#filter-form\" on panel placeholders; "
+            "this wires filter selections into panel hx-get requests."
+        )
+
+    def test_panel_containers_trigger_on_filter_changed(
+        self, client: TestClient, rid: str
+    ) -> None:
+        """Panel placeholders must include orq:filter-changed in hx-trigger."""
+        r = client.get(f"/r/{rid}")
+        assert r.status_code == 200
+        assert "orq:filter-changed" in r.text, (
+            "Expected 'orq:filter-changed' in hx-trigger on panel placeholders; "
+            "panels must refetch when the filter form fires this event."
+        )
+
+    def test_filter_form_has_stable_id(
+        self, client: TestClient, rid: str
+    ) -> None:
+        """The filter form must have id='filter-form' so hx-include can target it."""
+        r = client.get(f"/r/{rid}")
+        assert r.status_code == 200
+        assert 'id="filter-form"' in r.text, (
+            "Expected id=\"filter-form\" on the filter form element."
+        )
+
+
+# ---------------------------------------------------------------------------
+# 8. POST /r/{rid}/filter emits HX-Trigger: orq:filter-changed
+# ---------------------------------------------------------------------------
+
+
+class TestFilterPostEmitsHxTrigger:
+    """Verify POST /r/{rid}/filter returns the HX-Trigger header."""
+
+    def test_filter_post_returns_hx_trigger_header(
+        self, client: TestClient, rid: str
+    ) -> None:
+        """The filter POST handler must include HX-Trigger: orq:filter-changed
+        so that interactive panels (listening via hx-trigger) know to refetch."""
+        r = client.post(f"/r/{rid}/filter", data={})
+        assert r.status_code == 200
+        hx_trigger = r.headers.get("hx-trigger", "")
+        assert "orq:filter-changed" in hx_trigger, (
+            f"Expected HX-Trigger: orq:filter-changed in response headers, "
+            f"got: {hx_trigger!r}"
+        )
+
+    def test_filter_post_with_selections_still_emits_hx_trigger(
+        self, client: TestClient, rid: str
+    ) -> None:
+        """The HX-Trigger header is present even when filter selections are non-empty."""
+        r = client.post(f"/r/{rid}/filter", data={"result": "Vulnerable"})
+        assert r.status_code == 200
+        hx_trigger = r.headers.get("hx-trigger", "")
+        assert "orq:filter-changed" in hx_trigger
