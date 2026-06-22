@@ -91,6 +91,7 @@ nav:
   - Home: index.md
   - Guides:
       - Custom Evaluators & Frameworks: custom-evaluators-and-frameworks.md
+      - Dashboard: dashboard.md
   - Examples: examples/
   - API Reference: reference/
   - About:
