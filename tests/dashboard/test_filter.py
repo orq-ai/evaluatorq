@@ -294,6 +294,93 @@ class TestSimFilterRoute:
 
 
 # ---------------------------------------------------------------------------
+# OOB sidebar in filter response
+# ---------------------------------------------------------------------------
+
+
+class TestFilterOOBSidebar:
+    """POST /r/{rid}/filter must include the OOB download sidebar in its response.
+
+    The sidebar (hx-swap-oob="true") must carry filter params in CSV/JSON
+    hrefs and, when those hrefs are followed, yield fewer rows than unfiltered.
+    """
+
+    def test_redteam_filter_post_has_oob_attr(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        """The POST response must contain an element with hx-swap-oob="true"."""
+        rid = report_id(_rt_path(roots))
+        r = client.post(f"/r/{rid}/filter", data={"category": "ASI01", "result": "All"})
+        assert r.status_code == 200
+        assert 'hx-swap-oob="true"' in r.text
+
+    def test_redteam_filter_post_oob_sidebar_has_stable_id(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        """OOB sidebar must carry id="download-sidebar" so HTMX can target it."""
+        rid = report_id(_rt_path(roots))
+        r = client.post(f"/r/{rid}/filter", data={"category": "ASI01", "result": "All"})
+        assert r.status_code == 200
+        assert 'id="download-sidebar"' in r.text
+
+    def test_redteam_filter_post_oob_sidebar_csv_link_has_filter(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        """OOB sidebar CSV link must include the category filter param."""
+        rid = report_id(_rt_path(roots))
+        r = client.post(f"/r/{rid}/filter", data={"category": "ASI01", "result": "All"})
+        assert r.status_code == 200
+        sidebar_start = r.text.find('id="download-sidebar"')
+        sidebar_end = r.text.find("</section>", sidebar_start)
+        sidebar_html = r.text[sidebar_start:sidebar_end]
+        assert "category=ASI01" in sidebar_html
+
+    def test_redteam_oob_csv_link_round_trip_fewer_rows(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        """Filter → OOB sidebar link → GET that link → fewer rows than unfiltered."""
+        import json
+        rid = report_id(_rt_path(roots))
+
+        # POST filter to ASI01-only.
+        r_filter = client.post(f"/r/{rid}/filter", data={"category": "ASI01", "result": "All"})
+        assert r_filter.status_code == 200
+
+        # Extract CSV href from OOB sidebar.
+        sidebar_start = r_filter.text.find('id="download-sidebar"')
+        sidebar_end = r_filter.text.find("</section>", sidebar_start)
+        sidebar_html = r_filter.text[sidebar_start:sidebar_end]
+        csv_pos = sidebar_html.find("export.csv")
+        assert csv_pos >= 0, "No CSV link in OOB sidebar"
+        href_eq = sidebar_html.rfind('href="', 0, csv_pos)
+        href_end = sidebar_html.find('"', href_eq + 6)
+        csv_url = sidebar_html[href_eq + 6:href_end]
+
+        # GET the filtered CSV.
+        r_csv = client.get(csv_url)
+        assert r_csv.status_code == 200
+        filtered_rows = [ln for ln in r_csv.text.splitlines() if ln.strip()]
+
+        # GET unfiltered CSV.
+        all_rows = [ln for ln in client.get(f"/r/{rid}/export.csv").text.splitlines() if ln.strip()]
+
+        assert len(filtered_rows) < len(all_rows), (
+            f"Filtered CSV ({len(filtered_rows)} lines) not fewer than "
+            f"unfiltered ({len(all_rows)} lines)"
+        )
+
+    def test_sim_filter_post_has_oob_sidebar(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        """Sim surface filter POST must also include the OOB sidebar."""
+        rid = report_id(_sim_path(roots))
+        r = client.post(f"/r/{rid}/filter", data={"persona": "alice", "goal_outcome": "All"})
+        assert r.status_code == 200
+        assert 'hx-swap-oob="true"' in r.text
+        assert 'id="download-sidebar"' in r.text
+
+
+# ---------------------------------------------------------------------------
 # FilterDef unit tests (no HTTP)
 # ---------------------------------------------------------------------------
 

@@ -285,7 +285,21 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
 
         form_html = render_filter_form(rid, surface or '', new_opts, selections)
         fragment_html = filter_fragment(rid, surface or '', body_html, form_html)
-        return NotStr(fragment_html)
+
+        # OOB swap: re-render the download sidebar with the active filter
+        # querystring so that CSV/JSON links point at the filtered export.
+        # HTMX processes elements with hx-swap-oob="true" outside the primary
+        # swap target, updating #download-sidebar in-place.
+        oob_sidebar = download_sidebar(
+            rid,
+            surface or '',
+            selections=selections,
+            has_markdown=(adapter.export_markdown is not None),
+            has_csv=(surface == 'redteam'),
+            has_json=True,
+            oob=True,
+        )
+        return NotStr(fragment_html + oob_sidebar)
 
     # ------------------------------------------------------------------
     # Route: GET /r/{rid}/export  (legacy alias) + export.html
