@@ -59,3 +59,4 @@ site/
 
 # superpowers working dir (plans/specs)
 docs/superpowers/
+.sesskey
