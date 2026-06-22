@@ -117,8 +117,19 @@ def _safe_getattr(mod: object, name: str, parent_dotted: str) -> object | None:
         return None
 
 
+# One-line blurb per API package for the reference landing page.
+_PACKAGE_DESC = {
+    "evaluatorq": "Core evaluation API — `evaluatorq()`, `DataPoint`, `job`, built-in evaluators.",
+    "evaluatorq.redteam": "Adversarial red teaming — `red_team()`, targets, OWASP frameworks.",
+    "evaluatorq.openresponses": "OpenAI Responses API integration.",
+    "evaluatorq.tracing": "OpenTelemetry tracing helpers.",
+    "evaluatorq.integrations": "Third-party agent integrations (LangChain, LangGraph, …).",
+}
+
+
 def write_api_pages() -> None:
     nav_lines = []
+    index_rows = []
     for dotted in API_PACKAGES:
         mod = importlib.import_module(dotted)
         names = list(getattr(mod, "__all__", []))
@@ -146,8 +157,18 @@ def write_api_pages() -> None:
                 fd.write(f"::: {dotted}\n")
         mkdocs_gen_files.set_edit_path(page_path, "gen_pages.py")
         title = dotted.replace("evaluatorq.integrations.", "integrations/").replace("evaluatorq.", "") or "evaluatorq"
-        nav_lines.append(f"- [{title}]({page_path.relative_to('reference').as_posix()})\n")
+        href = page_path.relative_to("reference").as_posix()
+        nav_lines.append(f"- [{title}]({href})\n")
+        desc = _PACKAGE_DESC.get(dotted, "")
+        index_rows.append(f"- [`{dotted}`]({href}) — {desc}\n")
+
+    # Landing page so /reference/ resolves (not a 404) and section-index has a home.
+    with mkdocs_gen_files.open("reference/index.md", "w") as fd:
+        fd.write("# API Reference\n\n")
+        fd.write("The public API, documented from each package's `__all__`.\n\n")
+        fd.writelines(index_rows)
     with mkdocs_gen_files.open("reference/SUMMARY.md", "w") as fd:
+        fd.write("- [Overview](index.md)\n")
         fd.writelines(nav_lines)
 
 
@@ -266,24 +287,47 @@ def write_example_pages() -> None:
 
     lines: list[str] = []
 
+    # Top-level area order (lower = first); unlisted areas fall back to alpha.
+    _SECTION_ORDER = {"lib": 0, "agent_simulation": 1, "redteam": 2}
+
+    def _ranked(keys) -> list[str]:
+        return sorted(keys, key=lambda k: (_SECTION_ORDER.get(k, 99), k))
+
     def emit(node: dict, depth: int) -> None:
         indent = "    " * depth
-        for name in sorted(k for k in node if k != "__files__"):
+        for name in _ranked(k for k in node if k != "__files__"):
             lines.append(f"{indent}- {_section_label(name)}:\n")
             emit(node[name], depth + 1)
         for label, href in node.get("__files__", []):
             lines.append(f"{indent}- [{label}]({href})\n")
 
     emit(tree, 0)
-    # Section landing page (navigation.indexes uses the first SUMMARY entry).
-    cats = sorted(_section_label(k) for k in tree if k != "__files__")
+
+    def first_href(node: dict) -> str | None:
+        """First example page href in a subtree (depth-first, sorted)."""
+        for name in sorted(k for k in node if k != "__files__"):
+            h = first_href(node[name])
+            if h:
+                return h
+        files_here = node.get("__files__", [])
+        return files_here[0][1] if files_here else None
+
+    # Landing page as browsable grid cards (one per area), matching the homepage.
+    top = _ranked(k for k in tree if k != "__files__")
     with mkdocs_gen_files.open("examples/index.md", "w") as fd:
         fd.write("# Examples\n\n")
-        fd.write(f"{len(files)} runnable scripts. Browse by area:\n\n")
-        for c in cats:
-            fd.write(f"## {c}\n\n")
-            if _CATEGORY_DESC.get(c):
-                fd.write(f"{_CATEGORY_DESC[c]}\n\n")
+        fd.write(f"{len(files)} runnable scripts, grouped by area:\n\n")
+        fd.write('<div class="grid cards" markdown>\n\n')
+        for key in top:
+            label = _section_label(key)
+            href = first_href(tree[key])
+            desc = _CATEGORY_DESC.get(label, "")
+            fd.write(f"-   __{label}__\n\n    ---\n\n")
+            if desc:
+                fd.write(f"    {desc}\n\n")
+            if href:
+                fd.write(f"    [:octicons-arrow-right-24: Browse {label}]({href})\n\n")
+        fd.write("</div>\n")
     with mkdocs_gen_files.open("examples/SUMMARY.md", "w") as fd:
         fd.write("- [Overview](index.md)\n")
         fd.writelines(lines)

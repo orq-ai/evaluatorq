@@ -5,8 +5,6 @@ This file provides guidance to Claude Code when working in `packages/evaluatorq-
 ## Quick Reference
 
 ```bash
-# All commands run from packages/evaluatorq-py/ (or via nx from repo root)
-
 # Install dependencies (dev group + all optional extras)
 uv sync --all-extras --all-groups
 
@@ -30,14 +28,6 @@ uv run basedpyright
 
 # Build
 uv build
-```
-
-Or via Nx from the monorepo root:
-
-```bash
-bunx nx test @orq-ai/evaluatorq-py
-bunx nx lint @orq-ai/evaluatorq-py
-bunx nx typecheck @orq-ai/evaluatorq-py
 ```
 
 ## Package Structure

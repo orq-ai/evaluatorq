@@ -6,13 +6,10 @@
 
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/) package manager
-- Access to the orqkit monorepo
 
 ### Setup
 
 ```bash
-cd packages/evaluatorq-py
-
 # Install all dependencies (dev group + all optional extras)
 uv sync --all-extras --all-groups
 
@@ -54,15 +51,6 @@ uv run ruff format src
 
 # Type check
 uv run basedpyright
-```
-
-### Using Nx (from monorepo root)
-
-```bash
-bunx nx test @orq-ai/evaluatorq-py
-bunx nx lint @orq-ai/evaluatorq-py
-bunx nx typecheck @orq-ai/evaluatorq-py
-bunx nx build @orq-ai/evaluatorq-py
 ```
 
 ## Project Structure

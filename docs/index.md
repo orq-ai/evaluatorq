@@ -3,12 +3,22 @@
 Run LLM evaluations, red-team agents, and simulate multi-turn conversations
 in Python — against any agent, with the Orq AI platform as optional infrastructure.
 
+[Get Started](guides/getting-started.md){ .md-button .md-button--primary }
+[View on GitHub](https://github.com/orq-ai/evaluatorq){ .md-button }
+
 ## Install
 
-```bash
-pip install evaluatorq                # core evaluation loop
-pip install "evaluatorq[redteam]"     # + red teaming / simulation
+<!-- termynal -->
+
+```console
+$ pip install evaluatorq
+---> 100%
+Successfully installed evaluatorq
 ```
+
+!!! tip "Optional extras"
+    `pip install "evaluatorq[redteam]"` adds adversarial red teaming ·
+    `pip install "evaluatorq[simulation]"` adds multi-turn agent simulation.
 
 ## What it does
 
@@ -52,21 +62,28 @@ storage, not a requirement.
 ```python
 import asyncio
 
-from evaluatorq import DataPoint, evaluatorq, job, string_contains_evaluator
+from evaluatorq import (
+    DataPoint,
+    evaluatorq,
+    job,
+    string_contains_evaluator,
+)
 
 
-@job("uppercase-converter")
+@job("uppercase")
 async def uppercase_job(data: DataPoint, _row: int) -> str:
-    return str(data.inputs.get("text", "")).upper()
+    text = str(data.inputs.get("text", ""))
+    return text.upper()
 
 
 async def main():
+    data = [
+        DataPoint(inputs={"text": "hello"}, expected_output="HELLO"),
+        DataPoint(inputs={"text": "world"}, expected_output="WORLD"),
+    ]
     await evaluatorq(
         "smoke-test",
-        data=[
-            DataPoint(inputs={"text": "hello world"}, expected_output="HELLO"),
-            DataPoint(inputs={"text": "evaluatorq rocks"}, expected_output="EVALUATORQ"),
-        ],
+        data=data,
         jobs=[uppercase_job],
         evaluators=[string_contains_evaluator()],
         print_results=True,
@@ -74,6 +91,19 @@ async def main():
 
 
 asyncio.run(main())
+```
+
+Running it prints a pass/fail table:
+
+```text
+       smoke-test — uppercase
+┏━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━┓
+┃ input ┃ output  ┃ expected ┃ score  ┃
+┡━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━┩
+│ hello │ HELLO   │ HELLO    │ ✓ pass │
+│ world │ WORLD   │ WORLD    │ ✓ pass │
+└───────┴─────────┴──────────┴────────┘
+        2/2 passed (100%)
 ```
 
 ## Where to next
