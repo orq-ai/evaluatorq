@@ -426,7 +426,9 @@ class TestFilterDefUnit:
         from evaluatorq.dashboard.filters import FILTERS
 
         report = _rt_report()
-        new_opts = FILTERS["redteam"].recompute_options(report, {"category": ["ASI01"]})
+        # recompute_options now takes an already-filtered list (Fix 4).
+        filtered = FILTERS["redteam"].apply(report, {"category": ["ASI01"]})
+        new_opts = FILTERS["redteam"].recompute_options(filtered)
         # After filtering to ASI01, LLM01 should not appear in recomputed options.
         assert "LLM01" not in new_opts["category"]
         assert "ASI01" in new_opts["category"]
@@ -460,6 +462,8 @@ class TestFilterDefUnit:
         from evaluatorq.dashboard.filters import FILTERS
 
         run = _sim_run()
-        new_opts = FILTERS["sim"].recompute_options(run, {"persona": ["alice"]})
+        # recompute_options now takes an already-filtered list (Fix 4).
+        filtered = FILTERS["sim"].apply(run, {"persona": ["alice"]})
+        new_opts = FILTERS["sim"].recompute_options(filtered)
         assert "alice" in new_opts["persona"]
         assert "bob" not in new_opts["persona"]

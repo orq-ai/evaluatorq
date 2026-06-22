@@ -75,8 +75,13 @@ def _redteam_adapter() -> SurfaceAdapter:
             })
         return rows
 
+    def _rt_load(p: Any) -> Any:
+        from evaluatorq.dashboard.library import _read_json_cached
+        data = _read_json_cached(p)
+        return RedTeamReport.model_validate(data)
+
     return SurfaceAdapter(
-        load=lambda p: RedTeamReport.model_validate_json(p.read_text()),
+        load=_rt_load,
         body=render_report_body,
         export=export_html,
         name=lambda r: getattr(r, 'description', None) or 'Red team report',
@@ -109,8 +114,13 @@ def _sim_adapter() -> SurfaceAdapter:
                 break
         return entries
 
+    def _sim_load(p: Any) -> Any:
+        from evaluatorq.dashboard.library import _read_json_cached
+        data = _read_json_cached(p)
+        return SimulationRun.model_validate(data)
+
     return SurfaceAdapter(
-        load=lambda p: SimulationRun.model_validate_json(p.read_text()),
+        load=_sim_load,
         body=lambda run: render_report_body(
             run.results,
             target=run.target_kind,

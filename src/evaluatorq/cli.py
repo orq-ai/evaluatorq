@@ -39,7 +39,8 @@ def ui(
                 "Optional path to scan. "
                 "Omit to show all runs from both redteam and sim stores. "
                 "A directory is scanned for reports; "
-                "a file's parent directory is used."
+                "a file opens the dashboard scoped to that file's parent directory "
+                "and prints the direct report URL so you can navigate straight to it."
             )
         ),
     ] = None,
@@ -59,18 +60,27 @@ def ui(
 
     With a directory PATH only that directory is scanned.
 
-    With a file PATH the file's parent directory is scanned (the index
-    will list all reports in that directory).
+    With a file PATH the file's parent directory is scanned so the report
+    resolves.  The direct URL for that report is printed so you can open it
+    immediately instead of landing on the index listing.
     """
     from evaluatorq.dashboard.launch import serve
+    from evaluatorq.dashboard.library import report_id
 
     roots: list[Path] | None
+    direct_rid: str | None = None
+
     if path is None:
         roots = None  # library.py picks the defaults
     elif path.is_dir():
         roots = [path]
     else:
+        # Scan the parent so the report resolves, but surface the direct link.
         roots = [path.parent]
+        direct_rid = report_id(path)
+
+    if direct_rid is not None:
+        typer.echo(f"Direct report URL: http://{host}:{port}/r/{direct_rid}")
 
     serve(roots, host=host, port=port)
 

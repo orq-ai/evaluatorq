@@ -5,8 +5,10 @@ Each ``FilterDef`` encapsulates all filter operations for a surface:
 - ``dimensions``          : ordered list of dimension keys
 - ``options(obj)``        : compute full option lists from the *full* object
 - ``apply(obj, sel)``     : return the filtered result list
-- ``recompute_options(obj, sel)`` : recompute option lists from the *already
-                            filtered* result list so empty options drop out.
+- ``recompute_options(filtered)`` : recompute option lists from an
+                            *already-filtered* result list so empty options
+                            drop out.  The caller is responsible for running
+                            ``apply`` first and passing the result in.
 
 Selections are plain ``dict[str, list[str]]`` mapping dimension key to the
 list of selected values.  Radio dimensions (``result``, ``goal_outcome``) use
@@ -41,8 +43,12 @@ class FilterDef:
     apply: Callable[[Any, dict[str, list[str]]], list[Any]]
     """Return the filtered result list given the raw object + selections."""
 
-    recompute_options: Callable[[Any, dict[str, list[str]]], dict[str, list[str]]]
-    """Return option lists recomputed from the *already-filtered* result list."""
+    recompute_options: Callable[[list[Any]], dict[str, list[str]]]
+    """Return option lists recomputed from an *already-filtered* result list.
+
+    The caller must apply ``FilterDef.apply`` first and pass the resulting
+    list in.  This avoids running ``apply`` twice per POST.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -166,9 +172,12 @@ def _rt_apply(report: Any, selections: dict[str, list[str]]) -> list[Any]:
     return results
 
 
-def _rt_recompute_options(report: Any, selections: dict[str, list[str]]) -> dict[str, list[str]]:
-    """Recompute option lists from the filtered result set so empty options drop."""
-    filtered = _rt_apply(report, selections)
+def _rt_recompute_options(filtered: list[Any]) -> dict[str, list[str]]:
+    """Recompute option lists from an already-filtered result list.
+
+    The caller is responsible for calling ``_rt_apply`` first and passing
+    the result in, so that ``apply`` runs only once per POST.
+    """
     opts = _rt_options_from_results(filtered)
     # The result radio always shows all four statuses regardless of filter state.
     opts["result"] = ["All", "Vulnerable", "Resistant", "Error"]
@@ -241,8 +250,12 @@ def _sim_apply(run: Any, selections: dict[str, list[str]]) -> list[Any]:
     return results
 
 
-def _sim_recompute_options(run: Any, selections: dict[str, list[str]]) -> dict[str, list[str]]:
-    filtered = _sim_apply(run, selections)
+def _sim_recompute_options(filtered: list[Any]) -> dict[str, list[str]]:
+    """Recompute option lists from an already-filtered result list.
+
+    The caller is responsible for calling ``_sim_apply`` first and passing
+    the result in, so that ``apply`` runs only once per POST.
+    """
     opts = _sim_options_from_results(filtered)
     # The goal_outcome radio always shows all three values.
     opts["goal_outcome"] = ["All", "Achieved", "Not achieved"]
@@ -258,12 +271,12 @@ FILTERS: dict[str, FilterDef] = {
         dimensions=_REDTEAM_DIMS,
         options=_rt_full_options,
         apply=_rt_apply,
-        recompute_options=_rt_recompute_options,
+        recompute_options=_rt_recompute_options,  # type: ignore[arg-type]
     ),
     "sim": FilterDef(
         dimensions=_SIM_DIMS,
         options=_sim_full_options,
         apply=_sim_apply,
-        recompute_options=_sim_recompute_options,
+        recompute_options=_sim_recompute_options,  # type: ignore[arg-type]
     ),
 }

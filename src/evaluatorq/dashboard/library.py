@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import base64
+import functools
 import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path  # noqa: TC003
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -23,6 +24,35 @@ def report_id(path: Path) -> str:
     return base64.urlsafe_b64encode(digest).decode().rstrip('=')
 
 
+@functools.lru_cache(maxsize=64)
+def read_json(path_str: str, mtime_ns: int) -> dict[str, object]:
+    """Parse and cache the JSON at *path_str*.
+
+    The cache key includes *mtime_ns* (nanosecond modification time) so that
+    any on-disk change automatically produces a cache miss — stale data is
+    never served.  The *mtime_ns* argument is derived by the caller from
+    ``Path.stat().st_mtime_ns`` and must not be fabricated.
+
+    Args:
+        path_str:  Absolute path string (``str(path.resolve())``).
+        mtime_ns:  Nanosecond mtime of the file at the time of the call.
+
+    Returns:
+        Parsed JSON object as a ``dict``.
+
+    Raises:
+        json.JSONDecodeError: When the file content is not valid JSON.
+        OSError: When the file cannot be read.
+    """
+    return json.loads(Path(path_str).read_text())  # type: ignore[return-value]
+
+
+def _read_json_cached(path: Path) -> dict[str, object]:
+    """Read + parse JSON at *path*, using the mtime-keyed LRU cache."""
+    mtime_ns = path.stat().st_mtime_ns
+    return read_json(str(path.resolve()), mtime_ns)
+
+
 def sniff_kind(data: dict[str, object]) -> str | None:
     """Surface from a single required-unique field. sim ('mode') checked first."""
     if 'mode' in data:
@@ -34,7 +64,7 @@ def sniff_kind(data: dict[str, object]) -> str | None:
 
 def load_surface(path: Path) -> tuple[str | None, dict[str, object]]:
     try:
-        data = json.loads(path.read_text())
+        data = _read_json_cached(path)
     except (json.JSONDecodeError, OSError):
         return None, {}
     return sniff_kind(data), data

@@ -187,10 +187,11 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     # Route: GET /  — report index
     # ------------------------------------------------------------------
     @app.get('/')
-    def index() -> NotStr:
+    def index(req: Request) -> NotStr:
+        active_surface = req.query_params.get('surface') or None
         cards = library.scan(roots)
-        body = index_body(cards)
-        html = page('Reports', body)
+        body = index_body(cards, active_surface=active_surface)
+        html = page('Reports', body, active_surface=active_surface)
         return NotStr(html)
 
     # ------------------------------------------------------------------
@@ -292,9 +293,10 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         for key, value in form_data.multi_items():
             selections.setdefault(key, []).append(str(value))
 
-        # Apply filters and recompute options
+        # Apply filters once; pass the already-filtered list to recompute_options
+        # so apply() runs exactly once per POST (Fix 4).
         filtered = filter_def.apply(report_obj, selections)
-        new_opts = filter_def.recompute_options(report_obj, selections)
+        new_opts = filter_def.recompute_options(filtered)
 
         # Render body based on surface
         if surface == 'redteam':
