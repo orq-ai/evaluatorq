@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = [ "src/evaluatorq" ]
-include = [ "src/evaluatorq/py.typed", "src/evaluatorq/**/*.css" ]
+include = [ "src/evaluatorq/py.typed", "src/evaluatorq/**/*.css", "src/evaluatorq/**/*.js" ]
 
 [tool.hatch.build.targets.sdist]
 exclude = [ "examples/", ".venv/", "tests/" ]
@@ -145,6 +145,27 @@ reportUntypedFunctionDecorator = "none"
 reportUnnecessaryIsInstance = "none"
 reportUnnecessaryTypeIgnoreComment = "none"
 
+# FastHTML's dynamic FT components (Script, Div, NotStr, etc.) and starlette
+# request injection type poorly. Scope the resulting noise to the dashboard
+# package so typecheck CI stays green without loosening the global config.
+[[tool.basedpyright.executionEnvironments]]
+root = "src/evaluatorq/dashboard"
+reportArgumentType = "none"
+reportAttributeAccessIssue = "none"
+reportGeneralTypeIssues = "none"
+reportMissingTypeArgument = "none"
+reportReturnType = "none"
+
+# Dashboard tests use FastHTML components and deliberate fake section kinds /
+# untyped fixture dicts — same type-noise as the package, scoped the same way.
+[[tool.basedpyright.executionEnvironments]]
+root = "tests/dashboard"
+reportArgumentType = "none"
+reportAttributeAccessIssue = "none"
+reportGeneralTypeIssues = "none"
+reportMissingTypeArgument = "none"
+reportReturnType = "none"
+
 [project]
 name = "evaluatorq"
 version = "1.3.2"
@@ -178,13 +199,11 @@ dependencies = [
   redteam = [
   "openai>=1.0.0,<3.0.0",
   "huggingface-hub>=0.20.0",
-  "plotly>=5.18.0",
   "vl-convert-python>=1.6.0"
 ]
   simulation = [
   "openai>=1.0.0,<3.0.0",
   "orq-ai-sdk>=4.4.7",
-  "plotly>=5.18.0",
   "vl-convert-python>=1.6.0"
 ]
   dashboard = [

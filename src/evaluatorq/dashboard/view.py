@@ -1,9 +1,8 @@
 """View helpers: HTML fragments and FastHTML header assets for the dashboard.
 
 ``head_assets()`` returns a tuple of FastHTML header elements (Script/Link
-tags) for vendored JS (htmx, vega trio, dashboard.js).  The referenced paths
-under ``/static/`` do not yet exist on disk — they will be vendored in a
-later task.  The tags can be emitted now so routes are wired correctly.
+tags) for the vendored JS (htmx, vega trio, dashboard.js) under ``/static/``,
+served by the app from ``dashboard/static/``.
 
 ``index_body(cards)`` and ``report_not_found()`` render pure-HTML fragments
 that are injected into the shell via ``shell.page()``.
@@ -29,9 +28,8 @@ if TYPE_CHECKING:
 def head_assets() -> tuple[Script, ...]:
     """Return FastHTML header elements for vendored JS assets.
 
-    The ``/static/`` paths will be populated in a later task (Task 6/10).
-    Returning Script tags now ensures routes that call ``head_assets()`` emit
-    the correct ``<script src>`` markup without requiring the files to exist.
+    The ``/static/`` files are vendored under ``dashboard/static/`` and served
+    by the app; these Script tags wire them into every report page.
     """
     return (
         Script(src='/static/htmx.min.js'),
