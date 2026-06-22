@@ -91,8 +91,7 @@ def test_outcome_to_prediction_success():
 def test_outcome_to_prediction_error():
     outcome = JudgeOutcome(error_kind=JudgeError.TIMEOUT, error_message="timed out after 5000ms")
     pred = _outcome_to_prediction(outcome)
-    assert pred.error is not None
-    assert "timed" in pred.error.lower() or pred.error  # any error message is fine
+    assert pred.error is not None and "timed" in pred.error.lower()
     assert pred.value is None
 
 
@@ -201,3 +200,70 @@ def test_to_evaluation_result_categorical_label_fail():
         score_range=(0.0, 1.0),
     )
     assert result.pass_ is False
+
+
+def _make_inconclusive_deliberation(explanation="explanation text"):
+    """Build an inconclusive JuryDeliberation (verdict=None).
+
+    The JuryResult validator requires len(votes) == judges_configured + replacements_used,
+    so we supply one failed vote to satisfy that constraint.
+    """
+    failed_vote = JuryVote(
+        model="test-model",
+        success=False,
+        value=None,
+        error="judge failed",
+    )
+    jury = JuryResult(
+        judges_configured=1,
+        judges_succeeded=0,
+        judges_failed=1,
+        replacements_used=0,
+        tie=False,
+        inconclusive=True,
+        votes=[failed_vote],
+        stats=None,
+        raw_agreement=None,
+    )
+    return JuryDeliberation(verdict=None, explanation=explanation, jury=jury, token_usage=None)
+
+
+def test_to_evaluation_result_inconclusive():
+    """verdict=None deliberation -> value='inconclusive' and pass_ is None."""
+    delib = _make_inconclusive_deliberation()
+    result = _to_evaluation_result(
+        delib,
+        verdict_kind="categorical",
+        passing_labels=None,
+        threshold=0.5,
+        score_range=(0.0, 1.0),
+    )
+    assert result.value == "inconclusive"
+    assert result.pass_ is None
+
+
+def test_to_evaluation_result_numeric_clamped():
+    """numeric verdict=1.5 with score_range=(0.0, 1.0) -> value clamped to 1.0 and pass_ is True."""
+    delib = _make_deliberation(1.5)
+    result = _to_evaluation_result(
+        delib,
+        verdict_kind="numeric",
+        passing_labels=None,
+        threshold=0.5,
+        score_range=(0.0, 1.0),
+    )
+    assert result.value == 1.0
+    assert result.pass_ is True
+
+
+def test_to_evaluation_result_string_label_no_passing_labels():
+    """string label verdict with passing_labels=None -> pass_ is None."""
+    delib = _make_deliberation("good")
+    result = _to_evaluation_result(
+        delib,
+        verdict_kind="categorical",
+        passing_labels=None,
+        threshold=0.5,
+        score_range=(0.0, 1.0),
+    )
+    assert result.pass_ is None

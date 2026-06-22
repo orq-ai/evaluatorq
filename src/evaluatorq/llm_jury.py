@@ -8,7 +8,6 @@ from pydantic import BaseModel, Field
 
 from evaluatorq.common.judge import JudgeOutcome
 from evaluatorq.common.jury import JuryDeliberation, Prediction, append_jury_summary
-from evaluatorq.contracts import TokenUsage
 from evaluatorq.types import DataPoint, EvaluationResult, Output
 
 DEFAULT_JUDGE_MODEL = "openai/gpt-5.5"
@@ -168,24 +167,19 @@ def _to_evaluation_result(
     explanation = append_jury_summary(deliberation.explanation, deliberation.jury)
 
     if verdict is None:
-        # Inconclusive jury — mark as failed.
-        return EvaluationResult.model_validate({
-            "value": False,
-            "explanation": explanation,
-            "pass": False,
-            "token_usage": deliberation.token_usage,
-        })
-
-    if verdict_kind == "numeric":
-        value = float(verdict)
-        passed = value >= threshold
+        value: Any = "inconclusive"
+        passed = None
+    elif verdict_kind == "numeric":
+        lo, hi = score_range
+        score = min(max(float(verdict), lo), hi)
+        value = score
+        passed = score >= threshold
     elif isinstance(verdict, bool):
         value = verdict
         passed = verdict
-    else:
-        # String label
+    else:  # string label
         value = verdict
-        passed = (verdict in passing_labels) if passing_labels is not None else True
+        passed = (verdict in passing_labels) if passing_labels else None
 
     return EvaluationResult.model_validate({
         "value": value,
