@@ -123,6 +123,7 @@ def _render_severity_bar_chart(by_severity: dict[str, Any]) -> str:
         color=_COLORS['orange_300'],
         x_title='Count',
         value_labels=[str(int(v)) for v in values],
+        colors=[_SEVERITY_COLORS[sev] for sev in labels],
     )
     svg = _render_svg(spec)
     return f'<div class="chart-container">{svg}</div>' if svg else ''
@@ -859,6 +860,10 @@ def _render_turn_depth_bar_chart(rows: list[dict[str, Any]]) -> str:
 
     turn_counts = [str(r['turn_count']) for r in rows]
     asr_pcts = [r.get('vulnerability_rate', 0.0) * 100 for r in rows]
+    bar_colors = [
+        _COLORS['red_400'] if asr >= 50 else (_COLORS['yellow_400'] if asr >= 20 else _COLORS['success_400'])
+        for asr in asr_pcts
+    ]
 
     spec = _vl_bar_h(
         labels=turn_counts,
@@ -866,6 +871,7 @@ def _render_turn_depth_bar_chart(rows: list[dict[str, Any]]) -> str:
         color=_COLORS['teal_400'],
         x_title='Attack Success Rate (%)',
         value_labels=[f'{v:.0f}%' for v in asr_pcts],
+        colors=bar_colors,
     )
     svg = _render_svg(spec)
     return f'<div class="chart-container">{svg}</div>' if svg else ''

@@ -310,8 +310,12 @@ def test_render_donut_chart_filters_zero_values():
         values=[5, 0, 3],
         colors=['#2ebd85', '#ff0000', '#d92d20'],
         title='t',
-    )
+    ).lower()
+    # The zero-valued 'B' segment (its unique #ff0000 fill) is filtered out;
+    # the two non-zero segments' colors survive.
     assert '<svg' in out
+    assert '#ff0000' not in out
+    assert '#2ebd85' in out and '#d92d20' in out
 
 
 def test_render_donut_chart_all_zero_returns_empty():
