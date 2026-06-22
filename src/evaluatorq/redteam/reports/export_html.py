@@ -1,11 +1,11 @@
 """HTML renderer for red team reports.
 
 ``export_html(report)`` converts a ``RedTeamReport`` to a self-contained HTML
-string with inline SVG charts (via Plotly + kaleido), styled tables, and
+string with inline SVG charts (via Vega-Lite / vl-convert), styled tables, and
 print-friendly CSS.  No JavaScript is required — charts are static SVGs.
 
-If ``plotly`` or ``kaleido`` are not installed the report degrades gracefully
-to a tables-only layout.
+If ``vl-convert-python`` is not installed the report degrades gracefully to a
+tables-only layout (``render_svg`` returns ``''`` when unavailable).
 """
 
 from __future__ import annotations
@@ -23,23 +23,15 @@ from evaluatorq.common.reports import load_logo_svg as _load_logo_svg
 from evaluatorq.common.reports import pct as _pct
 from evaluatorq.common.reports import render_donut_chart as _render_donut_chart_common
 from evaluatorq.common.reports import truncate as _truncate
-from evaluatorq.common.reports import try_render_svg as _try_render_svg_chart
+from evaluatorq.common.reports.vega import render_svg as _render_svg
+from evaluatorq.common.reports.vega import vl_bar_h as _vl_bar_h
+from evaluatorq.common.reports.vega import vl_donut as _vl_donut
+from evaluatorq.common.reports.vega import vl_grouped_bar as _vl_grouped_bar
 from evaluatorq.contracts import ReportSection
 from evaluatorq.redteam.reports.sections import build_report_sections
 
 if TYPE_CHECKING:
     from evaluatorq.redteam.contracts import RedTeamReport
-
-
-def _charts_available() -> bool:
-    """Local plotly+kaleido availability guard (A4 will replace with Vega-Lite)."""
-    try:
-        import kaleido  # noqa: F401
-        import plotly  # noqa: F401
-
-        return True
-    except ImportError:
-        return False
 
 
 # ---------------------------------------------------------------------------
@@ -95,24 +87,19 @@ def _render_donut_chart(summary_data: dict[str, Any]) -> str:
 
 
 def _render_severity_bar_chart(by_severity: dict[str, Any]) -> str:
-    """Render a vertical bar chart of vulnerability counts by severity level.
+    """Render a horizontal bar chart of vulnerability counts by severity level.
 
     Args:
         by_severity: Mapping of severity level -> summary object (or dict) with
             a ``vulnerabilities_found`` attribute/key.  Corresponds to
             ``ReportSummary.by_severity``.
     """
-    if not _charts_available():
-        return ''
-    import plotly.graph_objects as go
-
     if not by_severity:
         return ''
 
     # Build ordered lists, keeping only severities that have vulnerabilities.
     labels: list[str] = []
-    values: list[int] = []
-    colors: list[str] = []
+    values: list[float] = []
     for sev in _SEVERITY_ORDER:
         entry = by_severity.get(sev)
         if entry is None:
@@ -125,43 +112,24 @@ def _render_severity_bar_chart(by_severity: dict[str, Any]) -> str:
         )
         if found > 0:
             labels.append(sev)
-            values.append(found)
-            colors.append(_SEVERITY_COLORS.get(sev, '#999'))
+            values.append(float(found))
 
     if not labels:
         return ''
 
-    fig = go.Figure(
-        data=[
-            go.Bar(
-                x=labels,
-                y=values,
-                marker_color=colors,
-                text=values,
-                textposition='outside',
-            )
-        ]
+    spec = _vl_bar_h(
+        labels=labels,
+        values=values,
+        color=_COLORS['orange_300'],
+        x_title='Count',
+        value_labels=[str(int(v)) for v in values],
     )
-    fig.update_layout(
-        width=450,
-        height=300,
-        margin=dict(t=40, b=40, l=50, r=30),
-        title=dict(text='Vulnerabilities by Severity', font=dict(size=14)),
-        xaxis_title='Severity',
-        yaxis_title='Count',
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    svg = _try_render_svg_chart(fig)
+    svg = _render_svg(spec)
     return f'<div class="chart-container">{svg}</div>' if svg else ''
 
 
 def _render_category_bar_chart(rows: list[dict[str, Any]]) -> str:
     """Render a horizontal bar chart of per-category vulnerability rate."""
-    if not _charts_available():
-        return ''
-    import plotly.graph_objects as go
-
     if not rows:
         return ''
 
@@ -170,30 +138,14 @@ def _render_category_bar_chart(rows: list[dict[str, Any]]) -> str:
     labels = [r.get('category', '?') for r in sorted_rows]
     rates = [r.get('vulnerability_rate', 0) * 100 for r in sorted_rows]
 
-    fig = go.Figure(
-        data=[
-            go.Bar(
-                y=labels,
-                x=rates,
-                orientation='h',
-                marker_color=_COLORS['orange_300'],
-                text=[f'{r:.0f}%' for r in rates],
-                textposition='outside',
-            )
-        ]
+    spec = _vl_bar_h(
+        labels=labels,
+        values=rates,
+        color=_COLORS['orange_300'],
+        x_title='Vulnerability Rate (%)',
+        value_labels=[f'{r:.0f}%' for r in rates],
     )
-    fig.update_layout(
-        width=500,
-        height=max(250, len(labels) * 35 + 80),
-        margin=dict(t=40, b=40, l=80, r=50),
-        title=dict(text='Vulnerability Rate by Category', font=dict(size=14)),
-        xaxis_title='Vulnerability Rate (%)',
-        xaxis=dict(range=[0, max(max(rates) * 1.2, 5) if rates else 100]),
-        yaxis=dict(autorange='reversed'),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    svg = _try_render_svg_chart(fig)
+    svg = _render_svg(spec)
     return f'<div class="chart-container">{svg}</div>' if svg else ''
 
 
@@ -204,49 +156,21 @@ def _render_technique_bar_chart(rows: list[dict[str, Any]]) -> str:
     Techniques are sorted by vulnerability rate (highest first) and capped at
     the top 15 to keep the chart readable.
     """
-    if not _charts_available():
-        return ''
-    import plotly.graph_objects as go
-
     if not rows:
         return ''
 
     sorted_rows = sorted(rows, key=lambda r: r.get('vulnerability_rate', 0), reverse=True)[:15]
     labels = [r.get('technique', '?') for r in sorted_rows]
     rates = [r.get('vulnerability_rate', 0) * 100 for r in sorted_rows]
-    totals = [r.get('total_attacks', 0) for r in sorted_rows]
 
-    hover_texts = [
-        f'{label}<br>ASR: {rate:.1f}%<br>Attacks: {total}'
-        for label, rate, total in zip(labels, rates, totals, strict=False)
-    ]
-
-    fig = go.Figure(
-        data=[
-            go.Bar(
-                y=labels,
-                x=rates,
-                orientation='h',
-                marker_color=_COLORS['orange_300'],
-                text=[f'{r:.0f}%' for r in rates],
-                textposition='outside',
-                hovertext=hover_texts,
-                hoverinfo='text',
-            )
-        ]
+    spec = _vl_bar_h(
+        labels=labels,
+        values=rates,
+        color=_COLORS['orange_300'],
+        x_title='Attack Success Rate (%)',
+        value_labels=[f'{r:.0f}%' for r in rates],
     )
-    fig.update_layout(
-        width=500,
-        height=max(250, len(labels) * 35 + 80),
-        margin=dict(t=40, b=40, l=140, r=60),
-        title=dict(text='ASR by Technique', font=dict(size=14)),
-        xaxis_title='Attack Success Rate (%)',
-        xaxis=dict(range=[0, max(max(rates) * 1.2, 5) if rates else 100]),
-        yaxis=dict(autorange='reversed'),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    svg = _try_render_svg_chart(fig)
+    svg = _render_svg(spec)
     return f'<div class="chart-container">{svg}</div>' if svg else ''
 
 
@@ -257,10 +181,6 @@ def _render_vulnerability_bar_chart(rows: list[dict[str, Any]]) -> str:
     Vulnerabilities are sorted by vulnerability rate (highest first) and capped
     at the top 15 to keep the chart readable.
     """
-    if not _charts_available():
-        return ''
-    import plotly.graph_objects as go
-
     if not rows:
         return ''
 
@@ -268,39 +188,15 @@ def _render_vulnerability_bar_chart(rows: list[dict[str, Any]]) -> str:
     # Prefer the human-readable name; fall back to the ID.
     labels = [r.get('vulnerability_name') or r.get('vulnerability', '?') for r in sorted_rows]
     rates = [r.get('vulnerability_rate', 0) * 100 for r in sorted_rows]
-    totals = [r.get('total_attacks', 0) for r in sorted_rows]
 
-    hover_texts = [
-        f'{label}<br>ASR: {rate:.1f}%<br>Attacks: {total}'
-        for label, rate, total in zip(labels, rates, totals, strict=False)
-    ]
-
-    fig = go.Figure(
-        data=[
-            go.Bar(
-                y=labels,
-                x=rates,
-                orientation='h',
-                marker_color=_COLORS['orange_300'],
-                text=[f'{r:.0f}%' for r in rates],
-                textposition='outside',
-                hovertext=hover_texts,
-                hoverinfo='text',
-            )
-        ]
+    spec = _vl_bar_h(
+        labels=labels,
+        values=rates,
+        color=_COLORS['orange_300'],
+        x_title='Attack Success Rate (%)',
+        value_labels=[f'{r:.0f}%' for r in rates],
     )
-    fig.update_layout(
-        width=500,
-        height=max(250, len(labels) * 35 + 80),
-        margin=dict(t=40, b=40, l=160, r=60),
-        title=dict(text='ASR by Vulnerability', font=dict(size=14)),
-        xaxis_title='Attack Success Rate (%)',
-        xaxis=dict(range=[0, max(max(rates) * 1.2, 5) if rates else 100]),
-        yaxis=dict(autorange='reversed'),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    svg = _try_render_svg_chart(fig)
+    svg = _render_svg(spec)
     return f'<div class="chart-container">{svg}</div>' if svg else ''
 
 
@@ -544,49 +440,21 @@ def _render_technique_breakdown_html(section: ReportSection) -> str:
 
 def _render_delivery_bar_chart(rows: list[dict[str, Any]]) -> str:
     """Render a horizontal bar chart of ASR% by delivery method."""
-    if not _charts_available():
-        return ''
-    import plotly.graph_objects as go
-
     if not rows:
         return ''
 
     sorted_rows = sorted(rows, key=lambda r: r.get('vulnerability_rate', 0), reverse=True)
     labels = [r.get('delivery_method', '?') for r in sorted_rows]
     rates = [r.get('vulnerability_rate', 0) * 100 for r in sorted_rows]
-    totals = [r.get('total_attacks', 0) for r in sorted_rows]
 
-    hover_texts = [
-        f'{label}<br>ASR: {rate:.1f}%<br>Attacks: {total}'
-        for label, rate, total in zip(labels, rates, totals, strict=False)
-    ]
-
-    fig = go.Figure(
-        data=[
-            go.Bar(
-                y=labels,
-                x=rates,
-                orientation='h',
-                marker_color=_COLORS['blue_400'],
-                text=[f'{r:.0f}%' for r in rates],
-                textposition='outside',
-                hovertext=hover_texts,
-                hoverinfo='text',
-            )
-        ]
+    spec = _vl_bar_h(
+        labels=labels,
+        values=rates,
+        color=_COLORS['blue_400'],
+        x_title='Attack Success Rate (%)',
+        value_labels=[f'{r:.0f}%' for r in rates],
     )
-    fig.update_layout(
-        width=500,
-        height=max(250, len(labels) * 35 + 80),
-        margin=dict(t=40, b=40, l=140, r=60),
-        title=dict(text='ASR by Delivery Method', font=dict(size=14)),
-        xaxis_title='Attack Success Rate (%)',
-        xaxis=dict(range=[0, max(max(rates) * 1.2, 5) if rates else 100]),
-        yaxis=dict(autorange='reversed'),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    svg = _try_render_svg_chart(fig)
+    svg = _render_svg(spec)
     return f'<div class="chart-container">{svg}</div>' if svg else ''
 
 
@@ -894,11 +762,12 @@ def _render_agent_context_html(section: ReportSection) -> str:
 
 
 def _render_mini_donut_chart(label: str, data: dict[str, Any]) -> str:
-    """Render a small donut chart for a single turn-type or domain group."""
-    if not _charts_available():
-        return ''
-    import plotly.graph_objects as go
+    """Render a small donut chart for a single turn-type or domain group.
 
+    The ``label`` (turn-type/domain name) is rendered as a ``<figcaption>``
+    so it is preserved alongside the SVG (Vega-Lite specs carry no title).
+    The donut center shows the ASR%.
+    """
     total = data.get('total_attacks', 0)
     vuln = data.get('vulnerabilities_found', 0)
     if total == 0:
@@ -917,31 +786,22 @@ def _render_mini_donut_chart(label: str, data: dict[str, Any]) -> str:
         return ''
     lbls, vals, cols = zip(*filtered, strict=False)
 
-    fig = go.Figure(
-        data=[
-            go.Pie(
-                labels=list(lbls),
-                values=list(vals),
-                hole=0.55,
-                marker=dict(colors=list(cols)),
-                textinfo='percent',
-                textfont=dict(size=11),
-            )
-        ]
-    )
     asr_pct = f'{vuln / total:.0%}' if total > 0 else '0%'
-    fig.update_layout(
-        width=250,
-        height=220,
-        margin=dict(t=35, b=20, l=10, r=10),
-        showlegend=True,
-        legend=dict(orientation='h', y=-0.05, font=dict(size=10)),
-        title=dict(text=f'{label}<br><sup>ASR: {asr_pct}</sup>', font=dict(size=12)),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
+    spec = _vl_donut(
+        labels=list(lbls),
+        values=[float(v) for v in vals],
+        colors=list(cols),
+        center_label=asr_pct,
     )
-    svg = _try_render_svg_chart(fig)
-    return f'<div class="chart-container" style="display:inline-block;vertical-align:top">{svg}</div>' if svg else ''
+    svg = _render_svg(spec)
+    if not svg:
+        return ''
+    return (
+        f'<figure class="chart-card" style="display:inline-block;vertical-align:top">'
+        f'<figcaption>{_esc(label)}</figcaption>'
+        f'{svg}'
+        f'</figure>'
+    )
 
 
 def _render_turn_scope_breakdown_html(section: ReportSection) -> str:
@@ -993,45 +853,21 @@ def _render_turn_scope_breakdown_html(section: ReportSection) -> str:
 
 
 def _render_turn_depth_bar_chart(rows: list[dict[str, Any]]) -> str:
-    """Render a vertical bar chart of ASR% by turn count."""
-    if not _charts_available() or not rows:
+    """Render a horizontal bar chart of ASR% by turn count."""
+    if not rows:
         return ''
-    import plotly.graph_objects as go
 
     turn_counts = [str(r['turn_count']) for r in rows]
     asr_pcts = [r.get('vulnerability_rate', 0.0) * 100 for r in rows]
-    totals = [r.get('total_attacks', 0) for r in rows]
 
-    bar_colors = [
-        _COLORS['red_400'] if asr >= 50 else (_COLORS['yellow_400'] if asr >= 20 else _COLORS['success_400'])
-        for asr in asr_pcts
-    ]
-
-    fig = go.Figure(
-        data=[
-            go.Bar(
-                x=turn_counts,
-                y=asr_pcts,
-                marker_color=bar_colors,
-                text=[f'{v:.0f}%' for v in asr_pcts],
-                textposition='outside',
-                customdata=totals,
-                hovertemplate='Turn %{x}<br>ASR: %{y:.1f}%<br>Attacks: %{customdata}<extra></extra>',
-            )
-        ]
+    spec = _vl_bar_h(
+        labels=turn_counts,
+        values=asr_pcts,
+        color=_COLORS['teal_400'],
+        x_title='Attack Success Rate (%)',
+        value_labels=[f'{v:.0f}%' for v in asr_pcts],
     )
-    fig.update_layout(
-        width=500,
-        height=320,
-        margin=dict(t=50, b=50, l=60, r=30),
-        title=dict(text='ASR% by Conversation Turn Count', font=dict(size=14)),
-        xaxis_title='Number of Turns',
-        yaxis_title='Attack Success Rate (%)',
-        yaxis=dict(range=[0, max(max(asr_pcts) * 1.2, 10) if asr_pcts else 100]),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    svg = _try_render_svg_chart(fig)
+    svg = _render_svg(spec)
     return f'<div class="chart-container">{svg}</div>' if svg else ''
 
 
@@ -1057,39 +893,23 @@ def _render_turn_depth_analysis_html(section: ReportSection) -> str:
 
 def _render_token_per_agent_bar_chart(per_agent: list[dict[str, Any]]) -> str:
     """Render a horizontal bar chart of total tokens per agent."""
-    if not _charts_available() or not per_agent:
+    if not per_agent:
         return ''
-    import plotly.graph_objects as go
 
     labels = [r.get('agent', '?') for r in per_agent]
-    values = [r.get('total_tokens', 0) for r in per_agent]
+    values = [float(r.get('total_tokens', 0)) for r in per_agent]
 
     if not any(values):
         return ''
 
-    fig = go.Figure(
-        data=[
-            go.Bar(
-                y=labels,
-                x=values,
-                orientation='h',
-                marker_color=_COLORS['teal_400'],
-                text=values,
-                textposition='outside',
-            )
-        ]
+    spec = _vl_bar_h(
+        labels=labels,
+        values=values,
+        color=_COLORS['teal_400'],
+        x_title='Total Tokens',
+        value_labels=[str(int(v)) for v in values],
     )
-    fig.update_layout(
-        width=500,
-        height=max(200, len(labels) * 40 + 80),
-        margin=dict(t=40, b=40, l=120, r=60),
-        title=dict(text='Total Tokens per Agent', font=dict(size=14)),
-        xaxis_title='Total Tokens',
-        yaxis=dict(autorange='reversed'),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    svg = _try_render_svg_chart(fig)
+    svg = _render_svg(spec)
     return f'<div class="chart-container">{svg}</div>' if svg else ''
 
 
@@ -1157,15 +977,14 @@ def _render_token_usage_html(section: ReportSection) -> str:
 
 def _render_source_donut_chart(rows: list[dict[str, Any]]) -> str:
     """Render a donut chart of attack source distribution."""
-    if not _charts_available() or not rows:
+    if not rows:
         return ''
-    import plotly.graph_objects as go
 
     labels = [r['source'] for r in rows]
-    values = [r['count'] for r in rows]
+    values = [float(r['count']) for r in rows]
 
     # Use a qualitative palette based on brand colors
-    palette = [
+    source_palette = [
         _COLORS['teal_400'],
         _COLORS['orange_300'],
         _COLORS['blue_400'],
@@ -1173,30 +992,14 @@ def _render_source_donut_chart(rows: list[dict[str, Any]]) -> str:
         _COLORS['yellow_400'],
         _COLORS['red_400'],
     ]
-    colors = [palette[i % len(palette)] for i in range(len(labels))]
+    colors = [source_palette[i % len(source_palette)] for i in range(len(labels))]
 
-    fig = go.Figure(
-        data=[
-            go.Pie(
-                labels=labels,
-                values=values,
-                hole=0.45,
-                marker=dict(colors=colors),
-                textinfo='label+percent',
-                textfont=dict(size=11),
-            )
-        ]
+    spec = _vl_donut(
+        labels=labels,
+        values=values,
+        colors=colors,
     )
-    fig.update_layout(
-        width=450,
-        height=320,
-        margin=dict(t=40, b=30, l=30, r=30),
-        showlegend=False,
-        title=dict(text='Attack Sources', font=dict(size=14)),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    svg = _try_render_svg_chart(fig)
+    svg = _render_svg(spec)
     return f'<div class="chart-container">{svg}</div>' if svg else ''
 
 
@@ -1265,88 +1068,43 @@ def _render_agent_comparison_grouped_bar(
     agents: list[str],
 ) -> str:
     """Render a grouped horizontal bar chart of ASR by vulnerability per agent."""
-    if not _charts_available() or not vuln_asr_rows or not agents:
+    if not vuln_asr_rows or not agents:
         return ''
-    import plotly.graph_objects as go
-
-    qualitative = [
-        _COLORS['teal_400'],
-        _COLORS['orange_300'],
-        _COLORS['blue_400'],
-        _COLORS['yellow_400'],
-        _COLORS['red_400'],
-        _COLORS['success_400'],
-    ]
 
     rows = vuln_asr_rows[:15]
-    vuln_labels = [r['vulnerability'] for r in rows]
+    categories = [r['vulnerability'] for r in rows]
 
-    traces = []
-    for i, agent_name in enumerate(agents):
+    series: list[tuple[str, list[float]]] = []
+    for agent_name in agents:
         asr_values = [r['agents'].get(agent_name, {}).get('asr', 0.0) * 100 for r in rows]
-        traces.append(
-            go.Bar(
-                name=agent_name,
-                y=vuln_labels,
-                x=asr_values,
-                orientation='h',
-                marker_color=qualitative[i % len(qualitative)],
-                text=[f'{v:.0f}%' for v in asr_values],
-                textposition='outside',
-            )
-        )
+        series.append((agent_name, asr_values))
 
-    fig = go.Figure(data=traces)
-    fig.update_layout(
-        barmode='group',
-        width=600,
-        height=max(300, len(rows) * len(agents) * 20 + 100),
-        margin=dict(t=50, b=40, l=180, r=60),
-        title=dict(text='ASR by Vulnerability per Agent', font=dict(size=14)),
-        xaxis_title='Attack Success Rate (%)',
-        xaxis=dict(range=[0, 110]),
-        yaxis=dict(autorange='reversed'),
-        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
+    spec = _vl_grouped_bar(
+        categories=categories,
+        series=series,
+        x_title='Attack Success Rate (%)',
     )
-    svg = _try_render_svg_chart(fig)
+    svg = _render_svg(spec)
     return f'<div class="chart-container">{svg}</div>' if svg else ''
 
 
 def _render_framework_bar_chart(rows: list[dict[str, Any]]) -> str:
-    """Render a vertical bar chart of ASR% by framework."""
-    if not _charts_available() or not rows:
+    """Render a horizontal bar chart of ASR% by framework."""
+    if not rows:
         return ''
-    import plotly.graph_objects as go
 
     labels = [r['framework'] for r in rows]
     rates = [r['vulnerability_rate'] * 100 for r in rows]
     totals = [r['total_attacks'] for r in rows]
 
-    fig = go.Figure(
-        data=[
-            go.Bar(
-                x=labels,
-                y=rates,
-                marker_color=_COLORS['teal_400'],
-                text=[f'{rate:.1f}%<br>n={n}' for rate, n in zip(rates, totals, strict=False)],
-                textposition='outside',
-            )
-        ]
+    spec = _vl_bar_h(
+        labels=labels,
+        values=rates,
+        color=_COLORS['teal_400'],
+        x_title='ASR (%)',
+        value_labels=[f'{rate:.1f}% n={n}' for rate, n in zip(rates, totals, strict=False)],
     )
-    fig.update_layout(
-        width=500,
-        height=350,
-        margin=dict(t=50, b=50, l=60, r=30),
-        title=dict(text='ASR by Framework', font=dict(size=14)),
-        xaxis_title='Framework',
-        yaxis_title='ASR (%)',
-        yaxis=dict(range=[0, max(max(rates) * 1.25, 10) if rates else 100]),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-    )
-    svg = _try_render_svg_chart(fig)
+    svg = _render_svg(spec)
     return f'<div class="chart-container">{svg}</div>' if svg else ''
 
 
@@ -1757,8 +1515,9 @@ def export_html(report: RedTeamReport) -> str:
     """Convert a ``RedTeamReport`` to a self-contained HTML string.
 
     The output is a single HTML file with inline CSS and optional inline SVG
-    charts (if ``plotly`` and ``kaleido`` are installed).  No JavaScript is
-    required.
+    charts (rendered via Vega-Lite / vl-convert).  No JavaScript is required.
+    When ``vl-convert-python`` is not installed charts are omitted and the
+    report degrades to a tables-only layout.
 
     Args:
         report: The red team report to render.

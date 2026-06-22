@@ -191,9 +191,8 @@ dependencies = [
   "watchdog>=4.0.0",
   "vl-convert-python>=1.6.0"
 ]
-  export = [ "kaleido>=0.2.1" ]
   all = [
-  "evaluatorq[orq,otel,langchain,langgraph,openai-agents,pydantic-ai,crewai,redteam,simulation,export]"
+  "evaluatorq[orq,otel,langchain,langgraph,openai-agents,pydantic-ai,crewai,redteam,simulation]"
 ]
 
   [project.scripts]
