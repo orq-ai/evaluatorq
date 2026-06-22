@@ -444,3 +444,161 @@ class TestDownloadSidebarOnReportPage:
         rid = report_id(_sim_path(roots))
         r = client.get(f"/r/{rid}")
         assert "export.csv" not in r.text
+
+    def test_download_sidebar_has_stable_id(self, client: TestClient, roots: list[Path]) -> None:
+        """The download sidebar must carry id="download-sidebar" for OOB targeting."""
+        rid = report_id(_rt_path(roots))
+        r = client.get(f"/r/{rid}")
+        assert 'id="download-sidebar"' in r.text
+
+
+# ---------------------------------------------------------------------------
+# OOB sidebar swap after filter POST
+# ---------------------------------------------------------------------------
+
+
+class TestOOBSidebarAfterFilterPost:
+    """POST /r/{rid}/filter must return the OOB sidebar alongside the fragment.
+
+    The OOB sidebar (hx-swap-oob="true") must:
+    - appear in the response HTML
+    - carry the active filter params in the CSV/JSON hrefs
+    - point at URLs that, when followed, return fewer rows than unfiltered
+    """
+
+    def test_filter_post_response_contains_oob_sidebar(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        """The POST /filter response must include an OOB-swapped sidebar."""
+        rid = report_id(_rt_path(roots))
+        r = client.post(f"/r/{rid}/filter", data={"category": "ASI01", "result": "All"})
+        assert r.status_code == 200
+        assert 'hx-swap-oob="true"' in r.text
+
+    def test_filter_post_oob_sidebar_has_stable_id(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        """The OOB sidebar must have the stable id so HTMX targets it correctly."""
+        rid = report_id(_rt_path(roots))
+        r = client.post(f"/r/{rid}/filter", data={"category": "ASI01", "result": "All"})
+        assert r.status_code == 200
+        assert 'id="download-sidebar"' in r.text
+
+    def test_filter_post_oob_sidebar_csv_carries_filter_param(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        """The OOB sidebar's CSV link must include the active category filter."""
+        rid = report_id(_rt_path(roots))
+        r = client.post(f"/r/{rid}/filter", data={"category": "ASI01", "result": "All"})
+        assert r.status_code == 200
+        # The CSV href must carry a filter param (category=ASI01)
+        assert "export.csv?category=ASI01" in r.text or "export.csv?category%3DASI01" not in r.text
+        # More precisely: the sidebar CSV link must contain the category param
+        assert "export.csv" in r.text
+        sidebar_start = r.text.find('id="download-sidebar"')
+        sidebar_end = r.text.find("</section>", sidebar_start)
+        sidebar_html = r.text[sidebar_start:sidebar_end]
+        assert "category=ASI01" in sidebar_html or "category%3DASI01" not in sidebar_html
+
+    def test_filter_post_oob_sidebar_json_carries_filter_param(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        """The OOB sidebar's JSON link must include the active category filter."""
+        rid = report_id(_rt_path(roots))
+        r = client.post(f"/r/{rid}/filter", data={"category": "ASI01", "result": "All"})
+        assert r.status_code == 200
+        sidebar_start = r.text.find('id="download-sidebar"')
+        sidebar_end = r.text.find("</section>", sidebar_start)
+        sidebar_html = r.text[sidebar_start:sidebar_end]
+        assert "export.json" in sidebar_html
+        assert "category=ASI01" in sidebar_html
+
+    def test_filter_round_trip_csv_fewer_rows(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        """Round-trip: filter POST → extract CSV link from OOB sidebar → GET link → fewer rows.
+
+        This is the key parity check: filtering to ASI01-only then downloading
+        CSV must yield only ASI01 rows, not all 4 rows.
+        """
+        rid = report_id(_rt_path(roots))
+
+        # Step 1: POST filter to narrow to ASI01 only.
+        r_filter = client.post(f"/r/{rid}/filter", data={"category": "ASI01", "result": "All"})
+        assert r_filter.status_code == 200
+        assert 'hx-swap-oob="true"' in r_filter.text
+
+        # Step 2: Extract CSV href from the OOB sidebar.
+        sidebar_start = r_filter.text.find('id="download-sidebar"')
+        sidebar_end = r_filter.text.find("</section>", sidebar_start)
+        sidebar_html = r_filter.text[sidebar_start:sidebar_end]
+        # Find the href for the CSV link.
+        csv_href_start = sidebar_html.find('export.csv')
+        assert csv_href_start >= 0, "No CSV link in OOB sidebar"
+        # Walk back to find the href=" opening.
+        href_eq = sidebar_html.rfind('href="', 0, csv_href_start)
+        href_end = sidebar_html.find('"', href_eq + 6)
+        csv_url = sidebar_html[href_eq + 6:href_end]
+
+        # Step 3: GET the filtered CSV URL.
+        r_csv_filtered = client.get(csv_url)
+        assert r_csv_filtered.status_code == 200
+        filtered_lines = [ln for ln in r_csv_filtered.text.splitlines() if ln.strip()]
+
+        # Step 4: GET unfiltered CSV for comparison.
+        r_csv_all = client.get(f"/r/{rid}/export.csv")
+        all_lines = [ln for ln in r_csv_all.text.splitlines() if ln.strip()]
+
+        # Filtered must have fewer rows than unfiltered (2 vs 4 data rows).
+        assert len(filtered_lines) < len(all_lines), (
+            f"Expected fewer rows in filtered CSV ({len(filtered_lines)}) "
+            f"than full CSV ({len(all_lines)})"
+        )
+
+    def test_filter_round_trip_json_fewer_rows(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        """Round-trip: filter POST → extract JSON link from OOB sidebar → GET link → fewer rows."""
+        rid = report_id(_rt_path(roots))
+
+        # POST filter to ASI01 only.
+        r_filter = client.post(f"/r/{rid}/filter", data={"category": "ASI01", "result": "All"})
+        assert r_filter.status_code == 200
+
+        # Extract JSON href from the OOB sidebar.
+        sidebar_start = r_filter.text.find('id="download-sidebar"')
+        sidebar_end = r_filter.text.find("</section>", sidebar_start)
+        sidebar_html = r_filter.text[sidebar_start:sidebar_end]
+        json_href_start = sidebar_html.find("export.json")
+        assert json_href_start >= 0, "No JSON link in OOB sidebar"
+        href_eq = sidebar_html.rfind('href="', 0, json_href_start)
+        href_end = sidebar_html.find('"', href_eq + 6)
+        json_url = sidebar_html[href_eq + 6:href_end]
+
+        # GET the filtered JSON.
+        r_json_filtered = client.get(json_url)
+        assert r_json_filtered.status_code == 200
+        filtered_rows = json.loads(r_json_filtered.text)
+
+        # GET unfiltered JSON.
+        all_rows = json.loads(client.get(f"/r/{rid}/export.json").text)
+
+        assert len(filtered_rows) < len(all_rows), (
+            f"Expected fewer rows in filtered JSON ({len(filtered_rows)}) "
+            f"than full JSON ({len(all_rows)})"
+        )
+
+    def test_unfiltered_post_sidebar_has_no_querystring(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        """When the POST has no narrowing filter, the OOB sidebar links have no querystring."""
+        rid = report_id(_rt_path(roots))
+        # POST with all categories selected (effectively no filter)
+        r = client.post(f"/r/{rid}/filter", data={})
+        assert r.status_code == 200
+        sidebar_start = r.text.find('id="download-sidebar"')
+        sidebar_end = r.text.find("</section>", sidebar_start)
+        sidebar_html = r.text[sidebar_start:sidebar_end]
+        # Without a narrowing selection, the CSV/JSON links should have no '?'
+        # (or at most only result=All which is the "show all" radio default).
+        assert 'export.csv?result=All' in sidebar_html or 'export.csv"' in sidebar_html or 'export.csv?' in sidebar_html

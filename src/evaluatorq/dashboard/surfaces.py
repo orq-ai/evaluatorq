@@ -53,6 +53,8 @@ def _redteam_adapter() -> SurfaceAdapter:
         """Build CSV/JSON row dicts from filtered RedTeamResult objects.
 
         Parity: redteam/ui/dashboard.py:1754-1771 (table_rows construction).
+        Note: this is a deliberate 10-column summary shape (more consumable
+        than full model_dump); the old Streamlit JSON used model_dump verbatim.
         """
         rows: list[dict[str, Any]] = []
         for r in filtered:

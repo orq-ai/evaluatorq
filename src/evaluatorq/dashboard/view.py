@@ -16,6 +16,7 @@ combines a re-rendered body and a re-rendered form into the HTMX swap target.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from urllib.parse import urlencode
 
 from fasthtml.common import Script
 
@@ -238,36 +239,64 @@ def report_view_with_filters(
     return f'<section class="report-view">{swap}</section>'
 
 
+_DOWNLOAD_SIDEBAR_ID = 'download-sidebar'
+
+
 def download_sidebar(
     rid: str,
     surface: str,
     *,
+    selections: dict[str, list[str]] | None = None,
     filter_qs: str = '',
     has_markdown: bool = False,
     has_csv: bool = False,
     has_json: bool = True,
+    oob: bool = False,
 ) -> str:
     """Render the download links sidebar for a report page.
 
-    Generates a ``<section class="download-sidebar">`` containing links for
-    the available export formats for *surface*.  CSV/JSON links carry the
-    active filter query-string so the downloaded data reflects the currently
-    filtered set.
+    Generates a ``<section id="download-sidebar" class="download-sidebar">``
+    containing links for the available export formats for *surface*.  CSV/JSON
+    links carry the active filter query-string so the downloaded data reflects
+    the currently filtered set.
+
+    The sidebar has a stable ``id`` (``"download-sidebar"``) so it can be
+    targeted by HTMX out-of-band swaps after filter POSTs.
 
     Args:
         rid:          Report ID (URL-safe).
         surface:      Surface key (``'redteam'`` | ``'sim'``).
-        filter_qs:    Active filter query-string (e.g. ``"result=Vulnerable"``).
-                      Empty string → no filter suffix (full report).
+        selections:   Active filter selections as ``dict[str, list[str]]``.
+                      When provided, takes precedence over *filter_qs*.
+        filter_qs:    Legacy: active filter query-string
+                      (e.g. ``"result=Vulnerable"``).  Ignored when
+                      *selections* is given.  Empty string → no filter suffix.
         has_markdown: Whether to include a Markdown download link.
         has_csv:      Whether to include a CSV download link.
         has_json:     Whether to include a JSON download link.
+        oob:          When ``True``, add ``hx-swap-oob="true"`` so HTMX
+                      replaces the sidebar in-place without it being inside
+                      the primary swap target.
 
     Returns:
         An HTML ``<section>`` fragment.
     """
     safe_rid = esc(rid)
-    qs = f'?{filter_qs}' if filter_qs else ''
+
+    # Build the query-string from selections (multi-value) using urlencode so
+    # that & separators are NOT HTML-escaped.  Only the rid path segment is
+    # escaped via esc().  The legacy filter_qs fallback is kept for callers
+    # that still pass a raw string.
+    if selections:
+        # Flatten dict[str, list[str]] → list of (key, val) pairs for urlencode.
+        pairs: list[tuple[str, str]] = [
+            (k, v) for k, vals in selections.items() for v in vals
+        ]
+        qs = f'?{urlencode(pairs)}' if pairs else ''
+    else:
+        qs = f'?{filter_qs}' if filter_qs else ''
+
+    oob_attr = ' hx-swap-oob="true"' if oob else ''
 
     links: list[str] = [
         f'<a class="download-link" href="/r/{safe_rid}/export.html">HTML</a>',
@@ -275,12 +304,15 @@ def download_sidebar(
     if has_markdown:
         links.append(f'<a class="download-link" href="/r/{safe_rid}/export.md">Markdown</a>')
     if has_csv:
-        links.append(f'<a class="download-link" href="/r/{safe_rid}/export.csv{esc(qs)}">CSV</a>')
+        links.append(f'<a class="download-link" href="/r/{safe_rid}/export.csv{qs}">CSV</a>')
     if has_json:
-        links.append(f'<a class="download-link" href="/r/{safe_rid}/export.json{esc(qs)}">JSON</a>')
+        links.append(f'<a class="download-link" href="/r/{safe_rid}/export.json{qs}">JSON</a>')
 
     inner = '\n'.join(links)
-    return f'<section class="download-sidebar"><h3 class="download-title">Downloads</h3>{inner}</section>'
+    return (
+        f'<section id="{_DOWNLOAD_SIDEBAR_ID}" class="download-sidebar"{oob_attr}>'
+        f'<h3 class="download-title">Downloads</h3>{inner}</section>'
+    )
 
 
 def sim_interactive_panels(rid: str, entries: list[dict]) -> str:
