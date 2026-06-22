@@ -1024,6 +1024,30 @@ def _dominant_framework(results: list[RedTeamResult]) -> Framework | None:
     return None
 
 
+def rebuild_filtered_report(
+    report: RedTeamReport,
+    filtered_results: list[RedTeamResult],
+) -> RedTeamReport:
+    """Return a copy of *report* with results replaced by *filtered_results*.
+
+    Re-derives ``results``, ``summary``, ``total_results``, and
+    ``categories_tested`` from *filtered_results*.  Every other field
+    (``version``, ``created_at``, ``description``, ``pipeline``,
+    ``framework``, ``tested_agents``, ``agent_contexts``,
+    ``focus_area_recommendations``, ``token_usage_summary``,
+    ``duration_seconds``, ``pipeline_warnings``, ``experiment_url``)
+    carries through unchanged.
+    """
+    return report.model_copy(
+        update={
+            'results': filtered_results,
+            'summary': compute_report_summary(filtered_results),
+            'total_results': len(filtered_results),
+            'categories_tested': sorted({r.attack.category for r in filtered_results}),
+        }
+    )
+
+
 def merge_reports(
     *reports: RedTeamReport,
     description: str | None = None,
