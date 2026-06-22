@@ -63,6 +63,21 @@ def test_render_embed_emits_div_and_view_registry():
     assert 'data-vega-for' in html
 
 
+def test_render_embed_escapes_script_close():
+    # A data value containing </script> must not break out of the JSON island.
+    spec = {
+        'mark': 'bar',
+        'data': {'values': [{'a': '</script><script>alert(1)</script>', 'b': 1}]},
+        'encoding': {
+            'x': {'field': 'a', 'type': 'nominal'},
+            'y': {'field': 'b', 'type': 'quantitative'},
+        },
+    }
+    html = render_embed(spec, 'c1')
+    assert '</script><script>alert(1)' not in html
+    assert '<\\/script>' in html
+
+
 # ---------------------------------------------------------------------------
 # A2: spec builder tests
 # ---------------------------------------------------------------------------

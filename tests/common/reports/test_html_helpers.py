@@ -158,6 +158,19 @@ def test_render_heatmap_absent_cell_is_neutral():
     assert '—' in out
 
 
+def test_render_heatmap_absent_cell_default_fmt_is_not_negative_percent():
+    """With the default value_fmt, an absent cell renders '—', never '-100%'."""
+    out = h.render_heatmap(
+        x_labels=['c1'],
+        y_labels=['r1'],
+        cells=[[-1.0]],
+        scale=ORQ_SCALE_GOOD_BAD,
+        title='t',
+    )
+    assert '-100%' not in out
+    assert '—' in out
+
+
 def test_render_heatmap_safety_flag_applies():
     """Safety cells must still render (the SVG red stroke is in the Vega spec)."""
     out = h.render_heatmap(
