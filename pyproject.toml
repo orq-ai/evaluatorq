@@ -176,14 +176,14 @@ dependencies = [
   pydantic-ai = [ "pydantic-ai-slim[openai]>=1.0.0" ]
   crewai = [ "crewai>=0.70.0; python_version >= '3.11'" ]
   redteam = [
-  "openai>=1.0.0,<3.0.0",
+  "openai>=1.92.0,<3.0.0",
   "huggingface-hub>=0.20.0",
   "streamlit>=1.30.0",
   "plotly>=5.18.0",
   "watchdog>=4.0.0"
 ]
   simulation = [
-  "openai>=1.0.0,<3.0.0",
+  "openai>=1.92.0,<3.0.0",
   "orq-ai-sdk>=4.4.7",
   "streamlit>=1.30.0",
   "plotly>=5.18.0",
