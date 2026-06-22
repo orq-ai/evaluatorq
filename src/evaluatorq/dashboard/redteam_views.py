@@ -20,6 +20,7 @@ from __future__ import annotations
 import operator
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote as _quote
 
 from loguru import logger
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
@@ -169,9 +170,12 @@ def _select_buttons(
     parts: list[str] = [f'<div class="rt-view-selector" id="{esc(container_id)}">']
     for opt in options:
         active_class = " rt-view-selector-active" if opt == selected else ""
-        # Build the URL with this option selected, preserving extra params
+        # Build the URL with this option selected, preserving extra params.
+        # Use urllib.parse.quote for query-param values so spaces/ampersands
+        # in option strings produce valid URLs.  esc() (html.escape) is kept
+        # only for HTML-attribute / text contexts.
         sep = "&" if extra_params else ""
-        url = f"{hx_url}?{param_name}={esc(opt)}{sep}{extra_params}"
+        url = f"{hx_url}?{param_name}={_quote(str(opt), safe='')}{sep}{extra_params}"
         lbl = labels.get(opt, opt)
         parts.append(
             f'<button class="rt-view-selector-btn{active_class}"'
@@ -212,8 +216,9 @@ def render_breakdown(
     stack_labels: dict[str, str] = {"none": "None", **_DIM_LABELS}
     cur_stack = stack_by or "none"
 
-    # Selector: group_by buttons; preserve stack_by as extra param
-    extra_stack = f"stack_by={esc(cur_stack)}" if cur_stack != "none" else ""
+    # Selector: group_by buttons; preserve stack_by as extra param.
+    # URL-encode the preserved values so dimension names with special chars are safe.
+    extra_stack = f"stack_by={_quote(str(cur_stack), safe='')}" if cur_stack != "none" else ""
     group_selector = _select_buttons(
         options=dimensions,
         labels=_DIM_LABELS,
@@ -223,7 +228,7 @@ def render_breakdown(
         extra_params=extra_stack,
         container_id=container_id,
     )
-    extra_group = f"group_by={esc(group_by)}"
+    extra_group = f"group_by={_quote(str(group_by), safe='')}"
     stack_selector = _select_buttons(
         options=stack_options,
         labels=stack_labels,
@@ -329,14 +334,25 @@ def _build_breakdown_chart(
         # Build series: (stack_value, [asr_per_dim_in_dim_order])
         row_by_gs: dict[tuple[str, str], dict[str, Any]] = {(row["dimension"], row["stack"]): row for row in stacked_rows}
         series: list[tuple[str, list[float]]] = []
+        # Build per-series/per-label n= text labels to match Streamlit parity
+        # (ref: redteam/ui/dashboard.py:1413 labels each stacked segment "n=<count>").
+        stacked_value_labels: list[list[str]] = []
         for sv in stack_vals:
-            sv_vals = [row_by_gs.get((d, sv), {"asr": 0.0})["asr"] for d in dim_order]
+            sv_vals: list[float] = []
+            sv_texts: list[str] = []
+            for d in dim_order:
+                row = row_by_gs.get((d, sv), {"asr": 0.0, "n": 0})
+                sv_vals.append(row["asr"])
+                n = row["n"]
+                sv_texts.append(f"n={n}" if n else "")
             series.append((sv, sv_vals))
+            stacked_value_labels.append(sv_texts)
 
         spec = vl_stacked_bar(
             labels=dim_order,
             series=series,
             x_title="ASR (%)",
+            value_labels=stacked_value_labels,
         )
 
     return render_embed(spec, chart_id)
@@ -701,13 +717,13 @@ def render_disagreement(
 
     base_url = f"/r/{esc(rid)}/view/disagreement"
 
-    # Agent-pair selectors
+    # Agent-pair selectors — URL-encode agent keys inside extra_params too.
     selector_a = _agent_select(
         agents=agents,
         selected=agent_a,
         param_name="a",
         hx_url=base_url,
-        extra_params=f"b={esc(agent_b)}&page=1",
+        extra_params=f"b={_quote(str(agent_b), safe='')}&page=1",
         container_id=container_id,
         label="Agent A",
     )
@@ -716,7 +732,7 @@ def render_disagreement(
         selected=agent_b,
         param_name="b",
         hx_url=base_url,
-        extra_params=f"a={esc(agent_a)}&page=1",
+        extra_params=f"a={_quote(str(agent_a), safe='')}&page=1",
         container_id=container_id,
         label="Agent B",
     )
@@ -758,8 +774,8 @@ def render_disagreement(
     # Pagination controls
     prev_disabled = ' disabled' if page <= 1 else ''
     next_disabled = ' disabled' if page >= total_pages else ''
-    prev_url = f"{base_url}?a={esc(agent_a)}&b={esc(agent_b)}&page={page - 1}"
-    next_url = f"{base_url}?a={esc(agent_a)}&b={esc(agent_b)}&page={page + 1}"
+    prev_url = f"{base_url}?a={_quote(str(agent_a), safe='')}&b={_quote(str(agent_b), safe='')}&page={page - 1}"
+    next_url = f"{base_url}?a={_quote(str(agent_a), safe='')}&b={_quote(str(agent_b), safe='')}&page={page + 1}"
 
     pagination_html = (
         f'<div class="rt-dis-pagination">'
@@ -820,7 +836,9 @@ def _agent_select(
     parts = [f'<div class="rt-dis-agent-select"><label class="rt-breakdown-label">{esc(label)}</label>']
     for ag in agents:
         active_class = " rt-view-selector-active" if ag == selected else ""
-        url = f"{hx_url}?{param_name}={esc(ag)}&{extra_params}"
+        # URL-encode the agent key so keys containing spaces or special chars
+        # produce valid query strings; Starlette auto-decodes on the way in.
+        url = f"{hx_url}?{param_name}={_quote(str(ag), safe='')}&{extra_params}"
         parts.append(
             f'<button class="rt-view-selector-btn{active_class}"'
             f' hx-get="{url}"'
