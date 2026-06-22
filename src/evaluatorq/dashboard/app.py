@@ -25,11 +25,37 @@ from __future__ import annotations
 
 # ---------------------------------------------------------------------------
 # Starlette 1.3.x compatibility shim for FastHTML 0.12.x
-# FastHTML passes on_startup/on_shutdown kwargs that Starlette 1.3 dropped.
+# FastHTML passes on_startup/on_shutdown kwargs that Starlette 1.3 dropped (it
+# now wants a single ``lifespan``). The shim is a process-global class patch, so
+# it must be SEMANTICS-PRESERVING: rather than dropping on_startup/on_shutdown
+# (which would silently lobotomize any OTHER Starlette app constructed in the
+# same interpreter), it translates them into a lifespan that still runs them.
 # ---------------------------------------------------------------------------
+import contextlib
+
 import starlette.applications as _starlette_app
 
 _orig_starlette_init = _starlette_app.Starlette.__init__
+
+
+def _lifespan_from_handlers(on_startup, on_shutdown):
+    """Fold Starlette's removed on_startup/on_shutdown lists into a lifespan."""
+
+    @contextlib.asynccontextmanager
+    async def _lifespan(_app):
+        for handler in on_startup or ():
+            result = handler()
+            if result is not None:
+                await result
+        try:
+            yield
+        finally:
+            for handler in on_shutdown or ():
+                result = handler()
+                if result is not None:
+                    await result
+
+    return _lifespan
 
 
 def _starlette_compat_init(  # type: ignore[override]
@@ -43,6 +69,11 @@ def _starlette_compat_init(  # type: ignore[override]
     on_shutdown: object = None,
     **kw: object,
 ) -> None:
+    # Preserve startup/shutdown handlers by folding them into a lifespan,
+    # instead of discarding them. Only synthesize when no explicit lifespan
+    # was given (Starlette forbids passing both).
+    if lifespan is None and (on_startup or on_shutdown):
+        lifespan = _lifespan_from_handlers(on_startup, on_shutdown)  # type: ignore[arg-type]
     _orig_starlette_init(
         self,
         debug=debug,  # type: ignore[arg-type]
