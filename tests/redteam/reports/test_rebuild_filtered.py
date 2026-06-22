@@ -60,6 +60,23 @@ def _make_report(results: list[RedTeamResult], tested_agents: list[str]) -> RedT
     )
 
 
+def test_noop_filter_reproduces_summary_and_sections():
+    """Rebuilding with ALL results yields the same summary + section kinds."""
+    results = [
+        _make_result(category='ASI01', passed=True),
+        _make_result(category='ASI01', passed=False),
+        _make_result(category='LLM01', passed=None),
+    ]
+    report = _make_report(results, tested_agents=['agent-a'])
+
+    rebuilt = rebuild_filtered_report(report, report.results)
+
+    assert rebuilt.summary.model_dump() == report.summary.model_dump()
+    assert rebuilt.total_results == report.total_results
+    assert rebuilt.categories_tested == report.categories_tested
+    assert [s.kind for s in build_report_sections(rebuilt)] == [s.kind for s in build_report_sections(report)]
+
+
 def test_empty_filter_returns_empty_report() -> None:
     """Filtering to zero results yields an empty but valid report."""
     results = [
