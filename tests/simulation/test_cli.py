@@ -369,88 +369,33 @@ def test_runs_skips_malformed(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# ui command
+# ui command  (FastHTML launcher — thin alias for sim runs dir)
 # ---------------------------------------------------------------------------
 
 
-def _write_run_file(path: Path, name: str = "r") -> None:
-    path.write_text(
-        json.dumps(
-            {
-                "run_name": name,
-                "created_at": "2026-01-01T00:00:00+00:00",
-                "mode": "run",
-                "target_kind": "openai_model",
-                "evaluator_names": [],
-                "total_results": 0,
-                "scorer_averages": {},
-                "results": [],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-
-def test_ui_latest_resolves_most_recent(tmp_path: Path) -> None:
+def test_ui_calls_serve_with_sim_runs_dir(tmp_path: Path) -> None:
+    """sim ui delegates straight to dashboard.launch.serve with the sim-runs dir."""
     runs_dir = tmp_path / "sim-runs"
-    runs_dir.mkdir()
-    older = runs_dir / "a_20260101-000000.json"
-    newer = runs_dir / "b_20260102-000000.json"
-    _write_run_file(older)
-    _write_run_file(newer)
-    import os
-
-    os.utime(older, (1, 1))
-    os.utime(newer, (2, 2))
-
     with (
         patch("evaluatorq.simulation.cli._get_sim_runs_dir", return_value=runs_dir),
-        patch("evaluatorq.common.ui.launch.launch_streamlit") as launch,
+        patch("evaluatorq.dashboard.launch.serve") as mock_serve,
     ):
-        result = runner.invoke(app, ["ui", "--latest"])
-
-    assert result.exit_code == 0
-    assert launch.call_args.args[1] == newer.resolve()
-
-
-def test_ui_no_runs_errors(tmp_path: Path) -> None:
-    with patch("evaluatorq.simulation.cli._get_sim_runs_dir", return_value=tmp_path / "empty"):
         result = runner.invoke(app, ["ui"])
-    assert result.exit_code == 1
-    assert "No runs found" in result.output
 
-
-def test_ui_explicit_path(tmp_path: Path) -> None:
-    run_file = tmp_path / "run.json"
-    _write_run_file(run_file)
-    with (
-        patch("evaluatorq.simulation.cli._get_sim_runs_dir", return_value=tmp_path / "sim-runs"),
-        patch("evaluatorq.common.ui.launch.launch_streamlit") as launch,
-    ):
-        result = runner.invoke(app, ["ui", str(run_file)])
     assert result.exit_code == 0
-    assert launch.call_args.args[1] == run_file.resolve()
+    mock_serve.assert_called_once_with([runs_dir], host="127.0.0.1", port=8080)
 
 
-def test_ui_bare_filename_fallback(tmp_path: Path) -> None:
+def test_ui_accepts_custom_host_and_port(tmp_path: Path) -> None:
     runs_dir = tmp_path / "sim-runs"
-    runs_dir.mkdir()
-    run_file = runs_dir / "my-run.json"
-    _write_run_file(run_file)
     with (
         patch("evaluatorq.simulation.cli._get_sim_runs_dir", return_value=runs_dir),
-        patch("evaluatorq.common.ui.launch.launch_streamlit") as launch,
+        patch("evaluatorq.dashboard.launch.serve") as mock_serve,
     ):
-        result = runner.invoke(app, ["ui", "my-run.json"])
+        result = runner.invoke(app, ["ui", "--host", "0.0.0.0", "--port", "9090"])
+
     assert result.exit_code == 0
-    assert launch.call_args.args[1] == run_file
-
-
-def test_ui_missing_path_errors(tmp_path: Path) -> None:
-    with patch("evaluatorq.simulation.cli._get_sim_runs_dir", return_value=tmp_path / "sim-runs"):
-        result = runner.invoke(app, ["ui", str(tmp_path / "nope.json")])
-    assert result.exit_code == 1
-    assert "does not exist" in result.output
+    mock_serve.assert_called_once_with([runs_dir], host="0.0.0.0", port=9090)
 
 
 # ---------------------------------------------------------------------------

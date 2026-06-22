@@ -494,59 +494,20 @@ def run(
 
 @app.command()
 def ui(
-    report_path: Annotated[
-        Path | None,
-        typer.Argument(
-            help="Path to report JSON file or directory. Omit to use the latest run."
-        ),
-    ] = None,
-    latest: Annotated[  # noqa: FBT002
-        bool,
-        typer.Option("--latest", "-l", help="Open the most recent auto-saved run."),
-    ] = False,
-    port: Annotated[
-        int,
-        typer.Option(help="Port for the Streamlit server."),
-    ] = 8501,
     host: Annotated[
         str,
-        typer.Option(help="Host to bind the Streamlit server to."),
-    ] = "localhost",
+        typer.Option(help="Host to bind the dashboard server to."),
+    ] = "127.0.0.1",
+    port: Annotated[
+        int,
+        typer.Option(help="Port for the dashboard server."),
+    ] = 8080,
 ) -> None:
-    """Launch the interactive Streamlit dashboard for a red team report."""
+    """Launch the FastHTML dashboard scoped to red team runs."""
+    from evaluatorq.dashboard.launch import serve
     from evaluatorq.redteam.runner import get_runs_dir
 
-    if report_path is None or latest:
-        # Find the most recent auto-saved run
-        runs_dir = get_runs_dir()
-        if runs_dir.exists():
-            run_files = sorted(
-                runs_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True
-            )
-            if run_files:
-                report_path = run_files[0]
-                typer.echo(f"Opening latest run: {report_path.name}")
-        if report_path is None:
-            typer.echo(
-                "No runs found. Run `eq redteam run` first, or pass a report path.",
-                err=True,
-            )
-            raise typer.Exit(code=1)
-
-    report_path = report_path.resolve()
-    if not report_path.exists():
-        # Check if it's a filename from the runs directory
-        candidate = get_runs_dir() / report_path.name
-        if candidate.exists():
-            report_path = candidate
-        else:
-            typer.echo(f"Error: {report_path} does not exist.", err=True)
-            raise typer.Exit(code=1)
-
-    from evaluatorq.common.ui.launch import launch_streamlit
-
-    dashboard_script = Path(__file__).parent / "ui" / "dashboard.py"
-    launch_streamlit(dashboard_script, report_path, port=port, host=host, extra="redteam")
+    serve([get_runs_dir()], host=host, port=port)
 
 
 @app.command()
