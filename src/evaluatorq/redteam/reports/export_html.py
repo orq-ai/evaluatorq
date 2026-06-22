@@ -483,7 +483,7 @@ def _render_delivery_breakdown_html(section: ReportSection) -> str:
 
 
 def _render_error_bar_chart(errors_by_type: dict[str, int]) -> str:
-    """Render a simple inline bar chart of error counts by type (no Plotly needed)."""
+    """Render a simple inline bar chart of error counts by type, built from raw HTML."""
     if not errors_by_type:
         return ''
 
@@ -1125,8 +1125,8 @@ def _render_agent_comparison_html(section: ReportSection) -> str:
     Produces:
     - KPI cards (one per agent) showing total attacks, vulnerabilities, and ASR.
     - An HTML heatmap table (vulnerability x agent, color-coded by ASR%).
-    - A grouped bar chart of ASR by vulnerability per agent (Plotly SVG when
-      available, plain table fallback otherwise).
+    - A grouped bar chart of ASR by vulnerability per agent (Vega-Lite SVG via
+      vl-convert when available, plain table fallback otherwise).
     """
     data = section.data
     agents: list[str] = data.get('agents', [])

@@ -13,6 +13,7 @@ vl-convert-python is not installed.
 
 from __future__ import annotations
 
+import functools
 import html as _html
 import json
 from typing import Any
@@ -41,14 +42,19 @@ ORQ_VL_CONFIG: dict[str, Any] = {
 }
 
 
+@functools.lru_cache(maxsize=1)
 def vl_available() -> bool:
-    """Return True if vl-convert-python is importable at runtime."""
+    """Return True if vl-convert-python is importable at runtime (cached)."""
     try:
         import vl_convert  # noqa: F401
 
         return True
     except ImportError:
         return False
+
+
+# Warn at most once per process when charts are silently omitted for a missing dep.
+_VL_UNAVAILABLE_WARNED = False
 
 
 def _finalize(spec: dict[str, Any]) -> dict[str, Any]:
@@ -68,7 +74,10 @@ def render_svg(spec: dict[str, Any]) -> str:
     if not spec:
         return ''
     if not vl_available():
-        logger.warning('vl-convert unavailable; chart omitted from report.')
+        global _VL_UNAVAILABLE_WARNED
+        if not _VL_UNAVAILABLE_WARNED:
+            logger.warning('vl-convert-python not installed; charts omitted from reports.')
+            _VL_UNAVAILABLE_WARNED = True
         return ''
     try:
         import vl_convert as vlc
@@ -84,14 +93,17 @@ def render_embed(spec: dict[str, Any], dom_id: str) -> str:
 
     The fragment contains:
     - A ``<div>`` with *dom_id* as its ``id``.
-    - A ``<script>`` that registers the spec on ``window.__orqVegaViews`` so a
-      single page-level loader can drive all charts with one ``vegaEmbed`` call.
+    - A ``<script>`` that immediately calls ``vegaEmbed`` if the library is on the
+      page, and registers the resulting view on ``window.__orqVegaViews[dom_id]``
+      for external access (e.g. teardown).
 
     Returns ``''`` when *spec* is empty.
     """
     if not spec:
         return ''
-    spec_json = json.dumps(_finalize(spec))
+    # Escape ``</`` so a data value containing ``</script>`` cannot break out of
+    # the inline JSON island (json.dumps does not do this).
+    spec_json = json.dumps(_finalize(spec)).replace('</', '<\\/')
     safe = _html.escape(dom_id, quote=True)
     return (
         f'<div id="{safe}" class="vega-chart"></div>'
@@ -130,8 +142,8 @@ def vl_bar_h(
         {
             'label': label,
             'value': v,
-            'text': value_labels[i] if value_labels else f'{v:g}',
-            'fill': colors[i] if colors else color,
+            'text': (value_labels[i] if i < len(value_labels) else f'{v:g}') if value_labels else f'{v:g}',
+            'fill': (colors[i] if i < len(colors) else color) if colors else color,
         }
         for i, (label, v) in enumerate(zip(labels, values, strict=False))
     ]

@@ -1,12 +1,13 @@
 """HTML formatting helpers shared across report renderers.
 
 Brand colors, the parameterized CSS loader, and small HTML primitives
-(``esc``, ``html_table``, ``pct``, ``truncate``) live here. All chart helpers
-(``scale_color``, ``svg_donut``, ``svg_bar``, ``render_heatmap``,
-``render_histogram``, ``render_line_chart``, ``render_sparkline``,
-``render_donut_chart``, ``render_horizontal_bar_chart``, ``kpi_cards``,
-``status_badge``) build Vega-Lite specs rendered to SVG via vl-convert.
-Charts degrade to ``''`` when ``vl-convert-python`` is not installed.
+(``esc``, ``html_table``, ``pct``, ``truncate``, ``kpi_cards``,
+``status_badge``) live here. The chart helpers (``svg_donut``, ``svg_bar``,
+``render_heatmap``, ``render_histogram``, ``render_line_chart``,
+``render_sparkline``, ``render_donut_chart``, ``render_horizontal_bar_chart``)
+build Vega-Lite specs rendered to SVG via vl-convert (``scale_color`` computes
+the per-cell heatmap colors). Charts degrade to ``''`` when
+``vl-convert-python`` is not installed.
 """
 
 from __future__ import annotations
@@ -201,7 +202,7 @@ def _rgb_to_hex(rgb: tuple[float, float, float]) -> str:
 
 
 def scale_color(value: float, scale: list[list[float | str]]) -> str:
-    """Interpolate a hex color for ``value`` in [0, 1] along a Plotly-style scale.
+    """Interpolate a hex color for ``value`` in [0, 1] along a ``[[pos, hex], ...]`` scale.
 
     ``scale`` is a list of ``[position, hex]`` stops sorted by position.
     Values outside [0, 1] are clamped to the scale endpoints.
@@ -316,10 +317,14 @@ def render_heatmap(
         text_row: list[str] = []
         for xi in range(len(x_labels)):
             value = float(cells[yi][xi])
-            # value < 0 marks an absent cell -> neutral grey sentinel, not the scale.
-            color = '#e4e2df' if value < 0 else scale_color(value, scale)
-            color_row.append(color)
-            text_row.append(value_fmt(value))
+            # value < 0 marks an absent cell -> neutral grey sentinel + em-dash text,
+            # not the scale color and not a misleading value_fmt(-1.0) == '-100%'.
+            if value < 0:
+                color_row.append('#e4e2df')
+                text_row.append('—')
+            else:
+                color_row.append(scale_color(value, scale))
+                text_row.append(value_fmt(value))
         cell_colors.append(color_row)
         cell_texts.append(text_row)
     safety: list[list[bool]] | None = None
