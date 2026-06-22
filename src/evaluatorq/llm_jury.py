@@ -2,13 +2,21 @@ from __future__ import annotations
 
 import json
 import typing
-from typing import Any
+from typing import Any, Literal
 
+from loguru import logger
 from pydantic import BaseModel, Field
 
-from evaluatorq.common.judge import JudgeOutcome
-from evaluatorq.common.jury import JuryDeliberation, Prediction, append_jury_summary
-from evaluatorq.types import DataPoint, EvaluationResult, Output
+from evaluatorq.common.judge import JudgeOutcome, run_judge
+from evaluatorq.common.jury import JuryDeliberation, Prediction, VerdictKind, append_jury_summary, run_jury
+from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.contracts import LLMCallConfig
+from evaluatorq.types import DataPoint, EvaluationResult, Evaluator, Output, ScorerParameter
+
+try:
+    from evaluatorq.common.jury import TieBreak
+except ImportError:  # pragma: no cover - TieBreak is a type alias
+    TieBreak = Any  # type: ignore
 
 DEFAULT_JUDGE_MODEL = "openai/gpt-5.5"
 
@@ -187,3 +195,124 @@ def _to_evaluation_result(
         "pass": passed,
         "token_usage": deliberation.token_usage,
     })
+
+
+# ---------------------------------------------------------------------------
+# Panel resolution helper
+# ---------------------------------------------------------------------------
+
+
+def _resolve_panel(judges: list[str] | None, model: str | None) -> list[str]:
+    """Resolve a judge panel from either a list of judges or a single model shorthand.
+
+    Raises:
+        ValueError: If both ``judges`` and ``model`` are set simultaneously.
+    """
+    if judges and model:
+        raise ValueError("Pass either `judges` or `model`, not both.")
+    if model:
+        return [model]
+    if judges:
+        return list(judges)
+    return [DEFAULT_JUDGE_MODEL]
+
+
+# ---------------------------------------------------------------------------
+# Public factory
+# ---------------------------------------------------------------------------
+
+
+# ponytail: strict_panel reserved for parity; generic jury has no self-judge guard yet
+def llm_jury(
+    *,
+    name: str,
+    criteria: str | None = None,
+    prompt: str | None = None,
+    system_prompt: str | None = None,
+    judges: list[str] | None = None,
+    model: str | None = None,
+    repetitions: int = 1,
+    replacement_judges: list[str] | None = None,
+    min_successful_judges: int = 1,
+    strict_panel: bool = False,
+    verdict_kind: Literal["categorical", "numeric"] = "categorical",
+    labels: list[str] | None = None,
+    passing_labels: list[str] | None = None,
+    numeric_aggregation: Literal["mean", "median"] = "mean",
+    threshold: float = 0.5,
+    score_range: tuple[float, float] = (0.0, 1.0),
+    tie_break: Any = None,
+    structured_output: bool = True,
+    temperature: float | None = None,
+    max_tokens: int = 8000,
+    timeout_ms: int = 90000,
+    extra_kwargs: dict[str, Any] | None = None,
+    client: Any = None,
+) -> Evaluator:
+    """Build a jury (or single-judge) LLM evaluator for ``evaluators=[...]``."""
+    # --- validation (fail fast) ---
+    if bool(criteria) == bool(prompt):
+        raise ValueError("Pass exactly one of `criteria` or `prompt`.")
+    if verdict_kind != "categorical" and (labels or passing_labels):
+        raise ValueError("`labels`/`passing_labels` are only valid for verdict_kind='categorical'.")
+    if labels and passing_labels and not set(passing_labels) <= set(labels):
+        raise ValueError("`passing_labels` must be a subset of `labels`.")
+    if verdict_kind == "numeric" and not (score_range[0] <= threshold <= score_range[1]):
+        raise ValueError(
+            f"threshold ({threshold}) must lie within score_range {score_range}."
+        )
+    panel = _resolve_panel(judges, model)
+    deduped = list(dict.fromkeys([*panel]))
+    if not (1 <= min_successful_judges <= len(deduped)):
+        raise ValueError(
+            f"min_successful_judges ({min_successful_judges}) must be between 1 and "
+            f"the deduplicated panel size ({len(deduped)})."
+        )
+    if temperature == 0.0:
+        logger.warning(
+            "temperature=0.0: reasoning models (o-series, gpt-5, …) often score worse "
+            "at temp 0. Leave it unset unless you know your model benefits."
+        )
+
+    resolved_client = client if client is not None else resolve_llm_client(config_client=None).client
+    verdict_model = _build_verdict_model(verdict_kind, labels, score_range)
+    template = prompt if prompt is not None else _default_template(criteria or "")
+    sys_prompt = system_prompt if system_prompt is not None else _default_system_prompt(
+        verdict_kind, labels, score_range
+    )
+    vkind = VerdictKind.NUMERIC if verdict_kind == "numeric" else VerdictKind.CATEGORICAL
+
+    async def scorer(params: ScorerParameter) -> EvaluationResult:
+        data = params["data"]
+        output = params["output"]
+        replacements = _build_replacements(data, output, criteria or "")
+
+        async def judge_fn(judge_model: str) -> Prediction:
+            cfg = LLMCallConfig(
+                model=judge_model, max_tokens=max_tokens, timeout_ms=timeout_ms,
+                extra_kwargs=extra_kwargs or {},
+            )
+            outcome = await run_judge(
+                client=resolved_client, model=judge_model, cfg=cfg,
+                prompt_template=template, replacements=replacements,
+                system_prompt=sys_prompt, response_model=verdict_model,
+                structured_output=structured_output, temperature=temperature,
+            )
+            return _outcome_to_prediction(outcome)
+
+        deliberation = await run_jury(
+            judge_fn=judge_fn,
+            panel=panel,
+            repetitions=repetitions,
+            replacement_judges=replacement_judges or [],
+            min_successful_judges=min_successful_judges,
+            verdict_kind=vkind,
+            numeric_aggregation=numeric_aggregation,
+            tie_break=tie_break,
+        )
+        return _to_evaluation_result(
+            deliberation, verdict_kind=verdict_kind, passing_labels=passing_labels,
+            threshold=threshold, score_range=score_range,
+        )
+
+    return {"name": name, "scorer": scorer}
