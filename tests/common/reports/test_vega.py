@@ -1,6 +1,7 @@
 # tests/common/reports/test_vega.py
 from __future__ import annotations
 
+from evaluatorq.common.reports.palette import COLORS
 from evaluatorq.common.reports.vega import (
     ORQ_VL_CONFIG,
     render_embed,
@@ -13,10 +14,8 @@ from evaluatorq.common.reports.vega import (
     vl_histogram,
     vl_line,
     vl_sparkline,
+    vl_stacked_bar,
 )
-from evaluatorq.common.reports.palette import COLORS
-from evaluatorq.common.reports.html_helpers import scale_color
-from evaluatorq.common.reports.palette import ORQ_SCALE_HEAT
 
 
 def test_vl_available_true():
@@ -232,3 +231,72 @@ def test_sparkline_basic():
 
 def test_sparkline_empty():
     assert vl_sparkline(values=[]) == {}
+
+
+# ---------------------------------------------------------------------------
+# vl_stacked_bar tests (Task 7 addition)
+# ---------------------------------------------------------------------------
+
+
+def test_stacked_bar_empty_labels():
+    assert vl_stacked_bar(labels=[], series=[('a', [1.0])], x_title='X') == {}
+
+
+def test_stacked_bar_empty_series():
+    assert vl_stacked_bar(labels=['x'], series=[], x_title='X') == {}
+
+
+def test_stacked_bar_layered_spec():
+    """Non-empty spec must be a layered chart (bar + text)."""
+    spec = vl_stacked_bar(
+        labels=['cat1', 'cat2'],
+        series=[('series-a', [10.0, 20.0]), ('series-b', [30.0, 40.0])],
+        x_title='ASR (%)',
+    )
+    assert spec  # not empty
+    assert 'layer' in spec
+
+
+def test_stacked_bar_contains_stack_zero():
+    """Quantitative x encoding must carry stack='zero'."""
+    spec = vl_stacked_bar(
+        labels=['cat1'],
+        series=[('a', [5.0]), ('b', [10.0])],
+        x_title='ASR (%)',
+    )
+    # stack: zero on the x encoding in the base
+    x_enc = spec.get('encoding', {}).get('x', {})
+    assert x_enc.get('stack') == 'zero'
+
+
+def test_stacked_bar_series_field_in_encoding():
+    """Color encoding must use the 'series' field so qualitative palette applies."""
+    spec = vl_stacked_bar(
+        labels=['cat1', 'cat2'],
+        series=[('alpha', [1.0, 2.0]), ('beta', [3.0, 4.0])],
+        x_title='ASR (%)',
+    )
+    color_enc = spec.get('encoding', {}).get('color', {})
+    assert color_enc.get('field') == 'series'
+
+
+def test_stacked_bar_renders_svg():
+    """render_svg must produce an SVG for a valid stacked bar spec."""
+    spec = vl_stacked_bar(
+        labels=['cat1', 'cat2'],
+        series=[('a', [10.0, 20.0]), ('b', [30.0, 5.0])],
+        x_title='ASR (%)',
+    )
+    svg = render_svg(spec)
+    assert '<svg' in svg
+
+
+def test_stacked_bar_data_contains_all_series_rows():
+    """Data values must include one row per (label x series) combination."""
+    labels = ['x', 'y', 'z']
+    series = [('s1', [1.0, 2.0, 3.0]), ('s2', [4.0, 5.0, 6.0])]
+    spec = vl_stacked_bar(labels=labels, series=series, x_title='Count')
+    rows = spec['data']['values']
+    assert len(rows) == len(labels) * len(series)
+    series_names = {r['series'] for r in rows}
+    assert series_names == {'s1', 's2'}
