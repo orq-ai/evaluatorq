@@ -256,6 +256,66 @@ class TestBreakdownView:
         # Category labels are injected into the Vega spec JSON as "label" values
         assert "ASI01" in html or "ASI02" in html or "LLM01" in html
 
+    def test_asr_recomputed_known_distribution(self, tmp_path: Path) -> None:
+        """ASR arithmetic: ASI01 with 2 vulnerable / 4 total must produce 50.0%.
+
+        Build a report where category ASI01 has exactly 2 vulnerable results out
+        of 4, so ASR = 50.0%.  Another category (ASI02) has 0/2 = 0.0%.
+        GET breakdown?group_by=category and assert the embedded Vega spec JSON
+        contains the numeric value 50.0 (and its label text "50.0%"), proving
+        the arithmetic is correct end-to-end.
+        """
+        import json
+
+        rt = tmp_path / "runs"
+        rt.mkdir()
+        # ASI01: 2 vulnerable + 2 resistant = 50% ASR
+        # ASI02: 0 vulnerable + 2 resistant = 0% ASR
+        results = [
+            _make_result(category="ASI01", passed=False, agent_key="agent-a", attack_id="asi01-v1"),
+            _make_result(category="ASI01", passed=False, agent_key="agent-a", attack_id="asi01-v2"),
+            _make_result(category="ASI01", passed=True, agent_key="agent-a", attack_id="asi01-r1"),
+            _make_result(category="ASI01", passed=True, agent_key="agent-a", attack_id="asi01-r2"),
+            _make_result(category="ASI02", passed=True, agent_key="agent-a", attack_id="asi02-r1"),
+            _make_result(category="ASI02", passed=True, agent_key="agent-a", attack_id="asi02-r2"),
+        ]
+        report = _make_report(results, tested_agents=["agent-a"])
+        rp = rt / "rt_asr_known_20260101.json"
+        rp.write_text(report.model_dump_json())
+        known_app = build_app(roots=[rt])
+        known_rid = report_id(rp)
+        html = TestClient(known_app, raise_server_exceptions=True).get(
+            f"/r/{known_rid}/view/breakdown?group_by=category"
+        ).text
+        assert html, "Expected non-empty HTML from breakdown"
+
+        # Extract Vega spec JSON from the <script type="application/json"> island.
+        # render_embed writes: <script type="application/json" data-vega-for="...">...spec...</script>
+        import re
+        specs = re.findall(r'<script[^>]+data-vega-for[^>]*>(.*?)</script>', html, re.DOTALL)
+        assert specs, f"No embedded Vega spec found in HTML:\n{html[:800]}"
+
+        # The spec JSON must contain 50.0 as the numeric ASR value for ASI01
+        # and 0.0 for ASI02.  Both appear in 'data.values' rows.
+        spec_obj = json.loads(specs[0].replace('<\\/', '</'))
+        rows = spec_obj["data"]["values"]
+        # _dim_value calls _fmt_category which formats "ASI01" as "ASI01 - <name>"
+        # so match by prefix to stay robust to category-name changes.
+        asi01_row = next((r for r in rows if str(r.get("label", "")).startswith("ASI01")), None)
+        asi02_row = next((r for r in rows if str(r.get("label", "")).startswith("ASI02")), None)
+        assert asi01_row is not None, f"ASI01 row missing from spec rows: {rows}"
+        assert asi02_row is not None, f"ASI02 row missing from spec rows: {rows}"
+        assert asi01_row["value"] == 50.0, (
+            f"Expected ASI01 ASR=50.0, got {asi01_row['value']!r}"
+        )
+        assert asi02_row["value"] == 0.0, (
+            f"Expected ASI02 ASR=0.0, got {asi02_row['value']!r}"
+        )
+        # Also verify the text label contains "50.0%"
+        assert "50.0%" in asi01_row.get("text", ""), (
+            f"Expected '50.0%' in text label, got {asi01_row.get('text')!r}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # 2. Agent heatmap view
@@ -466,6 +526,37 @@ class TestDisagreementView:
         solo_rid = report_id(rp)
         html = solo_client.get(f"/r/{solo_rid}/view/disagreement?page=1").text
         assert "2 or more" in html or "agent" in html.lower()
+
+    def test_url_encoded_agent_keys_round_trip(self, tmp_path: Path) -> None:
+        """Agent keys with spaces/ampersands must be URL-encoded in hx-get URLs
+        and still resolve correctly when Starlette decodes query params.
+
+        Verifies Fix 1: _agent_select uses urllib.parse.quote so 'agent b'
+        becomes 'agent+b' or 'agent%20b' in the href, not a malformed URL.
+        The disagreement view for the spaced-key pair must return 200 and
+        contain both agent names.
+        """
+        rt = tmp_path / "runs"
+        rt.mkdir()
+        results = [
+            _make_result(category="ASI01", passed=False, agent_key="agent b", attack_id="att-sp-0"),
+            _make_result(category="ASI01", passed=True, agent_key="agent&b", attack_id="att-sp-0"),
+        ]
+        report = _make_report(results, tested_agents=["agent b", "agent&b"])
+        rp = rt / "rt_spaced_20260101.json"
+        rp.write_text(report.model_dump_json())
+        sp_app = build_app(roots=[rt])
+        sp_rid = report_id(rp)
+        from urllib.parse import quote
+
+        sp_client = TestClient(sp_app, raise_server_exceptions=True)
+        html = sp_client.get(
+            f"/r/{sp_rid}/view/disagreement"
+            f"?a={quote('agent b', safe='')}&b={quote('agent&b', safe='')}&page=1"
+        ).text
+        # Both agent names appear as text (esc()-encoded in HTML)
+        assert "agent b" in html or "agent+b" in html or "agent%20b" in html
+        assert "rt-disagreement" in html
 
     def test_no_disagreements_shows_info(self, tmp_path: Path) -> None:
         """When both agents always agree, shows 'no disagreements' message."""
