@@ -62,11 +62,13 @@ from starlette.responses import Response
 
 from evaluatorq.dashboard import library
 from evaluatorq.dashboard.filters import FILTERS
+from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.surfaces import ADAPTERS
 from evaluatorq.dashboard.view import (
     filter_fragment,
     index_body,
+    redteam_interactive_panels,
     render_filter_form,
     report_broken,
     report_not_found,
@@ -142,6 +144,9 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
             body_with_filters = report_view_with_filters(rid, surface or "", body_html, form_html)
         else:
             body_with_filters = f'<section class="report-view">{body_html}</section>'
+        # Append interactive panels for redteam reports.
+        if surface == "redteam":
+            body_with_filters = body_with_filters + redteam_interactive_panels(rid)
         html = page(name, body_with_filters, active_surface=surface)
         return NotStr(html)
 
@@ -226,5 +231,10 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
                 media_type="text/plain",
             )
         return Response(adapter.export(report_obj), media_type="text/html")
+
+    # ------------------------------------------------------------------
+    # Routes: GET /r/{rid}/view/*  — redteam interactive fragment views
+    # ------------------------------------------------------------------
+    register_redteam_view_routes(app, roots)
 
     return app

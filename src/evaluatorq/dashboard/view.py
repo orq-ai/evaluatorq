@@ -238,3 +238,84 @@ def report_view_with_filters(
     """
     swap = filter_fragment(rid, surface, body_html, form_html)
     return f'<section class="report-view">{swap}</section>'
+
+
+def redteam_interactive_panels(rid: str) -> str:
+    """Render the interactive dashboard panels section for a redteam report.
+
+    Returns an HTML ``<section>`` containing four HTMX-wired panels that load
+    their content via ``GET /r/{rid}/view/*`` routes:
+
+    - Interactive breakdown (group_by x stack_by bar chart)
+    - Agent heatmap (dimension selector — multi-agent reports only)
+    - Conversation viewer (per-row transcript drill-down)
+    - Disagreement viewer (agent-pair side-by-side — multi-agent only)
+
+    Each panel contains a placeholder ``<div>`` with ``hx-get`` + ``hx-trigger``
+    ``load`` so the content is fetched on page load without blocking the initial
+    render.  Task 6's ``dashboard.js`` re-embeds ``render_embed`` Vega charts
+    after each HTMX swap.
+    """
+    safe_rid = esc(rid)
+
+    breakdown = (
+        f'<div class="rt-panel" id="panel-breakdown">'
+        f'<h2 class="rt-panel-title">Interactive Breakdown</h2>'
+        f'<div'
+        f' hx-get="/r/{safe_rid}/view/breakdown?group_by=vulnerability&amp;stack_by=none"'
+        f' hx-trigger="load"'
+        f' hx-target="this"'
+        f' hx-swap="outerHTML">'
+        f'<p class="rt-panel-loading">Loading breakdown…</p>'
+        f'</div>'
+        f'</div>'
+    )
+
+    heatmap = (
+        f'<div class="rt-panel" id="panel-agent-heatmap">'
+        f'<h2 class="rt-panel-title">Agent Heatmap</h2>'
+        f'<div'
+        f' hx-get="/r/{safe_rid}/view/agent-heatmap?dim=vulnerability"'
+        f' hx-trigger="load"'
+        f' hx-target="this"'
+        f' hx-swap="outerHTML">'
+        f'<p class="rt-panel-loading">Loading heatmap…</p>'
+        f'</div>'
+        f'</div>'
+    )
+
+    conversation = (
+        f'<div class="rt-panel" id="panel-conversation">'
+        f'<h2 class="rt-panel-title">Conversation Viewer</h2>'
+        f'<div'
+        f' hx-get="/r/{safe_rid}/view/conversation?idx=0"'
+        f' hx-trigger="load"'
+        f' hx-target="this"'
+        f' hx-swap="outerHTML">'
+        f'<p class="rt-panel-loading">Loading conversation viewer…</p>'
+        f'</div>'
+        f'</div>'
+    )
+
+    disagreement = (
+        f'<div class="rt-panel" id="panel-disagreement">'
+        f'<h2 class="rt-panel-title">Disagreement Viewer</h2>'
+        f'<div'
+        f' hx-get="/r/{safe_rid}/view/disagreement?page=1"'
+        f' hx-trigger="load"'
+        f' hx-target="this"'
+        f' hx-swap="outerHTML">'
+        f'<p class="rt-panel-loading">Loading disagreement viewer…</p>'
+        f'</div>'
+        f'</div>'
+    )
+
+    return (
+        f'<section class="rt-interactive-panels">'
+        f'<h1 class="rt-panels-title">Interactive Analysis</h1>'
+        f'{breakdown}'
+        f'{heatmap}'
+        f'{conversation}'
+        f'{disagreement}'
+        f'</section>'
+    )

@@ -390,6 +390,70 @@ def vl_grouped_bar(
     }
 
 
+def vl_stacked_bar(
+    *,
+    labels: list[str],
+    series: list[tuple[str, list[float]]],
+    x_title: str,
+    value_labels: list[list[str]] | None = None,
+) -> dict[str, Any]:
+    """Stacked horizontal bar chart for multi-series breakdowns.
+
+    Mirrors :func:`vl_bar_h`'s layered shape but adds a ``color``/series field
+    and ``stack='zero'`` on the quantitative x axis.  The qualitative palette
+    from ``ORQ_VL_CONFIG`` handles series colours automatically.
+
+    ``labels`` are the y-axis categories (rows).
+    ``series`` is a list of ``(series_name, values_per_label)`` tuples.
+    ``value_labels`` is optional per-series/per-label text labels; omitted
+    labels fall back to the numeric value.
+
+    Returns ``{}`` when *labels* or *series* is empty.
+    """
+    if not labels or not series:
+        return {}
+
+    rows: list[dict[str, Any]] = []
+    for si, (name, vals) in enumerate(series):
+        for li, label in enumerate(labels):
+            v = vals[li] if li < len(vals) else 0.0
+            text: str
+            if value_labels is not None and si < len(value_labels) and li < len(value_labels[si]):
+                text = value_labels[si][li]
+            else:
+                text = f'{v:g}'
+            rows.append({'label': label, 'series': name, 'value': v, 'text': text})
+
+    base: dict[str, Any] = {
+        'data': {'values': rows},
+        'encoding': {
+            'y': {'field': 'label', 'type': 'nominal', 'sort': None, 'title': None},
+            'x': {
+                'field': 'value',
+                'type': 'quantitative',
+                'title': x_title,
+                'stack': 'zero',
+            },
+            'color': {'field': 'series', 'type': 'nominal', 'legend': {'title': None}},
+        },
+        'width': 420,
+        'height': {'step': 24},
+    }
+    bar_layer: dict[str, Any] = {
+        'mark': {'type': 'bar'},
+    }
+    text_layer: dict[str, Any] = {
+        'mark': {'type': 'text', 'align': 'left', 'dx': 4, 'color': COLORS['ink_700']},
+        'encoding': {
+            'y': {'field': 'label', 'type': 'nominal', 'sort': None},
+            'x': {'field': 'value', 'type': 'quantitative', 'stack': 'zero'},
+            'text': {'field': 'text', 'type': 'nominal'},
+            'color': {'value': COLORS['ink_700']},
+        },
+    }
+    return {**base, 'layer': [bar_layer, text_layer]}
+
+
 def vl_sparkline(*, values: list[float]) -> dict[str, Any]:
     """Bare mini bar chart for inline use in table rows."""
     if not values:
