@@ -1,7 +1,7 @@
-"""Vercel AI SDK integration for evaluatorq red teaming.
+"""Vercel AI SDK integration for evaluatorq simulation and red teaming.
 
 Provides a wrapper to use any Vercel AI SDK agent (served over HTTP)
-as a red teaming target.
+as an AgentTarget (usable in simulation and red teaming).
 """
 
 from .target import VercelAISdkTarget

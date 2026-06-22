@@ -42,6 +42,10 @@ logger = logging.getLogger(__name__)  # noqa: RUF067
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import AgentTarget, LLMCallConfig, TokenUsage
+    from evaluatorq.integrations.callable_integration import CallableTarget
+    from evaluatorq.integrations.langgraph_integration import LangGraphTarget
+    from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget
+    from evaluatorq.integrations.vercel_ai_sdk_integration import VercelAISdkTarget
     from evaluatorq.openresponses.target import OrqResponsesTarget
     from evaluatorq.simulation.adapters import (
         from_chat_completions,
@@ -177,6 +181,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
         'SimulationCancelledError',
     ),
     'AgentTarget': ('evaluatorq.contracts', 'AgentTarget'),
+    'CallableTarget': ('evaluatorq.integrations.callable_integration', 'CallableTarget'),
+    'LangGraphTarget': ('evaluatorq.integrations.langgraph_integration', 'LangGraphTarget'),
+    'OpenAIAgentTarget': ('evaluatorq.integrations.openai_agents_integration', 'OpenAIAgentTarget'),
+    'VercelAISdkTarget': ('evaluatorq.integrations.vercel_ai_sdk_integration', 'VercelAISdkTarget'),
     'DEFAULT_MODEL': ('evaluatorq.simulation.types', 'DEFAULT_MODEL'),
     'CommunicationStyle': ('evaluatorq.simulation.types', 'CommunicationStyle'),
     'ConversationStrategy': (
@@ -257,6 +265,7 @@ __all__ = [
     'AgentConfig',
     'AgentTarget',
     'BaseAgent',
+    'CallableTarget',
     'CommunicationStyle',
     'ConversationStrategy',
     'Criterion',
@@ -273,8 +282,10 @@ __all__ = [
     'Judgment',
     # Config (re-exported for user convenience)
     'LLMCallConfig',
+    'LangGraphTarget',
     'Message',
     # Target implementations
+    'OpenAIAgentTarget',
     'OrqResponsesTarget',
     'Persona',
     'PersonaGenerator',
@@ -299,6 +310,7 @@ __all__ = [
     'TokenUsage',
     'TurnMetrics',
     'UserSimulatorAgent',
+    'VercelAISdkTarget',
     'apply_perturbation',
     'apply_perturbations_batch',
     'apply_random_perturbation',
