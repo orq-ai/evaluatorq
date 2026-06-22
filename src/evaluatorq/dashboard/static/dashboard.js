@@ -26,6 +26,17 @@
 (function () {
   window.__orqVegaViews = window.__orqVegaViews || {};
 
+  // htmx 2.x executes inline <script> in swapped content by default, which
+  // would run render_embed()'s per-chart IIFE AND this afterSwap handler on the
+  // same node -> double-embed + detached-view leak. Disable inline-script
+  // execution so this handler is the single embed path for swapped fragments.
+  // (Charts in the initial full-page load still embed via their IIFE, executed
+  // normally by the browser, not by htmx.)
+  document.addEventListener('htmx:config', function () {
+    if (window.htmx) window.htmx.config.allowScriptTags = false;
+  });
+  if (window.htmx) window.htmx.config.allowScriptTags = false;
+
   document.body.addEventListener('htmx:afterSwap', function (evt) {
     var scope = evt.detail.target;
     if (!scope || !window.vegaEmbed) return;

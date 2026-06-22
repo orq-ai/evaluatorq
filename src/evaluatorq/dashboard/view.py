@@ -63,7 +63,7 @@ def index_body(cards: list[ReportCard]) -> str:
             f'<article class="report-card-item">'
             f'<a href="/r/{card.id}" class="report-card-link">'
             f'<div class="report-card-surface">{surface_label}</div>'
-            f'<div class="report-card-name">{card.name}{error_badge}</div>'
+            f'<div class="report-card-name">{esc(card.name)}{error_badge}</div>'
             f'<div class="report-card-meta">{created}'
             f'{" · " + card.headline if card.headline else ""}'
             f'</div>'

@@ -8,7 +8,7 @@ fragments look identical to their standalone exports.
 
 from __future__ import annotations
 
-from evaluatorq.common.reports import load_css, load_logo_svg
+from evaluatorq.common.reports import esc, load_css, load_logo_svg
 from evaluatorq.dashboard.surfaces import ADAPTERS
 from evaluatorq.dashboard.view import head_assets
 
@@ -68,7 +68,7 @@ def page(
         "<head>\n"
         '<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
-        f"<title>{title} — evaluatorq</title>\n"
+        f"<title>{esc(title)} — evaluatorq</title>\n"
         f"<style>\n{css}\n</style>\n"
         f"{scripts}\n"
         "</head>\n"
