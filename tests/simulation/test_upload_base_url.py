@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any
+import sys
 from unittest.mock import AsyncMock, patch
 
 import pytest
+
+import evaluatorq.evaluatorq  # noqa: F401  populate sys.modules; the package attr is shadowed by the function
+
+# evaluatorq.evaluatorq resolves to the re-exported function, not the submodule,
+# so patch the module object directly (3.10's mock can't resolve the shadowed path).
+_EQ_MOD = sys.modules["evaluatorq.evaluatorq"]
 
 from evaluatorq.simulation.types import (
     CommunicationStyle,
@@ -46,7 +52,7 @@ async def test_sim_forwards_base_url_from_env(monkeypatch: pytest.MonkeyPatch) -
     from evaluatorq.simulation.api import simulate
 
     spy = AsyncMock(return_value=[])
-    with patch("evaluatorq.evaluatorq.evaluatorq", spy):
+    with patch.object(_EQ_MOD, "evaluatorq", spy):
         await simulate(
             target=_target,
             datapoints=[_make_datapoint()],

@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import os
+import sys
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+import evaluatorq.evaluatorq  # noqa: F401  populate sys.modules; the package attr is shadowed by the function
 from evaluatorq import DataPoint, evaluatorq
+
+# evaluatorq.evaluatorq resolves to the re-exported function, not the submodule,
+# so patch the module object directly (3.10's mock can't resolve the shadowed path).
+_EQ_MOD = sys.modules["evaluatorq.evaluatorq"]
 
 
 async def _job(data: DataPoint, _row: int) -> dict[str, Any]:
@@ -20,7 +26,7 @@ async def test_forwards_base_url_to_upload() -> None:
     spy = AsyncMock(return_value=None)
     with (
         patch.dict(os.environ, {"ORQ_API_KEY": "test"}),
-        patch("evaluatorq.evaluatorq.send_results_to_orq", spy),
+        patch.object(_EQ_MOD, "send_results_to_orq", spy),
     ):
         await evaluatorq(
             "run",
@@ -39,7 +45,7 @@ async def test_base_url_defaults_to_none() -> None:
     spy = AsyncMock(return_value=None)
     with (
         patch.dict(os.environ, {"ORQ_API_KEY": "test"}),
-        patch("evaluatorq.evaluatorq.send_results_to_orq", spy),
+        patch.object(_EQ_MOD, "send_results_to_orq", spy),
     ):
         await evaluatorq(
             "run",
