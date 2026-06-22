@@ -112,7 +112,7 @@ def render_embed(spec: dict[str, Any], dom_id: str) -> str:
         f'var el=document.getElementById("{safe}");'
         f'var s=JSON.parse(document.querySelector(\'[data-vega-for="{safe}"]\').textContent);'
         f'if(window.vegaEmbed&&el){{vegaEmbed(el,s,{{actions:false}}).then(function(r){{'
-        f'window.__orqVegaViews["{safe}"]=r.view;}});}}}})();</script>'
+        f'window.__orqVegaViews["{safe}"]=r;}});}}}})();</script>'
     )
 
 

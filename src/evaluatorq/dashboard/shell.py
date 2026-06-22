@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from evaluatorq.common.reports import load_css, load_logo_svg
 from evaluatorq.dashboard.surfaces import ADAPTERS
+from evaluatorq.dashboard.view import head_assets
 
 # Surfaces that have a nav entry, in display order.
 _NAV_SURFACES: list[tuple[str, str]] = [
@@ -58,6 +59,8 @@ def page(
     css = load_css()
     header = _header_html()
     nav = _nav_html(active_surface)
+    # Render vendored JS script tags from head_assets() as plain HTML strings.
+    scripts = "".join(str(a) for a in head_assets())
 
     return (
         "<!DOCTYPE html>\n"
@@ -67,6 +70,7 @@ def page(
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f"<title>{title} — evaluatorq</title>\n"
         f"<style>\n{css}\n</style>\n"
+        f"{scripts}\n"
         "</head>\n"
         "<body>\n"
         f"{header}\n"
