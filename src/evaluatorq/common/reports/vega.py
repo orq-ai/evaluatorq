@@ -94,10 +94,11 @@ def render_embed(spec: dict[str, Any], dom_id: str) -> str:
     spec_json = json.dumps(_finalize(spec))
     safe = _html.escape(dom_id, quote=True)
     return (
-        f'<div id="{safe}" class="vega-chart"></div>\n'
-        f'<script>\n'
-        f'(window.__orqVegaViews = window.__orqVegaViews || []).push('
-        f'{{id: "{safe}", spec: {spec_json}}}'
-        f');\n'
-        f'</script>'
+        f'<div id="{safe}" class="vega-chart"></div>'
+        f'<script type="application/json" data-vega-for="{safe}">{spec_json}</script>'
+        '<script>(function(){window.__orqVegaViews=window.__orqVegaViews||{};'
+        f'var el=document.getElementById("{safe}");'
+        f'var s=JSON.parse(document.querySelector(\'[data-vega-for="{safe}"]\').textContent);'
+        f'if(window.vegaEmbed&&el){{vegaEmbed(el,s,{{actions:false}}).then(function(r){{'
+        f'window.__orqVegaViews["{safe}"]=r.view;}});}}}})();</script>'
     )
