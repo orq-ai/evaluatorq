@@ -33,11 +33,11 @@ def head_assets() -> tuple[Script, ...]:
     the correct ``<script src>`` markup without requiring the files to exist.
     """
     return (
-        Script(src="/static/htmx.min.js"),
-        Script(src="/static/vega.min.js"),
-        Script(src="/static/vega-lite.min.js"),
-        Script(src="/static/vega-embed.min.js"),
-        Script(src="/static/dashboard.js"),
+        Script(src='/static/htmx.min.js'),
+        Script(src='/static/vega.min.js'),
+        Script(src='/static/vega-lite.min.js'),
+        Script(src='/static/vega-embed.min.js'),
+        Script(src='/static/dashboard.js'),
     )
 
 
@@ -50,29 +50,27 @@ def index_body(cards: list[ReportCard]) -> str:
     if not cards:
         return (
             '<section class="report-index">'
-            "<h1>Reports</h1>"
+            '<h1>Reports</h1>'
             '<p class="empty-state">No reports found. Run a red team or simulation job to generate reports.</p>'
-            "</section>"
+            '</section>'
         )
 
     items: list[str] = []
     for card in cards:
-        error_badge = (
-            f'<span class="card-error" title="{esc(card.error)}">error</span>' if card.error else ""
-        )
-        created = card.created_at.strftime("%Y-%m-%d %H:%M") if card.created_at else ""
-        surface_label = card.surface.replace("redteam", "Red Team").replace("sim", "Simulation")
+        error_badge = f'<span class="card-error" title="{esc(card.error)}">error</span>' if card.error else ''
+        created = card.created_at.strftime('%Y-%m-%d %H:%M') if card.created_at else ''
+        surface_label = card.surface.replace('redteam', 'Red Team').replace('sim', 'Simulation')
         items.append(
             f'<article class="report-card-item">'
             f'<a href="/r/{card.id}" class="report-card-link">'
             f'<div class="report-card-surface">{surface_label}</div>'
             f'<div class="report-card-name">{card.name}{error_badge}</div>'
             f'<div class="report-card-meta">{created}'
-            f"{' · ' + card.headline if card.headline else ''}"
-            f"</div>"
-            f"</a>"
+            f'{" · " + card.headline if card.headline else ""}'
+            f'</div>'
+            f'</a>'
             f'<a href="/r/{card.id}/export" class="report-card-export" title="Download standalone HTML">export</a>'
-            f"</article>"
+            f'</article>'
         )
 
     grid = f'<div class="report-grid">{"".join(items)}</div>'
@@ -83,10 +81,10 @@ def report_not_found(rid: str) -> str:
     """Render a 404-style body fragment for an unknown report ID."""
     return (
         '<section class="report-not-found">'
-        "<h1>Report not found</h1>"
+        '<h1>Report not found</h1>'
         f'<p>No report with id <code>{esc(rid)}</code> could be located.</p>'
         '<p><a href="/">Back to reports</a></p>'
-        "</section>"
+        '</section>'
     )
 
 
@@ -94,11 +92,11 @@ def report_broken(rid: str, filename: str, detail: str) -> str:
     """Render an error page fragment for a report that sniffed OK but failed to load."""
     return (
         '<section class="report-broken">'
-        "<h1>Report could not be loaded</h1>"
+        '<h1>Report could not be loaded</h1>'
         f'<p class="report-broken-filename">File: <code>{esc(filename)}</code></p>'
         f'<p class="report-broken-detail">{esc(detail)}</p>'
         '<p><a href="/">Back to reports</a></p>'
-        "</section>"
+        '</section>'
     )
 
 
@@ -108,7 +106,7 @@ def report_broken(rid: str, filename: str, detail: str) -> str:
 
 # Dimensions that behave as a radio (single-select).  All others are
 # multiselect checkboxes.
-_RADIO_DIMS: frozenset[str] = frozenset({"result", "goal_outcome"})
+_RADIO_DIMS: frozenset[str] = frozenset({'result', 'goal_outcome'})
 
 
 def render_filter_form(
@@ -137,7 +135,7 @@ def render_filter_form(
 
     filter_def = FILTERS.get(surface)
     if filter_def is None:
-        return ""
+        return ''
 
     parts: list[str] = []
     for dim in filter_def.dimensions:
@@ -147,7 +145,7 @@ def render_filter_form(
 
         sel = selections.get(dim, [])
 
-        label = dim.replace("_", " ").title()
+        label = dim.replace('_', ' ').title()
         parts.extend([
             f'<div class="filter-group" data-dim="{esc(dim)}">',
             f'<label class="filter-label">{esc(label)}</label>',
@@ -178,7 +176,7 @@ def render_filter_form(
 
         parts.append('</div>')
 
-    inner = "".join(parts)
+    inner = ''.join(parts)
     return (
         f'<form id="filter-form" class="filter-form"'
         f' hx-post="/r/{esc(rid)}/filter"'
@@ -238,6 +236,72 @@ def report_view_with_filters(
     """
     swap = filter_fragment(rid, surface, body_html, form_html)
     return f'<section class="report-view">{swap}</section>'
+
+
+def download_sidebar(
+    rid: str,
+    surface: str,
+    *,
+    filter_qs: str = '',
+    has_markdown: bool = False,
+    has_csv: bool = False,
+    has_json: bool = True,
+) -> str:
+    """Render the download links sidebar for a report page.
+
+    Generates a ``<section class="download-sidebar">`` containing links for
+    the available export formats for *surface*.  CSV/JSON links carry the
+    active filter query-string so the downloaded data reflects the currently
+    filtered set.
+
+    Args:
+        rid:          Report ID (URL-safe).
+        surface:      Surface key (``'redteam'`` | ``'sim'``).
+        filter_qs:    Active filter query-string (e.g. ``"result=Vulnerable"``).
+                      Empty string → no filter suffix (full report).
+        has_markdown: Whether to include a Markdown download link.
+        has_csv:      Whether to include a CSV download link.
+        has_json:     Whether to include a JSON download link.
+
+    Returns:
+        An HTML ``<section>`` fragment.
+    """
+    safe_rid = esc(rid)
+    qs = f'?{filter_qs}' if filter_qs else ''
+
+    links: list[str] = [
+        f'<a class="download-link" href="/r/{safe_rid}/export.html">HTML</a>',
+    ]
+    if has_markdown:
+        links.append(f'<a class="download-link" href="/r/{safe_rid}/export.md">Markdown</a>')
+    if has_csv:
+        links.append(f'<a class="download-link" href="/r/{safe_rid}/export.csv{esc(qs)}">CSV</a>')
+    if has_json:
+        links.append(f'<a class="download-link" href="/r/{safe_rid}/export.json{esc(qs)}">JSON</a>')
+
+    inner = '\n'.join(links)
+    return f'<section class="download-sidebar"><h3 class="download-title">Downloads</h3>{inner}</section>'
+
+
+def sim_interactive_panels(rid: str, entries: list[dict]) -> str:
+    """Render the interactive sim panels section (conversation list + transcript).
+
+    Embeds the sim row list table with HTMX-wired transcript drill-down panel.
+    Parity: Streamlit ``_render_transcripts`` (dashboard.py:316-390).
+
+    Args:
+        rid:     Report ID (URL-safe).
+        entries: Individual-results entries from the section layer.
+
+    Returns:
+        An HTML ``<section class="sim-interactive-panels">`` fragment.
+    """
+    from evaluatorq.dashboard.sim_views import render_sim_row_list
+
+    row_list = render_sim_row_list(rid, entries)
+    return (
+        f'<section class="sim-interactive-panels"><h1 class="sim-panels-title">Conversations</h1>{row_list}</section>'
+    )
 
 
 def redteam_interactive_panels(rid: str) -> str:
