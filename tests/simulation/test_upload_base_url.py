@@ -55,4 +55,5 @@ async def test_sim_forwards_base_url_from_env(monkeypatch: pytest.MonkeyPatch) -
             exit_on_failure=False,
         )
 
+    assert spy.await_args is not None
     assert spy.await_args.kwargs["_base_url"] == "https://my.staging.orq.ai"
