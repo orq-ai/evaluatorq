@@ -42,6 +42,8 @@ def test_render_embed_emits_div_and_view_registry():
             'y': {'field': 'b', 'type': 'quantitative'},
         },
     }
-    html = render_embed(spec, 'chart-1')
-    assert 'id="chart-1"' in html
-    assert '__orqVegaViews' in html
+    html = render_embed(spec, 'chart-42')
+    assert 'id="chart-42"' in html
+    assert 'vegaEmbed' in html
+    assert 'window.__orqVegaViews' in html
+    assert 'data-vega-for' in html
