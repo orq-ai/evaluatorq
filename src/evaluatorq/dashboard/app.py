@@ -57,12 +57,21 @@ from pathlib import Path
 
 from fasthtml.core import FastHTML, NotStr
 from loguru import logger
+from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import Response
 
 from evaluatorq.dashboard import library
+from evaluatorq.dashboard.filters import FILTERS
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.surfaces import ADAPTERS
-from evaluatorq.dashboard.view import index_body, report_broken, report_not_found
+from evaluatorq.dashboard.view import (
+    filter_fragment,
+    index_body,
+    render_filter_form,
+    report_broken,
+    report_not_found,
+    report_view_with_filters,
+)
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
@@ -125,8 +134,73 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
             return Response(broken_html, status_code=200, media_type="text/html")
         body_html = adapter.body(report_obj)
         name = adapter.name(report_obj)
-        html = page(name, f'<section class="report-view">{body_html}</section>', active_surface=surface)
+        # Render filter form alongside the body when a filter definition exists.
+        filter_def = FILTERS.get(surface or "")
+        if filter_def is not None:
+            opts = filter_def.options(report_obj)
+            form_html = render_filter_form(rid, surface or "", opts, {})
+            body_with_filters = report_view_with_filters(rid, surface or "", body_html, form_html)
+        else:
+            body_with_filters = f'<section class="report-view">{body_html}</section>'
+        html = page(name, body_with_filters, active_surface=surface)
         return NotStr(html)
+
+    # ------------------------------------------------------------------
+    # Route: POST /r/{rid}/filter  — HTMX filter round-trip
+    # ------------------------------------------------------------------
+    @app.post("/r/{rid}/filter")
+    async def report_filter(rid: str, req: Request) -> NotStr | Response:
+        path = library.resolve(rid, roots)
+        if path is None:
+            return Response("404 Not Found", status_code=404, media_type="text/plain")
+
+        surface, _raw = library.load_surface(path)
+        adapter = ADAPTERS.get(surface or "")
+        filter_def = FILTERS.get(surface or "")
+        if adapter is None or filter_def is None:
+            return Response("404 Not Found", status_code=404, media_type="text/plain")
+
+        try:
+            report_obj = adapter.load(path)
+        except Exception as exc:
+            logger.warning("Failed to load report for filter {}: {}", path.name, exc)
+            return Response(
+                f"Error loading report: {exc}",
+                status_code=422,
+                media_type="text/plain",
+            )
+
+        # Parse form data — build selections dict[str, list[str]]
+        form_data = await req.form()
+        selections: dict[str, list[str]] = {}
+        for key, value in form_data.multi_items():
+            selections.setdefault(key, []).append(str(value))
+
+        # Apply filters and recompute options
+        filtered = filter_def.apply(report_obj, selections)
+        new_opts = filter_def.recompute_options(report_obj, selections)
+
+        # Render body based on surface
+        if surface == "redteam":
+            from evaluatorq.redteam.reports.converters import rebuild_filtered_report
+            from evaluatorq.redteam.reports.export_html import render_report_body
+
+            rebuilt = rebuild_filtered_report(report_obj, filtered)
+            body_html = render_report_body(rebuilt)
+        else:
+            from evaluatorq.simulation.reports.export_html import (
+                render_report_body as sim_render_report_body,
+            )
+
+            body_html = sim_render_report_body(
+                filtered,
+                target=report_obj.target_kind,
+                run_date=report_obj.created_at,
+            )
+
+        form_html = render_filter_form(rid, surface or "", new_opts, selections)
+        fragment_html = filter_fragment(rid, surface or "", body_html, form_html)
+        return NotStr(fragment_html)
 
     # ------------------------------------------------------------------
     # Route: GET /r/{rid}/export  — standalone export
