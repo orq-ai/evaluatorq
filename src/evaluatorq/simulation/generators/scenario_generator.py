@@ -208,8 +208,15 @@ class ScenarioGenerator:
         context: str = "",
         num_scenarios: int = 10,
         edge_case_percentage: float = 0.3,
+        seed: str = "",
     ) -> list[Scenario]:
-        """Generate scenarios for agent testing."""
+        """Generate scenarios for agent testing.
+
+        When ``seed`` is set, every generated scenario must be built around that
+        situation (e.g. ``"disputes a refund denial"``); the LLM fills the goal,
+        context, and success/failure criteria. The intermediate tier between
+        fully-auto generation and hand-built ``Scenario`` objects.
+        """
         from evaluatorq.simulation.tracing import with_simulation_span
 
         try:
@@ -218,19 +225,33 @@ class ScenarioGenerator:
                 {
                     "orq.simulation.num_scenarios": num_scenarios,
                     "orq.simulation.model": self._model,
+                    "orq.simulation.seed": seed,
                 },
             ):
                 num_edge_cases = int(num_scenarios * edge_case_percentage)
+
+                if seed:
+                    instructions = (
+                        f"Generate {num_scenarios} scenario(s), each built around "
+                        f'this situation: "{seed}".\n'
+                        "- Fill the goal, context, starting emotion, and clear "
+                        "success/failure criteria so each scenario is coherent and "
+                        "realistic for that situation"
+                    )
+                else:
+                    instructions = (
+                        f"Generate {num_scenarios} diverse test scenarios for this agent.\n"
+                        f"- Include {num_edge_cases} edge case scenarios\n"
+                        "- Cover different emotional states and urgency levels\n"
+                        "- Include both positive and potentially problematic interactions\n"
+                        "- Each scenario should have clear success/failure criteria"
+                    )
 
                 user_prompt = f"""Agent Description: {delimit(agent_description)}
 
 Additional Context: {delimit(context or "None provided")}
 
-Generate {num_scenarios} diverse test scenarios for this agent.
-- Include {num_edge_cases} edge case scenarios
-- Cover different emotional states and urgency levels
-- Include both positive and potentially problematic interactions
-- Each scenario should have clear success/failure criteria
+{instructions}
 
 Return ONLY a JSON array, no other text."""
 
