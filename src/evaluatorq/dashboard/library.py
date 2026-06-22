@@ -76,6 +76,10 @@ def _card(path: Path) -> ReportCard | None:
         created_at = datetime.fromisoformat(str(created)) if created else datetime.now(tz=timezone.utc)
     except (TypeError, ValueError):
         created_at = datetime.now(tz=timezone.utc)
+    # Normalize naive timestamps (hand-edited / third-party JSON) to UTC so the
+    # index sort never mixes naive and aware datetimes (TypeError on compare).
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
     name = data.get('run_name') or data.get('description') or path.stem
     error = None
     if surface == 'redteam' and 'summary' not in data:
