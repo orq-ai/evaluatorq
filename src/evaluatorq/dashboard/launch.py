@@ -48,8 +48,8 @@ class _InterceptHandler(logging.Handler):
         # Walk up the stack to find the frame that actually issued the log
         # call, skipping frames that belong to the stdlib logging machinery.
         frame, depth = logging.currentframe(), 2
-        while frame.f_code.co_filename == logging.__file__:
-            frame = frame.f_back  # type: ignore[assignment]
+        while frame is not None and frame.f_code.co_filename == logging.__file__:
+            frame = frame.f_back
             depth += 1
 
         logger.opt(depth=depth, exception=record.exc_info).log(
