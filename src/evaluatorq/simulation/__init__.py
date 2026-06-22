@@ -34,6 +34,10 @@ from evaluatorq.simulation.api import (
     SimulationDroppedError,
     generate,
     generate_and_simulate,
+    generate_persona,
+    generate_personas,
+    generate_scenario,
+    generate_scenarios,
     simulate,
 )
 from evaluatorq.simulation.types import DEFAULT_MODEL
@@ -314,6 +318,10 @@ __all__ = [
     'from_orq_deployment',
     'generate',
     'generate_and_simulate',
+    'generate_persona',
+    'generate_personas',
+    'generate_scenario',
+    'generate_scenarios',
     'generate_datapoint',
     'get_all_evaluators',
     'get_evaluator',

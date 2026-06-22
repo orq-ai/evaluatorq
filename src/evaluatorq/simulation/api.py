@@ -368,6 +368,144 @@ async def generate(
 
 
 # ---------------------------------------------------------------------------
+# Seeded generation — the intermediate tier (archetype → full object)
+# ---------------------------------------------------------------------------
+
+
+async def generate_personas(
+    seeds: list[str],
+    *,
+    agent_description: str = "",
+    context: str = "",
+    sim_model: str = DEFAULT_MODEL,
+    generation_client: AsyncOpenAI | None = None,
+) -> list[Persona]:
+    """Generate one ``Persona`` per archetype seed (e.g. ``"angry customer"``).
+
+    The intermediate tier between fully-auto generation
+    (:func:`generate_and_simulate`) and hand-built ``Persona`` objects: you name
+    each archetype, the LLM fills every trait. Provider resolves via the shared
+    factory (``ORQ_API_KEY`` → ``OPENAI_API_KEY``) unless ``generation_client``
+    is injected.
+    """
+    from evaluatorq.simulation.exceptions import SimulationError
+    from evaluatorq.simulation.generators import PersonaGenerator
+
+    if not seeds:
+        raise ValueError("generate_personas requires at least one seed")
+    description = agent_description or "a general-purpose conversational assistant"
+    gen = PersonaGenerator(model=sim_model, client=generation_client)
+    try:
+        batches = await asyncio.gather(
+            *[
+                gen.generate(
+                    agent_description=description,
+                    context=context,
+                    num_personas=1,
+                    edge_case_percentage=0.0,
+                    seed=seed,
+                )
+                for seed in seeds
+            ]
+        )
+    finally:
+        await gen.close()
+    personas: list[Persona] = []
+    for seed, batch in zip(seeds, batches, strict=True):
+        if not batch:
+            raise SimulationError(f"persona generation returned nothing for seed: {seed!r}")
+        personas.append(batch[0])
+    return personas
+
+
+async def generate_persona(
+    seed: str,
+    *,
+    agent_description: str = "",
+    context: str = "",
+    sim_model: str = DEFAULT_MODEL,
+    generation_client: AsyncOpenAI | None = None,
+) -> Persona:
+    """Generate one ``Persona`` from a short archetype seed (e.g. ``"angry customer"``).
+
+    See :func:`generate_personas` for the batch form and provider resolution.
+    """
+    personas = await generate_personas(
+        [seed],
+        agent_description=agent_description,
+        context=context,
+        sim_model=sim_model,
+        generation_client=generation_client,
+    )
+    return personas[0]
+
+
+async def generate_scenarios(
+    seeds: list[str],
+    *,
+    agent_description: str = "",
+    context: str = "",
+    sim_model: str = DEFAULT_MODEL,
+    generation_client: AsyncOpenAI | None = None,
+) -> list[Scenario]:
+    """Generate one ``Scenario`` per situation seed (e.g. ``"disputes a refund denial"``).
+
+    The scenario counterpart to :func:`generate_personas`: you name each
+    situation, the LLM fills the goal, context, and success/failure criteria.
+    """
+    from evaluatorq.simulation.exceptions import SimulationError
+    from evaluatorq.simulation.generators import ScenarioGenerator
+
+    if not seeds:
+        raise ValueError("generate_scenarios requires at least one seed")
+    description = agent_description or "a general-purpose conversational assistant"
+    gen = ScenarioGenerator(model=sim_model, client=generation_client)
+    try:
+        batches = await asyncio.gather(
+            *[
+                gen.generate(
+                    agent_description=description,
+                    context=context,
+                    num_scenarios=1,
+                    edge_case_percentage=0.0,
+                    seed=seed,
+                )
+                for seed in seeds
+            ]
+        )
+    finally:
+        await gen.close()
+    scenarios: list[Scenario] = []
+    for seed, batch in zip(seeds, batches, strict=True):
+        if not batch:
+            raise SimulationError(f"scenario generation returned nothing for seed: {seed!r}")
+        scenarios.append(batch[0])
+    return scenarios
+
+
+async def generate_scenario(
+    seed: str,
+    *,
+    agent_description: str = "",
+    context: str = "",
+    sim_model: str = DEFAULT_MODEL,
+    generation_client: AsyncOpenAI | None = None,
+) -> Scenario:
+    """Generate one ``Scenario`` from a short situation seed.
+
+    See :func:`generate_scenarios` for the batch form and provider resolution.
+    """
+    scenarios = await generate_scenarios(
+        [seed],
+        agent_description=agent_description,
+        context=context,
+        sim_model=sim_model,
+        generation_client=generation_client,
+    )
+    return scenarios[0]
+
+
+# ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
 
