@@ -40,13 +40,18 @@ def head_assets() -> tuple[Script, ...]:
     )
 
 
-def index_body(cards: list[ReportCard]) -> str:
+def index_body(cards: list[ReportCard], *, active_surface: str | None = None) -> str:
     """Render the report-listing page body as an HTML fragment.
 
+    When *active_surface* is given (``'redteam'`` | ``'sim'``), only cards
+    matching that surface are shown.  Passing ``None`` (default) shows all.
+
     Returns a ``<section>`` element containing either a grid of report cards
-    or a friendly "no reports" message when *cards* is empty.
+    or a friendly "no reports" message when the (filtered) cards list is empty.
     """
-    if not cards:
+    visible = [c for c in cards if active_surface is None or c.surface == active_surface]
+
+    if not visible:
         return (
             '<section class="report-index">'
             '<h1>Reports</h1>'
@@ -55,7 +60,7 @@ def index_body(cards: list[ReportCard]) -> str:
         )
 
     items: list[str] = []
-    for card in cards:
+    for card in visible:
         error_badge = f'<span class="card-error" title="{esc(card.error)}">error</span>' if card.error else ''
         created = card.created_at.strftime('%Y-%m-%d %H:%M') if card.created_at else ''
         surface_label = card.surface.replace('redteam', 'Red Team').replace('sim', 'Simulation')

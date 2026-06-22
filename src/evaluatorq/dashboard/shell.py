@@ -25,7 +25,7 @@ def _nav_html(active_surface: str | None = None) -> str:
         if key not in ADAPTERS:
             continue
         active_cls = ' class="active"' if key == active_surface else ""
-        items.append(f'<li><a href="/"{active_cls}>{label}</a></li>')
+        items.append(f'<li><a href="/?surface={key}"{active_cls}>{label}</a></li>')
     return f'<nav aria-label="Surface navigation"><ul>{"".join(items)}</ul></nav>'
 
 
