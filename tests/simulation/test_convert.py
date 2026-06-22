@@ -1,6 +1,15 @@
 """Tests for SimulationResult → OpenResponses conversion."""
 
 from evaluatorq.contracts import TokenUsage
+from evaluatorq.openresponses.convert_models import (
+    IncompleteDetails as ORIncompleteDetails,
+)
+from evaluatorq.openresponses.convert_models import (
+    Message as ORMessage,
+)
+from evaluatorq.openresponses.convert_models import (
+    Usage as ORUsage,
+)
 from evaluatorq.simulation.convert import to_open_responses
 from evaluatorq.simulation.types import (
     Message,
@@ -192,3 +201,37 @@ class TestToOpenResponses:
         assert response["object"] == "response"
         assert response["id"].startswith("resp_")
         assert isinstance(response["created_at"], int)
+
+
+class TestTypedModelRoundTrip:
+    """RES-833: output is produced by the canonical evaluatorq.openresponses
+    typed models, so every item round-trips through them losslessly."""
+
+    def test_input_items_round_trip_through_typed_message(self):
+        response = to_open_responses(
+            _make_result(
+                messages=[
+                    Message(role="system", content="You are helpful"),
+                    Message(role="user", content="Hello"),
+                    Message(role="assistant", content="Hi!"),
+                ]
+            )
+        )
+        assert response["input"]
+        for item in response["input"]:
+            assert ORMessage.model_validate(item).model_dump(mode="json") == item
+
+    def test_output_items_round_trip_through_typed_message(self):
+        response = to_open_responses(_make_result())
+        assert response["output"]
+        for item in response["output"]:
+            assert ORMessage.model_validate(item).model_dump(mode="json") == item
+
+    def test_usage_round_trips_through_typed_usage(self):
+        response = to_open_responses(_make_result())
+        assert ORUsage.model_validate(response["usage"]).model_dump(mode="json") == response["usage"]
+
+    def test_incomplete_details_round_trip_through_typed_model(self):
+        response = to_open_responses(_make_result(terminated_by=TerminatedBy.max_turns))
+        details = response["incomplete_details"]
+        assert ORIncompleteDetails.model_validate(details).model_dump(mode="json") == details
