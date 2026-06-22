@@ -56,12 +56,13 @@ _starlette_app.Starlette.__init__ = _starlette_compat_init  # type: ignore[metho
 from pathlib import Path
 
 from fasthtml.core import FastHTML, NotStr
+from loguru import logger
 from starlette.responses import Response
 
 from evaluatorq.dashboard import library
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.surfaces import ADAPTERS
-from evaluatorq.dashboard.view import index_body, report_not_found
+from evaluatorq.dashboard.view import index_body, report_broken, report_not_found
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
@@ -112,7 +113,16 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
             not_found_html = page("Not found", report_not_found(rid))
             return Response(not_found_html, status_code=404, media_type="text/html")
 
-        report_obj = adapter.load(path)
+        try:
+            report_obj = adapter.load(path)
+        except Exception as exc:
+            logger.warning("Failed to load report {}: {}", path.name, exc)
+            broken_html = page(
+                f"Error — {path.name}",
+                report_broken(rid, path.name, str(exc)),
+                active_surface=surface,
+            )
+            return Response(broken_html, status_code=200, media_type="text/html")
         body_html = adapter.body(report_obj)
         name = adapter.name(report_obj)
         html = page(name, f'<section class="report-view">{body_html}</section>', active_surface=surface)
@@ -132,7 +142,15 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         if adapter is None:
             return Response("404 Not Found", status_code=404, media_type="text/plain")
 
-        report_obj = adapter.load(path)
+        try:
+            report_obj = adapter.load(path)
+        except Exception as exc:
+            logger.warning("Failed to load report for export {}: {}", path.name, exc)
+            return Response(
+                f"Error loading report {path.name}: {exc}",
+                status_code=422,
+                media_type="text/plain",
+            )
         return Response(adapter.export(report_obj), media_type="text/html")
 
     return app

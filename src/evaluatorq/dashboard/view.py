@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING
 
 from fasthtml.common import Script
 
+from evaluatorq.common.reports import esc
+
 if TYPE_CHECKING:
     from evaluatorq.dashboard.library import ReportCard
 
@@ -52,7 +54,7 @@ def index_body(cards: list[ReportCard]) -> str:
     items: list[str] = []
     for card in cards:
         error_badge = (
-            f'<span class="card-error" title="{card.error}">error</span>' if card.error else ""
+            f'<span class="card-error" title="{esc(card.error)}">error</span>' if card.error else ""
         )
         created = card.created_at.strftime("%Y-%m-%d %H:%M") if card.created_at else ""
         surface_label = card.surface.replace("redteam", "Red Team").replace("sim", "Simulation")
@@ -78,7 +80,19 @@ def report_not_found(rid: str) -> str:
     return (
         '<section class="report-not-found">'
         "<h1>Report not found</h1>"
-        f'<p>No report with id <code>{rid}</code> could be located.</p>'
+        f'<p>No report with id <code>{esc(rid)}</code> could be located.</p>'
+        '<p><a href="/">Back to reports</a></p>'
+        "</section>"
+    )
+
+
+def report_broken(rid: str, filename: str, detail: str) -> str:
+    """Render an error page fragment for a report that sniffed OK but failed to load."""
+    return (
+        '<section class="report-broken">'
+        "<h1>Report could not be loaded</h1>"
+        f'<p class="report-broken-filename">File: <code>{esc(filename)}</code></p>'
+        f'<p class="report-broken-detail">{esc(detail)}</p>'
         '<p><a href="/">Back to reports</a></p>'
         "</section>"
     )
