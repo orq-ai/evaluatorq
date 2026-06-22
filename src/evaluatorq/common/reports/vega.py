@@ -102,3 +102,287 @@ def render_embed(spec: dict[str, Any], dom_id: str) -> str:
         f'if(window.vegaEmbed&&el){{vegaEmbed(el,s,{{actions:false}}).then(function(r){{'
         f'window.__orqVegaViews["{safe}"]=r.view;}});}}}})();</script>'
     )
+
+
+# ---------------------------------------------------------------------------
+# Spec builders — return a Vega-Lite v5 dict, or {} when there is nothing to draw.
+# Specs carry NO title (the figcaption wrapper owns it).
+# ---------------------------------------------------------------------------
+
+
+def vl_bar_h(
+    *,
+    labels: list[str],
+    values: list[float],
+    color: str,
+    x_title: str,
+    value_labels: list[str] | None = None,
+) -> dict[str, Any]:
+    """Horizontal bar chart with an optional text-label overlay layer."""
+    if not labels:
+        return {}
+    rows = [
+        {
+            'label': label,
+            'value': v,
+            'text': value_labels[i] if value_labels else f'{v:g}',
+        }
+        for i, (label, v) in enumerate(zip(labels, values, strict=False))
+    ]
+    base: dict[str, Any] = {
+        'data': {'values': rows},
+        'encoding': {
+            'y': {'field': 'label', 'type': 'nominal', 'sort': None, 'title': None},
+            'x': {'field': 'value', 'type': 'quantitative', 'title': x_title},
+        },
+        'width': 420,
+        'height': {'step': 24},
+    }
+    bar_layer: dict[str, Any] = {
+        'mark': {'type': 'bar', 'color': color},
+        'encoding': {
+            'y': {'field': 'label', 'type': 'nominal', 'sort': None, 'title': None},
+            'x': {'field': 'value', 'type': 'quantitative', 'title': x_title},
+        },
+    }
+    text_layer: dict[str, Any] = {
+        'mark': {'type': 'text', 'align': 'left', 'dx': 4, 'color': COLORS['ink_700']},
+        'encoding': {
+            'y': {'field': 'label', 'type': 'nominal', 'sort': None},
+            'x': {'field': 'value', 'type': 'quantitative'},
+            'text': {'field': 'text', 'type': 'nominal'},
+        },
+    }
+    return {**base, 'layer': [bar_layer, text_layer]}
+
+
+def vl_donut(
+    *,
+    labels: list[str],
+    values: list[float],
+    colors: list[str],
+    center_label: str = '',
+) -> dict[str, Any]:
+    """Donut arc chart with an optional center text label."""
+    if not labels:
+        return {}
+    rows = [{'label': label, 'value': v, 'color': c} for label, v, c in zip(labels, values, colors, strict=False)]
+    arc: dict[str, Any] = {
+        'data': {'values': rows},
+        'mark': {'type': 'arc', 'innerRadius': 60, 'tooltip': True},
+        'encoding': {
+            'theta': {'field': 'value', 'type': 'quantitative'},
+            'color': {'field': 'color', 'type': 'nominal', 'scale': None, 'legend': None},
+            'order': {'field': 'value', 'type': 'quantitative', 'sort': 'descending'},
+        },
+    }
+    if not center_label:
+        return {**arc, 'width': 240, 'height': 240}
+    return {
+        'width': 240,
+        'height': 240,
+        'layer': [
+            arc,
+            {
+                'data': {'values': [{'t': center_label}]},
+                'mark': {'type': 'text', 'fontSize': 20, 'fontWeight': 'bold', 'color': COLORS['ink_700']},
+                'encoding': {'text': {'field': 't', 'type': 'nominal'}},
+            },
+        ],
+    }
+
+
+def vl_heatmap(
+    *,
+    x_labels: list[str],
+    y_labels: list[str],
+    cell_colors: list[list[str]],
+    cell_texts: list[list[str]],
+    safety_mask: list[list[bool]] | None = None,
+) -> dict[str, Any]:
+    """Heatmap with literal precomputed cell colors (color.scale=None) and optional safety highlight."""
+    if not x_labels or not y_labels:
+        return {}
+    rows: list[dict[str, Any]] = []
+    for yi, y in enumerate(y_labels):
+        for xi, x in enumerate(x_labels):
+            rows.append({
+                'x': x,
+                'y': y,
+                'fill': cell_colors[yi][xi],
+                'text': cell_texts[yi][xi],
+                'safety': bool(safety_mask and safety_mask[yi][xi]),
+            })
+    return {
+        'data': {'values': rows},
+        'layer': [
+            {
+                'mark': {'type': 'rect', 'tooltip': True},
+                'encoding': {
+                    'x': {'field': 'x', 'type': 'nominal', 'title': None},
+                    'y': {'field': 'y', 'type': 'nominal', 'title': None},
+                    'color': {'field': 'fill', 'type': 'nominal', 'scale': None, 'legend': None},
+                    'stroke': {
+                        'condition': {'test': 'datum.safety', 'value': COLORS['red_400']},
+                        'value': None,
+                    },
+                    'strokeWidth': {
+                        'condition': {'test': 'datum.safety', 'value': 3},
+                        'value': 0,
+                    },
+                },
+            },
+            {
+                'mark': {'type': 'text', 'fontSize': 11},
+                'encoding': {
+                    'x': {'field': 'x', 'type': 'nominal'},
+                    'y': {'field': 'y', 'type': 'nominal'},
+                    'text': {'field': 'text', 'type': 'nominal'},
+                },
+            },
+        ],
+        'width': 420,
+        'height': 200,
+    }
+
+
+def vl_histogram(
+    *,
+    values: list[float],
+    bins: int,
+    mean: float | None = None,
+) -> dict[str, Any]:
+    """Histogram with counts pre-computed in Python (deterministic; no dual-aggregate).
+
+    Includes a bar layer, count text labels, and an optional mean rule.
+    """
+    if not values or bins <= 0:
+        return {}
+    counts = [0] * bins
+    for v in values:
+        idx = min(bins - 1, max(0, int(float(v) * bins)))
+        counts[idx] += 1
+    bin_rows = [
+        {
+            'lo': i / bins,
+            'hi': (i + 1) / bins,
+            'mid': (i + 0.5) / bins,
+            'c': counts[i],
+        }
+        for i in range(bins)
+    ]
+    base: dict[str, Any] = {'data': {'values': bin_rows}}
+    bar: dict[str, Any] = {
+        'mark': {'type': 'bar', 'color': COLORS['teal_400'], 'tooltip': True},
+        'encoding': {
+            'x': {'field': 'lo', 'type': 'quantitative', 'title': None},
+            'x2': {'field': 'hi'},
+            'y': {'field': 'c', 'type': 'quantitative', 'title': 'Count'},
+        },
+    }
+    text: dict[str, Any] = {
+        'mark': {'type': 'text', 'dy': -4, 'color': COLORS['ink_700']},
+        'encoding': {
+            'x': {'field': 'mid', 'type': 'quantitative'},
+            'y': {'field': 'c', 'type': 'quantitative'},
+            'text': {'field': 'c', 'type': 'quantitative'},
+        },
+    }
+    layers: list[dict[str, Any]] = [bar, text]
+    if mean is not None:
+        layers.append({
+            'data': {'values': [{'m': float(mean)}]},
+            'mark': {'type': 'rule', 'strokeDash': [4, 4], 'color': COLORS['orange_300']},
+            'encoding': {'x': {'field': 'm', 'type': 'quantitative'}},
+        })
+    return {**base, 'layer': layers, 'width': 420, 'height': 200}
+
+
+def vl_line(
+    *,
+    x_labels: list[str],
+    series: list[tuple[str, list[float | None]]],
+) -> dict[str, Any]:
+    """Multi-series line chart.
+
+    Nulls are kept in the data and ``mark.invalid`` is set so Vega-Lite breaks
+    the line across gaps rather than connecting across them.  Each series gets
+    a distinct ``strokeDash`` and point ``shape`` for colour-blind accessibility.
+    """
+    if not x_labels or not series:
+        return {}
+    # Flatten to long-form rows, preserving nulls for gap detection.
+    rows: list[dict[str, Any]] = []
+    for name, ys in series:
+        for i, x in enumerate(x_labels):
+            rows.append({'x': x, 'series': name, 'v': ys[i] if i < len(ys) else None})
+    return {
+        'data': {'values': rows},
+        'mark': {
+            'type': 'line',
+            'point': {'filled': False},
+            # 'break-paths-keep-domains' is VL v5.18+ — vl-convert ships an earlier
+            # build that only supports 'filter'.  'filter' drops null points so the
+            # line still breaks at gaps; upgrade when vl-convert catches up.
+            'invalid': 'filter',
+        },
+        'encoding': {
+            'x': {'field': 'x', 'type': 'nominal', 'title': None},
+            'y': {'field': 'v', 'type': 'quantitative', 'title': None},
+            'color': {'field': 'series', 'type': 'nominal', 'legend': {'title': None}},
+            'strokeDash': {'field': 'series', 'type': 'nominal'},
+            'shape': {'field': 'series', 'type': 'nominal'},
+        },
+        'width': 420,
+        'height': 200,
+    }
+
+
+def vl_grouped_bar(
+    *,
+    categories: list[str],
+    series: list[tuple[str, list[float]]],
+    x_title: str,
+) -> dict[str, Any]:
+    """Grouped horizontal bar chart for multi-series agent-comparison.
+
+    Each series produces one bar per category, offset via ``xOffset``.
+    ``series`` is a list of ``(name, values_per_category)`` tuples.
+    """
+    if not categories or not series:
+        return {}
+    rows = [
+        {'cat': categories[i], 'series': name, 'value': vals[i]}
+        for name, vals in series
+        for i in range(len(categories))
+        if i < len(vals)
+    ]
+    return {
+        'data': {'values': rows},
+        'mark': {'type': 'bar', 'tooltip': True},
+        'encoding': {
+            'y': {'field': 'cat', 'type': 'nominal', 'sort': None, 'title': None},
+            'x': {'field': 'value', 'type': 'quantitative', 'title': x_title},
+            'yOffset': {'field': 'series', 'type': 'nominal'},
+            'xOffset': {'field': 'series', 'type': 'nominal'},
+            'color': {'field': 'series', 'type': 'nominal', 'legend': {'title': None}},
+        },
+        'width': 420,
+        'height': {'step': 16},
+    }
+
+
+def vl_sparkline(*, values: list[float]) -> dict[str, Any]:
+    """Bare mini bar chart for inline use in table rows."""
+    if not values:
+        return {}
+    return {
+        'data': {'values': [{'i': i, 'v': float(v)} for i, v in enumerate(values)]},
+        'mark': {'type': 'bar', 'color': COLORS['teal_400']},
+        'encoding': {
+            'x': {'field': 'i', 'type': 'ordinal', 'axis': None},
+            'y': {'field': 'v', 'type': 'quantitative', 'axis': None},
+        },
+        'width': 80,
+        'height': 20,
+    }
