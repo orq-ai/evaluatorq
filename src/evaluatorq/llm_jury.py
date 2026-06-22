@@ -35,18 +35,13 @@ def _build_verdict_model(
         A Pydantic BaseModel class with 'value' and 'explanation' fields
     """
     if verdict_kind == "categorical":
-        if labels is None:
-            # No labels = boolean
-            value_annotation = bool
-        else:
-            # Labels provided = Literal
-            value_annotation = typing.Literal[tuple(labels)]  # type: ignore
+        value_annotation = bool if labels is None else typing.Literal[tuple(labels)]  # type: ignore[valid-type]
     else:  # numeric
         value_annotation = float
 
     # Create model dynamically
     class VerdictModel(BaseModel):
-        value: value_annotation  # type: ignore
+        value: value_annotation  # type: ignore  # pyright: ignore[reportInvalidTypeForm]
         explanation: str = Field(default="", description="Explanation for the verdict")
 
     return VerdictModel
@@ -87,7 +82,7 @@ def _default_system_prompt(
 ) -> str:
     """Return a sensible system prompt for the jury judge.
 
-    The prompt instructs the model to return a structured verdict and a 2–3
+    The prompt instructs the model to return a structured verdict and a 2-3
     sentence explanation.  The ``value`` constraint is tailored to the
     ``verdict_kind``:
 

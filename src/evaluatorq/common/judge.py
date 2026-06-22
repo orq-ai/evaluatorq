@@ -12,10 +12,8 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
-from openai import APIConnectionError, APIStatusError, APITimeoutError
+from openai import APIConnectionError, APIStatusError, APITimeoutError, BadRequestError
 from pydantic import BaseModel, ConfigDict, ValidationError
-
-from openai import BadRequestError
 
 from evaluatorq.common.llm_call import execute_chat_completion, execute_chat_parse
 from evaluatorq.common.messages import coerce_content_text
@@ -200,7 +198,7 @@ async def run_judge(
     span_attributes: dict[str, str] | None = None,
     response_model: type[_BaseModel] | None = None,
     structured_output: bool = True,
-    temperature: float | None | object = _USE_CFG,
+    temperature: float | object | None = _USE_CFG,  # type: ignore[type-arg]
 ) -> JudgeOutcome:
     """Render the template, call the judge model, and parse the verdict.
 
@@ -254,25 +252,24 @@ async def run_judge(
                         explanation=getattr(parsed, 'explanation', ''),
                     )
                 return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
-            else:
-                # Legacy path: byte-identical to original run_judge behavior.
-                response, usage = await execute_chat_completion(
-                    client=client,
-                    model=model,
-                    messages=[
-                        {'role': 'system', 'content': system_prompt},
-                        {'role': 'user', 'content': user_prompt},
-                    ],
-                    span=span,
-                    timeout_s=cfg.timeout_ms / 1000.0,
-                    temperature=temp,
-                    max_completion_tokens=cfg.max_tokens,
-                    response_format={'type': 'json_object'},
-                    extra_kwargs=cfg.extra_kwargs or None,
-                )
-                raw_content = response.choices[0].message.content or '{}'
-                payload = EvaluatorResponsePayload.model_validate_json(raw_content)
-                return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
+            # Legacy path: byte-identical to original run_judge behavior.
+            response, usage = await execute_chat_completion(
+                client=client,
+                model=model,
+                messages=[
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user', 'content': user_prompt},
+                ],
+                span=span,
+                timeout_s=cfg.timeout_ms / 1000.0,
+                temperature=temp,
+                max_completion_tokens=cfg.max_tokens,
+                response_format={'type': 'json_object'},
+                extra_kwargs=cfg.extra_kwargs or None,
+            )
+            raw_content = response.choices[0].message.content or '{}'
+            payload = EvaluatorResponsePayload.model_validate_json(raw_content)
+            return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
     except (asyncio.TimeoutError, APITimeoutError):
         logger.error('Judge [{}] timed out after {}ms', model, cfg.timeout_ms)
         return JudgeOutcome(

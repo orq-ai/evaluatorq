@@ -13,6 +13,7 @@ from .evaluators import (
     string_contains_evaluator,
 )
 from .job_helper import job
+from .llm_jury import llm_jury
 from .openresponses import ResponseResourceDict
 from .types import (
     DataPoint,
@@ -67,6 +68,8 @@ __all__ = [
     "invoke",
     # Helper functions
     "job",
+    # LLM jury evaluator
+    "llm_jury",
     # Built-in evaluators
     "string_contains_evaluator",
 ]
