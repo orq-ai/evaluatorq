@@ -54,6 +54,7 @@ from evaluatorq.common.reports.render import (
     render_markdown,
 )
 from evaluatorq.common.reports.rich_styles import rate_style
+from evaluatorq.common.reports.vega import render_embed, render_svg
 
 __all__ = [
     'COLORS',
@@ -82,6 +83,7 @@ __all__ = [
     'pct',
     'rate_style',
     'render_donut_chart',
+    'render_embed',
     'render_header_md',
     'render_heatmap',
     'render_histogram',
@@ -90,6 +92,7 @@ __all__ = [
     'render_line_chart',
     'render_markdown',
     'render_sparkline',
+    'render_svg',
     'scale_color',
     'status_badge',
     'svg_bar',

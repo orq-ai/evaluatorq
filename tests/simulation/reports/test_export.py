@@ -116,7 +116,7 @@ def test_html_renders_without_plotly(sample_results, monkeypatch):
 
 def test_html_renders_new_charts(sample_results):
     html = export_html(sample_results, target='t')
-    assert 'heatmap-table' in html  # criteria + persona/scenario heatmaps
+    assert '<svg' in html  # criteria + persona/scenario heatmaps rendered as SVG via Vega-Lite
     assert 'Goal Score Distribution' in html
     assert 'Turn Quality Timeline' in html
     assert 'Failures' in html
@@ -248,11 +248,11 @@ def test_export_html_escapes_user_controlled_metadata():
     nasty = "<script>alert('xss')</script>"
     result = SimulationResult(
         messages=[
-            Message(role="user", content=nasty),
-            Message(role="assistant", content="hi"),
+            Message(role='user', content=nasty),
+            Message(role='assistant', content='hi'),
         ],
         terminated_by=TerminatedBy.judge,
-        reason="ok " + nasty,
+        reason='ok ' + nasty,
         goal_achieved=False,
         goal_completion_score=0.5,
         rules_broken=[nasty],
@@ -260,21 +260,21 @@ def test_export_html_escapes_user_controlled_metadata():
         token_usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
         turn_metrics=[],
         metadata={
-            "persona": nasty,
-            "scenario": "S&T",
-            "model": "m & m",
-            "evaluator_scores": {nasty: 1.0},
-            "error": nasty,
+            'persona': nasty,
+            'scenario': 'S&T',
+            'model': 'm & m',
+            'evaluator_scores': {nasty: 1.0},
+            'error': nasty,
         },
     )
     html = export_html([result], target=nasty)
     # The raw script tag must NEVER appear in HTML output.
-    assert "<script>alert" not in html
+    assert '<script>alert' not in html
     assert nasty not in html
     # And the escaped form should be there at least once (in the persona field).
-    assert "&lt;script&gt;" in html
+    assert '&lt;script&gt;' in html
     # Ampersands also escaped (e.g., persona "S&T", model "m & m").
-    assert "S&amp;T" in html or "m &amp; m" in html
+    assert 'S&amp;T' in html or 'm &amp; m' in html
 
 
 def test_export_html_css_has_no_double_percent_artifacts():
@@ -363,18 +363,31 @@ def test_overview_html_and_md_show_traits_and_goal():
     from evaluatorq.simulation.types import SimulationResult, TerminatedBy
 
     r = SimulationResult(
-        messages=[], terminated_by=TerminatedBy.judge, reason='r',
-        goal_achieved=True, goal_completion_score=1.0, rules_broken=[],
-        turn_count=1, turn_metrics=[],
+        messages=[],
+        terminated_by=TerminatedBy.judge,
+        reason='r',
+        goal_achieved=True,
+        goal_completion_score=1.0,
+        rules_broken=[],
+        turn_count=1,
+        turn_metrics=[],
         token_usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
         metadata={
-            'persona': 'Frustrated Customer', 'scenario': 'Billing',
-            'persona_traits': {'patience': 0.2, 'assertiveness': 0.8, 'politeness': 0.4,
-                               'technical_level': 0.3, 'communication_style': 'casual',
-                               'background': 'Annoyed.'},
-            'scenario_goal': 'Explain the invoice', 'scenario_context': 'Unexpected charge.',
-            'criteria_meta': [{'id': 'criteria_0', 'description': 'explains charge',
-                               'type': 'must_happen', 'passed': True}],
+            'persona': 'Frustrated Customer',
+            'scenario': 'Billing',
+            'persona_traits': {
+                'patience': 0.2,
+                'assertiveness': 0.8,
+                'politeness': 0.4,
+                'technical_level': 0.3,
+                'communication_style': 'casual',
+                'background': 'Annoyed.',
+            },
+            'scenario_goal': 'Explain the invoice',
+            'scenario_context': 'Unexpected charge.',
+            'criteria_meta': [
+                {'id': 'criteria_0', 'description': 'explains charge', 'type': 'must_happen', 'passed': True}
+            ],
         },
     )
     html = export_html([r], target='Agent')
@@ -390,19 +403,30 @@ def test_overview_renders_zero_trait_and_fallback_without_metadata():
 
     def _result(metadata):
         return SimulationResult(
-            messages=[], terminated_by=TerminatedBy.judge, reason='r',
-            goal_achieved=True, goal_completion_score=1.0, rules_broken=[],
-            turn_count=1, turn_metrics=[],
+            messages=[],
+            terminated_by=TerminatedBy.judge,
+            reason='r',
+            goal_achieved=True,
+            goal_completion_score=1.0,
+            rules_broken=[],
+            turn_count=1,
+            turn_metrics=[],
             token_usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
             metadata=metadata,
         )
 
     # patience 0.0 must NOT be dropped by a truthiness guard
     with_zero = _result({
-        'persona': 'P', 'scenario': 'S',
-        'persona_traits': {'patience': 0.0, 'assertiveness': 0.8, 'politeness': 0.4,
-                           'technical_level': 0.3, 'communication_style': 'casual',
-                           'background': 'bg'},
+        'persona': 'P',
+        'scenario': 'S',
+        'persona_traits': {
+            'patience': 0.0,
+            'assertiveness': 0.8,
+            'politeness': 0.4,
+            'technical_level': 0.3,
+            'communication_style': 'casual',
+            'background': 'bg',
+        },
         'scenario_goal': 'g',
     })
     html = export_html([with_zero], target='Agent')
