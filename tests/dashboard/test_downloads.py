@@ -228,16 +228,30 @@ class TestExportMd:
         assert "content-disposition" in r.headers
         assert "attachment" in r.headers["content-disposition"]
 
-    def test_sim_md_returns_404(self, client: TestClient, roots: list[Path]) -> None:
-        """Sim never had a Markdown export — honest parity, must return 404."""
+    def test_sim_md_returns_200(self, client: TestClient, roots: list[Path]) -> None:
+        """C1: sim export.md now wired — must return 200."""
         rid = report_id(_sim_path(roots))
         r = client.get(f"/r/{rid}/export.md")
-        assert r.status_code == 404
+        assert r.status_code == 200
 
-    def test_sim_md_body_explains_reason(self, client: TestClient, roots: list[Path]) -> None:
+    def test_sim_md_content_type(self, client: TestClient, roots: list[Path]) -> None:
+        """C1: sim export.md must return text/markdown."""
         rid = report_id(_sim_path(roots))
         r = client.get(f"/r/{rid}/export.md")
-        assert "simulation" in r.text.lower() or "markdown" in r.text.lower()
+        assert "text/markdown" in r.headers.get("content-type", "")
+
+    def test_sim_md_has_content_disposition(self, client: TestClient, roots: list[Path]) -> None:
+        """C1: sim export.md must carry attachment Content-Disposition."""
+        rid = report_id(_sim_path(roots))
+        r = client.get(f"/r/{rid}/export.md")
+        assert "content-disposition" in r.headers
+        assert "attachment" in r.headers["content-disposition"]
+
+    def test_sim_md_non_empty(self, client: TestClient, roots: list[Path]) -> None:
+        """C1: sim export.md body must be non-empty."""
+        rid = report_id(_sim_path(roots))
+        r = client.get(f"/r/{rid}/export.md")
+        assert len(r.text) > 0
 
     def test_missing_md_returns_404(self, client: TestClient) -> None:
         r = client.get("/r/nonexistent123/export.md")
@@ -428,14 +442,13 @@ class TestDownloadSidebarOnReportPage:
         r = client.get(f"/r/{rid}")
         assert "export.json" in r.text
 
-    def test_sim_page_has_no_md_download_link(
+    def test_sim_page_has_md_download_link(
         self, client: TestClient, roots: list[Path]
     ) -> None:
-        """Sim page must NOT show a Markdown download link."""
+        """C1: sim page must now show a Markdown download link."""
         rid = report_id(_sim_path(roots))
         r = client.get(f"/r/{rid}")
-        # The download sidebar should not link to export.md for sim reports.
-        assert "export.md" not in r.text
+        assert "export.md" in r.text
 
     def test_sim_page_has_no_csv_download_link(
         self, client: TestClient, roots: list[Path]
