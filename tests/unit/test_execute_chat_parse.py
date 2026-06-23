@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from openai import BadRequestError
 from pydantic import BaseModel
 
 from evaluatorq.common.llm_call import execute_chat_parse
@@ -33,7 +34,7 @@ async def test_parse_forwards_response_model_and_returns_completion():
 
     resp, usage = await execute_chat_parse(
         client=client,
-        model="openai/gpt-5.5",
+        model="openai/gpt-5.4-mini",
         messages=[{"role": "user", "content": "hi"}],
         span=None,
         timeout_s=30.0,
@@ -56,3 +57,25 @@ async def test_parse_includes_temperature_when_set():
         response_model=_V, temperature=0.3,
     )
     assert client.chat.completions.parse.call_args.kwargs["temperature"] == 0.3
+
+
+@pytest.mark.asyncio
+async def test_parse_drops_reasoning_effort_and_retries_once():
+    # A 400 mentioning "reasoning" causes reasoning_effort to be dropped and the call
+    # retried exactly once; the retry succeeds and omits reasoning_effort.
+    client = MagicMock()
+    err = BadRequestError(
+        message="unsupported parameter: reasoning_effort",
+        response=MagicMock(status_code=400),
+        body={"error": {"message": "reasoning_effort not supported"}},
+    )
+    client.chat.completions.parse = AsyncMock(
+        side_effect=[err, _completion(_V(value=True, explanation="ok"))]
+    )
+    resp, _usage = await execute_chat_parse(
+        client=client, model="m", messages=[], span=None, timeout_s=5.0,
+        response_model=_V, extra_kwargs={"reasoning_effort": "high"},
+    )
+    assert resp.choices[0].message.parsed.value is True
+    assert client.chat.completions.parse.call_count == 2
+    assert "reasoning_effort" not in client.chat.completions.parse.call_args.kwargs

@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+import asyncio
+from typing import Literal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from openai import BadRequestError
 from pydantic import BaseModel, create_model
 
-from evaluatorq.common.judge import run_judge
+from evaluatorq.common.judge import JudgeError, run_judge
 from evaluatorq.contracts import LLMCallConfig
 
 
 def _cfg() -> LLMCallConfig:
-    return LLMCallConfig(model="openai/gpt-5.5", temperature=1.0, max_tokens=8000, timeout_ms=30000)
+    return LLMCallConfig(model="openai/gpt-5.4-mini", temperature=1.0, max_tokens=8000, timeout_ms=30000)
 
 
 def _verdict_model() -> type[BaseModel]:
@@ -32,7 +34,7 @@ async def test_tier1_parse_normalizes_to_payload():
     client = MagicMock()
     client.chat.completions.parse = AsyncMock(return_value=_parsed_completion(True, "resisted"))
     out = await run_judge(
-        client=client, model="openai/gpt-5.5", cfg=_cfg(),
+        client=client, model="openai/gpt-5.4-mini", cfg=_cfg(),
         prompt_template="judge: {{output.response}}", replacements={"output.response": "hi"},
         system_prompt="sys", response_model=_verdict_model(),
     )
@@ -136,3 +138,78 @@ async def test_temperature_none_override_omits_temperature():
         response_model=_verdict_model(), temperature=None,
     )
     assert "temperature" not in client.chat.completions.parse.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_structured_timeout_maps_to_timeout_error():
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(side_effect=asyncio.TimeoutError())
+    out = await run_judge(
+        client=client, model="m", cfg=_cfg(),
+        prompt_template="t", replacements={}, system_prompt="s", response_model=_verdict_model(),
+    )
+    assert out.error_kind is JudgeError.TIMEOUT
+    assert out.payload is None
+
+
+@pytest.mark.asyncio
+async def test_non_schema_badrequest_does_not_fall_back():
+    # A 400 unrelated to schema support (e.g. context length) must NOT be swallowed
+    # into the json_object fallback; it surfaces as an API_STATUS error and `create`
+    # is never called.
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(
+        side_effect=BadRequestError(
+            message="context length exceeded",
+            response=MagicMock(status_code=400), body={"error": {"message": "context length exceeded"}},
+        )
+    )
+    client.chat.completions.create = AsyncMock()  # must not be called
+    out = await run_judge(
+        client=client, model="m", cfg=_cfg(),
+        prompt_template="t", replacements={}, system_prompt="s", response_model=_verdict_model(),
+    )
+    assert out.error_kind is JudgeError.API_STATUS
+    assert not client.chat.completions.create.called
+
+
+@pytest.mark.asyncio
+async def test_parsed_none_without_refusal_is_parse_error():
+    # No refusal, but the SDK produced no parsed object (truncation / filter): this is
+    # a hard PARSE error, not a clean value=None abstain.
+    client = MagicMock()
+    msg = MagicMock(); msg.parsed = None; msg.refusal = None
+    comp = MagicMock(); comp.choices = [MagicMock(message=msg, finish_reason="length")]; comp.usage = None
+    client.chat.completions.parse = AsyncMock(return_value=comp)
+    out = await run_judge(
+        client=client, model="m", cfg=_cfg(),
+        prompt_template="t", replacements={}, system_prompt="s", response_model=_verdict_model(),
+    )
+    assert out.error_kind is JudgeError.PARSE
+    assert out.payload is None
+
+
+@pytest.mark.asyncio
+async def test_json_object_fallback_enforces_label_set():
+    # On the fallback path an out-of-set categorical label must raise (-> PARSE),
+    # not slip through the loose payload model.
+    verdict_model = create_model(
+        "LabelVerdict", value=(Literal["yes", "no"], ...), explanation=(str, ...)
+    )
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(
+        side_effect=BadRequestError(
+            message="json_schema not supported",
+            response=MagicMock(status_code=400), body={"error": {"message": "json_schema unsupported"}},
+        )
+    )
+    create_comp = MagicMock()
+    create_comp.choices = [MagicMock(message=MagicMock(content='{"value": "maybe", "explanation": "x"}'))]
+    create_comp.usage = None
+    client.chat.completions.create = AsyncMock(return_value=create_comp)
+
+    out = await run_judge(
+        client=client, model="m", cfg=_cfg(),
+        prompt_template="t", replacements={}, system_prompt="sys", response_model=verdict_model,
+    )
+    assert out.error_kind is JudgeError.PARSE

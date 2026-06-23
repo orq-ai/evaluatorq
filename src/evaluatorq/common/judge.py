@@ -194,6 +194,11 @@ async def _json_object_judge(
         extra_kwargs=cfg.extra_kwargs or None,
     )
     raw = response.choices[0].message.content or '{}'
+    if inject_model is not None:
+        # Enforce the dynamic verdict schema (e.g. a categorical Literal label set)
+        # on the fallback path too, so an out-of-set value raises ValidationError
+        # (-> JudgeError.PARSE) instead of slipping through the loose payload model.
+        inject_model.model_validate_json(raw)
     return EvaluatorResponsePayload.model_validate_json(raw), usage, raw
 
 
@@ -266,12 +271,25 @@ async def run_judge(
                 msg = response.choices[0].message
                 if getattr(msg, 'refusal', None):
                     payload = EvaluatorResponsePayload(value=None, abstain=True, explanation=msg.refusal or '')
-                else:
-                    parsed = msg.parsed
-                    payload = EvaluatorResponsePayload(
-                        value=getattr(parsed, 'value', None),
-                        explanation=getattr(parsed, 'explanation', ''),
+                    return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
+                parsed = msg.parsed
+                if parsed is None:
+                    # No refusal, but the SDK could not produce a parsed object (truncated
+                    # completion, content filter, un-coercible JSON). Surface this as a hard
+                    # PARSE error rather than silently degrading to a value=None abstain.
+                    finish = getattr(response.choices[0], 'finish_reason', None)
+                    logger.error('Judge [{}] structured parse produced no object (finish_reason={})', model, finish)
+                    return JudgeOutcome(
+                        error_kind=JudgeError.PARSE,
+                        error_message=f'structured output produced no parsed object (finish_reason={finish})',
+                        token_usage=usage,
+                        raw_content=raw_content,
                     )
+                # Direct attribute access (not getattr-with-default): the verdict model
+                # always defines `value`/`explanation`, so a miss is a real contract bug
+                # that should raise (-> UNKNOWN) instead of masking as a None abstain.
+                raw_content = parsed.model_dump_json()
+                payload = EvaluatorResponsePayload(value=parsed.value, explanation=parsed.explanation)
                 return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
             if response_model is not None:
                 # structured_output disabled, but a verdict model is set: stay on the

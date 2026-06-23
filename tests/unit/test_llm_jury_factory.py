@@ -93,3 +93,90 @@ async def test_scorer_runs_panel_and_maps_pass():
     assert not isinstance(result, dict)
     assert result.pass_ is True
     assert result.value == "yes"
+
+
+def test_validation_passing_labels_subset_of_labels():
+    with pytest.raises(ValueError):
+        llm_jury(name="x", criteria="c", labels=["a", "b"], passing_labels=["c"])
+
+
+def test_validation_rejects_degenerate_labels():
+    with pytest.raises(ValueError):
+        llm_jury(name="x", criteria="c", labels=[])
+    with pytest.raises(ValueError):
+        llm_jury(name="x", criteria="c", labels=["only"])
+
+
+def test_validation_rejects_reversed_score_range():
+    with pytest.raises(ValueError):
+        llm_jury(name="x", criteria="c", verdict_kind="numeric", score_range=(1.0, 0.0))
+
+
+def test_validation_rejects_nonpositive_repetitions():
+    with pytest.raises(ValueError):
+        llm_jury(name="x", criteria="c", repetitions=0)
+
+
+@pytest.mark.asyncio
+async def test_lone_judge_propagates_outage():
+    # A single judge with no replacements has no redundancy: a judge outage must
+    # propagate (abort loudly) rather than silently returning inconclusive.
+    with patch.object(llm_jury_mod, "resolve_llm_client") as rc:
+        rc.return_value = MagicMock(client=MagicMock())
+        ev = llm_jury(name="x", criteria="c", model="m1", labels=["yes", "no"], passing_labels=["yes"])
+
+    async def boom(**kwargs):
+        raise RuntimeError("judge offline")
+
+    with patch.object(llm_jury_mod, "run_judge", side_effect=boom):
+        dp = DataPoint(inputs={"q": "?"}, expected_output="x")
+        with pytest.raises(RuntimeError):
+            await ev["scorer"]({"data": dp, "output": "x"})
+
+
+@pytest.mark.asyncio
+async def test_scorer_numeric_maps_threshold_pass():
+    with patch.object(llm_jury_mod, "resolve_llm_client") as rc:
+        rc.return_value = MagicMock(client=MagicMock())
+        ev = llm_jury(
+            name="quality", criteria="good?", model="m1",
+            verdict_kind="numeric", score_range=(0.0, 1.0), threshold=0.5,
+        )
+
+    async def fake_run_judge(**kwargs):
+        return JudgeOutcome(
+            payload=EvaluatorResponsePayload(value=0.8, explanation="solid"),
+            token_usage=None, raw_content="{}",
+        )
+
+    with patch.object(llm_jury_mod, "run_judge", side_effect=fake_run_judge):
+        dp = DataPoint(inputs={"q": "?"}, expected_output="x")
+        result = await ev["scorer"]({"data": dp, "output": "x"})
+
+    assert not isinstance(result, dict)
+    assert result.value == 0.8
+    assert result.pass_ is True
+
+
+@pytest.mark.asyncio
+async def test_scorer_inconclusive_when_all_judges_abstain():
+    with patch.object(llm_jury_mod, "resolve_llm_client") as rc:
+        rc.return_value = MagicMock(client=MagicMock())
+        ev = llm_jury(
+            name="x", criteria="c", judges=["m1", "m2"],
+            labels=["yes", "no"], passing_labels=["yes"],
+        )
+
+    async def fake_run_judge(**kwargs):
+        return JudgeOutcome(
+            payload=EvaluatorResponsePayload(value=None, abstain=True, explanation="unsure"),
+            token_usage=None, raw_content="{}",
+        )
+
+    with patch.object(llm_jury_mod, "run_judge", side_effect=fake_run_judge):
+        dp = DataPoint(inputs={"q": "?"}, expected_output="x")
+        result = await ev["scorer"]({"data": dp, "output": "x"})
+
+    assert not isinstance(result, dict)
+    assert result.value == "inconclusive"
+    assert result.pass_ is None

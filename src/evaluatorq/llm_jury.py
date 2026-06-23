@@ -8,17 +8,19 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from evaluatorq.common.judge import JudgeOutcome, run_judge
-from evaluatorq.common.jury import JuryDeliberation, Prediction, VerdictKind, append_jury_summary, run_jury
+from evaluatorq.common.jury import (
+    JuryDeliberation,
+    Prediction,
+    TieBreak,
+    VerdictKind,
+    append_jury_summary,
+    run_jury,
+)
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.types import DataPoint, EvaluationResult, Evaluator, Output, ScorerParameter
 
-try:
-    from evaluatorq.common.jury import TieBreak
-except ImportError:  # pragma: no cover - TieBreak is a type alias
-    TieBreak = Any  # type: ignore
-
-DEFAULT_JUDGE_MODEL = "openai/gpt-5.5"
+DEFAULT_JUDGE_MODEL = "openai/gpt-5.4-mini"
 
 
 def _build_verdict_model(
@@ -174,7 +176,12 @@ def _to_evaluation_result(
         passed = None
     elif verdict_kind == "numeric":
         lo, hi = score_range
-        score = min(max(float(verdict), lo), hi)
+        raw_score = float(verdict)
+        if not (lo <= raw_score <= hi):
+            logger.warning(
+                "judge returned {} outside score_range {}; clamping", raw_score, score_range
+            )
+        score = min(max(raw_score, lo), hi)
         value = score
         passed = score >= threshold
     elif isinstance(verdict, bool):
@@ -226,7 +233,6 @@ def _resolve_panel(judges: list[str] | None, model: str | None) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-# ponytail: strict_panel reserved for parity; generic jury has no self-judge guard yet
 def llm_jury(
     *,
     name: str,
@@ -238,14 +244,13 @@ def llm_jury(
     repetitions: int = 1,
     replacement_judges: list[str] | None = None,
     min_successful_judges: int = 1,
-    strict_panel: bool = False,
     verdict_kind: Literal["categorical", "numeric"] = "categorical",
     labels: list[str] | None = None,
     passing_labels: list[str] | None = None,
     numeric_aggregation: Literal["mean", "median"] = "mean",
     threshold: float = 0.5,
     score_range: tuple[float, float] = (0.0, 1.0),
-    tie_break: Any = None,
+    tie_break: TieBreak | None = None,
     structured_output: bool = True,
     temperature: float | None = None,
     max_tokens: int = 8000,
@@ -257,16 +262,26 @@ def llm_jury(
     # --- validation (fail fast) ---
     if bool(criteria) == bool(prompt):
         raise ValueError("Pass exactly one of `criteria` or `prompt`.")
+    if repetitions < 1:
+        raise ValueError(f"repetitions ({repetitions}) must be >= 1.")
     if verdict_kind != "categorical" and (labels or passing_labels):
         raise ValueError("`labels`/`passing_labels` are only valid for verdict_kind='categorical'.")
+    if labels is not None and len(labels) < 2:
+        # A categorical judge with 0/1 options is meaningless, and an empty list
+        # would build a degenerate ``Literal[()]`` verdict model.
+        raise ValueError("categorical `labels` must list at least two options.")
     if labels and passing_labels and not set(passing_labels) <= set(labels):
         raise ValueError("`passing_labels` must be a subset of `labels`.")
+    if verdict_kind == "numeric" and score_range[0] >= score_range[1]:
+        raise ValueError(f"score_range {score_range} must be increasing (lo < hi).")
     if verdict_kind == "numeric" and not (score_range[0] <= threshold <= score_range[1]):
         raise ValueError(
             f"threshold ({threshold}) must lie within score_range {score_range}."
         )
     panel = _resolve_panel(judges=judges, model=model)
     deduped = list(dict.fromkeys([*panel]))
+    # Bound is the base panel size by design: replacement_judges are spillover for
+    # failed primaries, not extra capacity, so they don't raise the achievable floor.
     if not (1 <= min_successful_judges <= len(deduped)):
         raise ValueError(
             f"min_successful_judges ({min_successful_judges}) must be between 1 and "
@@ -313,6 +328,9 @@ def llm_jury(
             verdict_kind=vkind,
             numeric_aggregation=numeric_aggregation,
             tie_break=tie_break,
+            # A lone judge with no stand-ins has no redundancy: re-raise an outage
+            # loudly instead of silently returning inconclusive on every datapoint.
+            propagate_errors=(len(deduped) == 1 and not replacement_judges),
         )
         return _to_evaluation_result(
             deliberation=deliberation, verdict_kind=verdict_kind, passing_labels=passing_labels,
