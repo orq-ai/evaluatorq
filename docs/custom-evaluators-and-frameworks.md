@@ -17,11 +17,18 @@ The red teaming system has four core registries that work together:
 3. **Strategy Registry** (`adaptive/strategy_registry.py`) — maps vulnerabilities to attack strategies
 4. **Framework Mappings** — many-to-many mappings from vulnerabilities to compliance framework categories (e.g., OWASP ASI, OWASP LLM Top 10)
 
-```
-Vulnerability (primitive)
-    ├── VulnerabilityDef (metadata + framework mappings)
-    ├── Evaluator (LLM-as-judge prompt)
-    └── AttackStrategies[] (attack templates)
+```mermaid
+graph TD
+    V[Vulnerability]
+    VD[VulnerabilityDef<br/>metadata + framework mappings]
+    E[Evaluator<br/>LLM-as-judge prompt]
+    S[AttackStrategies[]<br/>attack templates]
+    F[Framework categories<br/>OWASP LLM / ASI / custom]
+
+    V --> VD
+    V --> E
+    V --> S
+    VD --> F
 ```
 
 ## Adding a New Vulnerability
