@@ -1007,6 +1007,7 @@ source = { editable = "." }
 dependencies = [
     { name = "httpx" },
     { name = "loguru" },
+    { name = "openai" },
     { name = "pydantic" },
     { name = "rich" },
     { name = "typer" },
@@ -1019,7 +1020,6 @@ all = [
     { name = "kaleido" },
     { name = "langchain" },
     { name = "langgraph" },
-    { name = "openai" },
     { name = "openai-agents" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
@@ -1036,9 +1036,6 @@ crewai = [
 ]
 export = [
     { name = "kaleido" },
-]
-judge = [
-    { name = "openai" },
 ]
 langchain = [
     { name = "langchain" },
@@ -1063,13 +1060,11 @@ pydantic-ai = [
 ]
 redteam = [
     { name = "huggingface-hub" },
-    { name = "openai" },
     { name = "plotly" },
     { name = "streamlit" },
     { name = "watchdog" },
 ]
 simulation = [
-    { name = "openai" },
     { name = "orq-ai-sdk" },
     { name = "plotly" },
     { name = "streamlit" },
@@ -1109,16 +1104,14 @@ docs = [
 [package.metadata]
 requires-dist = [
     { name = "crewai", marker = "python_full_version >= '3.11' and extra == 'crewai'", specifier = ">=0.70.0" },
-    { name = "evaluatorq", extras = ["orq", "otel", "judge", "langchain", "langgraph", "openai-agents", "pydantic-ai", "crewai", "redteam", "simulation", "export"], marker = "extra == 'all'" },
+    { name = "evaluatorq", extras = ["orq", "otel", "langchain", "langgraph", "openai-agents", "pydantic-ai", "crewai", "redteam", "simulation", "export"], marker = "extra == 'all'" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "huggingface-hub", marker = "extra == 'redteam'", specifier = ">=0.20.0" },
     { name = "kaleido", marker = "extra == 'export'", specifier = ">=0.2.1" },
     { name = "langchain", marker = "extra == 'langchain'", specifier = ">=1.0.0,<2.0.0" },
     { name = "langgraph", marker = "extra == 'langgraph'", specifier = ">=0.2.0" },
     { name = "loguru", specifier = ">=0.6.0" },
-    { name = "openai", marker = "extra == 'judge'", specifier = ">=1.92.0,<3.0.0" },
-    { name = "openai", marker = "extra == 'redteam'", specifier = ">=1.92.0,<3.0.0" },
-    { name = "openai", marker = "extra == 'simulation'", specifier = ">=1.92.0,<3.0.0" },
+    { name = "openai", specifier = ">=1.92.0,<3.0.0" },
     { name = "openai-agents", marker = "extra == 'openai-agents'", specifier = ">=0.1.0" },
     { name = "opentelemetry-api", marker = "extra == 'otel'", specifier = ">=1.20.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'otel'", specifier = ">=1.20.0" },
@@ -1137,7 +1130,7 @@ requires-dist = [
     { name = "watchdog", marker = "extra == 'redteam'", specifier = ">=4.0.0" },
     { name = "watchdog", marker = "extra == 'simulation'", specifier = ">=4.0.0" },
 ]
-provides-extras = ["orq", "otel", "judge", "langchain", "langgraph", "openai-agents", "pydantic-ai", "crewai", "redteam", "simulation", "export", "all"]
+provides-extras = ["orq", "otel", "langchain", "langgraph", "openai-agents", "pydantic-ai", "crewai", "redteam", "simulation", "export", "all"]
 
 [package.metadata.requires-dev]
 dev = [
