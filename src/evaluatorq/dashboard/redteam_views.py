@@ -37,6 +37,7 @@ from evaluatorq.common.reports import (
 )
 from evaluatorq.common.reports.vega import vl_bar_h, vl_heatmap, vl_stacked_bar
 from evaluatorq.redteam.contracts import OWASP_CATEGORY_NAMES, RedTeamReport, RedTeamResult
+from evaluatorq.redteam.reports.converters import _is_evaluated, _is_vulnerable
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -277,17 +278,21 @@ def _build_breakdown_chart(
 
     if stack_by is None:
         # Simple horizontal bar: group_by dimension → ASR%
-        groups: dict[str, dict[str, int]] = defaultdict(lambda: {"vuln": 0, "total": 0})
+        # Use the evaluated-set denominator (matching compute_report_summary) so that
+        # unevaluated/errored results are excluded from both numerator and denominator.
+        groups: dict[str, dict[str, int]] = defaultdict(lambda: {"vuln": 0, "evaluated": 0})
         for r in results:
             key = _dim_value(r, group_by)
-            groups[key]["total"] += 1
-            if r.vulnerable:
-                groups[key]["vuln"] += 1
+            if _is_evaluated(r):
+                groups[key]["evaluated"] += 1
+                if _is_vulnerable(r):
+                    groups[key]["vuln"] += 1
 
         chart_rows: list[dict[str, Any]] = []
         for name, counts in groups.items():
-            asr = (counts["vuln"] / counts["total"] * 100) if counts["total"] else 0.0
-            chart_rows.append({"dimension": name, "asr": round(asr, 1), "n": counts["total"]})
+            # n= reflects the evaluated count (matches the ASR denominator shown).
+            asr = (counts["vuln"] / counts["evaluated"] * 100) if counts["evaluated"] else 0.0
+            chart_rows.append({"dimension": name, "asr": round(asr, 1), "n": counts["evaluated"]})
 
         chart_rows.sort(key=operator.itemgetter("asr"), reverse=True)
 
@@ -308,20 +313,23 @@ def _build_breakdown_chart(
         )
     else:
         # Stacked bar: group_by x stack_by -> ASR%
+        # Use the evaluated-set denominator to match compute_report_summary.
         groups_stacked: dict[tuple[str, str], dict[str, int]] = defaultdict(
-            lambda: {"vuln": 0, "total": 0}
+            lambda: {"vuln": 0, "evaluated": 0}
         )
         for r in results:
-            g = _dim_value(r, group_by)
-            s = _dim_value(r, stack_by)
-            groups_stacked[g, s]["total"] += 1
-            if r.vulnerable:
-                groups_stacked[g, s]["vuln"] += 1
+            if _is_evaluated(r):
+                g = _dim_value(r, group_by)
+                s = _dim_value(r, stack_by)
+                groups_stacked[g, s]["evaluated"] += 1
+                if _is_vulnerable(r):
+                    groups_stacked[g, s]["vuln"] += 1
 
         stacked_rows: list[dict[str, Any]] = []
         for (g, s), counts in groups_stacked.items():
-            asr = (counts["vuln"] / counts["total"] * 100) if counts["total"] else 0.0
-            stacked_rows.append({"dimension": g, "stack": s, "asr": round(asr, 1), "n": counts["total"]})
+            # n= reflects the evaluated count (matches the ASR denominator shown).
+            asr = (counts["vuln"] / counts["evaluated"] * 100) if counts["evaluated"] else 0.0
+            stacked_rows.append({"dimension": g, "stack": s, "asr": round(asr, 1), "n": counts["evaluated"]})
 
         # Sort dimensions by average ASR descending
         dim_asr: dict[str, list[float]] = defaultdict(list)
@@ -427,16 +435,19 @@ def _build_heatmap_chart(
     """Build and embed the agent heatmap."""
     chart_id = f"{container_id}-chart"
 
-    # Build pivot: dim_value -> agent_key -> {total, vuln}
+    # Build pivot: dim_value -> agent_key -> {evaluated, vuln}
+    # Use the evaluated-set denominator to match compute_report_summary — each cell
+    # ASR = _is_vulnerable count / _is_evaluated count for that (agent, dim-value) bucket.
     pivot: dict[str, dict[str, dict[str, int]]] = defaultdict(
-        lambda: defaultdict(lambda: {"total": 0, "vuln": 0})
+        lambda: defaultdict(lambda: {"evaluated": 0, "vuln": 0})
     )
     for r in results:
-        dv = _heatmap_dim_value(r, dim)
-        ak = _agent_key(r)
-        pivot[dv][ak]["total"] += 1
-        if r.vulnerable:
-            pivot[dv][ak]["vuln"] += 1
+        if _is_evaluated(r):
+            dv = _heatmap_dim_value(r, dim)
+            ak = _agent_key(r)
+            pivot[dv][ak]["evaluated"] += 1
+            if _is_vulnerable(r):
+                pivot[dv][ak]["vuln"] += 1
 
     # Sort rows
     if dim == "severity":
@@ -458,17 +469,17 @@ def _build_heatmap_chart(
         row_colors: list[str] = []
         row_texts: list[str] = []
         for ak in agents:
-            counts = pivot[dv].get(ak, {"total": 0, "vuln": 0})
-            total = counts["total"]
+            counts = pivot[dv].get(ak, {"evaluated": 0, "vuln": 0})
+            evaluated = counts["evaluated"]
             vuln = counts["vuln"]
-            if total == 0:
+            if evaluated == 0:
                 row_colors.append(grey)
                 row_texts.append("—")
             else:
-                asr = vuln / total  # 0-1 for scale_color
+                asr = vuln / evaluated  # 0-1 for scale_color
                 color = scale_color(asr, ORQ_SCALE_HEAT)
                 row_colors.append(color)
-                row_texts.append(f"{asr * 100:.0f}%\nn={total}")
+                row_texts.append(f"{asr * 100:.0f}%\nn={evaluated}")
         cell_colors.append(row_colors)
         cell_texts.append(row_texts)
 
@@ -749,7 +760,13 @@ def render_disagreement(
         if agent_a not in agent_map or agent_b not in agent_map:
             continue
         r1, r2 = agent_map[agent_a], agent_map[agent_b]
-        if r1.vulnerable != r2.vulnerable:
+        # Skip pairs where either side is unevaluated: an unevaluated result is
+        # neither vulnerable nor resistant, so it should not count as a disagreement
+        # (mirrors _build_agent_disagreements_section in sections.py which skips
+        # attacks without results for both agents, then compares evaluated verdicts).
+        if not _is_evaluated(r1) or not _is_evaluated(r2):
+            continue
+        if _is_vulnerable(r1) != _is_vulnerable(r2):
             disagreements.append((r1, r2))
 
     if not disagreements:

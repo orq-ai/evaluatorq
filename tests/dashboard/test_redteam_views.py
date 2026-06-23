@@ -316,6 +316,69 @@ class TestBreakdownView:
             f"Expected '50.0%' in text label, got {asi01_row.get('text')!r}"
         )
 
+    def test_asr_evaluated_set_denominator_matches_static_report(self, tmp_path: Path) -> None:
+        """Regression guard: interactive breakdown ASR == static report ASR on evaluated-set denominator.
+
+        Build a report for a single category containing a MIX of vulnerable,
+        resistant, and unevaluated/errored results (evaluation=None).  Assert
+        that the interactive breakdown's ASR for that category equals
+        compute_report_summary(results).by_category[cat].vulnerability_rate × 100,
+        i.e. BOTH paths use vulns / evaluated_total — NOT vulns / raw_total.
+
+        With 2 vulnerable + 1 resistant + 1 unevaluated (evaluation=None):
+          evaluated total = 3, vulns = 2 → ASR = 2/3 ≈ 66.7%   (evaluated-set)
+          raw total = 4, vulns = 2      → ASR = 2/4 = 50.0%     (wrong raw-total)
+        The test checks that the Vega spec shows 66.7, not 50.0.
+        """
+        import json
+        import re
+
+        rt = tmp_path / "runs"
+        rt.mkdir()
+        results = [
+            _make_result(category="ASI01", passed=False, agent_key="agent-a", attack_id="asr-v1"),
+            _make_result(category="ASI01", passed=False, agent_key="agent-a", attack_id="asr-v2"),
+            _make_result(category="ASI01", passed=True, agent_key="agent-a", attack_id="asr-r1"),
+            # Unevaluated result (evaluation=None) — must be excluded from ASR denominator.
+            _make_result(category="ASI01", passed=None, agent_key="agent-a", attack_id="asr-err"),
+        ]
+        report = _make_report(results, tested_agents=["agent-a"])
+
+        # Static report ASR for ASI01 via the canonical path.
+        from evaluatorq.redteam.reports.converters import compute_report_summary
+
+        static_summary = compute_report_summary(results)
+        static_asr_rate = static_summary.by_category["ASI01"].vulnerability_rate  # 0-1
+        static_asr_pct = round(static_asr_rate * 100, 1)
+        # Sanity-check: 2 vulns / 3 evaluated = 0.6667 → 66.7%
+        assert static_asr_pct == pytest.approx(66.7, abs=0.1), (
+            f"Static report ASR for ASI01 should be ~66.7%, got {static_asr_pct}"
+        )
+
+        rp = rt / "rt_eval_denom_20260101.json"
+        rp.write_text(report.model_dump_json())
+        denom_app = build_app(roots=[rt])
+        denom_rid = report_id(rp)
+        html = TestClient(denom_app, raise_server_exceptions=True).get(
+            f"/r/{denom_rid}/view/breakdown?group_by=category"
+        ).text
+        assert html, "Expected non-empty HTML from breakdown"
+
+        specs = re.findall(r'<script[^>]+data-vega-for[^>]*>(.*?)</script>', html, re.DOTALL)
+        assert specs, f"No embedded Vega spec found in HTML:\n{html[:800]}"
+
+        spec_obj = json.loads(specs[0].replace('<\\/', '</'))
+        rows = spec_obj["data"]["values"]
+        asi01_row = next((r for r in rows if str(r.get("label", "")).startswith("ASI01")), None)
+        assert asi01_row is not None, f"ASI01 row missing from spec rows: {rows}"
+
+        interactive_asr_pct = asi01_row["value"]
+        assert interactive_asr_pct == pytest.approx(static_asr_pct, abs=0.1), (
+            f"Interactive breakdown ASR ({interactive_asr_pct}%) must equal static report ASR "
+            f"({static_asr_pct}%) — both must use the evaluated-set denominator. "
+            f"If interactive shows 50.0% the raw-total denominator bug has regressed."
+        )
+
 
 # ---------------------------------------------------------------------------
 # 2. Agent heatmap view
