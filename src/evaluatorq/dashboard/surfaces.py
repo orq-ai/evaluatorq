@@ -102,18 +102,15 @@ def _sim_adapter() -> SurfaceAdapter:
         Parity: simulation/ui/dashboard.py:322-334 (table dict inside
         ``_render_transcripts``).  This matches the shape used by the
         Streamlit JSON download button (dashboard.py:338).
-        """
-        from evaluatorq.simulation.reports.sections import build_report_sections
 
-        # Build entries via the section layer so all fields (transcript,
-        # criteria, evaluator_scores, judge_reason) are populated consistently.
-        sections = build_report_sections(filtered)
-        entries: list[dict[str, Any]] = []
-        for s in sections:
-            if s.kind == 'individual_results':
-                entries = s.data.get('entries', [])
-                break
-        return entries
+        Returns plain dicts (not SimulationEntry models) because the output
+        flows directly into ``json.dumps(..., default=str)`` in the export
+        route.  ``model_dump(mode='json')`` is used so all values are
+        JSON-serialisable (enums → str, datetime → str, etc.).
+        """
+        from evaluatorq.simulation.reports.sections import individual_entries
+
+        return [e.model_dump(mode='json') for e in individual_entries(filtered)]
 
     def _sim_load(p: Any) -> Any:
         from evaluatorq.dashboard.library import _read_json_cached

@@ -23,6 +23,7 @@ from starlette.responses import Response
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.view import render_message_list
+from evaluatorq.simulation.types import SimulationEntry
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -67,19 +68,11 @@ def _load_run(rid: str, roots: list[Path] | None) -> Any | None:
         return None
 
 
-def _entries_from_run(run: Any) -> list[dict[str, Any]]:
-    """Build the individual-results entry list from a SimulationRun.
+def _entries_from_run(run: Any) -> list[SimulationEntry]:
+    """Build the typed individual-results entry list from a SimulationRun."""
+    from evaluatorq.simulation.reports.sections import individual_entries
 
-    Uses the same section builder that the Streamlit dashboard does so the
-    fields (transcript, criteria, evaluator_scores, etc.) are identical.
-    """
-    from evaluatorq.simulation.reports.sections import build_report_sections
-
-    sections = build_report_sections(run.results)
-    for s in sections:
-        if s.kind == 'individual_results':
-            return s.data.get('entries', [])
-    return []
+    return individual_entries(run.results)
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +80,7 @@ def _entries_from_run(run: Any) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def render_sim_row_list(rid: str, entries: list[dict[str, Any]]) -> str:
+def render_sim_row_list(rid: str, entries: list[SimulationEntry]) -> str:
     """Render the conversation list panel for a sim report.
 
     Each row is a clickable element with ``hx-get`` pointing to the
@@ -96,7 +89,7 @@ def render_sim_row_list(rid: str, entries: list[dict[str, Any]]) -> str:
 
     Args:
         rid:     Report ID (URL-safe).
-        entries: Entry list from ``_entries_from_run``.
+        entries: Typed entry list from ``_entries_from_run`` / ``individual_entries``.
 
     Returns:
         HTML fragment containing a ``<section class="sim-row-list">``.
@@ -107,13 +100,13 @@ def render_sim_row_list(rid: str, entries: list[dict[str, Any]]) -> str:
     safe_rid = esc(rid)
     rows_html: list[str] = []
     for e in entries:
-        idx = e['index']
-        persona = esc(str(e.get('persona', 'unknown')))
-        scenario = esc(str(e.get('scenario', 'unknown')))
-        goal = 'yes' if e.get('goal_achieved') else 'no'
-        score = f'{e.get("goal_completion_score", 0.0):.2f}'
-        turns = str(e.get('turn_count', 0))
-        terminated = esc(str(e.get('terminated_by', '')))
+        idx = e.index
+        persona = esc(e.persona)
+        scenario = esc(e.scenario)
+        goal = 'yes' if e.goal_achieved else 'no'
+        score = f'{e.goal_completion_score:.2f}'
+        turns = str(e.turn_count)
+        terminated = esc(e.terminated_by)
 
         rows_html.append(
             f'<tr class="sim-row-item"'
@@ -151,7 +144,7 @@ def render_sim_row_list(rid: str, entries: list[dict[str, Any]]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def render_transcript_fragment(entry: dict[str, Any]) -> str:
+def render_transcript_fragment(entry: SimulationEntry) -> str:
     """Render the drill-down transcript fragment for a single sim result entry.
 
     Parity: dashboard.py:356-390.
@@ -160,21 +153,20 @@ def render_transcript_fragment(entry: dict[str, Any]) -> str:
     content) goes through ``esc()`` — stored-XSS vector.
 
     Args:
-        entry: One element from ``_entries_from_run`` (the individual_results
-               section data).
+        entry: A typed ``SimulationEntry`` from ``individual_entries``.
 
     Returns:
         An HTML fragment (no full-page shell).
     """
-    idx: int = entry.get('index', 0)
-    persona = esc(str(entry.get('persona', 'unknown')))
-    scenario = esc(str(entry.get('scenario', 'unknown')))
-    goal_achieved: bool = bool(entry.get('goal_achieved'))
-    score: float = entry.get('goal_completion_score', 0.0)
-    turns: int = entry.get('turn_count', 0)
-    terminated_by = esc(str(entry.get('terminated_by', '')))
-    judge_reason = esc(str(entry.get('judge_reason', '') or ''))
-    error = entry.get('error')
+    idx: int = entry.index
+    persona = esc(entry.persona)
+    scenario = esc(entry.scenario)
+    goal_achieved: bool = entry.goal_achieved
+    score: float = entry.goal_completion_score
+    turns: int = entry.turn_count
+    terminated_by = esc(entry.terminated_by)
+    judge_reason = esc(entry.judge_reason or '')
+    error = entry.error
 
     # Header (parity: st.subheader f"#{idx+1} · {persona} · {scenario}")
     header = f'<h3 class="sim-transcript-header">#{idx + 1} &middot; {persona} &middot; {scenario}</h3>'
@@ -204,22 +196,20 @@ def render_transcript_fragment(entry: dict[str, Any]) -> str:
         error_html = f'<p class="sim-transcript-error"><strong>Error:</strong> {esc(str(error))}</p>'
 
     # Criteria (parity: dashboard.py:371-377)
-    criteria: list[dict[str, Any]] = entry.get('criteria', []) or []
+    criteria = entry.criteria or []
     criteria_html = ''
     if criteria:
         rows_parts: list[str] = []
         for c in criteria:
-            passed = c.get('passed', True)
-            is_safety = c.get('safety', False)
-            if passed:
+            if c.passed:
                 icon = '&#x2705;'  # ✅
-            elif is_safety:
+            elif c.safety:
                 icon = '&#x26D4;'  # ⛔
             else:
                 icon = '&#x274C;'  # ❌
-            ctype = c.get('type') or ''
+            ctype = c.type or ''
             ctype_html = f' <em class="sim-ctype">{esc(ctype)}</em>' if ctype else ''
-            desc = esc(str(c.get('description', '')))
+            desc = esc(c.description)
             rows_parts.append(f'<li class="sim-criterion">{icon} {desc}{ctype_html}</li>')
         criteria_html = (
             f'<div class="sim-criteria">'
@@ -229,16 +219,16 @@ def render_transcript_fragment(entry: dict[str, Any]) -> str:
         )
 
     # Transcript (parity: dashboard.py:384-390)
-    transcript: list[dict[str, Any]] = entry.get('transcript', []) or []
+    transcript = entry.transcript or []
 
     # Normalise content via coerce_content_text (handles OpenAI content blocks)
     # before handing off to the shared renderer.  The '(empty)' fallback is
     # sim-specific so we apply it here rather than inside render_message_list.
     normalised_msgs: list[dict[str, Any]] = []
     for msg in transcript:
-        raw_content = msg.get('content', '')
+        raw_content = msg.content
         content_text = coerce_content_text(raw_content) or '(empty)'
-        normalised_msgs.append({'role': msg.get('role', 'unknown'), 'content': content_text})
+        normalised_msgs.append({'role': msg.role, 'content': content_text})
 
     transcript_html = (
         (
@@ -333,14 +323,9 @@ def register_sim_view_routes(app: Any, roots: list[Any] | None = None) -> None:
         selections = _parse_sim_filter(req)
         if selections:
             filtered_results = _apply_sim_filter(run, selections)
-            from evaluatorq.simulation.reports.sections import build_report_sections
+            from evaluatorq.simulation.reports.sections import individual_entries
 
-            sections = build_report_sections(filtered_results)
-            entries: list[dict[str, Any]] = []
-            for s in sections:
-                if s.kind == 'individual_results':
-                    entries = s.data.get('entries', [])
-                    break
+            entries = individual_entries(filtered_results)
         else:
             entries = _entries_from_run(run)
 
@@ -388,17 +373,9 @@ def register_sim_view_routes(app: Any, roots: list[Any] | None = None) -> None:
         selections = _parse_sim_filter(req)
         if selections:
             filtered_results = _apply_sim_filter(run, selections)
-            # Build entries from the filtered result set by temporarily
-            # replacing run.results with the filtered slice.  We use
-            # build_report_sections directly on the filtered list.
-            from evaluatorq.simulation.reports.sections import build_report_sections
+            from evaluatorq.simulation.reports.sections import individual_entries
 
-            sections = build_report_sections(filtered_results)
-            entries: list[dict[str, Any]] = []
-            for s in sections:
-                if s.kind == 'individual_results':
-                    entries = s.data.get('entries', [])
-                    break
+            entries = individual_entries(filtered_results)
         else:
             entries = _entries_from_run(run)
 

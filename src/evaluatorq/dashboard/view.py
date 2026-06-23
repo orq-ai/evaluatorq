@@ -379,7 +379,7 @@ def render_message_list(
     return "".join(parts)
 
 
-def sim_interactive_panels(rid: str, entries: list[dict]) -> str:
+def sim_interactive_panels(rid: str, entries: list[Any]) -> str:
     """Render the interactive sim panels section (conversation list + transcript).
 
     Embeds the sim row list table with HTMX-wired transcript drill-down panel.
