@@ -25,8 +25,8 @@ Section kinds:
     - ``token_usage``             — token consumption summary
     - ``source_distribution``     — attack source counts
 
-Interactive views with no static-section equivalent are recorded as
-sanctioned dashboard-only in ``docs/redteam-dashboard-only-views.md``.
+Interactive views with no static-section equivalent remain dashboard-only and
+are documented in the dashboard guide rather than as static report sections.
 """
 
 from __future__ import annotations
