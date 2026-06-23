@@ -221,15 +221,11 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         if surface == 'redteam':
             body_with_filters = body_with_filters + redteam_interactive_panels(rid)
         elif surface == 'sim':
-            # Build entries for the conversation list panel.
-            from evaluatorq.simulation.reports.sections import build_report_sections
+            # Build typed entries for the conversation list panel.
+            from evaluatorq.simulation.reports.sections import individual_entries
+            from evaluatorq.simulation.types import SimulationEntry
 
-            sections = build_report_sections(report_obj.results)
-            entries: list[dict] = []
-            for s in sections:
-                if s.kind == 'individual_results':
-                    entries = s.data.get('entries', [])
-                    break
+            entries: list[SimulationEntry] = individual_entries(report_obj.results)
             body_with_filters = body_with_filters + sim_interactive_panels(rid, entries)
 
         # Download sidebar — available exports per surface.
