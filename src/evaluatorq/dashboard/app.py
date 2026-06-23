@@ -261,23 +261,8 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         filtered = filter_def.apply(report_obj, selections)
         new_opts = filter_def.recompute_options(filtered)
 
-        # Render body based on surface
-        if surface == 'redteam':
-            from evaluatorq.redteam.reports.converters import rebuild_filtered_report
-            from evaluatorq.redteam.reports.export_html import render_report_body
-
-            rebuilt = rebuild_filtered_report(report_obj, filtered)
-            body_html = render_report_body(rebuilt)
-        else:
-            from evaluatorq.simulation.reports.export_html import (
-                render_report_body as sim_render_report_body,
-            )
-
-            body_html = sim_render_report_body(
-                filtered,
-                target=report_obj.target_kind,
-                run_date=report_obj.created_at,
-            )
+        # Render body from filtered results — surface-agnostic via adapter field.
+        body_html = adapter.body_from_results(report_obj, filtered)
 
         form_html = render_filter_form(rid, surface or '', new_opts, selections)
         fragment_html = filter_fragment(rid, surface or '', body_html, form_html)

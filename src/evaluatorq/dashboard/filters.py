@@ -271,13 +271,13 @@ FILTERS: dict[str, FilterDef] = {
         dimensions=_REDTEAM_DIMS,
         options=_rt_full_options,
         apply=_rt_apply,
-        recompute_options=_rt_recompute_options,  # type: ignore[arg-type]
+        recompute_options=_rt_recompute_options,
     ),
     "sim": FilterDef(
         dimensions=_SIM_DIMS,
         options=_sim_full_options,
         apply=_sim_apply,
-        recompute_options=_sim_recompute_options,  # type: ignore[arg-type]
+        recompute_options=_sim_recompute_options,
     ),
 }
 

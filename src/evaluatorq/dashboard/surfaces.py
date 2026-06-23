@@ -36,6 +36,11 @@ class SurfaceAdapter:
     name: Callable[[Any], str]
     created_at: Callable[[Any], datetime]
 
+    # Render the report body HTML from (report_obj, filtered_results).
+    # Used by POST /r/{rid}/filter to rebuild the body after filtering
+    # without branching on surface kind in the handler.
+    body_from_results: Callable[[Any, list[Any]], str]
+
     # Optional: return Markdown string, or None when not supported.
     export_markdown: Callable[[Any], str] | None = field(default=None)
 
@@ -45,11 +50,14 @@ class SurfaceAdapter:
 
 
 def _redteam_adapter() -> SurfaceAdapter:
-    from evaluatorq.redteam.contracts import RedTeamReport
+    from pathlib import Path as _Path
+
+    from evaluatorq.redteam.contracts import RedTeamReport, RedTeamResult
+    from evaluatorq.redteam.reports.converters import rebuild_filtered_report
     from evaluatorq.redteam.reports.export_html import export_html, render_report_body
     from evaluatorq.redteam.reports.export_md import export_markdown as _rt_export_md
 
-    def _rt_rows(report: Any, filtered: list[Any]) -> list[dict[str, Any]]:
+    def _rt_rows(report: RedTeamReport, filtered: list[RedTeamResult]) -> list[dict[str, Any]]:
         """Build CSV/JSON row dicts from filtered RedTeamResult objects.
 
         Parity: redteam/ui/dashboard.py:1754-1771 (table_rows construction).
@@ -75,7 +83,7 @@ def _redteam_adapter() -> SurfaceAdapter:
             })
         return rows
 
-    def _rt_load(p: Any) -> Any:
+    def _rt_load(p: _Path) -> RedTeamReport:
         from evaluatorq.dashboard.library import _read_json_cached
         data = _read_json_cached(p)
         return RedTeamReport.model_validate(data)
@@ -86,17 +94,20 @@ def _redteam_adapter() -> SurfaceAdapter:
         export=export_html,
         name=lambda r: getattr(r, 'description', None) or 'Red team report',
         created_at=lambda r: r.created_at,
+        body_from_results=lambda report, filtered: render_report_body(rebuild_filtered_report(report, filtered)),
         export_markdown=_rt_export_md,
         rows=_rt_rows,
     )
 
 
 def _sim_adapter() -> SurfaceAdapter:
+    from pathlib import Path as _Path
+
     from evaluatorq.simulation.reports.export_html import export_html, render_report_body
     from evaluatorq.simulation.reports.export_md import export_markdown as _sim_export_md
-    from evaluatorq.simulation.types import SimulationRun
+    from evaluatorq.simulation.types import SimulationResult, SimulationRun
 
-    def _sim_rows(run: Any, filtered: list[Any]) -> list[dict[str, Any]]:
+    def _sim_rows(run: SimulationRun, filtered: list[SimulationResult]) -> list[dict[str, Any]]:
         """Build JSON row dicts from filtered SimulationResult objects.
 
         Parity: simulation/ui/dashboard.py:322-334 (table dict inside
@@ -112,7 +123,7 @@ def _sim_adapter() -> SurfaceAdapter:
 
         return [e.model_dump(mode='json') for e in individual_entries(filtered)]
 
-    def _sim_load(p: Any) -> Any:
+    def _sim_load(p: _Path) -> SimulationRun:
         from evaluatorq.dashboard.library import _read_json_cached
         data = _read_json_cached(p)
         return SimulationRun.model_validate(data)
@@ -131,6 +142,11 @@ def _sim_adapter() -> SurfaceAdapter:
         ),
         name=lambda run: run.run_name,
         created_at=lambda run: run.created_at,
+        body_from_results=lambda run, filtered: render_report_body(
+            filtered,
+            target=run.target_kind,
+            run_date=run.created_at,
+        ),
         export_markdown=lambda run: _sim_export_md(run.results, target=run.target_kind, run_date=run.created_at),
         rows=_sim_rows,
     )
