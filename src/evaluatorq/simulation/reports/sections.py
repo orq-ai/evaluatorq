@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq.contracts import ReportSection
+from evaluatorq.simulation.types import CriteriaRow, SimulationEntry, TranscriptMessage
 
 if TYPE_CHECKING:
     from evaluatorq.simulation.types import SimulationResult
@@ -354,32 +355,48 @@ def _build_token_usage_section(results: list[SimulationResult]) -> ReportSection
     )
 
 
-def _build_individual_results_section(results: list[SimulationResult]) -> ReportSection:
-    entries: list[dict[str, Any]] = []
+def individual_entries(results: list[SimulationResult]) -> list[SimulationEntry]:
+    """Build typed ``SimulationEntry`` objects for every result.
+
+    This is the single source of truth for the per-result field extraction that
+    used to live inline inside ``_build_individual_results_section``.  The
+    wrapper delegates here and dumps via ``model_dump(mode='json')``, so both
+    static exporters and any future consumer get byte-identical output.
+    """
+    entries: list[SimulationEntry] = []
     for idx, r in enumerate(results):
         target_model = r.metadata.get('target_model')
-        entries.append({
-            'index': idx,
-            'persona': _persona_name(r),
-            'scenario': _scenario_name(r),
-            'model': _model_name(r),
-            'target_model': str(target_model) if target_model else None,
-            'terminated_by': r.terminated_by.value,
-            'goal_achieved': r.goal_achieved,
-            'goal_completion_score': r.goal_completion_score,
-            'rules_broken': list(r.rules_broken),
-            'criteria': _criteria_rows(r),
-            'turn_count': r.turn_count,
-            'total_tokens': r.token_usage.total_tokens,
-            'judge_reason': r.reason,
-            'error': _error_message(r),
-            'evaluator_scores': _evaluator_scores(r),
-            'transcript': [{'role': m.role, 'content': m.content or ''} for m in r.messages],
-        })
+        entries.append(
+            SimulationEntry(
+                index=idx,
+                persona=_persona_name(r),
+                scenario=_scenario_name(r),
+                model=_model_name(r),
+                target_model=str(target_model) if target_model else None,
+                terminated_by=r.terminated_by.value,
+                goal_achieved=r.goal_achieved,
+                goal_completion_score=r.goal_completion_score,
+                rules_broken=list(r.rules_broken),
+                criteria=[CriteriaRow(**row) for row in _criteria_rows(r)],
+                turn_count=r.turn_count,
+                total_tokens=r.token_usage.total_tokens,
+                judge_reason=r.reason,
+                error=_error_message(r),
+                evaluator_scores=_evaluator_scores(r),
+                transcript=[
+                    TranscriptMessage(role=m.role, content=m.content or '')
+                    for m in r.messages
+                ],
+            )
+        )
+    return entries
+
+
+def _build_individual_results_section(results: list[SimulationResult]) -> ReportSection:
     return ReportSection(
         kind='individual_results',
         title='Individual Conversations',
-        data={'entries': entries},
+        data={'entries': [e.model_dump(mode='json') for e in individual_entries(results)]},
     )
 
 
