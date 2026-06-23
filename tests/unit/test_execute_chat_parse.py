@@ -76,6 +76,8 @@ async def test_parse_drops_reasoning_effort_and_retries_once():
         client=client, model="m", messages=[], span=None, timeout_s=5.0,
         response_model=_V, extra_kwargs={"reasoning_effort": "high"},
     )
-    assert resp.choices[0].message.parsed.value is True
+    parsed = resp.choices[0].message.parsed
+    assert parsed is not None
+    assert parsed.value is True
     assert client.chat.completions.parse.call_count == 2
     assert "reasoning_effort" not in client.chat.completions.parse.call_args.kwargs
