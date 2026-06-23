@@ -92,8 +92,15 @@ markdown_extensions:
 # Home only; final nav shape recorded under "Target nav" in the File Structure.
 nav:
   - Home: index.md
-  - Guides:
-      - Custom Evaluators & Frameworks: custom-evaluators-and-frameworks.md
+  - Get Started:
+      - Getting Started: guides/getting-started.md
+      - Agent Simulation:
+          - guides/agent-simulation.md
+          - Simulate an OpenAI agent: guides/agent-simulation-openai.md
+      - Red Teaming:
+          - guides/red-teaming.md
+          - Red-team an OpenAI model: guides/red-teaming-openai.md
+          - Custom Evaluators & Frameworks: custom-evaluators-and-frameworks.md
       - Dashboard: dashboard.md
   - Examples: examples/
   - API Reference: reference/

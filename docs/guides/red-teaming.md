@@ -64,8 +64,11 @@ For a fast gate, use the smoke example
 ([`08_quick_smoke_test.py`](../examples/redteam/08_quick_smoke_test.md)) — a
 small fixed run you can assert a minimum resistance rate against.
 
+!!! tip "View results in the local dashboard"
+    Run `eq ui` to browse saved red-team and simulation reports together, or use
+    `eq redteam ui` / `eq sim ui` for a surface-specific view.
+
 ## Where to next
 
 - **[Examples › Red Teaming](../examples/index.md)** — static datasets, category filtering, custom clients, multi-target, report inspection, custom hooks.
 - **[Custom Evaluators & Frameworks](../custom-evaluators-and-frameworks.md)** — add your own vulnerabilities and attack strategies.
-```
