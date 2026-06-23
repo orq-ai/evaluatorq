@@ -22,6 +22,8 @@ from starlette.responses import Response
 
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.reports import esc
+from evaluatorq.dashboard.filter_request import parse_selections
+from evaluatorq.dashboard.filters import apply_or_all
 from evaluatorq.dashboard.view import render_message_list
 from evaluatorq.simulation.types import SimulationEntry
 
@@ -260,37 +262,6 @@ def render_transcript_fragment(entry: SimulationEntry) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _parse_sim_filter(req: Request) -> dict[str, list[str]]:
-    """Parse sim filter selections from the request query-string.
-
-    Reads the same dimension names that ``FILTERS['sim']`` uses so that
-    ``hx-include="#filter-form"`` on the sim panel container automatically
-    carries the current filter state into transcript ``hx-get`` requests.
-
-    Returns an empty dict when no filter params are present (≡ "show all").
-    """
-    from evaluatorq.dashboard.filters import FILTERS
-
-    filter_def = FILTERS.get('sim')
-    if filter_def is None:
-        return {}
-    selections: dict[str, list[str]] = {}
-    for dim in filter_def.dimensions:
-        vals = req.query_params.getlist(dim)
-        if vals:
-            selections[dim] = vals
-    return selections
-
-
-def _apply_sim_filter(run: Any, selections: dict[str, list[str]]) -> list[Any]:
-    """Return the filtered sim results; empty selections ≡ all results."""
-    from evaluatorq.dashboard.filters import FILTERS
-
-    filter_def = FILTERS.get('sim')
-    if filter_def is None or not selections:
-        return list(run.results)
-    return filter_def.apply(run, selections)
-
 
 def register_sim_view_routes(app: Any, roots: list[Any] | None = None) -> None:
     """Register simulation view routes on *app*.
@@ -320,14 +291,11 @@ def register_sim_view_routes(app: Any, roots: list[Any] | None = None) -> None:
         if run is None:
             return Response('Report not found.', status_code=404, media_type='text/html')
 
-        selections = _parse_sim_filter(req)
-        if selections:
-            filtered_results = _apply_sim_filter(run, selections)
-            from evaluatorq.simulation.reports.sections import individual_entries
+        selections = parse_selections(req, 'sim')
+        filtered_results = apply_or_all(run, 'sim', selections)
+        from evaluatorq.simulation.reports.sections import individual_entries
 
-            entries = individual_entries(filtered_results)
-        else:
-            entries = _entries_from_run(run)
+        entries = individual_entries(filtered_results)
 
         html = render_sim_row_list(rid, entries)
         # Return wrapped in the same container div that the sim_interactive_panels
@@ -370,14 +338,11 @@ def register_sim_view_routes(app: Any, roots: list[Any] | None = None) -> None:
 
         # Apply any active filter before building the entry list so the idx
         # refers to a position in the same filtered ordering as the row-list.
-        selections = _parse_sim_filter(req)
-        if selections:
-            filtered_results = _apply_sim_filter(run, selections)
-            from evaluatorq.simulation.reports.sections import individual_entries
+        selections = parse_selections(req, 'sim')
+        filtered_results = apply_or_all(run, 'sim', selections)
+        from evaluatorq.simulation.reports.sections import individual_entries
 
-            entries = individual_entries(filtered_results)
-        else:
-            entries = _entries_from_run(run)
+        entries = individual_entries(filtered_results)
 
         if not entries or idx < 0 or idx >= len(entries):
             return Response(

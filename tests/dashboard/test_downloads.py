@@ -615,3 +615,56 @@ class TestOOBSidebarAfterFilterPost:
         # Without a narrowing selection, the CSV/JSON links should have no '?'
         # (or at most only result=All which is the "show all" radio default).
         assert 'export.csv?result=All' in sidebar_html or 'export.csv"' in sidebar_html or 'export.csv?' in sidebar_html
+
+
+# ---------------------------------------------------------------------------
+# T-3 behavior guard: empty selections ≡ all results on export routes
+# ---------------------------------------------------------------------------
+
+
+class TestEmptySelectionsExportAll:
+    """T-3: GET export.csv / export.json with NO filter params must return ALL
+    result rows (i.e. same count as the full unfiltered report).
+
+    This guards the harmonization in task-4: after ``apply_or_all`` replaces the
+    bare ``filter_def.apply(...)`` calls on the export routes, empty selections
+    must uniformly mean "all".  The test proves that invariant for both surfaces.
+    """
+
+    def test_redteam_csv_empty_selections_returns_all_rows(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        """export.csv with no query params must return ALL 4 result rows (+1 header)."""
+        rid = report_id(_rt_path(roots))
+        # Unfiltered: 4 results in the fixture
+        r = client.get(f"/r/{rid}/export.csv")
+        assert r.status_code == 200
+        data_lines = [ln for ln in r.text.splitlines() if ln.strip()]
+        # 1 header + 4 data rows = 5 lines
+        assert len(data_lines) == 5, (
+            f"Expected 5 lines (1 header + 4 data rows), got {len(data_lines)}: {data_lines}"
+        )
+
+    def test_redteam_json_empty_selections_returns_all_rows(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        """export.json with no query params must return ALL 4 results."""
+        rid = report_id(_rt_path(roots))
+        r = client.get(f"/r/{rid}/export.json")
+        assert r.status_code == 200
+        rows = json.loads(r.text)
+        assert len(rows) == 4, (
+            f"Expected 4 rows (all unfiltered), got {len(rows)}"
+        )
+
+    def test_sim_json_empty_selections_returns_all_rows(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        """export.json with no query params must return ALL 2 sim results."""
+        rid = report_id(_sim_path(roots))
+        r = client.get(f"/r/{rid}/export.json")
+        assert r.status_code == 200
+        rows = json.loads(r.text)
+        assert len(rows) == 2, (
+            f"Expected 2 rows (all unfiltered sim results), got {len(rows)}"
+        )

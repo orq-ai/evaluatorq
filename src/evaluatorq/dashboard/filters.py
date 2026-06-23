@@ -280,3 +280,30 @@ FILTERS: dict[str, FilterDef] = {
         recompute_options=_sim_recompute_options,  # type: ignore[arg-type]
     ),
 }
+
+
+# ---------------------------------------------------------------------------
+# Shared application helper (pure — no web-framework imports)
+# ---------------------------------------------------------------------------
+
+
+def apply_or_all(report_obj: Any, surface: str, selections: dict[str, list[str]]) -> list[Any]:
+    """Return the filtered result list, defaulting to all results when unfiltered.
+
+    Empty *selections* (no active filter) or an unknown *surface* both map to
+    the full ``report_obj.results`` list, so callers never need an explicit
+    ``if not selections`` guard.
+
+    Args:
+        report_obj: The raw report/run object (must have a ``.results`` attribute).
+        surface:    Dashboard surface key (``"redteam"`` or ``"sim"``).
+        selections: Dimension → selected-values mapping parsed from the request.
+                    An empty dict means "all results".
+
+    Returns:
+        Filtered (or full) result list.
+    """
+    filter_def = FILTERS.get(surface)
+    if filter_def is None or not selections:
+        return list(report_obj.results)
+    return filter_def.apply(report_obj, selections)

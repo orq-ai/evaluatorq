@@ -26,6 +26,8 @@ from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this
 from starlette.responses import Response
 
 from evaluatorq.common.reports import esc
+from evaluatorq.dashboard.filter_request import parse_selections
+from evaluatorq.dashboard.filters import apply_or_all
 from evaluatorq.dashboard.redteam_charts import render_agent_heatmap, render_breakdown
 from evaluatorq.dashboard.redteam_transcripts import render_conversation, render_disagreement
 
@@ -68,37 +70,6 @@ def _404(message: str) -> str:
     return f'<div class="rt-view-error"><p>{esc(message)}</p></div>'
 
 
-def _parse_redteam_filter(req: Request) -> dict[str, list[str]]:
-    """Parse redteam filter selections from the request query-string.
-
-    Reads the same dimension names that ``FILTERS['redteam']`` uses so that
-    ``hx-include="#filter-form"`` on each panel container automatically
-    carries the current filter state into every panel ``hx-get`` request.
-
-    Returns an empty dict when no filter params are present (≡ "show all").
-    """
-    from evaluatorq.dashboard.filters import FILTERS
-
-    filter_def = FILTERS.get("redteam")
-    if filter_def is None:
-        return {}
-    selections: dict[str, list[str]] = {}
-    for dim in filter_def.dimensions:
-        vals = req.query_params.getlist(dim)
-        if vals:
-            selections[dim] = vals
-    return selections
-
-
-def _apply_redteam_filter(report: RedTeamReport, selections: dict[str, list[str]]) -> list[Any]:
-    """Return the filtered result list; empty selections ≡ all results."""
-    from evaluatorq.dashboard.filters import FILTERS
-
-    filter_def = FILTERS.get("redteam")
-    if filter_def is None or not selections:
-        return list(report.results)
-    return filter_def.apply(report, selections)
-
 
 # ---------------------------------------------------------------------------
 # Route factory: register all four views on a FastHTML app
@@ -126,8 +97,8 @@ def register_redteam_view_routes(app: Any, roots: list[Any] | None = None) -> No
         if report is None:
             return Response(_404(f"Report {rid} not found"), status_code=404, media_type="text/html")
 
-        selections = _parse_redteam_filter(req)
-        filtered_results = _apply_redteam_filter(report, selections)
+        selections = parse_selections(req, "redteam")
+        filtered_results = apply_or_all(report, "redteam", selections)
         filtered_report = report.model_copy(update={"results": filtered_results})
 
         html = render_breakdown(report=filtered_report, group_by=group_by, stack_by=stack_by, rid=rid)
@@ -141,8 +112,8 @@ def register_redteam_view_routes(app: Any, roots: list[Any] | None = None) -> No
         if report is None:
             return Response(_404(f"Report {rid} not found"), status_code=404, media_type="text/html")
 
-        selections = _parse_redteam_filter(req)
-        filtered_results = _apply_redteam_filter(report, selections)
+        selections = parse_selections(req, "redteam")
+        filtered_results = apply_or_all(report, "redteam", selections)
         filtered_report = report.model_copy(update={"results": filtered_results})
 
         html = render_agent_heatmap(report=filtered_report, dim=dim, rid=rid)
@@ -159,8 +130,8 @@ def register_redteam_view_routes(app: Any, roots: list[Any] | None = None) -> No
         if report is None:
             return Response(_404(f"Report {rid} not found"), status_code=404, media_type="text/html")
 
-        selections = _parse_redteam_filter(req)
-        filtered_results = _apply_redteam_filter(report, selections)
+        selections = parse_selections(req, "redteam")
+        filtered_results = apply_or_all(report, "redteam", selections)
         filtered_report = report.model_copy(update={"results": filtered_results})
 
         if filtered_results and idx >= len(filtered_results):
@@ -182,8 +153,8 @@ def register_redteam_view_routes(app: Any, roots: list[Any] | None = None) -> No
         if report is None:
             return Response(_404(f"Report {rid} not found"), status_code=404, media_type="text/html")
 
-        selections = _parse_redteam_filter(req)
-        filtered_results = _apply_redteam_filter(report, selections)
+        selections = parse_selections(req, "redteam")
+        filtered_results = apply_or_all(report, "redteam", selections)
         filtered_report = report.model_copy(update={"results": filtered_results})
 
         html = render_disagreement(

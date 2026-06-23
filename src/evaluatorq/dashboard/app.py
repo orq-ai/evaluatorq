@@ -100,7 +100,8 @@ from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this
 from starlette.responses import Response
 
 from evaluatorq.dashboard import library
-from evaluatorq.dashboard.filters import FILTERS
+from evaluatorq.dashboard.filter_request import parse_selections
+from evaluatorq.dashboard.filters import FILTERS, apply_or_all
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.sim_views import register_sim_view_routes
@@ -124,23 +125,6 @@ _STATIC_DIR = Path(__file__).parent / 'static'
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-
-def _parse_filter_selections(req: Request, surface: str) -> dict[str, list[str]]:
-    """Parse filter selections from the request query-string.
-
-    Mirrors how the POST /filter handler reads form data, but reads from
-    GET query params instead.  Used by the CSV/JSON export routes so the
-    same filter state can be re-applied.
-    """
-    filter_def = FILTERS.get(surface)
-    if filter_def is None:
-        return {}
-    selections: dict[str, list[str]] = {}
-    for dim in filter_def.dimensions:
-        vals = req.query_params.getlist(dim)
-        if vals:
-            selections[dim] = vals
-    return selections
 
 
 def build_app(roots: list[Path] | None = None) -> FastHTML:
@@ -437,11 +421,8 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
             )
 
         # Apply filters from the query-string (same logic as POST /filter).
-        selections = _parse_filter_selections(req, surface or '')
-        if filter_def is not None:
-            filtered = filter_def.apply(report_obj, selections)
-        else:
-            filtered = list(getattr(report_obj, 'results', []))
+        selections = parse_selections(req, surface or '')
+        filtered = apply_or_all(report_obj, surface or '', selections)
 
         row_dicts = adapter.rows(report_obj, filtered)
 
@@ -497,11 +478,8 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
             )
 
         # Apply filters from the query-string.
-        selections = _parse_filter_selections(req, surface or '')
-        if filter_def is not None:
-            filtered = filter_def.apply(report_obj, selections)
-        else:
-            filtered = list(getattr(report_obj, 'results', []))
+        selections = parse_selections(req, surface or '')
+        filtered = apply_or_all(report_obj, surface or '', selections)
 
         row_dicts = adapter.rows(report_obj, filtered)
 
