@@ -42,7 +42,7 @@
 html { font-size: 100%; }
 @media screen and (min-width: 100em) { html { font-size: 106.25%; } }
 @media screen and (min-width: 125em) { html { font-size: 112.5%; } }
-.md-typeset { font-size: 0.72rem; }           /* ~11.5px body — compact */
+.md-typeset { font-size: 0.85rem; }           /* ~13.6px body — readable, up from the 0.72rem compact scale */
 .md-typeset h1 { font-size: 1.75rem; line-height: 1.25; font-weight: 700; }
 .md-typeset h2 { font-size: 1.35rem; margin-top: 2.2rem; }
 .md-typeset h3 { font-size: 1.1rem; }
