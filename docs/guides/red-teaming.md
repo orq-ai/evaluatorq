@@ -4,9 +4,25 @@ Probe an agent or model with adversarial attacks mapped to the OWASP **LLM Top
 10** and **Agentic Security Initiative (ASI)** frameworks, then read off a
 resistance rate.
 
+*[ASI]: OWASP Agentic Security Initiative
+*[LLM01]: Prompt Injection
+*[ASR]: Attack Success Rate
+
 ```bash
 pip install "evaluatorq[redteam]"
 export ORQ_API_KEY=...   # targets your Orq agent + routes the attacker LLM
+```
+
+```mermaid
+flowchart LR
+    C[Categories<br/>LLM01 / ASI01 / ...]
+    SP[Strategy planner]
+    AG[Attack generator]
+    OR[Runner / orchestrator]
+    EV[OWASP evaluator]
+    RP[Report + ASR]
+
+    C --> SP --> AG --> OR --> EV --> RP
 ```
 
 ## Modes

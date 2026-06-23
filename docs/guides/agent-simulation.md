@@ -15,6 +15,23 @@ pip install "evaluatorq[simulation]"
 export ORQ_API_KEY=...
 ```
 
+```mermaid
+sequenceDiagram
+    participant U as User simulator
+    participant A as Agent under test
+    participant J as Judge
+
+    U->>A: next user turn
+    A-->>U: agent reply
+    loop until max_turns or stop condition
+        U->>A: follow-up turn
+        A-->>U: response
+    end
+    U->>J: full transcript + scenario
+    A->>J: agent responses
+    J-->>U: goal achieved / criteria met scores
+```
+
 ## Generate from a one-line description
 
 The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios,

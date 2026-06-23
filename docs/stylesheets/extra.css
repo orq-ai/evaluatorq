@@ -217,3 +217,7 @@ html { font-size: 100%; }
 /* ponytail: NOT overriding Material's sidebar-collapse breakpoint (76.25em).
    A CSS-only override leaves a broken half-state — drawer-mode and sidebar-mode
    render different DOM. Widen the window past ~1220px for the permanent sidebar. */
+
+.md-typeset .mermaid {
+  --md-mermaid-edge-color: var(--orq-teal-light);
+}

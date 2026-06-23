@@ -22,6 +22,17 @@ An evaluation has three parts:
 `evaluatorq(...)` runs every job over every datapoint in parallel and applies
 each evaluator to the results.
 
+```mermaid
+flowchart LR
+    D[DataPoint]
+    J[@job]
+    O[output]
+    E[Evaluator]
+    P[pass / fail]
+
+    D --> J --> O --> E --> P
+```
+
 ## A first evaluation
 
 ```python
@@ -61,9 +72,10 @@ Run it:
 python simple_local_eval.py
 ```
 
-`print_results=True` renders a pass/fail table in the terminal. A passing row
-means the evaluator's condition held (here: the expected string appears in the
-output). Wire that pass/fail signal into CI to gate on quality regressions.
+`print_results=True` renders a pass/fail table in the terminal. In this
+example, `string_contains_evaluator()` checks whether the job output contains
+the `expected_output`, so `HELLO WORLD` satisfies an expected output of `HELLO`.
+Wire that pass/fail signal into CI to gate on quality regressions.
 
 ## Where to next
 
