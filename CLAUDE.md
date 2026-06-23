@@ -28,6 +28,12 @@ uv run basedpyright
 
 # Build
 uv build
+
+# Serve the docs site locally (live-reload at http://127.0.0.1:8000/evaluatorq/)
+uv run --group docs mkdocs serve
+
+# Build the docs site (strict — fails on warnings, as CI does)
+uv run --group docs mkdocs build --strict
 ```
 
 ## Package Structure
