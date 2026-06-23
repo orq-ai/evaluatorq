@@ -7,7 +7,7 @@ display name, and extracting a ``datetime`` from a parsed report object.
 Optional export callables:
 
 - ``export_markdown``: returns a Markdown string for the report, or ``None``
-  if the surface has no Markdown export (sim only ever had JSON download).
+  if the surface has no Markdown export.
 - ``rows``: returns the serialisable row list used by CSV/JSON export.  Each
   element is a ``dict[str, Any]`` (redteam) or a plain dict (sim entries).
 
@@ -93,6 +93,7 @@ def _redteam_adapter() -> SurfaceAdapter:
 
 def _sim_adapter() -> SurfaceAdapter:
     from evaluatorq.simulation.reports.export_html import export_html, render_report_body
+    from evaluatorq.simulation.reports.export_md import export_markdown as _sim_export_md
     from evaluatorq.simulation.types import SimulationRun
 
     def _sim_rows(run: Any, filtered: list[Any]) -> list[dict[str, Any]]:
@@ -133,7 +134,7 @@ def _sim_adapter() -> SurfaceAdapter:
         ),
         name=lambda run: run.run_name,
         created_at=lambda run: run.created_at,
-        export_markdown=None,  # sim never had a markdown download — honest parity
+        export_markdown=lambda run: _sim_export_md(run.results, target=run.target_kind, run_date=run.created_at),
         rows=_sim_rows,
     )
 

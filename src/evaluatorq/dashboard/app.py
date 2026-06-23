@@ -6,7 +6,7 @@
 - ``GET /r/{rid}``            → embedded report view in the dashboard shell
 - ``GET /r/{rid}/export``     → standalone HTML export (alias: export.html)
 - ``GET /r/{rid}/export.html``→ standalone HTML export (full document)
-- ``GET /r/{rid}/export.md``  → Markdown export (redteam only; sim → 404)
+- ``GET /r/{rid}/export.md``  → Markdown export (redteam and sim)
 - ``GET /r/{rid}/export.csv`` → CSV of (filtered) result rows
 - ``GET /r/{rid}/export.json``→ JSON of (filtered) result rows
 - ``GET /r/{rid}/sim/transcript?idx=`` → sim transcript fragment (HTMX)
@@ -208,9 +208,11 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         name = adapter.name(report_obj)
 
         # Render filter form alongside the body.  Both known surfaces
-        # (redteam, sim) are registered in FILTERS so filter_def is always
-        # non-None at this point.
-        filter_def = FILTERS[surface or '']
+        # (redteam, sim) are registered in FILTERS; fall back to 404 for unknown surfaces.
+        filter_def = FILTERS.get(surface or '')
+        if filter_def is None:
+            not_found_html = page('Not found', report_not_found(rid))
+            return Response(not_found_html, status_code=404, media_type='text/html')
         opts = filter_def.options(report_obj)
         form_html = render_filter_form(rid, surface or '', opts, {})
         body_with_filters = report_view_with_filters(rid, surface or '', body_html, form_html)
@@ -361,7 +363,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         return _do_html_export(rid)
 
     # ------------------------------------------------------------------
-    # Route: GET /r/{rid}/export.md  — Markdown (redteam only)
+    # Route: GET /r/{rid}/export.md  — Markdown (redteam and sim)
     # ------------------------------------------------------------------
     @app.get('/r/{rid}/export.md')
     def report_export_md(rid: str) -> Response:
@@ -375,9 +377,8 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
             return Response('404 Not Found', status_code=404, media_type='text/plain')
 
         if adapter.export_markdown is None:
-            # sim never had a Markdown export — honest parity, not a silent drop.
             return Response(
-                'no markdown export for simulation runs',
+                'no markdown export for this surface',
                 status_code=404,
                 media_type='text/plain',
             )
