@@ -22,6 +22,7 @@ from starlette.responses import Response
 
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.reports import esc
+from evaluatorq.dashboard.view import render_message_list
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -79,15 +80,6 @@ def _entries_from_run(run: Any) -> list[dict[str, Any]]:
         if s.kind == 'individual_results':
             return s.data.get('entries', [])
     return []
-
-
-def _meta(run: Any, key: str) -> str:
-    """Return metadata string from the run-level meta if available.
-
-    The per-result ``metadata`` dict is accessed inside entries; this helper
-    is for the filters._meta parity — unused here but kept for symmetry.
-    """
-    return str(getattr(run, key, 'unknown'))
 
 
 # ---------------------------------------------------------------------------
@@ -238,26 +230,23 @@ def render_transcript_fragment(entry: dict[str, Any]) -> str:
 
     # Transcript (parity: dashboard.py:384-390)
     transcript: list[dict[str, Any]] = entry.get('transcript', []) or []
-    msg_parts: list[str] = []
+
+    # Normalise content via coerce_content_text (handles OpenAI content blocks)
+    # before handing off to the shared renderer.  The '(empty)' fallback is
+    # sim-specific so we apply it here rather than inside render_message_list.
+    normalised_msgs: list[dict[str, Any]] = []
     for msg in transcript:
-        role = msg.get('role', 'unknown')
-        label = _ROLE_LABELS.get(role, role)
         raw_content = msg.get('content', '')
         content_text = coerce_content_text(raw_content) or '(empty)'
-        safe_content = esc(content_text)
-        css_role = role if role in ('user', 'assistant', 'system', 'tool') else 'unknown'
-        msg_parts.append(
-            f'<div class="sim-msg sim-msg-{esc(css_role)}">'
-            f'<span class="sim-msg-role">{esc(label)}</span>'
-            f'<pre class="sim-msg-content">{safe_content}</pre>'
-            f'</div>'
-        )
+        normalised_msgs.append({'role': msg.get('role', 'unknown'), 'content': content_text})
 
     transcript_html = (
         (
             f'<div class="sim-transcript">'
             f'<strong>Transcript</strong>'
-            f'<div class="sim-transcript-messages">{"".join(msg_parts)}</div>'
+            f'<div class="sim-transcript-messages">'
+            f'{render_message_list(normalised_msgs, role_labels=_ROLE_LABELS, class_prefix="sim")}'
+            f'</div>'
             f'</div>'
         )
         if transcript

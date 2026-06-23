@@ -10,11 +10,15 @@ that are injected into the shell via ``shell.page()``.
 ``render_filter_form(rid, surface, opts, selections)`` renders the HTMX
 filter sidebar form.  ``filter_fragment(rid, surface, body_html, form_html)``
 combines a re-rendered body and a re-rendered form into the HTMX swap target.
+
+``render_message_list(messages, *, role_labels, class_prefix)`` renders a
+role-labeled message list as a series of ``<div>`` elements.  Shared by
+``sim_views`` (and any other surface that uses the simple flat layout).
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
 from fasthtml.common import Script
@@ -250,7 +254,6 @@ def download_sidebar(
     surface: str,
     *,
     selections: dict[str, list[str]] | None = None,
-    filter_qs: str = '',
     has_markdown: bool = False,
     has_csv: bool = False,
     has_json: bool = True,
@@ -270,10 +273,9 @@ def download_sidebar(
         rid:          Report ID (URL-safe).
         surface:      Surface key (``'redteam'`` | ``'sim'``).
         selections:   Active filter selections as ``dict[str, list[str]]``.
-                      When provided, takes precedence over *filter_qs*.
-        filter_qs:    Legacy: active filter query-string
-                      (e.g. ``"result=Vulnerable"``).  Ignored when
-                      *selections* is given.  Empty string → no filter suffix.
+                      When provided, filter params are appended to CSV/JSON
+                      download links so the downloaded data reflects the
+                      currently filtered set.
         has_markdown: Whether to include a Markdown download link.
         has_csv:      Whether to include a CSV download link.
         has_json:     Whether to include a JSON download link.
@@ -288,8 +290,7 @@ def download_sidebar(
 
     # Build the query-string from selections (multi-value) using urlencode so
     # that & separators are NOT HTML-escaped.  Only the rid path segment is
-    # escaped via esc().  The legacy filter_qs fallback is kept for callers
-    # that still pass a raw string.
+    # escaped via esc().
     if selections:
         # Flatten dict[str, list[str]] → list of (key, val) pairs for urlencode.
         pairs: list[tuple[str, str]] = [
@@ -297,7 +298,7 @@ def download_sidebar(
         ]
         qs = f'?{urlencode(pairs)}' if pairs else ''
     else:
-        qs = f'?{filter_qs}' if filter_qs else ''
+        qs = ''
 
     oob_attr = ' hx-swap-oob="true"' if oob else ''
 
@@ -316,6 +317,66 @@ def download_sidebar(
         f'<section id="{_DOWNLOAD_SIDEBAR_ID}" class="download-sidebar"{oob_attr}>'
         f'<h3 class="download-title">Downloads</h3>{inner}</section>'
     )
+
+
+def render_message_list(
+    messages: list[Any],
+    *,
+    role_labels: dict[str, str],
+    class_prefix: str,
+) -> str:
+    """Render a role-labeled message list as a series of ``<div>`` elements.
+
+    Each message produces:
+
+    .. code-block:: html
+
+        <div class="{class_prefix}-msg {class_prefix}-msg-{css_role}">
+          <span class="{class_prefix}-msg-role">{label}</span>
+          <pre class="{class_prefix}-msg-content">{esc(content)}</pre>
+        </div>
+
+    Where ``{css_role}`` is the raw role value when it is one of
+    ``user``, ``assistant``, ``system``, ``tool``; otherwise ``unknown``.
+
+    Every content string is passed through ``esc()`` (HTML-escaping) to
+    prevent stored-XSS vectors.
+
+    Args:
+        messages:     Sequence of message dicts (``role`` / ``content`` keys)
+                      or objects with ``.role`` / ``.content`` attributes.
+        role_labels:  Mapping from role name → display label.  Falls back to
+                      the raw role string when a role is not in the map.
+        class_prefix: CSS class namespace (e.g. ``"sim"`` → ``sim-msg``).
+
+    Returns:
+        Concatenated HTML string (empty string when *messages* is empty).
+    """
+    known_roles = frozenset({"user", "assistant", "system", "tool"})
+
+    parts: list[str] = []
+    for msg in messages:
+        # Support both dict-style and attribute-style message objects.
+        if isinstance(msg, dict):
+            role = str(msg.get("role", "unknown"))
+            raw_content = msg.get("content", "")
+        else:
+            role = str(getattr(msg, "role", "unknown"))
+            raw_content = getattr(msg, "content", "")
+
+        label = role_labels.get(role, role)
+        content_text: str = raw_content if isinstance(raw_content, str) else str(raw_content or "")
+        safe_content = esc(content_text)
+        css_role = role if role in known_roles else "unknown"
+
+        parts.append(
+            f'<div class="{class_prefix}-msg {class_prefix}-msg-{esc(css_role)}">'
+            f'<span class="{class_prefix}-msg-role">{esc(label)}</span>'
+            f'<pre class="{class_prefix}-msg-content">{safe_content}</pre>'
+            f'</div>'
+        )
+
+    return "".join(parts)
 
 
 def sim_interactive_panels(rid: str, entries: list[dict]) -> str:
