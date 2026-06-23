@@ -1163,6 +1163,7 @@ docs = [
     { name = "mkdocs-material" },
     { name = "mkdocs-section-index" },
     { name = "mkdocstrings", extra = ["python"] },
+    { name = "termynal" },
 ]
 
 [package.metadata]
@@ -1223,6 +1224,7 @@ docs = [
     { name = "mkdocs-material", specifier = ">=9.5.0" },
     { name = "mkdocs-section-index", specifier = ">=0.3.0" },
     { name = "mkdocstrings", extras = ["python"], specifier = ">=0.26.0" },
+    { name = "termynal", specifier = ">=0.12.0" },
 ]
 
 [[package]]
@@ -4688,6 +4690,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/47/c6/ee486fd809e357697ee8a44d3d69222b344920433d3b6666ccd9b374630c/tenacity-9.1.4.tar.gz", hash = "sha256:adb31d4c263f2bd041081ab33b498309a57c77f9acf2db65aadf0898179cf93a", size = 49413, upload-time = "2026-02-07T10:45:33.841Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d7/c1/eb8f9debc45d3b7918a32ab756658a0904732f75e555402972246b0b8e71/tenacity-9.1.4-py3-none-any.whl", hash = "sha256:6095a360c919085f28c6527de529e76a06ad89b23659fa881ae0649b867a9d55", size = 28926, upload-time = "2026-02-07T10:45:32.24Z" },
+]
+
+[[package]]
+name = "termynal"
+version = "0.14.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "markdown" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/26/8c/ea13868e6008ed964837db011648e3e7766e0ecfa1b42d7b9a4cf0c228e2/termynal-0.14.0.tar.gz", hash = "sha256:2918a1a6cf468497fbb3a72dc3726743988829eef1136d0c78a81df70ec869f6", size = 178022, upload-time = "2026-03-16T16:56:21.539Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c3/8f/c089f7c9f9fc1da25e6271386e5df84e1f6e0b04d2f0b408939b51b2876f/termynal-0.14.0-py3-none-any.whl", hash = "sha256:b5147545e29256d35148251f5c2d3d23dec1d2fb0b4ba464ff330a7de8b56fc6", size = 11754, upload-time = "2026-03-16T16:56:22.76Z" },
 ]
 
 [[package]]

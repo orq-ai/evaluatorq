@@ -7,6 +7,7 @@ into the docs tree (nothing written to disk under docs/).
 import importlib
 import re
 from pathlib import Path
+from typing import Any
 
 import mkdocs_gen_files
 
@@ -117,8 +118,19 @@ def _safe_getattr(mod: object, name: str, parent_dotted: str) -> object | None:
         return None
 
 
+# One-line blurb per API package for the reference landing page.
+_PACKAGE_DESC = {
+    "evaluatorq": "Core evaluation API — `evaluatorq()`, `DataPoint`, `job`, built-in evaluators.",
+    "evaluatorq.redteam": "Adversarial red teaming — `red_team()`, targets, OWASP frameworks.",
+    "evaluatorq.openresponses": "OpenAI Responses API integration.",
+    "evaluatorq.tracing": "OpenTelemetry tracing helpers.",
+    "evaluatorq.integrations": "Third-party agent integrations (LangChain, LangGraph, …).",
+}
+
+
 def write_api_pages() -> None:
     nav_lines = []
+    index_rows = []
     for dotted in API_PACKAGES:
         mod = importlib.import_module(dotted)
         names = list(getattr(mod, "__all__", []))
@@ -146,14 +158,88 @@ def write_api_pages() -> None:
                 fd.write(f"::: {dotted}\n")
         mkdocs_gen_files.set_edit_path(page_path, "gen_pages.py")
         title = dotted.replace("evaluatorq.integrations.", "integrations/").replace("evaluatorq.", "") or "evaluatorq"
-        nav_lines.append(f"- [{title}]({page_path.relative_to('reference').as_posix()})\n")
+        href = page_path.relative_to("reference").as_posix()
+        nav_lines.append(f"- [{title}]({href})\n")
+        desc = _PACKAGE_DESC.get(dotted, "")
+        index_rows.append(f"- [`{dotted}`]({href}) — {desc}\n")
+
+    # Landing page so /reference/ resolves (not a 404) and section-index has a home.
+    with mkdocs_gen_files.open("reference/index.md", "w") as fd:
+        fd.write("# API Reference\n\n")
+        fd.write("The public API, documented from each package's `__all__`.\n\n")
+        fd.writelines(index_rows)
     with mkdocs_gen_files.open("reference/SUMMARY.md", "w") as fd:
+        fd.write("- [Overview](index.md)\n")
         fd.writelines(nav_lines)
 
 
+# Support code, tests, and internal infra — NOT standalone examples. Excluded
+# from the generated Examples section so the nav stays a list of runnable recipes.
+_EXCLUDE_FILES = {
+    "orq_agent_tailscale_openai.py",  # internal Tailscale endpoint, not public
+    "evals.py",  # utility module, not a recipe
+    "example_runners.py",  # internal orchestration helper
+    "examples.py",  # thin dispatcher, no standalone value
+    # Demo scaffolding — supporting modules for the redteam demos, not recipes.
+    # Their entrypoints (run.py, compare.py, run_redteam.py) stay published.
+    "config.py",
+    "tools.py",
+    "demo_data.py",
+    "handlers.py",
+    "prompts.py",
+    "refund_target.py",
+    "build_agent.py",
+}
+_EXCLUDE_DIRS = {"tests", "webapp", "agents", "__pycache__"}
+
+# Title-case mangles proper nouns / acronyms; restore them (whole-word only).
+_TITLE_FIXUPS = {
+    "Openai": "OpenAI",
+    "Pydantic Ai": "PydanticAI",
+    "Crewai": "CrewAI",
+    "Langgraph": "LangGraph",
+    "Langchain": "LangChain",
+    "Llm": "LLM",
+    "Orq": "ORQ",
+    "Owasp": "OWASP",
+    "Cli": "CLI",
+}
+# Opaque directory names → reader-facing section labels.
+_SECTION_RENAMES = {"lib": "Core Library", "redteam": "Red Teaming"}
+# Per-file title overrides (file stem → label) for misleading filenames.
+_PAGE_TITLE_OVERRIDES = {"country_unit_test": "Country Dataset Eval"}
+# One-line blurb per top-level category for the Examples landing page.
+_CATEGORY_DESC = {
+    "Core Library": "Basics, datasets, structured scoring, CLI usage, and framework integrations.",
+    "Agent Simulation": "Drive agents with a simulated user across multi-turn conversations — LangGraph, CrewAI, OpenAI Agents, PydanticAI, or a custom target.",
+    "Red Teaming": "Adversarial OWASP LLM Top 10 / ASI attacks against demo agents, dynamic and static.",
+}
+
+
 def _pretty(stem: str) -> str:
-    """Filename/dir → readable title: drop a leading numeric prefix, title-case."""
-    return re.sub(r"^\d+[_-]", "", stem).replace("_", " ").title()
+    """Filename/dir → readable title: drop a leading numeric prefix, title-case,
+    then restore known proper nouns/acronyms."""
+    title = re.sub(r"^\d+[_-]", "", stem).replace("_", " ").title()
+    for wrong, right in _TITLE_FIXUPS.items():
+        title = re.sub(rf"\b{re.escape(wrong)}\b", right, title)
+    return title
+
+
+def _section_label(name: str) -> str:
+    return _SECTION_RENAMES.get(name, _pretty(name))
+
+
+def _docstring_summary(source: str) -> str:
+    """First paragraph of a module docstring, collapsed to one line (or '')."""
+    import ast
+    import textwrap
+
+    try:
+        doc = ast.get_docstring(ast.parse(source)) or ""
+    except SyntaxError:
+        return ""
+    first = doc.strip().split("\n\n")[0].replace("\n", " ").strip()
+    return textwrap.shorten(first, width=280, placeholder="…") if first else ""
 
 
 def write_example_pages() -> None:
@@ -165,17 +251,30 @@ def write_example_pages() -> None:
     files = sorted(
         p
         for p in EXAMPLES.rglob("*.py")
-        if p.name != "__init__.py" and "__pycache__" not in p.parts
+        if p.name != "__init__.py"
+        and not p.name.startswith("test_")  # pytest files are not examples
+        and p.name not in _EXCLUDE_FILES
+        and not (set(p.relative_to(EXAMPLES).parts[:-1]) & _EXCLUDE_DIRS)
     )
-    tree: dict = {}
+    tree: dict[str, Any] = {}
     for f in files:
         rel = f.relative_to(EXAMPLES)
         page = Path("examples", rel).with_suffix(".md")
         source = f.read_text(encoding="utf-8")
         gh = f"{BLOB}/{f.relative_to(REPO).as_posix()}"
+        title = _PAGE_TITLE_OVERRIDES.get(f.stem, _pretty(f.stem))
+        desc = _docstring_summary(source)
         with mkdocs_gen_files.open(page, "w") as fd:
-            fd.write(f"# {_pretty(f.stem)}\n\n")
+            fd.write(f"# {title}\n\n")
+            if desc:
+                fd.write(f"{desc}\n\n")
             fd.write(f"[View on GitHub]({gh})\n\n")
+            if "<your-" in source:
+                fd.write(
+                    "!!! warning\n"
+                    "    Contains placeholder IDs (`<your-...>`). Replace them with real\n"
+                    "    values from the Orq platform before running.\n\n"
+                )
             fd.write("```python\n")
             fd.write(source if source.endswith("\n") else source + "\n")
             fd.write("```\n")
@@ -184,27 +283,52 @@ def write_example_pages() -> None:
         for part in rel.parts[:-1]:
             node = node.setdefault(part, {})
         node.setdefault("__files__", []).append(
-            (_pretty(f.stem), page.relative_to("examples").as_posix())
+            (title, page.relative_to("examples").as_posix())
         )
 
     lines: list[str] = []
 
-    def emit(node: dict, depth: int) -> None:
+    # Top-level area order (lower = first); unlisted areas fall back to alpha.
+    _SECTION_ORDER = {"lib": 0, "agent_simulation": 1, "redteam": 2}
+
+    def _ranked(keys) -> list[str]:
+        return sorted(keys, key=lambda k: (_SECTION_ORDER.get(k, 99), k))
+
+    def emit(node: dict[str, Any], depth: int) -> None:
         indent = "    " * depth
-        for name in sorted(k for k in node if k != "__files__"):
-            lines.append(f"{indent}- {_pretty(name)}:\n")
+        for name in _ranked(k for k in node if k != "__files__"):
+            lines.append(f"{indent}- {_section_label(name)}:\n")
             emit(node[name], depth + 1)
         for label, href in node.get("__files__", []):
             lines.append(f"{indent}- [{label}]({href})\n")
 
     emit(tree, 0)
-    # Section landing page (navigation.indexes uses the first SUMMARY entry).
-    cats = sorted(_pretty(k) for k in tree if k != "__files__")
+
+    def first_href(node: dict[str, Any]) -> str | None:
+        """First example page href in a subtree (depth-first, sorted)."""
+        for name in sorted(k for k in node if k != "__files__"):
+            h = first_href(node[name])
+            if h:
+                return h
+        files_here = node.get("__files__", [])
+        return files_here[0][1] if files_here else None
+
+    # Landing page as browsable grid cards (one per area), matching the homepage.
+    top = _ranked(k for k in tree if k != "__files__")
     with mkdocs_gen_files.open("examples/index.md", "w") as fd:
         fd.write("# Examples\n\n")
         fd.write(f"{len(files)} runnable scripts, grouped by area:\n\n")
-        for c in cats:
-            fd.write(f"- {c}\n")
+        fd.write('<div class="grid cards" markdown>\n\n')
+        for key in top:
+            label = _section_label(key)
+            href = first_href(tree[key])
+            desc = _CATEGORY_DESC.get(label, "")
+            fd.write(f"-   __{label}__\n\n    ---\n\n")
+            if desc:
+                fd.write(f"    {desc}\n\n")
+            if href:
+                fd.write(f"    [:octicons-arrow-right-24: Browse {label}]({href})\n\n")
+        fd.write("</div>\n")
     with mkdocs_gen_files.open("examples/SUMMARY.md", "w") as fd:
         fd.write("- [Overview](index.md)\n")
         fd.writelines(lines)

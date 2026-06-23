@@ -2,6 +2,12 @@
 
 This guide explains how to add custom evaluators, vulnerabilities, attack strategies, and frameworks to the evaluatorq red teaming system.
 
+!!! note "Requires editing the package source"
+    The extension points below modify evaluatorq's internal registries directly —
+    they are not a stable runtime API. Clone the repo and install in editable mode
+    (`pip install -e ".[redteam]"`), then make your changes there. A runtime
+    registration API is planned; see the [Roadmap](roadmap.md).
+
 ## Architecture Overview
 
 The red teaming system has four core registries that work together:
