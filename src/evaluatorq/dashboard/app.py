@@ -125,23 +125,6 @@ _STATIC_DIR = Path(__file__).parent / 'static'
 # ---------------------------------------------------------------------------
 
 
-def _resolve_and_load(rid: str, roots: list[Path] | None) -> tuple[Path, str, object] | None:
-    """Resolve report id → (path, surface, report_obj) or None on miss/error."""
-    path = library.resolve(rid, roots)
-    if path is None:
-        return None
-    surface, _raw = library.load_surface(path)
-    adapter = ADAPTERS.get(surface or '')
-    if adapter is None:
-        return None
-    try:
-        report_obj = adapter.load(path)
-    except Exception as exc:
-        logger.warning('Failed to load report {}: {}', path.name, exc)
-        return None
-    return path, surface, report_obj  # type: ignore[return-value]
-
-
 def _parse_filter_selections(req: Request, surface: str) -> dict[str, list[str]]:
     """Parse filter selections from the request query-string.
 
@@ -224,14 +207,13 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         body_html = adapter.body(report_obj)
         name = adapter.name(report_obj)
 
-        # Render filter form alongside the body when a filter definition exists.
-        filter_def = FILTERS.get(surface or '')
-        if filter_def is not None:
-            opts = filter_def.options(report_obj)
-            form_html = render_filter_form(rid, surface or '', opts, {})
-            body_with_filters = report_view_with_filters(rid, surface or '', body_html, form_html)
-        else:
-            body_with_filters = f'<section class="report-view">{body_html}</section>'
+        # Render filter form alongside the body.  Both known surfaces
+        # (redteam, sim) are registered in FILTERS so filter_def is always
+        # non-None at this point.
+        filter_def = FILTERS[surface or '']
+        opts = filter_def.options(report_obj)
+        form_html = render_filter_form(rid, surface or '', opts, {})
+        body_with_filters = report_view_with_filters(rid, surface or '', body_html, form_html)
 
         # Append surface-specific interactive panels.
         if surface == 'redteam':
@@ -252,7 +234,6 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         dl_sidebar = download_sidebar(
             rid,
             surface or '',
-            filter_qs='',
             has_markdown=(adapter.export_markdown is not None),
             has_csv=(surface == 'redteam'),
             has_json=True,
