@@ -14,9 +14,9 @@ theme:
   name: material
   logo: assets/orq-mark-white.svg
   favicon: assets/orq-favicon.svg
-  font:
-    text: Inter
-    code: JetBrains Mono
+  # Self-host the Orq brand fonts (Avio Sans / Kurrent) — see stylesheets/extra.css.
+  # `false` stops Material fetching Google Fonts; @font-face + var overrides do the rest.
+  font: false
   # Feature set mirrors Pydantic's docs (Material for MkDocs), minus the
   # Insiders-only ones (navigation.path, instant.prefetch/preview, tabs.sticky)
   # that would fail `mkdocs build --strict` on the community edition.
