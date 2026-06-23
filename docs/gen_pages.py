@@ -7,6 +7,7 @@ into the docs tree (nothing written to disk under docs/).
 import importlib
 import re
 from pathlib import Path
+from typing import Any
 
 import mkdocs_gen_files
 
@@ -255,7 +256,7 @@ def write_example_pages() -> None:
         and p.name not in _EXCLUDE_FILES
         and not (set(p.relative_to(EXAMPLES).parts[:-1]) & _EXCLUDE_DIRS)
     )
-    tree: dict = {}
+    tree: dict[str, Any] = {}
     for f in files:
         rel = f.relative_to(EXAMPLES)
         page = Path("examples", rel).with_suffix(".md")
@@ -293,7 +294,7 @@ def write_example_pages() -> None:
     def _ranked(keys) -> list[str]:
         return sorted(keys, key=lambda k: (_SECTION_ORDER.get(k, 99), k))
 
-    def emit(node: dict, depth: int) -> None:
+    def emit(node: dict[str, Any], depth: int) -> None:
         indent = "    " * depth
         for name in _ranked(k for k in node if k != "__files__"):
             lines.append(f"{indent}- {_section_label(name)}:\n")
@@ -303,7 +304,7 @@ def write_example_pages() -> None:
 
     emit(tree, 0)
 
-    def first_href(node: dict) -> str | None:
+    def first_href(node: dict[str, Any]) -> str | None:
         """First example page href in a subtree (depth-first, sorted)."""
         for name in sorted(k for k in node if k != "__files__"):
             h = first_href(node[name])
