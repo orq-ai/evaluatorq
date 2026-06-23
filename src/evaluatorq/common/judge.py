@@ -163,6 +163,7 @@ def _classify(exc: Exception) -> JudgeError:
 
 
 async def _json_object_judge(
+    *,
     client: AsyncOpenAI,
     model: str,
     cfg: LLMCallConfig,
@@ -251,14 +252,14 @@ async def run_judge(
                         raise
                     logger.warning('Model {} rejected structured output; falling back to json_object', model)
                     payload, usage, raw_content = await _json_object_judge(
-                        client,
-                        model,
-                        cfg,
-                        system_prompt,
-                        user_prompt,
-                        span,
-                        temp,
-                        response_model,
+                        client=client,
+                        model=model,
+                        cfg=cfg,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        span=span,
+                        temp=temp,
+                        inject_model=response_model,
                     )
                     return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
 
@@ -277,14 +278,14 @@ async def run_judge(
                 # json_object path yet inject the schema so dynamic constraints (e.g. a
                 # categorical label set) still steer the model instead of being dropped.
                 payload, usage, raw_content = await _json_object_judge(
-                    client,
-                    model,
-                    cfg,
-                    system_prompt,
-                    user_prompt,
-                    span,
-                    temp,
-                    response_model,
+                    client=client,
+                    model=model,
+                    cfg=cfg,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    span=span,
+                    temp=temp,
+                    inject_model=response_model,
                 )
                 return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
             # Legacy path: byte-identical to original run_judge behavior.

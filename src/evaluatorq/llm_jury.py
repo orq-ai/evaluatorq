@@ -265,7 +265,7 @@ def llm_jury(
         raise ValueError(
             f"threshold ({threshold}) must lie within score_range {score_range}."
         )
-    panel = _resolve_panel(judges, model)
+    panel = _resolve_panel(judges=judges, model=model)
     deduped = list(dict.fromkeys([*panel]))
     if not (1 <= min_successful_judges <= len(deduped)):
         raise ValueError(
@@ -279,17 +279,17 @@ def llm_jury(
         )
 
     resolved_client = client if client is not None else resolve_llm_client(config_client=None).client
-    verdict_model = _build_verdict_model(verdict_kind, labels, score_range)
-    template = prompt if prompt is not None else _default_template(criteria or "")
+    verdict_model = _build_verdict_model(verdict_kind=verdict_kind, labels=labels, score_range=score_range)
+    template = prompt if prompt is not None else _default_template(criteria=criteria or "")
     sys_prompt = system_prompt if system_prompt is not None else _default_system_prompt(
-        verdict_kind, labels, score_range
+        verdict_kind=verdict_kind, labels=labels, score_range=score_range
     )
     vkind = VerdictKind.NUMERIC if verdict_kind == "numeric" else VerdictKind.CATEGORICAL
 
     async def scorer(params: ScorerParameter) -> EvaluationResult:
         data = params["data"]
         output = params["output"]
-        replacements = _build_replacements(data, output, criteria or "")
+        replacements = _build_replacements(data=data, output=output, criteria=criteria or "")
 
         async def judge_fn(judge_model: str) -> Prediction:
             cfg = LLMCallConfig(
@@ -302,7 +302,7 @@ def llm_jury(
                 system_prompt=sys_prompt, response_model=verdict_model,
                 structured_output=structured_output, temperature=temperature,
             )
-            return _outcome_to_prediction(outcome)
+            return _outcome_to_prediction(outcome=outcome)
 
         deliberation = await run_jury(
             judge_fn=judge_fn,
@@ -315,7 +315,7 @@ def llm_jury(
             tie_break=tie_break,
         )
         return _to_evaluation_result(
-            deliberation, verdict_kind=verdict_kind, passing_labels=passing_labels,
+            deliberation=deliberation, verdict_kind=verdict_kind, passing_labels=passing_labels,
             threshold=threshold, score_range=score_range,
         )
 
