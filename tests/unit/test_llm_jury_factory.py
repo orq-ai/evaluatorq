@@ -4,9 +4,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import importlib
+
 from evaluatorq.common.judge import JudgeOutcome, EvaluatorResponsePayload
 from evaluatorq.llm_jury import llm_jury
 from evaluatorq.types import DataPoint
+
+# NOTE: patch via the real module object from sys.modules, not the dotted string
+# "evaluatorq.llm_jury.X". The package re-exports the ``llm_jury`` function, which
+# shadows the same-named submodule as a package attribute — so both mock's dotted
+# lookup and ``import evaluatorq.llm_jury as ...`` resolve to the function on 3.10.
+# importlib.import_module returns the sys.modules entry, bypassing that shadowing.
+llm_jury_mod = importlib.import_module("evaluatorq.llm_jury")
 
 
 def test_validation_requires_exactly_one_of_criteria_prompt():
@@ -46,8 +55,8 @@ def test_validation_threshold_within_score_range():
 
 
 def test_temperature_zero_warns():
-    with patch("evaluatorq.llm_jury.resolve_llm_client") as rc, \
-         patch("evaluatorq.llm_jury.logger.warning") as warn:
+    with patch.object(llm_jury_mod, "resolve_llm_client") as rc, \
+         patch.object(llm_jury_mod.logger, "warning") as warn:
         rc.return_value = MagicMock(client=MagicMock())
         llm_jury(name="x", criteria="c", temperature=0.0)
     assert warn.called
@@ -55,7 +64,7 @@ def test_temperature_zero_warns():
 
 
 def test_returns_evaluator_dict():
-    with patch("evaluatorq.llm_jury.resolve_llm_client") as rc:
+    with patch.object(llm_jury_mod, "resolve_llm_client") as rc:
         rc.return_value = MagicMock(client=MagicMock())
         ev = llm_jury(name="correctness", criteria="correct?", judges=["m1"])
     assert ev["name"] == "correctness"
@@ -64,7 +73,7 @@ def test_returns_evaluator_dict():
 
 @pytest.mark.asyncio
 async def test_scorer_runs_panel_and_maps_pass():
-    with patch("evaluatorq.llm_jury.resolve_llm_client") as rc:
+    with patch.object(llm_jury_mod, "resolve_llm_client") as rc:
         rc.return_value = MagicMock(client=MagicMock())
         ev = llm_jury(
             name="correctness", criteria="correct?",
@@ -77,7 +86,7 @@ async def test_scorer_runs_panel_and_maps_pass():
             token_usage=None, raw_content="{}",
         )
 
-    with patch("evaluatorq.llm_jury.run_judge", side_effect=fake_run_judge):
+    with patch.object(llm_jury_mod, "run_judge", side_effect=fake_run_judge):
         dp = DataPoint(inputs={"q": "2+2?"}, expected_output="4")
         result = await ev["scorer"]({"data": dp, "output": "4"})
 
