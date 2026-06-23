@@ -200,15 +200,24 @@ def _to_evaluation_result(
 def _resolve_panel(judges: list[str] | None, model: str | None) -> list[str]:
     """Resolve a judge panel from either a list of judges or a single model shorthand.
 
+    ``None`` for both means "use the default panel". An explicitly supplied but
+    empty ``judges`` list (or blank ``model``) is a configuration error, not a
+    request for the default — the resolved panel must be non-empty.
+
     Raises:
-        ValueError: If both ``judges`` and ``model`` are set simultaneously.
+        ValueError: If both ``judges`` and ``model`` are set, if ``judges`` is an
+            empty list, or if ``model`` is blank.
     """
-    if judges and model:
+    if judges is not None and model is not None:
         raise ValueError("Pass either `judges` or `model`, not both.")
-    if model:
-        return [model]
-    if judges:
+    if judges is not None:
+        if not judges:
+            raise ValueError("`judges` must be a non-empty list of judge models.")
         return list(judges)
+    if model is not None:
+        if not model.strip():
+            raise ValueError("`model` must be a non-empty judge model identifier.")
+        return [model]
     return [DEFAULT_JUDGE_MODEL]
 
 

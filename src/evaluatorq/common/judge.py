@@ -272,6 +272,21 @@ async def run_judge(
                         explanation=getattr(parsed, 'explanation', ''),
                     )
                 return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
+            if response_model is not None:
+                # structured_output disabled, but a verdict model is set: stay on the
+                # json_object path yet inject the schema so dynamic constraints (e.g. a
+                # categorical label set) still steer the model instead of being dropped.
+                payload, usage, raw_content = await _json_object_judge(
+                    client,
+                    model,
+                    cfg,
+                    system_prompt,
+                    user_prompt,
+                    span,
+                    temp,
+                    response_model,
+                )
+                return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
             # Legacy path: byte-identical to original run_judge behavior.
             response, usage = await execute_chat_completion(
                 client=client,

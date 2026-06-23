@@ -16,6 +16,15 @@ def test_validation_requires_exactly_one_of_criteria_prompt():
         llm_jury(name="x", criteria="a", prompt="b")  # both
 
 
+def test_validation_rejects_empty_judge_panel():
+    # An explicit empty list is a config error, not a request for the default panel.
+    with pytest.raises(ValueError):
+        llm_jury(name="x", criteria="c", judges=[])
+    # A blank model shorthand is likewise rejected.
+    with pytest.raises(ValueError):
+        llm_jury(name="x", criteria="c", model="  ")
+
+
 def test_validation_labels_require_categorical():
     with pytest.raises(ValueError):
         llm_jury(name="x", criteria="c", verdict_kind="numeric", labels=["a", "b"])

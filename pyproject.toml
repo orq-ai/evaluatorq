@@ -156,7 +156,8 @@ dependencies = [
   "httpx>=0.28.1",
   "rich>=14.2.0",
   "loguru>=0.6.0",
-  "typer>=0.12.0"
+  "typer>=0.12.0",
+  "openai>=1.92.0,<3.0.0"
 ]
 
   [project.license]

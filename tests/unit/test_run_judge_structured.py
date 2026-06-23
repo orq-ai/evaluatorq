@@ -81,6 +81,32 @@ async def test_fallback_to_json_object_on_badrequest():
 
 
 @pytest.mark.asyncio
+async def test_structured_output_false_still_injects_schema():
+    # structured_output=False must NOT silently drop the verdict schema: it routes
+    # through the json_object path with the schema injected into the system prompt,
+    # so a verdict model (e.g. a label set) still constrains the model.
+    client = MagicMock()
+    comp = MagicMock()
+    comp.choices = [MagicMock(message=MagicMock(content='{"value": true, "explanation": "ok"}'))]
+    comp.usage = None
+    client.chat.completions.create = AsyncMock(return_value=comp)
+    client.chat.completions.parse = AsyncMock()  # must not be called
+
+    out = await run_judge(
+        client=client, model="m", cfg=_cfg(),
+        prompt_template="t", replacements={}, system_prompt="sys",
+        response_model=_verdict_model(), structured_output=False,
+    )
+    assert out.payload is not None
+    assert out.payload.value is True
+    assert not client.chat.completions.parse.called
+    # schema injected into the system message, not the bare legacy prompt
+    sent = client.chat.completions.create.call_args.kwargs
+    assert sent["response_format"] == {"type": "json_object"}
+    assert any("value" in m["content"] for m in sent["messages"] if m["role"] == "system")
+
+
+@pytest.mark.asyncio
 async def test_response_model_none_uses_create_unchanged():
     client = MagicMock()
     comp = MagicMock()
