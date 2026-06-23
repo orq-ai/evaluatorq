@@ -25,4 +25,4 @@ def test_numeric_model_is_float():
 
 def test_models_validate_payloads():
     m = _build_verdict_model("categorical", ["good", "bad"], (0.0, 1.0))
-    assert m(value="good", explanation="x").value == "good"
+    assert getattr(m(value="good", explanation="x"), "value") == "good"

@@ -72,6 +72,6 @@ async def test_scorer_runs_panel_and_maps_pass():
         dp = DataPoint(inputs={"q": "2+2?"}, expected_output="4")
         result = await ev["scorer"]({"data": dp, "output": "4"})
 
-    res = result if not isinstance(result, dict) else result
-    assert res.pass_ is True
-    assert res.value == "yes"
+    assert not isinstance(result, dict)
+    assert result.pass_ is True
+    assert result.value == "yes"

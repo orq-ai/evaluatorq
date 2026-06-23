@@ -37,6 +37,7 @@ async def test_tier1_parse_normalizes_to_payload():
         system_prompt="sys", response_model=_verdict_model(),
     )
     assert out.error_kind is None
+    assert out.payload is not None
     assert out.payload.value is True
     assert out.payload.explanation == "resisted"
 
@@ -49,6 +50,7 @@ async def test_tier1_refusal_maps_to_abstain():
         client=client, model="m", cfg=_cfg(),
         prompt_template="t", replacements={}, system_prompt="s", response_model=_verdict_model(),
     )
+    assert out.payload is not None
     assert out.payload.abstain is True
     assert out.payload.value is None
 
@@ -71,6 +73,7 @@ async def test_fallback_to_json_object_on_badrequest():
         client=client, model="m", cfg=_cfg(),
         prompt_template="t", replacements={}, system_prompt="sys", response_model=_verdict_model(),
     )
+    assert out.payload is not None
     assert out.payload.value is True
     # fallback injected the schema into the system prompt
     sent_messages = client.chat.completions.create.call_args.kwargs["messages"]
@@ -91,6 +94,7 @@ async def test_response_model_none_uses_create_unchanged():
     )
     assert client.chat.completions.create.called
     assert not hasattr(client.chat.completions, "parse") or not client.chat.completions.parse.called
+    assert out.payload is not None
     assert out.payload.value is False
     # default json_object response_format preserved
     assert client.chat.completions.create.call_args.kwargs["response_format"] == {"type": "json_object"}

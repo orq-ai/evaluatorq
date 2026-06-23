@@ -35,8 +35,13 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
     from pydantic import BaseModel as _BaseModel
 
+
 # Sentinel: when temperature is this object, use cfg.temperature; when None, omit the param.
-_USE_CFG = object()
+class _UseCfg:
+    """Sentinel: caller omitted temperature; fall back to ``cfg.temperature``."""
+
+
+_USE_CFG = _UseCfg()
 
 DEFAULT_SECURITY_EVALUATOR_SYSTEM_PROMPT = (
     'You are a security evaluator. Respond ONLY with a JSON object '
@@ -165,22 +170,26 @@ async def _json_object_judge(
     user_prompt: str,
     span: Any,
     temp: float | None,
-    inject_model: _BaseModel | None = None,
+    inject_model: type[_BaseModel] | None = None,
 ) -> tuple[EvaluatorResponsePayload, TokenUsage | None, str]:
     """Call the judge using the legacy json_object completion path; optionally injects model's JSON schema into system prompt."""
     sys = system_prompt
     if inject_model is not None:
-        import json as _json
-        schema = _json.dumps(inject_model.model_json_schema(), indent=2)
+        schema = json.dumps(inject_model.model_json_schema(), indent=2)
         sys = f'{system_prompt}\n\nRespond JSON matching schema:\n{schema}'
     messages = [
         {'role': 'system', 'content': sys},
         {'role': 'user', 'content': user_prompt},
     ]
     response, usage = await execute_chat_completion(
-        client=client, model=model, messages=messages, span=span,
-        timeout_s=cfg.timeout_ms / 1000.0, temperature=temp,
-        max_completion_tokens=cfg.max_tokens, response_format={'type': 'json_object'},
+        client=client,
+        model=model,
+        messages=messages,
+        span=span,
+        timeout_s=cfg.timeout_ms / 1000.0,
+        temperature=temp,
+        max_completion_tokens=cfg.max_tokens,
+        response_format={'type': 'json_object'},
         extra_kwargs=cfg.extra_kwargs or None,
     )
     raw = response.choices[0].message.content or '{}'
@@ -198,7 +207,7 @@ async def run_judge(
     span_attributes: dict[str, str] | None = None,
     response_model: type[_BaseModel] | None = None,
     structured_output: bool = True,
-    temperature: float | object | None = _USE_CFG,  # type: ignore[type-arg]
+    temperature: float | _UseCfg | None = _USE_CFG,
 ) -> JudgeOutcome:
     """Render the template, call the judge model, and parse the verdict.
 
@@ -213,23 +222,27 @@ async def run_judge(
     ``temperature`` defaults to ``cfg.temperature`` via the ``_USE_CFG`` sentinel;
     pass ``None`` explicitly to omit the param (e.g. for reasoning models).
     """
-    temp = cfg.temperature if temperature is _USE_CFG else temperature
+    temp: float | None = cfg.temperature if isinstance(temperature, _UseCfg) else temperature
     user_prompt = render_template(prompt_template, replacements)
-    use_parse = response_model is not None and structured_output
 
     raw_content = '{}'
     try:
         async with with_llm_span(model=model, attributes=span_attributes or {}) as span:
-            if use_parse:
+            if structured_output and response_model is not None:
                 messages = [
                     {'role': 'system', 'content': system_prompt},
                     {'role': 'user', 'content': user_prompt},
                 ]
                 try:
                     response, usage = await execute_chat_parse(
-                        client=client, model=model, messages=messages, span=span,
-                        timeout_s=cfg.timeout_ms / 1000.0, response_model=response_model,
-                        temperature=temp, max_completion_tokens=cfg.max_tokens,
+                        client=client,
+                        model=model,
+                        messages=messages,
+                        span=span,
+                        timeout_s=cfg.timeout_ms / 1000.0,
+                        response_model=response_model,
+                        temperature=temp,
+                        max_completion_tokens=cfg.max_tokens,
                         extra_kwargs=cfg.extra_kwargs or None,
                     )
                 except BadRequestError as exc:
@@ -238,13 +251,20 @@ async def run_judge(
                         raise
                     logger.warning('Model {} rejected structured output; falling back to json_object', model)
                     payload, usage, raw_content = await _json_object_judge(
-                        client, model, cfg, system_prompt, user_prompt, span, temp, response_model,
+                        client,
+                        model,
+                        cfg,
+                        system_prompt,
+                        user_prompt,
+                        span,
+                        temp,
+                        response_model,
                     )
                     return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
 
                 msg = response.choices[0].message
                 if getattr(msg, 'refusal', None):
-                    payload = EvaluatorResponsePayload(value=None, abstain=True, explanation=msg.refusal)
+                    payload = EvaluatorResponsePayload(value=None, abstain=True, explanation=msg.refusal or '')
                 else:
                     parsed = msg.parsed
                     payload = EvaluatorResponsePayload(
