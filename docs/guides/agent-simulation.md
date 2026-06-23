@@ -159,6 +159,10 @@ async function that maps the conversation to your agent's reply, so you can
 simulate a plain OpenAI model or any HTTP agent. See
 [Simulate an OpenAI agent](agent-simulation-openai.md).
 
+!!! tip "View results in the local dashboard"
+    Run `eq ui` to browse saved red-team and simulation reports together, or use
+    `eq redteam ui` / `eq sim ui` for a surface-specific view.
+
 ## Where to next
 
 - **[Examples › Agent Simulation](../examples/index.md)** — tool simulation, hardening loops, LangGraph / CrewAI / OpenAI Agents targets.

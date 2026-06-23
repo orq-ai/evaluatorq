@@ -28,6 +28,7 @@ BLOB = "https://github.com/orq-ai/evaluatorq/blob/main"
 API_PACKAGES = [
     "evaluatorq",
     "evaluatorq.redteam",
+    "evaluatorq.simulation",
     "evaluatorq.openresponses",
     "evaluatorq.tracing",
     "evaluatorq.integrations",

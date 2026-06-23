@@ -123,6 +123,7 @@ nav:
           - guides/red-teaming.md
           - Red-team an OpenAI model: guides/red-teaming-openai.md
           - Custom Evaluators & Frameworks: custom-evaluators-and-frameworks.md
+      - Dashboard: dashboard.md
   - Examples: examples/
   - API Reference: reference/
   - About:

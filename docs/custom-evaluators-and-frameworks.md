@@ -294,7 +294,7 @@ STRATEGY_REGISTRY.update(BIAS_STRATEGIES)
 
 Then run:
 ```bash
-evaluatorq-redteam run -t agent:my-agent -v bias_gender --mode dynamic
+eq redteam run -t agent:my-agent -v bias_gender --mode dynamic
 ```
 
 ## Running with Custom Vulnerabilities
@@ -302,10 +302,10 @@ evaluatorq-redteam run -t agent:my-agent -v bias_gender --mode dynamic
 ### CLI
 ```bash
 # By vulnerability ID
-evaluatorq-redteam run -t agent:my-agent -v my_custom_vuln --mode dynamic
+eq redteam run -t agent:my-agent -v my_custom_vuln --mode dynamic
 
 # By category code (if mapped)
-evaluatorq-redteam run -t agent:my-agent -c MF01 --mode dynamic
+eq redteam run -t agent:my-agent -c MF01 --mode dynamic
 ```
 
 ### Programmatic API
