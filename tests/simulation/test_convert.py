@@ -235,3 +235,25 @@ class TestTypedModelRoundTrip:
         response = to_open_responses(_make_result(terminated_by=TerminatedBy.max_turns))
         details = response["incomplete_details"]
         assert ORIncompleteDetails.model_validate(details).model_dump(mode="json") == details
+
+    def test_output_item_has_expected_literal_shape(self):
+        """Pin the wire shape against a literal (not the model that produced it),
+        so a dropped field — e.g. ``annotations``/``logprobs`` — is caught even
+        if the model changed in lockstep."""
+        item = to_open_responses(_make_result())["output"][0]
+        assert item["type"] == "message"
+        assert item["role"] == "assistant"
+        assert item["status"] == "completed"
+        assert item["content"] == [
+            {"type": "output_text", "text": "Hi there!", "annotations": [], "logprobs": []}
+        ]
+
+    def test_usage_has_expected_literal_keys(self):
+        usage = to_open_responses(_make_result())["usage"]
+        assert usage == {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "total_tokens": 150,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens_details": {"reasoning_tokens": 0},
+        }
