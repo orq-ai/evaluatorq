@@ -47,7 +47,7 @@ def read_json(path_str: str, mtime_ns: int) -> dict[str, object]:
     return json.loads(Path(path_str).read_text())  # type: ignore[return-value]
 
 
-def _read_json_cached(path: Path) -> dict[str, object]:
+def read_json_cached(path: Path) -> dict[str, object]:
     """Read + parse JSON at *path*, using the mtime-keyed LRU cache."""
     mtime_ns = path.stat().st_mtime_ns
     return read_json(str(path.resolve()), mtime_ns)
@@ -64,7 +64,7 @@ def sniff_kind(data: dict[str, object]) -> str | None:
 
 def load_surface(path: Path) -> tuple[str | None, dict[str, object]]:
     try:
-        data = _read_json_cached(path)
+        data = read_json_cached(path)
     except (json.JSONDecodeError, OSError):
         return None, {}
     return sniff_kind(data), data

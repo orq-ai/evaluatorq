@@ -6,7 +6,7 @@ Exports:
 
 Internal helpers:
     _render_result_detail, _render_messages, _render_agent_side, _agent_select
-    _fmt_category, _fmt_vulnerability, _agent_key (re-imported from redteam_charts)
+    fmt_category, fmt_vulnerability, agent_key (re-imported from redteam_charts)
 
 All functions return raw HTML strings suitable for HTMX hx-swap.
 """
@@ -18,9 +18,9 @@ from urllib.parse import quote as _quote
 
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.redteam_charts import (
-    _agent_key,
-    _fmt_category,
-    _fmt_vulnerability,
+    agent_key,
+    fmt_category,
+    fmt_vulnerability,
 )
 from evaluatorq.redteam.reports.converters import _is_evaluated, _is_vulnerable
 
@@ -90,8 +90,8 @@ def _render_result_detail(r: RedTeamResult) -> str:
     """Render the detail pane for a single result: metadata + transcript."""
     atk = r.attack
 
-    vuln_name = _fmt_vulnerability(atk.vulnerability) if atk.vulnerability else "-"
-    category = _fmt_category(atk.category)
+    vuln_name = fmt_vulnerability(atk.vulnerability) if atk.vulnerability else "-"
+    category = fmt_category(atk.category)
     technique = atk.attack_technique.value
     severity = atk.severity.value
     turn_type = atk.turn_type.value if atk.turn_type else "-"
@@ -250,7 +250,7 @@ def render_disagreement(
     from collections import defaultdict
 
     results = report.results
-    agents = list(dict.fromkeys(_agent_key(r) for r in results))
+    agents = list(dict.fromkeys(agent_key(r) for r in results))
 
     if len(agents) < 2:
         return (
@@ -288,7 +288,7 @@ def render_disagreement(
 
     attack_results: dict[str, dict[str, RedTeamResult]] = defaultdict(dict)
     for r in results:
-        ak = _agent_key(r)
+        ak = agent_key(r)
         if ak in (agent_a, agent_b):
             attack_results[r.attack.id][ak] = r
 
@@ -344,8 +344,8 @@ def render_disagreement(
     items_html_parts: list[str] = []
     for item_idx, (r1, r2) in enumerate(page_items, start=start + 1):
         vuln_label = (
-            _fmt_vulnerability(r1.attack.vulnerability) if r1.attack.vulnerability
-            else _fmt_category(r1.attack.category)
+            fmt_vulnerability(r1.attack.vulnerability) if r1.attack.vulnerability
+            else fmt_category(r1.attack.category)
         )
         technique_label = r1.attack.attack_technique.value
         item_html = (

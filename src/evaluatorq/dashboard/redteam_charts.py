@@ -3,12 +3,14 @@
 Exports:
     render_breakdown        -- interactive breakdown (group_by x stack_by) fragment
     render_agent_heatmap    -- agent heatmap fragment
+    agent_key               -- extract agent key string from a RedTeamResult
+    fmt_category            -- format a framework category code for display
+    fmt_vulnerability       -- format a vulnerability ID for display
 
 Internal helpers:
     _build_breakdown_chart, _build_heatmap_chart
-    _select_buttons, _dim_value, _heatmap_dim_value, _agent_key
+    _select_buttons, _dim_value, _heatmap_dim_value
     _DIM_LABELS, _HEATMAP_DIM_LABELS
-    _fmt_category, _fmt_vulnerability
 
 All functions return raw HTML strings suitable for HTMX hx-swap.
 """
@@ -60,12 +62,12 @@ _HEATMAP_DIM_LABELS: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 
-def _fmt_category(code: str) -> str:
+def fmt_category(code: str) -> str:
     name = OWASP_CATEGORY_NAMES.get(code)
     return f"{code} - {name}" if name else code
 
 
-def _fmt_vulnerability(vuln_id: str) -> str:
+def fmt_vulnerability(vuln_id: str) -> str:
     """Format a vulnerability ID into a human-readable name."""
     from evaluatorq.redteam.vulnerability_registry import VULNERABILITY_DEFS, Vulnerability
 
@@ -82,9 +84,9 @@ def _fmt_vulnerability(vuln_id: str) -> str:
 def _dim_value(r: RedTeamResult, dim: str) -> str:
     """Extract a string dimension value from a RedTeamResult."""
     if dim == "category":
-        return _fmt_category(r.attack.category)
+        return fmt_category(r.attack.category)
     if dim == "vulnerability":
-        return _fmt_vulnerability(r.attack.vulnerability) if r.attack.vulnerability else "unknown"
+        return fmt_vulnerability(r.attack.vulnerability) if r.attack.vulnerability else "unknown"
     if dim == "severity":
         return r.attack.severity.value
     if dim == "attack_technique":
@@ -104,9 +106,9 @@ def _dim_value(r: RedTeamResult, dim: str) -> str:
 def _heatmap_dim_value(r: RedTeamResult, dim: str) -> str:
     """Extract a dimension value for the agent heatmap view."""
     if dim == "vulnerability":
-        return _fmt_vulnerability(r.attack.vulnerability) if r.attack.vulnerability else "unknown"
+        return fmt_vulnerability(r.attack.vulnerability) if r.attack.vulnerability else "unknown"
     if dim == "category":
-        return _fmt_category(r.attack.category)
+        return fmt_category(r.attack.category)
     if dim == "technique":
         return r.attack.attack_technique.value
     if dim == "severity":
@@ -114,7 +116,7 @@ def _heatmap_dim_value(r: RedTeamResult, dim: str) -> str:
     return "unknown"
 
 
-def _agent_key(r: RedTeamResult) -> str:
+def agent_key(r: RedTeamResult) -> str:
     return r.agent.key or r.agent.display_name or "unknown"
 
 
@@ -330,7 +332,7 @@ def render_agent_heatmap(
     results = report.results
     dim_options = list(_HEATMAP_DIM_LABELS.keys())
 
-    agents = list(dict.fromkeys(_agent_key(r) for r in results))
+    agents = list(dict.fromkeys(agent_key(r) for r in results))
 
     if len(agents) < 2:
         return (
@@ -388,7 +390,7 @@ def _build_heatmap_chart(
     for r in results:
         if _is_evaluated(r):
             dv = _heatmap_dim_value(r, dim)
-            ak = _agent_key(r)
+            ak = agent_key(r)
             pivot[dv][ak]["evaluated"] += 1
             if _is_vulnerable(r):
                 pivot[dv][ak]["vuln"] += 1

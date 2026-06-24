@@ -87,8 +87,8 @@ def _redteam_adapter() -> SurfaceAdapter:
         return rows
 
     def _rt_load(p: _Path) -> RedTeamReport:
-        from evaluatorq.dashboard.library import _read_json_cached
-        data = _read_json_cached(p)
+        from evaluatorq.dashboard.library import read_json_cached
+        data = read_json_cached(p)
         return RedTeamReport.model_validate(data)
 
     return SurfaceAdapter(
@@ -127,8 +127,8 @@ def _sim_adapter() -> SurfaceAdapter:
         return [e.model_dump(mode='json') for e in individual_entries(filtered)]
 
     def _sim_load(p: _Path) -> SimulationRun:
-        from evaluatorq.dashboard.library import _read_json_cached
-        data = _read_json_cached(p)
+        from evaluatorq.dashboard.library import read_json_cached
+        data = read_json_cached(p)
         return SimulationRun.model_validate(data)
 
     return SurfaceAdapter(
