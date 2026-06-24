@@ -9,9 +9,10 @@ dashboard or any OTLP-compatible backend.
 Tracing initialises lazily on the first evaluation run. It turns on automatically
 when either condition is true:
 
-- `ORQ_API_KEY` is set — spans are sent to `https://my.orq.ai/v2/otel` (or
-  `<ORQ_BASE_URL>/v2/otel` if `ORQ_BASE_URL` is set).
-- `OTEL_EXPORTER_OTLP_ENDPOINT` is set — spans are sent to that endpoint.
+- `ORQ_API_KEY` is set — the OTLP base endpoint is `https://my.orq.ai/v2/otel`
+  (or `<ORQ_BASE_URL>/v2/otel` if `ORQ_BASE_URL` is set); the exporter appends
+  `/v1/traces`, so spans POST to `…/v2/otel/v1/traces`.
+- `OTEL_EXPORTER_OTLP_ENDPOINT` is set — that endpoint is used as the OTLP base.
 
 If neither variable is set, no tracer is created and all span context managers
 are no-ops.
