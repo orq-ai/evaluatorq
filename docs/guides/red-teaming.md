@@ -112,8 +112,10 @@ flowchart LR
 ## Reading the report
 
 `report.summary.resistance_rate` is the fraction of attacks the target withstood
-— higher is better. `report.attacks` is indexed per vulnerability for a
-per-category breakdown.
+— higher is better. `report.results` holds every attack result; group by
+`r.attack.vulnerability` for a per-vulnerability breakdown.
+`report.summary.by_vulnerability` contains pre-aggregated
+`VulnerabilitySummary` statistics keyed by vulnerability identifier.
 
 ## In CI
 
