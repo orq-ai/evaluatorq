@@ -1,4 +1,4 @@
-"""Red teaming target wrapper for Vercel AI SDK agents served over HTTP.
+"""AgentTarget wrapper for Vercel AI SDK agents served over HTTP.
 
 The Vercel AI SDK is a TypeScript library, so Python integration works by
 calling an HTTP endpoint that serves the agent (e.g. a Next.js route handler).
@@ -19,8 +19,15 @@ from urllib.parse import urlparse
 
 import httpx
 
-from evaluatorq.contracts import AgentTarget, Message
-from evaluatorq.redteam.contracts import AgentContext, AgentResponse, OutputMessage, TextOutputItem, TokenUsage
+from evaluatorq.contracts import (
+    AgentContext,
+    AgentResponse,
+    AgentTarget,
+    Message,
+    OutputMessage,
+    TextOutputItem,
+    TokenUsage,
+)
 
 AISdkMessageFormat = Literal['v4', 'v5']
 """AI SDK tool-message wire format. v5 (current) vs v4 (legacy) differ on tool
@@ -28,7 +35,7 @@ field names — see :func:`_message_to_ai_sdk_message`."""
 
 
 class VercelAISdkTarget(AgentTarget):
-    """Wraps a Vercel AI SDK HTTP endpoint as a red teaming target.
+    """Wraps a Vercel AI SDK HTTP endpoint as an AgentTarget.
 
     The endpoint must accept POST requests with a JSON body containing
     ``messages`` in the standard chat format and return a response using
@@ -47,7 +54,7 @@ class VercelAISdkTarget(AgentTarget):
             headers={"Authorization": "Bearer sk-..."},
         )
 
-        # Pass to red teaming
+        # Pass to simulation or red teaming
         config = DynamicRunConfig(targets=[target])
     """
 
@@ -61,7 +68,7 @@ class VercelAISdkTarget(AgentTarget):
         agent_context: AgentContext | None = None,
         message_format: AISdkMessageFormat = 'v5',
     ) -> None:
-        """Create a Vercel AI SDK red teaming target.
+        """Create a Vercel AI SDK agent target.
 
         Args:
             url: The HTTP endpoint URL serving the AI SDK agent.
@@ -135,7 +142,7 @@ class VercelAISdkTarget(AgentTarget):
         return AgentContext(key=safe_key, description='opaque Vercel AI SDK HTTP target')
 
     def new(self) -> VercelAISdkTarget:
-        """Return an independent instance for parallel red teaming jobs."""
+        """Return an independent instance for parallel simulation/red-team jobs."""
         return VercelAISdkTarget(
             self._url,
             headers=dict(self._headers),

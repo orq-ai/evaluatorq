@@ -1,4 +1,4 @@
-"""Simulation/red-teaming target wrapper for Pydantic AI agents."""
+"""Simulation/AgentTarget wrapper for Pydantic AI agents."""
 
 from __future__ import annotations
 
@@ -8,10 +8,11 @@ import re
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from evaluatorq.contracts import AgentTarget, Message
-from evaluatorq.redteam.contracts import (
+from evaluatorq.contracts import (
     AgentContext,
     AgentResponse,
+    AgentTarget,
+    Message,
     OutputMessage,
     TextOutputItem,
     TokenUsage,

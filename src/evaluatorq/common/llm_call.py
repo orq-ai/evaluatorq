@@ -24,8 +24,9 @@ from evaluatorq.contracts import TokenUsage
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
-    from openai.types.chat import ChatCompletion
+    from openai.types.chat import ChatCompletion, ParsedChatCompletion
     from opentelemetry.trace import Span
+    from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -88,5 +89,54 @@ async def execute_chat_completion(
         logger.warning('Model %s rejected reasoning_effort; dropping it and retrying once', model)
         params.pop('reasoning_effort', None)
         response = await asyncio.wait_for(client.chat.completions.create(**params), timeout=timeout_s)
+    record_llm_response(span, response)
+    return response, TokenUsage.from_completion(response)
+
+
+async def execute_chat_parse(
+    *,
+    client: AsyncOpenAI,
+    model: str,
+    messages: list[dict[str, Any]],
+    span: Span | None,
+    timeout_s: float,
+    response_model: type[BaseModel],
+    temperature: float | None = None,
+    max_completion_tokens: int | None = None,
+    inject_trace_headers: bool = True,
+    extra_kwargs: dict[str, Any] | None = None,
+) -> tuple[ParsedChatCompletion[Any], TokenUsage | None]:
+    """Execute one structured Chat Completions call via ``.parse``.
+
+    Mirrors :func:`execute_chat_completion` (span recording, trace headers,
+    reasoning_effort drop-retry) but routes through ``client.chat.completions.parse``
+    with a Pydantic ``response_model``. The parsed object is available on
+    ``response.choices[0].message.parsed`` (or ``.refusal``).
+    """
+    params: dict[str, Any] = {'model': model, 'messages': messages, 'response_format': response_model}
+    if temperature is not None:
+        params['temperature'] = temperature
+    if max_completion_tokens is not None:
+        params['max_completion_tokens'] = max_completion_tokens
+    if extra_kwargs:
+        params.update(extra_kwargs)
+
+    record_llm_input(span, messages)
+
+    if inject_trace_headers:
+        headers = await get_trace_context_headers()
+        if headers:
+            existing = params.get('extra_headers') or {}
+            params['extra_headers'] = {**existing, **headers}
+
+    try:
+        response = await asyncio.wait_for(client.chat.completions.parse(**params), timeout=timeout_s)
+    except BadRequestError as exc:
+        err_body = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
+        if 'reasoning_effort' not in params or 'reasoning' not in err_body:
+            raise
+        logger.warning('Model %s rejected reasoning_effort; dropping it and retrying once', model)
+        params.pop('reasoning_effort', None)
+        response = await asyncio.wait_for(client.chat.completions.parse(**params), timeout=timeout_s)
     record_llm_response(span, response)
     return response, TokenUsage.from_completion(response)

@@ -1,6 +1,6 @@
-"""LangGraph integration for evaluatorq red teaming.
+"""LangGraph integration for evaluatorq simulation and red teaming.
 
-Provides a wrapper to use any LangGraph compiled graph as a red teaming target.
+Provides a wrapper to use any LangGraph compiled graph as an AgentTarget.
 """
 
 from .target import LangGraphTarget

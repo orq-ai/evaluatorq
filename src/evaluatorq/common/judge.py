@@ -12,10 +12,10 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
-from openai import APIConnectionError, APIStatusError, APITimeoutError
+from openai import APIConnectionError, APIStatusError, APITimeoutError, BadRequestError
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from evaluatorq.common.llm_call import execute_chat_completion
+from evaluatorq.common.llm_call import execute_chat_completion, execute_chat_parse
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.template_engine import render_template
 from evaluatorq.common.tracing import with_llm_span
@@ -33,6 +33,15 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from openai import AsyncOpenAI
+    from pydantic import BaseModel as _BaseModel
+
+
+# Sentinel: when temperature is this object, use cfg.temperature; when None, omit the param.
+class _UseCfg:
+    """Sentinel: caller omitted temperature; fall back to ``cfg.temperature``."""
+
+
+_USE_CFG = _UseCfg()
 
 DEFAULT_SECURITY_EVALUATOR_SYSTEM_PROMPT = (
     'You are a security evaluator. Respond ONLY with a JSON object '
@@ -153,6 +162,46 @@ def _classify(exc: Exception) -> JudgeError:
     return JudgeError.UNKNOWN
 
 
+async def _json_object_judge(
+    *,
+    client: AsyncOpenAI,
+    model: str,
+    cfg: LLMCallConfig,
+    system_prompt: str,
+    user_prompt: str,
+    span: Any,
+    temp: float | None,
+    inject_model: type[_BaseModel] | None = None,
+) -> tuple[EvaluatorResponsePayload, TokenUsage | None, str]:
+    """Call the judge using the legacy json_object completion path; optionally injects model's JSON schema into system prompt."""
+    sys = system_prompt
+    if inject_model is not None:
+        schema = json.dumps(inject_model.model_json_schema(), indent=2)
+        sys = f'{system_prompt}\n\nRespond JSON matching schema:\n{schema}'
+    messages = [
+        {'role': 'system', 'content': sys},
+        {'role': 'user', 'content': user_prompt},
+    ]
+    response, usage = await execute_chat_completion(
+        client=client,
+        model=model,
+        messages=messages,
+        span=span,
+        timeout_s=cfg.timeout_ms / 1000.0,
+        temperature=temp,
+        max_completion_tokens=cfg.max_tokens,
+        response_format={'type': 'json_object'},
+        extra_kwargs=cfg.extra_kwargs or None,
+    )
+    raw = response.choices[0].message.content or '{}'
+    if inject_model is not None:
+        # Enforce the dynamic verdict schema (e.g. a categorical Literal label set)
+        # on the fallback path too, so an out-of-set value raises ValidationError
+        # (-> JudgeError.PARSE) instead of slipping through the loose payload model.
+        inject_model.model_validate_json(raw)
+    return EvaluatorResponsePayload.model_validate_json(raw), usage, raw
+
+
 async def run_judge(
     *,
     client: AsyncOpenAI,
@@ -162,33 +211,123 @@ async def run_judge(
     replacements: dict[str, Any],
     system_prompt: str = DEFAULT_SECURITY_EVALUATOR_SYSTEM_PROMPT,
     span_attributes: dict[str, str] | None = None,
+    response_model: type[_BaseModel] | None = None,
+    structured_output: bool = True,
+    temperature: float | _UseCfg | None = _USE_CFG,
 ) -> JudgeOutcome:
-    """Render the template, call the judge model, and parse the verdict."""
-    prompt = render_template(prompt_template, replacements)
-    messages = [
-        {'role': 'system', 'content': system_prompt},
-        {'role': 'user', 'content': prompt},
-    ]
+    """Render the template, call the judge model, and parse the verdict.
+
+    When ``response_model`` is None (default), behavior is byte-identical to the
+    original implementation: uses ``client.chat.completions.create`` with
+    ``response_format={'type': 'json_object'}`` and ``temperature=cfg.temperature``.
+
+    When ``response_model`` is provided, routes through tier-1 ``.parse`` (structured
+    output). On ``BadRequestError`` related to schema support, falls back to the
+    json_object path with model schema injected into the system prompt.
+
+    ``temperature`` defaults to ``cfg.temperature`` via the ``_USE_CFG`` sentinel;
+    pass ``None`` explicitly to omit the param (e.g. for reasoning models).
+    """
+    temp: float | None = cfg.temperature if isinstance(temperature, _UseCfg) else temperature
+    user_prompt = render_template(prompt_template, replacements)
+
     raw_content = '{}'
     try:
-        async with with_llm_span(
-            model=model,
-            attributes=span_attributes or {},
-        ) as span:
+        async with with_llm_span(model=model, attributes=span_attributes or {}) as span:
+            if structured_output and response_model is not None:
+                messages = [
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user', 'content': user_prompt},
+                ]
+                try:
+                    response, usage = await execute_chat_parse(
+                        client=client,
+                        model=model,
+                        messages=messages,
+                        span=span,
+                        timeout_s=cfg.timeout_ms / 1000.0,
+                        response_model=response_model,
+                        temperature=temp,
+                        max_completion_tokens=cfg.max_tokens,
+                        extra_kwargs=cfg.extra_kwargs or None,
+                    )
+                except BadRequestError as exc:
+                    err = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
+                    # Only fall back when the error looks like a structured-output
+                    # rejection. A miss here intentionally re-raises rather than
+                    # silently degrading — do not widen this to a bare
+                    # `except BadRequestError`. ('schema' already covers 'json_schema'.)
+                    if not any(k in err for k in ('response_format', 'schema')):
+                        raise
+                    logger.warning('Model {} rejected structured output; falling back to json_object', model)
+                    payload, usage, raw_content = await _json_object_judge(
+                        client=client,
+                        model=model,
+                        cfg=cfg,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        span=span,
+                        temp=temp,
+                        inject_model=response_model,
+                    )
+                    return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
+
+                msg = response.choices[0].message
+                if getattr(msg, 'refusal', None):
+                    payload = EvaluatorResponsePayload(value=None, abstain=True, explanation=msg.refusal or '')
+                    return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
+                parsed = msg.parsed
+                if parsed is None:
+                    # No refusal, but the SDK could not produce a parsed object (truncated
+                    # completion, content filter, un-coercible JSON). Surface this as a hard
+                    # PARSE error rather than silently degrading to a value=None abstain.
+                    finish = getattr(response.choices[0], 'finish_reason', None)
+                    logger.error('Judge [{}] structured parse produced no object (finish_reason={})', model, finish)
+                    return JudgeOutcome(
+                        error_kind=JudgeError.PARSE,
+                        error_message=f'structured output produced no parsed object (finish_reason={finish})',
+                        token_usage=usage,
+                        raw_content=raw_content,
+                    )
+                # Direct attribute access (not getattr-with-default): the verdict model
+                # always defines `value`/`explanation`, so a miss is a real contract bug
+                # that should raise (-> UNKNOWN) instead of masking as a None abstain.
+                raw_content = parsed.model_dump_json()
+                payload = EvaluatorResponsePayload(value=parsed.value, explanation=parsed.explanation)
+                return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
+            if response_model is not None:
+                # structured_output disabled, but a verdict model is set: stay on the
+                # json_object path yet inject the schema so dynamic constraints (e.g. a
+                # categorical label set) still steer the model instead of being dropped.
+                payload, usage, raw_content = await _json_object_judge(
+                    client=client,
+                    model=model,
+                    cfg=cfg,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    span=span,
+                    temp=temp,
+                    inject_model=response_model,
+                )
+                return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
+            # Legacy path: byte-identical to original run_judge behavior.
             response, usage = await execute_chat_completion(
                 client=client,
                 model=model,
-                messages=messages,
+                messages=[
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user', 'content': user_prompt},
+                ],
                 span=span,
                 timeout_s=cfg.timeout_ms / 1000.0,
-                temperature=cfg.temperature,
+                temperature=temp,
                 max_completion_tokens=cfg.max_tokens,
                 response_format={'type': 'json_object'},
                 extra_kwargs=cfg.extra_kwargs or None,
             )
-        raw_content = response.choices[0].message.content or '{}'
-        payload = EvaluatorResponsePayload.model_validate_json(raw_content)
-        return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
+            raw_content = response.choices[0].message.content or '{}'
+            payload = EvaluatorResponsePayload.model_validate_json(raw_content)
+            return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
     except (asyncio.TimeoutError, APITimeoutError):
         logger.error('Judge [{}] timed out after {}ms', model, cfg.timeout_ms)
         return JudgeOutcome(

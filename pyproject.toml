@@ -177,7 +177,8 @@ dependencies = [
   "httpx>=0.28.1",
   "rich>=14.2.0",
   "loguru>=0.6.0",
-  "typer>=0.12.0"
+  "typer>=0.12.0",
+  "openai>=1.92.0,<3.0.0"
 ]
 
   [project.license]
@@ -197,7 +198,6 @@ dependencies = [
   pydantic-ai = [ "pydantic-ai-slim[openai]>=1.0.0" ]
   crewai = [ "crewai>=0.70.0; python_version >= '3.11'" ]
   redteam = [
-  "openai>=1.0.0,<3.0.0",
   "huggingface-hub>=0.20.0",
   "streamlit>=1.30.0",
   "plotly>=5.18.0",
@@ -205,7 +205,6 @@ dependencies = [
   "vl-convert-python>=1.6.0"
 ]
   simulation = [
-  "openai>=1.0.0,<3.0.0",
   "orq-ai-sdk>=4.4.7",
   "streamlit>=1.30.0",
   "plotly>=5.18.0",
@@ -276,11 +275,11 @@ docs = [
 dev = [
   "pytest>=8.0.0",
   "pytest-asyncio>=1.2.0",
+  "pytest-timeout>=2.3.0",
   "basedpyright>=1.21.0",
   "ruff>=0.14.3",
   "orq-ai-sdk>=4.4.7",
   "anthropic>=0.75.0",
-  "openai>=1.0.0",
   "opentelemetry-api>=1.20.0",
   "opentelemetry-sdk>=1.20.0",
   "opentelemetry-exporter-otlp-proto-http>=1.20.0",

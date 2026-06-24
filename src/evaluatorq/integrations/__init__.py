@@ -2,12 +2,12 @@
 
 Available integrations:
 - langchain_integration: LangChain agent wrapper for OpenResponses format
-- langgraph_integration: LangGraph red teaming target
-- openai_agents_integration: OpenAI Agents SDK red teaming target
+- langgraph_integration: LangGraph agent target
+- openai_agents_integration: OpenAI Agents SDK agent target
 - pydantic_ai_integration: Pydantic AI agent target
 - crewai_integration: CrewAI crew target
-- vercel_ai_sdk_integration: Vercel AI SDK red teaming target (HTTP)
-- callable_integration: Custom callable red teaming target
+- vercel_ai_sdk_integration: Vercel AI SDK agent target (HTTP)
+- callable_integration: Custom callable agent target
 
 Integrations with optional dependencies (langgraph, openai-agents, pydantic-ai,
 crewai) use lazy imports so that importing this package does not fail when those

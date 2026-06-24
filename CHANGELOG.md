@@ -10,6 +10,7 @@ All notable changes to `evaluatorq` are documented here.
 
 - `EVALUATORQ_SPAN_MAX_TEXT_CHARS` defaults to **capturing all message content** (no truncation), in both the Python and TypeScript tracing layers. Set the env var to a positive integer (canonical: `8192`) to cap span text at that many characters (marker `... [truncated]`); `-1`, `0`, or unset all mean capture all. The cap applies uniformly to input **and** output message content. (RES-715 introduced an `8192` default; RES-899 reverts to capture-all and unifies the TS path, which previously hardcoded a separate `2000`-char cap.)
 - `loguru` is now a core dependency (previously gated behind the `[redteam]` extra). This slightly widens the install footprint for non-redteam consumers but unifies the logging stack across the package.
+- `openai` (`>=1.92.0`) is now a core dependency (previously gated behind the `[redteam]` extra). The new `llm_jury()` evaluator imports it at package load, so every base install pulls it; this widens the base footprint for users who only call `evaluate()`, in exchange for `llm_jury()` working without an extra.
 
 ### Breaking Changes
 
@@ -111,6 +112,7 @@ target = CallableTarget(lambda messages: my_agent(messages[-1].content or ""))
 
 ### New Features
 
+- **`llm_jury()`** — LLM-as-a-jury evaluator for `evaluatorq(evaluators=[...])`. A single judge or a panel rates a target output against criteria; verdicts can be boolean (default), labeled categorical (`labels=` + `passing_labels=`), or numeric (`verdict_kind="numeric"` + `threshold=`). The panel consensus rule is selectable via `aggregator=`: `"mode"` (default) or `"majority"` (strict >50%) for categorical, `"mean_std"` (default) / `"median"` / `"min"` / `"max"` for numeric, or a custom `Callable[[list[JuryVote]], ...]`. Uses structured generation (tiered `.parse` → `json_object` fallback) and resolves the LLM client lazily on first scorer call so declaring an evaluator never requires credentials. The Responses-API path is deferred (RES-972). (RES-848)
 - **`OWASP_LLM_TOP_10`** and **`OWASP_ASI_TOP_10`** — public `list[str]` constants exported from `evaluatorq.redteam`. Pass them to `red_team(categories=OWASP_LLM_TOP_10)` to run a full framework sweep without spelling out individual category codes (RES-815).
 - `simulate()` and `generate_and_simulate()` accept a new opt-in `upload_results=` flag (default `False`). When set to `True`, results are uploaded to the Orq platform after the run, surfacing as an experiment when `ORQ_API_KEY` is configured. Upload errors are logged but never fail the call. Both functions also accept `evaluation_description=` and `path=` parameters mirroring `evaluatorq()` (RES-598).
 - **`LLMCallConfig`** — per-role LLM configuration with `model`, `temperature`, `max_tokens`, `timeout_ms`, `extra_kwargs`, and `client` fields
