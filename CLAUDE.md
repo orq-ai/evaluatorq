@@ -34,6 +34,10 @@ uv run --group docs mkdocs serve
 
 # Build the docs site (strict — fails on warnings, as CI does)
 uv run --group docs mkdocs build --strict
+
+# Validate mermaid diagrams render in strict renderers (GitHub/VS Code) — runs in CI.
+# strict build does NOT catch mermaid label defects; this does.
+uv run python scripts/validate_mermaid.py
 ```
 
 ## Package Structure
