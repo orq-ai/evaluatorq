@@ -8,6 +8,8 @@ T-2: fallback — when criteria_meta is absent the fallback path still populates
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from evaluatorq.contracts import Message, TokenUsage
@@ -52,7 +54,7 @@ def _make_result(
     goal_completion_score: float = 0.9,
     terminated_by: TerminatedBy = TerminatedBy.judge,
     rules_broken: list[str] | None = None,
-    criteria_meta: list[dict] | None = None,
+    criteria_meta: list[dict[str, Any]] | None = None,
     turn_count: int = 3,
     prompt_tokens: int = 10,
     completion_tokens: int = 5,

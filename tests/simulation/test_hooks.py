@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import io
 import warnings
+from typing import Any
 
 import pytest
 
@@ -550,7 +551,7 @@ async def test_simulate_emits_simulate_stage(datapoint_factory):
 @pytest.mark.asyncio
 async def test_meta_carries_target(datapoint_factory):
     """SimulationRunMeta passed to on_confirm must carry 'target' field."""
-    captured: dict = {}
+    captured: dict[str, Any] = {}
 
     class Cap(DefaultHooks):
         async def on_confirm(self, meta):
@@ -840,6 +841,7 @@ def test_rich_hooks_reusable_across_runs():
         parallelism=2,
         evaluation_name='',
         evaluator_names=['goal_achieved'],
+        target='callback',
     )
 
     asyncio.run(hooks.on_run_start(meta))

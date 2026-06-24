@@ -54,7 +54,7 @@ def vl_available() -> bool:
 
 
 # Warn at most once per process when charts are silently omitted for a missing dep.
-_VL_UNAVAILABLE_WARNED = False
+_vl_unavailable_warned = False
 
 
 def _finalize(spec: dict[str, Any]) -> dict[str, Any]:
@@ -74,10 +74,10 @@ def render_svg(spec: dict[str, Any]) -> str:
     if not spec:
         return ''
     if not vl_available():
-        global _VL_UNAVAILABLE_WARNED
-        if not _VL_UNAVAILABLE_WARNED:
+        global _vl_unavailable_warned
+        if not _vl_unavailable_warned:
             logger.warning('vl-convert-python not installed; charts omitted from reports.')
-            _VL_UNAVAILABLE_WARNED = True
+            _vl_unavailable_warned = True
         return ''
     try:
         import vl_convert as vlc
