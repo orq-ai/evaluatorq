@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from evaluatorq.common.jury import Prediction, VerdictKind, run_jury
+from evaluatorq.common.jury import (
+    Prediction,
+    VerdictKind,
+    run_jury,
+    validate_aggregator,
+)
 from evaluatorq.contracts import TokenUsage
 
 
@@ -125,7 +130,7 @@ async def test_numeric_median_aggregation() -> None:
         judge_fn=judge,
         panel=['a', 'b', 'c'],
         verdict_kind=VerdictKind.NUMERIC,
-        numeric_aggregation='median',
+        aggregator='median',
     )
 
     assert result.verdict == pytest.approx(0.5)
@@ -145,7 +150,7 @@ async def test_numeric_median_even_count() -> None:
         judge_fn=judge,
         panel=['a', 'b'],
         verdict_kind=VerdictKind.NUMERIC,
-        numeric_aggregation='median',
+        aggregator='median',
     )
 
     assert result.verdict == pytest.approx(0.5)
@@ -194,3 +199,92 @@ async def test_errors_swallowed_when_not_propagating() -> None:
     result = await run_jury(judge_fn=judge, panel=['only'], propagate_errors=False)
     assert result.jury.votes[0].success is False
     assert result.jury.inconclusive is True
+
+
+# --- aggregator strategies -------------------------------------------------
+
+
+def _numeric_panel(scores: dict[str, float]):
+    async def judge(model: str) -> Prediction:
+        return Prediction(value=scores[model], explanation=f'{model}={scores[model]}')
+
+    return judge, list(scores)
+
+
+@pytest.mark.asyncio
+async def test_numeric_default_is_mean() -> None:
+    judge, panel = _numeric_panel({'a': 0.0, 'b': 0.6, 'c': 0.9})
+    result = await run_jury(judge_fn=judge, panel=panel, verdict_kind=VerdictKind.NUMERIC)
+    assert result.verdict == pytest.approx(0.5)
+    # std rides along regardless of strategy
+    assert result.jury.stats is not None and result.jury.stats.std > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('aggregator', 'expected'),
+    [('mean_std', 0.5), ('median', 0.6), ('min', 0.0), ('max', 0.9)],
+)
+async def test_numeric_aggregators(aggregator: str, expected: float) -> None:
+    judge, panel = _numeric_panel({'a': 0.0, 'b': 0.6, 'c': 0.9})
+    result = await run_jury(
+        judge_fn=judge, panel=panel, verdict_kind=VerdictKind.NUMERIC, aggregator=aggregator
+    )
+    assert result.verdict == pytest.approx(expected)
+
+
+@pytest.mark.asyncio
+async def test_majority_returns_verdict_when_above_half() -> None:
+    values = {'a': True, 'b': True, 'c': False}
+
+    async def judge(model: str) -> Prediction:
+        return Prediction(value=values[model], explanation='')
+
+    result = await run_jury(
+        judge_fn=judge, panel=list(values), verdict_kind=VerdictKind.CATEGORICAL, aggregator='majority'
+    )
+    assert result.verdict is True
+    assert result.jury.inconclusive is False
+
+
+@pytest.mark.asyncio
+async def test_majority_inconclusive_without_strict_majority() -> None:
+    # 3-way split: top value has 1/3, not >50% -> inconclusive.
+    values = {'a': 'x', 'b': 'y', 'c': 'z'}
+
+    async def judge(model: str) -> Prediction:
+        return Prediction(value=values[model], explanation='')
+
+    result = await run_jury(
+        judge_fn=judge, panel=list(values), verdict_kind=VerdictKind.CATEGORICAL, aggregator='majority'
+    )
+    assert result.jury.inconclusive is True
+
+
+@pytest.mark.asyncio
+async def test_custom_callable_aggregator_sees_votes() -> None:
+    values = {'a': 'red', 'b': 'blue', 'c': 'red'}
+
+    async def judge(model: str) -> Prediction:
+        return Prediction(value=values[model], explanation='')
+
+    # Custom rule: pick the verdict of judge 'b' specifically (weighting demo).
+    def pick_b(votes):
+        return next((v.value for v in votes if v.model == 'b'), None)
+
+    result = await run_jury(
+        judge_fn=judge, panel=list(values), verdict_kind=VerdictKind.CATEGORICAL, aggregator=pick_b
+    )
+    assert result.verdict == 'blue'
+
+
+def test_validate_aggregator_rejects_kind_mismatch() -> None:
+    with pytest.raises(ValueError, match='categorical-only'):
+        validate_aggregator('mode', VerdictKind.NUMERIC)
+    with pytest.raises(ValueError, match='numeric-only'):
+        validate_aggregator('median', VerdictKind.CATEGORICAL)
+    with pytest.raises(ValueError, match='Unknown aggregator'):
+        validate_aggregator('banana', VerdictKind.CATEGORICAL)
+    # None and callables always pass
+    validate_aggregator(None, VerdictKind.NUMERIC)
+    validate_aggregator(lambda votes: None, VerdictKind.CATEGORICAL)

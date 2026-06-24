@@ -9,12 +9,14 @@ from pydantic import BaseModel, Field
 
 from evaluatorq.common.judge import JudgeOutcome, run_judge
 from evaluatorq.common.jury import (
+    AggregatorSpec,
     JuryDeliberation,
     Prediction,
     TieBreak,
     VerdictKind,
     append_jury_summary,
     run_jury,
+    validate_aggregator,
 )
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.contracts import LLMCallConfig
@@ -247,7 +249,7 @@ def llm_jury(
     verdict_kind: Literal["categorical", "numeric"] = "categorical",
     labels: list[str] | None = None,
     passing_labels: list[str] | None = None,
-    numeric_aggregation: Literal["mean", "median"] = "mean",
+    aggregator: AggregatorSpec | None = None,
     threshold: float = 0.5,
     score_range: tuple[float, float] = (0.0, 1.0),
     tie_break: TieBreak | None = None,
@@ -296,6 +298,16 @@ def llm_jury(
       the verdict directly).
     - ``labels`` must be strings. Native ``True``/``False`` are not labels — use
       boolean mode for that.
+    - ``aggregator`` picks the panel consensus rule and must match the verdict
+      kind (a mismatch raises ``ValueError``):
+
+      * categorical: ``"mode"`` (default — most common; plurality ties go to
+        ``tie_break``) or ``"majority"`` (strict >50%, else inconclusive).
+      * numeric: ``"mean_std"`` (default — mean verdict, std always reported in
+        ``stats``), ``"median"``, ``"min"``, or ``"max"``.
+      * a custom ``Callable[[list[JuryVote]], bool | float | str | None]`` for
+        either kind (return ``None`` for "no consensus" / inconclusive). The
+        same numeric keyword also collapses a single judge's ``repetitions``.
 
     Examples
     --------
@@ -348,6 +360,10 @@ def llm_jury(
         raise ValueError(
             f"threshold ({threshold}) must lie within score_range {score_range}."
         )
+    validate_aggregator(
+        aggregator,
+        VerdictKind.NUMERIC if verdict_kind == "numeric" else VerdictKind.CATEGORICAL,
+    )
     panel = _resolve_panel(judges=judges, model=model)
     deduped = list(dict.fromkeys([*panel]))
     # Bound is the base panel size by design: replacement_judges are spillover for
@@ -402,7 +418,7 @@ def llm_jury(
             replacement_judges=replacement_judges or [],
             min_successful_judges=min_successful_judges,
             verdict_kind=vkind,
-            numeric_aggregation=numeric_aggregation,
+            aggregator=aggregator,
             tie_break=tie_break,
             # A lone judge with no stand-ins has no redundancy: re-raise an outage
             # loudly instead of silently returning inconclusive on every datapoint.
