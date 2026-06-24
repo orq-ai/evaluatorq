@@ -10,11 +10,11 @@ resistance rate.
 
 ```mermaid
 flowchart LR
-    C[Categories<br/>LLM01 / ASI01 / ...] --> SP[Strategy planner]
-    SP --> AG[Attack generator]
-    AG --> OR[Runner / orchestrator]
-    OR --> EV[OWASP evaluator]
-    EV --> RP[Report: ASR]
+    C["Categories<br/>LLM01 / ASI01 / ..."] --> SP["Strategy planner"]
+    SP --> AG["Attack generator"]
+    AG --> OR["Runner / orchestrator"]
+    OR --> EV["OWASP evaluator"]
+    EV --> RP["Report: ASR"]
 ```
 
 ## Modes

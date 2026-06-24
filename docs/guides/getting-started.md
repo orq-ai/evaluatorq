@@ -24,11 +24,11 @@ each evaluator to the results.
 
 ```mermaid
 flowchart LR
-    D[DataPoint]
-    J[@job]
-    O[output]
-    E[Evaluator]
-    P[pass / fail]
+    D["DataPoint"]
+    J["@job"]
+    O["output"]
+    E["Evaluator"]
+    P["pass / fail"]
 
     D --> J --> O --> E --> P
 ```

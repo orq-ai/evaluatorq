@@ -19,11 +19,11 @@ The red teaming system has four core registries that work together:
 
 ```mermaid
 graph TD
-    V[Vulnerability]
-    VD[VulnerabilityDef<br/>metadata + framework mappings]
-    E[Evaluator<br/>LLM-as-judge prompt]
+    V["Vulnerability"]
+    VD["VulnerabilityDef<br/>metadata + framework mappings"]
+    E["Evaluator<br/>LLM-as-judge prompt"]
     S["AttackStrategies[]<br/>attack templates"]
-    F[Framework categories<br/>OWASP LLM / ASI / custom]
+    F["Framework categories<br/>OWASP LLM / ASI / custom"]
 
     V --> VD
     V --> E
