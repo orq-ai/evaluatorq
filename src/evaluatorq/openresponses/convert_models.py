@@ -13,7 +13,7 @@ from enum import Enum
 from typing import Annotated, Any, Literal
 
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer
 
 
 class MessageRole(Enum):
@@ -82,18 +82,7 @@ class InputFileContent(_OmitNoneContent):
     file_data: str | None = Field(default=None, description="The base64-encoded contents of the file.")
     file_url: str | None = Field(default=None, description="The URL of the file.")
     filename: str | None = Field(default=None, description="The name of the file.")
-
-    @model_validator(mode="after")
-    def _require_one_source(self) -> InputFileContent:
-        # Orq's ResponsesInputFileSchema is a union of three single-source
-        # variants — exactly one of file_data / file_id / file_url is required.
-        # An empty file part is rejected server-side, so fail fast here instead.
-        sources = (self.file_data, self.file_id, self.file_url)
-        if sum(s is not None for s in sources) != 1:
-            raise ValueError(
-                "InputFileContent requires exactly one of file_data, file_id, or file_url"
-            )
-        return self
+    mime_type: str | None = Field(default=None, description="The MIME type of the file.")
 
 
 class UrlCitationBody(BaseModel):

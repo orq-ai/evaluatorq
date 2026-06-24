@@ -33,22 +33,11 @@ def test_input_image_content_detail_choices() -> None:
         InputImageContent(type="input_image", image_url="https://x", detail="ultra")  # pyright: ignore[reportArgumentType]
 
 
-def test_input_file_content_single_source() -> None:
+def test_input_file_content_all_optional() -> None:
     f = InputFileContent(type="input_file", file_data="data:application/pdf;base64,AAA", filename="a.pdf")
     assert f.type == "input_file"
     assert f.filename == "a.pdf"
-    assert f.file_id is None and f.file_url is None
-
-
-def test_input_file_requires_exactly_one_source() -> None:
-    """Orq's ResponsesInputFileSchema requires exactly one of file_data/file_id/
-    file_url; zero or multiple sources must be rejected, not silently sent."""
-    with pytest.raises(ValidationError, match="exactly one of"):
-        InputFileContent(type="input_file")  # zero sources
-    with pytest.raises(ValidationError, match="exactly one of"):
-        InputFileContent(type="input_file", file_id="f", file_url="https://x")  # two sources
-    # exactly one is accepted
-    assert InputFileContent(type="input_file", file_id="f").file_id == "f"
+    assert f.file_id is None and f.file_url is None and f.mime_type is None
 
 
 def test_none_optional_fields_omitted_on_serialization() -> None:

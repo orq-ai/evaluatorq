@@ -39,14 +39,14 @@ class InputImageContentDict(TypedDict, total=False):
 
 
 class InputFileContentDict(TypedDict, total=False):
-    """File content sent to the model. Exactly one of file_data / file_id /
-    file_url is required (per Orq's ResponsesInputFileSchema)."""
+    """File content sent to the model."""
 
     type: str  # Always "input_file"
     file_id: str | None
     file_data: str | None
     file_url: str | None
     filename: str | None
+    mime_type: str | None
 
 
 # A single content part of a message, in OpenResponses wire shape.
