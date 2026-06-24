@@ -60,4 +60,7 @@ site/
 
 # superpowers working dir (plans/specs)
 docs/superpowers/
+.superpowers/
+
+# FastHTML runtime session key
 .sesskey
