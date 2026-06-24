@@ -175,3 +175,10 @@ Two env vars control how much text is stored on spans:
 W3C `traceparent`/`tracestate` headers for the active span. Pass these into
 outgoing HTTP requests to propagate trace context across service boundaries.
 Returns an empty dict when OTel is not available.
+
+!!! warning "Internal helper — import path not guaranteed stable"
+    `get_trace_context_headers` lives in `evaluatorq.common.tracing` and is
+    **not** re-exported from the public `evaluatorq.tracing` namespace. It is an
+    internal utility; its import path may change in a future release without a
+    deprecation cycle. Prefer W3C propagation via the OpenTelemetry SDK's own
+    `inject()` helper if you need a stable public API.

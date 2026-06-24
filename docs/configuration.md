@@ -7,7 +7,7 @@ All configuration is via environment variables. No config file is required.
 | Variable | Required? | Default | What it does |
 |---|---|---|---|
 | `ORQ_API_KEY` | Required for Orq features | — | Authenticates against the Orq platform. Required to fetch datasets, upload results, and invoke deployments. Also auto-enables OpenTelemetry tracing (spans are sent to `https://my.orq.ai/v2/otel`). |
-| `ORQ_BASE_URL` | No | `https://my.orq.ai` | Override the Orq API base URL. Affects all API calls and the derived OTLP tracing endpoint (`<ORQ_BASE_URL>/v2/otel`). |
+| `ORQ_BASE_URL` | No | `https://my.orq.ai` | Overrides the Orq API base URL. Affects Orq SDK calls (dataset fetch, deployment invocation) and the derived OTLP tracing endpoint (`<ORQ_BASE_URL>/v2/otel`). Does **not** redirect OpenAI-compatible LLM calls — use `OPENAI_BASE_URL` for that. |
 | `OPENAI_API_KEY` | Required if not using Orq | — | API key for the OpenAI (or compatible) backend. Used by the red teaming pipeline and agent simulation when `ORQ_API_KEY` is absent. |
 | `OPENAI_BASE_URL` | No | OpenAI default | Redirect OpenAI-compatible calls to a different host (vLLM, OpenRouter, Azure, local). Honoured by the red teaming and simulation LLM client. |
 | `ORQ_DISABLE_TRACING` | No | unset | Set to `1` or `true` to suppress all OpenTelemetry spans even when `ORQ_API_KEY` or `OTEL_EXPORTER_OTLP_ENDPOINT` is present. |
@@ -18,9 +18,9 @@ All configuration is via environment variables. No config file is required.
 | `OTEL_SERVICE_VERSION` | No | `1.0.0` | Service version recorded on every span's `service.version` resource attribute. |
 | `EVALUATORQ_CAPTURE_MESSAGE_CONTENT` | No | `true` | Set to `false` or `0` to strip LLM message content (prompts and responses) from spans. Token counts, model name, and latency are still recorded. Useful when exporting to third-party backends or to avoid capturing PII. |
 | `EVALUATORQ_SPAN_MAX_TEXT_CHARS` | No | unset (no limit) | Maximum characters per span text attribute. Set a positive integer (e.g. `8192`) to truncate long strings. Unset or `0` / `-1` means capture all. |
-| `EVALUATORQ_LLM_TIMEOUT_S` | No | `60.0` | Per-LLM-call timeout in seconds. Applies to simulation agents. Increase for slow self-hosted endpoints. |
-| `EVALUATORQ_LLM_MAX_TOKENS` | No | `8192` | Maximum completion tokens per LLM call in simulation. Increase for reasoning models that exhaust the default budget before emitting a tool call. |
-| `EVALUATORQ_REASONING_EFFORT` | No | `medium` | Reasoning effort hint passed to reasoning-capable models in simulation. Set to `""`, `none`, or `off` to omit the parameter entirely. |
+| `EVALUATORQ_LLM_TIMEOUT_S` | No | `60.0` | Per-LLM-call timeout in seconds. **Simulation only** — has no effect on red teaming or core evaluation. Increase for slow self-hosted endpoints. |
+| `EVALUATORQ_LLM_MAX_TOKENS` | No | `8192` | Maximum completion tokens per LLM call. **Simulation only** — has no effect on red teaming or core evaluation. Increase for reasoning models that exhaust the default budget before emitting a tool call. |
+| `EVALUATORQ_REASONING_EFFORT` | No | `medium` | Reasoning effort hint passed to reasoning-capable models. **Simulation only** — has no effect on red teaming or core evaluation. Set to `""`, `none`, or `off` to omit the parameter entirely. |
 
 ## `.env` file
 

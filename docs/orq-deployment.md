@@ -21,7 +21,7 @@ the lifetime of the process.
 
 | Requirement | Detail |
 |---|---|
-| Package | `orq-ai-sdk>=4.4.7` — install via `pip install evaluatorq[orq]` |
+| Package | `orq-ai-sdk>=4.4.7` — install directly with `pip install orq-ai-sdk` or via `pip install evaluatorq[orq]` |
 | `ORQ_API_KEY` | Required. Set in environment or `.env` file. |
 | `ORQ_BASE_URL` | Optional. Defaults to `https://my.orq.ai`. Override for self-hosted or staging. |
 
