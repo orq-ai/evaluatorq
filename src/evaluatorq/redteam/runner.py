@@ -2286,6 +2286,8 @@ async def _run_dynamic_or_hybrid(
                 description=description or f'{mode.capitalize()} red teaming ({len(all_target_labels)} targets)',
                 start_time=pipeline_start,
                 report=merged,
+                # All targets share one resolved attacker/inference client, so the
+                # first prepared target is representative of the Orq host to upload to.
                 inference_client=prepared_targets[0].resolved_llm_client if prepared_targets else None,
             )
         finally:
