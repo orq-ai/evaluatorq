@@ -231,6 +231,8 @@ async def test_numeric_aggregators(aggregator: str, expected: float) -> None:
         judge_fn=judge, panel=panel, verdict_kind=VerdictKind.NUMERIC, aggregator=aggregator
     )
     assert result.verdict == pytest.approx(expected)
+    # std rides along even when the verdict isn't the mean (median/min/max)
+    assert result.jury.stats is not None and result.jury.stats.std > 0
 
 
 @pytest.mark.asyncio
@@ -320,3 +322,87 @@ async def test_repetition_collapse_uses_numeric_keyword() -> None:
         aggregator='max',
     )
     assert result.verdict == pytest.approx(0.9)
+
+
+def test_aggregator_registry_parity() -> None:
+    # The fn registry, the kind partition, and the AggregatorName literal must
+    # name exactly the same keyword set, or validation/dispatch silently drift.
+    from typing import get_args
+
+    from evaluatorq.common.jury import _AGG_KIND, _AGGREGATORS, AggregatorName
+
+    names = set(get_args(AggregatorName))
+    assert set(_AGGREGATORS) == names
+    assert set(_AGG_KIND) == names
+
+
+@pytest.mark.asyncio
+async def test_majority_inconclusive_at_exactly_half() -> None:
+    # 2 of 4 is exactly 50% — not a strict majority, so inconclusive.
+    values = {'a': True, 'b': True, 'c': False, 'd': False}
+
+    async def judge(model: str) -> Prediction:
+        return Prediction(value=values[model], explanation='')
+
+    result = await run_jury(
+        judge_fn=judge, panel=list(values), verdict_kind=VerdictKind.CATEGORICAL, aggregator='majority'
+    )
+    assert result.jury.inconclusive is True
+
+
+@pytest.mark.asyncio
+async def test_custom_callable_returning_none_is_inconclusive() -> None:
+    async def judge(model: str) -> Prediction:
+        return Prediction(value='x', explanation='')
+
+    result = await run_jury(
+        judge_fn=judge,
+        panel=['a', 'b'],
+        verdict_kind=VerdictKind.CATEGORICAL,
+        aggregator=lambda votes: None,  # deliberate "no consensus"
+    )
+    assert result.verdict is None
+    assert result.jury.inconclusive is True
+
+
+@pytest.mark.asyncio
+async def test_custom_callable_sees_abstained_and_failed_votes() -> None:
+    # The contract: a custom aggregator receives ALL votes, not just decisive.
+    async def judge(model: str) -> Prediction:
+        if model == 'ok':
+            return Prediction(value='yes', explanation='')
+        if model == 'abst':
+            return Prediction(abstained=True, explanation='unsure')
+        raise RuntimeError('down')
+
+    seen: dict[str, int] = {}
+
+    def count_votes(votes):
+        seen['n'] = len(votes)
+        seen['abstained'] = sum(1 for v in votes if v.abstained)
+        seen['failed'] = sum(1 for v in votes if not v.success)
+        return 'yes'
+
+    result = await run_jury(
+        judge_fn=judge,
+        panel=['ok', 'abst', 'bad'],
+        verdict_kind=VerdictKind.CATEGORICAL,
+        aggregator=count_votes,
+    )
+    assert result.verdict == 'yes'
+    assert seen['n'] == 3  # all three votes, not just the one decisive
+    assert seen['abstained'] == 1
+    assert seen['failed'] == 1
+
+
+@pytest.mark.asyncio
+async def test_repetition_collapse_min() -> None:
+    scores = iter([0.9, 0.4, 0.2])
+
+    async def judge(model: str) -> Prediction:
+        return Prediction(value=next(scores), explanation='')
+
+    result = await run_jury(
+        judge_fn=judge, panel=['a'], repetitions=3, verdict_kind=VerdictKind.NUMERIC, aggregator='min'
+    )
+    assert result.verdict == pytest.approx(0.2)

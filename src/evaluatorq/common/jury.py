@@ -16,17 +16,16 @@ from evaluatorq.contracts import JuryResult, JuryStats, JuryVote, StrEnum, Token
 VerdictValue = bool | float | str
 TieBreak = Callable[[list[VerdictValue]], VerdictValue | None]
 
-# A custom panel aggregator sees the full per-judge votes (model, abstained,
-# replacement, value) so it can weight or quorum, and returns the consensus
-# verdict — or None for "no consensus" (inconclusive). The runner still derives
-# stats / agreement / pass downstream.
+# A custom panel aggregator sees ALL per-judge votes — including abstained and
+# failed ones (filter on .success / .abstained yourself) — plus model and
+# replacement, so it can weight or quorum. It returns the consensus verdict, or
+# None for "no consensus" (inconclusive). The built-in keyword aggregators
+# instead operate on decisive votes only (see _decisive_values). The runner
+# derives stats / agreement / pass downstream regardless.
 Aggregator = Callable[[list[JuryVote]], VerdictValue | None]
-CategoricalAggName = Literal['mode', 'majority']
 NumericAggName = Literal['mean_std', 'median', 'min', 'max']
 AggregatorName = Literal['mode', 'majority', 'mean_std', 'median', 'min', 'max']
 AggregatorSpec = AggregatorName | Aggregator
-_CATEGORICAL_AGGS: frozenset[str] = frozenset(('mode', 'majority'))
-_NUMERIC_AGGS: frozenset[str] = frozenset(('mean_std', 'median', 'min', 'max'))
 
 
 class VerdictKind(StrEnum):
@@ -136,6 +135,18 @@ _AGGREGATORS: dict[str, Aggregator] = {
     'max': _make_numeric_agg('max'),
 }
 
+# Single source of truth for the keyword -> verdict-kind partition. Keep in sync
+# with _AGGREGATORS and the AggregatorName literal; test_aggregator_registry_parity
+# pins all three together.
+_AGG_KIND: dict[str, VerdictKind] = {
+    'mode': VerdictKind.CATEGORICAL,
+    'majority': VerdictKind.CATEGORICAL,
+    'mean_std': VerdictKind.NUMERIC,
+    'median': VerdictKind.NUMERIC,
+    'min': VerdictKind.NUMERIC,
+    'max': VerdictKind.NUMERIC,
+}
+
 
 def validate_aggregator(aggregator: AggregatorSpec | None, verdict_kind: VerdictKind) -> None:
     """Reject a keyword aggregator that doesn't match the verdict kind.
@@ -145,12 +156,14 @@ def validate_aggregator(aggregator: AggregatorSpec | None, verdict_kind: Verdict
     """
     if aggregator is None or callable(aggregator):
         return
-    if aggregator not in _AGGREGATORS:
-        raise ValueError(f'Unknown aggregator {aggregator!r}; expected one of {sorted(_AGGREGATORS)} or a callable.')
-    if verdict_kind is VerdictKind.NUMERIC and aggregator not in _NUMERIC_AGGS:
-        raise ValueError(f'aggregator={aggregator!r} is categorical-only; numeric verdict_kind needs one of {sorted(_NUMERIC_AGGS)}.')
-    if verdict_kind is VerdictKind.CATEGORICAL and aggregator not in _CATEGORICAL_AGGS:
-        raise ValueError(f'aggregator={aggregator!r} is numeric-only; categorical verdict_kind needs one of {sorted(_CATEGORICAL_AGGS)}.')
+    if aggregator not in _AGG_KIND:
+        raise ValueError(f'Unknown aggregator {aggregator!r}; expected one of {sorted(_AGG_KIND)} or a callable.')
+    if _AGG_KIND[aggregator] is not verdict_kind:
+        allowed = sorted(n for n, k in _AGG_KIND.items() if k is verdict_kind)
+        raise ValueError(
+            f'aggregator={aggregator!r} is {_AGG_KIND[aggregator].value}-only; '
+            f'verdict_kind={verdict_kind.value!r} needs one of {allowed}.'
+        )
 
 
 def _jury_stats(values: Sequence[VerdictValue]) -> JuryStats | None:
@@ -337,7 +350,7 @@ async def run_jury(
     # Per-judge repetition collapse reuses the numeric keyword when one is set,
     # else falls back to mean (a custom callable only runs at the panel level).
     numeric_how: NumericAggName = 'mean_std'
-    if isinstance(aggregator, str) and aggregator in _NUMERIC_AGGS:
+    if isinstance(aggregator, str) and _AGG_KIND.get(aggregator) is VerdictKind.NUMERIC:
         numeric_how = cast('NumericAggName', aggregator)
     agg_fn: Aggregator = aggregator if callable(aggregator) else _AGGREGATORS[aggregator]
 
@@ -406,7 +419,9 @@ async def run_jury(
             if tie and tie_break is not None:
                 verdict = tie_break(decisive_values)
         else:
-            verdict = agg_fn(decisive_votes)
+            # Pass ALL votes — custom callables may want abstained/failed votes
+            # for quorum/weighting; built-ins re-filter to decisive internally.
+            verdict = agg_fn(votes)
         if verdict is None:
             inconclusive = True
             tie = False

@@ -303,8 +303,8 @@ def llm_jury(
 
       * categorical: ``"mode"`` (default — most common; plurality ties go to
         ``tie_break``) or ``"majority"`` (strict >50%, else inconclusive).
-      * numeric: ``"mean_std"`` (default — mean verdict, std always reported in
-        ``stats``), ``"median"``, ``"min"``, or ``"max"``.
+      * numeric: ``"mean_std"`` (default — mean verdict; std reported in
+        ``stats`` on a conclusive verdict), ``"median"``, ``"min"``, or ``"max"``.
       * a custom ``Callable[[list[JuryVote]], bool | float | str | None]`` for
         either kind (return ``None`` for "no consensus" / inconclusive). The
         same numeric keyword also collapses a single judge's ``repetitions``.
