@@ -22,7 +22,7 @@ graph TD
     V[Vulnerability]
     VD[VulnerabilityDef<br/>metadata + framework mappings]
     E[Evaluator<br/>LLM-as-judge prompt]
-    S[AttackStrategies[]<br/>attack templates]
+    S["AttackStrategies[]<br/>attack templates"]
     F[Framework categories<br/>OWASP LLM / ASI / custom]
 
     V --> VD

@@ -55,26 +55,31 @@
 :root {
   --orq-teal: #025558;
   --orq-teal-light: #299d8f;
+  --orq-teal-dark: #013a3c;
   --orq-orange: #ff8f34;
-  --orq-cyan: #28ffe2;
+  --orq-orange-deep: #df5325; /* orange for fills/buttons (white text on top) */
+  --orq-orange-text: #c4421a; /* orange for TEXT on light surfaces — ~4.6:1 AA */
   --orq-ink: #25232e;
   --orq-sand: #f9f8f6;
 }
 
-/* Light scheme: teal primary, orange accent. */
+/* Light scheme: teal identity, orange accent. */
 [data-md-color-scheme="default"] {
   --md-primary-fg-color: var(--orq-teal);
   --md-primary-fg-color--light: var(--orq-teal-light);
-  --md-primary-fg-color--dark: #013a3c;
-  --md-accent-fg-color: var(--orq-orange);
+  --md-primary-fg-color--dark: var(--orq-teal-dark);
+  --md-accent-fg-color: var(--orq-orange-deep); /* hover accent, AA on white */
   --md-typeset-a-color: var(--orq-teal);
+  --md-code-bg-color: var(--orq-sand);
 }
 
-/* Dark scheme: lighten so teal stays legible on slate. */
+/* Dark scheme: lighten teal so it stays legible on slate. */
 [data-md-color-scheme="slate"] {
   --md-primary-fg-color: var(--orq-teal-light);
+  --md-primary-fg-color--light: #3db8a8;
+  --md-primary-bg-color: #ffffff; /* text/icons on the primary header */
   --md-accent-fg-color: var(--orq-orange);
-  --md-typeset-a-color: var(--orq-cyan);
+  --md-typeset-a-color: var(--orq-teal-light); /* teal-light, not blinding cyan */
 }
 
 /* Headings in brand teal (light only — slate handles its own contrast). */
@@ -217,7 +222,3 @@ html { font-size: 100%; }
 /* ponytail: NOT overriding Material's sidebar-collapse breakpoint (76.25em).
    A CSS-only override leaves a broken half-state — drawer-mode and sidebar-mode
    render different DOM. Widen the window past ~1220px for the permanent sidebar. */
-
-.md-typeset .mermaid {
-  --md-mermaid-edge-color: var(--orq-teal-light);
-}
