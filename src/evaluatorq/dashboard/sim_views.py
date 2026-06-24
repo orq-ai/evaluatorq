@@ -262,7 +262,6 @@ def render_transcript_fragment(entry: SimulationEntry) -> str:
 # ---------------------------------------------------------------------------
 
 
-
 def register_sim_view_routes(app: Any, roots: list[Any] | None = None) -> None:
     """Register simulation view routes on *app*.
 

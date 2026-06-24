@@ -28,7 +28,7 @@ from __future__ import annotations
 # is in place when build_app() constructs the FastHTML app.  dashboard tests
 # use build_app()+TestClient without serve(), so the patch must NOT be deferred
 # to serve().  See evaluatorq/dashboard/_compat.py for the full explanation.
-import evaluatorq.dashboard._compat  # noqa: F401
+import evaluatorq.dashboard._compat  # noqa: F401 — side-effect import; must precede FastHTML (intentional sort-order deviation)
 
 # ---------------------------------------------------------------------------
 # Normal imports (after shim)
@@ -68,7 +68,6 @@ _STATIC_DIR = Path(__file__).parent / 'static'
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
 
 
 def build_app(roots: list[Path] | None = None) -> FastHTML:

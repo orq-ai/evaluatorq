@@ -70,7 +70,6 @@ def _404(message: str) -> str:
     return f'<div class="rt-view-error"><p>{esc(message)}</p></div>'
 
 
-
 # ---------------------------------------------------------------------------
 # Route factory: register all four views on a FastHTML app
 # ---------------------------------------------------------------------------
