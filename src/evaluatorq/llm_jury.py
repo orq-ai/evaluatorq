@@ -365,7 +365,7 @@ def llm_jury(
         VerdictKind.NUMERIC if verdict_kind == "numeric" else VerdictKind.CATEGORICAL,
     )
     panel = _resolve_panel(judges=judges, model=model)
-    deduped = list(dict.fromkeys([*panel]))
+    deduped = list(dict.fromkeys(panel))
     # Bound is the base panel size by design: replacement_judges are spillover for
     # failed primaries, not extra capacity, so they don't raise the achievable floor.
     if not (1 <= min_successful_judges <= len(deduped)):
