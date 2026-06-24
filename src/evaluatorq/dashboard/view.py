@@ -223,7 +223,7 @@ def filter_fragment(
     """
     return (
         f'<div id="filter-swap" class="filter-swap-container"'
-        f' data-rid="{esc(rid)}" data-surface="{esc(surface)}">'
+        f' data-rid="{esc(rid)}">'
         f'{form_html}'
         f'<div class="report-body-area">'
         f'{body_html}'
@@ -257,7 +257,6 @@ def download_sidebar(
     selections: dict[str, list[str]] | None = None,
     has_markdown: bool = False,
     has_csv: bool = False,
-    has_json: bool = True,
     oob: bool = False,
 ) -> str:
     """Render the download links sidebar for a report page.
@@ -279,7 +278,6 @@ def download_sidebar(
                       currently filtered set.
         has_markdown: Whether to include a Markdown download link.
         has_csv:      Whether to include a CSV download link.
-        has_json:     Whether to include a JSON download link.
         oob:          When ``True``, add ``hx-swap-oob="true"`` so HTMX
                       replaces the sidebar in-place without it being inside
                       the primary swap target.
@@ -310,8 +308,7 @@ def download_sidebar(
         links.append(f'<a class="download-link" href="/r/{safe_rid}/export.md">Markdown</a>')
     if has_csv:
         links.append(f'<a class="download-link" href="/r/{safe_rid}/export.csv{qs}">CSV</a>')
-    if has_json:
-        links.append(f'<a class="download-link" href="/r/{safe_rid}/export.json{qs}">JSON</a>')
+    links.append(f'<a class="download-link" href="/r/{safe_rid}/export.json{qs}">JSON</a>')
 
     inner = '\n'.join(links)
     return (
@@ -380,6 +377,35 @@ def render_message_list(
     return "".join(parts)
 
 
+def _sim_rowlist_wrapper(rid: str, inner: str) -> str:
+    """Wrap *inner* HTML in the HTMX container div for the sim row-list.
+
+    The div re-fetches itself when the ``orq:filter-changed`` event fires,
+    carrying the current filter form values via ``hx-include``.  Both the
+    initial page render (``sim_interactive_panels``) and the HTMX fragment
+    route (``GET /r/{rid}/sim/row-list``) must return this identical wrapper
+    so that ``hx-swap="outerHTML"`` replaces the correct element.
+
+    Args:
+        rid:   Report ID (URL-safe).
+        inner: Already-rendered row-list HTML to embed inside the div.
+
+    Returns:
+        An HTML ``<div hx-get=...>`` string.
+    """
+    safe_rid = esc(rid)
+    return (
+        f'<div'
+        f' hx-get="/r/{safe_rid}/sim/row-list"'
+        f' hx-trigger="orq:filter-changed from:body"'
+        f' hx-include="#filter-form"'
+        f' hx-target="this"'
+        f' hx-swap="outerHTML">'
+        f'{inner}'
+        f'</div>'
+    )
+
+
 def sim_interactive_panels(rid: str, entries: list[Any]) -> str:
     """Render the interactive sim panels section (conversation list + transcript).
 
@@ -400,21 +426,11 @@ def sim_interactive_panels(rid: str, entries: list[Any]) -> str:
     """
     from evaluatorq.dashboard.sim_views import render_sim_row_list
 
-    safe_rid = esc(rid)
     row_list = render_sim_row_list(rid, entries)
-    # Wrap in an HTMX-enabled container that refetches the row list when the
-    # filter changes, carrying the current filter form selections each time.
     return (
         f'<section class="sim-interactive-panels">'
         f'<h1 class="sim-panels-title">Conversations</h1>'
-        f'<div'
-        f' hx-get="/r/{safe_rid}/sim/row-list"'
-        f' hx-trigger="orq:filter-changed from:body"'
-        f' hx-include="#filter-form"'
-        f' hx-target="this"'
-        f' hx-swap="outerHTML">'
-        f'{row_list}'
-        f'</div>'
+        f'{_sim_rowlist_wrapper(rid, row_list)}'
         f'</section>'
     )
 

@@ -218,7 +218,6 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
             surface or '',
             has_markdown=(adapter.export_markdown is not None),
             has_csv=(surface == 'redteam'),
-            has_json=True,
         )
         body_with_filters = body_with_filters + dl_sidebar
 
@@ -277,7 +276,6 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
             selections=selections,
             has_markdown=(adapter.export_markdown is not None),
             has_csv=(surface == 'redteam'),
-            has_json=True,
             oob=True,
         )
         # Signal interactive panels to refetch with the new filter.  Panels

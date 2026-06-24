@@ -24,7 +24,7 @@ from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import apply_or_all
-from evaluatorq.dashboard.view import render_message_list
+from evaluatorq.dashboard.view import _sim_rowlist_wrapper, render_message_list
 from evaluatorq.simulation.types import SimulationEntry
 
 if TYPE_CHECKING:
@@ -298,19 +298,9 @@ def register_sim_view_routes(app: Any, roots: list[Any] | None = None) -> None:
         entries = individual_entries(filtered_results)
 
         html = render_sim_row_list(rid, entries)
-        # Return wrapped in the same container div that the sim_interactive_panels
-        # helper renders so the outerHTML swap replaces the correct element.
-        return Response(
-            f'<div'
-            f' hx-get="/r/{esc(rid)}/sim/row-list"'
-            f' hx-trigger="orq:filter-changed from:body"'
-            f' hx-include="#filter-form"'
-            f' hx-target="this"'
-            f' hx-swap="outerHTML">'
-            f'{html}'
-            f'</div>',
-            media_type='text/html',
-        )
+        # Return wrapped in the same container div that sim_interactive_panels
+        # renders so the outerHTML swap replaces the correct element.
+        return Response(_sim_rowlist_wrapper(rid, html), media_type='text/html')
 
     @app.get('/r/{rid}/sim/transcript')
     def sim_transcript(rid: str, req: Request) -> Response:
