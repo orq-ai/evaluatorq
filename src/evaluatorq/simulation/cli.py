@@ -1106,19 +1106,55 @@ def _format_scorer_averages(averages: dict[str, float]) -> str:
 
 @app.command()
 def ui(
-    host: Annotated[
-        str,
-        typer.Option(help="Host to bind the dashboard server to."),
-    ] = "127.0.0.1",
+    run_path: Annotated[
+        Path | None,
+        typer.Argument(help="Path to a run JSON file. Omit to open the latest run."),
+    ] = None,
+    latest: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option("--latest", "-l", help="Open the most recent auto-saved run."),
+    ] = False,
     port: Annotated[
         int,
-        typer.Option(help="Port for the dashboard server."),
-    ] = 8080,
+        typer.Option(help="Port for the Streamlit server."),
+    ] = 8501,
+    host: Annotated[
+        str,
+        typer.Option(help="Host to bind the Streamlit server to."),
+    ] = "localhost",
 ) -> None:
-    """Launch the FastHTML dashboard scoped to simulation runs."""
-    from evaluatorq.dashboard.launch import serve
+    """Launch the interactive Streamlit dashboard for a simulation run."""
+    from evaluatorq.common.ui.launch import launch_streamlit
 
-    serve([_get_sim_runs_dir()], host=host, port=port)
+    runs_dir = _get_sim_runs_dir()
+
+    if run_path is None or latest:
+        if runs_dir.exists():
+            run_files = sorted(
+                runs_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True
+            )
+            if run_files:
+                run_path = run_files[0]
+                typer.echo(f"Opening latest run: {run_path.name}")
+        if run_path is None:
+            typer.echo(
+                "No runs found. Run `eq sim run` first, or pass a run path.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    run_path = run_path.resolve()
+    if not run_path.exists():
+        # Allow passing a bare filename from the runs directory.
+        candidate = runs_dir / run_path.name
+        if candidate.exists():
+            run_path = candidate
+        else:
+            typer.echo(f"Error: {run_path} does not exist.", err=True)
+            raise typer.Exit(code=1)
+
+    dashboard_script = Path(__file__).parent / "ui" / "dashboard.py"
+    launch_streamlit(dashboard_script, run_path, port=port, host=host, extra="simulation")
 
 
 def _export_report(run: Any, directory: Path, *, fmt: str) -> None:

@@ -104,20 +104,19 @@ def test_intercept_handler_uses_numeric_fallback_for_unknown_level() -> None:
 
 
 # ---------------------------------------------------------------------------
-# CLI help smoke-tests (eq ui, redteam ui, sim ui)
+# CLI help smoke-tests (eq dashboard, redteam ui, sim ui)
 # ---------------------------------------------------------------------------
 
 
-def test_eq_ui_help() -> None:
-    """eq ui --help exits 0 and lists the ui command."""
-    # The module-level ``app`` already has the ``ui`` command registered.
+def test_eq_dashboard_help() -> None:
+    """eq dashboard --help exits 0 and lists the FastHTML dashboard command."""
+    # The FastHTML dashboard lives under ``eq dashboard`` (preview); the ``ui``
+    # commands still serve the Streamlit dashboards while it is in development.
     from evaluatorq.cli import app
 
     runner = CliRunner()
-    result = runner.invoke(app, ["ui", "--help"])
+    result = runner.invoke(app, ["dashboard", "--help"])
     assert result.exit_code == 0
-    # The help text should mention the fasthtml dashboard.
-    assert "dashboard" in result.output.lower() or "path" in result.output.lower()
 
 
 def test_redteam_ui_help() -> None:

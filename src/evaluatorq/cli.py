@@ -3,8 +3,8 @@
 Usage:
     evaluatorq redteam run --target agent:my-agent
     evaluatorq redteam ui report.json
-    evaluatorq ui
-    evaluatorq ui /path/to/run.json
+    evaluatorq dashboard
+    evaluatorq dashboard /path/to/run.json
 """
 
 from __future__ import annotations
@@ -26,12 +26,12 @@ app = typer.Typer(
 
 
 # ---------------------------------------------------------------------------
-# eq ui
+# eq dashboard (FastHTML — preview, still in development)
 # ---------------------------------------------------------------------------
 
 
 @app.command()
-def ui(
+def dashboard(
     path: Annotated[
         Path | None,
         typer.Argument(
@@ -53,7 +53,7 @@ def ui(
         typer.Option(help="Port for the dashboard server."),
     ] = 8080,
 ) -> None:
-    """Launch the FastHTML dashboard.
+    """Launch the FastHTML dashboard (preview — still in development).
 
     With no PATH both the redteam run store (.evaluatorq/runs/) and the
     simulation run store (.evaluatorq/sim-runs/) are scanned.

@@ -50,7 +50,7 @@ src/evaluatorq/
 ├── integrations/            # Third-party integrations (LangChain, etc.)
 ├── tracing/                 # OpenTelemetry tracing
 ├── openresponses/           # OpenAI Responses API integration
-├── dashboard/               # FastHTML web dashboard (eq ui / redteam ui / sim ui)
+├── dashboard/               # FastHTML web dashboard (eq dashboard — preview, in dev; ui commands still serve the Streamlit dashboards)
 │   ├── app.py               # build_app(roots) — ASGI app factory + all routes
 │   ├── _compat.py           # Starlette 1.3.x / FastHTML 0.12.x compat shim (applied on import)
 │   ├── shell.py             # page() — full HTML page shell with head assets

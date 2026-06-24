@@ -9,8 +9,13 @@ tooling that probes `import evaluatorq` then falls back to
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+
+# typer's rich help renders to a 0-width console when stdout is a pipe (no TTY),
+# producing blank output. Pin a width so the captured help text is non-empty.
+_HELP_ENV = {**os.environ, "COLUMNS": "80"}
 
 
 def test_python_m_evaluatorq_help_exits_zero() -> None:
@@ -19,6 +24,7 @@ def test_python_m_evaluatorq_help_exits_zero() -> None:
         capture_output=True,
         text=True,
         timeout=60,
+        env=_HELP_ENV,
     )
     assert result.returncode == 0, result.stderr
     assert "Evaluation framework for AI systems." in result.stdout
@@ -31,5 +37,6 @@ def test_python_m_evaluatorq_cli_help_exits_zero() -> None:
         capture_output=True,
         text=True,
         timeout=60,
+        env=_HELP_ENV,
     )
     assert result.returncode == 0, result.stderr
