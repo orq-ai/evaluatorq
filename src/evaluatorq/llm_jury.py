@@ -258,7 +258,68 @@ def llm_jury(
     extra_kwargs: dict[str, Any] | None = None,
     client: Any = None,
 ) -> Evaluator:
-    """Build a jury (or single-judge) LLM evaluator for ``evaluators=[...]``."""
+    """Build a jury (or single-judge) LLM evaluator for ``evaluators=[...]``.
+
+    Verdict modes
+    -------------
+    The judge's verdict type and the ``passed`` (pass/fail) field are decided by
+    ``verdict_kind`` together with ``labels``. ``verdict_kind`` is **not** inferred
+    from ``labels`` — it defaults to ``"categorical"`` and you pick the mode
+    explicitly. There are three modes:
+
+    +-------------------------------+------------------+--------------------------------+
+    | how you configure it          | judge returns    | ``passed`` is                  |
+    +===============================+==================+================================+
+    | ``verdict_kind="categorical"``| a JSON boolean   | the boolean itself             |
+    | (default), ``labels=None``    | ``true``/``false`` |                              |
+    | — **boolean mode**            |                  |                                |
+    +-------------------------------+------------------+--------------------------------+
+    | ``verdict_kind="categorical"``| one of ``labels``| ``verdict in passing_labels``  |
+    | with ``labels=[...]``         | (a string)       | (``None`` if no                |
+    | — **labeled mode**            |                  | ``passing_labels`` given)      |
+    +-------------------------------+------------------+--------------------------------+
+    | ``verdict_kind="numeric"``    | a float in       | ``score >= threshold``         |
+    | — **numeric mode**            | ``score_range``  |                                |
+    +-------------------------------+------------------+--------------------------------+
+
+    Notes:
+
+    - For a yes/no judge, use **boolean mode** (the default — just omit ``labels``).
+      ``passed`` is populated automatically; you do not need ``passing_labels``.
+    - ``labels`` and ``passing_labels`` are valid **only** for
+      ``verdict_kind="categorical"``; passing them with ``"numeric"`` raises
+      ``ValueError``.
+    - In labeled mode, ``passing_labels`` must be a subset of ``labels``. If you
+      omit it, the verdict is still recorded but ``passed`` is ``None`` (no
+      pass/fail, so no pass-rate to aggregate).
+    - ``labels`` must be strings. Native ``True``/``False`` are not labels — use
+      boolean mode for that.
+
+    Examples
+    --------
+    Boolean — "is the answer correct?" (``verdict_kind="categorical"``, the default)::
+
+        llm_jury(name="correct", criteria="Is the answer factually correct?")
+
+    Labeled categorical (``verdict_kind="categorical"``)::
+
+        llm_jury(
+            name="grade",
+            criteria="Grade the answer.",
+            labels=["correct", "partially_correct", "incorrect"],
+            passing_labels=["correct", "partially_correct"],
+        )
+
+    Numeric (``verdict_kind="numeric"``)::
+
+        llm_jury(
+            name="helpfulness",
+            criteria="Rate helpfulness from 0 to 1.",
+            verdict_kind="numeric",
+            score_range=(0.0, 1.0),
+            threshold=0.7,
+        )
+    """
     # --- validation (fail fast) ---
     if bool(criteria) == bool(prompt):
         raise ValueError("Pass exactly one of `criteria` or `prompt`.")
