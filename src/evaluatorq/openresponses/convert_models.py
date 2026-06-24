@@ -13,7 +13,7 @@ from enum import Enum
 from typing import Annotated, Any, Literal
 
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer
 
 
 class MessageRole(Enum):
@@ -48,7 +48,20 @@ class InputTextContent(BaseModel):
     text: Annotated[str, Field(description="The text input to the model.")]
 
 
-class InputImageContent(BaseModel):
+class _OmitNoneContent(BaseModel):
+    """Content part that drops None-valued optional fields on serialization.
+
+    The Orq Responses API treats an unset optional content field as *absent*,
+    not as an explicit ``null`` — sending ``null`` is rejected. So a content
+    part serializes only the fields actually provided.
+    """
+
+    @model_serializer(mode="wrap")
+    def _omit_none(self, handler: Any) -> dict[str, Any]:
+        return {k: v for k, v in handler(self).items() if v is not None}
+
+
+class InputImageContent(_OmitNoneContent):
     type: Annotated[
         Literal["input_image"],
         Field(description="The type of the input item. Always `input_image`."),
@@ -60,7 +73,7 @@ class InputImageContent(BaseModel):
     )
 
 
-class InputFileContent(BaseModel):
+class InputFileContent(_OmitNoneContent):
     type: Annotated[
         Literal["input_file"],
         Field(description="The type of the input item. Always `input_file`."),

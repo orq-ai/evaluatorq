@@ -40,6 +40,19 @@ def test_input_file_content_all_optional() -> None:
     assert f.file_id is None and f.file_url is None and f.mime_type is None
 
 
+def test_none_optional_fields_omitted_on_serialization() -> None:
+    """Unset optional fields must be absent from the payload, not null — the Orq
+    Responses API rejects explicit null on optional content fields."""
+    img = InputImageContent(type="input_image", image_url="https://x/y.png")
+    assert img.model_dump(mode="json") == {
+        "type": "input_image",
+        "image_url": "https://x/y.png",
+        "detail": "auto",
+    }
+    f = InputFileContent(type="input_file", file_url="https://x/a.pdf")
+    assert f.model_dump(mode="json") == {"type": "input_file", "file_url": "https://x/a.pdf"}
+
+
 def test_message_accepts_mixed_text_and_image() -> None:
     content: ContentList = [
         InputTextContent(type="input_text", text="what is this?"),
