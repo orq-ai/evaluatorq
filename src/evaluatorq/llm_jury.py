@@ -354,7 +354,10 @@ def llm_jury(
             "at temp 0. Leave it unset unless you know your model benefits."
         )
 
-    resolved_client = client if client is not None else resolve_llm_client(config_client=None).client
+    # Resolve the client lazily on first scorer call, not here: declaring an
+    # evaluator at module scope should never require credentials. An explicit
+    # client= is used as-is; otherwise we resolve once on first use.
+    resolved_client = client
     verdict_model = _build_verdict_model(verdict_kind=verdict_kind, labels=labels, score_range=score_range)
     template = prompt if prompt is not None else _default_template(criteria=criteria or "")
     sys_prompt = system_prompt if system_prompt is not None else _default_system_prompt(
@@ -363,6 +366,9 @@ def llm_jury(
     vkind = VerdictKind.NUMERIC if verdict_kind == "numeric" else VerdictKind.CATEGORICAL
 
     async def scorer(params: ScorerParameter) -> EvaluationResult:
+        nonlocal resolved_client
+        if resolved_client is None:
+            resolved_client = resolve_llm_client(config_client=None).client
         data = params["data"]
         output = params["output"]
         replacements = _build_replacements(data=data, output=output, criteria=criteria or "")

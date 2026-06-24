@@ -10,6 +10,7 @@ All notable changes to `evaluatorq` are documented here.
 
 - `EVALUATORQ_SPAN_MAX_TEXT_CHARS` defaults to **capturing all message content** (no truncation), in both the Python and TypeScript tracing layers. Set the env var to a positive integer (canonical: `8192`) to cap span text at that many characters (marker `... [truncated]`); `-1`, `0`, or unset all mean capture all. The cap applies uniformly to input **and** output message content. (RES-715 introduced an `8192` default; RES-899 reverts to capture-all and unifies the TS path, which previously hardcoded a separate `2000`-char cap.)
 - `loguru` is now a core dependency (previously gated behind the `[redteam]` extra). This slightly widens the install footprint for non-redteam consumers but unifies the logging stack across the package.
+- `openai` (`>=1.92.0`) is now a core dependency (previously gated behind the `[redteam]` extra). The new `llm_jury()` evaluator imports it at package load, so every base install pulls it; this widens the base footprint for users who only call `evaluate()`, in exchange for `llm_jury()` working without an extra.
 
 ### Breaking Changes
 
