@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from evaluatorq.common.jury import (
+    NumericAggName,
     Prediction,
     VerdictKind,
     run_jury,
@@ -225,7 +226,7 @@ async def test_numeric_default_is_mean() -> None:
     ('aggregator', 'expected'),
     [('mean_std', 0.5), ('median', 0.6), ('min', 0.0), ('max', 0.9)],
 )
-async def test_numeric_aggregators(aggregator: str, expected: float) -> None:
+async def test_numeric_aggregators(aggregator: NumericAggName, expected: float) -> None:
     judge, panel = _numeric_panel({'a': 0.0, 'b': 0.6, 'c': 0.9})
     result = await run_jury(
         judge_fn=judge, panel=panel, verdict_kind=VerdictKind.NUMERIC, aggregator=aggregator
@@ -286,7 +287,7 @@ def test_validate_aggregator_rejects_kind_mismatch() -> None:
     with pytest.raises(ValueError, match='numeric-only'):
         validate_aggregator('median', VerdictKind.CATEGORICAL)
     with pytest.raises(ValueError, match='Unknown aggregator'):
-        validate_aggregator('banana', VerdictKind.CATEGORICAL)
+        validate_aggregator('banana', VerdictKind.CATEGORICAL)  # pyright: ignore[reportArgumentType]
     # None and callables always pass
     validate_aggregator(None, VerdictKind.NUMERIC)
     validate_aggregator(lambda votes: None, VerdictKind.CATEGORICAL)

@@ -101,7 +101,7 @@ def test_validation_aggregator_kind_mismatch():
     with pytest.raises(ValueError, match="numeric-only"):
         llm_jury(name="x", criteria="c", aggregator="median")
     with pytest.raises(ValueError, match="Unknown aggregator"):
-        llm_jury(name="x", criteria="c", aggregator="banana")
+        llm_jury(name="x", criteria="c", aggregator="banana")  # pyright: ignore[reportArgumentType]
 
 
 @pytest.mark.asyncio
