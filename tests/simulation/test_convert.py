@@ -257,3 +257,91 @@ class TestTypedModelRoundTrip:
             "input_tokens_details": {"cached_tokens": 0},
             "output_tokens_details": {"reasoning_tokens": 0},
         }
+
+
+class TestToolCallConversion:
+    """RES-833 follow-up: assistant tool_calls and role='tool' messages map to
+    FunctionCall / FunctionCallOutput output items (mirrors the langchain path)."""
+
+    def test_assistant_tool_call_maps_to_function_call(self):
+        from evaluatorq.contracts import FunctionCall as CFunctionCall
+        from evaluatorq.contracts import StrategyToolCall
+
+        result = _make_result(
+            messages=[
+                Message(role="user", content="weather?"),
+                Message(
+                    role="assistant",
+                    tool_calls=[
+                        StrategyToolCall(
+                            id="call_1",
+                            function=CFunctionCall(name="get_weather", arguments='{"city": "Paris"}'),
+                            item_id="fc_abc",
+                        )
+                    ],
+                ),
+            ]
+        )
+        response = to_open_responses(result)
+        # Tool-only assistant turn: no empty text message, one function_call item.
+        assert response["output"] == [
+            {
+                "type": "function_call",
+                "id": "fc_abc",
+                "call_id": "call_1",
+                "name": "get_weather",
+                "arguments": '{"city": "Paris"}',
+                "status": "completed",
+                "result": None,
+            }
+        ]
+
+    def test_function_call_id_generated_when_no_item_id(self):
+        from evaluatorq.contracts import FunctionCall as CFunctionCall
+        from evaluatorq.contracts import StrategyToolCall
+
+        result = _make_result(
+            messages=[
+                Message(
+                    role="assistant",
+                    tool_calls=[
+                        StrategyToolCall(id="call_1", function=CFunctionCall(name="f", arguments="{}"))
+                    ],
+                ),
+            ]
+        )
+        item = to_open_responses(result)["output"][0]
+        assert item["type"] == "function_call"
+        assert item["id"].startswith("fc_")
+
+    def test_tool_message_maps_to_function_call_output(self):
+        result = _make_result(
+            messages=[Message(role="tool", tool_call_id="call_1", name="get_weather", content="sunny")]
+        )
+        item = to_open_responses(result)["output"][0]
+        assert item["type"] == "function_call_output"
+        assert item["call_id"] == "call_1"
+        assert item["output"] == "sunny"
+        assert item["status"] == "completed"
+        assert item["id"].startswith("fco_")
+
+    def test_assistant_text_and_tool_calls_both_emitted_in_order(self):
+        from evaluatorq.contracts import FunctionCall as CFunctionCall
+        from evaluatorq.contracts import StrategyToolCall
+
+        result = _make_result(
+            messages=[
+                Message(
+                    role="assistant",
+                    content="Let me check.",
+                    tool_calls=[
+                        StrategyToolCall(id="call_1", function=CFunctionCall(name="f", arguments="{}"), item_id="fc_1")
+                    ],
+                ),
+            ]
+        )
+        out = to_open_responses(result)["output"]
+        assert out[0]["type"] == "message"
+        assert out[0]["content"][0]["text"] == "Let me check."
+        assert out[1]["type"] == "function_call"
+        assert out[1]["call_id"] == "call_1"

@@ -7,6 +7,9 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.openresponses.convert_models import (
+    FunctionCall,
+    FunctionCallOutput,
+    FunctionCallStatus,
     IncompleteDetails,
     InputTextContent,
     InputTokensDetails,
@@ -59,19 +62,41 @@ def to_open_responses(
             )
             input_items.append(message.model_dump(mode="json"))
         elif msg.role == "assistant":
-            # tool_calls on assistant messages and role="tool" messages are not
-            # mapped here; the simulation runner currently never produces them.
-            out_content: list[InputTextContent | OutputTextContent] = [
-                OutputTextContent(text=msg.content or "", annotations=[])
-            ]
-            message = Message(
-                type="message",
-                id=_generate_item_id("msg"),
-                role=MessageRole.assistant,
-                status=MessageStatus.completed,
-                content=out_content,
+            # An assistant turn can carry text and/or tool_calls. Emit the text
+            # message when there is content, then a function_call item per call
+            # (separate Responses output items). A tool-only turn skips the empty
+            # text message. Mirrors the langchain integration's mapping.
+            if msg.content:
+                out_content: list[InputTextContent | OutputTextContent] = [
+                    OutputTextContent(text=msg.content, annotations=[])
+                ]
+                message = Message(
+                    type="message",
+                    id=_generate_item_id("msg"),
+                    role=MessageRole.assistant,
+                    status=MessageStatus.completed,
+                    content=out_content,
+                )
+                output_items.append(message.model_dump(mode="json"))
+            for tc in msg.tool_calls or []:
+                function_call = FunctionCall(
+                    type="function_call",
+                    id=tc.item_id or _generate_item_id("fc"),
+                    call_id=tc.id,
+                    name=tc.function.name,
+                    arguments=tc.function.arguments,
+                    status=FunctionCallStatus.completed,
+                )
+                output_items.append(function_call.model_dump(mode="json"))
+        elif msg.role == "tool":
+            function_call_output = FunctionCallOutput(
+                type="function_call_output",
+                id=_generate_item_id("fco"),
+                call_id=msg.tool_call_id or "",
+                output=msg.content or "",
+                status=FunctionCallStatus.completed,
             )
-            output_items.append(message.model_dump(mode="json"))
+            output_items.append(function_call_output.model_dump(mode="json"))
 
     # Map terminated_by to status
     if result.terminated_by.value == "judge":
