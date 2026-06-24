@@ -136,7 +136,7 @@ src/evaluatorq/
 ### Environment Variables
 
 - `ORQ_API_KEY` — ORQ platform authentication
-- `ORQ_API_URL` — ORQ API base URL (optional override)
+- `ORQ_BASE_URL` — ORQ API base URL (optional override; default `https://my.orq.ai`)
 - `EVALUATORQ_OWASP_DATASET_ID` — default dataset ID for static mode
 - `OPENAI_API_KEY` — for direct OpenAI backend or pipeline LLM calls
 

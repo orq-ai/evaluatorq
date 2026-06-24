@@ -81,5 +81,6 @@ Wire that pass/fail signal into CI to gate on quality regressions.
 
 - **[Agent Simulation](agent-simulation.md)** — score multi-turn conversations.
 - **[Red Teaming](red-teaming.md)** — adversarial security testing.
+- **[Configuration](../configuration.md)** — API keys and environment variables for Orq/OpenAI backends.
 - **[Examples](../examples/index.md)** — datasets, structured scoring, integrations.
 - **[API Reference](../reference/evaluatorq.md)** — `evaluatorq`, `DataPoint`, `job`, evaluators.
