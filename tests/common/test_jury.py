@@ -288,3 +288,35 @@ def test_validate_aggregator_rejects_kind_mismatch() -> None:
     # None and callables always pass
     validate_aggregator(None, VerdictKind.NUMERIC)
     validate_aggregator(lambda votes: None, VerdictKind.CATEGORICAL)
+
+
+@pytest.mark.asyncio
+async def test_mode_explicit_picks_most_common() -> None:
+    values = {'a': 'x', 'b': 'x', 'c': 'y'}
+
+    async def judge(model: str) -> Prediction:
+        return Prediction(value=values[model], explanation='')
+
+    result = await run_jury(
+        judge_fn=judge, panel=list(values), verdict_kind=VerdictKind.CATEGORICAL, aggregator='mode'
+    )
+    assert result.verdict == 'x'
+    assert result.jury.tie is False
+
+
+@pytest.mark.asyncio
+async def test_repetition_collapse_uses_numeric_keyword() -> None:
+    # The numeric keyword also reduces a single judge's repetitions: max -> 0.9.
+    scores = iter([0.1, 0.5, 0.9])
+
+    async def judge(model: str) -> Prediction:
+        return Prediction(value=next(scores), explanation='')
+
+    result = await run_jury(
+        judge_fn=judge,
+        panel=['a'],
+        repetitions=3,
+        verdict_kind=VerdictKind.NUMERIC,
+        aggregator='max',
+    )
+    assert result.verdict == pytest.approx(0.9)

@@ -94,6 +94,66 @@ async def test_scorer_runs_panel_and_maps_pass():
     assert result.value == "yes"
 
 
+def test_validation_aggregator_kind_mismatch():
+    # Categorical-only keyword on numeric, and numeric-only keyword on categorical.
+    with pytest.raises(ValueError, match="categorical-only"):
+        llm_jury(name="x", criteria="c", verdict_kind="numeric", aggregator="mode")
+    with pytest.raises(ValueError, match="numeric-only"):
+        llm_jury(name="x", criteria="c", aggregator="median")
+    with pytest.raises(ValueError, match="Unknown aggregator"):
+        llm_jury(name="x", criteria="c", aggregator="banana")
+
+
+@pytest.mark.asyncio
+async def test_scorer_majority_through_factory():
+    ev = llm_jury(
+        name="x", criteria="c", judges=["m1", "m2", "m3"],
+        labels=["yes", "no"], passing_labels=["yes"], aggregator="majority",
+        client=MagicMock(),
+    )
+    verdicts = {"m1": "yes", "m2": "yes", "m3": "no"}  # 2/3 -> majority "yes"
+
+    async def fake_run_judge(**kwargs):
+        return JudgeOutcome(
+            payload=EvaluatorResponsePayload(value=verdicts[kwargs["model"]], explanation="x"),
+            token_usage=None, raw_content="{}",
+        )
+
+    with patch.object(llm_jury_mod, "run_judge", side_effect=fake_run_judge):
+        dp = DataPoint(inputs={"q": "?"}, expected_output="x")
+        result = await ev["scorer"]({"data": dp, "output": "x"})
+
+    assert not isinstance(result, dict)
+    assert result.value == "yes"
+    assert result.pass_ is True
+
+
+@pytest.mark.asyncio
+async def test_scorer_custom_callable_aggregator_through_factory():
+    # Custom rule: trust only judge m2's verdict (weighting demo).
+    ev = llm_jury(
+        name="x", criteria="c", judges=["m1", "m2", "m3"],
+        labels=["yes", "no"], passing_labels=["yes"],
+        aggregator=lambda votes: next((v.value for v in votes if v.model == "m2"), None),
+        client=MagicMock(),
+    )
+    verdicts = {"m1": "no", "m2": "yes", "m3": "no"}
+
+    async def fake_run_judge(**kwargs):
+        return JudgeOutcome(
+            payload=EvaluatorResponsePayload(value=verdicts[kwargs["model"]], explanation="x"),
+            token_usage=None, raw_content="{}",
+        )
+
+    with patch.object(llm_jury_mod, "run_judge", side_effect=fake_run_judge):
+        dp = DataPoint(inputs={"q": "?"}, expected_output="x")
+        result = await ev["scorer"]({"data": dp, "output": "x"})
+
+    assert not isinstance(result, dict)
+    assert result.value == "yes"  # m2 said yes despite 2 "no" votes
+    assert result.pass_ is True
+
+
 def test_validation_passing_labels_subset_of_labels():
     with pytest.raises(ValueError):
         llm_jury(name="x", criteria="c", labels=["a", "b"], passing_labels=["c"])
