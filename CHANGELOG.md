@@ -112,6 +112,7 @@ target = CallableTarget(lambda messages: my_agent(messages[-1].content or ""))
 
 ### New Features
 
+- **`llm_jury()`** — LLM-as-a-jury evaluator for `evaluatorq(evaluators=[...])`. A single judge or a panel rates a target output against criteria; verdicts can be boolean (default), labeled categorical (`labels=` + `passing_labels=`), or numeric (`verdict_kind="numeric"` + `threshold=`). Uses structured generation (tiered `.parse` → `json_object` fallback) and resolves the LLM client lazily on first scorer call so declaring an evaluator never requires credentials. The Responses-API path is deferred (RES-972). (RES-848)
 - **`OWASP_LLM_TOP_10`** and **`OWASP_ASI_TOP_10`** — public `list[str]` constants exported from `evaluatorq.redteam`. Pass them to `red_team(categories=OWASP_LLM_TOP_10)` to run a full framework sweep without spelling out individual category codes (RES-815).
 - `simulate()` and `generate_and_simulate()` accept a new opt-in `upload_results=` flag (default `False`). When set to `True`, results are uploaded to the Orq platform after the run, surfacing as an experiment when `ORQ_API_KEY` is configured. Upload errors are logged but never fail the call. Both functions also accept `evaluation_description=` and `path=` parameters mirroring `evaluatorq()` (RES-598).
 - **`LLMCallConfig`** — per-role LLM configuration with `model`, `temperature`, `max_tokens`, `timeout_ms`, `extra_kwargs`, and `client` fields
