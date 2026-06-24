@@ -190,7 +190,7 @@ def write_example_pages() -> None:
         for p in EXAMPLES.rglob("*.py")
         if p.name != "__init__.py" and "__pycache__" not in p.parts
     )
-    tree: dict = {}
+    tree: dict[str, Any] = {}
     for f in files:
         rel = f.relative_to(EXAMPLES)
         page = Path("examples", rel).with_suffix(".md")
@@ -212,7 +212,7 @@ def write_example_pages() -> None:
 
     lines: list[str] = []
 
-    def emit(node: dict, depth: int) -> None:
+    def emit(node: dict[str, Any], depth: int) -> None:
         indent = "    " * depth
         for name in sorted(k for k in node if k != "__files__"):
             lines.append(f"{indent}- {_pretty(name)}:\n")
