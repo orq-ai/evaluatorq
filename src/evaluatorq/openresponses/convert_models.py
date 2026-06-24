@@ -48,6 +48,30 @@ class InputTextContent(BaseModel):
     text: Annotated[str, Field(description="The text input to the model.")]
 
 
+class InputImageContent(BaseModel):
+    type: Annotated[
+        Literal["input_image"],
+        Field(description="The type of the input item. Always `input_image`."),
+    ]
+    image_url: Annotated[str, Field(description="The URL of the image (https or data: URI).")]
+    file_id: str | None = Field(default=None, description="The ID of an uploaded file to use as the image.")
+    detail: Literal["auto", "low", "high"] = Field(
+        default="auto", description="The detail level the model uses to process the image."
+    )
+
+
+class InputFileContent(BaseModel):
+    type: Annotated[
+        Literal["input_file"],
+        Field(description="The type of the input item. Always `input_file`."),
+    ]
+    file_id: str | None = Field(default=None, description="The ID of an uploaded file.")
+    file_data: str | None = Field(default=None, description="The base64-encoded contents of the file.")
+    file_url: str | None = Field(default=None, description="The URL of the file.")
+    filename: str | None = Field(default=None, description="The name of the file.")
+    mime_type: str | None = Field(default=None, description="The MIME type of the file.")
+
+
 class UrlCitationBody(BaseModel):
     type: Annotated[
         Literal["url_citation"],
@@ -201,7 +225,7 @@ class Message(BaseModel):
     status: MessageStatus
     role: MessageRole
     content: Annotated[
-        list[InputTextContent | OutputTextContent],
+        list[InputTextContent | InputImageContent | InputFileContent | OutputTextContent],
         Field(description="The content of the message"),
     ]
 
