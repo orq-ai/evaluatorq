@@ -10,14 +10,11 @@ from __future__ import annotations
 
 from evaluatorq.common.reports import esc, load_css, load_logo_svg
 from evaluatorq.dashboard.styles import DASHBOARD_CSS
-from evaluatorq.dashboard.surfaces import ADAPTERS
+from evaluatorq.dashboard.surfaces import ADAPTERS, SURFACE_LABELS
 from evaluatorq.dashboard.view import head_assets
 
 # Surfaces that have a nav entry, in display order.
-_NAV_SURFACES: list[tuple[str, str]] = [
-    ("redteam", "Red Team"),
-    ("sim", "Simulation"),
-]
+_NAV_SURFACES: list[tuple[str, str]] = list(SURFACE_LABELS.items())
 
 
 def _nav_html(active_surface: str | None = None) -> str:

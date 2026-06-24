@@ -13,6 +13,9 @@ Optional export callables:
 
 ``ADAPTERS`` is the single registry keyed by surface kind strings matching
 ``evaluatorq.dashboard.library.sniff_kind`` return values.
+
+``SURFACE_LABELS`` maps surface keys to their human-readable display labels.
+Used by both the nav bar (``shell.py``) and the report-card list (``view.py``).
 """
 
 from __future__ import annotations
@@ -155,4 +158,11 @@ def _sim_adapter() -> SurfaceAdapter:
 ADAPTERS: dict[str, SurfaceAdapter] = {
     'redteam': _redteam_adapter(),
     'sim': _sim_adapter(),
+}
+
+# Human-readable labels for each surface key.  Single source of truth used by
+# the nav bar (shell.py) and the report-card index (view.py).
+SURFACE_LABELS: dict[str, str] = {
+    'redteam': 'Red Team',
+    'sim': 'Simulation',
 }

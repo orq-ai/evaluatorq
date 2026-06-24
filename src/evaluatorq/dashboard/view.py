@@ -24,6 +24,7 @@ from urllib.parse import urlencode
 from fasthtml.common import Script
 
 from evaluatorq.common.reports import esc
+from evaluatorq.dashboard.surfaces import SURFACE_LABELS
 
 if TYPE_CHECKING:
     from evaluatorq.dashboard.library import ReportCard
@@ -67,7 +68,7 @@ def index_body(cards: list[ReportCard], *, active_surface: str | None = None) ->
     for card in visible:
         error_badge = f'<span class="card-error" title="{esc(card.error)}">error</span>' if card.error else ''
         created = card.created_at.strftime('%Y-%m-%d %H:%M') if card.created_at else ''
-        surface_label = card.surface.replace('redteam', 'Red Team').replace('sim', 'Simulation')
+        surface_label = SURFACE_LABELS.get(card.surface, card.surface)
         items.append(
             f'<article class="report-card-item">'
             f'<a href="/r/{card.id}" class="report-card-link">'
