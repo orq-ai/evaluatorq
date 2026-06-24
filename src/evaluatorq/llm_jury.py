@@ -291,7 +291,9 @@ def llm_jury(
       ``ValueError``.
     - In labeled mode, ``passing_labels`` must be a subset of ``labels``. If you
       omit it, the verdict is still recorded but ``passed`` is ``None`` (no
-      pass/fail, so no pass-rate to aggregate).
+      pass/fail, so no pass-rate to aggregate). ``passing_labels`` requires
+      ``labels`` — it is rejected in boolean mode (which derives pass/fail from
+      the verdict directly).
     - ``labels`` must be strings. Native ``True``/``False`` are not labels — use
       boolean mode for that.
 
@@ -331,6 +333,13 @@ def llm_jury(
         # A categorical judge with 0/1 options is meaningless, and an empty list
         # would build a degenerate ``Literal[()]`` verdict model.
         raise ValueError("categorical `labels` must list at least two options.")
+    if passing_labels and not labels:
+        # Boolean mode (categorical + no labels) derives pass/fail from the verdict
+        # directly, so passing_labels would be silently ignored — reject it loudly.
+        raise ValueError(
+            "`passing_labels` requires `labels` (categorical labeled mode); "
+            "boolean mode derives pass/fail from the verdict directly."
+        )
     if labels and passing_labels and not set(passing_labels) <= set(labels):
         raise ValueError("`passing_labels` must be a subset of `labels`.")
     if verdict_kind == "numeric" and score_range[0] >= score_range[1]:

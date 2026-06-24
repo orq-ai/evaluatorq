@@ -99,6 +99,12 @@ def test_validation_passing_labels_subset_of_labels():
         llm_jury(name="x", criteria="c", labels=["a", "b"], passing_labels=["c"])
 
 
+def test_validation_passing_labels_requires_labels():
+    # Boolean mode (no labels) would silently ignore passing_labels — reject it.
+    with pytest.raises(ValueError, match="requires `labels`"):
+        llm_jury(name="x", criteria="c", passing_labels=["yes"])
+
+
 def test_validation_rejects_degenerate_labels():
     with pytest.raises(ValueError):
         llm_jury(name="x", criteria="c", labels=[])

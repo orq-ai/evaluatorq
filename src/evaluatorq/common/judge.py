@@ -253,7 +253,11 @@ async def run_judge(
                     )
                 except BadRequestError as exc:
                     err = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
-                    if not any(k in err for k in ('response_format', 'json_schema', 'schema')):
+                    # Only fall back when the error looks like a structured-output
+                    # rejection. A miss here intentionally re-raises rather than
+                    # silently degrading — do not widen this to a bare
+                    # `except BadRequestError`. ('schema' already covers 'json_schema'.)
+                    if not any(k in err for k in ('response_format', 'schema')):
                         raise
                     logger.warning('Model {} rejected structured output; falling back to json_object', model)
                     payload, usage, raw_content = await _json_object_judge(
