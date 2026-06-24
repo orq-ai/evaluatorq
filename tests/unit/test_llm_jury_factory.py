@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -73,12 +73,11 @@ def test_returns_evaluator_dict():
 
 @pytest.mark.asyncio
 async def test_scorer_runs_panel_and_maps_pass():
-    with patch.object(llm_jury_mod, "resolve_llm_client") as rc:
-        rc.return_value = MagicMock(client=MagicMock())
-        ev = llm_jury(
-            name="correctness", criteria="correct?",
-            judges=["m1"], labels=["yes", "no"], passing_labels=["yes"],
-        )
+    ev = llm_jury(
+        name="correctness", criteria="correct?",
+        judges=["m1"], labels=["yes", "no"], passing_labels=["yes"],
+        client=MagicMock(),
+    )
 
     async def fake_run_judge(**kwargs):
         return JudgeOutcome(
@@ -121,9 +120,10 @@ def test_validation_rejects_nonpositive_repetitions():
 async def test_lone_judge_propagates_outage():
     # A single judge with no replacements has no redundancy: a judge outage must
     # propagate (abort loudly) rather than silently returning inconclusive.
-    with patch.object(llm_jury_mod, "resolve_llm_client") as rc:
-        rc.return_value = MagicMock(client=MagicMock())
-        ev = llm_jury(name="x", criteria="c", model="m1", labels=["yes", "no"], passing_labels=["yes"])
+    ev = llm_jury(
+        name="x", criteria="c", model="m1", labels=["yes", "no"], passing_labels=["yes"],
+        client=MagicMock(),
+    )
 
     async def boom(**kwargs):
         raise RuntimeError("judge offline")
@@ -136,12 +136,11 @@ async def test_lone_judge_propagates_outage():
 
 @pytest.mark.asyncio
 async def test_scorer_numeric_maps_threshold_pass():
-    with patch.object(llm_jury_mod, "resolve_llm_client") as rc:
-        rc.return_value = MagicMock(client=MagicMock())
-        ev = llm_jury(
-            name="quality", criteria="good?", model="m1",
-            verdict_kind="numeric", score_range=(0.0, 1.0), threshold=0.5,
-        )
+    ev = llm_jury(
+        name="quality", criteria="good?", model="m1",
+        verdict_kind="numeric", score_range=(0.0, 1.0), threshold=0.5,
+        client=MagicMock(),
+    )
 
     async def fake_run_judge(**kwargs):
         return JudgeOutcome(
@@ -160,12 +159,11 @@ async def test_scorer_numeric_maps_threshold_pass():
 
 @pytest.mark.asyncio
 async def test_scorer_inconclusive_when_all_judges_abstain():
-    with patch.object(llm_jury_mod, "resolve_llm_client") as rc:
-        rc.return_value = MagicMock(client=MagicMock())
-        ev = llm_jury(
-            name="x", criteria="c", judges=["m1", "m2"],
-            labels=["yes", "no"], passing_labels=["yes"],
-        )
+    ev = llm_jury(
+        name="x", criteria="c", judges=["m1", "m2"],
+        labels=["yes", "no"], passing_labels=["yes"],
+        client=MagicMock(),
+    )
 
     async def fake_run_judge(**kwargs):
         return JudgeOutcome(
@@ -180,3 +178,24 @@ async def test_scorer_inconclusive_when_all_judges_abstain():
     assert not isinstance(result, dict)
     assert result.value == "inconclusive"
     assert result.pass_ is None
+
+
+@pytest.mark.asyncio
+async def test_client_resolved_lazily_not_at_factory_time():
+    # Declaring an evaluator with no client= must not resolve credentials;
+    # resolution happens on first scorer call (Amina's PR #15 review).
+    with patch.object(llm_jury_mod, "resolve_llm_client") as rc:
+        rc.return_value = MagicMock(client=MagicMock())
+        ev = llm_jury(name="x", criteria="c", model="m1", labels=["yes", "no"], passing_labels=["yes"])
+        rc.assert_not_called()  # factory time: no resolution
+
+        async def fake_run_judge(**kwargs):
+            return JudgeOutcome(
+                payload=EvaluatorResponsePayload(value="yes", explanation="ok"),
+                token_usage=None, raw_content="{}",
+            )
+
+        with patch.object(llm_jury_mod, "run_judge", side_effect=fake_run_judge):
+            dp = DataPoint(inputs={"q": "?"}, expected_output="x")
+            await ev["scorer"]({"data": dp, "output": "x"})
+        rc.assert_called_once()  # first scorer call: resolved once
