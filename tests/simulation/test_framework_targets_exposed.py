@@ -9,10 +9,24 @@ import sys
 import pytest
 
 
-def test_importing_callable_target_does_not_import_redteam() -> None:
-    """An integration target must not drag in the whole redteam package."""
+@pytest.mark.parametrize(
+    "module",
+    [
+        "evaluatorq.integrations.callable_integration.target",
+        "evaluatorq.integrations.langgraph_integration.target",
+        "evaluatorq.integrations.openai_agents_integration.target",
+        "evaluatorq.integrations.vercel_ai_sdk_integration.target",
+    ],
+)
+def test_importing_integration_target_does_not_import_redteam(module: str) -> None:
+    """No exposed integration target may drag in the whole redteam package.
+
+    Checked per-module because each target has its own independent import block —
+    a redteam import re-added to any one of them must fail the suite, not just
+    the one that happens to be exercised.
+    """
     code = (
-        "import evaluatorq.integrations.callable_integration.target\n"
+        f"import {module}\n"
         "import sys\n"
         "leaked = sorted(m for m in sys.modules if m.startswith('evaluatorq.redteam'))\n"
         "assert not leaked, leaked\n"
