@@ -6,7 +6,7 @@ import asyncio
 import re
 from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Literal
+from typing import Literal, cast
 
 from loguru import logger
 from pydantic import BaseModel
@@ -15,6 +15,17 @@ from evaluatorq.contracts import JuryResult, JuryStats, JuryVote, StrEnum, Token
 
 VerdictValue = bool | float | str
 TieBreak = Callable[[list[VerdictValue]], VerdictValue | None]
+
+# A custom panel aggregator sees ALL per-judge votes — including abstained and
+# failed ones (filter on .success / .abstained yourself) — plus model and
+# replacement, so it can weight or quorum. It returns the consensus verdict, or
+# None for "no consensus" (inconclusive). The built-in keyword aggregators
+# instead operate on decisive votes only (see _decisive_values). The runner
+# derives stats / agreement / pass downstream regardless.
+Aggregator = Callable[[list[JuryVote]], VerdictValue | None]
+NumericAggName = Literal['mean_std', 'median', 'min', 'max']
+AggregatorName = Literal['mode', 'majority', 'mean_std', 'median', 'min', 'max']
+AggregatorSpec = AggregatorName | Aggregator
 
 
 class VerdictKind(StrEnum):
@@ -65,17 +76,94 @@ def _plurality_vote(values: Sequence[VerdictValue]) -> tuple[VerdictValue | None
     return winners[0], False
 
 
-def _numeric_vote(values: Sequence[VerdictValue], aggregation: Literal['mean', 'median']) -> float | None:
+def _numeric_reduce(values: Sequence[VerdictValue], how: NumericAggName) -> float | None:
+    """Reduce numeric verdicts to one float. ``mean_std`` returns the mean (the
+    std rides along in :func:`_jury_stats`); ``median``/``min``/``max`` are exact."""
     nums = [float(v) for v in values if isinstance(v, (int, float)) and not isinstance(v, bool)]
     if not nums:
         return None
-    if aggregation == 'median':
+    if how == 'median':
         ordered = sorted(nums)
         mid = len(ordered) // 2
         if len(ordered) % 2:
             return ordered[mid]
         return (ordered[mid - 1] + ordered[mid]) / 2
+    if how == 'min':
+        return min(nums)
+    if how == 'max':
+        return max(nums)
     return sum(nums) / len(nums)
+
+
+def _strict_majority(values: Sequence[VerdictValue]) -> VerdictValue | None:
+    """Most common value only if it holds a strict >50% majority, else None."""
+    if not values:
+        return None
+    value, count = Counter(values).most_common(1)[0]
+    return value if count * 2 > len(values) else None
+
+
+def _decisive_values(votes: Sequence[JuryVote]) -> list[VerdictValue]:
+    return [v.value for v in votes if v.value is not None and not v.abstained and v.success]
+
+
+# Built-in panel aggregators, each conforming to the public ``Aggregator``
+# schema (list[JuryVote] -> verdict | None). Custom callables plug in the same
+# way. ``mode`` here ignores ties (the runner handles tie_break separately).
+def _agg_mode(votes: list[JuryVote]) -> VerdictValue | None:
+    verdict, _tie = _plurality_vote(_decisive_values(votes))
+    return verdict
+
+
+def _agg_majority(votes: list[JuryVote]) -> VerdictValue | None:
+    return _strict_majority(_decisive_values(votes))
+
+
+def _make_numeric_agg(how: NumericAggName) -> Aggregator:
+    def agg(votes: list[JuryVote]) -> VerdictValue | None:
+        return _numeric_reduce(_decisive_values(votes), how)
+
+    return agg
+
+
+_AGGREGATORS: dict[str, Aggregator] = {
+    'mode': _agg_mode,
+    'majority': _agg_majority,
+    'mean_std': _make_numeric_agg('mean_std'),
+    'median': _make_numeric_agg('median'),
+    'min': _make_numeric_agg('min'),
+    'max': _make_numeric_agg('max'),
+}
+
+# Single source of truth for the keyword -> verdict-kind partition. Keep in sync
+# with _AGGREGATORS and the AggregatorName literal; test_aggregator_registry_parity
+# pins all three together.
+_AGG_KIND: dict[str, VerdictKind] = {
+    'mode': VerdictKind.CATEGORICAL,
+    'majority': VerdictKind.CATEGORICAL,
+    'mean_std': VerdictKind.NUMERIC,
+    'median': VerdictKind.NUMERIC,
+    'min': VerdictKind.NUMERIC,
+    'max': VerdictKind.NUMERIC,
+}
+
+
+def validate_aggregator(aggregator: AggregatorSpec | None, verdict_kind: VerdictKind) -> None:
+    """Reject a keyword aggregator that doesn't match the verdict kind.
+
+    ``None`` (default) and custom callables always pass — a callable is trusted
+    to handle whatever values its panel produces.
+    """
+    if aggregator is None or callable(aggregator):
+        return
+    if aggregator not in _AGG_KIND:
+        raise ValueError(f'Unknown aggregator {aggregator!r}; expected one of {sorted(_AGG_KIND)} or a callable.')
+    if _AGG_KIND[aggregator] is not verdict_kind:
+        allowed = sorted(n for n, k in _AGG_KIND.items() if k is verdict_kind)
+        raise ValueError(
+            f'aggregator={aggregator!r} is {_AGG_KIND[aggregator].value}-only; '
+            f'verdict_kind={verdict_kind.value!r} needs one of {allowed}.'
+        )
 
 
 def _jury_stats(values: Sequence[VerdictValue]) -> JuryStats | None:
@@ -149,7 +237,7 @@ async def _judge_vote(
     verdict_kind: VerdictKind,
     tie_break: TieBreak | None,
     replacement: bool,
-    numeric_aggregation: Literal['mean', 'median'],
+    numeric_how: NumericAggName,
     propagate_errors: bool = False,
 ) -> tuple[JuryVote, list[TokenUsage]]:
     predictions = await asyncio.gather(
@@ -195,7 +283,7 @@ async def _judge_vote(
     values = [p.value for p in decisive if p.value is not None]
     tie = False
     if verdict_kind is VerdictKind.NUMERIC:
-        value = _numeric_vote(values, numeric_aggregation)
+        value = _numeric_reduce(values, numeric_how)
     else:
         value, tie = _plurality_vote(values)
         if tie and tie_break is not None:
@@ -239,17 +327,33 @@ async def run_jury(
     min_successful_judges: int = 1,
     verdict_kind: VerdictKind = VerdictKind.CATEGORICAL,
     tie_break: TieBreak | None = None,
-    numeric_aggregation: Literal['mean', 'median'] = 'mean',
+    aggregator: AggregatorSpec | None = None,
     tie_break_label: str | None = None,
     propagate_errors: bool = False,
 ) -> JuryDeliberation:
     """Run a generic panel of judges and aggregate their verdicts.
+
+    ``aggregator`` selects the panel consensus rule: a keyword (``mode`` /
+    ``majority`` for categorical, ``mean_std`` / ``median`` / ``min`` / ``max``
+    for numeric) or a custom ``Aggregator`` callable. ``None`` defaults to
+    ``mode`` (categorical) or ``mean_std`` (numeric). The same numeric rule
+    collapses a single judge's repetitions; ``tie_break`` applies only to
+    ``mode`` plurality ties.
 
     ``propagate_errors`` re-raises a judge_fn exception instead of recording it
     as a failed vote. Callers set this when the panel has no redundancy (a lone
     judge with no replacements) so an outage aborts loudly rather than producing
     inconclusive verdicts on every datapoint.
     """
+    if aggregator is None:
+        aggregator = 'mean_std' if verdict_kind is VerdictKind.NUMERIC else 'mode'
+    # Per-judge repetition collapse reuses the numeric keyword when one is set,
+    # else falls back to mean (a custom callable only runs at the panel level).
+    numeric_how: NumericAggName = 'mean_std'
+    if isinstance(aggregator, str) and _AGG_KIND.get(aggregator) is VerdictKind.NUMERIC:
+        numeric_how = cast('NumericAggName', aggregator)
+    agg_fn: Aggregator = aggregator if callable(aggregator) else _AGGREGATORS[aggregator]
+
     resolved_panel = resolve_panel(panel)
     # Dedup the replacement pool against the panel AND within itself; a repeated
     # stand-in (e.g. ['mistral-large', 'mistral-large']) would otherwise cast two
@@ -269,7 +373,7 @@ async def run_jury(
             verdict_kind=verdict_kind,
             tie_break=tie_break,
             replacement=False,
-            numeric_aggregation=numeric_aggregation,
+            numeric_how=numeric_how,
             propagate_errors=propagate_errors,
         )
         for model in resolved_panel
@@ -292,7 +396,7 @@ async def run_jury(
                 verdict_kind=verdict_kind,
                 tie_break=tie_break,
                 replacement=True,
-                numeric_aggregation=numeric_aggregation,
+                numeric_how=numeric_how,
             )
             for model in stand_ins
         ])
@@ -307,15 +411,20 @@ async def run_jury(
     verdict: VerdictValue | None = None
 
     if not inconclusive:
-        if verdict_kind is VerdictKind.NUMERIC:
-            verdict = _numeric_vote(decisive_values, numeric_aggregation)
-        else:
+        # ``mode`` is special-cased so plurality ties route through tie_break and
+        # set the tie flag; every other built-in keyword and custom callable is a
+        # plain decisive-votes -> verdict reduction (no tie concept).
+        if aggregator == 'mode':
             verdict, tie = _plurality_vote(decisive_values)
             if tie and tie_break is not None:
                 verdict = tie_break(decisive_values)
-            if verdict is None:
-                inconclusive = True
-                tie = False
+        else:
+            # Pass ALL votes — custom callables may want abstained/failed votes
+            # for quorum/weighting; built-ins re-filter to decisive internally.
+            verdict = agg_fn(votes)
+        if verdict is None:
+            inconclusive = True
+            tie = False
 
     # Log degraded / collapsed jury states loudly (A4).
     if not decisive_votes:
