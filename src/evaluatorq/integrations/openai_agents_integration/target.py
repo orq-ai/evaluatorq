@@ -1,4 +1,4 @@
-"""Red teaming target wrapper for OpenAI Agents SDK."""
+"""AgentTarget wrapper for OpenAI Agents SDK."""
 
 from __future__ import annotations
 
@@ -9,10 +9,11 @@ from typing import Any
 from agents import Agent, Runner
 from loguru import logger
 
-from evaluatorq.contracts import AgentTarget, Message
-from evaluatorq.redteam.contracts import (
+from evaluatorq.contracts import (
     AgentContext,
     AgentResponse,
+    AgentTarget,
+    Message,
     OutputMessage,
     TextOutputItem,
     TokenUsage,
@@ -22,7 +23,7 @@ from evaluatorq.redteam.contracts import (
 
 
 class OpenAIAgentTarget(AgentTarget):
-    """Wraps an OpenAI Agents SDK Agent as a red teaming target.
+    """Wraps an OpenAI Agents SDK Agent as an AgentTarget.
 
     Usage::
 
@@ -32,12 +33,12 @@ class OpenAIAgentTarget(AgentTarget):
         agent = Agent(name="my-agent", instructions="You are a helpful assistant.")
         target = OpenAIAgentTarget(agent)
 
-        # Pass to red teaming
+        # Pass to simulation or red teaming
         config = DynamicRunConfig(targets=[target])
     """
 
     def __init__(self, agent: Agent, *, run_kwargs: dict[str, Any] | None = None) -> None:
-        """Create an OpenAI Agents SDK red teaming target.
+        """Create an OpenAI Agents SDK agent target.
 
         Args:
             agent: An OpenAI Agents SDK Agent instance.
@@ -238,7 +239,7 @@ class OpenAIAgentTarget(AgentTarget):
         return OpenAIAgentTarget(self._agent, run_kwargs=dict(self._run_kwargs))
 
     def new(self) -> OpenAIAgentTarget:
-        """Return an independent instance for parallel red teaming jobs."""
+        """Return an independent instance for parallel simulation/red-team jobs."""
         return self.clone()
 
 

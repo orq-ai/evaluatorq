@@ -1,4 +1,4 @@
-"""Simulation/red-teaming target wrapper for CrewAI crews.
+"""Simulation/AgentTarget wrapper for CrewAI crews.
 
 CrewAI is the biggest format divergence among the supported frameworks, which
 makes it a good generality stress test for the unified ``AgentTarget`` protocol.
@@ -25,10 +25,11 @@ import re
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from evaluatorq.contracts import AgentTarget, Message
-from evaluatorq.redteam.contracts import (
+from evaluatorq.contracts import (
     AgentContext,
     AgentResponse,
+    AgentTarget,
+    Message,
     OutputMessage,
     TextOutputItem,
     TokenUsage,

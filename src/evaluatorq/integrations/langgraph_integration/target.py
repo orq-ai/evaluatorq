@@ -1,4 +1,4 @@
-"""Red teaming target wrapper for LangGraph agents."""
+"""AgentTarget wrapper for LangGraph agents."""
 
 from __future__ import annotations
 
@@ -13,11 +13,12 @@ from langchain_core.messages import AIMessage
 from langchain_core.outputs import LLMResult
 from langchain_core.runnables import RunnableConfig
 
-from evaluatorq.contracts import AgentTarget, Message
-from evaluatorq.redteam.contracts import (
+from evaluatorq.contracts import (
     AgentContext,
     AgentResponse,
+    AgentTarget,
     MemoryStoreInfo,
+    Message,
     OutputMessage,
     TextOutputItem,
     TokenUsage,
@@ -90,7 +91,7 @@ class _TokenUsageCollector(BaseCallbackHandler):
 
 
 class LangGraphTarget(AgentTarget):
-    """Wraps a LangGraph CompiledStateGraph as a red teaming target.
+    """Wraps a LangGraph CompiledStateGraph as an AgentTarget.
 
     Each instance generates its own ``memory_entity_id`` used as the LangGraph
     ``thread_id`` — this is the checkpointer's isolation key, so parallel
@@ -109,7 +110,7 @@ class LangGraphTarget(AgentTarget):
         graph = create_react_agent(model, tools=[...])
         target = LangGraphTarget(graph)
 
-        # Pass to red teaming
+        # Pass to simulation or red teaming
         config = DynamicRunConfig(targets=[target])
     """
 
@@ -120,7 +121,7 @@ class LangGraphTarget(AgentTarget):
         config: dict[str, Any] | None = None,
         agent_context: AgentContext | None = None,
     ) -> None:
-        """Create a LangGraph red teaming target.
+        """Create a LangGraph agent target.
 
         Args:
             graph: A compiled LangGraph state graph.
@@ -321,7 +322,7 @@ class LangGraphTarget(AgentTarget):
         )
 
     def new(self) -> LangGraphTarget:
-        """Return an independent instance for parallel red teaming jobs.
+        """Return an independent instance for parallel simulation/red-team jobs.
 
         Each call gets a fresh ``memory_entity_id`` (and thus a fresh LangGraph
         thread), so parallel workers never share checkpointer state.

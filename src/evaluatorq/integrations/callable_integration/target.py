@@ -1,4 +1,4 @@
-"""Red teaming target wrapper for arbitrary callables."""
+"""AgentTarget wrapper for arbitrary callables."""
 
 from __future__ import annotations
 
@@ -8,8 +8,15 @@ from typing import Any
 
 from loguru import logger
 
-from evaluatorq.contracts import AgentTarget, Message
-from evaluatorq.redteam.contracts import AgentContext, AgentResponse, OutputMessage, TextOutputItem, TokenUsage
+from evaluatorq.contracts import (
+    AgentContext,
+    AgentResponse,
+    AgentTarget,
+    Message,
+    OutputMessage,
+    TextOutputItem,
+    TokenUsage,
+)
 
 # Accepted callable signatures — receive the conversation as a list of typed
 # :class:`~evaluatorq.contracts.Message` objects. The list holds one message for
@@ -36,7 +43,7 @@ def _is_async_callable(fn: object) -> bool:
 
 
 class CallableTarget(AgentTarget):
-    """Wraps any sync or async function as a red teaming target.
+    """Wraps any sync or async function as an AgentTarget.
 
     Use this as an escape hatch for frameworks that don't have a dedicated
     integration. You provide a function that takes the conversation (a list of
@@ -71,7 +78,7 @@ class CallableTarget(AgentTarget):
 
         target = CallableTarget(my_agent, usage_fn=get_usage)
 
-        # Pass to red teaming
+        # Pass to simulation or red teaming
         config = DynamicRunConfig(targets=[target])
     """
 
@@ -83,7 +90,7 @@ class CallableTarget(AgentTarget):
         usage_fn: UsageFn | None = None,
         agent_context: AgentContext | None = None,
     ) -> None:
-        """Create a callable red teaming target.
+        """Create a callable agent target.
 
         Args:
             fn: A sync or async function taking the conversation as a
