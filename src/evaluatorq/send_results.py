@@ -7,6 +7,7 @@ import httpx
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from .common.llm_client import ORQ_DEFAULT_HOST
 from .types import DataPointResult, EvaluatorqResult
 
 
@@ -92,9 +93,7 @@ async def send_results_to_orq(
             results=results,
         )
 
-        # Prefer an explicit base_url (e.g. the host used for inference); fall
-        # back to the environment or the default host.
-        resolved_base_url = (base_url or os.getenv("ORQ_BASE_URL", "https://my.orq.ai")).rstrip("/")
+        resolved_base_url = (base_url or os.getenv("ORQ_BASE_URL", ORQ_DEFAULT_HOST)).rstrip("/")
 
         # Serialize with aliases, stripping None on optional fields (the API
         # rejects null for ``error``, ``explanation``, etc.) but keeping
