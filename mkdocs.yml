@@ -75,7 +75,9 @@ plugins:
               warn_unknown_params: false
               warn_missing_types: false
   - redirects:
-      redirect_maps: {}
+      redirect_maps:
+        guides/agent-simulation-openai.md: guides/agent-simulation.md
+        guides/red-teaming-openai.md: guides/red-teaming.md
   - git-revision-date-localized:
       enable_creation_date: true
       type: timeago
@@ -126,14 +128,16 @@ nav:
   - Home: index.md
   - Get Started:
       - Getting Started: guides/getting-started.md
-      - Agent Simulation:
-          - guides/agent-simulation.md
-          - Simulate an OpenAI agent: guides/agent-simulation-openai.md
+      - Agent Simulation: guides/agent-simulation.md
       - Red Teaming:
           - guides/red-teaming.md
-          - Red-team an OpenAI model: guides/red-teaming-openai.md
           - Custom Evaluators & Frameworks: custom-evaluators-and-frameworks.md
       - Dashboard: dashboard.md
+  - Reference:
+      - Configuration: configuration.md
+      - Tracing: tracing.md
+      - CLI Reference: cli-reference.md
+      - Orq Deployment: orq-deployment.md
   - Examples: examples/
   - API Reference: reference/
   - About:
