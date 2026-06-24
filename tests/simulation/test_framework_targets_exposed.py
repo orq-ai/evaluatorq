@@ -50,6 +50,25 @@ def test_framework_target_exposed_from_simulation(name: str) -> None:
     assert name in sim.__all__
 
 
+@pytest.mark.parametrize(
+    ("name", "extra"),
+    [("LangGraphTarget", "langgraph"), ("OpenAIAgentTarget", "openai-agents")],
+)
+def test_missing_optional_dep_gives_actionable_error(
+    name: str, extra: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing integration extra surfaces as an install hint, not a raw
+    ImportError about the third-party package."""
+    import evaluatorq.simulation as sim
+
+    def _boom(_module: str) -> object:
+        raise ModuleNotFoundError(f"No module named '{extra}'")
+
+    monkeypatch.setattr(sim.importlib, "import_module", _boom)
+    with pytest.raises(ImportError, match=rf"evaluatorq\[{extra}\]"):
+        sim.__getattr__(name)
+
+
 @pytest.mark.asyncio
 async def test_integration_target_reports_token_usage() -> None:
     """A simulation driven by an integration target (the target_agent path, not

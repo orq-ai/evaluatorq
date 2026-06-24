@@ -244,12 +244,30 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
 }
 
 
+# Framework targets that pull an optional dependency at import time, so a
+# missing extra surfaces as an actionable message instead of a bare ImportError
+# about the third-party package. (Callable/Vercel need no extra.)
+_OPTIONAL_TARGET_EXTRAS: dict[str, str] = {
+    'LangGraphTarget': 'langgraph',
+    'OpenAIAgentTarget': 'openai-agents',
+}
+
+
 def __getattr__(name: str) -> Any:
     if name not in _LAZY_IMPORTS:
         raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
 
     module_name, attr_name = _LAZY_IMPORTS[name]
-    value = getattr(importlib.import_module(module_name), attr_name)
+    try:
+        value = getattr(importlib.import_module(module_name), attr_name)
+    except ModuleNotFoundError as exc:
+        extra = _OPTIONAL_TARGET_EXTRAS.get(name)
+        if extra is not None:
+            raise ImportError(
+                f"{name} requires the optional '{extra}' dependency. "
+                f"Install it with: pip install 'evaluatorq[{extra}]'"
+            ) from exc
+        raise
     globals()[name] = value
     return value
 
