@@ -28,6 +28,7 @@ BLOB = "https://github.com/orq-ai/evaluatorq/blob/main"
 API_PACKAGES = [
     "evaluatorq",
     "evaluatorq.redteam",
+    "evaluatorq.simulation",
     "evaluatorq.openresponses",
     "evaluatorq.tracing",
     "evaluatorq.integrations",
@@ -122,6 +123,7 @@ def _safe_getattr(mod: object, name: str, parent_dotted: str) -> object | None:
 _PACKAGE_DESC = {
     "evaluatorq": "Core evaluation API — `evaluatorq()`, `DataPoint`, `job`, built-in evaluators.",
     "evaluatorq.redteam": "Adversarial red teaming — `red_team()`, targets, OWASP frameworks.",
+    "evaluatorq.simulation": "Multi-turn agent simulation — `simulate()`, user-simulator + judge.",
     "evaluatorq.openresponses": "OpenAI Responses API integration.",
     "evaluatorq.tracing": "OpenTelemetry tracing helpers.",
     "evaluatorq.integrations": "Third-party agent integrations (LangChain, LangGraph, …).",

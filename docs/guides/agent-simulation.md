@@ -7,48 +7,128 @@ transcripts by hand. Three LLMs are in play:
 - **User simulator** — plays a **persona** pursuing a **scenario** goal, turn by turn.
 - **Judge** — scores whether the goal was met and whether any rules were broken.
 
-Requires the simulation extra and an `ORQ_API_KEY` — the example below targets an
-Orq agent, and the simulator/judge LLMs route through Orq by default:
+=== "Orq agent"
 
-```bash
-pip install "evaluatorq[simulation]"
-export ORQ_API_KEY=...
+    Requires the simulation extra and an `ORQ_API_KEY`:
+
+    ```bash
+    pip install "evaluatorq[simulation]"
+    export ORQ_API_KEY=...
+    ```
+
+=== "OpenAI"
+
+    Requires the simulation extra, the `openai` package, and an `OPENAI_API_KEY`:
+
+    ```bash
+    pip install "evaluatorq[simulation]" openai
+    export OPENAI_API_KEY=sk-...
+    ```
+
+```mermaid
+sequenceDiagram
+    participant U as User simulator
+    participant A as Agent under test
+    participant J as Judge
+
+    U->>A: next user turn
+    A-->>U: agent reply
+    loop until max_turns or stop condition
+        U->>A: follow-up turn
+        A-->>U: response
+    end
+    U->>J: full transcript + scenario
+    A->>J: agent responses
+    J-->>U: goal achieved / criteria met scores
 ```
 
 ## Generate from a one-line description
 
 The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios,
 and opening messages from a short description of your agent — no hand-written
-`Persona(...)` / `Scenario(...)`. Point it at an Orq deployment with `agent_key=`
-(from AI Studio → Deployments).
+`Persona(...)` / `Scenario(...)`.
 
-```python
-import asyncio
+=== "Orq agent"
 
-from evaluatorq.simulation import generate_and_simulate
+    Point it at an Orq deployment with `agent_key=` (from AI Studio → Deployments).
+    The simulator and judge LLMs route through Orq by default.
 
+    ```python
+    import asyncio
 
-async def main():
-    results = await generate_and_simulate(
-        evaluation_name="support-agent-sim",
-        agent_key="my-support-agent",       # Orq deployment, routed via ORQ_API_KEY
-        agent_description=(
-            "Customer support agent for an e-commerce store; "
-            "handles refunds, orders, and product questions."
-        ),
-        num_personas=3,
-        num_scenarios=4,                     # → 12 persona × scenario simulations
-        max_turns=6,
-        evaluator_names=["goal_achieved", "criteria_met"],
-    )
-
-    passed = sum(r.goal_achieved for r in results)
-    print(f"Pass rate: {passed}/{len(results)}")
+    from evaluatorq.simulation import generate_and_simulate
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
-```
+    async def main():
+        results = await generate_and_simulate(
+            evaluation_name="support-agent-sim",
+            agent_key="my-support-agent",       # Orq deployment, routed via ORQ_API_KEY
+            agent_description=(
+                "Customer support agent for an e-commerce store; "
+                "handles refunds, orders, and product questions."
+            ),
+            num_personas=3,
+            num_scenarios=4,                     # → 12 persona × scenario simulations
+            max_turns=6,
+            evaluator_names=["goal_achieved", "criteria_met"],
+        )
+
+        passed = sum(r.goal_achieved for r in results)
+        print(f"Pass rate: {passed}/{len(results)}")
+
+
+    if __name__ == "__main__":
+        asyncio.run(main())
+    ```
+
+=== "OpenAI"
+
+    Pass `sim_model=` to route the simulator and judge through OpenAI directly.
+    Use `target_callback=` for the agent under test.
+
+    ```python
+    import asyncio
+
+    from openai import AsyncOpenAI
+
+    from evaluatorq.contracts import Message
+    from evaluatorq.simulation import generate_and_simulate
+
+    client = AsyncOpenAI()
+
+    SYSTEM = "You are a customer support agent for Acme Corp. Be concise and helpful."
+
+
+    async def openai_agent(messages: list[Message]) -> str:
+        history = [{"role": "system", "content": SYSTEM}]
+        history += [{"role": m.role, "content": m.content or ""} for m in messages]
+        resp = await client.chat.completions.create(model="gpt-4o-mini", messages=history)
+        return resp.choices[0].message.content or ""
+
+
+    async def main():
+        results = await generate_and_simulate(
+            evaluation_name="support-agent-sim-openai",
+            target_callback=openai_agent,
+            agent_description=(
+                "Customer support agent for an e-commerce store; "
+                "handles refunds, orders, and product questions."
+            ),
+            num_personas=3,
+            num_scenarios=4,
+            sim_model="gpt-4o-mini",             # simulator + judge on OpenAI directly
+            max_turns=6,
+            evaluator_names=["goal_achieved", "criteria_met"],
+            upload_results=False,
+        )
+
+        passed = sum(r.goal_achieved for r in results)
+        print(f"Pass rate: {passed}/{len(results)}")
+
+
+    if __name__ == "__main__":
+        asyncio.run(main())
+    ```
 
 `agent_description` drives generation; `num_personas × num_scenarios` is how many
 conversations run. Provider resolves `ORQ_API_KEY` → `OPENAI_API_KEY`.
@@ -98,66 +178,129 @@ When you want exact personas and pass/fail criteria, build them yourself and cal
 a **scenario** is *what they want* plus the **criteria** the agent must (or must
 not) satisfy.
 
-```python
-import asyncio
+=== "Orq agent"
 
-from evaluatorq.simulation import simulate
-from evaluatorq.simulation.types import (
-    CommunicationStyle, Criterion, EmotionalArc, Persona, Scenario, StartingEmotion,
-)
+    Pass `agent_key=` (from AI Studio → Deployments) to route through the Orq platform.
 
+    ```python
+    import asyncio
 
-async def main():
-    persona = Persona(
-        name="Impatient Customer",
-        patience=0.2, assertiveness=0.8, politeness=0.4, technical_level=0.3,
-        communication_style=CommunicationStyle.terse,
-        background="Received the wrong item and wants a refund urgently",
-        emotional_arc=EmotionalArc.escalating,
-    )
-    scenario = Scenario(
-        name="Wrong Item Refund",
-        goal="Get a full refund for the wrong item received",
-        context="Ordered headphones but received a phone case instead",
-        starting_emotion=StartingEmotion.frustrated,
-        criteria=[
-            Criterion(description="Agent asks for order details", type="must_happen"),
-            Criterion(description="Agent acknowledges the mistake", type="must_happen"),
-            Criterion(description="Agent blames the customer", type="must_not_happen"),
-        ],
+    from evaluatorq.simulation import simulate
+    from evaluatorq.simulation.types import (
+        CommunicationStyle, Criterion, EmotionalArc, Persona, Scenario, StartingEmotion,
     )
 
-    results = await simulate(
-        evaluation_name="basic-simulation-example",
-        agent_key="my-support-agent",      # Orq deployment, routed via ORQ_API_KEY
-        personas=[persona],
-        scenarios=[scenario],
-        max_turns=6,
-        evaluator_names=["goal_achieved", "criteria_met"],
-    )
 
-    result = results[0]
-    score = result.goal_completion_score or 0.0
-    print(f"Goal achieved: {result.goal_achieved}  score={score:.2f}")
-    for msg in result.messages:
-        who = "User" if msg.role == "user" else "Agent"
-        print(f"{who}: {msg.content}")
+    async def main():
+        persona = Persona(
+            name="Impatient Customer",
+            patience=0.2, assertiveness=0.8, politeness=0.4, technical_level=0.3,
+            communication_style=CommunicationStyle.terse,
+            background="Received the wrong item and wants a refund urgently",
+            emotional_arc=EmotionalArc.escalating,
+        )
+        scenario = Scenario(
+            name="Wrong Item Refund",
+            goal="Get a full refund for the wrong item received",
+            context="Ordered headphones but received a phone case instead",
+            starting_emotion=StartingEmotion.frustrated,
+            criteria=[
+                Criterion(description="Agent asks for order details", type="must_happen"),
+                Criterion(description="Agent acknowledges the mistake", type="must_happen"),
+                Criterion(description="Agent blames the customer", type="must_not_happen"),
+            ],
+        )
+
+        results = await simulate(
+            evaluation_name="basic-simulation-example",
+            agent_key="my-support-agent",      # Orq deployment, routed via ORQ_API_KEY
+            personas=[persona],
+            scenarios=[scenario],
+            max_turns=6,
+            evaluator_names=["goal_achieved", "criteria_met"],
+        )
+
+        result = results[0]
+        score = result.goal_completion_score or 0.0
+        print(f"Goal achieved: {result.goal_achieved}  score={score:.2f}")
+        for msg in result.messages:
+            who = "User" if msg.role == "user" else "Agent"
+            print(f"{who}: {msg.content}")
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
-```
+    if __name__ == "__main__":
+        asyncio.run(main())
+    ```
+
+=== "OpenAI"
+
+    Use `target_callback=` with any async function that maps the conversation to
+    your agent's reply. Pass `sim_model=` to run the simulator and judge on OpenAI
+    directly. Set `upload_results=False` for a local-only run.
+
+    ```python
+    import asyncio
+
+    from openai import AsyncOpenAI
+
+    from evaluatorq.contracts import Message
+    from evaluatorq.simulation import simulate
+    from evaluatorq.simulation.types import Criterion, Persona, Scenario
+
+    client = AsyncOpenAI()
+
+    SYSTEM = "You are a customer support agent for Acme Corp. Be concise and helpful."
+
+
+    async def openai_agent(messages: list[Message]) -> str:
+        """Your agent under test — a raw OpenAI model."""
+        history = [{"role": "system", "content": SYSTEM}]
+        history += [{"role": m.role, "content": m.content or ""} for m in messages]
+        resp = await client.chat.completions.create(model="gpt-4o-mini", messages=history)
+        return resp.choices[0].message.content or ""
+
+
+    async def main():
+        persona = Persona(name="Impatient Customer", patience=0.2, assertiveness=0.8)
+        scenario = Scenario(
+            name="Wrong Item Refund",
+            goal="Get a full refund for the wrong item received",
+            criteria=[
+                Criterion(description="Agent asks for order details", type="must_happen"),
+            ],
+        )
+
+        results = await simulate(
+            evaluation_name="openai-agent-simulation",
+            target_callback=openai_agent,        # your OpenAI agent
+            personas=[persona],
+            scenarios=[scenario],
+            sim_model="gpt-4o-mini",             # simulator + judge on OpenAI directly
+            max_turns=6,
+            evaluator_names=["goal_achieved", "criteria_met"],
+            upload_results=False,                # local-only run, no Orq experiment
+        )
+
+        result = results[0]
+        score = result.goal_completion_score or 0.0
+        print(f"Goal achieved: {result.goal_achieved}  score={score:.2f}")
+
+
+    if __name__ == "__main__":
+        asyncio.run(main())
+    ```
 
 One persona × one scenario yields one `SimulationResult` with `goal_achieved`,
 `goal_completion_score`, `turn_count`, `rules_broken`, and the full message
 transcript.
 
-## Bring your own agent
+The `target_callback` is the only structural difference from the Orq path —
+personas, scenarios, criteria, and the result shape are identical. Swap the
+callback body for any HTTP/LLM agent.
 
-Don't have an Orq deployment? `simulate()` also takes a `target_callback=` — any
-async function that maps the conversation to your agent's reply, so you can
-simulate a plain OpenAI model or any HTTP agent. See
-[Simulate an OpenAI agent](agent-simulation-openai.md).
+!!! tip "View results in the local dashboard"
+    Run `eq ui` to browse saved red-team and simulation reports together, or use
+    `eq redteam ui` / `eq sim ui` for a surface-specific view.
 
 ## Where to next
 

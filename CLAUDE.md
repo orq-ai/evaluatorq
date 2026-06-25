@@ -34,6 +34,10 @@ uv run --group docs mkdocs serve
 
 # Build the docs site (strict — fails on warnings, as CI does)
 uv run --group docs mkdocs build --strict
+
+# Validate mermaid diagrams render in strict renderers (GitHub/VS Code) — runs in CI.
+# strict build does NOT catch mermaid label defects; this does.
+uv run python scripts/validate_mermaid.py
 ```
 
 ## Package Structure
@@ -141,8 +145,7 @@ src/evaluatorq/
 ### Environment Variables
 
 - `ORQ_API_KEY` — ORQ platform authentication
-- `ORQ_API_URL` — ORQ API base URL (optional override)
-- `EVALUATORQ_OWASP_DATASET_ID` — default dataset ID for static mode
+- `ORQ_BASE_URL` — ORQ API base URL (optional override; default `https://my.orq.ai`)
 - `OPENAI_API_KEY` — for direct OpenAI backend or pipeline LLM calls
 
 ### Code Style
