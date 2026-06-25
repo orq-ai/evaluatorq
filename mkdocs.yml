@@ -32,9 +32,7 @@ theme:
     - navigation.indexes
     - navigation.top
     - toc.follow
-    - content.code.copy
     - search.highlight
-    - toc.follow
   # 3-way auto / light / dark toggle (same UX as Pydantic), Orq palette.
   palette:
     - scheme: default
