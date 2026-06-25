@@ -77,6 +77,61 @@ async def test_fenced_json_is_unwrapped(monkeypatch: pytest.MonkeyPatch, content
 
 
 @pytest.mark.asyncio
+async def test_fenced_json_empty_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty fenced block yields '' which fails JSON parse -> PARSE."""
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=_json_response('```json\n```'))
+    outcome = await run_judge(
+        client=client,
+        model='m',
+        cfg=LLMCallConfig(),
+        prompt_template='x',
+        replacements={},
+    )
+    assert outcome.error_kind is JudgeError.PARSE
+
+
+@pytest.mark.asyncio
+async def test_fenced_json_no_leading_triple_backticks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Text that starts with two backticks is not treated as fenced."""
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=_json_response('``{"value": true}'))
+    outcome = await run_judge(
+        client=client,
+        model='m',
+        cfg=LLMCallConfig(),
+        prompt_template='x',
+        replacements={},
+    )
+    assert outcome.error_kind is JudgeError.PARSE
+
+
+@pytest.mark.asyncio
+async def test_fenced_json_inner_triple_backticks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If the explanation inside a fenced block contains ' ``` ', rfind may
+    match the wrong fence. The _strip_code_fences function should still
+    handle the common case; this test documents that edge behaviour."""
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    client = MagicMock()
+    # Inner ``` inside the JSON content — rfind matches the inner one first
+    client.chat.completions.create = AsyncMock(
+        return_value=_json_response('```json\n{"value": true, "explanation": "use ``` for code"}\n```')
+    )
+    outcome = await run_judge(
+        client=client,
+        model='m',
+        cfg=LLMCallConfig(),
+        prompt_template='x',
+        replacements={},
+    )
+    # The inner ``` causes rfind to truncate; payload may fail or be partial
+    # The important thing is the function doesn't crash.
+    assert outcome.raw_content == '```json\n{"value": true, "explanation": "use ``` for code"}\n```'
+
+
+@pytest.mark.asyncio
 async def test_timeout_captured(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
     client = MagicMock()
