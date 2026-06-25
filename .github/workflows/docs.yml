@@ -18,6 +18,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
         with:
@@ -26,6 +28,8 @@ jobs:
         run: uv sync --frozen --all-extras --group docs
       - name: Example compile smoke
         run: uv run python scripts/smoke_examples.py
+      - name: Validate mermaid diagrams
+        run: uv run python scripts/validate_mermaid.py
       - name: Build docs (strict)
         run: uv run mkdocs build --strict
       - name: Configure Pages

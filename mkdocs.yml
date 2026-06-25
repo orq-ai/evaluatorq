@@ -24,45 +24,30 @@ theme:
     - content.tabs.link
     - content.code.annotate
     - content.code.copy
+    - content.tooltips
     - navigation.tabs
     - navigation.instant
     - navigation.instant.progress
     - navigation.sections
     - navigation.indexes
     - navigation.top
-    - navigation.tracking
-    - navigation.footer
-    - search.suggest
+    - toc.follow
+    - content.code.copy
     - search.highlight
     - toc.follow
   # 3-way auto / light / dark toggle (same UX as Pydantic), Orq palette.
   palette:
-    - media: "(prefers-color-scheme)"
+    - scheme: default
       primary: custom
       accent: custom
-      toggle: { icon: material/brightness-auto, name: Switch to light mode }
-    - media: "(prefers-color-scheme: light)"
-      scheme: default
+      toggle: { icon: material/brightness-7, name: Switch dark mode }
+    - scheme: slate
       primary: custom
       accent: custom
-      toggle: { icon: material/brightness-7, name: Switch to dark mode }
-    - media: "(prefers-color-scheme: dark)"
-      scheme: slate
-      primary: custom
-      accent: custom
-      toggle: { icon: material/brightness-4, name: Switch to system preference }
+      toggle: { icon: material/brightness-4, name: Switch light mode }
 
 extra_css:
   - stylesheets/extra.css
-
-extra_javascript:
-  - js/keyboard.js
-
-extra:
-  social:
-    - icon: fontawesome/brands/github
-      link: https://github.com/orq-ai/evaluatorq
-      name: evaluatorq on GitHub
 
 plugins:
   - search
@@ -89,19 +74,46 @@ plugins:
             docstring_options:
               warn_unknown_params: false
               warn_missing_types: false
+  - redirects:
+      redirect_maps:
+        guides/agent-simulation-openai.md: guides/agent-simulation.md
+        guides/red-teaming-openai.md: guides/red-teaming.md
+  - git-revision-date-localized:
+      enable_creation_date: true
+      type: timeago
+      fallback_to_build_date: true
+  - minify:
+      minify_html: true
+      cache_safe: true
 
 markdown_extensions:
   - tables
   - attr_list
   - md_in_html
   - admonition
+  - abbr
+  - footnotes
   - pymdownx.details
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite
-  - pymdownx.superfences
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.caret
+  - pymdownx.tilde
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+      dedent_subsections: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
   - pymdownx.emoji:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
@@ -116,13 +128,16 @@ nav:
   - Home: index.md
   - Get Started:
       - Getting Started: guides/getting-started.md
-      - Agent Simulation:
-          - guides/agent-simulation.md
-          - Simulate an OpenAI agent: guides/agent-simulation-openai.md
+      - Agent Simulation: guides/agent-simulation.md
       - Red Teaming:
           - guides/red-teaming.md
-          - Red-team an OpenAI model: guides/red-teaming-openai.md
           - Custom Evaluators & Frameworks: custom-evaluators-and-frameworks.md
+      - Dashboard: dashboard.md
+  - Reference:
+      - Configuration: configuration.md
+      - Tracing: tracing.md
+      - CLI Reference: cli-reference.md
+      - Orq Deployment: orq-deployment.md
   - Examples: examples/
   - API Reference: reference/
   - About:

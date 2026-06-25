@@ -34,6 +34,10 @@ uv run --group docs mkdocs serve
 
 # Build the docs site (strict — fails on warnings, as CI does)
 uv run --group docs mkdocs build --strict
+
+# Validate mermaid diagrams render in strict renderers (GitHub/VS Code) — runs in CI.
+# strict build does NOT catch mermaid label defects; this does.
+uv run python scripts/validate_mermaid.py
 ```
 
 ## Package Structure
@@ -52,18 +56,13 @@ src/evaluatorq/
 ├── openresponses/           # OpenAI Responses API integration
 ├── dashboard/               # FastHTML web dashboard (eq dashboard — preview, in dev; ui commands still serve the Streamlit dashboards)
 │   ├── app.py               # build_app(roots) — ASGI app factory + all routes
-│   ├── _compat.py           # Starlette 1.3.x / FastHTML 0.12.x compat shim (applied on import)
 │   ├── shell.py             # page() — full HTML page shell with head assets
 │   ├── view.py              # HTML fragment helpers (index, filter form, downloads)
-│   ├── library.py           # File discovery, sniff_kind(), report_id(), scan(), read_json_cached()
+│   ├── library.py           # File discovery, sniff_kind(), report_id(), scan()
 │   ├── surfaces.py          # SurfaceAdapter registry (redteam + sim adapters)
 │   ├── filters.py           # FilterDef registry (redteam 7-dim, sim 4-dim)
-│   ├── filter_request.py    # parse_selections() — query-string filter parser
-│   ├── styles.py            # Shared CSS constants / class-name helpers
 │   ├── redteam_views.py     # HTMX fragment routes for 4 interactive redteam views
-│   ├── redteam_charts.py    # Interactive breakdown chart + agent heatmap fragments
-│   ├── redteam_transcripts.py # Conversation viewer + disagreement viewer fragments
-│   ├── sim_views.py         # HTMX fragment routes: sim row list, transcript viewer, filter plumbing
+│   ├── sim_views.py         # HTMX fragment route for sim transcript viewer
 │   ├── launch.py            # CLI launch helper (uvicorn entry point)
 │   └── static/              # Vendored JS: htmx, vega trio, dashboard.js
 └── redteam/                 # Red teaming subpackage
@@ -141,8 +140,7 @@ src/evaluatorq/
 ### Environment Variables
 
 - `ORQ_API_KEY` — ORQ platform authentication
-- `ORQ_API_URL` — ORQ API base URL (optional override)
-- `EVALUATORQ_OWASP_DATASET_ID` — default dataset ID for static mode
+- `ORQ_BASE_URL` — ORQ API base URL (optional override; default `https://my.orq.ai`)
 - `OPENAI_API_KEY` — for direct OpenAI backend or pipeline LLM calls
 
 ### Code Style
