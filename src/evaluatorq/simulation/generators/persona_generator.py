@@ -136,8 +136,15 @@ class PersonaGenerator:
         context: str = "",
         num_personas: int = 5,
         edge_case_percentage: float = 0.2,
+        seed: str = "",
     ) -> list[Persona]:
-        """Generate personas for agent testing."""
+        """Generate personas for agent testing.
+
+        When ``seed`` is set, every generated persona must embody that archetype
+        (e.g. ``"angry customer"``); the LLM fills the remaining traits. This is
+        the intermediate tier between fully-auto generation and hand-built
+        ``Persona`` objects.
+        """
         from evaluatorq.simulation.tracing import with_simulation_span
 
         async with with_simulation_span(
@@ -145,18 +152,32 @@ class PersonaGenerator:
             {
                 "orq.simulation.num_personas": num_personas,
                 "orq.simulation.model": self._model,
+                "orq.simulation.seed": seed,
             },
         ):
             num_edge_cases = int(num_personas * edge_case_percentage)
+
+            if seed:
+                instructions = (
+                    f"Generate {num_personas} persona(s), each embodying this "
+                    f'archetype: "{seed}".\n'
+                    "- Fill patience, assertiveness, politeness, technical level, "
+                    "background, communication style, and emotional arc so each "
+                    "persona is coherent and realistic for that archetype"
+                )
+            else:
+                instructions = (
+                    f"Generate {num_personas} diverse personas for testing this agent.\n"
+                    f"- Include {num_edge_cases} edge case/challenging personas\n"
+                    "- Ensure variety in patience, assertiveness, and technical levels\n"
+                    "- Create realistic backgrounds relevant to the agent's domain"
+                )
 
             user_prompt = f"""Agent Description: {delimit(agent_description)}
 
 Additional Context: {delimit(context or "None provided")}
 
-Generate {num_personas} diverse personas for testing this agent.
-- Include {num_edge_cases} edge case/challenging personas
-- Ensure variety in patience, assertiveness, and technical levels
-- Create realistic backgrounds relevant to the agent's domain
+{instructions}
 
 Return ONLY a JSON array, no other text."""
 

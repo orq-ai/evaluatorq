@@ -1012,4 +1012,10 @@ uv run ruff format
 
 # Lint code
 uv run ruff check
+
+# Serve the documentation site locally (live-reload at http://127.0.0.1:8000/evaluatorq/)
+uv run --group docs mkdocs serve
+
+# Build the documentation site (strict — fails on warnings, as CI does)
+uv run --group docs mkdocs build --strict
 ```

@@ -446,7 +446,8 @@ tr:nth-child(even) { background: rgba(0,0,0,.015); }
     font-weight: 600;
     font-size: .78em;
 }
-.heatmap-cell--safety { outline: 2px solid var(--slate); outline-offset: -2px; }
+/* retired: heatmap safety highlight is now a Vega red stroke on the rect layer (A3) */
+/* .heatmap-cell--safety { outline: 2px solid var(--slate); outline-offset: -2px; } */
 
 /* ---- Sparklines ---- */
 .sparkline { width: 80px; height: 20px; vertical-align: middle; }

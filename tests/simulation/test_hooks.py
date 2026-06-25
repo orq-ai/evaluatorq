@@ -7,11 +7,14 @@ from __future__ import annotations
 import asyncio
 import io
 import warnings
+from typing import Any
 
 import pytest
 
 from evaluatorq.simulation.hooks import (
     DefaultHooks,
+    RichHooks,
+    SimStage,
     SimulationHooks,
     SimulationRunMeta,
 )
@@ -59,6 +62,7 @@ def _meta() -> SimulationRunMeta:
         parallelism=1,
         evaluation_name='e',
         evaluator_names=['goal_achieved'],
+        target='callback',
     )
 
 
@@ -516,6 +520,60 @@ async def test_hooks_none_is_behaviour_identical(datapoint_factory):
     assert r.metadata['datapoint_id'] == 'dp1'
 
 
+@pytest.mark.asyncio
+async def test_simulate_emits_simulate_stage(datapoint_factory):
+    """simulate() must bracket execution with SIMULATE stage hooks."""
+    seen: list[str] = []
+
+    class Rec(DefaultHooks):
+        async def on_stage_start(self, stage, meta):
+            seen.append(f'start:{stage}')
+
+        async def on_stage_end(self, stage, meta):
+            seen.append(f'end:{stage}')
+
+    async def _ok_target(messages):
+        return 'fine'
+
+    await simulate(
+        datapoints=[datapoint_factory('dp1')],
+        target=_ok_target,
+        max_turns=1,
+        hooks=Rec(),
+        user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+        judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+        upload_results=False,
+    )
+    assert f'start:{SimStage.SIMULATE}' in seen
+    assert f'end:{SimStage.SIMULATE}' in seen
+
+
+@pytest.mark.asyncio
+async def test_meta_carries_target(datapoint_factory):
+    """SimulationRunMeta passed to on_confirm must carry 'target' field."""
+    captured: dict[str, Any] = {}
+
+    class Cap(DefaultHooks):
+        async def on_confirm(self, meta):
+            captured.update(meta)
+            return True
+
+    async def _ok_target(messages):
+        return 'fine'
+
+    await simulate(
+        datapoints=[datapoint_factory('dp1')],
+        target=_ok_target,
+        max_turns=1,
+        hooks=Cap(),
+        user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+        judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+        upload_results=False,
+    )
+    assert 'target' in captured
+    assert captured['target'] == 'callback'
+
+
 def test_hooks_exported_from_package():
     import evaluatorq.simulation as sim
 
@@ -783,6 +841,7 @@ def test_rich_hooks_reusable_across_runs():
         parallelism=2,
         evaluation_name='',
         evaluator_names=['goal_achieved'],
+        target='callback',
     )
 
     asyncio.run(hooks.on_run_start(meta))
@@ -959,3 +1018,174 @@ async def test_async_target_closed_when_on_run_complete_raises(datapoint_factory
         )
     assert hooks.completed is True  # terminal still fired
     assert target.closed is True  # cleanup ran despite the raising async hook
+
+
+# ---------------------------------------------------------------------------
+# SimStage + on_stage_start/end hook tests (Task 4)
+# ---------------------------------------------------------------------------
+
+
+def test_stage_hooks_keep_protocol_satisfied():
+    """Adding on_stage_start/end to the Protocol must not break isinstance checks
+    as long as BOTH DefaultHooks and RichHooks implement the methods."""
+    from rich.console import Console
+
+    assert isinstance(DefaultHooks(), SimulationHooks)
+    assert isinstance(RichHooks(console=Console()), SimulationHooks)
+
+
+def test_rich_stage_start_renders_rule():
+    """RichHooks.on_stage_start must emit a console.rule containing the stage label."""
+    buf = io.StringIO()
+    h = RichHooks(console=__import__('rich.console', fromlist=['Console']).Console(file=buf, width=80, force_terminal=False))
+    asyncio.run(h.on_stage_start(SimStage.SIMULATE, {}))
+    assert 'Running Simulations' in buf.getvalue()
+
+
+def test_rich_stage_end_generate_prints_count():
+    """RichHooks.on_stage_end with GENERATE and num_datapoints in meta prints count."""
+    buf = io.StringIO()
+    from rich.console import Console
+
+    h = RichHooks(console=Console(file=buf, width=80, force_terminal=False))
+    asyncio.run(h.on_stage_end(SimStage.GENERATE, {'num_datapoints': 42}))
+    assert '42' in buf.getvalue()
+    assert 'datapoints' in buf.getvalue()
+
+
+def test_rich_stage_end_simulate_prints_nothing():
+    """RichHooks.on_stage_end with SIMULATE stage must not print."""
+    buf = io.StringIO()
+    from rich.console import Console
+
+    h = RichHooks(console=Console(file=buf, width=80, force_terminal=False))
+    asyncio.run(h.on_stage_end(SimStage.SIMULATE, {}))
+    assert buf.getvalue() == ''
+
+
+def test_default_hooks_stage_methods_are_silent():
+    """DefaultHooks.on_stage_start and on_stage_end run without raising."""
+    hooks = DefaultHooks()
+    asyncio.run(hooks.on_stage_start(SimStage.GENERATE, {}))
+    asyncio.run(hooks.on_stage_end(SimStage.GENERATE, {'num_datapoints': 5}))
+    asyncio.run(hooks.on_stage_start(SimStage.SIMULATE, {}))
+    asyncio.run(hooks.on_stage_end(SimStage.SIMULATE, {}))
+
+
+def test_simstage_exported_from_package():
+    """SimStage must be importable from evaluatorq.simulation."""
+    import evaluatorq.simulation as sim
+
+    assert sim.SimStage is not None
+    assert 'SimStage' in sim.__all__
+
+
+# ---------------------------------------------------------------------------
+# Task 6: Confirm gate + summary render in RichHooks; enriched DefaultHooks
+# ---------------------------------------------------------------------------
+
+
+def _meta_with_target(n: int = 2) -> SimulationRunMeta:
+    """Variant of _meta() with a non-trivial target for Task 6 tests."""
+    return SimulationRunMeta(
+        num_datapoints=n,
+        model='openai/gpt-5.4-mini',
+        max_turns=5,
+        parallelism=3,
+        evaluation_name='sim',
+        evaluator_names=['goal_achieved'],
+        target='agent:foo',
+    )
+
+
+def test_rich_confirm_skip_renders_plan_with_target():
+    """RichHooks.on_confirm with skip_confirm=True must render a Run Plan
+    table containing the target and model, then return True without prompting."""
+    from rich.console import Console
+
+    buf = io.StringIO()
+    h = RichHooks(console=Console(file=buf, width=90, force_terminal=False), skip_confirm=True)
+    assert asyncio.run(h.on_confirm(_meta_with_target())) is True
+    out = buf.getvalue()
+    assert 'Run Plan' in out
+    assert 'agent:foo' in out
+    assert 'openai/gpt-5.4-mini' in out
+
+
+def test_rich_run_complete_renders_once(sim_result_factory):
+    """RichHooks.on_run_complete must render the summary exactly once even if
+    called twice (idempotent guard on _summary_rendered)."""
+    from rich.console import Console
+
+    buf = io.StringIO()
+    h = RichHooks(console=Console(file=buf, width=90, force_terminal=False))
+    results = [sim_result_factory(goal_achieved=True)]
+    asyncio.run(h.on_run_complete(results))
+    asyncio.run(h.on_run_complete(results))   # second call must be a no-op
+    out = buf.getvalue()
+    assert out.count('SIMULATION SUMMARY') == 1
+    assert 'ui --latest' in out
+
+
+def test_rich_run_complete_summary_rendered_resets_on_new_run(sim_result_factory):
+    """_reset_run_state must clear _summary_rendered so a reused RichHooks
+    instance renders a fresh summary on the next on_run_start / on_run_complete
+    cycle."""
+    from rich.console import Console
+
+    buf = io.StringIO()
+    h = RichHooks(console=Console(file=buf, width=90, force_terminal=False))
+    results = [sim_result_factory(goal_achieved=True)]
+
+    # First run — renders once.
+    asyncio.run(h.on_run_start(_meta_with_target()))
+    asyncio.run(h.on_run_complete(results))
+    assert buf.getvalue().count('SIMULATION SUMMARY') == 1
+
+    # Second run — reset must clear the guard; summary must render again.
+    asyncio.run(h.on_run_start(_meta_with_target()))
+    asyncio.run(h.on_run_complete(results))
+    assert buf.getvalue().count('SIMULATION SUMMARY') == 2
+
+
+def test_default_hooks_on_confirm_logs_plan_and_returns_true(caplog):
+    """DefaultHooks.on_confirm must log the run plan at INFO and return True."""
+    import logging
+
+    hooks = DefaultHooks()
+    with caplog.at_level(logging.INFO, logger='evaluatorq.simulation.hooks'):
+        result = asyncio.run(hooks.on_confirm(_meta_with_target()))
+    assert result is True
+    assert 'Run plan' in caplog.text
+    assert 'agent:foo' in caplog.text
+    assert 'openai/gpt-5.4-mini' in caplog.text
+    assert any(r.levelname == 'INFO' for r in caplog.records)
+
+
+def test_default_hooks_on_run_complete_logs_structured(caplog, sim_result_factory):
+    """DefaultHooks.on_run_complete must log goal_achieved count and avg_turns."""
+    import logging
+
+    hooks = DefaultHooks()
+    results = [
+        sim_result_factory(goal_achieved=True),
+        sim_result_factory(goal_achieved=False),
+    ]
+    with caplog.at_level(logging.INFO, logger='evaluatorq.simulation.hooks'):
+        asyncio.run(hooks.on_run_complete(results))
+    assert 'Run complete' in caplog.text
+    assert 'goal_achieved=1/2' in caplog.text
+    assert 'avg_turns=' in caplog.text
+    assert any(r.levelname == 'INFO' for r in caplog.records)
+
+
+def test_default_hooks_on_run_complete_warns_on_errors(caplog, sim_result_factory):
+    """DefaultHooks.on_run_complete must emit a WARNING when any result errored."""
+    import logging
+
+    hooks = DefaultHooks()
+    results = [sim_result_factory(goal_achieved=False, error='oops')]
+    with caplog.at_level(logging.WARNING, logger='evaluatorq.simulation.hooks'):
+        asyncio.run(hooks.on_run_complete(results))
+    assert any(r.levelname == 'WARNING' for r in caplog.records)
+    assert 'errored' in caplog.text.lower()

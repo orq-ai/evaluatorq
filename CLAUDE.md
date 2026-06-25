@@ -28,6 +28,12 @@ uv run basedpyright
 
 # Build
 uv build
+
+# Serve the docs site locally (live-reload at http://127.0.0.1:8000/evaluatorq/)
+uv run --group docs mkdocs serve
+
+# Build the docs site (strict — fails on warnings, as CI does)
+uv run --group docs mkdocs build --strict
 ```
 
 ## Package Structure
@@ -44,6 +50,22 @@ src/evaluatorq/
 ├── integrations/            # Third-party integrations (LangChain, etc.)
 ├── tracing/                 # OpenTelemetry tracing
 ├── openresponses/           # OpenAI Responses API integration
+├── dashboard/               # FastHTML web dashboard (eq dashboard — preview, in dev; ui commands still serve the Streamlit dashboards)
+│   ├── app.py               # build_app(roots) — ASGI app factory + all routes
+│   ├── _compat.py           # Starlette 1.3.x / FastHTML 0.12.x compat shim (applied on import)
+│   ├── shell.py             # page() — full HTML page shell with head assets
+│   ├── view.py              # HTML fragment helpers (index, filter form, downloads)
+│   ├── library.py           # File discovery, sniff_kind(), report_id(), scan(), read_json_cached()
+│   ├── surfaces.py          # SurfaceAdapter registry (redteam + sim adapters)
+│   ├── filters.py           # FilterDef registry (redteam 7-dim, sim 4-dim)
+│   ├── filter_request.py    # parse_selections() — query-string filter parser
+│   ├── styles.py            # Shared CSS constants / class-name helpers
+│   ├── redteam_views.py     # HTMX fragment routes for 4 interactive redteam views
+│   ├── redteam_charts.py    # Interactive breakdown chart + agent heatmap fragments
+│   ├── redteam_transcripts.py # Conversation viewer + disagreement viewer fragments
+│   ├── sim_views.py         # HTMX fragment routes: sim row list, transcript viewer, filter plumbing
+│   ├── launch.py            # CLI launch helper (uvicorn entry point)
+│   └── static/              # Vendored JS: htmx, vega trio, dashboard.js
 └── redteam/                 # Red teaming subpackage
     ├── contracts.py         # All data models, enums, Pydantic schemas
     ├── vulnerability_registry.py  # Single source of truth for vulnerabilities
@@ -79,10 +101,9 @@ src/evaluatorq/
     ├── reports/             # Report generation
     │   ├── converters.py    # Result → report conversion
     │   └── display.py       # Rich terminal display
-    ├── runtime/             # Job execution
-    │   ├── jobs.py          # Async job runner
-    │   └── orq_agent_job.py # ORQ-specific job implementation
-    └── ui/                  # Streamlit report viewer
+    └── runtime/             # Job execution
+        ├── jobs.py          # Async job runner
+        └── orq_agent_job.py # ORQ-specific job implementation
 ```
 
 ## Key Patterns
@@ -112,6 +133,7 @@ src/evaluatorq/
 
 - Runtime: `pydantic`, `httpx`, `rich`, `loguru`
 - Red team extra: `openai`, `typer`, `python-dotenv`, `huggingface-hub`
+- Dashboard extra: `python-fasthtml`, `uvicorn` (install as `evaluatorq[dashboard]`)
 - Dev: `pytest`, `pytest-asyncio`, `basedpyright`, `ruff`
 - Package manager: `uv` (not pip)
 - Build system: `hatchling`

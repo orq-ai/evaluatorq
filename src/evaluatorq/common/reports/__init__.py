@@ -7,6 +7,7 @@ builders and per-section render functions.
 """
 
 from evaluatorq.common.reports import palette
+from evaluatorq.common.reports.console import confirm_run_plan, write_text_report
 from evaluatorq.common.reports.html_helpers import (
     COLORS,
     STATUS_COLORS,
@@ -26,7 +27,6 @@ from evaluatorq.common.reports.html_helpers import (
     status_badge,
     svg_bar,
     svg_donut,
-    try_render_svg,
 )
 from evaluatorq.common.reports.md_helpers import (
     bar,
@@ -48,10 +48,13 @@ from evaluatorq.common.reports.palette import (
 from evaluatorq.common.reports.render import (
     RendererRegistry,
     format_date,
+    render_body,
     render_header_md,
     render_html,
     render_markdown,
 )
+from evaluatorq.common.reports.rich_styles import rate_style
+from evaluatorq.common.reports.vega import render_embed, render_svg
 
 __all__ = [
     'COLORS',
@@ -67,6 +70,7 @@ __all__ = [
     'bold_bar',
     'center_table',
     'charts_available',
+    'confirm_run_plan',
     'details_block',
     'esc',
     'format_date',
@@ -77,7 +81,10 @@ __all__ = [
     'md_table',
     'palette',
     'pct',
+    'rate_style',
+    'render_body',
     'render_donut_chart',
+    'render_embed',
     'render_header_md',
     'render_heatmap',
     'render_histogram',
@@ -86,10 +93,11 @@ __all__ = [
     'render_line_chart',
     'render_markdown',
     'render_sparkline',
+    'render_svg',
     'scale_color',
     'status_badge',
     'svg_bar',
     'svg_donut',
     'truncate',
-    'try_render_svg',
+    'write_text_report',
 ]

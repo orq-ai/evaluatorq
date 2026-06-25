@@ -99,24 +99,29 @@ def test_html_no_raw_criteria_id_leak(sample_results):
     assert 'criteria_1' not in html
 
 
-def test_html_renders_without_plotly(sample_results, monkeypatch):
+def test_html_renders_without_vl_convert(sample_results, monkeypatch):
     import builtins
 
     real_import = builtins.__import__
 
-    def no_plotly(name, *a, **k):
-        if name.startswith('plotly') or name == 'kaleido':
+    def no_vl_convert(name, *a, **k):
+        if name == 'vl_convert':
             raise ImportError(name)
         return real_import(name, *a, **k)
 
-    monkeypatch.setattr(builtins, '__import__', no_plotly)
+    monkeypatch.setattr(builtins, '__import__', no_vl_convert)
+    import evaluatorq.common.reports.vega as vega_mod
+
+    monkeypatch.setattr(vega_mod, 'vl_available', lambda: False)
+
     html = export_html(sample_results, target='t')
-    assert '<svg' in html  # charts still render (hand-SVG)
+    assert '<html' in html
+    assert '<table' in html  # degrades gracefully to tables when charts absent
 
 
 def test_html_renders_new_charts(sample_results):
     html = export_html(sample_results, target='t')
-    assert 'heatmap-table' in html  # criteria + persona/scenario heatmaps
+    assert '<svg' in html  # criteria + persona/scenario heatmaps rendered as SVG via Vega-Lite
     assert 'Goal Score Distribution' in html
     assert 'Turn Quality Timeline' in html
     assert 'Failures' in html
@@ -248,11 +253,11 @@ def test_export_html_escapes_user_controlled_metadata():
     nasty = "<script>alert('xss')</script>"
     result = SimulationResult(
         messages=[
-            Message(role="user", content=nasty),
-            Message(role="assistant", content="hi"),
+            Message(role='user', content=nasty),
+            Message(role='assistant', content='hi'),
         ],
         terminated_by=TerminatedBy.judge,
-        reason="ok " + nasty,
+        reason='ok ' + nasty,
         goal_achieved=False,
         goal_completion_score=0.5,
         rules_broken=[nasty],
@@ -260,21 +265,21 @@ def test_export_html_escapes_user_controlled_metadata():
         token_usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
         turn_metrics=[],
         metadata={
-            "persona": nasty,
-            "scenario": "S&T",
-            "model": "m & m",
-            "evaluator_scores": {nasty: 1.0},
-            "error": nasty,
+            'persona': nasty,
+            'scenario': 'S&T',
+            'model': 'm & m',
+            'evaluator_scores': {nasty: 1.0},
+            'error': nasty,
         },
     )
     html = export_html([result], target=nasty)
     # The raw script tag must NEVER appear in HTML output.
-    assert "<script>alert" not in html
+    assert '<script>alert' not in html
     assert nasty not in html
     # And the escaped form should be there at least once (in the persona field).
-    assert "&lt;script&gt;" in html
+    assert '&lt;script&gt;' in html
     # Ampersands also escaped (e.g., persona "S&T", model "m & m").
-    assert "S&amp;T" in html or "m &amp; m" in html
+    assert 'S&amp;T' in html or 'm &amp; m' in html
 
 
 def test_export_html_css_has_no_double_percent_artifacts():
@@ -363,18 +368,31 @@ def test_overview_html_and_md_show_traits_and_goal():
     from evaluatorq.simulation.types import SimulationResult, TerminatedBy
 
     r = SimulationResult(
-        messages=[], terminated_by=TerminatedBy.judge, reason='r',
-        goal_achieved=True, goal_completion_score=1.0, rules_broken=[],
-        turn_count=1, turn_metrics=[],
+        messages=[],
+        terminated_by=TerminatedBy.judge,
+        reason='r',
+        goal_achieved=True,
+        goal_completion_score=1.0,
+        rules_broken=[],
+        turn_count=1,
+        turn_metrics=[],
         token_usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
         metadata={
-            'persona': 'Frustrated Customer', 'scenario': 'Billing',
-            'persona_traits': {'patience': 0.2, 'assertiveness': 0.8, 'politeness': 0.4,
-                               'technical_level': 0.3, 'communication_style': 'casual',
-                               'background': 'Annoyed.'},
-            'scenario_goal': 'Explain the invoice', 'scenario_context': 'Unexpected charge.',
-            'criteria_meta': [{'id': 'criteria_0', 'description': 'explains charge',
-                               'type': 'must_happen', 'passed': True}],
+            'persona': 'Frustrated Customer',
+            'scenario': 'Billing',
+            'persona_traits': {
+                'patience': 0.2,
+                'assertiveness': 0.8,
+                'politeness': 0.4,
+                'technical_level': 0.3,
+                'communication_style': 'casual',
+                'background': 'Annoyed.',
+            },
+            'scenario_goal': 'Explain the invoice',
+            'scenario_context': 'Unexpected charge.',
+            'criteria_meta': [
+                {'id': 'criteria_0', 'description': 'explains charge', 'type': 'must_happen', 'passed': True}
+            ],
         },
     )
     html = export_html([r], target='Agent')
@@ -390,19 +408,30 @@ def test_overview_renders_zero_trait_and_fallback_without_metadata():
 
     def _result(metadata):
         return SimulationResult(
-            messages=[], terminated_by=TerminatedBy.judge, reason='r',
-            goal_achieved=True, goal_completion_score=1.0, rules_broken=[],
-            turn_count=1, turn_metrics=[],
+            messages=[],
+            terminated_by=TerminatedBy.judge,
+            reason='r',
+            goal_achieved=True,
+            goal_completion_score=1.0,
+            rules_broken=[],
+            turn_count=1,
+            turn_metrics=[],
             token_usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
             metadata=metadata,
         )
 
     # patience 0.0 must NOT be dropped by a truthiness guard
     with_zero = _result({
-        'persona': 'P', 'scenario': 'S',
-        'persona_traits': {'patience': 0.0, 'assertiveness': 0.8, 'politeness': 0.4,
-                           'technical_level': 0.3, 'communication_style': 'casual',
-                           'background': 'bg'},
+        'persona': 'P',
+        'scenario': 'S',
+        'persona_traits': {
+            'patience': 0.0,
+            'assertiveness': 0.8,
+            'politeness': 0.4,
+            'technical_level': 0.3,
+            'communication_style': 'casual',
+            'background': 'bg',
+        },
         'scenario_goal': 'g',
     })
     html = export_html([with_zero], target='Agent')
@@ -415,3 +444,35 @@ def test_overview_renders_zero_trait_and_fallback_without_metadata():
     md2 = export_markdown([legacy], target='Agent')
     assert 'Old' in html2 and 'Old' in md2
     assert 'Goal:' not in html2 and '**Goal:**' not in md2
+
+
+def test_heatmap_scale_direction_and_absent_sentinel(sim_result_factory):
+    """Regression: sim heatmap must use green-high scale (success=green, not red)
+    and absent persona x scenario cells must render the neutral grey sentinel #e4e2df.
+
+    Constructs a 2x2 grid (p1,p2 x s1,s2) with three results present:
+      - (p1,s1): fully successful -> success_rate 1.0 -> green high endpoint #157f57
+      - (p1,s2): fully successful -> success_rate 1.0 -> green high endpoint
+      - (p2,s1): fully successful -> success_rate 1.0 -> green high endpoint
+      - (p2,s2): ABSENT -> filled as -1.0 -> grey sentinel #e4e2df
+
+    The absent cell requires 2+ personas AND 2+ scenarios so the grid gap exists.
+    """
+    from evaluatorq.common.reports.html_helpers import scale_color
+    from evaluatorq.simulation.reports.export_html import _SCALE_GREEN_HIGH, export_html
+
+    results = [
+        sim_result_factory(goal_achieved=True, persona='p1', scenario='s1'),
+        sim_result_factory(goal_achieved=True, persona='p1', scenario='s2'),
+        sim_result_factory(goal_achieved=True, persona='p2', scenario='s1'),
+        # (p2, s2) intentionally absent — heatmap fills -1.0 -> grey sentinel
+    ]
+
+    out = export_html(results).lower()
+    # Deterministic green high endpoint (scale_color at 1.0, a scale endpoint)
+    full = scale_color(1.0, _SCALE_GREEN_HIGH).lstrip('#').lower()  # 157f57
+
+    # Green success cell and grey absent cell both appear, and charts rendered
+    assert full in out and '#e4e2df' in out and '<svg' in out
+    # Guard inversion bug: 1.0 cell must be the green endpoint (not red)
+    assert out.count(full) >= 1

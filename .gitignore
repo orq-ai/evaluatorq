@@ -53,6 +53,7 @@ Thumbs.db
 
 # Docs build output
 site/
+.worktrees/
 
 # Logs
 *.log
@@ -60,3 +61,6 @@ site/
 # superpowers working dir (plans/specs)
 docs/superpowers/
 .superpowers/
+
+# FastHTML runtime session key
+.sesskey

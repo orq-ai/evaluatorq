@@ -34,6 +34,10 @@ from evaluatorq.simulation.api import (
     SimulationDroppedError,
     generate,
     generate_and_simulate,
+    generate_persona,
+    generate_personas,
+    generate_scenario,
+    generate_scenarios,
     simulate,
 )
 from evaluatorq.simulation.types import DEFAULT_MODEL
@@ -74,6 +78,7 @@ if TYPE_CHECKING:
     from evaluatorq.simulation.hooks import (
         DefaultHooks,
         RichHooks,
+        SimStage,
         SimulationHooks,
         SimulationRunMeta,
     )
@@ -171,6 +176,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
         'evaluatorq.simulation.runner.simulation',
         'SimulationRunner',
     ),
+    'SimStage': ('evaluatorq.simulation.hooks', 'SimStage'),
     'SimulationHooks': ('evaluatorq.simulation.hooks', 'SimulationHooks'),
     'DefaultHooks': ('evaluatorq.simulation.hooks', 'DefaultHooks'),
     'RichHooks': ('evaluatorq.simulation.hooks', 'RichHooks'),
@@ -313,6 +319,7 @@ __all__ = [
     'Scenario',
     'ScenarioGenerator',
     # Exceptions
+    'SimStage',
     'SimulationCancelledError',
     'SimulationDroppedError',
     'SimulationError',
@@ -341,6 +348,10 @@ __all__ = [
     'from_orq_deployment',
     'generate',
     'generate_and_simulate',
+    'generate_persona',
+    'generate_personas',
+    'generate_scenario',
+    'generate_scenarios',
     'generate_datapoint',
     'get_all_evaluators',
     'get_evaluator',

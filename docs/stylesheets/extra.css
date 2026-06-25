@@ -1,3 +1,55 @@
+/* --- Orq brand fonts (self-hosted, vendored from orquesta-web) ----------
+   Body = Avio Sans, headings = Kurrent, code = Kurrent Mono. `theme.font:
+   false` in mkdocs.yml stops Material loading Google Fonts so these win. */
+@font-face {
+  font-family: "Avio Sans";
+  src: url("fonts/AvioSans-Regular.woff2") format("woff2");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Avio Sans";
+  src: url("fonts/AvioSans-RegularItalic.woff2") format("woff2");
+  font-weight: 400; font-style: italic; font-display: swap;
+}
+@font-face {
+  font-family: "Avio Sans";
+  src: url("fonts/AvioSans-Medium.woff2") format("woff2");
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Avio Sans";
+  src: url("fonts/AvioSans-SemiBold.woff2") format("woff2");
+  font-weight: 600; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Avio Sans";
+  src: url("fonts/AvioSans-Bold.woff2") format("woff2");
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Kurrent";
+  src: url("fonts/ESKlarheitKurrent-Md.woff2") format("woff2");
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Kurrent";
+  src: url("fonts/ESKlarheitKurrent-Smbd.woff2") format("woff2");
+  font-weight: 600; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Kurrent Mono";
+  src: url("fonts/ESKlarheitKurrentMono-Md.woff2") format("woff2");
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+:root {
+  --md-text-font-family: "Avio Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --md-code-font-family: "Kurrent Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+/* Headings in Kurrent (brand display face); body stays Avio Sans. */
+.md-typeset h1, .md-typeset h2, .md-typeset h3,
+.md-typeset h4, .md-typeset h5, .md-typeset h6,
+.md-header__title { font-family: "Kurrent", var(--md-text-font-family); }
+
 /* Orq brand palette + design language (see /DESIGN.md).
    Rule: teal carries the interface, orange punctuates — one accent per view. */
 :root {
@@ -42,16 +94,22 @@
 html { font-size: 100%; }
 @media screen and (min-width: 100em) { html { font-size: 106.25%; } }
 @media screen and (min-width: 125em) { html { font-size: 112.5%; } }
-.md-typeset { font-size: 0.72rem; }           /* ~11.5px body — compact */
+.md-typeset { font-size: 0.98rem; }           /* ~15.7px body — 15% up from 0.85rem */
 .md-typeset h1 { font-size: 1.75rem; line-height: 1.25; font-weight: 700; }
 .md-typeset h2 { font-size: 1.35rem; margin-top: 2.2rem; }
 .md-typeset h3 { font-size: 1.1rem; }
+/* Material pins admonitions/tables/footnotes to a fixed 0.64rem that ignores the
+   body bump above. Pull them to the exact body size so all prose reads uniform. */
+.md-typeset .admonition,
+.md-typeset details,
+.md-typeset table:not([class]),
+.md-typeset .footnote { font-size: 0.98rem; }
 
-/* Sidebar nav + TOC: scale down to match the denser body. */
-.md-nav { font-size: 0.66rem; }
-.md-nav__title { font-size: 0.66rem; }
-.md-nav__link { font-size: 0.7rem; }
-.md-tabs__link { font-size: 0.72rem; }
+/* Sidebar nav + TOC: ~content size, a touch bigger so the menu reads as chrome. */
+.md-nav { font-size: 1rem; }
+.md-nav__title { font-size: 1rem; }
+.md-nav__link { font-size: 1rem; }
+.md-tabs__link { font-size: 0.95rem; }
 
 /* --- Logo: circular mark, square aspect ------------------------------ */
 .md-header__button.md-logo img,

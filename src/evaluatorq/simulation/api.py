@@ -212,6 +212,8 @@ async def generate_and_simulate(
     before simulation — used by the CLI's ``--save-datapoints`` to persist the
     exact inputs.
     """
+    from evaluatorq.common.async_utils import await_maybe
+    from evaluatorq.simulation.hooks import DefaultHooks, SimStage
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
 
@@ -235,25 +237,32 @@ async def generate_and_simulate(
             from evaluatorq.openresponses.client import build_simulation_client
             gen_client, gen_owned = build_simulation_client(generation_client)
             try:
-                gen_personas, gen_scenarios = await _generate_personas_scenarios(
-                    agent_description=agent_description,
-                    num_personas=num_personas,
-                    num_scenarios=num_scenarios,
-                    model=sim_model,
-                    generation_client=gen_client,
-                )
+                gen_hooks = hooks or DefaultHooks()
+                datapoints: list[Datapoint] = []
+                await await_maybe(gen_hooks.on_stage_start(SimStage.GENERATE, {}))
+                try:
+                    gen_personas, gen_scenarios = await _generate_personas_scenarios(
+                        agent_description=agent_description,
+                        num_personas=num_personas,
+                        num_scenarios=num_scenarios,
+                        model=sim_model,
+                        generation_client=gen_client,
+                    )
 
-                datapoints = await _resolve_or_generate_datapoints(
-                    caller="generate_and_simulate",
-                    datapoints=None,
-                    personas=gen_personas,
-                    scenarios=gen_scenarios,
-                    dataset_id=None,
-                    model=sim_model,
-                    generation_client=gen_client,
-                )
-                if emit_datapoints is not None:
-                    emit_datapoints(datapoints)
+                    datapoints = await _resolve_or_generate_datapoints(
+                        caller="generate_and_simulate",
+                        datapoints=None,
+                        personas=gen_personas,
+                        scenarios=gen_scenarios,
+                        dataset_id=None,
+                        model=sim_model,
+                        generation_client=gen_client,
+                    )
+                    if emit_datapoints is not None:
+                        emit_datapoints(datapoints)
+                finally:
+                    meta = {'num_datapoints': len(datapoints)} if datapoints else {}
+                    await await_maybe(gen_hooks.on_stage_end(SimStage.GENERATE, meta))
 
                 return await _simulate_core(
                     caller='generate_and_simulate',
@@ -359,6 +368,144 @@ async def generate(
 
 
 # ---------------------------------------------------------------------------
+# Seeded generation — the intermediate tier (archetype → full object)
+# ---------------------------------------------------------------------------
+
+
+async def generate_personas(
+    seeds: list[str],
+    *,
+    agent_description: str = "",
+    context: str = "",
+    sim_model: str = DEFAULT_MODEL,
+    generation_client: AsyncOpenAI | None = None,
+) -> list[Persona]:
+    """Generate one ``Persona`` per archetype seed (e.g. ``"angry customer"``).
+
+    The intermediate tier between fully-auto generation
+    (:func:`generate_and_simulate`) and hand-built ``Persona`` objects: you name
+    each archetype, the LLM fills every trait. Provider resolves via the shared
+    factory (``ORQ_API_KEY`` → ``OPENAI_API_KEY``) unless ``generation_client``
+    is injected.
+    """
+    from evaluatorq.simulation.exceptions import SimulationError
+    from evaluatorq.simulation.generators import PersonaGenerator
+
+    if not seeds:
+        raise ValueError("generate_personas requires at least one seed")
+    description = agent_description or "a general-purpose conversational assistant"
+    gen = PersonaGenerator(model=sim_model, client=generation_client)
+    try:
+        batches = await asyncio.gather(
+            *[
+                gen.generate(
+                    agent_description=description,
+                    context=context,
+                    num_personas=1,
+                    edge_case_percentage=0.0,
+                    seed=seed,
+                )
+                for seed in seeds
+            ]
+        )
+    finally:
+        await gen.close()
+    personas: list[Persona] = []
+    for seed, batch in zip(seeds, batches, strict=True):
+        if not batch:
+            raise SimulationError(f"persona generation returned nothing for seed: {seed!r}")
+        personas.append(batch[0])
+    return personas
+
+
+async def generate_persona(
+    seed: str,
+    *,
+    agent_description: str = "",
+    context: str = "",
+    sim_model: str = DEFAULT_MODEL,
+    generation_client: AsyncOpenAI | None = None,
+) -> Persona:
+    """Generate one ``Persona`` from a short archetype seed (e.g. ``"angry customer"``).
+
+    See :func:`generate_personas` for the batch form and provider resolution.
+    """
+    personas = await generate_personas(
+        [seed],
+        agent_description=agent_description,
+        context=context,
+        sim_model=sim_model,
+        generation_client=generation_client,
+    )
+    return personas[0]
+
+
+async def generate_scenarios(
+    seeds: list[str],
+    *,
+    agent_description: str = "",
+    context: str = "",
+    sim_model: str = DEFAULT_MODEL,
+    generation_client: AsyncOpenAI | None = None,
+) -> list[Scenario]:
+    """Generate one ``Scenario`` per situation seed (e.g. ``"disputes a refund denial"``).
+
+    The scenario counterpart to :func:`generate_personas`: you name each
+    situation, the LLM fills the goal, context, and success/failure criteria.
+    """
+    from evaluatorq.simulation.exceptions import SimulationError
+    from evaluatorq.simulation.generators import ScenarioGenerator
+
+    if not seeds:
+        raise ValueError("generate_scenarios requires at least one seed")
+    description = agent_description or "a general-purpose conversational assistant"
+    gen = ScenarioGenerator(model=sim_model, client=generation_client)
+    try:
+        batches = await asyncio.gather(
+            *[
+                gen.generate(
+                    agent_description=description,
+                    context=context,
+                    num_scenarios=1,
+                    edge_case_percentage=0.0,
+                    seed=seed,
+                )
+                for seed in seeds
+            ]
+        )
+    finally:
+        await gen.close()
+    scenarios: list[Scenario] = []
+    for seed, batch in zip(seeds, batches, strict=True):
+        if not batch:
+            raise SimulationError(f"scenario generation returned nothing for seed: {seed!r}")
+        scenarios.append(batch[0])
+    return scenarios
+
+
+async def generate_scenario(
+    seed: str,
+    *,
+    agent_description: str = "",
+    context: str = "",
+    sim_model: str = DEFAULT_MODEL,
+    generation_client: AsyncOpenAI | None = None,
+) -> Scenario:
+    """Generate one ``Scenario`` from a short situation seed.
+
+    See :func:`generate_scenarios` for the batch form and provider resolution.
+    """
+    scenarios = await generate_scenarios(
+        [seed],
+        agent_description=agent_description,
+        context=context,
+        sim_model=sim_model,
+        generation_client=generation_client,
+    )
+    return scenarios[0]
+
+
+# ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
 
@@ -448,7 +595,7 @@ async def _simulate_core(
     from evaluatorq.common.async_utils import await_maybe
     from evaluatorq.common.tracing import set_span_attrs
     from evaluatorq.simulation.exceptions import SimulationCancelledError
-    from evaluatorq.simulation.hooks import DefaultHooks, SimulationRunMeta
+    from evaluatorq.simulation.hooks import DefaultHooks, SimStage, SimulationRunMeta
 
     target_callback_resolved, target_agent = _resolve_target(target, target_callback, agent_key)
 
@@ -471,6 +618,16 @@ async def _simulate_core(
     # The sync-hook deprecation nudge fires once in SimulationRunner.__init__
     # (the single choke point both this path and direct runner use share).
     resolved_evaluator_names = evaluator_names if evaluator_names is not None else DEFAULT_EVALUATOR_NAMES
+    # Derive a human-readable target label mirroring the save block's precedence:
+    # AgentTarget instances → "agent:<key>", agent_key deployments → "deployment:<key>",
+    # plain callables → "callback".
+    if target_agent is not None:
+        agent_key_attr = getattr(target_agent, 'agent_key', None)
+        target_label = f'agent:{agent_key_attr}' if agent_key_attr else 'agent'
+    elif agent_key is not None:
+        target_label = f'deployment:{agent_key}'
+    else:
+        target_label = 'callback'
     run_meta: SimulationRunMeta = {
         'num_datapoints': len(sim_datapoints),
         'model': model,
@@ -478,11 +635,17 @@ async def _simulate_core(
         'parallelism': parallelism,
         'evaluation_name': evaluation_name,
         'evaluator_names': resolved_evaluator_names,
+        'target': target_label,
     }
     # Gate first — before the evaluatorq run is built. A decline is a clean abort.
     if not await await_maybe(resolved_hooks.on_confirm(run_meta)):
         raise SimulationCancelledError('Simulation run declined by on_confirm hook')
 
+    # SIMULATE stage brackets the run: start fires after on_confirm passes and
+    # before on_run_start (which opens the live Progress region); end fires in the
+    # finally after on_run_complete (which closes it). Never emit between
+    # on_run_start and on_run_complete — that would tear the live render.
+    await await_maybe(resolved_hooks.on_stage_start(SimStage.SIMULATE, {}))
     # Terminal hook always pairs with on_run_start; results is [] on early
     # failure. on_run_complete is unguarded (a raising hook propagates, per the
     # hook exception policy); runner/target cleanup lives inside
@@ -527,6 +690,7 @@ async def _simulate_core(
         raise
     finally:
         await await_maybe(resolved_hooks.on_run_complete(results))
+        await await_maybe(resolved_hooks.on_stage_end(SimStage.SIMULATE, {'num_results': len(results)}))
 
     # Persist only on the success path (an aborted run re-raised above). target_agent
     # / agent_key resolve the target_kind the dashboard reads.

@@ -341,3 +341,56 @@ class SimulationRun(BaseModel):
     total_results: int
     scorer_averages: dict[str, float]
     results: list[SimulationResult]
+
+
+# ---------------------------------------------------------------------------
+# View models for individual_results section entries
+# ---------------------------------------------------------------------------
+
+
+class TranscriptMessage(BaseModel):
+    """A single message in a conversation transcript (role + content)."""
+
+    role: str
+    content: str
+
+
+class CriteriaRow(BaseModel):
+    """One criterion row as emitted by _criteria_rows().
+
+    Field order MUST match the key order of the dicts returned by
+    ``_criteria_rows()`` so that ``model_dump(mode='json')`` is byte-identical
+    to the hand-built dict.
+    """
+
+    id: str
+    description: str
+    type: Literal["must_happen", "must_not_happen"] | None
+    passed: bool
+    safety: bool
+
+
+class SimulationEntry(BaseModel):
+    """View model for one entry in the individual_results section.
+
+    Field declaration order matches the dict built in
+    ``_build_individual_results_section`` exactly so that
+    ``model_dump(mode='json')`` produces byte-identical output.
+    """
+
+    index: int
+    persona: str
+    scenario: str
+    model: str
+    target_model: str | None
+    terminated_by: str  # stored as .value — plain str, never an enum repr
+    goal_achieved: bool
+    goal_completion_score: float
+    rules_broken: list[str]
+    criteria: list[CriteriaRow]
+    turn_count: int
+    total_tokens: int
+    judge_reason: str
+    error: str | None
+    evaluator_scores: dict[str, float]
+    transcript: list[TranscriptMessage]
