@@ -14,9 +14,15 @@ def coerce_content_text(content: Any) -> str:
     else) pass through ``str``.
     """
     if isinstance(content, list):
-        return "\n".join(
-            part.get("text", "")
-            for part in content
-            if isinstance(part, dict) and part.get("type") == "text"
-        )
+        texts: list[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                # Both the chat-completions ("text") and Responses ("input_text")
+                # shapes carry their text under a "text" key.
+                if part.get("type") in ("text", "input_text"):
+                    texts.append(part.get("text", ""))
+            elif getattr(part, "type", None) == "input_text":
+                # An InputTextContent pydantic content part.
+                texts.append(getattr(part, "text", ""))
+        return "\n".join(texts)
     return str(content or "")

@@ -337,4 +337,7 @@ def _message_to_responses_input_items(m: Message) -> list[dict[str, Any]]:
                 fc['id'] = tc.item_id
             items.append(fc)
         return items
+    # Multi-part content passes straight through as Responses-API content parts.
+    if isinstance(m.content, list):
+        return [{'role': m.role, 'content': [p.model_dump(mode='json') for p in m.content]}]
     return [{'role': m.role, 'content': m.content or ''}]

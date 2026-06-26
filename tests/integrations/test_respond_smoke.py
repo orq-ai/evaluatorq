@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from evaluatorq.contracts import AgentResponse, AgentTarget, Message
+from evaluatorq.contracts import AgentResponse, AgentTarget, Message, content_to_text
 
 
 def _msgs(content: str = "hi") -> list[Message]:
@@ -36,7 +36,7 @@ async def test_callable_target_respond_accepts_non_user_last():
     """CallableTarget forwards the whole transcript; it imposes no last-turn-role guard."""
     from evaluatorq.integrations.callable_integration import CallableTarget
 
-    target = CallableTarget(lambda messages: messages[-1].content or "")
+    target = CallableTarget(lambda messages: content_to_text(messages[-1].content))
     result = await target.respond([Message(role="assistant", content="x")])
     assert result.text == "x"
 

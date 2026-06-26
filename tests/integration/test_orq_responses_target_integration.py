@@ -15,7 +15,16 @@ import os
 import pytest
 
 from evaluatorq.contracts import AgentResponse, LLMCallConfig, Message
+from evaluatorq.openresponses.convert_models import InputImageContent, InputTextContent
 from evaluatorq.openresponses.target import OrqResponsesTarget
+
+# 1x1 red PNG, base64 data URL.
+_RED_PIXEL_DATA_URL = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+# A small, stable public image.
+_HTTPS_IMAGE_URL = "https://upload.wikimedia.org/wikipedia/commons/thumb/4/47/PNG_transparency_demonstration_1.png/280px-PNG_transparency_demonstration_1.png"
 
 
 @pytest.mark.integration
@@ -53,3 +62,52 @@ class TestOrqResponsesTargetIntegration:
         # Usage is reported on the response itself (no instance accumulation).
         assert r2.usage is not None
         assert r2.usage.total_tokens > 0
+
+    @pytest.mark.asyncio
+    async def test_multipart_image_base64_round_trips(self):
+        """RES-879: a base64 image part flows through respond to a vision model."""
+        if not os.environ.get("ORQ_API_KEY"):
+            pytest.skip("ORQ_API_KEY not set")
+
+        config = LLMCallConfig(model="openai/gpt-4o-mini")
+        target = OrqResponsesTarget(config, instructions="Reply tersely.")
+
+        r = await target.respond(
+            [
+                Message(
+                    role="user",
+                    content=[
+                        InputTextContent(
+                            type="input_text",
+                            text="Reply with the single word RED if you can see the image.",
+                        ),
+                        InputImageContent(type="input_image", image_url=_RED_PIXEL_DATA_URL),
+                    ],
+                )
+            ]
+        )
+        assert isinstance(r, AgentResponse)
+        assert r.text
+
+    @pytest.mark.asyncio
+    async def test_multipart_image_https_round_trips(self):
+        """RES-879: an https image part flows through respond to a vision model."""
+        if not os.environ.get("ORQ_API_KEY"):
+            pytest.skip("ORQ_API_KEY not set")
+
+        config = LLMCallConfig(model="openai/gpt-4o-mini")
+        target = OrqResponsesTarget(config, instructions="Reply tersely.")
+
+        r = await target.respond(
+            [
+                Message(
+                    role="user",
+                    content=[
+                        InputTextContent(type="input_text", text="Describe this image in one short sentence."),
+                        InputImageContent(type="input_image", image_url=_HTTPS_IMAGE_URL),
+                    ],
+                )
+            ]
+        )
+        assert isinstance(r, AgentResponse)
+        assert r.text

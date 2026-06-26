@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from evaluatorq.common.messages import coerce_content_text
+
 if TYPE_CHECKING:
     from evaluatorq.redteam.contracts import RedTeamResult
 
@@ -12,7 +14,7 @@ def extract_prompt(result: RedTeamResult) -> str:
     """Extract the first user message content as the attack prompt."""
     for msg in result.messages:
         if msg.role == "user" and msg.content:
-            return msg.content
+            return coerce_content_text(msg.content)
     return ""
 
 
@@ -23,5 +25,5 @@ def extract_response(result: RedTeamResult) -> str:
     # Fall back to last assistant message
     for msg in reversed(result.messages):
         if msg.role == "assistant" and msg.content:
-            return msg.content
+            return coerce_content_text(msg.content)
     return ""
