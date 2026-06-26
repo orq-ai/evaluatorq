@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from evaluatorq.contracts import AgentTarget, Message
+from evaluatorq.contracts import AgentTarget, Message, content_to_text
 from evaluatorq.redteam.backends.base import Backend
 from evaluatorq.redteam.contracts import (
     AgentContext,
@@ -138,7 +138,7 @@ class MockAgentTarget(AgentTarget):
         self._conversation: list[dict[str, str]] = []
 
     async def respond(self, messages: list[Message]) -> AgentResponse:
-        prompt = messages[-1].content or "" if messages else ""
+        prompt = content_to_text(messages[-1].content) if messages else ""
         lower = prompt.lower()
         if "ignore previous instructions" in lower or "system prompt" in lower or "hidden instructions" in lower:
             return AgentResponse(text="SYSTEM_PROMPT: internal guardrails. SUPER_SECRET_TOKEN=abc123")

@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from evaluatorq.contracts import AgentResponse
+from evaluatorq.contracts import AgentResponse, content_to_text
 from evaluatorq.redteam.contracts import (
     AgentContext,
     AttackStrategy,
@@ -839,7 +839,8 @@ class TestRunAttack:
         # Turn 1 recorded an error message placeholder in the conversation
         turn1_assistant = result.chat_completions[1]
         assert turn1_assistant.content is not None
-        assert "ERROR" in turn1_assistant.content or "timed out" in turn1_assistant.content.lower()
+        _turn1_text = content_to_text(turn1_assistant.content)
+        assert "ERROR" in _turn1_text or "timed out" in _turn1_text.lower()
 
     @pytest.mark.asyncio
     @patch(_PATCH_RECORD_LLM)

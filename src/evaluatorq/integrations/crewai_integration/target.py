@@ -33,6 +33,7 @@ from evaluatorq.contracts import (
     OutputMessage,
     TextOutputItem,
     TokenUsage,
+    content_to_text,
 )
 
 if TYPE_CHECKING:
@@ -174,7 +175,7 @@ def _flatten(messages: list[Message]) -> str:
         # Escape braces: CrewAI fills {input_key} via str.format on the task
         # description, so any literal { } in user content would otherwise raise
         # KeyError or collide with other task variables (template injection).
-        safe = m.content.replace("{", "{{").replace("}", "}}")
+        safe = content_to_text(m.content).replace("{", "{{").replace("}", "}}")
         lines.append(f"{label}: {safe}")
     return "\n".join(lines)
 
