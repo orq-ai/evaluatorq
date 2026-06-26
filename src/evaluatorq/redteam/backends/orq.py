@@ -370,17 +370,8 @@ class ORQAgentTarget(AgentTarget):
             agent_key=self.agent_key,
         )
 
-        tools: list[ToolInfo] = []
         settings = getattr(agent_data, 'settings', None)
-        if settings and hasattr(settings, 'tools') and settings.tools:
-            tools.extend(
-                ToolInfo(
-                    name=getattr(tool, 'key', None) or getattr(tool, 'display_name', None) or tool.id,
-                    description=getattr(tool, 'description', None),
-                    parameters=None,
-                )
-                for tool in settings.tools
-            )
+        raw_tools = list(settings.tools) if settings and getattr(settings, 'tools', None) else []
 
         raw_kb_ids: list[str] = []
         if hasattr(agent_data, 'knowledge_bases') and agent_data.knowledge_bases:
@@ -392,10 +383,12 @@ class ORQAgentTarget(AgentTarget):
 
         enrichment_tasks: list[Any] = [self._enrich_knowledge_base(kb_id) for kb_id in raw_kb_ids]
         enrichment_tasks.extend(self._enrich_memory_store(ms_id) for ms_id in raw_ms_ids)
+        enrichment_tasks.extend(self._enrich_tool(t) for t in raw_tools)
 
         enriched_results = await asyncio.gather(*enrichment_tasks) if enrichment_tasks else []
         knowledge_bases = [r for r in enriched_results if isinstance(r, KnowledgeBaseInfo)]
         memory_stores = [r for r in enriched_results if isinstance(r, MemoryStoreInfo)]
+        tools = [r for r in enriched_results if isinstance(r, ToolInfo)]
 
         model_raw = getattr(agent_data, 'model', None)
         model_id = getattr(model_raw, 'id', None) if model_raw is not None else None
@@ -442,6 +435,41 @@ class ORQAgentTarget(AgentTarget):
         except Exception as e:
             logger.warning(f'Failed to enrich memory store {ms_key}: {e} — attack strategies will use limited context')
             return MemoryStoreInfo(id=ms_key)
+
+    async def _enrich_tool(self, binding: Any) -> ToolInfo:
+        """Resolve an agent tool binding to full ToolInfo (description + parameter schema).
+
+        The agent-retrieve endpoint only returns a tool *binding* (no JSON schema).
+        When a tool_id is present we fetch the underlying tool definition for its
+        real description and parameters; otherwise we fall back to binding fields.
+        """
+        name = (
+            getattr(binding, 'key', None) or getattr(binding, 'display_name', None) or getattr(binding, 'id', 'unknown')
+        )
+        description = getattr(binding, 'description', None)
+        action_type = getattr(binding, 'action_type', None)
+        parameters = None
+        tool_id = getattr(binding, 'tool_id', None)
+        if tool_id:
+            try:
+                rich = await asyncio.to_thread(self.orq_client.tools.retrieve, tool_id=tool_id)
+                fn = getattr(rich, 'function', None)
+                js = getattr(rich, 'json_schema', None)
+                if fn is not None:
+                    description = getattr(fn, 'description', None) or description
+                    raw_params = getattr(fn, 'parameters', None)
+                elif js is not None:
+                    description = getattr(js, 'description', None) or description
+                    raw_params = getattr(js, 'schema_', None)
+                else:
+                    description = getattr(rich, 'description', None) or description
+                    raw_params = None
+                # SDK returns parameters/schema as a Pydantic model; ToolInfo wants a plain dict.
+                if raw_params is not None:
+                    parameters = raw_params.model_dump() if hasattr(raw_params, 'model_dump') else raw_params
+            except Exception as e:
+                logger.warning(f'Failed to enrich tool {tool_id}: {e} — attack strategies will use limited context')
+        return ToolInfo(name=name, description=description, parameters=parameters, action_type=action_type)
 
     def map_error(self, exc: Exception) -> tuple[str, str]:
         """Map an exception to a normalized error code and message tuple."""

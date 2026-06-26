@@ -723,6 +723,7 @@ class ToolInfo(BaseModel):
     name: str = Field(description='Tool name/identifier')
     description: str | None = Field(default=None, description='Tool description')
     parameters: dict[str, Any] | None = Field(default=None, description='Tool parameter schema')
+    action_type: str | None = Field(default=None, description='Tool action type (e.g. function, http, mcp)')
 
 
 class MemoryStoreInfo(BaseModel):
