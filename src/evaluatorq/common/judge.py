@@ -154,6 +154,28 @@ def build_eval_replacements(
     return {**flat, **nested}
 
 
+def _strip_code_fences(text: str) -> str:
+    """Unwrap a markdown-fenced JSON block to its inner content.
+
+    Some providers ignore ``response_format=json_object`` when reached through
+    the Orq router (notably Anthropic and Gemini) and wrap an otherwise-valid
+    verdict in a ```` ```json ```` block. Returns the text unchanged when there
+    is no leading fence, so bare JSON is untouched.
+    """
+    stripped = text.strip()
+    if not stripped.startswith('```'):
+        return text
+    newline = stripped.find('\n')
+    if newline == -1:
+        return text
+    inner = stripped[newline + 1 :]
+    # Drop only a closing fence that sits on its own line. Anchoring on the
+    # newline avoids matching a ``` inside the JSON content (e.g. inside an
+    # explanation string), which a bare rfind('```') would truncate at.
+    inner = inner.rsplit('\n```', 1)[0]
+    return inner.strip()
+
+
 def _classify(exc: Exception) -> JudgeError:
     if isinstance(exc, APIConnectionError):
         return JudgeError.API_CONNECTION
@@ -194,12 +216,15 @@ async def _json_object_judge(
         extra_kwargs=cfg.extra_kwargs or None,
     )
     raw = response.choices[0].message.content or '{}'
+    # Routed Anthropic/Gemini sometimes ignore json_object and wrap the verdict in
+    # a ```json fence; strip it before parsing (raw stays original for the trace).
+    cleaned = _strip_code_fences(raw)
     if inject_model is not None:
         # Enforce the dynamic verdict schema (e.g. a categorical Literal label set)
         # on the fallback path too, so an out-of-set value raises ValidationError
         # (-> JudgeError.PARSE) instead of slipping through the loose payload model.
-        inject_model.model_validate_json(raw)
-    return EvaluatorResponsePayload.model_validate_json(raw), usage, raw
+        inject_model.model_validate_json(cleaned)
+    return EvaluatorResponsePayload.model_validate_json(cleaned), usage, raw
 
 
 async def run_judge(
@@ -326,7 +351,7 @@ async def run_judge(
                 extra_kwargs=cfg.extra_kwargs or None,
             )
             raw_content = response.choices[0].message.content or '{}'
-            payload = EvaluatorResponsePayload.model_validate_json(raw_content)
+            payload = EvaluatorResponsePayload.model_validate_json(_strip_code_fences(raw_content))
             return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw_content)
     except (asyncio.TimeoutError, APITimeoutError):
         logger.error('Judge [{}] timed out after {}ms', model, cfg.timeout_ms)

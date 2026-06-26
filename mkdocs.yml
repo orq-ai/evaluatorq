@@ -132,6 +132,7 @@ nav:
       - Red Teaming:
           - guides/red-teaming.md
           - Custom Evaluators & Frameworks: custom-evaluators-and-frameworks.md
+      - LLM as a Jury: llm-as-a-jury.md
       - Dashboard: dashboard.md
   - Reference:
       - Configuration: configuration.md

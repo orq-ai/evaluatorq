@@ -48,6 +48,35 @@ async def test_success_parses_payload(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'content',
+    [
+        '```json\n{"value": true, "explanation": "resisted"}\n```',
+        '```\n{"value": true, "explanation": "resisted"}\n```',
+        '   ```json\n{"value": true, "explanation": "resisted"}\n```   ',
+        # Opening fence but no closing fence — must still unwrap and parse.
+        '```json\n{"value": true, "explanation": "resisted"}',
+    ],
+)
+async def test_fenced_json_is_unwrapped(monkeypatch: pytest.MonkeyPatch, content: str) -> None:
+    """Providers that ignore json_object (routed Anthropic/Gemini) wrap valid
+    JSON in a markdown code fence; the verdict must still parse, not drop."""
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=_json_response(content))
+    outcome = await run_judge(
+        client=client,
+        model='m',
+        cfg=LLMCallConfig(),
+        prompt_template='x',
+        replacements={},
+    )
+    assert outcome.error_kind is None
+    assert isinstance(outcome.payload, EvaluatorResponsePayload)
+    assert outcome.payload.value is True
+
+
+@pytest.mark.asyncio
 async def test_timeout_captured(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
     client = MagicMock()
