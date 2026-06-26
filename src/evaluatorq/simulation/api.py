@@ -620,13 +620,14 @@ async def _simulate_core(
     # (the single choke point both this path and direct runner use share).
     resolved_evaluator_names = evaluator_names if evaluator_names is not None else DEFAULT_EVALUATOR_NAMES
     # Derive a human-readable target label mirroring the save block's precedence:
-    # AgentTarget instances → "agent:<key>", deployment strings → "deployment",
+    # AgentTarget instances → "agent:<key>", deployment strings → "deployment:<key>",
     # plain callables → "callback".
     if target_agent is not None:
         agent_key_attr = getattr(target_agent, 'agent_key', None)
         target_label = f'agent:{agent_key_attr}' if agent_key_attr else 'agent'
     elif target_kind_hint == 'orq_deployment':
-        target_label = 'deployment'
+        dep_key = getattr(target_callback_resolved, 'deployment_key', None)
+        target_label = f'deployment:{dep_key}' if dep_key else 'deployment'
     else:
         target_label = 'callback'
     run_meta: SimulationRunMeta = {
@@ -750,6 +751,11 @@ def _resolve_target(
     resolved = target if target is not None else target_callback
 
     if isinstance(resolved, str):
+        # NOTE: intentional coupling to red-team internals (`_parse_target`,
+        # `_make_agent_backend` below) so the SDK's `agent:<key>` path uses the
+        # exact same Responses-router backend as `eq sim` / `red_team()`. If those
+        # private helpers are renamed/moved, update here or promote them to a
+        # shared non-underscore module both packages import.
         from evaluatorq.redteam.contracts import TargetKind
         from evaluatorq.redteam.runner import _parse_target
 
