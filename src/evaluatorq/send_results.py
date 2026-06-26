@@ -94,6 +94,7 @@ async def send_results_to_orq(
         )
 
         resolved_base_url = (base_url or os.getenv("ORQ_BASE_URL", ORQ_DEFAULT_HOST)).rstrip("/")
+        logger.debug("Uploading results to {}", resolved_base_url)
 
         # Serialize with aliases, stripping None on optional fields (the API
         # rejects null for ``error``, ``explanation``, etc.) but keeping

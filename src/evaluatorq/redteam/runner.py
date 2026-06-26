@@ -19,6 +19,7 @@ from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, job
 from evaluatorq.common.async_utils import await_maybe, warn_if_sync_hooks
+from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.tracing import set_span_attrs
 from evaluatorq.contracts import AgentTarget, Message
@@ -162,7 +163,6 @@ async def _send_cleaned_results(
     used (RES-912). Falls back to ``ORQ_BASE_URL`` / the default when it is not
     an Orq-routed client.
     """
-    from evaluatorq.common.llm_client import resolve_results_base_url
     api_key = os.environ.get('ORQ_API_KEY')
     if not api_key:
         logger.debug('Skipping result upload to Orq platform: ORQ_API_KEY not set')
@@ -186,6 +186,9 @@ async def _send_cleaned_results(
         return
 
     logger.debug(f'Sending {len(cleaned)} cleaned results to Orq platform (stripped from {len(results)} raw)')
+    # Resolve the upload host before the try, so a resolution failure surfaces on
+    # its own rather than being caught below and mislabelled as an upload failure.
+    upload_base_url = resolve_results_base_url(inference_client)
     try:
         experiment_url = await send_results_to_orq(
             api_key=api_key,
@@ -195,7 +198,7 @@ async def _send_cleaned_results(
             results=cleaned,
             start_time=start_time,
             end_time=datetime.now(tz=timezone.utc),
-            base_url=resolve_results_base_url(inference_client),
+            base_url=upload_base_url,
         )
         if report is not None and experiment_url:
             report.experiment_url = experiment_url
@@ -2286,8 +2289,9 @@ async def _run_dynamic_or_hybrid(
                 description=description or f'{mode.capitalize()} red teaming ({len(all_target_labels)} targets)',
                 start_time=pipeline_start,
                 report=merged,
-                # All targets share one resolved attacker/inference client, so the
-                # first prepared target is representative of the Orq host to upload to.
+                # The attacker LLM client — the same Orq host that owns the
+                # ORQ_API_KEY used for this run, shared across all prepared
+                # targets, so the first one is representative of the upload host.
                 inference_client=prepared_targets[0].resolved_llm_client if prepared_targets else None,
             )
         finally:

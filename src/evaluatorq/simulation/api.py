@@ -17,6 +17,7 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run, build_simulation_run, write_report
 
@@ -912,8 +913,6 @@ async def _simulate_via_evaluatorq(
 
     # Resolve the Orq host once from the inference client so results upload to
     # the same server used for inference (RES-912); falls back to env.
-    from evaluatorq.common.llm_client import resolve_results_base_url
-
     upload_base_url = resolve_results_base_url(generation_client)
 
     try:

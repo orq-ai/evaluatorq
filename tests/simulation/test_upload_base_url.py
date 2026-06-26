@@ -63,3 +63,32 @@ async def test_sim_forwards_base_url_from_env(monkeypatch: pytest.MonkeyPatch) -
 
     assert spy.await_args is not None
     assert spy.await_args.kwargs["_base_url"] == "https://my.staging.orq.ai"
+
+
+@pytest.mark.asyncio
+async def test_sim_forwards_base_url_from_injected_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An injected Orq-routed generation_client wins over ORQ_BASE_URL — results
+    upload to the host the injected inference client actually uses."""
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    monkeypatch.setenv("ORQ_API_KEY", "test")
+    monkeypatch.setenv("ORQ_BASE_URL", "https://my.orq.ai")  # env points at prod
+
+    from evaluatorq.simulation.api import simulate
+
+    client = cast("Any", SimpleNamespace(base_url="https://my.staging.orq.ai/v3/router"))
+    spy = AsyncMock(return_value=[])
+    with patch.object(_EQ_MOD, "evaluatorq", spy):
+        await simulate(
+            target=_target,
+            datapoints=[_make_datapoint()],
+            sim_model="test",
+            max_turns=1,
+            exit_on_failure=False,
+            generation_client=client,
+        )
+
+    assert spy.await_args is not None
+    # client host wins over the prod env var
+    assert spy.await_args.kwargs["_base_url"] == "https://my.staging.orq.ai"
