@@ -56,6 +56,10 @@ async def test_success_parses_payload(monkeypatch: pytest.MonkeyPatch) -> None:
         '   ```json\n{"value": true, "explanation": "resisted"}\n```   ',
         # Opening fence but no closing fence — must still unwrap and parse.
         '```json\n{"value": true, "explanation": "resisted"}',
+        # Inner ``` in the explanation with no closing fence: the newline-anchored
+        # close must not truncate at the inner backticks (regression for the
+        # rfind('```') edge case).
+        '```json\n{"value": true, "explanation": "use ``` for code"}',
     ],
 )
 async def test_fenced_json_is_unwrapped(monkeypatch: pytest.MonkeyPatch, content: str) -> None:
