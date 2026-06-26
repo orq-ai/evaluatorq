@@ -301,7 +301,7 @@ STRATEGY_REGISTRY.update(BIAS_STRATEGIES)
 
 Then run:
 ```bash
-eq redteam run -t agent:my-agent -v bias_gender --mode dynamic
+eq redteam run -t agent:my-agent -V bias_gender --mode dynamic
 ```
 
 ## Running with Custom Vulnerabilities
@@ -309,7 +309,7 @@ eq redteam run -t agent:my-agent -v bias_gender --mode dynamic
 ### CLI
 ```bash
 # By vulnerability ID
-eq redteam run -t agent:my-agent -v my_custom_vuln --mode dynamic
+eq redteam run -t agent:my-agent -V my_custom_vuln --mode dynamic
 
 # By category code (if mapped)
 eq redteam run -t agent:my-agent -c MF01 --mode dynamic
