@@ -19,6 +19,7 @@ from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, job
 from evaluatorq.common.async_utils import await_maybe, warn_if_sync_hooks
+from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.tracing import set_span_attrs
 from evaluatorq.contracts import AgentTarget, Message
@@ -144,6 +145,7 @@ async def _send_cleaned_results(
     description: str,
     start_time: datetime,
     report: RedTeamReport | None = None,
+    inference_client: AsyncOpenAI | None = None,
 ) -> None:
     """Strip skipped job results and upload to the Orq platform.
 
@@ -155,6 +157,11 @@ async def _send_cleaned_results(
 
     If *report* is provided, ``report.experiment_url`` is set to the URL
     returned by the platform on a successful upload.
+
+    ``inference_client`` is the client used for inference; its Orq host is
+    resolved once and forwarded so results upload to the same server inference
+    used (RES-912). Falls back to ``ORQ_BASE_URL`` / the default when it is not
+    an Orq-routed client.
     """
     api_key = os.environ.get('ORQ_API_KEY')
     if not api_key:
@@ -179,6 +186,9 @@ async def _send_cleaned_results(
         return
 
     logger.debug(f'Sending {len(cleaned)} cleaned results to Orq platform (stripped from {len(results)} raw)')
+    # Resolve the upload host before the try, so a resolution failure surfaces on
+    # its own rather than being caught below and mislabelled as an upload failure.
+    upload_base_url = resolve_results_base_url(inference_client)
     try:
         experiment_url = await send_results_to_orq(
             api_key=api_key,
@@ -188,6 +198,7 @@ async def _send_cleaned_results(
             results=cleaned,
             start_time=start_time,
             end_time=datetime.now(tz=timezone.utc),
+            base_url=upload_base_url,
         )
         if report is not None and experiment_url:
             report.experiment_url = experiment_url
@@ -2278,6 +2289,10 @@ async def _run_dynamic_or_hybrid(
                 description=description or f'{mode.capitalize()} red teaming ({len(all_target_labels)} targets)',
                 start_time=pipeline_start,
                 report=merged,
+                # The attacker LLM client — the same Orq host that owns the
+                # ORQ_API_KEY used for this run, shared across all prepared
+                # targets, so the first one is representative of the upload host.
+                inference_client=prepared_targets[0].resolved_llm_client if prepared_targets else None,
             )
         finally:
             _save_report(output_dir, '03_summary_report.json', merged)
@@ -2616,6 +2631,7 @@ async def _run_static(
             description=description or f'Static red teaming ({len(all_target_labels)} targets)',
             start_time=pipeline_start,
             report=merged,
+            inference_client=llm_client,
         )
     finally:
         _save_report(output_dir, '03_summary_report.json', merged)

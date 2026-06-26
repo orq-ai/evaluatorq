@@ -17,6 +17,7 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run, build_simulation_run, write_report
 
@@ -1074,6 +1075,10 @@ async def _simulate_via_evaluatorq(
     start = datetime.now(tz=timezone.utc)
     run_name = evaluation_name or f'simulation-{start.strftime("%Y%m%d-%H%M%S")}-{uuid.uuid4().hex[:8]}'
 
+    # Resolve the Orq host once from the inference client so results upload to
+    # the same server used for inference (RES-912); falls back to env.
+    upload_base_url = resolve_results_base_url(generation_client)
+
     try:
         eq_results = await evaluatorq(
             run_name,
@@ -1085,6 +1090,7 @@ async def _simulate_via_evaluatorq(
             path=orq_results_path,
             _send_results=upload_results,
             _exit_on_failure=exit_on_failure,
+            _base_url=upload_base_url,
         )
     finally:
         # Close the runner, then any target that owns resources (e.g.

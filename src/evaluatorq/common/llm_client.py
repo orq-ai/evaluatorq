@@ -23,6 +23,8 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING, NamedTuple
 
+from loguru import logger
+
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
@@ -62,6 +64,31 @@ def client_routes_through_orq(client: AsyncOpenAI | None) -> bool:
     if base_url is None:
         return False
     return str(base_url).rstrip("/").endswith(ORQ_ROUTER_SUFFIX)
+
+
+def resolve_results_base_url(
+    client: AsyncOpenAI | None = None,
+    *,
+    default_orq_host: str = ORQ_DEFAULT_HOST,
+) -> str:
+    """Resolve the Orq host that results should be uploaded to.
+
+    Prefers the host of the client actually used for inference when it routes
+    through the Orq router — so a staging/custom Orq endpoint receives both the
+    inference traffic and the results — stripping the ``/v3/router`` suffix to
+    get the bare host. A non-Orq client (e.g. direct OpenAI) is ignored: uploads
+    always go to Orq, never to the inference provider. Falls back to
+    ``ORQ_BASE_URL`` / ``default_orq_host`` when no Orq-routed client is given,
+    preserving the original env-based behaviour.
+    """
+    if client_routes_through_orq(client):
+        host = str(client.base_url).rstrip("/")  # pyright: ignore[reportOptionalMemberAccess]
+        resolved = host[: -len(ORQ_ROUTER_SUFFIX)].rstrip("/")
+        logger.debug("Results upload host resolved from inference client: {}", resolved)
+        return resolved
+    resolved = os.environ.get("ORQ_BASE_URL", default_orq_host).rstrip("/")
+    logger.debug("Results upload host resolved from env/default: {}", resolved)
+    return resolved
 
 
 def resolve_llm_client(
@@ -145,4 +172,5 @@ __all__ = [
     "ResolvedClient",
     "client_routes_through_orq",
     "resolve_llm_client",
+    "resolve_results_base_url",
 ]

@@ -64,6 +64,7 @@ async def evaluatorq(
     path: str | None = None,
     _exit_on_failure: bool = True,
     _send_results: bool = True,
+    _base_url: str | None = None,
     _trace_type: str = "evaluatorq",
 ) -> EvaluatorqResult:
     """
@@ -316,6 +317,7 @@ async def evaluatorq(
             start_time,
             datetime.now(timezone.utc),
             path=path,
+            base_url=_base_url,
         )
 
     # Shutdown tracing gracefully

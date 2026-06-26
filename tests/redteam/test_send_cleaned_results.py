@@ -6,11 +6,16 @@ import os
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from evaluatorq.redteam.contracts import Pipeline, RedTeamReport, ReportSummary
 from evaluatorq.redteam.runner import _send_cleaned_results
 from evaluatorq.types import DataPoint, DataPointResult, JobResult
+
+if TYPE_CHECKING:
+    from openai import AsyncOpenAI
 
 
 def _make_report() -> RedTeamReport:
@@ -112,3 +117,48 @@ async def test_upload_exception_does_not_break_report() -> None:
             report=report,
         )
     assert report.experiment_url is None
+
+
+@pytest.mark.asyncio
+async def test_forwards_inference_client_base_url() -> None:
+    """RES-912: the Orq host used for inference is forwarded to the upload so
+    results land on the same server (e.g. staging)."""
+    from types import SimpleNamespace
+    from typing import cast
+
+    report = _make_report()
+    spy = AsyncMock(return_value=None)
+    client = cast("AsyncOpenAI", cast(object, SimpleNamespace(base_url="https://my.staging.orq.ai/v3/router")))
+    with (
+        patch.dict(os.environ, {"ORQ_API_KEY": "test"}),
+        patch("evaluatorq.redteam.runner.send_results_to_orq", spy),
+    ):
+        await _send_cleaned_results(
+            results=[_make_result()],
+            name="n",
+            description="d",
+            start_time=datetime.now(tz=timezone.utc),
+            report=report,
+            inference_client=client,
+        )
+    assert spy.await_args is not None
+    assert spy.await_args.kwargs["base_url"] == "https://my.staging.orq.ai"
+
+
+@pytest.mark.asyncio
+async def test_base_url_falls_back_to_env_without_client() -> None:
+    report = _make_report()
+    spy = AsyncMock(return_value=None)
+    with (
+        patch.dict(os.environ, {"ORQ_API_KEY": "test", "ORQ_BASE_URL": "https://my.staging.orq.ai"}),
+        patch("evaluatorq.redteam.runner.send_results_to_orq", spy),
+    ):
+        await _send_cleaned_results(
+            results=[_make_result()],
+            name="n",
+            description="d",
+            start_time=datetime.now(tz=timezone.utc),
+            report=report,
+        )
+    assert spy.await_args is not None
+    assert spy.await_args.kwargs["base_url"] == "https://my.staging.orq.ai"

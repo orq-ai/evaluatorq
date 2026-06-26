@@ -7,6 +7,7 @@ import httpx
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from .common.llm_client import ORQ_DEFAULT_HOST
 from .types import DataPointResult, EvaluatorqResult
 
 
@@ -50,6 +51,7 @@ async def send_results_to_orq(
     end_time: datetime,
     *,
     path: str | None = None,
+    base_url: str | None = None,
     raise_on_error: bool = False,
 ) -> str | None:
     """
@@ -65,6 +67,10 @@ async def send_results_to_orq(
         end_time: When the evaluation ended
         path: Optional path (e.g. "MyProject/MyFolder") to place the experiment
               in a specific project and folder on the Orq platform.
+        base_url: Optional Orq host to upload to (e.g. a staging server). When
+              omitted, falls back to the ``ORQ_BASE_URL`` env var, then to
+              ``https://my.orq.ai``. Lets callers route results to the same
+              server used for inference.
         raise_on_error: Raise upload errors instead of treating upload as best-effort.
 
     Returns:
@@ -87,8 +93,8 @@ async def send_results_to_orq(
             results=results,
         )
 
-        # Get base URL from environment or use default.
-        base_url = os.getenv("ORQ_BASE_URL", "https://my.orq.ai").rstrip("/")
+        resolved_base_url = (base_url or os.getenv("ORQ_BASE_URL", ORQ_DEFAULT_HOST)).rstrip("/")
+        logger.debug("Uploading results to {}", resolved_base_url)
 
         # Serialize with aliases, stripping None on optional fields (the API
         # rejects null for ``error``, ``explanation``, etc.) but keeping
@@ -116,7 +122,7 @@ async def send_results_to_orq(
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                f"{base_url}/v2/spreadsheets/evaluations/receive",
+                f"{resolved_base_url}/v2/spreadsheets/evaluations/receive",
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {api_key}",
