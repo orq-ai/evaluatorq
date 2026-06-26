@@ -43,7 +43,7 @@ from loguru import logger
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import Response
 
-from evaluatorq.dashboard import library
+from evaluatorq.dashboard import library, metrics
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
@@ -51,14 +51,17 @@ from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.sim_views import register_sim_view_routes
 from evaluatorq.dashboard.surfaces import ADAPTERS
 from evaluatorq.dashboard.view import (
+    SURFACE_LABELS,
     download_sidebar,
     filter_fragment,
-    index_body,
+    landing_body,
     redteam_interactive_panels,
     render_filter_form,
     report_broken,
     report_not_found,
     report_view_with_filters,
+    runs_screen_body,
+    settings_body,
     sim_interactive_panels,
 )
 
@@ -98,11 +101,24 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     # ------------------------------------------------------------------
     @app.get('/')
     def index(req: Request) -> NotStr:
-        active_surface = req.query_params.get('surface') or None
-        cards = library.scan(roots)
-        body = index_body(cards, active_surface=active_surface)
-        html = page('Reports', body, active_surface=active_surface)
-        return NotStr(html)
+        surface = req.query_params.get('surface') or None
+        if surface is None:
+            # Combined Dashboard landing — aggregates across both run stores.
+            body = landing_body(metrics.landing(roots))
+            return NotStr(page('Dashboard', body, active_nav='dashboard'))
+        # Per-kind run list (Red Team / Agent Sim).  Unknown surfaces render an
+        # empty run-list screen rather than 500.
+        rows = [r for r in metrics.run_rows(roots) if r.surface == surface]
+        label = SURFACE_LABELS.get(surface, 'Reports')
+        body = runs_screen_body(rows, surface)
+        return NotStr(page(label, body, active_surface=surface))
+
+    # ------------------------------------------------------------------
+    # Route: GET /settings  — stub screen (matches v1 design nav)
+    # ------------------------------------------------------------------
+    @app.get('/settings')
+    def settings() -> NotStr:
+        return NotStr(page('Settings', settings_body(), active_nav='settings'))
 
     # ------------------------------------------------------------------
     # Route: GET /r/{rid}  — embedded report view
