@@ -6,6 +6,21 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from evaluatorq.openresponses.convert_models import (
+    FunctionCall,
+    FunctionCallOutput,
+    FunctionCallStatus,
+    IncompleteDetails,
+    InputTextContent,
+    InputTokensDetails,
+    Message,
+    MessageRole,
+    MessageStatus,
+    OutputTextContent,
+    OutputTokensDetails,
+    Usage,
+)
+
 if TYPE_CHECKING:
     from evaluatorq.simulation.types import SimulationResult
 
@@ -35,34 +50,53 @@ def to_open_responses(
 
     for msg in result.messages:
         if msg.role in ("user", "system"):
-            input_items.append(
-                {
-                    "type": "message",
-                    "id": _generate_item_id("msg"),
-                    "role": msg.role,
-                    "status": "completed",
-                    "content": [{"type": "input_text", "text": msg.content or ""}],
-                }
+            in_content: list[InputTextContent | OutputTextContent] = [
+                InputTextContent(type="input_text", text=msg.content or "")
+            ]
+            message = Message(
+                type="message",
+                id=_generate_item_id("msg"),
+                role=MessageRole(msg.role),
+                status=MessageStatus.completed,
+                content=in_content,
             )
+            input_items.append(message.model_dump(mode="json"))
         elif msg.role == "assistant":
-            # tool_calls on assistant messages and role="tool" messages are not
-            # mapped here; the simulation runner currently never produces them.
-            output_items.append(
-                {
-                    "type": "message",
-                    "id": _generate_item_id("msg"),
-                    "role": "assistant",
-                    "status": "completed",
-                    "content": [
-                        {
-                            "type": "output_text",
-                            "text": msg.content or "",
-                            "annotations": [],
-                            "logprobs": [],
-                        }
-                    ],
-                }
+            # An assistant turn can carry text and/or tool_calls. Emit the text
+            # message when there is content, then a function_call item per call
+            # (separate Responses output items). A tool-only turn skips the empty
+            # text message. Mirrors the langchain integration's mapping.
+            if msg.content:
+                out_content: list[InputTextContent | OutputTextContent] = [
+                    OutputTextContent(text=msg.content, annotations=[])
+                ]
+                message = Message(
+                    type="message",
+                    id=_generate_item_id("msg"),
+                    role=MessageRole.assistant,
+                    status=MessageStatus.completed,
+                    content=out_content,
+                )
+                output_items.append(message.model_dump(mode="json"))
+            for tc in msg.tool_calls or []:
+                function_call = FunctionCall(
+                    type="function_call",
+                    id=tc.item_id or _generate_item_id("fc"),
+                    call_id=tc.id,
+                    name=tc.function.name,
+                    arguments=tc.function.arguments,
+                    status=FunctionCallStatus.completed,
+                )
+                output_items.append(function_call.model_dump(mode="json"))
+        elif msg.role == "tool":
+            function_call_output = FunctionCallOutput(
+                type="function_call_output",
+                id=_generate_item_id("fco"),
+                call_id=msg.tool_call_id or "",
+                output=msg.content or "",
+                status=FunctionCallStatus.completed,
             )
+            output_items.append(function_call_output.model_dump(mode="json"))
 
     # Map terminated_by to status
     if result.terminated_by.value == "judge":
@@ -73,7 +107,9 @@ def to_open_responses(
         status = "incomplete"
 
     incomplete_details = (
-        {"reason": f"{result.terminated_by.value}: {result.reason}"}
+        IncompleteDetails(
+            reason=f"{result.terminated_by.value}: {result.reason}"
+        ).model_dump(mode="json")
         if status == "incomplete"
         else None
     )
@@ -81,13 +117,13 @@ def to_open_responses(
     # Build usage from token_usage
     usage_data = None
     if result.token_usage.total_tokens > 0:
-        usage_data = {
-            "input_tokens": result.token_usage.prompt_tokens,
-            "input_tokens_details": {"cached_tokens": 0},
-            "output_tokens": result.token_usage.completion_tokens,
-            "output_tokens_details": {"reasoning_tokens": 0},
-            "total_tokens": result.token_usage.total_tokens,
-        }
+        usage_data = Usage(
+            input_tokens=result.token_usage.prompt_tokens,
+            output_tokens=result.token_usage.completion_tokens,
+            total_tokens=result.token_usage.total_tokens,
+            input_tokens_details=InputTokensDetails(cached_tokens=0),
+            output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
+        ).model_dump(mode="json")
 
     metadata: dict[str, Any] = {
         "framework": "simulation",

@@ -1,6 +1,15 @@
 """Tests for SimulationResult → OpenResponses conversion."""
 
 from evaluatorq.contracts import TokenUsage
+from evaluatorq.openresponses.convert_models import (
+    IncompleteDetails as ORIncompleteDetails,
+)
+from evaluatorq.openresponses.convert_models import (
+    Message as ORMessage,
+)
+from evaluatorq.openresponses.convert_models import (
+    Usage as ORUsage,
+)
 from evaluatorq.simulation.convert import to_open_responses
 from evaluatorq.simulation.types import (
     Message,
@@ -192,3 +201,147 @@ class TestToOpenResponses:
         assert response["object"] == "response"
         assert response["id"].startswith("resp_")
         assert isinstance(response["created_at"], int)
+
+
+class TestTypedModelRoundTrip:
+    """RES-833: output is produced by the canonical evaluatorq.openresponses
+    typed models, so every item round-trips through them losslessly."""
+
+    def test_input_items_round_trip_through_typed_message(self):
+        response = to_open_responses(
+            _make_result(
+                messages=[
+                    Message(role="system", content="You are helpful"),
+                    Message(role="user", content="Hello"),
+                    Message(role="assistant", content="Hi!"),
+                ]
+            )
+        )
+        assert response["input"]
+        for item in response["input"]:
+            assert ORMessage.model_validate(item).model_dump(mode="json") == item
+
+    def test_output_items_round_trip_through_typed_message(self):
+        response = to_open_responses(_make_result())
+        assert response["output"]
+        for item in response["output"]:
+            assert ORMessage.model_validate(item).model_dump(mode="json") == item
+
+    def test_usage_round_trips_through_typed_usage(self):
+        response = to_open_responses(_make_result())
+        assert ORUsage.model_validate(response["usage"]).model_dump(mode="json") == response["usage"]
+
+    def test_incomplete_details_round_trip_through_typed_model(self):
+        response = to_open_responses(_make_result(terminated_by=TerminatedBy.max_turns))
+        details = response["incomplete_details"]
+        assert ORIncompleteDetails.model_validate(details).model_dump(mode="json") == details
+
+    def test_output_item_has_expected_literal_shape(self):
+        """Pin the wire shape against a literal (not the model that produced it),
+        so a dropped field — e.g. ``annotations``/``logprobs`` — is caught even
+        if the model changed in lockstep."""
+        item = to_open_responses(_make_result())["output"][0]
+        assert item["type"] == "message"
+        assert item["role"] == "assistant"
+        assert item["status"] == "completed"
+        assert item["content"] == [
+            {"type": "output_text", "text": "Hi there!", "annotations": [], "logprobs": []}
+        ]
+
+    def test_usage_has_expected_literal_keys(self):
+        usage = to_open_responses(_make_result())["usage"]
+        assert usage == {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "total_tokens": 150,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens_details": {"reasoning_tokens": 0},
+        }
+
+
+class TestToolCallConversion:
+    """RES-833 follow-up: assistant tool_calls and role='tool' messages map to
+    FunctionCall / FunctionCallOutput output items (mirrors the langchain path)."""
+
+    def test_assistant_tool_call_maps_to_function_call(self):
+        from evaluatorq.contracts import FunctionCall as CFunctionCall
+        from evaluatorq.contracts import StrategyToolCall
+
+        result = _make_result(
+            messages=[
+                Message(role="user", content="weather?"),
+                Message(
+                    role="assistant",
+                    tool_calls=[
+                        StrategyToolCall(
+                            id="call_1",
+                            function=CFunctionCall(name="get_weather", arguments='{"city": "Paris"}'),
+                            item_id="fc_abc",
+                        )
+                    ],
+                ),
+            ]
+        )
+        response = to_open_responses(result)
+        # Tool-only assistant turn: no empty text message, one function_call item.
+        assert response["output"] == [
+            {
+                "type": "function_call",
+                "id": "fc_abc",
+                "call_id": "call_1",
+                "name": "get_weather",
+                "arguments": '{"city": "Paris"}',
+                "status": "completed",
+                "result": None,
+            }
+        ]
+
+    def test_function_call_id_generated_when_no_item_id(self):
+        from evaluatorq.contracts import FunctionCall as CFunctionCall
+        from evaluatorq.contracts import StrategyToolCall
+
+        result = _make_result(
+            messages=[
+                Message(
+                    role="assistant",
+                    tool_calls=[
+                        StrategyToolCall(id="call_1", function=CFunctionCall(name="f", arguments="{}"))
+                    ],
+                ),
+            ]
+        )
+        item = to_open_responses(result)["output"][0]
+        assert item["type"] == "function_call"
+        assert item["id"].startswith("fc_")
+
+    def test_tool_message_maps_to_function_call_output(self):
+        result = _make_result(
+            messages=[Message(role="tool", tool_call_id="call_1", name="get_weather", content="sunny")]
+        )
+        item = to_open_responses(result)["output"][0]
+        assert item["type"] == "function_call_output"
+        assert item["call_id"] == "call_1"
+        assert item["output"] == "sunny"
+        assert item["status"] == "completed"
+        assert item["id"].startswith("fco_")
+
+    def test_assistant_text_and_tool_calls_both_emitted_in_order(self):
+        from evaluatorq.contracts import FunctionCall as CFunctionCall
+        from evaluatorq.contracts import StrategyToolCall
+
+        result = _make_result(
+            messages=[
+                Message(
+                    role="assistant",
+                    content="Let me check.",
+                    tool_calls=[
+                        StrategyToolCall(id="call_1", function=CFunctionCall(name="f", arguments="{}"), item_id="fc_1")
+                    ],
+                ),
+            ]
+        )
+        out = to_open_responses(result)["output"]
+        assert out[0]["type"] == "message"
+        assert out[0]["content"][0]["text"] == "Let me check."
+        assert out[1]["type"] == "function_call"
+        assert out[1]["call_id"] == "call_1"
