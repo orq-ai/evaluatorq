@@ -6,7 +6,6 @@ import pytest
 
 from evaluatorq.common.sanitize import delimit, xml_escape
 
-
 # ---------------------------------------------------------------------------
 # delimit — default tag
 # ---------------------------------------------------------------------------
@@ -161,9 +160,9 @@ async def test_datapoint_system_prompt_always_rebuilt():
     user_system_prompt value (JSONL bypass fix)."""
     from evaluatorq.simulation.types import (
         CommunicationStyle,
-        Datapoint,
         Persona,
         Scenario,
+        SimulationDatapoint,
     )
     from evaluatorq.simulation.utils.prompt_builders import (
         build_datapoint_system_prompt,
@@ -185,7 +184,7 @@ async def test_datapoint_system_prompt_always_rebuilt():
     )
 
     stale_prompt = "stale cached prompt — should NOT be used"
-    dp = Datapoint(
+    dp = SimulationDatapoint(
         id="dp_test",
         persona=persona,
         scenario=scenario,

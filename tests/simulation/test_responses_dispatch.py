@@ -12,9 +12,8 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
-from openai import BadRequestError
-
 import pytest
+from openai import BadRequestError
 
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.agents.base import BaseAgent, LLMResult

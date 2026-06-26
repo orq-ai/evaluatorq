@@ -14,17 +14,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from evaluatorq.contracts import AgentResponse, AgentTarget, Message
+from evaluatorq.contracts import AgentResponse, AgentTarget, Message, TokenUsage
 from evaluatorq.simulation.runner.simulation import SimulationRunner
-from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.types import (
     CommunicationStyle,
-    Datapoint,
     Persona,
     Scenario,
+    SimulationDatapoint,
     TerminatedBy,
 )
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers (mirror test_simulate_injection.py conventions)
@@ -50,10 +48,10 @@ def _make_scenario(name: str = 'Target Model Scenario') -> Scenario:
 def _make_datapoint(
     persona: Persona | None = None,
     scenario: Scenario | None = None,
-) -> Datapoint:
+) -> SimulationDatapoint:
     p = persona or _make_persona()
     s = scenario or _make_scenario()
-    return Datapoint(
+    return SimulationDatapoint(
         id='dp-target-model-001',
         persona=p,
         scenario=s,

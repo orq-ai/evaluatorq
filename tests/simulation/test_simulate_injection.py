@@ -19,10 +19,10 @@ from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.runner.simulation import SimulationRunner
 from evaluatorq.simulation.types import (
     CommunicationStyle,
-    Datapoint,
     Message,
     Persona,
     Scenario,
+    SimulationDatapoint,
     TerminatedBy,
 )
 
@@ -51,10 +51,10 @@ def _make_datapoint(
     persona: Persona | None = None,
     scenario: Scenario | None = None,
     first_message: str = "Hello, can you help me?",
-) -> Datapoint:
+) -> SimulationDatapoint:
     p = persona or _make_persona()
     s = scenario or _make_scenario()
-    return Datapoint(
+    return SimulationDatapoint(
         id="dp-001",
         persona=p,
         scenario=s,
@@ -314,7 +314,7 @@ class TestSimulateWithInjectedUserSimulator:
             max_turns=1,
         )
 
-        # Datapoint with no first_message forces a generate_first_message call
+        # SimulationDatapoint with no first_message forces a generate_first_message call
         dp = _make_datapoint(first_message="")
         result = await runner.run(datapoint=dp)
 

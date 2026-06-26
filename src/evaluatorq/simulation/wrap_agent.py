@@ -40,7 +40,7 @@ def wrap_simulation_agent(
 
     Each DataPoint should have inputs containing simulation data:
     - ``persona`` and ``scenario``, or
-    - ``datapoint`` (full Datapoint object), or
+    - ``datapoint`` (full SimulationDatapoint object), or
     - ``datapoints`` / ``personas`` + ``scenarios`` each of length one
 
     The returned callable owns a long-lived ``SimulationRunner`` (and its

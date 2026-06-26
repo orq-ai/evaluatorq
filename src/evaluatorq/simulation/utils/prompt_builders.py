@@ -12,11 +12,11 @@ from evaluatorq.simulation.types import (
     STRATEGY_INSTRUCTIONS,
     ConversationStrategy,
     CulturalContext,
-    Datapoint,
     EmotionalArc,
     InputFormat,
     Persona,
     Scenario,
+    SimulationDatapoint,
 )
 
 # ---------------------------------------------------------------------------
@@ -149,7 +149,7 @@ def build_scenario_user_context(scenario: Scenario) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Datapoint helpers
+# SimulationDatapoint helpers
 # ---------------------------------------------------------------------------
 
 
@@ -162,10 +162,10 @@ def build_datapoint_system_prompt(persona: Persona, scenario: Scenario) -> str:
 
 def generate_datapoint(
     persona: Persona, scenario: Scenario, first_message: str = ""
-) -> Datapoint:
+) -> SimulationDatapoint:
     """Generate a datapoint from persona and scenario."""
     dp_id = f"dp_{uuid.uuid4().hex[:12]}"
-    return Datapoint(
+    return SimulationDatapoint(
         id=dp_id,
         persona=persona,
         scenario=scenario,

@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
     from evaluatorq.common.async_utils import MaybeAsync
     from evaluatorq.simulation.types import (
-        Datapoint,
+        SimulationDatapoint,
         SimulationResult,
         TurnMetrics,
     )
@@ -127,13 +127,13 @@ class SimulationHooks(Protocol):
     def on_run_start(self, meta: SimulationRunMeta) -> MaybeAsync[None]: ...
     def on_stage_start(self, stage: SimStage | str, meta: dict[str, Any]) -> MaybeAsync[None]: ...
     def on_stage_end(self, stage: SimStage | str, meta: dict[str, Any]) -> MaybeAsync[None]: ...
-    def on_datapoint_start(self, datapoint: Datapoint) -> MaybeAsync[None]: ...
+    def on_datapoint_start(self, datapoint: SimulationDatapoint) -> MaybeAsync[None]: ...
     def on_turn_complete(self, datapoint_id: str, metrics: TurnMetrics) -> MaybeAsync[None]: ...
     def on_datapoint_complete(self, result: SimulationResult) -> MaybeAsync[None]: ...
     def on_evaluator_complete(
         self, datapoint_id: str, name: str, score: float, result: SimulationResult
     ) -> MaybeAsync[None]: ...
-    def on_datapoint_error(self, datapoint: Datapoint, exception: BaseException) -> MaybeAsync[None]: ...
+    def on_datapoint_error(self, datapoint: SimulationDatapoint, exception: BaseException) -> MaybeAsync[None]: ...
     def on_run_complete(self, results: list[SimulationResult]) -> MaybeAsync[None]: ...
 
 
@@ -168,8 +168,8 @@ class DefaultHooks:
     async def on_stage_end(self, stage: SimStage | str, meta: dict[str, Any]) -> None:
         logger.info(f'[simulation] Stage end: {_stage_label(stage)}')
 
-    async def on_datapoint_start(self, datapoint: Datapoint) -> None:
-        logger.debug(f'[simulation] Datapoint start: {datapoint.id}')
+    async def on_datapoint_start(self, datapoint: SimulationDatapoint) -> None:
+        logger.debug(f'[simulation] SimulationDatapoint start: {datapoint.id}')
 
     async def on_turn_complete(self, datapoint_id: str, metrics: TurnMetrics) -> None:
         logger.debug(f'[simulation] {datapoint_id} turn {metrics.turn_number} complete')
@@ -177,14 +177,14 @@ class DefaultHooks:
     async def on_datapoint_complete(self, result: SimulationResult) -> None:
         dp_id = result.metadata.get('datapoint_id', '?')
         logger.debug(
-            f'[simulation] Datapoint complete: {dp_id} terminated_by={result.terminated_by} goal={result.goal_achieved}'
+            f'[simulation] SimulationDatapoint complete: {dp_id} terminated_by={result.terminated_by} goal={result.goal_achieved}'
         )
 
     async def on_evaluator_complete(self, datapoint_id: str, name: str, score: float, result: SimulationResult) -> None:
         logger.debug(f'[simulation] {datapoint_id} evaluator {name!r} -> {score}')
 
-    async def on_datapoint_error(self, datapoint: Datapoint, exception: BaseException) -> None:
-        logger.warning(f'[simulation] Datapoint error: {datapoint.id} {type(exception).__name__}: {exception}')
+    async def on_datapoint_error(self, datapoint: SimulationDatapoint, exception: BaseException) -> None:
+        logger.warning(f'[simulation] SimulationDatapoint error: {datapoint.id} {type(exception).__name__}: {exception}')
 
     async def on_run_complete(self, results: list[SimulationResult]) -> None:
         """Terminal hook. Always fires exactly once after ``on_run_start``, even
@@ -299,7 +299,7 @@ class RichHooks:
         self._max_turns = meta['max_turns']
         self._overall_task_id = self._progress.add_task('[bold cyan]Simulations', total=meta['num_datapoints'])
 
-    async def on_datapoint_start(self, datapoint: Datapoint) -> None:
+    async def on_datapoint_start(self, datapoint: SimulationDatapoint) -> None:
         from rich.markup import escape
 
         self._ensure_started()
@@ -346,7 +346,7 @@ class RichHooks:
         # No per-event render.
         return
 
-    async def on_datapoint_error(self, datapoint: Datapoint, exception: BaseException) -> None:
+    async def on_datapoint_error(self, datapoint: SimulationDatapoint, exception: BaseException) -> None:
         if self._progress is None:
             return
         from rich.markup import escape

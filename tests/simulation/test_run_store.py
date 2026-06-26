@@ -351,7 +351,7 @@ def test_sim_runs_dir_name_is_path() -> None:
 
 
 def _make_datapoint() -> Any:
-    from evaluatorq.simulation.types import CommunicationStyle, Datapoint, Persona, Scenario
+    from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario, SimulationDatapoint
 
     persona = Persona(
         name="T",
@@ -362,7 +362,7 @@ def _make_datapoint() -> Any:
         communication_style=CommunicationStyle.casual,
         background="t",
     )
-    return Datapoint(
+    return SimulationDatapoint(
         id="dp-1",
         persona=persona,
         scenario=Scenario(name="S", goal="help"),

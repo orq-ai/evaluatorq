@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.hooks import (
     DefaultHooks,
     RichHooks,
@@ -18,12 +19,11 @@ from evaluatorq.simulation.hooks import (
     SimulationHooks,
     SimulationRunMeta,
 )
-from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.types import (
     CommunicationStyle,
-    Datapoint,
     Persona,
     Scenario,
+    SimulationDatapoint,
     SimulationResult,
     TerminatedBy,
     TurnMetrics,
@@ -32,7 +32,7 @@ from evaluatorq.simulation.types import (
 
 @pytest.fixture
 def datapoint_factory():
-    def _make(dp_id: str) -> Datapoint:
+    def _make(dp_id: str) -> SimulationDatapoint:
         persona = Persona(
             name=f'p-{dp_id}',
             patience=0.5,
@@ -43,7 +43,7 @@ def datapoint_factory():
             background='d',
         )
         scenario = Scenario(name=f's-{dp_id}', goal='g')
-        return Datapoint(
+        return SimulationDatapoint(
             id=dp_id,
             persona=persona,
             scenario=scenario,
@@ -89,9 +89,9 @@ def _turn_metrics() -> TurnMetrics:
     )
 
 
+from evaluatorq.contracts import TokenUsage as _TU
 from evaluatorq.simulation.runner.simulation import SimulationRunner
 from evaluatorq.simulation.types import Judgment, Message
-from evaluatorq.contracts import TokenUsage as _TU
 
 
 class _StubUserSim:

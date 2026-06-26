@@ -970,7 +970,7 @@ def validate_dataset(
     if not path.exists():
         raise typer.BadParameter(f"File not found: {path}")
 
-    from evaluatorq.simulation.types import Datapoint
+    from evaluatorq.simulation.types import SimulationDatapoint
 
     try:
         content = path.read_text(encoding="utf-8")
@@ -980,10 +980,10 @@ def validate_dataset(
     bad_count = 0
     lines = [line for line in content.splitlines() if line.strip()]
 
-    valid_datapoints: list[Datapoint] = []
+    valid_datapoints: list[SimulationDatapoint] = []
     for i, line in enumerate(lines, start=1):
         try:
-            dp = Datapoint.model_validate_json(line)
+            dp = SimulationDatapoint.model_validate_json(line)
             valid_datapoints.append(dp)
         except Exception as exc:  # noqa: PERF203
             typer.echo(f"Line {i}: {exc}", err=True)
@@ -1180,7 +1180,7 @@ def _write_results(results: list[Any], output: Path) -> None:
 
 
 def _write_datapoints(datapoints: list[Any], output: Path) -> None:
-    """Write datapoints as raw ``Datapoint`` JSONL — one ``model_dump_json()``
+    """Write datapoints as raw ``SimulationDatapoint`` JSONL — one ``model_dump_json()``
     per line. This is the canonical local handoff format: it preserves the
     datapoint ``id``, round-trips through ``load_datapoints_from_jsonl`` (which
     ``simulate`` uses), and validates under ``validate-dataset``. The Orq-dataset

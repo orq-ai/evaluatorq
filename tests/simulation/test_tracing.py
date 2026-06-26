@@ -571,10 +571,10 @@ async def test_end_to_end_simulation_produces_full_span_tree(
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.simulation.types import (
         CommunicationStyle,
-        Datapoint,
         Message,
         Persona,
         Scenario,
+        SimulationDatapoint,
     )
 
     # Build mock judge: should_terminate after the 2nd turn
@@ -624,7 +624,7 @@ async def test_end_to_end_simulation_produces_full_span_tree(
         background='A test user',
     )
     scenario = Scenario(name='Smoke', goal='Get help')
-    dp = Datapoint(
+    dp = SimulationDatapoint(
         id='dp-smoke',
         persona=persona,
         scenario=scenario,
@@ -923,10 +923,10 @@ async def test_run_span_records_error_metadata_and_usage(
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.simulation.types import (
         CommunicationStyle,
-        Datapoint,
         Message,
         Persona,
         Scenario,
+        SimulationDatapoint,
         TerminatedBy,
     )
 
@@ -959,7 +959,7 @@ async def test_run_span_records_error_metadata_and_usage(
         background='A test user',
     )
     scenario = Scenario(name='Failure', goal='Get help')
-    dp = Datapoint(
+    dp = SimulationDatapoint(
         id='dp-error',
         persona=persona,
         scenario=scenario,
@@ -1001,9 +1001,9 @@ async def test_target_agent_usage_aggregated_into_run_result(
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.simulation.types import (
         CommunicationStyle,
-        Datapoint,
         Persona,
         Scenario,
+        SimulationDatapoint,
     )
 
     class _FakeAgentTarget(AgentTarget):
@@ -1065,7 +1065,7 @@ async def test_target_agent_usage_aggregated_into_run_result(
         background='A test user',
     )
     scenario = Scenario(name='UsageRollup', goal='Get help')
-    dp = Datapoint(
+    dp = SimulationDatapoint(
         id='dp-usage',
         persona=persona,
         scenario=scenario,
@@ -1115,10 +1115,10 @@ async def test_run_span_records_cancellation_metadata_and_usage(
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.simulation.types import (
         CommunicationStyle,
-        Datapoint,
         Message,
         Persona,
         Scenario,
+        SimulationDatapoint,
     )
 
     judge = MagicMock()
@@ -1150,7 +1150,7 @@ async def test_run_span_records_cancellation_metadata_and_usage(
         background='A test user',
     )
     scenario = Scenario(name='Cancelled', goal='Get help')
-    dp = Datapoint(
+    dp = SimulationDatapoint(
         id='dp-cancelled',
         persona=persona,
         scenario=scenario,

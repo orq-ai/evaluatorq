@@ -81,9 +81,9 @@ async def test_integration_target_reports_token_usage() -> None:
     from evaluatorq.simulation.runner.simulation import SimulationRunner
     from evaluatorq.simulation.types import (
         CommunicationStyle,
-        Datapoint,
         Persona,
         Scenario,
+        SimulationDatapoint,
     )
 
     def agent(messages: list[ContractMessage]) -> str:
@@ -122,7 +122,7 @@ async def test_integration_target_reports_token_usage() -> None:
         user_simulator=sim,
         judge=judge,
     )
-    dp = Datapoint(
+    dp = SimulationDatapoint(
         id="dp-1",
         persona=Persona(
             name="P",

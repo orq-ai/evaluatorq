@@ -4,24 +4,24 @@ from datetime import datetime
 
 from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.types import (
+    CULTURAL_CONTEXT_INSTRUCTIONS,
+    EMOTIONAL_ARC_INSTRUCTIONS,
+    INPUT_FORMAT_INSTRUCTIONS,
+    STRATEGY_INSTRUCTIONS,
     CommunicationStyle,
     ConversationStrategy,
     Criterion,
     CulturalContext,
-    Datapoint,
     EmotionalArc,
     InputFormat,
     Message,
     Persona,
     Scenario,
+    SimulationDatapoint,
     SimulationResult,
     SimulationRun,
     StartingEmotion,
     TerminatedBy,
-    EMOTIONAL_ARC_INSTRUCTIONS,
-    CULTURAL_CONTEXT_INSTRUCTIONS,
-    STRATEGY_INSTRUCTIONS,
-    INPUT_FORMAT_INSTRUCTIONS,
 )
 
 
@@ -114,7 +114,7 @@ def test_datapoint_model():
         background="bg",
     )
     s = Scenario(name="Scenario", goal="Goal")
-    dp = Datapoint(
+    dp = SimulationDatapoint(
         id="dp_abc123",
         persona=p,
         scenario=s,

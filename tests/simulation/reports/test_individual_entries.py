@@ -16,7 +16,6 @@ from evaluatorq.contracts import Message, TokenUsage
 from evaluatorq.simulation.reports.sections import individual_entries
 from evaluatorq.simulation.types import SimulationResult, TerminatedBy, TurnMetrics
 
-
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
