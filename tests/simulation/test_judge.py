@@ -5,8 +5,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from evaluatorq.simulation.agents.judge import JUDGE_TOOLS, JudgeAgent, JudgeAgentConfig
 from evaluatorq.simulation.agents.base import LLMResult
+from evaluatorq.simulation.agents.judge import JUDGE_TOOLS, JudgeAgent, JudgeAgentConfig
 from evaluatorq.simulation.types import Criterion
 
 

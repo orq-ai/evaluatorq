@@ -1,17 +1,17 @@
 """Shared helpers for converting between evaluatorq ``DataPoint`` and the
-simulation-side ``Datapoint``.
+simulation-side ``SimulationDatapoint``.
 
 Both ``simulation/api.py`` (the ``simulate()`` path) and
 ``simulation/wrap_agent.py`` (the public ``wrap_simulation_agent()`` job)
 need to normalise an evaluatorq ``DataPoint`` into a single simulation
-``Datapoint``, so the logic lives here to avoid the cross-module import.
+``SimulationDatapoint``, so the logic lives here to avoid the cross-module import.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from evaluatorq.simulation.types import Datapoint, Persona, Scenario
+from evaluatorq.simulation.types import Persona, Scenario, SimulationDatapoint
 
 if TYPE_CHECKING:
     from evaluatorq.types import DataPoint
@@ -28,18 +28,18 @@ def _validate_shape(value: Any, label: str, required_keys: list[str]) -> None:
             raise ValueError(f"Invalid '{label}': missing required field '{key}'")
 
 
-def _extract_single_datapoint(data: DataPoint) -> Datapoint:
-    """Extract exactly one simulation Datapoint from an evaluatorq DataPoint.
+def _extract_single_datapoint(data: DataPoint) -> SimulationDatapoint:
+    """Extract exactly one simulation SimulationDatapoint from an evaluatorq DataPoint.
 
     Accepts the four input shapes (``datapoint``, ``datapoints`` of length one,
     ``persona`` + ``scenario``, ``personas`` + ``scenarios`` each of length
-    one) and normalises to a single ``Datapoint``.
+    one) and normalises to a single ``SimulationDatapoint``.
     """
     inputs = data.inputs
     if "datapoint" in inputs:
         dp = inputs["datapoint"]
         _validate_shape(dp, "datapoint", ["persona", "scenario", "first_message"])
-        return Datapoint.model_validate(dp)
+        return SimulationDatapoint.model_validate(dp)
     if "datapoints" in inputs:
         dps = inputs["datapoints"]
         if not isinstance(dps, list):
@@ -52,13 +52,13 @@ def _extract_single_datapoint(data: DataPoint) -> Datapoint:
         _validate_shape(
             dps[0], "datapoints[]", ["persona", "scenario", "first_message"]
         )
-        return Datapoint.model_validate(dps[0])
+        return SimulationDatapoint.model_validate(dps[0])
     if "persona" in inputs and "scenario" in inputs:
         _validate_shape(inputs["persona"], "persona", ["name"])
         _validate_shape(inputs["scenario"], "scenario", ["name", "goal"])
         persona = Persona.model_validate(inputs["persona"])
         scenario = Scenario.model_validate(inputs["scenario"])
-        return Datapoint(
+        return SimulationDatapoint(
             id=f"{persona.name}-{scenario.name}",
             persona=persona,
             scenario=scenario,
@@ -79,7 +79,7 @@ def _extract_single_datapoint(data: DataPoint) -> Datapoint:
         _validate_shape(inputs["scenarios"][0], "scenarios[]", ["name", "goal"])
         persona = Persona.model_validate(inputs["personas"][0])
         scenario = Scenario.model_validate(inputs["scenarios"][0])
-        return Datapoint(
+        return SimulationDatapoint(
             id=f"{persona.name}-{scenario.name}",
             persona=persona,
             scenario=scenario,

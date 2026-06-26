@@ -60,13 +60,13 @@ def _make_result(
 def _make_datapoints(count: int = 2) -> list[Any]:
     from evaluatorq.simulation.types import (
         CommunicationStyle,
-        Datapoint,
         Persona,
         Scenario,
+        SimulationDatapoint,
     )
 
     return [
-        Datapoint(
+        SimulationDatapoint(
             id=f"dp-{i}",
             persona=Persona(
                 name=f"User{i}",

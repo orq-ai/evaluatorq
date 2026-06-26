@@ -1,4 +1,4 @@
-"""Datapoint generator for creating test datasets.
+"""SimulationDatapoint generator for creating test datasets.
 
 Combines personas and scenarios into complete datapoints with first messages.
 """
@@ -18,9 +18,9 @@ from evaluatorq.simulation.generators.scenario_generator import ScenarioGenerato
 from evaluatorq.simulation.quality.message_perturbation import apply_random_perturbation
 from evaluatorq.simulation.types import (
     DEFAULT_MODEL,
-    Datapoint,
     Persona,
     Scenario,
+    SimulationDatapoint,
 )
 from evaluatorq.simulation.utils.prompt_builders import generate_datapoint
 
@@ -75,7 +75,7 @@ class DatapointGenerator:
         num_security: int = 5,
         security_seed_examples: list[dict[str, Any]] | None = None,
         security_categories: list[str] | None = None,
-    ) -> list[Datapoint]:
+    ) -> list[SimulationDatapoint]:
         """Generate datapoints from agent description.
 
         Creates personas and scenarios, then combines them into datapoints.
@@ -159,7 +159,7 @@ class DatapointGenerator:
         self,
         personas: list[Persona],
         scenarios: list[Scenario],
-    ) -> list[Datapoint]:
+    ) -> list[SimulationDatapoint]:
         """Generate datapoints from persona-scenario combinations."""
         combinations = [(p, s) for p in personas for s in scenarios]
 
@@ -170,7 +170,7 @@ class DatapointGenerator:
             len(scenarios),
         )
 
-        async def generate_single(persona: Persona, scenario: Scenario) -> Datapoint:
+        async def generate_single(persona: Persona, scenario: Scenario) -> SimulationDatapoint:
             async with self._semaphore:
                 first_message = await self._first_message_generator.generate(
                     persona, scenario
@@ -186,9 +186,9 @@ class DatapointGenerator:
 
     @staticmethod
     def _apply_perturbations(
-        datapoints: list[Datapoint],
+        datapoints: list[SimulationDatapoint],
         perturbation_rate: float,
-    ) -> list[Datapoint]:
+    ) -> list[SimulationDatapoint]:
         """Apply random input perturbations to first messages for robustness testing."""
         import random
 

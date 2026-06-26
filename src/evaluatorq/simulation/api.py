@@ -32,15 +32,15 @@ if TYPE_CHECKING:
     from evaluatorq.simulation.generators import FirstMessageGenerator
     from evaluatorq.simulation.hooks import SimulationHooks
     from evaluatorq.simulation.types import (
-        Datapoint,
         Message,
         Persona,
         Scenario,
+        SimulationDatapoint,
         SimulationResult,
     )
     from evaluatorq.types import DataPoint, DataPointResult, Evaluator
 
-    EmitDatapoints = Callable[[list[Datapoint]], None]
+    EmitDatapoints = Callable[[list[SimulationDatapoint]], None]
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ async def simulate(
     target: Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = None,
     personas: list[Persona] | None = None,
     scenarios: list[Scenario] | None = None,
-    datapoints: list[Datapoint] | None = None,
+    datapoints: list[SimulationDatapoint] | None = None,
     dataset_id: str | None = None,
     max_turns: int = 10,
     sim_model: str = DEFAULT_MODEL,
@@ -238,7 +238,7 @@ async def generate_and_simulate(
             gen_client, gen_owned = build_simulation_client(generation_client)
             try:
                 gen_hooks = hooks or DefaultHooks()
-                datapoints: list[Datapoint] = []
+                datapoints: list[SimulationDatapoint] = []
                 await await_maybe(gen_hooks.on_stage_start(SimStage.GENERATE, {}))
                 try:
                     gen_personas, gen_scenarios = await _generate_personas_scenarios(
@@ -304,10 +304,10 @@ async def generate(
     num_scenarios: int = 5,
     sim_model: str = DEFAULT_MODEL,
     generation_client: AsyncOpenAI | None = None,
-) -> list[Datapoint]:
-    """Generate ready-to-run simulation ``Datapoint``s from an agent description.
+) -> list[SimulationDatapoint]:
+    """Generate ready-to-run simulation ``SimulationDatapoint``s from an agent description.
 
-    Produces personas and scenarios, then builds one ``Datapoint`` per
+    Produces personas and scenarios, then builds one ``SimulationDatapoint`` per
     persona x scenario pair (each with a generated first message). Returns the
     datapoints without running any simulation — feed them to :func:`simulate`
     via ``datapoints=...``, or persist them (e.g. JSONL) and reuse.
@@ -565,7 +565,7 @@ async def _simulate_core(
     target: Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None,
     personas: list[Persona] | None,
     scenarios: list[Scenario] | None,
-    datapoints: list[Datapoint] | None,
+    datapoints: list[SimulationDatapoint] | None,
     dataset_id: str | None,
     max_turns: int,
     model: str,
@@ -769,13 +769,13 @@ def _require_orq_api_key(caller: str) -> str:
 async def _resolve_or_generate_datapoints(
     *,
     caller: str,
-    datapoints: list[Datapoint] | None,
+    datapoints: list[SimulationDatapoint] | None,
     personas: list[Persona] | None,
     scenarios: list[Scenario] | None,
     dataset_id: str | None,
     model: str,
     generation_client: AsyncOpenAI | None,
-) -> list[Datapoint]:
+) -> list[SimulationDatapoint]:
     """Return ready-to-run Datapoints.
 
     Resolution precedence: ``dataset_id`` -> ``datapoints`` -> persona x scenario
@@ -814,7 +814,7 @@ async def _resolve_or_generate_datapoints(
         first_msg_gen = FirstMessageGenerator(model=model, client=gen_client)
         pairs = [(p, s) for p in personas for s in scenarios]
 
-        generated: list[Datapoint] = []
+        generated: list[SimulationDatapoint] = []
         batch_size = 5
         for i in range(0, len(pairs), batch_size):
             batch = pairs[i : i + batch_size]
@@ -840,9 +840,9 @@ async def _resolve_or_generate_datapoints(
             await gen_client.close()
 
 
-async def _fetch_simulation_datapoints_from_orq(api_key: str, dataset_id: str) -> list[Datapoint]:
+async def _fetch_simulation_datapoints_from_orq(api_key: str, dataset_id: str) -> list[SimulationDatapoint]:
     """Stream the named Orq dataset and parse each row into a simulation
-    Datapoint via the same shape-tolerant extractor used by the inline path.
+    SimulationDatapoint via the same shape-tolerant extractor used by the inline path.
     """
     from pydantic import ValidationError
 
@@ -850,7 +850,7 @@ async def _fetch_simulation_datapoints_from_orq(api_key: str, dataset_id: str) -
     from evaluatorq.simulation._datapoint_io import _extract_single_datapoint
 
     orq_client = setup_orq_client(api_key)
-    out: list[Datapoint] = []
+    out: list[SimulationDatapoint] = []
     row = 0
     async for batch in fetch_dataset_batches(orq_client, dataset_id):
         for eq_dp in batch.datapoints:
@@ -864,7 +864,7 @@ async def _fetch_simulation_datapoints_from_orq(api_key: str, dataset_id: str) -
     return out
 
 
-async def _generate_single_datapoint(gen: FirstMessageGenerator, persona: Persona, scenario: Scenario) -> Datapoint:
+async def _generate_single_datapoint(gen: FirstMessageGenerator, persona: Persona, scenario: Scenario) -> SimulationDatapoint:
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.simulation.utils.prompt_builders import generate_datapoint
 
@@ -883,7 +883,7 @@ async def _generate_single_datapoint(gen: FirstMessageGenerator, persona: Person
 def _build_simulation_job_and_cache(
     *,
     job_name: str,
-    sim_dp_by_id: dict[int, Datapoint],
+    sim_dp_by_id: dict[int, SimulationDatapoint],
     target_callback: Callable[[list[Message]], str | Awaitable[str]] | None,
     target_agent: AgentTarget | None,
     model: str,
@@ -1022,7 +1022,7 @@ async def _simulate_via_evaluatorq(
     evaluation_name: str,
     target_callback: Callable[[list[Message]], str | Awaitable[str]] | None,
     target_agent: AgentTarget | None,
-    sim_datapoints: list[Datapoint],
+    sim_datapoints: list[SimulationDatapoint],
     max_turns: int,
     model: str,
     evaluator_names: list[str] | None,
@@ -1052,7 +1052,7 @@ async def _simulate_via_evaluatorq(
 
     eq_datapoints = [DataPoint(inputs={'datapoint': dp.model_dump(mode='json')}) for dp in sim_datapoints]
     # Map the evaluatorq DataPoint instance back to its source simulation
-    # Datapoint by identity, so the job can run the source directly without
+    # SimulationDatapoint by identity, so the job can run the source directly without
     # re-parsing inputs["datapoint"] on every run.
     sim_dp_by_id = {id(eq): sim for eq, sim in zip(eq_datapoints, sim_datapoints, strict=True)}
 

@@ -313,11 +313,11 @@ class SimulationResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Datapoint
+# SimulationDatapoint
 # ---------------------------------------------------------------------------
 
 
-class Datapoint(BaseModel):
+class SimulationDatapoint(BaseModel):
     id: str
     persona: Persona
     scenario: Scenario

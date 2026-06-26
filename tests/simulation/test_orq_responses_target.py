@@ -18,8 +18,6 @@ import pytest
 from evaluatorq.contracts import AgentResponse, LLMCallConfig, Message
 from evaluatorq.openresponses.target import OrqResponsesTarget
 
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

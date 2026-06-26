@@ -10,9 +10,9 @@ from typing import Any, TypeVar
 
 from evaluatorq.simulation.types import (
     CommunicationStyle,
-    Datapoint,
     Persona,
     Scenario,
+    SimulationDatapoint,
     SimulationResult,
 )
 
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def export_datapoints_to_jsonl(datapoints: list[Datapoint], output_path: str) -> None:
+def export_datapoints_to_jsonl(datapoints: list[SimulationDatapoint], output_path: str) -> None:
     """Export datapoints to JSONL format for orq.ai datasets."""
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -56,14 +56,14 @@ def export_results_to_jsonl(results: list[SimulationResult], output_path: str) -
 # ---------------------------------------------------------------------------
 
 
-def load_datapoints_from_jsonl(input_path: str) -> list[Datapoint]:
+def load_datapoints_from_jsonl(input_path: str) -> list[SimulationDatapoint]:
     """Load datapoints from a JSONL file.
 
     Supports both the current format (with full persona/scenario objects) and a
     legacy format (with flat fields).
     """
     content = Path(input_path).read_text(encoding="utf-8")
-    datapoints: list[Datapoint] = []
+    datapoints: list[SimulationDatapoint] = []
 
     for line in content.split("\n"):
         trimmed = line.strip()
@@ -78,11 +78,11 @@ def load_datapoints_from_jsonl(input_path: str) -> list[Datapoint]:
             )
             continue
 
-        # Raw ``Datapoint`` line (what ``sim generate`` writes): top-level
+        # Raw ``SimulationDatapoint`` line (what ``sim generate`` writes): top-level
         # persona/scenario dicts and an id. Parse directly so the id and all
         # fields round-trip unchanged.
         if isinstance(data.get("persona"), dict) and isinstance(data.get("scenario"), dict):
-            datapoints.append(Datapoint.model_validate(data))
+            datapoints.append(SimulationDatapoint.model_validate(data))
             continue
 
         inputs = data.get("inputs", {})
@@ -112,7 +112,7 @@ def load_datapoints_from_jsonl(input_path: str) -> list[Datapoint]:
             )
 
         datapoints.append(
-            Datapoint(
+            SimulationDatapoint(
                 id=f"dp_{uuid.uuid4().hex[:12]}",
                 persona=persona,
                 scenario=scenario,
@@ -155,15 +155,15 @@ def parse_jsonl(content: str, cls: type[T] | None = None) -> list[T | dict[str, 
 
 
 def results_to_jsonl(
-    results: list[dict[str, Datapoint | SimulationResult]],
+    results: list[dict[str, SimulationDatapoint | SimulationResult]],
 ) -> str:
     """Convert simulation results to JSONL string for dataset export."""
     lines = []
     for r in results:
         dp = r["datapoint"]
         result = r["result"]
-        if not isinstance(dp, Datapoint):
-            raise TypeError(f"Expected Datapoint, got {type(dp).__name__}")
+        if not isinstance(dp, SimulationDatapoint):
+            raise TypeError(f"Expected SimulationDatapoint, got {type(dp).__name__}")
         if not isinstance(result, SimulationResult):
             raise TypeError(f"Expected SimulationResult, got {type(result).__name__}")
         lines.append(

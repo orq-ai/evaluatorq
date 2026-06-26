@@ -18,11 +18,11 @@ from evaluatorq.simulation.agents.user_simulator import (
 from evaluatorq.simulation.tracing import with_simulation_span
 from evaluatorq.simulation.types import (
     DEFAULT_MODEL,
-    Datapoint,
     Judgment,
     Message,
     Persona,
     Scenario,
+    SimulationDatapoint,
     SimulationResult,
     TerminatedBy,
     TurnMetrics,
@@ -307,7 +307,7 @@ class SimulationRunner:
         *,
         persona: Persona | None = None,
         scenario: Scenario | None = None,
-        datapoint: Datapoint | None = None,
+        datapoint: SimulationDatapoint | None = None,
         max_turns: int | None = None,
         first_message: str | None = None,
     ) -> SimulationResult:
@@ -636,7 +636,7 @@ class SimulationRunner:
 
     async def run_batch(
         self,
-        datapoints: list[Datapoint],
+        datapoints: list[SimulationDatapoint],
         *,
         max_turns: int | None = None,
         timeout_per_simulation: float = 300.0,
@@ -647,7 +647,7 @@ class SimulationRunner:
             raise ValueError(f'max_concurrency must be >= 1, got {max_concurrency}')
         semaphore = asyncio.Semaphore(max_concurrency)
 
-        async def run_single(dp: Datapoint) -> SimulationResult:
+        async def run_single(dp: SimulationDatapoint) -> SimulationResult:
             async with semaphore:
                 await await_maybe(self._hooks.on_datapoint_start(dp))
                 return await self._run_with_timeout(dp, max_turns, timeout_per_simulation)
@@ -719,7 +719,7 @@ class SimulationRunner:
 
     async def _run_with_timeout(
         self,
-        datapoint: Datapoint,
+        datapoint: SimulationDatapoint,
         max_turns: int | None,
         timeout_s: float,
     ) -> SimulationResult:

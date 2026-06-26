@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from evaluatorq.simulation.api import generate, generate_and_simulate, simulate
-from evaluatorq.simulation.types import CommunicationStyle, Datapoint, Judgment, Persona, Scenario
+from evaluatorq.simulation.types import CommunicationStyle, Judgment, Persona, Scenario, SimulationDatapoint
 
 
 def _persona() -> Persona:
@@ -108,8 +108,8 @@ async def test_sim_model_is_the_public_param(monkeypatch):
         await simulate(**bad_kwargs)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
 
 
-def _make_datapoint(dp_id: str = "dp-0") -> Datapoint:
-    return Datapoint(
+def _make_datapoint(dp_id: str = "dp-0") -> SimulationDatapoint:
+    return SimulationDatapoint(
         id=dp_id,
         persona=_persona(),
         scenario=_scenario(),
@@ -120,14 +120,14 @@ def _make_datapoint(dp_id: str = "dp-0") -> Datapoint:
 
 @pytest.mark.asyncio
 async def test_generate_and_simulate_emit_datapoints_called_once(monkeypatch):
-    """emit_datapoints is invoked exactly once with the generated list[Datapoint]."""
+    """emit_datapoints is invoked exactly once with the generated list[SimulationDatapoint]."""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
     fake_datapoints = [_make_datapoint("dp-0"), _make_datapoint("dp-1")]
 
-    emitted: list[list[Datapoint]] = []
+    emitted: list[list[SimulationDatapoint]] = []
 
-    def sink(dps: list[Datapoint]) -> None:
+    def sink(dps: list[SimulationDatapoint]) -> None:
         emitted.append(dps)
 
     with (
@@ -153,7 +153,7 @@ async def test_generate_and_simulate_emit_datapoints_called_once(monkeypatch):
     assert len(emitted) == 1, f"sink called {len(emitted)} times (expected 1)"
     assert emitted[0] is fake_datapoints
     assert isinstance(emitted[0], list)
-    assert all(isinstance(dp, Datapoint) for dp in emitted[0])
+    assert all(isinstance(dp, SimulationDatapoint) for dp in emitted[0])
 
 
 @pytest.mark.asyncio

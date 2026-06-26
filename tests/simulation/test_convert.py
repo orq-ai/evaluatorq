@@ -1,5 +1,7 @@
 """Tests for SimulationResult → OpenResponses conversion."""
 
+from typing import Any
+
 from evaluatorq.contracts import TokenUsage
 from evaluatorq.openresponses.convert_models import (
     IncompleteDetails as ORIncompleteDetails,
@@ -16,9 +18,6 @@ from evaluatorq.simulation.types import (
     SimulationResult,
     TerminatedBy,
 )
-
-
-from typing import Any
 
 
 def _make_result(**overrides: Any) -> SimulationResult:
