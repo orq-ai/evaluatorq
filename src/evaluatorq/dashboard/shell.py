@@ -16,10 +16,28 @@ The CSS layers, in cascade order, are:
 
 from __future__ import annotations
 
-from evaluatorq.common.reports import esc, load_css, load_logo_svg
+from pathlib import Path
+
+from evaluatorq.common.reports import esc, load_css
 from evaluatorq.dashboard.styles import DASHBOARD_CSS
 from evaluatorq.dashboard.theme import EDITORIAL_CSS
 from evaluatorq.dashboard.view import head_assets
+
+# The v1 brand mark (orq ink-nodes logomark), vendored from the design system.
+# Inlined rather than served via /static/ so it renders in tests and exports too.
+_MARK_PATH = Path(__file__).parent / 'static' / 'orq-mark.svg'
+_mark_cache: str | None = None
+
+
+def _load_mark() -> str:
+    global _mark_cache
+    if _mark_cache is None:
+        try:
+            _mark_cache = _MARK_PATH.read_text(encoding='utf-8')
+        except OSError:
+            _mark_cache = ''
+    return _mark_cache
+
 
 # Sidebar nav: (key, label, href, inline-SVG icon path data).  Keys match the
 # ``active_nav`` resolution below; hrefs reuse the existing index routes so the
@@ -64,8 +82,10 @@ def _icon(path_data: str) -> str:
 
 
 def _sidebar_html(active_nav: str) -> str:
-    logo = load_logo_svg()
-    logo_html = f'<span class="nav-logo">{logo}</span>' if logo else ''
+    # The v1 brand lockup is the orq mark (not the full wordmark) + the
+    # "evaluatorq" wordmark with an orange "q".
+    mark = _load_mark()
+    logo_html = f'<span class="nav-mark">{mark}</span>' if mark else ''
     items: list[str] = []
     for key, label, href, icon in _NAV:
         active = ' active' if key == active_nav else ''

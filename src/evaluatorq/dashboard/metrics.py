@@ -154,9 +154,6 @@ def landing(roots: list[Path] | None = None) -> Landing:
     redteam = [r for r in rows if r.surface == 'redteam']
     sim = [r for r in rows if r.surface == 'sim']
 
-    resistances = [r.score for r in redteam if r.score is not None]
-    resistance_rate = sum(resistances) / len(resistances) if resistances else None
-
     # Roll up severity counts + token usage + resistant/vulnerable from raw JSON.
     severity_counts: dict[str, int] = {}
     total_tokens = 0
@@ -192,6 +189,12 @@ def landing(roots: list[Path] | None = None) -> Landing:
     severity = [(sev, severity_counts[sev]) for sev in SEVERITY_ORDER if severity_counts.get(sev)]
     by_kind = [('Red team', len(redteam)), ('Agent sim', len(sim))]
     tokens_by_kind = [(k, n) for k, n in (('Red team', rt_tokens), ('Agent sim', sim_tokens)) if n]
+
+    # Attack-weighted resistance, so the headline stat agrees with the donut.
+    # The per-run mean is misleading: runs with zero evaluated attacks default
+    # resistance_rate to 1.0 and inflate it.  ``None`` when nothing was evaluated.
+    evaluated = resistant + vulnerable
+    resistance_rate = resistant / evaluated if evaluated else None
 
     return Landing(
         total_runs=len(rows),

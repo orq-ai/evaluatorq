@@ -42,8 +42,8 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
     padding: 4px 8px 18px;
     text-decoration: none;
 }
-.app-brand .nav-logo svg,
-.app-brand .nav-logo img { height: 24px; width: auto; display: block; }
+.app-brand .nav-mark { display: inline-flex; flex-shrink: 0; }
+.app-brand .nav-mark svg { width: 24px; height: 24px; display: block; }
 .app-brand .brand-name {
     font-family: var(--font-display);
     font-size: 18px;
