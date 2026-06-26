@@ -13,9 +13,9 @@ capture the exact generated inputs for reproducible re-runs, pass
 
 Usage:
     evaluatorq sim generate --agent-description "..." --output dp.jsonl
-    evaluatorq sim simulate --datapoints dp.jsonl --agent-key my-agent
+    evaluatorq sim simulate --datapoints dp.jsonl --target my-agent
     evaluatorq sim run --agent-description "..." --openai-model gpt-4o-mini
-    evaluatorq sim run --agent-description "..." --agent-key my-agent --save-datapoints dp.jsonl
+    evaluatorq sim run --agent-description "..." --target my-agent --save-datapoints dp.jsonl
     evaluatorq sim export --input results.jsonl --output payload.json
     evaluatorq sim validate-dataset dp.jsonl
     evaluatorq sim runs
@@ -85,7 +85,6 @@ def _configure_logging(verbosity: int) -> None:
 def _resolve_target(
     *,
     target: str | None,
-    agent_key: str | None,
     vercel_url: str | None,
     openai_model: str | None,
 ) -> Any:
@@ -95,7 +94,6 @@ def _resolve_target(
     """
     supplied = {
         "--target": target,
-        "--agent-key": agent_key,
         "--vercel-url": vercel_url,
         "--openai-model": openai_model,
     }
@@ -103,7 +101,7 @@ def _resolve_target(
 
     if len(active) == 0:
         raise typer.BadParameter(
-            "Provide exactly one of: --target, --agent-key, --vercel-url, --openai-model"
+            "Provide exactly one of: --target, --vercel-url, --openai-model"
         )
     if len(active) > 1:
         raise typer.BadParameter(
@@ -122,12 +120,6 @@ def _resolve_target(
 
             return from_orq_deployment(value)
         raise typer.BadParameter(f"Unsupported target kind for sim: {kind}")
-
-    if agent_key is not None:
-        _require_orq_api_key("--agent-key")
-        from evaluatorq.simulation.adapters import from_orq_deployment
-
-        return from_orq_deployment(agent_key)
 
     if vercel_url is not None:
         from evaluatorq.integrations.vercel_ai_sdk_integration import VercelAISdkTarget
@@ -241,7 +233,6 @@ def _resolve_evaluators(evaluators: list[str] | None) -> list[str] | None:
 def _infer_target_kind(
     *,
     target: str | None,
-    agent_key: str | None,
     vercel_url: str | None,
     openai_model: str | None,
 ) -> str:
@@ -254,8 +245,6 @@ def _infer_target_kind(
         if kind == TargetKind.DEPLOYMENT:
             return "orq_deployment"
         return str(kind)
-    if agent_key is not None:
-        return "orq_deployment"
     if vercel_url is not None:
         return "vercel"
     return "openai_model"
@@ -280,13 +269,6 @@ def simulate(
                 "Target to simulate: agent:<key> or deployment:<key>. "
                 "Bare values default to agent:<key>."
             ),
-        ),
-    ] = None,
-    agent_key: Annotated[
-        str | None,
-        typer.Option(
-            "--agent-key",
-            help="Deprecated alias for Orq deployment key behavior (requires ORQ_API_KEY).",
         ),
     ] = None,
     vercel_url: Annotated[
@@ -387,15 +369,13 @@ def simulate(
     Targets (provide exactly one):
 
     - --target TARGET    agent:<key> (default for bare key) or deployment:<key>.
-    - --agent-key KEY    Deprecated alias for Orq deployment key behavior.
     - --vercel-url URL   Vercel AI SDK HTTP endpoint.
     - --openai-model M   OpenAI-compatible model. Provider from env:
       ORQ_API_KEY for the Orq AI Router, else OPENAI_API_KEY
       (+ optional OPENAI_BASE_URL for vLLM/OpenRouter/local). ORQ wins if both set.
 
     Note: --target agent:<key> invokes a hosted Orq agent through the Responses
-    router. --agent-key / --target deployment:<key> use the legacy deployment
-    callback path.
+    router. --target deployment:<key> uses the legacy deployment callback path.
     """
     if quiet:
         verbose = -1
@@ -418,14 +398,12 @@ def simulate(
     try:
         resolved_target = _resolve_target(
             target=target,
-            agent_key=agent_key,
             vercel_url=vercel_url,
             openai_model=openai_model,
         )
         evaluator_names = _resolve_evaluators(evaluator)
         target_kind = _infer_target_kind(
             target=target,
-            agent_key=agent_key,
             vercel_url=vercel_url,
             openai_model=openai_model,
         )
@@ -529,13 +507,6 @@ def run(
                 "Target to simulate: agent:<key> or deployment:<key>. "
                 "Bare values default to agent:<key>."
             ),
-        ),
-    ] = None,
-    agent_key: Annotated[
-        str | None,
-        typer.Option(
-            "--agent-key",
-            help="Deprecated alias for Orq deployment key behavior (requires ORQ_API_KEY).",
         ),
     ] = None,
     vercel_url: Annotated[
@@ -655,7 +626,6 @@ def run(
     Targets (provide exactly one):
 
     - --target TARGET    agent:<key> (default for bare key) or deployment:<key>.
-    - --agent-key KEY    Deprecated alias for Orq deployment key behavior.
     - --vercel-url URL   Vercel AI SDK HTTP endpoint.
     - --openai-model M   OpenAI-compatible model. Provider from env:
       ORQ_API_KEY for the Orq AI Router, else OPENAI_API_KEY
@@ -685,14 +655,12 @@ def run(
         )
         resolved_target = _resolve_target(
             target=target,
-            agent_key=agent_key,
             vercel_url=vercel_url,
             openai_model=openai_model,
         )
         evaluator_names = _resolve_evaluators(evaluator)
         target_kind = _infer_target_kind(
             target=target,
-            agent_key=agent_key,
             vercel_url=vercel_url,
             openai_model=openai_model,
         )
