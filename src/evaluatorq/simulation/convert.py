@@ -11,6 +11,8 @@ from evaluatorq.openresponses.convert_models import (
     FunctionCallOutput,
     FunctionCallStatus,
     IncompleteDetails,
+    InputFileContent,
+    InputImageContent,
     InputTextContent,
     InputTokensDetails,
     Message,
@@ -20,6 +22,10 @@ from evaluatorq.openresponses.convert_models import (
     OutputTokensDetails,
     Usage,
 )
+
+# Message.content accepts any content part; simulation only emits text parts, but
+# the variable annotation must match the (invariant) list element union.
+_ContentList = list[InputTextContent | InputImageContent | InputFileContent | OutputTextContent]
 
 if TYPE_CHECKING:
     from evaluatorq.simulation.types import SimulationResult
@@ -50,7 +56,7 @@ def to_open_responses(
 
     for msg in result.messages:
         if msg.role in ("user", "system"):
-            in_content: list[InputTextContent | OutputTextContent] = [
+            in_content: _ContentList = [
                 InputTextContent(type="input_text", text=msg.content or "")
             ]
             message = Message(
@@ -67,7 +73,7 @@ def to_open_responses(
             # (separate Responses output items). A tool-only turn skips the empty
             # text message. Mirrors the langchain integration's mapping.
             if msg.content:
-                out_content: list[InputTextContent | OutputTextContent] = [
+                out_content: _ContentList = [
                     OutputTextContent(text=msg.content, annotations=[])
                 ]
                 message = Message(
