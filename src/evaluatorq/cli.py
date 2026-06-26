@@ -19,10 +19,28 @@ import typer
 # ---------------------------------------------------------------------------
 
 app = typer.Typer(
-    name="evaluatorq",
-    help="Evaluation framework for AI systems.",
+    name='evaluatorq',
+    help='Evaluation framework for AI systems.',
     no_args_is_help=True,
 )
+
+
+def _version_callback(value: bool) -> None:  # noqa: FBT001
+    if value:
+        from importlib.metadata import version
+
+        typer.echo(f'evaluatorq {version("evaluatorq")}')
+        raise typer.Exit
+
+
+@app.callback()
+def _main(
+    version: Annotated[  # noqa: FBT002 — eager callback consumes it
+        bool,
+        typer.Option('--version', help='Show version and exit.', callback=_version_callback, is_eager=True),
+    ] = False,
+) -> None:
+    """Evaluation framework for AI systems."""
 
 
 # ---------------------------------------------------------------------------
@@ -36,21 +54,21 @@ def dashboard(
         Path | None,
         typer.Argument(
             help=(
-                "Optional path to scan. "
-                "Omit to show all runs from both redteam and sim stores. "
-                "A directory is scanned for reports; "
+                'Optional path to scan. '
+                'Omit to show all runs from both redteam and sim stores. '
+                'A directory is scanned for reports; '
                 "a file opens the dashboard scoped to that file's parent directory "
-                "and prints the direct report URL so you can navigate straight to it."
+                'and prints the direct report URL so you can navigate straight to it.'
             )
         ),
     ] = None,
     host: Annotated[
         str,
-        typer.Option(help="Host to bind the dashboard server to."),
-    ] = "127.0.0.1",
+        typer.Option(help='Host to bind the dashboard server to.'),
+    ] = '127.0.0.1',
     port: Annotated[
         int,
-        typer.Option(help="Port for the dashboard server."),
+        typer.Option(help='Port for the dashboard server.'),
     ] = 8080,
 ) -> None:
     """Launch the FastHTML dashboard (preview — still in development).
@@ -80,7 +98,7 @@ def dashboard(
         direct_rid = report_id(path)
 
     if direct_rid is not None:
-        typer.echo(f"Direct report URL: http://{host}:{port}/r/{direct_rid}")
+        typer.echo(f'Direct report URL: http://{host}:{port}/r/{direct_rid}')
 
     serve(roots, host=host, port=port)
 
@@ -95,14 +113,14 @@ def main() -> None:
     try:
         from evaluatorq.redteam.cli import app as redteam_app
 
-        app.add_typer(redteam_app, name="redteam", help="Red teaming commands.")
+        app.add_typer(redteam_app, name='redteam', help='Red teaming commands.')
     except ImportError:
         pass
 
     try:
         from evaluatorq.simulation.cli import app as sim_app
 
-        app.add_typer(sim_app, name="sim", help="Agent simulation commands.")
+        app.add_typer(sim_app, name='sim', help='Agent simulation commands.')
     except ImportError:
         pass
 
@@ -110,5 +128,5 @@ def main() -> None:
 
 
 # Allow `python -m evaluatorq.cli` as well as the entry point.
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
