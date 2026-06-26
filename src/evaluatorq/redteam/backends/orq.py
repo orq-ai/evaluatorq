@@ -43,6 +43,7 @@ def _get_orq_server_url() -> str:
     return url.rstrip('/').removesuffix('/v3/router')
 
 
+from evaluatorq.common.tracing import record_token_usage, set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.backends._errors import extract_provider_error_code, extract_status_code
 from evaluatorq.redteam.backends.base import Backend
@@ -58,7 +59,6 @@ from evaluatorq.redteam.contracts import (
     ToolCallOutputItem,
     ToolInfo,
 )
-from evaluatorq.common.tracing import record_token_usage, set_span_attrs, truncate_for_span
 from evaluatorq.redteam.tracing import with_redteam_span
 
 
@@ -456,12 +456,14 @@ class ORQAgentTarget(AgentTarget):
                 fn = getattr(rich, 'function', None)
                 js = getattr(rich, 'json_schema', None)
                 if fn is not None:
-                    description = getattr(fn, 'description', None) or description
+                    description = getattr(fn, 'description', None) or getattr(rich, 'description', None) or description
                     raw_params = getattr(fn, 'parameters', None)
                 elif js is not None:
-                    description = getattr(js, 'description', None) or description
+                    description = getattr(js, 'description', None) or getattr(rich, 'description', None) or description
                     raw_params = getattr(js, 'schema_', None)
                 else:
+                    # http, mcp, and code tools do not expose parameter schemas in
+                    # the retrieved tool definition; we return description only.
                     description = getattr(rich, 'description', None) or description
                     raw_params = None
                 # SDK returns parameters/schema as a Pydantic model; ToolInfo wants a plain dict.
