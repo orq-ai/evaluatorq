@@ -3,7 +3,7 @@
 Drive your agent through realistic multi-turn conversations without writing test
 transcripts by hand. Three LLMs are in play:
 
-- **Your agent** — the target under test (a callback, or an Orq deployment).
+- **Your agent** — the target under test (a hosted Orq agent, a callback, or a legacy Orq deployment).
 - **User simulator** — plays a **persona** pursuing a **scenario** goal, turn by turn.
 - **Judge** — scores whether the goal was met and whether any rules were broken.
 
@@ -50,8 +50,8 @@ and opening messages from a short description of your agent — no hand-written
 
 === "Orq agent"
 
-    Point it at an Orq deployment with `agent_key=` (from AI Studio → Deployments).
-    The simulator and judge LLMs route through Orq by default.
+    Point it at a hosted Orq agent with `target="agent:<key>"` (the agent key from
+    AI Studio → Agents). The simulator and judge LLMs route through Orq by default.
 
     ```python
     import asyncio
@@ -62,7 +62,7 @@ and opening messages from a short description of your agent — no hand-written
     async def main():
         results = await generate_and_simulate(
             evaluation_name="support-agent-sim",
-            agent_key="my-support-agent",       # Orq deployment, routed via ORQ_API_KEY
+            target="agent:my-support-agent",     # hosted Orq agent, routed via ORQ_API_KEY
             agent_description=(
                 "Customer support agent for an e-commerce store; "
                 "handles refunds, orders, and product questions."
@@ -155,7 +155,7 @@ async def main():
 
     results = await simulate(
         evaluation_name="seeded-simulation",
-        agent_key="my-support-agent",
+        target="agent:my-support-agent",
         personas=[persona],
         scenarios=[scenario],
         max_turns=6,
@@ -180,7 +180,7 @@ not) satisfy.
 
 === "Orq agent"
 
-    Pass `agent_key=` (from AI Studio → Deployments) to route through the Orq platform.
+    Pass `target="agent:<key>"` (the agent key from AI Studio → Agents) to route to a hosted Orq agent.
 
     ```python
     import asyncio
@@ -213,7 +213,7 @@ not) satisfy.
 
         results = await simulate(
             evaluation_name="basic-simulation-example",
-            agent_key="my-support-agent",      # Orq deployment, routed via ORQ_API_KEY
+            target="agent:my-support-agent",    # hosted Orq agent, routed via ORQ_API_KEY
             personas=[persona],
             scenarios=[scenario],
             max_turns=6,

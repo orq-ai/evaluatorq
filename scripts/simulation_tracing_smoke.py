@@ -120,7 +120,7 @@ async def main() -> None:
     print("Running simulate(): 1 persona x 1 scenario, max_turns=2 ...\n")
     results = await simulate(
         evaluation_name="tracing-smoke",
-        agent_key="deployment_chat_reply",
+        target="deployment:deployment_chat_reply",
         personas=[persona],
         scenarios=[scenario],
         max_turns=2,

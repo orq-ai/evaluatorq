@@ -76,7 +76,7 @@ directories:
 | Default store | Written by |
 |---|---|
 | `.evaluatorq/runs/*.json` | `red_team()` / `eq redteam run` |
-| `.evaluatorq/sim-runs/*.json` | `simulate()` / `eq sim run` |
+| `.evaluatorq/sim-runs/*.json` | `eq sim run` (auto-saves unless `--no-save`); `simulate()` only when called with `save=True` |
 
 Files are identified by a content-hash of their absolute path — the URL for
 each report is stable for the lifetime of the file.

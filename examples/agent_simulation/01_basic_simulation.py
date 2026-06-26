@@ -89,7 +89,7 @@ async def main() -> None:
     )
 
     # 3. Run simulation
-    # target_callback=: pass any async function; use agent_key= for orq.ai deployments.
+    # target_callback=: pass any async function; use target="agent:<key>" for orq.ai agents.
     # sim_model=: the LLM used for the UserSimulator and Judge (defaults to openai/gpt-5.4-mini).
     # evaluator_names=: scorers applied to each result (default: goal_achieved, criteria_met).
     logger.info("Running simulation...")
