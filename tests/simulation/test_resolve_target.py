@@ -73,4 +73,4 @@ def test_empty_string_raises() -> None:
 
 def test_non_callable_target_raises() -> None:
     with pytest.raises(TypeError, match="Unsupported target type"):
-        _resolve_target(123, None)  # type: ignore[arg-type]
+        _resolve_target(123, None)  # pyright: ignore[reportArgumentType]
