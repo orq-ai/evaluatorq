@@ -801,7 +801,7 @@ Stress-test an agent against *real users* before they do. A **user-simulator LLM
 pip install evaluatorq[simulation]
 ```
 
-Define who the user is (`Persona`) and what they want (`Scenario`), then simulate — against a local callable or, with `agent_key=`, a live orq.ai deployment:
+Define who the user is (`Persona`) and what they want (`Scenario`), then simulate — against a hosted orq.ai agent (`target="agent:<key>"`) or a local callable:
 
 ```python
 from evaluatorq.simulation import simulate
@@ -809,7 +809,7 @@ from evaluatorq.simulation.types import CommunicationStyle, Criterion, Persona, 
 
 results = await simulate(
     evaluation_name="support-agent-sim",
-    agent_key="my-support-agent",  # or target_callback=<async fn> for a local agent
+    target="agent:my-support-agent",  # hosted Orq agent; or target_callback=<async fn> for a local agent
     personas=[Persona(
         name="Impatient Customer",
         patience=0.2,
@@ -836,7 +836,7 @@ No personas yet? `generate_and_simulate(agent_description=...)` invents personas
 
 - 📓 [Agent simulation intro notebook](examples/agent_simulation_intro.ipynb) — runnable 5-minute SDK walkthrough
 - 📘 [Concepts, entry points, datasets, CLI](src/evaluatorq/simulation/README.md)
-- 🧪 [Runnable example scripts](examples/agent_simulation/) — orq deployment, tool-using agents, hardening loop, CI gating
+- 🧪 [Runnable example scripts](examples/agent_simulation/) — orq agent & deployment targets, tool-using agents, hardening loop, CI gating
 
 ## 📚 API Reference
 

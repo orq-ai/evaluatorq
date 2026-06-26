@@ -52,9 +52,8 @@ from evaluatorq.simulation.exceptions import SimulationDroppedError
 async def simulate(
     *,
     evaluation_name: str = '',
-    agent_key: str | None = None,
     target_callback: Callable[[list[Message]], str | Awaitable[str]] | None = None,
-    target: Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = None,
+    target: str | Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = None,
     personas: list[Persona] | None = None,
     scenarios: list[Scenario] | None = None,
     datapoints: list[Datapoint] | None = None,
@@ -85,9 +84,13 @@ async def simulate(
     Args:
         target_callback: Callable that receives the conversation history and
             returns the agent's response. Kept for backwards compatibility.
-        target: Alias for ``target_callback``. Takes precedence when both are
-            supplied. May also be an ``AgentTarget`` instance, which is routed
-            to the runner's ``target_agent`` path (it speaks ``respond(messages)``).
+        target: The agent under test. Takes precedence over ``target_callback``
+            when both are supplied. Accepts a ``str`` (``"agent:<key>"`` or bare
+            ``"<key>"`` → hosted Orq agent via the Responses router;
+            ``"deployment:<key>"`` → legacy Orq deployment), an ``AgentTarget``
+            instance (routed to the runner's ``target_agent`` path; speaks
+            ``respond(messages)``), or a callable (same shape as
+            ``target_callback``).
         user_simulator: Pre-constructed ``BaseAgent`` to drive the user side.
             When omitted a default ``UserSimulatorAgent`` is built from
             ``sim_model``. ``sim_model`` drives the user-simulator, the judge,
@@ -139,7 +142,6 @@ async def simulate(
             return await _simulate_core(
                 caller='simulate',
                 evaluation_name=evaluation_name,
-                agent_key=agent_key,
                 target_callback=target_callback,
                 target=target,
                 personas=personas,
@@ -170,9 +172,8 @@ async def generate_and_simulate(
     *,
     evaluation_name: str = '',
     agent_description: str,
-    agent_key: str | None = None,
     target_callback: Callable[[list[Message]], str | Awaitable[str]] | None = None,
-    target: Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = None,
+    target: str | Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = None,
     num_personas: int = 5,
     num_scenarios: int = 5,
     max_turns: int = 10,
@@ -194,8 +195,9 @@ async def generate_and_simulate(
     """Generate personas/scenarios, then run simulations via evaluatorq().
 
     Accepts the same ``target`` shapes as :func:`simulate` — a plain callable,
-    an ``AgentTarget`` instance, or an ``agent_key`` for the Orq deployment
-    bridge. Persona/scenario/first-message generation resolves its provider via
+    an ``AgentTarget`` instance, or a string (``"agent:<key>"`` / bare ``"<key>"``
+    for a hosted Orq agent, ``"deployment:<key>"`` for the Orq deployment bridge).
+    Persona/scenario/first-message generation resolves its provider via
     the shared factory: an injected ``generation_client`` → ``ORQ_API_KEY``
     (Orq router) → ``OPENAI_API_KEY`` (with optional ``OPENAI_BASE_URL`` for an
     OpenAI-compatible endpoint). No API key is needed when a client is injected.
@@ -267,7 +269,6 @@ async def generate_and_simulate(
                 return await _simulate_core(
                     caller='generate_and_simulate',
                     evaluation_name=evaluation_name,
-                    agent_key=agent_key,
                     target_callback=target_callback,
                     target=target,
                     personas=None,
@@ -560,9 +561,8 @@ async def _simulate_core(
     *,
     caller: str,
     evaluation_name: str,
-    agent_key: str | None,
     target_callback: Callable[[list[Message]], str | Awaitable[str]] | None,
-    target: Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None,
+    target: str | Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None,
     personas: list[Persona] | None,
     scenarios: list[Scenario] | None,
     datapoints: list[Datapoint] | None,
@@ -585,7 +585,7 @@ async def _simulate_core(
 ) -> list[SimulationResult]:
     """Core simulation logic (runs inside the orq.simulation.pipeline span).
 
-    Resolves the target (callable, ``AgentTarget``, or ``agent_key`` bridge),
+    Resolves the target (callable, ``AgentTarget``, or ``"agent:"``/``"deployment:"`` string),
     resolves/generates the datapoints, then drives the run-level lifecycle
     hooks (``on_confirm`` gate → ``on_run_start`` → ``on_run_complete``) around
     ``_simulate_via_evaluatorq``, which routes execution through evaluatorq's
@@ -597,7 +597,7 @@ async def _simulate_core(
     from evaluatorq.simulation.exceptions import SimulationCancelledError
     from evaluatorq.simulation.hooks import DefaultHooks, SimStage, SimulationRunMeta
 
-    target_callback_resolved, target_agent = _resolve_target(target, target_callback, agent_key)
+    target_callback_resolved, target_agent, target_kind_hint = _resolve_target(target, target_callback)
 
     sim_datapoints = await _resolve_or_generate_datapoints(
         caller=caller,
@@ -619,13 +619,13 @@ async def _simulate_core(
     # (the single choke point both this path and direct runner use share).
     resolved_evaluator_names = evaluator_names if evaluator_names is not None else DEFAULT_EVALUATOR_NAMES
     # Derive a human-readable target label mirroring the save block's precedence:
-    # AgentTarget instances → "agent:<key>", agent_key deployments → "deployment:<key>",
+    # AgentTarget instances → "agent:<key>", deployment strings → "deployment",
     # plain callables → "callback".
     if target_agent is not None:
         agent_key_attr = getattr(target_agent, 'agent_key', None)
         target_label = f'agent:{agent_key_attr}' if agent_key_attr else 'agent'
-    elif agent_key is not None:
-        target_label = f'deployment:{agent_key}'
+    elif target_kind_hint == 'orq_deployment':
+        target_label = 'deployment'
     else:
         target_label = 'callback'
     run_meta: SimulationRunMeta = {
@@ -692,22 +692,14 @@ async def _simulate_core(
         await await_maybe(resolved_hooks.on_run_complete(results))
         await await_maybe(resolved_hooks.on_stage_end(SimStage.SIMULATE, {'num_results': len(results)}))
 
-    # Persist only on the success path (an aborted run re-raised above). target_agent
-    # / agent_key resolve the target_kind the dashboard reads.
+    # Persist only on the success path (an aborted run re-raised above).
+    # _resolve_target's kind hint resolves the target_kind the dashboard reads.
     # TODO(RES-963): inline because on_run_complete carries no run metadata and
     # hooks aren't yet composable; move to a save hook once that lands.
     if save:
-        # Mirror _resolve_target's precedence: target/target_callback win over
-        # agent_key, so a callable passed alongside agent_key is a 'callback'
-        # run, not an 'orq_deployment' one.
-        if target_agent is not None:
-            target_kind = 'orq_agent'
-        elif target is not None or target_callback is not None:
-            target_kind = 'callback'
-        elif agent_key is not None:
-            target_kind = 'orq_deployment'
-        else:
-            target_kind = 'callback'
+        # hint is 'orq_agent' for AgentTarget / "agent:" strings, 'orq_deployment'
+        # for "deployment:" strings, and None for plain callables.
+        target_kind = target_kind_hint or 'callback'
         # A persistence failure (disk full, read-only .evaluatorq/, perms, or the
         # collision-exhaustion RuntimeError) must NOT discard a completed, paid-for
         # run. Log and still return results — the saved file is a convenience.
@@ -735,28 +727,69 @@ async def _simulate_core(
 
 
 def _resolve_target(
-    target: Callable[..., Any] | AgentTarget | None,
+    target: str | Callable[..., Any] | AgentTarget | None,
     target_callback: Callable[..., Any] | None,
-    agent_key: str | None,
-) -> tuple[Callable[[list[Message]], str | Awaitable[str]] | None, AgentTarget | None]:
-    """Resolve the simulation target into (callback, agent) for the runner.
+) -> tuple[Callable[[list[Message]], str | Awaitable[str]] | None, AgentTarget | None, str | None]:
+    """Resolve the simulation target into ``(callback, agent, kind_hint)`` for the runner.
 
     ``target`` takes precedence over ``target_callback`` when both are given.
-    An ``AgentTarget`` instance is routed to the runner's ``target_agent`` path
-    (it speaks ``respond(messages)``, not the callable shape); plain callables
-    and the ``agent_key`` deployment bridge stay on the callback path.
+    Accepts:
+
+    * an ``AgentTarget`` instance → routed to the runner's ``target_agent`` path
+      (it speaks ``respond(messages)``); kind hint ``"orq_agent"``;
+    * a ``str`` → ``"agent:<key>"`` or bare ``"<key>"`` builds a hosted Orq agent
+      target via the Responses router (hint ``"orq_agent"``) — the same backend
+      the ``eq sim`` CLI uses for ``--target agent:<key>``; ``"deployment:<key>"``
+      bridges to an Orq deployment callback (hint ``"orq_deployment"``);
+    * a plain callable → callback path (hint ``None`` → ``"callback"``).
     """
     from evaluatorq.contracts import AgentTarget
     from evaluatorq.simulation.adapters import from_orq_deployment
 
-    resolved = target or target_callback
+    resolved = target if target is not None else target_callback
+
+    if isinstance(resolved, str):
+        from evaluatorq.redteam.contracts import TargetKind
+        from evaluatorq.redteam.runner import _parse_target
+
+        if not resolved.strip():
+            raise ValueError(
+                "Target string is empty; use 'agent:<key>', 'deployment:<key>', "
+                "or a bare '<key>'."
+            )
+        kind, value = _parse_target(resolved)
+        if kind is TargetKind.AGENT:
+            # Same composite backend the CLI / red-team runner use for
+            # ``agent:<key>``: exec via the Responses router (``agent/<key>``),
+            # NOT the ORQ SDK agents endpoint. Keeps SDK and CLI on one path.
+            from evaluatorq.redteam.contracts import LLMConfig, TargetConfig
+            from evaluatorq.redteam.runner import _make_agent_backend
+
+            backend = _make_agent_backend(
+                target_config=TargetConfig(system_prompt=None),
+                pipeline_config=LLMConfig(),
+            )
+            return None, backend.create_target(value), 'orq_agent'
+        if kind is TargetKind.DEPLOYMENT:
+            return from_orq_deployment(value), None, 'orq_deployment'
+        raise ValueError(
+            f"Unsupported target kind {kind.value!r} for simulation; "
+            "use 'agent:<key>', 'deployment:<key>', an AgentTarget, or a callable."
+        )
+
     if isinstance(resolved, AgentTarget):
-        return None, resolved
-    if not resolved and agent_key:
-        resolved = from_orq_deployment(agent_key)
-    if not resolved:
-        raise ValueError('Either target_callback (or target) or agent_key is required')
-    return resolved, None
+        return None, resolved, 'orq_agent'
+    if resolved is None:
+        raise ValueError(
+            "A target is required: pass target= (an AgentTarget, a callable, "
+            "'agent:<key>', or 'deployment:<key>') or target_callback=."
+        )
+    if not callable(resolved):
+        raise TypeError(
+            f"Unsupported target type {type(resolved).__name__!r}; pass a str "
+            "('agent:<key>' / 'deployment:<key>'), an AgentTarget, or a callable."
+        )
+    return resolved, None, None
 
 
 def _require_orq_api_key(caller: str) -> str:
