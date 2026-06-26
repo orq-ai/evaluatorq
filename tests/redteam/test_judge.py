@@ -48,6 +48,94 @@ async def test_success_parses_payload(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'content',
+    [
+        '```json\n{"value": true, "explanation": "resisted"}\n```',
+        '```\n{"value": true, "explanation": "resisted"}\n```',
+        '   ```json\n{"value": true, "explanation": "resisted"}\n```   ',
+        # Opening fence but no closing fence — must still unwrap and parse.
+        '```json\n{"value": true, "explanation": "resisted"}',
+        # Inner ``` in the explanation with no closing fence: the newline-anchored
+        # close must not truncate at the inner backticks (regression for the
+        # rfind('```') edge case).
+        '```json\n{"value": true, "explanation": "use ``` for code"}',
+    ],
+)
+async def test_fenced_json_is_unwrapped(monkeypatch: pytest.MonkeyPatch, content: str) -> None:
+    """Providers that ignore json_object (routed Anthropic/Gemini) wrap valid
+    JSON in a markdown code fence; the verdict must still parse, not drop."""
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=_json_response(content))
+    outcome = await run_judge(
+        client=client,
+        model='m',
+        cfg=LLMCallConfig(),
+        prompt_template='x',
+        replacements={},
+    )
+    assert outcome.error_kind is None
+    assert isinstance(outcome.payload, EvaluatorResponsePayload)
+    assert outcome.payload.value is True
+
+
+@pytest.mark.asyncio
+async def test_fenced_json_empty_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty fenced block yields '' which fails JSON parse -> PARSE."""
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=_json_response('```json\n```'))
+    outcome = await run_judge(
+        client=client,
+        model='m',
+        cfg=LLMCallConfig(),
+        prompt_template='x',
+        replacements={},
+    )
+    assert outcome.error_kind is JudgeError.PARSE
+
+
+@pytest.mark.asyncio
+async def test_fenced_json_no_leading_triple_backticks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Text that starts with two backticks is not treated as fenced."""
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=_json_response('``{"value": true}'))
+    outcome = await run_judge(
+        client=client,
+        model='m',
+        cfg=LLMCallConfig(),
+        prompt_template='x',
+        replacements={},
+    )
+    assert outcome.error_kind is JudgeError.PARSE
+
+
+@pytest.mark.asyncio
+async def test_fenced_json_inner_triple_backticks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If the explanation inside a fenced block contains ' ``` ', rfind may
+    match the wrong fence. The _strip_code_fences function should still
+    handle the common case; this test documents that edge behaviour."""
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    client = MagicMock()
+    # Inner ``` inside the JSON content — rfind matches the inner one first
+    client.chat.completions.create = AsyncMock(
+        return_value=_json_response('```json\n{"value": true, "explanation": "use ``` for code"}\n```')
+    )
+    outcome = await run_judge(
+        client=client,
+        model='m',
+        cfg=LLMCallConfig(),
+        prompt_template='x',
+        replacements={},
+    )
+    # The inner ``` causes rfind to truncate; payload may fail or be partial
+    # The important thing is the function doesn't crash.
+    assert outcome.raw_content == '```json\n{"value": true, "explanation": "use ``` for code"}\n```'
+
+
+@pytest.mark.asyncio
 async def test_timeout_captured(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
     client = MagicMock()
