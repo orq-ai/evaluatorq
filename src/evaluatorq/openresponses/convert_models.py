@@ -66,7 +66,9 @@ class InputImageContent(_OmitNoneContent):
         Literal["input_image"],
         Field(description="The type of the input item. Always `input_image`."),
     ]
-    image_url: Annotated[str, Field(description="The URL of the image (https or data: URI).")]
+    # image_url and file_id are both optional in the contract — file_id is the
+    # alternative source — so a file_id-only image part is expressible.
+    image_url: str | None = Field(default=None, description="The URL of the image (https or data: URI).")
     file_id: str | None = Field(default=None, description="The ID of an uploaded file to use as the image.")
     detail: Literal["auto", "low", "high"] = Field(
         default="auto", description="The detail level the model uses to process the image."

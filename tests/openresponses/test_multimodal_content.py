@@ -27,6 +27,18 @@ def test_input_image_content_minimal() -> None:
     assert img.detail == "auto"  # default
 
 
+def test_input_image_content_file_id_only() -> None:
+    """image_url is optional — a file_id-only image part is valid (file_id is
+    the alternative source in the contract)."""
+    img = InputImageContent(type="input_image", file_id="file_123")
+    assert img.image_url is None
+    assert img.model_dump(mode="json") == {
+        "type": "input_image",
+        "file_id": "file_123",
+        "detail": "auto",
+    }
+
+
 def test_input_image_content_detail_choices() -> None:
     assert InputImageContent(type="input_image", image_url="https://x", detail="low").detail == "low"
     with pytest.raises(ValidationError):
