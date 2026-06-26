@@ -59,7 +59,7 @@ jobs:
     steps:
       - name: Deploy
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
       - name: Verify Pages live (HTTP 200)
         run: |
           url="${{ steps.deployment.outputs.page_url }}"
