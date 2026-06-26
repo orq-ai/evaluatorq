@@ -15,15 +15,15 @@ _EQ_MOD = sys.modules["evaluatorq.evaluatorq"]
 
 from evaluatorq.simulation.types import (
     CommunicationStyle,
-    Datapoint,
+    SimulationDatapoint,
     Message,
     Persona,
     Scenario,
 )
 
 
-def _make_datapoint() -> Datapoint:
-    return Datapoint(
+def _make_datapoint() -> SimulationDatapoint:
+    return SimulationDatapoint(
         id="dp-001",
         persona=Persona(
             name="P",
