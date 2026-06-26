@@ -202,6 +202,31 @@ def runs_screen_body(rows: list[RunRow], surface: str) -> str:
     )
 
 
+_ARROW_LEFT = (
+    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+    ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>'
+)
+_DOWNLOAD_ICON = (
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+    ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>'
+    '<path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>'
+)
+
+
+def report_back_link(surface: str) -> str:
+    """Render the 'back to run list' link shown above a report (matches v1)."""
+    target = f'/?surface={esc(surface)}' if surface in ('redteam', 'sim') else '/'
+    label = {'redteam': 'Red team runs', 'sim': 'Agent sim runs'}.get(surface, 'All runs')
+    return f'<a class="report-back" href="{target}">{_ARROW_LEFT} {esc(label)}</a>'
+
+
+def report_actions(rid: str) -> str:
+    """Render the topbar action area for a report view (Export)."""
+    return f'<a class="btn-secondary" href="/r/{esc(rid)}/export.html">{_DOWNLOAD_ICON} Export</a>'
+
+
 def settings_body() -> str:
     """Render the Settings stub screen (not part of the v1 demo)."""
     return (

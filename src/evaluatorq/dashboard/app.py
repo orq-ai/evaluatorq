@@ -57,6 +57,8 @@ from evaluatorq.dashboard.view import (
     landing_body,
     redteam_interactive_panels,
     render_filter_form,
+    report_actions,
+    report_back_link,
     report_broken,
     report_not_found,
     report_view_with_filters,
@@ -149,6 +151,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
 
         body_html = adapter.body(report_obj)
         name = adapter.name(report_obj)
+        back_link = report_back_link(surface or '')
 
         # Render filter form alongside the body.  Both known surfaces
         # (redteam, sim) are registered in FILTERS; fall back to 404 for unknown surfaces.
@@ -180,7 +183,13 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         )
         body_with_filters = body_with_filters + dl_sidebar
 
-        html = page(name, body_with_filters, active_surface=surface)
+        full_body = f'<div class="report-head">{back_link}</div>{body_with_filters}'
+        html = page(
+            name,
+            full_body,
+            active_surface=surface,
+            actions_html=report_actions(rid),
+        )
         return NotStr(html)
 
     # ------------------------------------------------------------------
