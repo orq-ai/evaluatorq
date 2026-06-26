@@ -139,11 +139,12 @@ async def main() -> None:
         raise SystemExit("ORQ_API_KEY is not set")
 
     if args.deployment:
-        # Deployment path: agent_key= routes through from_orq_deployment() internally,
-        # which calls evaluatorq.deployment.invoke - stateless prompt + model config.
+        # Deployment path: target="deployment:<key>" routes through
+        # from_orq_deployment() internally, which calls evaluatorq.deployment.invoke
+        # - stateless prompt + model config.
         target_key = args.deployment
         agent_description = args.description or f"orq.ai deployment '{args.deployment}'"
-        target_kwargs: dict[str, Any] = {"agent_key": target_key}
+        target_kwargs: dict[str, Any] = {"target": f"deployment:{target_key}"}
         logger.info(f"Target: deployment '{target_key}'")
     else:
         # A2A agent path: wrap client.agents.responses.create as a target_callback.

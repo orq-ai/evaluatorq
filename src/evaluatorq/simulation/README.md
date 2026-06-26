@@ -30,7 +30,7 @@ from evaluatorq.simulation import simulate
 
 results = await simulate(
     evaluation_name="support-agent-sim",
-    target_callback=my_async_agent,   # or agent_key="..." / target=AgentTarget
+    target_callback=my_async_agent,   # or target="agent:<key>" / target=AgentTarget
     personas=[persona],
     scenarios=[scenario],
     max_turns=8,
@@ -45,9 +45,10 @@ A runnable, narrated walkthrough lives in
 
 The agent under test is supplied one of these ways (mutually exclusive):
 
-- **`target_callback=` / `target=`** — any `async`/sync callable `(list[Message]) -> str`. The simplest path; great for local mocks and quick checks.
+- **`target="agent:<key>"`** (or bare **`target="<key>"`**) — a hosted **orq.ai** agent, invoked through the stateless Responses API target. Requires `ORQ_API_KEY`. The primary path.
+- **`target="deployment:<key>"`** — bridges to a legacy **orq.ai** deployment. Requires `ORQ_API_KEY`.
 - **`target=<AgentTarget>`** — an `AgentTarget` instance (e.g. `OrqResponsesTarget`) that speaks `respond(messages)`.
-- **`agent_key="..."`** — bridges to a live **orq.ai** deployment. Requires `ORQ_API_KEY`.
+- **`target_callback=` / `target=<callable>`** — any `async`/sync callable `(list[Message]) -> str`. Great for local mocks and quick checks.
 
 On the CLI, prefer `--target` to mirror red teaming:
 

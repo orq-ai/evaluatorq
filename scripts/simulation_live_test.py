@@ -70,7 +70,7 @@ async def main() -> None:
     print("[1] Running simulation against 'deployment_chat_reply'...\n")
     results = await simulate(
         evaluation_name="live-test",
-        agent_key="deployment_chat_reply",
+        target="deployment:deployment_chat_reply",
         personas=[persona],
         scenarios=[scenario],
         max_turns=5,

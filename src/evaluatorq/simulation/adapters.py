@@ -30,6 +30,9 @@ def from_orq_deployment(
             messages=[{"role": m.role, "content": m.content or ""} for m in messages],
         )
 
+    # Carry the key so the run-metadata label can render "deployment:<key>",
+    # symmetric to how an AgentTarget exposes `agent_key`.
+    callback.deployment_key = agent_key  # pyright: ignore[reportFunctionMemberAccess]
     return callback
 
 

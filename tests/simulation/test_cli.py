@@ -174,28 +174,24 @@ def test_sanitise_run_name_strips_leading_trailing_underscores() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_infer_target_kind_agent_key() -> None:
-    assert _infer_target_kind(target=None, agent_key="k", vercel_url=None, openai_model=None) == "orq_deployment"
-
-
 def test_infer_target_kind_agent_target() -> None:
-    assert _infer_target_kind(target="agent:k", agent_key=None, vercel_url=None, openai_model=None) == "orq_agent"
+    assert _infer_target_kind(target="agent:k", vercel_url=None, openai_model=None) == "orq_agent"
 
 
 def test_infer_target_kind_bare_target_defaults_agent() -> None:
-    assert _infer_target_kind(target="k", agent_key=None, vercel_url=None, openai_model=None) == "orq_agent"
+    assert _infer_target_kind(target="k", vercel_url=None, openai_model=None) == "orq_agent"
 
 
 def test_infer_target_kind_deployment_target() -> None:
-    assert _infer_target_kind(target="deployment:k", agent_key=None, vercel_url=None, openai_model=None) == "orq_deployment"
+    assert _infer_target_kind(target="deployment:k", vercel_url=None, openai_model=None) == "orq_deployment"
 
 
 def test_infer_target_kind_vercel() -> None:
-    assert _infer_target_kind(target=None, agent_key=None, vercel_url="http://x", openai_model=None) == "vercel"
+    assert _infer_target_kind(target=None, vercel_url="http://x", openai_model=None) == "vercel"
 
 
 def test_infer_target_kind_openai() -> None:
-    assert _infer_target_kind(target=None, agent_key=None, vercel_url=None, openai_model="gpt-4o") == "openai_model"
+    assert _infer_target_kind(target=None, vercel_url=None, openai_model="gpt-4o") == "openai_model"
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +201,7 @@ def test_infer_target_kind_openai() -> None:
 
 def test_resolve_target_agent_prefix_uses_openresponses_backend(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ORQ_API_KEY", "test-key")
-    target = _resolve_target(target="agent:refund-agent-fixed", agent_key=None, vercel_url=None, openai_model=None)
+    target = _resolve_target(target="agent:refund-agent-fixed", vercel_url=None, openai_model=None)
 
     assert target.config.model == "agent/refund-agent-fixed"
     assert target.require_orq is True
@@ -213,7 +209,7 @@ def test_resolve_target_agent_prefix_uses_openresponses_backend(monkeypatch: pyt
 
 def test_resolve_target_bare_value_defaults_to_agent(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ORQ_API_KEY", "test-key")
-    target = _resolve_target(target="refund-agent-fixed", agent_key=None, vercel_url=None, openai_model=None)
+    target = _resolve_target(target="refund-agent-fixed", vercel_url=None, openai_model=None)
 
     assert target.config.model == "agent/refund-agent-fixed"
 
@@ -222,7 +218,7 @@ def test_resolve_target_deployment_prefix_uses_deployment_callback(monkeypatch: 
     marker = object()
     monkeypatch.setenv("ORQ_API_KEY", "test-key")
     with patch("evaluatorq.simulation.adapters.from_orq_deployment", return_value=marker) as factory:
-        target = _resolve_target(target="deployment:refund-agent-fixed", agent_key=None, vercel_url=None, openai_model=None)
+        target = _resolve_target(target="deployment:refund-agent-fixed", vercel_url=None, openai_model=None)
 
     assert target is marker
     factory.assert_called_once_with("refund-agent-fixed")
