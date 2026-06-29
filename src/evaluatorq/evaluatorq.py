@@ -7,6 +7,9 @@ from datetime import datetime, timezone
 from itertools import starmap
 from typing import Any, cast
 
+from loguru import logger
+
+from .common.messages import coerce_content_text
 from .fetch_data import fetch_dataset_batches, setup_orq_client
 from .processings import process_data_point
 from .progress import Phase, ProgressService, with_progress
@@ -31,24 +34,73 @@ from .types import (
 )
 
 
-def check_pass_failures(results: EvaluatorqResult) -> bool:
+def check_pass_failures(
+    results: EvaluatorqResult, *, treat_errors_as_failure: bool = False
+) -> bool:
     """
     Check if any evaluator returned pass_=False.
 
     Args:
         results: The evaluation results to check
+        treat_errors_as_failure: When True, a row whose job errored (e.g. a missing
+            recorded response in no-inference mode) also counts as a failure. Without
+            this, an errored job has no evaluator scores and would be invisible here,
+            letting a run with no usable responses exit successfully.
 
     Returns:
         True if any evaluator failed (pass_=False), False otherwise
     """
     for data_point_result in results:
+        if treat_errors_as_failure and data_point_result.error:
+            return True
         if data_point_result.job_results:
             for job_result in data_point_result.job_results:
+                if treat_errors_as_failure and job_result.error:
+                    return True
                 if job_result.evaluator_scores:
                     for evaluator_score in job_result.evaluator_scores:
                         if evaluator_score.score.pass_ is False:
                             return True
     return False
+
+
+def extract_recorded_response(messages: Any) -> str:
+    """Return the last recorded assistant response from a row's ``messages`` column.
+
+    Used by the no-inference path: the pre-recorded conversation already contains the
+    response we want to score, so we surface the last assistant message's text rather
+    than generating a new one.
+
+    Raises:
+        ValueError: if ``messages`` is empty or holds no assistant message with text.
+    """
+    if not messages:
+        raise ValueError(
+            "inference=False requires a recorded response in the 'messages' column, "
+            "but this row has no messages."
+        )
+    for message in reversed(list(messages)):
+        role = message.get("role") if isinstance(message, dict) else getattr(message, "role", None)
+        if role != "assistant":
+            continue
+        content = (
+            message.get("content") if isinstance(message, dict) else getattr(message, "content", None)
+        )
+        text = coerce_content_text(content)
+        if text.strip():
+            return text
+    raise ValueError(
+        "inference=False requires a recorded response in the 'messages' column, "
+        "but this row has no assistant message with text content."
+    )
+
+
+# Must be async to satisfy the Job protocol (an Awaitable-returning callable), even
+# though replaying a recorded response involves no awaiting.
+async def _replay_recorded_response(data_point: DataPoint, _row_index: int) -> dict[str, Any]:  # noqa: RUF029
+    """Synthetic job for the no-inference path: replays the pre-recorded response."""
+    response = extract_recorded_response(data_point.inputs.get("messages"))
+    return {"name": "recorded", "output": response}
 
 
 async def evaluatorq(
@@ -62,6 +114,7 @@ async def evaluatorq(
     print_results: bool = True,
     description: str | None = None,
     path: str | None = None,
+    inference: bool = True,
     _exit_on_failure: bool = True,
     _send_results: bool = True,
     _base_url: str | None = None,
@@ -93,6 +146,9 @@ async def evaluatorq(
         description: Optional description for the evaluation run.
         path: Optional path (e.g. "MyProject/MyFolder") to place the experiment
               in a specific project and folder on the Orq platform.
+        inference: When True (default) jobs run to generate responses. When False,
+              generation is skipped and evaluators score the pre-recorded response in
+              each row's ``messages`` column; ``jobs`` is then optional and ignored.
 
     Returns:
         List of DataPointResult objects
@@ -105,8 +161,8 @@ async def evaluatorq(
     if params is not None:
         # Validate params if passed as dict
         validated = EvaluatorParams.model_validate(params) if isinstance(params, dict) else params
-    elif data is not None and jobs is not None:
-        # Use kwargs
+    elif data is not None and (jobs is not None or not inference):
+        # Use kwargs ('jobs' is optional when inference=False, since responses are replayed).
         validated = EvaluatorParams(
             data=data,
             jobs=jobs,
@@ -115,15 +171,25 @@ async def evaluatorq(
             print_results=print_results,
             description=description,
             path=path,
+            inference=inference,
         )
     else:
         raise ValueError(
-            "Either 'params' or both 'data' and 'jobs' keyword arguments are required"
+            "Either 'params' or both 'data' and 'jobs' keyword arguments are required "
+            "(omit 'jobs' only when inference=False)"
         )
 
     # Extract validated values
     data = validated.data
-    jobs = validated.jobs
+    inference = validated.inference
+    if inference:
+        # The validator guarantees jobs is non-empty whenever inference=True.
+        jobs = cast("list[Job]", validated.jobs)
+    else:
+        # No-inference mode: skip generation and replay each row's recorded response.
+        if validated.jobs:
+            logger.warning("inference=False: ignoring the provided 'jobs'; responses are replayed from the 'messages' column.")
+        jobs = [_replay_recorded_response]
     evaluators_list = validated.evaluators or []
     parallelism = validated.parallelism
     print_results = validated.print_results
@@ -164,7 +230,11 @@ async def evaluatorq(
                 "ORQ_API_KEY environment variable must be set to fetch datapoints from Orq platform."
             )
         dataset_id = data.dataset_id
-        include_messages = data.include_messages
+        # No-inference mode needs the recorded responses, which arrive in the
+        # 'messages' column only when include_messages is enabled.
+        include_messages = data.include_messages or not inference
+        if include_messages and not data.include_messages:
+            logger.debug("inference=False: enabling include_messages to load recorded responses despite include_messages=False on the dataset input.")
 
         # Stream fetch and process batches concurrently
         async def run_streaming_evaluation() -> EvaluatorqResult:
@@ -326,8 +396,10 @@ async def evaluatorq(
         await asyncio.sleep(2)  # Give additional time for network operations
         await shutdown_tracing()
 
-    # Check for pass failures and exit if any
-    has_failures = check_pass_failures(results)
+    # Check for pass failures and exit if any. In no-inference mode a row that has no
+    # usable recorded response surfaces as a job error rather than an evaluator score,
+    # so count those errors as failures too (the mode must fail loudly, not exit 0).
+    has_failures = check_pass_failures(results, treat_errors_as_failure=not inference)
     if has_failures and _exit_on_failure:
         sys.exit(1)
 

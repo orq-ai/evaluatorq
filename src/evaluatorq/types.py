@@ -2,7 +2,7 @@ import json
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
 from typing_extensions import TypedDict
 
 from evaluatorq.contracts import TokenUsage
@@ -185,9 +185,18 @@ class EvaluatorParams(BaseModel):
     }
 
     data: DatasetIdInput | Sequence[Awaitable[DataPoint] | DataPointInput]
-    jobs: list[Job]
+    jobs: list[Job] | None = None
     evaluators: list[Evaluator] | None = None
     parallelism: int = Field(default=1, ge=1)
     print_results: bool = Field(default=True, validation_alias="print")
     description: str | None = None
     path: str | None = None
+    inference: bool = True
+    """When False, skip generation and evaluate the pre-recorded response in each
+    row's ``messages`` column instead of running ``jobs``."""
+
+    @model_validator(mode="after")
+    def _require_jobs_when_inferring(self) -> "EvaluatorParams":
+        if self.inference and not self.jobs:
+            raise ValueError("'jobs' is required unless inference=False")
+        return self
