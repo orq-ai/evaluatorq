@@ -252,16 +252,18 @@ class Message(BaseModel):
             param: dict[str, Any] = {
                 'role': 'tool',
                 'tool_call_id': self.tool_call_id or '',
-                'content': self.content or '',
+                'content': content_to_text(self.content),
             }
             if self.name:
                 param['name'] = self.name
             return param
         if self.role == 'assistant' and self.tool_calls:
-            # content may be None on a pure tool-call turn; OpenAI accepts null.
+            # content may be None on a pure tool-call turn; OpenAI accepts null, so
+            # preserve None and only render string/list content (multi-part lists would
+            # otherwise leak raw Pydantic objects into the payload).
             return {
                 'role': 'assistant',
-                'content': self.content,
+                'content': _render_chat_content(self.content) if self.content is not None else None,
                 'tool_calls': [
                     {
                         'id': tc.id,

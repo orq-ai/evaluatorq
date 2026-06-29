@@ -9,7 +9,14 @@ import pytest
 
 pytest.importorskip("agents")
 
-from evaluatorq.contracts import FunctionCall, Message, StrategyToolCall, ToolCallOutputItem  # noqa: E402
+from evaluatorq.contracts import (  # noqa: E402
+    FunctionCall,
+    InputImageContent,
+    InputTextContent,
+    Message,
+    StrategyToolCall,
+    ToolCallOutputItem,
+)
 from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget  # noqa: E402
 from evaluatorq.integrations.openai_agents_integration.target import (  # noqa: E402
     _message_to_responses_input_items,
@@ -172,6 +179,28 @@ class TestOpenAIAgentTarget:
         assert len(tool_calls) == 1
         assert tool_calls[0].name == "lookup"
         assert tool_calls[0].arguments == '{"q":"x"}'
+
+    def test_responses_input_items_render_multipart_content(self) -> None:
+        """A user message with multi-part content passes straight through as
+        Responses-API content parts (dict-dumped), not raw Pydantic objects."""
+        items = _message_to_responses_input_items(
+            Message(
+                role="user",
+                content=[
+                    InputTextContent(type="input_text", text="what is this?"),
+                    InputImageContent(type="input_image", image_url="https://x/y.png"),
+                ],
+            )
+        )
+
+        assert len(items) == 1
+        item = items[0]
+        assert item["role"] == "user"
+        assert isinstance(item["content"], list)
+        # Each part is a plain dict (model_dump), never a ContentPart instance.
+        assert all(isinstance(part, dict) for part in item["content"])
+        assert item["content"][0]["text"] == "what is this?"
+        assert item["content"][1]["image_url"] == "https://x/y.png"
 
     @pytest.mark.asyncio
     async def test_no_warning_when_input_echoed(
