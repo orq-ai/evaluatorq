@@ -38,8 +38,7 @@ sequenceDiagram
         A-->>U: response
     end
     U->>J: full transcript + scenario
-    A->>J: agent responses
-    J-->>U: goal achieved / criteria met scores
+    Note over J: scores goal_achieved / criteria_met
 ```
 
 ## Generate from a one-line description
@@ -131,7 +130,10 @@ and opening messages from a short description of your agent — no hand-written
     ```
 
 `agent_description` drives generation; `num_personas × num_scenarios` is how many
-conversations run. Provider resolves `ORQ_API_KEY` → `OPENAI_API_KEY`.
+conversations run. The simulator and judge LLMs resolve their provider by
+precedence: if `ORQ_API_KEY` is set they route through the Orq AI Router;
+otherwise they fall back to OpenAI via `OPENAI_API_KEY` (an explicitly passed
+client always wins). See [Configuration](../configuration.md).
 
 ## Seed by archetype
 
@@ -177,6 +179,11 @@ When you want exact personas and pass/fail criteria, build them yourself and cal
 `simulate()`. A **persona** is *who* is talking (patience, assertiveness, tone);
 a **scenario** is *what they want* plus the **criteria** the agent must (or must
 not) satisfy.
+
+A persona requires its core traits — `name`, `patience`, `assertiveness`,
+`politeness`, `technical_level`, `communication_style`, and `background`. Only
+`emotional_arc` and `cultural_context` default (to `None`). A scenario needs just
+`name` and `goal`; everything else, including `criteria`, is optional.
 
 === "Orq agent"
 
@@ -245,7 +252,7 @@ not) satisfy.
 
     from evaluatorq.contracts import Message
     from evaluatorq.simulation import simulate
-    from evaluatorq.simulation.types import Criterion, Persona, Scenario
+    from evaluatorq.simulation.types import CommunicationStyle, Criterion, Persona, Scenario
 
     client = AsyncOpenAI()
 
@@ -261,7 +268,12 @@ not) satisfy.
 
 
     async def main():
-        persona = Persona(name="Impatient Customer", patience=0.2, assertiveness=0.8)
+        persona = Persona(
+            name="Impatient Customer",
+            patience=0.2, assertiveness=0.8, politeness=0.4, technical_level=0.3,
+            communication_style=CommunicationStyle.terse,
+            background="Received the wrong item and wants a refund urgently",
+        )
         scenario = Scenario(
             name="Wrong Item Refund",
             goal="Get a full refund for the wrong item received",

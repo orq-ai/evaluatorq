@@ -6,7 +6,6 @@ resistance rate.
 
 *[ASI]: OWASP Agentic Security Initiative
 *[LLM01]: Prompt Injection
-*[ASR]: Attack Success Rate
 
 ```mermaid
 flowchart LR
@@ -14,7 +13,7 @@ flowchart LR
     SP --> AG["Attack generator"]
     AG --> OR["Runner / orchestrator"]
     OR --> EV["OWASP evaluator"]
-    EV --> RP["Report: ASR"]
+    EV --> RP["Report: resistance rate"]
 ```
 
 ## Modes
@@ -109,6 +108,13 @@ flowchart LR
         with `openai/...` (which then uses `ORQ_API_KEY`). Everything else —
         categories, modes, the report — is identical to the Orq agent path.
 
+!!! note "`generate_strategies` and the CLI"
+    Both examples pass `generate_strategies=False` to skip LLM-authored attack
+    strategies and run only the built-in ones — faster and more deterministic.
+    The parameter defaults to `True`. On the CLI the equivalent is the
+    `--no-generate-strategies` flag; there is no positive form, since generation
+    is on by default.
+
 ## Reading the report
 
 `report.summary.resistance_rate` is the fraction of attacks the target withstood
@@ -119,9 +125,24 @@ flowchart LR
 
 ## In CI
 
-For a fast gate, use the smoke example
-([`08_quick_smoke_test.py`](../examples/redteam/08_quick_smoke_test.md)) —
-a small fixed run you can assert a minimum resistance rate against.
+For a fast gate, run a small fixed set of attacks and assert a minimum
+resistance rate, failing the build if the target regresses:
+
+```python
+report = await red_team(
+    OpenAIModelTarget("gpt-4o-mini", system_prompt="..."),
+    mode="static",                 # replay a fixed dataset — deterministic, cheap
+    categories=["LLM01", "LLM07"],
+    max_static_datapoints=10,
+)
+assert report.summary.resistance_rate >= 0.9, (
+    f"resistance {report.summary.resistance_rate:.0%} below the 0.9 gate"
+)
+```
+
+The runnable smoke example
+([`08_quick_smoke_test.py`](../examples/redteam/08_quick_smoke_test.md)) wraps
+this same pattern.
 
 !!! tip "View results in the local dashboard"
     Run `eq ui` to browse saved red-team and simulation reports together, or use
@@ -130,4 +151,5 @@ a small fixed run you can assert a minimum resistance rate against.
 ## Where to next
 
 - **[Examples › Red Teaming](../examples/index.md)** — static datasets, category filtering, custom clients, multi-target, report inspection, custom hooks.
+- **[API Reference › redteam](../reference/evaluatorq/redteam.md)** — the full `Vulnerability` enum and the OWASP `LLM__` / `ASI__` category codes you can pass to `categories=`. The [CLI Reference](../cli-reference.md#eq-redteam-run) lists the same as `--category` / `--vulnerability`.
 - **[Custom Evaluators & Frameworks](../custom-evaluators-and-frameworks.md)** — add your own vulnerabilities and attack strategies.
