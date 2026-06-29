@@ -145,8 +145,8 @@ The runnable smoke example
 this same pattern.
 
 !!! tip "View results in the local dashboard"
-    Run `eq ui` to browse saved red-team and simulation reports together, or use
-    `eq redteam ui` / `eq sim ui` for a surface-specific view.
+    Run `eq dashboard` to browse saved red-team and simulation reports together;
+    `eq redteam ui` / `eq sim ui` open the legacy Streamlit views for one surface.
 
 ## Where to next
 
