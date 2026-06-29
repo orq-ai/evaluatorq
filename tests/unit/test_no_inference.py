@@ -3,7 +3,7 @@
 import pytest
 
 from evaluatorq import evaluatorq
-from evaluatorq.evaluatorq import extract_recorded_response
+from evaluatorq.evaluatorq import check_pass_failures, extract_recorded_response
 from evaluatorq.types import DataPoint, EvaluationResult, ScorerParameter
 
 
@@ -122,6 +122,11 @@ async def test_no_inference_missing_response_errors_clearly():
     assert job_result.output is None
     assert job_result.error is not None
     assert "messages" in job_result.error
+
+    # Fail-loud at the run level: a missing recorded response leaves no evaluator
+    # score, so only treat_errors_as_failure surfaces it (the run must not exit 0).
+    assert check_pass_failures(results) is False
+    assert check_pass_failures(results, treat_errors_as_failure=True) is True
 
 
 @pytest.mark.asyncio
