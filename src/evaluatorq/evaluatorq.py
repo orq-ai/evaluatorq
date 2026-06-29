@@ -7,6 +7,9 @@ from datetime import datetime, timezone
 from itertools import starmap
 from typing import Any, cast
 
+from loguru import logger
+
+from .common.messages import coerce_content_text
 from .fetch_data import fetch_dataset_batches, setup_orq_client
 from .processings import process_data_point
 from .progress import Phase, ProgressService, with_progress
@@ -51,6 +54,43 @@ def check_pass_failures(results: EvaluatorqResult) -> bool:
     return False
 
 
+def extract_recorded_response(messages: Any) -> str:
+    """Return the last recorded assistant response from a row's ``messages`` column.
+
+    Used by the no-inference path: the pre-recorded conversation already contains the
+    response we want to score, so we surface the last assistant message's text rather
+    than generating a new one.
+
+    Raises:
+        ValueError: if ``messages`` is empty or holds no assistant message with text.
+    """
+    if not messages:
+        raise ValueError(
+            "inference=False requires a recorded response in the 'messages' column, "
+            "but this row has no messages."
+        )
+    for message in reversed(list(messages)):
+        role = message.get("role") if isinstance(message, dict) else getattr(message, "role", None)
+        if role != "assistant":
+            continue
+        content = (
+            message.get("content") if isinstance(message, dict) else getattr(message, "content", None)
+        )
+        text = coerce_content_text(content)
+        if text.strip():
+            return text
+    raise ValueError(
+        "inference=False requires a recorded response in the 'messages' column, "
+        "but this row has no assistant message with text content."
+    )
+
+
+async def _replay_recorded_response(data_point: DataPoint, _row_index: int) -> dict[str, Any]:
+    """Synthetic job for the no-inference path: replays the pre-recorded response."""
+    response = extract_recorded_response(data_point.inputs.get("messages"))
+    return {"name": "recorded", "output": response}
+
+
 async def evaluatorq(
     name: str,
     params: EvaluatorParams | dict[str, Any] | None = None,
@@ -62,6 +102,7 @@ async def evaluatorq(
     print_results: bool = True,
     description: str | None = None,
     path: str | None = None,
+    inference: bool = True,
     _exit_on_failure: bool = True,
     _send_results: bool = True,
     _base_url: str | None = None,
@@ -93,6 +134,9 @@ async def evaluatorq(
         description: Optional description for the evaluation run.
         path: Optional path (e.g. "MyProject/MyFolder") to place the experiment
               in a specific project and folder on the Orq platform.
+        inference: When True (default) jobs run to generate responses. When False,
+              generation is skipped and evaluators score the pre-recorded response in
+              each row's ``messages`` column; ``jobs`` is then optional and ignored.
 
     Returns:
         List of DataPointResult objects
@@ -105,8 +149,8 @@ async def evaluatorq(
     if params is not None:
         # Validate params if passed as dict
         validated = EvaluatorParams.model_validate(params) if isinstance(params, dict) else params
-    elif data is not None and jobs is not None:
-        # Use kwargs
+    elif data is not None and (jobs is not None or not inference):
+        # Use kwargs ('jobs' is optional when inference=False — responses are replayed).
         validated = EvaluatorParams(
             data=data,
             jobs=jobs,
@@ -115,15 +159,24 @@ async def evaluatorq(
             print_results=print_results,
             description=description,
             path=path,
+            inference=inference,
         )
     else:
         raise ValueError(
-            "Either 'params' or both 'data' and 'jobs' keyword arguments are required"
+            "Either 'params' or both 'data' and 'jobs' keyword arguments are required "
+            "(omit 'jobs' only when inference=False)"
         )
 
     # Extract validated values
     data = validated.data
-    jobs = validated.jobs
+    inference = validated.inference
+    if inference:
+        jobs = validated.jobs or []
+    else:
+        # No-inference mode: skip generation and replay each row's recorded response.
+        if validated.jobs:
+            logger.warning("inference=False: ignoring the provided 'jobs'; responses are replayed from the 'messages' column.")
+        jobs = [_replay_recorded_response]
     evaluators_list = validated.evaluators or []
     parallelism = validated.parallelism
     print_results = validated.print_results
@@ -164,7 +217,9 @@ async def evaluatorq(
                 "ORQ_API_KEY environment variable must be set to fetch datapoints from Orq platform."
             )
         dataset_id = data.dataset_id
-        include_messages = data.include_messages
+        # No-inference mode needs the recorded responses, which arrive in the
+        # 'messages' column only when include_messages is enabled.
+        include_messages = data.include_messages or not inference
 
         # Stream fetch and process batches concurrently
         async def run_streaming_evaluation() -> EvaluatorqResult:
