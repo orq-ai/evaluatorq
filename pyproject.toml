@@ -212,7 +212,7 @@ dependencies = [
   "vl-convert-python>=1.6.0"
 ]
   dashboard = [
-  "python-fasthtml>=0.12.0,<0.13.0",
+  "python-fasthtml>=0.12.0,<0.15.0",
   "uvicorn>=0.30.0",
   "vl-convert-python>=1.6.0"
 ]
