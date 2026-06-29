@@ -13,12 +13,12 @@ Saved runs land in ``.evaluatorq/sim-runs/`` under collision-free
 from __future__ import annotations
 
 import logging
-import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.simulation.types import SimulationRun
 
 logger = logging.getLogger(__name__)
@@ -35,10 +35,8 @@ def sanitise_run_name(name: str) -> str:
 
 
 def get_sim_runs_dir() -> Path:
-    base = os.environ.get("EVALUATORQ_DIR")
-    if base:
-        return Path(base) / "sim-runs"
-    return Path.cwd() / SIM_RUNS_DIR_NAME
+    """Return the agent sim runs directory (``<store>/sim-runs``)."""
+    return get_store_dir("sim-runs")
 
 
 def build_simulation_run(
