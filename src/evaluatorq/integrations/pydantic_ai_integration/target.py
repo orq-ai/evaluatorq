@@ -17,6 +17,7 @@ from evaluatorq.contracts import (
     TextOutputItem,
     TokenUsage,
     ToolCallOutputItem,
+    content_to_text,
 )
 
 if TYPE_CHECKING:
@@ -83,7 +84,7 @@ class PydanticAITarget(AgentTarget):
         """Send the latest user turn to the agent; thread history internally."""
         if not messages or messages[-1].role != "user":
             raise ValueError("PydanticAITarget.respond requires messages[-1].role == 'user'")
-        prompt = messages[-1].content or ""
+        prompt = content_to_text(messages[-1].content)
 
         result = await self._agent.run(
             prompt,

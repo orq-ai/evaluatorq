@@ -8,14 +8,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from evaluatorq.contracts import Message
+from evaluatorq.contracts import Message, content_to_text
 from evaluatorq.integrations.callable_integration import CallableTarget
 from evaluatorq.redteam.contracts import AgentResponse, OutputMessage, TextOutputItem, TokenUsage, ToolCallOutputItem
 
 
 def _last(messages: list[Message]) -> str:
     """Read the last turn's content off a Message list."""
-    return messages[-1].content or ""
+    return content_to_text(messages[-1].content)
 
 
 class TestCallableTarget:
@@ -252,7 +252,7 @@ class TestCallableTargetUsage:
         captured: dict[str, list[str]] = {}
 
         def usage_fn(messages: list[Message], response: str) -> TokenUsage:
-            captured["contents"] = [m.content or "" for m in messages]
+            captured["contents"] = [content_to_text(m.content) for m in messages]
             return TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, calls=1)
 
         target = CallableTarget(lambda messages: "response", usage_fn=usage_fn)

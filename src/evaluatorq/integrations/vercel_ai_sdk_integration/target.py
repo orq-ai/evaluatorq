@@ -27,6 +27,7 @@ from evaluatorq.contracts import (
     OutputMessage,
     TextOutputItem,
     TokenUsage,
+    content_to_text,
 )
 
 AISdkMessageFormat = Literal['v4', 'v5']
@@ -214,7 +215,7 @@ def _message_to_ai_sdk_message(m: Message, *, version: AISdkMessageFormat = 'v5'
     if m.role == 'assistant' and m.tool_calls:
         parts: list[dict[str, Any]] = []
         if m.content:
-            parts.append({'type': 'text', 'text': m.content})
+            parts.append({'type': 'text', 'text': content_to_text(m.content)})
         input_key = 'args' if version == 'v4' else 'input'
         for tc in m.tool_calls:
             try:
@@ -229,7 +230,7 @@ def _message_to_ai_sdk_message(m: Message, *, version: AISdkMessageFormat = 'v5'
                 input_key: tool_input,
             })
         return {'role': 'assistant', 'content': parts}
-    return {'role': m.role, 'content': m.content or ''}
+    return {'role': m.role, 'content': content_to_text(m.content)}
 
 
 def _parse_data_stream(raw: str) -> tuple[str, TokenUsage | None]:

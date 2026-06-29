@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from evaluatorq.contracts import Message
+from evaluatorq.contracts import Message, content_to_text
 from evaluatorq.integrations.callable_integration import CallableTarget
 
 
@@ -18,7 +18,7 @@ class TestCallableIntegration:
         history: list[str] = []
 
         async def stateful_agent(messages: list[Message]) -> str:
-            history.append(messages[-1].content or "")
+            history.append(content_to_text(messages[-1].content))
             return f"You said {len(history)} things so far."
 
         def reset() -> None:

@@ -182,11 +182,15 @@ class OrqResponsesTarget(AgentTarget):
     def _messages_to_input(messages: list[Message]) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         for m in messages:
+            # Multi-part content (text + image/file) passes straight through to
+            # the Responses API as input content parts.
+            if isinstance(m.content, list):
+                content: Any = [p.model_dump(mode="json") for p in m.content]
             # Assistant messages with tool_calls require content: null per
             # OpenAI's spec; collapsing None to "" produces an invalid payload.
             # For other roles, the API expects a string, so coerce None -> "".
-            if m.role == "assistant":
-                content: Any = m.content
+            elif m.role == "assistant":
+                content = m.content
             else:
                 content = m.content or ""
             d: dict[str, Any] = {"role": m.role, "content": content}

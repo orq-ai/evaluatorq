@@ -6,6 +6,7 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from evaluatorq.contracts import content_to_text
 from evaluatorq.openresponses.convert_models import (
     FunctionCall,
     FunctionCallOutput,
@@ -57,7 +58,7 @@ def to_open_responses(
     for msg in result.messages:
         if msg.role in ("user", "system"):
             in_content: _ContentList = [
-                InputTextContent(type="input_text", text=msg.content or "")
+                InputTextContent(type="input_text", text=content_to_text(msg.content))
             ]
             message = Message(
                 type="message",
@@ -74,7 +75,7 @@ def to_open_responses(
             # text message. Mirrors the langchain integration's mapping.
             if msg.content:
                 out_content: _ContentList = [
-                    OutputTextContent(text=msg.content, annotations=[])
+                    OutputTextContent(text=content_to_text(msg.content), annotations=[])
                 ]
                 message = Message(
                     type="message",
@@ -99,7 +100,7 @@ def to_open_responses(
                 type="function_call_output",
                 id=_generate_item_id("fco"),
                 call_id=msg.tool_call_id or "",
-                output=msg.content or "",
+                output=content_to_text(msg.content),
                 status=FunctionCallStatus.completed,
             )
             output_items.append(function_call_output.model_dump(mode="json"))

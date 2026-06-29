@@ -11,6 +11,89 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias
 from loguru import logger
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_serializer, model_validator
 
+from evaluatorq.openresponses.convert_models import (
+    InputFileContent,
+    InputImageContent,
+    InputTextContent,
+)
+
+# A single part of multi-modal message content (Responses-API input shapes).
+# Tagged on ``type`` (mirroring ``OutputMessage``) so Pydantic dispatches on the
+# discriminator rather than try-each-member matching.
+ContentPart: TypeAlias = Annotated[
+    InputTextContent | InputImageContent | InputFileContent,
+    Field(discriminator='type'),
+]
+
+
+def _content_part_to_chat_block(part: ContentPart) -> dict[str, Any]:
+    """Render a Responses-style content part as an OpenAI chat-completions block.
+
+    Images and files use the chat-completions shapes (``image_url`` / ``file``),
+    which differ from the Responses ``input_image`` / ``input_file`` wire shapes.
+    """
+    if isinstance(part, InputTextContent):
+        return {'type': 'text', 'text': part.text}
+    if isinstance(part, InputImageContent):
+        if part.image_url is None:
+            # A file_id-only image is a Responses-API shape; chat-completions has
+            # no slot for it, so emitting a block without a url would be silently
+            # invalid. Fail loudly instead.
+            raise NotImplementedError(
+                'file_id-backed images are Responses-API only; use OrqResponsesTarget.'
+            )
+        return {'type': 'image_url', 'image_url': {'url': part.image_url, 'detail': part.detail}}
+    if not isinstance(part, InputFileContent):
+        raise NotImplementedError(f'Unsupported content part: {part.type!r}')
+    if part.file_id is None and part.file_data is None:
+        # file_url/mime_type are intentionally Responses-only — the chat-completions
+        # file block has no slot for them. Without file_id or file_data there is no
+        # representable content, so fail loudly rather than emit an empty block.
+        raise NotImplementedError(
+            'file_url-backed files are Responses-API only; use OrqResponsesTarget.'
+        )
+    file_obj: dict[str, Any] = {}
+    if part.file_id is not None:
+        file_obj['file_id'] = part.file_id
+    if part.file_data is not None:
+        file_obj['file_data'] = part.file_data
+    if part.filename is not None:
+        file_obj['filename'] = part.filename
+    return {'type': 'file', 'file': file_obj}
+
+
+def _render_chat_content(content: str | list[ContentPart] | None) -> str | list[dict[str, Any]]:
+    """Render message content for the chat-completions API: a plain string, or a
+    list of content blocks for multi-modal content."""
+    if isinstance(content, list):
+        return [_content_part_to_chat_block(p) for p in content]
+    return content or ''
+
+
+def content_to_text(content: str | list[ContentPart] | None) -> str:
+    """Flatten message content to plain text.
+
+    For targets that accept only text: a string (or ``None``) passes through; a
+    multi-part list is concatenated from its text parts (no separator), but a
+    non-text part (image or file) raises :class:`NotImplementedError` with a clear
+    message rather than silently dropping content.
+    """
+    if content is None:
+        return ''
+    if isinstance(content, str):
+        return content
+    out: list[str] = []
+    for part in content:
+        if isinstance(part, InputTextContent):
+            out.append(part.text)
+        else:
+            raise NotImplementedError(
+                f'This target accepts only text content; got a {part.type!r} part. '
+                'Use a Responses-API target (OrqResponsesTarget) for image/file content.'
+            )
+    return ''.join(out)
+
+
 if sys.version_info >= (3, 11):
     from enum import StrEnum
 else:
@@ -138,10 +221,13 @@ class Message(BaseModel):
     - Tool response: ``{"role": "tool", "tool_call_id": "...", "name": "...", "content": "..."}``
     """
 
-    role: Literal['user', 'assistant', 'tool', 'system']
-    content: str | None = Field(
+    role: Literal['user', 'assistant', 'tool', 'system', 'developer']
+    content: str | list[ContentPart] | None = Field(
         default=None,
-        description='Message content (required for user/system, optional for assistant with tool_calls)',
+        description=(
+            'Message content. A plain string, or a list of multi-modal content parts '
+            '(text/image/file). Required for user/system, optional for assistant with tool_calls.'
+        ),
     )
 
     # Tool call fields (OpenAI format)
@@ -185,7 +271,7 @@ class Message(BaseModel):
                     for tc in self.tool_calls
                 ],
             }
-        return {'role': self.role, 'content': self.content or ''}
+        return {'role': self.role, 'content': _render_chat_content(self.content)}
 
 
 def _usage_get(usage: Any, key: str, default: Any = None) -> Any:
@@ -923,6 +1009,7 @@ __all__ = [
     'AgentResponse',
     'AgentResponseError',
     'AgentTarget',
+    'ContentPart',
     'FunctionCall',
     'JuryResult',
     'JuryStats',
@@ -940,4 +1027,5 @@ __all__ = [
     'TokenUsage',
     'ToolCallOutputItem',
     'ToolInfo',
+    'content_to_text',
 ]

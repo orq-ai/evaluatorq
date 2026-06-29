@@ -9,6 +9,8 @@ from __future__ import annotations
 import inspect
 from typing import TYPE_CHECKING, Any
 
+from evaluatorq.contracts import content_to_text
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
@@ -27,7 +29,7 @@ def from_orq_deployment(
 
         return await invoke(
             agent_key,
-            messages=[{"role": m.role, "content": m.content or ""} for m in messages],
+            messages=[{"role": m.role, "content": content_to_text(m.content)} for m in messages],
         )
 
     return callback
@@ -42,7 +44,7 @@ def from_chat_completions(
     """
 
     async def callback(messages: list[Message]) -> str:
-        result = fn([{"role": m.role, "content": m.content or ""} for m in messages])
+        result = fn([{"role": m.role, "content": content_to_text(m.content)} for m in messages])
         if inspect.isawaitable(result):
             return await result
         return result
