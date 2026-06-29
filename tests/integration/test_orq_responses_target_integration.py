@@ -18,13 +18,16 @@ from evaluatorq.contracts import AgentResponse, LLMCallConfig, Message
 from evaluatorq.openresponses.convert_models import InputImageContent, InputTextContent
 from evaluatorq.openresponses.target import OrqResponsesTarget
 
-# 1x1 red PNG, base64 data URL.
+# 1x1 solid-color PNGs as base64 data URLs. Self-contained so the tests do not
+# depend on any live external URL (which could rate-limit, move, or change).
 _RED_PIXEL_DATA_URL = (
     "data:image/png;base64,"
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
 )
-# A small, stable public image.
-_HTTPS_IMAGE_URL = "https://upload.wikimedia.org/wikipedia/commons/thumb/4/47/PNG_transparency_demonstration_1.png/280px-PNG_transparency_demonstration_1.png"
+_GREEN_PIXEL_DATA_URL = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNg+M8AAAICAQB7CYF4AAAAAElFTkSuQmCC"
+)
 
 
 @pytest.mark.integration
@@ -65,7 +68,11 @@ class TestOrqResponsesTargetIntegration:
 
     @pytest.mark.asyncio
     async def test_multipart_image_base64_round_trips(self):
-        """RES-879: a base64 image part flows through respond to a vision model."""
+        """RES-879: a base64 image part actually reaches the vision model.
+
+        Asserts the model reports the image color, not merely that the HTTP call
+        succeeded -- a truthy ``r.text`` would pass even if the image were dropped.
+        """
         if not os.environ.get("ORQ_API_KEY"):
             pytest.skip("ORQ_API_KEY not set")
 
@@ -79,7 +86,7 @@ class TestOrqResponsesTargetIntegration:
                     content=[
                         InputTextContent(
                             type="input_text",
-                            text="Reply with the single word RED if you can see the image.",
+                            text="What color is this image? Reply with just the color name.",
                         ),
                         InputImageContent(type="input_image", image_url=_RED_PIXEL_DATA_URL),
                     ],
@@ -87,11 +94,15 @@ class TestOrqResponsesTargetIntegration:
             ]
         )
         assert isinstance(r, AgentResponse)
-        assert r.text
+        assert "red" in r.text.lower()
 
     @pytest.mark.asyncio
-    async def test_multipart_image_https_round_trips(self):
-        """RES-879: an https image part flows through respond to a vision model."""
+    async def test_multipart_second_image_round_trips(self):
+        """RES-879: a second, distinct image part also reaches the vision model.
+
+        Uses a different color so a stale/cached/dropped image would fail the
+        assertion. Base64 data URL keeps the test free of any live dependency.
+        """
         if not os.environ.get("ORQ_API_KEY"):
             pytest.skip("ORQ_API_KEY not set")
 
@@ -103,11 +114,14 @@ class TestOrqResponsesTargetIntegration:
                 Message(
                     role="user",
                     content=[
-                        InputTextContent(type="input_text", text="Describe this image in one short sentence."),
-                        InputImageContent(type="input_image", image_url=_HTTPS_IMAGE_URL),
+                        InputTextContent(
+                            type="input_text",
+                            text="What color is this image? Reply with just the color name.",
+                        ),
+                        InputImageContent(type="input_image", image_url=_GREEN_PIXEL_DATA_URL),
                     ],
                 )
             ]
         )
         assert isinstance(r, AgentResponse)
-        assert r.text
+        assert "green" in r.text.lower()

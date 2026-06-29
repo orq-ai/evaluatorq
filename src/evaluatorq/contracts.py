@@ -35,6 +35,8 @@ def _content_part_to_chat_block(part: ContentPart) -> dict[str, Any]:
             image_url['url'] = part.image_url
         image_url['detail'] = part.detail
         return {'type': 'image_url', 'image_url': image_url}
+    if not isinstance(part, InputFileContent):
+        raise NotImplementedError(f'Unsupported content part: {part.type!r}')
     file_obj: dict[str, Any] = {}
     if part.file_id is not None:
         file_obj['file_id'] = part.file_id

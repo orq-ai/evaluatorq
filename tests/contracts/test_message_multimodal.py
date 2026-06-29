@@ -5,22 +5,31 @@ from __future__ import annotations
 import pytest
 
 from evaluatorq.contracts import ContentPart, Message, content_to_text
-from evaluatorq.openresponses.convert_models import InputImageContent, InputTextContent
+from evaluatorq.openresponses.convert_models import (
+    InputFileContent,
+    InputImageContent,
+    InputTextContent,
+)
+
+
+@pytest.fixture
+def text_and_image() -> list[ContentPart]:
+    """A reusable text + image multi-part content list."""
+    return [
+        InputTextContent(type="input_text", text="what is this?"),
+        InputImageContent(type="input_image", image_url="https://x/y.png"),
+    ]
 
 
 def test_developer_role_accepted() -> None:
     m = Message(role="developer", content="You are a developer assistant.")
     assert m.role == "developer"
+    # Round-trips through chat-completions rendering, not just model validation.
+    assert m.to_chat_completion() == {"role": "developer", "content": "You are a developer assistant."}
 
 
-def test_content_accepts_multipart_list() -> None:
-    m = Message(
-        role="user",
-        content=[
-            InputTextContent(type="input_text", text="what is this?"),
-            InputImageContent(type="input_image", image_url="https://x/y.png"),
-        ],
-    )
+def test_content_accepts_multipart_list(text_and_image: list[ContentPart]) -> None:
+    m = Message(role="user", content=text_and_image)
     assert isinstance(m.content, list)
     assert len(m.content) == 2
     assert isinstance(m.content[1], InputImageContent)
@@ -49,17 +58,32 @@ def test_to_chat_completion_renders_multipart() -> None:
     ]
 
 
-def test_orq_responses_target_passes_multipart_through() -> None:
-    """The Responses target serializes multi-part content to input content parts."""
-    from evaluatorq.openresponses.target import OrqResponsesTarget
-
+def test_to_chat_completion_renders_file_part() -> None:
+    """An InputFileContent part serializes to the chat-completions ``file`` block."""
     m = Message(
         role="user",
         content=[
-            InputTextContent(type="input_text", text="what is this?"),
-            InputImageContent(type="input_image", image_url="https://x/y.png"),
+            InputTextContent(type="input_text", text="summarize"),
+            InputFileContent(type="input_file", file_id="file-123", filename="doc.pdf"),
         ],
     )
+    out = m.to_chat_completion()
+    assert out["content"] == [
+        {"type": "text", "text": "summarize"},
+        {"type": "file", "file": {"file_id": "file-123", "filename": "doc.pdf"}},
+    ]
+
+
+def test_orq_responses_target_passes_multipart_through(text_and_image: list[ContentPart]) -> None:
+    """The Responses target serializes multi-part content to input content parts.
+
+    Note: this exercises the private ``_messages_to_input`` directly to assert the
+    serialized wire shape without a live call; it is coupled to that implementation
+    detail by design.
+    """
+    from evaluatorq.openresponses.target import OrqResponsesTarget
+
+    m = Message(role="user", content=text_and_image)
     items = OrqResponsesTarget._messages_to_input([m])
     assert items[0]["role"] == "user"
     parts = items[0]["content"]
@@ -86,3 +110,7 @@ def test_content_to_text_text_only() -> None:
         InputTextContent(type="input_text", text="b"),
     ]
     assert content_to_text(content) == "ab"
+
+
+def test_content_to_text_empty_list() -> None:
+    assert content_to_text([]) == ""
