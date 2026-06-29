@@ -239,7 +239,8 @@ commit_parser = "conventional"
 # Suppress PSR's own build step (we run `uv build` separately in the workflow)
 # so the action only handles versioning, changelog, and tagging. `uv` is not on
 # PATH inside the PSR action container, so a non-empty build_command exits 127.
-build_command = false
+# Must be an empty string, not `false` — PSR v10's config schema rejects a bool.
+build_command = ""
 upload_to_vcs_release = true
 
 [tool.semantic_release.branches.main]
