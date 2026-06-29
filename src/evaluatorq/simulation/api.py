@@ -88,7 +88,7 @@ async def simulate(
         target: The agent under test. Takes precedence over ``target_callback``
             when both are supplied. Accepts a ``str`` (``"agent:<key>"`` or bare
             ``"<key>"`` → hosted Orq agent via the Responses router;
-            ``"deployment:<key>"`` → legacy Orq deployment), an ``AgentTarget``
+            ``"deployment:<key>"`` → Orq deployment), an ``AgentTarget``
             instance (routed to the runner's ``target_agent`` path; speaks
             ``respond(messages)``), or a callable (same shape as
             ``target_callback``).
