@@ -3,7 +3,7 @@
 Drive your agent through realistic multi-turn conversations without writing test
 transcripts by hand. Three LLMs are in play:
 
-- **Your agent** — the target under test (a hosted Orq agent, a callback, or a legacy Orq deployment).
+- **Your agent** — the target under test (a hosted Orq agent, a callback, or an Orq deployment).
 - **User simulator** — plays a **persona** pursuing a **scenario** goal, turn by turn.
 - **Judge** — scores whether the goal was met and whether any rules were broken.
 

@@ -97,7 +97,7 @@ class TestFix1CliDirectUrl:
 
         # Invoke without actually starting uvicorn — patch serve to return immediately.
         with patch("evaluatorq.dashboard.launch.serve"):
-            result = runner.invoke(cli_app, [str(report_file)])
+            result = runner.invoke(cli_app, ["dashboard", str(report_file)])
 
         assert result.exit_code == 0, result.output
         # The output must contain the direct report URL.
@@ -122,7 +122,7 @@ class TestFix1CliDirectUrl:
             captured_roots = roots
 
         with patch("evaluatorq.dashboard.launch.serve", side_effect=_fake_serve):
-            runner.invoke(cli_app, [str(report_file)])
+            runner.invoke(cli_app, ["dashboard", str(report_file)])
 
         assert captured_roots is not None
         assert captured_roots == [rt_dir]
@@ -138,7 +138,7 @@ class TestFix1CliDirectUrl:
 
         runner = CliRunner()
         with patch("evaluatorq.dashboard.launch.serve"):
-            result = runner.invoke(cli_app, [str(rt_dir)])
+            result = runner.invoke(cli_app, ["dashboard", str(rt_dir)])
 
         assert "/r/" not in result.output
 

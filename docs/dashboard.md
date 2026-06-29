@@ -45,6 +45,7 @@ eq dashboard --host 0.0.0.0 --port 8888
 |---|---|
 | `eq dashboard` | Both default stores: `.evaluatorq/runs` (red team) and `.evaluatorq/sim-runs` (simulation) |
 | `eq dashboard PATH` | Only that directory; pass a file to scope to its parent and print the report's direct URL |
+| `eq redteam ui` / `eq sim ui` | Legacy Streamlit views, scoped to a single surface (see the note below) |
 
 With no `PATH` the server prints the local URL to open. Pointing at a file
 prints that report's direct URL so you land straight on it.
