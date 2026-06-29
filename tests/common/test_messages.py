@@ -27,9 +27,19 @@ def test_list_surfaces_non_text_parts_as_placeholders():
         {"type": "text", "text": "keep"},
         {"type": "image_url", "image_url": {"url": "http://x"}},
         {"type": "input_file", "file_id": "f-1"},
-        "not-a-dict",
     ]
     assert coerce_content_text(content) == "keep\n[image]\n[file]"
+
+
+def test_list_surfaces_unknown_part_types_as_placeholders():
+    """Unknown/future part shapes are surfaced, not silently dropped."""
+    content = [
+        {"type": "text", "text": "keep"},
+        {"type": "input_audio", "input_audio": {}},
+        {"type": "output_text", "text": "ignored-key"},
+        "not-a-dict",
+    ]
+    assert coerce_content_text(content) == "keep\n[input_audio]\n[output_text]\n[unknown]"
 
 
 def test_empty_list_is_empty_string():

@@ -18,7 +18,12 @@ from evaluatorq.openresponses.convert_models import (
 )
 
 # A single part of multi-modal message content (Responses-API input shapes).
-ContentPart: TypeAlias = InputTextContent | InputImageContent | InputFileContent
+# Tagged on ``type`` (mirroring ``OutputMessage``) so Pydantic dispatches on the
+# discriminator rather than try-each-member matching.
+ContentPart: TypeAlias = Annotated[
+    InputTextContent | InputImageContent | InputFileContent,
+    Field(discriminator='type'),
+]
 
 
 def _content_part_to_chat_block(part: ContentPart) -> dict[str, Any]:
@@ -30,13 +35,23 @@ def _content_part_to_chat_block(part: ContentPart) -> dict[str, Any]:
     if isinstance(part, InputTextContent):
         return {'type': 'text', 'text': part.text}
     if isinstance(part, InputImageContent):
-        image_url: dict[str, Any] = {}
-        if part.image_url is not None:
-            image_url['url'] = part.image_url
-        image_url['detail'] = part.detail
-        return {'type': 'image_url', 'image_url': image_url}
+        if part.image_url is None:
+            # A file_id-only image is a Responses-API shape; chat-completions has
+            # no slot for it, so emitting a block without a url would be silently
+            # invalid. Fail loudly instead.
+            raise NotImplementedError(
+                'file_id-backed images are Responses-API only; use OrqResponsesTarget.'
+            )
+        return {'type': 'image_url', 'image_url': {'url': part.image_url, 'detail': part.detail}}
     if not isinstance(part, InputFileContent):
         raise NotImplementedError(f'Unsupported content part: {part.type!r}')
+    if part.file_id is None and part.file_data is None:
+        # file_url/mime_type are intentionally Responses-only — the chat-completions
+        # file block has no slot for them. Without file_id or file_data there is no
+        # representable content, so fail loudly rather than emit an empty block.
+        raise NotImplementedError(
+            'file_url-backed files are Responses-API only; use OrqResponsesTarget.'
+        )
     file_obj: dict[str, Any] = {}
     if part.file_id is not None:
         file_obj['file_id'] = part.file_id
@@ -59,9 +74,9 @@ def content_to_text(content: str | list[ContentPart] | None) -> str:
     """Flatten message content to plain text.
 
     For targets that accept only text: a string (or ``None``) passes through; a
-    multi-part list is joined from its text parts, but a non-text part (image or
-    file) raises :class:`NotImplementedError` with a clear message rather than
-    silently dropping content.
+    multi-part list is concatenated from its text parts (no separator), but a
+    non-text part (image or file) raises :class:`NotImplementedError` with a clear
+    message rather than silently dropping content.
     """
     if content is None:
         return ''
@@ -77,6 +92,7 @@ def content_to_text(content: str | list[ContentPart] | None) -> str:
                 'Use a Responses-API target (OrqResponsesTarget) for image/file content.'
             )
     return ''.join(out)
+
 
 if sys.version_info >= (3, 11):
     from enum import StrEnum
@@ -994,6 +1010,7 @@ __all__ = [
     'AgentResponse',
     'AgentResponseError',
     'AgentTarget',
+    'ContentPart',
     'FunctionCall',
     'JuryResult',
     'JuryStats',
@@ -1011,4 +1028,5 @@ __all__ = [
     'TokenUsage',
     'ToolCallOutputItem',
     'ToolInfo',
+    'content_to_text',
 ]
