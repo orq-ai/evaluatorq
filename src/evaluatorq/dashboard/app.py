@@ -2,7 +2,9 @@
 
 ``build_app(roots)`` returns a configured FastHTML app with routes:
 
-- ``GET /``                   → index page listing all discovered reports
+- ``GET /``                   → combined Dashboard landing (no ``surface``), or a
+                               per-kind run list when ``?surface=redteam|sim``
+- ``GET /settings``           → settings stub screen (matches the v1 design nav)
 - ``GET /r/{rid}``            → embedded report view in the dashboard shell
 - ``GET /r/{rid}/export``     → standalone HTML export (alias: export.html)
 - ``GET /r/{rid}/export.html``→ standalone HTML export (full document)
