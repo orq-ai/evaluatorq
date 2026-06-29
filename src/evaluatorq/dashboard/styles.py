@@ -337,21 +337,39 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
     border-radius: var(--radius-lg);
     padding: 18px;
 }
-.filter-title, .download-title { margin: 0 0 14px; font-size: 15px; font-family: var(--font-display); }
-.filter-group { margin-bottom: 16px; }
+.download-title { margin: 0 0 14px; font-size: 15px; font-family: var(--font-display); }
+.filter-sidebar { padding: 24px 22px; }
+.filter-title {
+    margin: 0 0 20px;
+    font-family: var(--font-display);
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--text-strong);
+}
+.filter-group { margin-bottom: 22px; }
+.filter-group:last-child { margin-bottom: 0; }
 .filter-label {
     display: block;
     font-family: var(--font-mono);
     font-size: 11px;
     font-weight: 500;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.08em;
     color: var(--text-faint);
-    margin-bottom: 6px;
+    margin-bottom: 10px;
 }
 .filter-checkbox, .filter-radio {
-    display: flex; align-items: center; gap: 7px;
-    font-size: 13px; padding: 3px 0; cursor: pointer;
+    display: flex; align-items: flex-start; gap: 10px;
+    font-size: 14px; line-height: 1.35; color: var(--text-body);
+    padding: 5px 0; cursor: pointer;
+}
+.filter-checkbox input, .filter-radio input {
+    flex: 0 0 auto;
+    width: 17px; height: 17px;
+    margin: 1px 0 0;
+    accent-color: var(--teal-600);
+    cursor: pointer;
 }
 
 .download-sidebar { margin-top: 20px; }

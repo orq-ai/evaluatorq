@@ -132,6 +132,8 @@ class TestLandingScreen:
         # Recent runs include both run names.
         assert 'Refund agent probe' in r.text
         assert 'Support agent simulation' in r.text
+        # The combined dashboard mixes surfaces, so the kind badge disambiguates.
+        assert '<span class="kind-badge' in r.text
 
     def test_dashboard_nav_active(self, client: TestClient) -> None:
         r = client.get('/')
@@ -143,12 +145,15 @@ class TestLandingScreen:
         assert 'Refund agent probe' in r.text
         assert 'Support agent simulation' not in r.text
         assert 'runs-card' in r.text
+        # Single-surface list: the kind badge is redundant and omitted.
+        assert '<span class="kind-badge' not in r.text
 
     def test_agentsim_run_list(self, client: TestClient) -> None:
         r = client.get('/?surface=sim')
         assert r.status_code == 200
         assert 'Support agent simulation' in r.text
         assert 'Refund agent probe' not in r.text
+        assert '<span class="kind-badge' not in r.text
 
     def test_unknown_surface_empty(self, client: TestClient) -> None:
         r = client.get('/?surface=bogus')

@@ -74,12 +74,16 @@ def _status_badge(status: str) -> str:
     return f'<span class="status-badge {esc(status)}"><span class="dot"></span>{esc(label)}</span>'
 
 
-def _run_row(row: RunRow) -> str:
+def _run_row(row: RunRow, *, show_badge: bool = True) -> str:
     err = '<span class="card-error" title="failed to load">error</span>' if row.error else ''
+    # The surface badge disambiguates mixed lists (the combined dashboard). In a
+    # per-surface run overview every row shares the surface, so it carries no
+    # information — omit it there.
+    badge = _kind_badge(row.surface) if show_badge else ''
     return (
         f'<a class="run-row" href="/r/{esc(row.id)}">'
         f'<span class="run-id">'
-        f'<span class="run-name-line"><span class="run-name">{esc(row.name)}</span>{_kind_badge(row.surface)}{err}</span>'
+        f'<span class="run-name-line"><span class="run-name">{esc(row.name)}</span>{badge}{err}</span>'
         f'<span class="run-meta">{esc(row.headline)} · {esc(row.when)}</span>'
         f'</span>'
         f'<span class="run-score {_score_cls(row.score)}">{_fmt_score(row.score)}</span>'
@@ -196,7 +200,7 @@ def runs_screen_body(rows: list[RunRow], surface: str) -> str:
             '</div></section>'
         )
     head = '<div class="runs-head"><span>Job</span><span>Score</span><span>Status</span><span></span></div>'
-    body = ''.join(_run_row(r) for r in rows)
+    body = ''.join(_run_row(r, show_badge=False) for r in rows)
     return (
         f'<section class="runs-screen"><div class="runs-card">{head}<div class="run-list">{body}</div></div></section>'
     )
