@@ -4,6 +4,14 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _isolate_run_stores(tmp_path, monkeypatch):
+    """Point the redteam/sim run stores at a tmp dir so tests never write
+    runs into the repo's real ``.evaluatorq/`` store."""
+    monkeypatch.setenv("EVALUATORQ_DIR", str(tmp_path / ".evaluatorq"))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _clear_span_max_text_chars_cache():
     """Clear lru_cache between tests so EVALUATORQ_SPAN_MAX_TEXT_CHARS env changes propagate."""
     from evaluatorq.common.tracing import _default_span_max_text_chars

@@ -115,7 +115,15 @@ RUNS_DIR_NAME = Path('.evaluatorq') / 'runs'
 
 
 def get_runs_dir() -> Path:
-    """Return the runs directory resolved relative to the current working directory."""
+    """Return the runs directory.
+
+    Resolves to ``$EVALUATORQ_DIR/runs`` when ``EVALUATORQ_DIR`` is set
+    (tests point this at a tmp dir so runs never leak into the repo store),
+    otherwise ``.evaluatorq/runs`` relative to the current working directory.
+    """
+    base = os.environ.get('EVALUATORQ_DIR')
+    if base:
+        return Path(base) / 'runs'
     return Path.cwd() / RUNS_DIR_NAME
 
 
