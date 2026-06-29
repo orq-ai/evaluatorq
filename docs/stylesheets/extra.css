@@ -222,3 +222,11 @@ html { font-size: 100%; }
 /* ponytail: NOT overriding Material's sidebar-collapse breakpoint (76.25em).
    A CSS-only override leaves a broken half-state — drawer-mode and sidebar-mode
    render different DOM. Widen the window past ~1220px for the permanent sidebar. */
+
+/* Dashboard guide screenshots — subtle framing so captures sit apart from prose. */
+.dashboard-shot {
+  border-radius: 8px;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
+  margin: 1em 0;
+}
