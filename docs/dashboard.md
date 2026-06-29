@@ -29,8 +29,8 @@ The `eq` CLI exposes three convenience sub-commands:
 | Command | What it opens |
 |---|---|
 | `eq ui [PATH]` | Generic launcher — serves any directory you point it at, or the combined default stores |
-| `redteam ui` | Serves `.evaluatorq/runs` (red team reports only) |
-| `sim ui` | Serves `.evaluatorq/sim-runs` (simulation reports only) |
+| `eq redteam ui` | Serves `.evaluatorq/runs` (red team reports only) |
+| `eq sim ui` | Serves `.evaluatorq/sim-runs` (simulation reports only) |
 
 ### `eq ui` — generic launcher
 

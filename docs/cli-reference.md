@@ -12,6 +12,12 @@ Subcommands are registered at startup. `eq redteam` requires the `redteam` extra
 
 ---
 
+## Top-level options
+
+`eq --version` prints the installed version (e.g. `evaluatorq 1.3.2`) and exits. Running `eq` with no arguments prints help and exits.
+
+---
+
 ## `eq ui`
 
 Launch the FastHTML dashboard showing all red team **and** simulation runs.
@@ -76,6 +82,8 @@ eq redteam run --target agent:<key> [OPTIONS]
 | `--quiet` / `-q` | `bool` / `False` | Suppress progress bars and non-error output. |
 
 **Delivery methods** (`--delivery-method`): `DAN`, `role-play`, `skeleton-key`, `base64`, `leetspeak`, `multilingual`, `character-spacing`, `crescendo`, `many-shot`, `authority-impersonation`, `refusal-suppression`, `direct-request`, `code-elicitation`, `code-assistance`, `tool-response`, `word-substitution`.
+
+**Saving results.** Persistence is controlled by two flags. `--save` accepts `none` (no files), `final` (summary JSON only), or `detail` (all per-stage artifacts). `--output-dir DIR` sets where JSON is written and is **required** when `--save detail`.
 
 ---
 
@@ -275,3 +283,18 @@ eq sim ui [--host HOST] [--port PORT]
 |---|---|---|
 | `--host` | `str` / `127.0.0.1` | Host to bind the dashboard server to. |
 | `--port` | `int` / `8080` | Port for the dashboard server. |
+
+---
+
+## Recipes
+
+```bash
+# CI smoke run — one strategy per category, no LLM-generated strategies, quiet
+eq redteam run -t agent:my-agent --max-per-category 1 --no-generate-strategies -q
+
+# Save full per-stage artifacts to a directory
+eq redteam run -t agent:my-agent --save detail --output-dir ./runs
+
+# Quick simulation — two personas, two scenarios
+eq sim run -t agent:my-agent --num-personas 2 --num-scenarios 2
+```
