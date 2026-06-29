@@ -296,5 +296,5 @@ eq redteam run -t agent:my-agent --max-per-category 1 --no-generate-strategies -
 eq redteam run -t agent:my-agent --save detail --output-dir ./runs
 
 # Quick simulation — two personas, two scenarios
-eq sim run -t agent:my-agent --num-personas 2 --num-scenarios 2
+eq sim run --target agent:my-agent --num-personas 2 --num-scenarios 2
 ```
