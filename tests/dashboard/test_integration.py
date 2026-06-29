@@ -321,8 +321,8 @@ class TestMalformedAndPartiallyValidJSON:
         self,
         client: TestClient,
     ) -> None:
-        """The broken card on the index must carry the ``card-error`` CSS class
-        (rendered by ``index_body`` when ``card.error`` is set)."""
+        """The broken run on the landing must carry the ``card-error`` CSS class
+        (rendered by ``view._run_row`` when ``row.error`` is set)."""
         r = client.get('/')
         assert r.status_code == 200
         assert 'card-error' in r.text

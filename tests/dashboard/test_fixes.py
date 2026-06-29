@@ -187,8 +187,10 @@ class TestFix2SurfaceNavFilter:
         """The sim nav link must carry class='active' when ?surface=sim is requested."""
         r = client.get("/?surface=sim")
         assert r.status_code == 200
-        # The active nav item must have both the surface key and the active class.
-        assert 'class="active"' in r.text
+        # The active sidebar nav item carries the active class and is the
+        # Agent Sim link (/?surface=sim).
+        assert "nav-item active" in r.text
+        assert '<a class="nav-item active" href="/?surface=sim"' in r.text
 
     def test_nav_links_use_surface_hrefs(self, client: TestClient) -> None:
         """Nav links must point to /?surface=... not just /."""

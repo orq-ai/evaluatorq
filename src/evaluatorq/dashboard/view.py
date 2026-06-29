@@ -4,8 +4,9 @@
 tags) for the vendored JS (htmx, vega trio, dashboard.js) under ``/static/``,
 served by the app from ``dashboard/static/``.
 
-``index_body(cards)`` and ``report_not_found()`` render pure-HTML fragments
-that are injected into the shell via ``shell.page()``.
+``landing_body(data)`` renders the combined Dashboard screen; ``runs_screen_body``
+renders the per-kind run lists; ``settings_body`` / ``report_not_found`` render
+the remaining pure-HTML fragments injected into the shell via ``shell.page()``.
 
 ``render_filter_form(rid, surface, opts, selections)`` renders the HTMX
 filter sidebar form.  ``filter_fragment(rid, surface, body_html, form_html)``
@@ -18,16 +19,19 @@ role-labeled message list as a series of ``<div>`` elements.  Shared by
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
 from fasthtml.common import Script
 
 from evaluatorq.common.reports import esc
-from evaluatorq.dashboard.surfaces import SURFACE_LABELS
 
 if TYPE_CHECKING:
-    from evaluatorq.dashboard.library import ReportCard
+    from evaluatorq.dashboard.metrics import Landing, RunRow
+
+# Surface key → display label, used for run-list titles + kind badges.
+SURFACE_LABELS: dict[str, str] = {'redteam': 'Red Team', 'sim': 'Agent Sim'}
 
 
 def head_assets() -> tuple[Script, ...]:
@@ -45,45 +49,199 @@ def head_assets() -> tuple[Script, ...]:
     )
 
 
-def index_body(cards: list[ReportCard], *, active_surface: str | None = None) -> str:
-    """Render the report-listing page body as an HTML fragment.
+# ---------------------------------------------------------------------------
+# Combined landing + run lists (the Dashboard / Red Team / Agent Sim screens)
+# ---------------------------------------------------------------------------
 
-    When *active_surface* is given (``'redteam'`` | ``'sim'``), only cards
-    matching that surface are shown.  Passing ``None`` (default) shows all.
 
-    Returns a ``<section>`` element containing either a grid of report cards
-    or a friendly "no reports" message when the (filtered) cards list is empty.
-    """
-    visible = [c for c in cards if active_surface is None or c.surface == active_surface]
+def _score_cls(score: float | None) -> str:
+    if score is None:
+        return 'none'
+    return 'good' if score >= 0.8 else 'warn'
 
-    if not visible:
+
+def _fmt_score(score: float | None) -> str:
+    return '—' if score is None else f'{score:.2f}'
+
+
+def _kind_badge(surface: str) -> str:
+    label = SURFACE_LABELS.get(surface, surface)
+    return f'<span class="kind-badge {esc(surface)}">{esc(label)}</span>'
+
+
+def _status_badge(status: str) -> str:
+    label = {'passed': 'Passed', 'failed': 'Failed', 'warning': 'Warning'}.get(status, status.title())
+    return f'<span class="status-badge {esc(status)}"><span class="dot"></span>{esc(label)}</span>'
+
+
+def _run_row(row: RunRow, *, show_badge: bool = True) -> str:
+    err = '<span class="card-error" title="failed to load">error</span>' if row.error else ''
+    # The surface badge disambiguates mixed lists (the combined dashboard). In a
+    # per-surface run overview every row shares the surface, so it carries no
+    # information — omit it there.
+    badge = _kind_badge(row.surface) if show_badge else ''
+    return (
+        f'<a class="run-row" href="/r/{esc(row.id)}">'
+        f'<span class="run-id">'
+        f'<span class="run-name-line"><span class="run-name">{esc(row.name)}</span>{badge}{err}</span>'
+        f'<span class="run-meta">{esc(row.headline)} · {esc(row.when)}</span>'
+        f'</span>'
+        f'<span class="run-score {_score_cls(row.score)}">{_fmt_score(row.score)}</span>'
+        f'{_status_badge(row.status)}'
+        f'</a>'
+    )
+
+
+def _stat_tile(label: str, value: str, unit: str = '') -> str:
+    unit_html = f'<span class="stat-unit">{esc(unit)}</span>' if unit else ''
+    return (
+        f'<div class="stat-tile"><div class="stat-label">{esc(label)}</div>'
+        f'<div class="stat-value">{esc(value)}{unit_html}</div></div>'
+    )
+
+
+def _panel(title: str, sub: str, inner: str, *, cls: str = '') -> str:
+    cls_attr = f' {cls}' if cls else ''
+    return (
+        f'<div class="panel{cls_attr}"><div class="panel-title">{esc(title)}</div>'
+        f'<div class="panel-sub">{esc(sub)}</div>{inner}</div>'
+    )
+
+
+def _bars(rows: list[tuple[str, int]], colors: list[str], *, total_label: str = 'Total', fmt: str = '{}') -> str:
+    total = sum(v for _, v in rows) or 1
+    parts: list[str] = ['<div class="bars">']
+    for i, (name, val) in enumerate(rows):
+        pct = round(val / total * 100)
+        color = colors[i % len(colors)]
+        parts.append(
+            f'<div class="bar-row"><div class="bar-head">'
+            f'<span class="bar-name">{esc(name)}</span>'
+            f'<span class="bar-val">{esc(fmt.format(val))} <span class="bar-pct">· {pct}%</span></span>'
+            f'</div><div class="bar-track"><div class="bar-fill" style="width:{pct}%;background:{color}"></div></div></div>'
+        )
+    parts.append(
+        f'<div class="bars-total"><span class="t-label">{esc(total_label)}</span>'
+        f'<span class="t-val">{esc(fmt.format(sum(v for _, v in rows)))}</span></div></div>'
+    )
+    return ''.join(parts)
+
+
+def _donut(resistant: int, vulnerable: int) -> str:
+    total = resistant + vulnerable
+    pct = round(resistant / total * 100) if total else 0
+    r = 60
+    circ = 2 * math.pi * r
+    resist_len = circ * (resistant / total) if total else 0
+    return (
+        '<div class="donut-wrap"><div class="donut">'
+        f'<svg width="150" height="150" viewBox="0 0 150 150">'
+        f'<circle cx="75" cy="75" r="{r}" fill="none" stroke="var(--red-600)" stroke-width="18"/>'
+        f'<circle cx="75" cy="75" r="{r}" fill="none" stroke="var(--teal-600)" stroke-width="18"'
+        f' stroke-dasharray="{resist_len:.1f} {circ - resist_len:.1f}"/>'
+        f'</svg>'
+        f'<div class="donut-center"><span class="donut-value">{pct}%</span>'
+        f'<span class="donut-label">resistant</span></div>'
+        '</div></div>'
+    )
+
+
+def landing_body(data: Landing) -> str:
+    """Render the combined Dashboard landing as an HTML fragment."""
+    if data.total_runs == 0:
         return (
-            '<section class="report-index">'
-            '<h1>Reports</h1>'
-            '<p class="empty-state">No reports found. Run a red team or simulation job to generate reports.</p>'
-            '</section>'
+            '<section class="dash-wrap"><div class="runs-empty">'
+            'No reports found. Run a red team or simulation job to generate reports.'
+            '</div></section>'
         )
 
-    items: list[str] = []
-    for card in visible:
-        error_badge = f'<span class="card-error" title="{esc(card.error)}">error</span>' if card.error else ''
-        created = card.created_at.strftime('%Y-%m-%d %H:%M') if card.created_at else ''
-        surface_label = SURFACE_LABELS.get(card.surface, card.surface)
-        items.append(
-            f'<article class="report-card-item">'
-            f'<a href="/r/{card.id}" class="report-card-link">'
-            f'<div class="report-card-surface">{surface_label}</div>'
-            f'<div class="report-card-name">{esc(card.name)}{error_badge}</div>'
-            f'<div class="report-card-meta">{created}'
-            f'{" · " + card.headline if card.headline else ""}'
-            f'</div>'
-            f'</a>'
-            f'<a href="/r/{card.id}/export" class="report-card-export" title="Download standalone HTML">export</a>'
-            f'</article>'
-        )
+    resist = '—' if data.resistance_rate is None else f'{round(data.resistance_rate * 100)}'
+    band = (
+        '<div class="stat-band">'
+        + _stat_tile('Total runs', str(data.total_runs))
+        + _stat_tile('Red team', str(data.redteam_runs))
+        + _stat_tile('Agent sim', str(data.sim_runs))
+        + _stat_tile('Resistance', resist, unit='%')
+        + '</div>'
+    )
 
-    grid = f'<div class="report-grid">{"".join(items)}</div>'
-    return f'<section class="report-index"><h1>Reports</h1>{grid}</section>'
+    teal_jade = ['var(--chart-1)', 'var(--chart-2)']
+    severity_colors = ['var(--red-600)', 'var(--orange-500)', 'var(--amber-600)', 'var(--green-600)']
+
+    by_kind_panel = _panel('Runs by type', 'Red team · agent sim', _bars(data.by_kind, teal_jade))
+    donut_panel = _panel('Attack resistance', 'All red team runs', _donut(data.resistant, data.vulnerable))
+    row1 = f'<div class="dash-row2">{by_kind_panel}{donut_panel}</div>'
+
+    sev_rows = [(s.title(), n) for s, n in data.severity]
+    sev_inner = _bars(sev_rows, severity_colors) if sev_rows else '<p class="rt-panel-loading">No findings.</p>'
+    severity_panel = _panel('Findings by severity', 'Vulnerabilities found', sev_inner)
+    tok_inner = (
+        _bars(data.tokens_by_kind, teal_jade, fmt='{:,}')
+        if data.tokens_by_kind
+        else '<p class="rt-panel-loading">No token usage recorded.</p>'
+    )
+    tokens_panel = _panel('Token usage', 'By job type', tok_inner)
+    row2 = f'<div class="dash-row-eq">{severity_panel}{tokens_panel}</div>'
+
+    recent_inner = ''.join(_run_row(r) for r in data.recent)
+    recent_panel = _panel('Recent runs', 'Latest jobs', f'<div class="run-list">{recent_inner}</div>')
+
+    return f'<section class="dash-wrap">{band}{row1}{row2}{recent_panel}</section>'
+
+
+def runs_screen_body(rows: list[RunRow], surface: str) -> str:
+    """Render a per-kind run-list screen (Red Team / Agent Sim)."""
+    label = SURFACE_LABELS.get(surface, 'Reports')
+    if not rows:
+        return (
+            '<section class="runs-screen"><div class="runs-card">'
+            '<div class="runs-empty">No reports found for this surface. '
+            f'Run a {esc(label.lower())} job to generate one.</div>'
+            '</div></section>'
+        )
+    head = '<div class="runs-head"><span>Job</span><span>Score</span><span>Status</span><span></span></div>'
+    body = ''.join(_run_row(r, show_badge=False) for r in rows)
+    return (
+        f'<section class="runs-screen"><div class="runs-card">{head}<div class="run-list">{body}</div></div></section>'
+    )
+
+
+_ARROW_LEFT = (
+    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+    ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>'
+)
+_DOWNLOAD_ICON = (
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+    ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>'
+    '<path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>'
+)
+
+
+def report_back_link(surface: str) -> str:
+    """Render the 'back to run list' link shown above a report (matches v1)."""
+    target = f'/?surface={esc(surface)}' if surface in ('redteam', 'sim') else '/'
+    label = {'redteam': 'Red team runs', 'sim': 'Agent sim runs'}.get(surface, 'All runs')
+    return f'<a class="report-back" href="{target}">{_ARROW_LEFT} {esc(label)}</a>'
+
+
+def report_actions(rid: str) -> str:
+    """Render the topbar action area for a report view (Export)."""
+    return f'<a class="btn-secondary" href="/r/{esc(rid)}/export.html">{_DOWNLOAD_ICON} Export</a>'
+
+
+def settings_body() -> str:
+    """Render the Settings stub screen (not part of the v1 demo)."""
+    return (
+        '<section class="settings-stub">'
+        '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+        ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M2 20a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2"/><path d="m9 8 3-3 3 3"/>'
+        '<path d="M12 5v9"/></svg>'
+        '<div>Settings — not part of this release</div>'
+        '</section>'
+    )
 
 
 def report_not_found(rid: str) -> str:
@@ -292,9 +450,7 @@ def download_sidebar(
     # escaped via esc().
     if selections:
         # Flatten dict[str, list[str]] → list of (key, val) pairs for urlencode.
-        pairs: list[tuple[str, str]] = [
-            (k, v) for k, vals in selections.items() for v in vals
-        ]
+        pairs: list[tuple[str, str]] = [(k, v) for k, vals in selections.items() for v in vals]
         qs = f'?{urlencode(pairs)}' if pairs else ''
     else:
         qs = ''
@@ -350,22 +506,22 @@ def render_message_list(
     Returns:
         Concatenated HTML string (empty string when *messages* is empty).
     """
-    known_roles = frozenset({"user", "assistant", "system", "tool"})
+    known_roles = frozenset({'user', 'assistant', 'system', 'tool'})
 
     parts: list[str] = []
     for msg in messages:
         # Support both dict-style and attribute-style message objects.
         if isinstance(msg, dict):
-            role = str(msg.get("role", "unknown"))
-            raw_content = msg.get("content", "")
+            role = str(msg.get('role', 'unknown'))
+            raw_content = msg.get('content', '')
         else:
-            role = str(getattr(msg, "role", "unknown"))
-            raw_content = getattr(msg, "content", "")
+            role = str(getattr(msg, 'role', 'unknown'))
+            raw_content = getattr(msg, 'content', '')
 
         label = role_labels.get(role, role)
-        content_text: str = raw_content if isinstance(raw_content, str) else str(raw_content or "")
+        content_text: str = raw_content if isinstance(raw_content, str) else str(raw_content or '')
         safe_content = esc(content_text)
-        css_role = role if role in known_roles else "unknown"
+        css_role = role if role in known_roles else 'unknown'
 
         parts.append(
             f'<div class="{class_prefix}-msg {class_prefix}-msg-{esc(css_role)}">'
@@ -374,7 +530,7 @@ def render_message_list(
             f'</div>'
         )
 
-    return "".join(parts)
+    return ''.join(parts)
 
 
 def _sim_rowlist_wrapper(rid: str, inner: str) -> str:
@@ -465,70 +621,72 @@ def redteam_interactive_panels(rid: str) -> str:
     Task 6's ``dashboard.js`` re-embeds ``render_embed`` Vega charts after
     each HTMX swap.
     """
-    safe_rid = esc(rid)
-
-    breakdown = (
-        f'<div class="rt-panel" id="panel-breakdown">'
-        f'<h2 class="rt-panel-title">Interactive Breakdown</h2>'
-        f'<div'
-        f' hx-get="/r/{safe_rid}/view/breakdown?group_by=vulnerability&amp;stack_by=none"'
-        f' hx-trigger="load, orq:filter-changed from:body"'
-        f' hx-include="#filter-form"'
-        f' hx-target="this"'
-        f' hx-swap="outerHTML">'
-        f'<p class="rt-panel-loading">Loading breakdown…</p>'
-        f'</div>'
-        f'</div>'
-    )
-
-    heatmap = (
-        f'<div class="rt-panel" id="panel-agent-heatmap">'
-        f'<h2 class="rt-panel-title">Agent Heatmap</h2>'
-        f'<div'
-        f' hx-get="/r/{safe_rid}/view/agent-heatmap?dim=vulnerability"'
-        f' hx-trigger="load, orq:filter-changed from:body"'
-        f' hx-include="#filter-form"'
-        f' hx-target="this"'
-        f' hx-swap="outerHTML">'
-        f'<p class="rt-panel-loading">Loading heatmap…</p>'
-        f'</div>'
-        f'</div>'
-    )
-
-    conversation = (
-        f'<div class="rt-panel" id="panel-conversation">'
-        f'<h2 class="rt-panel-title">Conversation Viewer</h2>'
-        f'<div'
-        f' hx-get="/r/{safe_rid}/view/conversation?idx=0"'
-        f' hx-trigger="load, orq:filter-changed from:body"'
-        f' hx-include="#filter-form"'
-        f' hx-target="this"'
-        f' hx-swap="outerHTML">'
-        f'<p class="rt-panel-loading">Loading conversation viewer…</p>'
-        f'</div>'
-        f'</div>'
-    )
-
-    disagreement = (
-        f'<div class="rt-panel" id="panel-disagreement">'
-        f'<h2 class="rt-panel-title">Disagreement Viewer</h2>'
-        f'<div'
-        f' hx-get="/r/{safe_rid}/view/disagreement?page=1"'
-        f' hx-trigger="load, orq:filter-changed from:body"'
-        f' hx-include="#filter-form"'
-        f' hx-target="this"'
-        f' hx-swap="outerHTML">'
-        f'<p class="rt-panel-loading">Loading disagreement viewer…</p>'
-        f'</div>'
-        f'</div>'
-    )
-
     return (
         f'<section class="rt-interactive-panels">'
         f'<h1 class="rt-panels-title">Interactive Analysis</h1>'
-        f'{breakdown}'
-        f'{heatmap}'
-        f'{conversation}'
-        f'{disagreement}'
+        f'{rt_panel_breakdown(rid)}'
+        f'{rt_panel_agent_heatmap(rid)}'
+        f'{rt_panel_conversation(rid)}'
+        f'{rt_panel_disagreement(rid)}'
         f'</section>'
+    )
+
+
+def _rt_lazy_panel(rid: str, *, panel_id: str, title: str, path: str, loading: str) -> str:
+    """One HTMX-lazy redteam panel: fetches ``/r/{rid}/view/{path}`` on load and
+    whenever the filter form fires ``orq:filter-changed``, carrying the current
+    filter selections via ``hx-include``."""
+    safe_rid = esc(rid)
+    return (
+        f'<div class="rt-panel" id="{panel_id}">'
+        f'<h2 class="rt-panel-title">{esc(title)}</h2>'
+        f'<div'
+        f' hx-get="/r/{safe_rid}/view/{path}"'
+        f' hx-trigger="load, orq:filter-changed from:body"'
+        f' hx-include="#filter-form"'
+        f' hx-target="this"'
+        f' hx-swap="outerHTML">'
+        f'<p class="rt-panel-loading">{esc(loading)}</p>'
+        f'</div>'
+        f'</div>'
+    )
+
+
+def rt_panel_breakdown(rid: str) -> str:
+    return _rt_lazy_panel(
+        rid,
+        panel_id='panel-breakdown',
+        title='Interactive Breakdown',
+        path='breakdown?group_by=vulnerability&amp;stack_by=none',
+        loading='Loading breakdown…',
+    )
+
+
+def rt_panel_agent_heatmap(rid: str) -> str:
+    return _rt_lazy_panel(
+        rid,
+        panel_id='panel-agent-heatmap',
+        title='Agent Heatmap',
+        path='agent-heatmap?dim=vulnerability',
+        loading='Loading heatmap…',
+    )
+
+
+def rt_panel_conversation(rid: str) -> str:
+    return _rt_lazy_panel(
+        rid,
+        panel_id='panel-conversation',
+        title='Conversation Viewer',
+        path='conversation?idx=0',
+        loading='Loading conversation viewer…',
+    )
+
+
+def rt_panel_disagreement(rid: str) -> str:
+    return _rt_lazy_panel(
+        rid,
+        panel_id='panel-disagreement',
+        title='Disagreement Viewer',
+        path='disagreement?page=1',
+        loading='Loading disagreement viewer…',
     )
