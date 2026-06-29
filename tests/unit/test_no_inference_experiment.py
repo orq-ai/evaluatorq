@@ -2,6 +2,8 @@
 
 import importlib
 import json
+from collections.abc import Sequence
+from typing import Any
 
 import httpx
 import pytest
@@ -26,13 +28,13 @@ SHEET = "sheet_abc"
 SIGNED_URL = "https://storage.example.com/exports/run.jsonl?sig=xyz"
 
 
-def _jsonl(rows: list[dict[str, object]]) -> str:
+def _jsonl(rows: Sequence[dict[str, Any]]) -> str:
     return "\n".join(json.dumps(r) for r in rows)
 
 
 def _mock_transport(
-    manifests: list[dict[str, object]],
-    rows: list[dict[str, object]],
+    manifests: Sequence[dict[str, Any]],
+    rows: Sequence[dict[str, Any]],
     *,
     manifests_status: int = 200,
 ) -> httpx.MockTransport:
