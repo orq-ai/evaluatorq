@@ -184,8 +184,10 @@ inject(headers)          # writes `traceparent` (+ `tracestate`) for the active 
 # pass `headers` into your outgoing request, e.g. httpx.get(url, headers=headers)
 ```
 
-`inject()` is a no-op when no span is active or OTel is not installed, so it is
-safe to call unconditionally.
+`inject()` is a no-op when no span is active, so it is safe to call whenever
+OpenTelemetry is installed. (The `from opentelemetry.propagate import inject`
+import itself requires OTel; if you need code that also runs without it
+installed, use the internal helper below, which degrades to an empty dict.)
 
 !!! note "Internal convenience helper"
     evaluatorq also ships `get_trace_context_headers()` in
