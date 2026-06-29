@@ -46,15 +46,14 @@ A runnable, narrated walkthrough lives in
 The agent under test is supplied one of these ways (mutually exclusive):
 
 - **`target="agent:<key>"`** (or bare **`target="<key>"`**) — a hosted **orq.ai** agent, invoked through the stateless Responses API target. Requires `ORQ_API_KEY`. The primary path.
-- **`target="deployment:<key>"`** — bridges to a legacy **orq.ai** deployment. Requires `ORQ_API_KEY`.
+- **`target="deployment:<key>"`** — bridges to an **orq.ai** deployment. Requires `ORQ_API_KEY`.
 - **`target=<AgentTarget>`** — an `AgentTarget` instance (e.g. `OrqResponsesTarget`) that speaks `respond(messages)`.
 - **`target_callback=` / `target=<callable>`** — any `async`/sync callable `(list[Message]) -> str`. Great for local mocks and quick checks.
 
 On the CLI, prefer `--target` to mirror red teaming:
 
 - **`--target agent:<key>`** or bare **`--target <key>`** — invokes a hosted Orq agent through the stateless Responses API target.
-- **`--target deployment:<key>`** — uses the legacy deployment callback bridge.
-- **`--agent-key <key>`** — deprecated CLI alias for deployment behavior.
+- **`--target deployment:<key>`** — uses the deployment callback bridge.
 
 ## Personas & scenarios
 
@@ -119,7 +118,7 @@ Examples:
 ```bash
 eq sim run --target agent:refund-agent-fixed
 eq sim generate --target refund-agent-fixed --output dp.jsonl
-eq sim simulate --datapoints dp.jsonl --target deployment:legacy-refund-agent
+eq sim simulate --datapoints dp.jsonl --target deployment:refund-agent
 ```
 
 See [`examples/agent_simulation/README.md`](../../../examples/agent_simulation/README.md)

@@ -375,7 +375,7 @@ def simulate(
       (+ optional OPENAI_BASE_URL for vLLM/OpenRouter/local). ORQ wins if both set.
 
     Note: --target agent:<key> invokes a hosted Orq agent through the Responses
-    router. --target deployment:<key> uses the legacy deployment callback path.
+    router. --target deployment:<key> uses the deployment callback path.
     """
     if quiet:
         verbose = -1
