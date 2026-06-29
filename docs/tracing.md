@@ -172,14 +172,27 @@ Two env vars control how much text is stored on spans:
 
 ## W3C trace context propagation
 
-`get_trace_context_headers()` (from `evaluatorq.common.tracing`) returns the
-W3C `traceparent`/`tracestate` headers for the active span. Pass these into
-outgoing HTTP requests to propagate trace context across service boundaries.
-Returns an empty dict when OTel is not available.
+To propagate trace context across service boundaries, inject the active span's
+W3C `traceparent`/`tracestate` headers into your outgoing HTTP requests. Use the
+OpenTelemetry SDK's public `inject()` helper — a stable, supported API:
 
-!!! warning "Internal helper — import path not guaranteed stable"
-    `get_trace_context_headers` lives in `evaluatorq.common.tracing` and is
-    **not** re-exported from the public `evaluatorq.tracing` namespace. It is an
-    internal utility; its import path may change in a future release without a
-    deprecation cycle. Prefer W3C propagation via the OpenTelemetry SDK's own
-    `inject()` helper if you need a stable public API.
+```python
+from opentelemetry.propagate import inject
+
+headers: dict[str, str] = {}
+inject(headers)          # writes `traceparent` (+ `tracestate`) for the active span
+# pass `headers` into your outgoing request, e.g. httpx.get(url, headers=headers)
+```
+
+`inject()` is a no-op when no span is active, so it is safe to call whenever
+OpenTelemetry is installed. (The `from opentelemetry.propagate import inject`
+import itself requires OTel; if you need code that also runs without it
+installed, use the internal helper below, which degrades to an empty dict.)
+
+!!! note "Internal convenience helper"
+    evaluatorq also ships `get_trace_context_headers()` in
+    `evaluatorq.common.tracing`, which returns the same headers as a dict (empty
+    when OTel is unavailable). It is an internal utility — **not** re-exported
+    from the public `evaluatorq.tracing` namespace, and its import path may
+    change without a deprecation cycle. Prefer the OpenTelemetry `inject()` path
+    above for anything stable.

@@ -1,8 +1,8 @@
 # Orq Deployment Integration
 
 `evaluatorq.deployment` provides async helpers for calling
-[Orq deployments](https://orq.ai) from within evaluation jobs or any async
-Python context.
+[Orq deployments](https://docs.orq.ai/docs/deployment) from within evaluation
+jobs or any async Python context.
 
 ## What it does
 

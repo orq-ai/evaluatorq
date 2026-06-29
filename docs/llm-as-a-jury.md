@@ -176,6 +176,13 @@ report = await red_team(
 )
 ```
 
+!!! note "`strict_panel` only fires on a same-family judge"
+    `strict_panel=True` raises `ValueError` when any judge shares the target's
+    provider family — same-family self-judging can bias the verdict toward the
+    target's own provider. The panel above is entirely cross-family against an
+    OpenAI target, so the guard passes silently (the healthy case). It would
+    raise only if you added an in-family judge such as `"openai/gpt-4o-mini"`.
+
 `EvaluatorConfig` adds `strict_panel` (turn panel-composition warnings into hard
 errors) and surfaces a per-attack `jury` breakdown plus a run-level reliability
 statistic:

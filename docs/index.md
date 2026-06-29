@@ -54,8 +54,9 @@ Successfully installed evaluatorq
 </div>
 
 Works with LangGraph, OpenAI Agents SDK, PydanticAI, CrewAI, a plain async
-function, or an Orq deployment. The Orq platform is optional — for result
-storage, not a requirement.
+function, or an Orq deployment. The Orq platform is optional: it stores results
+and, when `ORQ_API_KEY` is set, routes the attacker and judge LLMs by default —
+but you can bring your own and run entirely on OpenAI.
 
 ## Quick look
 
@@ -70,21 +71,21 @@ from evaluatorq import (
 )
 
 
-@job("uppercase")
-async def uppercase_job(data: DataPoint, _row: int) -> str:
-    text = str(data.inputs.get("text", ""))
-    return text.upper()
+@job("greet")
+async def greet_job(data: DataPoint, _row: int) -> str:
+    name = str(data.inputs.get("name", ""))
+    return f"Hello, {name}!"
 
 
 async def main():
     data = [
-        DataPoint(inputs={"text": "hello"}, expected_output="HELLO"),
-        DataPoint(inputs={"text": "world"}, expected_output="WORLD"),
+        DataPoint(inputs={"name": "Ada"}, expected_output="Hello, Ada!"),
+        DataPoint(inputs={"name": "Lin"}, expected_output="Hello, Lin!"),
     ]
     await evaluatorq(
         "smoke-test",
         data=data,
-        jobs=[uppercase_job],
+        jobs=[greet_job],
         evaluators=[string_contains_evaluator()],
         print_results=True,
     )
@@ -93,17 +94,28 @@ async def main():
 asyncio.run(main())
 ```
 
-Running it prints a pass/fail table:
+`print_results=True` renders a summary and a per-evaluator score panel:
 
 ```text
-       smoke-test — uppercase
-┏━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━┓
-┃ input ┃ output  ┃ expected ┃ score  ┃
-┡━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━┩
-│ hello │ HELLO   │ HELLO    │ ✓ pass │
-│ world │ WORLD   │ WORLD    │ ✓ pass │
-└───────┴─────────┴──────────┴────────┘
-        2/2 passed (100%)
+EVALUATION RESULTS
+
+Summary:
+╭──────────────────────┬───────╮
+│ Metric               │ Value │
+├──────────────────────┼───────┤
+│ Total Data Points    │ 2     │
+│ Failed Data Points   │ 0     │
+│ Total Jobs           │ 2     │
+│ Failed Jobs          │ 0     │
+│ Success Rate         │ 100%  │
+╰──────────────────────┴───────╯
+
+Detailed Results:
+╭──────────────────┬───────╮
+│ Evaluators       │ greet │
+├──────────────────┼───────┤
+│ string-contains  │ 1.00  │
+╰──────────────────┴───────╯
 ```
 
 ## Where to next
