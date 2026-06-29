@@ -1,13 +1,9 @@
 name: Release
 
 on:
-  # Auto-release on merge to main is DISABLED until the PYPI_TOKEN secret is set.
-  # Without it, semantic-release would tag + create a GitHub Release and then fail
-  # at `uv publish`, leaving a release for a version never on PyPI. Re-enable by
-  # uncommenting the push trigger once PYPI_TOKEN exists (see migration tracker).
-  # push:
-  #   branches:
-  #     - main
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 concurrency:
@@ -40,11 +36,25 @@ jobs:
         run: uv sync --frozen --all-extras --all-groups
 
       # Bump version in pyproject.toml, commit, tag, and create GitHub Release.
+      # PSR writes a commit-based body; the next step replaces it with PR-based notes.
       - name: Semantic release
         id: release
         uses: python-semantic-release/python-semantic-release@v10.5.3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Replace the Release body with GitHub's PR-based auto-notes (What's Changed +
+      # contributor attributions, categorized via .github/release.yml). CHANGELOG.md
+      # stays commit-based; only the GitHub Release body changes.
+      - name: PR-based release notes
+        if: steps.release.outputs.released == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ steps.release.outputs.tag }}"
+          notes=$(gh api "repos/${{ github.repository }}/releases/generate-notes" \
+            -f tag_name="$tag" --jq '.body')
+          gh release edit "$tag" --notes "$notes"
 
       # Only build and publish when semantic-release actually cut a new version.
       - name: Build

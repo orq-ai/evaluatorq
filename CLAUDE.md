@@ -155,3 +155,16 @@ src/evaluatorq/
 - Linting: ruff
 - Type checking: basedpyright (lenient config — many rules disabled)
 - Logging: `loguru` everywhere (core runtime dependency since 1.3)
+
+### Releases
+
+Releases are fully automated by [python-semantic-release](https://python-semantic-release.readthedocs.io) via `.github/workflows/release.yml` on every push to `main`. **You do not bump the version, edit `CHANGELOG.md`, or tag by hand** — commit messages drive everything.
+
+- **Commits MUST follow [Conventional Commits](https://www.conventionalcommits.org).** The type prefix decides the version bump and the changelog section:
+  - `feat:` → minor bump, "Features" section
+  - `fix:` / `perf:` → patch bump, "Bug Fixes" / "Performance" section
+  - `feat!:` / `fix!:` or a `BREAKING CHANGE:` footer → major bump
+  - `docs:` `chore:` `ci:` `test:` `refactor:` `style:` `build:` `revert:` → no release on their own
+- On a release-worthy push, the pipeline: bumps `[project].version` in `pyproject.toml`, regenerates and commits `CHANGELOG.md` (grouped by type, derived from commits — not a raw git log), tags `vX.Y.Z`, creates the GitHub Release, then builds and publishes to PyPI.
+- The GitHub Release **body** is regenerated from GitHub's PR-based auto-notes (`.github/release.yml` controls the categories) — so it lists merged PRs and contributor attributions, which the commit-based `CHANGELOG.md` does not.
+- Do NOT hand-edit `CHANGELOG.md` — it is overwritten each release. To change what appears, fix the commit subjects.
