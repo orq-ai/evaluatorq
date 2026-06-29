@@ -53,6 +53,7 @@ Thumbs.db
 
 # Docs build output
 site/
+.cache/
 .worktrees/
 
 # Logs

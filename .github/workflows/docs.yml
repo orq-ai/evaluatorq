@@ -26,6 +26,10 @@ jobs:
           python-version: "3.13"
       - name: Install extras + docs
         run: uv sync --frozen --all-extras --group docs
+      # Cairo + imaging libs for the Material `social` plugin (og:/twitter cards).
+      # The plugin is gated to CI (CI=true) in mkdocs.yml; these are its system deps.
+      - name: Install Cairo (social cards)
+        run: sudo apt-get update && sudo apt-get install -y libcairo2-dev libfreetype6-dev libffi-dev libjpeg-dev libpng-dev libz-dev pngquant
       - name: Example compile smoke
         run: uv run python scripts/smoke_examples.py
       - name: Validate mermaid diagrams
