@@ -21,6 +21,7 @@ from evaluatorq import DataPoint, EvaluationResult, job
 from evaluatorq.common.async_utils import await_maybe, warn_if_sync_hooks
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.messages import coerce_content_text
+from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.common.tracing import set_span_attrs
 from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities, classify_agent_capabilities
@@ -111,12 +112,9 @@ def _save_report(output_dir: Path | None, filename: str, report: RedTeamReport) 
     logger.debug(f'Saved {filename} to {output_dir}')
 
 
-RUNS_DIR_NAME = Path('.evaluatorq') / 'runs'
-
-
 def get_runs_dir() -> Path:
-    """Return the runs directory resolved relative to the current working directory."""
-    return Path.cwd() / RUNS_DIR_NAME
+    """Return the red team runs directory (``<store>/runs``)."""
+    return get_store_dir('runs')
 
 
 def _auto_save_run(report: RedTeamReport, name: str | None = None) -> Path | None:

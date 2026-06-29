@@ -333,6 +333,8 @@ def test_write_report_full_run_json(tmp_path: Path) -> None:
 def test_get_sim_runs_dir_returns_cwd_relative_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Drop the autouse EVALUATORQ_DIR override so the cwd fallback is exercised.
+    monkeypatch.delenv("EVALUATORQ_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     result = get_sim_runs_dir()
     expected = tmp_path / SIM_RUNS_DIR_NAME
