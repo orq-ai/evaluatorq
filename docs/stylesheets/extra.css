@@ -88,6 +88,9 @@
   color: var(--orq-teal);
 }
 
+/* Widen the content column (Material default is 61rem). */
+.md-grid { max-width: 70rem; }
+
 /* --- Typography scale -------------------------------------------------
    Material defaults to 125% root, upscaling to 150% on wide screens —
    reads oversized. Pin body to ~16px, gentle wide-screen bump. */
