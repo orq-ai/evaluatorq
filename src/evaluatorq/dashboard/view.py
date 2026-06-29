@@ -621,70 +621,72 @@ def redteam_interactive_panels(rid: str) -> str:
     Task 6's ``dashboard.js`` re-embeds ``render_embed`` Vega charts after
     each HTMX swap.
     """
-    safe_rid = esc(rid)
-
-    breakdown = (
-        f'<div class="rt-panel" id="panel-breakdown">'
-        f'<h2 class="rt-panel-title">Interactive Breakdown</h2>'
-        f'<div'
-        f' hx-get="/r/{safe_rid}/view/breakdown?group_by=vulnerability&amp;stack_by=none"'
-        f' hx-trigger="load, orq:filter-changed from:body"'
-        f' hx-include="#filter-form"'
-        f' hx-target="this"'
-        f' hx-swap="outerHTML">'
-        f'<p class="rt-panel-loading">Loading breakdown…</p>'
-        f'</div>'
-        f'</div>'
-    )
-
-    heatmap = (
-        f'<div class="rt-panel" id="panel-agent-heatmap">'
-        f'<h2 class="rt-panel-title">Agent Heatmap</h2>'
-        f'<div'
-        f' hx-get="/r/{safe_rid}/view/agent-heatmap?dim=vulnerability"'
-        f' hx-trigger="load, orq:filter-changed from:body"'
-        f' hx-include="#filter-form"'
-        f' hx-target="this"'
-        f' hx-swap="outerHTML">'
-        f'<p class="rt-panel-loading">Loading heatmap…</p>'
-        f'</div>'
-        f'</div>'
-    )
-
-    conversation = (
-        f'<div class="rt-panel" id="panel-conversation">'
-        f'<h2 class="rt-panel-title">Conversation Viewer</h2>'
-        f'<div'
-        f' hx-get="/r/{safe_rid}/view/conversation?idx=0"'
-        f' hx-trigger="load, orq:filter-changed from:body"'
-        f' hx-include="#filter-form"'
-        f' hx-target="this"'
-        f' hx-swap="outerHTML">'
-        f'<p class="rt-panel-loading">Loading conversation viewer…</p>'
-        f'</div>'
-        f'</div>'
-    )
-
-    disagreement = (
-        f'<div class="rt-panel" id="panel-disagreement">'
-        f'<h2 class="rt-panel-title">Disagreement Viewer</h2>'
-        f'<div'
-        f' hx-get="/r/{safe_rid}/view/disagreement?page=1"'
-        f' hx-trigger="load, orq:filter-changed from:body"'
-        f' hx-include="#filter-form"'
-        f' hx-target="this"'
-        f' hx-swap="outerHTML">'
-        f'<p class="rt-panel-loading">Loading disagreement viewer…</p>'
-        f'</div>'
-        f'</div>'
-    )
-
     return (
         f'<section class="rt-interactive-panels">'
         f'<h1 class="rt-panels-title">Interactive Analysis</h1>'
-        f'{breakdown}'
-        f'{heatmap}'
-        f'{conversation}'
-        f'{disagreement}'
+        f'{rt_panel_breakdown(rid)}'
+        f'{rt_panel_agent_heatmap(rid)}'
+        f'{rt_panel_conversation(rid)}'
+        f'{rt_panel_disagreement(rid)}'
         f'</section>'
+    )
+
+
+def _rt_lazy_panel(rid: str, *, panel_id: str, title: str, path: str, loading: str) -> str:
+    """One HTMX-lazy redteam panel: fetches ``/r/{rid}/view/{path}`` on load and
+    whenever the filter form fires ``orq:filter-changed``, carrying the current
+    filter selections via ``hx-include``."""
+    safe_rid = esc(rid)
+    return (
+        f'<div class="rt-panel" id="{panel_id}">'
+        f'<h2 class="rt-panel-title">{esc(title)}</h2>'
+        f'<div'
+        f' hx-get="/r/{safe_rid}/view/{path}"'
+        f' hx-trigger="load, orq:filter-changed from:body"'
+        f' hx-include="#filter-form"'
+        f' hx-target="this"'
+        f' hx-swap="outerHTML">'
+        f'<p class="rt-panel-loading">{esc(loading)}</p>'
+        f'</div>'
+        f'</div>'
+    )
+
+
+def rt_panel_breakdown(rid: str) -> str:
+    return _rt_lazy_panel(
+        rid,
+        panel_id='panel-breakdown',
+        title='Interactive Breakdown',
+        path='breakdown?group_by=vulnerability&amp;stack_by=none',
+        loading='Loading breakdown…',
+    )
+
+
+def rt_panel_agent_heatmap(rid: str) -> str:
+    return _rt_lazy_panel(
+        rid,
+        panel_id='panel-agent-heatmap',
+        title='Agent Heatmap',
+        path='agent-heatmap?dim=vulnerability',
+        loading='Loading heatmap…',
+    )
+
+
+def rt_panel_conversation(rid: str) -> str:
+    return _rt_lazy_panel(
+        rid,
+        panel_id='panel-conversation',
+        title='Conversation Viewer',
+        path='conversation?idx=0',
+        loading='Loading conversation viewer…',
+    )
+
+
+def rt_panel_disagreement(rid: str) -> str:
+    return _rt_lazy_panel(
+        rid,
+        panel_id='panel-disagreement',
+        title='Disagreement Viewer',
+        path='disagreement?page=1',
+        loading='Loading disagreement viewer…',
     )

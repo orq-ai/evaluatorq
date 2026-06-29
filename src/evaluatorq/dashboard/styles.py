@@ -12,7 +12,7 @@ equal specificity and all ``var(--…)`` references resolve.
 
 from __future__ import annotations
 
-DASHBOARD_CSS = """
+_DASHBOARD_CSS_HEAD = """
 /* ==== shell: sidebar + main ========================================= */
 body.eq-dashboard { margin: 0; background: var(--surface-app); }
 .app-shell {
@@ -394,6 +394,58 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
 .rt-panel-title { margin: 0 0 14px; font-size: 17px; font-family: var(--font-display); }
 .rt-panel-loading { color: var(--text-faint); font-style: italic; }
 
+/* ==== report hero (above tabs) ===================================== */
+.report-hero { margin: 4px 0 20px; }
+.report-hero-title {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: 26px; font-weight: 700; letter-spacing: -0.02em;
+    color: var(--text-strong);
+}
+.report-hero-sub {
+    margin: 4px 0 16px;
+    font-size: 13px; color: var(--text-muted);
+    font-family: var(--font-mono);
+}
+
+/* ==== CSS-only tabs (report bodies) ================================= */
+/* Radios carry the state; labels are the tab bar; panels show on :checked.
+   Radios must be direct children of .tabs and precede .tab-bar/.tab-panels so
+   the sibling combinators resolve. nth-of-type pairs each radio to its panel. */
+.tabs { margin-top: 8px; }
+.tabs > .tab-radio { position: absolute; opacity: 0; pointer-events: none; }
+.tab-bar {
+    display: flex; flex-wrap: wrap; gap: 2px;
+    border-bottom: 1px solid var(--border-subtle);
+    margin-bottom: 22px;
+}
+.tab-label {
+    padding: 9px 14px;
+    font-size: 13px; font-weight: 500;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    white-space: nowrap;
+    user-select: none;
+}
+.tab-label:hover { color: var(--text-strong); }
+.tab-panel { display: none; }
+.tab-panel.active-fallback { display: block; }
+"""
+
+# CSS-only tab switching: pair the Nth radio (by document order) to the Nth
+# label and Nth panel. Generated for up to 9 tabs so the rules stay declarative
+# in the inlined stylesheet (no per-instance <style> blocks).
+_TAB_RULES = "".join(
+    f".tabs > .tab-radio:nth-of-type({i}):checked ~ .tab-bar > .tab-label:nth-child({i}) "
+    "{ color: var(--text-strong); border-bottom-color: var(--teal-600); }\n"
+    f".tabs > .tab-radio:nth-of-type({i}):checked ~ .tab-panels > .tab-panel:nth-child({i}) "
+    "{ display: block; }\n"
+    for i in range(1, 10)
+)
+
+_DASHBOARD_CSS_TAIL = """
 @media (max-width: 760px) {
     .filter-swap-container { flex-direction: column; }
     .filter-form { position: static; flex-basis: auto; width: 100%; }
@@ -401,3 +453,5 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
     .dash-row2, .dash-row-eq { grid-template-columns: 1fr; }
 }
 """
+
+DASHBOARD_CSS = _DASHBOARD_CSS_HEAD + _TAB_RULES + _DASHBOARD_CSS_TAIL

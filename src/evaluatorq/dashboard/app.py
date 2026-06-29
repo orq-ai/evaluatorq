@@ -25,13 +25,6 @@ documented as a concern in the task-3 report.
 
 from __future__ import annotations
 
-# Apply the Starlette 1.3.x / FastHTML 0.12.x compatibility shim BEFORE the
-# FastHTML import.  The shim patches Starlette.__init__ at import time so it
-# is in place when build_app() constructs the FastHTML app.  dashboard tests
-# use build_app()+TestClient without serve(), so the patch must NOT be deferred
-# to serve().  See evaluatorq/dashboard/_compat.py for the full explanation.
-import evaluatorq.dashboard._compat  # noqa: F401 — side-effect import; must precede FastHTML (intentional sort-order deviation)
-
 # ---------------------------------------------------------------------------
 # Normal imports (after shim)
 # ---------------------------------------------------------------------------
@@ -45,7 +38,13 @@ from loguru import logger
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import Response
 
-from evaluatorq.dashboard import library, metrics
+# Apply the Starlette 1.3.x / FastHTML 0.12.x compatibility shim BEFORE the
+# FastHTML import.  The shim patches Starlette.__init__ at import time so it
+# is in place when build_app() constructs the FastHTML app.  dashboard tests
+# use build_app()+TestClient without serve(), so the patch must NOT be deferred
+# to serve().  See evaluatorq/dashboard/_compat.py for the full explanation.
+import evaluatorq.dashboard._compat  # noqa: F401 — side-effect import; must precede FastHTML (intentional sort-order deviation)
+from evaluatorq.dashboard import library, metrics, report_tabs
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
@@ -57,7 +56,6 @@ from evaluatorq.dashboard.view import (
     download_sidebar,
     filter_fragment,
     landing_body,
-    redteam_interactive_panels,
     render_filter_form,
     report_actions,
     report_back_link,
@@ -66,7 +64,6 @@ from evaluatorq.dashboard.view import (
     report_view_with_filters,
     runs_screen_body,
     settings_body,
-    sim_interactive_panels,
 )
 
 _STATIC_DIR = Path(__file__).parent / 'static'
@@ -151,7 +148,6 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
             )
             return Response(broken_html, status_code=200, media_type='text/html')
 
-        body_html = adapter.body(report_obj)
         name = adapter.name(report_obj)
         back_link = report_back_link(surface or '')
 
@@ -161,20 +157,19 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         if filter_def is None:
             not_found_html = page('Not found', report_not_found(rid))
             return Response(not_found_html, status_code=404, media_type='text/html')
+
+        # Tabbed body for the known surfaces (Streamlit-aligned); the interactive
+        # panels live inside their tabs, so they are no longer appended separately.
+        if surface == 'sim':
+            body_html = report_tabs.sim_report_tabs(rid, report_obj)
+        elif surface == 'redteam':
+            body_html = report_tabs.redteam_report_tabs(rid, report_obj)
+        else:
+            body_html = adapter.body(report_obj)
+
         opts = filter_def.options(report_obj)
         form_html = render_filter_form(rid, surface or '', opts, {})
         body_with_filters = report_view_with_filters(rid, surface or '', body_html, form_html)
-
-        # Append surface-specific interactive panels.
-        if surface == 'redteam':
-            body_with_filters = body_with_filters + redteam_interactive_panels(rid)
-        elif surface == 'sim':
-            # Build typed entries for the conversation list panel.
-            from evaluatorq.simulation.reports.sections import individual_entries
-            from evaluatorq.simulation.types import SimulationEntry
-
-            entries: list[SimulationEntry] = individual_entries(report_obj.results)
-            body_with_filters = body_with_filters + sim_interactive_panels(rid, entries)
 
         # Download sidebar — available exports per surface.
         dl_sidebar = download_sidebar(
@@ -230,8 +225,16 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         filtered = filter_def.apply(report_obj, selections)
         new_opts = filter_def.recompute_options(filtered)
 
-        # Render body from filtered results — surface-agnostic via adapter field.
-        body_html = adapter.body_from_results(report_obj, filtered)
+        # Render the tabbed body from the filtered results so the static tab
+        # content (tables, charts) tracks the filter, not just the HTMX panels.
+        if surface == 'sim':
+            body_html = report_tabs.sim_report_tabs(rid, report_obj, filtered)
+        elif surface == 'redteam':
+            from evaluatorq.redteam.reports.converters import rebuild_filtered_report
+
+            body_html = report_tabs.redteam_report_tabs(rid, rebuild_filtered_report(report_obj, filtered))
+        else:
+            body_html = adapter.body_from_results(report_obj, filtered)
 
         form_html = render_filter_form(rid, surface or '', new_opts, selections)
         fragment_html = filter_fragment(rid, surface or '', body_html, form_html)
