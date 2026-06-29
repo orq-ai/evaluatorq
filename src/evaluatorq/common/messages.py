@@ -15,8 +15,9 @@ def coerce_content_text(content: Any) -> str:
 
     Unlike :func:`evaluatorq.contracts.content_to_text`, this best-effort helper
     does not raise on non-text parts (it is used in report/transcript rendering).
-    Image and file parts are surfaced as a ``[image]`` / ``[file]`` placeholder so
-    they are visibly accounted for rather than silently dropped.
+    Image and file parts are surfaced as a ``[image]`` / ``[file]`` placeholder,
+    and any other (unknown/future) part type as ``[<type>]``, so every part is
+    visibly accounted for rather than silently dropped.
     """
     if isinstance(content, list):
         texts: list[str] = []
@@ -30,5 +31,9 @@ def coerce_content_text(content: Any) -> str:
                 texts.append("[image]")
             elif part_type in ("file", "input_file"):
                 texts.append("[file]")
+            else:
+                # Unknown/future part shapes (e.g. audio, output_text) are still
+                # surfaced as a placeholder rather than vanishing silently.
+                texts.append(f"[{part_type or 'unknown'}]")
         return "\n".join(texts)
     return str(content or "")

@@ -43,6 +43,7 @@ def _get_orq_server_url() -> str:
     return url.rstrip('/').removesuffix('/v3/router')
 
 
+from evaluatorq.common.tracing import record_token_usage, set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentTarget, Message, content_to_text
 from evaluatorq.redteam.backends._errors import extract_provider_error_code, extract_status_code
 from evaluatorq.redteam.backends.base import Backend
@@ -58,7 +59,6 @@ from evaluatorq.redteam.contracts import (
     ToolCallOutputItem,
     ToolInfo,
 )
-from evaluatorq.common.tracing import record_token_usage, set_span_attrs, truncate_for_span
 from evaluatorq.redteam.tracing import with_redteam_span
 
 

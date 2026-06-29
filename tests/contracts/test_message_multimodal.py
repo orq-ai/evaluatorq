@@ -94,13 +94,43 @@ def test_orq_responses_target_passes_multipart_through(text_and_image: list[Cont
     assert parts[1]["image_url"] == "https://x/y.png"
 
 
+def test_to_chat_completion_raises_on_file_id_only_image() -> None:
+    """A file_id-only image is Responses-only and must not render an invalid block."""
+    m = Message(
+        role="user",
+        content=[InputImageContent(type="input_image", file_id="file-123")],
+    )
+    with pytest.raises(NotImplementedError, match="file_id-backed images"):
+        m.to_chat_completion()
+
+
+def test_to_chat_completion_raises_on_file_url_only_file() -> None:
+    """A file_url-only file has no chat-completions slot and must fail loudly."""
+    m = Message(
+        role="user",
+        content=[InputFileContent(type="input_file", file_url="https://x/y.pdf")],
+    )
+    with pytest.raises(NotImplementedError, match="file_url-backed files"):
+        m.to_chat_completion()
+
+
 def test_content_to_text_raises_on_image_part() -> None:
     """Text-only targets refuse non-text content rather than silently dropping it."""
     content: list[ContentPart] = [
         InputTextContent(type="input_text", text="hi"),
         InputImageContent(type="input_image", image_url="https://x/y.png"),
     ]
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(NotImplementedError, match="accepts only text content"):
+        content_to_text(content)
+
+
+def test_content_to_text_raises_on_file_part() -> None:
+    """The raise covers every non-text part, not just images."""
+    content: list[ContentPart] = [
+        InputTextContent(type="input_text", text="hi"),
+        InputFileContent(type="input_file", file_id="file-123"),
+    ]
+    with pytest.raises(NotImplementedError, match="accepts only text content"):
         content_to_text(content)
 
 
