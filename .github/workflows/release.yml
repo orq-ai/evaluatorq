@@ -1,85 +1,95 @@
 name: Release
 
+# Tag-driven release. On push to main, compute the next version from conventional
+# commits, push a tag (the version source via hatch-vcs), then build, publish to
+# PyPI via OIDC trusted publishing, and create a GitHub Release with PR-based
+# notes. Only a TAG is pushed — the Protect-main branch ruleset does not govern
+# tags, so a plain GITHUB_TOKEN suffices (no deploy key, no bypass, no commit to
+# main). An accidental major bump is refused unless explicitly forced.
 on:
   push:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      force_level:
+        description: "Force bump (major/minor/patch); blank = derive from commits. Required to release a major."
+        required: false
+        default: ""
+        type: choice
+        options: ["", "major", "minor", "patch"]
 
 concurrency:
   group: release
   cancel-in-progress: false
 
 permissions:
-  contents: write
-  id-token: write
+  contents: write   # push the tag + create the GitHub Release
+  id-token: write   # PyPI OIDC trusted publishing
 
 jobs:
   release:
-    name: Semantic release + publish
+    name: Tag + publish
     runs-on: ubuntu-latest
-    # Skip the release bot's own bump commit to avoid infinite release loops.
-    if: "!contains(github.event.head_commit.message, 'chore(release):')"
-
+    timeout-minutes: 15
     steps:
-      # SSH deploy key (in the Protect-main ruleset bypass) lets semantic-release
-      # push its version-bump commit back to the PR-protected main branch.
-      # GITHUB_TOKEN cannot bypass the ruleset; the deploy key can.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-          ssh-key: ${{ secrets.DEPLOY_KEY }}
+          fetch-depth: 0   # full history + tags for version derivation
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.13"
 
-      - name: Install dependencies
-        run: uv sync --frozen --all-extras --all-groups
-
-      # Run semantic-release as a CLI (not the docker action) so the version-bump
-      # commit/tag are pushed over the SSH remote from checkout — the deploy key is
-      # on the Protect-main ruleset bypass list. The docker action forces an
-      # HTTPS + GITHUB_TOKEN push, which cannot bypass the ruleset (GH013).
-      # GH_TOKEN is used only for the GitHub Release API call, not the git push.
-      - name: Semantic release
-        id: release
+      # Compute the next version (PSR as a pure calculator) and, if it warrants a
+      # release, create + push the tag. Tag push uses GITHUB_TOKEN over HTTPS — the
+      # branch ruleset does not apply to tags. A major bump without an explicit
+      # force_level is refused (this is what prevented the accidental 2.0.0).
+      - name: Compute version and tag
+        id: ver
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE_LEVEL: ${{ inputs.force_level }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          before=$(git rev-parse HEAD)
-          uvx --from "python-semantic-release==10.5.3" semantic-release -v version
-          after=$(git rev-parse HEAD)
-          if [ "$before" != "$after" ]; then
-            echo "released=true" >> "$GITHUB_OUTPUT"
-            echo "tag=$(git describe --tags --abbrev=0)" >> "$GITHUB_OUTPUT"
-          else
-            echo "released=false" >> "$GITHUB_OUTPUT"
+          FORCE=""
+          [ -n "$FORCE_LEVEL" ] && FORCE="--$FORCE_LEVEL"
+          CUR="$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)"
+          NEXT="v$(uvx --from 'python-semantic-release==10.5.3' semantic-release version --print $FORCE)"
+          echo "current=$CUR next=$NEXT force='$FORCE'"
+          if [ "$NEXT" = "$CUR" ] || git rev-parse -q --verify "refs/tags/$NEXT" >/dev/null; then
+            echo "No new version to release."; echo "released=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
+          cur_major="${CUR#v}"; cur_major="${cur_major%%.*}"
+          next_major="${NEXT#v}"; next_major="${next_major%%.*}"
+          if [ "$next_major" -gt "$cur_major" ] && [ -z "$FORCE" ]; then
+            echo "::warning::Refusing automatic major bump $CUR -> $NEXT. Re-run via workflow_dispatch with force_level=major to confirm."
+            echo "released=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          git tag "$NEXT"
+          git push origin "$NEXT"
+          echo "released=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
 
-      # Replace the Release body with GitHub's PR-based auto-notes (What's Changed +
-      # contributor attributions, categorized via .github/release.yml). CHANGELOG.md
-      # stays commit-based; only the GitHub Release body changes.
-      - name: PR-based release notes
-        if: steps.release.outputs.released == 'true'
+      - name: Build
+        if: steps.ver.outputs.released == 'true'
+        run: uv build
+
+      # OIDC trusted publishing — no PYPI_TOKEN secret. Requires a trusted
+      # publisher configured on PyPI for this repo + workflow (see CLAUDE.md).
+      - name: Publish to PyPI
+        if: steps.ver.outputs.released == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      # Release notes are cosmetic — create them LAST and never let a notes hiccup
+      # fail a run whose package already published (that half-release bit us before).
+      - name: Create GitHub Release
+        if: steps.ver.outputs.released == 'true'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tag="${{ steps.release.outputs.tag }}"
-          notes=$(gh api "repos/${{ github.repository }}/releases/generate-notes" \
-            -f tag_name="$tag" --jq '.body')
-          gh release edit "$tag" --notes "$notes"
-
-      # Only build and publish when semantic-release actually cut a new version.
-      - name: Build
-        if: steps.release.outputs.released == 'true'
-        run: uv build
-
-      - name: Publish to PyPI
-        if: steps.release.outputs.released == 'true'
-        run: uv publish
-        env:
-          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
+          gh release create "${{ steps.ver.outputs.tag }}" \
+            --title "${{ steps.ver.outputs.tag }}" \
+            --generate-notes --verify-tag

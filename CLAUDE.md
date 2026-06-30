@@ -158,13 +158,17 @@ src/evaluatorq/
 
 ### Releases
 
-Releases are fully automated by [python-semantic-release](https://python-semantic-release.readthedocs.io) via `.github/workflows/release.yml` on every push to `main`. **You do not bump the version, edit `CHANGELOG.md`, or tag by hand** — commit messages drive everything.
+Releases are **tag-driven**. The package version comes from the latest git tag via
+`hatch-vcs` (`[tool.hatch.version] source = "vcs"`) — there is **no `version` field
+in `pyproject.toml`** and nothing is committed back to `main` on release. The
+release workflow (`.github/workflows/release.yml`, on push to `main`) only pushes a
+**tag**, which the `Protect-main` branch ruleset does not govern, so a plain
+`GITHUB_TOKEN` is enough (no deploy key, no bypass). **You do not bump the version
+or tag by hand on the normal path** — commit messages drive it.
 
-- **Commits MUST follow [Conventional Commits](https://www.conventionalcommits.org).** The type prefix decides the version bump and the changelog section:
-  - `feat:` → minor bump, "Features" section
-  - `fix:` / `perf:` → patch bump, "Bug Fixes" / "Performance" section
-  - `feat!:` / `fix!:` or a `BREAKING CHANGE:` footer → major bump
-  - `docs:` `chore:` `ci:` `test:` `refactor:` `style:` `build:` `revert:` → no release on their own
-- On a release-worthy push, the pipeline: bumps `[project].version` in `pyproject.toml`, regenerates and commits `CHANGELOG.md` (grouped by type, derived from commits — not a raw git log), tags `vX.Y.Z`, creates the GitHub Release, then builds and publishes to PyPI.
-- The GitHub Release **body** is regenerated from GitHub's PR-based auto-notes (`.github/release.yml` controls the categories) — so it lists merged PRs and contributor attributions, which the commit-based `CHANGELOG.md` does not.
-- Do NOT hand-edit `CHANGELOG.md` — it is overwritten each release. To change what appears, fix the commit subjects.
+- **Commits MUST follow [Conventional Commits](https://www.conventionalcommits.org).** python-semantic-release (used only as a *version calculator* — `semantic-release version --print`) maps the commit types since the last tag to the next version:
+  - `feat:` → minor; `fix:`/`perf:` → patch; `feat!:`/`fix!:`/`BREAKING CHANGE:` → major; `docs:`/`chore:`/`ci:`/`test:`/`refactor:`/`style:`/`build:`/`revert:` → no release.
+- On a release-worthy push the workflow: computes the next version, **pushes the tag `vX.Y.Z`**, builds the wheel/sdist (version derived from the tag), **publishes to PyPI via OIDC trusted publishing** (no `PYPI_TOKEN` secret), then creates a GitHub Release with PR-based auto-notes (`.github/release.yml` controls the categories — merged PRs + contributor attributions).
+- **Accidental majors are refused.** A computed `major` bump is skipped unless you re-run via **workflow_dispatch** with `force_level=major`. Use `force_level=minor`/`patch` to override the computed level (e.g. to ship breaking changes as a minor deliberately).
+- There is no committed `CHANGELOG.md`; the human-readable changelog is the GitHub Release notes. Release notes are created last and are non-blocking — a notes failure never blocks the PyPI publish.
+- PyPI publishing requires a **Trusted Publisher** configured on PyPI for this repo + `release.yml` (PyPI → project → Publishing).

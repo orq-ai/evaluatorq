@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -1157,7 +1157,6 @@ wheels = [
 
 [[package]]
 name = "evaluatorq"
-version = "1.3.2"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -1269,38 +1268,54 @@ docs = [
 
 [package.metadata]
 requires-dist = [
+    { name = "crewai", marker = "python_full_version >= '3.11' and extra == 'all'", specifier = ">=0.70.0" },
     { name = "crewai", marker = "python_full_version >= '3.11' and extra == 'crewai'", specifier = ">=0.70.0" },
-    { name = "evaluatorq", extras = ["orq", "otel", "langchain", "langgraph", "openai-agents", "pydantic-ai", "crewai", "redteam", "simulation", "dashboard"], marker = "extra == 'all'" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "huggingface-hub", marker = "extra == 'all'", specifier = ">=0.20.0" },
     { name = "huggingface-hub", marker = "extra == 'redteam'", specifier = ">=0.20.0" },
+    { name = "langchain", marker = "extra == 'all'", specifier = ">=1.0.0,<2.0.0" },
     { name = "langchain", marker = "extra == 'langchain'", specifier = ">=1.0.0,<2.0.0" },
+    { name = "langgraph", marker = "extra == 'all'", specifier = ">=0.2.0" },
     { name = "langgraph", marker = "extra == 'langgraph'", specifier = ">=0.2.0" },
     { name = "loguru", specifier = ">=0.6.0" },
     { name = "openai", specifier = ">=1.92.0,<3.0.0" },
+    { name = "openai-agents", marker = "extra == 'all'", specifier = ">=0.1.0" },
     { name = "openai-agents", marker = "extra == 'openai-agents'", specifier = ">=0.1.0" },
+    { name = "opentelemetry-api", marker = "extra == 'all'", specifier = ">=1.20.0" },
     { name = "opentelemetry-api", marker = "extra == 'otel'", specifier = ">=1.20.0" },
+    { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'all'", specifier = ">=1.20.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'otel'", specifier = ">=1.20.0" },
+    { name = "opentelemetry-sdk", marker = "extra == 'all'", specifier = ">=1.20.0" },
     { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.20.0" },
+    { name = "opentelemetry-semantic-conventions", marker = "extra == 'all'", specifier = ">=0.41b0" },
     { name = "opentelemetry-semantic-conventions", marker = "extra == 'otel'", specifier = ">=0.41b0" },
+    { name = "orq-ai-sdk", marker = "extra == 'all'", specifier = ">=4.4.7" },
     { name = "orq-ai-sdk", marker = "extra == 'orq'", specifier = ">=4.4.7" },
     { name = "orq-ai-sdk", marker = "extra == 'simulation'", specifier = ">=4.4.7" },
+    { name = "plotly", marker = "extra == 'all'", specifier = ">=5.18.0" },
     { name = "plotly", marker = "extra == 'redteam'", specifier = ">=5.18.0" },
     { name = "plotly", marker = "extra == 'simulation'", specifier = ">=5.18.0" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "pydantic-ai-slim", extras = ["openai"], marker = "extra == 'all'", specifier = ">=1.0.0" },
     { name = "pydantic-ai-slim", extras = ["openai"], marker = "extra == 'pydantic-ai'", specifier = ">=1.0.0" },
-    { name = "python-fasthtml", marker = "extra == 'dashboard'", specifier = ">=0.12.0,<0.13.0" },
+    { name = "python-fasthtml", marker = "extra == 'all'", specifier = ">=0.12.0,<0.15.0" },
+    { name = "python-fasthtml", marker = "extra == 'dashboard'", specifier = ">=0.12.0,<0.15.0" },
     { name = "rich", specifier = ">=14.2.0" },
+    { name = "streamlit", marker = "extra == 'all'", specifier = ">=1.30.0" },
     { name = "streamlit", marker = "extra == 'redteam'", specifier = ">=1.30.0" },
     { name = "streamlit", marker = "extra == 'simulation'", specifier = ">=1.30.0" },
     { name = "typer", specifier = ">=0.12.0" },
+    { name = "uvicorn", marker = "extra == 'all'", specifier = ">=0.30.0" },
     { name = "uvicorn", marker = "extra == 'dashboard'", specifier = ">=0.30.0" },
+    { name = "vl-convert-python", marker = "extra == 'all'", specifier = ">=1.6.0" },
     { name = "vl-convert-python", marker = "extra == 'dashboard'", specifier = ">=1.6.0" },
     { name = "vl-convert-python", marker = "extra == 'redteam'", specifier = ">=1.6.0" },
     { name = "vl-convert-python", marker = "extra == 'simulation'", specifier = ">=1.6.0" },
+    { name = "watchdog", marker = "extra == 'all'", specifier = ">=4.0.0" },
     { name = "watchdog", marker = "extra == 'redteam'", specifier = ">=4.0.0" },
     { name = "watchdog", marker = "extra == 'simulation'", specifier = ">=4.0.0" },
 ]
-provides-extras = ["orq", "otel", "langchain", "langgraph", "openai-agents", "pydantic-ai", "crewai", "redteam", "simulation", "dashboard", "all"]
+provides-extras = ["all", "crewai", "dashboard", "langchain", "langgraph", "openai-agents", "orq", "otel", "pydantic-ai", "redteam", "simulation"]
 
 [package.metadata.requires-dev]
 dev = [
