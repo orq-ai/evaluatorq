@@ -22,10 +22,13 @@ jobs:
     if: "!contains(github.event.head_commit.message, 'chore(release):')"
 
     steps:
+      # SSH deploy key (in the Protect-main ruleset bypass) lets semantic-release
+      # push its version-bump commit back to the PR-protected main branch.
+      # GITHUB_TOKEN cannot bypass the ruleset; the deploy key can.
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
