@@ -175,11 +175,7 @@ reportReturnType = "none"
 
 [project]
 name = "evaluatorq"
-<<<<<<< Updated upstream
-version = "2.0.0"
-=======
 dynamic = ["version"]
->>>>>>> Stashed changes
 description = "An evaluation framework library for Python that provides a flexible way to run parallel evaluations and optionally integrate with the Orq AI platform."
 readme = "README.md"
 requires-python = ">=3.10"
