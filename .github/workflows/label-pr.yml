@@ -1,0 +1,45 @@
+name: Label PR
+
+# Auto-label a PR from its conventional-commit title prefix so GitHub's
+# auto-generated release notes (.github/release.yml) categorize it. Titles are
+# enforced as conventional commits anyway, so the label derives for free.
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            // conventional-commit type -> release-notes label
+            const MAP = {
+              feat: 'feature', fix: 'fix', perf: 'fix', revert: 'fix',
+              docs: 'docs',
+              chore: 'chore', ci: 'ci', refactor: 'refactor',
+              build: 'chore', test: 'chore', style: 'chore',
+            };
+            const title = context.payload.pull_request.title || '';
+            const m = title.match(/^(\w+)(\([^)]*\))?!?:/);
+            if (!m) {
+              core.info(`Title not conventional, no label: "${title}"`);
+              return;
+            }
+            const label = MAP[m[1].toLowerCase()];
+            if (!label) {
+              core.info(`No mapping for type "${m[1]}"`);
+              return;
+            }
+            // addLabels creates the label if it does not exist yet.
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              labels: [label],
+            });
+            core.info(`Applied label: ${label}`);
