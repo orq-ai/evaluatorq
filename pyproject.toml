@@ -243,6 +243,13 @@ commit_parser = "conventional"
 build_command = ""
 upload_to_vcs_release = true
 
+[tool.semantic_release.remote]
+# Push the version-bump commit over the existing git remote (the SSH deploy key
+# set up by checkout) instead of injecting GH_TOKEN into an HTTPS URL. Only the
+# deploy key is on the Protect-main ruleset bypass list; a token-auth HTTPS push
+# is rejected (GH013). GH_TOKEN is still used for the GitHub Release API call.
+ignore_token_for_push = true
+
 [tool.semantic_release.branches.main]
 match = "main"
 
