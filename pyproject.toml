@@ -1,6 +1,13 @@
 [build-system]
-requires = [ "hatchling" ]
+requires = [ "hatchling", "hatch-vcs" ]
 build-backend = "hatchling.build"
+
+# Version is derived from the latest git tag (vX.Y.Z) — nothing is committed back
+# to main on release, so the release pipeline only pushes a tag (which the
+# Protect-main branch ruleset does not govern). No version bump commit, no deploy
+# key, no ruleset bypass.
+[tool.hatch.version]
+source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = [ "src/evaluatorq" ]
@@ -168,7 +175,11 @@ reportReturnType = "none"
 
 [project]
 name = "evaluatorq"
+<<<<<<< Updated upstream
 version = "2.0.0"
+=======
+dynamic = ["version"]
+>>>>>>> Stashed changes
 description = "An evaluation framework library for Python that provides a flexible way to run parallel evaluations and optionally integrate with the Orq AI platform."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -229,26 +240,15 @@ dependencies = [
   Repository = "https://github.com/orq-ai/evaluatorq"
   Documentation = "https://orq-ai.github.io/evaluatorq/"
 
+# python-semantic-release is used ONLY as a version calculator here
+# (`semantic-release version --print` in CI). It reads the base version from the
+# latest git tag and derives the next from conventional commits. It does NOT
+# write files, commit, tag, or push — the release workflow tags + pushes itself.
+# No version_toml (version is tag-driven via hatch-vcs), no commit/remote config.
 [tool.semantic_release]
-# PSR v8+ config: version_toml points at the standard [project] version field.
-# hatchling reads version from the same field, so PSR and hatchling are
-# compatible — no version_source = "tag" or poetry-specific workarounds needed.
-version_toml = ["pyproject.toml:project.version"]
 branch = "main"
 commit_parser = "conventional"
-# Suppress PSR's own build step (we run `uv build` separately in the workflow)
-# so the action only handles versioning, changelog, and tagging. `uv` is not on
-# PATH inside the PSR action container, so a non-empty build_command exits 127.
-# Must be an empty string, not `false` — PSR v10's config schema rejects a bool.
-build_command = ""
-upload_to_vcs_release = true
-
-[tool.semantic_release.remote]
-# Push the version-bump commit over the existing git remote (the SSH deploy key
-# set up by checkout) instead of injecting GH_TOKEN into an HTTPS URL. Only the
-# deploy key is on the Protect-main ruleset bypass list; a token-auth HTTPS push
-# is rejected (GH013). GH_TOKEN is still used for the GitHub Release API call.
-ignore_token_for_push = true
+tag_format = "v{version}"
 
 [tool.semantic_release.branches.main]
 match = "main"
