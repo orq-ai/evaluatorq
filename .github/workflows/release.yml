@@ -2,7 +2,7 @@ name: Release
 
 # Tag-driven release. On push to main, compute the next version from conventional
 # commits, push a tag (the version source via hatch-vcs), then build, publish to
-# PyPI via OIDC trusted publishing, and create a GitHub Release with PR-based
+# PyPI (token auth via the PYPI_TOKEN secret), and create a GitHub Release with PR-based
 # notes. Only a TAG is pushed — the Protect-main branch ruleset does not govern
 # tags, so a plain GITHUB_TOKEN suffices (no deploy key, no bypass, no commit to
 # main). An accidental major bump is refused unless explicitly forced.
@@ -25,7 +25,7 @@ concurrency:
 
 permissions:
   contents: write   # push the tag + create the GitHub Release
-  id-token: write   # PyPI OIDC trusted publishing
+  id-token: write   # reserved for a future switch to PyPI OIDC trusted publishing
 
 jobs:
   release:
@@ -76,11 +76,14 @@ jobs:
         if: steps.ver.outputs.released == 'true'
         run: uv build
 
-      # OIDC trusted publishing — no PYPI_TOKEN secret. Requires a trusted
-      # publisher configured on PyPI for this repo + workflow (see CLAUDE.md).
+      # Token publishing via the PYPI_TOKEN secret. To switch to OIDC trusted
+      # publishing later, configure a trusted publisher on PyPI for this repo +
+      # workflow and delete the `with:` block (id-token: write is already set).
       - name: Publish to PyPI
         if: steps.ver.outputs.released == 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_TOKEN }}
 
       # Release notes are cosmetic — create them LAST and never let a notes hiccup
       # fail a run whose package already published (that half-release bit us before).
