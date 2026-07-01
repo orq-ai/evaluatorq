@@ -393,13 +393,17 @@ def settings_body(config: list[tuple[str, str]]) -> str:
         f'<span class="config-val">{esc(v)}</span></div>'
         for k, v in config
     )
+    config_panel = _panel('Configuration', 'What this dashboard is reading', f'<div class="config-list">{rows}</div>')
+    note = (
+        '<p class="config-note">The v1 design’s editable workspace, API-key, and delete-project controls '
+        'target the ORQ platform, not this local run viewer, so they are intentionally omitted. This page '
+        'reflects the read-only runtime config instead. See RES-1038.</p>'
+    )
+    about_panel = _panel('About settings', 'Design note', note)
     return (
         '<section class="dash-wrap">'
-        f'{_panel("Configuration", "What this dashboard is reading", f"<div class=\'config-list\'>{rows}</div>")}'
-        f'{_panel("About settings", "Design note", "<p class=\'config-note\'>The v1 design’s editable "
-        "workspace, API-key, and delete-project controls target the ORQ platform, not this local run "
-        "viewer, so they are intentionally omitted. This page reflects the read-only runtime config instead. "
-        "See RES-1038.</p>")}'
+        f'{config_panel}'
+        f'{about_panel}'
         '</section>'
     )
 
