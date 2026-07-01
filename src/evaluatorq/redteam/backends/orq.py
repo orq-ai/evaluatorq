@@ -151,6 +151,10 @@ class ORQAgentTarget(AgentTarget):
                 "ORQAgentTarget.respond requires messages[-1].role == 'user'. "
                 'Server-side conversation state is held via task_id.'
             )
+        # The agents endpoint takes a plain string ``prompt``, not Responses
+        # content-parts, so RES-879's "pass through" does not apply here: we
+        # intentionally flatten to text. content_to_text raises on image/file
+        # parts, which this stateful text endpoint cannot forward anyway.
         prompt = content_to_text(messages[-1].content)
         accumulated_usage = TokenUsage()
 
