@@ -170,9 +170,13 @@ class ExperimentInput(BaseModel):
     """
 
     experiment_id: str
-    """The experiment (sheet) ID to load responses from."""
+    """The experiment ID to load responses from. Read it off the experiment URL in the
+    Orq UI (``/experiments/<experiment_id>``). The API refers to experiments as
+    "spreadsheets", so you will also see this ID in ``/v2/spreadsheets/<id>`` routes."""
     run_id: str | None = None
-    """A specific run (manifest) ID. When omitted, the latest run is used."""
+    """A specific run ID (a "manifest" in the API). When omitted, the latest run is used.
+    Every execution of an experiment creates a new run; open it from the experiment's run
+    history to read its ID from the URL."""
 
 
 class EvaluatorParams(BaseModel):

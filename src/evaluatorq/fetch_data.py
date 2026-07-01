@@ -223,8 +223,12 @@ async def fetch_experiment_datapoints(
 
     Args:
         api_key: Orq API key for authentication.
-        experiment_id: The experiment (sheet) ID to load responses from.
-        run_id: A specific run (manifest) ID. When omitted, the latest run is used.
+        experiment_id: The experiment (sheet) ID to load responses from. Read it off the
+            experiment URL in the Orq UI: ``/experiments/<experiment_id>`` (the API refers
+            to experiments as "spreadsheets", hence the ``/v2/spreadsheets/<id>`` routes).
+        run_id: A specific run (manifest) ID. When omitted, the latest run is used. Each
+            time an experiment is run it produces a new run; open the run from the
+            experiment's run history to read its ID from the URL.
         base_url: Optional Orq host override. Falls back to ``ORQ_BASE_URL`` then the
             default host.
 
@@ -252,6 +256,12 @@ async def fetch_experiment_datapoints(
             if not manifests:
                 raise ValueError(
                     f"Experiment '{experiment_id}' has no runs to load responses from."
+                )
+            if all(not m.get("created") for m in manifests):
+                raise ValueError(
+                    f"Experiment '{experiment_id}' manifests carry no 'created' "
+                    "timestamps, so the latest run cannot be determined. "
+                    "Pass run_id explicitly."
                 )
             latest = max(manifests, key=lambda m: m.get("created") or "")
             resolved_run_id = latest.get("_id") or latest.get("id")
@@ -297,9 +307,17 @@ async def fetch_experiment_datapoints(
                 f"(experiment '{experiment_id}'): "
                 f"{download_resp.status_code} {download_resp.reason_phrase}"
             )
-        rows = [
-            json.loads(line) for line in download_resp.text.splitlines() if line.strip()
-        ]
+        rows = []
+        for lineno, line in enumerate(download_resp.text.splitlines(), start=1):
+            if not line.strip():
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"Malformed JSONL on line {lineno} of the export for run "
+                    f"'{resolved_run_id}' (experiment '{experiment_id}'): {exc}"
+                ) from exc
 
     if not rows:
         raise ValueError(

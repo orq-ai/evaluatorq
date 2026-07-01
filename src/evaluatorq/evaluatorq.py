@@ -145,8 +145,9 @@ async def evaluatorq(
     Args:
         name: Name of the evaluation run
         params: Optional EvaluatorParams instance or dict with all parameters.
-        data: The data to evaluate. Either a DatasetIdInput to fetch from Orq platform,
-              or a list of DataPoint instances/awaitables.
+        data: The data to evaluate. A DatasetIdInput to fetch from Orq platform, an
+              ExperimentInput to replay an experiment's recorded responses (requires
+              inference=False), or a list of DataPoint instances/awaitables.
         jobs: The jobs to run on the data.
         evaluators: The evaluators to use. If not provided, only jobs will run.
         parallelism: Number of jobs to run in parallel. Defaults to 1 (sequential).
