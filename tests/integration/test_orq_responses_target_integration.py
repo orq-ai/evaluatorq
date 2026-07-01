@@ -15,7 +15,19 @@ import os
 import pytest
 
 from evaluatorq.contracts import AgentResponse, LLMCallConfig, Message
+from evaluatorq.openresponses.convert_models import InputImageContent, InputTextContent
 from evaluatorq.openresponses.target import OrqResponsesTarget
+
+# 1x1 solid-color PNGs as base64 data URLs. Self-contained so the tests do not
+# depend on any live external URL (which could rate-limit, move, or change).
+_RED_PIXEL_DATA_URL = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+)
+_GREEN_PIXEL_DATA_URL = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNg+M8AAAICAQB7CYF4AAAAAElFTkSuQmCC"
+)
 
 
 @pytest.mark.integration
@@ -53,3 +65,63 @@ class TestOrqResponsesTargetIntegration:
         # Usage is reported on the response itself (no instance accumulation).
         assert r2.usage is not None
         assert r2.usage.total_tokens > 0
+
+    @pytest.mark.asyncio
+    async def test_multipart_image_base64_round_trips(self):
+        """RES-879: a base64 image part actually reaches the vision model.
+
+        Asserts the model reports the image color, not merely that the HTTP call
+        succeeded -- a truthy ``r.text`` would pass even if the image were dropped.
+        """
+        if not os.environ.get("ORQ_API_KEY"):
+            pytest.skip("ORQ_API_KEY not set")
+
+        config = LLMCallConfig(model="openai/gpt-4o-mini")
+        target = OrqResponsesTarget(config, instructions="Reply tersely.")
+
+        r = await target.respond(
+            [
+                Message(
+                    role="user",
+                    content=[
+                        InputTextContent(
+                            type="input_text",
+                            text="What color is this image? Reply with just the color name.",
+                        ),
+                        InputImageContent(type="input_image", image_url=_RED_PIXEL_DATA_URL),
+                    ],
+                )
+            ]
+        )
+        assert isinstance(r, AgentResponse)
+        assert "red" in r.text.lower()
+
+    @pytest.mark.asyncio
+    async def test_multipart_second_image_round_trips(self):
+        """RES-879: a second, distinct image part also reaches the vision model.
+
+        Uses a different color so a stale/cached/dropped image would fail the
+        assertion. Base64 data URL keeps the test free of any live dependency.
+        """
+        if not os.environ.get("ORQ_API_KEY"):
+            pytest.skip("ORQ_API_KEY not set")
+
+        config = LLMCallConfig(model="openai/gpt-4o-mini")
+        target = OrqResponsesTarget(config, instructions="Reply tersely.")
+
+        r = await target.respond(
+            [
+                Message(
+                    role="user",
+                    content=[
+                        InputTextContent(
+                            type="input_text",
+                            text="What color is this image? Reply with just the color name.",
+                        ),
+                        InputImageContent(type="input_image", image_url=_GREEN_PIXEL_DATA_URL),
+                    ],
+                )
+            ]
+        )
+        assert isinstance(r, AgentResponse)
+        assert "green" in r.text.lower()

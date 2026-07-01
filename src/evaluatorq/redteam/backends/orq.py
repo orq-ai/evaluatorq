@@ -44,7 +44,7 @@ def _get_orq_server_url() -> str:
 
 
 from evaluatorq.common.tracing import record_token_usage, set_span_attrs, truncate_for_span
-from evaluatorq.contracts import AgentTarget, Message
+from evaluatorq.contracts import AgentTarget, Message, content_to_text
 from evaluatorq.redteam.backends._errors import extract_provider_error_code, extract_status_code
 from evaluatorq.redteam.backends.base import Backend
 from evaluatorq.redteam.contracts import (
@@ -151,7 +151,11 @@ class ORQAgentTarget(AgentTarget):
                 "ORQAgentTarget.respond requires messages[-1].role == 'user'. "
                 'Server-side conversation state is held via task_id.'
             )
-        prompt = messages[-1].content or ''
+        # The agents endpoint takes a plain string ``prompt``, not Responses
+        # content-parts, so RES-879's "pass through" does not apply here: we
+        # intentionally flatten to text. content_to_text raises on image/file
+        # parts, which this stateful text endpoint cannot forward anyway.
+        prompt = content_to_text(messages[-1].content)
         accumulated_usage = TokenUsage()
 
         def _accumulate_usage(resp: object) -> None:

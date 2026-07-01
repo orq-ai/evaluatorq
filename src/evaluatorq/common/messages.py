@@ -12,11 +12,28 @@ def coerce_content_text(content: Any) -> str:
     ``[{"type": "text", "text": "..."}]``) surfaces the joined text rather than a
     Python ``repr`` of the list. ``None`` becomes ``""``; plain strings (and anything
     else) pass through ``str``.
+
+    Unlike :func:`evaluatorq.contracts.content_to_text`, this best-effort helper
+    does not raise on non-text parts (it is used in report/transcript rendering).
+    Image and file parts are surfaced as a ``[image]`` / ``[file]`` placeholder,
+    and any other (unknown/future) part type as ``[<type>]``, so every part is
+    visibly accounted for rather than silently dropped.
     """
     if isinstance(content, list):
-        return "\n".join(
-            part.get("text", "")
-            for part in content
-            if isinstance(part, dict) and part.get("type") == "text"
-        )
+        texts: list[str] = []
+        for part in content:
+            part_type = part.get("type") if isinstance(part, dict) else getattr(part, "type", None)
+            # Both the chat-completions ("text") and Responses ("input_text")
+            # shapes carry their text under a "text" key.
+            if part_type in ("text", "input_text"):
+                texts.append(part.get("text", "") if isinstance(part, dict) else getattr(part, "text", ""))
+            elif part_type in ("image_url", "input_image"):
+                texts.append("[image]")
+            elif part_type in ("file", "input_file"):
+                texts.append("[file]")
+            else:
+                # Unknown/future part shapes (e.g. audio, output_text) are still
+                # surfaced as a placeholder rather than vanishing silently.
+                texts.append(f"[{part_type or 'unknown'}]")
+        return "\n".join(texts)
     return str(content or "")

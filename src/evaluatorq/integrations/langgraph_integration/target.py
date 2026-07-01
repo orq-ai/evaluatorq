@@ -24,6 +24,7 @@ from evaluatorq.contracts import (
     TokenUsage,
     ToolCallOutputItem,
     ToolInfo,
+    content_to_text,
 )
 
 if TYPE_CHECKING:
@@ -169,7 +170,7 @@ class LangGraphTarget(AgentTarget):
         """
         if not messages or messages[-1].role != 'user':
             raise ValueError("LangGraphTarget.respond requires messages[-1].role == 'user'")
-        prompt = messages[-1].content or ''
+        prompt = content_to_text(messages[-1].content)
         collector = _TokenUsageCollector()
 
         base_config = self._build_config()
