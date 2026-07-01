@@ -202,6 +202,42 @@ class TestOpenAIAgentTarget:
         assert item["content"][0]["text"] == "what is this?"
         assert item["content"][1]["image_url"] == "https://x/y.png"
 
+    def test_responses_input_items_assistant_tool_calls_render_multipart_content(
+        self,
+    ) -> None:
+        """An assistant turn that carries both multi-part content and tool calls
+        emits the content as Responses-API parts, not a Python repr."""
+        items = _message_to_responses_input_items(
+            Message(
+                role="assistant",
+                content=[InputTextContent(type="input_text", text="thinking")],
+                tool_calls=[
+                    StrategyToolCall(
+                        id="c1", function=FunctionCall(name="lookup", arguments="{}")
+                    )
+                ],
+            )
+        )
+
+        assistant = next(i for i in items if i.get("role") == "assistant")
+        assert isinstance(assistant["content"], list)
+        assert assistant["content"][0]["text"] == "thinking"
+        assert any(i.get("type") == "function_call" for i in items)
+
+    def test_responses_input_items_tool_output_flattens_multipart(self) -> None:
+        """A tool result with multi-part content flattens to a plain string, since
+        function_call_output.output is a string field."""
+        items = _message_to_responses_input_items(
+            Message(
+                role="tool",
+                tool_call_id="c1",
+                content=[InputTextContent(type="input_text", text="the result")],
+            )
+        )
+
+        assert items[0]["type"] == "function_call_output"
+        assert items[0]["output"] == "the result"
+
     @pytest.mark.asyncio
     async def test_no_warning_when_input_echoed(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture

@@ -208,9 +208,9 @@ def _message_to_ai_sdk_message(m: Message, *, version: AISdkMessageFormat = 'v5'
             'toolName': m.name or '',
         }
         if version == 'v4':
-            result_part['result'] = m.content or ''
+            result_part['result'] = content_to_text(m.content)
         else:
-            result_part['output'] = {'type': 'text', 'value': m.content or ''}
+            result_part['output'] = {'type': 'text', 'value': content_to_text(m.content)}
         return {'role': 'tool', 'content': [result_part]}
     if m.role == 'assistant' and m.tool_calls:
         parts: list[dict[str, Any]] = []
