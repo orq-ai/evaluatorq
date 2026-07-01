@@ -9,7 +9,14 @@ import pytest
 
 pytest.importorskip("agents")
 
-from evaluatorq.contracts import FunctionCall, Message, StrategyToolCall, ToolCallOutputItem  # noqa: E402
+from evaluatorq.contracts import (  # noqa: E402
+    FunctionCall,
+    InputImageContent,
+    InputTextContent,
+    Message,
+    StrategyToolCall,
+    ToolCallOutputItem,
+)
 from evaluatorq.integrations.openai_agents_integration import OpenAIAgentTarget  # noqa: E402
 from evaluatorq.integrations.openai_agents_integration.target import (  # noqa: E402
     _message_to_responses_input_items,
@@ -172,6 +179,64 @@ class TestOpenAIAgentTarget:
         assert len(tool_calls) == 1
         assert tool_calls[0].name == "lookup"
         assert tool_calls[0].arguments == '{"q":"x"}'
+
+    def test_responses_input_items_render_multipart_content(self) -> None:
+        """A user message with multi-part content passes straight through as
+        Responses-API content parts (dict-dumped), not raw Pydantic objects."""
+        items = _message_to_responses_input_items(
+            Message(
+                role="user",
+                content=[
+                    InputTextContent(type="input_text", text="what is this?"),
+                    InputImageContent(type="input_image", image_url="https://x/y.png"),
+                ],
+            )
+        )
+
+        assert len(items) == 1
+        item = items[0]
+        assert item["role"] == "user"
+        assert isinstance(item["content"], list)
+        # Each part is a plain dict (model_dump), never a ContentPart instance.
+        assert all(isinstance(part, dict) for part in item["content"])
+        assert item["content"][0]["text"] == "what is this?"
+        assert item["content"][1]["image_url"] == "https://x/y.png"
+
+    def test_responses_input_items_assistant_tool_calls_render_multipart_content(
+        self,
+    ) -> None:
+        """An assistant turn that carries both multi-part content and tool calls
+        emits the content as Responses-API parts, not a Python repr."""
+        items = _message_to_responses_input_items(
+            Message(
+                role="assistant",
+                content=[InputTextContent(type="input_text", text="thinking")],
+                tool_calls=[
+                    StrategyToolCall(
+                        id="c1", function=FunctionCall(name="lookup", arguments="{}")
+                    )
+                ],
+            )
+        )
+
+        assistant = next(i for i in items if i.get("role") == "assistant")
+        assert isinstance(assistant["content"], list)
+        assert assistant["content"][0]["text"] == "thinking"
+        assert any(i.get("type") == "function_call" for i in items)
+
+    def test_responses_input_items_tool_output_flattens_multipart(self) -> None:
+        """A tool result with multi-part content flattens to a plain string, since
+        function_call_output.output is a string field."""
+        items = _message_to_responses_input_items(
+            Message(
+                role="tool",
+                tool_call_id="c1",
+                content=[InputTextContent(type="input_text", text="the result")],
+            )
+        )
+
+        assert items[0]["type"] == "function_call_output"
+        assert items[0]["output"] == "the result"
 
     @pytest.mark.asyncio
     async def test_no_warning_when_input_echoed(

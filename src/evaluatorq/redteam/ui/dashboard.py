@@ -18,6 +18,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from loguru import logger
 
+from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.redteam.contracts import (
     OWASP_CATEGORY_NAMES,
     AgentContext,
@@ -1900,7 +1901,7 @@ def _render_result_detail(result: RedTeamResult) -> None:
         st.markdown("**Conversation:**")
         for msg in result.messages:
             role = msg.role
-            content = msg.content or ""
+            content = coerce_content_text(msg.content)
 
             if role == "system":
                 with st.expander("System prompt", expanded=False):
@@ -2455,7 +2456,7 @@ def _render_disagreement_viewer(results: list[RedTeamResult], agents: list[str])
                     user_msgs = [m for m in r.messages if m.role == "user"]
                     if user_msgs:
                         st.markdown("**Attack prompt:**")
-                        prompt_text = user_msgs[-1].content or ""
+                        prompt_text = coerce_content_text(user_msgs[-1].content)
                         st.code(
                             prompt_text[:600] + ("…" if len(prompt_text) > 600 else ""),
                             language=None,

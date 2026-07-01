@@ -7,9 +7,10 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from evaluatorq.contracts import FunctionCall, Message, StrategyToolCall
+from evaluatorq.contracts import FunctionCall, InputTextContent, Message, StrategyToolCall
 from evaluatorq.integrations.vercel_ai_sdk_integration import VercelAISdkTarget
 from evaluatorq.integrations.vercel_ai_sdk_integration.target import (
+    _message_to_ai_sdk_message,
     _parse_data_stream,
     _parse_json_response,
 )
@@ -288,6 +289,33 @@ class TestVercelAISdkTarget:
         assert tool_row["content"] == [
             {"type": "tool-result", "toolCallId": "c1", "toolName": "lookup", "result": "r"}
         ]
+
+    def test_v5_tool_result_flattens_multipart_content(self) -> None:
+        """A tool result carrying multi-part content flattens to text in the typed
+        v5 `output.value`, not a Python repr of the parts list."""
+        rendered = _message_to_ai_sdk_message(
+            Message(
+                role="tool",
+                tool_call_id="c1",
+                name="lookup",
+                content=[InputTextContent(type="input_text", text="the result")],
+            ),
+            version="v5",
+        )
+        assert rendered["content"][0]["output"] == {"type": "text", "value": "the result"}
+
+    def test_v4_tool_result_flattens_multipart_content(self) -> None:
+        """Same for the v4 bare `result` field."""
+        rendered = _message_to_ai_sdk_message(
+            Message(
+                role="tool",
+                tool_call_id="c1",
+                name="lookup",
+                content=[InputTextContent(type="input_text", text="the result")],
+            ),
+            version="v4",
+        )
+        assert rendered["content"][0]["result"] == "the result"
 
     @pytest.mark.asyncio
     async def test_sends_tool_call_with_malformed_arguments_falls_back_to_raw_string(self) -> None:

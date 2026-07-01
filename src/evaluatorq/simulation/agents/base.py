@@ -26,6 +26,7 @@ from evaluatorq.contracts import (
     TextOutputItem,
     TokenUsage,
     ToolCallOutputItem,
+    content_to_text,
 )
 from evaluatorq.openresponses.client import build_simulation_client
 from evaluatorq.simulation.tracing import with_llm_span
@@ -261,7 +262,7 @@ class BaseAgent(ABC):
 
         full_messages: list[dict[str, Any]] = [
             {'role': 'system', 'content': self.system_prompt},
-            *[{'role': m.role, 'content': m.content or ''} for m in messages],
+            *[{'role': m.role, 'content': content_to_text(m.content)} for m in messages],
         ]
 
         async with with_llm_span(
@@ -339,7 +340,7 @@ class BaseAgent(ABC):
         """
         timeout_s = timeout or DEFAULT_TIMEOUT_S
 
-        input_messages = [{'role': m.role, 'content': m.content or ''} for m in messages]
+        input_messages = [{'role': m.role, 'content': content_to_text(m.content)} for m in messages]
 
         params: dict[str, Any] = {
             'model': self._model,

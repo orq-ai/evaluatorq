@@ -8,6 +8,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from evaluatorq.common.async_utils import await_maybe
+from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.tracing import record_llm_input, record_llm_output, record_token_usage, set_span_attrs
 from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
@@ -526,7 +527,7 @@ class SimulationRunner:
                 async with with_simulation_span('orq.simulation.target_call', None) as target_span:
                     record_llm_input(
                         target_span,
-                        [{'role': m.role, 'content': m.content or ''} for m in messages],
+                        [{'role': m.role, 'content': coerce_content_text(m.content)} for m in messages],
                     )
                     agent_response_text, agent_response_usage, agent_response_model = await self._get_target_response(
                         messages

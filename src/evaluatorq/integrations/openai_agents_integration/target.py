@@ -9,6 +9,7 @@ from typing import Any
 from agents import Agent, Runner
 from loguru import logger
 
+from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.contracts import (
     AgentContext,
     AgentResponse,
@@ -319,11 +320,25 @@ def _message_to_responses_input_items(m: Message) -> list[dict[str, Any]]:
     matching what the SDK's ``to_input_list()`` round-trips.
     """
     if m.role == 'tool':
-        return [{'type': 'function_call_output', 'call_id': m.tool_call_id or '', 'output': m.content or ''}]
+        # function_call_output.output is a plain string; flatten any multi-part content.
+        return [
+            {
+                'type': 'function_call_output',
+                'call_id': m.tool_call_id or '',
+                'output': coerce_content_text(m.content),
+            }
+        ]
     if m.role == 'assistant' and m.tool_calls:
         items: list[dict[str, Any]] = []
         if m.content:
-            items.append({'role': 'assistant', 'content': m.content})
+            # Mirror the non-tool path below: multi-part content passes through as
+            # Responses-API content parts rather than rendering as a Python repr.
+            content: Any = (
+                [p.model_dump(mode='json') for p in m.content]
+                if isinstance(m.content, list)
+                else m.content
+            )
+            items.append({'role': 'assistant', 'content': content})
         for tc in m.tool_calls:
             fc: dict[str, Any] = {
                 'type': 'function_call',
