@@ -321,13 +321,17 @@ def sim_overview(roots: list[Path] | None = None, *, limit: int = 8) -> SimOverv
             if isinstance(usage, dict) and 'cost_usd' in usage:
                 cost_total += _cost_usd(usage)
                 has_cost = True
+            # Outcome mirrors the donut segments exactly (goal_achieved / error),
+            # so the table pill and the donut never disagree.
             if is_error:
                 errors += 1
+                outcome = 'error'
             elif goal:
                 achieved += 1
+                outcome = 'passed'
             else:
                 not_achieved += 1
-            outcome = 'failed' if is_error else _status_from_score(score)
+                outcome = 'failed'
             dated.append((
                 card.created_at,
                 SimItem(

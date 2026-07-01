@@ -111,13 +111,13 @@ class TestSimOverviewMetrics:
         assert first.persona == 'alice'
         assert first.model == 'gpt-5.4'
         assert first.turns == 4
-        assert first.outcome == 'passed'  # score >= 0.8
+        assert first.outcome == 'passed'  # goal_achieved
         # Every row links to a real report id.
         rid = report_id(roots[1] / 'support_20260625_140000.json')
         assert all(it.rid == rid for it in ov.recent)
-        # The errored sim is flagged and reads as failed.
+        # The errored sim is flagged and reads as 'error' (matches the donut).
         errored = next(it for it in ov.recent if it.error)
-        assert errored.outcome == 'failed'
+        assert errored.outcome == 'error'
 
     def test_empty(self, tmp_path: Path) -> None:
         empty = [tmp_path / 'runs', tmp_path / 'sim-runs']

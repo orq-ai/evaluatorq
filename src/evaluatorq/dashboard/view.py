@@ -203,6 +203,7 @@ _OUTCOME_PILL: dict[str, tuple[str, str]] = {
     'passed': ('Passed', 'pass'),
     'warning': ('Warning', 'warn'),
     'failed': ('Failed', 'fail'),
+    'error': ('Error', 'warn'),
 }
 
 _ATTACK_STATUS_PILL: dict[str, tuple[str, str]] = {
