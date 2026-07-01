@@ -28,11 +28,25 @@ def _redteam_payload(
         'created_at': created,
         'run_name': name,
         'total_results': evaluated,
+        'results': [
+            {
+                'attack': {'severity': 'critical', 'strategy_name': 'direct_override'},
+                'agent': {'display_name': 'Refund agent', 'model': 'gpt-5.4'},
+                'vulnerable': True,
+                'error': None,
+            },
+            {
+                'attack': {'severity': 'low', 'strategy_name': 'roleplay'},
+                'agent': {'display_name': 'Refund agent', 'model': 'gpt-5.4'},
+                'vulnerable': False,
+                'error': None,
+            },
+        ],
         'summary': {
             'resistance_rate': resistance,
             'vulnerabilities_found': vulns,
             'evaluated_attacks': evaluated,
-            'token_usage_total': {'total_tokens': tokens},
+            'token_usage_total': {'total_tokens': tokens, 'cost_usd': 0.0048},
             'by_severity': {k: {'vulnerabilities_found': v} for k, v in severity.items()},
         },
     }
@@ -139,13 +153,17 @@ class TestLandingScreen:
         r = client.get('/')
         assert '<a class="nav-item active" href="/"' in r.text
 
-    def test_redteam_run_list(self, client: TestClient) -> None:
+    def test_redteam_overview(self, client: TestClient) -> None:
+        # Red Team is the design's rich overview: KPI band + item-level attacks
+        # table, not the run list.
         r = client.get('/?surface=redteam')
         assert r.status_code == 200
-        assert 'Refund agent probe' in r.text
+        assert 'kpi-band' in r.text
+        assert 'Attacks run' in r.text
+        assert 'Recent attacks' in r.text
+        # Item-level rows surface the target/attack; the sim run must not leak.
+        assert 'Refund agent' in r.text
         assert 'Support agent simulation' not in r.text
-        assert 'runs-card' in r.text
-        # Single-surface list: the kind badge is redundant and omitted.
         assert '<span class="kind-badge' not in r.text
 
     def test_agentsim_overview(self, client: TestClient) -> None:
@@ -165,11 +183,26 @@ class TestLandingScreen:
         assert r.status_code == 200
         assert 'no reports' in r.text.lower()
 
-    def test_settings_stub(self, client: TestClient) -> None:
+    def test_settings_config(self, client: TestClient) -> None:
         r = client.get('/settings')
         assert r.status_code == 200
-        assert 'settings-stub' in r.text
+        # Read-only runtime config, not the stub.
+        assert 'Configuration' in r.text
+        assert 'Run stores' in r.text
+        assert 'API key' in r.text
         assert '<a class="nav-item active" href="/settings"' in r.text
+
+    def test_global_search(self, client: TestClient) -> None:
+        # ⌘K search box is in the shell on every page.
+        assert 'class="search-input"' in client.get('/').text
+        # The search fragment matches report names case-insensitively.
+        r = client.get('/search', params={'q': 'refund'})
+        assert r.status_code == 200
+        assert 'Refund agent probe' in r.text
+        assert 'search-hit' in r.text
+        # Empty query returns nothing; no-match returns a friendly message.
+        assert client.get('/search', params={'q': ''}).text.strip() == ''
+        assert 'No matching reports' in client.get('/search', params={'q': 'zzzzz'}).text
 
 
 class TestReportHeader:

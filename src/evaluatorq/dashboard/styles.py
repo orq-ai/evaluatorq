@@ -261,6 +261,39 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
 .donut-legend li { display: flex; align-items: center; gap: 8px; }
 .donut-key { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
 
+/* ==== ⌘K global search (topbar) ==================================== */
+.topbar-search { position: relative; margin-left: auto; margin-right: 14px; }
+.search-input {
+    width: 260px; max-width: 40vw; padding: 7px 30px 7px 12px;
+    font-family: var(--font-sans); font-size: 13px; color: var(--text-strong);
+    background: var(--surface-card, #fff); border: 1px solid var(--border, #e2e0da);
+    border-radius: 8px;
+}
+.search-input:focus { outline: none; border-color: var(--teal-600); }
+.search-kbd {
+    position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    font-family: var(--font-mono); font-size: 10px; color: var(--text-faint);
+    pointer-events: none;
+}
+.search-results {
+    position: absolute; top: calc(100% + 6px); right: 0; width: 320px; max-width: 60vw;
+    background: var(--surface-card, #fff); border: 1px solid var(--border, #e2e0da);
+    border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,0.12); overflow: hidden; z-index: 40;
+}
+.search-results:empty { display: none; }
+.search-hit { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; text-decoration: none; }
+.search-hit:hover { background: var(--surface-app, #faf9f5); }
+.search-hit-kind { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; color: var(--text-faint); }
+.search-hit-name { font-size: 13px; color: var(--text-strong); }
+.search-empty { padding: 10px 12px; font-size: 13px; color: var(--text-muted); }
+
+/* ==== settings — read-only config ================================= */
+.config-list { display: flex; flex-direction: column; }
+.config-row { display: flex; justify-content: space-between; gap: 16px; padding: 8px 0; border-bottom: 1px solid var(--border, #eee); }
+.config-key { font-family: var(--font-sans); font-size: 13px; color: var(--text-muted); }
+.config-val { font-family: var(--font-mono); font-size: 12px; color: var(--text-strong); word-break: break-all; text-align: right; }
+.config-note { font-size: 13px; color: var(--text-muted); line-height: 1.5; }
+
 /* ==== run rows (recent + per-kind list) ============================= */
 .run-list { display: flex; flex-direction: column; }
 .run-row {

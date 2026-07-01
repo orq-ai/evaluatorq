@@ -28,7 +28,8 @@ from fasthtml.common import Script
 from evaluatorq.common.reports import esc
 
 if TYPE_CHECKING:
-    from evaluatorq.dashboard.metrics import Landing, RunRow, SimOverview
+    from evaluatorq.dashboard.library import ReportCard
+    from evaluatorq.dashboard.metrics import Landing, RedTeamOverview, RunRow, SimOverview
 
 # Surface key → display label, used for run-list titles + kind badges.
 SURFACE_LABELS: dict[str, str] = {'redteam': 'Red Team', 'sim': 'Agent Sim'}
@@ -108,7 +109,7 @@ def _panel(title: str, sub: str, inner: str, *, cls: str = '') -> str:
     )
 
 
-def _bars(rows: list[tuple[str, int]], colors: list[str], *, total_label: str = 'Total', fmt: str = '{}') -> str:
+def _bars(rows: list[tuple[str, float]], colors: list[str], *, total_label: str = 'Total', fmt: str = '{}') -> str:
     total = sum(v for _, v in rows) or 1
     parts: list[str] = ['<div class="bars">']
     for i, (name, val) in enumerate(rows):
@@ -159,7 +160,7 @@ def landing_body(data: Landing) -> str:
     band = (
         '<div class="stat-band">'
         + _stat_tile('Total runs', str(data.total_runs))
-        + _stat_tile('Red team', str(data.redteam_runs))
+        + _stat_tile('Total spend', _fmt_cost(data.total_cost))
         + _stat_tile('Agent sim', str(data.sim_runs))
         + _stat_tile('Resistance', resist, unit='%')
         + '</div>'
@@ -175,18 +176,27 @@ def landing_body(data: Landing) -> str:
     sev_rows = [(s.title(), n) for s, n in data.severity]
     sev_inner = _bars(sev_rows, severity_colors) if sev_rows else '<p class="rt-panel-loading">No findings.</p>'
     severity_panel = _panel('Findings by severity', 'Vulnerabilities found', sev_inner)
+    # Spend by job type — real dollars (cost_usd recorded upstream).
+    spend_inner = (
+        _bars(data.cost_by_kind, teal_jade, fmt='${:.4f}')
+        if data.cost_by_kind
+        else '<p class="rt-panel-loading">No cost recorded.</p>'
+    )
+    spend_panel = _panel('Spend by job type', 'Real cost across runs', spend_inner)
+    row2 = f'<div class="dash-row-eq">{severity_panel}{spend_panel}</div>'
+
     tok_inner = (
         _bars(data.tokens_by_kind, teal_jade, fmt='{:,}')
         if data.tokens_by_kind
         else '<p class="rt-panel-loading">No token usage recorded.</p>'
     )
     tokens_panel = _panel('Token usage', 'By job type', tok_inner)
-    row2 = f'<div class="dash-row-eq">{severity_panel}{tokens_panel}</div>'
+    row3 = f'<div class="dash-row-eq">{tokens_panel}</div>'
 
     recent_inner = ''.join(_run_row(r) for r in data.recent)
     recent_panel = _panel('Recent runs', 'Latest jobs', f'<div class="run-list">{recent_inner}</div>')
 
-    return f'<section class="dash-wrap">{band}{row1}{row2}{recent_panel}</section>'
+    return f'<section class="dash-wrap">{band}{row1}{row2}{row3}{recent_panel}</section>'
 
 
 _OUTCOME_PILL: dict[str, tuple[str, str]] = {
@@ -194,6 +204,29 @@ _OUTCOME_PILL: dict[str, tuple[str, str]] = {
     'warning': ('Warning', 'warn'),
     'failed': ('Failed', 'fail'),
 }
+
+_ATTACK_STATUS_PILL: dict[str, tuple[str, str]] = {
+    'passed': ('Resisted', 'pass'),
+    'failed': ('Vulnerable', 'fail'),
+    'warning': ('Error', 'warn'),
+}
+
+_SEVERITY_STATUS: dict[str, str] = {
+    'critical': 'fail',
+    'high': 'fail',
+    'medium': 'warn',
+    'low': 'neutral',
+}
+
+
+def _fmt_cost(v: float) -> str:
+    """Format a dollar amount: cents-precision for readable sums, more digits
+    for the sub-cent per-item costs typical of a single sim/attack."""
+    if v >= 1:
+        return f'${v:,.2f}'
+    if v > 0:
+        return f'${v:.4f}'
+    return '$0.00'
 
 
 def sim_overview_body(data: SimOverview) -> str:
@@ -211,14 +244,18 @@ def sim_overview_body(data: SimOverview) -> str:
         else ('pass' if data.goal_completion >= 0.8 else 'warn' if data.goal_completion >= 0.5 else 'fail')
     )
     avg_turns = '—' if data.avg_turns is None else f'{data.avg_turns:.1f}'
-    # Dollar cost is not tracked; avg tokens/sim stands in for the design's
-    # 'Avg cost/sim' card until the cost model lands (RES-1038).
-    avg_tokens = '—' if data.avg_tokens is None else f'{data.avg_tokens:,.0f}'
+    # Real per-sim dollar cost (cost_usd is recorded upstream). Falls back to
+    # avg tokens/sim only when no cost data is present.
+    if data.avg_cost is not None:
+        cost_label, cost_value = 'Avg cost/sim', _fmt_cost(data.avg_cost)
+    else:
+        cost_label = 'Avg tokens/sim'
+        cost_value = '—' if data.avg_tokens is None else f'{data.avg_tokens:,.0f}'
     band = kpi_cards([
         {'label': 'Simulations run', 'value': str(data.simulations_run)},
         {'label': 'Goal completion', 'value': gc, 'status': gc_status},
         {'label': 'Avg turns', 'value': avg_turns},
-        {'label': 'Avg tokens/sim', 'value': avg_tokens},
+        {'label': cost_label, 'value': cost_value},
     ])
 
     table_rows: list[list[str]] = []
@@ -234,6 +271,68 @@ def sim_overview_body(data: SimOverview) -> str:
         ])
     table = html_table(['Scenario', 'Persona', 'Model', 'Turns', 'Outcome', 'Score'], table_rows)
     panel = _panel('Recent simulations', 'Latest simulations across runs', table)
+    return f'<section class="dash-wrap">{band}{panel}</section>'
+
+
+def search_results(cards: list[ReportCard], query: str) -> str:
+    """Render the ⌘K global-search dropdown fragment: report links whose name or
+    surface matches ``query`` (case-insensitive). Empty query → empty."""
+    q = query.strip().lower()
+    if not q:
+        return ''
+    hits = [c for c in cards if q in c.name.lower() or q in SURFACE_LABELS.get(c.surface, c.surface).lower()]
+    if not hits:
+        return '<div class="search-empty">No matching reports.</div>'
+    items = []
+    for c in hits[:10]:
+        label = SURFACE_LABELS.get(c.surface, c.surface)
+        items.append(
+            f'<a class="search-hit" href="/r/{esc(c.id)}">'
+            f'<span class="search-hit-kind">{esc(label)}</span>'
+            f'<span class="search-hit-name">{esc(c.name)}</span></a>'
+        )
+    return ''.join(items)
+
+
+def redteam_overview_body(data: RedTeamOverview) -> str:
+    """Render the Red Team surface as the design's rich overview: 4 KPI cards
+    plus an item-level 'Recent attacks' table (RES-1021)."""
+    from evaluatorq.common.reports.html_helpers import html_table, kpi_cards, pct, status_badge
+
+    if data.attacks_run == 0:
+        return runs_screen_body([], 'redteam')
+
+    break_rate = '—' if data.break_rate is None else pct(data.break_rate)
+    break_status = (
+        'neutral'
+        if data.break_rate is None
+        else ('fail' if data.break_rate >= 0.25 else 'warn' if data.break_rate > 0 else 'pass')
+    )
+    robustness = '—' if data.avg_robustness is None else pct(data.avg_robustness)
+    robustness_status = (
+        'neutral' if data.avg_robustness is None else ('pass' if data.avg_robustness >= 0.8 else 'warn')
+    )
+    band = kpi_cards([
+        {'label': 'Attacks run', 'value': str(data.attacks_run)},
+        {'label': 'Break rate', 'value': break_rate, 'status': break_status},
+        {'label': 'Critical findings', 'value': str(data.critical_findings), 'status': 'fail' if data.critical_findings else 'pass'},
+        {'label': 'Avg robustness', 'value': robustness, 'status': robustness_status},
+    ])
+
+    table_rows: list[list[str]] = []
+    for it in data.recent:
+        status_label, status_kind = _ATTACK_STATUS_PILL.get(it.status, ('—', 'neutral'))
+        sev_kind = _SEVERITY_STATUS.get(it.severity, 'neutral')
+        table_rows.append([
+            f'<a href="/r/{esc(it.rid)}">{esc(it.target)}</a>',
+            esc(it.attack),
+            esc(it.model),
+            status_badge(it.severity.title(), sev_kind),
+            status_badge(status_label, status_kind),
+            esc(it.when),
+        ])
+    table = html_table(['Target', 'Attack', 'Model', 'Severity', 'Status', 'Time'], table_rows)
+    panel = _panel('Recent attacks', 'Latest attacks across runs', table)
     return f'<section class="dash-wrap">{band}{panel}</section>'
 
 
@@ -279,15 +378,27 @@ def report_actions(rid: str) -> str:
     return f'<a class="btn-secondary" href="/r/{esc(rid)}/export.html">{_DOWNLOAD_ICON} Export</a>'
 
 
-def settings_body() -> str:
-    """Render the Settings stub screen (not part of the v1 demo)."""
+def settings_body(config: list[tuple[str, str]]) -> str:
+    """Render the Settings screen as a read-only configuration view.
+
+    The v1 design's Settings page is a workspace-management surface (editable
+    workspace name, API keys, delete project) that doesn't map to a local
+    read-only run viewer. We instead reflect the actual runtime config the
+    dashboard is operating under, and note the design gap. Editable settings
+    would belong to the ORQ platform UI, not this local dashboard (RES-1038).
+    """
+    rows = ''.join(
+        f'<div class="config-row"><span class="config-key">{esc(k)}</span>'
+        f'<span class="config-val">{esc(v)}</span></div>'
+        for k, v in config
+    )
     return (
-        '<section class="settings-stub">'
-        '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
-        ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-        '<path d="M2 20a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2"/><path d="m9 8 3-3 3 3"/>'
-        '<path d="M12 5v9"/></svg>'
-        '<div>Settings — not part of this release</div>'
+        '<section class="dash-wrap">'
+        f'{_panel("Configuration", "What this dashboard is reading", f"<div class=\'config-list\'>{rows}</div>")}'
+        f'{_panel("About settings", "Design note", "<p class=\'config-note\'>The v1 design’s editable "
+        "workspace, API-key, and delete-project controls target the ORQ platform, not this local run "
+        "viewer, so they are intentionally omitted. This page reflects the read-only runtime config instead. "
+        "See RES-1038.</p>")}'
         '</section>'
     )
 
