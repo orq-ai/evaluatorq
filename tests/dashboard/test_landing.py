@@ -148,10 +148,15 @@ class TestLandingScreen:
         # Single-surface list: the kind badge is redundant and omitted.
         assert '<span class="kind-badge' not in r.text
 
-    def test_agentsim_run_list(self, client: TestClient) -> None:
+    def test_agentsim_overview(self, client: TestClient) -> None:
+        # Agent Sim is the design's rich overview: KPI band + item-level table,
+        # not the run list.
         r = client.get('/?surface=sim')
         assert r.status_code == 200
-        assert 'Support agent simulation' in r.text
+        assert 'kpi-band' in r.text
+        assert 'Simulations run' in r.text
+        assert 'Recent simulations' in r.text
+        # The red team run must not leak onto the sim surface.
         assert 'Refund agent probe' not in r.text
         assert '<span class="kind-badge' not in r.text
 

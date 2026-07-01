@@ -253,6 +253,13 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
     font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.05em;
     text-transform: uppercase; color: var(--text-faint);
 }
+.donut-wrap { gap: 20px; align-items: center; }
+.donut-legend {
+    list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column;
+    gap: 6px; font-family: var(--font-sans); font-size: 12px; color: var(--text-muted);
+}
+.donut-legend li { display: flex; align-items: center; gap: 8px; }
+.donut-key { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
 
 /* ==== run rows (recent + per-kind list) ============================= */
 .run-list { display: flex; flex-direction: column; }

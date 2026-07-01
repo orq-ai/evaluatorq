@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 from evaluatorq.dashboard import library
 
 if TYPE_CHECKING:
+    from datetime import datetime
     from pathlib import Path
 
 # Severity buckets in display order (matches the report severity scale).
@@ -218,3 +219,108 @@ def _results(data: dict[str, object]) -> list[dict[str, object]]:
 
 def _result_tokens(res: dict[str, object]) -> int:
     return _as_int(res.get('total_tokens')) or _tokens_total(res.get('token_usage'))
+
+
+# ---------------------------------------------------------------------------
+# Agent Sim overview (item-level, one row per simulation) — RES-1022
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SimItem:
+    """One simulation, as the design's item-level 'Recent simulations' table."""
+
+    rid: str  # report id of the run this simulation belongs to (row links here)
+    scenario: str
+    persona: str
+    model: str
+    turns: int
+    outcome: str  # 'passed' | 'warning' | 'failed'
+    error: bool
+    score: float  # goal completion score, 0..1
+
+
+@dataclass(frozen=True)
+class SimOverview:
+    """Rolled-up Agent Sim surface data: KPI cards + recent-simulations table.
+
+    Per the design decision, dollar cost is not tracked; the 'Avg cost/sim'
+    card is rendered as avg tokens/sim (see RES-1038 for the cost-model call).
+    """
+
+    simulations_run: int
+    goal_completion: float | None  # share of sims that achieved the goal, 0..1
+    avg_turns: float | None
+    avg_tokens: float | None
+    achieved: int  # outcomes donut segments
+    not_achieved: int
+    errors: int
+    recent: list[SimItem] = field(default_factory=list)
+
+
+def _sim_model(res: dict[str, object], meta: dict[str, object]) -> str:
+    for key in ('model', 'target_model'):
+        val = meta.get(key) or res.get(key)
+        if isinstance(val, str) and val:
+            return val
+    return 'unknown'
+
+
+def sim_overview(roots: list[Path] | None = None, *, limit: int = 8) -> SimOverview:
+    """Aggregate every simulation across the sim run store into item-level rows
+    plus headline KPIs. Rows are newest-run-first, capped at ``limit``."""
+    dated: list[tuple[datetime, SimItem]] = []
+    turns_total = 0
+    tokens_total = 0
+    achieved = not_achieved = errors = 0
+    total = 0
+
+    for card in library.scan(roots):
+        if card.surface != 'sim':
+            continue
+        try:
+            data = library.read_json_cached(card.path)
+        except (OSError, ValueError):
+            continue
+        for res in _results(data):
+            total += 1
+            meta = res.get('metadata')
+            meta = meta if isinstance(meta, dict) else {}
+            is_error = str(res.get('terminated_by') or '') == 'error'
+            goal = bool(res.get('goal_achieved'))
+            score = _as_float(res.get('goal_completion_score'))
+            turns = _as_int(res.get('turn_count'))
+            turns_total += turns
+            tokens_total += _result_tokens(res)
+            if is_error:
+                errors += 1
+            elif goal:
+                achieved += 1
+            else:
+                not_achieved += 1
+            outcome = 'failed' if is_error else _status_from_score(score)
+            dated.append((
+                card.created_at,
+                SimItem(
+                    rid=card.id,
+                    scenario=str(meta.get('scenario', 'unknown')),
+                    persona=str(meta.get('persona', 'unknown')),
+                    model=_sim_model(res, meta),
+                    turns=turns,
+                    outcome=outcome,
+                    error=is_error,
+                    score=score,
+                ),
+            ))
+
+    dated.sort(key=lambda t: t[0], reverse=True)
+    return SimOverview(
+        simulations_run=total,
+        goal_completion=(achieved / total) if total else None,
+        avg_turns=(turns_total / total) if total else None,
+        avg_tokens=(tokens_total / total) if total else None,
+        achieved=achieved,
+        not_achieved=not_achieved,
+        errors=errors,
+        recent=[item for _, item in dated[:limit]],
+    )

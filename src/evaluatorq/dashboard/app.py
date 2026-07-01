@@ -64,6 +64,7 @@ from evaluatorq.dashboard.view import (
     report_view_with_filters,
     runs_screen_body,
     settings_body,
+    sim_overview_body,
 )
 
 _STATIC_DIR = Path(__file__).parent / 'static'
@@ -107,11 +108,15 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
             # Combined Dashboard landing — aggregates across both run stores.
             body = landing_body(metrics.landing(roots))
             return NotStr(page('Dashboard', body, active_nav='dashboard'))
-        # Per-kind run list (Red Team / Agent Sim).  Unknown surfaces render an
-        # empty run-list screen rather than 500.
-        rows = [r for r in metrics.run_rows(roots) if r.surface == surface]
+        # Agent Sim is the design's rich item-level overview; Red Team (and any
+        # unknown surface) still render the run list.  Unknown surfaces fall
+        # through to an empty run-list screen rather than 500.
         label = SURFACE_LABELS.get(surface, 'Reports')
-        body = runs_screen_body(rows, surface)
+        if surface == 'sim':
+            body = sim_overview_body(metrics.sim_overview(roots))
+        else:
+            rows = [r for r in metrics.run_rows(roots) if r.surface == surface]
+            body = runs_screen_body(rows, surface)
         return NotStr(page(label, body, active_surface=surface))
 
     # ------------------------------------------------------------------

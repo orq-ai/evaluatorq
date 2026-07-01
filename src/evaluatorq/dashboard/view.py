@@ -28,7 +28,7 @@ from fasthtml.common import Script
 from evaluatorq.common.reports import esc
 
 if TYPE_CHECKING:
-    from evaluatorq.dashboard.metrics import Landing, RunRow
+    from evaluatorq.dashboard.metrics import Landing, RunRow, SimOverview
 
 # Surface key → display label, used for run-list titles + kind badges.
 SURFACE_LABELS: dict[str, str] = {'redteam': 'Red Team', 'sim': 'Agent Sim'}
@@ -187,6 +187,54 @@ def landing_body(data: Landing) -> str:
     recent_panel = _panel('Recent runs', 'Latest jobs', f'<div class="run-list">{recent_inner}</div>')
 
     return f'<section class="dash-wrap">{band}{row1}{row2}{recent_panel}</section>'
+
+
+_OUTCOME_PILL: dict[str, tuple[str, str]] = {
+    'passed': ('Passed', 'pass'),
+    'warning': ('Warning', 'warn'),
+    'failed': ('Failed', 'fail'),
+}
+
+
+def sim_overview_body(data: SimOverview) -> str:
+    """Render the Agent Sim surface as the design's rich overview: 4 KPI cards
+    plus an item-level 'Recent simulations' table (RES-1022)."""
+    from evaluatorq.common.reports.html_helpers import html_table, kpi_cards, pct, status_badge
+
+    if data.simulations_run == 0:
+        return runs_screen_body([], 'sim')
+
+    gc = '—' if data.goal_completion is None else pct(data.goal_completion)
+    gc_status = (
+        'neutral'
+        if data.goal_completion is None
+        else ('pass' if data.goal_completion >= 0.8 else 'warn' if data.goal_completion >= 0.5 else 'fail')
+    )
+    avg_turns = '—' if data.avg_turns is None else f'{data.avg_turns:.1f}'
+    # Dollar cost is not tracked; avg tokens/sim stands in for the design's
+    # 'Avg cost/sim' card until the cost model lands (RES-1038).
+    avg_tokens = '—' if data.avg_tokens is None else f'{data.avg_tokens:,.0f}'
+    band = kpi_cards([
+        {'label': 'Simulations run', 'value': str(data.simulations_run)},
+        {'label': 'Goal completion', 'value': gc, 'status': gc_status},
+        {'label': 'Avg turns', 'value': avg_turns},
+        {'label': 'Avg tokens/sim', 'value': avg_tokens},
+    ])
+
+    table_rows: list[list[str]] = []
+    for it in data.recent:
+        label, status = _OUTCOME_PILL.get(it.outcome, ('—', 'neutral'))
+        table_rows.append([
+            f'<a href="/r/{esc(it.rid)}">{esc(it.scenario)}</a>',
+            esc(it.persona),
+            esc(it.model),
+            str(it.turns),
+            status_badge(label, status),
+            pct(it.score),
+        ])
+    table = html_table(['Scenario', 'Persona', 'Model', 'Turns', 'Outcome', 'Score'], table_rows)
+    panel = _panel('Recent simulations', 'Latest simulations across runs', table)
+    return f'<section class="dash-wrap">{band}{panel}</section>'
 
 
 def runs_screen_body(rows: list[RunRow], surface: str) -> str:
