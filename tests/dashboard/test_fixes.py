@@ -44,9 +44,18 @@ def _sim_payload() -> dict:
         "mode": "run",
         "target_kind": "orq_agent",
         "evaluator_names": [],
-        "total_results": 0,
+        "total_results": 1,
         "scorer_averages": {},
-        "results": [],
+        "results": [
+            {
+                "terminated_by": "judge",
+                "goal_achieved": True,
+                "goal_completion_score": 1.0,
+                "turn_count": 2,
+                "total_tokens": 10,
+                "metadata": {"persona": "alice", "scenario": "billing", "model": "gpt-5.4"},
+            }
+        ],
     }
 
 
@@ -154,11 +163,12 @@ class TestFix2SurfaceNavFilter:
     def test_surface_sim_shows_only_sim_cards(
         self, client: TestClient, roots: list[Path]
     ) -> None:
-        """GET /?surface=sim must show the sim report and exclude the redteam one."""
+        """GET /?surface=sim must show the sim overview and exclude the redteam one."""
         r = client.get("/?surface=sim")
         assert r.status_code == 200
-        # Sim report name appears.
-        assert "demo-sim" in r.text
+        # The Agent Sim surface is the item-level overview (KPI cards + table).
+        assert "Recent simulations" in r.text
+        assert "billing" in r.text
         # Redteam report must not appear (its stem is rt_fix_test).
         assert "rt_fix_test" not in r.text
 

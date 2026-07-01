@@ -61,9 +61,12 @@ from evaluatorq.dashboard.view import (
     report_back_link,
     report_broken,
     report_not_found,
+    redteam_overview_body,
     report_view_with_filters,
     runs_screen_body,
+    search_results,
     settings_body,
+    sim_overview_body,
 )
 
 _STATIC_DIR = Path(__file__).parent / 'static'
@@ -72,6 +75,23 @@ _STATIC_DIR = Path(__file__).parent / 'static'
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _settings_config(roots: list[Path] | None) -> list[tuple[str, str]]:
+    """Build the read-only runtime config shown on the Settings page: the run
+    stores being scanned, the default sim model, and API-key presence (never
+    the values)."""
+    import os
+
+    from evaluatorq.dashboard.library import _default_roots
+    from evaluatorq.simulation.types import DEFAULT_MODEL
+
+    scan_roots = roots if roots is not None else _default_roots()
+    config: list[tuple[str, str]] = [('Run stores', ', '.join(str(p) for p in scan_roots) or '—')]
+    config.append(('Default sim model', DEFAULT_MODEL))
+    for label, var in (('ORQ API key', 'ORQ_API_KEY'), ('OpenAI API key', 'OPENAI_API_KEY')):
+        config.append((label, 'set' if os.environ.get(var) else 'not set'))
+    return config
 
 
 def build_app(roots: list[Path] | None = None) -> FastHTML:
@@ -107,19 +127,33 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
             # Combined Dashboard landing — aggregates across both run stores.
             body = landing_body(metrics.landing(roots))
             return NotStr(page('Dashboard', body, active_nav='dashboard'))
-        # Per-kind run list (Red Team / Agent Sim).  Unknown surfaces render an
-        # empty run-list screen rather than 500.
-        rows = [r for r in metrics.run_rows(roots) if r.surface == surface]
+        # Agent Sim is the design's rich item-level overview; Red Team (and any
+        # unknown surface) still render the run list.  Unknown surfaces fall
+        # through to an empty run-list screen rather than 500.
         label = SURFACE_LABELS.get(surface, 'Reports')
-        body = runs_screen_body(rows, surface)
+        if surface == 'sim':
+            body = sim_overview_body(metrics.sim_overview(roots))
+        elif surface == 'redteam':
+            body = redteam_overview_body(metrics.redteam_overview(roots))
+        else:
+            rows = [r for r in metrics.run_rows(roots) if r.surface == surface]
+            body = runs_screen_body(rows, surface)
         return NotStr(page(label, body, active_surface=surface))
 
     # ------------------------------------------------------------------
-    # Route: GET /settings  — stub screen (matches v1 design nav)
+    # Route: GET /settings  — read-only runtime configuration
     # ------------------------------------------------------------------
     @app.get('/settings')
     def settings() -> NotStr:
-        return NotStr(page('Settings', settings_body(), active_nav='settings'))
+        return NotStr(page('Settings', settings_body(_settings_config(roots)), active_nav='settings'))
+
+    # ------------------------------------------------------------------
+    # Route: GET /search?q=  — ⌘K global search fragment (HTMX)
+    # ------------------------------------------------------------------
+    @app.get('/search')
+    def search(req: Request) -> NotStr:
+        q = req.query_params.get('q') or ''
+        return NotStr(search_results(library.scan(roots), q))
 
     # ------------------------------------------------------------------
     # Route: GET /r/{rid}  — embedded report view
