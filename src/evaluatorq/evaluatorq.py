@@ -10,7 +10,11 @@ from typing import Any, cast
 from loguru import logger
 
 from .common.messages import coerce_content_text
-from .fetch_data import fetch_dataset_batches, setup_orq_client
+from .fetch_data import (
+    fetch_dataset_batches,
+    fetch_experiment_datapoints,
+    setup_orq_client,
+)
 from .processings import process_data_point
 from .progress import Phase, ProgressService, with_progress
 from .send_results import send_results_to_orq
@@ -30,6 +34,7 @@ from .types import (
     Evaluator,
     EvaluatorParams,
     EvaluatorqResult,
+    ExperimentInput,
     Job,
 )
 
@@ -107,7 +112,10 @@ async def evaluatorq(
     name: str,
     params: EvaluatorParams | dict[str, Any] | None = None,
     *,
-    data: DatasetIdInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None = None,
+    data: DatasetIdInput
+    | ExperimentInput
+    | Sequence[Awaitable[DataPoint] | DataPointInput]
+    | None = None,
     jobs: list[Job] | None = None,
     evaluators: list[Evaluator] | None = None,
     parallelism: int = 1,
@@ -137,8 +145,9 @@ async def evaluatorq(
     Args:
         name: Name of the evaluation run
         params: Optional EvaluatorParams instance or dict with all parameters.
-        data: The data to evaluate. Either a DatasetIdInput to fetch from Orq platform,
-              or a list of DataPoint instances/awaitables.
+        data: The data to evaluate. A DatasetIdInput to fetch from Orq platform, an
+              ExperimentInput to replay an experiment's recorded responses (requires
+              inference=False), or a list of DataPoint instances/awaitables.
         jobs: The jobs to run on the data.
         evaluators: The evaluators to use. If not provided, only jobs will run.
         parallelism: Number of jobs to run in parallel. Defaults to 1 (sequential).
@@ -214,6 +223,22 @@ async def evaluatorq(
     start_time = datetime.now(timezone.utc)
 
     dataset_id: str | None = None
+
+    # Experiment source (no-inference only): replace the input with the experiment's
+    # recorded responses, then fall through to the in-memory data path below. The
+    # validator already guarantees inference=False here.
+    if isinstance(data, ExperimentInput):
+        if not orq_api_key:
+            raise ValueError(
+                "ORQ_API_KEY environment variable must be set to load responses from an "
+                "Orq experiment."
+            )
+        data = await fetch_experiment_datapoints(
+            orq_api_key,
+            data.experiment_id,
+            data.run_id,
+            base_url=_base_url,
+        )
 
     # Create progress service
     progress = ProgressService()

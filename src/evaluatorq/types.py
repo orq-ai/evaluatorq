@@ -162,13 +162,31 @@ class DatasetIdInput(BaseModel):
     include_messages: bool = False
 
 
+class ExperimentInput(BaseModel):
+    """Input for sourcing pre-recorded responses from an Orq experiment.
+
+    Used with ``inference=False`` to re-run evaluators against the responses an
+    earlier experiment already produced, without regenerating them.
+    """
+
+    experiment_id: str
+    """The experiment ID to load responses from. Read it off the experiment URL in the
+    Orq UI (``/experiments/<experiment_id>``). The API refers to experiments as
+    "spreadsheets", so you will also see this ID in ``/v2/spreadsheets/<id>`` routes."""
+    run_id: str | None = None
+    """A specific run ID (a "manifest" in the API). When omitted, the latest run is used.
+    Every execution of an experiment creates a new run; open it from the experiment's run
+    history to read its ID from the URL."""
+
+
 class EvaluatorParams(BaseModel):
     """
     Parameters for running an evaluation.
 
     Args:
-        data: The data to evaluate. Either a DatasetIdInput to fetch from Orq platform,
-              or a list of DataPoint instances/awaitables.
+        data: The data to evaluate. A DatasetIdInput to fetch from Orq platform, an
+              ExperimentInput to replay an experiment's recorded responses (requires
+              inference=False), or a list of DataPoint instances/awaitables.
         jobs: The jobs to run on the data.
         evaluators: The evaluators to use. If not provided, only jobs will run.
         parallelism: Number of jobs to run in parallel. Defaults to 1 (sequential).
@@ -184,7 +202,7 @@ class EvaluatorParams(BaseModel):
         "populate_by_name": True,
     }
 
-    data: DatasetIdInput | Sequence[Awaitable[DataPoint] | DataPointInput]
+    data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput]
     jobs: list[Job] | None = None
     evaluators: list[Evaluator] | None = None
     parallelism: int = Field(default=1, ge=1)
@@ -199,4 +217,9 @@ class EvaluatorParams(BaseModel):
     def _require_jobs_when_inferring(self) -> "EvaluatorParams":
         if self.inference and not self.jobs:
             raise ValueError("'jobs' is required unless inference=False")
+        if isinstance(self.data, ExperimentInput) and self.inference:
+            raise ValueError(
+                "data=ExperimentInput(...) sources pre-recorded responses from an "
+                "experiment and is only valid with inference=False."
+            )
         return self
