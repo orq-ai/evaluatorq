@@ -13,10 +13,16 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from evaluatorq.common.jury import VerdictValue, _plurality_vote
+from evaluatorq.common.jury import Prediction, VerdictValue, _plurality_vote, run_jury
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Awaitable, Callable, Sequence
+
+    from evaluatorq.contracts import JuryVote
+
+    # A judge comparing two responses in the order shown: (first, second, model) -> Prediction
+    # with value in {'A', 'B', 'tie'} referring to the first or second response.
+    PairwiseJudgeFn = Callable[[str, str, str], Awaitable[Prediction]]
 
 
 def reconcile_pair(first: VerdictValue | None, second: VerdictValue | None) -> tuple[VerdictValue | None, bool]:
@@ -124,3 +130,89 @@ def build_report(comparisons: Sequence[PairwiseComparison]) -> PairwiseReport:
         tie_rate=winners['tie'] / total if total else 0.0,
         per_judge=judge_stats,
     )
+
+
+_UNSWAP = {'A': 'B', 'B': 'A'}
+
+
+def _decisive_value(vote: JuryVote) -> VerdictValue | None:
+    """The judge's verdict, or None if it failed or abstained."""
+    if not vote.success or vote.abstained:
+        return None
+    return vote.value
+
+
+def _unswap(value: VerdictValue | None) -> VerdictValue | None:
+    """Map a verdict from the swapped ordering back to the canonical A/B frame."""
+    if value is None:
+        return None
+    return _UNSWAP.get(str(value), value)
+
+
+async def run_pairwise(
+    *,
+    judge_fn: PairwiseJudgeFn,
+    panel: Sequence[str],
+    response_a: str,
+    response_b: str,
+    swap: bool = True,
+    repetitions: int = 1,
+    replacement_judges: Sequence[str] | None = None,
+    min_successful_judges: int = 1,
+    propagate_errors: bool = False,
+) -> PairwiseComparison:
+    """Run a panel over one A-vs-B comparison and reconcile it into a verdict.
+
+    Each judge runs through the shared :func:`run_jury`. When ``swap`` is on
+    (default) every judge is also run with A and B exchanged; the two verdicts
+    are un-swapped and passed through :func:`reconcile_pair`, so a judge that
+    just follows slot order abstains and is recorded as a flip. The winner is
+    the plurality of the reconciled votes.
+    """
+
+    async def _judge_first(model: str) -> Prediction:
+        return await judge_fn(response_a, response_b, model)
+
+    first = await run_jury(
+        judge_fn=_judge_first,
+        panel=panel,
+        repetitions=repetitions,
+        replacement_judges=replacement_judges,
+        min_successful_judges=min_successful_judges,
+        propagate_errors=propagate_errors,
+    )
+    first_votes = {v.model: v for v in first.jury.votes}
+
+    if not swap:
+        votes = [
+            PairwiseVote(model=model, vote=_as_str(_decisive_value(vote)), flipped=False)
+            for model, vote in first_votes.items()
+        ]
+        return PairwiseComparison(winner=pairwise_consensus([v.vote for v in votes]), votes=votes)
+
+    async def _judge_second(model: str) -> Prediction:
+        return await judge_fn(response_b, response_a, model)
+
+    second = await run_jury(
+        judge_fn=_judge_second,
+        panel=panel,
+        repetitions=repetitions,
+        replacement_judges=replacement_judges,
+        min_successful_judges=min_successful_judges,
+        propagate_errors=propagate_errors,
+    )
+    second_votes = {v.model: v for v in second.jury.votes}
+
+    votes = []
+    for model, first_vote in first_votes.items():
+        second_vote = second_votes.get(model)
+        first_value = _decisive_value(first_vote)
+        second_value = _unswap(_decisive_value(second_vote)) if second_vote else None
+        vote, flipped = reconcile_pair(first_value, second_value)
+        votes.append(PairwiseVote(model=model, vote=_as_str(vote), flipped=flipped))
+
+    return PairwiseComparison(winner=pairwise_consensus([v.vote for v in votes]), votes=votes)
+
+
+def _as_str(value: VerdictValue | None) -> str | None:
+    return None if value is None else str(value)
