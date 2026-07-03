@@ -13,9 +13,9 @@ if TYPE_CHECKING:
 def extract_prompt(result: RedTeamResult) -> str:
     """Extract the first user message content as the attack prompt."""
     for msg in result.messages:
-        if msg.role == "user" and msg.content:
+        if msg.role == 'user' and msg.content:
             return coerce_content_text(msg.content)
-    return ""
+    return ''
 
 
 def extract_response(result: RedTeamResult) -> str:
@@ -24,6 +24,6 @@ def extract_response(result: RedTeamResult) -> str:
         return result.response
     # Fall back to last assistant message
     for msg in reversed(result.messages):
-        if msg.role == "assistant" and msg.content:
+        if msg.role == 'assistant' and msg.content:
             return coerce_content_text(msg.content)
-    return ""
+    return ''

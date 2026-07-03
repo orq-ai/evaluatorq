@@ -16,7 +16,7 @@ def rate_style(value: float, *, higher_is_better: bool = True) -> str:
     """
     score = value if higher_is_better else 1.0 - value
     if score >= 0.8:
-        return "green"
+        return 'green'
     if score >= 0.5:
-        return "yellow"
-    return "red"
+        return 'yellow'
+    return 'red'

@@ -28,19 +28,20 @@ def export_datapoints_to_jsonl(datapoints: list[SimulationDatapoint], output_pat
     """Export datapoints to JSONL format for orq.ai datasets."""
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-    lines = [json.dumps(
-                {
-                    "inputs": {
-                        "category": f"{dp.persona.name} - {dp.scenario.name}",
-                        "first_message": dp.first_message,
-                        "user_system_prompt": dp.user_system_prompt,
-                        "persona": dp.persona.model_dump(mode="json"),
-                        "scenario": dp.scenario.model_dump(mode="json"),
-                    },
-                    "expected_output": None,
-                }
-            ) for dp in datapoints]
-    Path(output_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    lines = [
+        json.dumps({
+            'inputs': {
+                'category': f'{dp.persona.name} - {dp.scenario.name}',
+                'first_message': dp.first_message,
+                'user_system_prompt': dp.user_system_prompt,
+                'persona': dp.persona.model_dump(mode='json'),
+                'scenario': dp.scenario.model_dump(mode='json'),
+            },
+            'expected_output': None,
+        })
+        for dp in datapoints
+    ]
+    Path(output_path).write_text('\n'.join(lines) + '\n', encoding='utf-8')
 
 
 def export_results_to_jsonl(results: list[SimulationResult], output_path: str) -> None:
@@ -48,7 +49,7 @@ def export_results_to_jsonl(results: list[SimulationResult], output_path: str) -
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
     lines = [r.model_dump_json() for r in results]
-    Path(output_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    Path(output_path).write_text('\n'.join(lines) + '\n', encoding='utf-8')
 
 
 # ---------------------------------------------------------------------------
@@ -62,10 +63,10 @@ def load_datapoints_from_jsonl(input_path: str) -> list[SimulationDatapoint]:
     Supports both the current format (with full persona/scenario objects) and a
     legacy format (with flat fields).
     """
-    content = Path(input_path).read_text(encoding="utf-8")
+    content = Path(input_path).read_text(encoding='utf-8')
     datapoints: list[SimulationDatapoint] = []
 
-    for line in content.split("\n"):
+    for line in content.split('\n'):
         trimmed = line.strip()
         if not trimmed:
             continue
@@ -73,51 +74,49 @@ def load_datapoints_from_jsonl(input_path: str) -> list[SimulationDatapoint]:
         try:
             data = json.loads(trimmed)
         except json.JSONDecodeError:
-            logger.warning(
-                "loadDatapointsFromJsonl: skipping malformed line: %s", trimmed[:80]
-            )
+            logger.warning('loadDatapointsFromJsonl: skipping malformed line: %s', trimmed[:80])
             continue
 
         # Raw ``SimulationDatapoint`` line (what ``sim generate`` writes): top-level
         # persona/scenario dicts and an id. Parse directly so the id and all
         # fields round-trip unchanged.
-        if isinstance(data.get("persona"), dict) and isinstance(data.get("scenario"), dict):
+        if isinstance(data.get('persona'), dict) and isinstance(data.get('scenario'), dict):
             datapoints.append(SimulationDatapoint.model_validate(data))
             continue
 
-        inputs = data.get("inputs", {})
+        inputs = data.get('inputs', {})
 
         # Reconstruct persona
-        if isinstance(inputs.get("persona"), dict):
-            persona = Persona.model_validate(inputs["persona"])
+        if isinstance(inputs.get('persona'), dict):
+            persona = Persona.model_validate(inputs['persona'])
         else:
             persona = Persona(
-                name=inputs.get("persona_name", "Unknown"),
+                name=inputs.get('persona_name', 'Unknown'),
                 patience=0.5,
                 assertiveness=0.5,
                 politeness=0.5,
                 technical_level=0.5,
                 communication_style=CommunicationStyle.casual,
-                background=inputs.get("context", ""),
+                background=inputs.get('context', ''),
             )
 
         # Reconstruct scenario
-        if isinstance(inputs.get("scenario"), dict):
-            scenario = Scenario.model_validate(inputs["scenario"])
+        if isinstance(inputs.get('scenario'), dict):
+            scenario = Scenario.model_validate(inputs['scenario'])
         else:
             scenario = Scenario(
-                name=inputs.get("scenario_name", "Unknown"),
-                goal=inputs.get("goal", ""),
-                context=inputs.get("context", ""),
+                name=inputs.get('scenario_name', 'Unknown'),
+                goal=inputs.get('goal', ''),
+                context=inputs.get('context', ''),
             )
 
         datapoints.append(
             SimulationDatapoint(
-                id=f"dp_{uuid.uuid4().hex[:12]}",
+                id=f'dp_{uuid.uuid4().hex[:12]}',
                 persona=persona,
                 scenario=scenario,
-                user_system_prompt=inputs.get("user_system_prompt", ""),
-                first_message=inputs.get("first_message", ""),
+                user_system_prompt=inputs.get('user_system_prompt', ''),
+                first_message=inputs.get('first_message', ''),
             )
         )
 
@@ -129,7 +128,7 @@ def load_datapoints_from_jsonl(input_path: str) -> list[SimulationDatapoint]:
 # ---------------------------------------------------------------------------
 
 
-T = TypeVar("T")
+T = TypeVar('T')
 
 
 def parse_jsonl(content: str, cls: type[T] | None = None) -> list[T | dict[str, Any]]:
@@ -139,18 +138,18 @@ def parse_jsonl(content: str, cls: type[T] | None = None) -> list[T | dict[str, 
     through ``model_validate``.  Otherwise lines are returned as plain dicts.
     """
     results: list[T | dict[str, Any]] = []
-    for line in content.split("\n"):
+    for line in content.split('\n'):
         trimmed = line.strip()
         if not trimmed:
             continue
         try:
             data = json.loads(trimmed)
-            if cls is not None and hasattr(cls, "model_validate"):
+            if cls is not None and hasattr(cls, 'model_validate'):
                 results.append(cls.model_validate(data))  # pyright: ignore[reportAttributeAccessIssue]
             else:
                 results.append(data)
         except json.JSONDecodeError:
-            logger.warning("parseJsonl: skipping malformed line: %s", trimmed[:80])
+            logger.warning('parseJsonl: skipping malformed line: %s', trimmed[:80])
     return results
 
 
@@ -160,31 +159,27 @@ def results_to_jsonl(
     """Convert simulation results to JSONL string for dataset export."""
     lines = []
     for r in results:
-        dp = r["datapoint"]
-        result = r["result"]
+        dp = r['datapoint']
+        result = r['result']
         if not isinstance(dp, SimulationDatapoint):
-            raise TypeError(f"Expected SimulationDatapoint, got {type(dp).__name__}")
+            raise TypeError(f'Expected SimulationDatapoint, got {type(dp).__name__}')
         if not isinstance(result, SimulationResult):
-            raise TypeError(f"Expected SimulationResult, got {type(result).__name__}")
+            raise TypeError(f'Expected SimulationResult, got {type(result).__name__}')
         lines.append(
-            json.dumps(
-                {
-                    "id": dp.id,
-                    "persona": dp.persona.name,
-                    "scenario": dp.scenario.name,
-                    "first_message": dp.first_message,
-                    "goal_achieved": result.goal_achieved,
-                    "goal_completion_score": result.goal_completion_score,
-                    "terminated_by": result.terminated_by.value,
-                    "turn_count": result.turn_count,
-                    "messages": [m.model_dump(mode="json") for m in result.messages],
-                    "rules_broken": result.rules_broken,
-                    "token_usage": result.token_usage.model_dump(mode="json"),
-                    "turn_metrics": [
-                        tm.model_dump(mode="json") for tm in result.turn_metrics
-                    ],
-                    "metadata": result.metadata,
-                }
-            )
+            json.dumps({
+                'id': dp.id,
+                'persona': dp.persona.name,
+                'scenario': dp.scenario.name,
+                'first_message': dp.first_message,
+                'goal_achieved': result.goal_achieved,
+                'goal_completion_score': result.goal_completion_score,
+                'terminated_by': result.terminated_by.value,
+                'turn_count': result.turn_count,
+                'messages': [m.model_dump(mode='json') for m in result.messages],
+                'rules_broken': result.rules_broken,
+                'token_usage': result.token_usage.model_dump(mode='json'),
+                'turn_metrics': [tm.model_dump(mode='json') for tm in result.turn_metrics],
+                'metadata': result.metadata,
+            })
         )
-    return "\n".join(lines)
+    return '\n'.join(lines)

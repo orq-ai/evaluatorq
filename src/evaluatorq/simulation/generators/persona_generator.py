@@ -90,9 +90,7 @@ class PersonaGenerator:
         self._model = model
         from evaluatorq.openresponses.client import build_simulation_client
 
-        self._client, self._client_owned = build_simulation_client(
-            client, extra_api_key=api_key
-        )
+        self._client, self._client_owned = build_simulation_client(client, extra_api_key=api_key)
 
     async def close(self) -> None:
         """Close the HTTP client (only if this generator built it)."""
@@ -106,7 +104,7 @@ class PersonaGenerator:
         try:
             parsed = json.loads(content)
         except (json.JSONDecodeError, ValueError):
-            logger.warning("Failed to parse personas JSON response")
+            logger.warning('Failed to parse personas JSON response')
             return []
 
         # json_object mode returns a top-level object; find the first list value
@@ -114,11 +112,9 @@ class PersonaGenerator:
         if isinstance(parsed, list):
             items = parsed
         elif isinstance(parsed, dict):
-            items = next(
-                (v for v in parsed.values() if isinstance(v, list)), []
-            )
+            items = next((v for v in parsed.values() if isinstance(v, list)), [])
         else:
-            logger.warning("Failed to parse personas: unexpected JSON shape")
+            logger.warning('Failed to parse personas: unexpected JSON shape')
             return []
 
         personas: list[Persona] = []
@@ -126,17 +122,17 @@ class PersonaGenerator:
             try:
                 personas.append(Persona.model_validate(item))
             except Exception as e:  # noqa: PERF203
-                logger.warning("Failed to parse persona: %s", e)
+                logger.warning('Failed to parse persona: %s', e)
         return personas
 
     async def generate(
         self,
         *,
         agent_description: str,
-        context: str = "",
+        context: str = '',
         num_personas: int = 5,
         edge_case_percentage: float = 0.2,
-        seed: str = "",
+        seed: str = '',
     ) -> list[Persona]:
         """Generate personas for agent testing.
 
@@ -148,42 +144,42 @@ class PersonaGenerator:
         from evaluatorq.simulation.tracing import with_simulation_span
 
         async with with_simulation_span(
-            "orq.simulation.persona_generation",
+            'orq.simulation.persona_generation',
             {
-                "orq.simulation.num_personas": num_personas,
-                "orq.simulation.model": self._model,
-                "orq.simulation.seed": seed,
+                'orq.simulation.num_personas': num_personas,
+                'orq.simulation.model': self._model,
+                'orq.simulation.seed': seed,
             },
         ):
             num_edge_cases = int(num_personas * edge_case_percentage)
 
             if seed:
                 instructions = (
-                    f"Generate {num_personas} persona(s), each embodying this "
+                    f'Generate {num_personas} persona(s), each embodying this '
                     f'archetype: "{seed}".\n'
-                    "- Fill patience, assertiveness, politeness, technical level, "
-                    "background, communication style, and emotional arc so each "
-                    "persona is coherent and realistic for that archetype"
+                    '- Fill patience, assertiveness, politeness, technical level, '
+                    'background, communication style, and emotional arc so each '
+                    'persona is coherent and realistic for that archetype'
                 )
             else:
                 instructions = (
-                    f"Generate {num_personas} diverse personas for testing this agent.\n"
-                    f"- Include {num_edge_cases} edge case/challenging personas\n"
-                    "- Ensure variety in patience, assertiveness, and technical levels\n"
+                    f'Generate {num_personas} diverse personas for testing this agent.\n'
+                    f'- Include {num_edge_cases} edge case/challenging personas\n'
+                    '- Ensure variety in patience, assertiveness, and technical levels\n'
                     "- Create realistic backgrounds relevant to the agent's domain"
                 )
 
             user_prompt = f"""Agent Description: {delimit(agent_description)}
 
-Additional Context: {delimit(context or "None provided")}
+Additional Context: {delimit(context or 'None provided')}
 
 {instructions}
 
 Return ONLY a JSON array, no other text."""
 
             messages: list[dict[str, Any]] = [
-                {"role": "system", "content": _PERSONA_GENERATOR_PROMPT},
-                {"role": "user", "content": user_prompt},
+                {'role': 'system', 'content': _PERSONA_GENERATOR_PROMPT},
+                {'role': 'user', 'content': user_prompt},
             ]
 
             parsed, raw = await generate_structured(
@@ -193,13 +189,13 @@ Return ONLY a JSON array, no other text."""
                 response_format=PersonaListResponse,
                 temperature=_TEMPERATURE_CREATIVE,
                 max_tokens=4000,
-                label="PersonaGenerator.generate",
+                label='PersonaGenerator.generate',
             )
-            personas = parsed.personas if parsed is not None else self._parse_personas(raw or "[]")
+            personas = parsed.personas if parsed is not None else self._parse_personas(raw or '[]')
 
             if len(personas) < num_personas:
                 logger.warning(
-                    "PersonaGenerator: requested %d personas but only %d were successfully parsed",
+                    'PersonaGenerator: requested %d personas but only %d were successfully parsed',
                     num_personas,
                     len(personas),
                 )
@@ -209,60 +205,60 @@ Return ONLY a JSON array, no other text."""
         self,
         *,
         agent_description: str,
-        context: str = "",
+        context: str = '',
         num_personas: int = 8,
         edge_case_percentage: float = 0.2,
     ) -> list[Persona]:
         """Generate personas with guaranteed trait coverage."""
-        styles = ["formal", "casual", "terse", "verbose"]
+        styles = ['formal', 'casual', 'terse', 'verbose']
         trait_targets = [
             {
-                "patience": 0.1,
-                "assertiveness": 0.1,
-                "politeness": 0.1,
-                "technical_level": 0.1,
+                'patience': 0.1,
+                'assertiveness': 0.1,
+                'politeness': 0.1,
+                'technical_level': 0.1,
             },
             {
-                "patience": 0.9,
-                "assertiveness": 0.1,
-                "politeness": 0.9,
-                "technical_level": 0.9,
+                'patience': 0.9,
+                'assertiveness': 0.1,
+                'politeness': 0.9,
+                'technical_level': 0.9,
             },
             {
-                "patience": 0.1,
-                "assertiveness": 0.9,
-                "politeness": 0.1,
-                "technical_level": 0.5,
+                'patience': 0.1,
+                'assertiveness': 0.9,
+                'politeness': 0.1,
+                'technical_level': 0.5,
             },
             {
-                "patience": 0.5,
-                "assertiveness": 0.9,
-                "politeness": 0.9,
-                "technical_level": 0.1,
+                'patience': 0.5,
+                'assertiveness': 0.9,
+                'politeness': 0.9,
+                'technical_level': 0.1,
             },
             {
-                "patience": 0.5,
-                "assertiveness": 0.5,
-                "politeness": 0.5,
-                "technical_level": 0.5,
+                'patience': 0.5,
+                'assertiveness': 0.5,
+                'politeness': 0.5,
+                'technical_level': 0.5,
             },
             {
-                "patience": 0.3,
-                "assertiveness": 0.7,
-                "politeness": 0.6,
-                "technical_level": 0.3,
+                'patience': 0.3,
+                'assertiveness': 0.7,
+                'politeness': 0.6,
+                'technical_level': 0.3,
             },
             {
-                "patience": 0.7,
-                "assertiveness": 0.3,
-                "politeness": 0.8,
-                "technical_level": 0.7,
+                'patience': 0.7,
+                'assertiveness': 0.3,
+                'politeness': 0.8,
+                'technical_level': 0.7,
             },
             {
-                "patience": 0.2,
-                "assertiveness": 0.8,
-                "politeness": 0.3,
-                "technical_level": 0.8,
+                'patience': 0.2,
+                'assertiveness': 0.8,
+                'politeness': 0.3,
+                'technical_level': 0.8,
             },
         ]
         num_edge_cases = int(num_personas * edge_case_percentage)
@@ -272,15 +268,15 @@ Return ONLY a JSON array, no other text."""
             target = trait_targets[i % len(trait_targets)]
             coverage_lines.append(
                 f"- Persona {i + 1}: communication_style='{styles[i % len(styles)]}', "
-                f"patience={target['patience']:.1f}, "
-                f"assertiveness={target['assertiveness']:.1f}, "
-                f"politeness={target['politeness']:.1f}, "
-                f"technical_level={target['technical_level']:.1f}"
+                f'patience={target["patience"]:.1f}, '
+                f'assertiveness={target["assertiveness"]:.1f}, '
+                f'politeness={target["politeness"]:.1f}, '
+                f'technical_level={target["technical_level"]:.1f}'
             )
 
         user_prompt = f"""Agent Description: {delimit(agent_description)}
 
-Additional Context: {delimit(context or "None provided")}
+Additional Context: {delimit(context or 'None provided')}
 
 Generate {num_personas} personas with EXACT trait values as specified below.
 CRITICAL: Use the EXACT numeric values provided - do NOT adjust them to be more "balanced".
@@ -297,18 +293,18 @@ IMPORTANT:
 Return ONLY a JSON array, no other text."""
 
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": _PERSONA_GENERATOR_PROMPT},
-            {"role": "user", "content": user_prompt},
+            {'role': 'system', 'content': _PERSONA_GENERATOR_PROMPT},
+            {'role': 'user', 'content': user_prompt},
         ]
 
         from evaluatorq.simulation.tracing import with_simulation_span
 
         async with with_simulation_span(
-            "orq.simulation.persona_generation",
+            'orq.simulation.persona_generation',
             {
-                "orq.simulation.num_personas": num_personas,
-                "orq.simulation.mode": "coverage",
-                "orq.simulation.model": self._model,
+                'orq.simulation.num_personas': num_personas,
+                'orq.simulation.mode': 'coverage',
+                'orq.simulation.model': self._model,
             },
         ):
             parsed, raw = await generate_structured(
@@ -318,18 +314,12 @@ Return ONLY a JSON array, no other text."""
                 response_format=PersonaListResponse,
                 temperature=_TEMPERATURE_BALANCED,
                 max_tokens=4000,
-                label="PersonaGenerator.generate_with_coverage",
+                label='PersonaGenerator.generate_with_coverage',
             )
-            personas = (
-                parsed.personas
-                if parsed is not None
-                else self._parse_personas(raw or "[]")
-            )
+            personas = parsed.personas if parsed is not None else self._parse_personas(raw or '[]')
 
             # Validate coverage and fill gaps
-            personas = self._ensure_style_coverage(
-                personas, [CommunicationStyle(s) for s in styles]
-            )
+            personas = self._ensure_style_coverage(personas, [CommunicationStyle(s) for s in styles])
             self._log_trait_coverage_gaps(personas)
 
             if len(personas) > num_personas:
@@ -337,25 +327,21 @@ Return ONLY a JSON array, no other text."""
 
             if len(personas) < num_personas:
                 logger.warning(
-                    "PersonaGenerator: requested %d personas (with coverage) but only %d were successfully parsed",
+                    'PersonaGenerator: requested %d personas (with coverage) but only %d were successfully parsed',
                     num_personas,
                     len(personas),
                 )
             return personas
 
     @staticmethod
-    def _ensure_style_coverage(
-        personas: list[Persona], required_styles: list[CommunicationStyle]
-    ) -> list[Persona]:
+    def _ensure_style_coverage(personas: list[Persona], required_styles: list[CommunicationStyle]) -> list[Persona]:
         existing_styles = {p.communication_style for p in personas}
         missing_styles = [s for s in required_styles if s not in existing_styles]
 
         if missing_styles and personas:
             for i, style in enumerate(missing_styles):
                 if i < len(personas):
-                    personas[i] = personas[i].model_copy(
-                        update={"communication_style": style}
-                    )
+                    personas[i] = personas[i].model_copy(update={'communication_style': style})
                     logger.debug(
                         "Adjusted persona '%s' to style '%s' for coverage",
                         personas[i].name,
@@ -381,21 +367,21 @@ Return ONLY a JSON array, no other text."""
 
         gaps: list[str] = []
         if not has_low(patience_vals):
-            gaps.append("low patience (<0.2)")
+            gaps.append('low patience (<0.2)')
         if not has_high(patience_vals):
-            gaps.append("high patience (>0.8)")
+            gaps.append('high patience (>0.8)')
         if not has_low(assertive_vals):
-            gaps.append("low assertiveness (<0.2)")
+            gaps.append('low assertiveness (<0.2)')
         if not has_high(assertive_vals):
-            gaps.append("high assertiveness (>0.8)")
+            gaps.append('high assertiveness (>0.8)')
         if not has_low(polite_vals):
-            gaps.append("low politeness (<0.2)")
+            gaps.append('low politeness (<0.2)')
         if not has_high(polite_vals):
-            gaps.append("high politeness (>0.8)")
+            gaps.append('high politeness (>0.8)')
         if not has_low(tech_vals):
-            gaps.append("low technical_level (<0.2)")
+            gaps.append('low technical_level (<0.2)')
         if not has_high(tech_vals):
-            gaps.append("high technical_level (>0.8)")
+            gaps.append('high technical_level (>0.8)')
 
         if gaps:
-            logger.debug("Trait coverage gaps: %s", ", ".join(gaps))
+            logger.debug('Trait coverage gaps: %s', ', '.join(gaps))

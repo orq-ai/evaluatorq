@@ -80,8 +80,7 @@ def render_markdown(
         renderer = renderers.get(section.kind)
         if renderer is None:
             logger.warning(
-                "No renderer registered for section kind {!r}; the section "
-                "will be missing from the markdown report.",
+                'No renderer registered for section kind {!r}; the section will be missing from the markdown report.',
                 section.kind,
             )
             continue
@@ -132,8 +131,7 @@ def render_body(
         renderer = renderers.get(section.kind)
         if renderer is None:
             logger.warning(
-                "No renderer registered for section kind {!r}; the section "
-                "will be missing from the HTML report.",
+                'No renderer registered for section kind {!r}; the section will be missing from the HTML report.',
                 section.kind,
             )
             continue

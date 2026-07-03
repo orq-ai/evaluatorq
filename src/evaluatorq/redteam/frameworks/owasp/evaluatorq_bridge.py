@@ -147,7 +147,9 @@ def load_owasp_agentic_dataset(
         )
 
     if isinstance(dataset, Path):
-        return _load_from_file(dataset, num_samples=num_samples, categories=categories, delivery_methods=delivery_methods)
+        return _load_from_file(
+            dataset, num_samples=num_samples, categories=categories, delivery_methods=delivery_methods
+        )
 
     s = str(dataset)
 

@@ -277,9 +277,7 @@ def format_plan_for_prompt(steps: list[ToolCallStep]) -> str:
     benignly — rather than improvising the whole chain from scratch.
     """
     lines = [
-        f'{i}. Elicit the `{s.tool_name}` tool. '
-        f'Argument: {s.argument_description}. '
-        f'Benign framing: {s.benign_framing}'
+        f'{i}. Elicit the `{s.tool_name}` tool. Argument: {s.argument_description}. Benign framing: {s.benign_framing}'
         for i, s in enumerate(steps, 1)
     ]
     return (

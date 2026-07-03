@@ -437,11 +437,11 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
 # CSS-only tab switching: pair the Nth radio (by document order) to the Nth
 # label and Nth panel. Generated for up to 9 tabs so the rules stay declarative
 # in the inlined stylesheet (no per-instance <style> blocks).
-_TAB_RULES = "".join(
-    f".tabs > .tab-radio:nth-of-type({i}):checked ~ .tab-bar > .tab-label:nth-child({i}) "
-    "{ color: var(--text-strong); border-bottom-color: var(--teal-600); }\n"
-    f".tabs > .tab-radio:nth-of-type({i}):checked ~ .tab-panels > .tab-panel:nth-child({i}) "
-    "{ display: block; }\n"
+_TAB_RULES = ''.join(
+    f'.tabs > .tab-radio:nth-of-type({i}):checked ~ .tab-bar > .tab-label:nth-child({i}) '
+    '{ color: var(--text-strong); border-bottom-color: var(--teal-600); }\n'
+    f'.tabs > .tab-radio:nth-of-type({i}):checked ~ .tab-panels > .tab-panel:nth-child({i}) '
+    '{ display: block; }\n'
     for i in range(1, 10)
 )
 

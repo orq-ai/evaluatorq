@@ -36,57 +36,52 @@ def _extract_single_datapoint(data: DataPoint) -> SimulationDatapoint:
     one) and normalises to a single ``SimulationDatapoint``.
     """
     inputs = data.inputs
-    if "datapoint" in inputs:
-        dp = inputs["datapoint"]
-        _validate_shape(dp, "datapoint", ["persona", "scenario", "first_message"])
+    if 'datapoint' in inputs:
+        dp = inputs['datapoint']
+        _validate_shape(dp, 'datapoint', ['persona', 'scenario', 'first_message'])
         return SimulationDatapoint.model_validate(dp)
-    if "datapoints" in inputs:
-        dps = inputs["datapoints"]
+    if 'datapoints' in inputs:
+        dps = inputs['datapoints']
         if not isinstance(dps, list):
             raise ValueError("Expected 'datapoints' to be an array")
         if len(dps) != 1:
             raise ValueError(
-                "wrap_simulation_agent DataPoint must encode exactly one datapoint. "
-                "For batch simulations use simulate() directly."
+                'wrap_simulation_agent DataPoint must encode exactly one datapoint. '
+                'For batch simulations use simulate() directly.'
             )
-        _validate_shape(
-            dps[0], "datapoints[]", ["persona", "scenario", "first_message"]
-        )
+        _validate_shape(dps[0], 'datapoints[]', ['persona', 'scenario', 'first_message'])
         return SimulationDatapoint.model_validate(dps[0])
-    if "persona" in inputs and "scenario" in inputs:
-        _validate_shape(inputs["persona"], "persona", ["name"])
-        _validate_shape(inputs["scenario"], "scenario", ["name", "goal"])
-        persona = Persona.model_validate(inputs["persona"])
-        scenario = Scenario.model_validate(inputs["scenario"])
+    if 'persona' in inputs and 'scenario' in inputs:
+        _validate_shape(inputs['persona'], 'persona', ['name'])
+        _validate_shape(inputs['scenario'], 'scenario', ['name', 'goal'])
+        persona = Persona.model_validate(inputs['persona'])
+        scenario = Scenario.model_validate(inputs['scenario'])
         return SimulationDatapoint(
-            id=f"{persona.name}-{scenario.name}",
+            id=f'{persona.name}-{scenario.name}',
             persona=persona,
             scenario=scenario,
-            user_system_prompt="",
-            first_message=inputs.get("first_message", ""),
+            user_system_prompt='',
+            first_message=inputs.get('first_message', ''),
         )
-    if "personas" in inputs and "scenarios" in inputs:
-        if not isinstance(inputs["personas"], list) or not isinstance(
-            inputs["scenarios"], list
-        ):
+    if 'personas' in inputs and 'scenarios' in inputs:
+        if not isinstance(inputs['personas'], list) or not isinstance(inputs['scenarios'], list):
             raise ValueError("Expected 'personas' and 'scenarios' to be arrays")
-        if len(inputs["personas"]) != 1 or len(inputs["scenarios"]) != 1:
+        if len(inputs['personas']) != 1 or len(inputs['scenarios']) != 1:
             raise ValueError(
-                "wrap_simulation_agent DataPoint must encode exactly one "
-                "persona-scenario pair. For batch simulations use simulate() directly."
+                'wrap_simulation_agent DataPoint must encode exactly one '
+                'persona-scenario pair. For batch simulations use simulate() directly.'
             )
-        _validate_shape(inputs["personas"][0], "personas[]", ["name"])
-        _validate_shape(inputs["scenarios"][0], "scenarios[]", ["name", "goal"])
-        persona = Persona.model_validate(inputs["personas"][0])
-        scenario = Scenario.model_validate(inputs["scenarios"][0])
+        _validate_shape(inputs['personas'][0], 'personas[]', ['name'])
+        _validate_shape(inputs['scenarios'][0], 'scenarios[]', ['name', 'goal'])
+        persona = Persona.model_validate(inputs['personas'][0])
+        scenario = Scenario.model_validate(inputs['scenarios'][0])
         return SimulationDatapoint(
-            id=f"{persona.name}-{scenario.name}",
+            id=f'{persona.name}-{scenario.name}',
             persona=persona,
             scenario=scenario,
-            user_system_prompt="",
-            first_message=inputs.get("first_message", ""),
+            user_system_prompt='',
+            first_message=inputs.get('first_message', ''),
         )
     raise ValueError(
-        "Expected data.inputs to contain 'persona' + 'scenario', 'datapoint', "
-        "'datapoints', or 'personas' + 'scenarios'"
+        "Expected data.inputs to contain 'persona' + 'scenario', 'datapoint', 'datapoints', or 'personas' + 'scenarios'"
     )

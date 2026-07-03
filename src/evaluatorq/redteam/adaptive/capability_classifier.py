@@ -12,6 +12,7 @@ from loguru import logger
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI
 from pydantic import BaseModel, Field
 
+from evaluatorq.common.tracing import record_llm_response
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
     PIPELINE_CONFIG,
@@ -19,7 +20,6 @@ from evaluatorq.redteam.contracts import (
     AgentContext,
     LLMConfig,
 )
-from evaluatorq.common.tracing import record_llm_response
 from evaluatorq.redteam.tracing import with_llm_span
 from evaluatorq.redteam.utils import safe_substitute
 

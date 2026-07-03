@@ -646,9 +646,7 @@ def create_dynamic_evaluator(
         # nothing trustworthy to evaluate and are still skipped.
         if output.error:
             late_adversarial_failure = (
-                output.error_stage == 'adversarial_generation'
-                and (output.error_turn or 0) > 1
-                and bool(output.turns)
+                output.error_stage == 'adversarial_generation' and (output.error_turn or 0) > 1 and bool(output.turns)
             )
             if not late_adversarial_failure:
                 return EvaluationResult(

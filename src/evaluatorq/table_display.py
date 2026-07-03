@@ -46,36 +46,32 @@ def create_summary_display(results: EvaluatorqResult) -> Table:
             total_jobs += len(r.job_results)
             failed_jobs += sum(1 for job_result in r.job_results if job_result.error)
 
-    success_rate = (
-        round(((total_jobs - failed_jobs) / total_jobs) * 100) if total_jobs > 0 else 0
-    )
+    success_rate = round(((total_jobs - failed_jobs) / total_jobs) * 100) if total_jobs > 0 else 0
 
     # Create summary table with borders
-    table = Table(show_header=True, header_style="bold", box=box.ROUNDED)
-    table.add_column("Metric", style="white", width=20)
-    table.add_column("Value", width=15)
+    table = Table(show_header=True, header_style='bold', box=box.ROUNDED)
+    table.add_column('Metric', style='white', width=20)
+    table.add_column('Value', width=15)
 
-    table.add_row("Total Data Points", Text(str(total_data_points), style="cyan"))
+    table.add_row('Total Data Points', Text(str(total_data_points), style='cyan'))
 
-    failed_dp_style = "red" if failed_data_points > 0 else "green"
-    table.add_row(
-        "Failed Data Points", Text(str(failed_data_points), style=failed_dp_style)
-    )
+    failed_dp_style = 'red' if failed_data_points > 0 else 'green'
+    table.add_row('Failed Data Points', Text(str(failed_data_points), style=failed_dp_style))
 
-    table.add_row("Total Jobs", Text(str(total_jobs), style="cyan"))
+    table.add_row('Total Jobs', Text(str(total_jobs), style='cyan'))
 
-    failed_jobs_style = "red" if failed_jobs > 0 else "green"
-    table.add_row("Failed Jobs", Text(str(failed_jobs), style=failed_jobs_style))
+    failed_jobs_style = 'red' if failed_jobs > 0 else 'green'
+    table.add_row('Failed Jobs', Text(str(failed_jobs), style=failed_jobs_style))
 
     # Success rate with color coding
     if success_rate >= 80:
-        rate_style = "green"
+        rate_style = 'green'
     elif success_rate >= 50:
-        rate_style = "yellow"
+        rate_style = 'yellow'
     else:
-        rate_style = "red"
+        rate_style = 'red'
 
-    table.add_row("Success Rate", Text(f"{success_rate}%", style=rate_style))
+    table.add_row('Success Rate', Text(f'{success_rate}%', style=rate_style))
 
     return table
 
@@ -96,9 +92,7 @@ def calculate_evaluator_averages(
     all_evaluator_names: set[str] = set()
 
     # Store all scores per evaluator per job
-    scores_by_evaluator_and_job: ScoresByEvaluatorAndJob = defaultdict(
-        lambda: defaultdict(list)
-    )
+    scores_by_evaluator_and_job: ScoresByEvaluatorAndJob = defaultdict(lambda: defaultdict(list))
 
     # Collect scores
     for result in results:
@@ -115,9 +109,7 @@ def calculate_evaluator_averages(
                 all_evaluator_names.add(score.evaluator_name)
 
                 if not score.error:
-                    scores_by_evaluator_and_job[score.evaluator_name][
-                        job_result.job_name
-                    ].append(score.score.value)
+                    scores_by_evaluator_and_job[score.evaluator_name][job_result.job_name].append(score.score.value)
 
     job_names = sorted(all_job_names)
     evaluator_names = sorted(all_evaluator_names)
@@ -132,13 +124,13 @@ def calculate_evaluator_averages(
             scores = scores_by_evaluator_and_job[evaluator_name].get(job_name, [])
 
             if not scores:
-                evaluator_averages[job_name] = ("-", "dim")
+                evaluator_averages[job_name] = ('-', 'dim')
             else:
                 first_score = scores[0]
 
                 if isinstance(first_score, EvaluationResultCell):
                     # Structured result cell, show placeholder
-                    evaluator_averages[job_name] = ("[structured]", "dim")
+                    evaluator_averages[job_name] = ('[structured]', 'dim')
 
                 elif isinstance(first_score, bool):
                     # Calculate pass rate for boolean scores
@@ -146,33 +138,33 @@ def calculate_evaluator_averages(
                     pass_rate = (pass_count / len(scores)) * 100
 
                     if pass_rate == 100:
-                        style = "green"
+                        style = 'green'
                     elif pass_rate >= 50:
-                        style = "yellow"
+                        style = 'yellow'
                     else:
-                        style = "red"
+                        style = 'red'
 
-                    evaluator_averages[job_name] = (f"{pass_rate:.1f}%", style)
+                    evaluator_averages[job_name] = (f'{pass_rate:.1f}%', style)
 
                 elif isinstance(first_score, (int, float)):
                     # Calculate average for numeric scores
                     avg = sum(float(s) for s in scores if isinstance(s, (int, float))) / len(scores)
-                    evaluator_averages[job_name] = (f"{avg:.2f}", "yellow")
+                    evaluator_averages[job_name] = (f'{avg:.2f}', 'yellow')
 
                 elif isinstance(first_score, dict):
                     # For dict scores, show placeholder
-                    evaluator_averages[job_name] = ("[dict]", "dim")
+                    evaluator_averages[job_name] = ('[dict]', 'dim')
 
                 else:
                     # For strings, show placeholder
-                    evaluator_averages[job_name] = ("[string]", "dim")
+                    evaluator_averages[job_name] = ('[string]', 'dim')
 
         averages[evaluator_name] = evaluator_averages
 
     return {
-        "job_names": job_names,
-        "evaluator_names": evaluator_names,
-        "averages": averages,
+        'job_names': job_names,
+        'evaluator_names': evaluator_names,
+        'averages': averages,
     }
 
 
@@ -182,32 +174,32 @@ def create_results_display(results: EvaluatorqResult) -> Table:
         return Table()
 
     data = calculate_evaluator_averages(results)
-    job_names = data["job_names"]
-    evaluator_names = data["evaluator_names"]
-    averages = data["averages"]
+    job_names = data['job_names']
+    evaluator_names = data['evaluator_names']
+    averages = data['averages']
 
     if not job_names or not evaluator_names:
         # Return empty table or message
         table = Table(show_header=False)
-        table.add_row(Text("No job results or evaluators found.", style="yellow"))
+        table.add_row(Text('No job results or evaluators found.', style='yellow'))
         return table
 
     # Create table with dynamic columns and borders
-    table = Table(show_header=True, header_style="bold", box=box.ROUNDED)
+    table = Table(show_header=True, header_style='bold', box=box.ROUNDED)
 
     # Add evaluator column
-    table.add_column("Evaluators", style="white", width=20)
+    table.add_column('Evaluators', style='white', width=20)
 
     # Add job columns
     for job_name in job_names:
-        table.add_column(job_name, style="white", width=15, justify="center")
+        table.add_column(job_name, style='white', width=15, justify='center')
 
     # Add rows for each evaluator
     for evaluator_name in evaluator_names:
         row_data = [Text(evaluator_name)]
 
         for job_name in job_names:
-            avg_value, avg_style = averages[evaluator_name].get(job_name, ("-", "dim"))
+            avg_value, avg_style = averages[evaluator_name].get(job_name, ('-', 'dim'))
             row_data.append(Text(avg_value, style=avg_style))
 
         table.add_row(*row_data)
@@ -221,7 +213,7 @@ def collect_errors(results: EvaluatorqResult) -> list[str]:
 
     for idx, result in enumerate(results):
         if result.error:
-            errors.append(f"• Data point {idx + 1}: {result.error}")
+            errors.append(f'• Data point {idx + 1}: {result.error}')
 
         if result.job_results:
             for job in result.job_results:
@@ -229,7 +221,11 @@ def collect_errors(results: EvaluatorqResult) -> list[str]:
                     errors.append(f'• Job "{job.job_name}": {job.error}')
 
                 if job.evaluator_scores:
-                    errors.extend(f'• Evaluator "{score.evaluator_name}": {score.error}' for score in job.evaluator_scores if score.error)
+                    errors.extend(
+                        f'• Evaluator "{score.evaluator_name}": {score.error}'
+                        for score in job.evaluator_scores
+                        if score.error
+                    )
 
     return errors
 
@@ -244,23 +240,23 @@ async def display_results_table(results: EvaluatorqResult) -> None:  # noqa: RUF
     console = Console()
 
     if not results:
-        console.print("\n[yellow]No results to display.[/yellow]\n")
+        console.print('\n[yellow]No results to display.[/yellow]\n')
         return
 
     console.print()
 
     # Title
-    console.print("[bold underline white]EVALUATION RESULTS[/bold underline white]")
+    console.print('[bold underline white]EVALUATION RESULTS[/bold underline white]')
     console.print()
 
     # Summary section
-    console.print("[bold white]Summary:[/bold white]")
+    console.print('[bold white]Summary:[/bold white]')
     summary_table = create_summary_display(results)
     console.print(summary_table)
     console.print()
 
     # Detailed results section
-    console.print("[bold white]Detailed Results:[/bold white]")
+    console.print('[bold white]Detailed Results:[/bold white]')
     results_table = create_results_display(results)
     console.print(results_table)
     console.print()
@@ -268,15 +264,15 @@ async def display_results_table(results: EvaluatorqResult) -> None:  # noqa: RUF
     # Show errors if any
     errors = collect_errors(results)
     if errors:
-        console.print("[bold red]Errors:[/bold red]")
+        console.print('[bold red]Errors:[/bold red]')
         for error in errors:
-            console.print(f"[red]{error}[/red]")
+            console.print(f'[red]{error}[/red]')
         console.print()
 
     # Show tip
-    console.print("[dim]💡 Tip: Use print_results=False to get raw JSON results.[/dim]")
+    console.print('[dim]💡 Tip: Use print_results=False to get raw JSON results.[/dim]')
     console.print()
 
     # Success message (shown after table, matching TypeScript)
-    console.print("[green]✓ Evaluation completed successfully[/green]")
+    console.print('[green]✓ Evaluation completed successfully[/green]')
     console.print()

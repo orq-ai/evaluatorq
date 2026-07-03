@@ -5,4 +5,4 @@ Provides a wrapper to use any Pydantic AI ``Agent`` as a unified ``AgentTarget``
 
 from .target import PydanticAITarget
 
-__all__ = ["PydanticAITarget"]
+__all__ = ['PydanticAITarget']

@@ -16,15 +16,15 @@ MAX_RETRY_ATTEMPTS = 5
 RETRY_MIN_WAIT_S = 2.0
 RETRY_MAX_WAIT_S = 60.0
 
-T = TypeVar("T")
+T = TypeVar('T')
 
 # httpx connection errors that mirror TS network error retry
 _RETRYABLE_NETWORK_ERRORS = (
-    "ConnectError",
-    "ConnectTimeout",
-    "ReadTimeout",
-    "WriteTimeout",
-    "PoolTimeout",
+    'ConnectError',
+    'ConnectTimeout',
+    'ReadTimeout',
+    'WriteTimeout',
+    'PoolTimeout',
 )
 
 
@@ -67,7 +67,7 @@ async def with_retry(
     *,
     max_attempts: int = MAX_RETRY_ATTEMPTS,
     retry_statuses: Iterable[int] | None = None,
-    label: str = "API call",
+    label: str = 'API call',
 ) -> T:
     """Execute an async callable with exponential backoff on retryable errors.
 
@@ -76,8 +76,8 @@ async def with_retry(
     ``asyncio.TimeoutError`` and ``asyncio.CancelledError`` are never retried.
     """
     if max_attempts < 1:
-        raise ValueError(f"with_retry: max_attempts must be >= 1, got {max_attempts}")
-    last_error: Exception = RuntimeError("with_retry: no attempts made")
+        raise ValueError(f'with_retry: max_attempts must be >= 1, got {max_attempts}')
+    last_error: Exception = RuntimeError('with_retry: no attempts made')
     retry_status_set = set(retry_statuses) if retry_statuses is not None else None
 
     for attempt in range(1, max_attempts + 1):
@@ -96,7 +96,7 @@ async def with_retry(
                 wait_s = min(base_wait, RETRY_MAX_WAIT_S)
                 jitter = random.uniform(0, wait_s * 0.25)
                 logger.warning(
-                    "{}: attempt {}/{} failed ({}), retrying in {:.1f}s",
+                    '{}: attempt {}/{} failed ({}), retrying in {:.1f}s',
                     label,
                     attempt,
                     max_attempts,

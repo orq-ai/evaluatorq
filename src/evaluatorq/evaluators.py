@@ -6,14 +6,16 @@ This module provides commonly used evaluators that can be used with the evaluato
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .types import Evaluator, ScorerParameter
+if TYPE_CHECKING:
+    from .types import Evaluator, ScorerParameter
 
 
 def string_contains_evaluator(
+    *,
     case_insensitive: bool = True,
-    name: str = "string-contains",
+    name: str = 'string-contains',
 ) -> Evaluator:
     """
     Creates an evaluator that checks if the output contains the expected output.
@@ -37,20 +39,20 @@ def string_contains_evaluator(
         my_evaluator = string_contains_evaluator(name="my-contains-check")
     """
 
-    async def scorer(params: ScorerParameter) -> dict[str, Any]:
-        data = params["data"]
-        output = params["output"]
+    async def scorer(params: ScorerParameter) -> dict[str, Any]:  # noqa: RUF029  # scorer signature is async by evaluatorq contract
+        data = params['data']
+        output = params['output']
 
         # Convert to strings for comparison - this is intentional to allow flexible
         # matching of various output types (dicts, objects, etc.) as their string repr
-        expected = str(data.expected_output) if data.expected_output is not None else ""
-        actual = str(output) if output is not None else ""
+        expected = str(data.expected_output) if data.expected_output is not None else ''
+        actual = str(output) if output is not None else ''
 
         if not expected:
             return {
-                "value": 0,
-                "pass_": False,
-                "explanation": "No expected output defined",
+                'value': 0,
+                'pass_': False,
+                'explanation': 'No expected output defined',
             }
 
         expected_normalized = expected.casefold() if case_insensitive else expected
@@ -59,32 +61,31 @@ def string_contains_evaluator(
         contains = expected_normalized in actual_normalized
 
         # Truncate strings for readable explanations
-        truncated_expected = expected[:100] + "..." if len(expected) > 100 else expected
-        truncated_actual = actual[:100] + "..." if len(actual) > 100 else actual
+        truncated_expected = expected[:100] + '...' if len(expected) > 100 else expected
+        truncated_actual = actual[:100] + '...' if len(actual) > 100 else actual
 
         if contains:
             return {
-                "value": 1.0,
-                "pass_": True,
-                "explanation": f'Output contains "{truncated_expected}"',
+                'value': 1.0,
+                'pass_': True,
+                'explanation': f'Output contains "{truncated_expected}"',
             }
-        else:
-            return {
-                "value": 0.0,
-                "pass_": False,
-                "explanation": f'Expected "{truncated_expected}" not found in: "{truncated_actual}"',
-            }
+        return {
+            'value': 0.0,
+            'pass_': False,
+            'explanation': f'Expected "{truncated_expected}" not found in: "{truncated_actual}"',
+        }
 
     return {
-        "name": name,
-        "scorer": scorer,
+        'name': name,
+        'scorer': scorer,
     }
 
 
 def exact_match_evaluator(
     *,
     case_insensitive: bool = False,
-    name: str = "exact-match",
+    name: str = 'exact-match',
 ) -> Evaluator:
     """
     Creates an evaluator that checks if the output exactly matches the expected output.
@@ -105,20 +106,20 @@ def exact_match_evaluator(
         loose_evaluator = exact_match_evaluator(case_insensitive=True)
     """
 
-    async def scorer(params: ScorerParameter) -> dict[str, Any]:
-        data = params["data"]
-        output = params["output"]
+    async def scorer(params: ScorerParameter) -> dict[str, Any]:  # noqa: RUF029  # scorer signature is async by evaluatorq contract
+        data = params['data']
+        output = params['output']
 
         # Convert to strings for comparison - this is intentional to allow flexible
         # matching of various output types (dicts, objects, etc.) as their string repr
-        expected = str(data.expected_output) if data.expected_output is not None else ""
-        actual = str(output) if output is not None else ""
+        expected = str(data.expected_output) if data.expected_output is not None else ''
+        actual = str(output) if output is not None else ''
 
         if not expected:
             return {
-                "value": 0,
-                "pass_": False,
-                "explanation": "No expected output defined",
+                'value': 0,
+                'pass_': False,
+                'explanation': 'No expected output defined',
             }
 
         expected_normalized = expected.casefold() if case_insensitive else expected
@@ -127,23 +128,22 @@ def exact_match_evaluator(
         matches = expected_normalized == actual_normalized
 
         # Truncate strings for readable explanations
-        truncated_expected = expected[:100] + "..." if len(expected) > 100 else expected
-        truncated_actual = actual[:100] + "..." if len(actual) > 100 else actual
+        truncated_expected = expected[:100] + '...' if len(expected) > 100 else expected
+        truncated_actual = actual[:100] + '...' if len(actual) > 100 else actual
 
         if matches:
             return {
-                "value": 1.0,
-                "pass_": True,
-                "explanation": "Output exactly matches expected output",
+                'value': 1.0,
+                'pass_': True,
+                'explanation': 'Output exactly matches expected output',
             }
-        else:
-            return {
-                "value": 0.0,
-                "pass_": False,
-                "explanation": f'Expected "{truncated_expected}" but got "{truncated_actual}"',
-            }
+        return {
+            'value': 0.0,
+            'pass_': False,
+            'explanation': f'Expected "{truncated_expected}" but got "{truncated_actual}"',
+        }
 
     return {
-        "name": name,
-        "scorer": scorer,
+        'name': name,
+        'scorer': scorer,
     }

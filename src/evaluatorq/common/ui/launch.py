@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 def _install_hint(extra: str) -> str:
     return (
-        f"Streamlit is not installed. Install the {extra} extras:\n"
+        f'Streamlit is not installed. Install the {extra} extras:\n'
         f'  uv pip install "evaluatorq[{extra}]"\n'
         f'  pip install "evaluatorq[{extra}]"'
     )
@@ -45,7 +45,7 @@ def launch_streamlit(
     report_path: Path,
     *,
     port: int = 8501,
-    host: str = "localhost",
+    host: str = 'localhost',
     extra: str,
 ) -> None:
     """Run ``streamlit run <dashboard_script> -- <report_path>`` and exit.
@@ -54,7 +54,7 @@ def launch_streamlit(
     dashboard's ``sys.argv`` rather than treating it as a Streamlit flag.
     """
     if not dashboard_script.exists():
-        typer.echo("Error: Dashboard module not found.", err=True)
+        typer.echo('Error: Dashboard module not found.', err=True)
         raise typer.Exit(code=1)
 
     ensure_streamlit(extra)
@@ -62,17 +62,17 @@ def launch_streamlit(
     result = subprocess.run(
         [
             sys.executable,
-            "-m",
-            "streamlit",
-            "run",
+            '-m',
+            'streamlit',
+            'run',
             str(dashboard_script),
-            "--server.port",
+            '--server.port',
             str(port),
-            "--server.address",
+            '--server.address',
             host,
-            "--browser.gatherUsageStats",
-            "false",
-            "--",
+            '--browser.gatherUsageStats',
+            'false',
+            '--',
             str(report_path),
         ],
         check=False,

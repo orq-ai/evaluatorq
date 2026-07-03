@@ -17,39 +17,39 @@ libraries are not installed.
 from . import langchain_integration
 
 __all__ = [
-    "callable_integration",  # noqa: F822
-    "crewai_integration",  # noqa: F822
-    "langchain_integration",
-    "langgraph_integration",  # noqa: F822
-    "openai_agents_integration",  # noqa: F822
-    "pydantic_ai_integration",  # noqa: F822
-    "vercel_ai_sdk_integration",  # noqa: F822
+    'callable_integration',  # noqa: F822
+    'crewai_integration',  # noqa: F822
+    'langchain_integration',
+    'langgraph_integration',  # noqa: F822
+    'openai_agents_integration',  # noqa: F822
+    'pydantic_ai_integration',  # noqa: F822
+    'vercel_ai_sdk_integration',  # noqa: F822
 ]
 
 
 def __getattr__(name: str):
-    if name == "langgraph_integration":
+    if name == 'langgraph_integration':
         from . import langgraph_integration
 
         return langgraph_integration
-    if name == "openai_agents_integration":
+    if name == 'openai_agents_integration':
         from . import openai_agents_integration
 
         return openai_agents_integration
-    if name == "pydantic_ai_integration":
+    if name == 'pydantic_ai_integration':
         from . import pydantic_ai_integration
 
         return pydantic_ai_integration
-    if name == "crewai_integration":
+    if name == 'crewai_integration':
         from . import crewai_integration
 
         return crewai_integration
-    if name == "vercel_ai_sdk_integration":
+    if name == 'vercel_ai_sdk_integration':
         from . import vercel_ai_sdk_integration
 
         return vercel_ai_sdk_integration
-    if name == "callable_integration":
+    if name == 'callable_integration':
         from . import callable_integration
 
         return callable_integration
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')

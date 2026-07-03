@@ -25,10 +25,11 @@ from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import apply_or_all
 from evaluatorq.dashboard.view import _sim_rowlist_wrapper, render_message_list
-from evaluatorq.simulation.types import SimulationEntry
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from evaluatorq.simulation.types import SimulationEntry
 
 # ---------------------------------------------------------------------------
 # Role label mapping (parity: dashboard.py:385)

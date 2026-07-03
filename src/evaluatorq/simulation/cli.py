@@ -41,8 +41,8 @@ from evaluatorq.simulation.utils.run_store import sanitise_run_name as _sanitise
 from evaluatorq.simulation.utils.run_store import write_report as _write_report
 
 app = typer.Typer(
-    name="sim",
-    help="Agent simulation commands.",
+    name='sim',
+    help='Agent simulation commands.',
     no_args_is_help=True,
 )
 
@@ -62,11 +62,11 @@ def _configure_logging(verbosity: int) -> None:
     else:
         level = logging.DEBUG
 
-    logger = logging.getLogger("evaluatorq")
+    logger = logging.getLogger('evaluatorq')
     logger.setLevel(level)
     if not logger.handlers:
         handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+        handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
         logger.addHandler(handler)
     try:
         from loguru import logger as loguru_logger
@@ -93,20 +93,16 @@ def _resolve_target(
     Raises typer.BadParameter when zero or more than one flag is set.
     """
     supplied = {
-        "--target": target,
-        "--vercel-url": vercel_url,
-        "--openai-model": openai_model,
+        '--target': target,
+        '--vercel-url': vercel_url,
+        '--openai-model': openai_model,
     }
     active = {k: v for k, v in supplied.items() if v is not None}
 
     if len(active) == 0:
-        raise typer.BadParameter(
-            "Provide exactly one of: --target, --vercel-url, --openai-model"
-        )
+        raise typer.BadParameter('Provide exactly one of: --target, --vercel-url, --openai-model')
     if len(active) > 1:
-        raise typer.BadParameter(
-            f"Only one target flag allowed; got: {', '.join(active)}"
-        )
+        raise typer.BadParameter(f'Only one target flag allowed; got: {", ".join(active)}')
 
     if target is not None:
         from evaluatorq.redteam.contracts import TargetKind
@@ -115,11 +111,11 @@ def _resolve_target(
         if kind == TargetKind.AGENT:
             return _make_sim_agent_backend().create_target(value)
         if kind == TargetKind.DEPLOYMENT:
-            _require_orq_api_key("--target deployment:<key>")
+            _require_orq_api_key('--target deployment:<key>')
             from evaluatorq.simulation.adapters import from_orq_deployment
 
             return from_orq_deployment(value)
-        raise typer.BadParameter(f"Unsupported target kind for sim: {kind}")
+        raise typer.BadParameter(f'Unsupported target kind for sim: {kind}')
 
     if vercel_url is not None:
         from evaluatorq.integrations.vercel_ai_sdk_integration import VercelAISdkTarget
@@ -127,10 +123,9 @@ def _resolve_target(
         return VercelAISdkTarget(vercel_url)
 
     # openai_model
-    if not os.environ.get("OPENAI_API_KEY") and not os.environ.get("ORQ_API_KEY"):
+    if not os.environ.get('OPENAI_API_KEY') and not os.environ.get('ORQ_API_KEY'):
         raise typer.BadParameter(
-            "--openai-model requires OPENAI_API_KEY (or ORQ_API_KEY for the AI Router) "
-            "to be set in the environment."
+            '--openai-model requires OPENAI_API_KEY (or ORQ_API_KEY for the AI Router) to be set in the environment.'
         )
     from evaluatorq.redteam.backends.openai import OpenAIModelTarget
 
@@ -138,10 +133,8 @@ def _resolve_target(
 
 
 def _require_orq_api_key(flag: str) -> None:
-    if not os.environ.get("ORQ_API_KEY"):
-        raise typer.BadParameter(
-            f"{flag} requires ORQ_API_KEY to be set in the environment."
-        )
+    if not os.environ.get('ORQ_API_KEY'):
+        raise typer.BadParameter(f'{flag} requires ORQ_API_KEY to be set in the environment.')
 
 
 def _parse_target_spec(target: str) -> tuple[Any, str]:
@@ -168,24 +161,22 @@ async def _resolve_agent_description(
     if agent_description:
         return agent_description
     if target is None:
-        raise ValueError("This command requires --agent-description unless --target is an agent target")
+        raise ValueError('This command requires --agent-description unless --target is an agent target')
 
     from evaluatorq.redteam.contracts import TargetKind
 
     kind, value = _parse_target_spec(target)
     if kind != TargetKind.AGENT:
-        raise ValueError("This command requires --agent-description unless --target is an agent target")
+        raise ValueError('This command requires --agent-description unless --target is an agent target')
 
     ctx = await _make_sim_agent_backend().resolve_context(value)
     if not ctx.description:
-        raise ValueError(
-            f"Agent {value!r} has no description; pass --agent-description explicitly."
-        )
+        raise ValueError(f'Agent {value!r} has no description; pass --agent-description explicitly.')
     return ctx.description
 
 
 def _handle_cli_error(exc: Exception) -> NoReturn:
-    typer.echo(f"Error: {exc}", err=True)
+    typer.echo(f'Error: {exc}', err=True)
     raise typer.Exit(1) from None
 
 
@@ -217,10 +208,8 @@ def _resolve_evaluators(evaluators: list[str] | None) -> list[str] | None:
         try:
             get_evaluator(name)
         except ValueError:  # noqa: PERF203
-            known = ", ".join(SIMULATION_EVALUATORS)
-            raise typer.BadParameter(
-                f"Unknown evaluator: {name!r}. Known: {known}"
-            ) from None
+            known = ', '.join(SIMULATION_EVALUATORS)
+            raise typer.BadParameter(f'Unknown evaluator: {name!r}. Known: {known}') from None
 
     return list(evaluators)
 
@@ -241,13 +230,13 @@ def _infer_target_kind(
 
         kind, _ = _parse_target_spec(target)
         if kind == TargetKind.AGENT:
-            return "orq_agent"
+            return 'orq_agent'
         if kind == TargetKind.DEPLOYMENT:
-            return "orq_deployment"
+            return 'orq_deployment'
         return str(kind)
     if vercel_url is not None:
-        return "vercel"
-    return "openai_model"
+        return 'vercel'
+    return 'openai_model'
 
 
 # ---------------------------------------------------------------------------
@@ -259,109 +248,106 @@ def _infer_target_kind(
 def simulate(
     datapoints: Annotated[
         Path,
-        typer.Option("--datapoints", "-d", help="Path to datapoints JSONL file."),
+        typer.Option('--datapoints', '-d', help='Path to datapoints JSONL file.'),
     ],
     target: Annotated[
         str | None,
         typer.Option(
-            "--target",
-            help=(
-                "Target to simulate: agent:<key> or deployment:<key>. "
-                "Bare values default to agent:<key>."
-            ),
+            '--target',
+            help=('Target to simulate: agent:<key> or deployment:<key>. Bare values default to agent:<key>.'),
         ),
     ] = None,
     vercel_url: Annotated[
         str | None,
-        typer.Option("--vercel-url", help="Vercel AI SDK endpoint URL."),
+        typer.Option('--vercel-url', help='Vercel AI SDK endpoint URL.'),
     ] = None,
     openai_model: Annotated[
         str | None,
         typer.Option(
-            "--openai-model",
+            '--openai-model',
             help=(
-                "OpenAI-compatible model name. Provider is resolved from env: "
-                "ORQ_API_KEY routes via the Orq AI Router (ORQ_BASE_URL overrides "
-                "the host), otherwise OPENAI_API_KEY (+ optional OPENAI_BASE_URL for "
-                "vLLM/OpenRouter/Azure-compatible/local endpoints). ORQ wins if both "
-                "keys are set; namespace the model accordingly "
+                'OpenAI-compatible model name. Provider is resolved from env: '
+                'ORQ_API_KEY routes via the Orq AI Router (ORQ_BASE_URL overrides '
+                'the host), otherwise OPENAI_API_KEY (+ optional OPENAI_BASE_URL for '
+                'vLLM/OpenRouter/Azure-compatible/local endpoints). ORQ wins if both '
+                'keys are set; namespace the model accordingly '
                 "(e.g. 'openai/gpt-4o-mini' for the Orq router, 'gpt-4o-mini' for OpenAI)."
             ),
         ),
     ] = None,
     output: Annotated[
         Path | None,
-        typer.Option("--output", "-o", help="Path to write results JSONL."),
+        typer.Option('--output', '-o', help='Path to write results JSONL.'),
     ] = None,
     report_output: Annotated[
         Path | None,
         typer.Option(
-            "--report-output",
+            '--report-output',
             help=(
-                "Path to write the full SimulationRun report JSON (results + "
-                "scorer averages + metadata) to an explicit location, instead of "
-                "only the auto-named file under .evaluatorq/sim-runs/. The "
-                "auto-save still happens unless --no-save."
+                'Path to write the full SimulationRun report JSON (results + '
+                'scorer averages + metadata) to an explicit location, instead of '
+                'only the auto-named file under .evaluatorq/sim-runs/. The '
+                'auto-save still happens unless --no-save.'
             ),
         ),
     ] = None,
     name: Annotated[
         str,
-        typer.Option("--name", "-n", help="Run name for the run-store entry."),
-    ] = "sim",
+        typer.Option('--name', '-n', help='Run name for the run-store entry.'),
+    ] = 'sim',
     sim_model: Annotated[
         str,
         typer.Option(
-            "--sim-model",
+            '--sim-model',
             help=(
-                "Model for the user-simulator and judge. Provider resolved from "
-                "env: ORQ_API_KEY -> Orq router, else OPENAI_API_KEY "
-                "(+ OPENAI_BASE_URL) -> OpenAI-compatible endpoint. The default "
-                "targets the Orq router; for OpenAI-direct pass a bare model "
+                'Model for the user-simulator and judge. Provider resolved from '
+                'env: ORQ_API_KEY -> Orq router, else OPENAI_API_KEY '
+                '(+ OPENAI_BASE_URL) -> OpenAI-compatible endpoint. The default '
+                'targets the Orq router; for OpenAI-direct pass a bare model '
                 "name (e.g. 'gpt-5.4-mini', no provider prefix)."
             ),
         ),
     ] = DEFAULT_MODEL,
     max_turns: Annotated[
         int,
-        typer.Option("--max-turns", min=1, help="Maximum conversation turns."),
+        typer.Option('--max-turns', min=1, help='Maximum conversation turns.'),
     ] = 10,
     parallelism: Annotated[
         int,
-        typer.Option("--parallelism", min=1, help="Concurrent simulations."),
+        typer.Option('--parallelism', min=1, help='Concurrent simulations.'),
     ] = 5,
     evaluator: Annotated[
         list[str] | None,
-        typer.Option("--evaluator", help="Evaluator name (repeatable). Defaults to API defaults."),
+        typer.Option('--evaluator', help='Evaluator name (repeatable). Defaults to API defaults.'),
     ] = None,
     no_save: Annotated[  # noqa: FBT002
         bool,
-        typer.Option("--no-save", help="Skip writing to .evaluatorq/sim-runs/."),
+        typer.Option('--no-save', help='Skip writing to .evaluatorq/sim-runs/.'),
     ] = False,
     verbose: Annotated[
         int,
         typer.Option(
-            "--verbose",
-            "-v",
+            '--verbose',
+            '-v',
             count=True,
-            help="Increase verbosity (-v info logs, -vv debug logs).",
+            help='Increase verbosity (-v info logs, -vv debug logs).',
         ),
     ] = 0,
     quiet: Annotated[  # noqa: FBT002
         bool,
-        typer.Option("--quiet", "-q", help="Suppress non-error output."),
+        typer.Option('--quiet', '-q', help='Suppress non-error output.'),
     ] = False,
     yes: Annotated[  # noqa: FBT002
         bool,
-        typer.Option("--yes", "-y", help="Skip interactive confirmation prompt."),
+        typer.Option('--yes', '-y', help='Skip interactive confirmation prompt.'),
     ] = False,
     export_md: Annotated[
         Path | None,
-        typer.Option("--export-md", help="Directory for an auto-named Markdown report."),
+        typer.Option('--export-md', help='Directory for an auto-named Markdown report.'),
     ] = None,
     export_html: Annotated[
         Path | None,
-        typer.Option("--export-html", help="Directory for an auto-named HTML report."),
+        typer.Option('--export-html', help='Directory for an auto-named HTML report.'),
     ] = None,
 ) -> None:
     """Run simulations from a pre-built datapoints file.
@@ -393,7 +379,7 @@ def simulate(
         )
 
     if not datapoints.exists():
-        raise typer.BadParameter(f"Datapoints file not found: {datapoints}")
+        raise typer.BadParameter(f'Datapoints file not found: {datapoints}')
 
     try:
         resolved_target = _resolve_target(
@@ -420,10 +406,10 @@ def simulate(
             )
         )
     except KeyboardInterrupt:
-        typer.echo("^C aborted.", err=True)
+        typer.echo('^C aborted.', err=True)
         raise typer.Exit(130) from None
     except asyncio.CancelledError:
-        typer.echo("^C aborted.", err=True)
+        typer.echo('^C aborted.', err=True)
         raise typer.Exit(130) from None
     except typer.BadParameter:
         raise
@@ -438,24 +424,24 @@ def simulate(
 
     run = _build_simulation_run(
         run_name=name,
-        mode="simulate",
+        mode='simulate',
         target_kind=target_kind,
         evaluator_names=evaluator_names or DEFAULT_EVALUATOR_NAMES,
         results=results,
     )
 
     if export_md is not None:
-        _export_report(run, export_md, fmt="md")
+        _export_report(run, export_md, fmt='md')
     if export_html is not None:
-        _export_report(run, export_html, fmt="html")
+        _export_report(run, export_html, fmt='html')
 
     if report_output is not None:
         _write_report(run, report_output)
-        typer.echo(f"Report saved: {report_output}", err=True)
+        typer.echo(f'Report saved: {report_output}', err=True)
 
     if not no_save:
         run_path = _auto_save_run(run=run, run_name=name)
-        typer.echo(f"Run saved: {run_path}", err=True)
+        typer.echo(f'Run saved: {run_path}', err=True)
 
 
 async def _simulate_impl(
@@ -474,7 +460,7 @@ async def _simulate_impl(
 
     loaded = load_datapoints_from_jsonl(str(datapoints_path))
     if not loaded:
-        raise ValueError(f"No datapoints loaded from {datapoints_path}")
+        raise ValueError(f'No datapoints loaded from {datapoints_path}')
 
     return await simulate(
         datapoints=loaded,
@@ -497,128 +483,125 @@ async def _simulate_impl(
 def run(
     agent_description: Annotated[
         str | None,
-        typer.Option("--agent-description", help="Free-text description of the agent under test."),
+        typer.Option('--agent-description', help='Free-text description of the agent under test.'),
     ] = None,
     target: Annotated[
         str | None,
         typer.Option(
-            "--target",
-            help=(
-                "Target to simulate: agent:<key> or deployment:<key>. "
-                "Bare values default to agent:<key>."
-            ),
+            '--target',
+            help=('Target to simulate: agent:<key> or deployment:<key>. Bare values default to agent:<key>.'),
         ),
     ] = None,
     vercel_url: Annotated[
         str | None,
-        typer.Option("--vercel-url", help="Vercel AI SDK endpoint URL."),
+        typer.Option('--vercel-url', help='Vercel AI SDK endpoint URL.'),
     ] = None,
     openai_model: Annotated[
         str | None,
         typer.Option(
-            "--openai-model",
+            '--openai-model',
             help=(
-                "OpenAI-compatible model name. Provider is resolved from env: "
-                "ORQ_API_KEY routes via the Orq AI Router (ORQ_BASE_URL overrides "
-                "the host), otherwise OPENAI_API_KEY (+ optional OPENAI_BASE_URL for "
-                "vLLM/OpenRouter/Azure-compatible/local endpoints). ORQ wins if both "
-                "keys are set; namespace the model accordingly "
+                'OpenAI-compatible model name. Provider is resolved from env: '
+                'ORQ_API_KEY routes via the Orq AI Router (ORQ_BASE_URL overrides '
+                'the host), otherwise OPENAI_API_KEY (+ optional OPENAI_BASE_URL for '
+                'vLLM/OpenRouter/Azure-compatible/local endpoints). ORQ wins if both '
+                'keys are set; namespace the model accordingly '
                 "(e.g. 'openai/gpt-4o-mini' for the Orq router, 'gpt-4o-mini' for OpenAI)."
             ),
         ),
     ] = None,
     output: Annotated[
         Path | None,
-        typer.Option("--output", "-o", help="Path to write results JSONL."),
+        typer.Option('--output', '-o', help='Path to write results JSONL.'),
     ] = None,
     report_output: Annotated[
         Path | None,
         typer.Option(
-            "--report-output",
+            '--report-output',
             help=(
-                "Path to write the full SimulationRun report JSON (results + "
-                "scorer averages + metadata) to an explicit location, instead of "
-                "only the auto-named file under .evaluatorq/sim-runs/. The "
-                "auto-save still happens unless --no-save."
+                'Path to write the full SimulationRun report JSON (results + '
+                'scorer averages + metadata) to an explicit location, instead of '
+                'only the auto-named file under .evaluatorq/sim-runs/. The '
+                'auto-save still happens unless --no-save.'
             ),
         ),
     ] = None,
     name: Annotated[
         str,
-        typer.Option("--name", "-n", help="Run name for the run-store entry."),
-    ] = "sim",
+        typer.Option('--name', '-n', help='Run name for the run-store entry.'),
+    ] = 'sim',
     sim_model: Annotated[
         str,
         typer.Option(
-            "--sim-model",
+            '--sim-model',
             help=(
-                "Model for the user-simulator, the judge, and persona/scenario/"
-                "first-message generation. Provider resolved from env: "
-                "ORQ_API_KEY -> Orq router, else OPENAI_API_KEY (+ OPENAI_BASE_URL) "
-                "-> OpenAI-compatible endpoint. The default targets the Orq "
-                "router; for OpenAI-direct pass a bare model name "
+                'Model for the user-simulator, the judge, and persona/scenario/'
+                'first-message generation. Provider resolved from env: '
+                'ORQ_API_KEY -> Orq router, else OPENAI_API_KEY (+ OPENAI_BASE_URL) '
+                '-> OpenAI-compatible endpoint. The default targets the Orq '
+                'router; for OpenAI-direct pass a bare model name '
                 "(e.g. 'gpt-5.4-mini', no provider prefix)."
             ),
         ),
     ] = DEFAULT_MODEL,
     max_turns: Annotated[
         int,
-        typer.Option("--max-turns", min=1, help="Maximum conversation turns."),
+        typer.Option('--max-turns', min=1, help='Maximum conversation turns.'),
     ] = 10,
     parallelism: Annotated[
         int,
-        typer.Option("--parallelism", min=1, help="Concurrent simulations."),
+        typer.Option('--parallelism', min=1, help='Concurrent simulations.'),
     ] = 5,
     num_personas: Annotated[
         int,
-        typer.Option("--num-personas", min=1, help="Number of personas to generate."),
+        typer.Option('--num-personas', min=1, help='Number of personas to generate.'),
     ] = 5,
     num_scenarios: Annotated[
         int,
-        typer.Option("--num-scenarios", min=1, help="Number of scenarios to generate."),
+        typer.Option('--num-scenarios', min=1, help='Number of scenarios to generate.'),
     ] = 5,
     evaluator: Annotated[
         list[str] | None,
-        typer.Option("--evaluator", help="Evaluator name (repeatable). Defaults to API defaults."),
+        typer.Option('--evaluator', help='Evaluator name (repeatable). Defaults to API defaults.'),
     ] = None,
     no_save: Annotated[  # noqa: FBT002
         bool,
-        typer.Option("--no-save", help="Skip writing to .evaluatorq/sim-runs/."),
+        typer.Option('--no-save', help='Skip writing to .evaluatorq/sim-runs/.'),
     ] = False,
     save_datapoints: Annotated[
         Path | None,
         typer.Option(
-            "--save-datapoints",
+            '--save-datapoints',
             help=(
-                "Also write the generated datapoints (the simulate inputs) to this "
-                "JSONL path, for reproducible re-runs via `sim simulate --datapoints`."
+                'Also write the generated datapoints (the simulate inputs) to this '
+                'JSONL path, for reproducible re-runs via `sim simulate --datapoints`.'
             ),
         ),
     ] = None,
     verbose: Annotated[
         int,
         typer.Option(
-            "--verbose",
-            "-v",
+            '--verbose',
+            '-v',
             count=True,
-            help="Increase verbosity (-v info logs, -vv debug logs).",
+            help='Increase verbosity (-v info logs, -vv debug logs).',
         ),
     ] = 0,
     quiet: Annotated[  # noqa: FBT002
         bool,
-        typer.Option("--quiet", "-q", help="Suppress non-error output."),
+        typer.Option('--quiet', '-q', help='Suppress non-error output.'),
     ] = False,
     yes: Annotated[  # noqa: FBT002
         bool,
-        typer.Option("--yes", "-y", help="Skip interactive confirmation prompt."),
+        typer.Option('--yes', '-y', help='Skip interactive confirmation prompt.'),
     ] = False,
     export_md: Annotated[
         Path | None,
-        typer.Option("--export-md", help="Directory for an auto-named Markdown report."),
+        typer.Option('--export-md', help='Directory for an auto-named Markdown report.'),
     ] = None,
     export_html: Annotated[
         Path | None,
-        typer.Option("--export-html", help="Directory for an auto-named HTML report."),
+        typer.Option('--export-html', help='Directory for an auto-named HTML report.'),
     ] = None,
 ) -> None:
     """Generate personas and scenarios, then run simulations (generate + simulate).
@@ -680,10 +663,10 @@ def run(
             )
         )
     except KeyboardInterrupt:
-        typer.echo("^C aborted.", err=True)
+        typer.echo('^C aborted.', err=True)
         raise typer.Exit(130) from None
     except asyncio.CancelledError:
-        typer.echo("^C aborted.", err=True)
+        typer.echo('^C aborted.', err=True)
         raise typer.Exit(130) from None
     except typer.BadParameter:
         raise
@@ -698,24 +681,24 @@ def run(
 
     run = _build_simulation_run(
         run_name=name,
-        mode="run",
+        mode='run',
         target_kind=target_kind,
         evaluator_names=evaluator_names or DEFAULT_EVALUATOR_NAMES,
         results=results,
     )
 
     if export_md is not None:
-        _export_report(run, export_md, fmt="md")
+        _export_report(run, export_md, fmt='md')
     if export_html is not None:
-        _export_report(run, export_html, fmt="html")
+        _export_report(run, export_html, fmt='html')
 
     if report_output is not None:
         _write_report(run, report_output)
-        typer.echo(f"Report saved: {report_output}", err=True)
+        typer.echo(f'Report saved: {report_output}', err=True)
 
     if not no_save:
         run_path = _auto_save_run(run=run, run_name=name)
-        typer.echo(f"Run saved: {run_path}", err=True)
+        typer.echo(f'Run saved: {run_path}', err=True)
 
 
 async def _run_impl(
@@ -743,7 +726,7 @@ async def _run_impl(
             # disk before simulation, so a later sim failure must not swallow the
             # confirmation — the saved datapoints are exactly what you re-feed.
             _write_datapoints(dps, save_path)
-            typer.echo(f"Datapoints saved: {save_path}", err=True)
+            typer.echo(f'Datapoints saved: {save_path}', err=True)
 
         emit = _emit
 
@@ -771,55 +754,55 @@ async def _run_impl(
 def generate(
     output: Annotated[
         Path,
-        typer.Option("--output", "-o", help="Path to write the generated datapoints JSONL."),
+        typer.Option('--output', '-o', help='Path to write the generated datapoints JSONL.'),
     ],
     agent_description: Annotated[
         str | None,
-        typer.Option("--agent-description", help="Free-text description of the agent under test."),
+        typer.Option('--agent-description', help='Free-text description of the agent under test.'),
     ] = None,
     target: Annotated[
         str | None,
         typer.Option(
-            "--target",
+            '--target',
             help=(
-                "Agent target used to fetch the description when --agent-description "
-                "is omitted. Accepts agent:<key>; bare values default to agent:<key>."
+                'Agent target used to fetch the description when --agent-description '
+                'is omitted. Accepts agent:<key>; bare values default to agent:<key>.'
             ),
         ),
     ] = None,
     sim_model: Annotated[
         str,
         typer.Option(
-            "--sim-model",
+            '--sim-model',
             help=(
-                "Model for persona/scenario/first-message generation. Provider "
-                "resolved from env: ORQ_API_KEY -> Orq router, else "
-                "OPENAI_API_KEY (+ OPENAI_BASE_URL) -> OpenAI-compatible "
-                "endpoint. The default targets the Orq router; for OpenAI-direct "
+                'Model for persona/scenario/first-message generation. Provider '
+                'resolved from env: ORQ_API_KEY -> Orq router, else '
+                'OPENAI_API_KEY (+ OPENAI_BASE_URL) -> OpenAI-compatible '
+                'endpoint. The default targets the Orq router; for OpenAI-direct '
                 "pass a bare model name (e.g. 'gpt-5.4-mini', no provider prefix)."
             ),
         ),
     ] = DEFAULT_MODEL,
     num_personas: Annotated[
         int,
-        typer.Option("--num-personas", min=1, help="Number of personas to generate."),
+        typer.Option('--num-personas', min=1, help='Number of personas to generate.'),
     ] = 5,
     num_scenarios: Annotated[
         int,
-        typer.Option("--num-scenarios", min=1, help="Number of scenarios to generate."),
+        typer.Option('--num-scenarios', min=1, help='Number of scenarios to generate.'),
     ] = 5,
     verbose: Annotated[
         int,
         typer.Option(
-            "--verbose",
-            "-v",
+            '--verbose',
+            '-v',
             count=True,
-            help="Increase verbosity (-v info logs, -vv debug logs).",
+            help='Increase verbosity (-v info logs, -vv debug logs).',
         ),
     ] = 0,
     quiet: Annotated[  # noqa: FBT002
         bool,
-        typer.Option("--quiet", "-q", help="Suppress non-error output."),
+        typer.Option('--quiet', '-q', help='Suppress non-error output.'),
     ] = False,
 ) -> None:
     """Generate simulation datapoints from an agent description (no simulation).
@@ -848,10 +831,10 @@ def generate(
             )
         )
     except KeyboardInterrupt:
-        typer.echo("^C aborted.", err=True)
+        typer.echo('^C aborted.', err=True)
         raise typer.Exit(130) from None
     except asyncio.CancelledError:
-        typer.echo("^C aborted.", err=True)
+        typer.echo('^C aborted.', err=True)
         raise typer.Exit(130) from None
     except typer.BadParameter:
         raise
@@ -862,7 +845,7 @@ def generate(
         _handle_cli_error(exc)
 
     _write_datapoints(datapoints, output)
-    typer.echo(f"Generated {len(datapoints)} datapoint(s) -> {output}", err=True)
+    typer.echo(f'Generated {len(datapoints)} datapoint(s) -> {output}', err=True)
 
 
 async def _generate_impl(
@@ -891,35 +874,35 @@ async def _generate_impl(
 def export(
     input_path: Annotated[
         Path,
-        typer.Option("--input", "-i", help="Path to results JSONL file."),
+        typer.Option('--input', '-i', help='Path to results JSONL file.'),
     ],
     output: Annotated[
         Path,
-        typer.Option("--output", "-o", help="Path to write OpenResponses payload JSON."),
+        typer.Option('--output', '-o', help='Path to write OpenResponses payload JSON.'),
     ],
 ) -> None:
     """Convert simulation results JSONL to OpenResponses payload JSON."""
     if not input_path.exists():
-        raise typer.BadParameter(f"Input file not found: {input_path}")
+        raise typer.BadParameter(f'Input file not found: {input_path}')
 
     from evaluatorq.simulation.convert import to_open_responses
     from evaluatorq.simulation.types import SimulationResult
     from evaluatorq.simulation.utils.dataset_export import parse_jsonl
 
     try:
-        content = input_path.read_text(encoding="utf-8")
+        content = input_path.read_text(encoding='utf-8')
         results: list[SimulationResult] = parse_jsonl(content, cls=SimulationResult)  # pyright: ignore[reportAssignmentType]
     except Exception as exc:
-        raise typer.BadParameter(f"Failed to read {input_path}: {exc}") from exc
+        raise typer.BadParameter(f'Failed to read {input_path}: {exc}') from exc
 
     payloads = [to_open_responses(result) for result in results]
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
-        json.dumps([p if isinstance(p, dict) else p.model_dump(mode="json") for p in payloads], indent=2),
-        encoding="utf-8",
+        json.dumps([p if isinstance(p, dict) else p.model_dump(mode='json') for p in payloads], indent=2),
+        encoding='utf-8',
     )
-    typer.echo(f"Exported {len(payloads)} result(s) to {output}")
+    typer.echo(f'Exported {len(payloads)} result(s) to {output}')
 
 
 # ---------------------------------------------------------------------------
@@ -927,23 +910,23 @@ def export(
 # ---------------------------------------------------------------------------
 
 
-@app.command("validate-dataset", no_args_is_help=True)
+@app.command('validate-dataset', no_args_is_help=True)
 def validate_dataset(
     path: Annotated[
         Path,
-        typer.Argument(help="Path to datapoints JSONL file to validate."),
+        typer.Argument(help='Path to datapoints JSONL file to validate.'),
     ],
 ) -> None:
     """Validate a simulation datapoints JSONL file."""
     if not path.exists():
-        raise typer.BadParameter(f"File not found: {path}")
+        raise typer.BadParameter(f'File not found: {path}')
 
     from evaluatorq.simulation.types import SimulationDatapoint
 
     try:
-        content = path.read_text(encoding="utf-8")
+        content = path.read_text(encoding='utf-8')
     except Exception as exc:
-        raise typer.BadParameter(f"Cannot read {path}: {exc}") from exc
+        raise typer.BadParameter(f'Cannot read {path}: {exc}') from exc
 
     bad_count = 0
     lines = [line for line in content.splitlines() if line.strip()]
@@ -954,14 +937,14 @@ def validate_dataset(
             dp = SimulationDatapoint.model_validate_json(line)
             valid_datapoints.append(dp)
         except Exception as exc:  # noqa: PERF203
-            typer.echo(f"Line {i}: {exc}", err=True)
+            typer.echo(f'Line {i}: {exc}', err=True)
             bad_count += 1
 
     if bad_count:
-        typer.echo(f"{bad_count} invalid line(s) in {path}", err=True)
+        typer.echo(f'{bad_count} invalid line(s) in {path}', err=True)
         raise typer.Exit(1)
 
-    typer.echo(f"OK — {len(valid_datapoints)} valid datapoint(s) in {path}")
+    typer.echo(f'OK — {len(valid_datapoints)} valid datapoint(s) in {path}')
 
 
 # ---------------------------------------------------------------------------
@@ -973,46 +956,44 @@ def validate_dataset(
 def runs(
     directory: Annotated[
         Path | None,
-        typer.Argument(help="Directory to scan (default: .evaluatorq/sim-runs/)."),
+        typer.Argument(help='Directory to scan (default: .evaluatorq/sim-runs/).'),
     ] = None,
     limit: Annotated[
         int,
-        typer.Option("--limit", "-n", help="Maximum number of runs to show."),
+        typer.Option('--limit', '-n', help='Maximum number of runs to show.'),
     ] = 20,
 ) -> None:
     """List recent simulation runs."""
     runs_dir = directory or _get_sim_runs_dir()
 
     if not runs_dir.exists():
-        typer.echo(f"No sim-runs directory found at {runs_dir}")
+        typer.echo(f'No sim-runs directory found at {runs_dir}')
         raise typer.Exit(0)
 
     run_files = sorted(
-        runs_dir.glob("*.json"),
+        runs_dir.glob('*.json'),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )[:limit]
 
     if not run_files:
-        typer.echo(f"No runs found in {runs_dir}")
+        typer.echo(f'No runs found in {runs_dir}')
         raise typer.Exit(0)
 
     rows: list[dict[str, Any]] = []
     malformed = 0
     for run_file in run_files:
         try:
-            data = json.loads(run_file.read_text(encoding="utf-8"))
-            rows.append(
-                {
-                    "name": data.get("run_name", "—"),
-                    "date": data.get("created_at", "—")[:19].replace("T", " "),
-                    "mode": data.get("mode", "—"),
-                    "target": data.get("target_kind", "—"),
-                    "n": str(data.get("total_results", "—")),
-                    "scores": _format_scorer_averages(data.get("scorer_averages", {})),
-                    "file": run_file.name,
-                }
-            )
+            data = json.loads(run_file.read_text(encoding='utf-8'))
+            rows.append({
+                'name': data.get('run_name', '—'),
+                'date': data.get('created_at', '—')[:19].replace('T', ' '),
+                'mode': data.get('mode', '—'),
+                'target': data.get('target_kind', '—'),
+                'n': str(data.get('total_results', '—')),
+                'scores': _format_scorer_averages(data.get('scorer_averages', {})),
+                'file': run_file.name,
+            })
         except Exception:  # noqa: PERF203
             malformed += 1
 
@@ -1022,18 +1003,18 @@ def runs(
         from rich.console import Console
         from rich.table import Table
 
-        table = Table(title="Simulation Runs")
-        for col in ("Name", "Date", "Mode", "Target", "N", "Scores", "File"):
+        table = Table(title='Simulation Runs')
+        for col in ('Name', 'Date', 'Mode', 'Target', 'N', 'Scores', 'File'):
             table.add_column(col)
         for row in rows:
             table.add_row(
-                row["name"],
-                row["date"],
-                row["mode"],
-                row["target"],
-                row["n"],
-                row["scores"],
-                row["file"],
+                row['name'],
+                row['date'],
+                row['mode'],
+                row['target'],
+                row['n'],
+                row['scores'],
+                row['file'],
             )
         # Render through an explicit buffer + typer.echo rather than letting
         # Rich write straight to its own stdout handle: this keeps output on
@@ -1048,23 +1029,23 @@ def runs(
         Console(file=buffer, width=width).print(table)
         typer.echo(buffer.getvalue(), nl=False)
     except ImportError:
-        header = f"{'Name':<20} {'Date':<20} {'Mode':<10} {'Target':<16} {'N':>4}  {'Scores':<30} File"
+        header = f'{"Name":<20} {"Date":<20} {"Mode":<10} {"Target":<16} {"N":>4}  {"Scores":<30} File'
         typer.echo(header)
-        typer.echo("-" * len(header))
+        typer.echo('-' * len(header))
         for row in rows:
             typer.echo(
-                f"{row['name']:<20} {row['date']:<20} {row['mode']:<10} "
-                f"{row['target']:<16} {row['n']:>4}  {row['scores']:<30} {row['file']}"
+                f'{row["name"]:<20} {row["date"]:<20} {row["mode"]:<10} '
+                f'{row["target"]:<16} {row["n"]:>4}  {row["scores"]:<30} {row["file"]}'
             )
 
     if malformed:
-        typer.echo(f"Warning: {malformed} malformed run file(s) skipped.", err=True)
+        typer.echo(f'Warning: {malformed} malformed run file(s) skipped.', err=True)
 
 
 def _format_scorer_averages(averages: dict[str, float]) -> str:
     if not averages:
-        return "—"
-    return "  ".join(f"{k}={v:.2f}" for k, v in averages.items())
+        return '—'
+    return '  '.join(f'{k}={v:.2f}' for k, v in averages.items())
 
 
 # ---------------------------------------------------------------------------
@@ -1076,20 +1057,20 @@ def _format_scorer_averages(averages: dict[str, float]) -> str:
 def ui(
     run_path: Annotated[
         Path | None,
-        typer.Argument(help="Path to a run JSON file. Omit to open the latest run."),
+        typer.Argument(help='Path to a run JSON file. Omit to open the latest run.'),
     ] = None,
     latest: Annotated[  # noqa: FBT002
         bool,
-        typer.Option("--latest", "-l", help="Open the most recent auto-saved run."),
+        typer.Option('--latest', '-l', help='Open the most recent auto-saved run.'),
     ] = False,
     port: Annotated[
         int,
-        typer.Option(help="Port for the Streamlit server."),
+        typer.Option(help='Port for the Streamlit server.'),
     ] = 8501,
     host: Annotated[
         str,
-        typer.Option(help="Host to bind the Streamlit server to."),
-    ] = "localhost",
+        typer.Option(help='Host to bind the Streamlit server to.'),
+    ] = 'localhost',
 ) -> None:
     """Launch the interactive Streamlit dashboard for a simulation run."""
     from evaluatorq.common.ui.launch import launch_streamlit
@@ -1098,15 +1079,13 @@ def ui(
 
     if run_path is None or latest:
         if runs_dir.exists():
-            run_files = sorted(
-                runs_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True
-            )
+            run_files = sorted(runs_dir.glob('*.json'), key=lambda p: p.stat().st_mtime, reverse=True)
             if run_files:
                 run_path = run_files[0]
-                typer.echo(f"Opening latest run: {run_path.name}")
+                typer.echo(f'Opening latest run: {run_path.name}')
         if run_path is None:
             typer.echo(
-                "No runs found. Run `eq sim run` first, or pass a run path.",
+                'No runs found. Run `eq sim run` first, or pass a run path.',
                 err=True,
             )
             raise typer.Exit(code=1)
@@ -1118,11 +1097,11 @@ def ui(
         if candidate.exists():
             run_path = candidate
         else:
-            typer.echo(f"Error: {run_path} does not exist.", err=True)
+            typer.echo(f'Error: {run_path} does not exist.', err=True)
             raise typer.Exit(code=1)
 
-    dashboard_script = Path(__file__).parent / "ui" / "dashboard.py"
-    launch_streamlit(dashboard_script, run_path, port=port, host=host, extra="simulation")
+    dashboard_script = Path(__file__).parent / 'ui' / 'dashboard.py'
+    launch_streamlit(dashboard_script, run_path, port=port, host=host, extra='simulation')
 
 
 def _export_report(run: Any, directory: Path, *, fmt: str) -> None:
@@ -1131,8 +1110,8 @@ def _export_report(run: Any, directory: Path, *, fmt: str) -> None:
     from evaluatorq.simulation.reports.export_html import export_html
     from evaluatorq.simulation.reports.export_md import export_markdown
 
-    stem = f"sim-report-{_sanitise_run_name(run.run_name)}-{run.created_at:%Y%m%d-%H%M%S}"
-    if fmt == "md":
+    stem = f'sim-report-{_sanitise_run_name(run.run_name)}-{run.created_at:%Y%m%d-%H%M%S}'
+    if fmt == 'md':
         content = export_markdown(run.results, run_date=run.created_at)
     else:
         content = export_html(run.results, run_date=run.created_at)
@@ -1144,7 +1123,7 @@ def _write_results(results: list[Any], output: Path) -> None:
 
     output.parent.mkdir(parents=True, exist_ok=True)
     export_results_to_jsonl(results, str(output))
-    typer.echo(f"Results written to {output}")
+    typer.echo(f'Results written to {output}')
 
 
 def _write_datapoints(datapoints: list[Any], output: Path) -> None:
@@ -1157,12 +1136,12 @@ def _write_datapoints(datapoints: list[Any], output: Path) -> None:
     """
     output.parent.mkdir(parents=True, exist_ok=True)
     lines = [dp.model_dump_json() for dp in datapoints]
-    output.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    output.write_text('\n'.join(lines) + '\n', encoding='utf-8')
 
 
 # ---------------------------------------------------------------------------
 # Standalone entry point
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     app()
