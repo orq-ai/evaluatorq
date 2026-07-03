@@ -310,6 +310,132 @@ The `target_callback` is the only structural difference from the Orq path —
 personas, scenarios, criteria, and the result shape are identical. Swap the
 callback body for any HTTP/LLM agent.
 
+## From existing traces and data
+
+You do not have to invent every test case from scratch. If you already have
+recorded conversations, real production traces, or a batch of datapoints from an
+earlier run, you can feed that history back into simulation in two ways: replay
+the exact same cases, or mine them for the archetypes that drive fresh ones.
+
+### Replay stored datapoints
+
+A `SimulationDatapoint` bundles one persona, one scenario, and the opening
+message. Every case simulation runs is one of these, and you can persist them for
+reuse. `eq sim generate` writes the cases it builds to a JSONL file with
+`--output PATH` (one datapoint per line); `eq sim run` does the same alongside a
+live run with `--save-datapoints PATH`:
+
+<!-- termynal -->
+
+```bash
+# Generate cases once and keep them
+eq sim generate --agent-description "e-commerce support agent" \
+  --num-personas 3 --num-scenarios 4 \
+  --output cases.jsonl
+
+# Re-run the exact same cases against any target, as often as you like
+eq sim simulate --datapoints cases.jsonl --target agent:my-support-agent
+```
+
+Because the file pins the personas, scenarios, and first messages, the run is
+reproducible. That makes it the natural way to compare two agent versions, or the
+same agent under a new set of evaluators, on an identical bank of cases. From the
+SDK the same file loads via `load_datapoints_from_jsonl()`:
+
+```python
+import asyncio
+
+from evaluatorq.simulation import simulate
+from evaluatorq.simulation.utils import load_datapoints_from_jsonl
+
+
+async def main():
+    datapoints = load_datapoints_from_jsonl("cases.jsonl")
+
+    results = await simulate(
+        evaluation_name="replay-v2",
+        target="agent:my-support-agent-v2",   # new version, same cases
+        datapoints=datapoints,
+        max_turns=6,
+        evaluator_names=["goal_achieved", "criteria_met"],
+    )
+    passed = sum(r.goal_achieved for r in results)
+    print(f"Pass rate: {passed}/{len(results)}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+If your cases already live in Orq as a dataset, point `simulate()` at it with
+`dataset_id=` and skip the local file entirely. Each row's `inputs` should carry a
+`datapoint` object (`persona`, `scenario`, `first_message`), or a `persona` +
+`scenario` pair, matching the `SimulationDatapoint` shape above:
+
+```python
+results = await simulate(
+    evaluation_name="dataset-replay",
+    target="agent:my-support-agent",
+    dataset_id="my-simulation-cases",       # named Orq dataset, routed via ORQ_API_KEY
+    evaluator_names=["goal_achieved", "criteria_met"],
+)
+```
+
+`dataset_id`, `datapoints`, and `personas` + `scenarios` are mutually exclusive:
+pass exactly one source per run.
+
+### Ground new cases in real traces
+
+Replay reruns what you already have. The other move is to generate *new* cases
+that are shaped by what really happened. Production traces show you the user
+archetypes and situations your agent actually meets, and those become the seeds
+for generation. Pull the recurring patterns out of your traces (the impatient
+buyer disputing a charge, the confused first-time user, the edge case that broke
+last week), then hand them to `generate_personas()` / `generate_scenarios()` as
+short seed phrases:
+
+```python
+import asyncio
+
+from evaluatorq.simulation import generate_personas, generate_scenarios, simulate
+
+# Archetypes and situations distilled from real traces
+persona_seeds = ["impatient repeat buyer", "confused first-time user", "polite but persistent negotiator"]
+scenario_seeds = ["disputes a duplicate charge", "cannot find order confirmation", "asks for a discount after a late delivery"]
+
+
+async def main():
+    personas = await generate_personas(persona_seeds, agent_description="e-commerce support agent")
+    scenarios = await generate_scenarios(scenario_seeds, agent_description="e-commerce support agent")
+
+    results = await simulate(
+        evaluation_name="trace-grounded-sim",
+        target="agent:my-support-agent",
+        personas=personas,                    # 3 personas × 3 scenarios → 9 simulations
+        scenarios=scenarios,
+        max_turns=6,
+        evaluator_names=["goal_achieved", "criteria_met"],
+    )
+    passed = sum(r.goal_achieved for r in results)
+    print(f"Pass rate: {passed}/{len(results)}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+The seed is a steer, not a transcript: generation fills in the persona traits and
+scenario criteria and writes a natural opening message, so each run explores the
+space around the pattern rather than replaying one recorded conversation. Persist
+the generated cases (`eq sim generate --output`, or `eq sim run
+--save-datapoints`) and they become a replayable bank for the section above.
+
+!!! note "Reading the archetypes out of traces is manual today"
+    Turning raw traces into seed phrases is a step you do yourself, by reading the
+    conversations or grouping them however you already triage production. There is
+    no built-in trace-to-persona extractor yet; the seed list is the hand-off point
+    between your trace history and the generators.
+
 !!! tip "View results in the local dashboard"
     Run `eq dashboard` to browse saved red-team and simulation reports together;
     `eq redteam ui` / `eq sim ui` open the legacy Streamlit views for one surface.
