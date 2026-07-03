@@ -20,9 +20,16 @@ from evaluatorq.common.jury import (
 )
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.contracts import LLMCallConfig
+from evaluatorq.pairwise import PairwiseComparison, run_pairwise
 from evaluatorq.types import DataPoint, EvaluationResult, Evaluator, Output, ScorerParameter
 
-DEFAULT_JUDGE_MODEL = "openai/gpt-5.4-mini"
+DEFAULT_JUDGE_MODEL = 'openai/gpt-5.4-mini'
+
+PAIRWISE_LABELS = ['A', 'B', 'tie']
+DEFAULT_PAIRWISE_CRITERIA = (
+    'Compare the two responses on accuracy and correctness, helpfulness and '
+    'completeness, clarity and organization, and relevance to the question.'
+)
 
 
 def _build_verdict_model(
@@ -38,7 +45,7 @@ def _build_verdict_model(
     Returns:
         A Pydantic BaseModel class with 'value' and 'explanation' fields
     """
-    if verdict_kind == "categorical":
+    if verdict_kind == 'categorical':
         value_annotation = bool if labels is None else typing.Literal[tuple(labels)]  # type: ignore[valid-type]
     else:  # numeric
         value_annotation = float
@@ -46,7 +53,7 @@ def _build_verdict_model(
     # Create model dynamically
     class VerdictModel(BaseModel):
         value: value_annotation  # type: ignore  # pyright: ignore[reportInvalidTypeForm]
-        explanation: str = Field(default="", description="Explanation for the verdict")
+        explanation: str = Field(default='', description='Explanation for the verdict')
 
     return VerdictModel
 
@@ -65,25 +72,23 @@ def _build_replacements(data: DataPoint, output: Output, criteria: str) -> dict[
     - anything else — JSON-dumped as-is.
     """
     inputs = data.inputs
-    if isinstance(inputs, dict) and "messages" in inputs:
-        input_str = json.dumps(inputs["messages"], indent=2, default=str)
-    elif isinstance(inputs, dict) and "input" in inputs:
-        input_str = str(inputs["input"])
+    if isinstance(inputs, dict) and 'messages' in inputs:
+        input_str = json.dumps(inputs['messages'], indent=2, default=str)
+    elif isinstance(inputs, dict) and 'input' in inputs:
+        input_str = str(inputs['input'])
     else:
         input_str = json.dumps(inputs, indent=2, default=str)
 
     out_str = output if isinstance(output, str) else json.dumps(output, default=str)
     return {
-        "input": input_str,
-        "output": out_str,
-        "expected_output": "" if data.expected_output is None else str(data.expected_output),
-        "criteria": criteria,
+        'input': input_str,
+        'output': out_str,
+        'expected_output': '' if data.expected_output is None else str(data.expected_output),
+        'criteria': criteria,
     }
 
 
-def _default_system_prompt(
-    verdict_kind: str, labels: list[str] | None, score_range: tuple[float, float]
-) -> str:
+def _default_system_prompt(verdict_kind: str, labels: list[str] | None, score_range: tuple[float, float]) -> str:
     """Return a sensible system prompt for the jury judge.
 
     The prompt instructs the model to return a structured verdict and a 2-3
@@ -96,15 +101,15 @@ def _default_system_prompt(
     """
     base = (
         "You are a strict evaluator. Read the input, the model's output, any "
-        "expected output, and judge against the stated criterion. "
-        "Return a structured verdict with a 2-3 sentence explanation."
+        'expected output, and judge against the stated criterion. '
+        'Return a structured verdict with a 2-3 sentence explanation.'
     )
-    if verdict_kind == "numeric":
+    if verdict_kind == 'numeric':
         lo, hi = score_range
-        return f"{base} `value` must be a number between {lo} and {hi} (higher is better)."
+        return f'{base} `value` must be a number between {lo} and {hi} (higher is better).'
     if labels:
-        return f"{base} `value` must be exactly one of: {', '.join(labels)}."
-    return f"{base} `value` must be a boolean: true if the criterion is met, false otherwise."
+        return f'{base} `value` must be exactly one of: {", ".join(labels)}.'
+    return f'{base} `value` must be a boolean: true if the criterion is met, false otherwise.'
 
 
 def _default_template(criteria: str) -> str:
@@ -114,10 +119,10 @@ def _default_template(criteria: str) -> str:
     template engine (double-braces).
     """
     return (
-        f"# Criterion\n{criteria}\n\n"
-        "# Input\n{{input}}\n\n"
-        "# Output\n{{output}}\n\n"
-        "# Expected output\n{{expected_output}}\n"
+        f'# Criterion\n{criteria}\n\n'
+        '# Input\n{{input}}\n\n'
+        '# Output\n{{output}}\n\n'
+        '# Expected output\n{{expected_output}}\n'
     )
 
 
@@ -139,7 +144,7 @@ def _outcome_to_prediction(outcome: JudgeOutcome) -> Prediction:
         )
     payload = outcome.payload
     if payload is None:
-        return Prediction(error="judge returned no payload", token_usage=outcome.token_usage)
+        return Prediction(error='judge returned no payload', token_usage=outcome.token_usage)
     if payload.abstain or payload.value is None:
         return Prediction(
             abstained=True,
@@ -174,15 +179,13 @@ def _to_evaluation_result(
     explanation = append_jury_summary(deliberation.explanation, deliberation.jury)
 
     if verdict is None:
-        value: Any = "inconclusive"
+        value: Any = 'inconclusive'
         passed = None
-    elif verdict_kind == "numeric":
+    elif verdict_kind == 'numeric':
         lo, hi = score_range
         raw_score = float(verdict)
         if not (lo <= raw_score <= hi):
-            logger.warning(
-                "judge returned {} outside score_range {}; clamping", raw_score, score_range
-            )
+            logger.warning('judge returned {} outside score_range {}; clamping', raw_score, score_range)
         score = min(max(raw_score, lo), hi)
         value = score
         passed = score >= threshold
@@ -194,10 +197,10 @@ def _to_evaluation_result(
         passed = (verdict in passing_labels) if passing_labels else None
 
     return EvaluationResult.model_validate({
-        "value": value,
-        "explanation": explanation,
-        "pass": passed,
-        "token_usage": deliberation.token_usage,
+        'value': value,
+        'explanation': explanation,
+        'pass': passed,
+        'token_usage': deliberation.token_usage,
     })
 
 
@@ -218,14 +221,14 @@ def _resolve_panel(judges: list[str] | None, model: str | None) -> list[str]:
             empty list, or if ``model`` is blank.
     """
     if judges is not None and model is not None:
-        raise ValueError("Pass either `judges` or `model`, not both.")
+        raise ValueError('Pass either `judges` or `model`, not both.')
     if judges is not None:
         if not judges:
-            raise ValueError("`judges` must be a non-empty list of judge models.")
+            raise ValueError('`judges` must be a non-empty list of judge models.')
         return list(judges)
     if model is not None:
         if not model.strip():
-            raise ValueError("`model` must be a non-empty judge model identifier.")
+            raise ValueError('`model` must be a non-empty judge model identifier.')
         return [model]
     return [DEFAULT_JUDGE_MODEL]
 
@@ -246,7 +249,7 @@ def llm_jury(
     repetitions: int = 1,
     replacement_judges: list[str] | None = None,
     min_successful_judges: int = 1,
-    verdict_kind: Literal["categorical", "numeric"] = "categorical",
+    verdict_kind: Literal['categorical', 'numeric'] = 'categorical',
     labels: list[str] | None = None,
     passing_labels: list[str] | None = None,
     aggregator: AggregatorSpec | None = None,
@@ -336,33 +339,31 @@ def llm_jury(
     """
     # --- validation (fail fast) ---
     if bool(criteria) == bool(prompt):
-        raise ValueError("Pass exactly one of `criteria` or `prompt`.")
+        raise ValueError('Pass exactly one of `criteria` or `prompt`.')
     if repetitions < 1:
-        raise ValueError(f"repetitions ({repetitions}) must be >= 1.")
-    if verdict_kind != "categorical" and (labels or passing_labels):
+        raise ValueError(f'repetitions ({repetitions}) must be >= 1.')
+    if verdict_kind != 'categorical' and (labels or passing_labels):
         raise ValueError("`labels`/`passing_labels` are only valid for verdict_kind='categorical'.")
     if labels is not None and len(labels) < 2:
         # A categorical judge with 0/1 options is meaningless, and an empty list
         # would build a degenerate ``Literal[()]`` verdict model.
-        raise ValueError("categorical `labels` must list at least two options.")
+        raise ValueError('categorical `labels` must list at least two options.')
     if passing_labels and not labels:
         # Boolean mode (categorical + no labels) derives pass/fail from the verdict
         # directly, so passing_labels would be silently ignored — reject it loudly.
         raise ValueError(
-            "`passing_labels` requires `labels` (categorical labeled mode); "
-            "boolean mode derives pass/fail from the verdict directly."
+            '`passing_labels` requires `labels` (categorical labeled mode); '
+            'boolean mode derives pass/fail from the verdict directly.'
         )
     if labels and passing_labels and not set(passing_labels) <= set(labels):
-        raise ValueError("`passing_labels` must be a subset of `labels`.")
-    if verdict_kind == "numeric" and score_range[0] >= score_range[1]:
-        raise ValueError(f"score_range {score_range} must be increasing (lo < hi).")
-    if verdict_kind == "numeric" and not (score_range[0] <= threshold <= score_range[1]):
-        raise ValueError(
-            f"threshold ({threshold}) must lie within score_range {score_range}."
-        )
+        raise ValueError('`passing_labels` must be a subset of `labels`.')
+    if verdict_kind == 'numeric' and score_range[0] >= score_range[1]:
+        raise ValueError(f'score_range {score_range} must be increasing (lo < hi).')
+    if verdict_kind == 'numeric' and not (score_range[0] <= threshold <= score_range[1]):
+        raise ValueError(f'threshold ({threshold}) must lie within score_range {score_range}.')
     validate_aggregator(
         aggregator,
-        VerdictKind.NUMERIC if verdict_kind == "numeric" else VerdictKind.CATEGORICAL,
+        VerdictKind.NUMERIC if verdict_kind == 'numeric' else VerdictKind.CATEGORICAL,
     )
     panel = _resolve_panel(judges=judges, model=model)
     deduped = list(dict.fromkeys(panel))
@@ -370,13 +371,13 @@ def llm_jury(
     # failed primaries, not extra capacity, so they don't raise the achievable floor.
     if not (1 <= min_successful_judges <= len(deduped)):
         raise ValueError(
-            f"min_successful_judges ({min_successful_judges}) must be between 1 and "
-            f"the deduplicated panel size ({len(deduped)})."
+            f'min_successful_judges ({min_successful_judges}) must be between 1 and '
+            f'the deduplicated panel size ({len(deduped)}).'
         )
     if temperature == 0.0:
         logger.warning(
-            "temperature=0.0: reasoning models (o-series, gpt-5, …) often score worse "
-            "at temp 0. Leave it unset unless you know your model benefits."
+            'temperature=0.0: reasoning models (o-series, gpt-5, …) often score worse '
+            'at temp 0. Leave it unset unless you know your model benefits.'
         )
 
     # Resolve the client lazily on first scorer call, not here: declaring an
@@ -384,30 +385,39 @@ def llm_jury(
     # client= is used as-is; otherwise we resolve once on first use.
     resolved_client = client
     verdict_model = _build_verdict_model(verdict_kind=verdict_kind, labels=labels, score_range=score_range)
-    template = prompt if prompt is not None else _default_template(criteria=criteria or "")
-    sys_prompt = system_prompt if system_prompt is not None else _default_system_prompt(
-        verdict_kind=verdict_kind, labels=labels, score_range=score_range
+    template = prompt if prompt is not None else _default_template(criteria=criteria or '')
+    sys_prompt = (
+        system_prompt
+        if system_prompt is not None
+        else _default_system_prompt(verdict_kind=verdict_kind, labels=labels, score_range=score_range)
     )
-    vkind = VerdictKind.NUMERIC if verdict_kind == "numeric" else VerdictKind.CATEGORICAL
+    vkind = VerdictKind.NUMERIC if verdict_kind == 'numeric' else VerdictKind.CATEGORICAL
 
     async def scorer(params: ScorerParameter) -> EvaluationResult:
         nonlocal resolved_client
         if resolved_client is None:
             resolved_client = resolve_llm_client(config_client=None).client
-        data = params["data"]
-        output = params["output"]
-        replacements = _build_replacements(data=data, output=output, criteria=criteria or "")
+        data = params['data']
+        output = params['output']
+        replacements = _build_replacements(data=data, output=output, criteria=criteria or '')
 
         async def judge_fn(judge_model: str) -> Prediction:
             cfg = LLMCallConfig(
-                model=judge_model, max_tokens=max_tokens, timeout_ms=timeout_ms,
+                model=judge_model,
+                max_tokens=max_tokens,
+                timeout_ms=timeout_ms,
                 extra_kwargs=extra_kwargs or {},
             )
             outcome = await run_judge(
-                client=resolved_client, model=judge_model, cfg=cfg,
-                prompt_template=template, replacements=replacements,
-                system_prompt=sys_prompt, response_model=verdict_model,
-                structured_output=structured_output, temperature=temperature,
+                client=resolved_client,
+                model=judge_model,
+                cfg=cfg,
+                prompt_template=template,
+                replacements=replacements,
+                system_prompt=sys_prompt,
+                response_model=verdict_model,
+                structured_output=structured_output,
+                temperature=temperature,
             )
             return _outcome_to_prediction(outcome=outcome)
 
@@ -425,8 +435,161 @@ def llm_jury(
             propagate_errors=(len(deduped) == 1 and not replacement_judges),
         )
         return _to_evaluation_result(
-            deliberation=deliberation, verdict_kind=verdict_kind, passing_labels=passing_labels,
-            threshold=threshold, score_range=score_range,
+            deliberation=deliberation,
+            verdict_kind=verdict_kind,
+            passing_labels=passing_labels,
+            threshold=threshold,
+            score_range=score_range,
         )
 
-    return {"name": name, "scorer": scorer}
+    return {'name': name, 'scorer': scorer}
+
+
+# ---------------------------------------------------------------------------
+# Pairwise (preference) jury
+# ---------------------------------------------------------------------------
+
+
+def _pairwise_system_prompt() -> str:
+    return (
+        'You are an impartial judge comparing two AI responses, A and B, to a '
+        'question. Judge which is better against the stated criteria. Return a '
+        "structured verdict: `value` must be exactly one of 'A', 'B', or 'tie', "
+        'with a 2-3 sentence explanation.'
+    )
+
+
+def _pairwise_template(criteria: str) -> str:
+    return (
+        f'# Criteria\n{criteria}\n\n'
+        '# Question\n{{question}}\n\n'
+        '# Response A\n{{response_a}}\n\n'
+        '# Response B\n{{response_b}}\n'
+    )
+
+
+class PairwiseComparator:
+    """A configured pairwise LLM jury. Call :meth:`compare` on an A/B pair."""
+
+    def __init__(
+        self,
+        *,
+        panel: list[str],
+        criteria: str,
+        system_prompt: str,
+        swap: bool,
+        repetitions: int,
+        replacement_judges: list[str] | None,
+        min_successful_judges: int,
+        max_tokens: int,
+        timeout_ms: int,
+        temperature: float | None,
+        structured_output: bool,
+        extra_kwargs: dict[str, Any] | None,
+        client: Any,
+    ) -> None:
+        self._panel = panel
+        self._criteria = criteria
+        self._system_prompt = system_prompt
+        self._swap = swap
+        self._repetitions = repetitions
+        self._replacement_judges = replacement_judges
+        self._min_successful_judges = min_successful_judges
+        self._max_tokens = max_tokens
+        self._timeout_ms = timeout_ms
+        self._temperature = temperature
+        self._structured_output = structured_output
+        self._extra_kwargs = extra_kwargs
+        self._client = client
+        self._verdict_model = _build_verdict_model(
+            verdict_kind='categorical', labels=PAIRWISE_LABELS, score_range=(0.0, 1.0)
+        )
+        self._template = _pairwise_template(criteria)
+
+    async def compare(self, *, question: str, response_a: str, response_b: str) -> PairwiseComparison:
+        """Run the panel over one A-vs-B comparison and return the reconciled verdict."""
+        if self._client is None:
+            self._client = resolve_llm_client(config_client=None).client
+
+        async def judge_fn(first: str, second: str, model: str) -> Prediction:
+            cfg = LLMCallConfig(
+                model=model,
+                max_tokens=self._max_tokens,
+                timeout_ms=self._timeout_ms,
+                extra_kwargs=self._extra_kwargs or {},
+            )
+            outcome = await run_judge(
+                client=self._client,
+                model=model,
+                cfg=cfg,
+                prompt_template=self._template,
+                replacements={'question': question, 'response_a': first, 'response_b': second},
+                system_prompt=self._system_prompt,
+                response_model=self._verdict_model,
+                structured_output=self._structured_output,
+                temperature=self._temperature,
+            )
+            return _outcome_to_prediction(outcome=outcome)
+
+        return await run_pairwise(
+            judge_fn=judge_fn,
+            panel=self._panel,
+            response_a=response_a,
+            response_b=response_b,
+            swap=self._swap,
+            repetitions=self._repetitions,
+            replacement_judges=self._replacement_judges,
+            min_successful_judges=self._min_successful_judges,
+            propagate_errors=(len(self._panel) == 1 and not self._replacement_judges),
+        )
+
+
+def llm_jury_pairwise(
+    *,
+    judges: list[str] | None = None,
+    model: str | None = None,
+    criteria: str | None = None,
+    system_prompt: str | None = None,
+    swap: bool = True,
+    repetitions: int = 1,
+    replacement_judges: list[str] | None = None,
+    min_successful_judges: int = 1,
+    max_tokens: int = 8000,
+    timeout_ms: int = 90000,
+    temperature: float | None = None,
+    structured_output: bool = True,
+    extra_kwargs: dict[str, Any] | None = None,
+    client: Any = None,
+) -> PairwiseComparator:
+    """Build a pairwise (A-vs-B) LLM jury that reuses the shared panel machinery.
+
+    Judges compare two responses and pick a winner ('A'/'B'/'tie'). With ``swap``
+    on (default) each judge is run in both orderings to correct for position bias
+    (see ADR-24). Panel/orchestration params mirror :func:`llm_jury`. Returns a
+    :class:`PairwiseComparator`; call ``compare`` per A/B pair, and roll many
+    comparisons up with :func:`evaluatorq.pairwise.build_report`.
+    """
+    if repetitions < 1:
+        raise ValueError(f'repetitions ({repetitions}) must be >= 1.')
+    panel = _resolve_panel(judges=judges, model=model)
+    deduped = list(dict.fromkeys(panel))
+    if not (1 <= min_successful_judges <= len(deduped)):
+        raise ValueError(
+            f'min_successful_judges ({min_successful_judges}) must be between 1 and '
+            f'the deduplicated panel size ({len(deduped)}).'
+        )
+    return PairwiseComparator(
+        panel=panel,
+        criteria=criteria if criteria is not None else DEFAULT_PAIRWISE_CRITERIA,
+        system_prompt=system_prompt if system_prompt is not None else _pairwise_system_prompt(),
+        swap=swap,
+        repetitions=repetitions,
+        replacement_judges=replacement_judges,
+        min_successful_judges=min_successful_judges,
+        max_tokens=max_tokens,
+        timeout_ms=timeout_ms,
+        temperature=temperature,
+        structured_output=structured_output,
+        extra_kwargs=extra_kwargs,
+        client=client,
+    )

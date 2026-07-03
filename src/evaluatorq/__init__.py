@@ -13,8 +13,16 @@ from .evaluators import (
     string_contains_evaluator,
 )
 from .job_helper import job
-from .llm_jury import llm_jury
+from .llm_jury import PairwiseComparator, llm_jury, llm_jury_pairwise
 from .openresponses import ResponseResourceDict
+from .pairwise import (
+    JudgeStats,
+    PairwiseComparison,
+    PairwiseReport,
+    PairwiseVote,
+    build_report,
+    run_pairwise,
+)
 from .types import (
     DataPoint,
     DataPointDict,
@@ -39,39 +47,48 @@ from .types import (
 
 __all__ = [
     # Types
-    "DataPoint",
-    "DataPointDict",
-    "DataPointInput",
-    "DataPointResult",
-    "DatasetIdInput",
-    "DeploymentResponse",
-    "EvaluationResult",
-    "EvaluationResultCell",
-    "EvaluationResultCellValue",
-    "Evaluator",
-    "EvaluatorParams",
-    "EvaluatorScore",
-    "EvaluatorqResult",
-    "ExperimentInput",
-    "Job",
-    "JobResult",
-    "JobReturn",
-    "MessageDict",
-    "Output",
-    "ResponseResourceDict",
-    "Scorer",
-    "ScorerParameter",
-    "ThreadConfig",
+    'DataPoint',
+    'DataPointDict',
+    'DataPointInput',
+    'DataPointResult',
+    'DatasetIdInput',
+    'DeploymentResponse',
+    'EvaluationResult',
+    'EvaluationResultCell',
+    'EvaluationResultCellValue',
+    'Evaluator',
+    'EvaluatorParams',
+    'EvaluatorScore',
+    'EvaluatorqResult',
+    'ExperimentInput',
+    'Job',
+    'JobResult',
+    'JobReturn',
+    'JudgeStats',
+    'MessageDict',
+    'Output',
+    # Pairwise (preference) jury
+    'PairwiseComparator',
+    'PairwiseComparison',
+    'PairwiseReport',
+    'PairwiseVote',
+    'ResponseResourceDict',
+    'Scorer',
+    'ScorerParameter',
+    'ThreadConfig',
+    'build_report',
     # Deployment helpers
-    "deployment",
+    'deployment',
     # Main function
-    "evaluatorq",
-    "exact_match_evaluator",
-    "invoke",
+    'evaluatorq',
+    'exact_match_evaluator',
+    'invoke',
     # Helper functions
-    "job",
+    'job',
     # LLM jury evaluator
-    "llm_jury",
+    'llm_jury',
+    'llm_jury_pairwise',
+    'run_pairwise',
     # Built-in evaluators
-    "string_contains_evaluator",
+    'string_contains_evaluator',
 ]
