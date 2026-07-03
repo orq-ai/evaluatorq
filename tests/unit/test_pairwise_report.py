@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from evaluatorq.pairwise import PairwiseComparison, PairwiseVote, build_report
 
 
@@ -92,3 +94,23 @@ def test_judge_with_no_decisive_picks_has_none_lean() -> None:
 
     assert per_judge['w'].a_rate is None
     assert per_judge['w'].b_rate is None
+
+
+def test_report_mean_agreement() -> None:
+    """Mean agreement averages each comparison's modal share over its decisive reconciled votes."""
+    report = build_report(_comparisons())
+
+    # comp1 [A,A,tie]->2/3, comp2 [B]->1.0, comp3 [tie,A,B]->1/3; mean = 2/3.
+    assert report.mean_agreement == pytest.approx(2 / 3)
+
+
+def test_mean_agreement_none_when_no_decisive_votes() -> None:
+    """With no decisive votes anywhere, agreement is undefined (None), not zero."""
+    comparisons = [
+        PairwiseComparison(
+            winner='inconclusive',
+            votes=[PairwiseVote(model='w', vote=None, flipped=True)],
+        )
+    ]
+
+    assert build_report(comparisons).mean_agreement is None

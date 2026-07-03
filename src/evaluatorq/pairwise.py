@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from evaluatorq.common.jury import Prediction, VerdictValue, _plurality_vote, run_jury
+from evaluatorq.common.jury import Prediction, VerdictValue, _agreement_rate, _plurality_vote, run_jury
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
@@ -94,6 +94,9 @@ class PairwiseReport(BaseModel):
         description='Consensus B-wins over comparisons decided A or B; None if none were decisive'
     )
     tie_rate: float = Field(description='Comparisons whose consensus was a tie, over all comparisons')
+    mean_agreement: float | None = Field(
+        description='Mean inter-judge agreement (modal vote share) across comparisons; None if none were decisive'
+    )
     per_judge: list[JudgeStats] = Field(default_factory=list, description='Per-judge behaviour breakdown')
 
 
@@ -123,11 +126,18 @@ def build_report(comparisons: Sequence[PairwiseComparison]) -> PairwiseReport:
         for model, votes in per_judge.items()
     ]
 
+    agreements = [
+        rate
+        for c in comparisons
+        if (rate := _agreement_rate([v.vote for v in c.votes if v.vote is not None])) is not None
+    ]
+
     return PairwiseReport(
         comparisons=total,
         a_win_rate=_rate(winners['A'], decisive),
         b_win_rate=_rate(winners['B'], decisive),
         tie_rate=winners['tie'] / total if total else 0.0,
+        mean_agreement=sum(agreements) / len(agreements) if agreements else None,
         per_judge=judge_stats,
     )
 
