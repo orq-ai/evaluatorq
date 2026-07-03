@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from typing import Any
 
 import pytest
 
@@ -16,9 +17,8 @@ llm_jury_module = sys.modules["evaluatorq.llm_jury"]
 async def test_comparator_reconciles_a_consistent_judge(monkeypatch: pytest.MonkeyPatch) -> None:
     """A judge that prefers the same actual response in both orderings makes that response win."""
 
-    async def fake_run_judge(**kwargs: object) -> JudgeOutcome:
-        replacements = kwargs['replacements']
-        first = replacements['response_a']  # type: ignore[index]
+    async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
+        first = kwargs['replacements']['response_a']
         value = 'A' if first == 'GOOD' else 'B'
         return JudgeOutcome(payload=EvaluatorResponsePayload(value=value, explanation='x'))
 
@@ -36,8 +36,8 @@ async def test_comparator_runs_both_orderings(monkeypatch: pytest.MonkeyPatch) -
     """With swap on, each judge is asked once per ordering (A-first, then B-first)."""
     seen_first: list[str] = []
 
-    async def fake_run_judge(**kwargs: object) -> JudgeOutcome:
-        seen_first.append(kwargs['replacements']['response_a'])  # type: ignore[index]
+    async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
+        seen_first.append(kwargs['replacements']['response_a'])
         return JudgeOutcome(payload=EvaluatorResponsePayload(value='A', explanation='first slot'))
 
     monkeypatch.setattr(llm_jury_module, 'run_judge', fake_run_judge)
