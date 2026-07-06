@@ -20,9 +20,16 @@ from evaluatorq.common.jury import (
 )
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.contracts import LLMCallConfig
+from evaluatorq.pairwise import PairwiseComparison, run_pairwise
 from evaluatorq.types import DataPoint, EvaluationResult, Evaluator, Output, ScorerParameter
 
 DEFAULT_JUDGE_MODEL = 'openai/gpt-5.4-mini'
+
+PAIRWISE_LABELS = ['A', 'B', 'tie']
+DEFAULT_PAIRWISE_CRITERIA = (
+    'Compare the two responses on accuracy and correctness, helpfulness and '
+    'completeness, clarity and organization, and relevance to the question.'
+)
 
 
 def _build_verdict_model(
@@ -151,6 +158,41 @@ def _outcome_to_prediction(outcome: JudgeOutcome) -> Prediction:
     )
 
 
+async def _run_single_judge(
+    *,
+    client: Any,
+    model: str,
+    template: str,
+    replacements: dict[str, Any],
+    system_prompt: str,
+    verdict_model: type[BaseModel],
+    structured_output: bool,
+    temperature: float | None,
+    max_tokens: int,
+    timeout_ms: int,
+    extra_kwargs: dict[str, Any] | None,
+) -> Prediction:
+    """Run one judge call and map its outcome to a :class:`Prediction`.
+
+    The single ``run_judge`` call site shared by the pointwise (:func:`llm_jury`)
+    and pairwise (:class:`PairwiseComparator`) juries — only the ``replacements``
+    differ between them, so keeping one path stops the two from drifting.
+    """
+    cfg = LLMCallConfig(model=model, max_tokens=max_tokens, timeout_ms=timeout_ms, extra_kwargs=extra_kwargs or {})
+    outcome = await run_judge(
+        client=client,
+        model=model,
+        cfg=cfg,
+        prompt_template=template,
+        replacements=replacements,
+        system_prompt=system_prompt,
+        response_model=verdict_model,
+        structured_output=structured_output,
+        temperature=temperature,
+    )
+    return _outcome_to_prediction(outcome=outcome)
+
+
 def _to_evaluation_result(
     deliberation: JuryDeliberation,
     *,
@@ -224,6 +266,26 @@ def _resolve_panel(judges: list[str] | None, model: str | None) -> list[str]:
             raise ValueError('`model` must be a non-empty judge model identifier.')
         return [model]
     return [DEFAULT_JUDGE_MODEL]
+
+
+def _resolve_and_validate_panel(
+    *, judges: list[str] | None, model: str | None, min_successful_judges: int
+) -> tuple[list[str], list[str]]:
+    """Resolve the judge panel and validate ``min_successful_judges`` against it.
+
+    Returns ``(panel, deduped)``. The quorum floor is bounded by the deduplicated
+    panel size by design: ``replacement_judges`` are spillover for failed
+    primaries, not extra capacity, so they don't raise the achievable floor.
+    Shared by :func:`llm_jury` and :func:`llm_jury_pairwise`.
+    """
+    panel = _resolve_panel(judges=judges, model=model)
+    deduped = list(dict.fromkeys(panel))
+    if not (1 <= min_successful_judges <= len(deduped)):
+        raise ValueError(
+            f'min_successful_judges ({min_successful_judges}) must be between 1 and '
+            f'the deduplicated panel size ({len(deduped)}).'
+        )
+    return panel, deduped
 
 
 # ---------------------------------------------------------------------------
@@ -358,15 +420,9 @@ def llm_jury(
         aggregator,
         VerdictKind.NUMERIC if verdict_kind == 'numeric' else VerdictKind.CATEGORICAL,
     )
-    panel = _resolve_panel(judges=judges, model=model)
-    deduped = list(dict.fromkeys(panel))
-    # Bound is the base panel size by design: replacement_judges are spillover for
-    # failed primaries, not extra capacity, so they don't raise the achievable floor.
-    if not (1 <= min_successful_judges <= len(deduped)):
-        raise ValueError(
-            f'min_successful_judges ({min_successful_judges}) must be between 1 and '
-            f'the deduplicated panel size ({len(deduped)}).'
-        )
+    panel, deduped = _resolve_and_validate_panel(
+        judges=judges, model=model, min_successful_judges=min_successful_judges
+    )
     if temperature == 0.0:
         logger.warning(
             'temperature=0.0: reasoning models (o-series, gpt-5, …) often score worse '
@@ -395,24 +451,19 @@ def llm_jury(
         replacements = _build_replacements(data=data, output=output, criteria=criteria or '')
 
         async def judge_fn(judge_model: str) -> Prediction:
-            cfg = LLMCallConfig(
-                model=judge_model,
-                max_tokens=max_tokens,
-                timeout_ms=timeout_ms,
-                extra_kwargs=extra_kwargs or {},
-            )
-            outcome = await run_judge(
+            return await _run_single_judge(
                 client=resolved_client,
                 model=judge_model,
-                cfg=cfg,
-                prompt_template=template,
+                template=template,
                 replacements=replacements,
                 system_prompt=sys_prompt,
-                response_model=verdict_model,
+                verdict_model=verdict_model,
                 structured_output=structured_output,
                 temperature=temperature,
+                max_tokens=max_tokens,
+                timeout_ms=timeout_ms,
+                extra_kwargs=extra_kwargs,
             )
-            return _outcome_to_prediction(outcome=outcome)
 
         deliberation = await run_jury(
             judge_fn=judge_fn,
@@ -436,3 +487,146 @@ def llm_jury(
         )
 
     return {'name': name, 'scorer': scorer}
+
+
+# ---------------------------------------------------------------------------
+# Pairwise (preference) jury
+# ---------------------------------------------------------------------------
+
+
+def _pairwise_system_prompt() -> str:
+    return (
+        'You are an impartial judge comparing two AI responses, A and B, to a '
+        'question. Judge which is better against the stated criteria. Return a '
+        "structured verdict: `value` must be exactly one of 'A', 'B', or 'tie', "
+        'with a 2-3 sentence explanation.'
+    )
+
+
+def _pairwise_template(criteria: str) -> str:
+    return (
+        f'# Criteria\n{criteria}\n\n'
+        '# Question\n{{question}}\n\n'
+        '# Response A\n{{response_a}}\n\n'
+        '# Response B\n{{response_b}}\n'
+    )
+
+
+class PairwiseComparator:
+    """A configured pairwise LLM jury. Call :meth:`compare` on an A/B pair."""
+
+    def __init__(
+        self,
+        *,
+        panel: list[str],
+        criteria: str,
+        system_prompt: str,
+        swap: bool,
+        repetitions: int,
+        replacement_judges: list[str] | None,
+        min_successful_judges: int,
+        max_tokens: int,
+        timeout_ms: int,
+        temperature: float | None,
+        structured_output: bool,
+        extra_kwargs: dict[str, Any] | None,
+        client: Any,
+    ) -> None:
+        self._panel = panel
+        self._system_prompt = system_prompt
+        self._swap = swap
+        self._repetitions = repetitions
+        self._replacement_judges = replacement_judges
+        self._min_successful_judges = min_successful_judges
+        self._max_tokens = max_tokens
+        self._timeout_ms = timeout_ms
+        self._temperature = temperature
+        self._structured_output = structured_output
+        self._extra_kwargs = extra_kwargs
+        self._client = client
+        self._verdict_model = _build_verdict_model(
+            verdict_kind='categorical', labels=PAIRWISE_LABELS, score_range=(0.0, 1.0)
+        )
+        self._template = _pairwise_template(criteria)
+
+    async def compare(self, *, question: str, response_a: str, response_b: str) -> PairwiseComparison:
+        """Run the panel over one A-vs-B comparison and return the reconciled verdict."""
+        if self._client is None:
+            self._client = resolve_llm_client(config_client=None).client
+
+        async def judge_fn(first: str, second: str, model: str) -> Prediction:
+            return await _run_single_judge(
+                client=self._client,
+                model=model,
+                template=self._template,
+                replacements={'question': question, 'response_a': first, 'response_b': second},
+                system_prompt=self._system_prompt,
+                verdict_model=self._verdict_model,
+                structured_output=self._structured_output,
+                temperature=self._temperature,
+                max_tokens=self._max_tokens,
+                timeout_ms=self._timeout_ms,
+                extra_kwargs=self._extra_kwargs,
+            )
+
+        return await run_pairwise(
+            judge_fn=judge_fn,
+            panel=self._panel,
+            response_a=response_a,
+            response_b=response_b,
+            swap=self._swap,
+            repetitions=self._repetitions,
+            replacement_judges=self._replacement_judges,
+            min_successful_judges=self._min_successful_judges,
+            propagate_errors=(len(self._panel) == 1 and not self._replacement_judges),
+        )
+
+
+def llm_jury_pairwise(
+    *,
+    judges: list[str] | None = None,
+    model: str | None = None,
+    criteria: str | None = None,
+    system_prompt: str | None = None,
+    swap: bool = True,
+    repetitions: int = 1,
+    replacement_judges: list[str] | None = None,
+    min_successful_judges: int = 1,
+    max_tokens: int = 8000,
+    timeout_ms: int = 90000,
+    temperature: float | None = None,
+    structured_output: bool = True,
+    extra_kwargs: dict[str, Any] | None = None,
+    client: Any = None,
+) -> PairwiseComparator:
+    """Build a pairwise (A-vs-B) LLM jury that reuses the shared panel machinery.
+
+    Judges compare two responses and pick a winner ('A'/'B'/'tie'). With ``swap``
+    on (default) each judge is run in both orderings to correct for position bias
+    (see ADR-24). Panel/orchestration params mirror :func:`llm_jury`. Returns a
+    :class:`PairwiseComparator`; call ``compare`` per A/B pair, and roll many
+    comparisons up with :func:`evaluatorq.pairwise.build_report`.
+    """
+    if repetitions < 1:
+        raise ValueError(f'repetitions ({repetitions}) must be >= 1.')
+    _panel, deduped = _resolve_and_validate_panel(
+        judges=judges, model=model, min_successful_judges=min_successful_judges
+    )
+    return PairwiseComparator(
+        # Pass the deduped panel so the comparator's no-redundancy check
+        # (`len(panel) == 1`) matches the panel run_jury actually runs, keeping
+        # propagate_errors in step with llm_jury (judges=['m','m'] -> one judge).
+        panel=deduped,
+        criteria=criteria or DEFAULT_PAIRWISE_CRITERIA,
+        system_prompt=system_prompt if system_prompt is not None else _pairwise_system_prompt(),
+        swap=swap,
+        repetitions=repetitions,
+        replacement_judges=replacement_judges,
+        min_successful_judges=min_successful_judges,
+        max_tokens=max_tokens,
+        timeout_ms=timeout_ms,
+        temperature=temperature,
+        structured_output=structured_output,
+        extra_kwargs=extra_kwargs,
+        client=client,
+    )

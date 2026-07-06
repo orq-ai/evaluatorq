@@ -13,8 +13,16 @@ from .evaluators import (
     string_contains_evaluator,
 )
 from .job_helper import job
-from .llm_jury import llm_jury
+from .llm_jury import PairwiseComparator, llm_jury, llm_jury_pairwise
 from .openresponses import ResponseResourceDict
+from .pairwise import (
+    JudgeStats,
+    PairwiseComparison,
+    PairwiseReport,
+    PairwiseVote,
+    build_report,
+    run_pairwise,
+)
 from .types import (
     DataPoint,
     DataPointDict,
@@ -56,12 +64,19 @@ __all__ = [
     'Job',
     'JobResult',
     'JobReturn',
+    'JudgeStats',
     'MessageDict',
     'Output',
+    # Pairwise (preference) jury
+    'PairwiseComparator',
+    'PairwiseComparison',
+    'PairwiseReport',
+    'PairwiseVote',
     'ResponseResourceDict',
     'Scorer',
     'ScorerParameter',
     'ThreadConfig',
+    'build_report',
     # Deployment helpers
     'deployment',
     # Main function
@@ -72,6 +87,8 @@ __all__ = [
     'job',
     # LLM jury evaluator
     'llm_jury',
+    'llm_jury_pairwise',
+    'run_pairwise',
     # Built-in evaluators
     'string_contains_evaluator',
 ]
