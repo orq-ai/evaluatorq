@@ -259,6 +259,15 @@ html { font-size: 100%; }
   animation: none !important;
   transform: none !important;
 }
+/* Material toggles `.md-header--shadow` via JS on scroll, so the header gains a
+   box-shadow the moment you scroll — a visible state change even with the
+   transition killed above. Pin the shadow off in every state so the header and
+   tab bar look identical at the top of the page and after scrolling. */
+.md-header,
+.md-header--shadow,
+.md-tabs {
+  box-shadow: none !important;
+}
 /* Tabs always fully opaque (Material dims/fades inactive links to .7). */
 .md-tabs__link { opacity: 1 !important; }
 /* Clear transforms on the fixed bar's ancestors so they can't capture it as a containing block. */
