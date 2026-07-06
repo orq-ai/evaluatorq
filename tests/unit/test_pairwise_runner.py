@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from evaluatorq.common.jury import Prediction
+from evaluatorq.contracts import TokenUsage
 from evaluatorq.pairwise import run_pairwise
 
 
@@ -85,6 +86,7 @@ async def test_swap_off_uses_single_ordering() -> None:
 @pytest.mark.asyncio
 async def test_panel_consensus_over_multiple_judges() -> None:
     """The comparison winner is the panel plurality of the reconciled votes."""
+
     async def judge(first: str, second: str, model: str) -> Prediction:
         # judge-3 is a first-slot picker (will flip out); the other two are consistent.
         if model == 'judge-3':
@@ -103,3 +105,110 @@ async def test_panel_consensus_over_multiple_judges() -> None:
     assert votes['judge-2'].vote == 'A'
     assert votes['judge-3'].vote is None  # flipped
     assert comparison.winner == 'A'
+
+
+@pytest.mark.asyncio
+async def test_min_successful_judges_gates_the_winner() -> None:
+    """A quorum shortfall is inconclusive even when the lone survivor is decisive (#1)."""
+
+    async def judge(first: str, second: str, model: str) -> Prediction:
+        if model in ('judge-2', 'judge-3'):
+            raise RuntimeError('judge outage')
+        return Prediction(value='A' if first == 'GOOD' else 'B', explanation='quality')
+
+    comparison = await run_pairwise(
+        judge_fn=judge,
+        panel=['judge-1', 'judge-2', 'judge-3'],
+        response_a='GOOD',
+        response_b='BAD',
+        min_successful_judges=3,
+    )
+
+    # judge-1 alone is decisive, but 1 < 3 required, so the panel can't decide.
+    assert comparison.winner == 'inconclusive'
+
+
+@pytest.mark.asyncio
+async def test_replacement_judge_casts_a_reconciled_vote_under_swap() -> None:
+    """A stand-in runs in both orderings and its reconciled vote counts (#2)."""
+
+    async def judge(first: str, second: str, model: str) -> Prediction:
+        if model == 'primary':
+            raise RuntimeError('primary down in every ordering')
+        return Prediction(value='A' if first == 'GOOD' else 'B', explanation='backup quality')
+
+    comparison = await run_pairwise(
+        judge_fn=judge,
+        panel=['primary'],
+        response_a='GOOD',
+        response_b='BAD',
+        replacement_judges=['backup'],
+    )
+
+    votes = {v.model: v for v in comparison.votes}
+    assert votes['backup'].vote == 'A'
+    assert votes['backup'].replacement is True
+    assert comparison.winner == 'A'
+
+
+@pytest.mark.asyncio
+async def test_repetitions_run_each_ordering() -> None:
+    """repetitions>1 fans out per ordering and still reconciles to one vote."""
+    calls = 0
+
+    async def judge(first: str, second: str, model: str) -> Prediction:
+        nonlocal calls
+        calls += 1
+        return Prediction(value='A' if first == 'GOOD' else 'B', explanation='quality')
+
+    comparison = await run_pairwise(
+        judge_fn=judge,
+        panel=['judge-1'],
+        response_a='GOOD',
+        response_b='BAD',
+        repetitions=3,
+    )
+
+    assert calls == 6  # 3 repetitions x 2 orderings
+    assert comparison.votes[0].vote == 'A'
+    assert comparison.votes[0].flipped is False
+
+
+@pytest.mark.asyncio
+async def test_non_pairwise_verdict_is_rejected() -> None:
+    """A judge_fn leaking a non-A/B/tie value raises rather than surfacing 'True' as a winner."""
+
+    async def judge(first: str, second: str, model: str) -> Prediction:
+        return Prediction(value=True, explanation='oops, a bool')
+
+    with pytest.raises(ValueError, match='expected'):
+        await run_pairwise(
+            judge_fn=judge,
+            panel=['judge-1'],
+            response_a='GOOD',
+            response_b='BAD',
+        )
+
+
+@pytest.mark.asyncio
+async def test_token_usage_is_summed_across_orderings() -> None:
+    """Per-call token usage is aggregated onto the comparison (cost-accounting parity)."""
+
+    async def judge(first: str, second: str, model: str) -> Prediction:
+        return Prediction(
+            value='A' if first == 'GOOD' else 'B',
+            explanation='quality',
+            token_usage=TokenUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+        )
+
+    comparison = await run_pairwise(
+        judge_fn=judge,
+        panel=['judge-1'],
+        response_a='GOOD',
+        response_b='BAD',
+    )
+
+    assert comparison.token_usage is not None
+    # One judge, two orderings -> two calls summed.
+    assert comparison.token_usage.input_tokens == 20
+    assert comparison.token_usage.output_tokens == 10

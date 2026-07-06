@@ -97,11 +97,58 @@ def test_judge_with_no_decisive_picks_has_none_lean() -> None:
 
 
 def test_report_mean_agreement() -> None:
-    """Mean agreement averages each comparison's modal share over its decisive reconciled votes."""
+    """Mean agreement averages the modal share of comparisons with >=2 decisive votes."""
     report = build_report(_comparisons())
 
-    # comp1 [A,A,tie]->2/3, comp2 [B]->1.0, comp3 [tie,A,B]->1/3; mean = 2/3.
-    assert report.mean_agreement == pytest.approx(2 / 3)
+    # comp1 [A,A,tie]->2/3; comp2 [B] has one decisive vote -> excluded; comp3 [tie,A,B]->1/3.
+    # mean = (2/3 + 1/3) / 2 = 1/2.
+    assert report.mean_agreement == pytest.approx(1 / 2)
+
+
+def test_single_decisive_vote_excluded_from_mean_agreement() -> None:
+    """A comparison with one decisive vote would score 1.0 (highest when most degraded); exclude it."""
+    comparisons = [
+        PairwiseComparison(
+            winner='A',
+            votes=[
+                PairwiseVote(model='x', vote='A', flipped=False),
+                PairwiseVote(model='y', vote=None, flipped=True),
+                PairwiseVote(model='z', vote=None, flipped=True),
+            ],
+        )
+    ]
+
+    assert build_report(comparisons).mean_agreement is None
+
+
+def test_report_inconclusive_rate() -> None:
+    """The report surfaces the share of comparisons that reached no consensus."""
+    comparisons = [
+        PairwiseComparison(winner='A', votes=[PairwiseVote(model='x', vote='A', flipped=False)]),
+        PairwiseComparison(winner='inconclusive', votes=[PairwiseVote(model='x', vote=None, flipped=True)]),
+    ]
+
+    assert build_report(comparisons).inconclusive_rate == 0.5
+
+
+def test_position_bias_excludes_non_flippable_pairs() -> None:
+    """A vote whose pair never completed (a failed/missing ordering) is not in the flip denominator."""
+    comparisons = [
+        # Judge flipped on a completed pair.
+        PairwiseComparison(
+            winner='inconclusive',
+            votes=[PairwiseVote(model='j', vote=None, flipped=True, completed=True)],
+        ),
+        # Judge could not flip here: one ordering never produced a verdict.
+        PairwiseComparison(
+            winner='inconclusive',
+            votes=[PairwiseVote(model='j', vote=None, flipped=False, completed=False)],
+        ),
+    ]
+
+    per_judge = {j.model: j for j in build_report(comparisons).per_judge}
+    # 1 flip over 1 completed pair, not over 2 comparisons.
+    assert per_judge['j'].position_bias == 1.0
 
 
 def test_mean_agreement_none_when_no_decisive_votes() -> None:

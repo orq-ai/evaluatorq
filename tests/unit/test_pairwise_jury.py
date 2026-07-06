@@ -10,7 +10,7 @@ from evaluatorq.llm_jury import llm_jury_pairwise
 
 # The package rebinds the name `evaluatorq.llm_jury` to the function, shadowing the
 # submodule, so reach the real module (whose run_judge global we patch) via sys.modules.
-llm_jury_module = sys.modules["evaluatorq.llm_jury"]
+llm_jury_module = sys.modules['evaluatorq.llm_jury']
 
 
 @pytest.mark.asyncio

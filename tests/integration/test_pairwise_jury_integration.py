@@ -7,10 +7,14 @@ from evaluatorq import build_report, llm_jury_pairwise
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_pairwise_panel_of_two_judges_picks_the_better_answer() -> None:
-    """A 2-judge panel comparing a clearly better answer against a wrong one favours the better one."""
+async def test_pairwise_panel_picks_the_better_answer() -> None:
+    """An odd 3-judge panel comparing a clearly better answer against a wrong one favours the better one.
+
+    Three judges (not two) so a single judge's tie or flip can't split the panel into
+    a nondeterministic inconclusive result.
+    """
     comparator = llm_jury_pairwise(
-        judges=['openai/gpt-5.4-mini', 'anthropic/claude-haiku-4-5'],
+        judges=['openai/gpt-5.4-mini', 'anthropic/claude-haiku-4-5', 'openai/gpt-4o-mini'],
     )
 
     comparison = await comparator.compare(
@@ -20,7 +24,7 @@ async def test_pairwise_panel_of_two_judges_picks_the_better_answer() -> None:
     )
 
     assert comparison.winner == 'A'
-    assert len(comparison.votes) == 2
+    assert len(comparison.votes) == 3
 
     report = build_report([comparison])
     assert report.comparisons == 1

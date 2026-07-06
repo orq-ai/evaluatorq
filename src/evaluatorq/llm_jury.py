@@ -489,7 +489,6 @@ class PairwiseComparator:
         client: Any,
     ) -> None:
         self._panel = panel
-        self._criteria = criteria
         self._system_prompt = system_prompt
         self._swap = swap
         self._repetitions = repetitions
@@ -579,8 +578,11 @@ def llm_jury_pairwise(
             f'the deduplicated panel size ({len(deduped)}).'
         )
     return PairwiseComparator(
-        panel=panel,
-        criteria=criteria if criteria is not None else DEFAULT_PAIRWISE_CRITERIA,
+        # Pass the deduped panel so the comparator's no-redundancy check
+        # (`len(panel) == 1`) matches the panel run_jury actually runs, keeping
+        # propagate_errors in step with llm_jury (judges=['m','m'] -> one judge).
+        panel=deduped,
+        criteria=criteria or DEFAULT_PAIRWISE_CRITERIA,
         system_prompt=system_prompt if system_prompt is not None else _pairwise_system_prompt(),
         swap=swap,
         repetitions=repetitions,
