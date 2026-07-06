@@ -245,18 +245,39 @@ html { font-size: 100%; }
 @media screen and (min-width: 76.25em) {
   .md-tabs {
     position: sticky;
-    top: 2.4rem;          /* height of the sticky header above it */
+    top: 2.4rem;          /* flush under the 2.4rem sticky header — no overlap */
     z-index: 3;           /* below the header (z-index 4) so the search overlay wins */
+  }
+  /* Pin the sidebars below BOTH pinned bars (header 2.4rem + tabs 2.4rem).
+     Material's JS assumes the free-edition tab bar scrolls away and resets the
+     sidebar to top:2.4rem on scroll — but we keep the tab bar pinned, so without
+     this the sidebar's top nav link slides UNDER the tab bar and peeks out
+     clipped (the "ghost Home" that appears to move on scroll). */
+  .md-sidebar {
+    top: 4.8rem !important;
+  }
+  /* The primary sidebar is fixed at top:0 with z-index:5 — ABOVE the tab bar
+     (z-index:3) — so its active "Home" link paints over the pinned tab bar and
+     its transform-transition slides it on scroll (the "navbar text moving"
+     ghost). Drop it below the opaque tab bar and freeze the transition so the
+     tab bar covers it and nothing moves. Desktop only — the mobile drawer still
+     needs z-index:5 + its slide transition. */
+  .md-sidebar--primary {
+    z-index: 1 !important;
+    transition: none !important;
   }
 }
 
-/* The bars themselves never move — no autohide, no scroll-away transform. Note we
-   deliberately do NOT blanket-kill `transition`, so Material's gentle hover feedback
-   on links survives (it reads smoother and stays in keeping with the rest of the site). */
+/* No motion anywhere in the header or tab bar — no fade, slide, opacity shift, or
+   hover transition. Blanket-killed on every descendant so nothing in the nav
+   animates on scroll or hover. Keep it simple: the bars are static, always. */
 .md-header,
-.md-tabs {
-  transform: none !important;
+.md-header *,
+.md-tabs,
+.md-tabs * {
+  transition: none !important;
   animation: none !important;
+  transform: none !important;
 }
 /* Material toggles `.md-header--shadow` on scroll — a visible state change. Drop it,
    and instead give the whole nav ONE constant, brand-tinted shadow at its lower edge.
@@ -267,7 +288,14 @@ html { font-size: 100%; }
   box-shadow: none !important;
 }
 .md-tabs {
-  box-shadow: 0 2px 8px rgba(2, 85, 88, 0.08) !important;
+  /* Two shadows, no bar movement:
+     1. `0 -1px 0 teal` paints a 1px teal sliver UPWARD, bridging the sub-pixel
+        seam that opens between the two independently-stuck bars on long scrolls
+        (fills it with the bar's own colour instead of overlapping the bars).
+     2. the soft brand shadow below separates the whole nav from page content. */
+  box-shadow:
+    0 -1px 0 0 var(--md-primary-fg-color),
+    0 2px 8px rgba(2, 85, 88, 0.08) !important;
 }
 /* Keep every section tab fully legible (Material dims inactive tabs to .7). */
 .md-tabs__link { opacity: 1 !important; }
