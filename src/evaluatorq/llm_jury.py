@@ -158,6 +158,41 @@ def _outcome_to_prediction(outcome: JudgeOutcome) -> Prediction:
     )
 
 
+async def _run_single_judge(
+    *,
+    client: Any,
+    model: str,
+    template: str,
+    replacements: dict[str, Any],
+    system_prompt: str,
+    verdict_model: type[BaseModel],
+    structured_output: bool,
+    temperature: float | None,
+    max_tokens: int,
+    timeout_ms: int,
+    extra_kwargs: dict[str, Any] | None,
+) -> Prediction:
+    """Run one judge call and map its outcome to a :class:`Prediction`.
+
+    The single ``run_judge`` call site shared by the pointwise (:func:`llm_jury`)
+    and pairwise (:class:`PairwiseComparator`) juries — only the ``replacements``
+    differ between them, so keeping one path stops the two from drifting.
+    """
+    cfg = LLMCallConfig(model=model, max_tokens=max_tokens, timeout_ms=timeout_ms, extra_kwargs=extra_kwargs or {})
+    outcome = await run_judge(
+        client=client,
+        model=model,
+        cfg=cfg,
+        prompt_template=template,
+        replacements=replacements,
+        system_prompt=system_prompt,
+        response_model=verdict_model,
+        structured_output=structured_output,
+        temperature=temperature,
+    )
+    return _outcome_to_prediction(outcome=outcome)
+
+
 def _to_evaluation_result(
     deliberation: JuryDeliberation,
     *,
@@ -231,6 +266,26 @@ def _resolve_panel(judges: list[str] | None, model: str | None) -> list[str]:
             raise ValueError('`model` must be a non-empty judge model identifier.')
         return [model]
     return [DEFAULT_JUDGE_MODEL]
+
+
+def _resolve_and_validate_panel(
+    *, judges: list[str] | None, model: str | None, min_successful_judges: int
+) -> tuple[list[str], list[str]]:
+    """Resolve the judge panel and validate ``min_successful_judges`` against it.
+
+    Returns ``(panel, deduped)``. The quorum floor is bounded by the deduplicated
+    panel size by design: ``replacement_judges`` are spillover for failed
+    primaries, not extra capacity, so they don't raise the achievable floor.
+    Shared by :func:`llm_jury` and :func:`llm_jury_pairwise`.
+    """
+    panel = _resolve_panel(judges=judges, model=model)
+    deduped = list(dict.fromkeys(panel))
+    if not (1 <= min_successful_judges <= len(deduped)):
+        raise ValueError(
+            f'min_successful_judges ({min_successful_judges}) must be between 1 and '
+            f'the deduplicated panel size ({len(deduped)}).'
+        )
+    return panel, deduped
 
 
 # ---------------------------------------------------------------------------
@@ -365,15 +420,9 @@ def llm_jury(
         aggregator,
         VerdictKind.NUMERIC if verdict_kind == 'numeric' else VerdictKind.CATEGORICAL,
     )
-    panel = _resolve_panel(judges=judges, model=model)
-    deduped = list(dict.fromkeys(panel))
-    # Bound is the base panel size by design: replacement_judges are spillover for
-    # failed primaries, not extra capacity, so they don't raise the achievable floor.
-    if not (1 <= min_successful_judges <= len(deduped)):
-        raise ValueError(
-            f'min_successful_judges ({min_successful_judges}) must be between 1 and '
-            f'the deduplicated panel size ({len(deduped)}).'
-        )
+    panel, deduped = _resolve_and_validate_panel(
+        judges=judges, model=model, min_successful_judges=min_successful_judges
+    )
     if temperature == 0.0:
         logger.warning(
             'temperature=0.0: reasoning models (o-series, gpt-5, …) often score worse '
@@ -402,24 +451,19 @@ def llm_jury(
         replacements = _build_replacements(data=data, output=output, criteria=criteria or '')
 
         async def judge_fn(judge_model: str) -> Prediction:
-            cfg = LLMCallConfig(
-                model=judge_model,
-                max_tokens=max_tokens,
-                timeout_ms=timeout_ms,
-                extra_kwargs=extra_kwargs or {},
-            )
-            outcome = await run_judge(
+            return await _run_single_judge(
                 client=resolved_client,
                 model=judge_model,
-                cfg=cfg,
-                prompt_template=template,
+                template=template,
                 replacements=replacements,
                 system_prompt=sys_prompt,
-                response_model=verdict_model,
+                verdict_model=verdict_model,
                 structured_output=structured_output,
                 temperature=temperature,
+                max_tokens=max_tokens,
+                timeout_ms=timeout_ms,
+                extra_kwargs=extra_kwargs,
             )
-            return _outcome_to_prediction(outcome=outcome)
 
         deliberation = await run_jury(
             judge_fn=judge_fn,
@@ -511,24 +555,19 @@ class PairwiseComparator:
             self._client = resolve_llm_client(config_client=None).client
 
         async def judge_fn(first: str, second: str, model: str) -> Prediction:
-            cfg = LLMCallConfig(
-                model=model,
-                max_tokens=self._max_tokens,
-                timeout_ms=self._timeout_ms,
-                extra_kwargs=self._extra_kwargs or {},
-            )
-            outcome = await run_judge(
+            return await _run_single_judge(
                 client=self._client,
                 model=model,
-                cfg=cfg,
-                prompt_template=self._template,
+                template=self._template,
                 replacements={'question': question, 'response_a': first, 'response_b': second},
                 system_prompt=self._system_prompt,
-                response_model=self._verdict_model,
+                verdict_model=self._verdict_model,
                 structured_output=self._structured_output,
                 temperature=self._temperature,
+                max_tokens=self._max_tokens,
+                timeout_ms=self._timeout_ms,
+                extra_kwargs=self._extra_kwargs,
             )
-            return _outcome_to_prediction(outcome=outcome)
 
         return await run_pairwise(
             judge_fn=judge_fn,
@@ -570,13 +609,9 @@ def llm_jury_pairwise(
     """
     if repetitions < 1:
         raise ValueError(f'repetitions ({repetitions}) must be >= 1.')
-    panel = _resolve_panel(judges=judges, model=model)
-    deduped = list(dict.fromkeys(panel))
-    if not (1 <= min_successful_judges <= len(deduped)):
-        raise ValueError(
-            f'min_successful_judges ({min_successful_judges}) must be between 1 and '
-            f'the deduplicated panel size ({len(deduped)}).'
-        )
+    _panel, deduped = _resolve_and_validate_panel(
+        judges=judges, model=model, min_successful_judges=min_successful_judges
+    )
     return PairwiseComparator(
         # Pass the deduped panel so the comparator's no-redundancy check
         # (`len(panel) == 1`) matches the panel run_jury actually runs, keeping
