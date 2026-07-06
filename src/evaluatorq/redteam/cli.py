@@ -16,8 +16,8 @@ import typer
 from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, DeliveryMethod, SaveMode, Vulnerability
 
 app = typer.Typer(
-    name="redteam",
-    help="Red teaming CLI for evaluatorq.",
+    name='redteam',
+    help='Red teaming CLI for evaluatorq.',
     no_args_is_help=True,
     rich_markup_mode=None,
 )
@@ -33,7 +33,7 @@ def _split_csv(values: list[str] | None) -> list[str] | None:
     """
     if values is None:
         return None
-    tokens = [item.strip() for value in values for item in value.split(",") if item.strip()]
+    tokens = [item.strip() for value in values for item in value.split(',') if item.strip()]
     return tokens or None
 
 
@@ -48,11 +48,11 @@ def _configure_logging(verbosity: int) -> None:
     else:
         level = logging.DEBUG
 
-    logger = logging.getLogger("evaluatorq")
+    logger = logging.getLogger('evaluatorq')
     logger.setLevel(level)
     if not logger.handlers:
         handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+        handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
         logger.addHandler(handler)
 
     try:
@@ -80,9 +80,9 @@ def _generate_report_filename(target: str, timestamp: str, ext: str) -> str:
     Returns:
         Filename string.
     """
-    safe_target = re.sub(r"[/:|\s]+", "-", target).strip("-")
-    safe_target = re.sub(r"-{2,}", "-", safe_target)
-    return f"redteam-report-{safe_target}-{timestamp}{ext}"
+    safe_target = re.sub(r'[/:|\s]+', '-', target).strip('-')
+    safe_target = re.sub(r'-{2,}', '-', safe_target)
+    return f'redteam-report-{safe_target}-{timestamp}{ext}'
 
 
 def _generate_md_filename(target: str, timestamp: str) -> str:
@@ -99,9 +99,9 @@ def _generate_md_filename(target: str, timestamp: str) -> str:
     Returns:
         Filename string, e.g. ``"redteam-report-agent-my-target-20250615_103000.md"``.
     """
-    safe_target = re.sub(r"[/:|\s]+", "-", target).strip("-")
-    safe_target = re.sub(r"-{2,}", "-", safe_target)
-    return f"redteam-report-{safe_target}-{timestamp}.md"
+    safe_target = re.sub(r'[/:|\s]+', '-', target).strip('-')
+    safe_target = re.sub(r'-{2,}', '-', safe_target)
+    return f'redteam-report-{safe_target}-{timestamp}.md'
 
 
 def write_markdown_report(
@@ -128,18 +128,18 @@ def write_markdown_report(
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
-        typer.echo(f"Error: failed to create report directory {output_dir}: {e}", err=True)
+        typer.echo(f'Error: failed to create report directory {output_dir}: {e}', err=True)
         raise typer.Exit(code=1) from e
 
-    timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(tz=timezone.utc).strftime('%Y%m%d_%H%M%S')
     filename = _generate_md_filename(target=target, timestamp=timestamp)
     output_path = output_dir / filename
 
     md_content = export_markdown(report)
     try:
-        output_path.write_text(md_content, encoding="utf-8")
+        output_path.write_text(md_content, encoding='utf-8')
     except OSError as e:
-        typer.echo(f"Error: failed to write Markdown report to {output_path}: {e}", err=True)
+        typer.echo(f'Error: failed to write Markdown report to {output_path}: {e}', err=True)
         raise typer.Exit(code=1) from e
     return output_path
 
@@ -156,20 +156,18 @@ def write_html_report(
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
-        typer.echo(f"Error: failed to create report directory {output_dir}: {e}", err=True)
+        typer.echo(f'Error: failed to create report directory {output_dir}: {e}', err=True)
         raise typer.Exit(code=1) from e
 
-    timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
-    filename = _generate_report_filename(
-        target=target, timestamp=timestamp, ext=".html"
-    )
+    timestamp = datetime.now(tz=timezone.utc).strftime('%Y%m%d_%H%M%S')
+    filename = _generate_report_filename(target=target, timestamp=timestamp, ext='.html')
     output_path = output_dir / filename
 
     html_content = export_html(report)
     try:
-        output_path.write_text(html_content, encoding="utf-8")
+        output_path.write_text(html_content, encoding='utf-8')
     except OSError as e:
-        typer.echo(f"Error: failed to write HTML report to {output_path}: {e}", err=True)
+        typer.echo(f'Error: failed to write HTML report to {output_path}: {e}', err=True)
         raise typer.Exit(code=1) from e
     return output_path
 
@@ -179,131 +177,123 @@ def run(
     target: Annotated[
         list[str],
         typer.Option(
-            "--target",
-            "-t",
+            '--target',
+            '-t',
             help='Target identifier(s), e.g. "agent:<key>" or "deployment:<key>". For OpenAI models use OpenAIModelTarget in the Python API. Repeatable.',
         ),
     ],
     name: Annotated[
         str | None,
-        typer.Option("--name", "-n", help="Experiment name (defaults to 'red-team')."),
+        typer.Option('--name', '-n', help="Experiment name (defaults to 'red-team')."),
     ] = None,
     mode: Annotated[
         str,
         typer.Option(help='Execution mode: "dynamic", "static", or "hybrid".'),
-    ] = "dynamic",
+    ] = 'dynamic',
     categories: Annotated[
         list[str] | None,
         typer.Option(
-            "--category",
-            "-c",
-            help="OWASP categories to test (e.g. ASI01). Repeatable and/or comma-separated. Defaults to all.",
+            '--category',
+            '-c',
+            help='OWASP categories to test (e.g. ASI01). Repeatable and/or comma-separated. Defaults to all.',
         ),
     ] = None,
     vulnerabilities: Annotated[
         list[str] | None,
         typer.Option(
-            "--vulnerability",
-            "-V",
+            '--vulnerability',
+            '-V',
             help=(
                 "Vulnerability IDs to test (e.g. 'goal_hijacking', 'prompt_injection'). "
-                "Repeatable and/or comma-separated. Also accepts OWASP codes (ASI01, LLM01). "
-                "Takes precedence over --category. "
-                f"Available: {', '.join(v.value for v in Vulnerability)}."
+                'Repeatable and/or comma-separated. Also accepts OWASP codes (ASI01, LLM01). '
+                'Takes precedence over --category. '
+                f'Available: {", ".join(v.value for v in Vulnerability)}.'
             ),
         ),
     ] = None,
     strategies: Annotated[
         list[str] | None,
         typer.Option(
-            "--strategy",
-            "-s",
+            '--strategy',
+            '-s',
             help=(
-                "Restrict the run to attack strategies whose name matches one of "
-                "the supplied values. Repeatable and/or comma-separated "
-                "(-s a,b or -s a -s b). Filter applies to both registry and "
-                "LLM-generated strategies. Unknown registry names are rejected."
+                'Restrict the run to attack strategies whose name matches one of '
+                'the supplied values. Repeatable and/or comma-separated '
+                '(-s a,b or -s a -s b). Filter applies to both registry and '
+                'LLM-generated strategies. Unknown registry names are rejected.'
             ),
         ),
     ] = None,
     delivery_methods: Annotated[
         list[str] | None,
         typer.Option(
-            "--delivery-method",
-            "-d",
+            '--delivery-method',
+            '-d',
             help=(
-                "Restrict the run to attacks using one of the listed delivery "
-                "methods. Repeatable and/or comma-separated (-d a,b or -d a -d b). "
-                "Combines with --strategy as AND. "
-                f"Available: {', '.join(m.value for m in DeliveryMethod)}."
+                'Restrict the run to attacks using one of the listed delivery '
+                'methods. Repeatable and/or comma-separated (-d a,b or -d a -d b). '
+                'Combines with --strategy as AND. '
+                f'Available: {", ".join(m.value for m in DeliveryMethod)}.'
             ),
         ),
     ] = None,
     max_turns: Annotated[
         int,
-        typer.Option(help="Maximum conversation turns for multi-turn attacks."),
+        typer.Option(help='Maximum conversation turns for multi-turn attacks.'),
     ] = 5,
     max_per_category: Annotated[
         int | None,
-        typer.Option(help="Cap strategies per category."),
+        typer.Option(help='Cap strategies per category.'),
     ] = None,
     attack_model: Annotated[
         str,
-        typer.Option(help="Model for adversarial prompt generation."),
+        typer.Option(help='Model for adversarial prompt generation.'),
     ] = DEFAULT_PIPELINE_MODEL,
     attacker_instructions: Annotated[
         str | None,
         typer.Option(
-            "--attacker-instructions",
+            '--attacker-instructions',
             help=(
-                "Domain-specific context to steer attack generation "
+                'Domain-specific context to steer attack generation '
                 "(e.g. 'this agent handles financial transactions, try to get it to approve fraudulent ones')."
             ),
         ),
     ] = None,
     evaluator_model: Annotated[
         str,
-        typer.Option(help="Model for OWASP evaluation scoring."),
+        typer.Option(help='Model for OWASP evaluation scoring.'),
     ] = DEFAULT_PIPELINE_MODEL,
     parallelism: Annotated[
         int,
-        typer.Option(help="Maximum concurrent evaluatorq jobs."),
+        typer.Option(help='Maximum concurrent evaluatorq jobs.'),
     ] = 10,
     generated_strategy_count: Annotated[
         int,
-        typer.Option(help="Number of strategies to generate per category."),
+        typer.Option(help='Number of strategies to generate per category.'),
     ] = 2,
     no_generate_strategies: Annotated[  # noqa: FBT002
         bool,
-        typer.Option(
-            "--no-generate-strategies", help="Disable LLM-based strategy generation."
-        ),
+        typer.Option('--no-generate-strategies', help='Disable LLM-based strategy generation.'),
     ] = False,
     max_dynamic_datapoints: Annotated[
         int | None,
-        typer.Option(help="Cap dynamic (generated) datapoints."),
+        typer.Option(help='Cap dynamic (generated) datapoints.'),
     ] = None,
     max_static_datapoints: Annotated[
         int | None,
-        typer.Option(help="Cap static (dataset) datapoints."),
+        typer.Option(help='Cap static (dataset) datapoints.'),
     ] = None,
     no_cleanup_memory: Annotated[  # noqa: FBT002
         bool,
-        typer.Option(
-            "--no-cleanup-memory", help="Skip memory entity cleanup after dynamic runs."
-        ),
+        typer.Option('--no-cleanup-memory', help='Skip memory entity cleanup after dynamic runs.'),
     ] = False,
     dataset: Annotated[
         str | None,
-        typer.Option(
-            help='Dataset source: local path, "hf:org/repo", or "hf:org/repo/file.json".'
-        ),
+        typer.Option(help='Dataset source: local path, "hf:org/repo", or "hf:org/repo/file.json".'),
     ] = None,
     output_dir: Annotated[
         Path | None,
-        typer.Option(
-            help="Directory for saved JSON files. Required with --save detail."
-        ),
+        typer.Option(help='Directory for saved JSON files. Required with --save detail.'),
     ] = None,
     save: Annotated[
         SaveMode,
@@ -313,46 +303,42 @@ def run(
     ] = SaveMode.FINAL,
     yes: Annotated[  # noqa: FBT002
         bool,
-        typer.Option("--yes", "-y", help="Skip confirmation prompt."),
+        typer.Option('--yes', '-y', help='Skip confirmation prompt.'),
     ] = False,
     verbose: Annotated[
         int,
         typer.Option(
-            "--verbose",
-            "-v",
+            '--verbose',
+            '-v',
             count=True,
-            help="Increase verbosity (-v per-attack progress + info logs, -vv debug logs).",
+            help='Increase verbosity (-v per-attack progress + info logs, -vv debug logs).',
         ),
     ] = 0,
     quiet: Annotated[  # noqa: FBT002
         bool,
-        typer.Option(
-            "--quiet", "-q", help="Suppress progress bars and non-error output."
-        ),
+        typer.Option('--quiet', '-q', help='Suppress progress bars and non-error output.'),
     ] = False,
     save_report: Annotated[
         Path | None,
-        typer.Option(help="Path to write the report JSON."),
+        typer.Option(help='Path to write the report JSON.'),
     ] = None,
     export_md: Annotated[
         Path | None,
         typer.Option(
-            "--export-md",
-            help="Directory path to write a Markdown report. Filename is auto-generated.",
+            '--export-md',
+            help='Directory path to write a Markdown report. Filename is auto-generated.',
         ),
     ] = None,
     export_html: Annotated[
         Path | None,
         typer.Option(
-            "--export-html",
-            help="Directory path to write an HTML report. Filename is auto-generated.",
+            '--export-html',
+            help='Directory path to write an HTML report. Filename is auto-generated.',
         ),
     ] = None,
     system_prompt: Annotated[
         str | None,
-        typer.Option(
-            "--system-prompt", help="System prompt for the target model/agent."
-        ),
+        typer.Option('--system-prompt', help='System prompt for the target model/agent.'),
     ] = None,
 ) -> None:
     """Run red teaming against one or more targets."""
@@ -376,14 +362,11 @@ def run(
     if vulnerabilities:
         from evaluatorq.redteam.vulnerability_registry import CATEGORY_TO_VULNERABILITY
 
-        valid_ids = {v.value for v in Vulnerability} | set(
-            CATEGORY_TO_VULNERABILITY.keys()
-        )
+        valid_ids = {v.value for v in Vulnerability} | set(CATEGORY_TO_VULNERABILITY.keys())
         for v in vulnerabilities:
             if v not in valid_ids:
                 raise typer.BadParameter(
-                    f"Unknown vulnerability ID: {v!r}. "
-                    f"Valid IDs: {sorted(vi.value for vi in Vulnerability)}"
+                    f'Unknown vulnerability ID: {v!r}. Valid IDs: {sorted(vi.value for vi in Vulnerability)}'
                 )
 
     # Validate strategy names early: must be a registered strategy or a
@@ -392,10 +375,10 @@ def run(
         from evaluatorq.redteam.adaptive.strategy_registry import known_strategy_names
 
         known = known_strategy_names()
-        unknown = [s for s in strategies if s not in known and not s.startswith("generated_")]
+        unknown = [s for s in strategies if s not in known and not s.startswith('generated_')]
         if unknown:
             raise typer.BadParameter(
-                f"Unknown strategy name(s): {unknown}. "
+                f'Unknown strategy name(s): {unknown}. '
                 f"Valid names: {sorted(known)} (or a 'generated_*' name from a prior run)."
             )
 
@@ -409,8 +392,8 @@ def run(
         unknown = [d for d in delivery_tokens if d not in valid]
         if unknown:
             typer.echo(
-                f"Warning: delivery method(s) {unknown} are not in DeliveryMethod {sorted(valid)}; "
-                "filtering by them literally (they will only match a dataset row spelled exactly the same).",
+                f'Warning: delivery method(s) {unknown} are not in DeliveryMethod {sorted(valid)}; '
+                'filtering by them literally (they will only match a dataset row spelled exactly the same).',
                 err=True,
             )
         resolved_delivery_methods = [DeliveryMethod(d) if d in valid else d for d in delivery_tokens]
@@ -453,65 +436,57 @@ def run(
             )
         )
     except CancelledError:
-        typer.echo("Run cancelled.")
+        typer.echo('Run cancelled.')
         raise typer.Exit(code=0)
     except KeyboardInterrupt:
-        typer.echo("\nInterrupted.")
+        typer.echo('\nInterrupted.')
         raise typer.Exit(code=130)
     except RedTeamError as e:
-        typer.echo(f"Error: {e}", err=True)
+        typer.echo(f'Error: {e}', err=True)
         raise typer.Exit(code=1)
     except ValueError as e:
-        typer.echo(f"Error: {e}", err=True)
+        typer.echo(f'Error: {e}', err=True)
         raise typer.Exit(code=1)
     except ImportError as e:
         # e.g. static/hybrid run needs huggingface-hub — show the install hint
         # cleanly instead of a traceback.
-        typer.echo(f"Error: {e}", err=True)
+        typer.echo(f'Error: {e}', err=True)
         raise typer.Exit(code=1)
 
     if save_report:
         save_report.parent.mkdir(parents=True, exist_ok=True)
-        save_report.write_text(
-            json.dumps(report.model_dump(mode="json"), indent=2, default=str)
-        )
-        typer.echo(f"Report saved to {save_report}")
+        save_report.write_text(json.dumps(report.model_dump(mode='json'), indent=2, default=str))
+        typer.echo(f'Report saved to {save_report}')
 
     if export_md:
-        target_label = targets if isinstance(targets, str) else ", ".join(targets)
-        md_path = write_markdown_report(
-            report, output_dir=export_md, target=target_label
-        )
-        typer.echo(f"Markdown report written to {md_path}")
+        target_label = targets if isinstance(targets, str) else ', '.join(targets)
+        md_path = write_markdown_report(report, output_dir=export_md, target=target_label)
+        typer.echo(f'Markdown report written to {md_path}')
 
     if export_html:
-        target_label = targets if isinstance(targets, str) else ", ".join(targets)
-        html_path = write_html_report(
-            report, output_dir=export_html, target=target_label
-        )
-        typer.echo(f"HTML report written to {html_path}")
+        target_label = targets if isinstance(targets, str) else ', '.join(targets)
+        html_path = write_html_report(report, output_dir=export_html, target=target_label)
+        typer.echo(f'HTML report written to {html_path}')
 
 
 @app.command()
 def ui(
     report_path: Annotated[
         Path | None,
-        typer.Argument(
-            help="Path to report JSON file or directory. Omit to use the latest run."
-        ),
+        typer.Argument(help='Path to report JSON file or directory. Omit to use the latest run.'),
     ] = None,
     latest: Annotated[  # noqa: FBT002
         bool,
-        typer.Option("--latest", "-l", help="Open the most recent auto-saved run."),
+        typer.Option('--latest', '-l', help='Open the most recent auto-saved run.'),
     ] = False,
     port: Annotated[
         int,
-        typer.Option(help="Port for the Streamlit server."),
+        typer.Option(help='Port for the Streamlit server.'),
     ] = 8501,
     host: Annotated[
         str,
-        typer.Option(help="Host to bind the Streamlit server to."),
-    ] = "localhost",
+        typer.Option(help='Host to bind the Streamlit server to.'),
+    ] = 'localhost',
 ) -> None:
     """Launch the interactive Streamlit dashboard for a red team report."""
     from evaluatorq.redteam.runner import get_runs_dir
@@ -520,15 +495,13 @@ def ui(
         # Find the most recent auto-saved run
         runs_dir = get_runs_dir()
         if runs_dir.exists():
-            run_files = sorted(
-                runs_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True
-            )
+            run_files = sorted(runs_dir.glob('*.json'), key=lambda p: p.stat().st_mtime, reverse=True)
             if run_files:
                 report_path = run_files[0]
-                typer.echo(f"Opening latest run: {report_path.name}")
+                typer.echo(f'Opening latest run: {report_path.name}')
         if report_path is None:
             typer.echo(
-                "No runs found. Run `eq redteam run` first, or pass a report path.",
+                'No runs found. Run `eq redteam run` first, or pass a report path.',
                 err=True,
             )
             raise typer.Exit(code=1)
@@ -540,13 +513,13 @@ def ui(
         if candidate.exists():
             report_path = candidate
         else:
-            typer.echo(f"Error: {report_path} does not exist.", err=True)
+            typer.echo(f'Error: {report_path} does not exist.', err=True)
             raise typer.Exit(code=1)
 
     from evaluatorq.common.ui.launch import launch_streamlit
 
-    dashboard_script = Path(__file__).parent / "ui" / "dashboard.py"
-    launch_streamlit(dashboard_script, report_path, port=port, host=host, extra="redteam")
+    dashboard_script = Path(__file__).parent / 'ui' / 'dashboard.py'
+    launch_streamlit(dashboard_script, report_path, port=port, host=host, extra='redteam')
 
 
 @app.command()
@@ -581,23 +554,19 @@ def validate_dataset(
             from huggingface_hub import hf_hub_download
         except ImportError:
             typer.echo(
-                "huggingface-hub not installed. Install with: pip install evaluatorq[redteam]",
+                'huggingface-hub not installed. Install with: pip install evaluatorq[redteam]',
                 err=True,
             )
             raise typer.Exit(code=1)
-        typer.echo(
-            f"Downloading from HuggingFace: {DEFAULT_HF_REPO}/{DEFAULT_HF_FILENAME}"
-        )
+        typer.echo(f'Downloading from HuggingFace: {DEFAULT_HF_REPO}/{DEFAULT_HF_FILENAME}')
         try:
-            local_path = hf_hub_download(
-                repo_id=DEFAULT_HF_REPO, filename=DEFAULT_HF_FILENAME, repo_type="dataset"
-            )
+            local_path = hf_hub_download(repo_id=DEFAULT_HF_REPO, filename=DEFAULT_HF_FILENAME, repo_type='dataset')
         except Exception as e:
             typer.echo(
-                f"Failed to download dataset from HuggingFace "
-                f"({DEFAULT_HF_REPO}/{DEFAULT_HF_FILENAME}): {e}. Check your network "
-                "connection, that the repository exists, and your access "
-                "(set HF_TOKEN for gated/private datasets).",
+                f'Failed to download dataset from HuggingFace '
+                f'({DEFAULT_HF_REPO}/{DEFAULT_HF_FILENAME}): {e}. Check your network '
+                'connection, that the repository exists, and your access '
+                '(set HF_TOKEN for gated/private datasets).',
                 err=True,
             )
             raise typer.Exit(code=1)
@@ -605,28 +574,26 @@ def validate_dataset(
             with open(local_path) as f:
                 raw = json.load(f)
         except (OSError, json.JSONDecodeError) as e:
-            typer.echo(f"Failed to read dataset file: {e}", err=True)
+            typer.echo(f'Failed to read dataset file: {e}', err=True)
             raise typer.Exit(code=1)
-    elif dataset.startswith("hf:"):
+    elif dataset.startswith('hf:'):
         try:
             from huggingface_hub import hf_hub_download
         except ImportError:
             typer.echo(
-                "huggingface-hub not installed. Install with: pip install evaluatorq[redteam]",
+                'huggingface-hub not installed. Install with: pip install evaluatorq[redteam]',
                 err=True,
             )
             raise typer.Exit(code=1)
-        repo, filename = _parse_hf_source(dataset.removeprefix("hf:"))
-        typer.echo(f"Downloading from HuggingFace: {repo}/{filename}")
+        repo, filename = _parse_hf_source(dataset.removeprefix('hf:'))
+        typer.echo(f'Downloading from HuggingFace: {repo}/{filename}')
         try:
-            local_path = hf_hub_download(
-                repo_id=repo, filename=filename, repo_type="dataset"
-            )
+            local_path = hf_hub_download(repo_id=repo, filename=filename, repo_type='dataset')
         except Exception as e:
             typer.echo(
-                f"Failed to download dataset from HuggingFace ({repo}/{filename}): {e}. "
-                "Check your network connection, that the repository exists, and your "
-                "access (set HF_TOKEN for gated/private datasets).",
+                f'Failed to download dataset from HuggingFace ({repo}/{filename}): {e}. '
+                'Check your network connection, that the repository exists, and your '
+                'access (set HF_TOKEN for gated/private datasets).',
                 err=True,
             )
             raise typer.Exit(code=1)
@@ -634,21 +601,21 @@ def validate_dataset(
             with open(local_path) as f:
                 raw = json.load(f)
         except (OSError, json.JSONDecodeError) as e:
-            typer.echo(f"Failed to read dataset file: {e}", err=True)
+            typer.echo(f'Failed to read dataset file: {e}', err=True)
             raise typer.Exit(code=1)
     else:
         path = Path(dataset)
-        typer.echo(f"Validating local file: {path}")
+        typer.echo(f'Validating local file: {path}')
         with path.open() as f:
             raw = json.load(f)
 
     # Validate top-level shape
-    if not isinstance(raw, dict) or "samples" not in raw:
+    if not isinstance(raw, dict) or 'samples' not in raw:
         typer.echo("FAIL: Expected top-level object with 'samples' key.", err=True)
         raise typer.Exit(code=1)
 
-    samples = raw["samples"]
-    typer.echo(f"Found {len(samples)} samples.")
+    samples = raw['samples']
+    typer.echo(f'Found {len(samples)} samples.')
 
     errors: list[str] = []
     for i, sample in enumerate(samples):
@@ -656,31 +623,29 @@ def validate_dataset(
             RedTeamSample.model_validate(sample)
         except _ValidationError as e:  # noqa: PERF203
             for err in e.errors():
-                loc = " -> ".join(str(loc_part) for loc_part in err["loc"])
-                errors.append(f"  sample[{i}].{loc}: {err['msg']}")
+                loc = ' -> '.join(str(loc_part) for loc_part in err['loc'])
+                errors.append(f'  sample[{i}].{loc}: {err["msg"]}')
 
     if errors:
-        typer.echo(f"\nFAIL: {len(errors)} validation error(s):", err=True)
+        typer.echo(f'\nFAIL: {len(errors)} validation error(s):', err=True)
         for line in errors[:20]:
             typer.echo(line, err=True)
         if len(errors) > 20:
-            typer.echo(f"  ... and {len(errors) - 20} more", err=True)
+            typer.echo(f'  ... and {len(errors) - 20} more', err=True)
         raise typer.Exit(code=1)
 
-    typer.echo(f"OK: All {len(samples)} samples are valid.")
+    typer.echo(f'OK: All {len(samples)} samples are valid.')
 
 
 @app.command()
 def runs(
     path: Annotated[
         Path | None,
-        typer.Argument(
-            help="Directory containing run reports. Defaults to .evaluatorq/runs/"
-        ),
+        typer.Argument(help='Directory containing run reports. Defaults to .evaluatorq/runs/'),
     ] = None,
     limit: Annotated[
         int,
-        typer.Option("--limit", "-n", help="Maximum number of runs to show."),
+        typer.Option('--limit', '-n', help='Maximum number of runs to show.'),
     ] = 20,
 ) -> None:
     """List previous red team runs saved locally."""
@@ -688,14 +653,12 @@ def runs(
 
     runs_dir = Path(path) if path is not None else get_runs_dir()
     if not runs_dir.exists():
-        typer.echo(f"No runs found (directory {runs_dir} does not exist).")
+        typer.echo(f'No runs found (directory {runs_dir} does not exist).')
         raise typer.Exit(code=0)
 
-    run_files = sorted(
-        runs_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True
-    )
+    run_files = sorted(runs_dir.glob('*.json'), key=lambda p: p.stat().st_mtime, reverse=True)
     if not run_files:
-        typer.echo(f"No runs found in {runs_dir}.")
+        typer.echo(f'No runs found in {runs_dir}.')
         raise typer.Exit(code=0)
 
     run_files = run_files[:limit]
@@ -705,36 +668,34 @@ def runs(
         from rich.console import Console
         from rich.table import Table
 
-        table = Table(
-            title=f"Red Team Runs ({runs_dir})", show_header=True, box=box.ROUNDED
-        )
-        table.add_column("Name", style="cyan")
-        table.add_column("Date", style="white")
-        table.add_column("Mode", style="white")
-        table.add_column("Targets", style="white")
-        table.add_column("Attacks", style="white", justify="right")
-        table.add_column("ASR", style="white", justify="right")
-        table.add_column("File", style="dim")
+        table = Table(title=f'Red Team Runs ({runs_dir})', show_header=True, box=box.ROUNDED)
+        table.add_column('Name', style='cyan')
+        table.add_column('Date', style='white')
+        table.add_column('Mode', style='white')
+        table.add_column('Targets', style='white')
+        table.add_column('Attacks', style='white', justify='right')
+        table.add_column('ASR', style='white', justify='right')
+        table.add_column('File', style='dim')
 
         skipped = 0
         for f in run_files:
             try:
-                data = json.loads(f.read_text(encoding="utf-8"))
+                data = json.loads(f.read_text(encoding='utf-8'))
             except (json.JSONDecodeError, OSError):
                 skipped += 1
                 continue
 
-            run_name = data.get("run_name", f.stem)
-            created = data.get("created_at", "")
+            run_name = data.get('run_name', f.stem)
+            created = data.get('created_at', '')
             if isinstance(created, str) and len(created) >= 16:
-                created = created[:16].replace("T", " ")
-            pipeline = data.get("pipeline", "?")
-            agents = data.get("tested_agents", [])
-            targets_str = ", ".join(agents) if agents else "?"
-            summary = data.get("summary", {})
-            total = summary.get("total_attacks", data.get("total_results", 0))
-            asr = summary.get("vulnerability_rate", 0.0)
-            asr_str = f"{asr:.0%}" if isinstance(asr, (int, float)) else "?"
+                created = created[:16].replace('T', ' ')
+            pipeline = data.get('pipeline', '?')
+            agents = data.get('tested_agents', [])
+            targets_str = ', '.join(agents) if agents else '?'
+            summary = data.get('summary', {})
+            total = summary.get('total_attacks', data.get('total_results', 0))
+            asr = summary.get('vulnerability_rate', 0.0)
+            asr_str = f'{asr:.0%}' if isinstance(asr, (int, float)) else '?'
 
             table.add_row(
                 run_name,
@@ -749,37 +710,31 @@ def runs(
         console = Console()
         console.print(table)
         if skipped:
-            console.print(
-                f"[yellow]Warning: {skipped} file(s) could not be parsed and were skipped.[/yellow]"
-            )
+            console.print(f'[yellow]Warning: {skipped} file(s) could not be parsed and were skipped.[/yellow]')
 
     except ImportError:
         # Fallback without rich
-        typer.echo(
-            f"{'Name':<20} {'Date':<17} {'Mode':<8} {'Attacks':>7} {'ASR':>5}  File"
-        )
-        typer.echo("-" * 80)
+        typer.echo(f'{"Name":<20} {"Date":<17} {"Mode":<8} {"Attacks":>7} {"ASR":>5}  File')
+        typer.echo('-' * 80)
         skipped = 0
         for f in run_files:
             try:
-                data = json.loads(f.read_text(encoding="utf-8"))
+                data = json.loads(f.read_text(encoding='utf-8'))
             except (json.JSONDecodeError, OSError):
                 skipped += 1
                 continue
-            run_name = data.get("run_name", f.stem)[:20]
-            created = data.get("created_at", "")
+            run_name = data.get('run_name', f.stem)[:20]
+            created = data.get('created_at', '')
             if isinstance(created, str) and len(created) >= 16:
-                created = created[:16].replace("T", " ")
-            pipeline = data.get("pipeline", "?")
-            summary = data.get("summary", {})
-            total = summary.get("total_attacks", data.get("total_results", 0))
-            asr = summary.get("vulnerability_rate", 0.0)
-            asr_str = f"{asr:.0%}" if isinstance(asr, (int, float)) else "?"
-            typer.echo(
-                f"{run_name:<20} {created!s:<17} {pipeline:<8} {total:>7} {asr_str:>5}  {f.name}"
-            )
+                created = created[:16].replace('T', ' ')
+            pipeline = data.get('pipeline', '?')
+            summary = data.get('summary', {})
+            total = summary.get('total_attacks', data.get('total_results', 0))
+            asr = summary.get('vulnerability_rate', 0.0)
+            asr_str = f'{asr:.0%}' if isinstance(asr, (int, float)) else '?'
+            typer.echo(f'{run_name:<20} {created!s:<17} {pipeline:<8} {total:>7} {asr_str:>5}  {f.name}')
         if skipped:
             typer.echo(
-                f"Warning: {skipped} file(s) could not be parsed and were skipped.",
+                f'Warning: {skipped} file(s) could not be parsed and were skipped.',
                 err=True,
             )

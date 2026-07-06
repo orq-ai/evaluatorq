@@ -184,7 +184,9 @@ class DefaultHooks:
         logger.debug(f'[simulation] {datapoint_id} evaluator {name!r} -> {score}')
 
     async def on_datapoint_error(self, datapoint: SimulationDatapoint, exception: BaseException) -> None:
-        logger.warning(f'[simulation] SimulationDatapoint error: {datapoint.id} {type(exception).__name__}: {exception}')
+        logger.warning(
+            f'[simulation] SimulationDatapoint error: {datapoint.id} {type(exception).__name__}: {exception}'
+        )
 
     async def on_run_complete(self, results: list[SimulationResult]) -> None:
         """Terminal hook. Always fires exactly once after ``on_run_start``, even
@@ -192,9 +194,7 @@ class DefaultHooks:
         any results were collected."""
         total = len(results)
         achieved = sum(1 for r in results if r.goal_achieved)
-        errored = sum(
-            1 for r in results if r.terminated_by.value == 'error' or r.metadata.get('error')
-        )
+        errored = sum(1 for r in results if r.terminated_by.value == 'error' or r.metadata.get('error'))
         avg_turns = (sum(r.turn_count for r in results) / total) if total else 0.0
         broken = sum(len(r.rules_broken) for r in results)
         pct = (achieved / total) if total else 0.0

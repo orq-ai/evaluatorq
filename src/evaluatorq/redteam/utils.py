@@ -7,7 +7,7 @@ import re
 from evaluatorq.common.sanitize import xml_escape
 
 # Re-export for backwards compatibility
-__all__ = ["safe_substitute", "xml_escape"]
+__all__ = ['safe_substitute', 'xml_escape']
 
 
 def safe_substitute(template: str, replacements: dict[str, str]) -> str:

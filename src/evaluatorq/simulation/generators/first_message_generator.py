@@ -85,9 +85,7 @@ class FirstMessageGenerator:
         self._model = model
         from evaluatorq.openresponses.client import build_simulation_client
 
-        self._client, self._client_owned = build_simulation_client(
-            client, extra_api_key=api_key
-        )
+        self._client, self._client_owned = build_simulation_client(client, extra_api_key=api_key)
 
     async def close(self) -> None:
         """Close the HTTP client (only if this generator built it)."""
@@ -110,32 +108,30 @@ The message should immediately convey their goal and emotional state.
 Keep it natural - this is how they would actually open a conversation."""
 
         messages: list[ChatCompletionMessageParam] = cast(
-            "list[ChatCompletionMessageParam]",
+            'list[ChatCompletionMessageParam]',
             [
-                {"role": "system", "content": _FIRST_MESSAGE_PROMPT},
-                {"role": "user", "content": user_prompt},
+                {'role': 'system', 'content': _FIRST_MESSAGE_PROMPT},
+                {'role': 'user', 'content': user_prompt},
             ],
         )
 
         try:
             async with with_llm_span(
                 model=self._model,
-                operation="chat",
+                operation='chat',
                 temperature=_TEMPERATURE_FIRST_MESSAGE,
                 max_tokens=500,
-                purpose="first_message",
+                purpose='first_message',
             ) as span:
                 record_llm_input(
                     span,
                     [
-                        {"role": str(m["role"]), "content": str(m.get("content", ""))}  # pyright: ignore[reportAttributeAccessIssue]
+                        {'role': str(m['role']), 'content': str(m.get('content', ''))}  # pyright: ignore[reportAttributeAccessIssue]
                         for m in messages
                     ],
                 )
                 trace_headers = await get_trace_context_headers()
-                extra: dict[str, Any] = (
-                    {"extra_headers": trace_headers} if trace_headers else {}
-                )
+                extra: dict[str, Any] = {'extra_headers': trace_headers} if trace_headers else {}
                 for attempt in range(2):
                     response = await with_retry(
                         lambda: self._client.chat.completions.create(  # pyright: ignore[reportUnknownLambdaType]
@@ -145,28 +141,24 @@ Keep it natural - this is how they would actually open a conversation."""
                             max_tokens=500,
                             **extra,
                         ),
-                        label="FirstMessageGenerator.generate",
+                        label='FirstMessageGenerator.generate',
                     )
                     record_llm_response(span, response)
 
-                    message = response.choices[0].message.content if response.choices else ""
-                    message = re.sub(r'^["\']|["\']$', "", (message or "").strip())
+                    message = response.choices[0].message.content if response.choices else ''
+                    message = re.sub(r'^["\']|["\']$', '', (message or '').strip())
                     if message:
                         break
                     if attempt == 0:
-                        logger.info(
-                            "FirstMessageGenerator: LLM returned empty content, retrying once"
-                        )
+                        logger.info('FirstMessageGenerator: LLM returned empty content, retrying once')
                 else:
-                    message = ""
+                    message = ''
 
             if not message:
-                logger.warning(
-                    "FirstMessageGenerator: LLM returned empty content after retry, using generic fallback"
-                )
-                return f"Hi, I need help with: {scenario.goal}"
+                logger.warning('FirstMessageGenerator: LLM returned empty content after retry, using generic fallback')
+                return f'Hi, I need help with: {scenario.goal}'
 
-            logger.debug("Generated first message: %s...", message[:100])
+            logger.debug('Generated first message: %s...', message[:100])
             return message
 
         except APIStatusError as e:
@@ -179,9 +171,9 @@ Keep it natural - this is how they would actually open a conversation."""
             if e.status_code < 500 and e.status_code != 429:
                 raise
             logger.warning(
-                "FirstMessageGenerator: generation failed after retries (HTTP %s); "
-                "using a generic first message for this datapoint. Error: %s",
+                'FirstMessageGenerator: generation failed after retries (HTTP %s); '
+                'using a generic first message for this datapoint. Error: %s',
                 e.status_code,
                 e,
             )
-            return f"Hi, I need help with: {scenario.goal}"
+            return f'Hi, I need help with: {scenario.goal}'

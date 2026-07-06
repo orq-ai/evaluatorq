@@ -163,9 +163,7 @@ def _parse_json_list(content: str) -> list[dict[str, Any]]:
         for value in parsed.values():
             if isinstance(value, list):
                 return value
-    logger.warning(
-        "ScenarioGenerator: expected JSON array but got non-array response"
-    )
+    logger.warning('ScenarioGenerator: expected JSON array but got non-array response')
     return []
 
 
@@ -175,7 +173,7 @@ def _parse_scenarios(scenario_dicts: list[dict[str, Any]]) -> list[Scenario]:
         try:
             scenarios.append(Scenario.model_validate(s_dict))
         except Exception as e:  # noqa: PERF203
-            logger.warning("Failed to parse scenario: %s", e)
+            logger.warning('Failed to parse scenario: %s', e)
     return scenarios
 
 
@@ -192,9 +190,7 @@ class ScenarioGenerator:
         self._model = model
         from evaluatorq.openresponses.client import build_simulation_client
 
-        self._client, self._client_owned = build_simulation_client(
-            client, extra_api_key=api_key
-        )
+        self._client, self._client_owned = build_simulation_client(client, extra_api_key=api_key)
 
     async def close(self) -> None:
         """Close the HTTP client (only if this generator built it)."""
@@ -205,10 +201,10 @@ class ScenarioGenerator:
         self,
         *,
         agent_description: str,
-        context: str = "",
+        context: str = '',
         num_scenarios: int = 10,
         edge_case_percentage: float = 0.3,
-        seed: str = "",
+        seed: str = '',
     ) -> list[Scenario]:
         """Generate scenarios for agent testing.
 
@@ -221,43 +217,43 @@ class ScenarioGenerator:
 
         try:
             async with with_simulation_span(
-                "orq.simulation.scenario_generation",
+                'orq.simulation.scenario_generation',
                 {
-                    "orq.simulation.num_scenarios": num_scenarios,
-                    "orq.simulation.model": self._model,
-                    "orq.simulation.seed": seed,
+                    'orq.simulation.num_scenarios': num_scenarios,
+                    'orq.simulation.model': self._model,
+                    'orq.simulation.seed': seed,
                 },
             ):
                 num_edge_cases = int(num_scenarios * edge_case_percentage)
 
                 if seed:
                     instructions = (
-                        f"Generate {num_scenarios} scenario(s), each built around "
+                        f'Generate {num_scenarios} scenario(s), each built around '
                         f'this situation: "{seed}".\n'
-                        "- Fill the goal, context, starting emotion, and clear "
-                        "success/failure criteria so each scenario is coherent and "
-                        "realistic for that situation"
+                        '- Fill the goal, context, starting emotion, and clear '
+                        'success/failure criteria so each scenario is coherent and '
+                        'realistic for that situation'
                     )
                 else:
                     instructions = (
-                        f"Generate {num_scenarios} diverse test scenarios for this agent.\n"
-                        f"- Include {num_edge_cases} edge case scenarios\n"
-                        "- Cover different emotional states and urgency levels\n"
-                        "- Include both positive and potentially problematic interactions\n"
-                        "- Each scenario should have clear success/failure criteria"
+                        f'Generate {num_scenarios} diverse test scenarios for this agent.\n'
+                        f'- Include {num_edge_cases} edge case scenarios\n'
+                        '- Cover different emotional states and urgency levels\n'
+                        '- Include both positive and potentially problematic interactions\n'
+                        '- Each scenario should have clear success/failure criteria'
                     )
 
                 user_prompt = f"""Agent Description: {delimit(agent_description)}
 
-Additional Context: {delimit(context or "None provided")}
+Additional Context: {delimit(context or 'None provided')}
 
 {instructions}
 
 Return ONLY a JSON array, no other text."""
 
                 messages: list[dict[str, Any]] = [
-                    {"role": "system", "content": _SCENARIO_GENERATOR_PROMPT},
-                    {"role": "user", "content": user_prompt},
+                    {'role': 'system', 'content': _SCENARIO_GENERATOR_PROMPT},
+                    {'role': 'user', 'content': user_prompt},
                 ]
 
                 parsed, raw = await generate_structured(
@@ -267,51 +263,47 @@ Return ONLY a JSON array, no other text."""
                     response_format=ScenarioListResponse,
                     temperature=_TEMPERATURE_CREATIVE,
                     max_tokens=6000,
-                    label="ScenarioGenerator.generate",
+                    label='ScenarioGenerator.generate',
                 )
 
                 if parsed is not None:
                     scenarios = parsed.scenarios
                 else:
-                    scenario_dicts = _parse_json_list(raw or "[]")
+                    scenario_dicts = _parse_json_list(raw or '[]')
                     scenarios = _parse_scenarios(scenario_dicts)
 
                 if len(scenarios) < num_scenarios:
                     logger.warning(
-                        "ScenarioGenerator: requested %d scenarios but only %d were successfully parsed",
+                        'ScenarioGenerator: requested %d scenarios but only %d were successfully parsed',
                         num_scenarios,
                         len(scenarios),
                     )
                 return scenarios
         except json.JSONDecodeError:
-            logger.warning(
-                "ScenarioGenerator: LLM response was not valid JSON — returning empty array"
-            )
+            logger.warning('ScenarioGenerator: LLM response was not valid JSON — returning empty array')
             return []
 
     async def generate_with_coverage(
         self,
         *,
         agent_description: str,
-        context: str = "",
+        context: str = '',
         num_scenarios: int = 6,
         edge_case_percentage: float = 0.3,
     ) -> list[Scenario]:
         """Generate scenarios with guaranteed emotion and criteria coverage."""
-        emotions = ["neutral", "frustrated", "confused", "happy", "urgent"]
+        emotions = ['neutral', 'frustrated', 'confused', 'happy', 'urgent']
         num_edge_cases = int(num_scenarios * edge_case_percentage)
 
         coverage_lines = []
         for i in range(num_scenarios):
             emotion = emotions[i % len(emotions)]
-            edge_label = " (edge case)" if i < num_edge_cases else ""
-            coverage_lines.append(
-                f"- Scenario {i + 1}: starting_emotion='{emotion}'{edge_label}"
-            )
+            edge_label = ' (edge case)' if i < num_edge_cases else ''
+            coverage_lines.append(f"- Scenario {i + 1}: starting_emotion='{emotion}'{edge_label}")
 
         user_prompt = f"""Agent Description: {delimit(agent_description)}
 
-Additional Context: {delimit(context or "None provided")}
+Additional Context: {delimit(context or 'None provided')}
 
 Generate {num_scenarios} test scenarios with SPECIFIC requirements:
 
@@ -326,19 +318,19 @@ Additional requirements:
 Return ONLY a JSON array, no other text."""
 
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": _SCENARIO_GENERATOR_PROMPT},
-            {"role": "user", "content": user_prompt},
+            {'role': 'system', 'content': _SCENARIO_GENERATOR_PROMPT},
+            {'role': 'user', 'content': user_prompt},
         ]
 
         from evaluatorq.simulation.tracing import with_simulation_span
 
         try:
             async with with_simulation_span(
-                "orq.simulation.scenario_generation",
+                'orq.simulation.scenario_generation',
                 {
-                    "orq.simulation.num_scenarios": num_scenarios,
-                    "orq.simulation.mode": "coverage",
-                    "orq.simulation.model": self._model,
+                    'orq.simulation.num_scenarios': num_scenarios,
+                    'orq.simulation.mode': 'coverage',
+                    'orq.simulation.model': self._model,
                 },
             ):
                 parsed, raw = await generate_structured(
@@ -348,19 +340,17 @@ Return ONLY a JSON array, no other text."""
                     response_format=ScenarioListResponse,
                     temperature=_TEMPERATURE_BALANCED,
                     max_tokens=6000,
-                    label="ScenarioGenerator.generate_with_coverage",
+                    label='ScenarioGenerator.generate_with_coverage',
                 )
 
                 if parsed is not None:
                     scenarios = parsed.scenarios
                 else:
-                    scenario_dicts = _parse_json_list(raw or "[]")
+                    scenario_dicts = _parse_json_list(raw or '[]')
                     scenarios = _parse_scenarios(scenario_dicts)
 
                 # Validate coverage
-                scenarios = self._ensure_emotion_coverage(
-                    scenarios, [StartingEmotion(e) for e in emotions]
-                )
+                scenarios = self._ensure_emotion_coverage(scenarios, [StartingEmotion(e) for e in emotions])
                 scenarios = self._ensure_criteria_coverage(scenarios)
 
                 if len(scenarios) > num_scenarios:
@@ -368,15 +358,13 @@ Return ONLY a JSON array, no other text."""
 
                 if len(scenarios) < num_scenarios:
                     logger.warning(
-                        "ScenarioGenerator: requested %d scenarios (with coverage) but only %d parsed",
+                        'ScenarioGenerator: requested %d scenarios (with coverage) but only %d parsed',
                         num_scenarios,
                         len(scenarios),
                     )
                 return scenarios
         except json.JSONDecodeError:
-            logger.warning(
-                "ScenarioGenerator: LLM response was not valid JSON — returning empty array"
-            )
+            logger.warning('ScenarioGenerator: LLM response was not valid JSON — returning empty array')
             return []
 
     async def generate_edge_cases(
@@ -387,9 +375,7 @@ Return ONLY a JSON array, no other text."""
         num_edge_cases: int = 5,
     ) -> list[Scenario]:
         """Generate edge case scenarios specifically."""
-        existing_names = (
-            [s.name for s in existing_scenarios] if existing_scenarios else []
-        )
+        existing_names = [s.name for s in existing_scenarios] if existing_scenarios else []
 
         user_prompt = f"""Agent Description: {delimit(agent_description)}
 
@@ -407,19 +393,19 @@ Each scenario MUST have is_edge_case: true
 Return ONLY a JSON array, no other text."""
 
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": _SCENARIO_GENERATOR_PROMPT},
-            {"role": "user", "content": user_prompt},
+            {'role': 'system', 'content': _SCENARIO_GENERATOR_PROMPT},
+            {'role': 'user', 'content': user_prompt},
         ]
 
         from evaluatorq.simulation.tracing import with_simulation_span
 
         try:
             async with with_simulation_span(
-                "orq.simulation.scenario_generation",
+                'orq.simulation.scenario_generation',
                 {
-                    "orq.simulation.num_scenarios": num_edge_cases,
-                    "orq.simulation.mode": "edge_cases",
-                    "orq.simulation.model": self._model,
+                    'orq.simulation.num_scenarios': num_edge_cases,
+                    'orq.simulation.mode': 'edge_cases',
+                    'orq.simulation.model': self._model,
                 },
             ):
                 parsed, raw = await generate_structured(
@@ -429,30 +415,26 @@ Return ONLY a JSON array, no other text."""
                     response_format=ScenarioListResponse,
                     temperature=_TEMPERATURE_EDGE_CASE,
                     max_tokens=4000,
-                    label="ScenarioGenerator.generate_edge_cases",
+                    label='ScenarioGenerator.generate_edge_cases',
                 )
 
                 if parsed is not None:
-                    scenarios = [
-                        s.model_copy(update={"is_edge_case": True}) for s in parsed.scenarios
-                    ]
+                    scenarios = [s.model_copy(update={'is_edge_case': True}) for s in parsed.scenarios]
                 else:
-                    scenario_dicts = _parse_json_list(raw or "[]")
+                    scenario_dicts = _parse_json_list(raw or '[]')
                     for s_dict in scenario_dicts:
-                        s_dict["is_edge_case"] = True
+                        s_dict['is_edge_case'] = True
                     scenarios = _parse_scenarios(scenario_dicts)
 
                 if len(scenarios) < num_edge_cases:
                     logger.warning(
-                        "ScenarioGenerator: requested %d edge cases but only %d parsed",
+                        'ScenarioGenerator: requested %d edge cases but only %d parsed',
                         num_edge_cases,
                         len(scenarios),
                     )
                 return scenarios
         except json.JSONDecodeError:
-            logger.warning(
-                "ScenarioGenerator: LLM response was not valid JSON — returning empty array"
-            )
+            logger.warning('ScenarioGenerator: LLM response was not valid JSON — returning empty array')
             return []
 
     async def generate_boundary_scenarios(
@@ -477,19 +459,19 @@ Each scenario MUST have is_edge_case: true
 Return ONLY a JSON array, no other text."""
 
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": _BOUNDARY_SCENARIO_PROMPT},
-            {"role": "user", "content": user_prompt},
+            {'role': 'system', 'content': _BOUNDARY_SCENARIO_PROMPT},
+            {'role': 'user', 'content': user_prompt},
         ]
 
         from evaluatorq.simulation.tracing import with_simulation_span
 
         try:
             async with with_simulation_span(
-                "orq.simulation.scenario_generation",
+                'orq.simulation.scenario_generation',
                 {
-                    "orq.simulation.num_scenarios": num_scenarios,
-                    "orq.simulation.mode": "boundary",
-                    "orq.simulation.model": self._model,
+                    'orq.simulation.num_scenarios': num_scenarios,
+                    'orq.simulation.mode': 'boundary',
+                    'orq.simulation.model': self._model,
                 },
             ):
                 parsed, raw = await generate_structured(
@@ -499,30 +481,26 @@ Return ONLY a JSON array, no other text."""
                     response_format=ScenarioListResponse,
                     temperature=_TEMPERATURE_EDGE_CASE,
                     max_tokens=4000,
-                    label="ScenarioGenerator.generate_boundary_scenarios",
+                    label='ScenarioGenerator.generate_boundary_scenarios',
                 )
 
                 if parsed is not None:
-                    scenarios = [
-                        s.model_copy(update={"is_edge_case": True}) for s in parsed.scenarios
-                    ]
+                    scenarios = [s.model_copy(update={'is_edge_case': True}) for s in parsed.scenarios]
                 else:
-                    scenario_dicts = _parse_json_list(raw or "[]")
+                    scenario_dicts = _parse_json_list(raw or '[]')
                     for s_dict in scenario_dicts:
-                        s_dict["is_edge_case"] = True
+                        s_dict['is_edge_case'] = True
                     scenarios = _parse_scenarios(scenario_dicts)
 
                 if len(scenarios) < num_scenarios:
                     logger.warning(
-                        "ScenarioGenerator: requested %d boundary scenarios but only %d parsed",
+                        'ScenarioGenerator: requested %d boundary scenarios but only %d parsed',
                         num_scenarios,
                         len(scenarios),
                     )
                 return scenarios
         except json.JSONDecodeError:
-            logger.warning(
-                "ScenarioGenerator: LLM response was not valid JSON — returning empty array"
-            )
+            logger.warning('ScenarioGenerator: LLM response was not valid JSON — returning empty array')
             return []
 
     async def generate_security_scenarios(
@@ -534,19 +512,15 @@ Return ONLY a JSON array, no other text."""
         num_scenarios: int = 10,
     ) -> list[Scenario]:
         """Generate security test scenarios inspired by OWASP attack patterns."""
-        category_focus = ""
+        category_focus = ''
         if categories:
-            cat_names = [
-                f"OWASP-{cat.upper().replace('OWASP-', '')}" for cat in categories
-            ]
-            category_focus = (
-                f"\nFocus on these OWASP categories: {delimit(', '.join(cat_names))}"
-            )
+            cat_names = [f'OWASP-{cat.upper().replace("OWASP-", "")}' for cat in categories]
+            category_focus = f'\nFocus on these OWASP categories: {delimit(", ".join(cat_names))}'
 
-        seed_text = ""
+        seed_text = ''
         if seed_examples:
             examples_to_show = seed_examples[:5]
-            seed_text = f"\n\nUse these attack patterns as INSPIRATION (generate NOVEL variations, not copies):\n{delimit(json.dumps(examples_to_show, indent=2))}"
+            seed_text = f'\n\nUse these attack patterns as INSPIRATION (generate NOVEL variations, not copies):\n{delimit(json.dumps(examples_to_show, indent=2))}'
 
         user_prompt = f"""Agent Description: {delimit(agent_description)}
 {category_focus}
@@ -564,19 +538,19 @@ Requirements:
 Return ONLY a JSON array, no other text."""
 
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": _SECURITY_SCENARIO_PROMPT},
-            {"role": "user", "content": user_prompt},
+            {'role': 'system', 'content': _SECURITY_SCENARIO_PROMPT},
+            {'role': 'user', 'content': user_prompt},
         ]
 
         from evaluatorq.simulation.tracing import with_simulation_span
 
         try:
             async with with_simulation_span(
-                "orq.simulation.scenario_generation",
+                'orq.simulation.scenario_generation',
                 {
-                    "orq.simulation.num_scenarios": num_scenarios,
-                    "orq.simulation.mode": "security",
-                    "orq.simulation.model": self._model,
+                    'orq.simulation.num_scenarios': num_scenarios,
+                    'orq.simulation.mode': 'security',
+                    'orq.simulation.model': self._model,
                 },
             ):
                 parsed, raw = await generate_structured(
@@ -586,30 +560,26 @@ Return ONLY a JSON array, no other text."""
                     response_format=ScenarioListResponse,
                     temperature=_TEMPERATURE_EDGE_CASE,
                     max_tokens=6000,
-                    label="ScenarioGenerator.generate_security_scenarios",
+                    label='ScenarioGenerator.generate_security_scenarios',
                 )
 
                 if parsed is not None:
-                    scenarios = [
-                        s.model_copy(update={"is_edge_case": True}) for s in parsed.scenarios
-                    ]
+                    scenarios = [s.model_copy(update={'is_edge_case': True}) for s in parsed.scenarios]
                 else:
-                    scenario_dicts = _parse_json_list(raw or "[]")
+                    scenario_dicts = _parse_json_list(raw or '[]')
                     for s_dict in scenario_dicts:
-                        s_dict["is_edge_case"] = True
+                        s_dict['is_edge_case'] = True
                     scenarios = _parse_scenarios(scenario_dicts)
 
                 if len(scenarios) < num_scenarios:
                     logger.warning(
-                        "ScenarioGenerator: requested %d security scenarios but only %d parsed",
+                        'ScenarioGenerator: requested %d security scenarios but only %d parsed',
                         num_scenarios,
                         len(scenarios),
                     )
                 return scenarios
         except json.JSONDecodeError:
-            logger.warning(
-                "ScenarioGenerator: LLM response was not valid JSON — returning empty array"
-            )
+            logger.warning('ScenarioGenerator: LLM response was not valid JSON — returning empty array')
             return []
 
     # ---------------------------------------------------------------------------
@@ -617,18 +587,14 @@ Return ONLY a JSON array, no other text."""
     # ---------------------------------------------------------------------------
 
     @staticmethod
-    def _ensure_emotion_coverage(
-        scenarios: list[Scenario], required_emotions: list[StartingEmotion]
-    ) -> list[Scenario]:
+    def _ensure_emotion_coverage(scenarios: list[Scenario], required_emotions: list[StartingEmotion]) -> list[Scenario]:
         existing_emotions = {s.starting_emotion for s in scenarios}
         missing_emotions = [e for e in required_emotions if e not in existing_emotions]
 
         if missing_emotions and scenarios:
             for i, emotion in enumerate(missing_emotions):
                 if i < len(scenarios):
-                    scenarios[i] = scenarios[i].model_copy(
-                        update={"starting_emotion": emotion}
-                    )
+                    scenarios[i] = scenarios[i].model_copy(update={'starting_emotion': emotion})
                     logger.debug(
                         "Adjusted scenario '%s' to emotion '%s' for coverage",
                         scenarios[i].name,
@@ -638,22 +604,17 @@ Return ONLY a JSON array, no other text."""
 
     @staticmethod
     def _ensure_criteria_coverage(scenarios: list[Scenario]) -> list[Scenario]:
-        has_must_not = any(
-            any(c.type == "must_not_happen" for c in (s.criteria or []))
-            for s in scenarios
-        )
+        has_must_not = any(any(c.type == 'must_not_happen' for c in (s.criteria or [])) for s in scenarios)
 
         if not has_must_not and scenarios:
             existing_criteria = list(scenarios[0].criteria or [])
             existing_criteria.append(
                 Criterion(
-                    description="Agent should not provide incorrect information",
-                    type="must_not_happen",
+                    description='Agent should not provide incorrect information',
+                    type='must_not_happen',
                     evaluator=None,
                 )
             )
-            scenarios[0] = scenarios[0].model_copy(
-                update={"criteria": existing_criteria}
-            )
-            logger.debug("Added must_not_happen criterion for coverage")
+            scenarios[0] = scenarios[0].model_copy(update={'criteria': existing_criteria})
+            logger.debug('Added must_not_happen criterion for coverage')
         return scenarios

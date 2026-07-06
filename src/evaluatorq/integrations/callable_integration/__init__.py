@@ -5,4 +5,4 @@ Provides a wrapper to use any sync or async function as an AgentTarget.
 
 from .target import CallableTarget
 
-__all__ = ["CallableTarget"]
+__all__ = ['CallableTarget']

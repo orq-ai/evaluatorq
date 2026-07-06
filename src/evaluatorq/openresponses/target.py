@@ -6,6 +6,8 @@ import asyncio
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from typing_extensions import Self
+
 from evaluatorq.common.retry import with_retry
 from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, LLMCallConfig, Message
 from evaluatorq.openresponses.client import build_simulation_client
@@ -59,9 +61,7 @@ class OrqResponsesTarget(AgentTarget):
             self._client = client
             self._client_owned = False
         else:
-            self._client, self._client_owned = build_simulation_client(
-                config.client, require_orq=require_orq
-            )
+            self._client, self._client_owned = build_simulation_client(config.client, require_orq=require_orq)
 
     async def respond(self, messages: list[Message]) -> AgentResponse:
         """Stateless: send the full message list, return the response."""
@@ -106,7 +106,7 @@ class OrqResponsesTarget(AgentTarget):
             await self._client.close()
             self._client_owned = False
 
-    async def __aenter__(self) -> OrqResponsesTarget:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_exc_info: object) -> None:
@@ -126,57 +126,52 @@ class OrqResponsesTarget(AgentTarget):
 
         async def _do_call() -> AgentResponse:
             kwargs: dict[str, Any] = {
-                "model": self.config.model,
-                "input": responses_input,
+                'model': self.config.model,
+                'input': responses_input,
             }
             if self.config.max_tokens:
-                kwargs["max_output_tokens"] = self.config.max_tokens
+                kwargs['max_output_tokens'] = self.config.max_tokens
             if self.tools:
-                kwargs["tools"] = self.tools
+                kwargs['tools'] = self.tools
             if self.instructions is not None:
-                kwargs["instructions"] = self.instructions
+                kwargs['instructions'] = self.instructions
 
             async with with_llm_span(
                 model=self.config.model,
-                operation="responses",
-                purpose="target",
+                operation='responses',
+                purpose='target',
                 max_tokens=self.config.max_tokens,
             ) as span:
                 record_openresponses_request(span, kwargs)
                 coro = self._client.responses.create(**kwargs)
-                response = await (
-                    asyncio.wait_for(coro, timeout=timeout_s) if timeout_s else coro
-                )
+                response = await (asyncio.wait_for(coro, timeout=timeout_s) if timeout_s else coro)
                 record_openresponses_response(span, response)
 
             agent_response = AgentResponse.from_openresponses(response)
             if not agent_response.output:
                 raise RuntimeError(
-                    f"OrqResponsesTarget: response contained no extractable "
-                    f"output items (model={self.config.model}). This likely indicates "
-                    f"an API error or unexpected response format."
+                    f'OrqResponsesTarget: response contained no extractable '
+                    f'output items (model={self.config.model}). This likely indicates '
+                    f'an API error or unexpected response format.'
                 )
-            updates: dict[str, Any] = {"model": agent_response.model or self.config.model}
+            updates: dict[str, Any] = {'model': agent_response.model or self.config.model}
             if agent_response.usage is not None:
-                updates["usage"] = agent_response.usage.model_copy(update={"calls": 1})
+                updates['usage'] = agent_response.usage.model_copy(update={'calls': 1})
             return agent_response.model_copy(update=updates)
 
         try:
             retry_kwargs: dict[str, Any] = {}
             if self.retry_attempts is not None:
-                retry_kwargs["max_attempts"] = self.retry_attempts
+                retry_kwargs['max_attempts'] = self.retry_attempts
             if self.retry_statuses is not None:
-                retry_kwargs["retry_statuses"] = self.retry_statuses
+                retry_kwargs['retry_statuses'] = self.retry_statuses
             return await with_retry(
                 _do_call,
-                label="OrqResponsesTarget._call_responses_api",
+                label='OrqResponsesTarget._call_responses_api',
                 **retry_kwargs,
             )
         except asyncio.TimeoutError as e:
-            raise RuntimeError(
-                f"OrqResponsesTarget timed out after {timeout_s}s "
-                f"(model={self.config.model})"
-            ) from e
+            raise RuntimeError(f'OrqResponsesTarget timed out after {timeout_s}s (model={self.config.model})') from e
 
     @staticmethod
     def _messages_to_input(messages: list[Message]) -> list[dict[str, Any]]:
@@ -185,23 +180,23 @@ class OrqResponsesTarget(AgentTarget):
             # Multi-part content (text + image/file) passes straight through to
             # the Responses API as input content parts.
             if isinstance(m.content, list):
-                content: Any = [p.model_dump(mode="json") for p in m.content]
+                content: Any = [p.model_dump(mode='json') for p in m.content]
             # Assistant messages with tool_calls require content: null per
             # OpenAI's spec; collapsing None to "" produces an invalid payload.
             # For other roles, the API expects a string, so coerce None -> "".
-            elif m.role == "assistant":
+            elif m.role == 'assistant':
                 content = m.content
             else:
-                content = m.content or ""
-            d: dict[str, Any] = {"role": m.role, "content": content}
+                content = m.content or ''
+            d: dict[str, Any] = {'role': m.role, 'content': content}
             if m.tool_calls is not None:
-                d["tool_calls"] = [tc.model_dump() for tc in m.tool_calls]
+                d['tool_calls'] = [tc.model_dump() for tc in m.tool_calls]
             if m.tool_call_id is not None:
-                d["tool_call_id"] = m.tool_call_id
+                d['tool_call_id'] = m.tool_call_id
             if m.name is not None:
-                d["name"] = m.name
+                d['name'] = m.name
             result.append(d)
         return result
 
 
-__all__ = ["OrqResponsesTarget"]
+__all__ = ['OrqResponsesTarget']

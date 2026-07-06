@@ -10,21 +10,21 @@ import re
 
 def extract_status_code(exc: Exception) -> int | None:
     """Extract HTTP-like status code from structured exception fields or text."""
-    response = getattr(exc, "response", None)
-    status_code = getattr(response, "status_code", None)
+    response = getattr(exc, 'response', None)
+    status_code = getattr(response, 'status_code', None)
     if isinstance(status_code, int) and 100 <= status_code <= 599:
         return status_code
 
-    for attr in ("status_code", "status"):
+    for attr in ('status_code', 'status'):
         value = getattr(exc, attr, None)
         if isinstance(value, int) and 100 <= value <= 599:
             return value
 
     text = str(exc)
     patterns = [
-        r"\bstatus(?:_code)?\s*[=:]\s*(\d{3})\b",
-        r"\bHTTP\s*(\d{3})\b",
-        r"\bcode\s*[=:]\s*(\d{3})\b",
+        r'\bstatus(?:_code)?\s*[=:]\s*(\d{3})\b',
+        r'\bHTTP\s*(\d{3})\b',
+        r'\bcode\s*[=:]\s*(\d{3})\b',
     ]
     for pattern in patterns:
         match = re.search(pattern, text, flags=re.IGNORECASE)
@@ -38,15 +38,15 @@ def extract_status_code(exc: Exception) -> int | None:
 
 def extract_provider_error_code(exc: Exception) -> str | None:
     """Extract provider-specific symbolic error code if present."""
-    for attr in ("code", "error_code", "type"):
+    for attr in ('code', 'error_code', 'type'):
         value = getattr(exc, attr, None)
         if isinstance(value, str) and value.strip():
             return value.strip().lower()
 
-    body = getattr(exc, "body", None)
+    body = getattr(exc, 'body', None)
     if isinstance(body, dict):
-        error = body.get("error") if isinstance(body.get("error"), dict) else body
-        for key in ("code", "type", "error_code"):
+        error = body.get('error') if isinstance(body.get('error'), dict) else body
+        for key in ('code', 'type', 'error_code'):
             value = error.get(key) if isinstance(error, dict) else None
             if isinstance(value, str) and value.strip():
                 return value.strip().lower()

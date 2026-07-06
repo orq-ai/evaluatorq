@@ -13,6 +13,7 @@ else:
     class StrEnum(str, Enum):  # type: ignore[no-redef]
         """Polyfill for Python <3.11."""
 
+
 from pydantic import BaseModel
 
 

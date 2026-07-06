@@ -40,21 +40,17 @@ def render_conversation(
     report: RedTeamReport,
     idx: int,
     rid: str,
-    container_id: str = "rt-conversation",
+    container_id: str = 'rt-conversation',
 ) -> str:
     """Render the conversation viewer fragment: row list + transcript detail."""
     results = report.results
 
     list_items: list[str] = []
-    base_url = f"/r/{esc(rid)}/view/conversation"
+    base_url = f'/r/{esc(rid)}/view/conversation'
     for i, r in enumerate(results):
-        status = "VULN" if r.vulnerable else "SAFE"
-        label = (
-            f"[{status}] {esc(r.attack.id)} / "
-            f"{esc(r.attack.category)} / "
-            f"{esc(r.attack.attack_technique.value)}"
-        )
-        active_class = " rt-conv-row-active" if i == idx else ""
+        status = 'VULN' if r.vulnerable else 'SAFE'
+        label = f'[{status}] {esc(r.attack.id)} / {esc(r.attack.category)} / {esc(r.attack.attack_technique.value)}'
+        active_class = ' rt-conv-row-active' if i == idx else ''
         list_items.append(
             f'<li class="rt-conv-row{active_class}">'
             f'<button class="rt-conv-row-btn"'
@@ -72,7 +68,7 @@ def render_conversation(
         else '<p class="rt-view-empty">No results.</p>'
     )
 
-    detail_html = ""
+    detail_html = ''
     if 0 <= idx < len(results):
         detail_html = _render_result_detail(results[idx])
 
@@ -90,15 +86,15 @@ def _render_result_detail(r: RedTeamResult) -> str:
     """Render the detail pane for a single result: metadata + transcript."""
     atk = r.attack
 
-    vuln_name = fmt_vulnerability(atk.vulnerability) if atk.vulnerability else "-"
+    vuln_name = fmt_vulnerability(atk.vulnerability) if atk.vulnerability else '-'
     category = fmt_category(atk.category)
     technique = atk.attack_technique.value
     severity = atk.severity.value
-    turn_type = atk.turn_type.value if atk.turn_type else "-"
+    turn_type = atk.turn_type.value if atk.turn_type else '-'
 
-    delivery_str = ""
+    delivery_str = ''
     if atk.delivery_methods:
-        dms = [getattr(dm, "value", str(dm)) for dm in atk.delivery_methods]
+        dms = [getattr(dm, 'value', str(dm)) for dm in atk.delivery_methods]
         delivery_str = (
             f'<div class="rt-conv-meta-item">'
             f'<span class="rt-conv-meta-label">Delivery Methods</span>'
@@ -106,8 +102,8 @@ def _render_result_detail(r: RedTeamResult) -> str:
             f'</div>'
         )
 
-    verdict_class = "rt-conv-verdict-vuln" if r.vulnerable else "rt-conv-verdict-safe"
-    verdict_text = "VULNERABLE" if r.vulnerable else "RESISTANT"
+    verdict_class = 'rt-conv-verdict-vuln' if r.vulnerable else 'rt-conv-verdict-safe'
+    verdict_text = 'VULNERABLE' if r.vulnerable else 'RESISTANT'
 
     meta_html = (
         f'<div class="rt-conv-meta">'
@@ -139,7 +135,7 @@ def _render_result_detail(r: RedTeamResult) -> str:
         f'</div>'
     )
 
-    eval_html = ""
+    eval_html = ''
     if r.evaluation and r.evaluation.explanation:
         expl = r.evaluation.explanation
         eval_html = (
@@ -174,47 +170,43 @@ def _render_messages(messages: list[Any]) -> str:
 
     parts: list[str] = []
     for msg in messages:
-        role: str = getattr(msg, "role", "unknown")
-        content: str = getattr(msg, "content", "") or ""
-        tool_calls = getattr(msg, "tool_calls", None)
-        name: str = getattr(msg, "name", "") or ""
+        role: str = getattr(msg, 'role', 'unknown')
+        content: str = getattr(msg, 'content', '') or ''
+        tool_calls = getattr(msg, 'tool_calls', None)
+        name: str = getattr(msg, 'name', '') or ''
 
-        if role == "system":
+        if role == 'system':
             parts.append(
                 f'<details class="rt-msg rt-msg-system">'
                 f'<summary class="rt-msg-role">System prompt</summary>'
                 f'<pre class="rt-msg-content">{esc(content)}</pre>'
                 f'</details>'
             )
-        elif role == "user":
+        elif role == 'user':
             parts.append(
                 f'<div class="rt-msg rt-msg-user">'
                 f'<span class="rt-msg-role">User</span>'
                 f'<pre class="rt-msg-content">{esc(content)}</pre>'
                 f'</div>'
             )
-        elif role == "assistant":
+        elif role == 'assistant':
             inner_parts: list[str] = []
             if content:
                 inner_parts.append(f'<pre class="rt-msg-content">{esc(content)}</pre>')
             if tool_calls:
                 for tc in tool_calls:
-                    fn = getattr(tc, "function", None)
-                    fn_name = getattr(fn, "name", "?") if fn else "?"
-                    fn_args = getattr(fn, "arguments", "") if fn else ""
-                    inner_parts.append(
-                        f'<pre class="rt-msg-tool-call">'
-                        f'Tool call: {esc(fn_name)}({esc(fn_args)})'
-                        f'</pre>'
-                    )
+                    fn = getattr(tc, 'function', None)
+                    fn_name = getattr(fn, 'name', '?') if fn else '?'
+                    fn_args = getattr(fn, 'arguments', '') if fn else ''
+                    inner_parts.append(f'<pre class="rt-msg-tool-call">Tool call: {esc(fn_name)}({esc(fn_args)})</pre>')
             parts.append(
                 f'<div class="rt-msg rt-msg-assistant">'
                 f'<span class="rt-msg-role">Assistant</span>'
                 f'{"".join(inner_parts)}'
                 f'</div>'
             )
-        elif role == "tool":
-            tool_name = name or "tool"
+        elif role == 'tool':
+            tool_name = name or 'tool'
             parts.append(
                 f'<details class="rt-msg rt-msg-tool">'
                 f'<summary class="rt-msg-role">Tool response: {esc(tool_name)}</summary>'
@@ -229,7 +221,7 @@ def _render_messages(messages: list[Any]) -> str:
                 f'</div>'
             )
 
-    return "".join(parts)
+    return ''.join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -244,7 +236,7 @@ def render_disagreement(
     agent_b: str,
     page: int,
     rid: str,
-    container_id: str = "rt-disagreement",
+    container_id: str = 'rt-disagreement',
 ) -> str:
     """Render the disagreement viewer: agent-pair selector + paginated side-by-side."""
     from collections import defaultdict
@@ -256,7 +248,7 @@ def render_disagreement(
         return (
             f'<div class="rt-disagreement" id="{esc(container_id)}">'
             '<p class="rt-view-empty">Disagreement viewer requires 2 or more agents.</p>'
-            "</div>"
+            '</div>'
         )
 
     if agent_a not in agents:
@@ -265,25 +257,25 @@ def render_disagreement(
         remaining = [ag for ag in agents if ag != agent_a]
         agent_b = remaining[0] if remaining else agents[0]
 
-    base_url = f"/r/{esc(rid)}/view/disagreement"
+    base_url = f'/r/{esc(rid)}/view/disagreement'
 
     selector_a = _agent_select(
         agents=agents,
         selected=agent_a,
-        param_name="a",
+        param_name='a',
         hx_url=base_url,
-        extra_params=f"b={_quote(str(agent_b), safe='')}&page=1",
+        extra_params=f'b={_quote(str(agent_b), safe="")}&page=1',
         container_id=container_id,
-        label="Agent A",
+        label='Agent A',
     )
     selector_b = _agent_select(
         agents=[ag for ag in agents if ag != agent_a],
         selected=agent_b,
-        param_name="b",
+        param_name='b',
         hx_url=base_url,
-        extra_params=f"a={_quote(str(agent_a), safe='')}&page=1",
+        extra_params=f'a={_quote(str(agent_a), safe="")}&page=1',
         container_id=container_id,
-        label="Agent B",
+        label='Agent B',
     )
 
     attack_results: dict[str, dict[str, RedTeamResult]] = defaultdict(dict)
@@ -303,11 +295,7 @@ def render_disagreement(
             disagreements.append((r1, r2))
 
     if not disagreements:
-        no_dis_html = (
-            f'<p class="rt-view-empty">'
-            f'No disagreements found between {esc(agent_a)} and {esc(agent_b)}.'
-            f'</p>'
-        )
+        no_dis_html = f'<p class="rt-view-empty">No disagreements found between {esc(agent_a)} and {esc(agent_b)}.</p>'
         return (
             f'<div class="rt-disagreement" id="{esc(container_id)}">'
             f'<div class="rt-dis-controls">{selector_a}{selector_b}</div>'
@@ -323,8 +311,8 @@ def render_disagreement(
 
     prev_disabled = ' disabled' if page <= 1 else ''
     next_disabled = ' disabled' if page >= total_pages else ''
-    prev_url = f"{base_url}?a={_quote(str(agent_a), safe='')}&b={_quote(str(agent_b), safe='')}&page={page - 1}"
-    next_url = f"{base_url}?a={_quote(str(agent_a), safe='')}&b={_quote(str(agent_b), safe='')}&page={page + 1}"
+    prev_url = f'{base_url}?a={_quote(str(agent_a), safe="")}&b={_quote(str(agent_b), safe="")}&page={page - 1}'
+    next_url = f'{base_url}?a={_quote(str(agent_a), safe="")}&b={_quote(str(agent_b), safe="")}&page={page + 1}'
 
     pagination_html = (
         f'<div class="rt-dis-pagination">'
@@ -344,8 +332,7 @@ def render_disagreement(
     items_html_parts: list[str] = []
     for item_idx, (r1, r2) in enumerate(page_items, start=start + 1):
         vuln_label = (
-            fmt_vulnerability(r1.attack.vulnerability) if r1.attack.vulnerability
-            else fmt_category(r1.attack.category)
+            fmt_vulnerability(r1.attack.vulnerability) if r1.attack.vulnerability else fmt_category(r1.attack.category)
         )
         technique_label = r1.attack.attack_technique.value
         item_html = (
@@ -383,8 +370,8 @@ def _agent_select(
     """Render a labeled agent selector for the disagreement view."""
     parts = [f'<div class="rt-dis-agent-select"><label class="rt-breakdown-label">{esc(label)}</label>']
     for ag in agents:
-        active_class = " rt-view-selector-active" if ag == selected else ""
-        url = f"{hx_url}?{param_name}={_quote(str(ag), safe='')}&{extra_params}"
+        active_class = ' rt-view-selector-active' if ag == selected else ''
+        url = f'{hx_url}?{param_name}={_quote(str(ag), safe="")}&{extra_params}'
         parts.append(
             f'<button class="rt-view-selector-btn{active_class}"'
             f' hx-get="{url}"'
@@ -393,14 +380,14 @@ def _agent_select(
             f'{esc(ag)}'
             f'</button>'
         )
-    parts.append("</div>")
-    return "".join(parts)
+    parts.append('</div>')
+    return ''.join(parts)
 
 
 def _render_agent_side(r: RedTeamResult, agent_name: str) -> str:
     """Render one column of a disagreement item (attack prompt, response, eval)."""
-    verdict_class = "rt-conv-verdict-vuln" if r.vulnerable else "rt-conv-verdict-safe"
-    verdict_text = "VULNERABLE" if r.vulnerable else "RESISTANT"
+    verdict_class = 'rt-conv-verdict-vuln' if r.vulnerable else 'rt-conv-verdict-safe'
+    verdict_text = 'VULNERABLE' if r.vulnerable else 'RESISTANT'
 
     header = (
         f'<div class="rt-dis-agent-header">'
@@ -409,11 +396,11 @@ def _render_agent_side(r: RedTeamResult, agent_name: str) -> str:
         f'</div>'
     )
 
-    user_msgs = [m for m in r.messages if getattr(m, "role", "") == "user"]
-    prompt_html = ""
+    user_msgs = [m for m in r.messages if getattr(m, 'role', '') == 'user']
+    prompt_html = ''
     if user_msgs:
-        prompt_text = getattr(user_msgs[-1], "content", "") or ""
-        truncated = prompt_text[:600] + ("…" if len(prompt_text) > 600 else "")
+        prompt_text = getattr(user_msgs[-1], 'content', '') or ''
+        truncated = prompt_text[:600] + ('…' if len(prompt_text) > 600 else '')
         prompt_html = (
             f'<div class="rt-dis-section">'
             f'<strong>Attack prompt:</strong>'
@@ -421,10 +408,10 @@ def _render_agent_side(r: RedTeamResult, agent_name: str) -> str:
             f'</div>'
         )
 
-    response_html = ""
+    response_html = ''
     if r.response:
         resp = r.response
-        truncated = resp[:600] + ("…" if len(resp) > 600 else "")
+        truncated = resp[:600] + ('…' if len(resp) > 600 else '')
         response_html = (
             f'<div class="rt-dis-section">'
             f'<strong>Response:</strong>'
@@ -432,10 +419,10 @@ def _render_agent_side(r: RedTeamResult, agent_name: str) -> str:
             f'</div>'
         )
 
-    eval_html = ""
+    eval_html = ''
     if r.evaluation and r.evaluation.explanation:
         expl = r.evaluation.explanation
-        truncated = expl[:400] + ("…" if len(expl) > 400 else "")
+        truncated = expl[:400] + ('…' if len(expl) > 400 else '')
         eval_html = (
             f'<div class="rt-dis-section">'
             f'<strong>Evaluator:</strong>'

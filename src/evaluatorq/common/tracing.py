@@ -370,16 +370,16 @@ def record_llm_output(span: Span | None, output: str) -> None:
 
 
 def _derive_provider(model: str) -> str:
-    if "/" in model:
-        return model.split("/", 1)[0]
-    return "openai"
+    if '/' in model:
+        return model.split('/', 1)[0]
+    return 'openai'
 
 
 @asynccontextmanager
 async def with_llm_span(  # noqa: RUF029
     *,
     model: str,
-    operation: str = "chat",
+    operation: str = 'chat',
     provider: str | None = None,
     temperature: float | None = None,
     max_tokens: int | None = None,
@@ -406,32 +406,32 @@ async def with_llm_span(  # noqa: RUF029
 
     ctx = parent_context or otel_context.get_current()
     resolved_provider = provider or _derive_provider(model)
-    span_name = f"{operation} {model}"
+    span_name = f'{operation} {model}'
 
     genai_attrs: dict[str, Any] = {
-        "gen_ai.operation.name": operation,
-        "gen_ai.system": resolved_provider,
-        "gen_ai.provider.name": resolved_provider,
-        "gen_ai.request.model": model,
+        'gen_ai.operation.name': operation,
+        'gen_ai.system': resolved_provider,
+        'gen_ai.provider.name': resolved_provider,
+        'gen_ai.request.model': model,
     }
     if temperature is not None:
-        genai_attrs["gen_ai.request.temperature"] = float(temperature)
+        genai_attrs['gen_ai.request.temperature'] = float(temperature)
     if max_tokens is not None:
-        genai_attrs["gen_ai.request.max_tokens"] = max_tokens
+        genai_attrs['gen_ai.request.max_tokens'] = max_tokens
     if input_messages is not None:
         recordable = [
             {
-                "role": str(m.get("role", "") if isinstance(m, dict) else getattr(m, "role", "")),
-                "content": truncate_for_span(
-                    m.get("content", "") if isinstance(m, dict) else getattr(m, "content", "")
+                'role': str(m.get('role', '') if isinstance(m, dict) else getattr(m, 'role', '')),
+                'content': truncate_for_span(
+                    m.get('content', '') if isinstance(m, dict) else getattr(m, 'content', '')
                 ),
             }
             for m in input_messages
         ]
         if capture_message_content():
             serialized = json.dumps(recordable, ensure_ascii=False)
-            genai_attrs["gen_ai.input.messages"] = serialized
-            genai_attrs["input"] = serialized
+            genai_attrs['gen_ai.input.messages'] = serialized
+            genai_attrs['input'] = serialized
     if attributes:
         genai_attrs.update(attributes)
     # Domain-specific key mapping (e.g. orq.redteam.llm_purpose -> orq.llm.purpose)
@@ -448,7 +448,7 @@ async def with_llm_span(  # noqa: RUF029
             yield span
             span.set_status(Status(StatusCode.OK))
         except BaseException as e:
-            span.set_attribute("error.type", type(e).__name__)
+            span.set_attribute('error.type', type(e).__name__)
             span.set_status(Status(StatusCode.ERROR, str(e)))
             span.record_exception(e)
             raise

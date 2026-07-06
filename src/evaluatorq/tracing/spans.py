@@ -7,6 +7,7 @@ Span hierarchy:
       ├── [User's instrumented code becomes child spans]
       └── orq.evaluation (per evaluator - child of its job)
 """
+
 from __future__ import annotations
 
 import json
@@ -32,7 +33,7 @@ class JobSpanOptions:
     row_index: int
     job_name: str | None = None
     parent_context: Any | None = None
-    trace_type: str = "evaluatorq"
+    trace_type: str = 'evaluatorq'
 
 
 @dataclass
@@ -75,15 +76,15 @@ async def with_job_span(  # noqa: RUF029
         parent_ctx = options.parent_context or otel_context.get_current()
 
         attributes: dict[str, Any] = {
-            "orq.trace_type": options.trace_type,
-            "orq.run_id": options.run_id,
-            "orq.row_index": options.row_index,
+            'orq.trace_type': options.trace_type,
+            'orq.run_id': options.run_id,
+            'orq.row_index': options.row_index,
         }
         if options.job_name:
-            attributes["orq.job_name"] = options.job_name
+            attributes['orq.job_name'] = options.job_name
 
         with tracer.start_as_current_span(
-            "orq.job",
+            'orq.job',
             context=parent_ctx,
             kind=SpanKind.INTERNAL,
             attributes=attributes,
@@ -132,11 +133,11 @@ async def with_evaluation_span(  # noqa: RUF029
         from opentelemetry.trace import SpanKind, Status, StatusCode
 
         with tracer.start_as_current_span(
-            "orq.evaluation",
+            'orq.evaluation',
             kind=SpanKind.INTERNAL,
             attributes={
-                "orq.run_id": options.run_id,
-                "orq.evaluator_name": options.evaluator_name,
+                'orq.run_id': options.run_id,
+                'orq.evaluator_name': options.evaluator_name,
             },
         ) as span:
             try:
@@ -172,13 +173,17 @@ def set_evaluation_attributes(
         return
 
     span.set_attribute(
-        "orq.score",
-        json.dumps(score.model_dump()) if isinstance(score, EvaluationResultCell) else json.dumps(score) if isinstance(score, dict) else str(score),
+        'orq.score',
+        json.dumps(score.model_dump())
+        if isinstance(score, EvaluationResultCell)
+        else json.dumps(score)
+        if isinstance(score, dict)
+        else str(score),
     )
     if explanation is not None:
-        span.set_attribute("orq.explanation", explanation)
+        span.set_attribute('orq.explanation', explanation)
     if pass_ is not None:
-        span.set_attribute("orq.pass", pass_)
+        span.set_attribute('orq.pass', pass_)
 
 
 def set_job_name_attribute(span: Span | None, job_name: str) -> None:
@@ -191,4 +196,4 @@ def set_job_name_attribute(span: Span | None, job_name: str) -> None:
     """
     if span is None:
         return
-    span.set_attribute("orq.job_name", job_name)
+    span.set_attribute('orq.job_name', job_name)

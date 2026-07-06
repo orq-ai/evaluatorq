@@ -328,12 +328,11 @@ class LangGraphTarget(AgentTarget):
         Each call gets a fresh ``memory_entity_id`` (and thus a fresh LangGraph
         thread), so parallel workers never share checkpointer state.
         """
-        cloned = LangGraphTarget(
+        return LangGraphTarget(
             self._graph,
             config=dict(self._extra_config),
             agent_context=self._agent_context,
         )
-        return cloned
 
 
 def _introspect_tools(graph: CompiledStateGraph[Any, Any, Any, Any]) -> list[ToolInfo]:

@@ -82,7 +82,7 @@ class PydanticAITarget(AgentTarget):
 
     async def respond(self, messages: list[Message]) -> AgentResponse:
         """Send the latest user turn to the agent; thread history internally."""
-        if not messages or messages[-1].role != "user":
+        if not messages or messages[-1].role != 'user':
             raise ValueError("PydanticAITarget.respond requires messages[-1].role == 'user'")
         prompt = content_to_text(messages[-1].content)
 
@@ -99,8 +99,8 @@ class PydanticAITarget(AgentTarget):
             self._history = list(result.all_messages())
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning(
-                "PydanticAITarget: result.all_messages() failed (%s); conversation "
-                "history is now stale and subsequent turns may be incoherent",
+                'PydanticAITarget: result.all_messages() failed (%s); conversation '
+                'history is now stale and subsequent turns may be incoherent',
                 exc,
             )
 
@@ -110,7 +110,7 @@ class PydanticAITarget(AgentTarget):
         # text if the message objects don't expose the expected parts.
         output: list[OutputMessage] = _build_output(result)
         if not output:
-            text = "" if result.output is None else str(result.output)
+            text = '' if result.output is None else str(result.output)
             output = [TextOutputItem(text=text, annotations=[])]
         return AgentResponse(output=output, usage=_extract_usage(result))
 
@@ -119,16 +119,14 @@ class PydanticAITarget(AgentTarget):
         if self._agent_context is not None:
             return self._agent_context
         agent = self._agent
-        raw_key = str(getattr(agent, "name", None) or "pydantic_ai_agent").lower()
-        key = re.sub(r"[^a-z0-9_]+", "_", raw_key).strip("_") or "pydantic_ai_agent"
-        model_attr = getattr(agent, "model", None)
-        model = getattr(model_attr, "model_name", None) or (
-            str(model_attr) if model_attr is not None else None
-        )
+        raw_key = str(getattr(agent, 'name', None) or 'pydantic_ai_agent').lower()
+        key = re.sub(r'[^a-z0-9_]+', '_', raw_key).strip('_') or 'pydantic_ai_agent'
+        model_attr = getattr(agent, 'model', None)
+        model = getattr(model_attr, 'model_name', None) or (str(model_attr) if model_attr is not None else None)
         return AgentContext(
             key=key,
             display_name=raw_key,
-            description="Pydantic AI agent target",
+            description='Pydantic AI agent target',
             model=model,
         )
 
@@ -154,20 +152,21 @@ def _make_part_classifier() -> Callable[[Any], str]:
     try:
         from pydantic_ai.messages import TextPart, ToolCallPart, ToolReturnPart
     except Exception:  # pragma: no cover - defensive
+
         def by_name(part: Any) -> str:
             name = type(part).__name__
-            return name if name in {"TextPart", "ToolCallPart", "ToolReturnPart"} else ""
+            return name if name in {'TextPart', 'ToolCallPart', 'ToolReturnPart'} else ''
 
         return by_name
 
     def by_isinstance(part: Any) -> str:
         if isinstance(part, TextPart):
-            return "TextPart"
+            return 'TextPart'
         if isinstance(part, ToolCallPart):
-            return "ToolCallPart"
+            return 'ToolCallPart'
         if isinstance(part, ToolReturnPart):
-            return "ToolReturnPart"
-        return ""
+            return 'ToolReturnPart'
+        return ''
 
     return by_isinstance
 
@@ -195,17 +194,17 @@ def _build_output(result: Any) -> list[OutputMessage]:
     items: list[OutputMessage] = []
     tool_index: dict[str, int] = {}
     for msg in new_messages:
-        for part in getattr(msg, "parts", []) or []:
+        for part in getattr(msg, 'parts', []) or []:
             kind = classify(part)
-            if kind == "TextPart":
-                text = getattr(part, "content", "")
+            if kind == 'TextPart':
+                text = getattr(part, 'content', '')
                 if isinstance(text, str) and text:
                     items.append(TextOutputItem(text=text, annotations=[]))
-            elif kind == "ToolCallPart":
-                name = str(getattr(part, "tool_name", "") or "")
-                args = getattr(part, "args", "{}")
+            elif kind == 'ToolCallPart':
+                name = str(getattr(part, 'tool_name', '') or '')
+                args = getattr(part, 'args', '{}')
                 args_str = args if isinstance(args, str) else json.dumps(args, default=str)
-                call_id = str(getattr(part, "tool_call_id", "") or "")
+                call_id = str(getattr(part, 'tool_call_id', '') or '')
                 tc = (
                     ToolCallOutputItem(name=name, arguments=args_str, id=call_id, call_id=call_id)
                     if call_id
@@ -214,13 +213,13 @@ def _build_output(result: Any) -> list[OutputMessage]:
                 items.append(tc)
                 if call_id:
                     tool_index[call_id] = len(items) - 1
-            elif kind == "ToolReturnPart":
-                call_id = str(getattr(part, "tool_call_id", "") or "")
+            elif kind == 'ToolReturnPart':
+                call_id = str(getattr(part, 'tool_call_id', '') or '')
                 idx = tool_index.get(call_id)
                 if idx is not None and isinstance(items[idx], ToolCallOutputItem):
-                    out = getattr(part, "content", "")
+                    out = getattr(part, 'content', '')
                     out_str = out if isinstance(out, str) else str(out)
-                    items[idx] = items[idx].model_copy(update={"result": out_str})
+                    items[idx] = items[idx].model_copy(update={'result': out_str})
     return items
 
 
@@ -232,22 +231,22 @@ def _extract_usage(result: Any) -> TokenUsage | None:
     total is derived. Returns ``None`` when usage cannot be read so a run never
     fails just because token accounting is unavailable.
     """
-    raw = getattr(result, "usage", None)
+    raw = getattr(result, 'usage', None)
     # On recent versions ``usage`` is a property returning a RunUsage; on older
     # ones it is a method. Only call it when it isn't already a usage object, so
     # the property path doesn't emit a deprecation warning.
-    if raw is not None and not hasattr(raw, "input_tokens") and callable(raw):
+    if raw is not None and not hasattr(raw, 'input_tokens') and callable(raw):
         try:
             raw = raw()
         except Exception:  # pragma: no cover - defensive
             return None
     if raw is None:
         return None
-    prompt = int(getattr(raw, "input_tokens", 0) or 0)
-    completion = int(getattr(raw, "output_tokens", 0) or 0)
-    total = getattr(raw, "total_tokens", None)
+    prompt = int(getattr(raw, 'input_tokens', 0) or 0)
+    completion = int(getattr(raw, 'output_tokens', 0) or 0)
+    total = getattr(raw, 'total_tokens', None)
     total_tokens = int(total) if total else prompt + completion
-    calls = int(getattr(raw, "requests", 0) or 0) or 1
+    calls = int(getattr(raw, 'requests', 0) or 0) or 1
     if prompt == 0 and completion == 0 and total_tokens == 0:
         return None
     return TokenUsage(

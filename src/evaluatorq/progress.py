@@ -19,11 +19,11 @@ if TYPE_CHECKING:
 class Phase(str, Enum):
     """Progress phases"""
 
-    INITIALIZING = "initializing"
-    FETCHING = "fetching"
-    PROCESSING = "processing"
-    EVALUATING = "evaluating"
-    COMPLETED = "completed"
+    INITIALIZING = 'initializing'
+    FETCHING = 'fetching'
+    PROCESSING = 'processing'
+    EVALUATING = 'evaluating'
+    COMPLETED = 'completed'
 
 
 @dataclass
@@ -48,7 +48,7 @@ class ProgressService:
         self.state: ProgressState = ProgressState()
         self.console: Console = Console()
         self.live: Live | None = None
-        self.spinner: Spinner = Spinner("dots", style="cyan")
+        self.spinner: Spinner = Spinner('dots', style='cyan')
 
     def _format_progress_text(self) -> Text:
         """Format the progress text based on current state"""
@@ -57,42 +57,40 @@ class ProgressService:
         # Calculate percentage
         percentage = 0
         if self.state.total_data_points > 0:
-            percentage = round(
-                (self.state.current_data_point / self.state.total_data_points) * 100
-            )
+            percentage = round((self.state.current_data_point / self.state.total_data_points) * 100)
 
         if self.state.phase == Phase.INITIALIZING:
-            text = text.append("Initializing evaluation...", style="cyan")
+            text = text.append('Initializing evaluation...', style='cyan')
 
         elif self.state.phase == Phase.FETCHING:
             if self.state.total_data_points > 0:
                 text = text.append(
-                    f"Fetching dataset... ({self.state.total_data_points} datapoints loaded)",
-                    style="yellow",
+                    f'Fetching dataset... ({self.state.total_data_points} datapoints loaded)',
+                    style='yellow',
                 )
             else:
-                text = text.append("Fetching dataset...", style="yellow")
+                text = text.append('Fetching dataset...', style='yellow')
 
         elif self.state.phase == Phase.PROCESSING:
             text = text.append(
-                f"Processing data point {self.state.current_data_point}/{self.state.total_data_points} ({percentage}%)",
-                style="cyan",
+                f'Processing data point {self.state.current_data_point}/{self.state.total_data_points} ({percentage}%)',
+                style='cyan',
             )
             if self.state.current_job:
-                text = text.append(" - Running job: ", style="dim")
-                text = text.append(self.state.current_job, style="white")
+                text = text.append(' - Running job: ', style='dim')
+                text = text.append(self.state.current_job, style='white')
 
         elif self.state.phase == Phase.EVALUATING:
             text = text.append(
-                f"Evaluating results {self.state.current_data_point}/{self.state.total_data_points} ({percentage}%)",
-                style="cyan",
+                f'Evaluating results {self.state.current_data_point}/{self.state.total_data_points} ({percentage}%)',
+                style='cyan',
             )
             if self.state.current_evaluator:
-                text = text.append(" - Running evaluator: ", style="dim")
-                text = text.append(self.state.current_evaluator, style="white")
+                text = text.append(' - Running evaluator: ', style='dim')
+                text = text.append(self.state.current_evaluator, style='white')
 
         elif self.state.phase == Phase.COMPLETED:
-            text = text.append("✓ Evaluation completed", style="green")
+            text = text.append('✓ Evaluation completed', style='green')
 
         return text
 
@@ -172,7 +170,7 @@ class ProgressService:
                 self.live.stop()
 
             info_text = Text()
-            info_text = info_text.append(f"ℹ {message} ", style="blue")  # noqa: RUF001
+            info_text = info_text.append(f'ℹ {message} ', style='blue')  # noqa: RUF001
 
             self.console.print(info_text)
 

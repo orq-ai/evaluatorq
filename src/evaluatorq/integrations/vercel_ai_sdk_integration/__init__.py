@@ -6,4 +6,4 @@ as an AgentTarget (usable in simulation and red teaming).
 
 from .target import VercelAISdkTarget
 
-__all__ = ["VercelAISdkTarget"]
+__all__ = ['VercelAISdkTarget']
