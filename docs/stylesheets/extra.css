@@ -234,13 +234,25 @@ html { font-size: 100%; }
   margin: 1em 0;
 }
 
-/* Sticky primary nav tabs. Material's `navigation.tabs.sticky` is Insiders-only;
-   this is the free equivalent — pin the tab bar just under the (already sticky)
-   header so the top-level sections stay reachable while scrolling. z-index below
-   the header (4) so the search overlay still sits on top. Desktop only: the tab
-   bar is hidden below Material's 76.25em breakpoint (hamburger drawer takes over). */
-.md-tabs {
-  position: sticky;
-  top: 2.4rem;          /* Material header height */
-  z-index: 3;
+/* Keep the primary section tabs permanently visible — static, never scrolls away.
+   Material's free theme lets the tab bar scroll out of view (and `navigation.tabs.sticky`
+   is Insiders-only), so we pin it with position:fixed directly under the sticky 2.4rem
+   header, reserve 2.4rem of space so page content never hides beneath it, and disable the
+   tab-link transitions so nothing animates. Desktop only: below Material's 76.25em
+   breakpoint the tabs are replaced by the hamburger drawer, so these rules must not apply. */
+@media screen and (min-width: 76.25em) {
+  .md-tabs {
+    position: fixed;
+    top: 2.4rem;              /* directly under the 2.4rem sticky header */
+    left: 0;
+    right: 0;
+    z-index: 3;               /* below the header (z-index 4) so the search overlay wins */
+    transform: none !important;
+  }
+  .md-container {
+    padding-top: 2.4rem;      /* reserve the fixed tab bar's height (.md-tabs__item is 2.4rem) */
+  }
+  .md-tabs__link {
+    transition: none !important;
+  }
 }
