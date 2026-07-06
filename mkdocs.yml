@@ -138,8 +138,7 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Get Started:
-      - Getting Started: guides/getting-started.md
+  - Get Started: guides/getting-started.md
   - Guides:
       - Agent Simulation: guides/agent-simulation.md
       - Red Teaming:
@@ -147,7 +146,7 @@ nav:
           - Custom Evaluators & Frameworks: custom-evaluators-and-frameworks.md
       - LLM as a Jury: llm-as-a-jury.md
       - Dashboard: dashboard.md
-  - Manual:
+  - Setup:
       - Configuration: configuration.md
       - Tracing: tracing.md
       - CLI Reference: cli-reference.md
