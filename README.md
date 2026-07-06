@@ -1,5 +1,11 @@
 # evaluatorq
 
+[![PyPI version](https://img.shields.io/pypi/v/evaluatorq.svg)](https://pypi.org/project/evaluatorq/)
+[![Python versions](https://img.shields.io/pypi/pyversions/evaluatorq.svg)](https://pypi.org/project/evaluatorq/)
+[![CI](https://github.com/orq-ai/evaluatorq/actions/workflows/ci.yml/badge.svg)](https://github.com/orq-ai/evaluatorq/actions/workflows/ci.yml)
+[![Docs](https://img.shields.io/badge/docs-orq--ai.github.io-blue.svg)](https://orq-ai.github.io/evaluatorq/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/orq-ai/evaluatorq/blob/main/LICENSE)
+
 An evaluation framework library for Python that provides a flexible way to run parallel evaluations and optionally integrate with the Orq AI platform.
 
 ## Why evaluatorq?
