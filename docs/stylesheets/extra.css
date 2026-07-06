@@ -234,25 +234,33 @@ html { font-size: 100%; }
   margin: 1em 0;
 }
 
-/* Keep the primary section tabs permanently visible — static, never scrolls away.
-   Material's free theme lets the tab bar scroll out of view (and `navigation.tabs.sticky`
-   is Insiders-only), so we pin it with position:fixed directly under the sticky 2.4rem
-   header, reserve 2.4rem of space so page content never hides beneath it, and disable the
-   tab-link transitions so nothing animates. Desktop only: below Material's 76.25em
-   breakpoint the tabs are replaced by the hamburger drawer, so these rules must not apply. */
+/* Fully static top navigation — it must never scroll away, fade, slide, or animate.
+   - The tab bar is pinned with position:fixed under the sticky 2.4rem header, with its
+     2.4rem height reserved on the container so page content never hides beneath it.
+   - Every transition/animation/transform in the header + tab region is disabled.
+   - Transforms on the fixed bar's ancestors are cleared so none establishes a containing
+     block that could drag the fixed bar during scroll.
+   Desktop only: below Material's 76.25em breakpoint the tabs become the hamburger drawer,
+   so the fixed/padding rules must not apply there. */
 @media screen and (min-width: 76.25em) {
+  .md-container { padding-top: 2.4rem; }   /* reserve the fixed tab bar's height (.md-tabs__item = 2.4rem) */
   .md-tabs {
     position: fixed;
-    top: 2.4rem;              /* directly under the 2.4rem sticky header */
+    top: 2.4rem;                           /* directly under the 2.4rem sticky header */
     left: 0;
     right: 0;
-    z-index: 3;               /* below the header (z-index 4) so the search overlay wins */
-    transform: none !important;
-  }
-  .md-container {
-    padding-top: 2.4rem;      /* reserve the fixed tab bar's height (.md-tabs__item is 2.4rem) */
-  }
-  .md-tabs__link {
-    transition: none !important;
+    z-index: 3;                            /* below the header (z-index 4) so the search overlay wins */
   }
 }
+
+/* No motion anywhere in the header or tab bar: no fade, slide, opacity change, or shadow anim. */
+.md-header, .md-header *, .md-tabs, .md-tabs * {
+  transition: none !important;
+  animation: none !important;
+  transform: none !important;
+}
+/* Tabs always fully opaque (Material dims/fades inactive links to .7). */
+.md-tabs__link { opacity: 1 !important; }
+/* Clear transforms on the fixed bar's ancestors so they can't capture it as a containing block. */
+.md-container,
+.md-main { transform: none !important; }
