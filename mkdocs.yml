@@ -36,6 +36,8 @@ theme:
     - navigation.footer
     - toc.follow
     - search.highlight
+    - search.suggest
+    - search.share
   # 3-way auto / light / dark toggle (same UX as Pydantic), Orq palette.
   palette:
     - scheme: default
