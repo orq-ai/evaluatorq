@@ -250,6 +250,25 @@ def _infer_target_kind(
     return "openai_model"
 
 
+def _target_identity(
+    *,
+    target: str | None,
+    vercel_url: str | None,
+    openai_model: str | None,
+) -> tuple[str | None, str | None]:
+    """(target_name, target_model) persisted on the run so the dashboard can name
+    the target. Model is only client-known for OpenAI-model targets; agents /
+    deployments resolve it server-side, so it stays None there."""
+    if target is not None:
+        _, value = _parse_target_spec(target)
+        return (str(value) if value else None, None)
+    if vercel_url is not None:
+        return (vercel_url, None)
+    if openai_model is not None:
+        return (openai_model, openai_model)
+    return (None, None)
+
+
 # ---------------------------------------------------------------------------
 # simulate
 # ---------------------------------------------------------------------------
@@ -436,10 +455,13 @@ def simulate(
     if output:
         _write_results(results, output)
 
+    tgt_name, tgt_model = _target_identity(target=target, vercel_url=vercel_url, openai_model=openai_model)
     run = _build_simulation_run(
         run_name=name,
         mode="simulate",
         target_kind=target_kind,
+        target=tgt_name,
+        target_model=tgt_model,
         evaluator_names=evaluator_names or DEFAULT_EVALUATOR_NAMES,
         results=results,
     )
@@ -696,10 +718,13 @@ def run(
     if output:
         _write_results(results, output)
 
+    tgt_name, tgt_model = _target_identity(target=target, vercel_url=vercel_url, openai_model=openai_model)
     run = _build_simulation_run(
         run_name=name,
         mode="run",
         target_kind=target_kind,
+        target=tgt_name,
+        target_model=tgt_model,
         evaluator_names=evaluator_names or DEFAULT_EVALUATOR_NAMES,
         results=results,
     )

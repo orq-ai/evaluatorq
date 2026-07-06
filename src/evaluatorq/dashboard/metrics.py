@@ -100,25 +100,20 @@ def _cost_usd(usage: object) -> float:
     return _as_float(usage.get('cost_usd'))
 
 
-def _status_from_score(score: float | None, vulnerable: int | None = None) -> str:
-    """Map a 0..1 score (and optional vulnerability count) to a status pill."""
-    if vulnerable is not None and vulnerable == 0:
-        return 'passed'
-    if score is None:
-        return 'warning'
-    if score >= 0.8:
-        return 'passed'
-    if score >= 0.5:
-        return 'warning'
-    return 'failed'
+def _lifecycle_status(*, broken: bool, all_errored: bool = False) -> str:
+    """Run lifecycle for the Status column: 'error' when the report is broken or
+    every case errored, else 'finished'. ('running' isn't derivable — the run
+    store only receives a file once a job completes.)"""
+    return 'error' if broken or all_errored else 'finished'
 
 
 def _redteam_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
     summary = data.get('summary')
     summary = summary if isinstance(summary, dict) else {}
     resistance = _as_float(summary.get('resistance_rate'), default=1.0) if summary else None
-    vulns = _as_int(summary.get('vulnerabilities_found')) if summary else None
-    status = _status_from_score(resistance, vulnerable=vulns)
+    evaluated = _as_int(summary.get('evaluated_attacks')) if summary else 0
+    errors = _as_int(summary.get('total_errors')) if summary else 0
+    total = _as_int(summary.get('total_attacks')) if summary else 0
     return RunRow(
         id=card.id,
         surface='redteam',
@@ -126,7 +121,7 @@ def _redteam_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
         when=card.created_at.strftime('%Y-%m-%d %H:%M'),
         headline=card.headline,
         score=resistance,
-        status='failed' if card.error else status,
+        status=_lifecycle_status(broken=bool(card.error), all_errored=(total > 0 and evaluated == 0 and errors >= total)),
         error=bool(card.error),
     )
 
@@ -143,7 +138,7 @@ def _sim_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
         when=card.created_at.strftime('%Y-%m-%d %H:%M'),
         headline=card.headline,
         score=score,
-        status='failed' if card.error else _status_from_score(score),
+        status=_lifecycle_status(broken=bool(card.error)),
         error=bool(card.error),
     )
 
@@ -247,23 +242,98 @@ def _result_tokens(res: dict[str, object]) -> int:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class SimItem:
-    """One simulation, as the design's item-level 'Recent simulations' table."""
+_TARGET_LABELS: dict[str, str] = {
+    'orq_agent': 'Orq agent',
+    'orq_deployment': 'Orq deployment',
+    'openai_model': 'OpenAI model',
+    'vercel': 'Vercel',
+    'callback': 'Callback',
+}
 
-    rid: str  # report id of the run this simulation belongs to (row links here)
-    scenario: str
-    persona: str
-    model: str
-    turns: int
-    outcome: str  # 'passed' | 'warning' | 'failed'
+# Target kind → icon category the view renders ('agent' | 'llm' | 'deployment' | 'other').
+_TARGET_KIND_CATEGORY: dict[str, str] = {
+    'orq_agent': 'agent',
+    'orq_deployment': 'deployment',
+    'vercel': 'deployment',
+    'openai_model': 'llm',
+    'callback': 'other',
+}
+
+
+def _split_target(raw: str) -> tuple[str, str] | None:
+    """Parse a prefixed target string into (label, kind).
+
+    Targets are recorded as ``agent:<key>`` / ``deployment:<key>``; a bare
+    ``agent`` / ``deployment`` / ``callback`` carries a kind but no concrete
+    name.  Returns ``None`` when *raw* is empty.
+    """
+    raw = raw.strip()
+    if not raw:
+        return None
+    prefix, _, rest = raw.partition(':')
+    kind = {'agent': 'agent', 'deployment': 'deployment', 'callback': 'other'}.get(prefix, '')
+    if kind:
+        return (rest or _TARGET_LABELS.get(f'orq_{prefix}', prefix), kind)
+    return (raw, '')  # no known prefix → treat the whole string as a name
+
+
+def _sim_target(data: dict[str, object]) -> tuple[str, str]:
+    """Best available (label, icon-kind) for a sim run.
+
+    Prefers a concrete identifier when the report carries one — an explicit
+    ``target``/``model`` field, or a per-result ``metadata.target`` like
+    ``agent:<key>`` (``agent:``/``deployment:`` prefixes name the kind) — and
+    falls back to a branded ``target_kind`` label.  Old reports store only
+    ``target_kind`` + ``run_name``, so they show the kind label.
+    """
+    kind_cat = _TARGET_KIND_CATEGORY.get(str(data.get('target_kind') or ''), 'other')
+    # Preferred: the persisted target name (+ model when the client knew it).
+    target = data.get('target')
+    target_model = data.get('target_model')
+    if isinstance(target, str) and target:
+        name, kind = _split_target(target) or (target, '')
+        if isinstance(target_model, str) and target_model and target_model != name:
+            name = f'{name} · {target_model}'
+        return (name, kind or kind_cat)
+    # Legacy: a bare ``model`` field (older openai-model runs) → the model id.
+    model = data.get('model')
+    if isinstance(model, str) and model:
+        return (model, 'llm')
+    for res in _results(data):
+        meta = res.get('metadata')
+        tgt = meta.get('target') if isinstance(meta, dict) else None
+        if isinstance(tgt, str) and (parsed := _split_target(tgt)):
+            return (parsed[0], parsed[1] or kind_cat)
+    # No concrete target recorded (old reports). Derive an agent-ish name from
+    # run_name rather than the generic 'Orq agent' label: 'sim:<name>:<model>'
+    # → '<name>'.  Real fix is persisting the target on SimulationRun upstream.
+    run_name = str(data.get('run_name') or '')
+    if run_name:
+        name = run_name.split(':', 2)[1] if run_name.startswith('sim:') and ':' in run_name[4:] else run_name
+        return (name or run_name, kind_cat)
+    kind = str(data.get('target_kind') or '')
+    return (_TARGET_LABELS.get(kind, kind or 'unknown'), kind_cat)
+
+
+@dataclass(frozen=True)
+class SimRunRow:
+    """One full Agent Sim run, as the design's run-level table row."""
+
+    rid: str  # report id (row links here)
+    name: str  # run_name / job name
+    when: datetime  # created_at (rendered relative in the view)
+    target: str  # target label (e.g. 'Orq agent')
+    target_kind: str  # icon category: 'agent' | 'llm' | 'deployment' | 'other'
+    status: str  # 'passed' | 'warning' | 'failed'
+    score: float | None  # run score (mean of scorer_averages), 0..1
+    cases: int  # number of simulations in the run
+    cost: float  # summed cost_usd across the run's simulations
     error: bool
-    score: float  # goal completion score, 0..1
 
 
 @dataclass(frozen=True)
 class SimOverview:
-    """Rolled-up Agent Sim surface data: KPI cards + recent-simulations table.
+    """Rolled-up Agent Sim surface data: KPI cards + recent-runs table.
 
     ``avg_cost`` is the real per-sim dollar cost, averaged from each result's
     ``token_usage.cost_usd`` (recorded upstream); ``None`` when no cost data is
@@ -278,21 +348,21 @@ class SimOverview:
     achieved: int  # outcomes donut segments
     not_achieved: int
     errors: int
-    recent: list[SimItem] = field(default_factory=list)
+    recent: list[SimRunRow] = field(default_factory=list)  # newest run first
 
 
-def _sim_model(res: dict[str, object], meta: dict[str, object]) -> str:
-    for key in ('model', 'target_model'):
-        val = meta.get(key) or res.get(key)
-        if isinstance(val, str) and val:
-            return val
-    return 'unknown'
+def _sim_run_score(data: dict[str, object]) -> float | None:
+    """Run-level score: mean of the scorer averages (same basis as _sim_row)."""
+    averages = data.get('scorer_averages')
+    averages = averages if isinstance(averages, dict) else {}
+    vals = [_as_float(v) for v in averages.values()] if averages else []
+    return sum(vals) / len(vals) if vals else None
 
 
 def sim_overview(roots: list[Path] | None = None, *, limit: int = 8) -> SimOverview:
-    """Aggregate every simulation across the sim run store into item-level rows
-    plus headline KPIs. Rows are newest-run-first, capped at ``limit``."""
-    dated: list[tuple[datetime, SimItem]] = []
+    """Aggregate the sim run store into headline KPIs plus a run-level table
+    (one row per full simulation run). Rows are newest-first, capped at ``limit``."""
+    runs: list[SimRunRow] = []
     turns_total = 0
     tokens_total = 0
     cost_total = 0.0
@@ -307,46 +377,49 @@ def sim_overview(roots: list[Path] | None = None, *, limit: int = 8) -> SimOverv
             data = library.read_json_cached(card.path)
         except (OSError, ValueError):
             continue
+
+        run_cost = 0.0
+        run_cases = 0
+        run_errors = 0
         for res in _results(data):
             total += 1
-            meta = res.get('metadata')
-            meta = meta if isinstance(meta, dict) else {}
+            run_cases += 1
             is_error = str(res.get('terminated_by') or '') == 'error'
             goal = bool(res.get('goal_achieved'))
-            score = _as_float(res.get('goal_completion_score'))
-            turns = _as_int(res.get('turn_count'))
-            turns_total += turns
+            turns_total += _as_int(res.get('turn_count'))
             tokens_total += _result_tokens(res)
             usage = res.get('token_usage')
             if isinstance(usage, dict) and 'cost_usd' in usage:
-                cost_total += _cost_usd(usage)
+                run_cost += _cost_usd(usage)
                 has_cost = True
-            # Outcome mirrors the donut segments exactly (goal_achieved / error),
-            # so the table pill and the donut never disagree.
+            # Mirror the donut segments (goal_achieved / error) exactly.
             if is_error:
                 errors += 1
-                outcome = 'error'
+                run_errors += 1
             elif goal:
                 achieved += 1
-                outcome = 'passed'
             else:
                 not_achieved += 1
-                outcome = 'failed'
-            dated.append((
-                card.created_at,
-                SimItem(
-                    rid=card.id,
-                    scenario=str(meta.get('scenario', 'unknown')),
-                    persona=str(meta.get('persona', 'unknown')),
-                    model=_sim_model(res, meta),
-                    turns=turns,
-                    outcome=outcome,
-                    error=is_error,
-                    score=score,
-                ),
-            ))
+        cost_total += run_cost
 
-    dated.sort(key=lambda t: t[0], reverse=True)
+        score = _sim_run_score(data)
+        target, target_kind = _sim_target(data)
+        runs.append(
+            SimRunRow(
+                rid=card.id,
+                name=card.name,
+                when=card.created_at,
+                target=target,
+                target_kind=target_kind,
+                status=_lifecycle_status(broken=bool(card.error), all_errored=(run_cases > 0 and run_errors == run_cases)),
+                score=score,
+                cases=run_cases,
+                cost=run_cost,
+                error=bool(card.error),
+            )
+        )
+
+    runs.sort(key=lambda r: r.when, reverse=True)
     return SimOverview(
         simulations_run=total,
         goal_completion=(achieved / total) if total else None,
@@ -356,7 +429,7 @@ def sim_overview(roots: list[Path] | None = None, *, limit: int = 8) -> SimOverv
         achieved=achieved,
         not_achieved=not_achieved,
         errors=errors,
-        recent=[item for _, item in dated[:limit]],
+        recent=runs[:limit],
     )
 
 
@@ -366,48 +439,53 @@ def sim_overview(roots: list[Path] | None = None, *, limit: int = 8) -> SimOverv
 
 
 @dataclass(frozen=True)
-class AttackItem:
-    """One attack, as the design's item-level 'Recent attacks' table."""
+class RedTeamRunRow:
+    """One full red team run, as the design's run-level table row."""
 
-    rid: str  # report id of the run this attack belongs to (row links here)
-    target: str  # tested agent display name
-    attack: str  # strategy / technique label
-    model: str
-    severity: str  # 'critical' | 'high' | 'medium' | 'low'
-    status: str  # 'passed' (resisted) | 'failed' (vulnerable) | 'warning' (error)
+    rid: str  # report id (row links here)
+    name: str  # run_name / description
+    when: datetime  # created_at (rendered relative in the view)
+    target: str  # tested agent(s) label
+    target_kind: str  # icon category: 'agent' | 'llm' | 'deployment' | 'other'
+    status: str  # 'passed' (resisted) | 'warning' | 'failed'
+    score: float | None  # resistance rate, 0..1
+    cases: int  # number of attacks in the run
+    cost: float  # summed cost_usd for the run
     error: bool
-    when: str  # preformatted 'YYYY-MM-DD HH:MM'
 
 
 @dataclass(frozen=True)
 class RedTeamOverview:
-    """Rolled-up Red Team surface data: KPI cards + recent-attacks table."""
+    """Rolled-up Red Team surface data: KPI cards + recent-runs table."""
 
     attacks_run: int
     break_rate: float | None  # share of evaluated attacks that were vulnerable
     critical_findings: int
     avg_robustness: float | None  # attack-weighted resistance, 0..1
     total_cost: float | None  # summed cost_usd across red team runs
-    recent: list[AttackItem] = field(default_factory=list)
+    recent: list[RedTeamRunRow] = field(default_factory=list)  # newest run first
 
 
-def _attack_model(agent: dict[str, object]) -> str:
-    val = agent.get('model')
-    return val if isinstance(val, str) and val else 'unknown'
-
-
-def _attack_label(attack: dict[str, object]) -> str:
-    for key in ('strategy_name', 'attack_technique', 'vulnerability', 'id'):
-        val = attack.get(key)
-        if isinstance(val, str) and val:
-            return val.replace('_', ' ')
-    return 'unknown'
+def _redteam_target(data: dict[str, object], run_targets: set[str]) -> str:
+    """Prefer the run's tested_agents; fall back to targets seen in results."""
+    labels: list[str] = []
+    tested = data.get('tested_agents')
+    if isinstance(tested, list):
+        for t in tested:
+            if isinstance(t, str) and t:
+                labels.append(t)
+            elif isinstance(t, dict):
+                val = t.get('display_name') or t.get('key')
+                if isinstance(val, str) and val:
+                    labels.append(val)
+    labels = labels or sorted(run_targets)
+    return ', '.join(dict.fromkeys(labels)) if labels else 'unknown'
 
 
 def redteam_overview(roots: list[Path] | None = None, *, limit: int = 8) -> RedTeamOverview:
-    """Aggregate every attack across the red team run store into item-level rows
-    plus headline KPIs. Rows are newest-run-first, capped at ``limit``."""
-    dated: list[tuple[datetime, AttackItem]] = []
+    """Aggregate the red team run store into headline KPIs plus a run-level table
+    (one row per full red team run). Rows are newest-first, capped at ``limit``."""
+    runs: list[RedTeamRunRow] = []
     evaluated = 0
     vulnerable = 0
     critical = 0
@@ -425,50 +503,69 @@ def redteam_overview(roots: list[Path] | None = None, *, limit: int = 8) -> RedT
             continue
 
         summary = data.get('summary')
-        if isinstance(summary, dict):
-            usage = summary.get('token_usage_total')
-            if isinstance(usage, dict) and 'cost_usd' in usage:
-                cost_total += _cost_usd(usage)
-                has_cost = True
+        summary = summary if isinstance(summary, dict) else {}
+        run_cost = 0.0
+        usage = summary.get('token_usage_total')
+        if isinstance(usage, dict) and 'cost_usd' in usage:
+            run_cost = _cost_usd(usage)
+            cost_total += run_cost
+            has_cost = True
 
+        run_targets: set[str] = set()
+        has_key = has_model = False
+        run_vuln = 0
+        run_attacks = 0
+        run_errors = 0
         for res in _results(data):
             total_attacks += 1
+            run_attacks += 1
             attack = res.get('attack')
             attack = attack if isinstance(attack, dict) else {}
             agent = res.get('agent')
             agent = agent if isinstance(agent, dict) else {}
+            tgt = agent.get('display_name') or agent.get('key')
+            if isinstance(tgt, str) and tgt:
+                run_targets.add(tgt)
+            has_key = has_key or bool(agent.get('key'))
+            has_model = has_model or bool(agent.get('model'))
             is_error = bool(res.get('error'))
             is_vuln = bool(res.get('vulnerable'))
             severity = str(attack.get('severity', 'low')).lower()
-            if not is_error:
+            if is_error:
+                run_errors += 1
+            else:
                 evaluated += 1
                 if is_vuln:
                     vulnerable += 1
+                    run_vuln += 1
                     if severity == 'critical':
                         critical += 1
                 else:
                     resistant += 1
-            status = 'warning' if is_error else ('failed' if is_vuln else 'passed')
-            dated.append((
-                card.created_at,
-                AttackItem(
-                    rid=card.id,
-                    target=str(agent.get('display_name') or agent.get('key') or 'unknown'),
-                    attack=_attack_label(attack),
-                    model=_attack_model(agent),
-                    severity=severity,
-                    status=status,
-                    error=is_error,
-                    when=card.created_at.strftime('%Y-%m-%d %H:%M'),
-                ),
-            ))
 
-    dated.sort(key=lambda t: t[0], reverse=True)
+        resistance = _as_float(summary.get('resistance_rate')) if 'resistance_rate' in summary else None
+        cases = _as_int(summary.get('total_attacks')) or run_attacks
+        runs.append(
+            RedTeamRunRow(
+                rid=card.id,
+                name=card.name,
+                when=card.created_at,
+                target=_redteam_target(data, run_targets),
+                target_kind='agent' if has_key else ('llm' if has_model else 'other'),
+                status=_lifecycle_status(broken=bool(card.error), all_errored=(run_attacks > 0 and run_errors == run_attacks)),
+                score=resistance,
+                cases=cases,
+                cost=run_cost,
+                error=bool(card.error),
+            )
+        )
+
+    runs.sort(key=lambda r: r.when, reverse=True)
     return RedTeamOverview(
         attacks_run=total_attacks,
         break_rate=(vulnerable / evaluated) if evaluated else None,
         critical_findings=critical,
         avg_robustness=(resistant / evaluated) if evaluated else None,
         total_cost=cost_total if has_cost else None,
-        recent=[item for _, item in dated[:limit]],
+        recent=runs[:limit],
     )

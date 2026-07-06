@@ -103,21 +103,62 @@ class TestSimOverviewMetrics:
         # Outcomes split for the donut.
         assert (ov.achieved, ov.not_achieved, ov.errors) == (1, 1, 1)
 
-    def test_item_rows(self, roots: list[Path]) -> None:
+    def test_run_rows(self, roots: list[Path]) -> None:
         ov = metrics.sim_overview(roots)
-        assert len(ov.recent) == 3
-        first = ov.recent[0]
-        assert first.scenario == 'billing'
-        assert first.persona == 'alice'
-        assert first.model == 'gpt-5.4'
-        assert first.turns == 4
-        assert first.outcome == 'passed'  # goal_achieved
-        # Every row links to a real report id.
-        rid = report_id(roots[1] / 'support_20260625_140000.json')
-        assert all(it.rid == rid for it in ov.recent)
-        # The errored sim is flagged and reads as 'error' (matches the donut).
-        errored = next(it for it in ov.recent if it.error)
-        assert errored.outcome == 'error'
+        # One row per run (not per simulation case).
+        assert len(ov.recent) == 1
+        row = ov.recent[0]
+        assert row.name == 'Support sim'
+        assert row.cases == 3  # three simulations in the run
+        # Score is the mean of scorer_averages ({'goal_achieved': 0.5}).
+        assert row.score == pytest.approx(0.5)
+        assert row.status == 'finished'  # lifecycle — completed run (score carries quality)
+        # Row links to the run's report id.
+        assert row.rid == report_id(roots[1] / 'support_20260625_140000.json')
+
+    def test_target_name_and_model(self, tmp_path: Path) -> None:
+        """A run persisting `target` + `target_model` shows 'name · model'; a run
+        where every case errored reads Status = 'error'."""
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        (sim / 'named.json').write_text(
+            json.dumps({
+                'mode': 'run',
+                'created_at': '2026-06-30T10:00:00',
+                'run_name': 'sim:x',
+                'target_kind': 'orq_agent',
+                'target': 'support-bot',
+                'target_model': 'gpt-4o',
+                'total_results': 1,
+                'scorer_averages': {'goal_achieved': 1.0},
+                'results': [{'goal_achieved': True, 'turn_count': 1, 'metadata': {}}],
+            })
+        )
+        (sim / 'broken.json').write_text(
+            json.dumps({
+                'mode': 'run',
+                'created_at': '2026-06-29T10:00:00',
+                'run_name': 'sim:y',
+                'target_kind': 'orq_agent',
+                'target': 'refund-bot',
+                'total_results': 2,
+                'scorer_averages': {},
+                'results': [
+                    {'terminated_by': 'error', 'metadata': {}},
+                    {'terminated_by': 'error', 'metadata': {}},
+                ],
+            })
+        )
+        rows = {r.name: r for r in metrics.sim_overview([rt, sim]).recent}
+        # Agent target with a known model → "name · model".
+        assert rows['sim:x'].target == 'support-bot · gpt-4o'
+        # agent target name surfaces (never a generic 'Orq agent' label).
+        assert rows['sim:y'].target == 'refund-bot'
+        assert rows['sim:y'].target_kind == 'agent'
+        # Every case errored → lifecycle status 'error'.
+        assert rows['sim:y'].status == 'error'
 
     def test_empty(self, tmp_path: Path) -> None:
         empty = [tmp_path / 'runs', tmp_path / 'sim-runs']
@@ -137,10 +178,10 @@ class TestSimOverviewScreen:
         assert 'Goal completion' in r.text
         assert 'Avg turns' in r.text
         assert 'Avg tokens/sim' in r.text  # cost stand-in
-        assert 'Recent simulations' in r.text
-        # Item-level rows surface the scenario/persona, and link to the report.
-        assert 'billing' in r.text
-        assert 'alice' in r.text
+        assert 'Recent runs' in r.text
+        # Run-level rows surface the run name + design columns.
+        assert 'Support sim' in r.text
+        assert 'Cases' in r.text
 
     def test_empty_surface(self, tmp_path: Path) -> None:
         empty = [tmp_path / 'runs', tmp_path / 'sim-runs']

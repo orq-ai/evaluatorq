@@ -166,9 +166,9 @@ class TestFix2SurfaceNavFilter:
         """GET /?surface=sim must show the sim overview and exclude the redteam one."""
         r = client.get("/?surface=sim")
         assert r.status_code == 200
-        # The Agent Sim surface is the item-level overview (KPI cards + table).
-        assert "Recent simulations" in r.text
-        assert "billing" in r.text
+        # The Agent Sim surface is the run-level overview (KPI cards + table).
+        assert "Recent runs" in r.text
+        assert "demo-sim" in r.text
         # Redteam report must not appear (its stem is rt_fix_test).
         assert "rt_fix_test" not in r.text
 

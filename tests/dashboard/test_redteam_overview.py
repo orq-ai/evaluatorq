@@ -81,18 +81,19 @@ class TestRedTeamOverviewMetrics:
         assert ov.critical_findings == 1
         assert ov.total_cost == pytest.approx(0.0048)
 
-    def test_item_rows(self, roots: list[Path]) -> None:
+    def test_run_rows(self, roots: list[Path]) -> None:
         ov = metrics.redteam_overview(roots)
-        assert len(ov.recent) == 4
-        rid = report_id(roots[0] / "probe_20260629_101500.json")
-        assert all(it.rid == rid for it in ov.recent)
-        # The critical vulnerable attack reads as failed (broken through).
-        crit = next(it for it in ov.recent if it.severity == "critical")
-        assert crit.status == "failed"
-        assert crit.model == "gpt-5.4"
-        # The errored attack is flagged as warning, not a resist/break.
-        errored = next(it for it in ov.recent if it.error)
-        assert errored.status == "warning"
+        # One row per run (not per attack).
+        assert len(ov.recent) == 1
+        row = ov.recent[0]
+        assert row.rid == report_id(roots[0] / "probe_20260629_101500.json")
+        assert row.name == "Probe"
+        assert row.cases == 4  # four attacks in the run
+        # Target is the tested agent surfaced from the run's results.
+        assert row.target == "Refund agent"
+        # Score is the run resistance rate (2 of 3 evaluated resisted).
+        assert row.score == pytest.approx(2 / 3)
+        assert row.cost == pytest.approx(0.0048)
 
 
 class TestRedTeamOverviewScreen:
@@ -103,7 +104,7 @@ class TestRedTeamOverviewScreen:
         assert "Break rate" in r.text
         assert "Critical findings" in r.text
         assert "Avg robustness" in r.text
-        assert "Recent attacks" in r.text
+        assert "Recent runs" in r.text
         assert "Refund agent" in r.text
 
 

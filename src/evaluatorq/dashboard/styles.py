@@ -176,6 +176,64 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
 .status-badge.warning { background: var(--amber-100); color: var(--red-600); }
 .status-badge.warning .dot { background: var(--orange-500); }
 
+/* sim run-level table: two-line job cell + outline target pill */
+.sim-job { display: inline-flex; flex-direction: column; gap: 2px; text-decoration: none; }
+.sim-job-name { font-weight: 600; color: var(--text-strong, #1a1a1a); }
+.sim-job-sub { font-size: 12px; color: var(--text-muted, #8a8a8a); }
+.target-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 24px;
+    padding: 0 10px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+.target-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--chart-1); }
+.target-pill svg { width: 13px; height: 13px; color: var(--chart-1); flex: 0 0 auto; }
+.row-chevron { width: 16px; height: 16px; color: var(--text-faint); display: block; margin-left: auto; }
+
+/* Landing 'Recent runs' Type column: surface glyph + label (no colored bubble) */
+.type-cell { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; white-space: nowrap; }
+.type-cell svg { width: 15px; height: 15px; flex: 0 0 auto; }
+.type-cell.redteam svg { color: var(--red-600); }
+.type-cell.sim svg { color: var(--teal-600); }
+
+/* Landing 'Recent runs' — airy aligned columns, no table chrome */
+.recent-runs { display: flex; flex-direction: column; }
+.rr-head, .rr-row {
+    display: grid;
+    grid-template-columns: minmax(130px, 1.2fr) minmax(0, 2fr) auto auto 56px auto;
+    align-items: center;
+    gap: 16px;
+}
+.rr-head {
+    padding: 0 4px 10px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+}
+.rr-row {
+    padding: 12px 4px;
+    text-decoration: none;
+    color: inherit;
+    border-top: 1px solid var(--border-subtle);
+}
+.rr-row:hover { background: var(--app-gray-50); }
+.rr-job {
+    font-size: 13px; font-weight: 500; color: var(--text-strong);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rr-meta { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
+.rr-row .run-score { font-family: var(--font-mono); font-size: 13px; font-weight: 600; }
+/* Align the numeric Score column head + cell. */
+.rr-head span:nth-child(5), .rr-row .run-score { text-align: right; }
+
 /* ==== combined landing ============================================== */
 .dash-wrap { display: flex; flex-direction: column; gap: 16px; max-width: 1100px; }
 .stat-band { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }

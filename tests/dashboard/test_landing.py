@@ -108,7 +108,7 @@ class TestMetrics:
         assert set(by_surface) == {'redteam', 'sim'}
         # Red team score is the resistance rate.
         assert by_surface['redteam'].score == pytest.approx(0.86)
-        assert by_surface['redteam'].status == 'passed'  # >= 0.8
+        assert by_surface['redteam'].status == 'finished'  # lifecycle, not quality
         # Sim score is the mean of scorer averages.
         assert by_surface['sim'].score == pytest.approx((0.91 + 0.97) / 2)
 
@@ -141,39 +141,44 @@ class TestLandingScreen:
         r = client.get('/')
         assert r.status_code == 200
         assert 'stat-band' in r.text
-        assert 'Attack resistance' in r.text
+        # Attack-resistance donut was dropped; band now leads with Jobs run.
+        assert 'Attack resistance' not in r.text
+        assert 'Jobs run' in r.text
         assert 'Findings by severity' in r.text
         # Recent runs include both run names.
         assert 'Refund agent probe' in r.text
         assert 'Support agent simulation' in r.text
-        # The combined dashboard mixes surfaces, so the kind badge disambiguates.
-        assert '<span class="kind-badge' in r.text
+        # The combined dashboard mixes surfaces; the Type column disambiguates
+        # (surface glyph + label) instead of an inline bubble, rendered as an
+        # airy column list rather than a boxed table.
+        assert 'type-cell' in r.text
+        assert 'recent-runs' in r.text
 
     def test_dashboard_nav_active(self, client: TestClient) -> None:
         r = client.get('/')
         assert '<a class="nav-item active" href="/"' in r.text
 
     def test_redteam_overview(self, client: TestClient) -> None:
-        # Red Team is the design's rich overview: KPI band + item-level attacks
-        # table, not the run list.
+        # Red Team is the design's rich overview: KPI band + run-level table,
+        # one row per red team run (not per attack).
         r = client.get('/?surface=redteam')
         assert r.status_code == 200
         assert 'kpi-band' in r.text
         assert 'Attacks run' in r.text
-        assert 'Recent attacks' in r.text
-        # Item-level rows surface the target/attack; the sim run must not leak.
+        assert 'Recent runs' in r.text
+        # Run-level rows surface the run name; the sim run must not leak.
         assert 'Refund agent' in r.text
         assert 'Support agent simulation' not in r.text
         assert '<span class="kind-badge' not in r.text
 
     def test_agentsim_overview(self, client: TestClient) -> None:
-        # Agent Sim is the design's rich overview: KPI band + item-level table,
-        # not the run list.
+        # Agent Sim is the design's rich overview: KPI band + run-level table,
+        # one row per simulation run (not per simulation case).
         r = client.get('/?surface=sim')
         assert r.status_code == 200
         assert 'kpi-band' in r.text
         assert 'Simulations run' in r.text
-        assert 'Recent simulations' in r.text
+        assert 'Recent runs' in r.text
         # The red team run must not leak onto the sim surface.
         assert 'Refund agent probe' not in r.text
         assert '<span class="kind-badge' not in r.text

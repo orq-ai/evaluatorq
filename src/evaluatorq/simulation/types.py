@@ -337,6 +337,13 @@ class SimulationRun(BaseModel):
     created_at: datetime
     mode: Literal["run", "simulate", "generate"]
     target_kind: Literal["orq_agent", "orq_deployment", "vercel", "openai_model", "callback"]
+    # The concrete target under test: agent key / deployment key / model id /
+    # 'callback'. ``target_model`` is the model that target used *when the client
+    # knows it* (OpenAI-model targets); for orq agents/deployments the model is
+    # server-side config, so it stays None. Optional for back-compat with runs
+    # saved before these fields existed.
+    target: str | None = None
+    target_model: str | None = None
     evaluator_names: list[str]
     total_results: int
     scorer_averages: dict[str, float]

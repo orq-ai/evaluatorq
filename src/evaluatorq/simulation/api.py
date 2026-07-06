@@ -625,11 +625,17 @@ async def _simulate_core(
     if target_agent is not None:
         agent_key_attr = getattr(target_agent, 'agent_key', None)
         target_label = f'agent:{agent_key_attr}' if agent_key_attr else 'agent'
+        target_name = agent_key_attr or 'agent'
     elif target_kind_hint == 'orq_deployment':
         dep_key = getattr(target_callback_resolved, 'deployment_key', None)
         target_label = f'deployment:{dep_key}' if dep_key else 'deployment'
+        target_name = dep_key or 'deployment'
     else:
         target_label = 'callback'
+        target_name = 'callback'
+    # Model the target ran, only when the client knows it (e.g. an OpenAI-model
+    # target exposes ``.model``); orq agents/deployments resolve it server-side.
+    target_model = getattr(target_agent, 'model', None) or getattr(target_callback_resolved, 'model', None)
     run_meta: SimulationRunMeta = {
         'num_datapoints': len(sim_datapoints),
         'model': model,
@@ -710,6 +716,8 @@ async def _simulate_core(
                 run_name=evaluation_name or 'sim',
                 mode='simulate' if caller == 'simulate' else 'run',
                 target_kind=target_kind,
+                target=target_name,
+                target_model=target_model if isinstance(target_model, str) else None,
                 evaluator_names=resolved_evaluator_names,
                 results=results,
             )

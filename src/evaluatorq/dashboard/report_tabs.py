@@ -99,6 +99,8 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
 
     entries = individual_entries(rows)
 
+    # Folded 7→4 to curb tab sprawl: Turn quality → Breakdown; Evaluators +
+    # Judge & errors → Transcripts (all per-conversation verdicts); Tokens → Config.
     tabs = _tabs(
         'simtab',
         [
@@ -111,13 +113,16 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
                     'persona_scenario_heatmap',
                     'score_distribution',
                     'failures_first',
+                    'turn_metrics',
+                    'turn_quality_timeline',
                 ),
             ),
-            ('Transcripts', sim_interactive_panels(rid, entries)),
-            ('Turn quality', render('turn_metrics', 'turn_quality_timeline')),
-            ('Tokens', render('token_usage')),
-            ('Evaluators', render('evaluator_scores')),
-            ('Judge & errors', render('judge_verdicts', 'failure_mode', 'errors')),
+            (
+                'Transcripts',
+                sim_interactive_panels(rid, entries)
+                + render('evaluator_scores', 'judge_verdicts', 'failure_mode', 'errors'),
+            ),
+            ('Config', render('token_usage')),
         ],
     )
     return f'{hero}{tabs}'
@@ -233,12 +238,20 @@ def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
     multi_agent = len(report.tested_agents) > 1
     hero = _redteam_hero(by_kind.get('summary'), report)
 
+    # Folded 7→5: Comparison (agent heatmap + disagreements) → Evidence; Usage +
+    # Methodology → Config. Error Analysis stays its own tab — it's where users
+    # go to understand where the agent went wrong, not run metadata.
+    comparison = (
+        rt_panel_agent_heatmap(rid) + rt_panel_disagreement(rid) + render('agent_comparison', 'agent_disagreements')
+        if multi_agent
+        else ''
+    )
     tabs = _tabs(
         'rttab',
         [
-            ('Summary', render('summary', 'focus_areas')),
+            ('Overview', render('summary', 'focus_areas')),
             (
-                'Breakdown',
+                'Breakdowns',
                 rt_panel_breakdown(rid)
                 + render(
                     'vulnerability_breakdown',
@@ -251,16 +264,12 @@ def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
                     'framework_breakdown',
                 ),
             ),
-            ('Explorer', rt_panel_conversation(rid) + render('individual_results', 'source_distribution')),
-            ('Usage', render('token_usage')),
-            ('Error Analysis', render('error_analysis')),
             (
-                'Comparison',
-                (rt_panel_agent_heatmap(rid) + rt_panel_disagreement(rid) + render('agent_comparison', 'agent_disagreements'))
-                if multi_agent
-                else '',
+                'Evidence',
+                rt_panel_conversation(rid) + render('individual_results', 'source_distribution') + comparison,
             ),
-            ('Methodology', render('methodology', 'agent_context', 'severity_definitions')),
+            ('Error Analysis', render('error_analysis')),
+            ('Config', render('token_usage', 'methodology', 'agent_context', 'severity_definitions')),
         ],
     )
     return f'{hero}{tabs}'

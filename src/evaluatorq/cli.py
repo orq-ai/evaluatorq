@@ -91,7 +91,10 @@ def dashboard(
     if path is None:
         roots = None  # library.py picks the defaults
     elif path.is_dir():
-        roots = [path]
+        # Also include the store subdirs so pointing at a `.evaluatorq` root
+        # (which holds runs/ + sim-runs/, not top-level *.json) still resolves.
+        # Non-existent subdirs are skipped by the scanner.
+        roots = [path, path / 'runs', path / 'sim-runs']
     else:
         # Scan the parent so the report resolves, but surface the direct link.
         roots = [path.parent]

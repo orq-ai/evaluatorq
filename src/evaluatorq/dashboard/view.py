@@ -19,7 +19,7 @@ role-labeled message list as a series of ``<div>`` elements.  Shared by
 
 from __future__ import annotations
 
-import math
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
@@ -71,8 +71,14 @@ def _kind_badge(surface: str) -> str:
 
 
 def _status_badge(status: str) -> str:
-    label = {'passed': 'Passed', 'failed': 'Failed', 'warning': 'Warning'}.get(status, status.title())
-    return f'<span class="status-badge {esc(status)}"><span class="dot"></span>{esc(label)}</span>'
+    # Map lifecycle status → an existing pill color class (finished→passed green,
+    # error→failed red) so the run-list badges stay styled.
+    label, cls = {
+        'finished': ('Finished', 'passed'),
+        'error': ('Error', 'failed'),
+        'running': ('Running', 'warning'),
+    }.get(status, (status.title(), status))
+    return f'<span class="status-badge {esc(cls)}"><span class="dot"></span>{esc(label)}</span>'
 
 
 def _run_row(row: RunRow, *, show_badge: bool = True) -> str:
@@ -91,6 +97,55 @@ def _run_row(row: RunRow, *, show_badge: bool = True) -> str:
         f'{_status_badge(row.status)}'
         f'</a>'
     )
+
+
+# Surface → inline glyph (lucide: shield-alert / messages-square) for the Type column.
+_SURFACE_ICONS: dict[str, str] = {
+    'redteam': (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 '
+        '1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 '
+        '3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M12 8v4M12 16h.01"/></svg>'
+    ),
+    'sim': (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 '
+        '2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>'
+    ),
+}
+
+
+def _type_cell(surface: str) -> str:
+    """Type column: surface glyph + label (replaces the inline kind bubble)."""
+    icon = _SURFACE_ICONS.get(surface, '')
+    label = SURFACE_LABELS.get(surface, surface)
+    return f'<span class="type-cell {esc(surface)}">{icon}{esc(label)}</span>'
+
+
+def _recent_runs_table(rows: list[RunRow]) -> str:
+    """Landing 'Recent runs' as an airy column list (not a boxed table):
+    Type · Job · Cases · Time · Score · Status, aligned but borderless."""
+    from evaluatorq.common.reports.html_helpers import status_badge
+
+    head = (
+        '<div class="rr-head"><span>Type</span><span>Job</span><span>Cases</span>'
+        '<span>Time</span><span>Score</span><span>Status</span></div>'
+    )
+    row_html: list[str] = [head]
+    for r in rows:
+        label, status = _LIFECYCLE_PILL.get(r.status, (r.status.title(), "neutral"))
+        err = '<span class="card-error" title="failed to load">error</span>' if r.error else ''
+        row_html.append(
+            f'<a class="rr-row" href="/r/{esc(r.id)}">'
+            f'<span class="rr-type">{_type_cell(r.surface)}</span>'
+            f'<span class="rr-job">{esc(r.name)}{err}</span>'
+            f'<span class="rr-meta">{esc(r.headline)}</span>'
+            f'<span class="rr-meta">{esc(r.when)}</span>'
+            f'<span class="run-score {_score_cls(r.score)}">{_fmt_score(r.score)}</span>'
+            f'{status_badge(label, status)}'
+            f'</a>'
+        )
+    return f'<div class="recent-runs">{"".join(row_html)}</div>'
 
 
 def _stat_tile(label: str, value: str, unit: str = '') -> str:
@@ -128,25 +183,6 @@ def _bars(rows: list[tuple[str, float]], colors: list[str], *, total_label: str 
     return ''.join(parts)
 
 
-def _donut(resistant: int, vulnerable: int) -> str:
-    total = resistant + vulnerable
-    pct = round(resistant / total * 100) if total else 0
-    r = 60
-    circ = 2 * math.pi * r
-    resist_len = circ * (resistant / total) if total else 0
-    return (
-        '<div class="donut-wrap"><div class="donut">'
-        f'<svg width="150" height="150" viewBox="0 0 150 150">'
-        f'<circle cx="75" cy="75" r="{r}" fill="none" stroke="var(--red-600)" stroke-width="18"/>'
-        f'<circle cx="75" cy="75" r="{r}" fill="none" stroke="var(--teal-600)" stroke-width="18"'
-        f' stroke-dasharray="{resist_len:.1f} {circ - resist_len:.1f}"/>'
-        f'</svg>'
-        f'<div class="donut-center"><span class="donut-value">{pct}%</span>'
-        f'<span class="donut-label">resistant</span></div>'
-        '</div></div>'
-    )
-
-
 def landing_body(data: Landing) -> str:
     """Render the combined Dashboard landing as an HTML fragment."""
     if data.total_runs == 0:
@@ -156,13 +192,14 @@ def landing_body(data: Landing) -> str:
             '</div></section>'
         )
 
-    resist = '—' if data.resistance_rate is None else f'{round(data.resistance_rate * 100)}'
+    total_tokens = sum(n for _, n in data.tokens_by_kind)
+    avg_cost = data.total_cost / data.total_runs if data.total_runs else 0.0
     band = (
         '<div class="stat-band">'
-        + _stat_tile('Total runs', str(data.total_runs))
+        + _stat_tile('Jobs run', str(data.total_runs))
+        + _stat_tile('Avg cost / job', _fmt_cost(avg_cost))
         + _stat_tile('Total spend', _fmt_cost(data.total_cost))
-        + _stat_tile('Agent sim', str(data.sim_runs))
-        + _stat_tile('Resistance', resist, unit='%')
+        + _stat_tile('Total tokens', _fmt_compact(total_tokens))
         + '</div>'
     )
 
@@ -170,8 +207,6 @@ def landing_body(data: Landing) -> str:
     severity_colors = ['var(--red-600)', 'var(--orange-500)', 'var(--amber-600)', 'var(--green-600)']
 
     by_kind_panel = _panel('Runs by type', 'Red team · agent sim', _bars(data.by_kind, teal_jade))
-    donut_panel = _panel('Attack resistance', 'All red team runs', _donut(data.resistant, data.vulnerable))
-    row1 = f'<div class="dash-row2">{by_kind_panel}{donut_panel}</div>'
 
     sev_rows = [(s.title(), n) for s, n in data.severity]
     sev_inner = _bars(sev_rows, severity_colors) if sev_rows else '<p class="rt-panel-loading">No findings.</p>'
@@ -183,7 +218,6 @@ def landing_body(data: Landing) -> str:
         else '<p class="rt-panel-loading">No cost recorded.</p>'
     )
     spend_panel = _panel('Spend by job type', 'Real cost across runs', spend_inner)
-    row2 = f'<div class="dash-row-eq">{severity_panel}{spend_panel}</div>'
 
     tok_inner = (
         _bars(data.tokens_by_kind, teal_jade, fmt='{:,}')
@@ -191,12 +225,16 @@ def landing_body(data: Landing) -> str:
         else '<p class="rt-panel-loading">No token usage recorded.</p>'
     )
     tokens_panel = _panel('Token usage', 'By job type', tok_inner)
-    row3 = f'<div class="dash-row-eq">{tokens_panel}</div>'
 
-    recent_inner = ''.join(_run_row(r) for r in data.recent)
-    recent_panel = _panel('Recent runs', 'Latest jobs', f'<div class="run-list">{recent_inner}</div>')
+    # 2x2 grid of the four remaining panels.
+    grid = (
+        f'<div class="dash-row-eq">{by_kind_panel}{severity_panel}</div>'
+        f'<div class="dash-row-eq">{spend_panel}{tokens_panel}</div>'
+    )
 
-    return f'<section class="dash-wrap">{band}{row1}{row2}{row3}{recent_panel}</section>'
+    recent_panel = _panel('Recent runs', 'Latest jobs', _recent_runs_table(data.recent))
+
+    return f'<section class="dash-wrap">{band}{grid}{recent_panel}</section>'
 
 
 _OUTCOME_PILL: dict[str, tuple[str, str]] = {
@@ -206,17 +244,12 @@ _OUTCOME_PILL: dict[str, tuple[str, str]] = {
     'error': ('Error', 'warn'),
 }
 
-_ATTACK_STATUS_PILL: dict[str, tuple[str, str]] = {
-    'passed': ('Resisted', 'pass'),
-    'failed': ('Vulnerable', 'fail'),
-    'warning': ('Error', 'warn'),
-}
-
-_SEVERITY_STATUS: dict[str, str] = {
-    'critical': 'fail',
-    'high': 'fail',
-    'medium': 'warn',
-    'low': 'neutral',
+# Run lifecycle → (label, pill-kind) for the Status column. Score carries quality;
+# Status carries whether the run completed. 'running' reserved for future live jobs.
+_LIFECYCLE_PILL: dict[str, tuple[str, str]] = {
+    'finished': ('Finished', 'pass'),
+    'error': ('Error', 'fail'),
+    'running': ('Running', 'warn'),
 }
 
 
@@ -228,6 +261,62 @@ def _fmt_cost(v: float) -> str:
     if v > 0:
         return f'${v:.4f}'
     return '$0.00'
+
+
+# Inline target-kind glyphs (lucide: bot / cpu / rocket), sized to the pill.
+_TARGET_ICONS: dict[str, str] = {
+    'agent': (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4M8 2h8"/>'
+        '<rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2M20 14h2"/>'
+        '<path d="M9 13v2M15 13v2"/></svg>'
+    ),
+    'llm': (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/>'
+        '<rect x="9" y="9" width="6" height="6"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2'
+        'M2 9h2M2 15h2M20 9h2M20 15h2"/></svg>'
+    ),
+    'deployment': (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 '
+        '5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 0 1 '
+        '2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/>'
+        '<path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5z"/></svg>'
+    ),
+}
+
+
+_CHEVRON = (
+    '<svg class="row-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>'
+)
+
+
+def _target_pill(label: str, kind: str) -> str:
+    """Target cell: kind icon (agent / llm / deployment) + label, dot fallback."""
+    icon = _TARGET_ICONS.get(kind, '<span class="dot"></span>')
+    return f'<span class="target-pill" data-kind="{esc(kind)}">{icon}{esc(label)}</span>'
+
+
+def _ago(when: datetime) -> str:
+    """Relative time: '46m ago', '7h ago', '3d ago'."""
+    now = datetime.now(tz=when.tzinfo) if when.tzinfo else datetime.now()  # noqa: DTZ005
+    secs = max(0, int((now - when).total_seconds()))
+    if secs < 3600:
+        return f'{secs // 60}m ago'
+    if secs < 86400:
+        return f'{secs // 3600}h ago'
+    return f'{secs // 86400}d ago'
+
+
+def _fmt_compact(n: int) -> str:
+    """Compact large counts: 1_157_563 -> '1.2M', 4_200 -> '4.2K'."""
+    if n >= 1_000_000:
+        return f'{n / 1_000_000:.1f}M'
+    if n >= 1_000:
+        return f'{n / 1_000:.1f}K'
+    return str(n)
 
 
 def sim_overview_body(data: SimOverview) -> str:
@@ -260,18 +349,24 @@ def sim_overview_body(data: SimOverview) -> str:
     ])
 
     table_rows: list[list[str]] = []
-    for it in data.recent:
-        label, status = _OUTCOME_PILL.get(it.outcome, ('—', 'neutral'))
+    for r in data.recent:
+        label, status = _LIFECYCLE_PILL.get(r.status, (r.status.title(), "neutral"))
+        job = (
+            f'<a class="sim-job" href="/r/{esc(r.rid)}">'
+            f'<span class="sim-job-name">{esc(r.name)} · simulation</span>'
+            f'<span class="sim-job-sub">{esc(_ago(r.when))}</span></a>'
+        )
         table_rows.append([
-            f'<a href="/r/{esc(it.rid)}">{esc(it.scenario)}</a>',
-            esc(it.persona),
-            esc(it.model),
-            str(it.turns),
+            job,
+            _target_pill(r.target, r.target_kind),
             status_badge(label, status),
-            pct(it.score),
+            _fmt_score(r.score),
+            str(r.cases),
+            _fmt_cost(r.cost),
+            _CHEVRON,
         ])
-    table = html_table(['Scenario', 'Persona', 'Model', 'Turns', 'Outcome', 'Score'], table_rows)
-    panel = _panel('Recent simulations', 'Latest simulations across runs', table)
+    table = html_table(['Job', 'Target', 'Status', 'Score', 'Cases', 'Cost', ''], table_rows)
+    panel = _panel('Recent runs', 'Latest agent simulation runs', table)
     return f'<section class="dash-wrap">{band}{panel}</section>'
 
 
@@ -321,19 +416,24 @@ def redteam_overview_body(data: RedTeamOverview) -> str:
     ])
 
     table_rows: list[list[str]] = []
-    for it in data.recent:
-        status_label, status_kind = _ATTACK_STATUS_PILL.get(it.status, ('—', 'neutral'))
-        sev_kind = _SEVERITY_STATUS.get(it.severity, 'neutral')
+    for r in data.recent:
+        label, status = _LIFECYCLE_PILL.get(r.status, (r.status.title(), "neutral"))
+        job = (
+            f'<a class="sim-job" href="/r/{esc(r.rid)}">'
+            f'<span class="sim-job-name">{esc(r.name)} · red team</span>'
+            f'<span class="sim-job-sub">{esc(_ago(r.when))}</span></a>'
+        )
         table_rows.append([
-            f'<a href="/r/{esc(it.rid)}">{esc(it.target)}</a>',
-            esc(it.attack),
-            esc(it.model),
-            status_badge(it.severity.title(), sev_kind),
-            status_badge(status_label, status_kind),
-            esc(it.when),
+            job,
+            _target_pill(r.target, r.target_kind),
+            status_badge(label, status),
+            _fmt_score(r.score),
+            str(r.cases),
+            _fmt_cost(r.cost),
+            _CHEVRON,
         ])
-    table = html_table(['Target', 'Attack', 'Model', 'Severity', 'Status', 'Time'], table_rows)
-    panel = _panel('Recent attacks', 'Latest attacks across runs', table)
+    table = html_table(['Job', 'Target', 'Status', 'Score', 'Cases', 'Cost', ''], table_rows)
+    panel = _panel('Recent runs', 'Latest red team runs', table)
     return f'<section class="dash-wrap">{band}{panel}</section>'
 
 
@@ -386,7 +486,7 @@ def settings_body(config: list[tuple[str, str]]) -> str:
     workspace name, API keys, delete project) that doesn't map to a local
     read-only run viewer. We instead reflect the actual runtime config the
     dashboard is operating under, and note the design gap. Editable settings
-    would belong to the ORQ platform UI, not this local dashboard (RES-1038).
+    would belong to the Orq platform UI, not this local dashboard (RES-1038).
     """
     rows = ''.join(
         f'<div class="config-row"><span class="config-key">{esc(k)}</span>'
@@ -395,8 +495,8 @@ def settings_body(config: list[tuple[str, str]]) -> str:
     )
     config_panel = _panel('Configuration', 'What this dashboard is reading', f'<div class="config-list">{rows}</div>')
     note = (
-        '<p class="config-note">The v1 design’s editable workspace, API-key, and delete-project controls '
-        'target the ORQ platform, not this local run viewer, so they are intentionally omitted. This page '
+        '<p class="config-note">The v1 design\'s editable workspace, API-key, and delete-project controls '
+        'target the Orq platform, not this local run viewer, so they are intentionally omitted. This page '
         'reflects the read-only runtime config instead. See RES-1038.</p>'
     )
     about_panel = _panel('About settings', 'Design note', note)
