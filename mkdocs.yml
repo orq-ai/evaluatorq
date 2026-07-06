@@ -136,21 +136,18 @@ markdown_extensions:
   - toc:
       permalink: true
 
-# nav GROWS PER TASK. Each task appends pages it creates to keep a
-# green `mkdocs build --strict`. Never list a page before the task creates it
-# (mkdocs --strict fails on a nav entry whose file is missing). Task 1 ships
-# Home only; final nav shape recorded under "Target nav" in the File Structure.
 nav:
   - Home: index.md
   - Get Started:
       - Getting Started: guides/getting-started.md
+  - Guides:
       - Agent Simulation: guides/agent-simulation.md
       - Red Teaming:
-          - guides/red-teaming.md
+          - Overview: guides/red-teaming.md
           - Custom Evaluators & Frameworks: custom-evaluators-and-frameworks.md
       - LLM as a Jury: llm-as-a-jury.md
       - Dashboard: dashboard.md
-  - Reference:
+  - Manual:
       - Configuration: configuration.md
       - Tracing: tracing.md
       - CLI Reference: cli-reference.md
