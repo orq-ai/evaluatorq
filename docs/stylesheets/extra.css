@@ -234,42 +234,40 @@ html { font-size: 100%; }
   margin: 1em 0;
 }
 
-/* Fully static top navigation — it must never scroll away, fade, slide, or animate.
-   - The tab bar is pinned with position:fixed under the sticky 2.4rem header, with its
-     2.4rem height reserved on the container so page content never hides beneath it.
-   - Every transition/animation/transform in the header + tab region is disabled.
-   - Transforms on the fixed bar's ancestors are cleared so none establishes a containing
-     block that could drag the fixed bar during scroll.
-   Desktop only: below Material's 76.25em breakpoint the tabs become the hamburger drawer,
-   so the fixed/padding rules must not apply there. */
+/* --- Static, integrated top navigation --------------------------------------
+   The header + section tabs stay pinned at the top: they never autohide, fade
+   out, or scroll away. Material's free theme lets the tab bar scroll off (sticky
+   tabs are Insiders-only), so we pin it with position:sticky directly under the
+   2.4rem sticky header. Unlike position:fixed, sticky keeps the bar in normal
+   flow — so page content flows cleanly beneath it (no bleed-through) and no
+   height needs reserving. Desktop only: below 76.25em the tabs collapse into the
+   hamburger drawer, so this must not apply there. */
 @media screen and (min-width: 76.25em) {
-  .md-container { padding-top: 2.4rem; }   /* reserve the fixed tab bar's height (.md-tabs__item = 2.4rem) */
   .md-tabs {
-    position: fixed;
-    top: 2.4rem;                           /* directly under the 2.4rem sticky header */
-    left: 0;
-    right: 0;
-    z-index: 3;                            /* below the header (z-index 4) so the search overlay wins */
+    position: sticky;
+    top: 2.4rem;          /* height of the sticky header above it */
+    z-index: 3;           /* below the header (z-index 4) so the search overlay wins */
   }
 }
 
-/* No motion anywhere in the header or tab bar: no fade, slide, opacity change, or shadow anim. */
-.md-header, .md-header *, .md-tabs, .md-tabs * {
-  transition: none !important;
-  animation: none !important;
-  transform: none !important;
-}
-/* Material toggles `.md-header--shadow` via JS on scroll, so the header gains a
-   box-shadow the moment you scroll — a visible state change even with the
-   transition killed above. Pin the shadow off in every state so the header and
-   tab bar look identical at the top of the page and after scrolling. */
+/* The bars themselves never move — no autohide, no scroll-away transform. Note we
+   deliberately do NOT blanket-kill `transition`, so Material's gentle hover feedback
+   on links survives (it reads smoother and stays in keeping with the rest of the site). */
 .md-header,
-.md-header--shadow,
 .md-tabs {
+  transform: none !important;
+  animation: none !important;
+}
+/* Material toggles `.md-header--shadow` on scroll — a visible state change. Drop it,
+   and instead give the whole nav ONE constant, brand-tinted shadow at its lower edge.
+   The header + tab bar read as a single bar, cleanly separated from the content, and
+   look identical whether you're at the top of the page or scrolled down. */
+.md-header,
+.md-header--shadow {
   box-shadow: none !important;
 }
-/* Tabs always fully opaque (Material dims/fades inactive links to .7). */
+.md-tabs {
+  box-shadow: 0 2px 8px rgba(2, 85, 88, 0.08) !important;
+}
+/* Keep every section tab fully legible (Material dims inactive tabs to .7). */
 .md-tabs__link { opacity: 1 !important; }
-/* Clear transforms on the fixed bar's ancestors so they can't capture it as a containing block. */
-.md-container,
-.md-main { transform: none !important; }
