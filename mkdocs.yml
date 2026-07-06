@@ -47,6 +47,9 @@ theme:
 extra_css:
   - stylesheets/extra.css
 
+extra_javascript:
+  - js/keyboard.js   # ⌘K / Ctrl+K focuses the search box
+
 plugins:
   - search
   - gen-files:
@@ -149,10 +152,15 @@ nav:
   - Setup:
       - Configuration: configuration.md
       - Tracing: tracing.md
-      - CLI Reference: cli-reference.md
       - Orq Deployment: orq-deployment.md
   - Examples: examples/
-  - API Reference: reference/
+  - API Reference:
+      - Introduction: api-reference.md
+      - Python API: reference/
+      - CLI Reference:
+          - Overview: cli-reference/overview.md
+          - Red Teaming: cli-reference/redteam.md
+          - Simulation: cli-reference/simulation.md
   - About:
       - Contributing: contributing.md
       - Changelog: changelog.md

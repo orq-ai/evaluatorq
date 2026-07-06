@@ -54,7 +54,7 @@ prints that report's direct URL so you land straight on it.
     `eq redteam ui` and `eq sim ui` launch the older Streamlit dashboards,
     scoped to a single surface. The FastHTML `eq dashboard` documented here is
     the preview replacement that browses both surfaces together. The CLI surface
-    is still being consolidated — see the [CLI Reference](cli-reference.md).
+    is still being consolidated — see the [CLI Reference](cli-reference/overview.md).
 
 ---
 
