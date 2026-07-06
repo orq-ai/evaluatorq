@@ -19,7 +19,7 @@ import re
 import xml.sax.saxutils
 
 
-def delimit(text: str, *, tag: str = "data") -> str:
+def delimit(text: str, *, tag: str = 'data') -> str:
     """Wrap user-controlled text in delimiters to prevent prompt injection.
 
     Uses XML-like boundary tags to clearly separate user content from
@@ -35,16 +35,12 @@ def delimit(text: str, *, tag: str = "data") -> str:
         The text wrapped in ``<tag>…</tag>`` with internal occurrences
         of the tag escaped.
     """
-    if not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]*", tag):
-        raise ValueError(f"Invalid tag name: {tag!r}")
-    sanitized = text.replace("&", "&amp;")
-    sanitized = re.sub(
-        rf"<{re.escape(tag)}>", f"&lt;{tag}&gt;", sanitized, flags=re.IGNORECASE
-    )
-    sanitized = re.sub(
-        rf"</{re.escape(tag)}>", f"&lt;/{tag}&gt;", sanitized, flags=re.IGNORECASE
-    )
-    return f"<{tag}>{sanitized}</{tag}>"
+    if not re.fullmatch(r'[a-zA-Z][a-zA-Z0-9_-]*', tag):
+        raise ValueError(f'Invalid tag name: {tag!r}')
+    sanitized = text.replace('&', '&amp;')
+    sanitized = re.sub(rf'<{re.escape(tag)}>', f'&lt;{tag}&gt;', sanitized, flags=re.IGNORECASE)
+    sanitized = re.sub(rf'</{re.escape(tag)}>', f'&lt;/{tag}&gt;', sanitized, flags=re.IGNORECASE)
+    return f'<{tag}>{sanitized}</{tag}>'
 
 
 def xml_escape(text: str) -> str:

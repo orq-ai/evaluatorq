@@ -7,12 +7,12 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from evaluatorq.contracts import AgentContext, LLMCallConfig
+from evaluatorq.openresponses.target import OrqResponsesTarget
 from evaluatorq.redteam.backends._errors import (
     extract_provider_error_code,
     extract_status_code,
 )
 from evaluatorq.redteam.backends.base import Backend
-from evaluatorq.openresponses.target import OrqResponsesTarget
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -41,7 +41,7 @@ class OpenResponsesBackend(Backend):
         retry_statuses: list[int] | None = None,
         require_orq: bool = True,
     ) -> None:
-        super().__init__(name="openresponses")
+        super().__init__(name='openresponses')
         self._client = client
         self._instructions = instructions
         self._timeout_ms = timeout_ms
@@ -55,7 +55,7 @@ class OpenResponsesBackend(Backend):
         # unambiguous.
         config = LLMCallConfig(
             model=agent_key,
-            api="responses",
+            api='responses',
             timeout_ms=self._timeout_ms or 240_000,  # 240s matches Orq router default for long-tail tool calls
         )
         return OrqResponsesTarget(
@@ -68,24 +68,26 @@ class OpenResponsesBackend(Backend):
         )
 
     async def cleanup_memory(self, ctx: AgentContext, entity_ids: list[str]) -> None:
-        logger.debug("OpenResponses backend has no client-side memory store; cleanup is a no-op")
+        logger.debug('OpenResponses backend has no client-side memory store; cleanup is a no-op')
 
     def map_error(self, exc: Exception) -> tuple[str, str]:
         status_code = extract_status_code(exc)
         if status_code is not None:
-            return f"openresponses.http.{status_code}", f"{type(exc).__name__}: {exc}"
+            return f'openresponses.http.{status_code}', f'{type(exc).__name__}: {exc}'
         provider_code = extract_provider_error_code(exc)
         if provider_code:
-            return f"openresponses.code.{provider_code}", f"{type(exc).__name__}: {exc}"
+            return f'openresponses.code.{provider_code}', f'{type(exc).__name__}: {exc}'
         name = type(exc).__name__.lower()
-        if "ratelimit" in name:
-            return "openresponses.rate_limit", f"{type(exc).__name__}: {exc}"
-        if "timeout" in name:
-            return "openresponses.timeout", f"{type(exc).__name__}: {exc}"
-        if "authentication" in name:
-            return "openresponses.auth", f"{type(exc).__name__}: {exc}"
-        logger.opt(exception=exc).error("OpenResponsesBackend.map_error: unclassified exception mapped to openresponses.unknown")
-        return "openresponses.unknown", f"{type(exc).__name__}: {exc}"
+        if 'ratelimit' in name:
+            return 'openresponses.rate_limit', f'{type(exc).__name__}: {exc}'
+        if 'timeout' in name:
+            return 'openresponses.timeout', f'{type(exc).__name__}: {exc}'
+        if 'authentication' in name:
+            return 'openresponses.auth', f'{type(exc).__name__}: {exc}'
+        logger.opt(exception=exc).error(
+            'OpenResponsesBackend.map_error: unclassified exception mapped to openresponses.unknown'
+        )
+        return 'openresponses.unknown', f'{type(exc).__name__}: {exc}'
 
     async def resolve_context(self, agent_key: str) -> AgentContext:
         if agent_key in self._ctx_cache:
@@ -93,7 +95,7 @@ class OpenResponsesBackend(Backend):
         ctx = AgentContext(
             key=agent_key,
             display_name=agent_key,
-            description="OpenResponses agent target",
+            description='OpenResponses agent target',
             system_prompt=self._instructions,
             model=agent_key,
         )

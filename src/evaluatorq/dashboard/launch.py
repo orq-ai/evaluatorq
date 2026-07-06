@@ -23,8 +23,7 @@ def ensure_fasthtml() -> None:
         import typer
 
         typer.echo(
-            'The dashboard requires "dashboard" extra:\n'
-            '  pip install "evaluatorq[dashboard]"',
+            'The dashboard requires "dashboard" extra:\n  pip install "evaluatorq[dashboard]"',
             err=True,
         )
         raise typer.Exit(code=1)
@@ -52,15 +51,13 @@ class _InterceptHandler(logging.Handler):
             frame = frame.f_back
             depth += 1
 
-        logger.opt(depth=depth, exception=record.exc_info).log(
-            level, record.getMessage()
-        )
+        logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
 
 
 def serve(
     roots: list[Path] | None,
     *,
-    host: str = "127.0.0.1",
+    host: str = '127.0.0.1',
     port: int = 8080,
 ) -> None:
     """Start the FastHTML dashboard under uvicorn.

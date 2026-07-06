@@ -7,12 +7,8 @@ on:
       - main
 
 jobs:
-  # Advisory only — ~285 pre-existing lint violations and ~105 unformatted files
-  # inherited from the orqkit monorepo (RES-967). Violations are printed in the
-  # logs but the steps use continue-on-error so the job stays green and does not
-  # block merges. Remove the per-step continue-on-error once the cleanup lands.
   lint:
-    name: Lint (advisory)
+    name: Lint
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -28,11 +24,9 @@ jobs:
         run: uv sync --frozen --all-extras --all-groups
 
       - name: Ruff lint
-        continue-on-error: true
         run: uv run ruff check src
 
       - name: Ruff format check
-        continue-on-error: true
         run: uv run ruff format --check src
 
   check:

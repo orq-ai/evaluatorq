@@ -8,8 +8,8 @@ from evaluatorq.simulation.quality.message_perturbation import (
 )
 
 __all__ = [
-    "PerturbationType",
-    "apply_perturbation",
-    "apply_perturbations_batch",
-    "apply_random_perturbation",
+    'PerturbationType',
+    'apply_perturbation',
+    'apply_perturbations_batch',
+    'apply_random_perturbation',
 ]

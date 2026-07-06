@@ -238,6 +238,7 @@ async def generate_and_simulate(
             # sub-functions don't each construct their own AsyncOpenAI pool.
             # Mirrors the pattern used in generate().
             from evaluatorq.openresponses.client import build_simulation_client
+
             gen_client, gen_owned = build_simulation_client(generation_client)
             try:
                 gen_hooks = hooks or DefaultHooks()
@@ -253,7 +254,7 @@ async def generate_and_simulate(
                     )
 
                     datapoints = await _resolve_or_generate_datapoints(
-                        caller="generate_and_simulate",
+                        caller='generate_and_simulate',
                         datapoints=None,
                         personas=gen_personas,
                         scenarios=gen_scenarios,
@@ -333,11 +334,11 @@ async def generate(
 
     try:
         async with with_simulation_span(
-            "orq.simulation.generate",
+            'orq.simulation.generate',
             {
-                "orq.simulation.mode": "generate",
-                "orq.simulation.num_personas": num_personas,
-                "orq.simulation.num_scenarios": num_scenarios,
+                'orq.simulation.mode': 'generate',
+                'orq.simulation.num_personas': num_personas,
+                'orq.simulation.num_scenarios': num_scenarios,
             },
         ):
             # Build one client and inject it into both the persona/scenario and
@@ -354,7 +355,7 @@ async def generate(
                     generation_client=gen_client,
                 )
                 return await _resolve_or_generate_datapoints(
-                    caller="generate",
+                    caller='generate',
                     datapoints=None,
                     personas=gen_personas,
                     scenarios=gen_scenarios,
@@ -377,8 +378,8 @@ async def generate(
 async def generate_personas(
     seeds: list[str],
     *,
-    agent_description: str = "",
-    context: str = "",
+    agent_description: str = '',
+    context: str = '',
     sim_model: str = DEFAULT_MODEL,
     generation_client: AsyncOpenAI | None = None,
 ) -> list[Persona]:
@@ -394,28 +395,26 @@ async def generate_personas(
     from evaluatorq.simulation.generators import PersonaGenerator
 
     if not seeds:
-        raise ValueError("generate_personas requires at least one seed")
-    description = agent_description or "a general-purpose conversational assistant"
+        raise ValueError('generate_personas requires at least one seed')
+    description = agent_description or 'a general-purpose conversational assistant'
     gen = PersonaGenerator(model=sim_model, client=generation_client)
     try:
-        batches = await asyncio.gather(
-            *[
-                gen.generate(
-                    agent_description=description,
-                    context=context,
-                    num_personas=1,
-                    edge_case_percentage=0.0,
-                    seed=seed,
-                )
-                for seed in seeds
-            ]
-        )
+        batches = await asyncio.gather(*[
+            gen.generate(
+                agent_description=description,
+                context=context,
+                num_personas=1,
+                edge_case_percentage=0.0,
+                seed=seed,
+            )
+            for seed in seeds
+        ])
     finally:
         await gen.close()
     personas: list[Persona] = []
     for seed, batch in zip(seeds, batches, strict=True):
         if not batch:
-            raise SimulationError(f"persona generation returned nothing for seed: {seed!r}")
+            raise SimulationError(f'persona generation returned nothing for seed: {seed!r}')
         personas.append(batch[0])
     return personas
 
@@ -423,8 +422,8 @@ async def generate_personas(
 async def generate_persona(
     seed: str,
     *,
-    agent_description: str = "",
-    context: str = "",
+    agent_description: str = '',
+    context: str = '',
     sim_model: str = DEFAULT_MODEL,
     generation_client: AsyncOpenAI | None = None,
 ) -> Persona:
@@ -445,8 +444,8 @@ async def generate_persona(
 async def generate_scenarios(
     seeds: list[str],
     *,
-    agent_description: str = "",
-    context: str = "",
+    agent_description: str = '',
+    context: str = '',
     sim_model: str = DEFAULT_MODEL,
     generation_client: AsyncOpenAI | None = None,
 ) -> list[Scenario]:
@@ -459,28 +458,26 @@ async def generate_scenarios(
     from evaluatorq.simulation.generators import ScenarioGenerator
 
     if not seeds:
-        raise ValueError("generate_scenarios requires at least one seed")
-    description = agent_description or "a general-purpose conversational assistant"
+        raise ValueError('generate_scenarios requires at least one seed')
+    description = agent_description or 'a general-purpose conversational assistant'
     gen = ScenarioGenerator(model=sim_model, client=generation_client)
     try:
-        batches = await asyncio.gather(
-            *[
-                gen.generate(
-                    agent_description=description,
-                    context=context,
-                    num_scenarios=1,
-                    edge_case_percentage=0.0,
-                    seed=seed,
-                )
-                for seed in seeds
-            ]
-        )
+        batches = await asyncio.gather(*[
+            gen.generate(
+                agent_description=description,
+                context=context,
+                num_scenarios=1,
+                edge_case_percentage=0.0,
+                seed=seed,
+            )
+            for seed in seeds
+        ])
     finally:
         await gen.close()
     scenarios: list[Scenario] = []
     for seed, batch in zip(seeds, batches, strict=True):
         if not batch:
-            raise SimulationError(f"scenario generation returned nothing for seed: {seed!r}")
+            raise SimulationError(f'scenario generation returned nothing for seed: {seed!r}')
         scenarios.append(batch[0])
     return scenarios
 
@@ -488,8 +485,8 @@ async def generate_scenarios(
 async def generate_scenario(
     seed: str,
     *,
-    agent_description: str = "",
-    context: str = "",
+    agent_description: str = '',
+    context: str = '',
     sim_model: str = DEFAULT_MODEL,
     generation_client: AsyncOpenAI | None = None,
 ) -> Scenario:
@@ -719,12 +716,12 @@ async def _simulate_core(
             else:
                 saved_path = auto_save_run(run=run, run_name=run.run_name)
             _log_saved_run(saved_path)
-        except Exception as exc:  # noqa: BLE001 — deliberate; see comment
+        except Exception as exc:
             # Broad by design: this guards a disk-write side-effect that must
             # never discard already-completed work. Covers OSError, the
             # collision RuntimeError, and pydantic serialization errors
             # (PydanticSerializationError <: ValueError) from model_dump_json.
-            logger.error(f'Failed to save simulation run (results still returned): {exc}')
+            logger.exception(f'Failed to save simulation run (results still returned): {exc}')
     return results
 
 
@@ -760,10 +757,7 @@ def _resolve_target(
         from evaluatorq.redteam.runner import _parse_target
 
         if not resolved.strip():
-            raise ValueError(
-                "Target string is empty; use 'agent:<key>', 'deployment:<key>', "
-                "or a bare '<key>'."
-            )
+            raise ValueError("Target string is empty; use 'agent:<key>', 'deployment:<key>', or a bare '<key>'.")
         kind, value = _parse_target(resolved)
         if kind is TargetKind.AGENT:
             # Same composite backend the CLI / red-team runner use for
@@ -780,7 +774,7 @@ def _resolve_target(
         if kind is TargetKind.DEPLOYMENT:
             return from_orq_deployment(value), None, 'orq_deployment'
         raise ValueError(
-            f"Unsupported target kind {kind.value!r} for simulation; "
+            f'Unsupported target kind {kind.value!r} for simulation; '
             "use 'agent:<key>', 'deployment:<key>', an AgentTarget, or a callable."
         )
 
@@ -788,12 +782,12 @@ def _resolve_target(
         return None, resolved, 'orq_agent'
     if resolved is None:
         raise ValueError(
-            "A target is required: pass target= (an AgentTarget, a callable, "
+            'A target is required: pass target= (an AgentTarget, a callable, '
             "'agent:<key>', or 'deployment:<key>') or target_callback=."
         )
     if not callable(resolved):
         raise TypeError(
-            f"Unsupported target type {type(resolved).__name__!r}; pass a str "
+            f'Unsupported target type {type(resolved).__name__!r}; pass a str '
             "('agent:<key>' / 'deployment:<key>'), an AgentTarget, or a callable."
         )
     return resolved, None, None
@@ -904,7 +898,9 @@ async def _fetch_simulation_datapoints_from_orq(api_key: str, dataset_id: str) -
     return out
 
 
-async def _generate_single_datapoint(gen: FirstMessageGenerator, persona: Persona, scenario: Scenario) -> SimulationDatapoint:
+async def _generate_single_datapoint(
+    gen: FirstMessageGenerator, persona: Persona, scenario: Scenario
+) -> SimulationDatapoint:
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.simulation.utils.prompt_builders import generate_datapoint
 
@@ -1030,7 +1026,7 @@ def _adapt_simulation_scorer(
     """
     from evaluatorq.types import EvaluationResult, ScorerParameter
 
-    async def scorer(params: ScorerParameter) -> EvaluationResult:
+    async def scorer(params: ScorerParameter) -> EvaluationResult:  # noqa: RUF029  # scorer signature is async by evaluatorq contract
         # Both failure paths raise rather than returning a sentinel `0.0` —
         # evaluatorq's process_evaluator catches and records the error on
         # the EvaluatorScore, so callers (and exit_on_failure) see a real
@@ -1085,9 +1081,7 @@ async def _simulate_via_evaluatorq(
     from evaluatorq.simulation.evaluators import get_evaluator
     from evaluatorq.types import DataPoint
 
-    resolved_evaluator_names = (
-        evaluator_names if evaluator_names is not None else DEFAULT_EVALUATOR_NAMES
-    )
+    resolved_evaluator_names = evaluator_names if evaluator_names is not None else DEFAULT_EVALUATOR_NAMES
     scorers = [(name, get_evaluator(name)) for name in resolved_evaluator_names]
 
     eq_datapoints = [DataPoint(inputs={'datapoint': dp.model_dump(mode='json')}) for dp in sim_datapoints]

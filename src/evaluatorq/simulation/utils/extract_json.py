@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 
-_JSON_BLOCK_PATTERN = re.compile(r"```(?:json)?\s*\n?([\s\S]*?)\n?```", re.IGNORECASE)
+_JSON_BLOCK_PATTERN = re.compile(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', re.IGNORECASE)
 
 
 def extract_json_from_response(content: str) -> str:
@@ -18,7 +18,7 @@ def extract_json_from_response(content: str) -> str:
     - Multiple code blocks (returns first one)
     """
     if not content:
-        return ""
+        return ''
 
     # Try to extract from code block using regex
     match = _JSON_BLOCK_PATTERN.search(content)
@@ -26,11 +26,11 @@ def extract_json_from_response(content: str) -> str:
         return match.group(1).strip()
 
     # No code block found — try to find the outermost JSON array or object
-    array_json = _extract_balanced(content, "[", "]")
+    array_json = _extract_balanced(content, '[', ']')
     if array_json is not None:
         return array_json
 
-    object_json = _extract_balanced(content, "{", "}")
+    object_json = _extract_balanced(content, '{', '}')
     if object_json is not None:
         return object_json
 
@@ -38,9 +38,7 @@ def extract_json_from_response(content: str) -> str:
     return content.strip()
 
 
-def _extract_balanced_from(
-    content: str, open_ch: str, close_ch: str, start_idx: int
-) -> str | None:
+def _extract_balanced_from(content: str, open_ch: str, close_ch: str, start_idx: int) -> str | None:
     """Find the outermost balanced pair starting at start_idx.
 
     Respects JSON string literals to avoid counting brackets inside strings.
@@ -56,7 +54,7 @@ def _extract_balanced_from(
             escaped = False
             continue
 
-        if ch == "\\" and in_string:
+        if ch == '\\' and in_string:
             escaped = True
             continue
 

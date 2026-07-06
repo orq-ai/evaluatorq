@@ -28,7 +28,7 @@ async def process_data_point(
     evaluators: list[Evaluator] | None,
     parallelism: int,
     progress_service: ProgressService | None = None,
-    tracing_context: "TracingContext | None" = None,
+    tracing_context: 'TracingContext | None' = None,
 ) -> list[DataPointResult]:
     """
     Process a single data point through all jobs and evaluators.
@@ -54,9 +54,7 @@ async def process_data_point(
 
         # Update progress for this data point
         if progress_service:
-            await progress_service.update_progress(
-                current_data_point=row_index + 1, phase=Phase.PROCESSING
-            )
+            await progress_service.update_progress(current_data_point=row_index + 1, phase=Phase.PROCESSING)
 
         # Process jobs with concurrency control
         semaphore = asyncio.Semaphore(parallelism)
@@ -103,7 +101,7 @@ async def process_job(
     row_index: int,
     evaluators: list[Evaluator] | None = None,
     progress_service: ProgressService | None = None,
-    tracing_context: "TracingContext | None" = None,
+    tracing_context: 'TracingContext | None' = None,
 ) -> JobResult:
     """
     Process a single job and optionally run evaluators on its output.
@@ -126,24 +124,24 @@ async def process_job(
         with_job_span,
     )
 
-    job_name = "job"  # Default name
+    job_name = 'job'  # Default name
     output: Output = None
     error: str | None = None
 
     # Wrap the job execution in a span if tracing is enabled
     async with with_job_span(
         JobSpanOptions(
-            run_id=tracing_context.run_id if tracing_context else "",
+            run_id=tracing_context.run_id if tracing_context else '',
             row_index=row_index,
             parent_context=tracing_context.parent_context if tracing_context else None,
-            trace_type=tracing_context.trace_type if tracing_context else "evaluatorq",
+            trace_type=tracing_context.trace_type if tracing_context else 'evaluatorq',
         )
     ) as job_span:
         try:
             # Execute the job
             result = await job(data_point, row_index)
-            job_name = cast("str", result["name"])
-            output = cast("Output", result["output"])
+            job_name = cast('str', result['name'])
+            output = cast('Output', result['output'])
 
             # Set job name on span after execution
             set_job_name_attribute(job_span, job_name)
@@ -187,11 +185,7 @@ async def process_job(
             # Run all evaluators concurrently (unbounded concurrency)
             # Using create_task for better event loop scheduling
             tasks = [
-                asyncio.create_task(
-                    process_evaluator(
-                        evaluator, data_point, output, progress_service, tracing_context
-                    )
-                )
+                asyncio.create_task(process_evaluator(evaluator, data_point, output, progress_service, tracing_context))
                 for evaluator in evaluators
             ]
 
@@ -210,7 +204,7 @@ async def process_evaluator(
     data_point: DataPoint,
     output: Output,
     progress_service: ProgressService | None = None,
-    tracing_context: "TracingContext | None" = None,
+    tracing_context: 'TracingContext | None' = None,
 ) -> EvaluatorScore:
     """
     Process a single evaluator.
@@ -232,12 +226,12 @@ async def process_evaluator(
         with_evaluation_span,
     )
 
-    evaluator_name = evaluator["name"]
+    evaluator_name = evaluator['name']
 
     # Wrap the evaluator execution in a span if tracing is enabled
     async with with_evaluation_span(
         EvaluationSpanOptions(
-            run_id=tracing_context.run_id if tracing_context else "",
+            run_id=tracing_context.run_id if tracing_context else '',
             evaluator_name=evaluator_name,
         )
     ) as eval_span:
@@ -248,11 +242,11 @@ async def process_evaluator(
 
             # Execute the scorer
             scorer_param: ScorerParameter = {
-                "data": data_point,
-                "output": output,
+                'data': data_point,
+                'output': output,
             }
 
-            result = await evaluator["scorer"](scorer_param)
+            result = await evaluator['scorer'](scorer_param)
 
             # Convert dict to EvaluationResult if needed
             score = EvaluationResult.model_validate(result) if isinstance(result, dict) else result
@@ -275,6 +269,6 @@ async def process_evaluator(
             # Return error result with empty score
             return EvaluatorScore(
                 evaluator_name=evaluator_name,
-                score=EvaluationResult(value=""),
+                score=EvaluationResult(value=''),
                 error=str(error),
             )

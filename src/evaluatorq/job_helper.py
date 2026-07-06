@@ -81,8 +81,8 @@ def job(
                     output = result  # type: ignore
 
                 job_return: dict[str, Any] = {
-                    "name": name,
-                    "output": output,
+                    'name': name,
+                    'output': output,
                 }
                 return job_return
 

@@ -89,8 +89,7 @@ def _build_user_prompt(
         f'Category: {category} — {category_name}\n'
         f'Vulnerability rate: {vulnerability_rate:.0%}\n'
         f'Number of failed traces analyzed: {len(traces)}\n\n'
-        f'Failed attack traces (agent was VULNERABLE in each):\n\n'
-        + '\n\n'.join(traces)
+        f'Failed attack traces (agent was VULNERABLE in each):\n\n' + '\n\n'.join(traces)
     )
 
 
@@ -218,18 +217,20 @@ async def generate_focus_area_recommendations(
                 recs = []
             recs = [str(r) for r in recs if r]
 
-            recommendations.append(FocusAreaRecommendation(
-                category=area['category'],
-                category_name=area['category_name'],
-                risk_score=area['risk_score'],
-                traces_analyzed=len(sampled),
-                recommendations=recs,
-                patterns_observed=str(patterns),
-            ))
+            recommendations.append(
+                FocusAreaRecommendation(
+                    category=area['category'],
+                    category_name=area['category_name'],
+                    risk_score=area['risk_score'],
+                    traces_analyzed=len(sampled),
+                    recommendations=recs,
+                    patterns_observed=str(patterns),
+                )
+            )
 
         except Exception:
             logger.warning(
-                f"Failed to generate recommendations for {area['category']}",
+                f'Failed to generate recommendations for {area["category"]}',
                 exc_info=True,
             )
             continue

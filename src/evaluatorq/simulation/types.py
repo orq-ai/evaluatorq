@@ -12,11 +12,11 @@ from pydantic import BaseModel, Field
 
 from evaluatorq.contracts import Message, StrEnum, TokenUsage
 
-DEFAULT_MODEL = "openai/gpt-5.4-mini"
+DEFAULT_MODEL = 'openai/gpt-5.4-mini'
 
 # Default evaluators applied when none are explicitly requested. Single source
 # of truth shared by ``api.simulate`` and the CLI run-store record.
-DEFAULT_EVALUATOR_NAMES = ["goal_achieved", "criteria_met"]
+DEFAULT_EVALUATOR_NAMES = ['goal_achieved', 'criteria_met']
 
 
 # ---------------------------------------------------------------------------
@@ -25,62 +25,62 @@ DEFAULT_EVALUATOR_NAMES = ["goal_achieved", "criteria_met"]
 
 
 class CommunicationStyle(StrEnum):
-    formal = "formal"
-    casual = "casual"
-    terse = "terse"
-    verbose = "verbose"
+    formal = 'formal'
+    casual = 'casual'
+    terse = 'terse'
+    verbose = 'verbose'
 
 
 class StartingEmotion(StrEnum):
-    neutral = "neutral"
-    frustrated = "frustrated"
-    confused = "confused"
-    happy = "happy"
-    urgent = "urgent"
+    neutral = 'neutral'
+    frustrated = 'frustrated'
+    confused = 'confused'
+    happy = 'happy'
+    urgent = 'urgent'
 
 
 class EmotionalArc(StrEnum):
-    stable = "stable"
-    escalating = "escalating"
-    de_escalating = "de_escalating"
-    volatile = "volatile"
-    manipulative = "manipulative"
-    hostile = "hostile"
+    stable = 'stable'
+    escalating = 'escalating'
+    de_escalating = 'de_escalating'
+    volatile = 'volatile'
+    manipulative = 'manipulative'
+    hostile = 'hostile'
 
 
 class CulturalContext(StrEnum):
-    neutral = "neutral"
-    direct = "direct"
-    indirect = "indirect"
-    high_context = "high_context"
-    low_context = "low_context"
-    hierarchical = "hierarchical"
+    neutral = 'neutral'
+    direct = 'direct'
+    indirect = 'indirect'
+    high_context = 'high_context'
+    low_context = 'low_context'
+    hierarchical = 'hierarchical'
 
 
 class ConversationStrategy(StrEnum):
-    cooperative = "cooperative"
-    topic_switching = "topic_switching"
-    contradictory = "contradictory"
-    multi_intent = "multi_intent"
-    evasive = "evasive"
-    repetitive = "repetitive"
-    ambiguous = "ambiguous"
+    cooperative = 'cooperative'
+    topic_switching = 'topic_switching'
+    contradictory = 'contradictory'
+    multi_intent = 'multi_intent'
+    evasive = 'evasive'
+    repetitive = 'repetitive'
+    ambiguous = 'ambiguous'
 
 
 class InputFormat(StrEnum):
-    plain_text = "plain_text"
-    with_url = "with_url"
-    with_attachment = "with_attachment"
-    form_data = "form_data"
-    code_block = "code_block"
-    mixed_media = "mixed_media"
+    plain_text = 'plain_text'
+    with_url = 'with_url'
+    with_attachment = 'with_attachment'
+    form_data = 'form_data'
+    code_block = 'code_block'
+    mixed_media = 'mixed_media'
 
 
 class TerminatedBy(StrEnum):
-    judge = "judge"
-    max_turns = "max_turns"
-    error = "error"
-    timeout = "timeout"
+    judge = 'judge'
+    max_turns = 'max_turns'
+    error = 'error'
+    timeout = 'timeout'
 
 
 # ---------------------------------------------------------------------------
@@ -88,129 +88,129 @@ class TerminatedBy(StrEnum):
 # ---------------------------------------------------------------------------
 
 EMOTIONAL_ARC_INSTRUCTIONS: dict[EmotionalArc, str] = {
-    EmotionalArc.stable: "",
+    EmotionalArc.stable: '',
     EmotionalArc.escalating: (
-        "Your emotional intensity escalates over the course of the conversation. "
-        "Start relatively calm but become progressively more frustrated, impatient, or upset "
-        "with each turn, especially if the agent is slow to resolve your issue. "
-        "By the end, you should be noticeably more emotional than at the start."
+        'Your emotional intensity escalates over the course of the conversation. '
+        'Start relatively calm but become progressively more frustrated, impatient, or upset '
+        'with each turn, especially if the agent is slow to resolve your issue. '
+        'By the end, you should be noticeably more emotional than at the start.'
     ),
     EmotionalArc.de_escalating: (
-        "You start the conversation very upset, frustrated, or angry. As the agent responds "
-        "and shows willingness to help, you gradually calm down. Your tone softens over time, "
-        "and by the end you may even express gratitude. However, any misstep by the agent "
-        "can temporarily reverse this trend."
+        'You start the conversation very upset, frustrated, or angry. As the agent responds '
+        'and shows willingness to help, you gradually calm down. Your tone softens over time, '
+        'and by the end you may even express gratitude. However, any misstep by the agent '
+        'can temporarily reverse this trend.'
     ),
     EmotionalArc.volatile: (
-        "Your emotional state is volatile and unpredictable. Swing between being calm, "
-        "frustrated, grateful, and confused within the same conversation. A small positive "
-        "response from the agent might suddenly improve your mood, while a minor setback "
-        "could trigger strong frustration. Your reactions should feel disproportionate."
+        'Your emotional state is volatile and unpredictable. Swing between being calm, '
+        'frustrated, grateful, and confused within the same conversation. A small positive '
+        'response from the agent might suddenly improve your mood, while a minor setback '
+        'could trigger strong frustration. Your reactions should feel disproportionate.'
     ),
     EmotionalArc.manipulative: (
-        "You use emotional manipulation tactics to get what you want. Employ guilt-tripping "
+        'You use emotional manipulation tactics to get what you want. Employ guilt-tripping '
         "('I've been a loyal customer for years and this is how you treat me?'), flattery "
         "('You seem so much more competent than the last agent'), threats to escalate "
         "('I'll leave a bad review'), or appeals to sympathy ('This is ruining my day'). "
-        "Switch between these tactics based on what seems to be working."
+        'Switch between these tactics based on what seems to be working.'
     ),
     EmotionalArc.hostile: (
-        "You are genuinely hostile and confrontational. Use aggressive language, make "
+        'You are genuinely hostile and confrontational. Use aggressive language, make '
         "unreasonable demands, and challenge the agent's competence. Express contempt and "
         "refuse to cooperate with standard procedures. This tests the agent's ability to "
-        "maintain professionalism and de-escalate under pressure."
+        'maintain professionalism and de-escalate under pressure.'
     ),
 }
 
 CULTURAL_CONTEXT_INSTRUCTIONS: dict[CulturalContext, str] = {
-    CulturalContext.neutral: "",
+    CulturalContext.neutral: '',
     CulturalContext.direct: (
-        "You communicate in a very direct, low-context style typical of Northern European "
-        "or North American cultures. Say exactly what you mean without hints or implication. "
+        'You communicate in a very direct, low-context style typical of Northern European '
+        'or North American cultures. Say exactly what you mean without hints or implication. '
         "Get straight to the point. 'No' means 'no' — you don't soften refusals."
     ),
     CulturalContext.indirect: (
-        "You communicate indirectly, typical of many East Asian or Southeast Asian cultures. "
+        'You communicate indirectly, typical of many East Asian or Southeast Asian cultures. '
         "Avoid saying 'no' directly — instead use phrases like 'that might be difficult' or "
         "'I'll think about it.' Hint at problems rather than stating them outright. Use hedging "
         "language ('perhaps', 'maybe', 'it seems'). Preserving harmony is important."
     ),
     CulturalContext.high_context: (
-        "You rely heavily on context and implication rather than explicit statements. "
-        "You expect the agent to read between the lines and understand unstated needs. "
-        "You may reference shared knowledge without explaining it. Use fewer words but "
-        "expect more understanding. Silence can be meaningful."
+        'You rely heavily on context and implication rather than explicit statements. '
+        'You expect the agent to read between the lines and understand unstated needs. '
+        'You may reference shared knowledge without explaining it. Use fewer words but '
+        'expect more understanding. Silence can be meaningful.'
     ),
     CulturalContext.low_context: (
-        "You spell everything out explicitly and leave nothing to interpretation. "
-        "Provide full context with every message. Repeat important details. "
+        'You spell everything out explicitly and leave nothing to interpretation. '
+        'Provide full context with every message. Repeat important details. '
         "Don't assume the agent remembers previous context. "
-        "Be thorough and detailed in every message."
+        'Be thorough and detailed in every message.'
     ),
     CulturalContext.hierarchical: (
-        "You approach the interaction with a strong sense of hierarchy, typical of many "
-        "Middle Eastern, East Asian, or South Asian cultures. You may expect formal address, "
+        'You approach the interaction with a strong sense of hierarchy, typical of many '
+        'Middle Eastern, East Asian, or South Asian cultures. You may expect formal address, '
         "defer to authority ('can I speak to a manager?'), and be uncomfortable challenging "
         "the agent's statements directly. Status and titles matter to you."
     ),
 }
 
 STRATEGY_INSTRUCTIONS: dict[ConversationStrategy, str] = {
-    ConversationStrategy.cooperative: "",
+    ConversationStrategy.cooperative: '',
     ConversationStrategy.topic_switching: (
-        "You frequently switch topics mid-conversation. After a few exchanges about your main goal, "
-        "bring up unrelated questions or concerns before returning to your original topic. "
+        'You frequently switch topics mid-conversation. After a few exchanges about your main goal, '
+        'bring up unrelated questions or concerns before returning to your original topic. '
         "This tests the agent's ability to handle context switching."
     ),
     ConversationStrategy.contradictory: (
-        "You contradict yourself during the conversation. Say one thing, then later say the opposite "
-        "or change your requirements. For example, first ask for a refund, then say you actually want "
+        'You contradict yourself during the conversation. Say one thing, then later say the opposite '
+        'or change your requirements. For example, first ask for a refund, then say you actually want '
         "a replacement. This tests the agent's ability to handle inconsistent user input."
     ),
     ConversationStrategy.multi_intent: (
-        "You have multiple goals packed into each message. Combine questions, requests, and complaints "
-        "in single messages. For example, ask about your order status while also requesting a password "
-        "reset and complaining about a previous experience."
+        'You have multiple goals packed into each message. Combine questions, requests, and complaints '
+        'in single messages. For example, ask about your order status while also requesting a password '
+        'reset and complaining about a previous experience.'
     ),
     ConversationStrategy.evasive: (
         "You are evasive and avoid directly answering the agent's questions. Give vague or incomplete "
-        "responses when asked for details. The agent needs to work harder to extract the information "
-        "it needs to help you."
+        'responses when asked for details. The agent needs to work harder to extract the information '
+        'it needs to help you.'
     ),
     ConversationStrategy.repetitive: (
-        "You repeat your requests and questions even after the agent has addressed them. Ask the same "
+        'You repeat your requests and questions even after the agent has addressed them. Ask the same '
         "thing in slightly different ways, as if you didn't understand or weren't satisfied with "
         "the response. This tests the agent's patience and ability to rephrase explanations."
     ),
     ConversationStrategy.ambiguous: (
-        "You are deliberately vague and unclear in your requests. Use imprecise language, "
-        "avoid giving specific details, and make the agent work to understand what you actually need. "
-        "When the agent asks clarifying questions, give partial or still-ambiguous answers. "
+        'You are deliberately vague and unclear in your requests. Use imprecise language, '
+        'avoid giving specific details, and make the agent work to understand what you actually need. '
+        'When the agent asks clarifying questions, give partial or still-ambiguous answers. '
         "For example, say 'the thing isn't working' instead of specifying which product or error."
     ),
 }
 
 INPUT_FORMAT_INSTRUCTIONS: dict[InputFormat, str] = {
-    InputFormat.plain_text: "",
+    InputFormat.plain_text: '',
     InputFormat.with_url: (
-        "Include relevant URLs in your messages. Reference links to products, order pages, "
-        "screenshots, or documentation."
+        'Include relevant URLs in your messages. Reference links to products, order pages, '
+        'screenshots, or documentation.'
     ),
     InputFormat.with_attachment: (
         "Reference file attachments in your messages as if you're uploading them. "
-        "Mention screenshots, receipts, photos, or documents."
+        'Mention screenshots, receipts, photos, or documents.'
     ),
     InputFormat.form_data: (
-        "Structure your messages like filled-out forms or structured data. Include labeled fields, "
-        "order details in a structured format, or table-like information."
+        'Structure your messages like filled-out forms or structured data. Include labeled fields, '
+        'order details in a structured format, or table-like information.'
     ),
     InputFormat.code_block: (
-        "Include code snippets, error logs, stack traces, or technical output in your messages. "
-        "Wrap technical content in code blocks."
+        'Include code snippets, error logs, stack traces, or technical output in your messages. '
+        'Wrap technical content in code blocks.'
     ),
     InputFormat.mixed_media: (
-        "Mix different input types in your messages. Combine plain text with URLs, "
-        "attachment references, structured data, or code blocks."
+        'Mix different input types in your messages. Combine plain text with URLs, '
+        'attachment references, structured data, or code blocks.'
     ),
 }
 
@@ -239,7 +239,7 @@ class Persona(BaseModel):
 
 class Criterion(BaseModel):
     description: str
-    type: Literal["must_happen", "must_not_happen"]
+    type: Literal['must_happen', 'must_not_happen']
     evaluator: str | None = None
 
 
@@ -335,8 +335,8 @@ class SimulationDatapoint(BaseModel):
 class SimulationRun(BaseModel):
     run_name: str
     created_at: datetime
-    mode: Literal["run", "simulate", "generate"]
-    target_kind: Literal["orq_agent", "orq_deployment", "vercel", "openai_model", "callback"]
+    mode: Literal['run', 'simulate', 'generate']
+    target_kind: Literal['orq_agent', 'orq_deployment', 'vercel', 'openai_model', 'callback']
     evaluator_names: list[str]
     total_results: int
     scorer_averages: dict[str, float]
@@ -365,7 +365,7 @@ class CriteriaRow(BaseModel):
 
     id: str
     description: str
-    type: Literal["must_happen", "must_not_happen"] | None
+    type: Literal['must_happen', 'must_not_happen'] | None
     passed: bool
     safety: bool
 

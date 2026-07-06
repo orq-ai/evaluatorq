@@ -129,14 +129,12 @@ def _sim_hero(summary_section: Any, run: SimulationRun) -> str:
     verdict = data.get('verdict', 'neutral')
     success_status = 'pass' if verdict == 'pass' else ('warn' if verdict == 'warn' else 'fail')
     errors = data.get('errors', 0)
-    cards = kpi_cards(
-        [
-            {'label': 'Success Rate', 'value': pct(data.get('success_rate', 0.0)), 'status': success_status},
-            {'label': 'Avg Score', 'value': f'{data.get("avg_goal_completion_score", 0.0):.2f}', 'status': 'neutral'},
-            {'label': 'Conversations', 'value': str(data.get('total_conversations', 0)), 'status': 'neutral'},
-            {'label': 'Runtime Errors', 'value': str(errors), 'status': 'warn' if errors else 'neutral'},
-        ]
-    )
+    cards = kpi_cards([
+        {'label': 'Success Rate', 'value': pct(data.get('success_rate', 0.0)), 'status': success_status},
+        {'label': 'Avg Score', 'value': f'{data.get("avg_goal_completion_score", 0.0):.2f}', 'status': 'neutral'},
+        {'label': 'Conversations', 'value': str(data.get('total_conversations', 0)), 'status': 'neutral'},
+        {'label': 'Runtime Errors', 'value': str(errors), 'status': 'warn' if errors else 'neutral'},
+    ])
     return (
         f'<header class="report-hero"><h1 class="report-hero-title">Agent Simulation</h1>'
         f'<p class="report-hero-sub">{esc(run.run_name)} · target {esc(run.target_kind)}</p>'
@@ -199,7 +197,11 @@ def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
             ('Error Analysis', render('error_analysis')),
             (
                 'Comparison',
-                (rt_panel_agent_heatmap(rid) + rt_panel_disagreement(rid) + render('agent_comparison', 'agent_disagreements'))
+                (
+                    rt_panel_agent_heatmap(rid)
+                    + rt_panel_disagreement(rid)
+                    + render('agent_comparison', 'agent_disagreements')
+                )
                 if multi_agent
                 else '',
             ),
@@ -218,15 +220,17 @@ def _redteam_hero(summary_section: Any, report: RedTeamReport) -> str:
     vulns = data.get('vulnerabilities_found', 0)
     critical = data.get('critical_exposure', 0)
     errors = data.get('total_errors', 0)
-    cards = kpi_cards(
-        [
-            {'label': 'Attack Success Rate', 'value': pct(asr), 'status': 'fail' if asr >= 0.25 else ('warn' if asr > 0 else 'pass')},
-            {'label': 'Resistance', 'value': pct(resistance), 'status': 'pass' if resistance >= 0.8 else 'warn'},
-            {'label': 'Vulnerabilities', 'value': str(vulns), 'status': 'fail' if vulns else 'pass'},
-            {'label': 'Critical', 'value': str(critical), 'status': 'fail' if critical else 'neutral'},
-            {'label': 'Errors', 'value': str(errors), 'status': 'warn' if errors else 'neutral'},
-        ]
-    )
+    cards = kpi_cards([
+        {
+            'label': 'Attack Success Rate',
+            'value': pct(asr),
+            'status': 'fail' if asr >= 0.25 else ('warn' if asr > 0 else 'pass'),
+        },
+        {'label': 'Resistance', 'value': pct(resistance), 'status': 'pass' if resistance >= 0.8 else 'warn'},
+        {'label': 'Vulnerabilities', 'value': str(vulns), 'status': 'fail' if vulns else 'pass'},
+        {'label': 'Critical', 'value': str(critical), 'status': 'fail' if critical else 'neutral'},
+        {'label': 'Errors', 'value': str(errors), 'status': 'warn' if errors else 'neutral'},
+    ])
     return (
         f'<header class="report-hero"><h1 class="report-hero-title">Red Team</h1>'
         f'<p class="report-hero-sub">{esc(report.description or "Red teaming report")}</p>'

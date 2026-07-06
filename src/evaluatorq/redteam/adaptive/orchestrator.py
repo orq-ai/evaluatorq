@@ -530,9 +530,7 @@ class MultiTurnOrchestrator:
                     return None, planner_usage
                 # Cap to the turn budget — steps beyond max_turns can never be reached.
                 if len(valid_steps) > max_turns:
-                    logger.debug(
-                        f'Tool-chaining: capping {len(valid_steps)} steps to max_turns={max_turns}'
-                    )
+                    logger.debug(f'Tool-chaining: capping {len(valid_steps)} steps to max_turns={max_turns}')
                     valid_steps = valid_steps[:max_turns]
                 return format_plan_for_prompt(valid_steps), planner_usage
         except Exception as e:
@@ -624,7 +622,7 @@ class MultiTurnOrchestrator:
         try:
             for turn in range(max_turns):
                 # Per-turn target response (populated on success or synthesized on error)
-                _tgt_result: AgentResponse = AgentResponse()
+                tgt_result: AgentResponse = AgentResponse()
                 async with with_redteam_span(
                     'orq.redteam.attack_turn',
                     {
@@ -927,22 +925,22 @@ class MultiTurnOrchestrator:
                                 target.respond([*transcript, Message(role='user', content=attack_prompt)]),
                                 timeout=target_timeout_s,
                             )
-                            _tgt_result = _coerce_to_agent_response(raw_response)
-                            agent_response = _tgt_result.text
+                            tgt_result = _coerce_to_agent_response(raw_response)
+                            agent_response = tgt_result.text
                             consecutive_agent_errors = 0
-                            _resp_text = truncate_for_span(agent_response or '')
+                            resp_text = truncate_for_span(agent_response or '')
                             set_span_attrs(
                                 tgt_span,
                                 {
-                                    'output': _resp_text,
-                                    'orq.redteam.output': _resp_text,
+                                    'output': resp_text,
+                                    'orq.redteam.output': resp_text,
                                 },
                             )
-                            turn_usage = _tgt_result.usage
+                            turn_usage = tgt_result.usage
                     except asyncio.TimeoutError:
                         consecutive_agent_errors += 1
                         agent_response = f'[ERROR: Target agent timed out after {target_timeout_s:.0f}s]'
-                        _tgt_result = AgentResponse(
+                        tgt_result = AgentResponse(
                             output=[TextOutputItem(text=agent_response, annotations=[])],
                             error=AgentResponseError(
                                 message=agent_response, error_type='timeout', code='target.timeout'
@@ -963,7 +961,7 @@ class MultiTurnOrchestrator:
                             turns_record.append(
                                 Turn(
                                     attacker=current_attacker,
-                                    target=_tgt_result,
+                                    target=tgt_result,
                                 )
                             )
                             if progress is not None and task_id is not None:
@@ -986,7 +984,7 @@ class MultiTurnOrchestrator:
                         )
                         agent_response = f'[ERROR: {error_msg}]'
                         classified = classify_error_type(error_msg)
-                        _tgt_result = AgentResponse(
+                        tgt_result = AgentResponse(
                             output=[TextOutputItem(text=agent_response, annotations=[])],
                             error=AgentResponseError(
                                 message=agent_response,
@@ -1014,7 +1012,7 @@ class MultiTurnOrchestrator:
                             turns_record.append(
                                 Turn(
                                     attacker=current_attacker,
-                                    target=_tgt_result,
+                                    target=tgt_result,
                                 )
                             )
                             if progress is not None and task_id is not None:
@@ -1042,7 +1040,7 @@ class MultiTurnOrchestrator:
                         target_usage_acc = target_usage_acc + turn_usage
 
                     # Record the completed turn (target succeeded)
-                    turns_record.append(Turn(attacker=current_attacker, target=_tgt_result))
+                    turns_record.append(Turn(attacker=current_attacker, target=tgt_result))
 
                     # Update adversarial LLM context
                     adversarial_messages.append({'role': 'assistant', 'content': attack_prompt})

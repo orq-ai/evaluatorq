@@ -40,9 +40,9 @@ async def confirm_run_plan(
     import rich.box as box
     from rich.table import Table
 
-    table = Table(title=title, show_header=True, header_style="bold", box=box.ROUNDED)
-    table.add_column("Parameter", style="white", min_width=18)
-    table.add_column("Value", style="cyan")
+    table = Table(title=title, show_header=True, header_style='bold', box=box.ROUNDED)
+    table.add_column('Parameter', style='white', min_width=18)
+    table.add_column('Value', style='cyan')
     for name, value in rows:
         table.add_row(name, value)
     console.print(table)
@@ -82,10 +82,10 @@ def write_text_report(
     try:
         directory.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        typer.echo(f"Error: cannot create report directory {directory}: {exc}", err=True)
+        typer.echo(f'Error: cannot create report directory {directory}: {exc}', err=True)
         raise typer.Exit(code=1) from exc
 
-    path = directory / f"{stem}.{fmt}"
-    path.write_text(content, encoding="utf-8")
-    typer.echo(f"Report written to {path}", err=True)
+    path = directory / f'{stem}.{fmt}'
+    path.write_text(content, encoding='utf-8')
+    typer.echo(f'Report written to {path}', err=True)
     return path

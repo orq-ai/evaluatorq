@@ -22,10 +22,8 @@ def _format_vulnerability_label(vuln_str: str) -> str:
         return vuln_str
     vdef = VULNERABILITY_DEFS.get(vuln)
     if vdef:
-        cats = ', '.join(
-            code for codes in vdef.framework_mappings.values() for code in codes
-        )
-        return f"{vdef.name} ({cats})" if cats else vdef.name
+        cats = ', '.join(code for codes in vdef.framework_mappings.values() for code in codes)
+        return f'{vdef.name} ({cats})' if cats else vdef.name
     return vuln_str
 
 
@@ -33,7 +31,7 @@ def _format_category_label(category: str) -> str:
     """Format ``'ASI01'`` → ``'ASI01 - Goal Hijacking'``."""
     name = OWASP_CATEGORY_NAMES.get(category)
     if name:
-        return f"{category} - {name}"
+        return f'{category} - {name}'
     return category
 
 
@@ -51,58 +49,58 @@ def print_report_summary(report: RedTeamReport, *, console: Console | None = Non
 
     # ── Title ──────────────────────────────────────────────────────────
     console.print()
-    console.print("[bold underline white]RED TEAM REPORT SUMMARY[/bold underline white]")
+    console.print('[bold underline white]RED TEAM REPORT SUMMARY[/bold underline white]')
     console.print()
 
     # ── Summary stats table ────────────────────────────────────────────
-    stats = Table(show_header=True, header_style="bold", box=box.ROUNDED)
-    stats.add_column("Metric", style="white", width=22)
-    stats.add_column("Value", width=15)
+    stats = Table(show_header=True, header_style='bold', box=box.ROUNDED)
+    stats.add_column('Metric', style='white', width=22)
+    stats.add_column('Value', width=15)
 
-    stats.add_row("Total Attacks", Text(str(summary.total_attacks), style="cyan"))
-    stats.add_row("Evaluated", Text(str(summary.evaluated_attacks), style="cyan"))
+    stats.add_row('Total Attacks', Text(str(summary.total_attacks), style='cyan'))
+    stats.add_row('Evaluated', Text(str(summary.evaluated_attacks), style='cyan'))
     stats.add_row(
-        "Vulnerabilities",
-        Text(str(summary.vulnerabilities_found), style="red" if summary.vulnerabilities_found else "green"),
+        'Vulnerabilities',
+        Text(str(summary.vulnerabilities_found), style='red' if summary.vulnerabilities_found else 'green'),
     )
     stats.add_row(
-        "ASR",
-        Text(f"{summary.vulnerability_rate:.0%}", style=rate_style(summary.vulnerability_rate, higher_is_better=False)),
+        'ASR',
+        Text(f'{summary.vulnerability_rate:.0%}', style=rate_style(summary.vulnerability_rate, higher_is_better=False)),
     )
     stats.add_row(
-        "Eval Coverage",
-        Text(f"{summary.evaluation_coverage:.0%}", style=rate_style(summary.evaluation_coverage)),
+        'Eval Coverage',
+        Text(f'{summary.evaluation_coverage:.0%}', style=rate_style(summary.evaluation_coverage)),
     )
     if report.duration_seconds is not None:
         mins, secs = divmod(int(report.duration_seconds), 60)
-        stats.add_row("Duration", Text(f"{mins}m {secs}s", style="cyan"))
+        stats.add_row('Duration', Text(f'{mins}m {secs}s', style='cyan'))
     if summary.total_errors:
-        stats.add_row("Errors", Text(str(summary.total_errors), style="red"))
+        stats.add_row('Errors', Text(str(summary.total_errors), style='red'))
 
     # Panel-of-judges reliability (RES-739) — only present for multi-judge runs.
     rel = summary.jury_reliability
     if rel is not None:
         if rel.krippendorff_alpha is None:
-            value = Text(f"n/a ({rel.samples} samples)", style="dim")
+            value = Text(f'n/a ({rel.samples} samples)', style='dim')
         else:
             value = Text(
-                f"alpha={rel.krippendorff_alpha:.2f} ({rel.samples} samples)",
+                f'alpha={rel.krippendorff_alpha:.2f} ({rel.samples} samples)',
                 style=rate_style(rel.krippendorff_alpha),
             )
-        stats.add_row("Jury Agreement", value)
+        stats.add_row('Jury Agreement', value)
 
     # Datapoint breakdown (hybrid runs)
     breakdown = summary.datapoint_breakdown
     if breakdown:
         parts = []
-        if breakdown.get("static", 0):
-            parts.append(f"{breakdown['static']} static")
-        if breakdown.get("template_dynamic", 0):
-            parts.append(f"{breakdown['template_dynamic']} template")
-        if breakdown.get("generated_dynamic", 0):
-            parts.append(f"{breakdown['generated_dynamic']} generated")
+        if breakdown.get('static', 0):
+            parts.append(f'{breakdown["static"]} static')
+        if breakdown.get('template_dynamic', 0):
+            parts.append(f'{breakdown["template_dynamic"]} template')
+        if breakdown.get('generated_dynamic', 0):
+            parts.append(f'{breakdown["generated_dynamic"]} generated')
         if parts:
-            stats.add_row("Breakdown", Text(", ".join(parts), style="cyan"))
+            stats.add_row('Breakdown', Text(', '.join(parts), style='cyan'))
 
     console.print(stats)
     console.print()
@@ -115,31 +113,31 @@ def print_report_summary(report: RedTeamReport, *, console: Console | None = Non
             key=lambda v: (v.resistance_rate, -v.total_attacks),
         )
 
-        vuln_table = Table(show_header=True, header_style="bold", box=box.ROUNDED)
-        vuln_table.add_column("Vulnerability", style="white", min_width=35)
-        vuln_table.add_column("Domain", style="white", min_width=18)
-        vuln_table.add_column("Tested", justify="right", width=8)
-        vuln_table.add_column("Passed", justify="right", width=8)
-        vuln_table.add_column("ASR", justify="right", width=11)
+        vuln_table = Table(show_header=True, header_style='bold', box=box.ROUNDED)
+        vuln_table.add_column('Vulnerability', style='white', min_width=35)
+        vuln_table.add_column('Domain', style='white', min_width=18)
+        vuln_table.add_column('Tested', justify='right', width=8)
+        vuln_table.add_column('Passed', justify='right', width=8)
+        vuln_table.add_column('ASR', justify='right', width=11)
 
         for vuln_summary in sorted_vulns:
             passed_count = vuln_summary.total_attacks - vuln_summary.vulnerabilities_found
             asr = 1 - vuln_summary.resistance_rate
             vuln_table.add_row(
                 _format_vulnerability_label(vuln_summary.vulnerability),
-                Text(vuln_summary.domain.replace("_", " ").title(), style="white"),
-                Text(str(vuln_summary.total_attacks), style="cyan"),
+                Text(vuln_summary.domain.replace('_', ' ').title(), style='white'),
+                Text(str(vuln_summary.total_attacks), style='cyan'),
                 Text(
                     str(passed_count),
-                    style="green" if passed_count == vuln_summary.total_attacks else "yellow",
+                    style='green' if passed_count == vuln_summary.total_attacks else 'yellow',
                 ),
                 Text(
-                    f"{asr:.0%}",
+                    f'{asr:.0%}',
                     style=rate_style(asr, higher_is_better=False),
                 ),
             )
 
-        console.print("[bold white]Per-Vulnerability Breakdown:[/bold white]")
+        console.print('[bold white]Per-Vulnerability Breakdown:[/bold white]')
         console.print(vuln_table)
         console.print()
 
@@ -151,28 +149,28 @@ def print_report_summary(report: RedTeamReport, *, console: Console | None = Non
             key=lambda c: (c.resistance_rate, -c.total_attacks),
         )
 
-        cat_table = Table(show_header=True, header_style="bold", box=box.ROUNDED)
-        cat_table.add_column("Category", style="white", min_width=30)
-        cat_table.add_column("Attacks", justify="right", width=9)
-        cat_table.add_column("Vulnerable", justify="right", width=11)
-        cat_table.add_column("ASR", justify="right", width=11)
+        cat_table = Table(show_header=True, header_style='bold', box=box.ROUNDED)
+        cat_table.add_column('Category', style='white', min_width=30)
+        cat_table.add_column('Attacks', justify='right', width=9)
+        cat_table.add_column('Vulnerable', justify='right', width=11)
+        cat_table.add_column('ASR', justify='right', width=11)
 
         for cat_summary in sorted_cats:
             asr = 1 - cat_summary.resistance_rate
             cat_table.add_row(
                 _format_category_label(cat_summary.category),
-                Text(str(cat_summary.total_attacks), style="cyan"),
+                Text(str(cat_summary.total_attacks), style='cyan'),
                 Text(
                     str(cat_summary.vulnerabilities_found),
-                    style="red" if cat_summary.vulnerabilities_found else "green",
+                    style='red' if cat_summary.vulnerabilities_found else 'green',
                 ),
                 Text(
-                    f"{asr:.0%}",
+                    f'{asr:.0%}',
                     style=rate_style(asr, higher_is_better=False),
                 ),
             )
 
-        console.print("[bold white]Per-Category Breakdown:[/bold white]")
+        console.print('[bold white]Per-Category Breakdown:[/bold white]')
         console.print(cat_table)
         console.print()
 
@@ -183,14 +181,14 @@ def print_report_summary(report: RedTeamReport, *, console: Console | None = Non
             key=lambda t: t[1].vulnerabilities_found,
             reverse=True,
         )[:5]
-        tech_table = Table(show_header=True, header_style="bold", box=box.ROUNDED)
-        tech_table.add_column("Technique", style="white", min_width=25)
-        tech_table.add_column("Vulnerabilities", justify="right", width=16)
+        tech_table = Table(show_header=True, header_style='bold', box=box.ROUNDED)
+        tech_table.add_column('Technique', style='white', min_width=25)
+        tech_table.add_column('Vulnerabilities', justify='right', width=16)
 
         for technique, tech_summary in top_techniques:
-            tech_table.add_row(technique, Text(str(tech_summary.vulnerabilities_found), style="red"))
+            tech_table.add_row(technique, Text(str(tech_summary.vulnerabilities_found), style='red'))
 
-        console.print("[bold white]Top Vulnerable Techniques:[/bold white]")
+        console.print('[bold white]Top Vulnerable Techniques:[/bold white]')
         console.print(tech_table)
         console.print()
 
@@ -209,20 +207,20 @@ def print_report_summary(report: RedTeamReport, *, console: Console | None = Non
                     error_samples[etype] = msg
                     error_stages[etype] = r.error_stage or ''
 
-        err_table = Table(show_header=True, header_style="bold", box=box.ROUNDED)
-        err_table.add_column("Error", style="white", min_width=16)
-        err_table.add_column("Stage", style="cyan", min_width=10)
-        err_table.add_column("Count", justify="right", width=6)
-        err_table.add_column("Example", style="dim", max_width=70)
+        err_table = Table(show_header=True, header_style='bold', box=box.ROUNDED)
+        err_table.add_column('Error', style='white', min_width=16)
+        err_table.add_column('Stage', style='cyan', min_width=10)
+        err_table.add_column('Count', justify='right', width=6)
+        err_table.add_column('Example', style='dim', max_width=70)
 
         for error_code, count in top_errors:
             err_table.add_row(
                 error_code,
                 error_stages.get(error_code, ''),
-                Text(str(count), style="red"),
+                Text(str(count), style='red'),
                 error_samples.get(error_code, ''),
             )
 
-        console.print("[bold white]Top Error Causes:[/bold white]")
+        console.print('[bold white]Top Error Causes:[/bold white]')
         console.print(err_table)
         console.print()

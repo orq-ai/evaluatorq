@@ -40,20 +40,20 @@ from evaluatorq.redteam.reports.converters import _is_evaluated, _is_vulnerable
 # ---------------------------------------------------------------------------
 
 _DIM_LABELS: dict[str, str] = {
-    "vulnerability": "Vulnerability",
-    "category": "Framework Category",
-    "severity": "Severity",
-    "attack_technique": "Attack Technique",
-    "delivery_method": "Delivery Method",
-    "turn_type": "Turn Type",
-    "source": "Source",
+    'vulnerability': 'Vulnerability',
+    'category': 'Framework Category',
+    'severity': 'Severity',
+    'attack_technique': 'Attack Technique',
+    'delivery_method': 'Delivery Method',
+    'turn_type': 'Turn Type',
+    'source': 'Source',
 }
 
 _HEATMAP_DIM_LABELS: dict[str, str] = {
-    "vulnerability": "Vulnerability",
-    "category": "Category",
-    "technique": "Technique",
-    "severity": "Severity",
+    'vulnerability': 'Vulnerability',
+    'category': 'Category',
+    'technique': 'Technique',
+    'severity': 'Severity',
 }
 
 
@@ -64,7 +64,7 @@ _HEATMAP_DIM_LABELS: dict[str, str] = {
 
 def fmt_category(code: str) -> str:
     name = OWASP_CATEGORY_NAMES.get(code)
-    return f"{code} - {name}" if name else code
+    return f'{code} - {name}' if name else code
 
 
 def fmt_vulnerability(vuln_id: str) -> str:
@@ -78,46 +78,46 @@ def fmt_vulnerability(vuln_id: str) -> str:
             return vdef.name
     except ValueError:
         pass
-    return vuln_id.replace("_", " ").title()
+    return vuln_id.replace('_', ' ').title()
 
 
 def _dim_value(r: RedTeamResult, dim: str) -> str:
     """Extract a string dimension value from a RedTeamResult."""
-    if dim == "category":
+    if dim == 'category':
         return fmt_category(r.attack.category)
-    if dim == "vulnerability":
-        return fmt_vulnerability(r.attack.vulnerability) if r.attack.vulnerability else "unknown"
-    if dim == "severity":
+    if dim == 'vulnerability':
+        return fmt_vulnerability(r.attack.vulnerability) if r.attack.vulnerability else 'unknown'
+    if dim == 'severity':
         return r.attack.severity.value
-    if dim == "attack_technique":
+    if dim == 'attack_technique':
         return r.attack.attack_technique.value
-    if dim == "delivery_method":
+    if dim == 'delivery_method':
         if r.attack.delivery_methods:
             dm = r.attack.delivery_methods[0]
-            return getattr(dm, "value", str(dm))
-        return "unknown"
-    if dim == "turn_type":
-        return r.attack.turn_type.value if r.attack.turn_type else "unknown"
-    if dim == "source":
+            return getattr(dm, 'value', str(dm))
+        return 'unknown'
+    if dim == 'turn_type':
+        return r.attack.turn_type.value if r.attack.turn_type else 'unknown'
+    if dim == 'source':
         return r.attack.source
-    return "unknown"
+    return 'unknown'
 
 
 def _heatmap_dim_value(r: RedTeamResult, dim: str) -> str:
     """Extract a dimension value for the agent heatmap view."""
-    if dim == "vulnerability":
-        return fmt_vulnerability(r.attack.vulnerability) if r.attack.vulnerability else "unknown"
-    if dim == "category":
+    if dim == 'vulnerability':
+        return fmt_vulnerability(r.attack.vulnerability) if r.attack.vulnerability else 'unknown'
+    if dim == 'category':
         return fmt_category(r.attack.category)
-    if dim == "technique":
+    if dim == 'technique':
         return r.attack.attack_technique.value
-    if dim == "severity":
+    if dim == 'severity':
         return r.attack.severity.value
-    return "unknown"
+    return 'unknown'
 
 
 def agent_key(r: RedTeamResult) -> str:
-    return r.agent.key or r.agent.display_name or "unknown"
+    return r.agent.key or r.agent.display_name or 'unknown'
 
 
 # ---------------------------------------------------------------------------
@@ -132,15 +132,15 @@ def _select_buttons(
     selected: str,
     hx_url: str,
     param_name: str,
-    extra_params: str = "",
+    extra_params: str = '',
     container_id: str,
 ) -> str:
     """Render a row of hx-get buttons that swap ``container_id``."""
     parts: list[str] = [f'<div class="rt-view-selector" id="{esc(container_id)}">']
     for opt in options:
-        active_class = " rt-view-selector-active" if opt == selected else ""
-        sep = "&" if extra_params else ""
-        url = f"{hx_url}?{param_name}={_quote(str(opt), safe='')}{sep}{extra_params}"
+        active_class = ' rt-view-selector-active' if opt == selected else ''
+        sep = '&' if extra_params else ''
+        url = f'{hx_url}?{param_name}={_quote(str(opt), safe="")}{sep}{extra_params}'
         lbl = labels.get(opt, opt)
         parts.append(
             f'<button class="rt-view-selector-btn{active_class}"'
@@ -149,8 +149,8 @@ def _select_buttons(
             f' hx-swap="outerHTML">'
             f'{esc(lbl)}</button>'
         )
-    parts.append("</div>")
-    return "".join(parts)
+    parts.append('</div>')
+    return ''.join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +164,7 @@ def render_breakdown(
     group_by: str,
     stack_by: str | None,
     rid: str,
-    container_id: str = "rt-breakdown",
+    container_id: str = 'rt-breakdown',
 ) -> str:
     """Render the breakdown fragment: selector controls + Vega-Embed chart."""
     results = report.results
@@ -172,32 +172,32 @@ def render_breakdown(
 
     # Clamp invalid inputs
     if group_by not in dimensions:
-        group_by = "vulnerability"
+        group_by = 'vulnerability'
     if stack_by is not None and (stack_by not in dimensions or stack_by == group_by):
         stack_by = None
 
-    base_url = f"/r/{esc(rid)}/view/breakdown"
-    stack_options = ["none"] + [d for d in dimensions if d != group_by]
-    stack_labels: dict[str, str] = {"none": "None", **_DIM_LABELS}
-    cur_stack = stack_by or "none"
+    base_url = f'/r/{esc(rid)}/view/breakdown'
+    stack_options = ['none'] + [d for d in dimensions if d != group_by]
+    stack_labels: dict[str, str] = {'none': 'None', **_DIM_LABELS}
+    cur_stack = stack_by or 'none'
 
-    extra_stack = f"stack_by={_quote(str(cur_stack), safe='')}" if cur_stack != "none" else ""
+    extra_stack = f'stack_by={_quote(str(cur_stack), safe="")}' if cur_stack != 'none' else ''
     group_selector = _select_buttons(
         options=dimensions,
         labels=_DIM_LABELS,
         selected=group_by,
         hx_url=base_url,
-        param_name="group_by",
+        param_name='group_by',
         extra_params=extra_stack,
         container_id=container_id,
     )
-    extra_group = f"group_by={_quote(str(group_by), safe='')}"
+    extra_group = f'group_by={_quote(str(group_by), safe="")}'
     stack_selector = _select_buttons(
         options=stack_options,
         labels=stack_labels,
         selected=cur_stack,
         hx_url=base_url,
-        param_name="stack_by",
+        param_name='stack_by',
         extra_params=extra_group,
         container_id=container_id,
     )
@@ -207,7 +207,7 @@ def render_breakdown(
             f'<div class="rt-breakdown" id="{esc(container_id)}">'
             f'{group_selector}{stack_selector}'
             '<p class="rt-view-empty">No results to display.</p>'
-            "</div>"
+            '</div>'
         )
 
     chart_html = _build_breakdown_chart(results, group_by, stack_by, container_id)
@@ -225,7 +225,7 @@ def render_breakdown(
         f'</div>'
         f'</div>'
         f'{chart_html}'
-        f"</div>"
+        f'</div>'
     )
 
 
@@ -236,26 +236,26 @@ def _build_breakdown_chart(
     container_id: str,
 ) -> str:
     """Build and embed the breakdown bar chart."""
-    chart_id = f"{container_id}-chart"
+    chart_id = f'{container_id}-chart'
 
     if stack_by is None:
-        groups: dict[str, dict[str, int]] = defaultdict(lambda: {"vuln": 0, "evaluated": 0})
+        groups: dict[str, dict[str, int]] = defaultdict(lambda: {'vuln': 0, 'evaluated': 0})
         for r in results:
             key = _dim_value(r, group_by)
             if _is_evaluated(r):
-                groups[key]["evaluated"] += 1
+                groups[key]['evaluated'] += 1
                 if _is_vulnerable(r):
-                    groups[key]["vuln"] += 1
+                    groups[key]['vuln'] += 1
 
         chart_rows: list[dict[str, Any]] = []
         for name, counts in groups.items():
-            asr = (counts["vuln"] / counts["evaluated"] * 100) if counts["evaluated"] else 0.0
-            chart_rows.append({"dimension": name, "asr": round(asr, 1), "n": counts["evaluated"]})
+            asr = (counts['vuln'] / counts['evaluated'] * 100) if counts['evaluated'] else 0.0
+            chart_rows.append({'dimension': name, 'asr': round(asr, 1), 'n': counts['evaluated']})
 
-        chart_rows.sort(key=operator.itemgetter("asr"), reverse=True)
+        chart_rows.sort(key=operator.itemgetter('asr'), reverse=True)
 
-        labels = [row["dimension"] for row in chart_rows]
-        values = [row["asr"] for row in chart_rows]
+        labels = [row['dimension'] for row in chart_rows]
+        values = [row['asr'] for row in chart_rows]
         value_labels = [f'{row["asr"]:.1f}% (n={row["n"]})' for row in chart_rows]
 
         colors = [QUALITATIVE[i % len(QUALITATIVE)] for i in range(len(labels))]
@@ -264,52 +264,52 @@ def _build_breakdown_chart(
             labels=labels,
             values=values,
             color=QUALITATIVE[0],
-            x_title="ASR (%)",
+            x_title='ASR (%)',
             value_labels=value_labels,
             colors=colors,
         )
     else:
-        groups_stacked: dict[tuple[str, str], dict[str, int]] = defaultdict(
-            lambda: {"vuln": 0, "evaluated": 0}
-        )
+        groups_stacked: dict[tuple[str, str], dict[str, int]] = defaultdict(lambda: {'vuln': 0, 'evaluated': 0})
         for r in results:
             if _is_evaluated(r):
                 g = _dim_value(r, group_by)
                 s = _dim_value(r, stack_by)
-                groups_stacked[g, s]["evaluated"] += 1
+                groups_stacked[g, s]['evaluated'] += 1
                 if _is_vulnerable(r):
-                    groups_stacked[g, s]["vuln"] += 1
+                    groups_stacked[g, s]['vuln'] += 1
 
         stacked_rows: list[dict[str, Any]] = []
         for (g, s), counts in groups_stacked.items():
-            asr = (counts["vuln"] / counts["evaluated"] * 100) if counts["evaluated"] else 0.0
-            stacked_rows.append({"dimension": g, "stack": s, "asr": round(asr, 1), "n": counts["evaluated"]})
+            asr = (counts['vuln'] / counts['evaluated'] * 100) if counts['evaluated'] else 0.0
+            stacked_rows.append({'dimension': g, 'stack': s, 'asr': round(asr, 1), 'n': counts['evaluated']})
 
         dim_asr: dict[str, list[float]] = defaultdict(list)
         for row in stacked_rows:
-            dim_asr[row["dimension"]].append(row["asr"])
+            dim_asr[row['dimension']].append(row['asr'])
         dim_order = sorted(dim_asr.keys(), key=lambda d: sum(dim_asr[d]) / max(len(dim_asr[d]), 1), reverse=True)
 
-        stack_vals = sorted({row["stack"] for row in stacked_rows})
+        stack_vals = sorted({row['stack'] for row in stacked_rows})
 
-        row_by_gs: dict[tuple[str, str], dict[str, Any]] = {(row["dimension"], row["stack"]): row for row in stacked_rows}
+        row_by_gs: dict[tuple[str, str], dict[str, Any]] = {
+            (row['dimension'], row['stack']): row for row in stacked_rows
+        }
         series: list[tuple[str, list[float]]] = []
         stacked_value_labels: list[list[str]] = []
         for sv in stack_vals:
             sv_vals: list[float] = []
             sv_texts: list[str] = []
             for d in dim_order:
-                row = row_by_gs.get((d, sv), {"asr": 0.0, "n": 0})
-                sv_vals.append(row["asr"])
-                n = row["n"]
-                sv_texts.append(f"n={n}" if n else "")
+                row = row_by_gs.get((d, sv), {'asr': 0.0, 'n': 0})
+                sv_vals.append(row['asr'])
+                n = row['n']
+                sv_texts.append(f'n={n}' if n else '')
             series.append((sv, sv_vals))
             stacked_value_labels.append(sv_texts)
 
         spec = vl_stacked_bar(
             labels=dim_order,
             series=series,
-            x_title="ASR (%)",
+            x_title='ASR (%)',
             value_labels=stacked_value_labels,
         )
 
@@ -326,7 +326,7 @@ def render_agent_heatmap(
     report: RedTeamReport,
     dim: str,
     rid: str,
-    container_id: str = "rt-agent-heatmap",
+    container_id: str = 'rt-agent-heatmap',
 ) -> str:
     """Render the agent heatmap fragment: dim selector + heatmap chart."""
     results = report.results
@@ -338,19 +338,19 @@ def render_agent_heatmap(
         return (
             f'<div class="rt-agent-heatmap" id="{esc(container_id)}">'
             '<p class="rt-view-empty">Agent heatmap requires 2 or more agents.</p>'
-            "</div>"
+            '</div>'
         )
 
     if dim not in dim_options:
-        dim = "vulnerability"
+        dim = 'vulnerability'
 
-    base_url = f"/r/{esc(rid)}/view/agent-heatmap"
+    base_url = f'/r/{esc(rid)}/view/agent-heatmap'
     dim_selector = _select_buttons(
         options=dim_options,
         labels=_HEATMAP_DIM_LABELS,
         selected=dim,
         hx_url=base_url,
-        param_name="dim",
+        param_name='dim',
         container_id=container_id,
     )
 
@@ -359,7 +359,7 @@ def render_agent_heatmap(
             f'<div class="rt-agent-heatmap" id="{esc(container_id)}">'
             f'{dim_selector}'
             '<p class="rt-view-empty">No results to display.</p>'
-            "</div>"
+            '</div>'
         )
 
     chart_html = _build_heatmap_chart(results, agents, dim, container_id)
@@ -371,7 +371,7 @@ def render_agent_heatmap(
         f'{dim_selector}'
         f'</div>'
         f'{chart_html}'
-        f"</div>"
+        f'</div>'
     )
 
 
@@ -382,20 +382,18 @@ def _build_heatmap_chart(
     container_id: str,
 ) -> str:
     """Build and embed the agent heatmap."""
-    chart_id = f"{container_id}-chart"
+    chart_id = f'{container_id}-chart'
 
-    pivot: dict[str, dict[str, dict[str, int]]] = defaultdict(
-        lambda: defaultdict(lambda: {"evaluated": 0, "vuln": 0})
-    )
+    pivot: dict[str, dict[str, dict[str, int]]] = defaultdict(lambda: defaultdict(lambda: {'evaluated': 0, 'vuln': 0}))
     for r in results:
         if _is_evaluated(r):
             dv = _heatmap_dim_value(r, dim)
             ak = agent_key(r)
-            pivot[dv][ak]["evaluated"] += 1
+            pivot[dv][ak]['evaluated'] += 1
             if _is_vulnerable(r):
-                pivot[dv][ak]["vuln"] += 1
+                pivot[dv][ak]['vuln'] += 1
 
-    if dim == "severity":
+    if dim == 'severity':
         all_dim_vals = [s for s in SEVERITY_ORDER if s in pivot]
         other_vals = sorted(v for v in pivot if v not in SEVERITY_ORDER)
         all_dim_vals = all_dim_vals + other_vals
@@ -407,23 +405,23 @@ def _build_heatmap_chart(
 
     cell_colors: list[list[str]] = []
     cell_texts: list[list[str]] = []
-    grey = COLORS.get("sand_400", "#e4e2df")
+    grey = COLORS.get('sand_400', '#e4e2df')
 
     for dv in all_dim_vals:
         row_colors: list[str] = []
         row_texts: list[str] = []
         for ak in agents:
-            counts = pivot[dv].get(ak, {"evaluated": 0, "vuln": 0})
-            evaluated = counts["evaluated"]
-            vuln = counts["vuln"]
+            counts = pivot[dv].get(ak, {'evaluated': 0, 'vuln': 0})
+            evaluated = counts['evaluated']
+            vuln = counts['vuln']
             if evaluated == 0:
                 row_colors.append(grey)
-                row_texts.append("—")
+                row_texts.append('—')
             else:
                 asr = vuln / evaluated
                 color = scale_color(asr, ORQ_SCALE_HEAT)
                 row_colors.append(color)
-                row_texts.append(f"{asr * 100:.0f}%\nn={evaluated}")
+                row_texts.append(f'{asr * 100:.0f}%\nn={evaluated}')
         cell_colors.append(row_colors)
         cell_texts.append(row_texts)
 

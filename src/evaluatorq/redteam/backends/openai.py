@@ -106,7 +106,7 @@ class OpenAIModelTarget(AgentTarget):
         async with with_llm_span(
             model=self.model,
             input_messages=completion_messages,
-            attributes={"orq.redteam.llm_purpose": "target"},
+            attributes={'orq.redteam.llm_purpose': 'target'},
         ) as span:
             response = await asyncio.wait_for(
                 self.client.chat.completions.create(
@@ -121,7 +121,7 @@ class OpenAIModelTarget(AgentTarget):
             record_llm_response(span, response, output_content=content)
 
             tool_call_items: list[ToolCallOutputItem] = []
-            for tc in (getattr(msg, 'tool_calls', None) or []):
+            for tc in getattr(msg, 'tool_calls', None) or []:
                 func = getattr(tc, 'function', None)
                 if func is None:
                     continue
@@ -153,7 +153,13 @@ class OpenAIModelTarget(AgentTarget):
 
     def new(self) -> OpenAIModelTarget:
         """Return a fresh target instance for parallel job safety (satisfies the ``AgentTarget`` ABC)."""
-        return OpenAIModelTarget(model=self.model, system_prompt=self.system_prompt, client=self.client, max_tokens=self.max_tokens, timeout_ms=self.timeout_ms)
+        return OpenAIModelTarget(
+            model=self.model,
+            system_prompt=self.system_prompt,
+            client=self.client,
+            max_tokens=self.max_tokens,
+            timeout_ms=self.timeout_ms,
+        )
 
     target_kind: TargetKind = TargetKind.OPENAI
     """Used by the runner to populate report metadata correctly."""
@@ -192,7 +198,7 @@ class OpenAIBackend(Backend):
         max_tokens: int | None = None,
         timeout_ms: int | None = None,
     ) -> None:
-        super().__init__(name="openai")
+        super().__init__(name='openai')
         self._client = client or create_async_llm_client()
         self._system_prompt = system_prompt
         self._max_tokens = max_tokens

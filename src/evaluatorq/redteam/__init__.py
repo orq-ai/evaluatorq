@@ -23,7 +23,7 @@ def _check_redteam_deps() -> None:  # noqa: RUF067
             missing.append(mod)
     if missing:
         raise ImportError(
-            f"Red teaming requires optional dependencies: {', '.join(missing)}. "
+            f'Red teaming requires optional dependencies: {", ".join(missing)}. '
             f"Install with: pip install 'evaluatorq[redteam]'"
         )
 
@@ -132,115 +132,115 @@ from evaluatorq.redteam.vulnerability_registry import (
 )
 
 __all__ = [
-    "ADVERSARIAL_ANALYSIS_PROMPT",
-    "ADVERSARIAL_INITIAL_USER_PROMPT",
-    "ADVERSARIAL_SYSTEM_PROMPT",
-    "OWASP_ASI_TOP_10",
-    "OWASP_LLM_TOP_10",
+    'ADVERSARIAL_ANALYSIS_PROMPT',
+    'ADVERSARIAL_INITIAL_USER_PROMPT',
+    'ADVERSARIAL_SYSTEM_PROMPT',
+    'OWASP_ASI_TOP_10',
+    'OWASP_LLM_TOP_10',
     'SEVERITY_DEFINITIONS',
-    "VULNERABILITY_DEFS",
-    "AgentCapability",
-    "AgentContext",
-    "AgentInfo",
+    'VULNERABILITY_DEFS',
+    'AgentCapability',
+    'AgentContext',
+    'AgentInfo',
     # Result models
-    "AgentResponse",
+    'AgentResponse',
     # Target protocols
-    "AgentTarget",
-    "AttackEvaluationResult",
-    "AttackInfo",
-    "AttackSource",
+    'AgentTarget',
+    'AttackEvaluationResult',
+    'AttackInfo',
+    'AttackSource',
     # Attack models
-    "AttackStrategy",
-    "AttackTechnique",
-    "BackendError",
-    "CancelledError",
+    'AttackStrategy',
+    'AttackTechnique',
+    'BackendError',
+    'CancelledError',
     # Report models
-    "CategorySummary",
-    "ConfirmPayload",
-    "CredentialError",
-    "DefaultHooks",
-    "DeliveryMethod",
-    "DeliveryMethodSummary",
-    "DimensionSummary",
-    "DomainSummary",
-    "EvaluatorConfig",
+    'CategorySummary',
+    'ConfirmPayload',
+    'CredentialError',
+    'DefaultHooks',
+    'DeliveryMethod',
+    'DeliveryMethodSummary',
+    'DimensionSummary',
+    'DomainSummary',
+    'EvaluatorConfig',
     'FocusAreaRecommendation',
-    "Framework",
-    "FrameworkSummary",
+    'Framework',
+    'FrameworkSummary',
     # Message models
-    "FunctionCall",
-    "JuryResult",
-    "JuryStats",
-    "JuryVote",
-    "KnowledgeBaseInfo",
+    'FunctionCall',
+    'JuryResult',
+    'JuryStats',
+    'JuryVote',
+    'KnowledgeBaseInfo',
     # Pipeline config
-    "LLMCallConfig",
-    "LLMConfig",
-    "MemoryStoreInfo",
-    "Message",
-    "OpenAIModelTarget",
+    'LLMCallConfig',
+    'LLMConfig',
+    'MemoryStoreInfo',
+    'Message',
+    'OpenAIModelTarget',
     # Result models
-    "OrchestratorResult",
-    "OutputMessage",
-    "Pipeline",
+    'OrchestratorResult',
+    'OutputMessage',
+    'Pipeline',
     # Hook system
-    "PipelineHooks",
-    "PipelineStage",
-    "ReasoningOutputItem",
+    'PipelineHooks',
+    'PipelineStage',
+    'ReasoningOutputItem',
     # Exceptions
-    "RedTeamError",
+    'RedTeamError',
     # Input models
-    "RedTeamInput",
+    'RedTeamInput',
     # Core public types
-    "RedTeamReport",
-    "RedTeamResult",
-    "ReportSnapshot",
-    "ReportSummary",
-    "RichHooks",
+    'RedTeamReport',
+    'RedTeamResult',
+    'ReportSnapshot',
+    'ReportSummary',
+    'RichHooks',
     # Run-level error rollup
-    "RunError",
-    "Severity",
-    "SeveritySummary",
-    "TargetConfig",
-    "TechniqueSummary",
-    "TokenUsage",
+    'RunError',
+    'Severity',
+    'SeveritySummary',
+    'TargetConfig',
+    'TechniqueSummary',
+    'TokenUsage',
     # Agent context models
-    "ToolInfo",
+    'ToolInfo',
     # Enums
-    "TurnType",
-    "TurnTypeSummary",
-    "UnifiedEvaluationResult",
+    'TurnType',
+    'TurnTypeSummary',
+    'UnifiedEvaluationResult',
     # Vulnerability types
-    "Vulnerability",
-    "VulnerabilityDef",
-    "VulnerabilityDomain",
-    "VulnerabilitySummary",
+    'Vulnerability',
+    'VulnerabilityDef',
+    'VulnerabilityDomain',
+    'VulnerabilitySummary',
     # OpenResponses dataset helpers (RES-540)
-    "append_assistant_turn",
-    "append_user_followup",
-    "build_openresponses_request",
-    "get_category_info",
-    "get_vulnerability_name",
+    'append_assistant_turn',
+    'append_user_followup',
+    'build_openresponses_request',
+    'get_category_info',
+    'get_vulnerability_name',
     # Vulnerability introspection
-    "list_available_vulnerabilities",
+    'list_available_vulnerabilities',
     # Category introspection
-    "list_categories",
-    "load_openresponses_dataset",
-    "merge_reports",
-    "messages_from_openresponses_input",
-    "normalize_category",
+    'list_categories',
+    'load_openresponses_dataset',
+    'merge_reports',
+    'messages_from_openresponses_input',
+    'normalize_category',
     # Helper functions
-    "normalize_framework",
-    "orchestrator_result_to_openresponses_input",
-    "print_report_summary",
+    'normalize_framework',
+    'orchestrator_result_to_openresponses_input',
+    'print_report_summary',
     # Entry points
-    "red_team",
-    "redteam_sample_from_openresponses",
+    'red_team',
+    'redteam_sample_from_openresponses',
     # Backend extension
-    "register_backend",
-    "resolve_category",
-    "resolve_vulnerabilities",
-    "turns_to_openresponses_input",
+    'register_backend',
+    'resolve_category',
+    'resolve_vulnerabilities',
+    'turns_to_openresponses_input',
 ]
 
 
@@ -248,26 +248,28 @@ _deprecated_warned: set[str] = set()  # noqa: RUF067
 
 
 def __getattr__(name: str):
-    if name in ("RedTeamConfig", "PipelineLLMConfig"):
+    if name in ('RedTeamConfig', 'PipelineLLMConfig'):
         if name not in _deprecated_warned:
             import warnings
+
             _deprecated_warned.add(name)
             warnings.warn(
-                f"{name} has been renamed to LLMConfig. Update your imports.",
+                f'{name} has been renamed to LLMConfig. Update your imports.',
                 DeprecationWarning,
                 stacklevel=2,
             )
         from evaluatorq.redteam.contracts import LLMConfig
+
         return LLMConfig
-    if name == "EvaluationResult":
+    if name == 'EvaluationResult':
         if name not in _deprecated_warned:
             import warnings
+
             _deprecated_warned.add(name)
             warnings.warn(
-                "EvaluationResult is deprecated in evaluatorq.redteam. "
-                "Use AttackEvaluationResult instead.",
+                'EvaluationResult is deprecated in evaluatorq.redteam. Use AttackEvaluationResult instead.',
                 DeprecationWarning,
                 stacklevel=2,
             )
         return AttackEvaluationResult
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')

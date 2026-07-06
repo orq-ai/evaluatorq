@@ -32,10 +32,10 @@ def _extract_schema_parameters(
     if isinstance(schema_obj, dict):
         return schema_obj
     # Pydantic v2 model class
-    if hasattr(schema_obj, "model_json_schema"):
+    if hasattr(schema_obj, 'model_json_schema'):
         return schema_obj.model_json_schema()
     # Pydantic v1 model class
-    if hasattr(schema_obj, "schema") and callable(schema_obj.schema):
+    if hasattr(schema_obj, 'schema') and callable(schema_obj.schema):
         schema = schema_obj.schema()
         return schema if isinstance(schema, dict) else None
     return None
@@ -46,10 +46,10 @@ def _normalize_message(msg: Any) -> dict[str, Any]:
     if isinstance(msg, dict):
         return msg
     # Pydantic BaseModel (Orq SDK message types)
-    if hasattr(msg, "model_dump"):
+    if hasattr(msg, 'model_dump'):
         return msg.model_dump(exclude_none=True)
     # Fallback: duck-type role + content
-    return {"role": getattr(msg, "role", "user"), "content": getattr(msg, "content", "")}
+    return {'role': getattr(msg, 'role', 'user'), 'content': getattr(msg, 'content', '')}
 
 
 def _extract_messages_from_data(
@@ -60,7 +60,7 @@ def _extract_messages_from_data(
     Returns None when data.inputs["messages"] is missing, not a list, or empty.
     Each message is normalized to a plain dict to handle Orq SDK Pydantic models.
     """
-    messages = data.inputs.get("messages")
+    messages = data.inputs.get('messages')
     if not isinstance(messages, list) or len(messages) == 0:
         return None
     return [_normalize_message(m) for m in messages]
@@ -69,8 +69,8 @@ def _extract_messages_from_data(
 def wrap_langchain_agent(
     agent: CompiledStateGraph[Any, Any, Any, Any],
     *,
-    name: str = "agent",
-    prompt_key: str = "prompt",
+    name: str = 'agent',
+    prompt_key: str = 'prompt',
     instructions: str | Callable[[DataPoint], str] | None = None,
     tools: list[dict[str, Any]] | None = None,
 ) -> Any:
@@ -104,34 +104,34 @@ def wrap_langchain_agent(
         if instructions is not None:
             # Resolve instructions (static string or dynamic callable)
             resolved = instructions(data) if callable(instructions) else instructions
-            system_message: dict[str, str] = {"role": "system", "content": resolved}
+            system_message: dict[str, str] = {'role': 'system', 'content': resolved}
 
             if has_messages and has_prompt:
-                messages = [system_message, *input_messages, {"role": "user", "content": prompt}]
+                messages = [system_message, *input_messages, {'role': 'user', 'content': prompt}]
             elif has_prompt:
-                messages = [system_message, {"role": "user", "content": prompt}]
+                messages = [system_message, {'role': 'user', 'content': prompt}]
             elif has_messages:
                 messages = [system_message, *input_messages]
             else:
                 raise ValueError(
-                    f"Expected data.inputs.messages (list) or data.inputs.{prompt_key} (str), but neither was provided"
+                    f'Expected data.inputs.messages (list) or data.inputs.{prompt_key} (str), but neither was provided'
                 )
         elif has_messages and has_prompt:
-            messages = [*input_messages, {"role": "user", "content": prompt}]
+            messages = [*input_messages, {'role': 'user', 'content': prompt}]
         elif has_prompt:
-            messages = [{"role": "user", "content": prompt}]
+            messages = [{'role': 'user', 'content': prompt}]
         elif has_messages:
             messages = list(input_messages)
         else:
             raise ValueError(
-                f"Expected data.inputs.messages (list) or data.inputs.{prompt_key} (str), but neither was provided"
+                f'Expected data.inputs.messages (list) or data.inputs.{prompt_key} (str), but neither was provided'
             )
 
         # Invoke the LangChain agent
-        result = agent.invoke({"messages": messages})
+        result = agent.invoke({'messages': messages})
 
         # Extract messages from result
-        result_messages: list[BaseMessage] = result.get("messages", [])
+        result_messages: list[BaseMessage] = result.get('messages', [])
 
         # Get tools from agent if not provided explicitly
         resolved_tools = tools if tools is not None else extract_tools_from_agent(agent)
@@ -140,8 +140,8 @@ def wrap_langchain_agent(
         open_responses_output = convert_to_open_responses(result_messages, resolved_tools)
 
         return {
-            "name": name,
-            "output": open_responses_output,
+            'name': name,
+            'output': open_responses_output,
         }
 
     return job
@@ -163,27 +163,27 @@ def extract_tools_from_agent(agent: CompiledStateGraph[Any, Any, Any, Any]) -> l
     tools: list[dict[str, Any]] = []
 
     # CompiledStateGraph has nodes attribute
-    if not hasattr(agent, "nodes"):
+    if not hasattr(agent, 'nodes'):
         return tools
 
     for node in agent.nodes.values():
-        bound = getattr(node, "bound", None)
+        bound = getattr(node, 'bound', None)
         if bound is None:
             continue
 
         # Check for tools_by_name attribute (works for both ToolNode and _ToolNode)
-        tools_by_name = getattr(bound, "tools_by_name", None)
+        tools_by_name = getattr(bound, 'tools_by_name', None)
         if not tools_by_name:
             continue
 
         for tool_obj in tools_by_name.values():
             if isinstance(tool_obj, BaseTool):
                 tool_schema: dict[str, Any] = {
-                    "type": "function",
-                    "name": tool_obj.name,
-                    "description": tool_obj.description,
-                    "parameters": _extract_schema_parameters(tool_obj.args_schema),
-                    "strict": True,
+                    'type': 'function',
+                    'name': tool_obj.name,
+                    'description': tool_obj.description,
+                    'parameters': _extract_schema_parameters(tool_obj.args_schema),
+                    'strict': True,
                 }
                 tools.append(tool_schema)
 

@@ -50,9 +50,7 @@ class InputFileContentDict(TypedDict, total=False):
 
 
 # A single content part of a message, in OpenResponses wire shape.
-ContentPartDict = (
-    InputTextContentDict | InputImageContentDict | InputFileContentDict | OutputTextContent
-)
+ContentPartDict = InputTextContentDict | InputImageContentDict | InputFileContentDict | OutputTextContent
 
 
 class FunctionCallDict(TypedDict, total=False):

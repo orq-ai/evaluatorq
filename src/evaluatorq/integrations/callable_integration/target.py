@@ -31,14 +31,14 @@ AgentCallable = (
 
 # usage_fn receives the full forwarded transcript and the response text, so
 # token accounting stays correct across multi-turn conversations.
-UsageFn = Callable[[list[Message], str], "TokenUsage | None"]
+UsageFn = Callable[[list[Message], str], 'TokenUsage | None']
 
 
 def _is_async_callable(fn: object) -> bool:
     """True if ``fn`` is a coroutine function or a callable object with an async ``__call__``."""
     if asyncio.iscoroutinefunction(fn):
         return True
-    call = getattr(fn, "__call__", None)  # noqa: B004 — intentional: detect async callable objects
+    call = getattr(fn, '__call__', None)  # noqa: B004 — intentional: detect async callable objects
     return call is not None and asyncio.iscoroutinefunction(call)
 
 
@@ -143,17 +143,17 @@ class CallableTarget(AgentTarget):
         except (asyncio.CancelledError, asyncio.TimeoutError):
             raise
         except Exception as exc:
-            raise RuntimeError(f"CallableTarget: callable raised {exc!r}") from exc
+            raise RuntimeError(f'CallableTarget: callable raised {exc!r}') from exc
 
         if isinstance(result, AgentResponse):
             return result
-        text = str(result) if result is not None else ""
+        text = str(result) if result is not None else ''
         usage: TokenUsage | None = None
         if self._usage_fn is not None:
             try:
                 usage = self._usage_fn(messages, text)
             except Exception:
-                logger.exception("usage_fn raised an exception; using usage=None")
+                logger.exception('usage_fn raised an exception; using usage=None')
         text_item: OutputMessage = TextOutputItem(text=text, annotations=[])
         return AgentResponse(output=[text_item], usage=usage)
 
@@ -161,10 +161,10 @@ class CallableTarget(AgentTarget):
         """Return the user-provided agent context, or a minimal placeholder."""
         if self._agent_context is not None:
             return self._agent_context
-        name = getattr(self._fn, "__name__", "")
+        name = getattr(self._fn, '__name__', '')
         # Lambdas share the useless name "<lambda>"; fall back to a stable key.
-        key = name if name and name != "<lambda>" else "callable_target"
-        return AgentContext(key=key, description="opaque callable target")
+        key = name if name and name != '<lambda>' else 'callable_target'
+        return AgentContext(key=key, description='opaque callable target')
 
     def new(self) -> CallableTarget:
         """Return a fresh copy sharing the same callable, with state reset via reset_fn."""

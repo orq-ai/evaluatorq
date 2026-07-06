@@ -22,14 +22,14 @@ def from_orq_deployment(
 ) -> Callable[[list[Message]], Awaitable[str]]:
     """Create a simulation ``target_callback`` from an Orq deployment key."""
     if not agent_key.strip():
-        raise ValueError("agent_key must be a non-empty string")
+        raise ValueError('agent_key must be a non-empty string')
 
     async def callback(messages: list[Message]) -> str:
         from evaluatorq.deployment import invoke
 
         return await invoke(
             agent_key,
-            messages=[{"role": m.role, "content": content_to_text(m.content)} for m in messages],
+            messages=[{'role': m.role, 'content': content_to_text(m.content)} for m in messages],
         )
 
     # Carry the key so the run-metadata label can render "deployment:<key>",
@@ -47,7 +47,7 @@ def from_chat_completions(
     """
 
     async def callback(messages: list[Message]) -> str:
-        result = fn([{"role": m.role, "content": content_to_text(m.content)} for m in messages])
+        result = fn([{'role': m.role, 'content': content_to_text(m.content)} for m in messages])
         if inspect.isawaitable(result):
             return await result
         return result

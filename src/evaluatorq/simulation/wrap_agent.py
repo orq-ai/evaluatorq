@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 def wrap_simulation_agent(
     *,
-    name: str = "simulation",
+    name: str = 'simulation',
     target_callback: Callable[[list[Message]], str | Awaitable[str]] | None = None,
     agent_key: str | None = None,
     max_turns: int = 10,
@@ -56,27 +56,22 @@ def wrap_simulation_agent(
     """
     from evaluatorq.simulation.runner.simulation import SimulationRunner
 
-    if "evaluators" in deprecated_kwargs:
+    if 'evaluators' in deprecated_kwargs:
         # Removed in RES-594: scoring belongs on the evaluatorq() call, not
         # the job that produces the output. Raise loud — silently dropping
         # scoring would be worse than a TypeError.
         raise TypeError(
             "wrap_simulation_agent() no longer accepts 'evaluators='. Pass your "
-            "evaluator list to evaluatorq(..., evaluators=...) instead. See CHANGELOG."
+            'evaluator list to evaluatorq(..., evaluators=...) instead. See CHANGELOG.'
         )
     if deprecated_kwargs:
-        raise TypeError(
-            f"wrap_simulation_agent() got unexpected keyword arguments: "
-            f"{sorted(deprecated_kwargs)}"
-        )
+        raise TypeError(f'wrap_simulation_agent() got unexpected keyword arguments: {sorted(deprecated_kwargs)}')
 
     resolved_callback = target_callback
     if not resolved_callback and agent_key:
         resolved_callback = from_orq_deployment(agent_key)
     if not resolved_callback:
-        raise ValueError(
-            "wrap_simulation_agent requires either target_callback or agent_key"
-        )
+        raise ValueError('wrap_simulation_agent requires either target_callback or agent_key')
 
     effective_model = model or DEFAULT_MODEL
 
@@ -92,12 +87,12 @@ def wrap_simulation_agent(
         sim_dp = _extract_single_datapoint(data)
         result = await runner.run(datapoint=sim_dp, max_turns=max_turns)
         return {
-            "name": name,
-            "output": to_open_responses(result, effective_model),
+            'name': name,
+            'output': to_open_responses(result, effective_model),
         }
 
     async def aclose() -> None:
         await runner.close()
 
-    setattr(job_fn, "aclose", aclose)  # noqa: B010
+    setattr(job_fn, 'aclose', aclose)  # noqa: B010
     return job_fn
