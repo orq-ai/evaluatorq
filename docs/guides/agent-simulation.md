@@ -440,6 +440,44 @@ the generated cases (`eq sim generate --output`, or `eq sim run
     Run `eq dashboard` to browse saved red-team and simulation reports together;
     `eq redteam ui` / `eq sim ui` open the legacy Streamlit views for one surface.
 
+## External framework demos
+
+Each recording runs one framework's example end to end — the user simulator
+drives the conversation, the agent under test responds, and the judge scores the
+transcript. Sources live in `examples/agent_simulation/` (files `06`–`09`).
+
+### LangGraph
+
+<video controls muted playsinline preload="metadata" width="100%">
+  <source src="../../assets/sim-langgraph.mp4" type="video/mp4">
+  Your browser does not support the video tag —
+  <a href="../../assets/sim-langgraph.mp4">download the recording</a>.
+</video>
+
+### OpenAI Agents SDK
+
+<video controls muted playsinline preload="metadata" width="100%">
+  <source src="../../assets/sim-openai-agents.mp4" type="video/mp4">
+  Your browser does not support the video tag —
+  <a href="../../assets/sim-openai-agents.mp4">download the recording</a>.
+</video>
+
+### Pydantic AI
+
+<video controls muted playsinline preload="metadata" width="100%">
+  <source src="../../assets/sim-pydantic-ai.mp4" type="video/mp4">
+  Your browser does not support the video tag —
+  <a href="../../assets/sim-pydantic-ai.mp4">download the recording</a>.
+</video>
+
+### CrewAI
+
+<video controls muted playsinline preload="metadata" width="100%">
+  <source src="../../assets/sim-crewai.mp4" type="video/mp4">
+  Your browser does not support the video tag —
+  <a href="../../assets/sim-crewai.mp4">download the recording</a>.
+</video>
+
 ## Where to next
 
 - **[Examples › Agent Simulation](../examples/index.md)** — tool simulation, hardening loops, LangGraph / CrewAI / OpenAI Agents targets.
