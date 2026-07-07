@@ -180,10 +180,12 @@ description = "An evaluation framework library for Python that provides a flexib
 readme = "README.md"
 requires-python = ">=3.10"
 classifiers = [
+  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
 ]
 dependencies = [
   "pydantic>=2.0",
