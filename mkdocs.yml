@@ -3,7 +3,6 @@ site_description: Run LLM evaluations, red-team agents, and simulate multi-turn 
 site_url: https://orq-ai.github.io/evaluatorq/
 repo_url: https://github.com/orq-ai/evaluatorq
 repo_name: orq-ai/evaluatorq
-edit_uri: edit/main/docs/
 docs_dir: docs
 copyright: "© 2026 Orq AI · MIT License"
 
@@ -26,15 +25,14 @@ theme:
     - content.code.annotate
     - content.code.copy
     - content.tooltips
-    - content.action.edit
     - navigation.tabs
+    - navigation.instant
+    - navigation.instant.progress
     - navigation.sections
     - navigation.indexes
-    - navigation.footer
+    - navigation.top
     - toc.follow
     - search.highlight
-    - search.suggest
-    - search.share
   # 3-way auto / light / dark toggle (same UX as Pydantic), Orq palette.
   palette:
     - scheme: default
