@@ -102,7 +102,6 @@ plugins:
           - custom-evaluators-and-frameworks.md: Define custom evaluators and frameworks.
           - llm-as-a-jury.md: Multi-judge panel (jury) evaluation.
           - pairwise-judging.md: Pairwise comparison judging.
-          - dashboard.md: The interactive results dashboard.
         Setup:
           - configuration.md: Configuration and environment variables.
           - tracing.md: OpenTelemetry tracing.
