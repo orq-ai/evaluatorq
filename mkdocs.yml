@@ -91,6 +91,16 @@ plugins:
   # system libs locally. CI installs the deps in .github/workflows/docs.yml.
   - social:
       enabled: !ENV [CI, false]
+      # Orq-branded link-unfurl card (Slack/Twitter/OG preview). Default Material
+      # cards ignore our custom palette + self-hosted brand fonts, so set them
+      # explicitly here: orq slate ground, ivory text, the white orq mark
+      # (theme.logo). Kurrent/Avio Sans aren't on Google Fonts (which is where the
+      # social plugin sources faces), so use Inter — the brand's declared sans
+      # fallback (see stylesheets/extra.css --sans stack).
+      cards_layout_options:
+        background_color: "#141413"   # orq slate / ink
+        color: "#FAF7F4"              # orq ivory
+        font_family: Inter
   # Broken-link check. Strict build catches missing nav files; this catches
   # broken inline links and #anchors across the built site. External URLs are
   # skipped to keep CI deterministic (no network flakiness).
