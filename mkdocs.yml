@@ -72,6 +72,32 @@ plugins:
             docstring_options:
               warn_unknown_params: false
               warn_missing_types: false
+  # Agent-browsable docs (RES-1037): generate /llms.txt (a curated markdown index)
+  # and /llms-full.txt (all docs concatenated as one markdown file) per the llms.txt
+  # convention, so coding agents can read the docs as markdown instead of scraping
+  # HTML. Placed after mkdocstrings so the rendered API pages are available.
+  - llmstxt:
+      markdown_description: >-
+        evaluatorq is a Python library for running LLM evaluations, red-teaming AI
+        agents, and simulating multi-turn conversations. Bring your own agent, data,
+        and scorers; the Orq platform is optional infrastructure for storage and datasets.
+      full_output: llms-full.txt
+      sections:
+        Getting started:
+          - index.md: Overview, why evaluatorq, and installation.
+          - guides/getting-started.md: Run your first evaluation end to end.
+        Guides:
+          - guides/agent-simulation.md: Multi-turn, persona-driven conversation testing with an LLM judge.
+          - guides/red-teaming.md: Adaptive OWASP-mapped adversarial security testing for agents.
+          - custom-evaluators-and-frameworks.md: Define custom evaluators and frameworks.
+          - llm-as-a-jury.md: Multi-judge panel (jury) evaluation.
+          - pairwise-judging.md: Pairwise comparison judging.
+          - dashboard.md: The interactive results dashboard.
+        Setup:
+          - configuration.md: Configuration and environment variables.
+          - tracing.md: OpenTelemetry tracing.
+          - cli-reference.md: CLI commands (evaluatorq / eq).
+          - orq-deployment.md: Running against Orq deployments.
   - redirects:
       redirect_maps:
         guides/agent-simulation-openai.md: guides/agent-simulation.md
