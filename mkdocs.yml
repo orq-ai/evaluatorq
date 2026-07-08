@@ -48,6 +48,9 @@ theme:
 extra_css:
   - stylesheets/extra.css
 
+extra_javascript:
+  - js/keyboard.js   # ⌘K / Ctrl+K focuses the search box
+
 plugins:
   - search
   - gen-files:
@@ -137,28 +140,29 @@ markdown_extensions:
   - toc:
       permalink: true
 
-# nav GROWS PER TASK. Each task appends pages it creates to keep a
-# green `mkdocs build --strict`. Never list a page before the task creates it
-# (mkdocs --strict fails on a nav entry whose file is missing). Task 1 ships
-# Home only; final nav shape recorded under "Target nav" in the File Structure.
 nav:
   - Home: index.md
-  - Get Started:
-      - Getting Started: guides/getting-started.md
+  - Get Started: guides/getting-started.md
+  - Guides:
       - Agent Simulation: guides/agent-simulation.md
       - Red Teaming:
-          - guides/red-teaming.md
+          - Overview: guides/red-teaming.md
           - Custom Evaluators & Frameworks: custom-evaluators-and-frameworks.md
       - LLM as a Jury: llm-as-a-jury.md
       - Pairwise Judging: pairwise-judging.md
       - Dashboard: dashboard.md
-  - Reference:
+  - Setup:
       - Configuration: configuration.md
       - Tracing: tracing.md
-      - CLI Reference: cli-reference.md
       - Orq Deployment: orq-deployment.md
   - Examples: examples/
-  - API Reference: reference/
+  - API Reference:
+      - Introduction: api-reference.md
+      - Python API: reference/
+      - CLI Reference:
+          - Overview: cli-reference/overview.md
+          - Red Teaming: cli-reference/redteam.md
+          - Simulation: cli-reference/simulation.md
   - About:
       - Contributing: contributing.md
       - Changelog: changelog.md
