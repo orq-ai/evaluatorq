@@ -298,3 +298,9 @@ eq redteam run -t agent:my-agent --save detail --output-dir ./runs
 # Quick simulation — two personas, two scenarios
 eq sim run -t agent:my-agent --num-personas 2 --num-scenarios 2
 ```
+
+## Where to next
+
+- **[Agent Simulation](guides/agent-simulation.md)** — the `eq sim` workflow in depth.
+- **[Red Teaming](guides/red-teaming.md)** — the `eq redteam` workflow in depth.
+- **[Dashboard](dashboard.md)** — browse `eq dashboard` results.

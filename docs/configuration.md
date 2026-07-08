@@ -59,3 +59,9 @@ To send traces to a custom OTLP collector instead of Orq:
 ```dotenv
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 ```
+
+## Where to next
+
+- **[Getting Started](guides/getting-started.md)** — run your first evaluation.
+- **[Orq Deployment](orq-deployment.md)** — target an Orq-hosted deployment.
+- **[Tracing](tracing.md)** — enable OpenTelemetry tracing.

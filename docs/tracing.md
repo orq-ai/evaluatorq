@@ -196,3 +196,9 @@ installed, use the internal helper below, which degrades to an empty dict.)
     from the public `evaluatorq.tracing` namespace, and its import path may
     change without a deprecation cycle. Prefer the OpenTelemetry `inject()` path
     above for anything stable.
+
+## Where to next
+
+- **[Configuration](configuration.md)** — API keys and environment variables.
+- **[CLI Reference](cli-reference.md)** — run evaluations and red-team/sim from the terminal.
+- **[Dashboard](dashboard.md)** — browse saved results locally.

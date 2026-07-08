@@ -144,9 +144,7 @@ The runnable smoke example
 ([`08_quick_smoke_test.py`](../examples/redteam/08_quick_smoke_test.md)) wraps
 this same pattern.
 
-!!! tip "View results in the local dashboard"
-    Run `eq dashboard` to browse saved red-team and simulation reports together;
-    `eq redteam ui` / `eq sim ui` open the legacy Streamlit views for one surface.
+--8<-- "docs/_snippets/dashboard-tip.md"
 
 ## Where to next
 

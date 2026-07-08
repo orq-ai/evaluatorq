@@ -181,3 +181,9 @@ Every report page includes a download sidebar with export links:
 
 Download links respect the currently active filter state — the CSV/JSON exports
 contain only the rows visible in the filtered report body.
+
+## Where to next
+
+- **[Red Teaming](guides/red-teaming.md)** — generate the red-team reports the dashboard browses.
+- **[Agent Simulation](guides/agent-simulation.md)** — generate simulation reports.
+- **[CLI Reference](cli-reference.md)** — the `eq dashboard` command and options.

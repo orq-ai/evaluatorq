@@ -6,9 +6,10 @@ repo_name: orq-ai/evaluatorq
 docs_dir: docs
 copyright: "© 2026 Orq AI · MIT License"
 
-# Keep skill scratch (plans/specs) out of build.
+# Keep skill scratch (plans/specs) and shared snippet includes out of the built nav.
 exclude_docs: |
   superpowers/
+  _snippets/
 
 theme:
   name: material

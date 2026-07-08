@@ -436,9 +436,7 @@ the generated cases (`eq sim generate --output`, or `eq sim run
     no built-in trace-to-persona extractor yet; the seed list is the hand-off point
     between your trace history and the generators.
 
-!!! tip "View results in the local dashboard"
-    Run `eq dashboard` to browse saved red-team and simulation reports together;
-    `eq redteam ui` / `eq sim ui` open the legacy Streamlit views for one surface.
+--8<-- "docs/_snippets/dashboard-tip.md"
 
 ## External framework demos
 
