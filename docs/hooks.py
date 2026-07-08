@@ -29,11 +29,11 @@ def _section_patterns(config: MkDocsConfig) -> list[str]:
     plugin = config.plugins.get('llmstxt')
     if plugin is None:
         return []
-    patterns: list[str] = []
-    for entries in plugin.config.sections.values():
-        for entry in entries:
-            patterns.append(entry if isinstance(entry, str) else next(iter(entry)))
-    return patterns
+    return [
+        entry if isinstance(entry, str) else next(iter(entry))
+        for entries in plugin.config.sections.values()
+        for entry in entries
+    ]
 
 
 def on_nav(nav: Navigation, config: MkDocsConfig, files: Files) -> Navigation:
