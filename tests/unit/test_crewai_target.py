@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from typing import Literal
 from unittest.mock import MagicMock
 
 import pytest
@@ -28,7 +29,7 @@ def _crew(raw: object = 'Hello from the crew', usage: object = None) -> MagicMoc
     return crew
 
 
-def _msgs(*pairs: tuple[str, str]) -> list[Message]:
+def _msgs(*pairs: tuple[Literal['user', 'assistant', 'system', 'tool', 'developer'], str]) -> list[Message]:
     return [Message(role=r, content=c) for r, c in pairs]
 
 
