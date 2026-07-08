@@ -98,6 +98,11 @@ plugins:
           - tracing.md: OpenTelemetry tracing.
           - cli-reference.md: CLI commands (evaluatorq / eq).
           - orq-deployment.md: Running against Orq deployments.
+        API reference:
+          - reference/evaluatorq.md: The evaluatorq package API surface.
+          - reference/evaluatorq/*.md
+        Examples:
+          - examples/**/*.md
   - redirects:
       redirect_maps:
         guides/agent-simulation-openai.md: guides/agent-simulation.md
