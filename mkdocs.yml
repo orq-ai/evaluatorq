@@ -12,6 +12,7 @@ exclude_docs: |
 
 theme:
   name: material
+  custom_dir: overrides   # overrides/main.html sets the orq-branded og:/twitter: card (RES-1088)
   logo: assets/orq-mark-white.svg
   favicon: assets/orq-favicon.svg
   # Self-host the Orq brand fonts (Avio Sans / Kurrent) — see stylesheets/extra.css.
@@ -86,21 +87,11 @@ plugins:
   - minify:
       minify_html: true
       cache_safe: true
-  # Social/SEO cards (og:/twitter: previews). Needs Cairo + the material[imaging]
-  # extra, so gate to CI (CI=true) to keep `mkdocs serve` working without the
-  # system libs locally. CI installs the deps in .github/workflows/docs.yml.
-  - social:
-      enabled: !ENV [CI, false]
-      # Orq-branded link-unfurl card (Slack/Twitter/OG preview). Default Material
-      # cards ignore our custom palette + self-hosted brand fonts, so set them
-      # explicitly here: orq slate ground, ivory text, the white orq mark
-      # (theme.logo). Kurrent/Avio Sans aren't on Google Fonts (which is where the
-      # social plugin sources faces), so use Inter — the brand's declared sans
-      # fallback (see stylesheets/extra.css --sans stack).
-      cards_layout_options:
-        background_color: "#141413"   # orq slate / ink
-        color: "#FAF7F4"              # orq ivory
-        font_family: Inter
+  # Social/SEO card: a single hand-designed orq-branded og:/twitter: image
+  # (docs/assets/og-image.png), wired up in overrides/main.html. We do NOT use the
+  # `social` plugin — it can only source faces from Google Fonts, so it can't render
+  # the self-hosted Orq brand fonts (Kurrent / Avio Sans). Regenerate the card with
+  # `uv run --with "fonttools[woff]" --with cairosvg --with pillow python scripts/gen_og_card.py`.
   # Broken-link check. Strict build catches missing nav files; this catches
   # broken inline links and #anchors across the built site. External URLs are
   # skipped to keep CI deterministic (no network flakiness).
