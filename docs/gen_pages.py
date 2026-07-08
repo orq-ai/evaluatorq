@@ -163,16 +163,27 @@ def write_api_pages() -> None:
         href = page_path.relative_to("reference").as_posix()
         nav_lines.append(f"- [{title}]({href})\n")
         desc = _PACKAGE_DESC.get(dotted, "")
-        index_rows.append(f"- [`{dotted}`]({href}) — {desc}\n")
+        index_rows.append(f"- [`{dotted}`](reference/{href}) — {desc}\n")
 
-    # Landing page so /reference/ resolves (not a 404) and section-index has a home.
-    with mkdocs_gen_files.open("reference/index.md", "w") as fd:
-        fd.write("# API Reference\n\n")
-        fd.write("The public API, documented from each package's `__all__`.\n\n")
-        fd.writelines(index_rows)
+    # SUMMARY lists only the module pages — no index.md first entry, so
+    # section-index does NOT promote a landing page and "Python API" renders as a
+    # plain (non-clickable) section header. The tab's landing is the generated
+    # "Introduction" page below.
     with mkdocs_gen_files.open("reference/SUMMARY.md", "w") as fd:
-        fd.write("- [Overview](index.md)\n")
         fd.writelines(nav_lines)
+
+    # General landing for the API Reference tab (nav: "Introduction"). Covers both
+    # the Python SDK and the CLI, so it is not nested under either header.
+    with mkdocs_gen_files.open("api-reference.md", "w") as fd:
+        fd.write("# API Reference\n\n")
+        fd.write(
+            "evaluatorq exposes two interfaces:\n\n"
+            "- **Python API** — the SDK, documented below from each package's `__all__`.\n"
+            "- **[CLI Reference](cli-reference/overview.md)** — the `evaluatorq` / `eq` commands.\n\n"
+            "## Python packages\n\n"
+        )
+        fd.writelines(index_rows)
+    mkdocs_gen_files.set_edit_path("api-reference.md", "gen_pages.py")
 
 
 # Support code, tests, and internal infra — NOT standalone examples. Excluded
