@@ -148,6 +148,46 @@ this same pattern.
     Run `eq dashboard` to browse saved red-team and simulation reports together;
     `eq redteam ui` / `eq sim ui` open the legacy Streamlit views for one surface.
 
+## External agent frameworks
+
+`red_team()` accepts any `AgentTarget`, and each supported framework ships a
+wrapper that adapts its agent into one — so you red-team an agent built in your
+framework of choice without rewriting it. Install the matching extra, wrap the
+agent, and pass it straight to `red_team()`:
+
+```python
+from langchain_openai import ChatOpenAI
+from langgraph.prebuilt import create_react_agent
+
+from evaluatorq.integrations.langgraph_integration import LangGraphTarget
+from evaluatorq.redteam import red_team
+
+graph = create_react_agent(ChatOpenAI(model="gpt-4o-mini"), tools=[...], prompt="...")
+report = await red_team(LangGraphTarget(graph), categories=["LLM01", "ASI01"])
+```
+
+| Framework | Wrapper | Extra | Runnable example |
+|---|---|---|---|
+| LangGraph | `LangGraphTarget` | `evaluatorq[langgraph]` | [`17_langgraph_target.py`](../examples/redteam/17_langgraph_target.md) |
+| OpenAI Agents SDK | `OpenAIAgentTarget` | `evaluatorq[openai-agents]` | [`18_openai_agents_target.py`](../examples/redteam/18_openai_agents_target.md) |
+| Pydantic AI | `PydanticAITarget` | `evaluatorq[pydantic-ai]` | [`19_pydantic_ai_target.py`](../examples/redteam/19_pydantic_ai_target.md) |
+| CrewAI | `CrewAITarget` | `evaluatorq[crewai]` | [`20_crewai_target.py`](../examples/redteam/20_crewai_target.md) |
+
+### Known limitations
+
+Verified edge cases and framework-specific quirks to know before you rely on
+external-framework targets:
+
+| Area | Behavior | Applies to |
+|---|---|---|
+| **Conversation state** | Stateful targets own history internally and thread it across turns; call `.new()` for each parallel attack job to avoid cross-talk. | LangGraph, Pydantic AI |
+| **First-turn role** | `respond()` requires the last message to be `role="user"`; other roles raise `ValueError`. | LangGraph, Pydantic AI, CrewAI |
+| **Tool-call visibility** | Tool calls are surfaced to the judge, so tool-misuse (ASI) attacks are scored. | LangGraph, OpenAI Agents, Pydantic AI |
+| **CrewAI is opaque** | A crew exposes only its final output — intermediate agent/tool steps are not surfaced, so **tool-misuse (ASI) attacks can't be scored**; use LLM-tier categories. The whole transcript is flattened into one `{conversation}` input per turn (no native turn memory), so very long conversations may approach task-description limits. | CrewAI |
+| **Token usage** | Best-effort. Frameworks that don't surface usage metadata report `usage=None` (never a false non-zero). | all |
+| **Tool arguments** | Non-JSON-object tool arguments are normalized before scoring; exotic argument shapes may be simplified. | LangGraph, OpenAI Agents |
+| **Eager API-key check** | LangGraph/Pydantic AI construct their OpenAI client eagerly, so `OPENAI_API_KEY` must be set even to *build* the target, not just to run it. | LangGraph, Pydantic AI |
+
 ## Where to next
 
 - **[Examples › Red Teaming](../examples/index.md)** — static datasets, category filtering, custom clients, multi-target, report inspection, custom hooks.
