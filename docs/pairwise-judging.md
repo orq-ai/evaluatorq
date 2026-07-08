@@ -57,9 +57,7 @@ asyncio.run(main())
 `llm_jury_pairwise(model="x")` is the single-judge shorthand for `judges=["x"]`.
 Pass two or more `judges` to get a panel.
 
-!!! tip "Keep the panel odd and mixed-provider"
-    The same advice as the pointwise jury holds here. An odd panel keeps ties
-    rare, and a mix of provider families keeps the judges independent.
+--8<-- "docs/_snippets/panel-tip.md"
 
 ## Swap and reconcile: how a vote is decided
 

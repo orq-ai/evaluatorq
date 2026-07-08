@@ -65,10 +65,7 @@ asyncio.run(main())
 classic LLM-as-a-judge. Pass `judges=[...]` with two or more models to turn it
 into a jury.
 
-!!! tip "Keep the panel odd and mixed-provider"
-    An odd number of judges (3, 5) makes ties rare. A mix of provider families
-    gives you the independence a jury is meant to provide; three judges from the
-    same provider tend to be correlated and add little over one.
+--8<-- "docs/_snippets/panel-tip.md"
 
 ## Verdict modes
 
