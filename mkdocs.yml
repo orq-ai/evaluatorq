@@ -12,6 +12,7 @@ exclude_docs: |
 
 theme:
   name: material
+  custom_dir: overrides   # overrides/main.html adds the <link rel=alternate> to /llms.txt (RES-1037)
   logo: assets/orq-mark-white.svg
   favicon: assets/orq-favicon.svg
   # Self-host the Orq brand fonts (Avio Sans / Kurrent) — see stylesheets/extra.css.
@@ -47,6 +48,10 @@ theme:
 extra_css:
   - stylesheets/extra.css
 
+# Build hooks. hooks.py enforces llms.txt <-> nav parity (see the llmstxt plugin note).
+hooks:
+  - docs/hooks.py
+
 plugins:
   - search
   - gen-files:
@@ -73,14 +78,16 @@ plugins:
               warn_unknown_params: false
               warn_missing_types: false
   # Agent-browsable docs (RES-1037): generate /llms.txt (a curated markdown index)
-  # and /llms-full.txt (all docs concatenated as one markdown file) per the llms.txt
-  # convention, so coding agents can read the docs as markdown instead of scraping
-  # HTML. Placed after mkdocstrings so the rendered API pages are available.
+  # and /llms-full.txt (all docs as one markdown file) per the llms.txt convention, so
+  # coding agents read the docs as markdown instead of scraping HTML. Must sit AFTER
+  # mkdocstrings in the plugin list: both hook `on_page_content`, and plugins run in
+  # declaration order, so this captures the API pages only once mkdocstrings has rendered
+  # them (declaration-order, not a build-phase dependency).
+  #
+  # `sections` restates the pages in `nav:`. docs/hooks.py enforces parity at build time
+  # (every nav doc must be covered here, or `mkdocs build --strict` fails), so this can't
+  # silently drift out of sync with nav again.
   - llmstxt:
-      markdown_description: >-
-        evaluatorq is a Python library for running LLM evaluations, red-teaming AI
-        agents, and simulating multi-turn conversations. Bring your own agent, data,
-        and scorers; the Orq platform is optional infrastructure for storage and datasets.
       full_output: llms-full.txt
       sections:
         Getting started:
@@ -99,10 +106,22 @@ plugins:
           - cli-reference.md: CLI commands (evaluatorq / eq).
           - orq-deployment.md: Running against Orq deployments.
         API reference:
+          # NOTE: the plugin markdownifies rendered HTML, which flattens mkdocstrings'
+          # param-type column. The API index/links are still useful to an agent; the
+          # authoritative typed signatures live in the served HTML. A docstring-sourced
+          # dump is a follow-up (RES-1037 review #4).
           - reference/evaluatorq.md: The evaluatorq package API surface.
           - reference/evaluatorq/*.md
         Examples:
+          # `**/` is load-bearing under the plugin's fnmatch: it requires a subdirectory, so this
+          # matches example CONTENT at any depth (examples/<group>/<page>.md) but excludes the
+          # top-level scaffolding (examples/index.md, examples/SUMMARY.md). `examples/*.md` would
+          # wrongly pull those in, since fnmatch `*` also spans `/`.
           - examples/**/*.md
+        About:
+          - contributing.md: How to contribute.
+          - changelog.md: Release notes.
+          - roadmap.md: Planned work.
   - redirects:
       redirect_maps:
         guides/agent-simulation-openai.md: guides/agent-simulation.md
