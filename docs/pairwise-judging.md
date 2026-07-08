@@ -157,3 +157,9 @@ calls itself, so you can drive the swap-and-reconcile logic with your own judge.
 `reconcile_pair()` and `pairwise_consensus()` are exposed for the same reason.
 Most callers want `llm_jury_pairwise()`; reach for `run_pairwise()` when you are
 plugging in a non-LLM judge or testing the reconciliation directly.
+
+## Where to next
+
+- **[LLM as a Jury](llm-as-a-jury.md)** — score a single response with a judge panel.
+- **[Custom Evaluators & Frameworks](custom-evaluators-and-frameworks.md)** — define your own evaluators.
+- **[Red Teaming](guides/red-teaming.md)** — the red-team workflow judging plugs into.

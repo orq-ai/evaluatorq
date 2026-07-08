@@ -338,3 +338,9 @@ report = await red_team(
 | `EvaluatorGetter` | `frameworks/owasp/evaluators.py` | `Callable[[str \| None], LlmEvaluatorEntity]` |
 | `AttackTechnique` | `contracts.py` | Known attack technique enum |
 | `DeliveryMethod` | `contracts.py` | Prompt delivery method enum |
+
+## Where to next
+
+- **[Red Teaming](guides/red-teaming.md)** — the red-team workflow these evaluators and frameworks plug into.
+- **[LLM as a Jury](llm-as-a-jury.md)** — multi-judge panels for more reliable verdicts.
+- **[CLI Reference](cli-reference/redteam.md)** — run `eq redteam` from the terminal.

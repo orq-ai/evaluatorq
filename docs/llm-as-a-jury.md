@@ -221,3 +221,9 @@ A complete red-teaming script covering repetitions, replacements, the
 `min_successful_judges` threshold, `strict_panel`, and reading the per-result
 and run-level output lives at
 [`examples/redteam/16_llm_as_a_jury.py`](https://github.com/orq-ai/evaluatorq/blob/main/examples/redteam/16_llm_as_a_jury.py).
+
+## Where to next
+
+- **[Pairwise Judging](pairwise-judging.md)** — compare two responses instead of scoring one.
+- **[Custom Evaluators & Frameworks](custom-evaluators-and-frameworks.md)** — define your own evaluators.
+- **[Red Teaming](guides/red-teaming.md)** — use a jury as the red-team verdict.
