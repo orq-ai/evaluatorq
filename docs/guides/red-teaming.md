@@ -186,7 +186,7 @@ external-framework targets:
 | **CrewAI is opaque** | A crew exposes only its final output — intermediate agent/tool steps are not surfaced, so **tool-misuse (ASI) attacks can't be scored**; use LLM-tier categories. The whole transcript is flattened into one `{conversation}` input per turn (no native turn memory), so very long conversations may approach task-description limits. | CrewAI |
 | **Token usage** | Best-effort. Frameworks that don't surface usage metadata report `usage=None` (never a false non-zero). | all |
 | **Tool arguments** | Non-JSON-object tool arguments are normalized before scoring; exotic argument shapes may be simplified. | LangGraph, OpenAI Agents |
-| **Eager API-key check** | LangGraph/Pydantic AI construct their OpenAI client eagerly, so `OPENAI_API_KEY` must be set even to *build* the target, not just to run it. | LangGraph, Pydantic AI |
+| **Routing / keys** | The examples point each framework's model at the Orq AI Router with `ORQ_API_KEY` (model id `openai/gpt-4o-mini`), so no OpenAI key is needed — the attacker and judge auto-route the same way. The client is constructed eagerly, so `ORQ_API_KEY` must be set even to *build* the target. | all |
 
 ## Where to next
 
