@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+
+<!-- Advertise the agent-readable docs (RES-1037): a machine-discoverable pointer to
+     /llms.txt in every page's <head>, so agents find it without blind-probing the
+     convention. -->
+{% block extrahead %}
+  <link rel="alternate" type="text/markdown" href="{{ 'llms.txt' | url }}" title="llms.txt (agent-readable docs)">
+{% endblock %}

@@ -9,6 +9,8 @@
 
 An evaluation framework library for Python that provides a flexible way to run parallel evaluations and optionally integrate with the Orq AI platform.
 
+**Docs:** [orq-ai.github.io/evaluatorq](https://orq-ai.github.io/evaluatorq/). Agents can read the docs as markdown at [`/llms.txt`](https://orq-ai.github.io/evaluatorq/llms.txt) (curated index) and [`/llms-full.txt`](https://orq-ai.github.io/evaluatorq/llms-full.txt) (full text), per the [llms.txt convention](https://llmstxt.org/).
+
 ## Why evaluatorq?
 
 Orq's built-in experiment runner works well for evaluating deployments hosted on the platform, but it has limits: you can only target Orq-managed agents and deployments, and evaluation logic is constrained to what the UI exposes.
