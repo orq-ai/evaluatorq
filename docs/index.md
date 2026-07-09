@@ -51,6 +51,15 @@ Successfully installed evaluatorq
 
     [:octicons-arrow-right-24: Red teaming](guides/red-teaming.md)
 
+-   :material-gavel:{ .lg .middle } __LLM as a Jury__
+
+    ---
+
+    Score a single response with a panel of judge LLMs; odd, mixed-provider
+    panels make verdicts more reliable than any one judge.
+
+    [:octicons-arrow-right-24: LLM as a Jury](llm-as-a-jury.md)
+
 </div>
 
 Works with LangGraph, OpenAI Agents SDK, PydanticAI, CrewAI, a plain async
@@ -58,7 +67,7 @@ function, or an Orq deployment. The Orq platform is optional: it stores results
 and, when `ORQ_API_KEY` is set, routes the attacker and judge LLMs by default —
 but you can bring your own and run entirely on OpenAI.
 
-## Quick look
+## Quick start
 
 ```python
 import asyncio

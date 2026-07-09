@@ -9,7 +9,7 @@ All configuration is via environment variables. No config file is required.
 | `ORQ_API_KEY` | Required for Orq features | — | Authenticates against the Orq platform. Required to fetch datasets, upload results, and invoke deployments. Also auto-enables OpenTelemetry tracing (spans are sent to `https://my.orq.ai/v2/otel`). |
 | `ORQ_BASE_URL` | No | `https://my.orq.ai` | Overrides the Orq API base URL. Affects Orq SDK calls (dataset fetch, deployment invocation) and the derived OTLP tracing endpoint (`<ORQ_BASE_URL>/v2/otel`). Does **not** redirect OpenAI-compatible LLM calls — use `OPENAI_BASE_URL` for that. |
 | `ROUTER_BASE_URL` | Deprecated | — | Predecessor to `ORQ_BASE_URL`, no longer honoured. If set (and `ORQ_BASE_URL` is unset) it only logs a warning. Use `ORQ_BASE_URL` instead. |
-| `OPENAI_API_KEY` | Required if not using Orq | — | API key for the OpenAI (or compatible) backend. Used by the red teaming pipeline and agent simulation when `ORQ_API_KEY` is absent. |
+| `OPENAI_API_KEY` | Red-team / sim only, if not using Orq | — | API key for the OpenAI (or compatible) backend. Used by the red teaming pipeline and agent simulation when `ORQ_API_KEY` is absent. Not required for core `evaluatorq()` evaluation. |
 | `OPENAI_BASE_URL` | No | OpenAI default | Redirect OpenAI-compatible calls to a different host (vLLM, OpenRouter, Azure, local). Honoured by the red teaming and simulation LLM client. |
 | `ORQ_DISABLE_TRACING` | No | unset | Set to `1` or `true` to suppress all OpenTelemetry spans even when `ORQ_API_KEY` or `OTEL_EXPORTER_OTLP_ENDPOINT` is present. |
 | `ORQ_DEBUG` | No | unset | Set to any non-empty value to print tracing setup diagnostics to stdout (endpoint, auth headers, initialization errors). |
@@ -59,3 +59,9 @@ To send traces to a custom OTLP collector instead of Orq:
 ```dotenv
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 ```
+
+## Where to next
+
+- **[Getting Started](guides/getting-started.md)** — run your first evaluation.
+- **[Orq Deployment](orq-deployment.md)** — target an Orq-hosted deployment.
+- **[Tracing](tracing.md)** — enable OpenTelemetry tracing.

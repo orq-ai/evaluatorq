@@ -6,9 +6,14 @@ repo_name: orq-ai/evaluatorq
 docs_dir: docs
 copyright: "© 2026 Orq AI · MIT License"
 
-# Keep skill scratch (plans/specs) out of build.
+# Keep skill scratch (plans/specs) and shared snippet includes out of the built nav.
 exclude_docs: |
   superpowers/
+  _snippets/
+
+# Build but soft-hide pages that shouldn't appear in the left nav (reachable by direct URL only).
+not_in_nav: |
+  dashboard.md
 
 theme:
   name: material
@@ -194,19 +199,18 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Get Started: guides/getting-started.md
+  - Setup:
+      - Configuration: configuration.md
+      - Tracing: tracing.md
+      - Orq Deployment: orq-deployment.md
   - Guides:
+      - Get Started: guides/getting-started.md
       - Agent Simulation: guides/agent-simulation.md
       - Red Teaming:
           - Overview: guides/red-teaming.md
           - Custom Evaluators & Frameworks: custom-evaluators-and-frameworks.md
       - LLM as a Jury: llm-as-a-jury.md
       - Pairwise Judging: pairwise-judging.md
-      - Dashboard: dashboard.md
-  - Setup:
-      - Configuration: configuration.md
-      - Tracing: tracing.md
-      - Orq Deployment: orq-deployment.md
   - Examples: examples/
   - API Reference:
       - Introduction: api-reference.md
