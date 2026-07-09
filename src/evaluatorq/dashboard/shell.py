@@ -16,6 +16,7 @@ The CSS layers, in cascade order, are:
 
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
 from evaluatorq.common.reports import esc, load_css
@@ -37,6 +38,24 @@ def _load_mark() -> str:
         except OSError:
             _mark_cache = ''
     return _mark_cache
+
+
+# Orange orq favicon, inlined as a base64 data-URI <link> so it works live, in
+# tests, and in static exports without depending on the /static/ route.
+_FAVICON_PATH = Path(__file__).parent / 'static' / 'orq-favicon.svg'
+_favicon_cache: str | None = None
+
+
+def _favicon_link() -> str:
+    global _favicon_cache
+    if _favicon_cache is None:
+        try:
+            svg = _FAVICON_PATH.read_bytes()
+            b64 = base64.b64encode(svg).decode('ascii')
+            _favicon_cache = f'<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,{b64}">\n'
+        except OSError:
+            _favicon_cache = ''
+    return _favicon_cache
 
 
 # Sidebar nav: (key, label, href, inline-SVG icon path data).  Keys match the
@@ -141,6 +160,7 @@ def page(
         '<head>\n'
         '<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        f'{_favicon_link()}'
         f'<title>{esc(title)} — evaluatorq</title>\n'
         f'<style>\n{css}\n</style>\n'
         f'<style>\n{EDITORIAL_CSS}\n</style>\n'

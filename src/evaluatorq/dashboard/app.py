@@ -52,16 +52,17 @@ from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.sim_views import register_sim_view_routes
 from evaluatorq.dashboard.surfaces import ADAPTERS
 from evaluatorq.dashboard.view import (
+    RUN_PAGE_SIZES,
     SURFACE_LABELS,
     download_sidebar,
     filter_fragment,
     landing_body,
+    redteam_overview_body,
     render_filter_form,
     report_actions,
     report_back_link,
     report_broken,
     report_not_found,
-    redteam_overview_body,
     report_view_with_filters,
     runs_screen_body,
     search_results,
@@ -75,6 +76,22 @@ _STATIC_DIR = Path(__file__).parent / 'static'
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _paging(req: Request) -> tuple[int, int]:
+    """Parse ``?page=`` / ``?per_page=`` into a (page, per_page) pair. Bad input
+    falls back to page 1 and the default page size; ``per_page`` is allow-listed."""
+    try:
+        page = max(1, int(req.query_params.get('page', 1)))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        per_page = int(req.query_params.get('per_page', RUN_PAGE_SIZES[0]))
+    except (TypeError, ValueError):
+        per_page = RUN_PAGE_SIZES[0]
+    if per_page not in RUN_PAGE_SIZES:
+        per_page = RUN_PAGE_SIZES[0]
+    return page, per_page
 
 
 def _settings_config(roots: list[Path] | None) -> list[tuple[str, str]]:
@@ -131,10 +148,11 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         # unknown surface) still render the run list.  Unknown surfaces fall
         # through to an empty run-list screen rather than 500.
         label = SURFACE_LABELS.get(surface, 'Reports')
+        pg, per_pg = _paging(req)
         if surface == 'sim':
-            body = sim_overview_body(metrics.sim_overview(roots))
+            body = sim_overview_body(metrics.sim_overview(roots, page=pg, per_page=per_pg))
         elif surface == 'redteam':
-            body = redteam_overview_body(metrics.redteam_overview(roots))
+            body = redteam_overview_body(metrics.redteam_overview(roots, page=pg, per_page=per_pg))
         else:
             rows = [r for r in metrics.run_rows(roots) if r.surface == surface]
             body = runs_screen_body(rows, surface)

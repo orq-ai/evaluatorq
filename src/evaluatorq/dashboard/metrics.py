@@ -121,7 +121,9 @@ def _redteam_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
         when=card.created_at.strftime('%Y-%m-%d %H:%M'),
         headline=card.headline,
         score=resistance,
-        status=_lifecycle_status(broken=bool(card.error), all_errored=(total > 0 and evaluated == 0 and errors >= total)),
+        status=_lifecycle_status(
+            broken=bool(card.error), all_errored=(total > 0 and evaluated == 0 and errors >= total)
+        ),
         error=bool(card.error),
     )
 
@@ -322,8 +324,7 @@ class SimRunRow:
     rid: str  # report id (row links here)
     name: str  # run_name / job name
     when: datetime  # created_at (rendered relative in the view)
-    target: str  # target label (e.g. 'Orq agent')
-    target_kind: str  # icon category: 'agent' | 'llm' | 'deployment' | 'other'
+    targets: list[tuple[str, str]]  # (label, icon-kind) per target under test
     status: str  # 'passed' | 'warning' | 'failed'
     score: float | None  # run score (mean of scorer_averages), 0..1
     cases: int  # number of simulations in the run
@@ -348,7 +349,10 @@ class SimOverview:
     achieved: int  # outcomes donut segments
     not_achieved: int
     errors: int
-    recent: list[SimRunRow] = field(default_factory=list)  # newest run first
+    recent: list[SimRunRow] = field(default_factory=list)  # newest run first, current page
+    total_runs: int = 0  # total runs before paging (for the pager)
+    page: int = 1
+    per_page: int = 8
 
 
 def _sim_run_score(data: dict[str, object]) -> float | None:
@@ -359,9 +363,11 @@ def _sim_run_score(data: dict[str, object]) -> float | None:
     return sum(vals) / len(vals) if vals else None
 
 
-def sim_overview(roots: list[Path] | None = None, *, limit: int = 8) -> SimOverview:
+def sim_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: int = 8) -> SimOverview:
     """Aggregate the sim run store into headline KPIs plus a run-level table
-    (one row per full simulation run). Rows are newest-first, capped at ``limit``."""
+    (one row per full simulation run). Rows are newest-first, sliced to the
+    requested page of ``per_page`` (``total_runs`` carries the full count)."""
+    page = max(1, page)
     runs: list[SimRunRow] = []
     turns_total = 0
     tokens_total = 0
@@ -403,15 +409,15 @@ def sim_overview(roots: list[Path] | None = None, *, limit: int = 8) -> SimOverv
         cost_total += run_cost
 
         score = _sim_run_score(data)
-        target, target_kind = _sim_target(data)
         runs.append(
             SimRunRow(
                 rid=card.id,
                 name=card.name,
                 when=card.created_at,
-                target=target,
-                target_kind=target_kind,
-                status=_lifecycle_status(broken=bool(card.error), all_errored=(run_cases > 0 and run_errors == run_cases)),
+                targets=[_sim_target(data)],
+                status=_lifecycle_status(
+                    broken=bool(card.error), all_errored=(run_cases > 0 and run_errors == run_cases)
+                ),
                 score=score,
                 cases=run_cases,
                 cost=run_cost,
@@ -429,7 +435,10 @@ def sim_overview(roots: list[Path] | None = None, *, limit: int = 8) -> SimOverv
         achieved=achieved,
         not_achieved=not_achieved,
         errors=errors,
-        recent=runs[:limit],
+        recent=runs[(page - 1) * per_page : page * per_page],
+        total_runs=len(runs),
+        page=page,
+        per_page=per_page,
     )
 
 
@@ -445,8 +454,7 @@ class RedTeamRunRow:
     rid: str  # report id (row links here)
     name: str  # run_name / description
     when: datetime  # created_at (rendered relative in the view)
-    target: str  # tested agent(s) label
-    target_kind: str  # icon category: 'agent' | 'llm' | 'deployment' | 'other'
+    targets: list[tuple[str, str]]  # (label, icon-kind) per tested agent/model
     status: str  # 'passed' (resisted) | 'warning' | 'failed'
     score: float | None  # resistance rate, 0..1
     cases: int  # number of attacks in the run
@@ -463,28 +471,54 @@ class RedTeamOverview:
     critical_findings: int
     avg_robustness: float | None  # attack-weighted resistance, 0..1
     total_cost: float | None  # summed cost_usd across red team runs
-    recent: list[RedTeamRunRow] = field(default_factory=list)  # newest run first
+    recent: list[RedTeamRunRow] = field(default_factory=list)  # newest run first, current page
+    total_runs: int = 0  # total runs before paging (for the pager)
+    page: int = 1
+    per_page: int = 8
 
 
-def _redteam_target(data: dict[str, object], run_targets: set[str]) -> str:
-    """Prefer the run's tested_agents; fall back to targets seen in results."""
-    labels: list[str] = []
+def _redteam_targets(data: dict[str, object]) -> list[tuple[str, str]]:
+    """One (label, icon-kind) per distinct tested agent/model, so multi-target
+    runs render as separate chips instead of a comma-joined blob. Dedupes by
+    agent identity (key/model), preferring a display name for the label."""
+    seen: dict[str, list[str]] = {}
+    order: list[str] = []
+    for res in _results(data):
+        agent = res.get('agent')
+        agent = agent if isinstance(agent, dict) else {}
+        ident = agent.get('key') or agent.get('model')
+        label = agent.get('display_name') or agent.get('key') or agent.get('model')
+        if not isinstance(label, str) or not label:
+            continue
+        ident = ident if isinstance(ident, str) and ident else label
+        kind = 'agent' if agent.get('key') else ('llm' if agent.get('model') else 'other')
+        if ident not in seen:
+            order.append(ident)
+            seen[ident] = [label, kind]
+        elif agent.get('display_name'):  # upgrade the label to the display name
+            seen[ident][0] = str(agent['display_name'])
+    if order:
+        return [(seen[i][0], seen[i][1]) for i in order]
+    # Fallback: the run's tested_agents strings (strip agent:/deployment: prefix).
+    out: list[tuple[str, str]] = []
     tested = data.get('tested_agents')
     if isinstance(tested, list):
         for t in tested:
             if isinstance(t, str) and t:
-                labels.append(t)
+                name = t.split(':', 1)[1] if t.startswith(('agent:', 'deployment:')) else t
+                out.append((name, 'deployment' if t.startswith('deployment:') else 'agent'))
             elif isinstance(t, dict):
                 val = t.get('display_name') or t.get('key')
                 if isinstance(val, str) and val:
-                    labels.append(val)
-    labels = labels or sorted(run_targets)
-    return ', '.join(dict.fromkeys(labels)) if labels else 'unknown'
+                    out.append((val, 'agent'))
+    return out or [('unknown', 'other')]
 
 
-def redteam_overview(roots: list[Path] | None = None, *, limit: int = 8) -> RedTeamOverview:
+def redteam_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: int = 8) -> RedTeamOverview:
     """Aggregate the red team run store into headline KPIs plus a run-level table
-    (one row per full red team run). Rows are newest-first, capped at ``limit``."""
+    (one row per full red team run). Rows are newest-first, sliced to the requested
+    page of ``per_page`` (``total_runs`` carries the full count)."""
+    page = max(1, page)
     runs: list[RedTeamRunRow] = []
     evaluated = 0
     vulnerable = 0
@@ -511,8 +545,6 @@ def redteam_overview(roots: list[Path] | None = None, *, limit: int = 8) -> RedT
             cost_total += run_cost
             has_cost = True
 
-        run_targets: set[str] = set()
-        has_key = has_model = False
         run_vuln = 0
         run_attacks = 0
         run_errors = 0
@@ -521,13 +553,6 @@ def redteam_overview(roots: list[Path] | None = None, *, limit: int = 8) -> RedT
             run_attacks += 1
             attack = res.get('attack')
             attack = attack if isinstance(attack, dict) else {}
-            agent = res.get('agent')
-            agent = agent if isinstance(agent, dict) else {}
-            tgt = agent.get('display_name') or agent.get('key')
-            if isinstance(tgt, str) and tgt:
-                run_targets.add(tgt)
-            has_key = has_key or bool(agent.get('key'))
-            has_model = has_model or bool(agent.get('model'))
             is_error = bool(res.get('error'))
             is_vuln = bool(res.get('vulnerable'))
             severity = str(attack.get('severity', 'low')).lower()
@@ -550,9 +575,10 @@ def redteam_overview(roots: list[Path] | None = None, *, limit: int = 8) -> RedT
                 rid=card.id,
                 name=card.name,
                 when=card.created_at,
-                target=_redteam_target(data, run_targets),
-                target_kind='agent' if has_key else ('llm' if has_model else 'other'),
-                status=_lifecycle_status(broken=bool(card.error), all_errored=(run_attacks > 0 and run_errors == run_attacks)),
+                targets=_redteam_targets(data),
+                status=_lifecycle_status(
+                    broken=bool(card.error), all_errored=(run_attacks > 0 and run_errors == run_attacks)
+                ),
                 score=resistance,
                 cases=cases,
                 cost=run_cost,
@@ -567,5 +593,8 @@ def redteam_overview(roots: list[Path] | None = None, *, limit: int = 8) -> RedT
         critical_findings=critical,
         avg_robustness=(resistant / evaluated) if evaluated else None,
         total_cost=cost_total if has_cost else None,
-        recent=runs[:limit],
+        recent=runs[(page - 1) * per_page : page * per_page],
+        total_runs=len(runs),
+        page=page,
+        per_page=per_page,
     )

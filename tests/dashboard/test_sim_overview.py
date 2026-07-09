@@ -153,10 +153,9 @@ class TestSimOverviewMetrics:
         )
         rows = {r.name: r for r in metrics.sim_overview([rt, sim]).recent}
         # Agent target with a known model → "name · model".
-        assert rows['sim:x'].target == 'support-bot · gpt-4o'
+        assert rows['sim:x'].targets == [('support-bot · gpt-4o', 'agent')]
         # agent target name surfaces (never a generic 'Orq agent' label).
-        assert rows['sim:y'].target == 'refund-bot'
-        assert rows['sim:y'].target_kind == 'agent'
+        assert rows['sim:y'].targets == [('refund-bot', 'agent')]
         # Every case errored → lifecycle status 'error'.
         assert rows['sim:y'].status == 'error'
 
@@ -168,6 +167,62 @@ class TestSimOverviewMetrics:
         assert ov.simulations_run == 0
         assert ov.goal_completion is None
         assert ov.recent == []
+
+
+def _seed_many_sim(tmp_path: Path, n: int) -> list[Path]:
+    rt = tmp_path / 'runs'
+    sim = tmp_path / 'sim-runs'
+    rt.mkdir()
+    sim.mkdir()
+    for i in range(n):
+        (sim / f'sim_{i:03d}.json').write_text(
+            json.dumps(
+                _sim_payload(
+                    f'Sim {i}',
+                    created=f'2026-06-25T14:{i:02d}:00',
+                    results=[
+                        _result(
+                            persona='alice',
+                            scenario='billing',
+                            model='gpt-5.4',
+                            goal=True,
+                            score=0.9,
+                            turns=3,
+                            tokens=900,
+                        )
+                    ],
+                )
+            )
+        )
+    return [rt, sim]
+
+
+class TestSimOverviewPaging:
+    def test_slices_by_page(self, tmp_path: Path) -> None:
+        roots = _seed_many_sim(tmp_path, 20)
+        first = metrics.sim_overview(roots, page=1, per_page=8)
+        assert first.total_runs == 20
+        assert first.page == 1
+        assert first.per_page == 8
+        assert len(first.recent) == 8
+        assert first.recent[0].name == 'Sim 19'  # newest first
+
+        third = metrics.sim_overview(roots, page=3, per_page=8)
+        assert len(third.recent) == 4
+        assert third.recent[0].name == 'Sim 3'
+
+    def test_page_out_of_range_is_empty(self, tmp_path: Path) -> None:
+        roots = _seed_many_sim(tmp_path, 20)
+        ov = metrics.sim_overview(roots, page=99, per_page=8)
+        assert ov.recent == []
+        assert ov.total_runs == 20
+
+    def test_pager_nav_links(self, tmp_path: Path) -> None:
+        roots = _seed_many_sim(tmp_path, 20)
+        client = TestClient(build_app(roots=roots))
+        page1 = client.get('/?surface=sim&page=1').text
+        assert 'Next &rsaquo;' in page1
+        assert 'href="/?surface=sim&page=2&per_page=8"' in page1
 
 
 class TestSimOverviewScreen:

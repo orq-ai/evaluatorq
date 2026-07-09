@@ -192,9 +192,83 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
     font-weight: 500;
     white-space: nowrap;
 }
-.target-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--chart-1); }
-.target-pill svg { width: 13px; height: 13px; color: var(--chart-1); flex: 0 0 auto; }
+.target-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green-600); }
+.target-pill svg { width: 13px; height: 13px; color: var(--green-600); flex: 0 0 auto; }
 .row-chevron { width: 16px; height: 16px; color: var(--text-faint); display: block; margin-left: auto; }
+
+/* Run-level surface tables: clickable anchor-grid, borderless (no table chrome) */
+.runs-grid { display: flex; flex-direction: column; }
+/* Fixed/fr columns only — NO content-based (auto/max-content) widths, so every
+   row (each its own grid) resolves identical column edges and the bars align. */
+.runs-grid-head, .runs-grid-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) 92px 56px 56px 88px 18px;
+    align-items: center;
+    gap: 16px;
+}
+.runs-grid-head > span, .runs-grid-row > span { min-width: 0; }
+.runs-grid-row .target-pill { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.rg-targets { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; min-width: 0; }
+.runs-grid-head {
+    padding: 0 4px 10px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+}
+.runs-grid-row {
+    padding: 12px 4px;
+    text-decoration: none;
+    color: inherit;
+    border-top: 1px solid var(--border-subtle);
+}
+.runs-grid-row:hover { background: var(--app-gray-50); }
+.rg-job { display: inline-flex; flex-direction: column; gap: 2px; min-width: 0; }
+.rg-name { font-weight: 600; color: var(--text-strong, #1a1a1a); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rg-sub { font-size: 12px; color: var(--text-muted, #8a8a8a); }
+.rg-num { font-family: var(--font-mono); font-size: 13px; text-align: right; }
+.runs-grid-row .run-score { font-family: var(--font-mono); font-size: 13px; font-weight: 600; text-align: right; }
+.runs-grid-head span:nth-child(4) { text-align: right; }
+
+/* Run-overview pager: size picker on the left; count + prev/next on the right */
+.runs-pager {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 4px 4px;
+    font-size: 13px;
+    color: var(--text-muted, #8a8a8a);
+}
+.runs-pager-right { margin-left: auto; display: inline-flex; align-items: center; gap: 16px; }
+.runs-pager-nav { display: inline-flex; gap: 8px; }
+.runs-pager-count { color: var(--text-strong, #1a1a1a); }
+.runs-pager-sizes { display: inline-flex; align-items: center; gap: 6px; }
+.runs-pager-link {
+    text-decoration: none;
+    color: var(--text-muted, #8a8a8a);
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+.runs-pager-link:hover { background: var(--app-gray-50); color: var(--text-strong, #1a1a1a); }
+.runs-pager-link.is-active { color: var(--text-strong, #1a1a1a); font-weight: 600; }
+.runs-pager-link.is-disabled { opacity: 0.4; pointer-events: none; }
+
+/* Solid status pill mirroring the main platform (success green / error red) */
+.run-status {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #fff;
+    text-transform: lowercase;
+    white-space: nowrap;
+}
+.run-status.finished { background: var(--green-600); }
+.run-status.error { background: var(--red-600); }
+.run-status.running { background: var(--orange-500); }
 
 /* Landing 'Recent runs' Type column: surface glyph + label (no colored bubble) */
 .type-cell { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; white-space: nowrap; }
@@ -535,11 +609,11 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
 # CSS-only tab switching: pair the Nth radio (by document order) to the Nth
 # label and Nth panel. Generated for up to 9 tabs so the rules stay declarative
 # in the inlined stylesheet (no per-instance <style> blocks).
-_TAB_RULES = "".join(
-    f".tabs > .tab-radio:nth-of-type({i}):checked ~ .tab-bar > .tab-label:nth-child({i}) "
-    "{ color: var(--text-strong); border-bottom-color: var(--teal-600); }\n"
-    f".tabs > .tab-radio:nth-of-type({i}):checked ~ .tab-panels > .tab-panel:nth-child({i}) "
-    "{ display: block; }\n"
+_TAB_RULES = ''.join(
+    f'.tabs > .tab-radio:nth-of-type({i}):checked ~ .tab-bar > .tab-label:nth-child({i}) '
+    '{ color: var(--text-strong); border-bottom-color: var(--teal-600); }\n'
+    f'.tabs > .tab-radio:nth-of-type({i}):checked ~ .tab-panels > .tab-panel:nth-child({i}) '
+    '{ display: block; }\n'
     for i in range(1, 10)
 )
 
