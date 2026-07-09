@@ -23,26 +23,6 @@ Two command groups have their own pages:
 
 ---
 
-## `eq ui`
-
-Launch the FastHTML dashboard showing all red team **and** simulation runs.
-
-```bash
-eq ui [PATH] [--host HOST] [--port PORT]
-```
-
-`PATH` is optional. Omit it to scan both default run stores (`.evaluatorq/runs/` and `.evaluatorq/sim-runs/`). Pass a directory to restrict the scan; pass a file to scope to that file's parent directory and print a direct report URL.
-
-| Flag / Argument | Type / Default | Description |
-|---|---|---|
-| `PATH` | `Path \| None` / `None` | Optional path to scan. |
-| `--host` | `str` / `127.0.0.1` | Host to bind the dashboard server to. |
-| `--port` | `int` / `8080` | Port for the dashboard server. |
-
-Requires `evaluatorq[dashboard]` (`python-fasthtml`, `uvicorn`).
-
----
-
 ## Recipes
 
 ```bash
@@ -60,4 +40,4 @@ eq sim run -t agent:my-agent --num-personas 2 --num-scenarios 2
 
 - **[Agent Simulation](../guides/agent-simulation.md)** — the `eq sim` workflow in depth.
 - **[Red Teaming](../guides/red-teaming.md)** — the `eq redteam` workflow in depth.
-- **[Dashboard](../dashboard.md)** — browse `eq dashboard` results.
+- **[Red Teaming](../guides/red-teaming.md)** — browse red-team results with `eq redteam ui`.

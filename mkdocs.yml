@@ -11,6 +11,10 @@ exclude_docs: |
   superpowers/
   _snippets/
 
+# Build but soft-hide pages that shouldn't appear in the left nav (reachable by direct URL only).
+not_in_nav: |
+  dashboard.md
+
 theme:
   name: material
   logo: assets/orq-mark-white.svg
@@ -142,19 +146,18 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Get Started: guides/getting-started.md
+  - Setup:
+      - Configuration: configuration.md
+      - Tracing: tracing.md
+      - Orq Deployment: orq-deployment.md
   - Guides:
+      - Get Started: guides/getting-started.md
       - Agent Simulation: guides/agent-simulation.md
       - Red Teaming:
           - Overview: guides/red-teaming.md
           - Custom Evaluators & Frameworks: custom-evaluators-and-frameworks.md
       - LLM as a Jury: llm-as-a-jury.md
       - Pairwise Judging: pairwise-judging.md
-      - Dashboard: dashboard.md
-  - Setup:
-      - Configuration: configuration.md
-      - Tracing: tracing.md
-      - Orq Deployment: orq-deployment.md
   - Examples: examples/
   - API Reference:
       - Introduction: api-reference.md

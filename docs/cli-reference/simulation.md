@@ -140,13 +140,17 @@ eq sim runs [DIRECTORY] [--limit N]
 
 ## `eq sim ui`
 
-Launch the FastHTML dashboard scoped to simulation runs only.
+Launch the Streamlit dashboard for a saved simulation run.
 
 ```bash
-eq sim ui [--host HOST] [--port PORT]
+eq sim ui [RUN_PATH] [--latest] [--host HOST] [--port PORT]
 ```
 
-| Flag | Type / Default | Description |
+| Flag / Argument | Type / Default | Description |
 |---|---|---|
-| `--host` | `str` / `127.0.0.1` | Host to bind the dashboard server to. |
-| `--port` | `int` / `8080` | Port for the dashboard server. |
+| `RUN_PATH` | `Path \| None` / `None` | Saved run to open. Omit to use the latest auto-saved run. |
+| `--latest` / `-l` | `bool` / `False` | Open the most recent run without passing a path. |
+| `--host` | `str` / `localhost` | Host to bind the Streamlit server to. |
+| `--port` | `int` / `8501` | Port for the Streamlit server. |
+
+Requires `evaluatorq[simulation]`.
