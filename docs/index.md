@@ -51,6 +51,15 @@ Successfully installed evaluatorq
 
     [:octicons-arrow-right-24: Red teaming](guides/red-teaming.md)
 
+-   :material-gavel:{ .lg .middle } __LLM as a Jury__
+
+    ---
+
+    Score a single response with a panel of judge LLMs; odd, mixed-provider
+    panels make verdicts more reliable than any one judge.
+
+    [:octicons-arrow-right-24: LLM as a Jury](llm-as-a-jury.md)
+
 </div>
 
 Works with LangGraph, OpenAI Agents SDK, PydanticAI, CrewAI, a plain async
