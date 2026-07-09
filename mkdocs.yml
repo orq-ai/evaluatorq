@@ -96,6 +96,9 @@ plugins:
   # (every nav doc must be covered here, or `mkdocs build --strict` fails), so this can't
   # silently drift out of sync with nav again.
   - llmstxt:
+      markdown_description: |
+        This is the curated docs index. For the complete docs as one Markdown file, use
+        [llms-full.txt](https://orq-ai.github.io/evaluatorq/llms-full.txt).
       full_output: llms-full.txt
       sections:
         Getting started:
