@@ -124,16 +124,6 @@ html { font-size: 100%; }
 /* --- Grid cards: teal field, orange spark on hover -------------------
    Design language: cards are neutral/teal at rest; orange only appears
    as the hover accent (uniform border + arrow). */
-/* Pin a fixed 2-column grid (Material's default auto-fit would pack 3-4
-   across on wide screens); collapse to 1 column on mobile. */
-.md-typeset .grid.cards > ul {
-  grid-template-columns: repeat(2, 1fr);
-}
-@media screen and (max-width: 44.9375em) {
-  .md-typeset .grid.cards > ul {
-    grid-template-columns: 1fr;
-  }
-}
 .md-typeset .grid.cards > ul > li {
   border: 1px solid var(--md-default-fg-color--lightest);
   border-radius: 0.4rem;
