@@ -19,7 +19,8 @@ role-labeled message list as a series of ``<div>`` elements.  Shared by
 
 from __future__ import annotations
 
-import math
+from datetime import datetime
+from itertools import starmap
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
@@ -28,10 +29,15 @@ from fasthtml.common import Script
 from evaluatorq.common.reports import esc
 
 if TYPE_CHECKING:
-    from evaluatorq.dashboard.metrics import Landing, RunRow
+    from evaluatorq.dashboard.library import ReportCard
+    from evaluatorq.dashboard.metrics import Landing, RedTeamOverview, RunRow, SimOverview
 
 # Surface key → display label, used for run-list titles + kind badges.
 SURFACE_LABELS: dict[str, str] = {'redteam': 'Red Team', 'sim': 'Agent Sim'}
+
+# Allow-listed run-overview page sizes (first entry is the default). Shared with
+# app.py so the query parser and the size picker agree.
+RUN_PAGE_SIZES: tuple[int, ...] = (8, 15, 25)
 
 
 def head_assets() -> tuple[Script, ...]:
@@ -70,8 +76,14 @@ def _kind_badge(surface: str) -> str:
 
 
 def _status_badge(status: str) -> str:
-    label = {'passed': 'Passed', 'failed': 'Failed', 'warning': 'Warning'}.get(status, status.title())
-    return f'<span class="status-badge {esc(status)}"><span class="dot"></span>{esc(label)}</span>'
+    # Map lifecycle status → an existing pill color class (finished→passed green,
+    # error→failed red) so the run-list badges stay styled.
+    label, cls = {
+        'finished': ('Finished', 'passed'),
+        'error': ('Error', 'failed'),
+        'running': ('Running', 'warning'),
+    }.get(status, (status.title(), status))
+    return f'<span class="status-badge {esc(cls)}"><span class="dot"></span>{esc(label)}</span>'
 
 
 def _run_row(row: RunRow, *, show_badge: bool = True) -> str:
@@ -92,6 +104,55 @@ def _run_row(row: RunRow, *, show_badge: bool = True) -> str:
     )
 
 
+# Surface → inline glyph (lucide: shield-alert / messages-square) for the Type column.
+_SURFACE_ICONS: dict[str, str] = {
+    'redteam': (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 '
+        '1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 '
+        '3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M12 8v4M12 16h.01"/></svg>'
+    ),
+    'sim': (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 '
+        '2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>'
+    ),
+}
+
+
+def _type_cell(surface: str) -> str:
+    """Type column: surface glyph + label (replaces the inline kind bubble)."""
+    icon = _SURFACE_ICONS.get(surface, '')
+    label = SURFACE_LABELS.get(surface, surface)
+    return f'<span class="type-cell {esc(surface)}">{icon}{esc(label)}</span>'
+
+
+def _recent_runs_table(rows: list[RunRow]) -> str:
+    """Landing 'Recent runs' as an airy column list (not a boxed table):
+    Type · Job · Cases · Time · Score · Status, aligned but borderless."""
+    from evaluatorq.common.reports.html_helpers import status_badge
+
+    head = (
+        '<div class="rr-head"><span>Type</span><span>Job</span><span>Cases</span>'
+        '<span>Time</span><span>Score</span><span>Status</span></div>'
+    )
+    row_html: list[str] = [head]
+    for r in rows:
+        label, status = _LIFECYCLE_PILL.get(r.status, (r.status.title(), 'neutral'))
+        err = '<span class="card-error" title="failed to load">error</span>' if r.error else ''
+        row_html.append(
+            f'<a class="rr-row" href="/r/{esc(r.id)}">'
+            f'<span class="rr-type">{_type_cell(r.surface)}</span>'
+            f'<span class="rr-job">{esc(r.name)}{err}</span>'
+            f'<span class="rr-meta">{esc(r.headline)}</span>'
+            f'<span class="rr-meta">{esc(r.when)}</span>'
+            f'<span class="run-score {_score_cls(r.score)}">{_fmt_score(r.score)}</span>'
+            f'{status_badge(label, status)}'
+            f'</a>'
+        )
+    return f'<div class="recent-runs">{"".join(row_html)}</div>'
+
+
 def _stat_tile(label: str, value: str, unit: str = '') -> str:
     unit_html = f'<span class="stat-unit">{esc(unit)}</span>' if unit else ''
     return (
@@ -108,7 +169,7 @@ def _panel(title: str, sub: str, inner: str, *, cls: str = '') -> str:
     )
 
 
-def _bars(rows: list[tuple[str, int]], colors: list[str], *, total_label: str = 'Total', fmt: str = '{}') -> str:
+def _bars(rows: list[tuple[str, float]], colors: list[str], *, total_label: str = 'Total', fmt: str = '{}') -> str:
     total = sum(v for _, v in rows) or 1
     parts: list[str] = ['<div class="bars">']
     for i, (name, val) in enumerate(rows):
@@ -127,25 +188,6 @@ def _bars(rows: list[tuple[str, int]], colors: list[str], *, total_label: str = 
     return ''.join(parts)
 
 
-def _donut(resistant: int, vulnerable: int) -> str:
-    total = resistant + vulnerable
-    pct = round(resistant / total * 100) if total else 0
-    r = 60
-    circ = 2 * math.pi * r
-    resist_len = circ * (resistant / total) if total else 0
-    return (
-        '<div class="donut-wrap"><div class="donut">'
-        f'<svg width="150" height="150" viewBox="0 0 150 150">'
-        f'<circle cx="75" cy="75" r="{r}" fill="none" stroke="var(--red-600)" stroke-width="18"/>'
-        f'<circle cx="75" cy="75" r="{r}" fill="none" stroke="var(--teal-600)" stroke-width="18"'
-        f' stroke-dasharray="{resist_len:.1f} {circ - resist_len:.1f}"/>'
-        f'</svg>'
-        f'<div class="donut-center"><span class="donut-value">{pct}%</span>'
-        f'<span class="donut-label">resistant</span></div>'
-        '</div></div>'
-    )
-
-
 def landing_body(data: Landing) -> str:
     """Render the combined Dashboard landing as an HTML fragment."""
     if data.total_runs == 0:
@@ -155,13 +197,14 @@ def landing_body(data: Landing) -> str:
             '</div></section>'
         )
 
-    resist = '—' if data.resistance_rate is None else f'{round(data.resistance_rate * 100)}'
+    total_tokens = sum(n for _, n in data.tokens_by_kind)
+    avg_cost = data.total_cost / data.total_runs if data.total_runs else 0.0
     band = (
         '<div class="stat-band">'
-        + _stat_tile('Total runs', str(data.total_runs))
-        + _stat_tile('Red team', str(data.redteam_runs))
-        + _stat_tile('Agent sim', str(data.sim_runs))
-        + _stat_tile('Resistance', resist, unit='%')
+        + _stat_tile('Jobs run', str(data.total_runs))
+        + _stat_tile('Avg cost / job', _fmt_cost(avg_cost))
+        + _stat_tile('Total spend', _fmt_cost(data.total_cost))
+        + _stat_tile('Total tokens', _fmt_compact(total_tokens))
         + '</div>'
     )
 
@@ -169,24 +212,278 @@ def landing_body(data: Landing) -> str:
     severity_colors = ['var(--red-600)', 'var(--orange-500)', 'var(--amber-600)', 'var(--green-600)']
 
     by_kind_panel = _panel('Runs by type', 'Red team · agent sim', _bars(data.by_kind, teal_jade))
-    donut_panel = _panel('Attack resistance', 'All red team runs', _donut(data.resistant, data.vulnerable))
-    row1 = f'<div class="dash-row2">{by_kind_panel}{donut_panel}</div>'
 
     sev_rows = [(s.title(), n) for s, n in data.severity]
     sev_inner = _bars(sev_rows, severity_colors) if sev_rows else '<p class="rt-panel-loading">No findings.</p>'
     severity_panel = _panel('Findings by severity', 'Vulnerabilities found', sev_inner)
+    # Spend by job type — real dollars (cost_usd recorded upstream).
+    spend_inner = (
+        _bars(data.cost_by_kind, teal_jade, fmt='${:.4f}')
+        if data.cost_by_kind
+        else '<p class="rt-panel-loading">No cost recorded.</p>'
+    )
+    spend_panel = _panel('Spend by job type', 'Real cost across runs', spend_inner)
+
     tok_inner = (
         _bars(data.tokens_by_kind, teal_jade, fmt='{:,}')
         if data.tokens_by_kind
         else '<p class="rt-panel-loading">No token usage recorded.</p>'
     )
     tokens_panel = _panel('Token usage', 'By job type', tok_inner)
-    row2 = f'<div class="dash-row-eq">{severity_panel}{tokens_panel}</div>'
 
-    recent_inner = ''.join(_run_row(r) for r in data.recent)
-    recent_panel = _panel('Recent runs', 'Latest jobs', f'<div class="run-list">{recent_inner}</div>')
+    # 2x2 grid of the four remaining panels.
+    grid = (
+        f'<div class="dash-row-eq">{by_kind_panel}{severity_panel}</div>'
+        f'<div class="dash-row-eq">{spend_panel}{tokens_panel}</div>'
+    )
 
-    return f'<section class="dash-wrap">{band}{row1}{row2}{recent_panel}</section>'
+    recent_panel = _panel('Recent runs', 'Latest jobs', _recent_runs_table(data.recent))
+
+    return f'<section class="dash-wrap">{band}{grid}{recent_panel}</section>'
+
+
+_OUTCOME_PILL: dict[str, tuple[str, str]] = {
+    'passed': ('Passed', 'pass'),
+    'warning': ('Warning', 'warn'),
+    'failed': ('Failed', 'fail'),
+    'error': ('Error', 'warn'),
+}
+
+# Run lifecycle → (label, pill-kind) for the Status column. Score carries quality;
+# Status carries whether the run completed. 'running' reserved for future live jobs.
+_LIFECYCLE_PILL: dict[str, tuple[str, str]] = {
+    'finished': ('Finished', 'pass'),
+    'error': ('Error', 'fail'),
+    'running': ('Running', 'warn'),
+}
+
+
+def _fmt_cost(v: float) -> str:
+    """Format a dollar amount: cents-precision for readable sums, more digits
+    for the sub-cent per-item costs typical of a single sim/attack."""
+    if v >= 1:
+        return f'${v:,.2f}'
+    if v > 0:
+        return f'${v:.4f}'
+    return '$0.00'
+
+
+# Inline target-kind glyphs (lucide: bot / cpu / rocket), sized to the pill.
+_TARGET_ICONS: dict[str, str] = {
+    'agent': (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4M8 2h8"/>'
+        '<rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2M20 14h2"/>'
+        '<path d="M9 13v2M15 13v2"/></svg>'
+    ),
+    'llm': (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round"><path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 '
+        '0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0L14.06 8.5A2 2 0 0 0 15.5 '
+        '9.94l6.14 1.58a.5.5 0 0 1 0 .96L15.5 14.06a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z"/>'
+        '<path d="M20 3v4M22 5h-4M4 17v2M5 18H3"/></svg>'
+    ),
+    'deployment': (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 '
+        '5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 0 1 '
+        '2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/>'
+        '<path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5z"/></svg>'
+    ),
+}
+
+
+_CHEVRON = (
+    '<svg class="row-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>'
+)
+
+
+def _target_pill(label: str, kind: str) -> str:
+    """Target cell: kind icon (agent / llm / deployment) + label, dot fallback."""
+    icon = _TARGET_ICONS.get(kind, '<span class="dot"></span>')
+    return f'<span class="target-pill" data-kind="{esc(kind)}">{icon}{esc(label)}</span>'
+
+
+# Run lifecycle → label for the solid status pill (mirrors the platform's
+# success/error spans). 'finished' reads as 'success'.
+_STATUS_LABEL: dict[str, str] = {'finished': 'success', 'error': 'error', 'running': 'running'}
+
+
+def _run_status_pill(status: str) -> str:
+    """Solid filled status pill matching the main platform (green success /
+    red error, white lowercase text)."""
+    return f'<span class="run-status {esc(status)}">{esc(_STATUS_LABEL.get(status, status))}</span>'
+
+
+def _run_grid(rows: list[Any]) -> str:
+    """Run-level table as a clickable anchor-grid — the WHOLE row links to the
+    run's report. Borderless (no boxed table chrome), aligned columns.
+    Shared by the Red Team + Agent Sim surfaces (identical row shape)."""
+    head = (
+        '<div class="runs-grid-head"><span>Job</span><span>Target</span><span>Status</span>'
+        '<span>Score</span><span>Cases</span><span>Cost</span><span></span></div>'
+    )
+    parts: list[str] = [head]
+    for r in rows:
+        err = '<span class="card-error" title="failed to load">error</span>' if r.error else ''
+        parts.append(
+            f'<a class="runs-grid-row" href="/r/{esc(r.rid)}">'
+            f'<span class="rg-job"><span class="rg-name">{esc(r.name)}{err}</span>'
+            f'<span class="rg-sub">{esc(_ago(r.when))}</span></span>'
+            f'<span class="rg-targets">{"".join(starmap(_target_pill, r.targets))}</span>'
+            f'<span>{_run_status_pill(r.status)}</span>'
+            f'<span class="run-score {_score_cls(r.score)}">{_fmt_score(r.score)}</span>'
+            f'<span class="rg-num">{esc(str(r.cases))}</span>'
+            f'<span class="rg-num">{esc(_fmt_cost(r.cost))}</span>'
+            f'{_CHEVRON}'
+            f'</a>'
+        )
+    return f'<div class="runs-grid">{"".join(parts)}</div>'
+
+
+def _run_pager(surface: str, page: int, total: int, per_page: int) -> str:
+    """Prev/Next page nav + page-size picker for the run overview. Full-page GET
+    links (no JS), shared by both surfaces. Renders just the size picker when
+    everything fits on one page."""
+    last = max(1, -(-total // per_page))  # ceil division
+    page = min(page, last)
+
+    def link(label: str, *, pg: int, pp: int, disabled: bool = False, active: bool = False) -> str:
+        cls = 'runs-pager-link'
+        if active:
+            cls += ' is-active'
+        if disabled:
+            return f'<span class="{cls} is-disabled">{label}</span>'
+        return f'<a class="{cls}" href="/?surface={esc(surface)}&page={pg}&per_page={pp}">{label}</a>'
+
+    sizes = ''.join(link(str(sz), pg=1, pp=sz, active=(sz == per_page)) for sz in RUN_PAGE_SIZES)
+    left = f'<span class="runs-pager-sizes">Per page: {sizes}</span>'
+
+    if total <= per_page:
+        count = f'<span class="runs-pager-count">Total {total} runs</span>'
+        return f'<div class="runs-pager">{left}<span class="runs-pager-right">{count}</span></div>'
+
+    lo = (page - 1) * per_page + 1
+    hi = min(page * per_page, total)
+    count = f'<span class="runs-pager-count">{lo}&ndash;{hi} of {total}</span>'
+    nav = link('&lsaquo; Prev', pg=page - 1, pp=per_page, disabled=page <= 1) + link(
+        'Next &rsaquo;', pg=page + 1, pp=per_page, disabled=page >= last
+    )
+    return (
+        f'<div class="runs-pager">{left}'
+        f'<span class="runs-pager-right">{count}<span class="runs-pager-nav">{nav}</span></span></div>'
+    )
+
+
+def _ago(when: datetime) -> str:
+    """Relative time: '46m ago', '7h ago', '3d ago'."""
+    now = datetime.now(tz=when.tzinfo) if when.tzinfo else datetime.now()  # noqa: DTZ005
+    secs = max(0, int((now - when).total_seconds()))
+    if secs < 3600:
+        return f'{secs // 60}m ago'
+    if secs < 86400:
+        return f'{secs // 3600}h ago'
+    return f'{secs // 86400}d ago'
+
+
+def _fmt_compact(n: int) -> str:
+    """Compact large counts: 1_157_563 -> '1.2M', 4_200 -> '4.2K'."""
+    if n >= 1_000_000:
+        return f'{n / 1_000_000:.1f}M'
+    if n >= 1_000:
+        return f'{n / 1_000:.1f}K'
+    return str(n)
+
+
+def sim_overview_body(data: SimOverview) -> str:
+    """Render the Agent Sim surface as the design's rich overview: 4 KPI cards
+    plus an item-level 'Recent simulations' table (RES-1022)."""
+    from evaluatorq.common.reports.html_helpers import kpi_cards, pct
+
+    if data.simulations_run == 0:
+        return runs_screen_body([], 'sim')
+
+    gc = '—' if data.goal_completion is None else pct(data.goal_completion)
+    gc_status = (
+        'neutral'
+        if data.goal_completion is None
+        else ('pass' if data.goal_completion >= 0.8 else 'warn' if data.goal_completion >= 0.5 else 'fail')
+    )
+    avg_turns = '—' if data.avg_turns is None else f'{data.avg_turns:.1f}'
+    # Real per-sim dollar cost (cost_usd is recorded upstream). Falls back to
+    # avg tokens/sim only when no cost data is present.
+    if data.avg_cost is not None:
+        cost_label, cost_value = 'Avg cost/sim', _fmt_cost(data.avg_cost)
+    else:
+        cost_label = 'Avg tokens/sim'
+        cost_value = '—' if data.avg_tokens is None else f'{data.avg_tokens:,.0f}'
+    band = kpi_cards([
+        {'label': 'Simulations run', 'value': str(data.simulations_run)},
+        {'label': 'Goal completion', 'value': gc, 'status': gc_status},
+        {'label': 'Avg turns', 'value': avg_turns},
+        {'label': cost_label, 'value': cost_value},
+    ])
+
+    panel = _panel(
+        'Recent runs',
+        'Latest agent simulation runs',
+        _run_grid(data.recent) + _run_pager('sim', data.page, data.total_runs, data.per_page),
+    )
+    return f'<section class="dash-wrap">{band}{panel}</section>'
+
+
+def search_results(cards: list[ReportCard], query: str) -> str:
+    """Render the ⌘K global-search dropdown fragment: report links whose name or
+    surface matches ``query`` (case-insensitive). Empty query → empty."""
+    q = query.strip().lower()
+    if not q:
+        return ''
+    hits = [c for c in cards if q in c.name.lower() or q in SURFACE_LABELS.get(c.surface, c.surface).lower()]
+    if not hits:
+        return '<div class="search-empty">No matching reports.</div>'
+    items = []
+    for c in hits[:10]:
+        label = SURFACE_LABELS.get(c.surface, c.surface)
+        items.append(
+            f'<a class="search-hit" href="/r/{esc(c.id)}">'
+            f'<span class="search-hit-kind">{esc(label)}</span>'
+            f'<span class="search-hit-name">{esc(c.name)}</span></a>'
+        )
+    return ''.join(items)
+
+
+def redteam_overview_body(data: RedTeamOverview) -> str:
+    """Render the Red Team surface as the design's rich overview: 4 KPI cards
+    plus an item-level 'Recent attacks' table (RES-1021)."""
+    from evaluatorq.common.reports.html_helpers import kpi_cards, pct
+
+    if data.attacks_run == 0:
+        return runs_screen_body([], 'redteam')
+
+    asr = '—' if data.break_rate is None else pct(data.break_rate)
+    asr_status = (
+        'neutral'
+        if data.break_rate is None
+        else ('fail' if data.break_rate >= 0.25 else 'warn' if data.break_rate > 0 else 'pass')
+    )
+    band = kpi_cards([
+        {'label': 'Attacks run', 'value': str(data.attacks_run)},
+        {'label': 'ASR', 'value': asr, 'status': asr_status},
+        {
+            'label': 'Critical findings',
+            'value': str(data.critical_findings),
+            'status': 'fail' if data.critical_findings else 'pass',
+        },
+        {'label': 'Total spend', 'value': _fmt_cost(data.total_cost)},
+    ])
+
+    panel = _panel(
+        'Recent runs',
+        'Latest red team runs',
+        _run_grid(data.recent) + _run_pager('redteam', data.page, data.total_runs, data.per_page),
+    )
+    return f'<section class="dash-wrap">{band}{panel}</section>'
 
 
 def runs_screen_body(rows: list[RunRow], surface: str) -> str:
@@ -231,17 +528,22 @@ def report_actions(rid: str) -> str:
     return f'<a class="btn-secondary" href="/r/{esc(rid)}/export.html">{_DOWNLOAD_ICON} Export</a>'
 
 
-def settings_body() -> str:
-    """Render the Settings stub screen (not part of the v1 demo)."""
-    return (
-        '<section class="settings-stub">'
-        '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
-        ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-        '<path d="M2 20a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2"/><path d="m9 8 3-3 3 3"/>'
-        '<path d="M12 5v9"/></svg>'
-        '<div>Settings — not part of this release</div>'
-        '</section>'
+def settings_body(config: list[tuple[str, str]]) -> str:
+    """Render the Settings screen as a read-only configuration view.
+
+    The v1 design's Settings page is a workspace-management surface (editable
+    workspace name, API keys, delete project) that doesn't map to a local
+    read-only run viewer. We instead reflect the actual runtime config the
+    dashboard is operating under, and note the design gap. Editable settings
+    would belong to the Orq platform UI, not this local dashboard (RES-1038).
+    """
+    rows = ''.join(
+        f'<div class="config-row"><span class="config-key">{esc(k)}</span>'
+        f'<span class="config-val">{esc(v)}</span></div>'
+        for k, v in config
     )
+    config_panel = _panel('Configuration', 'What this dashboard is reading', f'<div class="config-list">{rows}</div>')
+    return f'<section class="dash-wrap">{config_panel}</section>'
 
 
 def report_not_found(rid: str) -> str:
