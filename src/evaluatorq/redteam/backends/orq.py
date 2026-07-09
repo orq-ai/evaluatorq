@@ -399,6 +399,9 @@ class ORQAgentTarget(AgentTarget):
 
         self._cached_context = AgentContext(
             key=self.agent_key,
+            id=getattr(agent_data, 'id', None),
+            workspace_id=getattr(agent_data, 'workspace_id', None),
+            target_kind='agent',
             display_name=getattr(agent_data, 'display_name', None),
             description=getattr(agent_data, 'description', None),
             system_prompt=getattr(agent_data, 'system_prompt', None),
