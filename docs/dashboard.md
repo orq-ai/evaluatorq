@@ -1,5 +1,11 @@
 # Dashboard
 
+!!! note "Preview — not yet generally available"
+    The combined `eq dashboard` documented here is an unreleased preview and is
+    not linked from the site navigation yet. For a stable local view of a saved
+    run, use `eq redteam ui` / `eq sim ui` (see the
+    [CLI Reference](cli-reference/overview.md)).
+
 evaluatorq ships a built-in web dashboard for browsing red team and simulation
 reports.  It is powered by **FastHTML** (a lightweight Python web framework)
 and served locally via **uvicorn**.  There is no external service dependency —

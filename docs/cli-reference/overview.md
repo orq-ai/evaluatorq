@@ -15,13 +15,9 @@ Two command groups have their own pages:
 - **[Red Teaming](redteam.md)** — adversarial testing (`eq redteam`).
 - **[Simulation](simulation.md)** — multi-turn user simulation (`eq sim`; `sim` is shorthand).
 
----
-
 ## Top-level options
 
 `eq --version` prints the installed version (e.g. `evaluatorq 1.3.2`) and exits. Running `eq` with no arguments prints help and exits.
-
----
 
 ## Recipes
 

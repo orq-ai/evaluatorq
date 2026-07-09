@@ -325,8 +325,6 @@ reuse. `eq sim generate` writes the cases it builds to a JSONL file with
 `--output PATH` (one datapoint per line); `eq sim run` does the same alongside a
 live run with `--save-datapoints PATH`:
 
-<!-- termynal -->
-
 ```bash
 # Generate cases once and keep them
 eq sim generate --agent-description "e-commerce support agent" \

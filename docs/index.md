@@ -67,7 +67,7 @@ function, or an Orq deployment. The Orq platform is optional: it stores results
 and, when `ORQ_API_KEY` is set, routes the attacker and judge LLMs by default —
 but you can bring your own and run entirely on OpenAI.
 
-## Quick look
+## Quick start
 
 ```python
 import asyncio

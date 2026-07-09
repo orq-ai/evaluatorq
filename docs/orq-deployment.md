@@ -115,7 +115,7 @@ Both IDs are read off the Orq UI:
   "manifest" in the API). Open a run from the experiment's run history to read its
   ID from the URL. Omit it to replay the latest run.
 
-### Usage
+### Example
 
 ```python
 from evaluatorq import evaluatorq, ExperimentInput

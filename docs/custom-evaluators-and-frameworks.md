@@ -199,19 +199,27 @@ my_strategies = [
 
 ### Registering strategies
 
-Create a strategy file (e.g., `frameworks/my_framework.py`) and register in `adaptive/strategy_registry.py`:
+Create a strategy file (e.g., `frameworks/my_framework.py`) with a
+`dict[str, list[AttackStrategy]]` keyed by category code, then edit
+`adaptive/strategy_registry.py` directly. `STRATEGY_REGISTRY` and
+`VULNERABILITY_STRATEGY_REGISTRY` are frozen `MappingProxyType`s built at
+import time, so merge into the private `_strategy_registry` dict **before** it
+is wrapped — you cannot mutate the exported registries from outside the module:
 
 ```python
 from evaluatorq.redteam.frameworks.my_framework import MY_STRATEGIES
 
-STRATEGY_REGISTRY.update(MY_STRATEGIES)
-
-# Also update the vulnerability-keyed registry
-for _cat, _strategies in MY_STRATEGIES.items():
-    _vuln = CATEGORY_TO_VULNERABILITY.get(_cat)
-    if _vuln is not None:
-        VULNERABILITY_STRATEGY_REGISTRY[_vuln] = _strategies
+_strategy_registry: dict[str, list[AttackStrategy]] = {
+    **ASI_STRATEGIES,
+    **LLM_STRATEGIES,
+    **MY_STRATEGIES,
+}
 ```
+
+No separate step is needed for the vulnerability-keyed registry — it is derived
+automatically from `_strategy_registry` via `CATEGORY_TO_VULNERABILITY`, as long
+as your category code is mapped to the vulnerability in
+`VulnerabilityDef.framework_mappings` (see "Adding a new vulnerability" above).
 
 ### Capability requirements
 
@@ -295,8 +303,9 @@ BIAS_STRATEGIES = {
     ],
 }
 
-# 6. Register strategies in adaptive/strategy_registry.py
-STRATEGY_REGISTRY.update(BIAS_STRATEGIES)
+# 6. Register strategies by merging BIAS_STRATEGIES into the private
+#    _strategy_registry dict in adaptive/strategy_registry.py, before it is
+#    frozen into STRATEGY_REGISTRY (a MappingProxyType) at import time.
 ```
 
 Then run:

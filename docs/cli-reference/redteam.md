@@ -38,7 +38,7 @@ eq redteam run --target agent:<key> [OPTIONS]
 | `--export-html` | `Path \| None` / `None` | Directory for an auto-named HTML report. |
 | `--system-prompt` | `str \| None` / `None` | System prompt for the target model/agent. |
 | `--yes` / `-y` | `bool` / `False` | Skip confirmation prompt. |
-| `--verbose` / `-v` | count / `0` | Increase verbosity. `-v` info logs; `-vv` debug logs. |
+| `--verbose` / `-v` | count / `0` | Increase verbosity. `-v` per-attack progress + info logs; `-vv` debug logs. |
 | `--quiet` / `-q` | `bool` / `False` | Suppress progress bars and non-error output. |
 
 **Delivery methods** (`--delivery-method`): `DAN`, `role-play`, `skeleton-key`, `base64`, `leetspeak`, `multilingual`, `character-spacing`, `crescendo`, `many-shot`, `authority-impersonation`, `refusal-suppression`, `direct-request`, `code-elicitation`, `code-assistance`, `tool-response`, `word-substitution`.
