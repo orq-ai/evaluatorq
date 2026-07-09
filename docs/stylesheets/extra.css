@@ -121,8 +121,8 @@ html { font-size: 100%; }
   width: auto;
 }
 
-/* --- Grid cards: teal field, orange spark on hover -------------------
-   Design language: cards are neutral/teal at rest; orange only appears
+/* --- Grid cards: teal field, teal accent on hover -------------------
+   Design language: cards are neutral at rest; the brand teal appears
    as the hover accent (uniform border + arrow). */
 .md-typeset .grid.cards > ul > li {
   border: 1px solid var(--md-default-fg-color--lightest);
@@ -131,9 +131,12 @@ html { font-size: 100%; }
   transition: border-color 120ms, box-shadow 120ms, transform 120ms;
 }
 .md-typeset .grid.cards > ul > li:hover {
-  border-color: var(--orq-orange);
+  border-color: var(--orq-teal);
   box-shadow: 0 2px 12px rgba(2, 85, 88, 0.1);
   transform: translateY(-2px);
+}
+[data-md-color-scheme="slate"] .md-typeset .grid.cards > ul > li:hover {
+  border-color: var(--orq-teal-light);
 }
 /* Card title icon in teal. */
 .md-typeset .grid.cards .lg.middle {
@@ -142,9 +145,8 @@ html { font-size: 100%; }
 [data-md-color-scheme="slate"] .md-typeset .grid.cards .lg.middle {
   color: var(--orq-teal-light);
 }
-/* The :octicons-arrow-right: "go" links — teal at REST (calm field), orange
-   only on hover/focus, so each card shows its one accent only when engaged
-   (DESIGN.md: one orange spark per view, orange is the hover accent). */
+/* The :octicons-arrow-right: "go" links — teal at REST, brightening to
+   teal-light on hover/focus so each card's accent lifts when engaged. */
 .md-typeset .grid.cards a:last-child {
   color: var(--orq-teal);
   font-weight: 600;
@@ -155,10 +157,7 @@ html { font-size: 100%; }
 .md-typeset .grid.cards > ul > li:hover a:last-child,
 .md-typeset .grid.cards a:last-child:hover,
 .md-typeset .grid.cards a:last-child:focus {
-  color: var(--orq-orange-text);
-}
-[data-md-color-scheme="slate"] .md-typeset .grid.cards > ul > li:hover a:last-child {
-  color: var(--orq-orange);
+  color: var(--orq-teal-light);
 }
 
 /* --- Links: teal, orange on hover (one consistent interaction) ------- */
