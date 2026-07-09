@@ -19,8 +19,20 @@ flowchart LR
 ## Modes
 
 - **dynamic** — an LLM generates attacks; run the categories you pick.
-- **static** — replays a fixed dataset of known attacks. Deterministic, cheap, good for CI.
+- **static** — replays a fixed dataset of known attacks instead of generating
+  them. Deterministic, cheap, good for CI. Runs Orq's public
+  [`orq/redteam-vulnerabilities`](https://huggingface.co/datasets/orq/redteam-vulnerabilities)
+  dataset by default; pass `dataset=` to run your own.
 - **hybrid** — static seeds plus dynamic expansion.
+
+```python
+# static mode replays Orq's public attack dataset by default
+report = await red_team(target, mode="static")
+
+# ...or bring your own — a local JSON file or a HuggingFace repo
+report = await red_team(target, mode="static", dataset="./my_attacks.json")
+report = await red_team(target, mode="static", dataset="hf:my-org/my-attacks")
+```
 
 ## Red-team your target
 

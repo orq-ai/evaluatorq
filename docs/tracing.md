@@ -201,4 +201,4 @@ installed, use the internal helper below, which degrades to an empty dict.)
 
 - **[Configuration](configuration.md)** — API keys and environment variables.
 - **[CLI Reference](cli-reference/overview.md)** — run evaluations and red-team/sim from the terminal.
-- **[CLI Reference](cli-reference/overview.md)** — browse results with `eq redteam ui` / `eq sim ui`.
+- **[Orq Deployment](orq-deployment.md)** — trace invocations against an Orq-hosted deployment.

@@ -18,7 +18,6 @@ Targets — provide **exactly one**:
 | Flag | Description |
 |---|---|
 | `--target` | `agent:<key>` or `deployment:<key>`. Bare values default to `agent:<key>`. |
-| `--agent-key` | Deprecated alias for Orq deployment key (requires `ORQ_API_KEY`). |
 | `--vercel-url` | Vercel AI SDK HTTP endpoint URL. |
 | `--openai-model` | OpenAI-compatible model name. Provider resolved from env: `ORQ_API_KEY` → Orq AI Router; `OPENAI_API_KEY` → OpenAI-compatible. |
 
@@ -52,7 +51,7 @@ Run simulations from a pre-built datapoints JSONL file.
 eq sim simulate --datapoints dp.jsonl --target agent:<key>
 ```
 
-Targets — same four flags as `eq sim run`. All other flags match `eq sim run` except `--num-personas`, `--num-scenarios`, and `--save-datapoints` are absent (datapoints are already provided).
+Targets — same three flags as `eq sim run`. All other flags match `eq sim run` except `--num-personas`, `--num-scenarios`, and `--save-datapoints` are absent (datapoints are already provided).
 
 | Flag | Type / Default | Description |
 |---|---|---|

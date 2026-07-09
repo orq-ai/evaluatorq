@@ -40,4 +40,4 @@ eq sim run -t agent:my-agent --num-personas 2 --num-scenarios 2
 
 - **[Agent Simulation](../guides/agent-simulation.md)** — the `eq sim` workflow in depth.
 - **[Red Teaming](../guides/red-teaming.md)** — the `eq redteam` workflow in depth.
-- **[Red Teaming](../guides/red-teaming.md)** — browse red-team results with `eq redteam ui`.
+- **[Getting Started](../guides/getting-started.md)** — run your first evaluation end-to-end.
