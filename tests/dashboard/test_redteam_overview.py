@@ -261,3 +261,28 @@ class TestSimRealCost:
         r = TestClient(build_app(roots=[rt, sim])).get('/?surface=sim')
         assert 'Avg cost/sim' in r.text
         assert '$0.00' in r.text
+
+    def test_avg_cost_ignores_costless_sims(self, tmp_path: Path) -> None:
+        """Mixed store: a sim without cost_usd is 'unknown', not $0 — it must not
+        dilute the mean. avg_cost divides by costed sims, not all sims."""
+        sim = tmp_path / 'sim-runs'
+        rt = tmp_path / 'runs'
+        sim.mkdir()
+        rt.mkdir()
+        (sim / 's.json').write_text(
+            json.dumps({
+                'mode': 'run',
+                'created_at': '2026-06-30T10:00:00',
+                'run_name': 'S',
+                'total_results': 2,
+                'scorer_averages': {},
+                'results': [
+                    {'token_usage': {'total_tokens': 100, 'cost_usd': 0.006}, 'goal_achieved': True, 'turn_count': 1},
+                    # Older sim recorded before cost_usd existed — no cost key.
+                    {'token_usage': {'total_tokens': 200}, 'goal_achieved': False, 'turn_count': 2},
+                ],
+            })
+        )
+        ov = metrics.sim_overview([rt, sim])
+        # One costed sim at 0.006 → 0.006, not 0.003 (would be the /total bug).
+        assert ov.avg_cost == pytest.approx(0.006)

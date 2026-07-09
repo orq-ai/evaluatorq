@@ -336,9 +336,10 @@ class SimRunRow:
 class SimOverview:
     """Rolled-up Agent Sim surface data: KPI cards + recent-runs table.
 
-    ``avg_cost`` is the real per-sim dollar cost, averaged from each result's
-    ``token_usage.cost_usd`` (recorded upstream); ``None`` when no cost data is
-    present, in which case the view falls back to avg tokens/sim.
+    ``avg_cost`` is the real per-sim dollar cost, averaged over only the sims
+    that carry a ``token_usage.cost_usd`` (recorded upstream) — a missing cost is
+    "unknown", not $0, so cost-less sims don't dilute the mean. ``None`` when no
+    sim has cost data, in which case the view falls back to avg tokens/sim.
     """
 
     simulations_run: int
@@ -372,7 +373,7 @@ def sim_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: in
     turns_total = 0
     tokens_total = 0
     cost_total = 0.0
-    has_cost = False
+    costed = 0  # sims that actually carry a cost_usd — avg_cost divides by this, not total
     achieved = not_achieved = errors = 0
     total = 0
 
@@ -397,7 +398,7 @@ def sim_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: in
             usage = res.get('token_usage')
             if isinstance(usage, dict) and 'cost_usd' in usage:
                 run_cost += _cost_usd(usage)
-                has_cost = True
+                costed += 1
             # Mirror the donut segments (goal_achieved / error) exactly.
             if is_error:
                 errors += 1
@@ -431,7 +432,7 @@ def sim_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: in
         goal_completion=(achieved / total) if total else None,
         avg_turns=(turns_total / total) if total else None,
         avg_tokens=(tokens_total / total) if total else None,
-        avg_cost=(cost_total / total) if (total and has_cost) else None,
+        avg_cost=(cost_total / costed) if costed else None,
         achieved=achieved,
         not_achieved=not_achieved,
         errors=errors,
