@@ -29,6 +29,7 @@ def _coerce_to_agent_response(raw: Any) -> AgentResponse:
     wrapped here at the orchestrator call site.
     """
     from evaluatorq.redteam.contracts import OutputMessage, TextOutputItem
+
     if isinstance(raw, AgentResponse):
         return raw
     text_item: OutputMessage = TextOutputItem(text=str(raw) if raw is not None else '', annotations=[])
@@ -77,7 +78,7 @@ class Backend(ABC):
 
     def map_error(self, exc: Exception) -> tuple[str, str]:
         """Return normalized ``(error_code, error_message)``."""
-        return "target_error", f"{type(exc).__name__}: {exc}"
+        return 'target_error', f'{type(exc).__name__}: {exc}'
 
     async def resolve_context(self, agent_key: str) -> AgentContext:
         """Resolve agent context for a key by probing a target once, then caching.
@@ -119,8 +120,8 @@ class HybridAgentBackend(Backend):
         # ``agent:`` run can avoid constructing the ORQ SDK backend entirely (and
         # thus avoid requiring ``orq-ai-sdk``). It is built on first context use.
         if (context_backend is None) == (context_backend_factory is None):
-            raise ValueError("provide exactly one of context_backend / context_backend_factory")
-        super().__init__(name="hybrid-agent")
+            raise ValueError('provide exactly one of context_backend / context_backend_factory')
+        super().__init__(name='hybrid-agent')
         self._context_cached = context_backend
         self._context_factory = context_backend_factory
         self._exec = exec_backend
@@ -133,7 +134,7 @@ class HybridAgentBackend(Backend):
             return cached
         factory = self._context_factory
         if factory is None:  # unreachable: __init__ guarantees exactly one source
-            raise RuntimeError("HybridAgentBackend has no context backend configured")
+            raise RuntimeError('HybridAgentBackend has no context backend configured')
         cached = factory()
         self._context_cached = cached
         return cached
@@ -142,7 +143,7 @@ class HybridAgentBackend(Backend):
         """Delegate to exec backend with ``agent/`` prefix for OrqResponses routing."""
         # Strip any existing prefix first so an already-prefixed key does not become
         # ``agent/agent/<key>``.
-        return self._exec.create_target(f"agent/{agent_key.removeprefix('agent/')}")
+        return self._exec.create_target(f'agent/{agent_key.removeprefix("agent/")}')
 
     async def resolve_context(self, agent_key: str) -> AgentContext:
         """Delegate context resolution to the ORQ SDK backend (has its own cache)."""
@@ -182,9 +183,9 @@ class BareTargetBackend(Backend):
             # Target created memory entities but inherits the no-op cleanup default;
             # adversarial data may persist. Surface loudly (matches ORQ path).
             logger.warning(
-                f"BareTargetBackend: {type(self._target).__name__} created "
-                f"{len(entity_ids)} memory entity id(s) but does not override cleanup_memory; "
-                "they may persist. Implement cleanup_memory on the target to release them."
+                f'BareTargetBackend: {type(self._target).__name__} created '
+                f'{len(entity_ids)} memory entity id(s) but does not override cleanup_memory; '
+                'they may persist. Implement cleanup_memory on the target to release them.'
             )
         await self._target.cleanup_memory(ctx, entity_ids)
 

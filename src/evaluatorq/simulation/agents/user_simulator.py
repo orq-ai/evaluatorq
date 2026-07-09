@@ -61,28 +61,24 @@ class UserSimulatorAgent(BaseAgent):
 
     @property
     def name(self) -> str:
-        return "UserSimulator"
+        return 'UserSimulator'
 
     @property
     def system_prompt(self) -> str:
         if self._custom_system_prompt:
-            return f"{DEFAULT_USER_SIMULATOR_PROMPT}\n\n---\n\n{self._custom_system_prompt}"
+            return f'{DEFAULT_USER_SIMULATOR_PROMPT}\n\n---\n\n{self._custom_system_prompt}'
         return DEFAULT_USER_SIMULATOR_PROMPT
 
-    async def generate_first_message(
-        self, messages: list[Message] | None = None
-    ) -> str:
+    async def generate_first_message(self, messages: list[Message] | None = None) -> str:
         """Generate the first message to start a conversation."""
         prompt_messages = list(messages or [])
         prompt_messages.append(
             Message(
-                role="user",
-                content="Generate your first message to start the conversation. Remember your goal and persona.",
+                role='user',
+                content='Generate your first message to start the conversation. Remember your goal and persona.',
             )
         )
-        return await self.respond_async(
-            prompt_messages, temperature=0.8, llm_purpose="first_message"
-        )
+        return await self.respond_async(prompt_messages, temperature=0.8, llm_purpose='first_message')
 
     def update_context(
         self,
@@ -90,10 +86,10 @@ class UserSimulatorAgent(BaseAgent):
         scenario_context: str | None = None,
     ) -> None:
         """Update the persona and scenario context."""
-        combined = ""
+        combined = ''
         if persona_context:
-            combined += f"PERSONA:\n{persona_context}\n\n"
+            combined += f'PERSONA:\n{persona_context}\n\n'
         if scenario_context:
-            combined += f"SCENARIO:\n{scenario_context}"
+            combined += f'SCENARIO:\n{scenario_context}'
 
         self._custom_system_prompt = combined.strip() or None

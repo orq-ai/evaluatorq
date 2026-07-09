@@ -14,13 +14,12 @@ if TYPE_CHECKING:
 
     from openai import AsyncOpenAI
 
-    from evaluatorq.contracts import AgentContext, AgentTarget
     from evaluatorq.redteam.backends.base import Backend
     from evaluatorq.redteam.contracts import LLMCallConfig, LLMConfig, TargetConfig
 
 
 # Retained for backward-compatible imports; canonical values live in common.llm_client.
-ORQ_DEFAULT_BASE_URL = "https://my.orq.ai"
+ORQ_DEFAULT_BASE_URL = 'https://my.orq.ai'
 
 
 def create_async_llm_client(role_config: LLMCallConfig | None = None) -> AsyncOpenAI:
@@ -40,8 +39,8 @@ def create_async_llm_client(role_config: LLMCallConfig | None = None) -> AsyncOp
     """
     from evaluatorq.common.llm_client import MissingLLMCredentialsError, resolve_llm_client
 
-    if os.getenv("ROUTER_BASE_URL") and not os.getenv("ORQ_BASE_URL"):
-        logger.warning("ROUTER_BASE_URL is no longer supported; rename it to ORQ_BASE_URL")
+    if os.getenv('ROUTER_BASE_URL') and not os.getenv('ORQ_BASE_URL'):
+        logger.warning('ROUTER_BASE_URL is no longer supported; rename it to ORQ_BASE_URL')
 
     config_client = role_config.client if role_config is not None else None
     try:
@@ -51,10 +50,7 @@ def create_async_llm_client(role_config: LLMCallConfig | None = None) -> AsyncOp
             honor_openai_base_url=True,
         ).client
     except ImportError as exc:
-        msg = (
-            "openai package is required for LLM-based attack generation. "
-            "Install it with: pip install openai"
-        )
+        msg = 'openai package is required for LLM-based attack generation. Install it with: pip install openai'
         raise BackendError(msg) from exc
     except MissingLLMCredentialsError as exc:
         raise CredentialError(str(exc)) from exc
@@ -69,7 +65,7 @@ def register_backend(name: str, factory: Callable[..., Backend]) -> None:
 
 
 def resolve_backend(
-    backend: str = "orq",
+    backend: str = 'orq',
     *,
     llm_client: AsyncOpenAI | None = None,
     target_config: TargetConfig | None = None,
@@ -79,9 +75,7 @@ def resolve_backend(
     normalized = backend.strip().lower()
     factory = _BACKEND_REGISTRY.get(normalized)
     if factory is None:
-        raise BackendError(
-            f"Unsupported backend: {backend!r}. Available: {sorted(_BACKEND_REGISTRY)}"
-        )
+        raise BackendError(f'Unsupported backend: {backend!r}. Available: {sorted(_BACKEND_REGISTRY)}')
     return factory(llm_client=llm_client, target_config=target_config, pipeline_config=pipeline_config)
 
 
@@ -105,7 +99,7 @@ def _create_orq_backend(
     try:
         from evaluatorq.redteam.backends.orq import ORQBackend
     except ImportError as exc:
-        raise BackendError("ORQ backend requested but ORQ dependencies are unavailable.") from exc
+        raise BackendError('ORQ backend requested but ORQ dependencies are unavailable.') from exc
 
     timeout_ms = pipeline_config.target_agent_timeout_ms if pipeline_config else None
     return ORQBackend(timeout_ms=timeout_ms)
@@ -133,6 +127,6 @@ def _create_openresponses_backend(
     )
 
 
-register_backend("openai", _create_openai_backend)
-register_backend("orq", _create_orq_backend)
-register_backend("openresponses", _create_openresponses_backend)
+register_backend('openai', _create_openai_backend)
+register_backend('orq', _create_orq_backend)
+register_backend('openresponses', _create_openresponses_backend)

@@ -45,4 +45,4 @@ def build_simulation_client(
     return resolved.client, resolved.owned
 
 
-__all__ = ["build_simulation_client"]
+__all__ = ['build_simulation_client']

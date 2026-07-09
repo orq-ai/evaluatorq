@@ -10,7 +10,11 @@ from typing import Any, cast
 from loguru import logger
 
 from .common.messages import coerce_content_text
-from .fetch_data import fetch_dataset_batches, setup_orq_client
+from .fetch_data import (
+    fetch_dataset_batches,
+    fetch_experiment_datapoints,
+    setup_orq_client,
+)
 from .processings import process_data_point
 from .progress import Phase, ProgressService, with_progress
 from .send_results import send_results_to_orq
@@ -30,13 +34,12 @@ from .types import (
     Evaluator,
     EvaluatorParams,
     EvaluatorqResult,
+    ExperimentInput,
     Job,
 )
 
 
-def check_pass_failures(
-    results: EvaluatorqResult, *, treat_errors_as_failure: bool = False
-) -> bool:
+def check_pass_failures(results: EvaluatorqResult, *, treat_errors_as_failure: bool = False) -> bool:
     """
     Check if any evaluator returned pass_=False.
 
@@ -76,22 +79,19 @@ def extract_recorded_response(messages: Any) -> str:
     """
     if not messages:
         raise ValueError(
-            "inference=False requires a recorded response in the 'messages' column, "
-            "but this row has no messages."
+            "inference=False requires a recorded response in the 'messages' column, but this row has no messages."
         )
     for message in reversed(list(messages)):
-        role = message.get("role") if isinstance(message, dict) else getattr(message, "role", None)
-        if role != "assistant":
+        role = message.get('role') if isinstance(message, dict) else getattr(message, 'role', None)
+        if role != 'assistant':
             continue
-        content = (
-            message.get("content") if isinstance(message, dict) else getattr(message, "content", None)
-        )
+        content = message.get('content') if isinstance(message, dict) else getattr(message, 'content', None)
         text = coerce_content_text(content)
         if text.strip():
             return text
     raise ValueError(
         "inference=False requires a recorded response in the 'messages' column, "
-        "but this row has no assistant message with text content."
+        'but this row has no assistant message with text content.'
     )
 
 
@@ -99,15 +99,15 @@ def extract_recorded_response(messages: Any) -> str:
 # though replaying a recorded response involves no awaiting.
 async def _replay_recorded_response(data_point: DataPoint, _row_index: int) -> dict[str, Any]:  # noqa: RUF029
     """Synthetic job for the no-inference path: replays the pre-recorded response."""
-    response = extract_recorded_response(data_point.inputs.get("messages"))
-    return {"name": "recorded", "output": response}
+    response = extract_recorded_response(data_point.inputs.get('messages'))
+    return {'name': 'recorded', 'output': response}
 
 
 async def evaluatorq(
     name: str,
     params: EvaluatorParams | dict[str, Any] | None = None,
     *,
-    data: DatasetIdInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None = None,
+    data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None = None,
     jobs: list[Job] | None = None,
     evaluators: list[Evaluator] | None = None,
     parallelism: int = 1,
@@ -118,7 +118,7 @@ async def evaluatorq(
     _exit_on_failure: bool = True,
     _send_results: bool = True,
     _base_url: str | None = None,
-    _trace_type: str = "evaluatorq",
+    _trace_type: str = 'evaluatorq',
 ) -> EvaluatorqResult:
     """
     Run an evaluation with the given parameters.
@@ -137,8 +137,9 @@ async def evaluatorq(
     Args:
         name: Name of the evaluation run
         params: Optional EvaluatorParams instance or dict with all parameters.
-        data: The data to evaluate. Either a DatasetIdInput to fetch from Orq platform,
-              or a list of DataPoint instances/awaitables.
+        data: The data to evaluate. A DatasetIdInput to fetch from Orq platform, an
+              ExperimentInput to replay an experiment's recorded responses (requires
+              inference=False), or a list of DataPoint instances/awaitables.
         jobs: The jobs to run on the data.
         evaluators: The evaluators to use. If not provided, only jobs will run.
         parallelism: Number of jobs to run in parallel. Defaults to 1 (sequential).
@@ -184,11 +185,13 @@ async def evaluatorq(
     inference = validated.inference
     if inference:
         # The validator guarantees jobs is non-empty whenever inference=True.
-        jobs = cast("list[Job]", validated.jobs)
+        jobs = cast('list[Job]', validated.jobs)
     else:
         # No-inference mode: skip generation and replay each row's recorded response.
         if validated.jobs:
-            logger.warning("inference=False: ignoring the provided 'jobs'; responses are replayed from the 'messages' column.")
+            logger.warning(
+                "inference=False: ignoring the provided 'jobs'; responses are replayed from the 'messages' column."
+            )
         jobs = [_replay_recorded_response]
     evaluators_list = validated.evaluators or []
     parallelism = validated.parallelism
@@ -209,11 +212,24 @@ async def evaluatorq(
             trace_type=_trace_type,
         )
 
-    orq_api_key = os.environ.get("ORQ_API_KEY")
+    orq_api_key = os.environ.get('ORQ_API_KEY')
 
     start_time = datetime.now(timezone.utc)
 
     dataset_id: str | None = None
+
+    # Experiment source (no-inference only): replace the input with the experiment's
+    # recorded responses, then fall through to the in-memory data path below. The
+    # validator already guarantees inference=False here.
+    if isinstance(data, ExperimentInput):
+        if not orq_api_key:
+            raise ValueError('ORQ_API_KEY environment variable must be set to load responses from an Orq experiment.')
+        data = await fetch_experiment_datapoints(
+            orq_api_key,
+            data.experiment_id,
+            data.run_id,
+            base_url=_base_url,
+        )
 
     # Create progress service
     progress = ProgressService()
@@ -226,15 +242,15 @@ async def evaluatorq(
             orq_client = setup_orq_client(orq_api_key)
 
         if not orq_api_key or not orq_client:
-            raise ValueError(
-                "ORQ_API_KEY environment variable must be set to fetch datapoints from Orq platform."
-            )
+            raise ValueError('ORQ_API_KEY environment variable must be set to fetch datapoints from Orq platform.')
         dataset_id = data.dataset_id
         # No-inference mode needs the recorded responses, which arrive in the
         # 'messages' column only when include_messages is enabled.
         include_messages = data.include_messages or not inference
         if include_messages and not data.include_messages:
-            logger.debug("inference=False: enabling include_messages to load recorded responses despite include_messages=False on the dataset input.")
+            logger.debug(
+                'inference=False: enabling include_messages to load recorded responses despite include_messages=False on the dataset input.'
+            )
 
         # Stream fetch and process batches concurrently
         async def run_streaming_evaluation() -> EvaluatorqResult:
@@ -244,14 +260,12 @@ async def evaluatorq(
             datapoint_index = 0
 
             # Shared progress state for tracking processed count
-            progress_ref = {"processed": 0}
+            progress_ref = {'processed': 0}
 
             # Semaphore for controlling parallelism
             data_point_semaphore = asyncio.Semaphore(parallelism)
 
-            async def process_with_semaphore(
-                index: int, data_promise: DataPoint
-            ) -> list[Any]:
+            async def process_with_semaphore(index: int, data_promise: DataPoint) -> list[Any]:
                 async with data_point_semaphore:
                     result = await process_data_point(
                         data_promise,
@@ -262,7 +276,7 @@ async def evaluatorq(
                         None,  # Don't pass progress in streaming mode - use polling instead
                         tracing_context,
                     )
-                    progress_ref["processed"] += 1
+                    progress_ref['processed'] += 1
                     return result
 
             # Initialize progress with unknown total (streaming mode)
@@ -279,10 +293,8 @@ async def evaluatorq(
                 while not stop_polling:
                     await progress.update_progress(
                         total_data_points=total_datapoints,
-                        current_data_point=progress_ref["processed"],
-                        phase=Phase.PROCESSING
-                        if progress_ref["processed"] > 0
-                        else Phase.FETCHING,
+                        current_data_point=progress_ref['processed'],
+                        phase=Phase.PROCESSING if progress_ref['processed'] > 0 else Phase.FETCHING,
                     )
                     await asyncio.sleep(0.1)
 
@@ -295,9 +307,7 @@ async def evaluatorq(
 
                     # Start processing this batch immediately
                     for datapoint in batch.datapoints:
-                        task = asyncio.create_task(
-                            process_with_semaphore(datapoint_index, datapoint)
-                        )
+                        task = asyncio.create_task(process_with_semaphore(datapoint_index, datapoint))
                         processing_tasks.append(task)
                         datapoint_index += 1
 
@@ -313,7 +323,7 @@ async def evaluatorq(
             # Final progress update
             await progress.update_progress(
                 total_data_points=total_datapoints,
-                current_data_point=progress_ref["processed"],
+                current_data_point=progress_ref['processed'],
                 phase=Phase.PROCESSING,
             )
 
@@ -323,13 +333,11 @@ async def evaluatorq(
 
             return all_results
 
-        results = await with_progress(
-            run_streaming_evaluation(), progress, show_progress=print_results
-        )
+        results = await with_progress(run_streaming_evaluation(), progress, show_progress=print_results)
 
     else:
         # Non-streaming case: process all data at once
-        data_promises = cast("list[DataPoint]", data)
+        data_promises = cast('list[DataPoint]', data)
 
         async def run_evaluation() -> EvaluatorqResult:
             # Initialize progress
@@ -342,9 +350,7 @@ async def evaluatorq(
             # Process data points with controlled concurrency
             data_point_semaphore = asyncio.Semaphore(parallelism)
 
-            async def process_with_semaphore(
-                index: int, data_promise: Awaitable[DataPoint] | DataPoint
-            ) -> list[Any]:
+            async def process_with_semaphore(index: int, data_promise: Awaitable[DataPoint] | DataPoint) -> list[Any]:
                 async with data_point_semaphore:
                     return await process_data_point(
                         data_promise,
@@ -368,9 +374,7 @@ async def evaluatorq(
 
             return results
 
-        results = await with_progress(
-            run_evaluation(), progress, show_progress=print_results
-        )
+        results = await with_progress(run_evaluation(), progress, show_progress=print_results)
 
     # Display results table
     if print_results:

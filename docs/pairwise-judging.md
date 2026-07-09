@@ -1,0 +1,163 @@
+# Pairwise (Preference) Judging
+
+Some questions are easier to answer by comparison than in isolation. Instead of
+asking "is this answer good?" you ask "is A better than B?". Pairwise judging
+runs a panel of judges over two responses and reconciles their picks into one
+winner, correcting for the position bias that makes a judge favour whichever
+response it happens to see first.
+
+It is a sibling of [LLM as a Jury](llm-as-a-jury.md): same panel machinery, same
+judge models, but the verdict is a preference (`A` / `B` / `tie`) rather than a
+pass or a score.
+
+## When to use it
+
+- You are comparing two systems, prompts, or model versions and want a direct
+  A-vs-B preference rather than two separate absolute scores.
+- Absolute grading is hard to calibrate but "which one is better" is clear.
+- You want the position bias measured and corrected instead of hoping it washes
+  out.
+
+## Quick start
+
+`llm_jury_pairwise()` builds a reusable comparator. Call `compare()` once per
+A/B pair:
+
+```python
+import asyncio
+
+from evaluatorq import build_report, llm_jury_pairwise
+
+comparator = llm_jury_pairwise(
+    criteria="The answer is accurate, complete, and directly addresses the question.",
+    judges=[
+        "anthropic/claude-sonnet-4-6",
+        "google/gemini-2.5-pro",
+        "openai/gpt-5.4-mini",
+    ],
+)
+
+
+async def main() -> None:
+    comparison = await comparator.compare(
+        question="What is the capital of France?",
+        response_a="The capital of France is Paris.",
+        response_b="The capital of France is Berlin.",
+    )
+    print(comparison.winner)  # "A"
+
+    # Roll many comparisons up into headline and per-judge metrics.
+    report = build_report([comparison])
+    print(report.a_win_rate, report.inconclusive_rate)
+
+
+asyncio.run(main())
+```
+
+`llm_jury_pairwise(model="x")` is the single-judge shorthand for `judges=["x"]`.
+Pass two or more `judges` to get a panel.
+
+--8<-- "docs/_snippets/panel-tip.md"
+
+## Swap and reconcile: how a vote is decided
+
+A judge shown response A first and response B second may lean toward the first
+slot regardless of content. Pairwise judging controls for this by running every
+judge **twice**: once as (A, B) and once as (B, A). The second ordering is
+un-swapped back into the canonical A/B frame, and the two verdicts are
+reconciled into a single vote:
+
+| First ordering | Second ordering (un-swapped) | Reconciled vote | Flipped |
+| --- | --- | --- | --- |
+| `A` | `A` | `A` | no |
+| `tie` | `tie` | `tie` | no |
+| `A` | `B` | abstains (`None`) | **yes** |
+| `A` | `tie` | abstains (`None`) | **yes** |
+| `A` | missing / failed | abstains (`None`) | no |
+
+A judge that agrees with itself across both orderings casts that vote. A judge
+that contradicts itself has no real preference: it **flips**, abstains from the
+tally, and the flip is recorded as position bias. The comparison winner is the
+plurality of the reconciled votes, or `inconclusive` when no side reaches a
+plurality or too few judges cast a decisive vote.
+
+Both orderings run concurrently, so swapping does not add wall-clock latency,
+only cost. Set `swap=False` to run a single ordering when you have already
+controlled for position another way; the position-bias metric is then
+unavailable (no second ordering to disagree with).
+
+## Panel configuration
+
+`llm_jury_pairwise()` mirrors [`llm_jury()`](llm-as-a-jury.md#panel-configuration):
+
+| Argument | Default | What it does |
+| --- | --- | --- |
+| `judges` | — | Judge model IDs. Two or more makes it a panel. Mutually exclusive with `model`. |
+| `model` | — | Single-judge shorthand for `judges=[model]`. |
+| `criteria` | a general quality rubric | What "better" means. An empty string falls back to the default rubric. |
+| `swap` | `True` | Run both orderings and reconcile. Turn off to skip position-bias correction. |
+| `repetitions` | `1` | How many times each judge is asked per ordering; the judge takes its own majority first. |
+| `replacement_judges` | `None` | Stand-ins for judges that fail mechanically. Promoted per pair and run in **both** orderings, so a stand-in casts a real reconciled vote. |
+| `min_successful_judges` | `1` | Minimum decisive reconciled votes, otherwise the comparison is **inconclusive**. Must not exceed the panel size. |
+
+## Reading a comparison
+
+`compare()` returns a `PairwiseComparison`:
+
+```python
+comparison.winner        # "A" | "B" | "tie" | "inconclusive"
+comparison.token_usage   # summed across both orderings and any replacements
+
+for vote in comparison.votes:
+    vote.model        # judge model ID
+    vote.vote         # reconciled "A" | "B" | "tie" | None (abstained)
+    vote.flipped      # True if the judge contradicted itself across orderings
+    vote.completed    # True if both orderings were decisive, so a flip was possible
+    vote.replacement  # True if this judge stood in for a failed one
+    vote.explanation  # rationale from the ordering that produced the vote
+```
+
+## Rolling up many comparisons
+
+`build_report()` aggregates a list of comparisons into a `PairwiseReport`:
+
+```python
+report = build_report(comparisons)
+
+report.comparisons        # how many went in
+report.a_win_rate         # A consensus wins over comparisons decided A or B
+report.b_win_rate         # B consensus wins over comparisons decided A or B
+report.tie_rate           # consensus ties over all comparisons
+report.inconclusive_rate  # comparisons the panel could not decide, over all comparisons
+report.mean_agreement     # mean inter-judge agreement (comparisons with >=2 decisive votes)
+
+for judge in report.per_judge:
+    judge.model          # judge model ID
+    judge.a_rate         # share of its decisive picks that went to A
+    judge.b_rate         # share of its decisive picks that went to B
+    judge.position_bias  # flips over pairs where a flip was possible
+    judge.tie_rate       # ties over all comparisons the judge saw
+```
+
+!!! note "Watch `inconclusive_rate` alongside the win rates"
+    The win rates are computed over decided comparisons only, so a run that was
+    mostly noise can still show a high `a_win_rate`. Read it together with
+    `inconclusive_rate`: a healthy result is a high win rate **and** a low
+    inconclusive rate. `mean_agreement` ignores comparisons with a single
+    decisive vote, since one lone voter always "agrees" with itself and would
+    otherwise flatter a degraded panel.
+
+## The lower-level core
+
+`run_pairwise()` is the ordering-independent engine underneath the comparator.
+It takes any async `judge_fn(first, second, model)` rather than building LLM
+calls itself, so you can drive the swap-and-reconcile logic with your own judge.
+`reconcile_pair()` and `pairwise_consensus()` are exposed for the same reason.
+Most callers want `llm_jury_pairwise()`; reach for `run_pairwise()` when you are
+plugging in a non-LLM judge or testing the reconciliation directly.
+
+## Where to next
+
+- **[LLM as a Jury](llm-as-a-jury.md)** — score a single response with a judge panel.
+- **[Custom Evaluators & Frameworks](custom-evaluators-and-frameworks.md)** — define your own evaluators.
+- **[Red Teaming](guides/red-teaming.md)** — the red-team workflow judging plugs into.

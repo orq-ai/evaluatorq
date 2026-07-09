@@ -53,7 +53,8 @@ ATTACK_TECHNIQUE_POOL: list[AttackTechnique] = [
     AttackTechnique.PAYLOAD_SPLITTING,
 ]
 
-assert ATTACK_TECHNIQUE_POOL, "ATTACK_TECHNIQUE_POOL must not be empty"
+if not ATTACK_TECHNIQUE_POOL:
+    raise ValueError('ATTACK_TECHNIQUE_POOL must not be empty')
 
 _DELIVERY_METHOD_VALUES = ', '.join(f'"{m.value}"' for m in DeliveryMethod)
 
@@ -64,10 +65,7 @@ class GeneratedObjective(BaseModel):
     objective: str = Field(description='Attack objective text')
     turn_type: TurnType = Field(description='Recommended turn type for this objective (single or multi)')
     delivery_method: DeliveryMethod = Field(
-        description=(
-            'Jailbreak/delivery technique best suited to this objective. '
-            f'One of: {_DELIVERY_METHOD_VALUES}'
-        )
+        description=(f'Jailbreak/delivery technique best suited to this objective. One of: {_DELIVERY_METHOD_VALUES}')
     )
     requires_tools: bool = Field(default=False, description='Whether executing this objective requires agent tools')
     requires_memory: bool = Field(default=False, description='Whether executing this objective requires agent memory')
@@ -151,21 +149,24 @@ def _build_objective_prompt(
     # Single-pass substitution prevents cascading expansion from agent metadata
     # containing placeholder strings. {count} is left as a late-bound placeholder
     # for callers to fill per LLM call.
-    prompt = safe_substitute(OBJECTIVE_GENERATION_PROMPT, {
-        '{agent_name}': agent_context.display_name or agent_context.key,
-        '{agent_description}': agent_context.description or 'An AI assistant',
-        '{tools}': tools_str,
-        '{memory_stores}': memory_str,
-        '{instructions_excerpt}': instructions_excerpt,
-        '{vulnerability_name}': vulnerability_name,
-        '{category_code}': category_code,
-        '{turn_type_guidance}': turn_type_guidance,
-        '{max_turns}': str(max_turns),
-        '{delivery_method_values}': _DELIVERY_METHOD_VALUES,
-    })
+    prompt = safe_substitute(
+        OBJECTIVE_GENERATION_PROMPT,
+        {
+            '{agent_name}': agent_context.display_name or agent_context.key,
+            '{agent_description}': agent_context.description or 'An AI assistant',
+            '{tools}': tools_str,
+            '{memory_stores}': memory_str,
+            '{instructions_excerpt}': instructions_excerpt,
+            '{vulnerability_name}': vulnerability_name,
+            '{category_code}': category_code,
+            '{turn_type_guidance}': turn_type_guidance,
+            '{max_turns}': str(max_turns),
+            '{delivery_method_values}': _DELIVERY_METHOD_VALUES,
+        },
+    )
 
     if attacker_instructions:
-        prompt += f"\n\n## Additional Context from Operator\n{attacker_instructions}"
+        prompt += f'\n\n## Additional Context from Operator\n{attacker_instructions}'
 
     return prompt
 
@@ -213,8 +214,8 @@ async def _call_llm_for_objectives_single(
             max_tokens=cfg.attacker.max_tokens,
             input_messages=gen_messages,
             attributes={
-                "orq.redteam.llm_purpose": "generate_strategies",
-                "orq.redteam.count": count,
+                'orq.redteam.llm_purpose': 'generate_strategies',
+                'orq.redteam.count': count,
                 **span_attributes,
             },
         ) as gen_span:
@@ -226,7 +227,8 @@ async def _call_llm_for_objectives_single(
                 label=f'Objective generation for {log_label}',
             )
             record_llm_response(
-                gen_span, response,
+                gen_span,
+                response,
                 output_content=getattr(response.choices[0].message, 'content', None),
             )
 
@@ -242,7 +244,9 @@ async def _call_llm_for_objectives_single(
         # this vulnerability's objectives rather than failing the whole run. Other
         # transport/status errors propagate to the caller's own retry/handling.
         if is_content_filter_error(e):
-            logger.error(f'Objective generation content-filtered after retries for {log_label!r}; returning no objectives')
+            logger.error(
+                f'Objective generation content-filtered after retries for {log_label!r}; returning no objectives'
+            )
             return []
         raise
     except Exception as e:
@@ -268,7 +272,14 @@ async def _call_llm_for_objectives(
     cfg = cfg or PIPELINE_CONFIG
     if count <= _MAX_PER_LLM_CALL:
         return await _call_llm_for_objectives_single(
-            prompt_template, llm_client, model, count, span_attributes, log_label, llm_kwargs, cfg,
+            prompt_template,
+            llm_client,
+            model,
+            count,
+            span_attributes,
+            log_label,
+            llm_kwargs,
+            cfg,
         )
 
     all_objectives: list[GeneratedObjective] = []
@@ -278,8 +289,11 @@ async def _call_llm_for_objectives(
     while remaining > 0:
         batch_size = min(remaining, _MAX_PER_LLM_CALL)
         batch_objectives = await _call_llm_for_objectives_single(
-            prompt_template, llm_client, model, batch_size,
-            {**span_attributes, "orq.redteam.batch_index": batch_idx},
+            prompt_template,
+            llm_client,
+            model,
+            batch_size,
+            {**span_attributes, 'orq.redteam.batch_index': batch_idx},
             f'{log_label} (batch {batch_idx + 1})',
             llm_kwargs,
             cfg,
@@ -344,8 +358,8 @@ async def generate_objectives_for_vulnerability(
         model=model,
         count=count,
         span_attributes={
-            "orq.redteam.category": category_code,
-            "orq.redteam.vulnerability": vuln.value,
+            'orq.redteam.category': category_code,
+            'orq.redteam.vulnerability': vuln.value,
         },
         log_label=f'{vuln.value} ({category_code})',
         llm_kwargs=llm_kwargs,
@@ -404,8 +418,7 @@ async def generate_objectives_for_category(
     # Fallback path for unrecognized category codes: build a best-effort prompt
     # using only the category code and the OWASP name map.
     logger.warning(
-        'Category %r could not be resolved to a known vulnerability — '
-        'falling back to legacy category-based prompt.',
+        'Category %r could not be resolved to a known vulnerability — falling back to legacy category-based prompt.',
         category,
     )
     vulnerability_name = OWASP_CATEGORY_NAMES.get(category, category)
@@ -424,8 +437,8 @@ async def generate_objectives_for_category(
         model=model,
         count=count,
         span_attributes={
-            "orq.redteam.category": category,
-            "orq.redteam.vulnerability": "",
+            'orq.redteam.category': category,
+            'orq.redteam.vulnerability': '',
         },
         log_label=category,
         llm_kwargs=llm_kwargs,

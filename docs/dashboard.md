@@ -1,5 +1,11 @@
 # Dashboard
 
+!!! note "Preview — not yet generally available"
+    The combined `eq dashboard` documented here is an unreleased preview and is
+    not linked from the site navigation yet. For a stable local view of a saved
+    run, use `eq redteam ui` / `eq sim ui` (see the
+    [CLI Reference](cli-reference/overview.md)).
+
 evaluatorq ships a built-in web dashboard for browsing red team and simulation
 reports.  It is powered by **FastHTML** (a lightweight Python web framework)
 and served locally via **uvicorn**.  There is no external service dependency —
@@ -54,7 +60,7 @@ prints that report's direct URL so you land straight on it.
     `eq redteam ui` and `eq sim ui` launch the older Streamlit dashboards,
     scoped to a single surface. The FastHTML `eq dashboard` documented here is
     the preview replacement that browses both surfaces together. The CLI surface
-    is still being consolidated — see the [CLI Reference](cli-reference.md).
+    is still being consolidated — see the [CLI Reference](cli-reference/overview.md).
 
 ---
 
@@ -181,3 +187,9 @@ Every report page includes a download sidebar with export links:
 
 Download links respect the currently active filter state — the CSV/JSON exports
 contain only the rows visible in the filtered report body.
+
+## Where to next
+
+- **[Red Teaming](guides/red-teaming.md)** — generate the red-team reports the dashboard browses.
+- **[Agent Simulation](guides/agent-simulation.md)** — generate simulation reports.
+- **[CLI Reference](cli-reference/overview.md)** — the `eq dashboard` command and options.

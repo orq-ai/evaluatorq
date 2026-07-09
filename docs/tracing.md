@@ -191,8 +191,15 @@ installed, use the internal helper below, which degrades to an empty dict.)
 
 !!! note "Internal convenience helper"
     evaluatorq also ships `get_trace_context_headers()` in
-    `evaluatorq.common.tracing`, which returns the same headers as a dict (empty
-    when OTel is unavailable). It is an internal utility — **not** re-exported
+    `evaluatorq.common.tracing`, an `async` helper you `await` for the same
+    headers as a dict (empty when OTel is unavailable). It is an internal
+    utility — **not** re-exported
     from the public `evaluatorq.tracing` namespace, and its import path may
     change without a deprecation cycle. Prefer the OpenTelemetry `inject()` path
     above for anything stable.
+
+## Where to next
+
+- **[Configuration](configuration.md)** — API keys and environment variables.
+- **[CLI Reference](cli-reference/overview.md)** — run evaluations and red-team/sim from the terminal.
+- **[Orq Deployment](orq-deployment.md)** — trace invocations against an Orq-hosted deployment.

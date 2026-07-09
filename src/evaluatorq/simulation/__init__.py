@@ -253,7 +253,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
 # Framework targets that pull an optional dependency at import time, so a
 # missing extra surfaces as an actionable message instead of a bare ImportError
 # about the third-party package. (Callable/Vercel need no extra.)
-_OPTIONAL_TARGET_EXTRAS: dict[str, str] = {
+_OPTIONAL_TARGET_EXTRAS: dict[str, str] = {  # noqa: RUF067  # lazy-import lookup table backing __getattr__ below
     'LangGraphTarget': 'langgraph',
     'OpenAIAgentTarget': 'openai-agents',
 }
@@ -270,8 +270,7 @@ def __getattr__(name: str) -> Any:
         extra = _OPTIONAL_TARGET_EXTRAS.get(name)
         if extra is not None:
             raise ImportError(
-                f"{name} requires the optional '{extra}' dependency. "
-                f"Install it with: pip install 'evaluatorq[{extra}]'"
+                f"{name} requires the optional '{extra}' dependency. Install it with: pip install 'evaluatorq[{extra}]'"
             ) from exc
         raise
     globals()[name] = value
@@ -348,11 +347,11 @@ __all__ = [
     'from_orq_deployment',
     'generate',
     'generate_and_simulate',
+    'generate_datapoint',
     'generate_persona',
     'generate_personas',
     'generate_scenario',
     'generate_scenarios',
-    'generate_datapoint',
     'get_all_evaluators',
     'get_evaluator',
     'get_sim_runs_dir',

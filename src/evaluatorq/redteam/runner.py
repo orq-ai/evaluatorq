@@ -546,9 +546,7 @@ async def red_team(
             # resolve_category_safe alone would mislabel a valid vulnerability ID (e.g.
             # 'goal_hijacking') as unrecognized in a mixed list.
             valid_vuln_ids = {v.value for v in Vulnerability}
-            unknown = [
-                c for c in categories if c not in valid_vuln_ids and resolve_category_safe(c) is None
-            ]
+            unknown = [c for c in categories if c not in valid_vuln_ids and resolve_category_safe(c) is None]
             raise ValueError(
                 f'Unrecognized categor{"y" if len(unknown) == 1 else "ies"}: '
                 f'{", ".join(unknown)}. Valid categories: {", ".join(list_available_categories())}.'
@@ -607,9 +605,7 @@ async def red_team(
                     'custom AgentTarget + evaluator via the SDK.'
                 )
             dropped_set = set(dropped_vulns)
-            resolved_categories = [
-                c for c in resolved_categories if resolve_category_safe(c) not in dropped_set
-            ]
+            resolved_categories = [c for c in resolved_categories if resolve_category_safe(c) not in dropped_set]
             resolved_vulns = evaluable_vulns
             logger.warning(
                 'Skipping %d requested categor%s with no automated evaluator: %s. '
@@ -956,7 +952,9 @@ def _make_agent_backend(*, target_config: TargetConfig | None, pipeline_config: 
     # Build the ORQ SDK context backend lazily: a static ``agent:`` run only ever
     # calls exec (create_target), so deferring this avoids importing/requiring
     # ``orq-ai-sdk`` for targets that never touch context resolution or memory cleanup.
-    exec_backend = resolve_backend('openresponses', llm_client=None, target_config=target_config, pipeline_config=pipeline_config)
+    exec_backend = resolve_backend(
+        'openresponses', llm_client=None, target_config=target_config, pipeline_config=pipeline_config
+    )
     return HybridAgentBackend(
         context_backend_factory=lambda: resolve_backend(
             'orq', target_config=target_config, pipeline_config=pipeline_config
@@ -2012,9 +2010,7 @@ async def _run_dynamic_or_hybrid(
         # so this covers the common path, not just direct models. Targets that
         # leave it unset (or set it to an opaque label) resolve to provider family
         # 'unknown' downstream and never trigger a spurious warning.
-        target_models = list(
-            dict.fromkeys(pt.agent_context.model for pt in prepared_targets if pt.agent_context.model)
-        )
+        target_models = list(dict.fromkeys(pt.agent_context.model for pt in prepared_targets if pt.agent_context.model))
         # Panel-of-judges / jury config shared by the dynamic evaluator (RES-739).
         panel_cfg = pipeline_config.evaluator if pipeline_config else None
         panel_kwargs: dict[str, Any] = {

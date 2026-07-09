@@ -85,6 +85,60 @@ async def my_job(data: DataPoint, _row: int) -> str:
     return await invoke("my-deployment", inputs=data.inputs)
 ```
 
+## Replaying an experiment's responses (no-inference mode)
+
+Sometimes you want to score responses that an Orq experiment already produced
+instead of generating fresh ones — to try new evaluators against a past run, or
+to re-grade without paying for another round of generation. That is what
+**no-inference mode** does: pass `inference=False` and evaluators run against the
+recorded response in each row rather than calling any job.
+
+The response source is chosen by the `data` argument to `evaluatorq()`:
+
+| `data` value | What it loads |
+|---|---|
+| `DatasetIdInput(id=...)` | Rows from an Orq dataset (you supply/generate the responses). |
+| `ExperimentInput(experiment_id=..., run_id=...)` | The recorded responses from a past experiment run. Requires `inference=False`. |
+| `list[DataPoint]` | In-memory datapoints. |
+
+`ExperimentInput` sits alongside `DatasetIdInput` in the `data` union — it is not
+a dataset, it is a completed experiment run whose outputs get replayed.
+
+### Finding the IDs
+
+Both IDs are read off the Orq UI:
+
+- **`experiment_id`** — the ID in the experiment URL, `/experiments/<experiment_id>`.
+  The REST API calls experiments "spreadsheets", so the same ID appears in
+  `/v2/spreadsheets/<id>` routes.
+- **`run_id`** — optional. Every execution of an experiment creates a new run (a
+  "manifest" in the API). Open a run from the experiment's run history to read its
+  ID from the URL. Omit it to replay the latest run.
+
+### Example
+
+```python
+from evaluatorq import evaluatorq, ExperimentInput
+
+async def run():
+    await evaluatorq(
+        "replay-past-experiment",
+        data=ExperimentInput(experiment_id="<experiment_id>"),  # latest run
+        evaluators=[my_evaluator],
+        inference=False,
+    )
+```
+
+Pin a specific run with `run_id`:
+
+```python
+data=ExperimentInput(experiment_id="<experiment_id>", run_id="<run_id>")
+```
+
+`ORQ_API_KEY` must be set — the recorded rows are fetched from the Orq API. When
+`inference=False`, `jobs` is optional and ignored. Any row whose recorded
+response is missing or blank fails loudly rather than being silently skipped.
+
 ## API reference
 
 ### `deployment()`
@@ -147,3 +201,9 @@ class MessageDict(TypedDict, total=False):
 `ORQ_API_KEY` must be set before the first call. A missing key raises
 `ValueError` at runtime with a descriptive message. A missing `orq-ai-sdk`
 installation raises `ImportError` with install instructions.
+
+## Where to next
+
+- **[Configuration](configuration.md)** — API keys and environment variables.
+- **[Tracing](tracing.md)** — trace deployment invocations with OpenTelemetry.
+- **[API Reference](reference/evaluatorq.md)** — `deployment`, `invoke`, `DataPoint`.

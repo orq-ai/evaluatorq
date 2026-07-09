@@ -81,6 +81,18 @@ framework's quirks:
 | Pydantic AI | `PydanticAITarget` | Threads typed `message_history` internally; tool calls extracted from message parts; usage has no total (derived) |
 | CrewAI | `CrewAITarget` | Sync `kickoff` run off-thread; transcript flattened to one `{conversation}` input; final crew output is "the response" |
 
+**Demo recordings** — each runs its example end to end (user simulator → agent
+→ judge). Embedded players live in the
+[Agent Simulation guide](../../docs/guides/agent-simulation.md#external-framework-demos);
+the raw files:
+
+| Framework | Recording |
+|-----------|-----------|
+| LangGraph | [`sim-langgraph.mp4`](../../docs/assets/sim-langgraph.mp4) |
+| OpenAI Agents SDK | [`sim-openai-agents.mp4`](../../docs/assets/sim-openai-agents.mp4) |
+| Pydantic AI | [`sim-pydantic-ai.mp4`](../../docs/assets/sim-pydantic-ai.mp4) |
+| CrewAI | [`sim-crewai.mp4`](../../docs/assets/sim-crewai.mp4) |
+
 > **Python 3.10 note:** the `crewai` extra is gated to Python >= 3.11 (its
 > `onnxruntime` dependency ships no 3.10 wheels), so `evaluatorq[crewai]` is
 > silently unavailable on 3.10. The other three frameworks support 3.10+.

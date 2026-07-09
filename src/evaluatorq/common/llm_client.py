@@ -28,8 +28,8 @@ from loguru import logger
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
-ORQ_DEFAULT_HOST = "https://my.orq.ai"
-ORQ_ROUTER_SUFFIX = "/v3/router"
+ORQ_DEFAULT_HOST = 'https://my.orq.ai'
+ORQ_ROUTER_SUFFIX = '/v3/router'
 
 
 class MissingLLMCredentialsError(ValueError):
@@ -60,10 +60,10 @@ def client_routes_through_orq(client: AsyncOpenAI | None) -> bool:
     the environment (it is needed for tracing). Host-agnostic: matches any host
     whose path ends in ``/v3/router``.
     """
-    base_url = getattr(client, "base_url", None)
+    base_url = getattr(client, 'base_url', None)
     if base_url is None:
         return False
-    return str(base_url).rstrip("/").endswith(ORQ_ROUTER_SUFFIX)
+    return str(base_url).rstrip('/').endswith(ORQ_ROUTER_SUFFIX)
 
 
 def resolve_results_base_url(
@@ -82,12 +82,12 @@ def resolve_results_base_url(
     preserving the original env-based behaviour.
     """
     if client_routes_through_orq(client):
-        host = str(client.base_url).rstrip("/")  # pyright: ignore[reportOptionalMemberAccess]
-        resolved = host[: -len(ORQ_ROUTER_SUFFIX)].rstrip("/")
-        logger.debug("Results upload host resolved from inference client: {}", resolved)
+        host = str(client.base_url).rstrip('/')  # pyright: ignore[reportOptionalMemberAccess]
+        resolved = host[: -len(ORQ_ROUTER_SUFFIX)].rstrip('/')
+        logger.debug('Results upload host resolved from inference client: {}', resolved)
         return resolved
-    resolved = os.environ.get("ORQ_BASE_URL", default_orq_host).rstrip("/")
-    logger.debug("Results upload host resolved from env/default: {}", resolved)
+    resolved = os.environ.get('ORQ_BASE_URL', default_orq_host).rstrip('/')
+    logger.debug('Results upload host resolved from env/default: {}', resolved)
     return resolved
 
 
@@ -127,10 +127,10 @@ def resolve_llm_client(
 
     from openai import AsyncOpenAI
 
-    orq_api_key = extra_api_key or os.environ.get("ORQ_API_KEY")
+    orq_api_key = extra_api_key or os.environ.get('ORQ_API_KEY')
     if orq_api_key:
-        host = os.environ.get("ORQ_BASE_URL", default_orq_host).rstrip("/")
-        router_url = f"{host}{ORQ_ROUTER_SUFFIX}"
+        host = os.environ.get('ORQ_BASE_URL', default_orq_host).rstrip('/')
+        router_url = f'{host}{ORQ_ROUTER_SUFFIX}'
         return ResolvedClient(
             client=AsyncOpenAI(api_key=orq_api_key, base_url=router_url),
             owned=True,
@@ -139,19 +139,17 @@ def resolve_llm_client(
 
     if require_orq:
         raise MissingLLMCredentialsError(
-            "ORQ routing is required for this target but no Orq credentials were "
-            "found. Set ORQ_API_KEY (optionally ORQ_BASE_URL), or pass a pre-built "
-            "Orq-routed client. The OPENAI_API_KEY fallback is disabled here: "
-            "ORQ agent targets must run on the Orq router."
+            'ORQ routing is required for this target but no Orq credentials were '
+            'found. Set ORQ_API_KEY (optionally ORQ_BASE_URL), or pass a pre-built '
+            'Orq-routed client. The OPENAI_API_KEY fallback is disabled here: '
+            'ORQ agent targets must run on the Orq router.'
         )
 
-    openai_api_key = os.environ.get("OPENAI_API_KEY")
+    openai_api_key = os.environ.get('OPENAI_API_KEY')
     if openai_api_key:
-        base_url = os.environ.get("OPENAI_BASE_URL") if honor_openai_base_url else None
+        base_url = os.environ.get('OPENAI_BASE_URL') if honor_openai_base_url else None
         client = (
-            AsyncOpenAI(api_key=openai_api_key, base_url=base_url)
-            if base_url
-            else AsyncOpenAI(api_key=openai_api_key)
+            AsyncOpenAI(api_key=openai_api_key, base_url=base_url) if base_url else AsyncOpenAI(api_key=openai_api_key)
         )
         return ResolvedClient(
             client=client,
@@ -160,17 +158,17 @@ def resolve_llm_client(
         )
 
     raise MissingLLMCredentialsError(
-        "Missing LLM credentials. Set either ORQ_API_KEY (optionally ORQ_BASE_URL) "
-        "or OPENAI_API_KEY (optionally OPENAI_BASE_URL), or pass a pre-built client."
+        'Missing LLM credentials. Set either ORQ_API_KEY (optionally ORQ_BASE_URL) '
+        'or OPENAI_API_KEY (optionally OPENAI_BASE_URL), or pass a pre-built client.'
     )
 
 
 __all__ = [
-    "ORQ_DEFAULT_HOST",
-    "ORQ_ROUTER_SUFFIX",
-    "MissingLLMCredentialsError",
-    "ResolvedClient",
-    "client_routes_through_orq",
-    "resolve_llm_client",
-    "resolve_results_base_url",
+    'ORQ_DEFAULT_HOST',
+    'ORQ_ROUTER_SUFFIX',
+    'MissingLLMCredentialsError',
+    'ResolvedClient',
+    'client_routes_through_orq',
+    'resolve_llm_client',
+    'resolve_results_base_url',
 ]

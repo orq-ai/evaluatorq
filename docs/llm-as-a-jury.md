@@ -65,10 +65,7 @@ asyncio.run(main())
 classic LLM-as-a-judge. Pass `judges=[...]` with two or more models to turn it
 into a jury.
 
-!!! tip "Keep the panel odd and mixed-provider"
-    An odd number of judges (3, 5) makes ties rare. A mix of provider families
-    gives you the independence a jury is meant to provide; three judges from the
-    same provider tend to be correlated and add little over one.
+--8<-- "docs/_snippets/panel-tip.md"
 
 ## Verdict modes
 
@@ -221,3 +218,9 @@ A complete red-teaming script covering repetitions, replacements, the
 `min_successful_judges` threshold, `strict_panel`, and reading the per-result
 and run-level output lives at
 [`examples/redteam/16_llm_as_a_jury.py`](https://github.com/orq-ai/evaluatorq/blob/main/examples/redteam/16_llm_as_a_jury.py).
+
+## Where to next
+
+- **[Pairwise Judging](pairwise-judging.md)** — compare two responses instead of scoring one.
+- **[Custom Evaluators & Frameworks](custom-evaluators-and-frameworks.md)** — define your own evaluators.
+- **[Red Teaming](guides/red-teaming.md)** — use a jury as the red-team verdict.

@@ -82,10 +82,10 @@ def conversation_quality_scorer(result: SimulationResult) -> float:
 # ---------------------------------------------------------------------------
 
 SIMULATION_EVALUATORS: dict[str, SimulationScorer] = {
-    "goal_achieved": goal_achieved_scorer,
-    "criteria_met": criteria_met_scorer,
-    "turn_efficiency": turn_efficiency_scorer,
-    "conversation_quality": conversation_quality_scorer,
+    'goal_achieved': goal_achieved_scorer,
+    'criteria_met': criteria_met_scorer,
+    'turn_efficiency': turn_efficiency_scorer,
+    'conversation_quality': conversation_quality_scorer,
 }
 
 
@@ -97,8 +97,8 @@ def get_evaluator(name: str) -> SimulationScorer:
     """
     evaluator = SIMULATION_EVALUATORS.get(name)
     if not evaluator:
-        available = ", ".join(SIMULATION_EVALUATORS.keys())
-        raise ValueError(f"Unknown evaluator: {name}. Available: {available}")
+        available = ', '.join(SIMULATION_EVALUATORS.keys())
+        raise ValueError(f'Unknown evaluator: {name}. Available: {available}')
     return evaluator
 
 

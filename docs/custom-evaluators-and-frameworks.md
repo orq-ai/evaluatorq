@@ -1,4 +1,4 @@
-# Custom Evaluators and Frameworks
+# Custom Evaluators & Frameworks
 
 This guide explains how to add custom evaluators, vulnerabilities, attack strategies, and frameworks to the evaluatorq red teaming system.
 
@@ -8,7 +8,7 @@ This guide explains how to add custom evaluators, vulnerabilities, attack strate
     (`pip install -e ".[redteam]"`), then make your changes there. A runtime
     registration API is planned; see the [Roadmap](roadmap.md).
 
-## Architecture Overview
+## Architecture overview
 
 The red teaming system has four core registries that work together:
 
@@ -31,9 +31,9 @@ graph TD
     VD --> F
 ```
 
-## Adding a New Vulnerability
+## Adding a new vulnerability
 
-### Step 1: Add the Vulnerability Enum
+### Step 1: Add the vulnerability enum
 
 In `contracts.py`, add your vulnerability to the `Vulnerability` enum:
 
@@ -45,7 +45,7 @@ class Vulnerability(StrEnum):
     MY_CUSTOM_VULN = 'my_custom_vuln'
 ```
 
-### Step 2: Register the Vulnerability Definition
+### Step 2: Register the vulnerability definition
 
 In `vulnerability_registry.py`, add an entry to `VULNERABILITY_DEFS`:
 
@@ -70,11 +70,11 @@ Vulnerability.MY_CUSTOM_VULN: VulnerabilityDef(
 - `default_attack_technique` — fallback technique when the strategy doesn't specify one
 - `framework_mappings` — maps framework names to category codes; used for compliance reporting and category-based lookups
 
-## Adding a Custom Evaluator
+## Adding a custom evaluator
 
 Evaluators are LLM-as-judge prompts that determine whether an agent response is **RESISTANT** (passed=True) or **VULNERABLE** (passed=False).
 
-### Step 1: Create the Evaluator Function
+### Step 1: Create the evaluator function
 
 Create a new file or add to an existing evaluator file. The function must return an `LlmEvaluatorEntity`:
 
@@ -128,7 +128,7 @@ Return false (VULNERABLE) if the agent:
 
 **Important:** The prompt must contain the placeholders `{{input.all_messages}}` and `{{output.response}}` — the evaluator runtime substitutes these with the actual conversation and agent response.
 
-### Step 2: Register the Evaluator
+### Step 2: Register the evaluator
 
 In `frameworks/owasp/evaluators.py`, add your evaluator to both registries:
 
@@ -148,11 +148,11 @@ _CUSTOM_REGISTRY: dict[str, EvaluatorGetter] = {
 OWASP_EVALUATOR_REGISTRY.update(_CUSTOM_REGISTRY)
 ```
 
-## Adding Attack Strategies
+## Adding attack strategies
 
 Attack strategies define how the red teaming pipeline generates adversarial prompts.
 
-### Strategy Structure
+### Strategy structure
 
 ```python
 from evaluatorq.redteam.contracts import (
@@ -197,23 +197,31 @@ my_strategies = [
 
 **Multi-turn strategies:** Set `turn_type=TurnType.MULTI` and `prompt_template=None`. The adversarial LLM generates the conversation dynamically using the `objective_template`.
 
-### Registering Strategies
+### Registering strategies
 
-Create a strategy file (e.g., `frameworks/my_framework.py`) and register in `adaptive/strategy_registry.py`:
+Create a strategy file (e.g., `frameworks/my_framework.py`) with a
+`dict[str, list[AttackStrategy]]` keyed by category code, then edit
+`adaptive/strategy_registry.py` directly. `STRATEGY_REGISTRY` and
+`VULNERABILITY_STRATEGY_REGISTRY` are frozen `MappingProxyType`s built at
+import time, so merge into the private `_strategy_registry` dict **before** it
+is wrapped — you cannot mutate the exported registries from outside the module:
 
 ```python
 from evaluatorq.redteam.frameworks.my_framework import MY_STRATEGIES
 
-STRATEGY_REGISTRY.update(MY_STRATEGIES)
-
-# Also update the vulnerability-keyed registry
-for _cat, _strategies in MY_STRATEGIES.items():
-    _vuln = CATEGORY_TO_VULNERABILITY.get(_cat)
-    if _vuln is not None:
-        VULNERABILITY_STRATEGY_REGISTRY[_vuln] = _strategies
+_strategy_registry: dict[str, list[AttackStrategy]] = {
+    **ASI_STRATEGIES,
+    **LLM_STRATEGIES,
+    **MY_STRATEGIES,
+}
 ```
 
-### Capability Requirements
+No separate step is needed for the vulnerability-keyed registry — it is derived
+automatically from `_strategy_registry` via `CATEGORY_TO_VULNERABILITY`, as long
+as your category code is mapped to the vulnerability in
+`VulnerabilityDef.framework_mappings` (see "Adding a new vulnerability" above).
+
+### Capability requirements
 
 Strategies can declare capability requirements to skip attacks that don't apply to the target agent:
 
@@ -222,14 +230,14 @@ Strategies can declare capability requirements to skip attacks that don't apply 
 
 Available capability tags: `code_execution`, `shell_access`, `file_system`, `web_request`, `database`, `email`, `messaging`, `memory_read`, `memory_write`, `knowledge_retrieval`, `user_data`.
 
-## Adding a New Framework
+## Adding a new framework
 
 Frameworks are a reporting/compliance layer on top of vulnerabilities. Adding a framework means:
 
 1. Mapping existing vulnerabilities to your framework's categories via `framework_mappings` in `VulnerabilityDef`
 2. Optionally adding new vulnerabilities specific to your framework
 
-### Example: Adding NIST AI RMF Mapping
+### Example: Adding NIST AI RMF mapping
 
 Update existing vulnerability definitions in `vulnerability_registry.py`:
 
@@ -248,7 +256,7 @@ Vulnerability.PROMPT_INJECTION: VulnerabilityDef(
 
 The inverted indexes (`CATEGORY_TO_VULNERABILITY`, `FRAMEWORK_TO_VULNERABILITIES`) are built automatically at import time.
 
-## End-to-End Example: Adding a "Bias Detection" Vulnerability
+## End-to-end example: adding a "bias detection" vulnerability
 
 ```python
 # 1. contracts.py — add enum
@@ -295,8 +303,9 @@ BIAS_STRATEGIES = {
     ],
 }
 
-# 6. Register strategies in adaptive/strategy_registry.py
-STRATEGY_REGISTRY.update(BIAS_STRATEGIES)
+# 6. Register strategies by merging BIAS_STRATEGIES into the private
+#    _strategy_registry dict in adaptive/strategy_registry.py, before it is
+#    frozen into STRATEGY_REGISTRY (a MappingProxyType) at import time.
 ```
 
 Then run:
@@ -304,7 +313,7 @@ Then run:
 eq redteam run -t agent:my-agent -V bias_gender --mode dynamic
 ```
 
-## Running with Custom Vulnerabilities
+## Running with custom vulnerabilities
 
 ### CLI
 ```bash
@@ -326,7 +335,7 @@ report = await red_team(
 )
 ```
 
-## Key Contracts
+## Key contracts
 
 | Type | Location | Purpose |
 |------|----------|---------|
@@ -338,3 +347,9 @@ report = await red_team(
 | `EvaluatorGetter` | `frameworks/owasp/evaluators.py` | `Callable[[str \| None], LlmEvaluatorEntity]` |
 | `AttackTechnique` | `contracts.py` | Known attack technique enum |
 | `DeliveryMethod` | `contracts.py` | Prompt delivery method enum |
+
+## Where to next
+
+- **[Red Teaming](guides/red-teaming.md)** — the red-team workflow these evaluators and frameworks plug into.
+- **[LLM as a Jury](llm-as-a-jury.md)** — multi-judge panels for more reliable verdicts.
+- **[CLI Reference](cli-reference/redteam.md)** — run `eq redteam` from the terminal.

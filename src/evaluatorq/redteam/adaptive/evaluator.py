@@ -245,10 +245,15 @@ class OWASPEvaluator:
                 replacements=replacements,
                 span_attributes=span_attributes,
             )
-            if outcome.error_kind in (JudgeError.API_CONNECTION, JudgeError.API_STATUS) and outcome.error_exc is not None:
+            if (
+                outcome.error_kind in (JudgeError.API_CONNECTION, JudgeError.API_STATUS)
+                and outcome.error_exc is not None
+            ):
                 raise outcome.error_exc
             if outcome.error_kind is not None or outcome.payload is None:
-                return Prediction(error=outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'error'))
+                return Prediction(
+                    error=outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'error')
+                )
             return Prediction(
                 value=outcome.payload.value,
                 explanation=outcome.payload.explanation,

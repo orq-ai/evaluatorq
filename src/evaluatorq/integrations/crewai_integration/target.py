@@ -43,13 +43,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_INPUT_KEY = "conversation"
+DEFAULT_INPUT_KEY = 'conversation'
 
 _ROLE_LABELS = {
-    "user": "Customer",
-    "assistant": "Agent",
-    "system": "System",
-    "tool": "Tool",
+    'user': 'Customer',
+    'assistant': 'Agent',
+    'system': 'System',
+    'tool': 'Tool',
 }
 
 
@@ -110,7 +110,7 @@ class CrewAITarget(AgentTarget):
 
     async def respond(self, messages: list[Message]) -> AgentResponse:
         """Flatten the transcript and run one synchronous crew kickoff off-thread."""
-        if not messages or messages[-1].role != "user":
+        if not messages or messages[-1].role != 'user':
             raise ValueError("CrewAITarget.respond requires messages[-1].role == 'user'")
         conversation = _flatten(messages)
         inputs = {**self._extra_inputs, self._input_key: conversation}
@@ -120,9 +120,9 @@ class CrewAITarget(AgentTarget):
         except (asyncio.CancelledError, asyncio.TimeoutError):
             raise
         except Exception as exc:
-            raise RuntimeError(f"CrewAITarget: crew.kickoff() raised an error: {exc}") from exc
+            raise RuntimeError(f'CrewAITarget: crew.kickoff() raised an error: {exc}') from exc
 
-        text = str(getattr(output, "raw", "") or "")
+        text = str(getattr(output, 'raw', '') or '')
         out: list[OutputMessage] = [TextOutputItem(text=text, annotations=[])]
         return AgentResponse(output=out, usage=_extract_usage(output))
 
@@ -130,16 +130,14 @@ class CrewAITarget(AgentTarget):
         """Return agent context introspected from the crew's agents."""
         if self._agent_context is not None:
             return self._agent_context
-        agents = getattr(self._crew, "agents", None) or []
-        roles = [str(getattr(a, "role", "")) for a in agents if getattr(a, "role", None)]
-        raw_key = (roles[0] if roles else "crewai_crew").lower()
+        agents = getattr(self._crew, 'agents', None) or []
+        roles = [str(getattr(a, 'role', '')) for a in agents if getattr(a, 'role', None)]
+        raw_key = (roles[0] if roles else 'crewai_crew').lower()
         # Real CrewAI role strings contain spaces, slashes, punctuation; collapse
         # anything outside [a-z0-9_] so the key is always well-formed.
-        key = re.sub(r"[^a-z0-9_]+", "_", raw_key).strip("_") or "crewai_crew"
+        key = re.sub(r'[^a-z0-9_]+', '_', raw_key).strip('_') or 'crewai_crew'
         description = (
-            f"CrewAI crew target ({len(agents)} agent(s): {', '.join(roles)})"
-            if roles
-            else "CrewAI crew target"
+            f'CrewAI crew target ({len(agents)} agent(s): {", ".join(roles)})' if roles else 'CrewAI crew target'
         )
         return AgentContext(key=key, display_name=key, description=description)
 
@@ -175,9 +173,9 @@ def _flatten(messages: list[Message]) -> str:
         # Escape braces: CrewAI fills {input_key} via str.format on the task
         # description, so any literal { } in user content would otherwise raise
         # KeyError or collide with other task variables (template injection).
-        safe = content_to_text(m.content).replace("{", "{{").replace("}", "}}")
-        lines.append(f"{label}: {safe}")
-    return "\n".join(lines)
+        safe = content_to_text(m.content).replace('{', '{{').replace('}', '}}')
+        lines.append(f'{label}: {safe}')
+    return '\n'.join(lines)
 
 
 def _extract_usage(output: Any) -> TokenUsage | None:
@@ -187,14 +185,14 @@ def _extract_usage(output: Any) -> TokenUsage | None:
     token accounting. CrewAI exposes ``successful_requests`` rather than a call
     count, which maps onto ``calls``.
     """
-    usage = getattr(output, "token_usage", None)
+    usage = getattr(output, 'token_usage', None)
     if usage is None:
         return None
-    prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
-    completion = int(getattr(usage, "completion_tokens", 0) or 0)
-    total = getattr(usage, "total_tokens", None)
+    prompt = int(getattr(usage, 'prompt_tokens', 0) or 0)
+    completion = int(getattr(usage, 'completion_tokens', 0) or 0)
+    total = getattr(usage, 'total_tokens', None)
     total_tokens = int(total) if total else prompt + completion
-    calls = int(getattr(usage, "successful_requests", 0) or 0) or 1
+    calls = int(getattr(usage, 'successful_requests', 0) or 0) or 1
     if prompt == 0 and completion == 0 and total_tokens == 0:
         return None
     return TokenUsage(

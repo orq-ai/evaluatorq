@@ -179,6 +179,14 @@ dynamic = ["version"]
 description = "An evaluation framework library for Python that provides a flexible way to run parallel evaluations and optionally integrate with the Orq AI platform."
 readme = "README.md"
 requires-python = ">=3.10"
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
+]
 dependencies = [
   "pydantic>=2.0",
   "httpx>=0.28.1",
@@ -279,6 +287,7 @@ docs = [
   "mkdocs-minify-plugin>=0.8.0",
   "mkdocs-git-revision-date-localized-plugin>=1.2.9",
   "mkdocs-htmlproofer-plugin>=1.2.0",
+  "mkdocs-llmstxt>=0.5.0",
 ]
 dev = [
   "pytest>=8.0.0",

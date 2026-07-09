@@ -19,8 +19,20 @@ flowchart LR
 ## Modes
 
 - **dynamic** — an LLM generates attacks; run the categories you pick.
-- **static** — replays a fixed dataset of known attacks. Deterministic, cheap, good for CI.
+- **static** — replays a fixed dataset of known attacks instead of generating
+  them. Deterministic, cheap, good for CI. Runs Orq's public
+  [`orq/redteam-vulnerabilities`](https://huggingface.co/datasets/orq/redteam-vulnerabilities)
+  dataset by default; pass `dataset=` to run your own.
 - **hybrid** — static seeds plus dynamic expansion.
+
+```python
+# static mode replays Orq's public attack dataset by default
+report = await red_team(target, mode="static")
+
+# ...or bring your own — a local JSON file or a HuggingFace repo
+report = await red_team(target, mode="static", dataset="./my_attacks.json")
+report = await red_team(target, mode="static", dataset="hf:my-org/my-attacks")
+```
 
 ## Red-team your target
 
@@ -144,12 +156,10 @@ The runnable smoke example
 ([`08_quick_smoke_test.py`](../examples/redteam/08_quick_smoke_test.md)) wraps
 this same pattern.
 
-!!! tip "View results in the local dashboard"
-    Run `eq dashboard` to browse saved red-team and simulation reports together;
-    `eq redteam ui` / `eq sim ui` open the legacy Streamlit views for one surface.
+--8<-- "docs/_snippets/dashboard-tip.md"
 
 ## Where to next
 
 - **[Examples › Red Teaming](../examples/index.md)** — static datasets, category filtering, custom clients, multi-target, report inspection, custom hooks.
-- **[API Reference › redteam](../reference/evaluatorq/redteam.md)** — the full `Vulnerability` enum and the OWASP `LLM__` / `ASI__` category codes you can pass to `categories=`. The [CLI Reference](../cli-reference.md#eq-redteam-run) lists the same as `--category` / `--vulnerability`.
+- **[API Reference › redteam](../reference/evaluatorq/redteam.md)** — the full `Vulnerability` enum and the OWASP `LLM__` / `ASI__` category codes you can pass to `categories=`. The [CLI Reference](../cli-reference/redteam.md#eq-redteam-run) lists the same as `--category` / `--vulnerability`.
 - **[Custom Evaluators & Frameworks](../custom-evaluators-and-frameworks.md)** — add your own vulnerabilities and attack strategies.

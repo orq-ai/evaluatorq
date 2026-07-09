@@ -20,7 +20,7 @@ from evaluatorq.simulation.tracing import with_llm_span
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T", bound=BaseModel)
+T = TypeVar('T', bound=BaseModel)
 
 
 async def generate_structured(
@@ -42,21 +42,21 @@ async def generate_structured(
 
     # Cast once — the OpenAI SDK accepts dict literals at runtime; the
     # TypedDict union just doesn't type-narrow from dict[str, Any].
-    typed_messages = cast("Any", messages)
+    typed_messages = cast('Any', messages)
 
     async with with_llm_span(
         model=model,
-        operation="chat",
+        operation='chat',
         temperature=temperature,
         max_tokens=max_tokens,
         purpose=label,
     ) as span:
         record_llm_input(
             span,
-            [{"role": str(m["role"]), "content": str(m["content"])} for m in messages],
+            [{'role': str(m['role']), 'content': str(m['content'])} for m in messages],
         )
         trace_headers = await get_trace_context_headers()
-        extra: dict[str, Any] = {"extra_headers": trace_headers} if trace_headers else {}
+        extra: dict[str, Any] = {'extra_headers': trace_headers} if trace_headers else {}
 
         # 1. Try structured output via parse()
         try:
@@ -73,23 +73,23 @@ async def generate_structured(
             )
             record_llm_response(span, response)
             message = response.choices[0].message
-            refusal = getattr(message, "refusal", None)
+            refusal = getattr(message, 'refusal', None)
             if refusal:
-                raise RuntimeError(f"{label}: model refused to generate: {refusal}")
+                raise RuntimeError(f'{label}: model refused to generate: {refusal}')
             parsed = message.parsed
             if parsed is not None:
-                return parsed, ""
-            logger.debug("%s: parse() returned None, falling back to json_object", label)
+                return parsed, ''
+            logger.debug('%s: parse() returned None, falling back to json_object', label)
         except APIStatusError as e:
             if e.status_code != 400:
                 raise
             # Only fall back if this looks like a schema-support issue
-            err_body = str(getattr(e, "body", None) or getattr(e, "message", "") or "").lower()
-            schema_keywords = ("structured", "response_format", "json_schema", "not supported")
+            err_body = str(getattr(e, 'body', None) or getattr(e, 'message', '') or '').lower()
+            schema_keywords = ('structured', 'response_format', 'json_schema', 'not supported')
             if not any(kw in err_body for kw in schema_keywords):
                 raise
             logger.warning(
-                "%s: structured output not supported by model, falling back to json_object",
+                '%s: structured output not supported by model, falling back to json_object',
                 label,
             )
             # TODO: annotate the active OTel span with
@@ -97,16 +97,16 @@ async def generate_structured(
             # once a get_current_span() helper is wired into this module.
             if span is not None:
                 fallback = True
-                span.set_attribute("orq.simulation.structured_output.fallback", fallback)
+                span.set_attribute('orq.simulation.structured_output.fallback', fallback)
         except LengthFinishReasonError as exc:
             # Length-truncated structured output is unusable — the JSON is cut
             # off mid-string. Falling back to json_object would truncate at the
             # same budget, so fail loudly with an actionable message instead.
-            logger.error("%s: structured output truncated at the token limit (max_tokens=%s)", label, max_tokens)
+            logger.exception('%s: structured output truncated at the token limit (max_tokens=%s)', label, max_tokens)
             raise RuntimeError(
-                f"{label}: the model hit the token limit (max_tokens={max_tokens}) and the "
-                f"structured output was truncated, so the result is unusable. Raise the budget "
-                f"via EVALUATORQ_LLM_MAX_TOKENS and retry."
+                f'{label}: the model hit the token limit (max_tokens={max_tokens}) and the '
+                f'structured output was truncated, so the result is unusable. Raise the budget '
+                f'via EVALUATORQ_LLM_MAX_TOKENS and retry.'
             ) from exc
 
         # 2. Fallback: json_object mode
@@ -116,11 +116,11 @@ async def generate_structured(
                 messages=typed_messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                response_format={"type": "json_object"},
+                response_format={'type': 'json_object'},
                 **extra,
             ),
-            label=f"{label} (fallback)",
+            label=f'{label} (fallback)',
         )
         record_llm_response(span, fallback_response)
-        content = fallback_response.choices[0].message.content if fallback_response.choices else ""
-        return None, content or ""
+        content = fallback_response.choices[0].message.content if fallback_response.choices else ''
+        return None, content or ''

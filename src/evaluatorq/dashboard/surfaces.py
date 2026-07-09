@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from datetime import datetime
     from pathlib import Path
+    from pathlib import Path as _Path
 
 
 @dataclass(frozen=True)
@@ -53,7 +54,6 @@ class SurfaceAdapter:
 
 
 def _redteam_adapter() -> SurfaceAdapter:
-    from pathlib import Path as _Path
 
     from evaluatorq.redteam.contracts import RedTeamReport, RedTeamResult
     from evaluatorq.redteam.reports.converters import rebuild_filtered_report
@@ -88,6 +88,7 @@ def _redteam_adapter() -> SurfaceAdapter:
 
     def _rt_load(p: _Path) -> RedTeamReport:
         from evaluatorq.dashboard.library import read_json_cached
+
         data = read_json_cached(p)
         return RedTeamReport.model_validate(data)
 
@@ -104,7 +105,6 @@ def _redteam_adapter() -> SurfaceAdapter:
 
 
 def _sim_adapter() -> SurfaceAdapter:
-    from pathlib import Path as _Path
 
     from evaluatorq.simulation.reports.export_html import export_html, render_report_body
     from evaluatorq.simulation.reports.export_md import export_markdown as _sim_export_md
@@ -128,6 +128,7 @@ def _sim_adapter() -> SurfaceAdapter:
 
     def _sim_load(p: _Path) -> SimulationRun:
         from evaluatorq.dashboard.library import read_json_cached
+
         data = read_json_cached(p)
         return SimulationRun.model_validate(data)
 

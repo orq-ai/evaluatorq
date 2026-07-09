@@ -5,4 +5,4 @@ Provides a wrapper to use any OpenAI Agents SDK agent as an AgentTarget.
 
 from .target import OpenAIAgentTarget
 
-__all__ = ["OpenAIAgentTarget"]
+__all__ = ['OpenAIAgentTarget']

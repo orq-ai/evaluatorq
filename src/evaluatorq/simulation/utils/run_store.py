@@ -23,20 +23,20 @@ from evaluatorq.simulation.types import SimulationRun
 
 logger = logging.getLogger(__name__)
 
-SIM_RUNS_DIR_NAME = Path(".evaluatorq") / "sim-runs"
+SIM_RUNS_DIR_NAME = Path('.evaluatorq') / 'sim-runs'
 
 
 def sanitise_run_name(name: str) -> str:
     sanitised = name.lower()
-    sanitised = re.sub(r"[^a-z0-9_-]", "_", sanitised)
-    sanitised = re.sub(r"_+", "_", sanitised)
-    sanitised = sanitised.strip("_")
-    return sanitised[:64] or "sim"
+    sanitised = re.sub(r'[^a-z0-9_-]', '_', sanitised)
+    sanitised = re.sub(r'_+', '_', sanitised)
+    sanitised = sanitised.strip('_')
+    return sanitised[:64] or 'sim'
 
 
 def get_sim_runs_dir() -> Path:
     """Return the agent sim runs directory (``<store>/sim-runs``)."""
-    return get_store_dir("sim-runs")
+    return get_store_dir('sim-runs')
 
 
 def build_simulation_run(
@@ -56,7 +56,7 @@ def build_simulation_run(
     """
     scorer_totals: dict[str, list[float]] = {}
     for result in results:
-        scores: dict[str, float] = (result.metadata or {}).get("evaluator_scores", {})
+        scores: dict[str, float] = (result.metadata or {}).get('evaluator_scores', {})
         for scorer_name, score in scores.items():
             if isinstance(score, (int, float)):
                 scorer_totals.setdefault(scorer_name, []).append(float(score))
@@ -64,7 +64,7 @@ def build_simulation_run(
                 # Drop non-numeric scores so a misbehaving evaluator can't crash
                 # the build — but log it, or the average silently reflects fewer
                 # data points than the run produced.
-                logger.warning("Dropping non-numeric score from scorer %r: %r", scorer_name, score)
+                logger.warning('Dropping non-numeric score from scorer %r: %r', scorer_name, score)
 
     scorer_averages = {k: sum(v) / len(v) for k, v in scorer_totals.items() if v}
 
@@ -88,19 +88,19 @@ def auto_save_run(*, run: SimulationRun, run_name: str) -> Path:
     runs_dir = get_sim_runs_dir()
     runs_dir.mkdir(parents=True, exist_ok=True)
 
-    ts = datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M%S")
-    base = f"{sanitise_run_name(run_name)}_{ts}"
+    ts = datetime.now(tz=timezone.utc).strftime('%Y%m%d-%H%M%S')
+    base = f'{sanitise_run_name(run_name)}_{ts}'
     payload = run.model_dump_json(indent=2)
 
     # Exclusive-create write: avoids the TOCTOU race between an exists() check
     # and a later write, and bounds the collision search.
-    target_path = runs_dir / f"{base}.json"
+    target_path = runs_dir / f'{base}.json'
     for counter in range(1000):
         try:
-            with target_path.open("x", encoding="utf-8") as fh:
+            with target_path.open('x', encoding='utf-8') as fh:
                 _ = fh.write(payload)
         except FileExistsError:  # noqa: PERF203 — exclusive-create retry is the point
-            target_path = runs_dir / f"{base}_{counter + 1:03d}.json"
+            target_path = runs_dir / f'{base}_{counter + 1:03d}.json'
         except OSError:
             # "x" created the file before the write failed (e.g. disk full) —
             # don't leave an empty/partial orphan behind.
@@ -108,9 +108,7 @@ def auto_save_run(*, run: SimulationRun, run_name: str) -> Path:
             raise
         else:
             return target_path
-    raise RuntimeError(
-        f"Could not find a free run-store filename for {base!r} after 1000 attempts"
-    )
+    raise RuntimeError(f'Could not find a free run-store filename for {base!r} after 1000 attempts')
 
 
 def write_report(run: SimulationRun, output: Path) -> None:
@@ -124,4 +122,4 @@ def write_report(run: SimulationRun, output: Path) -> None:
     ``--report-output`` opt-in only.
     """
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(run.model_dump_json(indent=2), encoding="utf-8")
+    output.write_text(run.model_dump_json(indent=2), encoding='utf-8')

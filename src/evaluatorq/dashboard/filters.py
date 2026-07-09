@@ -67,13 +67,13 @@ def _sel(selections: dict[str, list[str]], key: str, *, default: list[str]) -> l
 # ---------------------------------------------------------------------------
 
 _REDTEAM_DIMS = [
-    "result",
-    "agent",
-    "category",
-    "severity",
-    "technique",
-    "delivery_method",
-    "vulnerability",
+    'result',
+    'agent',
+    'category',
+    'severity',
+    'technique',
+    'delivery_method',
+    'vulnerability',
 ]
 
 
@@ -86,20 +86,18 @@ def _rt_options_from_results(results: list[Any]) -> dict[str, list[str]]:
     all_categories = sorted({r.attack.category for r in results})
     all_severities = [s for s in SEVERITY_ORDER if any(r.attack.severity.value == s for r in results)]
     all_techniques = sorted({r.attack.attack_technique.value for r in results})
-    all_delivery = sorted(
-        {getattr(dm, "value", dm) for r in results for dm in (r.attack.delivery_methods or [])}
-    )
+    all_delivery = sorted({getattr(dm, 'value', dm) for r in results for dm in (r.attack.delivery_methods or [])})
     all_vulnerabilities = sorted({r.attack.vulnerability for r in results if r.attack.vulnerability})
-    all_agents = sorted({r.agent.key or r.agent.display_name or "unknown" for r in results})
+    all_agents = sorted({r.agent.key or r.agent.display_name or 'unknown' for r in results})
 
     return {
-        "result": ["All", "Vulnerable", "Resistant", "Error"],
-        "agent": all_agents,
-        "category": all_categories,
-        "severity": all_severities,
-        "technique": all_techniques,
-        "delivery_method": all_delivery,
-        "vulnerability": all_vulnerabilities,
+        'result': ['All', 'Vulnerable', 'Resistant', 'Error'],
+        'agent': all_agents,
+        'category': all_categories,
+        'severity': all_severities,
+        'technique': all_techniques,
+        'delivery_method': all_delivery,
+        'vulnerability': all_vulnerabilities,
     }
 
 
@@ -113,61 +111,57 @@ def _rt_apply(report: Any, selections: dict[str, list[str]]) -> list[Any]:
     full_opts = _rt_full_options(report)
 
     # result (radio)
-    result_sel = selections.get("result", ["All"])
-    result_filter = result_sel[0] if result_sel else "All"
-    if result_filter == "Vulnerable":
+    result_sel = selections.get('result', ['All'])
+    result_filter = result_sel[0] if result_sel else 'All'
+    if result_filter == 'Vulnerable':
         results = [r for r in results if r.vulnerable]
-    elif result_filter == "Resistant":
+    elif result_filter == 'Resistant':
         results = [r for r in results if not r.vulnerable and not r.error]
-    elif result_filter == "Error":
+    elif result_filter == 'Error':
         results = [r for r in results if r.error]
 
     # category (multiselect)
-    all_categories = full_opts["category"]
-    sel_categories = _sel(selections, "category", default=all_categories)
+    all_categories = full_opts['category']
+    sel_categories = _sel(selections, 'category', default=all_categories)
     if set(sel_categories) != set(all_categories):
         results = [r for r in results if r.attack.category in sel_categories]
 
     # severity (multiselect)
-    all_severities = full_opts["severity"]
-    sel_severities = _sel(selections, "severity", default=all_severities)
+    all_severities = full_opts['severity']
+    sel_severities = _sel(selections, 'severity', default=all_severities)
     if set(sel_severities) != set(all_severities):
         results = [r for r in results if r.attack.severity.value in sel_severities]
 
     # technique (multiselect)
-    all_techniques = full_opts["technique"]
-    sel_techniques = _sel(selections, "technique", default=all_techniques)
+    all_techniques = full_opts['technique']
+    sel_techniques = _sel(selections, 'technique', default=all_techniques)
     if set(sel_techniques) != set(all_techniques):
         results = [r for r in results if r.attack.attack_technique.value in sel_techniques]
 
     # delivery_method (multiselect) — only when options exist
-    all_delivery = full_opts["delivery_method"]
+    all_delivery = full_opts['delivery_method']
     if all_delivery:
-        sel_delivery = _sel(selections, "delivery_method", default=all_delivery)
+        sel_delivery = _sel(selections, 'delivery_method', default=all_delivery)
         if set(sel_delivery) != set(all_delivery):
             results = [
                 r
                 for r in results
-                if any(getattr(dm, "value", dm) in sel_delivery for dm in (r.attack.delivery_methods or []))
+                if any(getattr(dm, 'value', dm) in sel_delivery for dm in (r.attack.delivery_methods or []))
             ]
 
     # vulnerability (multiselect) — only when options exist
-    all_vulnerabilities = full_opts["vulnerability"]
+    all_vulnerabilities = full_opts['vulnerability']
     if all_vulnerabilities:
-        sel_vulnerabilities = _sel(selections, "vulnerability", default=all_vulnerabilities)
+        sel_vulnerabilities = _sel(selections, 'vulnerability', default=all_vulnerabilities)
         if set(sel_vulnerabilities) != set(all_vulnerabilities):
             results = [r for r in results if r.attack.vulnerability in sel_vulnerabilities]
 
     # agent (multiselect) — only when >1 agent
-    all_agents = full_opts["agent"]
+    all_agents = full_opts['agent']
     if len(all_agents) > 1:
-        sel_agents = _sel(selections, "agent", default=all_agents)
+        sel_agents = _sel(selections, 'agent', default=all_agents)
         if set(sel_agents) != set(all_agents):
-            results = [
-                r
-                for r in results
-                if (r.agent.key or r.agent.display_name or "unknown") in sel_agents
-            ]
+            results = [r for r in results if (r.agent.key or r.agent.display_name or 'unknown') in sel_agents]
 
     return results
 
@@ -180,7 +174,7 @@ def _rt_recompute_options(filtered: list[Any]) -> dict[str, list[str]]:
     """
     opts = _rt_options_from_results(filtered)
     # The result radio always shows all four statuses regardless of filter state.
-    opts["result"] = ["All", "Vulnerable", "Resistant", "Error"]
+    opts['result'] = ['All', 'Vulnerable', 'Resistant', 'Error']
     return opts
 
 
@@ -189,26 +183,26 @@ def _rt_recompute_options(filtered: list[Any]) -> dict[str, list[str]]:
 # ---------------------------------------------------------------------------
 
 _SIM_DIMS = [
-    "persona",
-    "scenario",
-    "terminated_by",
-    "goal_outcome",
+    'persona',
+    'scenario',
+    'terminated_by',
+    'goal_outcome',
 ]
 
 
 def _meta(result: Any, key: str) -> str:
-    return str(result.metadata.get(key, "unknown"))
+    return str(result.metadata.get(key, 'unknown'))
 
 
 def _sim_options_from_results(results: list[Any]) -> dict[str, list[str]]:
-    personas = sorted({_meta(r, "persona") for r in results})
-    scenarios = sorted({_meta(r, "scenario") for r in results})
+    personas = sorted({_meta(r, 'persona') for r in results})
+    scenarios = sorted({_meta(r, 'scenario') for r in results})
     terminated = sorted({r.terminated_by.value for r in results})
     return {
-        "persona": personas,
-        "scenario": scenarios,
-        "terminated_by": terminated,
-        "goal_outcome": ["All", "Achieved", "Not achieved"],
+        'persona': personas,
+        'scenario': scenarios,
+        'terminated_by': terminated,
+        'goal_outcome': ['All', 'Achieved', 'Not achieved'],
     }
 
 
@@ -222,29 +216,29 @@ def _sim_apply(run: Any, selections: dict[str, list[str]]) -> list[Any]:
     full_opts = _sim_full_options(run)
 
     # persona (multiselect)
-    all_personas = full_opts["persona"]
-    sel_personas = _sel(selections, "persona", default=all_personas)
+    all_personas = full_opts['persona']
+    sel_personas = _sel(selections, 'persona', default=all_personas)
     if set(sel_personas) != set(all_personas):
-        results = [r for r in results if _meta(r, "persona") in sel_personas]
+        results = [r for r in results if _meta(r, 'persona') in sel_personas]
 
     # scenario (multiselect)
-    all_scenarios = full_opts["scenario"]
-    sel_scenarios = _sel(selections, "scenario", default=all_scenarios)
+    all_scenarios = full_opts['scenario']
+    sel_scenarios = _sel(selections, 'scenario', default=all_scenarios)
     if set(sel_scenarios) != set(all_scenarios):
-        results = [r for r in results if _meta(r, "scenario") in sel_scenarios]
+        results = [r for r in results if _meta(r, 'scenario') in sel_scenarios]
 
     # terminated_by (multiselect)
-    all_terminated = full_opts["terminated_by"]
-    sel_terminated = _sel(selections, "terminated_by", default=all_terminated)
+    all_terminated = full_opts['terminated_by']
+    sel_terminated = _sel(selections, 'terminated_by', default=all_terminated)
     if set(sel_terminated) != set(all_terminated):
         results = [r for r in results if r.terminated_by.value in sel_terminated]
 
     # goal_outcome (radio)
-    goal_sel = selections.get("goal_outcome", ["All"])
-    goal_filter = goal_sel[0] if goal_sel else "All"
-    if goal_filter == "Achieved":
+    goal_sel = selections.get('goal_outcome', ['All'])
+    goal_filter = goal_sel[0] if goal_sel else 'All'
+    if goal_filter == 'Achieved':
         results = [r for r in results if r.goal_achieved]
-    elif goal_filter == "Not achieved":
+    elif goal_filter == 'Not achieved':
         results = [r for r in results if not r.goal_achieved]
 
     return results
@@ -258,7 +252,7 @@ def _sim_recompute_options(filtered: list[Any]) -> dict[str, list[str]]:
     """
     opts = _sim_options_from_results(filtered)
     # The goal_outcome radio always shows all three values.
-    opts["goal_outcome"] = ["All", "Achieved", "Not achieved"]
+    opts['goal_outcome'] = ['All', 'Achieved', 'Not achieved']
     return opts
 
 
@@ -267,13 +261,13 @@ def _sim_recompute_options(filtered: list[Any]) -> dict[str, list[str]]:
 # ---------------------------------------------------------------------------
 
 FILTERS: dict[str, FilterDef] = {
-    "redteam": FilterDef(
+    'redteam': FilterDef(
         dimensions=_REDTEAM_DIMS,
         options=_rt_full_options,
         apply=_rt_apply,
         recompute_options=_rt_recompute_options,
     ),
-    "sim": FilterDef(
+    'sim': FilterDef(
         dimensions=_SIM_DIMS,
         options=_sim_full_options,
         apply=_sim_apply,

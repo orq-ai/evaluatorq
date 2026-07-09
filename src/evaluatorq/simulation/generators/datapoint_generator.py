@@ -64,7 +64,7 @@ class DatapointGenerator:
         self,
         *,
         agent_description: str,
-        context: str = "",
+        context: str = '',
         num_personas: int = 3,
         num_scenarios: int = 5,
         edge_case_percentage: float = 0.2,
@@ -81,19 +81,17 @@ class DatapointGenerator:
         Creates personas and scenarios, then combines them into datapoints.
         Total datapoints = numPersonas x (numScenarios + boundary + security)
         """
-        logger.info(
-            "Generating %d personas and %d scenarios...", num_personas, num_scenarios
-        )
+        logger.info('Generating %d personas and %d scenarios...', num_personas, num_scenarios)
 
         # Build tasks for parallel generation
         tasks: dict[str, Any] = {
-            "personas": self._persona_generator.generate(
+            'personas': self._persona_generator.generate(
                 agent_description=agent_description,
                 context=context,
                 num_personas=num_personas,
                 edge_case_percentage=edge_case_percentage,
             ),
-            "scenarios": self._scenario_generator.generate(
+            'scenarios': self._scenario_generator.generate(
                 agent_description=agent_description,
                 context=context,
                 num_scenarios=num_scenarios,
@@ -102,15 +100,15 @@ class DatapointGenerator:
         }
 
         if include_boundary:
-            logger.info("Including %d boundary scenarios", num_boundary)
-            tasks["boundary"] = self._scenario_generator.generate_boundary_scenarios(
+            logger.info('Including %d boundary scenarios', num_boundary)
+            tasks['boundary'] = self._scenario_generator.generate_boundary_scenarios(
                 agent_description=agent_description,
                 num_scenarios=num_boundary,
             )
 
         if include_security:
-            logger.info("Including %d security scenarios", num_security)
-            tasks["security"] = self._scenario_generator.generate_security_scenarios(
+            logger.info('Including %d security scenarios', num_security)
+            tasks['security'] = self._scenario_generator.generate_security_scenarios(
                 agent_description=agent_description,
                 seed_examples=security_seed_examples,
                 categories=security_categories,
@@ -121,29 +119,27 @@ class DatapointGenerator:
         raw_results = await asyncio.gather(*tasks.values())
         results = dict(zip(task_keys, raw_results, strict=False))
 
-        personas: list[Persona] = results["personas"]
-        scenarios: list[Scenario] = results["scenarios"]
+        personas: list[Persona] = results['personas']
+        scenarios: list[Scenario] = results['scenarios']
 
         # Merge additional scenario types
-        if "boundary" in results:
-            boundary: list[Scenario] = results["boundary"]
-            logger.info("Generated %d boundary scenarios", len(boundary))
+        if 'boundary' in results:
+            boundary: list[Scenario] = results['boundary']
+            logger.info('Generated %d boundary scenarios', len(boundary))
             scenarios = [*scenarios, *boundary]
-        if "security" in results:
-            security: list[Scenario] = results["security"]
-            logger.info("Generated %d security scenarios", len(security))
+        if 'security' in results:
+            security: list[Scenario] = results['security']
+            logger.info('Generated %d security scenarios', len(security))
             scenarios = [*scenarios, *security]
 
         if not personas:
             raise RuntimeError(
-                "Persona generation failed: no personas were produced. "
-                "Check LLM connectivity and response parsing."
+                'Persona generation failed: no personas were produced. Check LLM connectivity and response parsing.'
             )
 
         if not scenarios:
             raise RuntimeError(
-                "Scenario generation failed: no scenarios were produced. "
-                "Check LLM connectivity and response parsing."
+                'Scenario generation failed: no scenarios were produced. Check LLM connectivity and response parsing.'
             )
 
         # Generate datapoints from all combinations
@@ -164,7 +160,7 @@ class DatapointGenerator:
         combinations = [(p, s) for p in personas for s in scenarios]
 
         logger.info(
-            "Generating %d datapoints from %d personas x %d scenarios",
+            'Generating %d datapoints from %d personas x %d scenarios',
             len(combinations),
             len(personas),
             len(scenarios),
@@ -172,16 +168,14 @@ class DatapointGenerator:
 
         async def generate_single(persona: Persona, scenario: Scenario) -> SimulationDatapoint:
             async with self._semaphore:
-                first_message = await self._first_message_generator.generate(
-                    persona, scenario
-                )
+                first_message = await self._first_message_generator.generate(persona, scenario)
                 await asyncio.sleep(self._rate_limit_delay)
                 return generate_datapoint(persona, scenario, first_message)
 
         tasks = list(starmap(generate_single, combinations))
         datapoints = await asyncio.gather(*tasks)
 
-        logger.info("Generated %d datapoints", len(datapoints))
+        logger.info('Generated %d datapoints', len(datapoints))
         return list(datapoints)
 
     @staticmethod
@@ -198,14 +192,14 @@ class DatapointGenerator:
             if dp.first_message and random.random() < perturbation_rate:
                 perturbed_msg, p_type = apply_random_perturbation(dp.first_message)
                 perturbed_count += 1
-                logger.debug("Applied %s perturbation to: %s", p_type, dp.scenario.name)
-                result.append(dp.model_copy(update={"first_message": perturbed_msg}))
+                logger.debug('Applied %s perturbation to: %s', p_type, dp.scenario.name)
+                result.append(dp.model_copy(update={'first_message': perturbed_msg}))
             else:
                 result.append(dp)
 
         if perturbed_count > 0:
             logger.info(
-                "Applied perturbations to %d/%d first messages",
+                'Applied perturbations to %d/%d first messages',
                 perturbed_count,
                 len(datapoints),
             )

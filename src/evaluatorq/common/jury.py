@@ -240,9 +240,9 @@ async def _judge_vote(
     numeric_how: NumericAggName,
     propagate_errors: bool = False,
 ) -> tuple[JuryVote, list[TokenUsage]]:
-    predictions = await asyncio.gather(
-        *[_call_prediction(judge_fn, model, propagate_errors=propagate_errors) for _ in range(max(1, repetitions))]
-    )
+    predictions = await asyncio.gather(*[
+        _call_prediction(judge_fn, model, propagate_errors=propagate_errors) for _ in range(max(1, repetitions))
+    ])
     usages = [p.token_usage for p in predictions if p.token_usage is not None]
     decisive = [p for p in predictions if p.decisive]
     abstained = bool(predictions) and not decisive and any(p.abstained for p in predictions)
@@ -534,7 +534,7 @@ def _panel_composition_messages(panel: list[str], target_models: list[str], *, s
         shared_label = ', '.join(sorted(shared))
         messages.append(
             f'Judge(s) {offenders} share the target provider family ({shared_label}). '
-            'Same-family self-judging may bias verdicts toward the target\'s own provider; '
+            "Same-family self-judging may bias verdicts toward the target's own provider; "
             'prefer judges from a different provider than the target.'
         )
     return messages

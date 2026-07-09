@@ -1,6 +1,15 @@
 # evaluatorq
 
+[![PyPI version](https://img.shields.io/pypi/v/evaluatorq.svg)](https://pypi.org/project/evaluatorq/)
+[![Python versions](https://img.shields.io/pypi/pyversions/evaluatorq.svg)](https://pypi.org/project/evaluatorq/)
+[![CI](https://github.com/orq-ai/evaluatorq/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/orq-ai/evaluatorq/actions/workflows/ci.yml)
+[![Docs](https://github.com/orq-ai/evaluatorq/actions/workflows/docs.yml/badge.svg?branch=main)](https://github.com/orq-ai/evaluatorq/actions/workflows/docs.yml)
+[![Release](https://github.com/orq-ai/evaluatorq/actions/workflows/release.yml/badge.svg)](https://github.com/orq-ai/evaluatorq/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/orq-ai/evaluatorq/blob/main/LICENSE)
+
 An evaluation framework library for Python that provides a flexible way to run parallel evaluations and optionally integrate with the Orq AI platform.
+
+**Docs:** [orq-ai.github.io/evaluatorq](https://orq-ai.github.io/evaluatorq/). Agents can read the docs as markdown at [`/llms.txt`](https://orq-ai.github.io/evaluatorq/llms.txt) (curated index) and [`/llms-full.txt`](https://orq-ai.github.io/evaluatorq/llms-full.txt) (full text), per the [llms.txt convention](https://llmstxt.org/).
 
 ## Why evaluatorq?
 

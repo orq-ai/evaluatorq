@@ -14,14 +14,14 @@ from .types import DataPointResult, EvaluatorqResult
 class SendResultsPayload(BaseModel):
     """The payload format expected by the Orq API."""
 
-    model_config: dict[str, bool] = {"populate_by_name": True}
+    model_config: dict[str, bool] = {'populate_by_name': True}
 
-    name: str = Field(serialization_alias="_name")
-    description: str | None = Field(default=None, serialization_alias="_description")
-    created_at: str = Field(serialization_alias="_createdAt")
-    ended_at: str = Field(serialization_alias="_endedAt")
-    evaluation_duration: int = Field(serialization_alias="_evaluationDuration")
-    dataset_id: str | None = Field(default=None, serialization_alias="datasetId")
+    name: str = Field(serialization_alias='_name')
+    description: str | None = Field(default=None, serialization_alias='_description')
+    created_at: str = Field(serialization_alias='_createdAt')
+    ended_at: str = Field(serialization_alias='_endedAt')
+    evaluation_duration: int = Field(serialization_alias='_evaluationDuration')
+    dataset_id: str | None = Field(default=None, serialization_alias='datasetId')
     path: str | None = Field(default=None)
     results: list[DataPointResult]
 
@@ -93,13 +93,13 @@ async def send_results_to_orq(
             results=results,
         )
 
-        resolved_base_url = (base_url or os.getenv("ORQ_BASE_URL", ORQ_DEFAULT_HOST)).rstrip("/")
-        logger.debug("Uploading results to {}", resolved_base_url)
+        resolved_base_url = (base_url or os.getenv('ORQ_BASE_URL', ORQ_DEFAULT_HOST)).rstrip('/')
+        logger.debug('Uploading results to {}', resolved_base_url)
 
         # Serialize with aliases, stripping None on optional fields (the API
         # rejects null for ``error``, ``explanation``, etc.) but keeping
         # ``output`` even when None (the API requires it to be present).
-        payload_dict = payload.model_dump(mode="json", exclude_none=True, by_alias=True)
+        payload_dict = payload.model_dump(mode='json', exclude_none=True, by_alias=True)
 
         # Restore fields stripped by exclude_none.  The API schema marks
         # ``error`` and ``explanation`` as optional strings — they may be
@@ -107,38 +107,38 @@ async def send_results_to_orq(
         # empty strings rather than absent, in case any code path leaks a
         # ``null`` through nested dicts that exclude_none cannot reach.
         # ``output`` is required (nullable) so it must always be present.
-        for result in payload_dict.get("results", []):
-            for jr in result.get("jobResults") or []:
-                jr.setdefault("output", None)
-                jr.setdefault("error", "")
-                for es in jr.get("evaluatorScores") or []:
-                    if "score" in es:
-                        es["score"].setdefault("explanation", "")
+        for result in payload_dict.get('results', []):
+            for jr in result.get('jobResults') or []:
+                jr.setdefault('output', None)
+                jr.setdefault('error', '')
+                for es in jr.get('evaluatorScores') or []:
+                    if 'score' in es:
+                        es['score'].setdefault('explanation', '')
                         # Evaluator-cost metadata is for local reports only; never
                         # upload the judge's token usage or raw response to the platform.
-                        es["score"].pop("token_usage", None)
-                        es["score"].pop("raw_output", None)
-                    es.setdefault("error", "")
+                        es['score'].pop('token_usage', None)
+                        es['score'].pop('raw_output', None)
+                    es.setdefault('error', '')
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                f"{resolved_base_url}/v2/spreadsheets/evaluations/receive",
+                f'{resolved_base_url}/v2/spreadsheets/evaluations/receive',
                 headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {api_key}",
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {api_key}',
                 },
                 json=payload_dict,
             )
 
             if not response.is_success:
-                error_text = response.text or "Unknown error"
+                error_text = response.text or 'Unknown error'
                 if raise_on_error:
                     raise SendResultsError(
-                        "Could not send results to Orq platform "
-                        f"({response.status_code} {response.reason_phrase}): {error_text}"
+                        'Could not send results to Orq platform '
+                        f'({response.status_code} {response.reason_phrase}): {error_text}'
                     )
                 logger.warning(
-                    "Could not send results to Orq platform ({} {}): {}",
+                    'Could not send results to Orq platform ({} {}): {}',
                     response.status_code,
                     response.reason_phrase,
                     error_text,
@@ -148,19 +148,19 @@ async def send_results_to_orq(
             orq_result = OrqResponse.model_validate(response.json())
 
             logger.info(
-                "Results sent to Orq: {} ({} rows created)",
+                'Results sent to Orq: {} ({} rows created)',
                 orq_result.experiment_name,
                 orq_result.rows_created,
             )
             if orq_result.experiment_url:
-                logger.info("View your evaluation at: {}", orq_result.experiment_url)
+                logger.info('View your evaluation at: {}', orq_result.experiment_url)
 
             return orq_result.experiment_url
 
     except SendResultsError:
         raise
     except Exception:
-        logger.exception("Could not send results to Orq platform")
+        logger.exception('Could not send results to Orq platform')
         if raise_on_error:
             raise
         return None

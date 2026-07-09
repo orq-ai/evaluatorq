@@ -116,7 +116,9 @@ def _card(path: Path) -> ReportCard | None:
         error = 'missing required field: summary'
     elif surface == 'sim' and 'scorer_averages' not in data:
         error = 'missing required field: scorer_averages'
-    headline = '' if error else f"{data.get('total_results', 0)} {'attacks' if surface == 'redteam' else 'conversations'}"
+    headline = (
+        '' if error else f'{data.get("total_results", 0)} {"attacks" if surface == "redteam" else "conversations"}'
+    )
     return ReportCard(report_id(path), surface, str(name), created_at, headline, path, error)
 
 
