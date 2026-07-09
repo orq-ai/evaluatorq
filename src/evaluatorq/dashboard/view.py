@@ -20,6 +20,7 @@ role-labeled message list as a series of ``<div>`` elements.  Shared by
 from __future__ import annotations
 
 from datetime import datetime
+from itertools import starmap
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
@@ -330,7 +331,7 @@ def _run_grid(rows: list[Any]) -> str:
             f'<a class="runs-grid-row" href="/r/{esc(r.rid)}">'
             f'<span class="rg-job"><span class="rg-name">{esc(r.name)}{err}</span>'
             f'<span class="rg-sub">{esc(_ago(r.when))}</span></span>'
-            f'<span class="rg-targets">{"".join(_target_pill(lbl, kind) for lbl, kind in r.targets)}</span>'
+            f'<span class="rg-targets">{"".join(starmap(_target_pill, r.targets))}</span>'
             f'<span>{_run_status_pill(r.status)}</span>'
             f'<span class="run-score {_score_cls(r.score)}">{_fmt_score(r.score)}</span>'
             f'<span class="rg-num">{esc(str(r.cases))}</span>'
