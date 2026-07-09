@@ -98,7 +98,7 @@ plugins:
   - llmstxt:
       markdown_description: |
         This is the curated docs index. For the complete docs as one Markdown file, use
-        [llms-full.txt](https://orq-ai.github.io/evaluatorq/llms-full.txt).
+        [llms-full.txt](llms-full.txt).
       full_output: llms-full.txt
       sections:
         Getting started:
