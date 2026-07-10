@@ -467,3 +467,59 @@ class TestFilterDefUnit:
         new_opts = FILTERS["sim"].recompute_options(filtered)
         assert "alice" in new_opts["persona"]
         assert "bob" not in new_opts["persona"]
+
+
+# ---------------------------------------------------------------------------
+# goal_outcome two-value multiselect (Task 5)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def sim_results() -> list:
+    """A small list of SimulationResult-like objects with mixed goal_achieved."""
+    return _sim_run().results
+
+
+def _run(results):
+    class R:  # noqa: D401
+        pass
+
+    r = R()
+    r.results = results
+    return r
+
+
+class TestGoalOutcomeMultiselect:
+    @pytest.mark.parametrize(
+        "sel,expected_all",
+        [
+            ([], True),  # zero => All
+            (["Achieved", "Not achieved"], True),  # two => All
+        ],
+    )
+    def test_goal_outcome_zero_or_two_is_all(self, sim_results, sel, expected_all) -> None:
+        from evaluatorq.dashboard.filters import _sim_apply
+
+        run = _run(sim_results)
+        out = _sim_apply(run, {"goal_outcome": sel})
+        assert len(out) == len(sim_results)
+
+    def test_goal_outcome_single_achieved(self, sim_results) -> None:
+        from evaluatorq.dashboard.filters import _sim_apply
+
+        run = _run(sim_results)
+        out = _sim_apply(run, {"goal_outcome": ["Achieved"]})
+        assert all(r.goal_achieved for r in out)
+
+    def test_goal_outcome_single_not_achieved(self, sim_results) -> None:
+        from evaluatorq.dashboard.filters import _sim_apply
+
+        run = _run(sim_results)
+        out = _sim_apply(run, {"goal_outcome": ["Not achieved"]})
+        assert all(not r.goal_achieved for r in out)
+
+    def test_sim_options_no_all_sentinel(self, sim_results) -> None:
+        from evaluatorq.dashboard.filters import _sim_options_from_results
+
+        opts = _sim_options_from_results(sim_results)
+        assert opts["goal_outcome"] == ["Achieved", "Not achieved"]

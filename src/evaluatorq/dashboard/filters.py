@@ -11,9 +11,12 @@ Each ``FilterDef`` encapsulates all filter operations for a surface:
                             ``apply`` first and passing the result in.
 
 Selections are plain ``dict[str, list[str]]`` mapping dimension key to the
-list of selected values.  Radio dimensions (``result``, ``goal_outcome``) use
-a single-element list for the selected value.  Missing or empty selections
-default to "all selected" so a partial POST does not silently drop filters.
+list of selected values.  The ``result`` radio dimension uses a
+single-element list for the selected value.  The sim ``goal_outcome``
+dimension is a two-value multiselect (``Achieved`` / ``Not achieved``):
+selecting exactly one value narrows to that outcome; selecting zero or
+both values means "all".  Missing or empty selections default to "all
+selected" so a partial POST does not silently drop filters.
 """
 
 from __future__ import annotations
@@ -202,7 +205,7 @@ def _sim_options_from_results(results: list[Any]) -> dict[str, list[str]]:
         'persona': personas,
         'scenario': scenarios,
         'terminated_by': terminated,
-        'goal_outcome': ['All', 'Achieved', 'Not achieved'],
+        'goal_outcome': ['Achieved', 'Not achieved'],
     }
 
 
@@ -233,13 +236,11 @@ def _sim_apply(run: Any, selections: dict[str, list[str]]) -> list[Any]:
     if set(sel_terminated) != set(all_terminated):
         results = [r for r in results if r.terminated_by.value in sel_terminated]
 
-    # goal_outcome (radio)
-    goal_sel = selections.get('goal_outcome', ['All'])
-    goal_filter = goal_sel[0] if goal_sel else 'All'
-    if goal_filter == 'Achieved':
-        results = [r for r in results if r.goal_achieved]
-    elif goal_filter == 'Not achieved':
-        results = [r for r in results if not r.goal_achieved]
+    # goal_outcome (two-value multiselect: one => that outcome; zero/two => All)
+    goal_sel = [v for v in selections.get('goal_outcome', []) if v in {'Achieved', 'Not achieved'}]
+    if len(goal_sel) == 1:
+        want = goal_sel[0] == 'Achieved'
+        results = [r for r in results if bool(r.goal_achieved) == want]
 
     return results
 
@@ -251,8 +252,8 @@ def _sim_recompute_options(filtered: list[Any]) -> dict[str, list[str]]:
     the result in, so that ``apply`` runs only once per POST.
     """
     opts = _sim_options_from_results(filtered)
-    # The goal_outcome radio always shows all three values.
-    opts['goal_outcome'] = ['All', 'Achieved', 'Not achieved']
+    # The goal_outcome multiselect always shows both values.
+    opts['goal_outcome'] = ['Achieved', 'Not achieved']
     return opts
 
 
