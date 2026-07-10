@@ -36,11 +36,18 @@ BODY = (92, 90, 86)        # muted body gray
 MUTE = (150, 147, 140)     # captions / prompt
 TEAL = (114, 239, 227)
 CYAN = (150, 214, 226)
+ORANGE = (245, 139, 78)    # orq accent
+WHITE = (255, 255, 255)
 BORDER = (222, 219, 212)
 
-TITLE = "evaluatorq"
+TITLE_HEAD, TITLE_Q = "evaluator", "q"  # the "q" is highlighted (orq tie-in)
 TAGLINE = "Run LLM evaluations, red-team agents, and simulate multi-turn conversations in Python."
-PILLS = ["LLM Evaluation", "Red-Teaming", "Agent Simulation"]
+# What the library contains: (icon, tile colour, glyph colour, label).
+FEATURES = [
+    ("check", TEAL, INK, "LLM evaluation"),
+    ("target", ORANGE, WHITE, "Agent red-teaming"),
+    ("chat", TEAL, INK, "Conversation simulation"),
+]
 INSTALL = "pip install evaluatorq"
 LEFT = 96
 
@@ -67,14 +74,31 @@ def svg_png(path: Path, width: int, recolor: tuple[int, int, int] | None = None)
 
 
 def aurora() -> Image.Image:
-    """The signature orq.ai teal/cyan glow, concentrated upper-centre and softly blurred."""
+    """The signature orq.ai glow: teal/cyan upper-centre with a warm orange hint, softly blurred."""
     card = Image.new("RGBA", (W, H), (*GROUND, 255))
     layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
-    d.ellipse([W // 2 - 760, -440, W // 2 + 760, 190], fill=(*TEAL, 70))
-    d.ellipse([W // 2 + 40, -360, W // 2 + 900, 150], fill=(*CYAN, 55))
+    d.ellipse([W // 2 - 760, -440, W // 2 + 760, 190], fill=(*TEAL, 66))
+    d.ellipse([W // 2 + 120, -360, W // 2 + 940, 150], fill=(*CYAN, 52))
+    d.ellipse([W - 520, -320, W + 200, 210], fill=(*ORANGE, 34))  # warm orange hint, top-right
     card.alpha_composite(layer.filter(ImageFilter.GaussianBlur(150)))
     return card
+
+
+def feature_icon(draw: ImageDraw.ImageDraw, x: int, y: int, kind: str, tile: tuple[int, int, int], glyph: tuple[int, int, int]) -> int:
+    """Draw a rounded icon tile with a simple glyph; returns the tile size."""
+    s = 48
+    draw.rounded_rectangle([x, y, x + s, y + s], radius=13, fill=tile)
+    cx, cy = x + s // 2, y + s // 2
+    if kind == "check":  # evaluation / scoring
+        draw.line([(x + 13, cy), (x + 21, cy + 8), (x + 35, y + 14)], fill=glyph, width=4, joint="curve")
+    elif kind == "target":  # red-teaming / attack
+        draw.ellipse([cx - 13, cy - 13, cx + 13, cy + 13], outline=glyph, width=3)
+        draw.ellipse([cx - 4, cy - 4, cx + 4, cy + 4], fill=glyph)
+    elif kind == "chat":  # multi-turn conversation
+        draw.rounded_rectangle([x + 11, y + 12, x + 37, y + 30], radius=6, outline=glyph, width=3)
+        draw.polygon([(x + 17, y + 29), (x + 17, y + 37), (x + 25, y + 29)], fill=glyph)
+    return s
 
 
 def wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_w: int) -> list[str]:
@@ -92,18 +116,6 @@ def wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max
     return lines
 
 
-def pill(card: Image.Image, draw: ImageDraw.ImageDraw, x: int, y: int, text: str, font: ImageFont.FreeTypeFont) -> int:
-    """A white outline capability pill with a teal dot; returns its width."""
-    h, pad, gap, r = 56, 28, 16, 7
-    tw = draw.textlength(text, font=font)
-    w = int(pad * 2 + gap + r * 2 + tw)
-    draw.rounded_rectangle([x, y, x + w, y + h], radius=h // 2, fill=(255, 255, 255, 240), outline=BORDER, width=2)
-    cy = y + h // 2
-    draw.ellipse([x + pad, cy - r, x + pad + r * 2, cy + r], fill=TEAL, outline=(90, 200, 190), width=1)
-    draw.text((x + pad + r * 2 + gap, cy), text, font=font, fill=INK, anchor="lm")
-    return w
-
-
 def main() -> None:
     card = aurora()
     draw = ImageDraw.Draw(card)
@@ -113,8 +125,11 @@ def main() -> None:
     card.alpha_composite(mark, (LEFT, 66))
     draw.text((LEFT + 56, 86), "orq.ai", font=load_font("ESKlarheitKurrent-Smbd.woff2", 30), fill=INK, anchor="lm")
 
-    # Title in Kurrent SemiBold, near-black.
-    draw.text((LEFT - 6, 176), TITLE, font=load_font("ESKlarheitKurrent-Smbd.woff2", 120), fill=INK)
+    # Title in Kurrent SemiBold — near-black "evaluator" with an orange "q" (the orq tie-in).
+    title_font = load_font("ESKlarheitKurrent-Smbd.woff2", 120)
+    tx = LEFT - 6
+    draw.text((tx, 176), TITLE_HEAD, font=title_font, fill=INK)
+    draw.text((tx + draw.textlength(TITLE_HEAD, font=title_font), 176), TITLE_Q, font=title_font, fill=ORANGE)
 
     # Tagline in Avio Sans.
     tag_font = load_font("AvioSans-Regular.woff2", 34)
@@ -123,16 +138,19 @@ def main() -> None:
         draw.text((LEFT, y), line, font=tag_font, fill=BODY)
         y += 46
 
-    # Capability pills.
-    pill_font = load_font("AvioSans-Medium.woff2", 25)
-    x = LEFT
-    for label in PILLS:
-        x += pill(card, draw, x, 452, label, pill_font) + 16
+    # What's inside: icon-led feature row (reads as capabilities, not tags).
+    feat_font = load_font("AvioSans-Medium.woff2", 26)
+    x, fy = LEFT, 448
+    for kind, tile, glyph, label in FEATURES:
+        s = feature_icon(draw, x, fy, kind, tile, glyph)
+        lx = x + s + 15
+        draw.text((lx, fy + s // 2), label, font=feat_font, fill=INK, anchor="lm")
+        x = int(lx + draw.textlength(label, font=feat_font) + 46)
 
     # Install line in Kurrent Mono, with a muted prompt.
     mono = load_font("ESKlarheitKurrentMono-Md.woff2", 27)
-    draw.text((LEFT, H - 74), "$", font=mono, fill=MUTE)
-    draw.text((LEFT + 26, H - 74), INSTALL, font=mono, fill=INK)
+    draw.text((LEFT, H - 72), "$", font=mono, fill=MUTE)
+    draw.text((LEFT + 26, H - 72), INSTALL, font=mono, fill=INK)
 
     card.convert("RGB").save(OUT, "PNG")
     print(f"wrote {OUT.relative_to(ROOT)} ({OUT.stat().st_size // 1024} KB)")
