@@ -16,13 +16,16 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from starlette.testclient import TestClient
 
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.library import report_id
+
+if TYPE_CHECKING:
+    from evaluatorq.simulation.types import TurnMetrics
 
 # ---------------------------------------------------------------------------
 # Shared fixture factories
@@ -94,16 +97,24 @@ def _make_rt_report():
 def _make_sim_run(
     personas: list[str] | None = None,
     goal_achieved_flags: list[bool] | None = None,
+    turn_metrics_by_result: list[list[TurnMetrics]] | None = None,
 ):
-    """Build a minimal SimulationRun."""
+    """Build a minimal SimulationRun.
+
+    ``turn_metrics_by_result`` (optional) supplies each result's ``turn_metrics``
+    list, in order; results beyond its length (or when omitted) get ``[]``, so
+    existing callers that don't care about turn metrics are unaffected.
+    """
     from evaluatorq.contracts import TokenUsage
     from evaluatorq.simulation.types import SimulationResult, SimulationRun, TerminatedBy
 
     personas = personas or ["alice", "bob"]
     goal_achieved_flags = goal_achieved_flags or [True, False]
+    turn_metrics_by_result = turn_metrics_by_result or []
 
     results = []
-    for persona, goal in zip(personas, goal_achieved_flags):
+    for i, (persona, goal) in enumerate(zip(personas, goal_achieved_flags)):
+        tms = turn_metrics_by_result[i] if i < len(turn_metrics_by_result) else []
         results.append(
             SimulationResult(
                 messages=[],
@@ -112,8 +123,8 @@ def _make_sim_run(
                 goal_achieved=goal,
                 goal_completion_score=1.0 if goal else 0.0,
                 rules_broken=[],
-                turn_count=2,
-                turn_metrics=[],
+                turn_count=len(tms) or 2,
+                turn_metrics=tms,
                 token_usage=TokenUsage(input_tokens=10, output_tokens=5, total_tokens=15),
                 metadata={"persona": persona, "scenario": "billing"},
             )

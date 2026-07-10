@@ -28,6 +28,30 @@ def sim_run():
 
 
 @pytest.fixture()
+def sim_run_with_turn_metrics():
+    from evaluatorq.contracts import TokenUsage
+    from evaluatorq.simulation.types import TurnMetrics
+
+    def _tm(turn_number: int, response_quality: float, hallucination_risk: float) -> TurnMetrics:
+        return TurnMetrics(
+            turn_number=turn_number,
+            token_usage=TokenUsage(input_tokens=5, output_tokens=5, total_tokens=10),
+            response_quality=response_quality,
+            hallucination_risk=hallucination_risk,
+            judge_reason='ok',
+        )
+
+    return _make_sim_run(
+        personas=['alice', 'bob'],
+        goal_achieved_flags=[True, False],
+        turn_metrics_by_result=[
+            [_tm(1, 0.6, 0.2), _tm(2, 0.8, 0.1)],
+            [_tm(1, 0.5, 0.2), _tm(2, 0.7, 0.1)],
+        ],
+    )
+
+
+@pytest.fixture()
 def roots(tmp_path: Path) -> list[Path]:
     rt = tmp_path / 'runs'
     sim = tmp_path / 'sim-runs'
@@ -167,3 +191,42 @@ def test_sim_transcripts_tab_drops_failure_mode(sim_run) -> None:
 
     html = sim_report_tabs('rid', sim_run)
     assert 'id="section-failure_mode"' not in html
+
+
+def test_sim_turn_quality_tab_present_when_data(sim_run_with_turn_metrics) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run_with_turn_metrics)
+    assert 'Turn quality' in html
+    assert 'by turn index' in html.lower()
+
+
+def test_sim_turn_quality_tab_absent_without_turn_metrics(sim_run) -> None:
+    """No turn_metrics on any result -> the tab drops out (empty panel)."""
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run)
+    assert 'Turn quality' not in html
+
+
+def test_sim_turn_quality_delta_callout_and_chart(sim_run_with_turn_metrics) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run_with_turn_metrics)
+    # Delta callout: response quality improved, hallucination risk fell.
+    assert 'response quality' in html
+    assert 'hallucination risk' in html
+    assert 'class="rk-line-chart"' in html
+    assert 'class="rk-legend"' in html
+    # No confidence pill on the turn-quality callout.
+    assert 'CONFIDENCE' not in html.split('Turn quality trend')[-1].split('</div>')[0]
+
+
+def test_sim_turn_quality_stat_tiles_and_bar_rows(sim_run_with_turn_metrics) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run_with_turn_metrics)
+    assert 'class="sim-stat-grid"' in html
+    assert 'class="sim-stat-tile"' in html
+    assert 'class="rk-bar-rows"' in html
+    assert '2 turns' in html

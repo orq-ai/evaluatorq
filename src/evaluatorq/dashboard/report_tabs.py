@@ -85,10 +85,11 @@ def _tabs(group: str, items: list[tuple[str, str] | tuple[str, str, str]]) -> st
 def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = None) -> str:
     """Render the Agent Sim report body as Streamlit-aligned tabs.
 
-    Tabs: Overview, Breakdown, Transcripts, Turn quality, Tokens, Evaluators,
-    Judge & errors — each populated from the precomputed report sections (empty
-    tabs drop out). Pass ``results`` to render a filtered subset (the filter
-    round-trip); it defaults to the run's full result list.
+    Tabs: Overview, Breakdown, Transcripts, Turn quality, Config — each
+    populated from the precomputed report sections (empty tabs drop out; Turn
+    quality drops when a run carries no ``turn_metrics``). Pass ``results`` to
+    render a filtered subset (the filter round-trip); it defaults to the run's
+    full result list.
     """
     from evaluatorq.dashboard.view import sim_interactive_panels
     from evaluatorq.simulation.reports.export_html import _SECTION_RENDERERS
@@ -107,8 +108,9 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
 
     entries = individual_entries(rows)
 
-    # Folded 7→4 to curb tab sprawl: Turn quality → Breakdown; Evaluators +
-    # Judge & errors → Transcripts (all per-conversation verdicts); Tokens → Config.
+    # Folded 7→5 to curb tab sprawl: Evaluators + Judge & errors → Transcripts
+    # (all per-conversation verdicts); Tokens → Config. Turn quality is its own
+    # tab (unfolded from Breakdown) and drops out when a run has no turn_metrics.
     tabs = _tabs(
         'simtab',
         [
@@ -119,6 +121,7 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
                 sim_interactive_panels(rid, entries) + render('evaluator_scores', 'judge_verdicts', 'errors'),
                 f'Transcripts <span class="tab-count">{len(entries)}</span>',
             ),
+            ('Turn quality', _sim_turn_quality(by_kind)),
             ('Config', render('token_usage')),
         ],
     )
@@ -172,6 +175,113 @@ def _sim_breakdown(by_kind: dict[str, Any], render: Callable[..., str]) -> str:
     failures_html = render('failures_first')
 
     return f'{heatmap_html}{dist_html}{tables_html}{failure_html}{failures_html}'
+
+
+_TURN_METRIC_LABELS: dict[str, str] = {
+    'response_quality': 'response quality',
+    'hallucination_risk': 'hallucination risk',
+    'tone_appropriateness': 'tone appropriateness',
+    'factual_accuracy': 'factual accuracy',
+}
+# Metrics where a rising value is bad (risk), vs. the default where rising is good (quality).
+_TURN_RISK_METRICS = frozenset({'hallucination_risk'})
+
+
+def _turn_delta_callout(series: dict[str, list[float | None]]) -> str:
+    """Templated first-to-last-turn delta callout, no confidence pill (spec
+    §Turn.1). A clause renders only for series with >= 2 non-None points;
+    absent/short metrics are dropped. Returns '' when nothing qualifies."""
+    clauses: list[str] = []
+    for name, values in series.items():
+        points = [v for v in values if v is not None]
+        if len(points) < 2:
+            continue
+        delta = points[-1] - points[0]
+        label = esc(_TURN_METRIC_LABELS.get(name, name.replace('_', ' ')))
+        if abs(delta) < 0.005:
+            clauses.append(f'{label} held steady around <strong>{points[-1]:.2f}</strong>')
+            continue
+        if name in _TURN_RISK_METRICS:
+            verb = 'rose' if delta > 0 else 'fell'
+        else:
+            verb = 'improved' if delta > 0 else 'declined'
+        clauses.append(f'{label} {verb} by <strong>{abs(delta):.2f}</strong> from turn 1 to the last turn')
+    if not clauses:
+        return ''
+    body = '; '.join(clauses) + '.'
+    sentence = body[0].upper() + body[1:]
+    return (
+        '<div class="exec-summary">'
+        '<div class="es-head"><span class="es-label">Turn quality trend</span></div>'
+        f'<p class="es-body">{sentence}</p>'
+        '</div>'
+    )
+
+
+def _sim_turn_count_bar(turn_count_distribution: dict[int, int]) -> str:
+    """Turn-count distribution bar rows, sorted by turn count (spec §Turn.3)."""
+    from evaluatorq.dashboard.report_kit import bar_rows
+
+    if not turn_count_distribution:
+        return ''
+    rows = [(f'{n} turns', float(count)) for n, count in sorted(turn_count_distribution.items())]
+    return bar_rows(rows, width=420, label_w=70, color='var(--chart-2)', fmt=lambda v: str(int(v)))
+
+
+def _sim_avg_quality_tiles(avg_quality_metrics: dict[str, float]) -> str:
+    """Average quality metric stat tiles, 2-col grid (spec §Turn.3)."""
+    if not avg_quality_metrics:
+        return ''
+    tiles = ''.join(
+        f'<div class="sim-stat-tile"><div class="sim-stat-value">{value:.2f}</div>'
+        f'<div class="sim-stat-label">{esc(name.replace("_", " "))}</div></div>'
+        for name, value in avg_quality_metrics.items()
+    )
+    return f'<div class="sim-stat-grid">{tiles}</div>'
+
+
+def _sim_turn_quality(by_kind: dict[str, Any]) -> str:
+    """Turn quality tab body: delta callout → per-turn line chart → 2-col grid
+    of turn-count distribution + avg-quality stat tiles (spec §Turn).
+
+    ``turn_metrics``/``turn_quality_timeline`` sections are always built (even
+    for runs with no per-turn measurements — e.g. ``turn_count_distribution``
+    is derived from every result's ``turn_count``), so presence of the section
+    itself isn't a signal. What matters is whether there's any actual
+    turn-*quality* data (a non-empty timeline series or avg quality metric);
+    absent that, this returns '' and the whole tab drops out.
+    """
+    from evaluatorq.dashboard.report_kit import line_chart, panel
+
+    timeline_section = by_kind.get('turn_quality_timeline')
+    metrics_section = by_kind.get('turn_metrics')
+    timeline_data = timeline_section.data if timeline_section is not None else {}
+    metrics_data = metrics_section.data if metrics_section is not None else {}
+    series = timeline_data.get('series', {})
+    avg_quality_metrics = metrics_data.get('avg_quality_metrics', {})
+    if not series and not avg_quality_metrics:
+        return ''
+
+    callout_html = _turn_delta_callout(series)
+
+    chart_html = ''
+    chart = line_chart(timeline_data.get('turns', []), series)
+    if chart:
+        chart_html = panel(
+            'Per-turn quality',
+            chart,
+            sub='Average across conversations, by turn index (0–1)',  # noqa: RUF001 (mockup wording — spec §Turn.2)
+        )
+
+    dist_body = _sim_turn_count_bar(metrics_data.get('turn_count_distribution', {}))
+    dist_html = panel('Turn-count distribution', dist_body) if dist_body else ''
+
+    tiles_body = _sim_avg_quality_tiles(avg_quality_metrics)
+    tiles_html = panel('Average quality metrics', tiles_body) if tiles_body else ''
+
+    grid_html = f'<div class="sim-breakdown-grid-2">{dist_html}{tiles_html}</div>' if dist_html or tiles_html else ''
+
+    return f'{callout_html}{chart_html}{grid_html}'
 
 
 def _sim_overview(by_kind: dict[str, Any], rows: list[Any]) -> str:

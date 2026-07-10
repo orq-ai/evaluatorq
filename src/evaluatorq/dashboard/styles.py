@@ -912,6 +912,34 @@ _SIM_REPORT_CSS = """
 @media (max-width: 760px) {
     .sim-report .sim-breakdown-grid-2 { grid-template-columns: 1fr; }
 }
+
+/* ---- Turn quality tab (spec §Turn) ---- */
+/* Line chart legend (report_kit.line_chart) */
+.sim-report .rk-legend {
+    display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px;
+}
+.sim-report .rk-legend-item {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--text-muted);
+}
+.sim-report .rk-legend-swatch {
+    display: inline-block; width: 8px; height: 8px; border-radius: 2px;
+}
+/* Average quality metric stat tiles (spec §Turn.3) */
+.sim-report .sim-stat-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+}
+.sim-report .sim-stat-tile {
+    background: var(--surface-sunken); border-radius: 8px; padding: 12px 14px;
+}
+.sim-report .sim-stat-value {
+    font-family: var(--font-mono); font-size: 24px; font-weight: 600;
+    color: var(--text-strong);
+}
+.sim-report .sim-stat-label {
+    font-size: 11px; color: var(--text-muted); margin-top: 4px;
+    text-transform: capitalize;
+}
 """
 
 DASHBOARD_CSS = _DASHBOARD_CSS_HEAD + _TAB_RULES + _SIM_TAB_ACCENT + _DASHBOARD_CSS_TAIL + _SIM_REPORT_CSS
