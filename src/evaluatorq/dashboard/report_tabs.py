@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Any
 from evaluatorq.common.reports import esc
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from evaluatorq.redteam.contracts import RedTeamReport
     from evaluatorq.simulation.types import SimulationRun
 
@@ -111,28 +113,65 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
         'simtab',
         [
             ('Overview', _sim_overview(by_kind, rows)),
-            (
-                'Breakdown',
-                render(
-                    'persona_breakdown',
-                    'scenario_breakdown',
-                    'persona_scenario_heatmap',
-                    'score_distribution',
-                    'failures_first',
-                    'turn_metrics',
-                    'turn_quality_timeline',
-                ),
-            ),
+            ('Breakdown', _sim_breakdown(by_kind, render)),
             (
                 'Transcripts',
-                sim_interactive_panels(rid, entries)
-                + render('evaluator_scores', 'judge_verdicts', 'failure_mode', 'errors'),
+                sim_interactive_panels(rid, entries) + render('evaluator_scores', 'judge_verdicts', 'errors'),
                 f'Transcripts <span class="tab-count">{len(entries)}</span>',
             ),
             ('Config', render('token_usage')),
         ],
     )
     return f'<div class="sim-report">{hero}{tabs}</div>'
+
+
+def _sim_breakdown(by_kind: dict[str, Any], render: Callable[..., str]) -> str:
+    """Breakdown tab body: heatmap → score-distribution → per-persona/scenario
+    tables → top failure modes → failures table (spec §Breakdown)."""
+    from evaluatorq.dashboard.report_kit import bar_rows, heatmap, histogram, panel
+
+    heatmap_section = by_kind.get('persona_scenario_heatmap')
+    heatmap_html = ''
+    if heatmap_section is not None:
+        d = heatmap_section.data
+        heatmap_html = panel(
+            'Goal completion — persona × scenario',  # noqa: RUF001 (mockup wording — spec §Breakdown.1)
+            heatmap(d.get('personas', []), d.get('scenarios', []), d.get('cells', [])),
+            sub='Red → yellow → green as the goal-completion rate rises',
+        )
+
+    dist_section = by_kind.get('score_distribution')
+    dist_html = ''
+    if dist_section is not None:
+        scores = dist_section.data.get('scores', [])
+        if scores:
+            dist_html = panel(
+                'Score distribution',
+                histogram(scores),
+                sub=f'{len(scores)} conversations · dashed line = mean',
+            )
+
+    persona_html = render('persona_breakdown')
+    scenario_html = render('scenario_breakdown')
+    tables_html = (
+        f'<div class="sim-breakdown-grid-2">{persona_html}{scenario_html}</div>'
+        if persona_html or scenario_html
+        else ''
+    )
+
+    failure_mode_section = by_kind.get('failure_mode')
+    failure_html = ''
+    if failure_mode_section is not None:
+        rows = [(str(label), float(count)) for label, count in failure_mode_section.data.get('rows', [])]
+        if rows:
+            failure_html = panel(
+                'Top failure modes',
+                bar_rows(rows, width=520, label_w=220, color='var(--red-600)', fmt=lambda v: str(int(v))),
+            )
+
+    failures_html = render('failures_first')
+
+    return f'{heatmap_html}{dist_html}{tables_html}{failure_html}{failures_html}'
 
 
 def _sim_overview(by_kind: dict[str, Any], rows: list[Any]) -> str:

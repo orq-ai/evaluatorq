@@ -863,6 +863,55 @@ _SIM_REPORT_CSS = """
 .sim-report .sim-criterion-type {
     font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; flex-shrink: 0;
 }
+
+/* ---- Breakdown tab: stacked panels + heatmap/histogram/tables ---- */
+.sim-report .rk-panel + .rk-panel,
+.sim-report .rk-panel + .report-card,
+.sim-report .report-card + .rk-panel {
+    margin-top: 20px;
+}
+
+/* HTML-table heatmap (report_kit.heatmap) */
+.sim-report .rk-heatmap { border-collapse: separate; border-spacing: 4px; }
+.sim-report .rk-heat-col {
+    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    color: var(--text-muted); text-align: center; padding: 0 4px 6px;
+}
+.sim-report .rk-heat-row {
+    font-size: 12px; font-weight: 600; color: var(--text-strong);
+    text-align: right; padding-right: 10px; white-space: nowrap;
+}
+.sim-report .rk-heat-cell {
+    min-width: 50px; height: 34px; border-radius: 5px;
+    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    text-align: center; vertical-align: middle;
+}
+.sim-report .rk-heat-empty { background: var(--surface-sunken); color: var(--text-faint); }
+
+/* Per-persona / per-scenario tables (html_table output) + failures table */
+.sim-report .rk-panel-body { display: grid; }
+.sim-report table {
+    width: 100%; border-collapse: collapse;
+}
+.sim-report table thead th {
+    font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+    font-weight: 600; color: var(--text-faint); background: var(--surface-sunken);
+    padding: 11px 16px; text-align: left;
+}
+.sim-report table tbody td {
+    font-size: 13px; padding: 12px 16px; border-bottom: 1px solid var(--border-subtle);
+}
+.sim-report table tbody tr:last-child td { border-bottom: none; }
+.sim-report table thead th:not(:first-child),
+.sim-report table tbody td:not(:first-child) {
+    text-align: right; font-variant-numeric: tabular-nums;
+}
+.sim-report .sim-breakdown-grid-2 {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 20px;
+}
+@media (max-width: 760px) {
+    .sim-report .sim-breakdown-grid-2 { grid-template-columns: 1fr; }
+}
 """
 
 DASHBOARD_CSS = _DASHBOARD_CSS_HEAD + _TAB_RULES + _SIM_TAB_ACCENT + _DASHBOARD_CSS_TAIL + _SIM_REPORT_CSS

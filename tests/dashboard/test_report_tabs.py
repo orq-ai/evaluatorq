@@ -140,3 +140,30 @@ def test_sim_transcripts_tab_has_count_pill(sim_run) -> None:
 
     html = sim_report_tabs('rid', sim_run)
     assert 'class="tab-count"' in html  # count pill span class
+
+
+def test_sim_breakdown_has_heatmap_and_histogram(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run)
+    assert 'Goal completion —' in html
+    assert 'dashed line = mean' in html
+    assert 'class="rk-heatmap"' in html
+    assert 'class="rk-histogram"' in html
+
+
+def test_sim_breakdown_no_vlconvert_heatmap_or_histogram(sim_run) -> None:
+    """The Breakdown tab must use report_kit's SVG/HTML charts, never vl-convert."""
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run)
+    assert 'vega' not in html.lower()
+
+
+def test_sim_transcripts_tab_drops_failure_mode(sim_run) -> None:
+    """failure_mode moved to Breakdown (spec §Breakdown.4); Transcripts keeps
+    only evaluator_scores / judge_verdicts / errors below the cards."""
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run)
+    assert 'id="section-failure_mode"' not in html
