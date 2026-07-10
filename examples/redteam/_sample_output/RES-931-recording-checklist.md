@@ -38,7 +38,10 @@ all three. Exact attacks vary run to run since the attacker LLM is generative.
 
 ## After recording
 
-Drop the files in `docs/assets/redteam/` named `res931-<framework>.<ext>`
-(e.g. `res931-langgraph.mp4` or `.gif`), then the embed slots in
-`docs/guides/red-teaming.md` (marked with `RES-931 video slot` comments) get
-uncommented to point at them. Ping me and I will wire them in.
+The four recordings live at `docs/assets/redteam-<framework>.mp4` (LangGraph,
+OpenAI Agents, Pydantic AI, CrewAI) and are embedded in the 'Demo runs' section
+of `docs/guides/red-teaming.md`. Re-record and re-transcode any single one with:
+
+    ffmpeg -y -i input.mov -an -vf scale=1512:-2 -c:v libx264 -crf 30 \
+      -preset veryslow -pix_fmt yuv420p -movflags +faststart \
+      docs/assets/redteam-<framework>.mp4

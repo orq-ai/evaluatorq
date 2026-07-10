@@ -181,14 +181,39 @@ the Orq AI Router) with real attack transcripts and judge verdicts are captured 
 LangGraph, OpenAI Agents, and Pydantic AI each execute an indirect prompt injection
 (goal hijack via tool output); CrewAI resists all three.
 
-<!-- RES-931 video slot: per-framework screen recordings. Drop files in
-docs/assets/redteam/res931-<framework>.mp4 and uncomment the embeds below.
-See examples/redteam/_sample_output/RES-931-recording-checklist.md.
-<video controls src="../assets/redteam/res931-langgraph.mp4"></video>
-<video controls src="../assets/redteam/res931-openai-agents.mp4"></video>
-<video controls src="../assets/redteam/res931-pydantic-ai.mp4"></video>
-<video controls src="../assets/redteam/res931-crewai.mp4"></video>
--->
+Screen recordings of each run:
+
+#### LangGraph
+
+<video controls muted playsinline preload="metadata" width="100%">
+  <source src="../../assets/redteam-langgraph.mp4" type="video/mp4">
+  Your browser does not support the video tag —
+  <a href="../../assets/redteam-langgraph.mp4">download the recording</a>.
+</video>
+
+#### OpenAI Agents SDK
+
+<video controls muted playsinline preload="metadata" width="100%">
+  <source src="../../assets/redteam-openai-agents.mp4" type="video/mp4">
+  Your browser does not support the video tag —
+  <a href="../../assets/redteam-openai-agents.mp4">download the recording</a>.
+</video>
+
+#### Pydantic AI
+
+<video controls muted playsinline preload="metadata" width="100%">
+  <source src="../../assets/redteam-pydantic-ai.mp4" type="video/mp4">
+  Your browser does not support the video tag —
+  <a href="../../assets/redteam-pydantic-ai.mp4">download the recording</a>.
+</video>
+
+#### CrewAI
+
+<video controls muted playsinline preload="metadata" width="100%">
+  <source src="../../assets/redteam-crewai.mp4" type="video/mp4">
+  Your browser does not support the video tag —
+  <a href="../../assets/redteam-crewai.mp4">download the recording</a>.
+</video>
 
 ### Known limitations
 
