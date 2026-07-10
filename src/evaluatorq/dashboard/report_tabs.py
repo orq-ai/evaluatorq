@@ -110,7 +110,7 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
     tabs = _tabs(
         'simtab',
         [
-            ('Overview', _sim_outcomes_donut(rows) + render('overview')),
+            ('Overview', _sim_overview(by_kind, rows)),
             (
                 'Breakdown',
                 render(
@@ -127,11 +127,152 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
                 'Transcripts',
                 sim_interactive_panels(rid, entries)
                 + render('evaluator_scores', 'judge_verdicts', 'failure_mode', 'errors'),
+                f'Transcripts <span class="tab-count">{len(entries)}</span>',
             ),
             ('Config', render('token_usage')),
         ],
     )
-    return f'{hero}{tabs}'
+    return f'<div class="sim-report">{hero}{tabs}</div>'
+
+
+def _sim_overview(by_kind: dict[str, Any], rows: list[Any]) -> str:
+    """Overview tab body: exec summary, 5-card KPI band, then two 2-col grids
+    (donut + tokens; personas + scenarios). Spec §Overview."""
+    from evaluatorq.dashboard.report_kit import exec_summary
+
+    summary_section = by_kind.get('summary')
+    overview_section = by_kind.get('overview')
+    heatmap_section = by_kind.get('persona_scenario_heatmap')
+    tokens_section = by_kind.get('token_usage')
+
+    summary_data = summary_section.data if summary_section is not None else {}
+    overview_data = overview_section.data if overview_section is not None else {}
+    heatmap_data = heatmap_section.data if heatmap_section is not None else {}
+    tokens_data = tokens_section.data if tokens_section is not None else {}
+
+    summary_html = exec_summary(
+        summary_data=summary_data,
+        heatmap_data=heatmap_data,
+        confidence=summary_data.get('confidence'),
+    )
+    kpi_html = _sim_kpi_band(summary_data)
+    donut_html = _sim_outcomes_donut(rows)
+    tokens_html = _sim_tokens_panel(tokens_data)
+    personas_html = _sim_personas_panel(overview_data.get('personas', []))
+    scenarios_html = _sim_scenarios_panel(overview_data.get('scenarios', []))
+
+    return (
+        f'{summary_html}{kpi_html}'
+        f'<div class="sim-overview-grid-2">{donut_html}{tokens_html}</div>'
+        f'<div class="sim-overview-grid-2">{personas_html}{scenarios_html}</div>'
+    )
+
+
+def _sim_kpi_band(summary_data: dict[str, Any]) -> str:
+    """5-card KPI band (spec §Overview.2). Goal-completion status is the
+    summary verdict (pass/warn/fail) — never an ad-hoc threshold."""
+    from evaluatorq.common.reports.html_helpers import kpi_cards, pct
+
+    verdict = summary_data.get('verdict', 'neutral')
+    goal_status = verdict if verdict in {'pass', 'warn', 'fail'} else 'neutral'
+    errors = summary_data.get('errors', 0)
+    return kpi_cards([
+        {'label': 'Goal completion', 'value': pct(summary_data.get('success_rate', 0.0)), 'status': goal_status},
+        {
+            'label': 'Avg score',
+            'value': f'{summary_data.get("avg_goal_completion_score", 0.0):.2f}',
+            'status': 'neutral',
+        },
+        {'label': 'Conversations', 'value': str(summary_data.get('total_conversations', 0)), 'status': 'neutral'},
+        {'label': 'Avg turns', 'value': f'{summary_data.get("avg_turn_count", 0.0):.1f}', 'status': 'neutral'},
+        {'label': 'Errors', 'value': str(errors), 'status': 'fail' if errors else 'pass'},
+    ])
+
+
+def _sim_tokens_panel(data: dict[str, Any]) -> str:
+    """Token usage panel: Input/Output bar rows (spec §Overview.3)."""
+    from evaluatorq.dashboard.report_kit import bar_rows, panel
+
+    total = data.get('total_tokens', 0)
+    if not total:
+        return ''
+    prompt = data.get('prompt_tokens', 0)
+    completion = data.get('completion_tokens', 0)
+    avg = data.get('avg_total_per_conversation', 0.0)
+    rows = bar_rows(
+        [('Input', prompt), ('Output', completion)],
+        width=360,
+        label_w=70,
+        color='var(--chart-2)',
+        fmt=lambda v: f'{int(v):,}',
+    )
+    return panel('Tokens', rows, sub=f'{total:,} total · {avg:,.0f}/conv')
+
+
+_TRAIT_LABELS: tuple[str, ...] = ('patience', 'assertiveness', 'politeness', 'technical_level')
+
+
+def _sim_personas_panel(personas: list[dict[str, Any]]) -> str:
+    """Personas panel: name + style tag + conv count, plus a 2-col trait-bar
+    grid when traits are present (spec §Overview.4)."""
+    from evaluatorq.dashboard.report_kit import panel, tag
+
+    if not personas:
+        return ''
+    rows: list[str] = []
+    for p in personas:
+        name = esc(p.get('name', ''))
+        conv = p.get('conversations', 0)
+        traits = p.get('traits')
+        style = traits.get('communication_style') if isinstance(traits, dict) else None
+        header = (
+            f'<div class="sim-persona-row"><span class="sim-persona-name">{name}</span>'
+            f'{tag(str(style), tone="teal") if style else ""}'
+            f'<span class="sim-persona-count">{conv} conv</span></div>'
+        )
+        traits_html = ''
+        if isinstance(traits, dict):
+            bars = ''.join(
+                (
+                    f'<div class="sim-trait-bar"><span class="sim-trait-label">{esc(label)}</span>'
+                    '<span class="sim-trait-track">'
+                    f'<span class="sim-trait-fill" style="width:{max(0.0, min(1.0, float(v))) * 100:.0f}%"></span>'
+                    '</span></div>'
+                )
+                for label in _TRAIT_LABELS
+                if (v := traits.get(label)) is not None
+            )
+            if bars:
+                traits_html = f'<div class="sim-trait-grid">{bars}</div>'
+        rows.append(f'<div class="sim-persona-item">{header}{traits_html}</div>')
+    return panel(f'Personas ({len(personas)})', ''.join(rows))
+
+
+def _sim_scenarios_panel(scenarios: list[dict[str, Any]]) -> str:
+    """Scenarios panel: name, goal, and typed criteria lines (spec §Overview.4)."""
+    from evaluatorq.dashboard.report_kit import panel
+
+    if not scenarios:
+        return ''
+    rows: list[str] = []
+    for s in scenarios:
+        name = esc(s.get('name', ''))
+        goal = s.get('goal')
+        goal_html = f'<div class="sim-scenario-goal">{esc(goal)}</div>' if goal else ''
+        criteria_html = ''.join(
+            (
+                '<div class="sim-criterion">'
+                f'<span class="sim-criterion-type" style="color:var(--{"red-600" if c.get("type") == "must_not_happen" else "teal-600"})">'
+                f'{esc((c.get("type") or "").replace("_", " "))}</span>'
+                f'<span class="sim-criterion-desc">{esc(c.get("description", ""))}</span>'
+                '</div>'
+            )
+            for c in s.get('criteria', [])
+        )
+        rows.append(
+            f'<div class="sim-scenario-item"><div class="sim-scenario-name">{name}</div>{goal_html}{criteria_html}</div>'
+        )
+    return panel(f'Scenarios ({len(scenarios)})', ''.join(rows))
 
 
 _DONUT_SEGMENTS = (

@@ -41,6 +41,8 @@ EDITORIAL_CSS = """
     --text-body:   #4b4955;
     --text-muted:  #6f6d78;
     --text-faint:  #9d9ba4;
+    /* Darkest ink, for on-color text (e.g. heatmap cells on a light fill) */
+    --ink-900: #25232e;
 
     /* Borders — warm neutral hairlines */
     --border-subtle:  #e9e7e2;

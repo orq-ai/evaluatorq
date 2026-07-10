@@ -626,4 +626,132 @@ _DASHBOARD_CSS_TAIL = """
 }
 """
 
-DASHBOARD_CSS = _DASHBOARD_CSS_HEAD + _TAB_RULES + _DASHBOARD_CSS_TAIL
+# Active-tab underline scoped to the Agent Sim report only (spec: "Active-tab
+# underline: orange accent, scoped to `.sim-report .tabs` only — not
+# dashboard-wide"). Extra `.sim-report` class gives this higher specificity
+# than the surface-neutral `_TAB_RULES` above, so it wins without `!important`
+# and the shared Red Team tab bar is untouched.
+_SIM_TAB_ACCENT = ''.join(
+    f'.sim-report .tabs > .tab-radio:nth-of-type({i}):checked ~ .tab-bar > .tab-label:nth-child({i}) '
+    '{ border-bottom-color: var(--orange-500); }\n'
+    for i in range(1, 10)
+)
+
+# ==== .sim-report — Agent Sim report design-mockup alignment ============
+# All rules scoped under `.sim-report` (report_tabs.sim_report_tabs' wrapper)
+# per docs/superpowers/specs/2026-07-10-agent-sim-report-alignment-design.md.
+# Consumes report_kit.py primitives (exec_summary/panel/bar_rows/tag) and the
+# shared `.kpi-band`/`.kpi-card` markup from common/reports/report.css — the
+# overrides here only apply inside `.sim-report`, so the landing-page KPI
+# tiles and the flat HTML export (which never carry this class) are untouched.
+_SIM_REPORT_CSS = """
+.sim-report .tab-count {
+    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    background: var(--surface-sunken); color: var(--text-muted);
+    border-radius: 999px; padding: 1px 7px; margin-left: 5px;
+}
+
+/* ---- Executive summary callout (spec Overview.1) ---- */
+.sim-report .exec-summary {
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-left: 3px solid var(--orange-500);
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin: 16px 0;
+}
+.sim-report .es-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.sim-report .es-label {
+    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint);
+}
+.sim-report .es-confidence {
+    font-family: var(--font-mono); font-size: 10px; font-weight: 600;
+    border: 1px solid; border-radius: 999px; padding: 2px 8px;
+}
+.sim-report .es-body {
+    margin: 8px 0 0; font-size: 14px; line-height: 1.6; color: var(--text-body);
+    max-width: 760px;
+}
+.sim-report .es-body strong { color: var(--text-strong); }
+
+/* ---- 5-card KPI band (spec Overview.2) ---- */
+.sim-report .kpi-band {
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px;
+    margin: 16px 0;
+}
+.sim-report .kpi-card {
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-left: none;
+    border-top: 3px solid var(--teal-600);
+    border-radius: 12px;
+    padding: 15px 16px;
+}
+.sim-report .kpi-card--pass    { border-top-color: var(--green-600); }
+.sim-report .kpi-card--fail    { border-top-color: var(--red-600); }
+.sim-report .kpi-card--warn    { border-top-color: var(--amber-600); }
+.sim-report .kpi-card--neutral { border-top-color: var(--teal-600); }
+.sim-report .kpi-value {
+    font-family: var(--font-mono); font-size: 28px; font-weight: 600;
+    color: var(--text-strong); line-height: 1.1;
+}
+.sim-report .kpi-label { font-size: 12px; color: var(--text-muted); margin-top: 7px; }
+
+/* ---- 2-col grids (donut+tokens, personas+scenarios) ---- */
+.sim-report .sim-overview-grid-2 {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0;
+}
+@media (max-width: 760px) {
+    .sim-report .sim-overview-grid-2 { grid-template-columns: 1fr; }
+}
+
+/* ---- Panel wrapper (report_kit.panel) ---- */
+.sim-report .rk-panel {
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: 12px;
+    padding: 16px 20px;
+}
+.sim-report .rk-panel-title {
+    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint);
+}
+.sim-report .rk-panel-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.sim-report .rk-panel-body { margin-top: 12px; }
+
+/* ---- Tag (report_kit.tag) ---- */
+.sim-report .rk-tag {
+    display: inline-block; font-size: 11px; font-weight: 500;
+    border: 1px solid var(--border-default); border-radius: 999px;
+    padding: 1px 8px; margin-left: 8px; color: var(--text-muted);
+}
+
+/* ---- Personas panel (Overview) ---- */
+.sim-report .sim-persona-item + .sim-persona-item { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
+.sim-report .sim-persona-row { display: flex; align-items: center; gap: 4px; }
+.sim-report .sim-persona-name { font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--text-strong); }
+.sim-report .sim-persona-count { margin-left: auto; font-size: 11px; color: var(--text-faint); }
+.sim-report .sim-trait-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px;
+}
+.sim-report .sim-trait-bar { display: flex; align-items: center; gap: 6px; }
+.sim-report .sim-trait-label { width: 86px; flex-shrink: 0; font-size: 11px; color: var(--text-faint); }
+.sim-report .sim-trait-track {
+    flex: 1; height: 5px; border-radius: 3px; background: var(--surface-sunken); overflow: hidden;
+}
+.sim-report .sim-trait-fill { display: block; height: 100%; background: var(--teal-600); border-radius: 3px; }
+
+/* ---- Scenarios panel (Overview) ---- */
+.sim-report .sim-scenario-item + .sim-scenario-item { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
+.sim-report .sim-scenario-name { font-size: 13px; font-weight: 600; color: var(--text-strong); }
+.sim-report .sim-scenario-goal { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.sim-report .sim-criterion {
+    display: flex; align-items: baseline; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--text-muted);
+}
+.sim-report .sim-criterion-type {
+    font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; flex-shrink: 0;
+}
+"""
+
+DASHBOARD_CSS = _DASHBOARD_CSS_HEAD + _TAB_RULES + _SIM_TAB_ACCENT + _DASHBOARD_CSS_TAIL + _SIM_REPORT_CSS
