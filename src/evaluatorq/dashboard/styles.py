@@ -1281,6 +1281,20 @@ _RT_REPORT_CSS = """
     color: var(--text-faint);
 }
 .rt-report .rt-focus-mini-value { font-family: var(--font-mono); font-size: 14px; font-weight: 600; }
+
+/* ---- Attack evidence fragment (spec §Attacks, Task 13) ---- */
+.rt-report .rt-attack-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.rt-report .rt-verdict {
+    background: var(--surface-sunken); border-radius: 4px; padding: 10px 14px; margin-bottom: 14px;
+}
+.rt-report .rt-verdict-label {
+    font-family: var(--font-mono); font-size: 10px; font-weight: 600; text-transform: uppercase;
+    color: var(--text-faint); display: block;
+}
+.rt-report .rt-verdict-body { font-size: 13px; line-height: 1.55; margin: 4px 0 0; color: var(--text-body); }
+.rt-report .rt-verdict-vuln { border-left: 3px solid var(--orange-500); }
+.rt-report .rt-verdict-safe { background: var(--green-50); border-left: 3px solid var(--green-600); }
+.rt-report .rt-verdict-error .rt-verdict-body { color: var(--red-600); }
 """
 
 DASHBOARD_CSS = (

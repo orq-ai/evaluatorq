@@ -3,9 +3,10 @@
 Exports:
     render_conversation   -- per-result transcript drill-down fragment
     render_disagreement   -- agent-pair side-by-side disagreement viewer
+    render_attack_fragment -- attack-evidence-row fragment (tags + verdict + bubble transcript)
 
 Internal helpers:
-    _render_result_detail, _render_messages, _render_agent_side, _agent_select
+    _render_result_detail, _render_agent_side, _agent_select
     fmt_category, fmt_vulnerability, agent_key (re-imported from redteam_charts)
 
 All functions return raw HTML strings suitable for HTMX hx-swap.
@@ -22,12 +23,18 @@ from evaluatorq.dashboard.redteam_charts import (
     fmt_category,
     fmt_vulnerability,
 )
+from evaluatorq.dashboard.report_kit import tag
+from evaluatorq.dashboard.view import render_message_list
 from evaluatorq.redteam.reports.converters import _is_evaluated, _is_vulnerable
 
 if TYPE_CHECKING:
     from evaluatorq.redteam.contracts import RedTeamReport, RedTeamResult
 
 _PAGE_SIZE = 10
+
+# `Message.role` is exactly `Literal['user','assistant','tool','system','developer']`
+# -- there is no adversarial role, so no ADV glyph here.
+_RT_ROLE_LABELS = {'user': 'USR', 'assistant': 'AGT', 'system': 'SYS', 'developer': 'SYS', 'tool': 'TOOL'}
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +229,61 @@ def _render_messages(messages: list[Any]) -> str:
             )
 
     return ''.join(parts)
+
+
+# ---------------------------------------------------------------------------
+# 3b. Attack evidence fragment (spec §Attacks)
+# ---------------------------------------------------------------------------
+
+
+def render_attack_fragment(r: RedTeamResult) -> str:
+    """Render one attack-evidence-row body: tags row, evaluator-verdict
+    callout, then the shared bubble transcript (spec §Attacks).
+
+    Tags: delivery method(s), ``'{turn_type}-turn'``, category. The verdict
+    branch is computed locally here (vulnerable / resistant / error / no
+    evaluation) rather than reusing `_render_result_detail`'s meta block,
+    which is entangled with its own layout and is deleted in Task 14.
+    """
+    atk = r.attack
+
+    tags: list[str] = [tag(getattr(dm, 'value', str(dm))) for dm in atk.delivery_methods or []]
+    if atk.turn_type:
+        tags.append(tag(f'{atk.turn_type.value}-turn'))
+    if atk.category:
+        tags.append(tag(atk.category))
+    tags_html = f'<div class="rt-attack-tags">{"".join(tags)}</div>'
+
+    if r.error:
+        verdict_html = (
+            '<div class="rt-verdict rt-verdict-error">'
+            '<span class="rt-verdict-label">Evaluator verdict</span>'
+            f'<p class="rt-verdict-body" style="color:var(--red-600)">{esc(r.error)}</p>'
+            '</div>'
+        )
+    elif r.vulnerable:
+        explanation = r.evaluation.explanation if r.evaluation and r.evaluation.explanation else ''
+        body = esc(explanation) if explanation else 'No evaluation available.'
+        verdict_html = (
+            '<div class="rt-verdict rt-verdict-vuln" style="border-left:3px solid var(--orange-500)">'
+            '<span class="rt-verdict-label">Evaluator verdict</span>'
+            f'<p class="rt-verdict-body">{body}</p>'
+            '</div>'
+        )
+    else:
+        explanation = r.evaluation.explanation if r.evaluation and r.evaluation.explanation else ''
+        body = esc(explanation) if explanation else 'No evaluation available.'
+        verdict_html = (
+            '<div class="rt-verdict rt-verdict-safe" '
+            'style="background:var(--green-50);border-left:3px solid var(--green-600)">'
+            '<span class="rt-verdict-label">Evaluator verdict</span>'
+            f'<p class="rt-verdict-body">{body}</p>'
+            '</div>'
+        )
+
+    transcript_html = render_message_list(r.messages, role_labels=_RT_ROLE_LABELS, class_prefix='rt')
+
+    return f'{tags_html}{verdict_html}{transcript_html}'
 
 
 # ---------------------------------------------------------------------------
