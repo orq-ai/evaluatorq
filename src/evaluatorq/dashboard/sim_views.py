@@ -142,7 +142,8 @@ def render_sim_row_list(rid: str, entries: list[SimulationEntry]) -> str:
             f' hx-get="/r/{safe_rid}/sim/transcript?idx={idx}"'
             f' hx-trigger="click once"'
             f' hx-target="this"'
-            f' hx-swap="innerHTML"></div>'
+            f' hx-swap="innerHTML"'
+            f' hx-include="#filter-form"></div>'
         )
         cards_html.append(f'<details class="sim-conv-card">{summary}{body}</details>')
 

@@ -1022,10 +1022,13 @@ def sim_interactive_panels(rid: str, entries: list[Any]) -> str:
     Embeds the sim row list table with HTMX-wired transcript drill-down panel.
     Parity: Streamlit ``_render_transcripts`` (dashboard.py:316-390).
 
-    The outer section carries ``hx-include="#filter-form"`` and
-    ``hx-trigger="load, orq:filter-changed from:body"`` so that every row's
-    ``hx-get`` request for the transcript detail automatically includes the
-    active filter selections, and the section reloads when the filter changes.
+    The row-list itself is a static container: it is refreshed wholesale by
+    the ``POST /r/{rid}/filter`` response body swap (see
+    ``_sim_rowlist_wrapper``), not by its own ``hx-trigger``. Each conversation
+    card's lazy-loaded transcript body carries ``hx-include="#filter-form"``
+    (see ``render_sim_row_list``), so its ``hx-get`` request for the
+    transcript detail includes the active filter selections and stays
+    consistent with the filtered list the card was rendered from.
 
     Args:
         rid:     Report ID (URL-safe).

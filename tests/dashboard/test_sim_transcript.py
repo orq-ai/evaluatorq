@@ -468,13 +468,24 @@ class TestSimFilterAwareness:
     def test_sim_rowlist_wrapper_no_longer_self_refetches(
         self, client: TestClient, roots: list[Path]
     ) -> None:
-        """Double-fetch removal: the row-list wrapper no longer carries its own
-        hx-include/hx-trigger — the /filter POST body swap is the single
-        refresh path (spec §Transcripts double-fetch fix)."""
+        """Double-fetch removal: the row-list wrapper div itself carries no
+        hx-include/hx-trigger of its own — the /filter POST body swap is the
+        single refresh path (spec §Transcripts double-fetch fix).
+
+        Note: per-card transcript bodies DO carry hx-include="#filter-form"
+        (see TestCardDrilldownCarriesActiveFilter) so the filter reaches the
+        drill-down request; this test only guards the outer wrapper div,
+        which must stay an inert container with no hx-trigger of its own.
+        """
         rid = report_id(_sim_path(roots))
         r = client.get(f"/r/{rid}")
         assert r.status_code == 200
-        assert 'hx-include="#filter-form"' not in r.text
+        wrapper_start = r.text.find('id="sim-row-list-')
+        assert wrapper_start >= 0
+        wrapper_tag_end = r.text.find(">", wrapper_start)
+        wrapper_tag = r.text[max(0, wrapper_start - 20) : wrapper_tag_end + 1]
+        assert "hx-include" not in wrapper_tag
+        assert "hx-trigger" not in wrapper_tag
         assert "orq:filter-changed" not in r.text
 
     def test_filter_post_emits_hx_trigger_for_sim(
@@ -703,3 +714,122 @@ class TestTranscriptCriteriaXssEscaping:
         html = render_transcript_fragment(sim_entry_xss_criterion)
         assert "<script>" not in html
         assert "&lt;script&gt;" in html
+
+
+# ---------------------------------------------------------------------------
+# Regression: card drill-down must carry the active filter (task-11/12 fix).
+#
+# ``individual_entries()`` re-indexes 0..M-1 over whatever list it is given.
+# Each card's ``idx`` is a position within the list the row-list was rendered
+# from. If a filter is active, that list is the *filtered* list, so the
+# card's transcript hx-get MUST also send the filter — otherwise the
+# transcript route indexes the *full* (unfiltered) list and idx no longer
+# refers to the same conversation the card summarized.
+# ---------------------------------------------------------------------------
+
+
+class TestCardDrilldownCarriesActiveFilter:
+    def test_card_body_hx_get_includes_filter_form(self, sim_entries) -> None:
+        """render_sim_row_list's card body must carry hx-include="#filter-form"."""
+        from evaluatorq.dashboard.sim_views import render_sim_row_list
+
+        html = render_sim_row_list("rid", sim_entries)
+        assert 'hx-include="#filter-form"' in html
+
+    def test_filtered_card_idx_resolves_to_same_persona_via_transcript_route(
+        self, tmp_path: Path
+    ) -> None:
+        """End-to-end guard: with personas [alice, alice, bob] and a persona=bob
+        filter active, bob's card renders at filtered idx=0. The transcript
+        route call that hx-include="#filter-form" produces — i.e. idx=0 PLUS
+        the active persona=bob filter param — must return bob's conversation,
+        not alice's (which sits at idx=0/1 in the unfiltered/full list).
+        """
+        from evaluatorq.contracts import Message, TokenUsage
+        from evaluatorq.dashboard.app import build_app
+        from evaluatorq.simulation.types import (
+            SimulationResult,
+            SimulationRun,
+            TerminatedBy,
+        )
+
+        def _result(persona: str, marker: str) -> SimulationResult:
+            return SimulationResult(
+                messages=[
+                    Message(role="user", content=f"hi from {marker}"),
+                    Message(role="assistant", content=f"reply to {marker}"),
+                ],
+                terminated_by=TerminatedBy.judge,
+                reason="done",
+                goal_achieved=True,
+                goal_completion_score=1.0,
+                rules_broken=[],
+                turn_count=1,
+                turn_metrics=[],
+                token_usage=TokenUsage(input_tokens=5, output_tokens=5, total_tokens=10),
+                metadata={"persona": persona, "scenario": "s"},
+            )
+
+        results = [
+            _result("alice", "ALICE-ONE"),
+            _result("alice", "ALICE-TWO"),
+            _result("bob", "BOB-ONE"),
+        ]
+        run = SimulationRun(
+            run_name="filtered-idx-test",
+            created_at=datetime.now(tz=timezone.utc),
+            mode="run",
+            target_kind="orq_agent",
+            evaluator_names=["goal_achieved"],
+            total_results=len(results),
+            scorer_averages={"goal_achieved": 1.0},
+            results=results,
+        )
+        sim_dir = tmp_path / "sim-runs"
+        sim_dir.mkdir()
+        run_path = sim_dir / "filtered_idx_test.json"
+        run_path.write_text(run.model_dump_json())
+
+        app = build_app(roots=[sim_dir])
+        client = TestClient(app, raise_server_exceptions=True)
+        rid = report_id(run_path)
+
+        # Fetch the row-list AS FILTERED to persona=bob — this is what the
+        # browser actually has in the DOM when the user has bob selected in
+        # the filter form (the row-list is re-rendered by the /filter POST
+        # body swap). Bob is the only entry, so his card renders at the
+        # *filtered* idx=0.
+        row_list_html = client.get(f"/r/{rid}/sim/row-list?persona=bob").text
+        assert "BOB-ONE" not in row_list_html  # transcript body is lazy, not embedded
+        card_start = row_list_html.find("sim-conv-body")
+        assert card_start >= 0, "no conversation card found in filtered row-list"
+        card_div_start = row_list_html.rfind("<div", 0, card_start)
+        card_div_end = row_list_html.find("></div>", card_div_start) + len("></div>")
+        card_div = row_list_html[card_div_start:card_div_end]
+
+        hx_get_start = card_div.find('hx-get="') + len('hx-get="')
+        hx_get_end = card_div.find('"', hx_get_start)
+        hx_get_url = card_div[hx_get_start:hx_get_end]
+        assert "idx=0" in hx_get_url  # bob is the only (filtered) entry
+
+        # Simulate exactly what a real browser sends: the hx-get URL as-is,
+        # PLUS the filter-form fields ONLY IF the element actually carries
+        # hx-include="#filter-form" (that's what makes htmx merge them in).
+        # This is the crux of the regression: without the fix, the card has
+        # no hx-include, so the browser would send *only* hx_get_url — no
+        # persona param — and the route would silently resolve idx=0 against
+        # the FULL unfiltered list (alice), not the filtered one (bob).
+        if 'hx-include="#filter-form"' in card_div:
+            request_url = hx_get_url + "&persona=bob"
+        else:
+            request_url = hx_get_url
+
+        r = client.get(request_url)
+        assert r.status_code == 200
+        assert "BOB-ONE" in r.text, (
+            f"Expected bob's conversation from the exact request a real "
+            f"browser would send for this card ({request_url!r}), got: "
+            f"{r.text!r}"
+        )
+        assert "ALICE-ONE" not in r.text
+        assert "ALICE-TWO" not in r.text
