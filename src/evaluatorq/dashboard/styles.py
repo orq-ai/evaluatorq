@@ -1146,6 +1146,34 @@ _RT_REPORT_CSS = """
 .rt-hero-pill-sub {
     font-family: var(--font-mono); font-size: 10.5px; color: var(--text-faint);
 }
+
+/* ---- Overview tab (spec §Overview.4) ---- */
+.rt-report .rt-overview-grid-2 {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0;
+}
+@media (max-width: 760px) {
+    .rt-report .rt-overview-grid-2 { grid-template-columns: 1fr; }
+}
+.rt-report .rt-agents-table { display: flex; flex-direction: column; gap: 10px; }
+.rt-report .rt-agent-row {
+    display: grid; grid-template-columns: 1.4fr 64px 1fr 56px; align-items: center; gap: 12px;
+}
+.rt-report .rt-agent-row-name {
+    display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-strong);
+}
+.rt-report .rt-agent-row-model {
+    font-family: var(--font-mono); font-size: 10.5px; color: var(--text-faint);
+}
+.rt-report .rt-agent-row-count {
+    font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); text-align: right;
+}
+.rt-report .rt-agent-row-track {
+    height: 7px; border-radius: 999px; background: var(--chart-track); overflow: hidden;
+}
+.rt-report .rt-agent-row-fill { height: 100%; border-radius: 999px; }
+.rt-report .rt-agent-row-asr {
+    font-family: var(--font-mono); font-size: 12px; font-weight: 600; text-align: right;
+}
 """
 
 DASHBOARD_CSS = (

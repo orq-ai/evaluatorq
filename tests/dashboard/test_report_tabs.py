@@ -87,14 +87,14 @@ def test_sim_report_renders_tabs(client: TestClient, roots: list[Path]) -> None:
 def test_redteam_report_renders_tabs(client: TestClient, roots: list[Path]) -> None:
     rid = report_id(roots[0] / 'rt.json')
     labels = _tab_labels(client.get(f'/r/{rid}').text)
-    # Folded to Overview / Breakdowns / Evidence / (Error Analysis) / Config.
+    # 7-tab set: Overview / Agents / Focus areas / Breakdowns / Attacks / Usage / Config.
     assert 'Overview' in labels
     assert 'Breakdowns' in labels
-    assert 'Evidence' in labels
     assert 'Config' in labels
-    # Old tab names are gone; Error Analysis stays its own tab, never folded.
+    # Old (pre-alignment) tab names are gone.
     assert 'Summary' not in labels
     assert 'Methodology' not in labels
+    assert 'Evidence' not in labels
 
 
 def test_single_agent_report_has_no_comparison_tab(client: TestClient, roots: list[Path]) -> None:
@@ -289,3 +289,67 @@ def test_redteam_hero_shows_agent_pills_multi(rt_report_multi):
     by = _rt_by_kind(rt_report_multi)
     html = _redteam_hero(by.get('summary'), rt_report_multi)
     assert 'agents' in html  # "N agents" pill
+
+
+def test_rt_overview_has_exec_summary_and_five_kpis(rt_report_multi):
+    from evaluatorq.dashboard.report_tabs import redteam_report_tabs
+
+    html = redteam_report_tabs('rid', rt_report_multi)
+    assert 'class="report-aligned rt-report"' in html
+    assert 'Executive summary' in html
+    # 5 KPI cards
+    assert html.count('kpi-card') >= 5
+    assert 'Attack success rate' in html and 'Resistance rate' in html
+
+
+def test_rt_exec_summary_zero_vuln_fallback(rt_report_clean):
+    from evaluatorq.dashboard.report_tabs import _rt_by_kind, _rt_exec_summary
+
+    by = _rt_by_kind(rt_report_clean)
+    html = _rt_exec_summary(by['summary'].data, by)
+    assert 'resisted' in html.lower()
+    assert 'vulnerabilit' not in html.lower() or 'resisted all' in html.lower()
+
+
+def test_rt_tabs_seven_labels(rt_report_multi):
+    from evaluatorq.dashboard.report_tabs import redteam_report_tabs
+
+    html = redteam_report_tabs('rid', rt_report_multi)
+    for label in ['Overview', 'Agents', 'Focus areas', 'Breakdowns', 'Attacks', 'Usage', 'Config']:
+        assert label in html
+    assert 'Multi-turn' not in html  # folded into Breakdowns
+
+
+def test_rt_tab_count_pills(rt_report_multi):
+    # Count pills appear ONLY on Agents / Focus areas / Attacks (mockup parity).
+    from evaluatorq.dashboard.report_tabs import redteam_report_tabs
+
+    html = redteam_report_tabs('rid', rt_report_multi)
+    assert 'class="tab-count"' in html  # the raw-label 3-tuple pill
+
+
+def test_rt_exec_summary_multiturn_clause(rt_report_multi):
+    # rt_report_multi must include multi-turn results with rising ASR by depth.
+    from evaluatorq.dashboard.report_tabs import _rt_by_kind, _rt_exec_summary
+
+    by = _rt_by_kind(rt_report_multi)
+    html = _rt_exec_summary(by['summary'].data, by)
+    assert 'conversation depth' in html.lower()
+
+
+def test_rt_overview_end_to_end_wires_all_tabs(rt_report_multi):
+    # Guard against a helper (esp. Focus areas) being built but never spliced in.
+    from evaluatorq.dashboard.report_tabs import redteam_report_tabs
+
+    html = redteam_report_tabs('rid', rt_report_multi)
+    assert 'RISK' in html  # Focus-areas risk dial actually reaches the page
+    assert 'ASR' in html  # Agents ASR dial actually reaches the page
+    assert 'rk-heatmap' in html  # Breakdowns heatmap actually reaches the page
+
+
+def test_rt_report_empty_run_does_not_crash(rt_report_empty):
+    # 0-attack run: exec summary '', KPI zeros, no crash in any helper.
+    from evaluatorq.dashboard.report_tabs import redteam_report_tabs
+
+    html = redteam_report_tabs('rid', rt_report_empty)
+    assert 'class="report-aligned rt-report"' in html  # renders, doesn't raise

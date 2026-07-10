@@ -622,12 +622,242 @@ def _rt_agent_stats(report: RedTeamReport) -> dict[str, dict[str, Any]]:
     return stats
 
 
+def _rt_exec_summary(summary_data: dict[str, Any], by_kind: dict[str, Any]) -> str:
+    """Templated exec-summary sentence + fallbacks (spec §Overview.1).
+    Empty-run guard: ``total_attacks`` falsy -> ``''``, nothing below runs."""
+    from evaluatorq.common.reports.html_helpers import pct
+    from evaluatorq.dashboard.report_kit import callout
+
+    total = summary_data.get('total_attacks', 0)
+    if not total:
+        return ''
+
+    category_section = by_kind.get('category_breakdown')
+    rows = category_section.data.get('rows', []) if category_section is not None else []
+    k = len(rows)
+
+    vulns = summary_data.get('vulnerabilities_found', 0)
+    critical = summary_data.get('critical_exposure', 0)
+    resistance_rate = summary_data.get('resistance_rate', 0.0)
+
+    if vulns:
+        critical_clause = f', including <strong>{critical} critical</strong>' if critical else ''
+        sentence = (
+            f'Across <strong>{total}</strong> adversarial attacks spanning {k} OWASP '
+            f'categor{"y" if k == 1 else "ies"}, the agent resisted <strong>{pct(resistance_rate)}</strong> '
+            f'and exposed <strong>{vulns}</strong> vulnerabilit{"y" if vulns == 1 else "ies"}{critical_clause}.'
+        )
+    else:
+        sentence = (
+            f'Across <strong>{total}</strong> adversarial attacks spanning {k} OWASP '
+            f'categor{"y" if k == 1 else "ies"}, the agent resisted all of them.'
+        )
+
+    if rows and rows[0].get('vulnerability_rate', 0.0) > 0:
+        top = rows[0]
+        sentence += (
+            f' <strong>{esc(top.get("category_name", ""))}</strong> is the weakest area '
+            f'({pct(top.get("vulnerability_rate", 0.0))} attack success rate).'
+        )
+
+    turn_section = by_kind.get('turn_depth_analysis')
+    if turn_section is not None:
+        turn_rows = turn_section.data.get('rows', [])
+        if len(turn_rows) >= 2 and turn_rows[-1].get('vulnerability_rate', 0.0) > turn_rows[0].get(
+            'vulnerability_rate', 0.0
+        ):
+            first, last = turn_rows[0], turn_rows[-1]
+            sentence += (
+                f' Attack success climbs with conversation depth — from '
+                f'{pct(first.get("vulnerability_rate", 0.0))} at {first.get("turn_count")} turns to '
+                f'{pct(last.get("vulnerability_rate", 0.0))} at {last.get("turn_count")} turns.'
+            )
+
+    total_errors = summary_data.get('total_errors', 0)
+    if total_errors:
+        sentence += f' {total_errors} attack{"s" if total_errors != 1 else ""} errored and were not evaluated.'
+
+    return callout(sentence, confidence=summary_data.get('confidence'))
+
+
+def _rt_kpi_band(s: dict[str, Any]) -> str:
+    """5-card KPI band: Attacks run / Vulnerabilities / Attack success rate /
+    Resistance rate / Critical findings (spec §Overview.2)."""
+    from evaluatorq.common.reports.html_helpers import kpi_cards, pct
+
+    asr = s.get('vulnerability_rate', 0.0)
+    resistance = s.get('resistance_rate', 0.0)
+    vulns = s.get('vulnerabilities_found', 0)
+    critical = s.get('critical_exposure', 0)
+    return kpi_cards([
+        {'label': 'Attacks run', 'value': str(s.get('total_attacks', 0)), 'status': 'neutral'},
+        {'label': 'Vulnerabilities', 'value': str(vulns), 'status': 'fail' if vulns else 'pass'},
+        {
+            'label': 'Attack success rate',
+            'value': pct(asr),
+            'status': 'fail' if asr >= 0.25 else ('warn' if asr > 0 else 'pass'),
+        },
+        {'label': 'Resistance rate', 'value': pct(resistance), 'status': 'pass' if resistance >= 0.8 else 'warn'},
+        {'label': 'Critical findings', 'value': str(critical), 'status': 'fail' if critical else 'pass'},
+    ])
+
+
+def _rt_agent_row(stats: dict[str, Any]) -> str:
+    """One agents-under-test table row: dot + name/model, hit count, ASR track
+    bar, ASR value (spec §Overview.4)."""
+    from evaluatorq.common.reports.html_helpers import pct
+
+    critical = stats.get('critical', 0)
+    vulns = stats.get('vulns', 0)
+    dot_cls = 'rt-hero-dot--critical' if critical else ('rt-hero-dot--vuln' if vulns else 'rt-hero-dot--clean')
+    asr = stats.get('asr', 0.0)
+    bar_pct = max(0.0, min(1.0, asr)) * 100
+    bar_color = 'var(--red-600)' if critical else 'var(--orange-500)'
+    asr_color = 'var(--orange-600)' if vulns else 'var(--green-600)'
+    model = stats.get('model', '')
+    model_html = f'<div class="rt-agent-row-model">{esc(model)}</div>' if model else ''
+    return (
+        '<div class="rt-agent-row">'
+        f'<div class="rt-agent-row-name"><span class="rt-hero-dot {dot_cls}"></span>'
+        f'<span>{esc(stats.get("display_name", ""))}</span>{model_html}</div>'
+        f'<div class="rt-agent-row-count">{vulns}/{stats.get("attacks", 0)}</div>'
+        '<div class="rt-agent-row-track">'
+        f'<div class="rt-agent-row-fill" style="width:{bar_pct:.1f}%;background:{bar_color}"></div>'
+        '</div>'
+        f'<div class="rt-agent-row-asr" style="color:{asr_color}">{pct(asr)}</div>'
+        '</div>'
+    )
+
+
+def _rt_agents_under_test(report: RedTeamReport) -> str:
+    """Agents-under-test panel, weakest (highest ASR) first (spec §Overview.4)."""
+    from evaluatorq.dashboard.report_kit import panel
+
+    stats = _rt_agent_stats(report)
+    if not stats:
+        return ''
+    ranked = sorted(stats.values(), key=lambda st: st.get('asr', 0.0), reverse=True)
+    rows_html = ''.join(_rt_agent_row(st) for st in ranked)
+    return panel(
+        'Agents under test',
+        f'<div class="rt-agents-table">{rows_html}</div>',
+        sub=f'{len(ranked)} agents · per-agent attack success, weakest first',
+    )
+
+
+def _rt_overview(by_kind: dict[str, Any], report: RedTeamReport) -> str:
+    """Overview tab body: exec summary → 5-card KPI band → 2-col grid
+    (outcome donut + vulnerabilities-by-severity bars) → agents-under-test
+    panel (multi-agent only). Spec §Overview."""
+    from evaluatorq.common.reports.html_helpers import pct
+    from evaluatorq.dashboard.report_kit import bar_rows, donut, panel
+
+    summary_section = by_kind.get('summary')
+    summary_data = summary_section.data if summary_section is not None else {}
+
+    exec_html = _rt_exec_summary(summary_data, by_kind)
+    kpi_html = _rt_kpi_band(summary_data)
+
+    evaluated = summary_data.get('evaluated_attacks', 0)
+    vulns = summary_data.get('vulnerabilities_found', 0)
+    total_errors = summary_data.get('total_errors', 0)
+    resistant = max(evaluated - vulns, 0)
+    resistance_rate = summary_data.get('resistance_rate', 0.0)
+
+    outcome_html = donut(
+        [
+            {'label': 'Resistant', 'value': resistant, 'color': 'var(--green-600)'},
+            {'label': 'Vulnerable', 'value': vulns, 'color': 'var(--red-600)'},
+            {'label': 'Error', 'value': total_errors, 'color': 'var(--amber-600)'},
+        ],
+        pct(resistance_rate),
+        'resistant',
+    )
+    outcome_panel = panel('Outcome', outcome_html)
+
+    by_severity: dict[str, Any] = summary_data.get('by_severity', {})
+
+    def _sev_count(name: str) -> int:
+        entry = by_severity.get(name) or {}
+        return entry.get('vulnerabilities_found', 0)
+
+    high_count = _sev_count('high')
+    max_value = max(high_count, 3)
+    severity_bars = ''.join(
+        bar_rows(
+            [(label, float(count))],
+            width=420,
+            label_w=84,
+            color=color,
+            fmt=lambda v: str(int(v)),
+            max_value=max_value,
+        )
+        for label, count, color in (
+            ('Critical', _sev_count('critical'), 'var(--red-600)'),
+            ('High', high_count, 'var(--orange-500)'),
+            ('Medium', _sev_count('medium'), 'var(--text-muted)'),
+            ('Low', _sev_count('low'), 'var(--green-600)'),
+        )
+    )
+    severity_panel = panel('Vulnerabilities by severity', severity_bars)
+
+    grid_html = f'<div class="rt-overview-grid-2">{outcome_panel}{severity_panel}</div>'
+    agents_html = _rt_agents_under_test(report) if len(report.tested_agents) > 1 else ''
+
+    return f'{exec_html}{kpi_html}{grid_html}{agents_html}'
+
+
+def _rt_focus_risk_dial(focus_areas: list[dict[str, Any]]) -> str:
+    """Top-risk dial for the Focus areas tab (additive; spec §Focus areas
+    lands the full redesign later — this only carries the ``RISK`` gauge
+    forward so the Overview→Focus-areas handoff has real content today)."""
+    from evaluatorq.dashboard.report_kit import dial, panel
+
+    if not focus_areas:
+        return ''
+    top = focus_areas[0]
+    risk_score = top.get('risk_score', 0.0)
+    color = 'var(--red-600)' if risk_score >= 2 else ('var(--orange-600)' if risk_score >= 1 else 'var(--amber-600)')
+    risk_dial = dial(f'{risk_score:.1f}', min(risk_score / 8, 1.0), radius=38, stroke=9, color=color, sub='RISK')
+    return panel(
+        f'Top risk — {esc(top.get("category_name", ""))}',
+        risk_dial,
+        sub='Prioritized fixes, ranked by risk = attack success rate × avg severity',  # noqa: RUF001
+    )
+
+
+def _rt_breakdowns_heatmap(by_kind: dict[str, Any]) -> str:
+    """Attack success heatmap panel (additive; spec §Breakdowns lands the full
+    redesign later — this only carries the ``report_kit.heatmap()`` gauge
+    forward so vulnerability × technique ASR has real content today)."""  # noqa: RUF002
+    from evaluatorq.dashboard.report_kit import SCALE_HEAT_RT, heatmap, panel
+
+    section = by_kind.get('attack_heatmap')
+    if section is None or not section.data.get('cells'):
+        return ''
+    data = section.data
+    table_html = heatmap(
+        data.get('vulnerabilities', []),
+        data.get('techniques', []),
+        data.get('cells', []),
+        row_key='vulnerability',
+        col_key='technique',
+        value_key='vulnerability_rate',
+        color_scale=SCALE_HEAT_RT,
+    )
+    return panel(
+        'Attack success heatmap',
+        table_html,
+        sub='Vulnerability × technique — sand → orange → red as ASR rises',  # noqa: RUF001
+    )
+
+
 def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
     """Render the Red Team report body as Streamlit-aligned tabs.
 
-    Tabs: Summary, Breakdown, Explorer, Usage, Error Analysis, Comparison
-    (multi-agent only), Methodology — each populated from the precomputed report
-    sections plus the HTMX interactive panels (empty tabs drop out).
+    7 tabs: Overview, Agents (N), Focus areas (N), Breakdowns, Attacks (N),
+    Usage, Config — each populated from the precomputed report sections plus
+    the HTMX interactive panels (empty tabs drop out).
     """
     from evaluatorq.dashboard.view import (
         rt_panel_agent_heatmap,
@@ -645,41 +875,54 @@ def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
     multi_agent = len(report.tested_agents) > 1
     hero = _redteam_hero(by_kind.get('summary'), report)
 
-    # Folded 7→5: Comparison (agent heatmap + disagreements) → Evidence; Usage +
-    # Methodology → Config. Error Analysis stays its own tab — it's where users
-    # go to understand where the agent went wrong, not run metadata.
+    focus_section = by_kind.get('focus_areas')
+    focus_areas_list = focus_section.data.get('focus_areas', []) if focus_section is not None else []
+    n_agents = len(report.tested_agents)
+    n_focus = len(focus_areas_list)
+    n_attacks = len(report.results)
+
     comparison = (
         rt_panel_agent_heatmap(rid) + rt_panel_disagreement(rid) + render('agent_comparison', 'agent_disagreements')
         if multi_agent
         else ''
     )
+    agents_tab = render('agent_context') + comparison
+
+    focus_tab = _rt_focus_risk_dial(focus_areas_list) + render('focus_areas')
+
+    breakdowns_tab = (
+        _rt_breakdowns_heatmap(by_kind)
+        + rt_panel_breakdown(rid)
+        + render(
+            'vulnerability_breakdown',
+            'category_breakdown',
+            'technique_breakdown',
+            'delivery_breakdown',
+            'turn_scope_breakdown',
+            'turn_depth_analysis',
+            'attack_heatmap',
+            'framework_breakdown',
+        )
+    )
+
+    attacks_tab = rt_panel_conversation(rid) + render('individual_results', 'source_distribution', 'error_analysis')
+
+    usage_tab = render('token_usage') or '<p class="rk-empty">No token usage data recorded for this run.</p>'
+    config_tab = render('methodology', 'severity_definitions') or '<p class="rk-empty">No config data available.</p>'
+
     tabs = _tabs(
         'rttab',
         [
-            ('Overview', render('summary', 'focus_areas')),
-            (
-                'Breakdowns',
-                rt_panel_breakdown(rid)
-                + render(
-                    'vulnerability_breakdown',
-                    'category_breakdown',
-                    'technique_breakdown',
-                    'delivery_breakdown',
-                    'turn_scope_breakdown',
-                    'turn_depth_analysis',
-                    'attack_heatmap',
-                    'framework_breakdown',
-                ),
-            ),
-            (
-                'Evidence',
-                rt_panel_conversation(rid) + render('individual_results', 'source_distribution') + comparison,
-            ),
-            ('Error Analysis', render('error_analysis')),
-            ('Config', render('token_usage', 'methodology', 'agent_context', 'severity_definitions')),
+            ('Overview', _rt_overview(by_kind, report)),
+            ('Agents', agents_tab, f'Agents <span class="tab-count">{n_agents}</span>'),
+            ('Focus areas', focus_tab, f'Focus areas <span class="tab-count">{n_focus}</span>'),
+            ('Breakdowns', breakdowns_tab),
+            ('Attacks', attacks_tab, f'Attacks <span class="tab-count">{n_attacks}</span>'),
+            ('Usage', usage_tab),
+            ('Config', config_tab),
         ],
     )
-    return f'{hero}{tabs}'
+    return f'<div class="report-aligned rt-report">{hero}{tabs}</div>'
 
 
 def _rt_agent_pill(stats: dict[str, Any]) -> str:
