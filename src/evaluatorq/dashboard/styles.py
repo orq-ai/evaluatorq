@@ -501,9 +501,11 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
 .filter-form { flex: 0 0 230px; position: sticky; top: 80px; }
 .report-body-area { flex: 1 1 auto; min-width: 0; }
 
-/* ==== sim filter rail (right side) — scoped to .filter-form--sim so the
-   redteam .filter-sidebar form (still generic radio/checkbox) is untouched. */
-.filter-form--sim {
+/* ==== sim + redteam filter rail (right side) — scoped to .filter-form--sim
+   / .filter-form--redteam so the generic .filter-sidebar form (other
+   surfaces) is untouched. */
+.filter-form--sim,
+.filter-form--redteam {
     flex: 0 0 208px;
     position: static;
     display: flex;
@@ -513,6 +515,10 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
     padding: 16px;
+}
+.filter-form--redteam .filter-group { margin-bottom: 0; }
+.filter-form--redteam .filter-label {
+    font-size: 10.5px; margin-bottom: 8px;
 }
 .filter-rail-header {
     display: flex; align-items: center; gap: 6px;
@@ -559,6 +565,31 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
 .filter-chip.is-active .chip-dot-green { background: var(--green-600); }
 .filter-chip.is-active .chip-dot-red { background: var(--red-600); }
 .filter-chip.is-active .chip-dot-jade { background: var(--green-600); }
+.filter-chip.is-active .chip-dot-amber { background: var(--amber-600); }
+.filter-chip.is-active .chip-dot-gray { background: var(--text-faint); }
+
+/* min-turns slider (redteam rail, multi-turn runs only) */
+.filter-slider-row {
+    display: flex; align-items: center; gap: 8px;
+}
+.filter-slider {
+    flex: 1 1 auto;
+    accent-color: var(--green-600);
+}
+.filter-slider-readout {
+    font-family: var(--font-mono);
+    font-size: 10.5px; font-weight: 500;
+    color: var(--text-faint);
+    min-width: 2.5em; text-align: right;
+    flex-shrink: 0;
+}
+
+/* "More filters" expander (redteam rail: technique/delivery/vulnerability) */
+.filter-dd-more .filter-dd-trigger { justify-content: space-between; }
+.filter-dd-more-body {
+    display: flex; flex-direction: column; gap: 10px;
+    margin-top: 10px;
+}
 
 /* <details> Persona/Scenario dropdowns */
 .filter-dd { position: relative; }

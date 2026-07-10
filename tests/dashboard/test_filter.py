@@ -165,7 +165,7 @@ class TestRedteamFilterRoute:
         # Filtered to ASI01 only: 2 total results
         filtered = client.post(
             f'/r/{rid}/filter',
-            data={'category': 'ASI01', 'result': 'All'},
+            data={'category': 'ASI01'},
         )
         assert filtered.status_code == 200
 
@@ -182,7 +182,7 @@ class TestRedteamFilterRoute:
         rid = report_id(_rt_path(roots))
         r = client.post(
             f'/r/{rid}/filter',
-            data={'category': 'ASI01', 'result': 'All'},
+            data={'category': 'ASI01'},
         )
         assert r.status_code == 200
         text = r.text
@@ -202,7 +202,7 @@ class TestRedteamFilterRoute:
         rid = report_id(_rt_path(roots))
         r = client.post(
             f'/r/{rid}/filter',
-            data={'category': 'ASI01', 'result': 'All'},
+            data={'category': 'ASI01'},
         )
         assert r.status_code == 200
         # Extract only the filter form section to check options.
@@ -302,21 +302,21 @@ class TestFilterOOBSidebar:
     def test_redteam_filter_post_has_oob_attr(self, client: TestClient, roots: list[Path]) -> None:
         """The POST response must contain an element with hx-swap-oob="true"."""
         rid = report_id(_rt_path(roots))
-        r = client.post(f'/r/{rid}/filter', data={'category': 'ASI01', 'result': 'All'})
+        r = client.post(f'/r/{rid}/filter', data={'category': 'ASI01'})
         assert r.status_code == 200
         assert 'hx-swap-oob="true"' in r.text
 
     def test_redteam_filter_post_oob_sidebar_has_stable_id(self, client: TestClient, roots: list[Path]) -> None:
         """OOB sidebar must carry id="download-sidebar" so HTMX can target it."""
         rid = report_id(_rt_path(roots))
-        r = client.post(f'/r/{rid}/filter', data={'category': 'ASI01', 'result': 'All'})
+        r = client.post(f'/r/{rid}/filter', data={'category': 'ASI01'})
         assert r.status_code == 200
         assert 'id="download-sidebar"' in r.text
 
     def test_redteam_filter_post_oob_sidebar_csv_link_has_filter(self, client: TestClient, roots: list[Path]) -> None:
         """OOB sidebar CSV link must include the category filter param."""
         rid = report_id(_rt_path(roots))
-        r = client.post(f'/r/{rid}/filter', data={'category': 'ASI01', 'result': 'All'})
+        r = client.post(f'/r/{rid}/filter', data={'category': 'ASI01'})
         assert r.status_code == 200
         sidebar_start = r.text.find('id="download-sidebar"')
         sidebar_end = r.text.find('</section>', sidebar_start)
@@ -330,7 +330,7 @@ class TestFilterOOBSidebar:
         rid = report_id(_rt_path(roots))
 
         # POST filter to ASI01-only.
-        r_filter = client.post(f'/r/{rid}/filter', data={'category': 'ASI01', 'result': 'All'})
+        r_filter = client.post(f'/r/{rid}/filter', data={'category': 'ASI01'})
         assert r_filter.status_code == 200
 
         # Extract CSV href from OOB sidebar.
@@ -615,9 +615,14 @@ class TestSimFilterRailCounter:
     def test_redteam_branch_unaffected_by_new_kwargs(self):
         from evaluatorq.dashboard.view import render_filter_form
 
-        opts = {'category': ['ASI01', 'LLM01'], 'result': ['All', 'Vulnerable', 'Resistant', 'Error']}
+        opts = {
+            'category': ['ASI01', 'LLM01'],
+            'result': ['Vulnerable', 'Resistant', 'Error'],
+            'agent': ['a'],
+            'max_turns': ['1'],
+        }
         html = render_filter_form('rid', 'redteam', opts, {}, shown=1, total=2)
-        assert 'class="filter-sidebar"' in html
+        assert 'id="filter-form"' in html
         assert 'filter-dd-persona' not in html
 
 
@@ -644,3 +649,96 @@ def test_rowlist_wrapper_no_self_refetch():
     assert 'orq:filter-changed' not in html  # double-fetch removed
     assert 'hx-include' not in html
     assert '<section></section>' in html
+
+
+# ---------------------------------------------------------------------------
+# Task 9: result multiselect, min_turns slider, RT rail rendering
+# ---------------------------------------------------------------------------
+def _rt_run(results):
+    class R:
+        pass
+
+    r = R()
+    r.results = results
+    return r
+
+
+@pytest.mark.parametrize('sel,expect_all', [([], True), (['Vulnerable', 'Resistant', 'Error'], True)])
+def test_rt_result_zero_or_all_is_all(rt_results, sel, expect_all):
+    from evaluatorq.dashboard.filters import _rt_apply
+
+    out = _rt_apply(_rt_run(rt_results), {'result': sel})
+    assert len(out) == len(rt_results)
+
+
+def test_rt_result_single_vulnerable(rt_results):
+    from evaluatorq.dashboard.filters import _rt_apply
+
+    out = _rt_apply(_rt_run(rt_results), {'result': ['Vulnerable']})
+    assert all(r.vulnerable and not r.error for r in out)
+
+
+def test_rt_min_turns_filters(rt_results):
+    from evaluatorq.dashboard.filters import _rt_apply
+
+    out = _rt_apply(_rt_run(rt_results), {'min_turns': ['2']})
+    for r in out:
+        assert (r.execution.turns if r.execution else 1) >= 2
+
+
+def test_rt_min_turns_default_no_filter(rt_results):
+    from evaluatorq.dashboard.filters import _rt_apply
+
+    out = _rt_apply(_rt_run(rt_results), {'min_turns': ['1']})
+    assert len(out) == len(rt_results)
+
+
+def test_rt_options_no_all_sentinel(rt_results):
+    from evaluatorq.dashboard.filters import _rt_options_from_results
+
+    opts = _rt_options_from_results(rt_results)
+    assert opts['result'] == ['Vulnerable', 'Resistant', 'Error']
+    assert 'max_turns' in opts
+
+
+def test_rt_rail_has_slider_and_more_expander():
+    from evaluatorq.dashboard.view import _render_redteam_filter_rail
+
+    opts = {
+        'result': ['Vulnerable', 'Resistant', 'Error'],
+        'severity': ['critical'],
+        'category': ['ASI01'],
+        'agent': ['a', 'b'],
+        'technique': ['crescendo'],
+        'delivery_method': ['email'],
+        'vulnerability': ['v1'],
+        'max_turns': ['5'],
+    }
+    html = _render_redteam_filter_rail('rid', opts, {}, shown=3, total=3)
+    assert 'name="min_turns"' in html and 'type="range"' in html
+    assert 'id="filter-dd-more"' in html
+    assert 'id="filter-dd-technique"' in html  # inside the expander
+
+
+def test_rt_rail_hides_slider_when_max_turns_one():
+    from evaluatorq.dashboard.view import _render_redteam_filter_rail
+
+    opts = {
+        'result': ['Vulnerable', 'Resistant', 'Error'],
+        'severity': ['critical'],
+        'category': ['ASI01'],
+        'agent': ['a'],
+        'technique': ['t'],
+        'delivery_method': ['email'],
+        'vulnerability': ['v1'],
+        'max_turns': ['1'],
+    }
+    html = _render_redteam_filter_rail('rid', opts, {}, shown=1, total=1)
+    assert 'name="min_turns"' not in html  # slider hidden for single-turn-only runs
+
+
+def test_rt_recompute_options_drops_all_sentinel(rt_results):
+    from evaluatorq.dashboard.filters import _rt_recompute_options
+
+    opts = _rt_recompute_options(rt_results)
+    assert opts['result'] == ['Vulnerable', 'Resistant', 'Error']  # no 'All' after a filter POST

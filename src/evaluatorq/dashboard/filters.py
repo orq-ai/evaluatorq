@@ -71,9 +71,10 @@ def _sel(selections: dict[str, list[str]], key: str, *, default: list[str]) -> l
 
 _REDTEAM_DIMS = [
     'result',
-    'agent',
-    'category',
     'severity',
+    'min_turns',
+    'category',
+    'agent',
     'technique',
     'delivery_method',
     'vulnerability',
@@ -93,14 +94,17 @@ def _rt_options_from_results(results: list[Any]) -> dict[str, list[str]]:
     all_vulnerabilities = sorted({r.attack.vulnerability for r in results if r.attack.vulnerability})
     all_agents = sorted({r.agent.key or r.agent.display_name or 'unknown' for r in results})
 
+    max_turns = max((r.execution.turns if r.execution else 1 for r in results), default=1)
+
     return {
-        'result': ['All', 'Vulnerable', 'Resistant', 'Error'],
+        'result': ['Vulnerable', 'Resistant', 'Error'],
         'agent': all_agents,
         'category': all_categories,
         'severity': all_severities,
         'technique': all_techniques,
         'delivery_method': all_delivery,
         'vulnerability': all_vulnerabilities,
+        'max_turns': [str(max_turns)],
     }
 
 
@@ -113,15 +117,25 @@ def _rt_apply(report: Any, selections: dict[str, list[str]]) -> list[Any]:
     results: list[Any] = list(report.results)
     full_opts = _rt_full_options(report)
 
-    # result (radio)
-    result_sel = selections.get('result', ['All'])
-    result_filter = result_sel[0] if result_sel else 'All'
-    if result_filter == 'Vulnerable':
-        results = [r for r in results if r.vulnerable]
-    elif result_filter == 'Resistant':
-        results = [r for r in results if not r.vulnerable and not r.error]
-    elif result_filter == 'Error':
-        results = [r for r in results if r.error]
+    # result (3-value multiselect: empty or all-3 => no filter)
+    result_sel = selections.get('result', [])
+    all_result = {'Vulnerable', 'Resistant', 'Error'}
+    if result_sel and set(result_sel) != all_result:
+
+        def _cls(r):
+            return 'Error' if r.error else 'Vulnerable' if r.vulnerable else 'Resistant'
+
+        chosen = set(result_sel)
+        results = [r for r in results if _cls(r) in chosen]
+
+    # min_turns (slider)
+    mt_sel = selections.get('min_turns', ['1'])
+    try:
+        min_turns = int(mt_sel[0]) if mt_sel else 1
+    except (ValueError, TypeError):
+        min_turns = 1
+    if min_turns > 1:
+        results = [r for r in results if (r.execution.turns if r.execution else 1) >= min_turns]
 
     # category (multiselect)
     all_categories = full_opts['category']
@@ -175,10 +189,7 @@ def _rt_recompute_options(filtered: list[Any]) -> dict[str, list[str]]:
     The caller is responsible for calling ``_rt_apply`` first and passing
     the result in, so that ``apply`` runs only once per POST.
     """
-    opts = _rt_options_from_results(filtered)
-    # The result radio always shows all four statuses regardless of filter state.
-    opts['result'] = ['All', 'Vulnerable', 'Resistant', 'Error']
-    return opts
+    return _rt_options_from_results(filtered)
 
 
 # ---------------------------------------------------------------------------

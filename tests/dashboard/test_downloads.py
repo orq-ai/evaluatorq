@@ -495,7 +495,7 @@ class TestOOBSidebarAfterFilterPost:
     ) -> None:
         """The POST /filter response must include an OOB-swapped sidebar."""
         rid = report_id(_rt_path(roots))
-        r = client.post(f"/r/{rid}/filter", data={"category": "ASI01", "result": "All"})
+        r = client.post(f"/r/{rid}/filter", data={"category": "ASI01"})
         assert r.status_code == 200
         assert 'hx-swap-oob="true"' in r.text
 
@@ -504,7 +504,7 @@ class TestOOBSidebarAfterFilterPost:
     ) -> None:
         """The OOB sidebar must have the stable id so HTMX targets it correctly."""
         rid = report_id(_rt_path(roots))
-        r = client.post(f"/r/{rid}/filter", data={"category": "ASI01", "result": "All"})
+        r = client.post(f"/r/{rid}/filter", data={"category": "ASI01"})
         assert r.status_code == 200
         assert 'id="download-sidebar"' in r.text
 
@@ -513,7 +513,7 @@ class TestOOBSidebarAfterFilterPost:
     ) -> None:
         """The OOB sidebar's CSV link must include the active category filter."""
         rid = report_id(_rt_path(roots))
-        r = client.post(f"/r/{rid}/filter", data={"category": "ASI01", "result": "All"})
+        r = client.post(f"/r/{rid}/filter", data={"category": "ASI01"})
         assert r.status_code == 200
         # The CSV href must carry a filter param (category=ASI01)
         assert "export.csv?category=ASI01" in r.text or "export.csv?category%3DASI01" not in r.text
@@ -529,7 +529,7 @@ class TestOOBSidebarAfterFilterPost:
     ) -> None:
         """The OOB sidebar's JSON link must include the active category filter."""
         rid = report_id(_rt_path(roots))
-        r = client.post(f"/r/{rid}/filter", data={"category": "ASI01", "result": "All"})
+        r = client.post(f"/r/{rid}/filter", data={"category": "ASI01"})
         assert r.status_code == 200
         sidebar_start = r.text.find('id="download-sidebar"')
         sidebar_end = r.text.find("</section>", sidebar_start)
@@ -548,7 +548,7 @@ class TestOOBSidebarAfterFilterPost:
         rid = report_id(_rt_path(roots))
 
         # Step 1: POST filter to narrow to ASI01 only.
-        r_filter = client.post(f"/r/{rid}/filter", data={"category": "ASI01", "result": "All"})
+        r_filter = client.post(f"/r/{rid}/filter", data={"category": "ASI01"})
         assert r_filter.status_code == 200
         assert 'hx-swap-oob="true"' in r_filter.text
 
@@ -586,7 +586,7 @@ class TestOOBSidebarAfterFilterPost:
         rid = report_id(_rt_path(roots))
 
         # POST filter to ASI01 only.
-        r_filter = client.post(f"/r/{rid}/filter", data={"category": "ASI01", "result": "All"})
+        r_filter = client.post(f"/r/{rid}/filter", data={"category": "ASI01"})
         assert r_filter.status_code == 200
 
         # Extract JSON href from the OOB sidebar.

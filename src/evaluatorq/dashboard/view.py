@@ -708,6 +708,131 @@ def _render_sim_filter_rail(
     )
 
 
+# Outcome chip dot colors (spec: Vulnerable red-600, Resistant green-600, Error amber-600).
+_RESULT_DOT_CLASS: dict[str, str] = {
+    'Vulnerable': 'chip-dot-red',
+    'Resistant': 'chip-dot-green',
+    'Error': 'chip-dot-amber',
+}
+
+# Severity chip dot colors, aligned with report_kit.severity_pill tones.
+_SEVERITY_DOT_CLASS: dict[str, str] = {
+    'critical': 'chip-dot-red',
+    'high': 'chip-dot-amber',
+    'medium': 'chip-dot-gray',
+    'low': 'chip-dot-green',
+}
+
+
+def _render_redteam_filter_rail(
+    rid: str,
+    opts: dict[str, list[str]],
+    selections: dict[str, list[str]],
+    *,
+    shown: int | None,
+    total: int | None,
+) -> str:
+    """Render the right-side redteam filter rail: chips + slider + dropdowns + counter.
+
+    Outcome / Severity render as chip toggles; a min-turns slider is shown
+    only when the run has any multi-turn attacks (``opts['max_turns'] > 1``);
+    Category / Agent render as ``<details>`` dropdowns (Agent only when there
+    is more than one agent); Technique / Delivery Method / Vulnerability are
+    tucked behind a ``<details id="filter-dd-more">`` "More filters" expander
+    to keep the rail short for the common single-agent, single-category run.
+    """
+    result_opts = opts.get('result', [])
+    result_sel = set(selections.get('result', []))
+    result_chips = ''.join(
+        _chip('result', opt, checked=(opt in result_sel), dot_cls=_RESULT_DOT_CLASS.get(opt, 'chip-dot-gray'))
+        for opt in result_opts
+    )
+
+    severity_opts = opts.get('severity', [])
+    severity_sel = set(selections.get('severity', [])) or set(severity_opts)
+    severity_chips = ''.join(
+        _chip(
+            'severity',
+            opt,
+            checked=(opt in severity_sel),
+            dot_cls=_SEVERITY_DOT_CLASS.get(opt.lower(), 'chip-dot-gray'),
+        )
+        for opt in severity_opts
+    )
+
+    max_turns = int(opts.get('max_turns', ['1'])[0] or 1)
+    min_turns_sel = selections.get('min_turns', ['1'])
+    min_turns = int(min_turns_sel[0]) if min_turns_sel and min_turns_sel[0] else 1
+    slider_html = ''
+    if max_turns > 1:
+        readout = 'all' if min_turns <= 1 else f'≥ {min_turns}'
+        slider_html = (
+            '<div class="filter-group" data-dim="min_turns">'
+            '<label class="filter-label">Min. Turns</label>'
+            '<div class="filter-slider-row">'
+            f'<input type="range" class="filter-slider" name="min_turns" min="1" max="{max_turns}"'
+            f' value="{min_turns}">'
+            f'<span class="filter-slider-readout">{esc(readout)}</span>'
+            '</div>'
+            '</div>'
+        )
+
+    category_dd = _dropdown('category', 'Category', opts.get('category', []), selections.get('category', []))
+
+    agent_opts = opts.get('agent', [])
+    agent_dd = ''
+    if len(agent_opts) > 1:
+        agent_dd = _dropdown('agent', 'Agent', agent_opts, selections.get('agent', []))
+
+    more_rows = ''.join([
+        _dropdown('technique', 'Technique', opts.get('technique', []), selections.get('technique', [])),
+        _dropdown(
+            'delivery_method', 'Delivery Method', opts.get('delivery_method', []), selections.get('delivery_method', [])
+        ),
+        _dropdown('vulnerability', 'Vulnerability', opts.get('vulnerability', []), selections.get('vulnerability', [])),
+    ])
+    more_dd = (
+        f'<details id="filter-dd-more" class="filter-dd filter-dd-more">'
+        f'<summary class="filter-dd-trigger">'
+        f'<span class="filter-dd-name">More filters</span>'
+        f'{_FILTER_CHEVRON}'
+        f'</summary>'
+        f'<div class="filter-dd-more-body">{more_rows}</div>'
+        f'</details>'
+    )
+
+    if shown is not None and total is not None and shown < total:
+        counter = f'{shown} of {total} shown'
+    else:
+        counter = 'Showing all results'
+
+    inner = (
+        f'<div class="filter-rail-header">{_SLIDERS_ICON}<span class="filter-rail-title">Filters</span></div>'
+        f'<div class="filter-group" data-dim="result">'
+        f'<label class="filter-label">Outcome</label>'
+        f'<div class="filter-chip-row">{result_chips}</div>'
+        f'</div>'
+        f'<div class="filter-group" data-dim="severity">'
+        f'<label class="filter-label">Severity</label>'
+        f'<div class="filter-chip-row">{severity_chips}</div>'
+        f'</div>'
+        f'{slider_html}'
+        f'<div class="filter-group" data-dim="category">{category_dd}</div>'
+        + (f'<div class="filter-group" data-dim="agent">{agent_dd}</div>' if agent_dd else '')
+        + f'<div class="filter-group" data-dim="more">{more_dd}</div>'
+        f'<div class="filter-rail-footer">{esc(counter)}</div>'
+    )
+    return (
+        f'<form id="filter-form" class="filter-form filter-form--redteam"'
+        f' hx-post="/r/{esc(rid)}/filter"'
+        f' hx-trigger="change"'
+        f' hx-target="#filter-swap"'
+        f' hx-swap="outerHTML">'
+        f'{inner}'
+        f'</form>'
+    )
+
+
 def render_filter_form(
     rid: str,
     surface: str,
@@ -738,6 +863,8 @@ def render_filter_form(
     """
     if surface == 'sim':
         return _render_sim_filter_rail(rid, opts, selections, shown=shown, total=total)
+    if surface == 'redteam':
+        return _render_redteam_filter_rail(rid, opts, selections, shown=shown, total=total)
 
     from evaluatorq.dashboard.filters import FILTERS
 
