@@ -230,3 +230,29 @@ def test_sim_turn_quality_stat_tiles_and_bar_rows(sim_run_with_turn_metrics) -> 
     assert 'class="sim-stat-tile"' in html
     assert 'class="rk-bar-rows"' in html
     assert '2 turns' in html
+
+
+def test_sim_config_tab_has_metagrid(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run)
+    assert 'Job-level metadata' in html
+    assert sim_run.run_name in html
+
+
+def test_sim_config_tab_has_personas_and_scenarios(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run)
+    assert 'Simulated user profiles' in html
+    assert 'Goals + pass/fail criteria' in html
+    assert 'alice' in html
+    assert 'billing' in html
+
+
+def test_sim_config_tab_keeps_token_usage(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run)
+    config_html = html.split('Job-level metadata')[-1]
+    assert 'Tokens' in config_html or 'token' in config_html.lower()

@@ -85,11 +85,12 @@ def _tabs(group: str, items: list[tuple[str, str] | tuple[str, str, str]]) -> st
 def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = None) -> str:
     """Render the Agent Sim report body as Streamlit-aligned tabs.
 
-    Tabs: Overview, Breakdown, Transcripts, Turn quality, Config — each
+    Tabs: Overview · Breakdown · Transcripts · Turn quality · Config — each
     populated from the precomputed report sections (empty tabs drop out; Turn
-    quality drops when a run carries no ``turn_metrics``). Pass ``results`` to
-    render a filtered subset (the filter round-trip); it defaults to the run's
-    full result list.
+    quality drops when a run carries no ``turn_metrics``). Config folds job-level
+    metadata (run configuration, personas, scenarios) plus the kept token_usage
+    table. Pass ``results`` to render a filtered subset (the filter round-trip);
+    it defaults to the run's full result list.
     """
     from evaluatorq.dashboard.view import sim_interactive_panels
     from evaluatorq.simulation.reports.export_html import _SECTION_RENDERERS
@@ -122,10 +123,93 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
                 f'Transcripts <span class="tab-count">{len(entries)}</span>',
             ),
             ('Turn quality', _sim_turn_quality(by_kind)),
-            ('Config', render('token_usage')),
+            ('Config', _sim_config(by_kind, run) + render('token_usage')),
         ],
     )
     return f'<div class="sim-report">{hero}{tabs}</div>'
+
+
+def _sim_config(by_kind: dict[str, Any], run: SimulationRun) -> str:
+    """Config tab body: run-configuration meta grid → personas panel →
+    scenarios panel (spec §Config.1-3). The kept ``token_usage`` table is
+    appended by the caller."""
+    from evaluatorq.dashboard.report_kit import meta_grid, panel
+
+    overview_section = by_kind.get('overview')
+    overview_data = overview_section.data if overview_section is not None else {}
+    personas: list[dict[str, Any]] = overview_data.get('personas', [])
+    scenarios: list[dict[str, Any]] = overview_data.get('scenarios', [])
+
+    generated = run.created_at
+    generated_str = generated.date().isoformat() if hasattr(generated, 'date') else str(generated)[:10]
+
+    config_html = panel(
+        'Run configuration',
+        meta_grid([
+            ('Target', run.target),
+            ('Run name', run.run_name),
+            ('Model', run.target_model),
+            ('Mode', run.mode),
+            ('Target kind', run.target_kind),
+            ('Evaluators', ', '.join(run.evaluator_names) if run.evaluator_names else None),
+            ('Personas', str(len(personas)) if personas else None),
+            ('Scenarios', str(len(scenarios)) if scenarios else None),
+            ('Conversations', str(run.total_results)),
+            ('Generated', generated_str),
+        ]),
+        sub='Job-level metadata',
+    )
+
+    personas_html = ''
+    if personas:
+        rows = ''.join(_sim_config_persona_row(p) for p in personas)
+        personas_html = panel('Personas', rows, sub='Simulated user profiles')
+
+    scenarios_html = ''
+    if scenarios:
+        rows = ''.join(_sim_config_scenario_row(s) for s in scenarios)
+        scenarios_html = panel('Scenarios', rows, sub='Goals + pass/fail criteria')
+
+    return f'{config_html}{personas_html}{scenarios_html}'
+
+
+def _sim_config_persona_row(persona: dict[str, Any]) -> str:
+    """One Config-panel persona row: name · communication style · background
+    (spec §Config.2). Missing style/background fields are simply omitted."""
+    name = esc(persona.get('name', ''))
+    traits = persona.get('traits')
+    style = traits.get('communication_style') if isinstance(traits, dict) else None
+    background = persona.get('background') or (traits.get('background') if isinstance(traits, dict) else None)
+    style_html = f'<span class="sim-config-persona-style">{esc(str(style))}</span>' if style else ''
+    background_html = f'<span class="sim-config-persona-bg">{esc(str(background))}</span>' if background else ''
+    return (
+        '<div class="sim-config-persona-row">'
+        f'<span class="sim-config-persona-name">{name}</span>{style_html}{background_html}'
+        '</div>'
+    )
+
+
+def _sim_config_scenario_row(scenario: dict[str, Any]) -> str:
+    """One Config-panel scenario row: name + goal, then criteria chips
+    (spec §Config.3). ``must_not_happen`` → red "✗" prefix, else green "✓"."""
+    name = esc(scenario.get('name', ''))
+    goal = scenario.get('goal')
+    goal_html = f'<div class="sim-config-scenario-goal">{esc(str(goal))}</div>' if goal else ''
+    chips: list[str] = []
+    for c in scenario.get('criteria', []):
+        is_negative = c.get('type') == 'must_not_happen'
+        tone = 'red-600' if is_negative else 'green-600'
+        mark = '✗' if is_negative else '✓'
+        chips.append(
+            f'<span class="sim-config-criterion" style="color:var(--{tone})">'
+            f'{mark} {esc(c.get("description", ""))}</span>'
+        )
+    chips_html = f'<div class="sim-config-criteria">{"".join(chips)}</div>' if chips else ''
+    return (
+        '<div class="sim-config-scenario-row">'
+        f'<div class="sim-config-scenario-name">{name}</div>{goal_html}{chips_html}'
+        '</div>'
+    )
 
 
 def _sim_breakdown(by_kind: dict[str, Any], render: Callable[..., str]) -> str:

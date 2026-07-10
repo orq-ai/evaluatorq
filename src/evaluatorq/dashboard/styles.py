@@ -940,6 +940,47 @@ _SIM_REPORT_CSS = """
     font-size: 11px; color: var(--text-muted); margin-top: 4px;
     text-transform: capitalize;
 }
+
+/* ---- Config tab (spec §Config) ---- */
+/* Run-configuration meta grid (report_kit.meta_grid) */
+.sim-report .rk-meta-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 16px 24px;
+}
+.sim-report .rk-meta-key {
+    font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--text-faint);
+}
+.sim-report .rk-meta-value {
+    font-size: 13.5px; color: var(--text-body); margin-top: 4px;
+}
+/* Personas panel (name · communication style · background) */
+.sim-report .sim-config-persona-row {
+    display: flex; align-items: baseline; gap: 12px;
+    margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-subtle);
+}
+.sim-report .sim-config-persona-row:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+.sim-report .sim-config-persona-name {
+    font-size: 13px; font-weight: 600; color: var(--text-strong); min-width: 160px;
+}
+.sim-report .sim-config-persona-style {
+    font-family: var(--font-mono); font-size: 11px; color: var(--text-faint);
+}
+.sim-report .sim-config-persona-bg { font-size: 12.5px; color: var(--text-muted); }
+/* Scenarios panel (name + goal + criteria chips) */
+.sim-report .sim-config-scenario-row {
+    margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-subtle);
+}
+.sim-report .sim-config-scenario-row:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+.sim-report .sim-config-scenario-name { font-size: 13px; font-weight: 600; color: var(--text-strong); }
+.sim-report .sim-config-scenario-goal { font-size: 12.5px; color: var(--text-muted); margin-top: 3px; }
+.sim-report .sim-config-criteria {
+    display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
+}
+.sim-report .sim-config-criterion {
+    font-family: var(--font-mono); font-size: 11.5px; background: var(--surface-sunken);
+    border-radius: 6px; padding: 3px 9px;
+}
 """
 
 DASHBOARD_CSS = _DASHBOARD_CSS_HEAD + _TAB_RULES + _SIM_TAB_ACCENT + _DASHBOARD_CSS_TAIL + _SIM_REPORT_CSS
