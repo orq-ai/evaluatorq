@@ -992,10 +992,8 @@ def _rt_agents_intro(*, multi_agent: bool, n_agents: int) -> str:
 
 def _rt_agents(by_kind: dict[str, Any], report: RedTeamReport, rid: str) -> str:
     """Agents tab body: intro copy -> one card per agent (``agent_context``
-    joined with ``_rt_agent_stats`` by key) -> multi-agent-only kept panels
-    (``rt_panel_agent_heatmap``/``rt_panel_disagreement`` + agent_comparison/
-    agent_disagreements renders). Spec §Agents."""
-    from evaluatorq.dashboard.view import rt_panel_agent_heatmap, rt_panel_disagreement
+    joined with ``_rt_agent_stats`` by key) -> multi-agent-only server-rendered
+    agent_comparison (ASR heatmap) + agent_disagreements. Spec §Agents."""
     from evaluatorq.redteam.reports.export_html import _SECTION_RENDERERS
 
     agent_ctx_section = by_kind.get('agent_context')
@@ -1013,11 +1011,9 @@ def _rt_agents(by_kind: dict[str, Any], report: RedTeamReport, rid: str) -> str:
 
     tail = ''
     if multi_agent:
-        tail = (
-            rt_panel_agent_heatmap(rid)
-            + rt_panel_disagreement(rid)
-            + _render_sections(by_kind, _SECTION_RENDERERS, ('agent_comparison', 'agent_disagreements'))
-        )
+        # Server-rendered agent_comparison (ASR heatmap) + agent_disagreements only.
+        # The lazy vega Agent-Heatmap / Disagreement-Viewer panels duplicated these.
+        tail = _render_sections(by_kind, _SECTION_RENDERERS, ('agent_comparison', 'agent_disagreements'))
 
     return f'{intro}{cards}{tail}'
 

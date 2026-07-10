@@ -539,19 +539,3 @@ class TestFilterAwarityParity:
         r = client.get(f'/r/{rid}')
         assert r.status_code == 200
         assert 'hx-include="#filter-form"' in r.text
-
-    def test_report_page_panels_trigger_on_filter_changed(
-        self,
-        client: TestClient,
-        fixture_roots: list[Path],
-    ) -> None:
-        """Multi-agent vega panels (heatmap/disagreement) refresh on filter change.
-
-        Single-agent reports are now fully server-rendered (no vega panels); the
-        kept ``orq:filter-changed``-listening panels only exist in the multi-agent
-        Agents tab, so this parity guarantee is asserted against that fixture.
-        """
-        rid = _rid(fixture_roots, 'runs_multi', 'redteam_multi_agent.json')
-        r = client.get(f'/r/{rid}')
-        assert r.status_code == 200
-        assert 'orq:filter-changed' in r.text

@@ -756,15 +756,6 @@ class TestPanelContainerFilterWiring:
             'this wires filter selections into panel hx-get requests.'
         )
 
-    def test_panel_containers_trigger_on_filter_changed(self, client: TestClient, rid: str) -> None:
-        """Panel placeholders must include orq:filter-changed in hx-trigger."""
-        r = client.get(f'/r/{rid}')
-        assert r.status_code == 200
-        assert 'orq:filter-changed' in r.text, (
-            "Expected 'orq:filter-changed' in hx-trigger on panel placeholders; "
-            'panels must refetch when the filter form fires this event.'
-        )
-
     def test_filter_form_has_stable_id(self, client: TestClient, rid: str) -> None:
         """The filter form must have id='filter-form' so hx-include can target it."""
         r = client.get(f'/r/{rid}')

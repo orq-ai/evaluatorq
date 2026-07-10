@@ -26,7 +26,6 @@ from evaluatorq.common.reports import truncate as _truncate
 from evaluatorq.common.reports.vega import render_svg as _render_svg
 from evaluatorq.common.reports.vega import vl_bar_h as _vl_bar_h
 from evaluatorq.common.reports.vega import vl_donut as _vl_donut
-from evaluatorq.common.reports.vega import vl_grouped_bar as _vl_grouped_bar
 from evaluatorq.redteam.reports.sections import build_report_sections
 
 if TYPE_CHECKING:
@@ -1069,31 +1068,6 @@ def _asr_cell_color(asr_pct: float) -> str:
     return f'#{r:02x}{g:02x}{b:02x}'
 
 
-def _render_agent_comparison_grouped_bar(
-    vuln_asr_rows: list[dict[str, Any]],
-    agents: list[str],
-) -> str:
-    """Render a grouped horizontal bar chart of ASR by vulnerability per agent."""
-    if not vuln_asr_rows or not agents:
-        return ''
-
-    rows = vuln_asr_rows[:15]
-    categories = [r['vulnerability'] for r in rows]
-
-    series: list[tuple[str, list[float]]] = []
-    for agent_name in agents:
-        asr_values = [r['agents'].get(agent_name, {}).get('asr', 0.0) * 100 for r in rows]
-        series.append((agent_name, asr_values))
-
-    spec = _vl_grouped_bar(
-        categories=categories,
-        series=series,
-        x_title='Attack Success Rate (%)',
-    )
-    svg = _render_svg(spec)
-    return f'<div class="chart-container">{svg}</div>' if svg else ''
-
-
 def _render_framework_bar_chart(rows: list[dict[str, Any]]) -> str:
     """Render a horizontal bar chart of ASR% by framework."""
     if not rows:
@@ -1131,7 +1105,6 @@ def _render_agent_comparison_html(section: ReportSection) -> str:
     data = section.data
     agents: list[str] = data.get('agents', [])
     agent_metrics: list[dict[str, Any]] = data.get('agent_metrics', [])
-    vuln_asr_rows: list[dict[str, Any]] = data.get('vuln_asr_rows', [])
     heatmap: dict[str, Any] = data.get('heatmap', {})
 
     if len(agents) < 2:
@@ -1189,22 +1162,8 @@ def _render_agent_comparison_html(section: ReportSection) -> str:
         tbl_parts.append('</tbody></table></div>')
         parts.append('\n'.join(tbl_parts))
 
-    # Grouped bar chart: ASR by vulnerability per agent (with table fallback)
-    if vuln_asr_rows:
-        chart = _render_agent_comparison_grouped_bar(vuln_asr_rows, agents)
-        if chart:
-            parts.append(chart)
-        else:
-            table_headers = ['Vulnerability', *agents]
-            table_rows_data: list[list[str]] = []
-            for vrow in vuln_asr_rows[:20]:
-                row_cells = [_esc(vrow['vulnerability'])]
-                for ag in agents:
-                    ag_data = vrow['agents'].get(ag, {'asr': 0.0, 'total': 0})
-                    row_cells.append(f'{ag_data["asr"]:.0%} (n={ag_data["total"]})')
-                table_rows_data.append(row_cells)
-            parts.append(_html_table(table_headers, table_rows_data))
-
+    # The ASR heatmap above already shows ASR by vulnerability per agent; the
+    # grouped bar chart duplicated it, so it is intentionally omitted.
     return '\n'.join(parts)
 
 
