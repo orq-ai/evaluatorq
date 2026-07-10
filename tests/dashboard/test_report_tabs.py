@@ -10,6 +10,7 @@ from starlette.testclient import TestClient
 
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.library import report_id
+from evaluatorq.dashboard.report_tabs import _tabs
 
 from tests.dashboard.test_downloads import _make_rt_report, _make_sim_run
 
@@ -91,3 +92,14 @@ def test_filter_post_preserves_tabs(client: TestClient, roots: list[Path]) -> No
     assert r.status_code == 200
     assert "tab-label" in r.text
     assert "filter-swap" in r.text
+
+
+def test_tabs_two_tuple_escapes_label() -> None:
+    html = _tabs("g", [("<x>", "<p>body</p>")])
+    assert "&lt;x&gt;" in html
+    assert "<x>" not in html
+
+
+def test_tabs_three_tuple_renders_raw_label_html() -> None:
+    html = _tabs("g", [("Transcripts", "<p>body</p>", 'Transcripts <span class="pill">5</span>')])
+    assert '<span class="pill">5</span>' in html

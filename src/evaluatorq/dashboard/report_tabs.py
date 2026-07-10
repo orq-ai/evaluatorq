@@ -40,26 +40,32 @@ def _render_sections(
     return ''.join(out)
 
 
-def _tabs(group: str, items: list[tuple[str, str]]) -> str:
+def _tabs(group: str, items: list[tuple[str, str] | tuple[str, str, str]]) -> str:
     """Render a CSS-only tab group.
 
-    ``items`` is an ordered list of ``(label, panel_html)``. Tabs whose panel is
-    empty are dropped so a surface that lacks (say) error or comparison data
-    simply shows fewer tabs, matching the Streamlit conditional-tab behaviour.
-    The first surviving tab is checked. Switching is pure CSS (see ``styles.py``
+    ``items`` is an ordered list of ``(label, panel_html)`` or ``(label,
+    panel_html, label_html)``. In the 2-tuple form the label is HTML-escaped;
+    in the 3-tuple form ``label_html`` is rendered raw inside the ``<label>``
+    (the caller is responsible for escaping it), which lets a surface inject
+    e.g. a count pill next to the label. Tabs whose panel is empty are dropped
+    so a surface that lacks (say) error or comparison data simply shows fewer
+    tabs, matching the Streamlit conditional-tab behaviour. The first
+    surviving tab is checked. Switching is pure CSS (see ``styles.py``
     ``_TAB_RULES``): the Nth radio toggles the Nth label and Nth panel.
     """
-    live = [(label, html) for label, html in items if html and html.strip()]
+    live = [it for it in items if it[1] and it[1].strip()]
     if not live:
         return ''
     radios: list[str] = []
     labels: list[str] = []
     panels: list[str] = []
-    for i, (label, html) in enumerate(live):
+    for i, it in enumerate(live):
+        label, html = it[0], it[1]
+        label_html = it[2] if len(it) > 2 else esc(label)
         tid = f'{group}-{i}'
         checked = ' checked' if i == 0 else ''
         radios.append(f'<input class="tab-radio" type="radio" name="{esc(group)}" id="{esc(tid)}"{checked}>')
-        labels.append(f'<label class="tab-label" for="{esc(tid)}">{esc(label)}</label>')
+        labels.append(f'<label class="tab-label" for="{esc(tid)}">{label_html}</label>')
         panels.append(f'<section class="tab-panel">{html}</section>')
     return (
         f'<div class="tabs">{"".join(radios)}'
