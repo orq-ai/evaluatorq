@@ -325,8 +325,6 @@ reuse. `eq sim generate` writes the cases it builds to a JSONL file with
 `--output PATH` (one datapoint per line); `eq sim run` does the same alongside a
 live run with `--save-datapoints PATH`:
 
-<!-- termynal -->
-
 ```bash
 # Generate cases once and keep them
 eq sim generate --agent-description "e-commerce support agent" \
@@ -436,9 +434,7 @@ the generated cases (`eq sim generate --output`, or `eq sim run
     no built-in trace-to-persona extractor yet; the seed list is the hand-off point
     between your trace history and the generators.
 
-!!! tip "View results in the local dashboard"
-    Run `eq dashboard` to browse saved red-team and simulation reports together;
-    `eq redteam ui` / `eq sim ui` open the legacy Streamlit views for one surface.
+--8<-- "docs/_snippets/dashboard-tip.md"
 
 ## External framework demos
 

@@ -287,6 +287,7 @@ docs = [
   "mkdocs-minify-plugin>=0.8.0",
   "mkdocs-git-revision-date-localized-plugin>=1.2.9",
   "mkdocs-htmlproofer-plugin>=1.2.0",
+  "mkdocs-llmstxt>=0.5.0",
 ]
 dev = [
   "pytest>=8.0.0",

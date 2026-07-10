@@ -3,7 +3,8 @@
 [![PyPI version](https://img.shields.io/pypi/v/evaluatorq.svg)](https://pypi.org/project/evaluatorq/)
 [![Python versions](https://img.shields.io/pypi/pyversions/evaluatorq.svg)](https://pypi.org/project/evaluatorq/)
 [![CI](https://github.com/orq-ai/evaluatorq/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/orq-ai/evaluatorq/actions/workflows/ci.yml)
-[![Docs](https://github.com/orq-ai/evaluatorq/actions/workflows/docs.yml/badge.svg?branch=main)](https://github.com/orq-ai/evaluatorq/actions/workflows/docs.yml)
+[![Docs CI](https://img.shields.io/github/actions/workflow/status/orq-ai/evaluatorq/docs.yml?branch=main&label=Docs%20CI)](https://github.com/orq-ai/evaluatorq/actions/workflows/docs.yml)
+[![Docs Site](https://img.shields.io/badge/Docs-Live%20Site-0A7B83)](https://orq-ai.github.io/evaluatorq/)
 [![Release](https://github.com/orq-ai/evaluatorq/actions/workflows/release.yml/badge.svg)](https://github.com/orq-ai/evaluatorq/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/orq-ai/evaluatorq/blob/main/LICENSE)
 

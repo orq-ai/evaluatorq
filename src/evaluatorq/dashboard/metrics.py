@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 from evaluatorq.dashboard import library
 
 if TYPE_CHECKING:
+    from datetime import datetime
     from pathlib import Path
 
 # Severity buckets in display order (matches the report severity scale).
@@ -57,6 +58,8 @@ class Landing:
     tokens_by_kind: list[tuple[str, int]]  # [('Red team', n), ('Agent sim', n)]
     resistant: int  # attacks resisted (for the donut)
     vulnerable: int  # attacks that succeeded (for the donut)
+    total_cost: float = 0.0  # summed cost_usd across both stores
+    cost_by_kind: list[tuple[str, float]] = field(default_factory=list)  # non-zero only
     recent: list[RunRow] = field(default_factory=list)
 
 
@@ -85,25 +88,32 @@ def _tokens_total(usage: object) -> int:
     return _as_int(usage.get('prompt_tokens')) + _as_int(usage.get('completion_tokens'))
 
 
-def _status_from_score(score: float | None, vulnerable: int | None = None) -> str:
-    """Map a 0..1 score (and optional vulnerability count) to a status pill."""
-    if vulnerable is not None and vulnerable == 0:
-        return 'passed'
-    if score is None:
-        return 'warning'
-    if score >= 0.8:
-        return 'passed'
-    if score >= 0.5:
-        return 'warning'
-    return 'failed'
+def _cost_usd(usage: object) -> float:
+    """Pull the real dollar cost from a TokenUsage-shaped dict.
+
+    Both surfaces already record ``cost_usd`` upstream (sim per-result
+    ``token_usage``; red team ``summary.token_usage_total``), so no price model
+    is needed — the dashboard just surfaces it.
+    """
+    if not isinstance(usage, dict):
+        return 0.0
+    return _as_float(usage.get('cost_usd'))
+
+
+def _lifecycle_status(*, broken: bool, all_errored: bool = False) -> str:
+    """Run lifecycle for the Status column: 'error' when the report is broken or
+    every case errored, else 'finished'. ('running' isn't derivable — the run
+    store only receives a file once a job completes.)"""
+    return 'error' if broken or all_errored else 'finished'
 
 
 def _redteam_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
     summary = data.get('summary')
     summary = summary if isinstance(summary, dict) else {}
     resistance = _as_float(summary.get('resistance_rate'), default=1.0) if summary else None
-    vulns = _as_int(summary.get('vulnerabilities_found')) if summary else None
-    status = _status_from_score(resistance, vulnerable=vulns)
+    evaluated = _as_int(summary.get('evaluated_attacks')) if summary else 0
+    errors = _as_int(summary.get('total_errors')) if summary else 0
+    total = _as_int(summary.get('total_attacks')) if summary else 0
     return RunRow(
         id=card.id,
         surface='redteam',
@@ -111,7 +121,9 @@ def _redteam_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
         when=card.created_at.strftime('%Y-%m-%d %H:%M'),
         headline=card.headline,
         score=resistance,
-        status='failed' if card.error else status,
+        status=_lifecycle_status(
+            broken=bool(card.error), all_errored=(total > 0 and evaluated == 0 and errors >= total)
+        ),
         error=bool(card.error),
     )
 
@@ -128,7 +140,7 @@ def _sim_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
         when=card.created_at.strftime('%Y-%m-%d %H:%M'),
         headline=card.headline,
         score=score,
-        status='failed' if card.error else _status_from_score(score),
+        status=_lifecycle_status(broken=bool(card.error)),
         error=bool(card.error),
     )
 
@@ -159,6 +171,8 @@ def landing(roots: list[Path] | None = None) -> Landing:
     total_tokens = 0
     rt_tokens = 0
     sim_tokens = 0
+    rt_cost = 0.0
+    sim_cost = 0.0
     resistant = 0
     vulnerable = 0
     for card in library.scan(roots):
@@ -174,6 +188,7 @@ def landing(roots: list[Path] | None = None) -> Landing:
                 tok = _tokens_total(summary.get('token_usage_total'))
                 rt_tokens += tok
                 total_tokens += tok
+                rt_cost += _cost_usd(summary.get('token_usage_total'))
                 by_sev = summary.get('by_severity')
                 if isinstance(by_sev, dict):
                     for sev, entry in by_sev.items():
@@ -185,10 +200,12 @@ def landing(roots: list[Path] | None = None) -> Landing:
             tok = sum(_as_int(_result_tokens(res)) for res in _results(data))
             sim_tokens += tok
             total_tokens += tok
+            sim_cost += sum(_cost_usd(res.get('token_usage')) for res in _results(data))
 
     severity = [(sev, severity_counts[sev]) for sev in SEVERITY_ORDER if severity_counts.get(sev)]
     by_kind = [('Red team', len(redteam)), ('Agent sim', len(sim))]
     tokens_by_kind = [(k, n) for k, n in (('Red team', rt_tokens), ('Agent sim', sim_tokens)) if n]
+    cost_by_kind = [(k, c) for k, c in (('Red team', rt_cost), ('Agent sim', sim_cost)) if c > 0]
 
     # Attack-weighted resistance, so the headline stat agrees with the donut.
     # The per-run mean is misleading: runs with zero evaluated attacks default
@@ -207,6 +224,8 @@ def landing(roots: list[Path] | None = None) -> Landing:
         tokens_by_kind=tokens_by_kind,
         resistant=max(resistant, 0),
         vulnerable=max(vulnerable, 0),
+        total_cost=rt_cost + sim_cost,
+        cost_by_kind=cost_by_kind,
         recent=rows[:5],
     )
 
@@ -218,3 +237,365 @@ def _results(data: dict[str, object]) -> list[dict[str, object]]:
 
 def _result_tokens(res: dict[str, object]) -> int:
     return _as_int(res.get('total_tokens')) or _tokens_total(res.get('token_usage'))
+
+
+# ---------------------------------------------------------------------------
+# Agent Sim overview (item-level, one row per simulation) — RES-1022
+# ---------------------------------------------------------------------------
+
+
+_TARGET_LABELS: dict[str, str] = {
+    'orq_agent': 'Orq agent',
+    'orq_deployment': 'Orq deployment',
+    'openai_model': 'OpenAI model',
+    'vercel': 'Vercel',
+    'callback': 'Callback',
+}
+
+# Target kind → icon category the view renders ('agent' | 'llm' | 'deployment' | 'other').
+_TARGET_KIND_CATEGORY: dict[str, str] = {
+    'orq_agent': 'agent',
+    'orq_deployment': 'deployment',
+    'vercel': 'deployment',
+    'openai_model': 'llm',
+    'callback': 'other',
+}
+
+
+def _split_target(raw: str) -> tuple[str, str] | None:
+    """Parse a prefixed target string into (label, kind).
+
+    Targets are recorded as ``agent:<key>`` / ``deployment:<key>``; a bare
+    ``agent`` / ``deployment`` / ``callback`` carries a kind but no concrete
+    name.  Returns ``None`` when *raw* is empty.
+    """
+    raw = raw.strip()
+    if not raw:
+        return None
+    prefix, _, rest = raw.partition(':')
+    kind = {'agent': 'agent', 'deployment': 'deployment', 'callback': 'other'}.get(prefix, '')
+    if kind:
+        return (rest or _TARGET_LABELS.get(f'orq_{prefix}', prefix), kind)
+    return (raw, '')  # no known prefix → treat the whole string as a name
+
+
+def _sim_target(data: dict[str, object]) -> tuple[str, str]:
+    """Best available (label, icon-kind) for a sim run.
+
+    Prefers a concrete identifier when the report carries one — an explicit
+    ``target``/``model`` field, or a per-result ``metadata.target`` like
+    ``agent:<key>`` (``agent:``/``deployment:`` prefixes name the kind) — and
+    falls back to a branded ``target_kind`` label.  Old reports store only
+    ``target_kind`` + ``run_name``, so they show the kind label.
+    """
+    kind_cat = _TARGET_KIND_CATEGORY.get(str(data.get('target_kind') or ''), 'other')
+    # Preferred: the persisted target name (+ model when the client knew it).
+    target = data.get('target')
+    target_model = data.get('target_model')
+    if isinstance(target, str) and target:
+        name, kind = _split_target(target) or (target, '')
+        if isinstance(target_model, str) and target_model and target_model != name:
+            name = f'{name} · {target_model}'
+        return (name, kind or kind_cat)
+    # Legacy: a bare ``model`` field (older openai-model runs) → the model id.
+    model = data.get('model')
+    if isinstance(model, str) and model:
+        return (model, 'llm')
+    for res in _results(data):
+        meta = res.get('metadata')
+        tgt = meta.get('target') if isinstance(meta, dict) else None
+        if isinstance(tgt, str) and (parsed := _split_target(tgt)):
+            return (parsed[0], parsed[1] or kind_cat)
+    # No concrete target recorded (old reports). Derive an agent-ish name from
+    # run_name rather than the generic 'Orq agent' label: 'sim:<name>:<model>'
+    # → '<name>'.  Real fix is persisting the target on SimulationRun upstream.
+    run_name = str(data.get('run_name') or '')
+    if run_name:
+        name = run_name.split(':', 2)[1] if run_name.startswith('sim:') and ':' in run_name[4:] else run_name
+        return (name or run_name, kind_cat)
+    kind = str(data.get('target_kind') or '')
+    return (_TARGET_LABELS.get(kind, kind or 'unknown'), kind_cat)
+
+
+@dataclass(frozen=True)
+class SimRunRow:
+    """One full Agent Sim run, as the design's run-level table row."""
+
+    rid: str  # report id (row links here)
+    name: str  # run_name / job name
+    when: datetime  # created_at (rendered relative in the view)
+    targets: list[tuple[str, str]]  # (label, icon-kind) per target under test
+    status: str  # 'passed' | 'warning' | 'failed'
+    score: float | None  # run score (mean of scorer_averages), 0..1
+    cases: int  # number of simulations in the run
+    cost: float  # summed cost_usd across the run's simulations
+    error: bool
+
+
+@dataclass(frozen=True)
+class SimOverview:
+    """Rolled-up Agent Sim surface data: KPI cards + recent-runs table.
+
+    ``avg_cost`` is the real per-sim dollar cost, averaged over only the sims
+    that carry a ``token_usage.cost_usd`` (recorded upstream) — a missing cost is
+    "unknown", not $0, so cost-less sims don't dilute the mean. ``None`` when no
+    sim has cost data, in which case the view falls back to avg tokens/sim.
+    """
+
+    simulations_run: int
+    goal_completion: float | None  # share of sims that achieved the goal, 0..1
+    avg_turns: float | None
+    avg_tokens: float | None
+    avg_cost: float | None  # mean cost_usd per sim
+    achieved: int  # outcomes donut segments
+    not_achieved: int
+    errors: int
+    recent: list[SimRunRow] = field(default_factory=list)  # newest run first, current page
+    total_runs: int = 0  # total runs before paging (for the pager)
+    page: int = 1
+    per_page: int = 8
+
+
+def _sim_run_score(data: dict[str, object]) -> float | None:
+    """Run-level score: mean of the scorer averages (same basis as _sim_row)."""
+    averages = data.get('scorer_averages')
+    averages = averages if isinstance(averages, dict) else {}
+    vals = [_as_float(v) for v in averages.values()] if averages else []
+    return sum(vals) / len(vals) if vals else None
+
+
+def sim_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: int = 8) -> SimOverview:
+    """Aggregate the sim run store into headline KPIs plus a run-level table
+    (one row per full simulation run). Rows are newest-first, sliced to the
+    requested page of ``per_page`` (``total_runs`` carries the full count)."""
+    page = max(1, page)
+    runs: list[SimRunRow] = []
+    turns_total = 0
+    tokens_total = 0
+    cost_total = 0.0
+    costed = 0  # sims that actually carry a cost_usd — avg_cost divides by this, not total
+    achieved = not_achieved = errors = 0
+    total = 0
+
+    for card in library.scan(roots):
+        if card.surface != 'sim':
+            continue
+        try:
+            data = library.read_json_cached(card.path)
+        except (OSError, ValueError):
+            continue
+
+        run_cost = 0.0
+        run_cases = 0
+        run_errors = 0
+        for res in _results(data):
+            total += 1
+            run_cases += 1
+            is_error = str(res.get('terminated_by') or '') == 'error'
+            goal = bool(res.get('goal_achieved'))
+            turns_total += _as_int(res.get('turn_count'))
+            tokens_total += _result_tokens(res)
+            usage = res.get('token_usage')
+            if isinstance(usage, dict) and 'cost_usd' in usage:
+                run_cost += _cost_usd(usage)
+                costed += 1
+            # Mirror the donut segments (goal_achieved / error) exactly.
+            if is_error:
+                errors += 1
+                run_errors += 1
+            elif goal:
+                achieved += 1
+            else:
+                not_achieved += 1
+        cost_total += run_cost
+
+        score = _sim_run_score(data)
+        runs.append(
+            SimRunRow(
+                rid=card.id,
+                name=card.name,
+                when=card.created_at,
+                targets=[_sim_target(data)],
+                status=_lifecycle_status(
+                    broken=bool(card.error), all_errored=(run_cases > 0 and run_errors == run_cases)
+                ),
+                score=score,
+                cases=run_cases,
+                cost=run_cost,
+                error=bool(card.error),
+            )
+        )
+
+    runs.sort(key=lambda r: r.when, reverse=True)
+    return SimOverview(
+        simulations_run=total,
+        goal_completion=(achieved / total) if total else None,
+        avg_turns=(turns_total / total) if total else None,
+        avg_tokens=(tokens_total / total) if total else None,
+        avg_cost=(cost_total / costed) if costed else None,
+        achieved=achieved,
+        not_achieved=not_achieved,
+        errors=errors,
+        recent=runs[(page - 1) * per_page : page * per_page],
+        total_runs=len(runs),
+        page=page,
+        per_page=per_page,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Red Team overview (item-level, one row per attack) — RES-1021
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RedTeamRunRow:
+    """One full red team run, as the design's run-level table row."""
+
+    rid: str  # report id (row links here)
+    name: str  # run_name / description
+    when: datetime  # created_at (rendered relative in the view)
+    targets: list[tuple[str, str]]  # (label, icon-kind) per tested agent/model
+    status: str  # 'passed' (resisted) | 'warning' | 'failed'
+    score: float | None  # resistance rate, 0..1
+    cases: int  # number of attacks in the run
+    cost: float  # summed cost_usd for the run
+    error: bool
+
+
+@dataclass(frozen=True)
+class RedTeamOverview:
+    """Rolled-up Red Team surface data: KPI cards + recent-runs table."""
+
+    attacks_run: int
+    break_rate: float | None  # share of evaluated attacks that were vulnerable
+    critical_findings: int
+    avg_robustness: float | None  # attack-weighted resistance, 0..1
+    total_cost: float | None  # summed cost_usd across red team runs
+    recent: list[RedTeamRunRow] = field(default_factory=list)  # newest run first, current page
+    total_runs: int = 0  # total runs before paging (for the pager)
+    page: int = 1
+    per_page: int = 8
+
+
+def _redteam_targets(data: dict[str, object]) -> list[tuple[str, str]]:
+    """One (label, icon-kind) per distinct tested agent/model, so multi-target
+    runs render as separate chips instead of a comma-joined blob. Dedupes by
+    agent identity (key/model), preferring a display name for the label."""
+    seen: dict[str, list[str]] = {}
+    order: list[str] = []
+    for res in _results(data):
+        agent = res.get('agent')
+        agent = agent if isinstance(agent, dict) else {}
+        ident = agent.get('key') or agent.get('model')
+        label = agent.get('display_name') or agent.get('key') or agent.get('model')
+        if not isinstance(label, str) or not label:
+            continue
+        ident = ident if isinstance(ident, str) and ident else label
+        kind = 'agent' if agent.get('key') else ('llm' if agent.get('model') else 'other')
+        if ident not in seen:
+            order.append(ident)
+            seen[ident] = [label, kind]
+        elif agent.get('display_name'):  # upgrade the label to the display name
+            seen[ident][0] = str(agent['display_name'])
+    if order:
+        return [(seen[i][0], seen[i][1]) for i in order]
+    # Fallback: the run's tested_agents strings (strip agent:/deployment: prefix).
+    out: list[tuple[str, str]] = []
+    tested = data.get('tested_agents')
+    if isinstance(tested, list):
+        for t in tested:
+            if isinstance(t, str) and t:
+                name = t.split(':', 1)[1] if t.startswith(('agent:', 'deployment:')) else t
+                out.append((name, 'deployment' if t.startswith('deployment:') else 'agent'))
+            elif isinstance(t, dict):
+                val = t.get('display_name') or t.get('key')
+                if isinstance(val, str) and val:
+                    out.append((val, 'agent'))
+    return out or [('unknown', 'other')]
+
+
+def redteam_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: int = 8) -> RedTeamOverview:
+    """Aggregate the red team run store into headline KPIs plus a run-level table
+    (one row per full red team run). Rows are newest-first, sliced to the requested
+    page of ``per_page`` (``total_runs`` carries the full count)."""
+    page = max(1, page)
+    runs: list[RedTeamRunRow] = []
+    evaluated = 0
+    vulnerable = 0
+    critical = 0
+    resistant = 0
+    cost_total = 0.0
+    has_cost = False
+    total_attacks = 0
+
+    for card in library.scan(roots):
+        if card.surface != 'redteam':
+            continue
+        try:
+            data = library.read_json_cached(card.path)
+        except (OSError, ValueError):
+            continue
+
+        summary = data.get('summary')
+        summary = summary if isinstance(summary, dict) else {}
+        run_cost = 0.0
+        usage = summary.get('token_usage_total')
+        if isinstance(usage, dict) and 'cost_usd' in usage:
+            run_cost = _cost_usd(usage)
+            cost_total += run_cost
+            has_cost = True
+
+        run_vuln = 0
+        run_attacks = 0
+        run_errors = 0
+        for res in _results(data):
+            total_attacks += 1
+            run_attacks += 1
+            attack = res.get('attack')
+            attack = attack if isinstance(attack, dict) else {}
+            is_error = bool(res.get('error'))
+            is_vuln = bool(res.get('vulnerable'))
+            severity = str(attack.get('severity', 'low')).lower()
+            if is_error:
+                run_errors += 1
+            else:
+                evaluated += 1
+                if is_vuln:
+                    vulnerable += 1
+                    run_vuln += 1
+                    if severity == 'critical':
+                        critical += 1
+                else:
+                    resistant += 1
+
+        resistance = _as_float(summary.get('resistance_rate')) if 'resistance_rate' in summary else None
+        cases = _as_int(summary.get('total_attacks')) or run_attacks
+        runs.append(
+            RedTeamRunRow(
+                rid=card.id,
+                name=card.name,
+                when=card.created_at,
+                targets=_redteam_targets(data),
+                status=_lifecycle_status(
+                    broken=bool(card.error), all_errored=(run_attacks > 0 and run_errors == run_attacks)
+                ),
+                score=resistance,
+                cases=cases,
+                cost=run_cost,
+                error=bool(card.error),
+            )
+        )
+
+    runs.sort(key=lambda r: r.when, reverse=True)
+    return RedTeamOverview(
+        attacks_run=total_attacks,
+        break_rate=(vulnerable / evaluated) if evaluated else None,
+        critical_findings=critical,
+        avg_robustness=(resistant / evaluated) if evaluated else None,
+        total_cost=cost_total if has_cost else None,
+        recent=runs[(page - 1) * per_page : page * per_page],
+        total_runs=len(runs),
+        page=page,
+        per_page=per_page,
+    )

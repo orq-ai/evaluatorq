@@ -42,18 +42,25 @@ def client(roots: list[Path]) -> TestClient:
 def test_sim_report_renders_tabs(client: TestClient, roots: list[Path]) -> None:
     rid = report_id(roots[1] / "sim.json")
     labels = _tab_labels(client.get(f"/r/{rid}").text)
-    # Overview / Breakdown / Transcripts always present for a non-empty sim run.
+    # Folded to 4: Overview / Breakdown / Transcripts (+ Config when tokens exist).
     assert labels[:3] == ["Overview", "Breakdown", "Transcripts"]
-    assert "Judge & errors" in labels
+    # Evaluators / Judge & errors / Turn quality / Tokens folded into the above.
+    assert "Judge & errors" not in labels
+    assert "Turn quality" not in labels
+    assert "Evaluators" not in labels
 
 
 def test_redteam_report_renders_tabs(client: TestClient, roots: list[Path]) -> None:
     rid = report_id(roots[0] / "rt.json")
     labels = _tab_labels(client.get(f"/r/{rid}").text)
-    assert "Summary" in labels
-    assert "Breakdown" in labels
-    assert "Explorer" in labels
-    assert "Methodology" in labels
+    # Folded to Overview / Breakdowns / Evidence / (Error Analysis) / Config.
+    assert "Overview" in labels
+    assert "Breakdowns" in labels
+    assert "Evidence" in labels
+    assert "Config" in labels
+    # Old tab names are gone; Error Analysis stays its own tab, never folded.
+    assert "Summary" not in labels
+    assert "Methodology" not in labels
 
 
 def test_single_agent_report_has_no_comparison_tab(client: TestClient, roots: list[Path]) -> None:

@@ -57,9 +57,7 @@ asyncio.run(main())
 `llm_jury_pairwise(model="x")` is the single-judge shorthand for `judges=["x"]`.
 Pass two or more `judges` to get a panel.
 
-!!! tip "Keep the panel odd and mixed-provider"
-    The same advice as the pointwise jury holds here. An odd panel keeps ties
-    rare, and a mix of provider families keeps the judges independent.
+--8<-- "docs/_snippets/panel-tip.md"
 
 ## Swap and reconcile: how a vote is decided
 
@@ -157,3 +155,9 @@ calls itself, so you can drive the swap-and-reconcile logic with your own judge.
 `reconcile_pair()` and `pairwise_consensus()` are exposed for the same reason.
 Most callers want `llm_jury_pairwise()`; reach for `run_pairwise()` when you are
 plugging in a non-LLM judge or testing the reconciliation directly.
+
+## Where to next
+
+- **[LLM as a Jury](llm-as-a-jury.md)** — score a single response with a judge panel.
+- **[Custom Evaluators & Frameworks](custom-evaluators-and-frameworks.md)** — define your own evaluators.
+- **[Red Teaming](guides/red-teaming.md)** — the red-team workflow judging plugs into.

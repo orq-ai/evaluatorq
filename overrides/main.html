@@ -1,11 +1,15 @@
 {% extends "base.html" %}
 
-{#- Orq-branded social / link-unfurl card (RES-1088).
-    Material for MkDocs emits no og:/twitter: meta on its own — that came from the
-    `social` plugin, which can't use our self-hosted brand fonts. We replace it with
-    a single hand-designed static card (docs/assets/og-image.png, see
-    scripts/gen_og_card.py) referenced as an absolute URL off site_url. -#}
+{#- extrahead adds, on every page:
+    - RES-1037: a machine-discoverable pointer to /llms.txt so agents find the
+      agent-readable docs without blind-probing the convention.
+    - RES-1088: the Orq-branded social / link-unfurl card. Material for MkDocs
+      emits no og:/twitter: meta on its own (that came from the `social` plugin,
+      which can't use our self-hosted brand fonts), so we reference a single
+      hand-designed static card (docs/assets/og-image.png, see
+      scripts/gen_og_card.py) as an absolute URL off site_url. -#}
 {% block extrahead %}
+  <link rel="alternate" type="text/markdown" href="{{ 'llms.txt' | url }}" title="llms.txt (agent-readable docs)">
   {% set page_title = (page.title if page and page.title else config.site_name) | striptags %}
   {% set page_desc = (page.meta.description if page and page.meta.description else config.site_description) %}
   {% set og_image = config.site_url ~ "assets/og-image.png" %}

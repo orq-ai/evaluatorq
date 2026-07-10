@@ -67,4 +67,47 @@
       });
     });
   });
+
+  // ⌘K / Ctrl+K focuses the global report search; Escape clears + blurs it.
+  document.addEventListener('keydown', function (evt) {
+    if ((evt.metaKey || evt.ctrlKey) && (evt.key === 'k' || evt.key === 'K')) {
+      var input = document.querySelector('.search-input');
+      if (input) {
+        evt.preventDefault();
+        input.focus();
+        input.select();
+      }
+    } else if (evt.key === 'Escape') {
+      var active = document.querySelector('.search-input');
+      var results = document.getElementById('search-results');
+      if (results) results.innerHTML = '';
+      if (active && document.activeElement === active) active.blur();
+    }
+  });
+
+  // Resize-on-tab-show: CSS-only report tabs render their Vega charts while the
+  // panel is display:none (zero width), so charts come up tiny. When a tab is
+  // selected, resize the now-visible panel's tracked views to fit (RES-1021).
+  document.body.addEventListener('change', function (evt) {
+    var t = evt.target;
+    if (!t || !t.classList || !t.classList.contains('tab-radio')) return;
+    var tabs = t.closest('.tabs');
+    if (!tabs || !window.__orqVegaViews) return;
+    requestAnimationFrame(function () {
+      tabs.querySelectorAll('.tab-panel').forEach(function (panel) {
+        if (panel.offsetParent === null) return; // still hidden
+        panel.querySelectorAll('[data-vega-for]').forEach(function (tag) {
+          var id = tag.getAttribute('data-vega-for');
+          var r = id ? window.__orqVegaViews[id] : null;
+          if (r && r.view && r.view.resize) {
+            try {
+              r.view.resize().run();
+            } catch (e) {
+              /* view finalized/detached — ignore */
+            }
+          }
+        });
+      });
+    });
+  });
 })();

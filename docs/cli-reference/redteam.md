@@ -38,7 +38,7 @@ eq redteam run --target agent:<key> [OPTIONS]
 | `--export-html` | `Path \| None` / `None` | Directory for an auto-named HTML report. |
 | `--system-prompt` | `str \| None` / `None` | System prompt for the target model/agent. |
 | `--yes` / `-y` | `bool` / `False` | Skip confirmation prompt. |
-| `--verbose` / `-v` | count / `0` | Increase verbosity. `-v` info logs; `-vv` debug logs. |
+| `--verbose` / `-v` | count / `0` | Increase verbosity. `-v` per-attack progress + info logs; `-vv` debug logs. |
 | `--quiet` / `-q` | `bool` / `False` | Suppress progress bars and non-error output. |
 
 **Delivery methods** (`--delivery-method`): `DAN`, `role-play`, `skeleton-key`, `base64`, `leetspeak`, `multilingual`, `character-spacing`, `crescendo`, `many-shot`, `authority-impersonation`, `refusal-suppression`, `direct-request`, `code-elicitation`, `code-assistance`, `tool-response`, `word-substitution`.
@@ -49,16 +49,20 @@ eq redteam run --target agent:<key> [OPTIONS]
 
 ## `eq redteam ui`
 
-Launch the FastHTML dashboard scoped to red team runs only.
+Launch the Streamlit dashboard for a saved red-team run.
 
 ```bash
-eq redteam ui [--host HOST] [--port PORT]
+eq redteam ui [REPORT_PATH] [--latest] [--host HOST] [--port PORT]
 ```
 
-| Flag | Type / Default | Description |
+| Flag / Argument | Type / Default | Description |
 |---|---|---|
-| `--host` | `str` / `127.0.0.1` | Host to bind the dashboard server to. |
-| `--port` | `int` / `8080` | Port for the dashboard server. |
+| `REPORT_PATH` | `Path \| None` / `None` | Saved run to open. Omit to use the latest auto-saved run. |
+| `--latest` / `-l` | `bool` / `False` | Open the most recent run without passing a path. |
+| `--host` | `str` / `localhost` | Host to bind the Streamlit server to. |
+| `--port` | `int` / `8501` | Port for the Streamlit server. |
+
+Requires `evaluatorq[redteam]`.
 
 ---
 

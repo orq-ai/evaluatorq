@@ -15,33 +15,9 @@ Two command groups have their own pages:
 - **[Red Teaming](redteam.md)** — adversarial testing (`eq redteam`).
 - **[Simulation](simulation.md)** — multi-turn user simulation (`eq sim`; `sim` is shorthand).
 
----
-
 ## Top-level options
 
 `eq --version` prints the installed version (e.g. `evaluatorq 1.3.2`) and exits. Running `eq` with no arguments prints help and exits.
-
----
-
-## `eq ui`
-
-Launch the FastHTML dashboard showing all red team **and** simulation runs.
-
-```bash
-eq ui [PATH] [--host HOST] [--port PORT]
-```
-
-`PATH` is optional. Omit it to scan both default run stores (`.evaluatorq/runs/` and `.evaluatorq/sim-runs/`). Pass a directory to restrict the scan; pass a file to scope to that file's parent directory and print a direct report URL.
-
-| Flag / Argument | Type / Default | Description |
-|---|---|---|
-| `PATH` | `Path \| None` / `None` | Optional path to scan. |
-| `--host` | `str` / `127.0.0.1` | Host to bind the dashboard server to. |
-| `--port` | `int` / `8080` | Port for the dashboard server. |
-
-Requires `evaluatorq[dashboard]` (`python-fasthtml`, `uvicorn`).
-
----
 
 ## Recipes
 
@@ -55,3 +31,9 @@ eq redteam run -t agent:my-agent --save detail --output-dir ./runs
 # Quick simulation — two personas, two scenarios
 eq sim run -t agent:my-agent --num-personas 2 --num-scenarios 2
 ```
+
+## Where to next
+
+- **[Agent Simulation](../guides/agent-simulation.md)** — the `eq sim` workflow in depth.
+- **[Red Teaming](../guides/red-teaming.md)** — the `eq redteam` workflow in depth.
+- **[Getting Started](../guides/getting-started.md)** — run your first evaluation end-to-end.

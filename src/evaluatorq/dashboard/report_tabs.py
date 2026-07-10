@@ -13,6 +13,7 @@ panels are slotted into the tab they belong to.
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.reports import esc
@@ -98,10 +99,12 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
 
     entries = individual_entries(rows)
 
+    # Folded 7→4 to curb tab sprawl: Turn quality → Breakdown; Evaluators +
+    # Judge & errors → Transcripts (all per-conversation verdicts); Tokens → Config.
     tabs = _tabs(
         'simtab',
         [
-            ('Overview', render('overview')),
+            ('Overview', _sim_outcomes_donut(rows) + render('overview')),
             (
                 'Breakdown',
                 render(
@@ -110,16 +113,75 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
                     'persona_scenario_heatmap',
                     'score_distribution',
                     'failures_first',
+                    'turn_metrics',
+                    'turn_quality_timeline',
                 ),
             ),
-            ('Transcripts', sim_interactive_panels(rid, entries)),
-            ('Turn quality', render('turn_metrics', 'turn_quality_timeline')),
-            ('Tokens', render('token_usage')),
-            ('Evaluators', render('evaluator_scores')),
-            ('Judge & errors', render('judge_verdicts', 'failure_mode', 'errors')),
+            (
+                'Transcripts',
+                sim_interactive_panels(rid, entries)
+                + render('evaluator_scores', 'judge_verdicts', 'failure_mode', 'errors'),
+            ),
+            ('Config', render('token_usage')),
         ],
     )
     return f'{hero}{tabs}'
+
+
+_DONUT_SEGMENTS = (
+    ('Achieved', 'var(--teal-600)'),
+    ('Not achieved', 'var(--amber-600)'),
+    ('Errors', 'var(--red-600)'),
+)
+
+
+def _sim_outcomes_donut(rows: list[Any]) -> str:
+    """Three-segment outcomes donut (achieved / not achieved / errors) for the
+    sim report Overview tab. Parity with the Streamlit dashboard (RES-1022).
+
+    Self-contained SVG (no vl-convert dependency), mirroring the landing donut.
+    Returns '' for an empty run so the Overview section renders unchanged.
+    """
+    achieved = not_achieved = errors = 0
+    for r in rows:
+        if str(getattr(r, 'terminated_by', '') or '') == 'error':
+            errors += 1
+        elif getattr(r, 'goal_achieved', False):
+            achieved += 1
+        else:
+            not_achieved += 1
+    counts = (achieved, not_achieved, errors)
+    total = sum(counts)
+    if total == 0:
+        return ''
+
+    radius = 60
+    circ = 2 * math.pi * radius
+    arcs: list[str] = []
+    offset = 0.0
+    for (_, color), value in zip(_DONUT_SEGMENTS, counts, strict=True):
+        if value <= 0:
+            continue
+        length = circ * value / total
+        arcs.append(
+            f'<circle cx="75" cy="75" r="{radius}" fill="none" stroke="{color}" stroke-width="18"'
+            f' stroke-dasharray="{length:.1f} {circ - length:.1f}" stroke-dashoffset="{-offset:.1f}"/>'
+        )
+        offset += length
+    pct_achieved = round(achieved / total * 100)
+    legend = ''.join(
+        f'<li><span class="donut-key" style="background:{color}"></span>{esc(label)} · {value}</li>'
+        for (label, color), value in zip(_DONUT_SEGMENTS, counts, strict=True)
+        if value > 0
+    )
+    return (
+        '<figure class="chart-card"><figcaption>Outcomes</figcaption>'
+        '<div class="donut-wrap"><div class="donut">'
+        f'<svg width="150" height="150" viewBox="0 0 150 150">{"".join(arcs)}</svg>'
+        f'<div class="donut-center"><span class="donut-value">{pct_achieved}%</span>'
+        '<span class="donut-label">achieved</span></div></div>'
+        f'<ul class="donut-legend">{legend}</ul></div></figure>'
+    )
 
 
 def _sim_hero(summary_section: Any, run: SimulationRun) -> str:
@@ -174,12 +236,20 @@ def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
     multi_agent = len(report.tested_agents) > 1
     hero = _redteam_hero(by_kind.get('summary'), report)
 
+    # Folded 7→5: Comparison (agent heatmap + disagreements) → Evidence; Usage +
+    # Methodology → Config. Error Analysis stays its own tab — it's where users
+    # go to understand where the agent went wrong, not run metadata.
+    comparison = (
+        rt_panel_agent_heatmap(rid) + rt_panel_disagreement(rid) + render('agent_comparison', 'agent_disagreements')
+        if multi_agent
+        else ''
+    )
     tabs = _tabs(
         'rttab',
         [
-            ('Summary', render('summary', 'focus_areas')),
+            ('Overview', render('summary', 'focus_areas')),
             (
-                'Breakdown',
+                'Breakdowns',
                 rt_panel_breakdown(rid)
                 + render(
                     'vulnerability_breakdown',
@@ -192,20 +262,12 @@ def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
                     'framework_breakdown',
                 ),
             ),
-            ('Explorer', rt_panel_conversation(rid) + render('individual_results', 'source_distribution')),
-            ('Usage', render('token_usage')),
-            ('Error Analysis', render('error_analysis')),
             (
-                'Comparison',
-                (
-                    rt_panel_agent_heatmap(rid)
-                    + rt_panel_disagreement(rid)
-                    + render('agent_comparison', 'agent_disagreements')
-                )
-                if multi_agent
-                else '',
+                'Evidence',
+                rt_panel_conversation(rid) + render('individual_results', 'source_distribution') + comparison,
             ),
-            ('Methodology', render('methodology', 'agent_context', 'severity_definitions')),
+            ('Error Analysis', render('error_analysis')),
+            ('Config', render('token_usage', 'methodology', 'agent_context', 'severity_definitions')),
         ],
     )
     return f'{hero}{tabs}'
