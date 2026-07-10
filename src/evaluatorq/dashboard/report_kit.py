@@ -440,8 +440,8 @@ def _interp_color(v: float, *, stops: Any = None) -> str:
 
 
 def heatmap(
-    personas: list[str],
-    scenarios: list[str],
+    row_labels: list[str],
+    col_labels: list[str],
     cells: list[dict],
     *,
     row_key: str = 'persona',
@@ -456,11 +456,11 @@ def heatmap(
     call sites and rendering unchanged.
     """
     lookup = {(c[row_key], c[col_key]): c for c in cells}
-    header = ''.join(f'<th class="rk-heat-col">{esc(s)}</th>' for s in scenarios)
+    header = ''.join(f'<th class="rk-heat-col">{esc(s)}</th>' for s in col_labels)
     body_rows: list[str] = []
-    for p in personas:
+    for p in row_labels:
         tds: list[str] = []
-        for s in scenarios:
+        for s in col_labels:
             cell = lookup.get((p, s))
             if cell is None:
                 tds.append('<td class="rk-heat-cell rk-heat-empty">—</td>')

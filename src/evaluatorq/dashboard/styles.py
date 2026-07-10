@@ -1205,6 +1205,20 @@ _RT_REPORT_CSS = """
 .rt-report .rt-agent-row-asr {
     font-family: var(--font-mono); font-size: 12px; font-weight: 600; text-align: right;
 }
+
+/* ---- Breakdowns tab (spec §Breakdowns) ---- */
+.rt-report .rt-breakdowns-grid-2 {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0;
+}
+@media (max-width: 760px) {
+    .rt-report .rt-breakdowns-grid-2 { grid-template-columns: 1fr; }
+}
+.rt-report .rt-breakdowns-leadin {
+    font-size: 13px; color: var(--text-muted); margin: 0 0 10px;
+}
+.rt-report .rt-breakdowns-footnote {
+    font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); margin-top: 12px;
+}
 """
 
 DASHBOARD_CSS = (

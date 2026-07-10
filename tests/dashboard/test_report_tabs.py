@@ -347,6 +347,23 @@ def test_rt_overview_end_to_end_wires_all_tabs(rt_report_multi):
     assert 'rk-heatmap' in html  # Breakdowns heatmap actually reaches the page
 
 
+def test_rt_breakdowns_has_heatmap_and_multiturn(rt_report_multi):
+    from evaluatorq.dashboard.report_tabs import _rt_breakdowns, _rt_by_kind
+
+    html = _rt_breakdowns(_rt_by_kind(rt_report_multi))
+    assert 'rk-heatmap' in html
+    assert 'category' in html.lower()
+    # multi-turn depth section present when turn_depth_analysis exists
+    assert 'conversation depth' in html.lower()
+
+
+def test_rt_breakdowns_omits_depth_when_absent(rt_report_single_turn):
+    from evaluatorq.dashboard.report_tabs import _rt_breakdowns, _rt_by_kind
+
+    html = _rt_breakdowns(_rt_by_kind(rt_report_single_turn))
+    assert 'conversation depth' not in html.lower()
+
+
 def test_rt_report_empty_run_does_not_crash(rt_report_empty):
     # 0-attack run: exec summary '', KPI zeros, no crash in any helper.
     from evaluatorq.dashboard.report_tabs import redteam_report_tabs

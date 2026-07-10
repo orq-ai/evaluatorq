@@ -826,30 +826,183 @@ def _rt_focus_risk_dial(focus_areas: list[dict[str, Any]]) -> str:
     )
 
 
-def _rt_breakdowns_heatmap(by_kind: dict[str, Any]) -> str:
-    """Attack success heatmap panel (additive; spec §Breakdowns lands the full
-    redesign later — this only carries the ``report_kit.heatmap()`` gauge
-    forward so vulnerability × technique ASR has real content today)."""  # noqa: RUF002
-    from evaluatorq.dashboard.report_kit import SCALE_HEAT_RT, heatmap, panel
+def _rt_breakdowns_category_table(rows: list[dict[str, Any]]) -> str:
+    """Attack success by OWASP category table, design-styled (spec §Breakdowns.1):
+    Cat (tag) · Category (strong) · Run (right) · Found (right, red-600
+    semibold when >0 else muted) · ASR (right, mono pct)."""
+    from evaluatorq.common.reports import html_table
+    from evaluatorq.common.reports.html_helpers import pct
+    from evaluatorq.dashboard.report_kit import tag
 
-    section = by_kind.get('attack_heatmap')
-    if section is None or not section.data.get('cells'):
+    table_rows: list[list[str]] = []
+    for r in rows:
+        found = r.get('vulnerabilities_found', 0)
+        found_html = (
+            f'<span style="color:var(--red-600);font-weight:600">{found}</span>'
+            if found
+            else f'<span style="color:var(--text-muted)">{found}</span>'
+        )
+        table_rows.append([
+            tag(str(r.get('category', ''))),
+            f'<strong>{esc(r.get("category_name", ""))}</strong>',
+            f'<span style="font-variant-numeric:tabular-nums">{r.get("total_attacks", 0)}</span>',
+            found_html,
+            f'<span style="font-family:var(--font-mono)">{pct(r.get("vulnerability_rate", 0.0))}</span>',
+        ])
+    return html_table(['Cat', 'Category', 'Run', 'Found', 'ASR'], table_rows)
+
+
+def _rt_breakdowns_depth_footnote(rows: list[dict[str, Any]]) -> str:
+    """Mono faint footnote: ``2t: 1/12 · 3t: 3/11 · …`` per depth row (spec §Breakdowns.4)."""
+    parts = [f'{r.get("turn_count")}t: {r.get("vulnerabilities_found", 0)}/{r.get("total_attacks", 0)}' for r in rows]
+    return f'<div class="rt-breakdowns-footnote">{esc(" · ".join(parts))}</div>'
+
+
+def _rt_breakdowns_depth_leadin(rows: list[dict[str, Any]]) -> str:
+    """Lead-in sentence above the depth bars, only when >=2 rows and ASR
+    climbs from first to last depth (spec §Breakdowns.4)."""
+    from evaluatorq.common.reports.html_helpers import pct
+
+    if len(rows) < 2:
+        return ''
+    first, last = rows[0], rows[-1]
+    if last.get('vulnerability_rate', 0.0) <= first.get('vulnerability_rate', 0.0):
+        return ''
+    return (
+        '<p class="rt-breakdowns-leadin">Attack success climbs from '
+        f'<strong>{pct(first.get("vulnerability_rate", 0.0))}</strong> at {first.get("turn_count")} turns to '
+        f'<strong>{pct(last.get("vulnerability_rate", 0.0))}</strong> at {last.get("turn_count")} turns — '
+        'single-turn defenses are not enough.</p>'
+    )
+
+
+def _rt_breakdowns_depth_section(by_kind: dict[str, Any]) -> str:
+    """Attack success by conversation depth panel: only rendered when
+    ``turn_depth_analysis`` exists (execution-derived; static-pipeline and
+    single-turn-only runs simply omit this panel) — spec §Breakdowns.4."""
+    from evaluatorq.common.reports.html_helpers import pct
+    from evaluatorq.dashboard.report_kit import bar_rows, panel
+
+    section = by_kind.get('turn_depth_analysis')
+    if section is None:
+        return ''
+    rows = section.data.get('rows', [])
+    if not rows:
+        return ''
+    max_rate = max((r.get('vulnerability_rate', 0.0) for r in rows), default=0.0) or 1.0
+    bars = bar_rows(
+        [(f'{r.get("turn_count")} turns', r.get('vulnerability_rate', 0.0)) for r in rows],
+        width=520,
+        label_w=70,
+        color='var(--orange-500)',
+        fmt=pct,
+        max_value=max_rate,
+    )
+    leadin = _rt_breakdowns_depth_leadin(rows)
+    footnote = _rt_breakdowns_depth_footnote(rows)
+    return panel(
+        'Attack success by conversation depth',
+        f'{leadin}{bars}{footnote}',
+        # Lowercase (not "Multi-turn") — no separate Multi-turn tab exists
+        # (deviation #1, spec §Breakdowns.4); keeping the literal capitalized
+        # phrase out of the folded Breakdowns tab avoids implying one.
+        sub='multi-turn results only',
+    )
+
+
+def _rt_breakdowns_turn_scope_grid(by_kind: dict[str, Any]) -> str:
+    """By turn type / by domain 2-col grid, omitted entirely when the
+    ``turn_scope_breakdown`` section is None; either half omitted when its
+    dict is empty (spec §Breakdowns.4)."""
+    from evaluatorq.common.reports.html_helpers import pct
+    from evaluatorq.dashboard.report_kit import SCALE_HEAT_RT, bar_rows, panel
+
+    section = by_kind.get('turn_scope_breakdown')
+    if section is None:
         return ''
     data = section.data
-    table_html = heatmap(
-        data.get('vulnerabilities', []),
-        data.get('techniques', []),
-        data.get('cells', []),
-        row_key='vulnerability',
-        col_key='technique',
-        value_key='vulnerability_rate',
-        color_scale=SCALE_HEAT_RT,
+
+    def _grid_panel(title: str, entries: dict[str, dict[str, Any]]) -> str:
+        if not entries:
+            return ''
+        rows = [(name.replace('_', ' '), stats.get('vulnerability_rate', 0.0)) for name, stats in entries.items()]
+        bars = bar_rows(rows, width=420, label_w=110, color_scale=SCALE_HEAT_RT, fmt=pct, max_value=1.0)
+        return panel(title, bars)
+
+    turn_type_html = _grid_panel('By turn type', data.get('by_turn_type', {}))
+    domain_html = _grid_panel('By domain', data.get('by_domain', {}))
+    if not turn_type_html and not domain_html:
+        return ''
+    return f'<div class="rt-breakdowns-grid-2">{turn_type_html}{domain_html}</div>'
+
+
+def _rt_breakdowns(by_kind: dict[str, Any]) -> str:
+    """Breakdowns tab body: category table -> attack-success heatmap -> 2-col
+    technique/delivery bar rows -> folded multi-turn section (depth panel +
+    turn-scope grid, conditional) -> kept framework/vulnerability renders
+    (spec §Breakdowns)."""
+    from evaluatorq.dashboard.report_kit import SCALE_HEAT_RT, bar_rows, heatmap, panel
+
+    category_section = by_kind.get('category_breakdown')
+    category_html = ''
+    if category_section is not None:
+        rows = category_section.data.get('rows', [])
+        if rows:
+            category_html = panel(
+                'Attack success by OWASP category',
+                _rt_breakdowns_category_table(rows),
+                sub='Worst first',
+            )
+
+    heatmap_section = by_kind.get('attack_heatmap')
+    heatmap_html = ''
+    if heatmap_section is not None and heatmap_section.data.get('cells'):
+        data = heatmap_section.data
+        table_html = heatmap(
+            data.get('vulnerabilities', []),
+            data.get('techniques', []),
+            data.get('cells', []),
+            row_key='vulnerability',
+            col_key='technique',
+            value_key='vulnerability_rate',
+            color_scale=SCALE_HEAT_RT,
+        )
+        heatmap_html = panel(
+            'Attack success heatmap',
+            table_html,
+            sub='Category × technique — sand → orange → red as ASR rises',  # noqa: RUF001
+        )
+
+    from evaluatorq.common.reports.html_helpers import pct
+
+    def _rate_panel(title: str, kind: str, row_key: str) -> str:
+        section = by_kind.get(kind)
+        if section is None:
+            return ''
+        rows = section.data.get('rows', [])
+        if not rows:
+            return ''
+        bars = bar_rows(
+            [(str(r.get(row_key, '')), r.get('vulnerability_rate', 0.0)) for r in rows],
+            width=420,
+            label_w=150,
+            color_scale=SCALE_HEAT_RT,
+            fmt=pct,
+            max_value=1.0,
+        )
+        return panel(title, bars)
+
+    technique_html = _rate_panel('By technique', 'technique_breakdown', 'technique')
+    delivery_html = _rate_panel('By delivery method', 'delivery_breakdown', 'delivery_method')
+    rate_grid_html = (
+        f'<div class="rt-breakdowns-grid-2">{technique_html}{delivery_html}</div>'
+        if technique_html or delivery_html
+        else ''
     )
-    return panel(
-        'Attack success heatmap',
-        table_html,
-        sub='Vulnerability × technique — sand → orange → red as ASR rises',  # noqa: RUF001
-    )
+
+    multiturn_html = f'{_rt_breakdowns_depth_section(by_kind)}{_rt_breakdowns_turn_scope_grid(by_kind)}'
+
+    return f'{category_html}{heatmap_html}{rate_grid_html}{multiturn_html}'
 
 
 def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
@@ -861,7 +1014,6 @@ def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
     """
     from evaluatorq.dashboard.view import (
         rt_panel_agent_heatmap,
-        rt_panel_breakdown,
         rt_panel_conversation,
         rt_panel_disagreement,
     )
@@ -890,20 +1042,7 @@ def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
 
     focus_tab = _rt_focus_risk_dial(focus_areas_list) + render('focus_areas')
 
-    breakdowns_tab = (
-        _rt_breakdowns_heatmap(by_kind)
-        + rt_panel_breakdown(rid)
-        + render(
-            'vulnerability_breakdown',
-            'category_breakdown',
-            'technique_breakdown',
-            'delivery_breakdown',
-            'turn_scope_breakdown',
-            'turn_depth_analysis',
-            'attack_heatmap',
-            'framework_breakdown',
-        )
-    )
+    breakdowns_tab = _rt_breakdowns(by_kind) + render('framework_breakdown', 'vulnerability_breakdown')
 
     attacks_tab = rt_panel_conversation(rid) + render('individual_results', 'source_distribution', 'error_analysis')
 
