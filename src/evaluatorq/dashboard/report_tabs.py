@@ -13,7 +13,6 @@ panels are slotted into the tab they belong to.
 
 from __future__ import annotations
 
-import math
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.reports import esc
@@ -535,33 +534,17 @@ def _sim_outcomes_donut(rows: list[Any]) -> str:
     if total == 0:
         return ''
 
-    radius = 60
-    circ = 2 * math.pi * radius
-    arcs: list[str] = []
-    offset = 0.0
-    for (_, color), value in zip(_DONUT_SEGMENTS, counts, strict=True):
-        if value <= 0:
-            continue
-        length = circ * value / total
-        arcs.append(
-            f'<circle cx="75" cy="75" r="{radius}" fill="none" stroke="{color}" stroke-width="18"'
-            f' stroke-dasharray="{length:.1f} {circ - length:.1f}" stroke-dashoffset="{-offset:.1f}"/>'
-        )
-        offset += length
     pct_achieved = round(achieved / total * 100)
-    legend = ''.join(
-        f'<li><span class="donut-key" style="background:{color}"></span>{esc(label)} · {value}</li>'
+    # One donut implementation: delegate the ring/center/legend markup to
+    # report_kit.donut(); this function owns only the chart-card wrapper.
+    segments = [
+        {'label': label, 'value': value, 'color': color}
         for (label, color), value in zip(_DONUT_SEGMENTS, counts, strict=True)
-        if value > 0
-    )
-    return (
-        '<figure class="chart-card"><figcaption>Outcomes</figcaption>'
-        '<div class="donut-wrap"><div class="donut">'
-        f'<svg width="150" height="150" viewBox="0 0 150 150">{"".join(arcs)}</svg>'
-        f'<div class="donut-center"><span class="donut-value">{pct_achieved}%</span>'
-        '<span class="donut-label">goal met</span></div></div>'
-        f'<ul class="donut-legend">{legend}</ul></div></figure>'
-    )
+    ]
+    from evaluatorq.dashboard.report_kit import donut
+
+    inner = donut(segments, f'{pct_achieved}%', 'goal met')
+    return f'<figure class="chart-card"><figcaption>Outcomes</figcaption>{inner}</figure>'
 
 
 def _sim_hero(summary_section: Any, run: SimulationRun) -> str:

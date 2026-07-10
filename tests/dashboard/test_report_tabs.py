@@ -256,3 +256,12 @@ def test_sim_config_tab_keeps_token_usage(sim_run) -> None:
     html = sim_report_tabs('rid', sim_run)
     config_html = html.split('Job-level metadata')[-1]
     assert 'Tokens' in config_html or 'token' in config_html.lower()
+
+
+def test_sim_outcomes_donut_still_wraps_in_chart_card(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import _sim_outcomes_donut
+
+    # NB: _sim_outcomes_donut returns '' for zero rows (early-out). Pass rows
+    # shaped like real sim results so the wrapper renders.
+    html = _sim_outcomes_donut(sim_run.results)
+    assert 'class="chart-card"' in html
