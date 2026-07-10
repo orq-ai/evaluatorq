@@ -111,3 +111,24 @@
     });
   });
 })();
+
+// Persist open <details> filter dropdowns across HTMX filter swaps.
+// The filter POST outer-swaps #filter-swap, which would snap dropdowns shut.
+// Record which are open before the swap, re-open the same ids after.
+(function () {
+  var openIds = [];
+  document.body.addEventListener('htmx:beforeSwap', function () {
+    var form = document.getElementById('filter-form');
+    if (!form) return;
+    openIds = Array.prototype.slice
+      .call(form.querySelectorAll('details[id^="filter-dd"][open]'))
+      .map(function (d) { return d.id; });
+  });
+  document.body.addEventListener('htmx:afterSwap', function () {
+    openIds.forEach(function (id) {
+      var d = document.getElementById(id);
+      if (d) d.open = true;
+    });
+    openIds = [];
+  });
+})();

@@ -619,3 +619,14 @@ class TestSimFilterRailCounter:
         html = render_filter_form('rid', 'redteam', opts, {}, shown=1, total=2)
         assert 'class="filter-sidebar"' in html
         assert 'filter-dd-persona' not in html
+
+
+# ---------------------------------------------------------------------------
+# Task 7: persist open <details> filter dropdowns across HTMX filter swaps.
+# ---------------------------------------------------------------------------
+def test_dashboard_js_has_details_persistence_hook():
+    from pathlib import Path
+
+    js = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
+    assert 'htmx:beforeSwap' in js
+    assert 'filter-dd' in js or 'details[open]' in js
