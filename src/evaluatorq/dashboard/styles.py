@@ -737,33 +737,40 @@ _DASHBOARD_CSS_TAIL = """
 }
 """
 
-# Active-tab underline scoped to the Agent Sim report only (spec: "Active-tab
-# underline: orange accent, scoped to `.sim-report .tabs` only — not
-# dashboard-wide"). Extra `.sim-report` class gives this higher specificity
-# than the surface-neutral `_TAB_RULES` above, so it wins without `!important`
-# and the shared Red Team tab bar is untouched.
+# Active-tab underline: orange accent, scoped to `.report-aligned .tabs`.
+# Originally scoped to `.sim-report .tabs` only (the RT tab bar was out of
+# scope then); aligning RT is precisely this task, so the restriction is
+# superseded — deliberately, not silently (spec §Shared infrastructure #1).
+# The `.report-aligned` class gives this higher specificity than the
+# surface-neutral `_TAB_RULES` above, so it wins without `!important`.
 _SIM_TAB_ACCENT = ''.join(
-    f'.sim-report .tabs > .tab-radio:nth-of-type({i}):checked ~ .tab-bar > .tab-label:nth-child({i}) '
+    f'.report-aligned .tabs > .tab-radio:nth-of-type({i}):checked ~ .tab-bar > .tab-label:nth-child({i}) '
     '{ border-bottom-color: var(--orange-500); }\n'
     for i in range(1, 10)
 )
 
 # ==== .sim-report — Agent Sim report design-mockup alignment ============
-# All rules scoped under `.sim-report` (report_tabs.sim_report_tabs' wrapper)
-# per docs/superpowers/specs/2026-07-10-agent-sim-report-alignment-design.md.
+# Rules scoped under `.sim-report` (report_tabs.sim_report_tabs' wrapper) per
+# docs/superpowers/specs/2026-07-10-agent-sim-report-alignment-design.md.
+# Surface-identical rules (exec-summary/callout, KPI band, `.rk-*`
+# primitives, panel, design tables) have been promoted to `.report-aligned`
+# (both `sim_report_tabs` and `redteam_report_tabs` carry that class — spec
+# 2026-07-10-redteam-report-alignment-design.md §Shared infrastructure #1) so
+# they apply to both surfaces; only sim-only composition (personas/scenarios
+# overview, breakdown grids, config rows) stays scoped to `.sim-report` here.
 # Consumes report_kit.py primitives (exec_summary/panel/bar_rows/tag) and the
 # shared `.kpi-band`/`.kpi-card` markup from common/reports/report.css — the
-# overrides here only apply inside `.sim-report`, so the landing-page KPI
+# overrides here only apply inside `.report-aligned`, so the landing-page KPI
 # tiles and the flat HTML export (which never carry this class) are untouched.
 _SIM_REPORT_CSS = """
-.sim-report .tab-count {
+.report-aligned .tab-count {
     font-family: var(--font-mono); font-size: 11px; font-weight: 600;
     background: var(--surface-sunken); color: var(--text-muted);
     border-radius: 999px; padding: 1px 7px; margin-left: 5px;
 }
 
 /* ---- Executive summary callout (spec Overview.1) ---- */
-.sim-report .exec-summary {
+.report-aligned .exec-summary {
     background: var(--surface-card);
     border: 1px solid var(--border-subtle);
     border-left: 3px solid var(--orange-500);
@@ -771,27 +778,27 @@ _SIM_REPORT_CSS = """
     padding: 16px 20px;
     margin: 16px 0;
 }
-.sim-report .es-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.sim-report .es-label {
+.report-aligned .es-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.report-aligned .es-label {
     font-family: var(--font-mono); font-size: 11px; font-weight: 600;
     text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint);
 }
-.sim-report .es-confidence {
+.report-aligned .es-confidence {
     font-family: var(--font-mono); font-size: 10px; font-weight: 600;
     border: 1px solid; border-radius: 999px; padding: 2px 8px;
 }
-.sim-report .es-body {
+.report-aligned .es-body {
     margin: 8px 0 0; font-size: 14px; line-height: 1.6; color: var(--text-body);
     max-width: 760px;
 }
-.sim-report .es-body strong { color: var(--text-strong); }
+.report-aligned .es-body strong { color: var(--text-strong); }
 
 /* ---- 5-card KPI band (spec Overview.2) ---- */
-.sim-report .kpi-band {
+.report-aligned .kpi-band {
     display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px;
     margin: 16px 0;
 }
-.sim-report .kpi-card {
+.report-aligned .kpi-card {
     background: var(--surface-card);
     border: 1px solid var(--border-subtle);
     border-left: none;
@@ -799,15 +806,15 @@ _SIM_REPORT_CSS = """
     border-radius: 12px;
     padding: 15px 16px;
 }
-.sim-report .kpi-card--pass    { border-top-color: var(--green-600); }
-.sim-report .kpi-card--fail    { border-top-color: var(--red-600); }
-.sim-report .kpi-card--warn    { border-top-color: var(--amber-600); }
-.sim-report .kpi-card--neutral { border-top-color: var(--teal-600); }
-.sim-report .kpi-value {
+.report-aligned .kpi-card--pass    { border-top-color: var(--green-600); }
+.report-aligned .kpi-card--fail    { border-top-color: var(--red-600); }
+.report-aligned .kpi-card--warn    { border-top-color: var(--amber-600); }
+.report-aligned .kpi-card--neutral { border-top-color: var(--teal-600); }
+.report-aligned .kpi-value {
     font-family: var(--font-mono); font-size: 28px; font-weight: 600;
     color: var(--text-strong); line-height: 1.1;
 }
-.sim-report .kpi-label { font-size: 12px; color: var(--text-muted); margin-top: 7px; }
+.report-aligned .kpi-label { font-size: 12px; color: var(--text-muted); margin-top: 7px; }
 
 /* ---- 2-col grids (donut+tokens, personas+scenarios) ---- */
 .sim-report .sim-overview-grid-2 {
@@ -818,21 +825,21 @@ _SIM_REPORT_CSS = """
 }
 
 /* ---- Panel wrapper (report_kit.panel) ---- */
-.sim-report .rk-panel {
+.report-aligned .rk-panel {
     background: var(--surface-card);
     border: 1px solid var(--border-subtle);
     border-radius: 12px;
     padding: 16px 20px;
 }
-.sim-report .rk-panel-title {
+.report-aligned .rk-panel-title {
     font-family: var(--font-mono); font-size: 11px; font-weight: 600;
     text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint);
 }
-.sim-report .rk-panel-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
-.sim-report .rk-panel-body { margin-top: 12px; }
+.report-aligned .rk-panel-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.report-aligned .rk-panel-body { margin-top: 12px; }
 
 /* ---- Tag (report_kit.tag) ---- */
-.sim-report .rk-tag {
+.report-aligned .rk-tag {
     display: inline-block; font-size: 11px; font-weight: 500;
     border: 1px solid var(--border-default); border-radius: 999px;
     padding: 1px 8px; margin-left: 8px; color: var(--text-muted);
@@ -865,45 +872,45 @@ _SIM_REPORT_CSS = """
 }
 
 /* ---- Breakdown tab: stacked panels + heatmap/histogram/tables ---- */
-.sim-report .rk-panel + .rk-panel,
-.sim-report .rk-panel + .report-card,
-.sim-report .report-card + .rk-panel {
+.report-aligned .rk-panel + .rk-panel,
+.report-aligned .rk-panel + .report-card,
+.report-aligned .report-card + .rk-panel {
     margin-top: 20px;
 }
 
 /* HTML-table heatmap (report_kit.heatmap) */
-.sim-report .rk-heatmap { border-collapse: separate; border-spacing: 4px; }
-.sim-report .rk-heat-col {
+.report-aligned .rk-heatmap { border-collapse: separate; border-spacing: 4px; }
+.report-aligned .rk-heat-col {
     font-family: var(--font-mono); font-size: 11px; font-weight: 600;
     color: var(--text-muted); text-align: center; padding: 0 4px 6px;
 }
-.sim-report .rk-heat-row {
+.report-aligned .rk-heat-row {
     font-size: 12px; font-weight: 600; color: var(--text-strong);
     text-align: right; padding-right: 10px; white-space: nowrap;
 }
-.sim-report .rk-heat-cell {
+.report-aligned .rk-heat-cell {
     min-width: 50px; height: 34px; border-radius: 5px;
     font-family: var(--font-mono); font-size: 11px; font-weight: 600;
     text-align: center; vertical-align: middle;
 }
-.sim-report .rk-heat-empty { background: var(--surface-sunken); color: var(--text-faint); }
+.report-aligned .rk-heat-empty { background: var(--surface-sunken); color: var(--text-faint); }
 
 /* Per-persona / per-scenario tables (html_table output) + failures table */
-.sim-report .rk-panel-body { display: grid; }
-.sim-report table {
+.report-aligned .rk-panel-body { display: grid; }
+.report-aligned table {
     width: 100%; border-collapse: collapse;
 }
-.sim-report table thead th {
+.report-aligned table thead th {
     font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
     font-weight: 600; color: var(--text-faint); background: var(--surface-sunken);
     padding: 11px 16px; text-align: left;
 }
-.sim-report table tbody td {
+.report-aligned table tbody td {
     font-size: 13px; padding: 12px 16px; border-bottom: 1px solid var(--border-subtle);
 }
-.sim-report table tbody tr:last-child td { border-bottom: none; }
-.sim-report table thead th:not(:first-child),
-.sim-report table tbody td:not(:first-child) {
+.report-aligned table tbody tr:last-child td { border-bottom: none; }
+.report-aligned table thead th:not(:first-child),
+.report-aligned table tbody td:not(:first-child) {
     text-align: right; font-variant-numeric: tabular-nums;
 }
 .sim-report .sim-breakdown-grid-2 {
@@ -915,14 +922,14 @@ _SIM_REPORT_CSS = """
 
 /* ---- Turn quality tab (spec §Turn) ---- */
 /* Line chart legend (report_kit.line_chart) */
-.sim-report .rk-legend {
+.report-aligned .rk-legend {
     display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px;
 }
-.sim-report .rk-legend-item {
+.report-aligned .rk-legend-item {
     display: inline-flex; align-items: center; gap: 6px;
     font-size: 11px; color: var(--text-muted);
 }
-.sim-report .rk-legend-swatch {
+.report-aligned .rk-legend-swatch {
     display: inline-block; width: 8px; height: 8px; border-radius: 2px;
 }
 /* Average quality metric stat tiles (spec §Turn.3) */
@@ -943,15 +950,15 @@ _SIM_REPORT_CSS = """
 
 /* ---- Config tab (spec §Config) ---- */
 /* Run-configuration meta grid (report_kit.meta_grid) */
-.sim-report .rk-meta-grid {
+.report-aligned .rk-meta-grid {
     display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
     gap: 16px 24px;
 }
-.sim-report .rk-meta-key {
+.report-aligned .rk-meta-key {
     font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
     letter-spacing: 0.04em; color: var(--text-faint);
 }
-.sim-report .rk-meta-value {
+.report-aligned .rk-meta-value {
     font-size: 13.5px; color: var(--text-body); margin-top: 4px;
 }
 /* Personas panel (name · communication style · background) */
@@ -1037,30 +1044,44 @@ _SIM_TRANSCRIPT_CSS = """
     .sim-report .sim-transcript-grid { grid-template-columns: 1fr; }
 }
 
-/* Chat bubbles (render_message_list avatar + side extension) */
-.sim-report .sim-msg { display: flex; gap: 8px; margin-bottom: 10px; max-width: 88%; }
-.sim-report .sim-msg-user, .sim-report .sim-msg-system { margin-right: auto; }
-.sim-report .sim-msg-assistant, .sim-report .sim-msg-tool { margin-left: auto; flex-direction: row-reverse; }
-.sim-report .sim-msg-avatar {
+/* Chat bubbles (render_message_list avatar + side extension). Shared with
+   the Red Team transcript fragment, which calls the same
+   `render_message_list` with `class_prefix='rt'` (spec 2026-07-10-redteam-
+   report-alignment-design.md §Shared infrastructure #4) — one declaration
+   set, two selectors per rule, so the two reports cannot drift. */
+.report-aligned .sim-msg, .report-aligned .rt-msg {
+    display: flex; gap: 8px; margin-bottom: 10px; max-width: 88%;
+}
+.report-aligned .sim-msg-user, .report-aligned .sim-msg-system,
+.report-aligned .rt-msg-user, .report-aligned .rt-msg-system {
+    margin-right: auto;
+}
+.report-aligned .sim-msg-assistant, .report-aligned .sim-msg-tool,
+.report-aligned .rt-msg-assistant, .report-aligned .rt-msg-tool {
+    margin-left: auto; flex-direction: row-reverse;
+}
+.report-aligned .sim-msg-avatar, .report-aligned .rt-msg-avatar {
     flex-shrink: 0; width: 30px; height: 30px; border-radius: 8px;
     display: flex; align-items: center; justify-content: center;
     font-family: var(--font-mono); font-size: 9px; font-weight: 600;
     background: var(--ink-900); color: #fff;
 }
-.sim-report .sim-msg-assistant .sim-msg-avatar, .sim-report .sim-msg-tool .sim-msg-avatar {
+.report-aligned .sim-msg-assistant .sim-msg-avatar, .report-aligned .sim-msg-tool .sim-msg-avatar,
+.report-aligned .rt-msg-assistant .rt-msg-avatar, .report-aligned .rt-msg-tool .rt-msg-avatar {
     background: var(--teal-50); color: var(--teal-600);
 }
-.sim-report .sim-msg-bubble {
+.report-aligned .sim-msg-bubble, .report-aligned .rt-msg-bubble {
     background: var(--surface-sunken); border-radius: 12px; padding: 9px 13px;
 }
-.sim-report .sim-msg-assistant .sim-msg-bubble, .sim-report .sim-msg-tool .sim-msg-bubble {
+.report-aligned .sim-msg-assistant .sim-msg-bubble, .report-aligned .sim-msg-tool .sim-msg-bubble,
+.report-aligned .rt-msg-assistant .rt-msg-bubble, .report-aligned .rt-msg-tool .rt-msg-bubble {
     background: var(--teal-50);
 }
-.sim-report .sim-msg-role {
+.report-aligned .sim-msg-role, .report-aligned .rt-msg-role {
     display: block; font-family: var(--font-mono); font-size: 10px;
     text-transform: uppercase; color: var(--text-faint); margin-bottom: 3px;
 }
-.sim-report .sim-msg-content {
+.report-aligned .sim-msg-content, .report-aligned .rt-msg-content {
     font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
     margin: 0; font-family: inherit;
 }

@@ -125,7 +125,7 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
             ('Config', _sim_config(by_kind, run) + render('token_usage')),
         ],
     )
-    return f'<div class="sim-report">{hero}{tabs}</div>'
+    return f'<div class="report-aligned sim-report">{hero}{tabs}</div>'
 
 
 def _sim_config(by_kind: dict[str, Any], run: SimulationRun) -> str:

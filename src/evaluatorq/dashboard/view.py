@@ -611,7 +611,7 @@ def _chip(name: str, value: str, *, checked: bool, dot_cls: str) -> str:
     )
 
 
-def _sim_dropdown(dim: str, label: str, dim_opts: list[str], sel: list[str]) -> str:
+def _dropdown(dim: str, label: str, dim_opts: list[str], sel: list[str]) -> str:
     """One Persona/Scenario <details> dropdown with a stable id.
 
     ``sel`` empty means "all selected" (the default filter-route behaviour);
@@ -675,8 +675,8 @@ def _render_sim_filter_rail(
         _chip('terminated_by', opt, checked=(opt in term_sel), dot_cls='chip-dot-jade') for opt in term_opts
     )
 
-    persona_dd = _sim_dropdown('persona', 'Persona', opts.get('persona', []), selections.get('persona', []))
-    scenario_dd = _sim_dropdown('scenario', 'Scenario', opts.get('scenario', []), selections.get('scenario', []))
+    persona_dd = _dropdown('persona', 'Persona', opts.get('persona', []), selections.get('persona', []))
+    scenario_dd = _dropdown('scenario', 'Scenario', opts.get('scenario', []), selections.get('scenario', []))
 
     if shown is not None and total is not None and shown < total:
         counter = f'{shown} of {total} shown'

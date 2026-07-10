@@ -142,7 +142,7 @@ def test_sim_overview_has_exec_summary_and_five_kpis(sim_run) -> None:
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
 
     html = sim_report_tabs('rid', sim_run)
-    assert 'class="sim-report"' in html
+    assert 'class="report-aligned sim-report"' in html
     assert 'Executive summary' in html
     # 5-card KPI band incl. Avg turns
     assert 'Avg turns' in html
@@ -265,3 +265,10 @@ def test_sim_outcomes_donut_still_wraps_in_chart_card(sim_run) -> None:
     # shaped like real sim results so the wrapper renders.
     html = _sim_outcomes_donut(sim_run.results)
     assert 'class="chart-card"' in html
+
+
+def test_sim_report_has_shared_aligned_class(sim_run):
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run)
+    assert 'class="report-aligned sim-report"' in html
