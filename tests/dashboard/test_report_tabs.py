@@ -381,6 +381,27 @@ def test_rt_config_no_agent_context(rt_report_single):
     assert 'Methodology' in config_html  # but Config still has its own content
 
 
+def test_rt_focus_tiers_and_dials(rt_report_multi):
+    from evaluatorq.dashboard.report_tabs import _rt_by_kind, _rt_focus
+
+    html = _rt_focus(_rt_by_kind(rt_report_multi))
+    assert 'RISK' in html  # risk dial sub-label
+    assert 'Recommended fix' in html or 'remediation' in html.lower()
+
+
+def test_rt_focus_empty_on_clean_run(rt_report_clean):
+    from evaluatorq.dashboard.report_tabs import _rt_by_kind, _rt_focus
+
+    assert _rt_focus(_rt_by_kind(rt_report_clean)) == ''
+
+
+def test_rt_focus_handles_absent_llm_recs(rt_report_static):
+    from evaluatorq.dashboard.report_tabs import _rt_by_kind, _rt_focus
+
+    # must not KeyError when 'llm_recommendations' key is absent
+    _rt_focus(_rt_by_kind(rt_report_static))
+
+
 def test_rt_report_empty_run_does_not_crash(rt_report_empty):
     # 0-attack run: exec summary '', KPI zeros, no crash in any helper.
     from evaluatorq.dashboard.report_tabs import redteam_report_tabs

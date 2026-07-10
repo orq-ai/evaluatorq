@@ -1248,6 +1248,39 @@ _RT_REPORT_CSS = """
 }
 .rt-report .rt-agent-card-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .rt-report .rt-agent-card-chip-empty { color: var(--text-faint); font-size: 12px; }
+
+/* ---- Focus areas tab (spec §Focus areas) ---- */
+.rt-report .rt-focus-intro { font-size: 13px; color: var(--text-muted); margin: 0 0 16px; max-width: 720px; }
+.rt-report .rt-focus-intro code { font-family: var(--font-mono); }
+.rt-report .rt-focus-card { display: flex; gap: 16px; margin-bottom: 22px; }
+.rt-report .rt-focus-main { flex: 1 1 auto; min-width: 0; }
+.rt-report .rt-focus-tier-row { display: flex; align-items: center; gap: 8px; }
+.rt-report .rt-focus-tier-dot { width: 8px; height: 8px; border-radius: 999px; display: inline-block; }
+.rt-report .rt-focus-tier-label {
+    font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.07em;
+}
+.rt-report .rt-focus-category-name { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin-top: 6px; }
+.rt-report .rt-focus-category-code { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); margin-top: 2px; }
+.rt-report .rt-focus-patterns {
+    display: flex; align-items: center; gap: 8px; font-size: 12px; background: var(--surface-sunken);
+    border-radius: 6px; padding: 3px 9px; margin-top: 12px; width: fit-content;
+}
+.rt-report .rt-focus-pattern-dot { width: 5px; height: 5px; border-radius: 999px; display: inline-block; flex: 0 0 auto; }
+.rt-report .rt-focus-fixbox { background: var(--surface-sunken); border-radius: 8px; padding: 12px 14px; margin-top: 12px; }
+.rt-report .rt-focus-fixbox-label {
+    font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; color: var(--accent-hover);
+    letter-spacing: 0.05em;
+}
+.rt-report .rt-focus-fixbox-body { font-size: 13px; line-height: 1.55; margin-top: 6px; }
+.rt-report .rt-focus-right { flex: 0 0 100px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.rt-report .rt-focus-mini-stats { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.rt-report .rt-focus-mini-stat { display: flex; justify-content: space-between; align-items: baseline; }
+.rt-report .rt-focus-mini-key {
+    font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--text-faint);
+}
+.rt-report .rt-focus-mini-value { font-family: var(--font-mono); font-size: 14px; font-weight: 600; }
 """
 
 DASHBOARD_CSS = (

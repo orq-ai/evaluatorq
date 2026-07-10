@@ -807,23 +807,103 @@ def _rt_overview(by_kind: dict[str, Any], report: RedTeamReport) -> str:
     return f'{exec_html}{kpi_html}{grid_html}{agents_html}'
 
 
-def _rt_focus_risk_dial(focus_areas: list[dict[str, Any]]) -> str:
-    """Top-risk dial for the Focus areas tab (additive; spec §Focus areas
-    lands the full redesign later — this only carries the ``RISK`` gauge
-    forward so the Overview→Focus-areas handoff has real content today)."""
-    from evaluatorq.dashboard.report_kit import dial, panel
+_RISK_MAX = 8  # risk_score = vulnerability_rate x avg_severity_weight; SEVERITY_WEIGHTS tops out at critical=8
 
-    if not focus_areas:
+
+def _rt_focus_tier(risk_score: float) -> tuple[str, str, str]:
+    """Tier code/label/color from ``risk_score`` (spec §Focus areas): >=2 -> P1
+    Critical priority (red-600); >=1 -> P2 High priority (orange-600); else P3
+    Medium priority (amber-600)."""
+    if risk_score >= 2:
+        return 'P1', 'Critical priority', 'var(--red-600)'
+    if risk_score >= 1:
+        return 'P2', 'High priority', 'var(--orange-600)'
+    return 'P3', 'Medium priority', 'var(--amber-600)'
+
+
+def _rt_focus_pattern_chips(area: dict[str, Any], color: str) -> str:
+    """Pattern chips from ``llm_recommendations.patterns_observed`` — row
+    omitted when the key is absent (static pipeline; never subscript, spec
+    §Data sources)."""
+    patterns = area.get('llm_recommendations', {}).get('patterns_observed')
+    if not patterns:
         return ''
-    top = focus_areas[0]
-    risk_score = top.get('risk_score', 0.0)
-    color = 'var(--red-600)' if risk_score >= 2 else ('var(--orange-600)' if risk_score >= 1 else 'var(--amber-600)')
-    risk_dial = dial(f'{risk_score:.1f}', min(risk_score / 8, 1.0), radius=38, stroke=9, color=color, sub='RISK')
-    return panel(
-        f'Top risk — {esc(top.get("category_name", ""))}',
-        risk_dial,
-        sub='Prioritized fixes, ranked by risk = attack success rate × avg severity',  # noqa: RUF001
+    dot = f'<span class="rt-focus-pattern-dot" style="background:{color}"></span>'
+    return f'<div class="rt-focus-patterns">{dot}<span>{esc(patterns)}</span></div>'
+
+
+def _rt_focus_remediation_box(area: dict[str, Any]) -> str:
+    """Recommended-fix box from ``remediation`` — omitted when empty (spec §Focus areas)."""
+    remediation = area.get('remediation')
+    if not remediation:
+        return ''
+    return (
+        '<div class="rt-focus-fixbox">'
+        '<div class="rt-focus-fixbox-label">Recommended fix</div>'
+        f'<div class="rt-focus-fixbox-body">{esc(remediation)}</div>'
+        '</div>'
     )
+
+
+def _rt_focus_area_card(area: dict[str, Any]) -> str:
+    """One focus-area panel: tier + category header, pattern chips,
+    remediation box (main column) and risk dial + ASR/hits mini-stats
+    (fixed 100px right column). Spec §Focus areas."""
+    from evaluatorq.common.reports.html_helpers import pct
+    from evaluatorq.dashboard.report_kit import dial
+
+    risk_score = area.get('risk_score', 0.0)
+    tier_code, tier_label, color = _rt_focus_tier(risk_score)
+
+    header = (
+        '<div class="rt-focus-tier-row">'
+        f'<span class="rt-focus-tier-dot" style="background:{color}"></span>'
+        f'<span class="rt-focus-tier-label" style="color:{color}">{esc(tier_code)} · {esc(tier_label)}</span>'
+        '</div>'
+        f'<div class="rt-focus-category-name">{esc(area.get("category_name", ""))}</div>'
+        f'<div class="rt-focus-category-code">{esc(area.get("category", ""))}</div>'
+    )
+
+    patterns_html = _rt_focus_pattern_chips(area, color)
+    fixbox_html = _rt_focus_remediation_box(area)
+
+    main_col = f'<div class="rt-focus-main">{header}{patterns_html}{fixbox_html}</div>'
+
+    vulnerability_rate = area.get('vulnerability_rate', 0.0)
+    vulnerabilities_found = area.get('vulnerabilities_found', 0)
+    risk_dial = dial(f'{risk_score:.1f}', risk_score / _RISK_MAX, radius=38, stroke=9, color=color, sub='RISK')
+    right_col = (
+        '<div class="rt-focus-right">'
+        f'{risk_dial}'
+        '<div class="rt-focus-mini-stats">'
+        '<div class="rt-focus-mini-stat">'
+        '<span class="rt-focus-mini-key">ASR</span>'
+        f'<span class="rt-focus-mini-value">{pct(vulnerability_rate)}</span></div>'
+        '<div class="rt-focus-mini-stat">'
+        '<span class="rt-focus-mini-key">Hits</span>'
+        f'<span class="rt-focus-mini-value" style="color:{color}">{vulnerabilities_found}</span></div>'
+        '</div>'
+        '</div>'
+    )
+
+    return f'<div class="rk-panel rt-focus-card">{main_col}{right_col}</div>'
+
+
+def _rt_focus(by_kind: dict[str, Any]) -> str:
+    """Focus areas tab body: intro copy + one card per top-risk area (worst
+    first, section list is already top-5). Empty list (clean run) -> ``''``
+    so the tab drops entirely (spec §Focus areas)."""
+    section = by_kind.get('focus_areas')
+    areas: list[dict[str, Any]] = section.data.get('focus_areas', []) if section is not None else []
+    if not areas:
+        return ''
+
+    intro = (
+        '<p class="rt-focus-intro">Prioritized fixes, ranked by '
+        '<code>risk = success rate × avg severity</code>. Start at the top — P1 first.</p>'  # noqa: RUF001
+    )
+    cards = ''.join(_rt_focus_area_card(area) for area in areas)
+    return f'{intro}{cards}'
 
 
 def _rt_agent_card_chip_row(label: str, items: list[str]) -> str:
@@ -1157,7 +1237,7 @@ def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
 
     agents_tab = _rt_agents(by_kind, report, rid)
 
-    focus_tab = _rt_focus_risk_dial(focus_areas_list) + render('focus_areas')
+    focus_tab = _rt_focus(by_kind)
 
     breakdowns_tab = _rt_breakdowns(by_kind) + render('framework_breakdown', 'vulnerability_breakdown')
 
