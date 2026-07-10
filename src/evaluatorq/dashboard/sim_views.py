@@ -84,11 +84,15 @@ def _entries_from_run(run: Any) -> list[SimulationEntry]:
 
 
 def render_sim_row_list(rid: str, entries: list[SimulationEntry]) -> str:
-    """Render the conversation list panel for a sim report.
+    """Render the conversation-cards panel for a sim report (spec §Transcripts).
 
-    Each row is a clickable element with ``hx-get`` pointing to the
-    transcript endpoint.  Mirrors the ``table`` dict in dashboard.py:322-334
-    (persona, scenario, goal, score, turns, terminated).
+    One collapsed ``<details class="sim-conv-card">`` per entry. The
+    ``<summary>`` is the design header row (index, persona, scenario, and a
+    right-aligned cluster of turn-count/score/terminated-by tags plus an
+    outcome badge), tinted by outcome. The card body lazy-loads the full
+    transcript fragment exactly once, on first expand, via
+    ``hx-trigger="click once"`` against the existing transcript endpoint —
+    so large runs ship no transcript markup up front.
 
     Args:
         rid:     Report ID (URL-safe).
@@ -100,46 +104,49 @@ def render_sim_row_list(rid: str, entries: list[SimulationEntry]) -> str:
     if not entries:
         return '<section class="sim-row-list"><p class="sim-empty">No conversations found.</p></section>'
 
+    from evaluatorq.common.reports import status_badge
+    from evaluatorq.dashboard.report_kit import tag
+
     safe_rid = esc(rid)
-    rows_html: list[str] = []
+    cards_html: list[str] = []
     for e in entries:
         idx = e.index
         persona = esc(e.persona)
         scenario = esc(e.scenario)
-        goal = 'yes' if e.goal_achieved else 'no'
-        score = f'{e.goal_completion_score:.2f}'
-        turns = str(e.turn_count)
-        terminated = esc(e.terminated_by)
 
-        rows_html.append(
-            f'<tr class="sim-row-item"'
-            f' hx-get="/r/{safe_rid}/sim/transcript?idx={idx}"'
-            f' hx-target="#sim-transcript-panel"'
-            f' hx-swap="innerHTML"'
-            f' style="cursor:pointer">'
-            f'<td>{idx + 1}</td>'
-            f'<td>{persona}</td>'
-            f'<td>{scenario}</td>'
-            f'<td>{goal}</td>'
-            f'<td>{score}</td>'
-            f'<td>{turns}</td>'
-            f'<td>{terminated}</td>'
-            f'</tr>'
+        is_error = e.terminated_by == 'error'
+        if is_error:
+            tint = 'sim-tint-error'
+            badge = status_badge('Error', 'warn')
+        elif e.goal_achieved:
+            tint = 'sim-tint-achieved'
+            badge = status_badge('Goal met', 'pass')
+        else:
+            tint = 'sim-tint-missed'
+            badge = status_badge('Goal missed', 'fail')
+
+        right_cluster = (
+            f'{tag(f"{e.turn_count} turns")}{tag(f"score {e.goal_completion_score:.2f}")}{tag(e.terminated_by)}{badge}'
         )
+        summary = (
+            f'<summary class="sim-conv-summary {tint}">'
+            f'<span class="sim-conv-idx">#{idx + 1}</span>'
+            f'<span class="sim-conv-persona">{persona}</span>'
+            f'<span class="sim-conv-sep">&middot;</span>'
+            f'<span class="sim-conv-scenario">{scenario}</span>'
+            f'<span class="sim-conv-right">{right_cluster}</span>'
+            f'</summary>'
+        )
+        body = (
+            f'<div class="sim-conv-body"'
+            f' hx-get="/r/{safe_rid}/sim/transcript?idx={idx}"'
+            f' hx-trigger="click once"'
+            f' hx-target="this"'
+            f' hx-swap="innerHTML"></div>'
+        )
+        cards_html.append(f'<details class="sim-conv-card">{summary}{body}</details>')
 
-    table_html = (
-        '<table class="sim-row-table">'
-        '<thead><tr>'
-        '<th>#</th><th>Persona</th><th>Scenario</th>'
-        '<th>Goal</th><th>Score</th><th>Turns</th><th>Terminated</th>'
-        '</tr></thead>'
-        f'<tbody>{"".join(rows_html)}</tbody>'
-        '</table>'
-    )
-
-    panel = '<div id="sim-transcript-panel" class="sim-transcript-panel"><p class="sim-select-prompt">Select a row above to view its transcript.</p></div>'
-
-    return f'<section class="sim-row-list"><h2>Conversations</h2>{table_html}{panel}</section>'
+    return f'<section class="sim-row-list">{"".join(cards_html)}</section>'
 
 
 # ---------------------------------------------------------------------------

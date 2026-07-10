@@ -975,32 +975,30 @@ def render_message_list(
 
 
 def _sim_rowlist_wrapper(rid: str, inner: str) -> str:
-    """Wrap *inner* HTML in the HTMX container div for the sim row-list.
+    """Wrap *inner* HTML in a plain container div for the sim row-list.
 
-    The div re-fetches itself when the ``orq:filter-changed`` event fires,
-    carrying the current filter form values via ``hx-include``.  Both the
-    initial page render (``sim_interactive_panels``) and the HTMX fragment
-    route (``GET /r/{rid}/sim/row-list``) must return this identical wrapper
-    so that ``hx-swap="outerHTML"`` replaces the correct element.
+    Double-fetch removal (spec §Transcripts): ``POST /r/{rid}/filter`` already
+    re-renders the whole (filtered) report body — including this row list —
+    in a single response.  This wrapper previously *also* self-refetched via
+    ``hx-get``/``hx-trigger="orq:filter-changed"``, firing a redundant second
+    request for content the body swap had just delivered (about to get
+    heavier now that each row is a lazy-loading conversation card).  That
+    self-refetch is removed; the div is now an inert container and the
+    ``/filter`` POST body swap is the single refresh path.
+
+    ``GET /r/{rid}/sim/row-list`` stays registered as a route — it backs the
+    transcript endpoint's filtered-index contract for direct use — it is
+    simply no longer auto-triggered from here.
 
     Args:
         rid:   Report ID (URL-safe).
         inner: Already-rendered row-list HTML to embed inside the div.
 
     Returns:
-        An HTML ``<div hx-get=...>`` string.
+        An HTML ``<div>`` string wrapping *inner*.
     """
     safe_rid = esc(rid)
-    return (
-        f'<div'
-        f' hx-get="/r/{safe_rid}/sim/row-list"'
-        f' hx-trigger="orq:filter-changed from:body"'
-        f' hx-include="#filter-form"'
-        f' hx-target="this"'
-        f' hx-swap="outerHTML">'
-        f'{inner}'
-        f'</div>'
-    )
+    return f'<div id="sim-row-list-{safe_rid}">{inner}</div>'
 
 
 def sim_interactive_panels(rid: str, entries: list[Any]) -> str:

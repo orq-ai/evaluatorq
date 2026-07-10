@@ -358,12 +358,13 @@ class TestSimRowListOnReportPage:
         assert r.status_code == 200
         assert "sim-row-list" in r.text or "sim-row-table" in r.text
 
-    def test_sim_report_page_contains_transcript_panel(
+    def test_sim_report_page_cards_lazy_load_body(
         self, client: TestClient, roots: list[Path]
     ) -> None:
         rid = report_id(_sim_path(roots))
         r = client.get(f"/r/{rid}")
-        assert "sim-transcript-panel" in r.text
+        assert "sim-conv-card" in r.text
+        assert 'hx-trigger="click once"' in r.text
 
     def test_sim_report_page_has_hx_get_links(
         self, client: TestClient, roots: list[Path]
@@ -439,7 +440,7 @@ class TestSimFilterAwareness:
         rid = report_id(_sim_path(roots))
         r = client.get(f"/r/{rid}/sim/row-list")
         assert r.status_code == 200
-        assert "sim-row" in r.text or "sim-transcript-panel" in r.text
+        assert "sim-row" in r.text or "sim-conv-card" in r.text
 
     def test_sim_row_list_with_filter_returns_fewer_rows(
         self, client: TestClient, roots: list[Path]
@@ -449,8 +450,8 @@ class TestSimFilterAwareness:
         html_all = client.get(f"/r/{rid}/sim/row-list").text
         html_alice = client.get(f"/r/{rid}/sim/row-list?persona=alice").text
         # Count sim-row-item occurrences as proxy for number of rows.
-        all_count = html_all.count("sim-row-item")
-        alice_count = html_alice.count("sim-row-item")
+        all_count = html_all.count("sim-conv-card")
+        alice_count = html_alice.count("sim-conv-card")
         assert alice_count < all_count, (
             f"Expected fewer rows when filtering to persona=alice: "
             f"unfiltered={all_count}, filtered={alice_count}"
@@ -463,28 +464,17 @@ class TestSimFilterAwareness:
         r = client.get("/r/nonexistent-sim/sim/row-list")
         assert r.status_code == 404
 
-    def test_sim_panel_container_has_hx_include(
+    def test_sim_rowlist_wrapper_no_longer_self_refetches(
         self, client: TestClient, roots: list[Path]
     ) -> None:
-        """The sim interactive panel container must include hx-include='#filter-form'."""
+        """Double-fetch removal: the row-list wrapper no longer carries its own
+        hx-include/hx-trigger — the /filter POST body swap is the single
+        refresh path (spec §Transcripts double-fetch fix)."""
         rid = report_id(_sim_path(roots))
         r = client.get(f"/r/{rid}")
         assert r.status_code == 200
-        assert 'hx-include="#filter-form"' in r.text, (
-            "Expected hx-include=\"#filter-form\" on sim panel container so "
-            "filter selections are carried into transcript hx-get requests."
-        )
-
-    def test_sim_panel_container_triggers_on_filter_changed(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
-        """The sim panel container must listen for orq:filter-changed."""
-        rid = report_id(_sim_path(roots))
-        r = client.get(f"/r/{rid}")
-        assert r.status_code == 200
-        assert "orq:filter-changed" in r.text, (
-            "Expected 'orq:filter-changed' in hx-trigger on sim panel container."
-        )
+        assert 'hx-include="#filter-form"' not in r.text
+        assert "orq:filter-changed" not in r.text
 
     def test_filter_post_emits_hx_trigger_for_sim(
         self, client: TestClient, roots: list[Path]
@@ -497,3 +487,113 @@ class TestSimFilterAwareness:
         assert "orq:filter-changed" in hx_trigger, (
             f"Expected HX-Trigger: orq:filter-changed, got: {hx_trigger!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Direct-function tests: conversation cards (Task 11) — design-aligned
+# <details> cards, tinted by outcome.
+# ---------------------------------------------------------------------------
+
+
+def _entry(
+    *,
+    index: int = 0,
+    persona: str = "alice",
+    scenario: str = "billing inquiry",
+    terminated_by: str = "judge",
+    goal_achieved: bool = True,
+    goal_completion_score: float = 0.82,
+    turn_count: int = 3,
+    judge_reason: str = "Goal achieved after 3 turns.",
+    error: str | None = None,
+    criteria: list | None = None,
+    transcript: list | None = None,
+):
+    from evaluatorq.simulation.types import CriteriaRow, SimulationEntry, TranscriptMessage
+
+    if criteria is None:
+        criteria = [
+            CriteriaRow(
+                id="c1",
+                description="Agent confirms the order number",
+                type="must_happen",
+                passed=True,
+                safety=False,
+            ),
+        ]
+    if transcript is None:
+        transcript = [
+            TranscriptMessage(role="user", content="hi"),
+            TranscriptMessage(role="assistant", content="yo"),
+        ]
+    return SimulationEntry(
+        index=index,
+        persona=persona,
+        scenario=scenario,
+        model="gpt-4o",
+        target_model="gpt-4o",
+        terminated_by=terminated_by,
+        goal_achieved=goal_achieved,
+        goal_completion_score=goal_completion_score,
+        rules_broken=[],
+        criteria=criteria,
+        turn_count=turn_count,
+        total_tokens=100,
+        judge_reason=judge_reason,
+        error=error,
+        evaluator_scores={},
+        transcript=transcript,
+    )
+
+
+@pytest.fixture()
+def sim_entries():
+    return [
+        _entry(index=0, persona="alice", goal_achieved=True, terminated_by="judge"),
+        _entry(index=1, persona="bob", goal_achieved=False, terminated_by="max_turns"),
+        _entry(index=2, persona="carol", terminated_by="error", error="boom"),
+    ]
+
+
+class TestConversationCards:
+    """Task 11: collapsed tinted `<details>` conversation cards."""
+
+    def test_row_list_renders_details_cards_with_tint(self, sim_entries) -> None:
+        from evaluatorq.dashboard.sim_views import render_sim_row_list
+
+        html = render_sim_row_list("rid", sim_entries)
+        assert "<details" in html and "sim-conv-card" in html
+        assert "sim-tint-achieved" in html
+        assert "sim-tint-missed" in html
+        assert "sim-tint-error" in html
+        assert 'hx-trigger="click once"' in html
+
+    def test_row_list_summary_has_header_cluster(self, sim_entries) -> None:
+        from evaluatorq.dashboard.sim_views import render_sim_row_list
+
+        html = render_sim_row_list("rid", sim_entries)
+        assert "#1" in html
+        assert "alice" in html
+        assert "3 turns" in html
+        assert "score 0.82" in html
+        assert "Goal met" in html
+        assert "Goal missed" in html
+        assert "Error" in html
+
+    def test_row_list_error_takes_precedence_over_goal_achieved(self) -> None:
+        """terminated_by == 'error' tints error, regardless of goal_achieved."""
+        from evaluatorq.dashboard.sim_views import render_sim_row_list
+
+        entry = _entry(terminated_by="error", goal_achieved=True, error="boom")
+        html = render_sim_row_list("rid", [entry])
+        assert "sim-tint-error" in html
+        assert "sim-tint-achieved" not in html
+
+
+class TestRowlistWrapperNoSelfRefetch:
+    def test_rowlist_wrapper_no_self_refetch(self) -> None:
+        from evaluatorq.dashboard.view import _sim_rowlist_wrapper
+
+        html = _sim_rowlist_wrapper("rid", "<section></section>")
+        assert "orq:filter-changed" not in html
+        assert "hx-include" not in html

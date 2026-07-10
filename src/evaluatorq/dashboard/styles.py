@@ -983,4 +983,39 @@ _SIM_REPORT_CSS = """
 }
 """
 
-DASHBOARD_CSS = _DASHBOARD_CSS_HEAD + _TAB_RULES + _SIM_TAB_ACCENT + _DASHBOARD_CSS_TAIL + _SIM_REPORT_CSS
+# ==== .sim-report — Transcripts redesign (Task 11) ========================
+# Appended as its own block (rather than edited into _SIM_REPORT_CSS above)
+# so a concurrently-landing `.sim-report` CSS addition on another branch
+# merges cleanly. Covers: collapsed tinted conversation cards, scoped under
+# `.sim-report` per docs/superpowers/specs/2026-07-10-agent-sim-report-
+# alignment-design.md §Transcripts.
+_SIM_TRANSCRIPT_CSS = """
+/* ---- Conversation cards (spec §Transcripts, Task 11) ---- */
+.sim-report .sim-row-list { display: flex; flex-direction: column; gap: 10px; }
+.sim-report .sim-conv-card {
+    border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden;
+    background: var(--surface-app);
+}
+.sim-report .sim-conv-summary {
+    display: flex; align-items: center; gap: 8px; padding: 12px 16px;
+    cursor: pointer; list-style: none;
+}
+.sim-report .sim-conv-summary::-webkit-details-marker { display: none; }
+.sim-report .sim-conv-idx {
+    font-family: var(--font-mono); font-size: 12px; color: var(--text-faint);
+}
+.sim-report .sim-conv-persona { font-size: 14px; font-weight: 600; color: var(--text-strong); }
+.sim-report .sim-conv-sep { color: var(--text-faint); }
+.sim-report .sim-conv-scenario { font-size: 13px; color: var(--text-body); }
+.sim-report .sim-conv-right {
+    display: flex; align-items: center; gap: 6px; margin-left: auto;
+}
+.sim-report .sim-tint-achieved { background: var(--green-100); }
+.sim-report .sim-tint-missed { background: var(--red-100); }
+.sim-report .sim-tint-error { background: var(--amber-100); }
+.sim-report .sim-conv-body { padding: 16px; border-top: 1px solid var(--border-subtle); }
+"""
+
+DASHBOARD_CSS = (
+    _DASHBOARD_CSS_HEAD + _TAB_RULES + _SIM_TAB_ACCENT + _DASHBOARD_CSS_TAIL + _SIM_REPORT_CSS + _SIM_TRANSCRIPT_CSS
+)
