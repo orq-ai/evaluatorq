@@ -572,6 +572,56 @@ def _sim_hero(summary_section: Any, run: SimulationRun) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _rt_by_kind(report: RedTeamReport) -> dict[str, Any]:
+    """``build_report_sections(report)`` collapsed to ``{kind: section}``
+    (first section wins per kind), shared by the hero, tab wiring, and tests."""
+    from evaluatorq.redteam.reports.sections import build_report_sections
+
+    by_kind: dict[str, Any] = {}
+    for s in build_report_sections(report):
+        by_kind.setdefault(s.kind, s)
+    return by_kind
+
+
+def _rt_agent_stats(report: RedTeamReport) -> dict[str, dict[str, Any]]:
+    """Per-agent stats keyed by ``r.agent.key`` (spec §Run header / §Data
+    sources — ``agent_comparison`` is populated from the same ``report.results``
+    grouping, so card and table numbers always agree; this also makes
+    single-agent runs work since ``agent_comparison`` is None for < 2 agents).
+
+    ``display_name``/``model`` are taken from the **first** result matching
+    each key (not ``results[0]`` globally, which would attach one agent's
+    model to every card). ``asr = vulns / attacks`` guards ``attacks == 0``.
+    """
+    stats: dict[str, dict[str, Any]] = {}
+    for r in report.results:
+        key = r.agent.key or r.agent.display_name or r.agent.model or 'unknown'
+        entry: dict[str, Any] = stats.setdefault(
+            key,
+            {
+                'display_name': r.agent.display_name or key,
+                'model': r.agent.model or '',
+                'attacks': 0,
+                'vulns': 0,
+                'critical': 0,
+                'errors': 0,
+            },
+        )
+        entry['attacks'] += 1
+        if r.vulnerable:
+            entry['vulns'] += 1
+            if r.attack.severity == 'critical':
+                entry['critical'] += 1
+        if r.error is not None:
+            entry['errors'] += 1
+    for entry in stats.values():
+        attacks = entry['attacks']
+        vulns = entry['vulns']
+        entry['asr'] = vulns / attacks if attacks else 0.0
+        entry['resistance'] = 1.0 - entry['asr']
+    return stats
+
+
 def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
     """Render the Red Team report body as Streamlit-aligned tabs.
 
@@ -586,12 +636,8 @@ def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
         rt_panel_disagreement,
     )
     from evaluatorq.redteam.reports.export_html import _SECTION_RENDERERS
-    from evaluatorq.redteam.reports.sections import build_report_sections
 
-    sections = build_report_sections(report)
-    by_kind: dict[str, Any] = {}
-    for s in sections:
-        by_kind.setdefault(s.kind, s)
+    by_kind = _rt_by_kind(report)
 
     def render(*kinds: str) -> str:
         return _render_sections(by_kind, _SECTION_RENDERERS, kinds)
@@ -636,28 +682,37 @@ def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
     return f'{hero}{tabs}'
 
 
-def _redteam_hero(summary_section: Any, report: RedTeamReport) -> str:
-    from evaluatorq.common.reports.html_helpers import kpi_cards, pct
-
-    data = summary_section.data if summary_section is not None else {}
-    asr = data.get('vulnerability_rate', 0.0)
-    resistance = data.get('resistance_rate', 0.0)
-    vulns = data.get('vulnerabilities_found', 0)
-    critical = data.get('critical_exposure', 0)
-    errors = data.get('total_errors', 0)
-    cards = kpi_cards([
-        {
-            'label': 'Attack Success Rate',
-            'value': pct(asr),
-            'status': 'fail' if asr >= 0.25 else ('warn' if asr > 0 else 'pass'),
-        },
-        {'label': 'Resistance', 'value': pct(resistance), 'status': 'pass' if resistance >= 0.8 else 'warn'},
-        {'label': 'Vulnerabilities', 'value': str(vulns), 'status': 'fail' if vulns else 'pass'},
-        {'label': 'Critical', 'value': str(critical), 'status': 'fail' if critical else 'neutral'},
-        {'label': 'Errors', 'value': str(errors), 'status': 'warn' if errors else 'neutral'},
-    ])
+def _rt_agent_pill(stats: dict[str, Any]) -> str:
+    """One hero agent pill: dot (critical→red/vuln→orange/clean→green) + name
+    + mono faint ``{n} vuln`` / ``clean`` (spec §Run header)."""
+    vulns = stats.get('vulns', 0)
+    critical = stats.get('critical', 0)
+    dot_cls = 'rt-hero-dot--critical' if critical else ('rt-hero-dot--vuln' if vulns else 'rt-hero-dot--clean')
+    sub = f'{vulns} vuln' if vulns else 'clean'
     return (
-        f'<header class="report-hero"><h1 class="report-hero-title">Red Team</h1>'
+        '<span class="rt-hero-pill">'
+        f'<span class="rt-hero-dot {dot_cls}"></span>'
+        f'<span class="rt-hero-pill-name">{esc(stats.get("display_name", ""))}</span>'
+        f'<span class="rt-hero-pill-sub">{esc(sub)}</span>'
+        '</span>'
+    )
+
+
+def _redteam_hero(summary_section: Any, report: RedTeamReport) -> str:
+    """Title row + `N agents` pill (multi only) + per-agent pill row (multi
+    only). The 5-card KPI band moves to the Overview tab (spec §Run header) —
+    no double KPI band."""
+    multi_agent = len(report.tested_agents) > 1
+    agents_pill = f'<span class="rt-hero-agents-pill">{len(report.tested_agents)} agents</span>' if multi_agent else ''
+    agent_pills_html = ''
+    if multi_agent:
+        agent_stats = _rt_agent_stats(report)
+        pills = ''.join(_rt_agent_pill(stats) for stats in agent_stats.values())
+        agent_pills_html = f'<div class="rt-hero-agent-row">{pills}</div>'
+    return (
+        '<header class="report-hero rt-hero">'
+        f'<h1 class="rt-hero-title">Red Team{agents_pill}</h1>'
         f'<p class="report-hero-sub">{esc(report.description or "Red teaming report")}</p>'
-        f'{cards}</header>'
+        f'{agent_pills_html}'
+        '</header>'
     )

@@ -272,3 +272,20 @@ def test_sim_report_has_shared_aligned_class(sim_run):
 
     html = sim_report_tabs('rid', sim_run)
     assert 'class="report-aligned sim-report"' in html
+
+
+def test_redteam_hero_has_no_kpi_band(rt_report_single):
+    from evaluatorq.dashboard.report_tabs import _redteam_hero, _rt_by_kind
+
+    by = _rt_by_kind(rt_report_single)
+    html = _redteam_hero(by.get('summary'), rt_report_single)
+    assert 'report-hero' in html
+    assert 'kpi-band' not in html and 'kpi-card' not in html
+
+
+def test_redteam_hero_shows_agent_pills_multi(rt_report_multi):
+    from evaluatorq.dashboard.report_tabs import _redteam_hero, _rt_by_kind
+
+    by = _rt_by_kind(rt_report_multi)
+    html = _redteam_hero(by.get('summary'), rt_report_multi)
+    assert 'agents' in html  # "N agents" pill

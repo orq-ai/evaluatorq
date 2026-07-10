@@ -1112,6 +1112,48 @@ _SIM_TRANSCRIPT_CSS = """
 .sim-report .sim-ctype-unsafe { color: var(--red-600); }
 """
 
+# ==== .rt-report — Red Team report design-mockup alignment ==============
+# All rules scoped under `.rt-report` (report_tabs.redteam_report_tabs'
+# wrapper) per docs/superpowers/specs/2026-07-10-redteam-report-alignment-
+# design.md. Surface-identical widgets (exec-summary, KPI band, `.rk-*`
+# primitives, chat bubbles, active-tab underline) are already covered by the
+# `.report-aligned` promotion above; this block only carries RT-only
+# composition (hero agent pills, Overview 2-col grid, agents-under-test).
+_RT_REPORT_CSS = """
+/* ---- Run header (spec §Run header) ---- */
+.rt-hero-title {
+    margin: 0; display: flex; align-items: center; gap: 10px;
+    font-family: var(--font-display);
+    font-size: 19px; font-weight: 600; letter-spacing: -0.01em;
+    color: var(--text-strong);
+}
+.rt-hero-agents-pill {
+    font-family: var(--font-mono); font-size: 11px;
+    background: var(--surface-sunken); color: var(--text-muted);
+    border-radius: 999px; padding: 2px 8px;
+}
+.rt-hero-agent-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.rt-hero-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--surface-card); border: 1px solid var(--border-subtle);
+    border-radius: 999px; padding: 3px 10px; font-size: 12px;
+}
+.rt-hero-dot { display: inline-block; width: 7px; height: 7px; border-radius: 999px; }
+.rt-hero-dot--critical { background: var(--red-600); }
+.rt-hero-dot--vuln { background: var(--orange-500); }
+.rt-hero-dot--clean { background: var(--green-600); }
+.rt-hero-pill-name { color: var(--text-strong); }
+.rt-hero-pill-sub {
+    font-family: var(--font-mono); font-size: 10.5px; color: var(--text-faint);
+}
+"""
+
 DASHBOARD_CSS = (
-    _DASHBOARD_CSS_HEAD + _TAB_RULES + _SIM_TAB_ACCENT + _DASHBOARD_CSS_TAIL + _SIM_REPORT_CSS + _SIM_TRANSCRIPT_CSS
+    _DASHBOARD_CSS_HEAD
+    + _TAB_RULES
+    + _SIM_TAB_ACCENT
+    + _DASHBOARD_CSS_TAIL
+    + _SIM_REPORT_CSS
+    + _SIM_TRANSCRIPT_CSS
+    + _RT_REPORT_CSS
 )
