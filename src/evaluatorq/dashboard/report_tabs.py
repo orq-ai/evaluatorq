@@ -1047,16 +1047,18 @@ def _rt_attack_row(r: RedTeamResult, rid: str, idx: int) -> str:
         '<div class="rt-attack-row-chevron">&#9660;</div>'
         '</summary>'
     )
-    body_html = (
-        '<div class="rt-attack-row-body"'
+    # Lazy-load on the <details> `toggle` event, not a click on the (empty,
+    # collapsed) body div — clicking the summary opens the details but never
+    # delivers a click to the inner div, so a click trigger there never fires.
+    return (
+        '<details class="rt-attack-row"'
         f' hx-get="/r/{safe_rid}/redteam/attack?idx={idx}"'
         ' hx-include="#filter-form"'
-        ' hx-trigger="click once"'
+        ' hx-trigger="toggle once"'
+        ' hx-target="find .rt-attack-row-body"'
         ' hx-swap="innerHTML"'
-        '>'
-        '</div>'
+        f'>{summary_html}<div class="rt-attack-row-body"></div></details>'
     )
-    return f'<details class="rt-attack-row">{summary_html}{body_html}</details>'
 
 
 def _rt_attacks(report: RedTeamReport, rid: str) -> str:

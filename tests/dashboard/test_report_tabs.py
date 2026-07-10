@@ -415,7 +415,10 @@ def test_rt_attacks_rows_are_details(rt_report_multi):
 
     html = _rt_attacks(rt_report_multi, 'rid')
     assert 'class="rt-attack-row"' in html
-    assert 'hx-trigger="click once"' in html
+    # lazy-load fires on the <details> toggle (open), targeting the inner body —
+    # a click trigger on the collapsed inner div never fires.
+    assert 'hx-trigger="toggle once"' in html
+    assert 'hx-target="find .rt-attack-row-body"' in html
     assert '/r/rid/redteam/attack?idx=' in html
     assert 'source' in html.lower()  # kept source_distribution renders below the table
 
