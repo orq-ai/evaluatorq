@@ -20,7 +20,7 @@ from evaluatorq.common.reports import esc
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from evaluatorq.redteam.contracts import RedTeamReport
+    from evaluatorq.redteam.contracts import RedTeamReport, RedTeamResult
     from evaluatorq.simulation.types import SimulationRun
 
 
@@ -1022,15 +1022,158 @@ def _rt_agents(by_kind: dict[str, Any], report: RedTeamReport, rid: str) -> str:
     return f'{intro}{cards}{tail}'
 
 
-def _rt_config(by_kind: dict[str, Any], report: RedTeamReport) -> str:
-    """Config tab body: kept ``methodology``/``severity_definitions`` renders.
-    ``agent_context`` is deliberately excluded here — it now renders
-    exclusively in the Agents tab (spec §Agents, CRITICAL: no double-render)."""
+def _rt_attack_row(r: RedTeamResult, rid: str, idx: int) -> str:
+    """One `<details class="rt-attack-row">` evidence row: design header grid
+    summary (title/agent/vector/severity/outcome/chevron) + lazy fragment
+    body (spec §Attacks)."""
+    from evaluatorq.dashboard.redteam_charts import fmt_vulnerability
+    from evaluatorq.dashboard.report_kit import outcome_pill, severity_pill
+
+    atk = r.attack
+    title_name = fmt_vulnerability(atk.vulnerability) if atk.vulnerability else esc(atk.category)
+    outcome = 'error' if r.error else ('vulnerable' if r.vulnerable else 'resistant')
+    safe_rid = esc(rid)
+
+    summary_html = (
+        '<summary class="rt-attack-row-summary">'
+        '<div class="rt-attack-row-title">'
+        f'<strong>{esc(title_name)}</strong>'
+        f'<span class="rt-attack-row-id">{esc(atk.id)}</span>'
+        '</div>'
+        f'<div class="rt-attack-row-agent">{esc(r.agent.display_name or r.agent.key)}</div>'
+        f'<div class="rt-attack-row-vector">{esc(atk.attack_technique.value)}</div>'
+        f'<div class="rt-attack-row-severity">{severity_pill(atk.severity.value)}</div>'
+        f'<div class="rt-attack-row-outcome">{outcome_pill(outcome)}</div>'
+        '<div class="rt-attack-row-chevron">&#9660;</div>'
+        '</summary>'
+    )
+    body_html = (
+        '<div class="rt-attack-row-body"'
+        f' hx-get="/r/{safe_rid}/redteam/attack?idx={idx}"'
+        ' hx-include="#filter-form"'
+        ' hx-trigger="click once"'
+        ' hx-swap="innerHTML"'
+        '>'
+        '</div>'
+    )
+    return f'<details class="rt-attack-row">{summary_html}{body_html}</details>'
+
+
+def _rt_attacks(report: RedTeamReport, rid: str) -> str:
+    """Attacks tab body: evidence table of one ``<details>`` row per
+    (already-filtered) result, lazy-loading its fragment body once on click,
+    then the kept ``source_distribution`` render (spec §Attacks).
+
+    Ponytail: this list is intentionally unpaginated — scale honesty means
+    the collapsed row list itself renders in full while each row's
+    transcript payload stays lazy (deviation #7).
+    """
     from evaluatorq.redteam.reports.export_html import _SECTION_RENDERERS
 
-    return _render_sections(by_kind, _SECTION_RENDERERS, ('methodology', 'severity_definitions')) or (
-        '<p class="rk-empty">No config data available.</p>'
+    results = report.results
+    n = len(results)
+    intro = (
+        f'<p class="rt-attacks-intro">Evidence &mdash; {n} attack{"s" if n != 1 else ""}. '
+        'Click a row to expand the evaluator verdict and full transcript.</p>'
+        if results
+        else '<p class="rt-attacks-intro">No attacks match the current filters.</p>'
     )
+
+    header = (
+        '<div class="rt-attack-row-header">'
+        '<div>Attack</div><div>Agent</div><div>Vector</div>'
+        '<div>Severity</div><div>Outcome</div><div></div>'
+        '</div>'
+    )
+    rows = ''.join(_rt_attack_row(r, rid, i) for i, r in enumerate(results))
+    table_html = f'<div class="rk-panel rt-attack-table">{header}{rows}</div>' if results else ''
+
+    # `report` is already the *filtered* report the caller composed, so
+    # rebuild its sections here (not the outer tab's unfiltered `by_kind`)
+    # to keep `source_distribution` in sync with the visible rows.
+    kept = _render_sections(_rt_by_kind(report), _SECTION_RENDERERS, ('source_distribution',))
+    return f'{intro}{table_html}{kept}'
+
+
+def _rt_config(by_kind: dict[str, Any], report: RedTeamReport) -> str:
+    """Config tab body: run-configuration meta grid, methodology panel
+    (TESTED/NOT TESTED tags + jury-reliability block), kept
+    ``severity_definitions``/``error_analysis`` renders. ``agent_context`` is
+    deliberately excluded here — it now renders exclusively in the Agents
+    tab (spec §Agents, CRITICAL: no double-render)."""
+    from evaluatorq.common.reports.html_helpers import humanize_duration
+    from evaluatorq.dashboard.report_kit import meta_grid, panel, tag
+    from evaluatorq.redteam.reports.export_html import _SECTION_RENDERERS
+
+    summary_section = by_kind.get('summary')
+    summary_data: dict[str, Any] = summary_section.data if summary_section is not None else {}
+    methodology_section = by_kind.get('methodology')
+    method_data: dict[str, Any] = methodology_section.data if methodology_section is not None else {}
+
+    created_at = summary_data.get('created_at')
+    generated = created_at.date().isoformat() if hasattr(created_at, 'date') else (str(created_at) or None)
+
+    run_config_html = panel(
+        'Run configuration',
+        meta_grid([
+            ('Target', summary_data.get('target')),
+            ('Pipeline', summary_data.get('pipeline')),
+            ('Framework', method_data.get('framework')),
+            ('Scoring method', method_data.get('scoring_method')),
+            ('Agents', str(len(report.tested_agents)) if report.tested_agents else None),
+            (
+                'Attacks',
+                str(summary_data['total_attacks']) if summary_data.get('total_attacks') is not None else None,
+            ),
+            ('Generated', generated),
+            ('Duration', humanize_duration(summary_data.get('duration_seconds')) or None),
+        ]),
+    )
+
+    tested = method_data.get('categories_tested') or []
+    untested = method_data.get('untested_categories') or []
+    untested_names = method_data.get('untested_category_names') or {}
+
+    tested_html = (
+        '<div class="rt-config-methodology-row">'
+        '<span class="rt-config-methodology-label">TESTED</span>'
+        f'<div class="rt-config-methodology-tags">{"".join(tag(c) for c in tested)}</div>'
+        '</div>'
+        if tested
+        else ''
+    )
+    untested_html = (
+        '<div class="rt-config-methodology-row">'
+        '<span class="rt-config-methodology-label">NOT TESTED</span>'
+        f'<div class="rt-config-methodology-tags">'
+        f'{"".join(tag(untested_names.get(c, c)) for c in untested)}</div>'
+        '</div>'
+        if untested
+        else ''
+    )
+
+    jury = summary_data.get('jury_reliability')
+    jury_html = ''
+    if jury is not None:
+        alpha = jury.get('krippendorff_alpha')
+        jury_html = (
+            '<div class="rt-config-methodology-row">'
+            '<span class="rt-config-methodology-label">JURY RELIABILITY</span>'
+            + meta_grid([
+                ('Krippendorff alpha', f'{alpha:.2f}' if alpha is not None else None),
+                ('Samples', str(jury.get('samples')) if jury.get('samples') is not None else None),
+                ('Method', jury.get('method')),
+            ])
+            + '</div>'
+        )
+
+    pipeline = method_data.get('pipeline', '')
+    scoring = method_data.get('scoring_method', '')
+    sub = f'{pipeline} pipeline · {scoring}' if pipeline or scoring else None
+    methodology_html = panel('Methodology', f'{tested_html}{untested_html}{jury_html}', sub=sub)
+
+    kept = _render_sections(by_kind, _SECTION_RENDERERS, ('severity_definitions', 'error_analysis'))
+    return f'{run_config_html}{methodology_html}{kept}' or '<p class="rk-empty">No config data available.</p>'
 
 
 def _rt_breakdowns_category_table(rows: list[dict[str, Any]]) -> str:
@@ -1219,7 +1362,6 @@ def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
     Usage, Config — each populated from the precomputed report sections plus
     the HTMX interactive panels (empty tabs drop out).
     """
-    from evaluatorq.dashboard.view import rt_panel_conversation
     from evaluatorq.redteam.reports.export_html import _SECTION_RENDERERS
 
     by_kind = _rt_by_kind(report)
@@ -1241,7 +1383,7 @@ def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
 
     breakdowns_tab = _rt_breakdowns(by_kind) + render('framework_breakdown', 'vulnerability_breakdown')
 
-    attacks_tab = rt_panel_conversation(rid) + render('individual_results', 'source_distribution', 'error_analysis')
+    attacks_tab = _rt_attacks(report, rid)
 
     usage_tab = render('token_usage') or '<p class="rk-empty">No token usage data recorded for this run.</p>'
     config_tab = _rt_config(by_kind, report)

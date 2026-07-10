@@ -408,3 +408,23 @@ def test_rt_report_empty_run_does_not_crash(rt_report_empty):
 
     html = redteam_report_tabs('rid', rt_report_empty)
     assert 'class="report-aligned rt-report"' in html  # renders, doesn't raise
+
+
+def test_rt_attacks_rows_are_details(rt_report_multi):
+    from evaluatorq.dashboard.report_tabs import _rt_attacks
+
+    html = _rt_attacks(rt_report_multi, 'rid')
+    assert 'class="rt-attack-row"' in html
+    assert 'hx-trigger="click once"' in html
+    assert '/r/rid/redteam/attack?idx=' in html
+    assert 'source' in html.lower()  # kept source_distribution renders below the table
+
+
+def test_rt_config_has_metagrid_and_jury(rt_report_multi):
+    # rt_report_multi fixture must set summary.jury_reliability so the block renders.
+    from evaluatorq.dashboard.report_tabs import _rt_by_kind, _rt_config
+
+    html = _rt_config(_rt_by_kind(rt_report_multi), rt_report_multi)
+    assert 'Run configuration' in html or 'rk-meta' in html
+    assert 'Methodology' in html
+    assert 'JURY RELIABILITY' in html  # deviation #12: jury block replaces mockup's JURY string

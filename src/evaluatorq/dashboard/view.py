@@ -1175,47 +1175,6 @@ def sim_interactive_panels(rid: str, entries: list[Any]) -> str:
     )
 
 
-def redteam_interactive_panels(rid: str) -> str:
-    """Render the interactive dashboard panels section for a redteam report.
-
-    Returns an HTML ``<section>`` containing four HTMX-wired panels that load
-    their content via ``GET /r/{rid}/view/*`` routes:
-
-    - Interactive breakdown (group_by x stack_by bar chart)
-    - Agent heatmap (dimension selector — multi-agent reports only)
-    - Conversation viewer (per-row transcript drill-down)
-    - Disagreement viewer (agent-pair side-by-side — multi-agent only)
-
-    Each panel placeholder ``<div>`` carries:
-
-    - ``hx-trigger="load, orq:filter-changed from:body"`` so it fetches on
-      initial page load AND refetches whenever the filter form fires the
-      ``orq:filter-changed`` custom event (emitted by the POST /filter handler
-      via the ``HX-Trigger`` response header).
-    - ``hx-include="#filter-form"`` so each ``hx-get`` carries the current
-      filter selections as query params, giving the view routes the same filter
-      state the static body already uses.
-
-    The panel-own params (group_by, stack_by, dim, a, b, page, idx) live in the
-    ``hx-get`` URL and are preserved by ``hx-include`` being additive (it only
-    appends form fields; it does not replace URL params).  The filter dimension
-    names (result, agent, category, severity, technique, delivery_method,
-    vulnerability) do not collide with any panel-own param names.
-
-    Task 6's ``dashboard.js`` re-embeds ``render_embed`` Vega charts after
-    each HTMX swap.
-    """
-    return (
-        f'<section class="rt-interactive-panels">'
-        f'<h1 class="rt-panels-title">Interactive Analysis</h1>'
-        f'{rt_panel_breakdown(rid)}'
-        f'{rt_panel_agent_heatmap(rid)}'
-        f'{rt_panel_conversation(rid)}'
-        f'{rt_panel_disagreement(rid)}'
-        f'</section>'
-    )
-
-
 def _rt_lazy_panel(rid: str, *, panel_id: str, title: str, path: str, loading: str) -> str:
     """One HTMX-lazy redteam panel: fetches ``/r/{rid}/view/{path}`` on load and
     whenever the filter form fires ``orq:filter-changed``, carrying the current
@@ -1253,16 +1212,6 @@ def rt_panel_agent_heatmap(rid: str) -> str:
         title='Agent Heatmap',
         path='agent-heatmap?dim=vulnerability',
         loading='Loading heatmap…',
-    )
-
-
-def rt_panel_conversation(rid: str) -> str:
-    return _rt_lazy_panel(
-        rid,
-        panel_id='panel-conversation',
-        title='Conversation Viewer',
-        path='conversation?idx=0',
-        loading='Loading conversation viewer…',
     )
 
 

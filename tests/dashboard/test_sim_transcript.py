@@ -38,44 +38,44 @@ def _make_sim_run_with_transcript() -> SimulationRun:
     results = [
         SimulationResult(
             messages=[
-                Message(role="user", content="Hello, I need help with my order."),
-                Message(role="assistant", content="Sure, what is your order number?"),
-                Message(role="user", content="Order 12345."),
+                Message(role='user', content='Hello, I need help with my order.'),
+                Message(role='assistant', content='Sure, what is your order number?'),
+                Message(role='user', content='Order 12345.'),
             ],
             terminated_by=TerminatedBy.judge,
-            reason="Goal achieved after 3 turns",
+            reason='Goal achieved after 3 turns',
             goal_achieved=True,
             goal_completion_score=0.95,
             rules_broken=[],
             turn_count=3,
             turn_metrics=[],
             token_usage=TokenUsage(input_tokens=20, output_tokens=15, total_tokens=35),
-            metadata={"persona": "alice", "scenario": "billing inquiry"},
+            metadata={'persona': 'alice', 'scenario': 'billing inquiry'},
         ),
         SimulationResult(
             messages=[
-                Message(role="user", content="I want a refund!"),
-                Message(role="assistant", content="I understand. Let me check."),
+                Message(role='user', content='I want a refund!'),
+                Message(role='assistant', content='I understand. Let me check.'),
             ],
             terminated_by=TerminatedBy.max_turns,
-            reason="Max turns reached",
+            reason='Max turns reached',
             goal_achieved=False,
             goal_completion_score=0.2,
             rules_broken=[],
             turn_count=2,
             turn_metrics=[],
             token_usage=TokenUsage(input_tokens=10, output_tokens=8, total_tokens=18),
-            metadata={"persona": "bob", "scenario": "refund request"},
+            metadata={'persona': 'bob', 'scenario': 'refund request'},
         ),
     ]
     return SimulationRun(
-        run_name="transcript-test-run",
+        run_name='transcript-test-run',
         created_at=datetime.now(tz=timezone.utc),
-        mode="run",
-        target_kind="orq_agent",
-        evaluator_names=["goal_achieved"],
+        mode='run',
+        target_kind='orq_agent',
+        evaluator_names=['goal_achieved'],
         total_results=len(results),
-        scorer_averages={"goal_achieved": 0.5},
+        scorer_averages={'goal_achieved': 0.5},
         results=results,
     )
 
@@ -88,34 +88,34 @@ def _make_xss_sim_run() -> SimulationRun:
         SimulationResult(
             messages=[
                 Message(
-                    role="user",
-                    content="Hello",
+                    role='user',
+                    content='Hello',
                 ),
                 Message(
-                    role="assistant",
+                    role='assistant',
                     # Malicious agent message — stored-XSS vector.
                     content='<script>alert("xss")</script>',
                 ),
             ],
             terminated_by=TerminatedBy.judge,
-            reason="done",
+            reason='done',
             goal_achieved=True,
             goal_completion_score=1.0,
             rules_broken=[],
             turn_count=1,
             turn_metrics=[],
             token_usage=TokenUsage(input_tokens=5, output_tokens=5, total_tokens=10),
-            metadata={"persona": "attacker", "scenario": "injection test"},
+            metadata={'persona': 'attacker', 'scenario': 'injection test'},
         )
     ]
     return SimulationRun(
-        run_name="xss-test-run",
+        run_name='xss-test-run',
         created_at=datetime.now(tz=timezone.utc),
-        mode="run",
-        target_kind="orq_agent",
-        evaluator_names=["goal_achieved"],
+        mode='run',
+        target_kind='orq_agent',
+        evaluator_names=['goal_achieved'],
         total_results=1,
-        scorer_averages={"goal_achieved": 1.0},
+        scorer_averages={'goal_achieved': 1.0},
         results=results,
     )
 
@@ -140,32 +140,32 @@ def _make_rt_report():
     results = [
         RedTeamResult(
             attack=AttackInfo(
-                id="rt-1",
-                category="ASI01",
-                vulnerability="",
+                id='rt-1',
+                category='ASI01',
+                vulnerability='',
                 framework=Framework.OWASP_ASI,
                 attack_technique=AttackTechnique.INDIRECT_INJECTION,
                 delivery_methods=[DeliveryMethod.DIRECT_REQUEST],
                 turn_type=TurnType.SINGLE,
                 severity=Severity.MEDIUM,
-                source="test",
+                source='test',
             ),
-            agent=AgentInfo(key="agent-a"),
+            agent=AgentInfo(key='agent-a'),
             messages=[],
             vulnerable=False,
-            response="ok",
-            evaluation=UnifiedEvaluationResult(passed=True, explanation="ok"),
+            response='ok',
+            evaluation=UnifiedEvaluationResult(passed=True, explanation='ok'),
         )
     ]
     summary = compute_report_summary(results)
     return RedTeamReport(
         pipeline=Pipeline.STATIC,
         created_at=datetime.now(tz=timezone.utc),
-        categories_tested=["ASI01"],
+        categories_tested=['ASI01'],
         total_results=len(results),
         results=results,
         summary=summary,
-        description="rt-for-transcript-test",
+        description='rt-for-transcript-test',
     )
 
 
@@ -176,26 +176,26 @@ def _make_rt_report():
 
 @pytest.fixture()
 def roots(tmp_path: Path) -> list[Path]:
-    sim_dir = tmp_path / "sim-runs"
-    rt_dir = tmp_path / "runs"
+    sim_dir = tmp_path / 'sim-runs'
+    rt_dir = tmp_path / 'runs'
     sim_dir.mkdir()
     rt_dir.mkdir()
 
     sim_run = _make_sim_run_with_transcript()
-    (sim_dir / "sim_transcript_test.json").write_text(sim_run.model_dump_json())
+    (sim_dir / 'sim_transcript_test.json').write_text(sim_run.model_dump_json())
 
     rt_report = _make_rt_report()
-    (rt_dir / "rt_transcript_test.json").write_text(rt_report.model_dump_json())
+    (rt_dir / 'rt_transcript_test.json').write_text(rt_report.model_dump_json())
 
     return [rt_dir, sim_dir]
 
 
 @pytest.fixture()
 def xss_roots(tmp_path: Path) -> list[Path]:
-    sim_dir = tmp_path / "sim-runs"
+    sim_dir = tmp_path / 'sim-runs'
     sim_dir.mkdir()
     xss_run = _make_xss_sim_run()
-    (sim_dir / "xss_sim.json").write_text(xss_run.model_dump_json())
+    (sim_dir / 'xss_sim.json').write_text(xss_run.model_dump_json())
     return [sim_dir]
 
 
@@ -212,15 +212,15 @@ def xss_client(xss_roots: list[Path]) -> TestClient:
 
 
 def _sim_path(roots: list[Path]) -> Path:
-    return roots[1] / "sim_transcript_test.json"
+    return roots[1] / 'sim_transcript_test.json'
 
 
 def _rt_path(roots: list[Path]) -> Path:
-    return roots[0] / "rt_transcript_test.json"
+    return roots[0] / 'rt_transcript_test.json'
 
 
 def _xss_path(xss_roots: list[Path]) -> Path:
-    return xss_roots[0] / "xss_sim.json"
+    return xss_roots[0] / 'xss_sim.json'
 
 
 # ---------------------------------------------------------------------------
@@ -229,101 +229,75 @@ def _xss_path(xss_roots: list[Path]) -> Path:
 
 
 class TestSimTranscriptRoute:
-    def test_transcript_idx0_returns_200(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_transcript_idx0_returns_200(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
-        r = client.get(f"/r/{rid}/sim/transcript?idx=0")
+        r = client.get(f'/r/{rid}/sim/transcript?idx=0')
         assert r.status_code == 200
 
-    def test_transcript_content_type_is_html(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_transcript_content_type_is_html(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
-        r = client.get(f"/r/{rid}/sim/transcript?idx=0")
-        assert "text/html" in r.headers.get("content-type", "")
+        r = client.get(f'/r/{rid}/sim/transcript?idx=0')
+        assert 'text/html' in r.headers.get('content-type', '')
 
-    def test_transcript_contains_persona(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_transcript_contains_persona(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
-        r = client.get(f"/r/{rid}/sim/transcript?idx=0")
-        assert "alice" in r.text
+        r = client.get(f'/r/{rid}/sim/transcript?idx=0')
+        assert 'alice' in r.text
 
-    def test_transcript_contains_scenario(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_transcript_contains_scenario(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
-        r = client.get(f"/r/{rid}/sim/transcript?idx=0")
-        assert "billing" in r.text.lower()
+        r = client.get(f'/r/{rid}/sim/transcript?idx=0')
+        assert 'billing' in r.text.lower()
 
-    def test_transcript_contains_message_markup(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_transcript_contains_message_markup(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
-        r = client.get(f"/r/{rid}/sim/transcript?idx=0")
+        r = client.get(f'/r/{rid}/sim/transcript?idx=0')
         # The transcript messages must appear wrapped in sim-msg markup.
-        assert "sim-msg" in r.text
+        assert 'sim-msg' in r.text
 
-    def test_transcript_contains_first_message_content(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_transcript_contains_first_message_content(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
-        r = client.get(f"/r/{rid}/sim/transcript?idx=0")
-        assert "Hello, I need help with my order" in r.text
+        r = client.get(f'/r/{rid}/sim/transcript?idx=0')
+        assert 'Hello, I need help with my order' in r.text
 
-    def test_transcript_contains_grid_structure(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_transcript_contains_grid_structure(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
-        r = client.get(f"/r/{rid}/sim/transcript?idx=0")
+        r = client.get(f'/r/{rid}/sim/transcript?idx=0')
         # Design-aligned fragment: bubbles | criteria grid, no separate metrics block.
-        assert "sim-transcript-grid" in r.text
-        assert "sim-criteria" in r.text
+        assert 'sim-transcript-grid' in r.text
+        assert 'sim-criteria' in r.text
 
-    def test_transcript_contains_judge_reason(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_transcript_contains_judge_reason(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
-        r = client.get(f"/r/{rid}/sim/transcript?idx=0")
+        r = client.get(f'/r/{rid}/sim/transcript?idx=0')
         # judge reason "Goal achieved after 3 turns" should appear
-        assert "Goal achieved" in r.text
+        assert 'Goal achieved' in r.text
 
-    def test_transcript_idx1_returns_second_conversation(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_transcript_idx1_returns_second_conversation(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
-        r = client.get(f"/r/{rid}/sim/transcript?idx=1")
+        r = client.get(f'/r/{rid}/sim/transcript?idx=1')
         assert r.status_code == 200
-        assert "bob" in r.text
+        assert 'bob' in r.text
 
-    def test_transcript_out_of_range_idx_no_500(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_transcript_out_of_range_idx_no_500(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
-        r = client.get(f"/r/{rid}/sim/transcript?idx=999")
+        r = client.get(f'/r/{rid}/sim/transcript?idx=999')
         # Must not 500 — graceful empty or 200 with empty message.
         assert r.status_code != 500
 
-    def test_transcript_non_integer_idx_no_500(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_transcript_non_integer_idx_no_500(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
-        r = client.get(f"/r/{rid}/sim/transcript?idx=abc")
+        r = client.get(f'/r/{rid}/sim/transcript?idx=abc')
         assert r.status_code != 500
 
-    def test_transcript_missing_rid_returns_404(
-        self, client: TestClient
-    ) -> None:
-        r = client.get("/r/nonexistent123/sim/transcript?idx=0")
+    def test_transcript_missing_rid_returns_404(self, client: TestClient) -> None:
+        r = client.get('/r/nonexistent123/sim/transcript?idx=0')
         assert r.status_code == 404
 
-    def test_transcript_redteam_rid_returns_404(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_transcript_redteam_rid_returns_404(self, client: TestClient, roots: list[Path]) -> None:
         """Transcript route must return 404 when rid is a redteam report."""
         rid = report_id(_rt_path(roots))
-        r = client.get(f"/r/{rid}/sim/transcript?idx=0")
+        r = client.get(f'/r/{rid}/sim/transcript?idx=0')
         assert r.status_code == 404
 
 
@@ -333,16 +307,14 @@ class TestSimTranscriptRoute:
 
 
 class TestSimTranscriptXssEscaping:
-    def test_script_tag_is_escaped(
-        self, xss_client: TestClient, xss_roots: list[Path]
-    ) -> None:
+    def test_script_tag_is_escaped(self, xss_client: TestClient, xss_roots: list[Path]) -> None:
         rid = report_id(_xss_path(xss_roots))
-        r = xss_client.get(f"/r/{rid}/sim/transcript?idx=0")
+        r = xss_client.get(f'/r/{rid}/sim/transcript?idx=0')
         assert r.status_code == 200
         # The raw <script> tag must NOT appear verbatim in the response.
-        assert "<script>" not in r.text
+        assert '<script>' not in r.text
         # The escaped form must appear instead.
-        assert "&lt;script&gt;" in r.text
+        assert '&lt;script&gt;' in r.text
 
 
 # ---------------------------------------------------------------------------
@@ -351,37 +323,29 @@ class TestSimTranscriptXssEscaping:
 
 
 class TestSimRowListOnReportPage:
-    def test_sim_report_page_contains_row_list(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_sim_report_page_contains_row_list(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
-        r = client.get(f"/r/{rid}")
+        r = client.get(f'/r/{rid}')
         assert r.status_code == 200
-        assert "sim-row-list" in r.text or "sim-row-table" in r.text
+        assert 'sim-row-list' in r.text or 'sim-row-table' in r.text
 
-    def test_sim_report_page_cards_lazy_load_body(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_sim_report_page_cards_lazy_load_body(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
-        r = client.get(f"/r/{rid}")
-        assert "sim-conv-card" in r.text
+        r = client.get(f'/r/{rid}')
+        assert 'sim-conv-card' in r.text
         assert 'hx-trigger="click once"' in r.text
 
-    def test_sim_report_page_has_hx_get_links(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_sim_report_page_has_hx_get_links(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
-        r = client.get(f"/r/{rid}")
+        r = client.get(f'/r/{rid}')
         # Each row must have an hx-get pointing to the transcript endpoint.
-        assert "/sim/transcript" in r.text
+        assert '/sim/transcript' in r.text
 
-    def test_sim_report_page_shows_persona_names(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_sim_report_page_shows_persona_names(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
-        r = client.get(f"/r/{rid}")
-        assert "alice" in r.text
-        assert "bob" in r.text
+        r = client.get(f'/r/{rid}')
+        assert 'alice' in r.text
+        assert 'bob' in r.text
 
 
 # ---------------------------------------------------------------------------
@@ -397,77 +361,60 @@ class TestSimFilterAwareness:
     automatically includes the active filter selections.
     """
 
-    def test_transcript_with_persona_filter_returns_200(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_transcript_with_persona_filter_returns_200(self, client: TestClient, roots: list[Path]) -> None:
         """Transcript route with a persona filter param must return 200."""
         rid = report_id(_sim_path(roots))
-        r = client.get(f"/r/{rid}/sim/transcript?idx=0&persona=alice")
+        r = client.get(f'/r/{rid}/sim/transcript?idx=0&persona=alice')
         assert r.status_code == 200
 
-    def test_transcript_persona_filter_shows_matching_entry(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_transcript_persona_filter_shows_matching_entry(self, client: TestClient, roots: list[Path]) -> None:
         """When filtering to persona=alice, idx=0 in the filtered list maps to alice."""
         rid = report_id(_sim_path(roots))
-        r = client.get(f"/r/{rid}/sim/transcript?idx=0&persona=alice")
+        r = client.get(f'/r/{rid}/sim/transcript?idx=0&persona=alice')
         assert r.status_code == 200
-        assert "alice" in r.text
+        assert 'alice' in r.text
 
-    def test_transcript_filter_drops_non_matching_persona(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_transcript_filter_drops_non_matching_persona(self, client: TestClient, roots: list[Path]) -> None:
         """When filtering to persona=alice, bob should not appear in idx=0."""
         rid = report_id(_sim_path(roots))
-        r = client.get(f"/r/{rid}/sim/transcript?idx=0&persona=alice")
+        r = client.get(f'/r/{rid}/sim/transcript?idx=0&persona=alice')
         assert r.status_code == 200
         # With only alice in the filtered set, idx=0 is alice's entry.
-        assert "bob" not in r.text
+        assert 'bob' not in r.text
 
-    def test_transcript_out_of_range_after_filter_is_graceful(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_transcript_out_of_range_after_filter_is_graceful(self, client: TestClient, roots: list[Path]) -> None:
         """Filtering to a single persona leaves 1 entry; idx=1 must not 500."""
         rid = report_id(_sim_path(roots))
-        r = client.get(f"/r/{rid}/sim/transcript?idx=1&persona=alice")
+        r = client.get(f'/r/{rid}/sim/transcript?idx=1&persona=alice')
         # Out-of-range idx after filtering → graceful empty, not 500.
         assert r.status_code in (200, 404)
         assert r.status_code != 500
 
-    def test_sim_row_list_route_returns_200(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_sim_row_list_route_returns_200(self, client: TestClient, roots: list[Path]) -> None:
         """GET /r/{rid}/sim/row-list must return 200 with row-list HTML."""
         rid = report_id(_sim_path(roots))
-        r = client.get(f"/r/{rid}/sim/row-list")
+        r = client.get(f'/r/{rid}/sim/row-list')
         assert r.status_code == 200
-        assert "sim-row" in r.text or "sim-conv-card" in r.text
+        assert 'sim-row' in r.text or 'sim-conv-card' in r.text
 
-    def test_sim_row_list_with_filter_returns_fewer_rows(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_sim_row_list_with_filter_returns_fewer_rows(self, client: TestClient, roots: list[Path]) -> None:
         """Filtered row-list should contain fewer persona rows than unfiltered."""
         rid = report_id(_sim_path(roots))
-        html_all = client.get(f"/r/{rid}/sim/row-list").text
-        html_alice = client.get(f"/r/{rid}/sim/row-list?persona=alice").text
+        html_all = client.get(f'/r/{rid}/sim/row-list').text
+        html_alice = client.get(f'/r/{rid}/sim/row-list?persona=alice').text
         # Count sim-row-item occurrences as proxy for number of rows.
-        all_count = html_all.count("sim-conv-card")
-        alice_count = html_alice.count("sim-conv-card")
+        all_count = html_all.count('sim-conv-card')
+        alice_count = html_alice.count('sim-conv-card')
         assert alice_count < all_count, (
-            f"Expected fewer rows when filtering to persona=alice: "
-            f"unfiltered={all_count}, filtered={alice_count}"
+            f'Expected fewer rows when filtering to persona=alice: unfiltered={all_count}, filtered={alice_count}'
         )
 
-    def test_sim_row_list_missing_rid_returns_404(
-        self, client: TestClient
-    ) -> None:
+    def test_sim_row_list_missing_rid_returns_404(self, client: TestClient) -> None:
         """row-list route for an unknown rid must return 404."""
-        r = client.get("/r/nonexistent-sim/sim/row-list")
+        r = client.get('/r/nonexistent-sim/sim/row-list')
         assert r.status_code == 404
 
-    def test_sim_rowlist_wrapper_no_longer_self_refetches(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_sim_rowlist_wrapper_no_longer_self_refetches(self, client: TestClient, roots: list[Path]) -> None:
         """Double-fetch removal: the row-list wrapper div itself carries no
         hx-include/hx-trigger of its own — the /filter POST body swap is the
         single refresh path (spec §Transcripts double-fetch fix).
@@ -478,27 +425,23 @@ class TestSimFilterAwareness:
         which must stay an inert container with no hx-trigger of its own.
         """
         rid = report_id(_sim_path(roots))
-        r = client.get(f"/r/{rid}")
+        r = client.get(f'/r/{rid}')
         assert r.status_code == 200
         wrapper_start = r.text.find('id="sim-row-list-')
         assert wrapper_start >= 0
-        wrapper_tag_end = r.text.find(">", wrapper_start)
+        wrapper_tag_end = r.text.find('>', wrapper_start)
         wrapper_tag = r.text[max(0, wrapper_start - 20) : wrapper_tag_end + 1]
-        assert "hx-include" not in wrapper_tag
-        assert "hx-trigger" not in wrapper_tag
-        assert "orq:filter-changed" not in r.text
+        assert 'hx-include' not in wrapper_tag
+        assert 'hx-trigger' not in wrapper_tag
+        assert 'orq:filter-changed' not in r.text
 
-    def test_filter_post_emits_hx_trigger_for_sim(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_filter_post_emits_hx_trigger_for_sim(self, client: TestClient, roots: list[Path]) -> None:
         """POST /r/{rid}/filter for a sim report must return HX-Trigger header."""
         rid = report_id(_sim_path(roots))
-        r = client.post(f"/r/{rid}/filter", data={})
+        r = client.post(f'/r/{rid}/filter', data={})
         assert r.status_code == 200
-        hx_trigger = r.headers.get("hx-trigger", "")
-        assert "orq:filter-changed" in hx_trigger, (
-            f"Expected HX-Trigger: orq:filter-changed, got: {hx_trigger!r}"
-        )
+        hx_trigger = r.headers.get('hx-trigger', '')
+        assert 'orq:filter-changed' in hx_trigger, f'Expected HX-Trigger: orq:filter-changed, got: {hx_trigger!r}'
 
 
 # ---------------------------------------------------------------------------
@@ -512,13 +455,13 @@ class TestSimFilterAwareness:
 def _entry(
     *,
     index: int = 0,
-    persona: str = "alice",
-    scenario: str = "billing inquiry",
-    terminated_by: str = "judge",
+    persona: str = 'alice',
+    scenario: str = 'billing inquiry',
+    terminated_by: str = 'judge',
     goal_achieved: bool = True,
     goal_completion_score: float = 0.82,
     turn_count: int = 3,
-    judge_reason: str = "Goal achieved after 3 turns.",
+    judge_reason: str = 'Goal achieved after 3 turns.',
     error: str | None = None,
     criteria: list | None = None,
     transcript: list | None = None,
@@ -528,24 +471,24 @@ def _entry(
     if criteria is None:
         criteria = [
             CriteriaRow(
-                id="c1",
-                description="Agent confirms the order number",
-                type="must_happen",
+                id='c1',
+                description='Agent confirms the order number',
+                type='must_happen',
                 passed=True,
                 safety=False,
             ),
         ]
     if transcript is None:
         transcript = [
-            TranscriptMessage(role="user", content="hi"),
-            TranscriptMessage(role="assistant", content="yo"),
+            TranscriptMessage(role='user', content='hi'),
+            TranscriptMessage(role='assistant', content='yo'),
         ]
     return SimulationEntry(
         index=index,
         persona=persona,
         scenario=scenario,
-        model="gpt-4o",
-        target_model="gpt-4o",
+        model='gpt-4o',
+        target_model='gpt-4o',
         terminated_by=terminated_by,
         goal_achieved=goal_achieved,
         goal_completion_score=goal_completion_score,
@@ -563,9 +506,9 @@ def _entry(
 @pytest.fixture()
 def sim_entries():
     return [
-        _entry(index=0, persona="alice", goal_achieved=True, terminated_by="judge"),
-        _entry(index=1, persona="bob", goal_achieved=False, terminated_by="max_turns"),
-        _entry(index=2, persona="carol", terminated_by="error", error="boom"),
+        _entry(index=0, persona='alice', goal_achieved=True, terminated_by='judge'),
+        _entry(index=1, persona='bob', goal_achieved=False, terminated_by='max_turns'),
+        _entry(index=2, persona='carol', terminated_by='error', error='boom'),
     ]
 
 
@@ -576,16 +519,16 @@ def sim_entry_with_safety_criterion():
     return _entry(
         criteria=[
             CriteriaRow(
-                id="c1",
-                description="Agent must not reveal internal credentials",
-                type="must_not_happen",
+                id='c1',
+                description='Agent must not reveal internal credentials',
+                type='must_not_happen',
                 passed=True,
                 safety=True,
             ),
             CriteriaRow(
-                id="c2",
-                description="Agent confirms order number",
-                type="must_happen",
+                id='c2',
+                description='Agent confirms order number',
+                type='must_happen',
                 passed=False,
                 safety=False,
             ),
@@ -605,9 +548,9 @@ def sim_entry_xss_criterion():
     return _entry(
         criteria=[
             CriteriaRow(
-                id="c1",
+                id='c1',
                 description='<script>alert("xss")</script>',
-                type="must_happen",
+                type='must_happen',
                 passed=True,
                 safety=False,
             ),
@@ -621,42 +564,42 @@ class TestConversationCards:
     def test_row_list_renders_details_cards_with_tint(self, sim_entries) -> None:
         from evaluatorq.dashboard.sim_views import render_sim_row_list
 
-        html = render_sim_row_list("rid", sim_entries)
-        assert "<details" in html and "sim-conv-card" in html
-        assert "sim-tint-achieved" in html
-        assert "sim-tint-missed" in html
-        assert "sim-tint-error" in html
+        html = render_sim_row_list('rid', sim_entries)
+        assert '<details' in html and 'sim-conv-card' in html
+        assert 'sim-tint-achieved' in html
+        assert 'sim-tint-missed' in html
+        assert 'sim-tint-error' in html
         assert 'hx-trigger="click once"' in html
 
     def test_row_list_summary_has_header_cluster(self, sim_entries) -> None:
         from evaluatorq.dashboard.sim_views import render_sim_row_list
 
-        html = render_sim_row_list("rid", sim_entries)
-        assert "#1" in html
-        assert "alice" in html
-        assert "3 turns" in html
-        assert "score 0.82" in html
-        assert "Goal met" in html
-        assert "Goal missed" in html
-        assert "Error" in html
+        html = render_sim_row_list('rid', sim_entries)
+        assert '#1' in html
+        assert 'alice' in html
+        assert '3 turns' in html
+        assert 'score 0.82' in html
+        assert 'Goal met' in html
+        assert 'Goal missed' in html
+        assert 'Error' in html
 
     def test_row_list_error_takes_precedence_over_goal_achieved(self) -> None:
         """terminated_by == 'error' tints error, regardless of goal_achieved."""
         from evaluatorq.dashboard.sim_views import render_sim_row_list
 
-        entry = _entry(terminated_by="error", goal_achieved=True, error="boom")
-        html = render_sim_row_list("rid", [entry])
-        assert "sim-tint-error" in html
-        assert "sim-tint-achieved" not in html
+        entry = _entry(terminated_by='error', goal_achieved=True, error='boom')
+        html = render_sim_row_list('rid', [entry])
+        assert 'sim-tint-error' in html
+        assert 'sim-tint-achieved' not in html
 
 
 class TestRowlistWrapperNoSelfRefetch:
     def test_rowlist_wrapper_no_self_refetch(self) -> None:
         from evaluatorq.dashboard.view import _sim_rowlist_wrapper
 
-        html = _sim_rowlist_wrapper("rid", "<section></section>")
-        assert "orq:filter-changed" not in html
-        assert "hx-include" not in html
+        html = _sim_rowlist_wrapper('rid', '<section></section>')
+        assert 'orq:filter-changed' not in html
+        assert 'hx-include' not in html
 
 
 class TestMessageListAvatarAndSide:
@@ -665,11 +608,11 @@ class TestMessageListAvatarAndSide:
     def test_message_list_has_avatar_and_side(self) -> None:
         from evaluatorq.dashboard.view import render_message_list
 
-        msgs = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]
-        html = render_message_list(msgs, role_labels={"user": "USR", "assistant": "AGT"}, class_prefix="sim")
-        assert "sim-msg-avatar" in html
-        assert "sim-msg-user" in html and "sim-msg-assistant" in html
-        assert "USR" in html and "AGT" in html
+        msgs = [{'role': 'user', 'content': 'hi'}, {'role': 'assistant', 'content': 'yo'}]
+        html = render_message_list(msgs, role_labels={'user': 'USR', 'assistant': 'AGT'}, class_prefix='sim')
+        assert 'sim-msg-avatar' in html
+        assert 'sim-msg-user' in html and 'sim-msg-assistant' in html
+        assert 'USR' in html and 'AGT' in html
 
 
 class TestTranscriptFragmentRewrite:
@@ -679,32 +622,32 @@ class TestTranscriptFragmentRewrite:
         from evaluatorq.dashboard.sim_views import render_transcript_fragment
 
         html = render_transcript_fragment(sim_entry_with_safety_criterion)
-        assert "⛔" not in html  # three-state ⛔ icon gone
-        assert "&#x26D4;" not in html
-        assert "must_not_happen" in html  # type label preserved (rendered red)
-        assert "sim-judge" in html  # judge callout present when reason set
+        assert '⛔' not in html  # three-state ⛔ icon gone
+        assert '&#x26D4;' not in html
+        assert 'must_not_happen' in html  # type label preserved (rendered red)
+        assert 'sim-judge' in html  # judge callout present when reason set
 
     def test_transcript_fragment_criteria_two_state_icons(self, sim_entry_with_safety_criterion) -> None:
         from evaluatorq.dashboard.sim_views import render_transcript_fragment
 
         html = render_transcript_fragment(sim_entry_with_safety_criterion)
-        assert "sim-criterion-pass" in html
-        assert "sim-criterion-fail" in html
+        assert 'sim-criterion-pass' in html
+        assert 'sim-criterion-fail' in html
 
     def test_transcript_fragment_bubbles_present(self, sim_entry_with_transcript) -> None:
         from evaluatorq.dashboard.sim_views import render_transcript_fragment
 
         html = render_transcript_fragment(sim_entry_with_transcript)
-        assert "sim-msg-avatar" in html
-        assert "sim-transcript-grid" in html
+        assert 'sim-msg-avatar' in html
+        assert 'sim-transcript-grid' in html
 
     def test_transcript_fragment_error_entry_shows_error_message(self) -> None:
         from evaluatorq.dashboard.sim_views import render_transcript_fragment
 
-        entry = _entry(terminated_by="error", error="the target crashed")
+        entry = _entry(terminated_by='error', error='the target crashed')
         html = render_transcript_fragment(entry)
-        assert "the target crashed" in html
-        assert "sim-transcript-error" in html
+        assert 'the target crashed' in html
+        assert 'sim-transcript-error' in html
 
 
 class TestTranscriptCriteriaXssEscaping:
@@ -712,8 +655,8 @@ class TestTranscriptCriteriaXssEscaping:
         from evaluatorq.dashboard.sim_views import render_transcript_fragment
 
         html = render_transcript_fragment(sim_entry_xss_criterion)
-        assert "<script>" not in html
-        assert "&lt;script&gt;" in html
+        assert '<script>' not in html
+        assert '&lt;script&gt;' in html
 
 
 # ---------------------------------------------------------------------------
@@ -733,12 +676,10 @@ class TestCardDrilldownCarriesActiveFilter:
         """render_sim_row_list's card body must carry hx-include="#filter-form"."""
         from evaluatorq.dashboard.sim_views import render_sim_row_list
 
-        html = render_sim_row_list("rid", sim_entries)
+        html = render_sim_row_list('rid', sim_entries)
         assert 'hx-include="#filter-form"' in html
 
-    def test_filtered_card_idx_resolves_to_same_persona_via_transcript_route(
-        self, tmp_path: Path
-    ) -> None:
+    def test_filtered_card_idx_resolves_to_same_persona_via_transcript_route(self, tmp_path: Path) -> None:
         """End-to-end guard: with personas [alice, alice, bob] and a persona=bob
         filter active, bob's card renders at filtered idx=0. The transcript
         route call that hx-include="#filter-form" produces — i.e. idx=0 PLUS
@@ -756,38 +697,38 @@ class TestCardDrilldownCarriesActiveFilter:
         def _result(persona: str, marker: str) -> SimulationResult:
             return SimulationResult(
                 messages=[
-                    Message(role="user", content=f"hi from {marker}"),
-                    Message(role="assistant", content=f"reply to {marker}"),
+                    Message(role='user', content=f'hi from {marker}'),
+                    Message(role='assistant', content=f'reply to {marker}'),
                 ],
                 terminated_by=TerminatedBy.judge,
-                reason="done",
+                reason='done',
                 goal_achieved=True,
                 goal_completion_score=1.0,
                 rules_broken=[],
                 turn_count=1,
                 turn_metrics=[],
                 token_usage=TokenUsage(input_tokens=5, output_tokens=5, total_tokens=10),
-                metadata={"persona": persona, "scenario": "s"},
+                metadata={'persona': persona, 'scenario': 's'},
             )
 
         results = [
-            _result("alice", "ALICE-ONE"),
-            _result("alice", "ALICE-TWO"),
-            _result("bob", "BOB-ONE"),
+            _result('alice', 'ALICE-ONE'),
+            _result('alice', 'ALICE-TWO'),
+            _result('bob', 'BOB-ONE'),
         ]
         run = SimulationRun(
-            run_name="filtered-idx-test",
+            run_name='filtered-idx-test',
             created_at=datetime.now(tz=timezone.utc),
-            mode="run",
-            target_kind="orq_agent",
-            evaluator_names=["goal_achieved"],
+            mode='run',
+            target_kind='orq_agent',
+            evaluator_names=['goal_achieved'],
             total_results=len(results),
-            scorer_averages={"goal_achieved": 1.0},
+            scorer_averages={'goal_achieved': 1.0},
             results=results,
         )
-        sim_dir = tmp_path / "sim-runs"
+        sim_dir = tmp_path / 'sim-runs'
         sim_dir.mkdir()
-        run_path = sim_dir / "filtered_idx_test.json"
+        run_path = sim_dir / 'filtered_idx_test.json'
         run_path.write_text(run.model_dump_json())
 
         app = build_app(roots=[sim_dir])
@@ -799,18 +740,18 @@ class TestCardDrilldownCarriesActiveFilter:
         # the filter form (the row-list is re-rendered by the /filter POST
         # body swap). Bob is the only entry, so his card renders at the
         # *filtered* idx=0.
-        row_list_html = client.get(f"/r/{rid}/sim/row-list?persona=bob").text
-        assert "BOB-ONE" not in row_list_html  # transcript body is lazy, not embedded
-        card_start = row_list_html.find("sim-conv-body")
-        assert card_start >= 0, "no conversation card found in filtered row-list"
-        card_div_start = row_list_html.rfind("<div", 0, card_start)
-        card_div_end = row_list_html.find("></div>", card_div_start) + len("></div>")
+        row_list_html = client.get(f'/r/{rid}/sim/row-list?persona=bob').text
+        assert 'BOB-ONE' not in row_list_html  # transcript body is lazy, not embedded
+        card_start = row_list_html.find('sim-conv-body')
+        assert card_start >= 0, 'no conversation card found in filtered row-list'
+        card_div_start = row_list_html.rfind('<div', 0, card_start)
+        card_div_end = row_list_html.find('></div>', card_div_start) + len('></div>')
         card_div = row_list_html[card_div_start:card_div_end]
 
         hx_get_start = card_div.find('hx-get="') + len('hx-get="')
         hx_get_end = card_div.find('"', hx_get_start)
         hx_get_url = card_div[hx_get_start:hx_get_end]
-        assert "idx=0" in hx_get_url  # bob is the only (filtered) entry
+        assert 'idx=0' in hx_get_url  # bob is the only (filtered) entry
 
         # Simulate exactly what a real browser sends: the hx-get URL as-is,
         # PLUS the filter-form fields ONLY IF the element actually carries
@@ -820,16 +761,16 @@ class TestCardDrilldownCarriesActiveFilter:
         # persona param — and the route would silently resolve idx=0 against
         # the FULL unfiltered list (alice), not the filtered one (bob).
         if 'hx-include="#filter-form"' in card_div:
-            request_url = hx_get_url + "&persona=bob"
+            request_url = hx_get_url + '&persona=bob'
         else:
             request_url = hx_get_url
 
         r = client.get(request_url)
         assert r.status_code == 200
-        assert "BOB-ONE" in r.text, (
+        assert 'BOB-ONE' in r.text, (
             f"Expected bob's conversation from the exact request a real "
-            f"browser would send for this card ({request_url!r}), got: "
-            f"{r.text!r}"
+            f'browser would send for this card ({request_url!r}), got: '
+            f'{r.text!r}'
         )
-        assert "ALICE-ONE" not in r.text
-        assert "ALICE-TWO" not in r.text
+        assert 'ALICE-ONE' not in r.text
+        assert 'ALICE-TWO' not in r.text

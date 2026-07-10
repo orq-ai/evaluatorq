@@ -254,6 +254,7 @@ def rt_report_multi() -> RedTeamReport:
                 agent_display_name='Agent A',
                 passed=not vulnerable,
                 execution=ExecutionDetails(turns=turns, max_turns=6, objective_achieved=vulnerable),
+                source='generated_dynamic',
             )
         )
 

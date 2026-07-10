@@ -1295,6 +1295,35 @@ _RT_REPORT_CSS = """
 .rt-report .rt-verdict-vuln { border-left: 3px solid var(--orange-500); }
 .rt-report .rt-verdict-safe { background: var(--green-50); border-left: 3px solid var(--green-600); }
 .rt-report .rt-verdict-error .rt-verdict-body { color: var(--red-600); }
+
+/* ---- Attacks evidence table (spec §Attacks, Task 14) ---- */
+.rt-report .rt-attacks-intro { color: var(--text-faint); font-size: 13px; margin-bottom: 12px; }
+.rt-report .rt-attack-table { padding: 0; overflow: hidden; }
+.rt-report .rt-attack-row-header,
+.rt-report .rt-attack-row-summary {
+    display: grid; grid-template-columns: 1.9fr 1.1fr 1fr 0.85fr 0.95fr 20px;
+    align-items: center; gap: 10px; padding: 10px 14px;
+}
+.rt-report .rt-attack-row-header {
+    font-family: var(--font-mono); font-size: 10px; font-weight: 600; text-transform: uppercase;
+    color: var(--text-faint); border-bottom: 1px solid var(--border-subtle);
+}
+.rt-report .rt-attack-row { border-bottom: 1px solid var(--border-subtle); }
+.rt-report .rt-attack-row:last-child { border-bottom: none; }
+.rt-report .rt-attack-row-summary {
+    cursor: pointer; list-style: none; font-size: 13px;
+}
+.rt-report .rt-attack-row-summary::-webkit-details-marker { display: none; }
+.rt-report .rt-attack-row-summary:hover { background: var(--surface-sunken); }
+.rt-report .rt-attack-row-title { display: flex; flex-direction: column; gap: 2px; overflow: hidden; }
+.rt-report .rt-attack-row-id {
+    font-family: var(--font-mono); font-size: 10px; color: var(--text-faint);
+}
+.rt-report .rt-attack-row-chevron {
+    font-size: 10px; color: var(--text-faint); transition: transform 0.15s ease;
+}
+.rt-report .rt-attack-row[open] .rt-attack-row-chevron { transform: rotate(180deg); }
+.rt-report .rt-attack-row-body { padding: 14px; background: var(--surface-sunken); }
 """
 
 DASHBOARD_CSS = (
