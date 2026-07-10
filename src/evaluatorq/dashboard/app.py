@@ -220,7 +220,8 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
             body_html = adapter.body(report_obj)
 
         opts = filter_def.options(report_obj)
-        form_html = render_filter_form(rid, surface or '', opts, {})
+        total_results = len(report_obj.results)
+        form_html = render_filter_form(rid, surface or '', opts, {}, shown=total_results, total=total_results)
         body_with_filters = report_view_with_filters(rid, surface or '', body_html, form_html)
 
         # Download sidebar — available exports per surface.
@@ -288,7 +289,9 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         else:
             body_html = adapter.body_from_results(report_obj, filtered)
 
-        form_html = render_filter_form(rid, surface or '', new_opts, selections)
+        form_html = render_filter_form(
+            rid, surface or '', new_opts, selections, shown=len(filtered), total=len(report_obj.results)
+        )
         fragment_html = filter_fragment(rid, surface or '', body_html, form_html)
 
         # OOB swap: re-render the download sidebar with the active filter

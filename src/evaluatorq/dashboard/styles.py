@@ -501,6 +501,117 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
 .filter-form { flex: 0 0 230px; position: sticky; top: 80px; }
 .report-body-area { flex: 1 1 auto; min-width: 0; }
 
+/* ==== sim filter rail (right side) — scoped to .filter-form--sim so the
+   redteam .filter-sidebar form (still generic radio/checkbox) is untouched. */
+.filter-form--sim {
+    flex: 0 0 208px;
+    position: static;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: 16px;
+}
+.filter-rail-header {
+    display: flex; align-items: center; gap: 6px;
+    color: var(--text-faint);
+}
+.filter-rail-title {
+    font-family: var(--font-mono);
+    font-size: 11px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--text-faint);
+}
+.filter-form--sim .filter-group { margin-bottom: 0; }
+.filter-form--sim .filter-label {
+    font-size: 10.5px; margin-bottom: 8px;
+}
+.filter-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.filter-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 6px;
+    border-radius: 999px;
+    border: 1px solid var(--border-subtle);
+    background: transparent;
+    color: var(--text-faint);
+    font-size: 10.5px; font-weight: 500;
+    cursor: pointer;
+    user-select: none;
+}
+.filter-chip.is-active {
+    background: var(--surface-card);
+    border-color: var(--border-default);
+    color: var(--text-body);
+}
+.filter-chip-input {
+    /* visually-hidden — checked state drives .is-active via server re-render */
+    position: absolute; width: 1px; height: 1px;
+    padding: 0; margin: -1px; overflow: hidden;
+    clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+.filter-chip-dot {
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--border-default);
+    flex-shrink: 0;
+}
+.filter-chip.is-active .chip-dot-green { background: var(--green-600); }
+.filter-chip.is-active .chip-dot-red { background: var(--red-600); }
+.filter-chip.is-active .chip-dot-jade { background: var(--green-600); }
+
+/* <details> Persona/Scenario dropdowns */
+.filter-dd { position: relative; }
+.filter-dd-trigger {
+    display: flex; align-items: center; gap: 6px;
+    padding: 7px 9px;
+    background: var(--surface-card);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    font-size: 12.5px; color: var(--text-body);
+    cursor: pointer; list-style: none;
+}
+.filter-dd-trigger::-webkit-details-marker { display: none; }
+.filter-dd-status {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--border-default);
+    flex-shrink: 0;
+}
+.filter-dd-status.is-all { background: var(--green-600); }
+.filter-dd-status.is-partial { background: var(--chart-3); }
+.filter-dd-status.is-none { background: var(--border-default); }
+.filter-dd-name { color: var(--text-faint); }
+.filter-dd-value { flex: 1 1 auto; color: var(--text-body); font-weight: 500; }
+.filter-dd-chevron { flex-shrink: 0; color: var(--text-faint); }
+.filter-dd[open] .filter-dd-chevron { transform: rotate(180deg); }
+.filter-dd-menu {
+    position: absolute; z-index: 20;
+    top: calc(100% + 4px); left: 0; right: 0;
+    max-height: 230px; overflow-y: auto;
+    background: var(--surface-card);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    padding: 6px;
+}
+.filter-dd-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 6px;
+    font-size: 13px; color: var(--text-body);
+    cursor: pointer;
+}
+.filter-dd-row input {
+    width: 14px; height: 14px; border-radius: 4px;
+    accent-color: var(--green-600);
+}
+.filter-rail-footer {
+    padding-top: 10px;
+    border-top: 1px solid var(--border-subtle);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-faint);
+}
+
 .filter-sidebar,
 .download-sidebar,
 .rt-panel {

@@ -578,11 +578,144 @@ def report_broken(rid: str, filename: str, detail: str) -> str:
 _RADIO_DIMS: frozenset[str] = frozenset({'result', 'goal_outcome'})
 
 
+_SLIDERS_ICON = (
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+    ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>'
+    '<line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/>'
+    '<line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/>'
+    '<line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/>'
+    '<line x1="17" y1="16" x2="23" y2="16"/>'
+    '</svg>'
+)
+_FILTER_CHEVRON = (
+    '<svg class="filter-dd-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none"'
+    ' stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="m6 9 6 6 6-6"/></svg>'
+)
+
+# Goal-outcome chip dot colors (spec: Achieved green-600, Not achieved red-600).
+_GOAL_OUTCOME_DOT_CLASS: dict[str, str] = {'Achieved': 'chip-dot-green', 'Not achieved': 'chip-dot-red'}
+
+
+def _chip(name: str, value: str, *, checked: bool, dot_cls: str) -> str:
+    """One chip toggle: a <label>-wrapped visually-hidden checkbox."""
+    checked_attr = ' checked' if checked else ''
+    active_cls = ' is-active' if checked else ''
+    return (
+        f'<label class="filter-chip{active_cls}">'
+        f'<input type="checkbox" class="filter-chip-input" name="{esc(name)}" value="{esc(value)}"{checked_attr}>'
+        f'<span class="filter-chip-dot {dot_cls}"></span>'
+        f'<span class="filter-chip-label">{esc(value)}</span>'
+        f'</label>'
+    )
+
+
+def _sim_dropdown(dim: str, label: str, dim_opts: list[str], sel: list[str]) -> str:
+    """One Persona/Scenario <details> dropdown with a stable id.
+
+    ``sel`` empty means "all selected" (the default filter-route behaviour);
+    the trigger status/label reflect that.
+    """
+    selected_set = set(sel) if sel else set(dim_opts)
+    n_selected = len(selected_set)
+    n_total = len(dim_opts)
+    if n_selected == n_total:
+        status_cls, status_label = 'is-all', 'All'
+    elif n_selected == 0:
+        status_cls, status_label = 'is-none', 'None'
+    else:
+        status_cls, status_label = 'is-partial', f'{n_selected} selected'
+
+    rows = ''.join(
+        f'<label class="filter-dd-row">'
+        f'<input type="checkbox" name="{esc(dim)}" value="{esc(opt)}"'
+        f'{" checked" if opt in selected_set else ""}>'
+        f'<span>{esc(opt)}</span>'
+        f'</label>'
+        for opt in dim_opts
+    )
+    return (
+        f'<details id="filter-dd-{esc(dim)}" class="filter-dd">'
+        f'<summary class="filter-dd-trigger">'
+        f'<span class="filter-dd-status {status_cls}"></span>'
+        f'<span class="filter-dd-name">{esc(label)}</span>'
+        f'<span class="filter-dd-value">{esc(status_label)}</span>'
+        f'{_FILTER_CHEVRON}'
+        f'</summary>'
+        f'<div class="filter-dd-menu">{rows}</div>'
+        f'</details>'
+    )
+
+
+def _render_sim_filter_rail(
+    rid: str,
+    opts: dict[str, list[str]],
+    selections: dict[str, list[str]],
+    *,
+    shown: int | None,
+    total: int | None,
+) -> str:
+    """Render the right-side sim filter rail: chips + dropdowns + counter.
+
+    Goal outcome / Terminated by render as chip toggles; Persona / Scenario
+    render as ``<details>`` dropdowns with stable ids (``filter-dd-persona``,
+    ``filter-dd-scenario``) so a later JS task can persist their open state
+    across the HTMX outerHTML swap.
+    """
+    goal_opts = [o for o in opts.get('goal_outcome', []) if o in _GOAL_OUTCOME_DOT_CLASS]
+    goal_sel = set(selections.get('goal_outcome', []))
+    goal_chips = ''.join(
+        _chip('goal_outcome', opt, checked=(opt in goal_sel), dot_cls=_GOAL_OUTCOME_DOT_CLASS[opt]) for opt in goal_opts
+    )
+
+    term_opts = opts.get('terminated_by', [])
+    term_sel = set(selections.get('terminated_by', [])) or set(term_opts)
+    term_chips = ''.join(
+        _chip('terminated_by', opt, checked=(opt in term_sel), dot_cls='chip-dot-jade') for opt in term_opts
+    )
+
+    persona_dd = _sim_dropdown('persona', 'Persona', opts.get('persona', []), selections.get('persona', []))
+    scenario_dd = _sim_dropdown('scenario', 'Scenario', opts.get('scenario', []), selections.get('scenario', []))
+
+    if shown is not None and total is not None and shown < total:
+        counter = f'{shown} of {total} shown'
+    else:
+        counter = 'Showing all results'
+
+    inner = (
+        f'<div class="filter-rail-header">{_SLIDERS_ICON}<span class="filter-rail-title">Filters</span></div>'
+        f'<div class="filter-group" data-dim="goal_outcome">'
+        f'<label class="filter-label">Goal Outcome</label>'
+        f'<div class="filter-chip-row">{goal_chips}</div>'
+        f'</div>'
+        f'<div class="filter-group" data-dim="terminated_by">'
+        f'<label class="filter-label">Terminated By</label>'
+        f'<div class="filter-chip-row">{term_chips}</div>'
+        f'</div>'
+        f'<div class="filter-group" data-dim="persona">{persona_dd}</div>'
+        f'<div class="filter-group" data-dim="scenario">{scenario_dd}</div>'
+        f'<div class="filter-rail-footer">{esc(counter)}</div>'
+    )
+    return (
+        f'<form id="filter-form" class="filter-form filter-form--sim"'
+        f' hx-post="/r/{esc(rid)}/filter"'
+        f' hx-trigger="change"'
+        f' hx-target="#filter-swap"'
+        f' hx-swap="outerHTML">'
+        f'{inner}'
+        f'</form>'
+    )
+
+
 def render_filter_form(
     rid: str,
     surface: str,
     opts: dict[str, list[str]],
     selections: dict[str, list[str]],
+    *,
+    shown: int | None = None,
+    total: int | None = None,
 ) -> str:
     """Render the HTMX filter sidebar form as an HTML fragment.
 
@@ -596,10 +729,16 @@ def render_filter_form(
         opts:       Option lists per dimension (from ``FilterDef.options`` or
                     ``FilterDef.recompute_options``).
         selections: Currently active selections per dimension.
+        shown:      Count of currently-shown results (sim rail footer counter).
+        total:      Total unfiltered result count (sim rail footer counter).
+                    Ignored by the redteam branch.
 
     Returns:
         An HTML ``<form>`` fragment suitable for injection into the sidebar.
     """
+    if surface == 'sim':
+        return _render_sim_filter_rail(rid, opts, selections, shown=shown, total=total)
+
     from evaluatorq.dashboard.filters import FILTERS
 
     filter_def = FILTERS.get(surface)
@@ -684,10 +823,10 @@ def filter_fragment(
     return (
         f'<div id="filter-swap" class="filter-swap-container"'
         f' data-rid="{esc(rid)}">'
-        f'{form_html}'
         f'<div class="report-body-area">'
         f'{body_html}'
         f'</div>'
+        f'{form_html}'
         f'</div>'
     )
 
