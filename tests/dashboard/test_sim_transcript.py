@@ -272,13 +272,14 @@ class TestSimTranscriptRoute:
         r = client.get(f"/r/{rid}/sim/transcript?idx=0")
         assert "Hello, I need help with my order" in r.text
 
-    def test_transcript_contains_metrics(
+    def test_transcript_contains_grid_structure(
         self, client: TestClient, roots: list[Path]
     ) -> None:
         rid = report_id(_sim_path(roots))
         r = client.get(f"/r/{rid}/sim/transcript?idx=0")
-        # Metrics section must be present (turns, score, goal)
-        assert "sim-transcript-metrics" in r.text or "sim-metric" in r.text
+        # Design-aligned fragment: bubbles | criteria grid, no separate metrics block.
+        assert "sim-transcript-grid" in r.text
+        assert "sim-criteria" in r.text
 
     def test_transcript_contains_judge_reason(
         self, client: TestClient, roots: list[Path]
@@ -490,8 +491,10 @@ class TestSimFilterAwareness:
 
 
 # ---------------------------------------------------------------------------
-# Direct-function tests: conversation cards (Task 11) — design-aligned
-# <details> cards, tinted by outcome.
+# Direct-function tests: conversation cards (Task 11) + transcript fragment
+# rewrite (Task 12) — design-aligned <details> cards, judge callout, bubbles,
+# two-state criteria (deviation #4: the old three-state ⛔ safety icon is
+# removed; safety is preserved via a red "must_not_happen" type label).
 # ---------------------------------------------------------------------------
 
 
@@ -555,6 +558,52 @@ def sim_entries():
     ]
 
 
+@pytest.fixture()
+def sim_entry_with_safety_criterion():
+    from evaluatorq.simulation.types import CriteriaRow
+
+    return _entry(
+        criteria=[
+            CriteriaRow(
+                id="c1",
+                description="Agent must not reveal internal credentials",
+                type="must_not_happen",
+                passed=True,
+                safety=True,
+            ),
+            CriteriaRow(
+                id="c2",
+                description="Agent confirms order number",
+                type="must_happen",
+                passed=False,
+                safety=False,
+            ),
+        ],
+    )
+
+
+@pytest.fixture()
+def sim_entry_with_transcript():
+    return _entry()
+
+
+@pytest.fixture()
+def sim_entry_xss_criterion():
+    from evaluatorq.simulation.types import CriteriaRow
+
+    return _entry(
+        criteria=[
+            CriteriaRow(
+                id="c1",
+                description='<script>alert("xss")</script>',
+                type="must_happen",
+                passed=True,
+                safety=False,
+            ),
+        ],
+    )
+
+
 class TestConversationCards:
     """Task 11: collapsed tinted `<details>` conversation cards."""
 
@@ -597,3 +646,60 @@ class TestRowlistWrapperNoSelfRefetch:
         html = _sim_rowlist_wrapper("rid", "<section></section>")
         assert "orq:filter-changed" not in html
         assert "hx-include" not in html
+
+
+class TestMessageListAvatarAndSide:
+    """Task 12: render_message_list avatar/side extension."""
+
+    def test_message_list_has_avatar_and_side(self) -> None:
+        from evaluatorq.dashboard.view import render_message_list
+
+        msgs = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]
+        html = render_message_list(msgs, role_labels={"user": "USR", "assistant": "AGT"}, class_prefix="sim")
+        assert "sim-msg-avatar" in html
+        assert "sim-msg-user" in html and "sim-msg-assistant" in html
+        assert "USR" in html and "AGT" in html
+
+
+class TestTranscriptFragmentRewrite:
+    """Task 12: judge callout + bubbles + two-state criteria."""
+
+    def test_transcript_fragment_two_state_criteria(self, sim_entry_with_safety_criterion) -> None:
+        from evaluatorq.dashboard.sim_views import render_transcript_fragment
+
+        html = render_transcript_fragment(sim_entry_with_safety_criterion)
+        assert "⛔" not in html  # three-state ⛔ icon gone
+        assert "&#x26D4;" not in html
+        assert "must_not_happen" in html  # type label preserved (rendered red)
+        assert "sim-judge" in html  # judge callout present when reason set
+
+    def test_transcript_fragment_criteria_two_state_icons(self, sim_entry_with_safety_criterion) -> None:
+        from evaluatorq.dashboard.sim_views import render_transcript_fragment
+
+        html = render_transcript_fragment(sim_entry_with_safety_criterion)
+        assert "sim-criterion-pass" in html
+        assert "sim-criterion-fail" in html
+
+    def test_transcript_fragment_bubbles_present(self, sim_entry_with_transcript) -> None:
+        from evaluatorq.dashboard.sim_views import render_transcript_fragment
+
+        html = render_transcript_fragment(sim_entry_with_transcript)
+        assert "sim-msg-avatar" in html
+        assert "sim-transcript-grid" in html
+
+    def test_transcript_fragment_error_entry_shows_error_message(self) -> None:
+        from evaluatorq.dashboard.sim_views import render_transcript_fragment
+
+        entry = _entry(terminated_by="error", error="the target crashed")
+        html = render_transcript_fragment(entry)
+        assert "the target crashed" in html
+        assert "sim-transcript-error" in html
+
+
+class TestTranscriptCriteriaXssEscaping:
+    def test_transcript_criteria_escapes_html(self, sim_entry_xss_criterion) -> None:
+        from evaluatorq.dashboard.sim_views import render_transcript_fragment
+
+        html = render_transcript_fragment(sim_entry_xss_criterion)
+        assert "<script>" not in html
+        assert "&lt;script&gt;" in html

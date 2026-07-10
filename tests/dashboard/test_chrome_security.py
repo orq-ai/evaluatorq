@@ -66,3 +66,49 @@ def test_index_does_not_crash_on_mixed_naive_and_aware_timestamps(tmp_path: Path
     )
     r = TestClient(build_app([rt]), raise_server_exceptions=True).get('/')
     assert r.status_code == 200
+
+
+def _sim_run_with_xss_criterion():
+    from evaluatorq.contracts import Message, TokenUsage
+    from evaluatorq.simulation.types import SimulationResult, SimulationRun, TerminatedBy
+
+    result = SimulationResult(
+        messages=[Message(role='user', content='hi')],
+        terminated_by=TerminatedBy.judge,
+        reason='<img src=x onerror=alert(1)>',
+        goal_achieved=True,
+        goal_completion_score=1.0,
+        rules_broken=[],
+        turn_count=1,
+        turn_metrics=[],
+        token_usage=TokenUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+        metadata={'persona': 'alice', 'scenario': 'demo'},
+    )
+    return SimulationRun(
+        run_name='xss-criteria-run',
+        created_at=datetime.now(tz=timezone.utc),
+        mode='run',
+        target_kind='orq_agent',
+        evaluator_names=['goal_achieved'],
+        total_results=1,
+        scorer_averages={'goal_achieved': 1.0},
+        results=[result],
+    )
+
+
+def test_transcript_criteria_escapes_html(tmp_path: Path):
+    """Task 12: transcript fragment criteria/judge markup must escape HTML —
+    both the judge_reason and any criteria description are report-derived
+    strings and stored-XSS vectors."""
+    sim_dir = tmp_path / 'sim-runs'
+    sim_dir.mkdir()
+    run = _sim_run_with_xss_criterion()
+    p = sim_dir / 'xss_criteria.json'
+    p.write_text(run.model_dump_json())
+
+    client = TestClient(build_app([sim_dir]), raise_server_exceptions=True)
+    rid = report_id(p)
+    r = client.get(f'/r/{rid}/sim/transcript?idx=0')
+    assert r.status_code == 200
+    assert '<img src=x onerror=alert(1)>' not in r.text
+    assert '&lt;img src=x onerror=alert(1)&gt;' in r.text

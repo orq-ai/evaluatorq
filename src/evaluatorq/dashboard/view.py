@@ -920,22 +920,33 @@ def render_message_list(
     role_labels: dict[str, str],
     class_prefix: str,
 ) -> str:
-    """Render a role-labeled message list as a series of ``<div>`` elements.
+    """Render a role-labeled message list as a series of chat-bubble ``<div>``s.
 
     Each message produces:
 
     .. code-block:: html
 
         <div class="{class_prefix}-msg {class_prefix}-msg-{css_role}">
-          <span class="{class_prefix}-msg-role">{label}</span>
-          <pre class="{class_prefix}-msg-content">{esc(content)}</pre>
+          <span class="{class_prefix}-msg-avatar">{label}</span>
+          <div class="{class_prefix}-msg-bubble">
+            <span class="{class_prefix}-msg-role">{label}</span>
+            <pre class="{class_prefix}-msg-content">{esc(content)}</pre>
+          </div>
         </div>
 
     Where ``{css_role}`` is the raw role value when it is one of
     ``user``, ``assistant``, ``system``, ``tool``; otherwise ``unknown``.
+    The ``{class_prefix}-msg-avatar`` span is a short glyph (e.g. "USR" /
+    "AGT" / "SYS" / "TOOL") taken straight from *role_labels* — callers that
+    want a compact avatar should pass short labels; the ``{css_role}`` class
+    is what CSS uses to put user/system on the left and assistant/tool on
+    the right (spec §Transcripts), so no separate "side" marker is needed.
 
     Every content string is passed through ``esc()`` (HTML-escaping) to
-    prevent stored-XSS vectors.
+    prevent stored-XSS vectors. This is purely additive over the prior
+    shape (avatar span + bubble wrapper added); the ``{class_prefix}-msg
+    {class_prefix}-msg-{css_role}`` outer class and the ``-msg-role`` /
+    ``-msg-content`` elements are unchanged, so existing callers keep working.
 
     Args:
         messages:     Sequence of message dicts (``role`` / ``content`` keys)
@@ -963,11 +974,15 @@ def render_message_list(
         content_text: str = raw_content if isinstance(raw_content, str) else str(raw_content or '')
         safe_content = esc(content_text)
         css_role = role if role in known_roles else 'unknown'
+        safe_label = esc(label)
 
         parts.append(
             f'<div class="{class_prefix}-msg {class_prefix}-msg-{esc(css_role)}">'
-            f'<span class="{class_prefix}-msg-role">{esc(label)}</span>'
+            f'<span class="{class_prefix}-msg-avatar">{safe_label}</span>'
+            f'<div class="{class_prefix}-msg-bubble">'
+            f'<span class="{class_prefix}-msg-role">{safe_label}</span>'
             f'<pre class="{class_prefix}-msg-content">{safe_content}</pre>'
+            f'</div>'
             f'</div>'
         )
 

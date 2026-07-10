@@ -2,8 +2,8 @@
 
 Routes (all return HTML fragments, no full page shell):
 
-    GET /r/{rid}/sim/transcript?idx=   → conversation detail: header, metrics,
-                                          judge reason, criteria, full transcript
+    GET /r/{rid}/sim/transcript?idx=   → conversation detail: header, judge
+                                          callout, chat bubbles, criteria column
 
 The row list is rendered inline in the report page body (not via HTMX) but
 each row carries an ``hx-get`` link to this transcript endpoint.
@@ -36,10 +36,10 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 _ROLE_LABELS: dict[str, str] = {
-    'user': 'User (sim)',
-    'assistant': 'Target',
-    'system': 'System',
-    'tool': 'Tool',
+    'user': 'USR',
+    'assistant': 'AGT',
+    'system': 'SYS',
+    'tool': 'TOOL',
 }
 
 
@@ -154,13 +154,56 @@ def render_sim_row_list(rid: str, entries: list[SimulationEntry]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _render_criteria_column(entry: SimulationEntry) -> str:
+    """Render the CRITERIA column: two-state icon + description + type label.
+
+    Deviation #4 (deliberate): the old three-state icon (✅ passed / ⛔ unsafe
+    failure / ❌ other failure) is replaced by a plain two-state pass/fail
+    icon. No information is lost — the safety distinction is preserved via
+    the ``must_not_happen`` type label, rendered in red.
+    """
+    criteria = entry.criteria or []
+    items: list[str] = []
+    for c in criteria:
+        state_class = 'sim-criterion-pass' if c.passed else 'sim-criterion-fail'
+        icon = '&#x2713;' if c.passed else '&#x2717;'  # ✓ / ✗
+        ctype = c.type or ''
+        type_class = 'sim-ctype sim-ctype-unsafe' if ctype == 'must_not_happen' else 'sim-ctype'
+        type_html = f'<span class="{type_class}">{esc(ctype)}</span>' if ctype else ''
+        desc = esc(c.description)
+        items.append(
+            f'<li class="sim-criterion {state_class}">'
+            f'<span class="sim-criterion-icon">{icon}</span>'
+            f'<span class="sim-criterion-desc">{desc}</span>'
+            f'{type_html}'
+            f'</li>'
+        )
+
+    return (
+        f'<div class="sim-criteria">'
+        f'<div class="sim-criteria-header">CRITERIA</div>'
+        f'<ul class="sim-criteria-list">{"".join(items)}</ul>'
+        f'</div>'
+    )
+
+
 def render_transcript_fragment(entry: SimulationEntry) -> str:
     """Render the drill-down transcript fragment for a single sim result entry.
 
-    Parity: dashboard.py:356-390.
+    Design-aligned layout (spec §Transcripts): a Judge callout (sunken
+    background, teal-600 left border, "Judge" mono-label + ``judge_reason``)
+    followed by a two-column grid — chat bubbles (via ``render_message_list``)
+    on the left, the CRITERIA column on the right. Turn-count / score /
+    terminated-by metrics now live in the conversation card's ``<summary>``
+    header (``render_sim_row_list``), so this fragment no longer duplicates
+    them.
 
-    All user-supplied content (persona, scenario, judge_reason, message
-    content) goes through ``esc()`` — stored-XSS vector.
+    Error entries substitute a red error message for the judge callout and
+    the transcript bubbles (the criteria column is still shown — safety
+    findings on a crashed run are still relevant).
+
+    All user-supplied content (persona, scenario, judge_reason, criteria
+    description, message content) goes through ``esc()`` — stored-XSS vector.
 
     Args:
         entry: A typed ``SimulationEntry`` from ``individual_entries``.
@@ -171,98 +214,43 @@ def render_transcript_fragment(entry: SimulationEntry) -> str:
     idx: int = entry.index
     persona = esc(entry.persona)
     scenario = esc(entry.scenario)
-    goal_achieved: bool = entry.goal_achieved
-    score: float = entry.goal_completion_score
-    turns: int = entry.turn_count
-    terminated_by = esc(entry.terminated_by)
     judge_reason = esc(entry.judge_reason or '')
     error = entry.error
 
-    # Header (parity: st.subheader f"#{idx+1} · {persona} · {scenario}")
     header = f'<h3 class="sim-transcript-header">#{idx + 1} &middot; {persona} &middot; {scenario}</h3>'
+    criteria_col = _render_criteria_column(entry)
 
-    # Metrics (parity: 4 columns: goal achieved, score, turns, terminated by)
-    metrics = (
-        f'<div class="sim-transcript-metrics">'
-        f'<div class="sim-metric"><span class="sim-metric-label">Goal achieved</span>'
-        f'<span class="sim-metric-value">{"yes" if goal_achieved else "no"}</span></div>'
-        f'<div class="sim-metric"><span class="sim-metric-label">Score</span>'
-        f'<span class="sim-metric-value">{score:.2f}</span></div>'
-        f'<div class="sim-metric"><span class="sim-metric-label">Turns</span>'
-        f'<span class="sim-metric-value">{turns}</span></div>'
-        f'<div class="sim-metric"><span class="sim-metric-label">Terminated by</span>'
-        f'<span class="sim-metric-value">{terminated_by}</span></div>'
-        f'</div>'
-    )
+    if error:
+        error_html = f'<div class="sim-transcript-error"><strong>Error:</strong> {esc(str(error))}</div>'
+        return f'<div class="sim-transcript-detail">{header}{error_html}{criteria_col}</div>'
 
-    # Judge reason
     judge_html = ''
     if judge_reason:
-        judge_html = f'<p class="sim-judge-reason"><strong>Judge:</strong> {judge_reason}</p>'
-
-    # Error (parity: st.error)
-    error_html = ''
-    if error:
-        error_html = f'<p class="sim-transcript-error"><strong>Error:</strong> {esc(str(error))}</p>'
-
-    # Criteria (parity: dashboard.py:371-377)
-    criteria = entry.criteria or []
-    criteria_html = ''
-    if criteria:
-        rows_parts: list[str] = []
-        for c in criteria:
-            if c.passed:
-                icon = '&#x2705;'  # ✅
-            elif c.safety:
-                icon = '&#x26D4;'  # ⛔
-            else:
-                icon = '&#x274C;'  # ❌
-            ctype = c.type or ''
-            ctype_html = f' <em class="sim-ctype">{esc(ctype)}</em>' if ctype else ''
-            desc = esc(c.description)
-            rows_parts.append(f'<li class="sim-criterion">{icon} {desc}{ctype_html}</li>')
-        criteria_html = (
-            f'<div class="sim-criteria">'
-            f'<strong>Criteria</strong>'
-            f'<ul class="sim-criteria-list">{"".join(rows_parts)}</ul>'
+        judge_html = (
+            f'<div class="sim-judge">'
+            f'<span class="sim-judge-label">Judge</span>'
+            f'<p class="sim-judge-reason">{judge_reason}</p>'
             f'</div>'
         )
 
-    # Transcript (parity: dashboard.py:384-390)
+    # Transcript (parity: dashboard.py:384-390). Normalise content via
+    # coerce_content_text (handles OpenAI content blocks) before handing off
+    # to the shared renderer. The '(empty)' fallback is sim-specific so we
+    # apply it here rather than inside render_message_list.
     transcript = entry.transcript or []
-
-    # Normalise content via coerce_content_text (handles OpenAI content blocks)
-    # before handing off to the shared renderer.  The '(empty)' fallback is
-    # sim-specific so we apply it here rather than inside render_message_list.
     normalised_msgs: list[dict[str, Any]] = []
     for msg in transcript:
-        raw_content = msg.content
-        content_text = coerce_content_text(raw_content) or '(empty)'
+        content_text = coerce_content_text(msg.content) or '(empty)'
         normalised_msgs.append({'role': msg.role, 'content': content_text})
 
-    transcript_html = (
-        (
-            f'<div class="sim-transcript">'
-            f'<strong>Transcript</strong>'
-            f'<div class="sim-transcript-messages">'
-            f'{render_message_list(normalised_msgs, role_labels=_ROLE_LABELS, class_prefix="sim")}'
-            f'</div>'
-            f'</div>'
-        )
-        if transcript
-        else ''
-    )
-
-    return (
-        f'<div class="sim-transcript-detail">'
-        f'{header}'
-        f'{metrics}'
-        f'{judge_html}'
-        f'{error_html}'
-        f'{criteria_html}'
-        f'{transcript_html}'
+    bubbles_html = (
+        f'<div class="sim-transcript-bubbles">'
+        f'{render_message_list(normalised_msgs, role_labels=_ROLE_LABELS, class_prefix="sim")}'
         f'</div>'
     )
+    grid_html = f'<div class="sim-transcript-grid">{bubbles_html}{criteria_col}</div>'
+
+    return f'<div class="sim-transcript-detail">{header}{judge_html}{grid_html}</div>'
 
 
 # ---------------------------------------------------------------------------

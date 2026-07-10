@@ -983,11 +983,12 @@ _SIM_REPORT_CSS = """
 }
 """
 
-# ==== .sim-report — Transcripts redesign (Task 11) ========================
+# ==== .sim-report — Transcripts redesign (Tasks 11+12) ===================
 # Appended as its own block (rather than edited into _SIM_REPORT_CSS above)
 # so a concurrently-landing `.sim-report` CSS addition on another branch
-# merges cleanly. Covers: collapsed tinted conversation cards, scoped under
-# `.sim-report` per docs/superpowers/specs/2026-07-10-agent-sim-report-
+# merges cleanly. Covers: collapsed tinted conversation cards (Task 11) +
+# judge callout / chat bubbles / two-state criteria (Task 12), both scoped
+# under `.sim-report` per docs/superpowers/specs/2026-07-10-agent-sim-report-
 # alignment-design.md §Transcripts.
 _SIM_TRANSCRIPT_CSS = """
 /* ---- Conversation cards (spec §Transcripts, Task 11) ---- */
@@ -1014,6 +1015,80 @@ _SIM_TRANSCRIPT_CSS = """
 .sim-report .sim-tint-missed { background: var(--red-100); }
 .sim-report .sim-tint-error { background: var(--amber-100); }
 .sim-report .sim-conv-body { padding: 16px; border-top: 1px solid var(--border-subtle); }
+
+/* ---- Transcript fragment: judge callout / bubbles / criteria (Task 12) ---- */
+.sim-report .sim-judge {
+    background: var(--surface-sunken); border-left: 3px solid var(--teal-600);
+    border-radius: 4px; padding: 10px 14px; margin-bottom: 14px;
+}
+.sim-report .sim-judge-label {
+    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; color: var(--teal-600); display: block;
+}
+.sim-report .sim-judge-reason { font-size: 13px; line-height: 1.55; margin: 4px 0 0; color: var(--text-body); }
+.sim-report .sim-transcript-error {
+    background: var(--red-100); color: var(--red-600); border-radius: 4px;
+    padding: 10px 14px; margin-bottom: 14px; font-size: 13px;
+}
+.sim-report .sim-transcript-grid {
+    display: grid; grid-template-columns: 1.6fr 1fr; gap: 20px;
+}
+@media (max-width: 760px) {
+    .sim-report .sim-transcript-grid { grid-template-columns: 1fr; }
+}
+
+/* Chat bubbles (render_message_list avatar + side extension) */
+.sim-report .sim-msg { display: flex; gap: 8px; margin-bottom: 10px; max-width: 88%; }
+.sim-report .sim-msg-user, .sim-report .sim-msg-system { margin-right: auto; }
+.sim-report .sim-msg-assistant, .sim-report .sim-msg-tool { margin-left: auto; flex-direction: row-reverse; }
+.sim-report .sim-msg-avatar {
+    flex-shrink: 0; width: 30px; height: 30px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono); font-size: 9px; font-weight: 600;
+    background: var(--ink-900); color: #fff;
+}
+.sim-report .sim-msg-assistant .sim-msg-avatar, .sim-report .sim-msg-tool .sim-msg-avatar {
+    background: var(--teal-50); color: var(--teal-600);
+}
+.sim-report .sim-msg-bubble {
+    background: var(--surface-sunken); border-radius: 12px; padding: 9px 13px;
+}
+.sim-report .sim-msg-assistant .sim-msg-bubble, .sim-report .sim-msg-tool .sim-msg-bubble {
+    background: var(--teal-50);
+}
+.sim-report .sim-msg-role {
+    display: block; font-family: var(--font-mono); font-size: 10px;
+    text-transform: uppercase; color: var(--text-faint); margin-bottom: 3px;
+}
+.sim-report .sim-msg-content {
+    font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+    margin: 0; font-family: inherit;
+}
+
+/* Criteria column (two-state per deviation #4) */
+.sim-report .sim-criteria-header {
+    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; color: var(--text-faint); margin-bottom: 8px;
+}
+.sim-report .sim-criteria-list { list-style: none; margin: 0; padding: 0; }
+.sim-report .sim-criterion {
+    display: flex; align-items: flex-start; gap: 8px; padding: 8px 0;
+    border-top: 1px solid var(--border-subtle);
+}
+.sim-report .sim-criterion:first-child { border-top: none; }
+.sim-report .sim-criterion-icon {
+    flex-shrink: 0; width: 18px; height: 18px; border-radius: 999px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; color: #fff;
+}
+.sim-report .sim-criterion-pass .sim-criterion-icon { background: var(--green-600); }
+.sim-report .sim-criterion-fail .sim-criterion-icon { background: var(--red-600); }
+.sim-report .sim-criterion-desc { font-size: 13px; color: var(--text-body); flex: 1; }
+.sim-report .sim-ctype {
+    font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+    color: var(--text-faint); white-space: nowrap;
+}
+.sim-report .sim-ctype-unsafe { color: var(--red-600); }
 """
 
 DASHBOARD_CSS = (
