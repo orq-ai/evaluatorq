@@ -826,6 +826,133 @@ def _rt_focus_risk_dial(focus_areas: list[dict[str, Any]]) -> str:
     )
 
 
+def _rt_agent_card_chip_row(label: str, items: list[str]) -> str:
+    """One TOOLS/KNOWLEDGE chip row: mono faint label + ``tag()`` per item,
+    "—" when empty (spec §Agents)."""
+    from evaluatorq.dashboard.report_kit import tag
+
+    body = ''.join(tag(item) for item in items) if items else '<span class="rt-agent-card-chip-empty">—</span>'
+    return (
+        '<div class="rt-agent-card-chiprow">'
+        f'<span class="rt-agent-card-chip-label">{esc(label)}</span>'
+        f'<div class="rt-agent-card-chips">{body}</div>'
+        '</div>'
+    )
+
+
+def _rt_agent_card(agent_ctx: dict[str, Any] | None, key: str, stats: dict[str, Any]) -> str:
+    """One agent card: ASR dial column + main column (name/critical chip,
+    model, description, stat strip, TOOLS/KNOWLEDGE chip rows). Agents
+    present in results but missing ``agent_context`` still render via
+    ``stats``-only fallback (spec §Agents)."""
+    from evaluatorq.common.reports.html_helpers import pct
+    from evaluatorq.dashboard.report_kit import dial
+
+    ctx = agent_ctx or {}
+    display_name = ctx.get('display_name') or stats.get('display_name') or key
+    model = ctx.get('model') or stats.get('model') or ''
+    description = ctx.get('description') or ''
+    tools = ctx.get('tools') or []
+    knowledge_bases = ctx.get('knowledge_bases') or []
+
+    attacks = stats.get('attacks', 0)
+    vulns = stats.get('vulns', 0)
+    critical = stats.get('critical', 0)
+    asr = stats.get('asr', 0.0)
+    resistance = stats.get('resistance', 1.0 - asr)
+
+    dial_color = 'var(--red-600)' if critical else ('var(--orange-500)' if vulns else 'var(--green-600)')
+    dial_html = dial(pct(asr), asr, radius=24, stroke=6, color=dial_color, sub='ASR')
+
+    critical_chip = f'<span class="rt-agent-card-critical">{critical} critical</span>' if critical else ''
+    model_html = f'<div class="rt-agent-card-model">{esc(model)}</div>' if model else ''
+    description_html = f'<div class="rt-agent-card-desc">{esc(description)}</div>' if description else ''
+
+    critical_style = 'color:var(--red-600)' if critical else ''
+    stat_strip = (
+        '<div class="rt-agent-card-stats">'
+        '<div class="rt-agent-card-stat">'
+        '<span class="rt-agent-card-stat-key">Found</span>'
+        f'<span class="rt-agent-card-stat-value">{vulns}/{attacks}</span></div>'
+        '<div class="rt-agent-card-stat">'
+        '<span class="rt-agent-card-stat-key">Critical</span>'
+        f'<span class="rt-agent-card-stat-value" style="{critical_style}">{critical}</span></div>'
+        '<div class="rt-agent-card-stat">'
+        '<span class="rt-agent-card-stat-key">Resisted</span>'
+        f'<span class="rt-agent-card-stat-value" style="color:var(--green-600)">{pct(resistance)}</span></div>'
+        '</div>'
+    )
+
+    chips_html = _rt_agent_card_chip_row('TOOLS', tools) + _rt_agent_card_chip_row('KNOWLEDGE', knowledge_bases)
+
+    return (
+        '<div class="rk-panel rt-agent-card">'
+        f'<div class="rt-agent-card-dial">{dial_html}</div>'
+        '<div class="rt-agent-card-main">'
+        f'<div class="rt-agent-card-name-row">'
+        f'<span class="rt-agent-card-name">{esc(display_name)}</span>{critical_chip}</div>'
+        f'{model_html}{description_html}{stat_strip}{chips_html}'
+        '</div>'
+        '</div>'
+    )
+
+
+def _rt_agents_intro(*, multi_agent: bool, n_agents: int) -> str:
+    """Intro copy above the agent cards (spec §Agents)."""
+    if multi_agent:
+        text = (
+            f'The job targeted a <strong>{n_agents}-agent system</strong>. When an orchestrator '
+            'delegates to sub-agents that trust its routing context, a breach upstream propagates '
+            'downstream.'
+        )
+    else:
+        text = 'Single agent under assessment.'
+    return f'<p class="rt-agents-intro">{text}</p>'
+
+
+def _rt_agents(by_kind: dict[str, Any], report: RedTeamReport, rid: str) -> str:
+    """Agents tab body: intro copy -> one card per agent (``agent_context``
+    joined with ``_rt_agent_stats`` by key) -> multi-agent-only kept panels
+    (``rt_panel_agent_heatmap``/``rt_panel_disagreement`` + agent_comparison/
+    agent_disagreements renders). Spec §Agents."""
+    from evaluatorq.dashboard.view import rt_panel_agent_heatmap, rt_panel_disagreement
+    from evaluatorq.redteam.reports.export_html import _SECTION_RENDERERS
+
+    agent_ctx_section = by_kind.get('agent_context')
+    agents_ctx: list[dict[str, Any]] = agent_ctx_section.data.get('agents', []) if agent_ctx_section else []
+    ctx_by_key = {a['key']: a for a in agents_ctx}
+    stats = _rt_agent_stats(report)
+
+    ordered_keys = [*ctx_by_key.keys(), *(k for k in stats if k not in ctx_by_key)]
+    if not ordered_keys:
+        return ''
+
+    multi_agent = len(report.tested_agents) > 1
+    intro = _rt_agents_intro(multi_agent=multi_agent, n_agents=len(report.tested_agents))
+    cards = ''.join(_rt_agent_card(ctx_by_key.get(key), key, stats.get(key, {})) for key in ordered_keys)
+
+    tail = ''
+    if multi_agent:
+        tail = (
+            rt_panel_agent_heatmap(rid)
+            + rt_panel_disagreement(rid)
+            + _render_sections(by_kind, _SECTION_RENDERERS, ('agent_comparison', 'agent_disagreements'))
+        )
+
+    return f'{intro}{cards}{tail}'
+
+
+def _rt_config(by_kind: dict[str, Any], report: RedTeamReport) -> str:
+    """Config tab body: kept ``methodology``/``severity_definitions`` renders.
+    ``agent_context`` is deliberately excluded here — it now renders
+    exclusively in the Agents tab (spec §Agents, CRITICAL: no double-render)."""
+    from evaluatorq.redteam.reports.export_html import _SECTION_RENDERERS
+
+    return _render_sections(by_kind, _SECTION_RENDERERS, ('methodology', 'severity_definitions')) or (
+        '<p class="rk-empty">No config data available.</p>'
+    )
+
+
 def _rt_breakdowns_category_table(rows: list[dict[str, Any]]) -> str:
     """Attack success by OWASP category table, design-styled (spec §Breakdowns.1):
     Cat (tag) · Category (strong) · Run (right) · Found (right, red-600
@@ -1012,11 +1139,7 @@ def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
     Usage, Config — each populated from the precomputed report sections plus
     the HTMX interactive panels (empty tabs drop out).
     """
-    from evaluatorq.dashboard.view import (
-        rt_panel_agent_heatmap,
-        rt_panel_conversation,
-        rt_panel_disagreement,
-    )
+    from evaluatorq.dashboard.view import rt_panel_conversation
     from evaluatorq.redteam.reports.export_html import _SECTION_RENDERERS
 
     by_kind = _rt_by_kind(report)
@@ -1024,7 +1147,6 @@ def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
     def render(*kinds: str) -> str:
         return _render_sections(by_kind, _SECTION_RENDERERS, kinds)
 
-    multi_agent = len(report.tested_agents) > 1
     hero = _redteam_hero(by_kind.get('summary'), report)
 
     focus_section = by_kind.get('focus_areas')
@@ -1033,12 +1155,7 @@ def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
     n_focus = len(focus_areas_list)
     n_attacks = len(report.results)
 
-    comparison = (
-        rt_panel_agent_heatmap(rid) + rt_panel_disagreement(rid) + render('agent_comparison', 'agent_disagreements')
-        if multi_agent
-        else ''
-    )
-    agents_tab = render('agent_context') + comparison
+    agents_tab = _rt_agents(by_kind, report, rid)
 
     focus_tab = _rt_focus_risk_dial(focus_areas_list) + render('focus_areas')
 
@@ -1047,7 +1164,7 @@ def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
     attacks_tab = rt_panel_conversation(rid) + render('individual_results', 'source_distribution', 'error_analysis')
 
     usage_tab = render('token_usage') or '<p class="rk-empty">No token usage data recorded for this run.</p>'
-    config_tab = render('methodology', 'severity_definitions') or '<p class="rk-empty">No config data available.</p>'
+    config_tab = _rt_config(by_kind, report)
 
     tabs = _tabs(
         'rttab',

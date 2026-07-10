@@ -364,6 +364,23 @@ def test_rt_breakdowns_omits_depth_when_absent(rt_report_single_turn):
     assert 'conversation depth' not in html.lower()
 
 
+def test_rt_agents_single_agent_card(rt_report_single):
+    from evaluatorq.dashboard.report_tabs import _rt_agents, _rt_by_kind
+
+    html = _rt_agents(_rt_by_kind(rt_report_single), rt_report_single, 'rid')
+    assert 'ASR' in html  # dial sub-label
+    assert 'Single agent under assessment' in html
+
+
+def test_rt_config_no_agent_context(rt_report_single):
+    # The Config tab itself must not render agent_context chips (moved to Agents).
+    from evaluatorq.dashboard.report_tabs import _rt_by_kind, _rt_config
+
+    config_html = _rt_config(_rt_by_kind(rt_report_single), rt_report_single)
+    assert 'KNOWLEDGE' not in config_html  # tools/knowledge chip labels live only in Agents cards
+    assert 'Methodology' in config_html  # but Config still has its own content
+
+
 def test_rt_report_empty_run_does_not_crash(rt_report_empty):
     # 0-attack run: exec summary '', KPI zeros, no crash in any helper.
     from evaluatorq.dashboard.report_tabs import redteam_report_tabs

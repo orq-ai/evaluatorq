@@ -1219,6 +1219,35 @@ _RT_REPORT_CSS = """
 .rt-report .rt-breakdowns-footnote {
     font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); margin-top: 12px;
 }
+
+/* ---- Agents tab (spec §Agents) ---- */
+.rt-report .rt-agents-intro { font-size: 13px; color: var(--text-muted); margin: 0 0 16px; max-width: 720px; }
+.rt-report .rt-agent-card { display: flex; gap: 16px; margin-bottom: 22px; }
+.rt-report .rt-agent-card-dial { flex: 0 0 64px; }
+.rt-report .rt-agent-card-main { flex: 1 1 auto; min-width: 0; }
+.rt-report .rt-agent-card-name-row { display: flex; align-items: center; gap: 8px; }
+.rt-report .rt-agent-card-name { font-family: var(--font-display); font-size: 16px; font-weight: 600; }
+.rt-report .rt-agent-card-critical {
+    font-family: var(--font-mono); font-size: 10px; font-weight: 600; text-transform: uppercase;
+    color: var(--red-600); background: var(--red-100); border-radius: 5px; padding: 2px 6px;
+}
+.rt-report .rt-agent-card-model { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); margin-top: 3px; }
+.rt-report .rt-agent-card-desc { font-size: 13px; color: var(--text-body); margin-top: 6px; }
+.rt-report .rt-agent-card-stats {
+    display: flex; gap: 22px; margin-top: 11px; padding-top: 11px; border-top: 1px solid var(--border-subtle);
+}
+.rt-report .rt-agent-card-stat { display: flex; flex-direction: column; gap: 2px; }
+.rt-report .rt-agent-card-stat-key {
+    font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--text-faint);
+}
+.rt-report .rt-agent-card-stat-value { font-family: var(--font-mono); font-size: 14px; font-weight: 600; }
+.rt-report .rt-agent-card-chiprow { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.rt-report .rt-agent-card-chip-label {
+    font-size: 11px; color: var(--text-faint); flex: 0 0 70px;
+}
+.rt-report .rt-agent-card-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.rt-report .rt-agent-card-chip-empty { color: var(--text-faint); font-size: 12px; }
 """
 
 DASHBOARD_CSS = (
