@@ -123,6 +123,7 @@ def test_sim_overview_has_exec_summary_and_five_kpis(sim_run) -> None:
     # 5-card KPI band incl. Avg turns
     assert 'Avg turns' in html
     assert 'Goal completion' in html
+    assert 'goal met' in html
 
 
 def test_sim_kpi_goal_status_uses_verdict(sim_run) -> None:

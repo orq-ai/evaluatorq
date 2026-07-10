@@ -326,7 +326,7 @@ def _sim_outcomes_donut(rows: list[Any]) -> str:
         '<div class="donut-wrap"><div class="donut">'
         f'<svg width="150" height="150" viewBox="0 0 150 150">{"".join(arcs)}</svg>'
         f'<div class="donut-center"><span class="donut-value">{pct_achieved}%</span>'
-        '<span class="donut-label">achieved</span></div></div>'
+        '<span class="donut-label">goal met</span></div></div>'
         f'<ul class="donut-legend">{legend}</ul></div></figure>'
     )
 
