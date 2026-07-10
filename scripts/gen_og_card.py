@@ -45,7 +45,7 @@ TAGLINE = "Run LLM evaluations, red-team agents, and simulate multi-turn convers
 # What the library contains: (icon, tile colour, glyph colour, label).
 FEATURES = [
     ("check", TEAL, INK, "LLM evaluation"),
-    ("target", ORANGE, WHITE, "Agent red-teaming"),
+    ("target", TEAL, INK, "Agent red-teaming"),
     ("chat", TEAL, INK, "Conversation simulation"),
 ]
 INSTALL = "pip install evaluatorq"
