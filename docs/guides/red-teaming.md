@@ -173,6 +173,23 @@ report = await red_team(LangGraphTarget(graph), categories=["LLM01", "ASI01"])
 | Pydantic AI | `PydanticAITarget` | `evaluatorq[pydantic-ai]` | [`19_pydantic_ai_target.py`](../examples/redteam/19_pydantic_ai_target.md) |
 | CrewAI | `CrewAITarget` | `evaluatorq[crewai]` | [`20_crewai_target.py`](../examples/redteam/20_crewai_target.md) |
 
+### Demo runs
+
+Live runs of the four examples above (dynamic mode, 3 attacks each, routed through
+the Orq AI Router) with real attack transcripts and judge verdicts are captured in
+`examples/redteam/_sample_output/RES-931-external-framework-runs.md`. The headline:
+LangGraph, OpenAI Agents, and Pydantic AI each execute an indirect prompt injection
+(goal hijack via tool output); CrewAI resists all three.
+
+<!-- RES-931 video slot: per-framework screen recordings. Drop files in
+docs/assets/redteam/res931-<framework>.mp4 and uncomment the embeds below.
+See examples/redteam/_sample_output/RES-931-recording-checklist.md.
+<video controls src="../assets/redteam/res931-langgraph.mp4"></video>
+<video controls src="../assets/redteam/res931-openai-agents.mp4"></video>
+<video controls src="../assets/redteam/res931-pydantic-ai.mp4"></video>
+<video controls src="../assets/redteam/res931-crewai.mp4"></video>
+-->
+
 ### Known limitations
 
 Verified edge cases and framework-specific quirks to know before you rely on
