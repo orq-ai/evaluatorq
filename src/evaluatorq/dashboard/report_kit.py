@@ -269,10 +269,11 @@ def line_chart(turns: list[int], series: dict[str, list[float | None]]) -> str:
             parts.append(
                 f'<circle cx="{px:.1f}" cy="{py:.1f}" r="2.5" fill="white" stroke="{color}" stroke-width="1.5"></circle>'
             )
-        legend_items.append(
-            f'<span class="rk-legend-item"><span class="rk-legend-swatch" style="background:{color}"></span>'
-            f'{esc(name)}</span>'
-        )
+        if any(v is not None for v in values):
+            legend_items.append(
+                f'<span class="rk-legend-item"><span class="rk-legend-swatch" style="background:{color}"></span>'
+                f'{esc(name)}</span>'
+            )
     parts.append('</svg>')
     legend_html = f'<div class="rk-legend">{"".join(legend_items)}</div>'
     return ''.join(parts) + legend_html

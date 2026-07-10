@@ -76,6 +76,12 @@ def test_line_chart_empty_series_returns_empty():
     assert report_kit.line_chart([0, 1], {}) == ''
 
 
+def test_line_chart_excludes_all_none_series_from_legend():
+    html = report_kit.line_chart([0, 1, 2], {'real': [0.1, 0.2, 0.3], 'empty': [None, None, None]})
+    assert 'real' in html
+    assert 'empty' not in html  # all-None series draws nothing -> not in legend
+
+
 def test_bar_rows_escapes_labels():
     html = report_kit.bar_rows([('<b>x</b>', 3.0)], width=200, label_w=60, color='var(--chart-2)')
     assert '<b>x</b>' not in html
