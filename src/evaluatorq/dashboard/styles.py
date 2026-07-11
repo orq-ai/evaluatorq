@@ -1324,6 +1324,14 @@ _RT_REPORT_CSS = """
 }
 .rt-report .rt-attack-row[open] .rt-attack-row-chevron { transform: rotate(180deg); }
 .rt-report .rt-attack-row-body { padding: 14px; background: var(--surface-sunken); }
+
+/* Severity-definitions table (and any .severity-* label) uses the semantic
+   --sev-* scale instead of report.css's divergent --c-* palette, so the RT
+   report's severity colours match the pills and are tunable from theme.py. */
+.rt-report .severity-critical { color: var(--sev-critical); }
+.rt-report .severity-high     { color: var(--sev-high); }
+.rt-report .severity-medium   { color: var(--sev-medium); }
+.rt-report .severity-low      { color: var(--sev-low); }
 """
 
 DASHBOARD_CSS = (

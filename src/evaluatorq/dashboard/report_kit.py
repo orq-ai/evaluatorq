@@ -132,11 +132,14 @@ def dial(value_text: str, fraction: float, *, radius: int, stroke: int, color: s
     )
 
 
+# Semantic --outcome-*/--sev-* tokens (theme.py) so a single edit restyles every
+# pill. 'good' fg now tracks --outcome-resistant (was --teal-600, mismatching its
+# green dot).
 _PILL_TONES: dict[str, dict[str, str]] = {
-    'danger': {'bg': 'var(--red-100)', 'fg': 'var(--red-600)', 'dot': 'var(--red-600)'},
-    'danger-solid': {'bg': 'var(--red-600)', 'fg': '#fff', 'dot': '#fff'},
-    'warn': {'bg': 'var(--amber-100)', 'fg': 'var(--red-600)', 'dot': 'var(--orange-500)'},
-    'good': {'bg': 'var(--green-100)', 'fg': 'var(--teal-600)', 'dot': 'var(--green-600)'},
+    'danger': {'bg': 'var(--red-100)', 'fg': 'var(--outcome-vulnerable)', 'dot': 'var(--outcome-vulnerable)'},
+    'danger-solid': {'bg': 'var(--sev-critical)', 'fg': '#fff', 'dot': '#fff'},
+    'warn': {'bg': 'var(--amber-100)', 'fg': 'var(--red-600)', 'dot': 'var(--outcome-error)'},
+    'good': {'bg': 'var(--green-100)', 'fg': 'var(--outcome-resistant)', 'dot': 'var(--outcome-resistant)'},
     'neutral': {'bg': 'var(--sunken)', 'fg': 'var(--text-muted)', 'dot': 'var(--text-muted)'},
 }
 

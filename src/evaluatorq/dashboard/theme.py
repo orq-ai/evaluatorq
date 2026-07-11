@@ -72,6 +72,17 @@ EDITORIAL_CSS = """
     --green-100: #d6ece8;
     --green-50:  #eef6f4;
 
+    /* Semantic red-team scale — one source of truth for severity + outcome
+       colours. Repoint these to restyle every severity pill, outcome badge and
+       the severity-definitions table at once. */
+    --sev-critical: var(--red-600);
+    --sev-high:     var(--amber-600);
+    --sev-medium:   var(--text-muted);
+    --sev-low:      var(--green-600);
+    --outcome-vulnerable: var(--red-600);
+    --outcome-resistant:  var(--green-600);
+    --outcome-error:      var(--amber-600);
+
     /* Brand */
     --teal-600: #025558;
     --teal-100: #d4e7e6;
