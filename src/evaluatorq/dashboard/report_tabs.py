@@ -1026,7 +1026,8 @@ def _rt_attack_row(r: RedTeamResult, rid: str, idx: int) -> str:
     from evaluatorq.dashboard.report_kit import outcome_pill, severity_pill
 
     atk = r.attack
-    title_name = fmt_vulnerability(atk.vulnerability) if atk.vulnerability else esc(atk.category)
+    # Raw text either way — esc() is applied once at the interpolation site below.
+    title_name = fmt_vulnerability(atk.vulnerability) if atk.vulnerability else atk.category
     outcome = 'error' if r.error else ('vulnerable' if r.vulnerable else 'resistant')
     safe_rid = esc(rid)
 

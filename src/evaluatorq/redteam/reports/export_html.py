@@ -1028,11 +1028,6 @@ def _render_source_distribution_html(section: ReportSection) -> str:
 _ASR_HEAT_SCALE: list[list[float | str]] = [[0.0, '#299D8F'], [0.5, '#ff8f34'], [1.0, '#df5325']]
 
 
-def _asr_badge_color(asr: float) -> str:
-    """Inline background for an ASR fraction in [0, 1] on the brand heat scale."""
-    return _scale_color(asr, _ASR_HEAT_SCALE)
-
-
 # ---------------------------------------------------------------------------
 # Phase 3 chart helpers
 # ---------------------------------------------------------------------------
