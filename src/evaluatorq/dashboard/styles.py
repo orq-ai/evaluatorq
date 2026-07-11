@@ -1325,9 +1325,21 @@ _RT_REPORT_CSS = """
 .rt-report .rt-attack-row[open] .rt-attack-row-chevron { transform: rotate(180deg); }
 .rt-report .rt-attack-row-body { padding: 14px; background: var(--surface-sunken); }
 
+/* Unify the shared report.css palette onto the brand semantic tokens within the
+   RT report only (flat export + sim keep report.css defaults). Custom props
+   cascade, so this one block repoints every --c-*/--orq-orange consumer —
+   KPI cards, badges, risk pills, status badges, verdict lines — to brand. */
+.rt-report {
+    --c-fail: var(--outcome-vulnerable);
+    --c-pass: var(--outcome-resistant);
+    --c-warn: var(--outcome-error);
+    --orq-orange: var(--orange-500);
+    --clay: var(--orange-500);
+}
+
 /* Severity-definitions table (and any .severity-* label) uses the semantic
-   --sev-* scale instead of report.css's divergent --c-* palette, so the RT
-   report's severity colours match the pills and are tunable from theme.py. */
+   --sev-* scale (4-step: critical/high/medium/low) so medium stays a neutral
+   tint distinct from high, rather than collapsing onto --c-warn. */
 .rt-report .severity-critical { color: var(--sev-critical); }
 .rt-report .severity-high     { color: var(--sev-high); }
 .rt-report .severity-medium   { color: var(--sev-medium); }
