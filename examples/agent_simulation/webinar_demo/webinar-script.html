@@ -360,7 +360,7 @@
               closes both: generate → simulate → judge → keep. Arian holds
               questions unless something needs unpacking.
             </p>
-            <div class="tags"><span class="tag bauke">Bauke leads</span><span class="tag">deck s2–s4 (gap · pipeline · system view)</span></div>
+            <div class="tags"><span class="tag bauke">Bauke leads</span><span class="tag">deck s2–s6 (orq.ai · gap · pipeline · system · evaluatorq)</span></div>
           </div>
         </div>
 
@@ -376,7 +376,7 @@
               failing transcript. Arian interjects Q1–Q3 during natural pauses
               (while generation streams, while the sim runs).
             </p>
-            <div class="tags"><span class="tag bauke">Bauke drives</span><span class="tag arian">Arian Q1–Q3</span><span class="tag">deck s5–s6</span><span class="tag">RUNBOOK Act 1</span></div>
+            <div class="tags"><span class="tag bauke">Bauke drives</span><span class="tag arian">Arian Q1–Q3</span><span class="tag">deck s7–s8</span><span class="tag">RUNBOOK Act 1</span></div>
           </div>
         </div>
 
@@ -392,7 +392,7 @@
               where Arian lands the open-source question (Q4–Q5) — it's the
               audience's biggest silent objection.
             </p>
-            <div class="tags"><span class="tag bauke">Bauke drives</span><span class="tag arian">Arian Q4–Q5</span><span class="tag">deck s7</span><span class="tag">RUNBOOK Act 2</span></div>
+            <div class="tags"><span class="tag bauke">Bauke drives</span><span class="tag arian">Arian Q4–Q5</span><span class="tag">deck s9</span><span class="tag">RUNBOOK Act 2</span></div>
           </div>
         </div>
 
@@ -408,7 +408,7 @@
               re-run from the platform. Close on the three-options frame:
               from scratch / re-run / extend &amp; share.
             </p>
-            <div class="tags"><span class="tag bauke">Bauke drives</span><span class="tag">deck s8</span><span class="tag">RUNBOOK Act 3a–3c</span></div>
+            <div class="tags"><span class="tag bauke">Bauke drives</span><span class="tag">deck s10</span><span class="tag">RUNBOOK Act 3a–3c</span></div>
           </div>
         </div>
 
@@ -448,7 +448,7 @@
               re-run — and none of it needed a dataset to exist first.
               Conversational, opinionated, honest about limits.
             </p>
-            <div class="tags"><span class="tag arian">Arian leads</span><span class="tag bauke">Bauke answers</span><span class="tag">deck s9</span></div>
+            <div class="tags"><span class="tag arian">Arian leads</span><span class="tag bauke">Bauke answers</span><span class="tag">deck s11–s12</span></div>
           </div>
         </div>
 
@@ -463,7 +463,7 @@
               simulation against your own agent this week —
               <code>pip install evaluatorq</code>.
             </p>
-            <div class="tags"><span class="tag arian">Arian triages</span><span class="tag bauke">Bauke closes</span><span class="tag">deck s10–s11</span></div>
+            <div class="tags"><span class="tag arian">Arian triages</span><span class="tag bauke">Bauke closes</span><span class="tag">deck s13–s14</span></div>
           </div>
         </div>
       </div>
@@ -542,7 +542,7 @@
             <text x="462" y="118">agent reply</text>
             <text x="548" y="170">full transcript</text>
             <text x="742" y="118" text-anchor="end">verdicts + reasoning</text>
-            <text x="118" y="240">-o / --datapoints</text>
+            <text x="118" y="240">-o / --save-datapoints</text>
             <text x="300" y="282" fill="#D97757">re-run identical set on every agent change</text>
           </g>
         </svg>
@@ -797,7 +797,7 @@ uv run evaluatorq sim validate-dataset boh_datapoints.jsonl
 <span class="cm"># 3. run live, freeze the set for Act 3</span>
 uv run evaluatorq sim run \
   <span class="kw">--target</span> agent:boh_creditcard_agent_demo \
-  <span class="kw">--datapoints</span> boh_datapoints.jsonl \
+  <span class="kw">--save-datapoints</span> boh_datapoints.jsonl \
   <span class="kw">--name</span> boh-from-scratch
 
 <span class="cm"># 4. pass rate + a failing transcript</span>

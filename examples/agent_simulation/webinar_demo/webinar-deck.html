@@ -339,18 +339,6 @@
   /* ------------------------------------------------------------------
      Slide counter
      ------------------------------------------------------------------ */
-  /* persistent brand logo, bottom-left, static to the viewport */
-  #brand-logo {
-    position: fixed;
-    bottom: 20px;
-    left: 28px;
-    height: 20px;
-    opacity: 0.75;
-    z-index: 10;
-    user-select: none;
-    pointer-events: none;
-  }
-
   #counter {
     position: fixed;
     bottom: 22px;
@@ -388,6 +376,46 @@
         <span>Arian Pasquali</span>
         <span>45 min · live demo</span>
       </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Slide 1b · About orq.ai
+       ============================================================ -->
+  <section class="slide" id="s1b">
+    <div class="slide-inner">
+      <div class="eyebrow">orq.ai</div>
+      <h2>Build, evaluate, and run LLM apps in one place</h2>
+      <p class="lead">
+        orq.ai is the platform where teams take LLM apps and agents from idea
+        to production, with evaluation built in from day one.
+      </p>
+      <ul class="ship-list">
+        <li class="ship-item">
+          <span class="ship-dot"></span>
+          <div>
+            <div class="ship-title">Build</div>
+            <div class="ship-desc">Prompts, agents, knowledge bases, and deployments: version, test, and ship without redeploying your app.</div>
+          </div>
+          <span class="ship-ref">my.orq.ai</span>
+        </li>
+        <li class="ship-item">
+          <span class="ship-dot"></span>
+          <div>
+            <div class="ship-title">Evaluate</div>
+            <div class="ship-desc">Datasets, evaluators, experiments, and human review: know quality moved before your users do.</div>
+          </div>
+          <span class="ship-ref">today's topic</span>
+        </li>
+        <li class="ship-item">
+          <span class="ship-dot"></span>
+          <div>
+            <div class="ship-title">Observe</div>
+            <div class="ship-desc">Traces, costs, and quality signals from production feed back into your datasets and evals.</div>
+          </div>
+          <span class="ship-ref">observability</span>
+        </li>
+      </ul>
     </div>
   </section>
 
@@ -565,7 +593,7 @@
         <g font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="10.5" fill="#808080">
           <text x="225" y="38" text-anchor="middle">description seeds it all</text>
           <text x="118" y="118">sim generate</text>
-          <text x="118" y="240">-o / --datapoints</text>
+          <text x="118" y="240">-o / --save-datapoints</text>
           <text x="215" y="284">plays each datapoint</text>
           <text x="215" y="316" fill="#FF6B4A">re-run the identical suite on every agent change</text>
           <text x="330" y="118" text-anchor="end">user turn</text>
@@ -593,12 +621,38 @@
   </section>
 
   <!-- ============================================================
+       Slide 3c · Meet evaluatorq
+       ============================================================ -->
+  <section class="slide" id="s3c">
+    <div class="slide-inner">
+      <div class="eyebrow">Meet evaluatorq</div>
+      <h2>Evaluation as code, open source</h2>
+      <p class="lead">
+        The engine behind today's demo: a Python framework for evaluating LLM
+        pipelines and agents. Experiments, LLM judges, agent simulation, and
+        red teaming, from one CLI and SDK.
+      </p>
+      <div class="cmds"><pre>pip install evaluatorq        <span class="cm"># or: uv add evaluatorq</span>
+evaluatorq sim --help         <span class="cm"># 'eq' works too</span></pre></div>
+      <p class="cmd-note">
+        Runs anywhere: local JSONL in, results out. Connects to the orq
+        platform when you want shared datasets, experiments, and dashboards.
+      </p>
+      <div class="options" style="margin-top:24px;">
+        <span class="chip lean">github.com/orq-ai/evaluatorq</span>
+        <span class="chip">CLI + Python SDK</span>
+        <span class="chip">works with or without the platform</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
        Slide 4 — Demo roadmap
        ============================================================ -->
   <section class="slide" id="s4">
     <div class="slide-inner">
       <div class="eyebrow">Live demo</div>
-      <h1>Let's simulate an agent.</h1>
+      <h1>Let's break an agent.</h1>
       <p class="subtitle">
         A live credit-card support agent, zero test data. From here it's all
         terminal.
@@ -620,7 +674,7 @@ evaluatorq sim generate <span class="kw">--target</span> agent:boh_creditcard_ag
 
 <span class="cm"># 2. run the simulation against the live agent, freeze the set</span>
 evaluatorq sim run <span class="kw">--target</span> agent:boh_creditcard_agent_demo \
-  <span class="kw">--datapoints</span> datapoints.jsonl <span class="kw">--name</span> from-scratch
+  <span class="kw">--save-datapoints</span> datapoints.jsonl <span class="kw">--name</span> from-scratch
 
 <span class="cm"># 3. open the run viewer: pass rate + transcripts</span>
 evaluatorq sim ui .evaluatorq/sim-runs/&lt;run&gt;.json</pre></div>
@@ -719,6 +773,34 @@ results = <span class="kw">await</span> simulate(target=my_agent,
   </section>
 
   <!-- ============================================================
+       Slide 9b · Agent skills
+       ============================================================ -->
+  <section class="slide" id="s9b">
+    <div class="slide-inner">
+      <div class="eyebrow">For your coding agent</div>
+      <h2>Our skills drive the simulation CLI for you</h2>
+      <p class="lead">
+        orq-ai/assistant-plugins ships Agent Skills for the Build, Evaluate,
+        Optimize lifecycle. Works with Claude Code, Cursor, Codex, Gemini CLI,
+        and any Agent Skills-compatible assistant.
+      </p>
+      <div class="cmds"><pre><span class="cm"># in Claude Code:</span>
+/plugin marketplace add orq-ai/assistant-plugins
+/plugin install orq-skills@orq-claude-plugin
+/orq:quickstart               <span class="cm"># checks key, MCP, credentials</span></pre></div>
+      <p class="cmd-note">
+        Your assistant then knows the workflows: run a simulation, read the
+        failing transcripts, patch the agent, re-run the frozen suite.
+        You review the diff.
+      </p>
+      <div class="options" style="margin-top:24px;">
+        <span class="chip lean">github.com/orq-ai/assistant-plugins</span>
+        <span class="chip">skills + MCP + tracing</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
        Slide 10 — The ask (inverted)
        ============================================================ -->
   <section class="slide invert" id="s10">
@@ -765,12 +847,9 @@ results = <span class="kw">await</span> simulate(target=my_agent,
   <!-- ============================================================
        Slide counter
        ============================================================ -->
-  <img id="brand-logo" alt="orq">
-  <div id="counter">1 / 11</div>
+  <div id="counter">1 / 14</div>
 
 <script>
-  // reuse the title-slide ornament as the persistent corner logo
-  document.getElementById('brand-logo').src = document.querySelector('.ornament').src;
   (function () {
     const slides = Array.from(document.querySelectorAll('.slide'));
     const counter = document.getElementById('counter');
