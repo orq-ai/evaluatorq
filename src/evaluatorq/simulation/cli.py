@@ -404,6 +404,7 @@ def simulate(
         hooks = RichHooks(
             console=Console(stderr=True),
             skip_confirm=yes or not sys.stdin.isatty(),
+            defer_summary=executive_summary,
         )
 
     if not datapoints.exists():
@@ -462,6 +463,8 @@ def simulate(
     )
 
     _maybe_generate_executive_summary(run, enabled=executive_summary, model=sim_model)
+    if hooks is not None and executive_summary:
+        hooks.print_summary(results, executive_summary=run.executive_summary)
 
     if export_md is not None:
         _export_report(run, export_md, fmt='md')
@@ -670,6 +673,7 @@ def run(
         hooks = RichHooks(
             console=Console(stderr=True),
             skip_confirm=yes or not sys.stdin.isatty(),
+            defer_summary=executive_summary,
         )
 
     try:
@@ -731,6 +735,8 @@ def run(
     )
 
     _maybe_generate_executive_summary(run, enabled=executive_summary, model=sim_model)
+    if hooks is not None and executive_summary:
+        hooks.print_summary(results, executive_summary=run.executive_summary)
 
     if export_md is not None:
         _export_report(run, export_md, fmt='md')

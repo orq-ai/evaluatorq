@@ -56,9 +56,16 @@ def print_simulation_summary(
 
     sections = {s.kind: s for s in build_report_sections(results, executive_summary=executive_summary)}
 
-    # ── Summary stats ──────────────────────────────────────────────────
     summ = sections['summary'].data
     rate = summ['success_rate']
+
+    if summ.get('narrative'):
+        from rich.panel import Panel
+
+        console.print(Panel(str(summ['narrative']), title='Executive Summary', border_style='cyan'))
+        console.print()
+
+    # ── Summary stats ──────────────────────────────────────────────────
 
     stats = Table(show_header=True, header_style='bold', box=box.ROUNDED)
     stats.add_column('Metric', style='white', width=28)
@@ -96,12 +103,6 @@ def print_simulation_summary(
 
     console.print(stats)
     console.print()
-
-    if summ.get('narrative'):
-        from rich.panel import Panel
-
-        console.print(Panel(str(summ['narrative']), title='Executive Summary', border_style='cyan'))
-        console.print()
 
     # ── Per-persona breakdown ──────────────────────────────────────────
     _breakdown(console, sections['persona_breakdown'], key='persona', title='Per-Persona Breakdown')

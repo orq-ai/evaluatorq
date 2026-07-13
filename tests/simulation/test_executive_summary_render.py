@@ -20,6 +20,7 @@ def test_sim_html_includes_narrative_and_pill():
     assert _NARRATIVE in html
     assert 'status-badge' in html
     assert 'CONFIDENCE' in html
+    assert html.index(_NARRATIVE) < html.index('<div class="kpi-band">')
 
 
 def test_sim_markdown_includes_narrative():

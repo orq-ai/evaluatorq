@@ -87,7 +87,10 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
     from evaluatorq.simulation.reports.sections import build_report_sections, individual_entries
 
     rows = run.results if results is None else results
-    sections = build_report_sections(rows)
+    # The saved narrative describes the complete run. Suppress it on filtered
+    # views rather than presenting whole-run prose beside subset metrics.
+    narrative = run.executive_summary if results is None else None
+    sections = build_report_sections(rows, executive_summary=narrative)
     by_kind: dict[str, Any] = {}
     for s in sections:
         by_kind.setdefault(s.kind, s)
@@ -104,7 +107,7 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
     tabs = _tabs(
         'simtab',
         [
-            ('Overview', _sim_outcomes_donut(rows) + render('overview')),
+            ('Overview', render('summary') + _sim_outcomes_donut(rows) + render('overview')),
             (
                 'Breakdown',
                 render(

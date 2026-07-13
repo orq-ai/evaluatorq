@@ -320,3 +320,24 @@ def test_sim_dashboard_adapter_preserves_full_run_narrative() -> None:
     assert run.executive_summary in ADAPTERS['sim'].body(run)
     assert run.executive_summary in ADAPTERS['sim'].export(run)
     assert run.executive_summary in ADAPTERS['sim'].export_markdown(run)  # type: ignore[operator]
+
+
+def test_sim_tabbed_dashboard_preserves_only_full_run_narrative() -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+    from evaluatorq.simulation.types import SimulationRun
+
+    results = _make_sim_results()
+    run = SimulationRun(
+        run_name='narrative-test',
+        created_at=datetime.now(tz=timezone.utc),
+        mode='simulate',
+        target_kind='callback',
+        evaluator_names=[],
+        total_results=len(results),
+        scorer_averages={},
+        results=results,
+        executive_summary='The simulated user achieved a risky outcome.',
+    )
+
+    assert run.executive_summary in sim_report_tabs('run-1', run)
+    assert run.executive_summary not in sim_report_tabs('run-1', run, results=[])

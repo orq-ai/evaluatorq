@@ -219,13 +219,20 @@ class RichHooks:
         console: a ``rich.console.Console``; a new one is created when ``None``.
     """
 
-    def __init__(self, *, console: RichConsole | None = None, skip_confirm: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        console: RichConsole | None = None,
+        skip_confirm: bool = False,
+        defer_summary: bool = False,
+    ) -> None:
         if console is None:
             from rich.console import Console
 
             console = Console()
         self._console = console
         self._skip_confirm = skip_confirm
+        self._defer_summary = defer_summary
         self._summary_rendered = False
         self._progress: Any = None  # rich.progress.Progress
         self._overall_task_id: Any = None  # rich.progress.TaskID | None
@@ -368,8 +375,16 @@ class RichHooks:
             self._progress = None
         if self._summary_rendered:
             return
+        if self._defer_summary:
+            return
+        self.print_summary(results)
+
+    def print_summary(self, results: list[SimulationResult], *, executive_summary: str | None = None) -> None:
+        """Print the final summary once, optionally including generated prose."""
+        if self._summary_rendered:
+            return
         self._summary_rendered = True
         from evaluatorq.simulation.reports.display import print_simulation_summary
 
-        print_simulation_summary(results, console=self._console)
+        print_simulation_summary(results, executive_summary=executive_summary, console=self._console)
         self._console.print('[dim]Tip: explore results with "eq sim ui --latest"[/dim]')
