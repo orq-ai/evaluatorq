@@ -448,6 +448,7 @@ def simulate(
         target_kind=target_kind,
         target=tgt_name,
         target_model=tgt_model,
+        max_turns=max_turns,
         evaluator_names=evaluator_names or DEFAULT_EVALUATOR_NAMES,
         results=results,
     )
@@ -708,6 +709,7 @@ def run(
         target_kind=target_kind,
         target=tgt_name,
         target_model=tgt_model,
+        max_turns=max_turns,
         evaluator_names=evaluator_names or DEFAULT_EVALUATOR_NAMES,
         results=results,
     )

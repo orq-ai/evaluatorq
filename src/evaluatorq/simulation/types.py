@@ -344,6 +344,9 @@ class SimulationRun(BaseModel):
     # saved before these fields existed.
     target: str | None = None
     target_model: str | None = None
+    # Configured turn cap for the run. Optional for back-compat with runs saved
+    # before this field existed (older reports simply omit the Config row).
+    max_turns: int | None = None
     evaluator_names: list[str]
     total_results: int
     scorer_averages: dict[str, float]

@@ -48,6 +48,7 @@ def build_simulation_run(
     results: list[Any],
     target: str | None = None,
     target_model: str | None = None,
+    max_turns: int | None = None,
 ) -> SimulationRun:
     """Build the full ``SimulationRun`` report model from results.
 
@@ -75,6 +76,7 @@ def build_simulation_run(
         target_kind=target_kind,  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
         target=target,
         target_model=target_model,
+        max_turns=max_turns,
         evaluator_names=evaluator_names,
         total_results=len(results),
         scorer_averages=scorer_averages,

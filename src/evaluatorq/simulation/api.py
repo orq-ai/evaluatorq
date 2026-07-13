@@ -715,6 +715,7 @@ async def _simulate_core(
                 target_kind=target_kind,
                 target=target_name,
                 target_model=target_model if isinstance(target_model, str) else None,
+                max_turns=max_turns,
                 evaluator_names=resolved_evaluator_names,
                 results=results,
             )
