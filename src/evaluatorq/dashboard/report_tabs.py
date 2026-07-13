@@ -163,43 +163,79 @@ def _sim_config(by_kind: dict[str, Any], run: SimulationRun, entity_context: dic
     else:
         generated_str = str(generated)[:16]
 
+    # Run scale (persona/scenario/conversation counts) reads as "how big was
+    # this run"; promote it to stat tiles above the textual config so it pops.
+    scope = [
+        t
+        for t in (
+            (str(len(personas)), 'Personas') if personas else None,
+            (str(len(scenarios)), 'Scenarios') if scenarios else None,
+            (str(run.total_results), 'Conversations'),
+        )
+        if t
+    ]
+    stat_html = ''
+    if scope:
+        tiles = ''.join(
+            f'<div class="rk-stat"><span class="rk-stat-num">{esc(num)}</span>'
+            f'<span class="rk-stat-cap">{esc(cap)}</span></div>'
+            for num, cap in scope
+        )
+        stat_html = f'<div class="rk-stat-row">{tiles}</div>'
+
+    # Config split into semantic groups (target vs run metadata) instead of one
+    # flat sweep, so the panel is scannable.
+    target_grid = meta_grid([
+        ('Target', run.target),
+        ('Run name', run.run_name),
+        ('Model', run.target_model),
+        ('Target kind', run.target_kind),
+        ('Mode', run.mode),
+        ('Max turns', str(run.max_turns) if run.max_turns is not None else None),
+    ])
+    run_grid = meta_grid([
+        ('Evaluators', ', '.join(run.evaluator_names) if run.evaluator_names else None),
+        ('Generated', generated_str),
+    ])
+    groups = (
+        f'<div class="rk-meta-group"><div class="rk-meta-group-title">Target</div>{target_grid}</div>'
+        f'<div class="rk-meta-group"><div class="rk-meta-group-title">Run</div>{run_grid}</div>'
+    )
     config_html = panel(
         'Run configuration',
-        meta_grid([
-            ('Target', run.target),
-            ('Run name', run.run_name),
-            ('Model', run.target_model),
-            ('Mode', run.mode),
-            ('Max turns', str(run.max_turns) if run.max_turns is not None else None),
-            ('Target kind', run.target_kind),
-            ('Evaluators', ', '.join(run.evaluator_names) if run.evaluator_names else None),
-            ('Personas', str(len(personas)) if personas else None),
-            ('Scenarios', str(len(scenarios)) if scenarios else None),
-            ('Conversations', str(run.total_results)),
-            ('Generated', generated_str),
-        ]),
+        f'{stat_html}{groups}',
         sub='Job-level metadata',
     )
 
     personas_html = ''
     if personas:
-        rows = ''.join(_sim_config_persona_row(p, persona_ids.get(str(p.get('name', '')))) for p in personas)
+        rows = _sim_config_persona_header() + ''.join(
+            _sim_config_persona_row(p, persona_ids.get(str(p.get('name', '')))) for p in personas
+        )
         personas_html = panel('Personas', rows, sub='Simulated user profiles')
 
     scenarios_html = ''
     if scenarios:
-        rows = ''.join(_sim_config_scenario_row(s, scenario_ids.get(str(s.get('name', '')))) for s in scenarios)
+        rows = _sim_config_scenario_header() + ''.join(
+            _sim_config_scenario_row(s, scenario_ids.get(str(s.get('name', '')))) for s in scenarios
+        )
         scenarios_html = panel('Scenarios', rows, sub='Goals + pass/fail criteria')
 
     return f'{config_html}{personas_html}{scenarios_html}'
 
 
+def _sim_config_persona_header() -> str:
+    """Column headers for the persona grid: Persona · Tone · one per trait."""
+    traits = ''.join(f'<span>{esc(label)}</span>' for _key, label in _SIM_TRAIT_LABELS)
+    return f'<div class="sim-config-persona-head"><span>Persona</span><span>Tone</span>{traits}</div>'
+
+
 def _sim_config_persona_row(persona: dict[str, Any], entity_id: str | None = None) -> str:
-    """One compact Config-panel persona row: name · style · trait mini-bars."""
+    """One compact Config-panel persona row: name · tone · trait mini-bars (grid columns)."""
     name = esc(persona.get('name', ''))
     traits = persona.get('traits')
     style = traits.get('communication_style') if isinstance(traits, dict) else None
-    style_html = f'<span class="sim-config-persona-style">{esc(str(style))}</span>' if style else ''
+    style_html = f'<span class="sim-config-persona-style">{esc(str(style)) if style else "—"}</span>'
     traits_html = _sim_trait_minis(traits) if isinstance(traits, dict) else ''
     trigger_attrs = _sim_entity_trigger_attrs('persona', entity_id)
     return (
@@ -209,16 +245,68 @@ def _sim_config_persona_row(persona: dict[str, Any], entity_id: str | None = Non
     )
 
 
+def _sim_config_scenario_header() -> str:
+    """Column headers for the scenario grid: Scenario · Criteria · Pass rate
+    (aligned with the row grid below)."""
+    return (
+        '<div class="sim-config-scenario-head"><span>Scenario</span><span>Criteria</span><span>Pass rate</span></div>'
+    )
+
+
 def _sim_config_scenario_row(scenario: dict[str, Any], entity_id: str | None = None) -> str:
-    """One compact Config-panel scenario row: name + criteria count."""
+    """One compact Config-panel scenario row: name + goal · criteria split · pass-rate badge
+    (three grid columns aligned with the header)."""
     name = esc(scenario.get('name', ''))
-    count = len(scenario.get('criteria') or [])
-    count_html = f'<span class="sim-config-check-count">{count} {"check" if count == 1 else "checks"}</span>'
+    goal = scenario.get('goal')
+    goal_html = f'<div class="sim-config-scenario-goal">{esc(str(goal))}</div>' if goal else ''
+    count_html = _sim_config_criteria_split(scenario.get('criteria') or [])
+    badge_html = _sim_pass_rate_badge(scenario.get('pass_rate'))
     trigger_attrs = _sim_entity_trigger_attrs('scenario', entity_id)
     return (
         f'<button type="button" class="sim-config-scenario-row sim-entity-row" {trigger_attrs}>'
-        f'<span class="sim-config-scenario-name">{name}</span>{count_html}'
+        f'<div class="sim-config-scenario-main">'
+        f'<span class="sim-config-scenario-name">{name}</span>{goal_html}'
+        '</div>'
+        f'<span class="sim-config-scenario-checks">{count_html}</span>'
+        f'<span class="sim-config-scenario-rate-cell">{badge_html}</span>'
         '</button>'
+    )
+
+
+def _sim_config_criteria_split(criteria: list[dict[str, Any]]) -> str:
+    """`N must-happen · M must-not` label, split by criterion type. Falls back
+    to the flat `N checks` label when no criterion carries a recognised type."""
+    must_happen = sum(1 for c in criteria if c.get('type') == 'must_happen')
+    must_not = sum(1 for c in criteria if c.get('type') == 'must_not_happen')
+    if must_happen == 0 and must_not == 0:
+        count = len(criteria)
+        label = f'{count} {"check" if count == 1 else "checks"}'
+        return f'<span class="sim-config-check-count">{label}</span>'
+
+    parts: list[str] = []
+    if must_happen:
+        parts.append(f'{must_happen} must-happen')
+    if must_not:
+        parts.append(f'{must_not} must-not')
+    return f'<span class="sim-config-check-count">{" · ".join(parts)}</span>'
+
+
+def _sim_pass_rate_badge(pass_rate: float | None) -> str:
+    """Small pill with a colored dot showing the scenario's pass rate. Omitted
+    entirely when the pass rate is unknown."""
+    if pass_rate is None:
+        return ''
+    if pass_rate >= 0.8:
+        severity = 'high'
+    elif pass_rate >= 0.5:
+        severity = 'mid'
+    else:
+        severity = 'low'
+    pct = round(pass_rate * 100)
+    return (
+        f'<span class="sim-scenario-rate sim-scenario-rate--{severity}">'
+        f'<span class="sim-scenario-rate-dot"></span>{pct}%'
+        '</span>'
     )
 
 
@@ -231,18 +319,21 @@ _SIM_TRAIT_LABELS: tuple[tuple[str, str], ...] = (
 
 
 def _sim_trait_minis(traits: dict[str, Any]) -> str:
+    # One cell per label (empty placeholder if missing) so cells stay column-aligned under the headers.
+    # data-tip drives an instant CSS tooltip (native title has a ~1s browser delay).
     bars: list[str] = []
     for key, label in _SIM_TRAIT_LABELS:
         raw = traits.get(key)
         if not isinstance(raw, int | float):
+            bars.append('<span class="sim-trait-mini sim-trait-mini--empty" aria-hidden="true"></span>')
             continue
         value = max(0.0, min(1.0, float(raw)))
         bars.append(
-            f'<span class="sim-trait-mini" title="{esc(label.lower())}: {value:.2f}" aria-label="{esc(label)} {value:.2f}">'
+            f'<span class="sim-trait-mini" data-tip="{esc(label)} {value:.2f}" aria-label="{esc(label)} {value:.2f}">'
             f'<span class="sim-trait-mini-fill" style="width:{value * 100:.0f}%"></span>'
             f'</span>'
         )
-    return f'<span class="sim-trait-minis">{"".join(bars)}</span>' if bars else ''
+    return f'<span class="sim-trait-minis">{"".join(bars)}</span>'
 
 
 def _sim_entity_trigger_attrs(kind: str, entity_id: str | None) -> str:
@@ -273,8 +364,8 @@ def _sim_entity_modal(entity_context: dict[str, Any]) -> str:
         '<div class="sim-entity-modal-shell">'
         '<div class="sim-entity-modal-content" data-sim-entity-content></div>'
         '<div class="sim-entity-modal-actions">'
-        '<button type="button" class="sim-entity-nav" data-sim-entity-prev aria-label="Previous entity" title="Previous entity">&larr;</button>'
-        '<button type="button" class="sim-entity-nav" data-sim-entity-next aria-label="Next entity" title="Next entity">&rarr;</button>'
+        '<button type="button" class="sim-entity-nav" data-sim-entity-prev aria-label="Previous entity (k)" title="Previous entity (k)">&larr;<kbd class="sim-entity-kbd">k</kbd></button>'
+        '<button type="button" class="sim-entity-nav" data-sim-entity-next aria-label="Next entity (j)" title="Next entity (j)">&rarr;<kbd class="sim-entity-kbd">j</kbd></button>'
         '<button type="button" class="sim-entity-close" data-sim-entity-close>Close</button>'
         '</div>'
         '</div>'
@@ -412,7 +503,7 @@ def _sim_breakdown(
     """Breakdown tab body: heatmap → score-distribution → per-persona/scenario
     tables → top failure modes → failures table (spec §Breakdown)."""
     from evaluatorq.common.reports.html_helpers import pct
-    from evaluatorq.dashboard.report_kit import bar_rows, heatmap, histogram, panel
+    from evaluatorq.dashboard.report_kit import heatmap, histogram, panel
 
     entity_context = entity_context or _sim_entity_context(by_kind)
     persona_ids: dict[str, str] = entity_context.get('persona_ids', {})
@@ -460,12 +551,13 @@ def _sim_breakdown(
         by_kind.get('scenario_breakdown'),
         'Per-scenario',
         'scenario',
-        ['Scenario', 'Conv', 'Goal rate', 'Avg score', 'Avg turns'],
+        ['Scenario', 'Conv', 'Goal rate', 'Avg score', 'Avg turns', 'Tokens'],
         lambda r: [
             str(r['conversations']),
             _tinted(pct(r['success_rate']), r['success_rate']),
             _tinted(f'{r["avg_goal_completion_score"]:.2f}', r['avg_goal_completion_score']),
             f'{r["avg_turn_count"]:.1f}',
+            f'{r["total_tokens"]:,}' if r.get('total_tokens') else '—',
         ],
         label=lambda r: _sim_entity_button(str(r['scenario']), 'scenario', scenario_ids.get(str(r['scenario']))),
     )
@@ -474,16 +566,55 @@ def _sim_breakdown(
     failure_mode_section = by_kind.get('failure_mode')
     failure_html = ''
     if failure_mode_section is not None:
-        rows = [(str(label), float(count)) for label, count in failure_mode_section.data.get('rows', [])]
-        if rows:
-            failure_html = panel(
-                'Top failure modes',
-                bar_rows(rows, width=520, label_w=220, color='var(--red-600)', fmt=lambda v: str(int(v))),
-            )
+        rows = [(str(label), int(count)) for label, count in failure_mode_section.data.get('rows', [])]
+        failure_html = _sim_failure_modes(rows)
 
     failures_html = render('failures_first')
 
     return f'{heatmap_html}{dist_html}{tables_html}{failure_html}{failures_html}'
+
+
+def _sim_failure_modes(rows: list[tuple[str, int]]) -> str:
+    """'Top failure modes' as HTML bars with a client-side min-count slider.
+
+    Each failed ``scenario: criterion`` pair aggregates across the personas the
+    scenario ran against; the count is how many conversations tripped it. Bars
+    below the slider threshold are hidden (default 2 — hide one-offs, which are
+    just the failures-first list). Labels truncate at the *end* via CSS ellipsis
+    so the scenario/criterion prefix stays readable. Returns '' when no rows."""
+    if not rows:
+        return ''
+    max_c = max(c for _, c in rows)
+    # Default: hide singletons when any repeat exists; otherwise show everything
+    # (a max of 1 means every failure is a one-off and the slider is a no-op).
+    default = 2 if max_c >= 2 else 1
+    bars: list[str] = []
+    for label, count in rows:
+        pct = (count / max_c) * 100 if max_c else 0
+        hidden = ' hidden' if count < default else ''
+        bars.append(
+            f'<div class="sim-fm-row" data-count="{count}"{hidden}>'
+            f'<span class="sim-fm-label" title="{esc(label)}">{esc(label)}</span>'
+            f'<span class="sim-fm-track"><span class="sim-fm-fill" style="width:{pct:.1f}%"></span></span>'
+            f'<span class="sim-fm-count">{count}</span>'
+            '</div>'
+        )
+    slider = (
+        '<span class="sim-fm-filter">'
+        '<label for="sim-fm-slider">min count</label>'
+        f'<input id="sim-fm-slider" type="range" class="sim-fm-slider" data-fm-slider '
+        f'min="1" max="{max_c}" value="{default}" aria-label="Minimum failure count">'
+        f'<output class="sim-fm-out" data-fm-out>{default}</output>'
+        '</span>'
+    )
+    return (
+        '<div class="rk-panel sim-fm" data-fm-panel>'
+        f'<div class="rk-panel-title sim-fm-head"><span>Top failure modes</span>{slider}</div>'
+        '<div class="rk-panel-body">'
+        f'<div class="sim-fm-bars">{"".join(bars)}</div>'
+        '<p class="sim-fm-empty" data-fm-empty hidden>No failure modes at or above this count.</p>'
+        '</div></div>'
+    )
 
 
 _TURN_METRIC_LABELS: dict[str, str] = {
@@ -578,6 +709,12 @@ def _sim_turn_quality(by_kind: dict[str, Any]) -> str:
     series = timeline_data.get('series', {})
     avg_quality_metrics = metrics_data.get('avg_quality_metrics', {})
     if not series and not avg_quality_metrics:
+        return ''
+
+    # Single-turn runs (every conversation has ≤1 turn) have no per-turn story to
+    # tell — no trend, a one-bar distribution — so drop the whole tab.
+    turn_dist = metrics_data.get('turn_count_distribution', {})
+    if turn_dist and max(turn_dist, default=0) <= 1:
         return ''
 
     callout_html = _turn_delta_callout(series)
@@ -995,8 +1132,8 @@ def _sim_scenarios_panel(scenarios: list[dict[str, Any]]) -> str:
 
 _DONUT_SEGMENTS = (
     ('Achieved', 'var(--teal-600)'),
-    ('Not achieved', 'var(--amber-600)'),
-    ('Errors', 'var(--red-600)'),
+    ('Not achieved', 'var(--outcome-vulnerable)'),
+    ('Errors', 'var(--outcome-error)'),
 )
 
 
@@ -1038,9 +1175,11 @@ def _sim_hero(run: SimulationRun) -> str:
     # band inside the Overview tab (_sim_kpi_band), so a hero band duplicated
     # them above the tabs. Hero is now just title + subtitle.
     return (
-        f'<header class="report-hero"><h1 class="report-hero-title">Agent Simulation</h1>'
-        f'<p class="report-hero-sub">{esc(run.run_name)} · target {esc(run.target_kind)}</p>'
-        f'</header>'
+        '<header class="report-hero">'
+        '<p class="report-hero-kicker">Agent Simulation</p>'
+        f'<h2 class="report-hero-title">{esc(run.run_name)}</h2>'
+        f'<p class="report-hero-sub">target {esc(run.target_kind)}</p>'
+        '</header>'
     )
 
 
@@ -1928,8 +2067,8 @@ def _redteam_hero(summary_section: Any, report: RedTeamReport) -> str:
         agent_pills_html = f'<div class="rt-hero-agent-row">{pills}</div>'
     return (
         '<header class="report-hero rt-hero">'
-        f'<h1 class="rt-hero-title">Red Team{agents_pill}</h1>'
-        f'<p class="report-hero-sub">{esc(report.description or "Red teaming report")}</p>'
+        '<p class="report-hero-kicker">Red Team</p>'
+        f'<h2 class="report-hero-title rt-hero-title">{esc(report.description or "Red teaming report")}{agents_pill}</h2>'
         f'{agent_pills_html}'
         '</header>'
     )

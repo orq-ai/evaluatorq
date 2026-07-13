@@ -34,7 +34,39 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
     position: sticky;
     top: 0;
     height: 100vh;
+    overflow: hidden;
+    transition: width 0.15s ease, padding 0.15s ease;
 }
+
+/* Collapse toggle: sits at the bottom of the sidebar (margin-top:auto pushes
+   it down). Class lives on <html> (set in shell.py before paint) so it
+   persists across the full-page navigations between reports. */
+.sidebar-toggle {
+    margin-top: auto;
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px; border: none; width: 100%;
+    background: transparent; color: var(--text-muted);
+    font-family: var(--font-sans); font-size: 13px; text-align: left;
+    border-radius: var(--radius-md); cursor: pointer;
+}
+.sidebar-toggle:hover { background: rgba(10,10,11,0.04); color: var(--text-strong); }
+.sidebar-toggle .nav-icon { transition: transform 0.15s ease; }
+.sidebar-toggle-kbd {
+    margin-left: auto; font-family: var(--font-sans); font-size: 11px;
+    font-weight: 500; letter-spacing: 0.3px;
+    color: var(--text-muted); background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+    border-radius: 5px; padding: 2px 7px; line-height: 1.5;
+}
+html.sidebar-collapsed .app-sidebar { width: 60px; padding: 16px 8px; }
+html.sidebar-collapsed .app-brand { justify-content: center; padding: 4px 0 18px; }
+html.sidebar-collapsed .app-brand .brand-name { display: none; }
+html.sidebar-collapsed .nav-item { justify-content: center; padding: 8px; }
+html.sidebar-collapsed .nav-item span,
+html.sidebar-collapsed .sidebar-toggle span,
+html.sidebar-collapsed .sidebar-toggle-kbd { display: none; }
+html.sidebar-collapsed .sidebar-toggle { justify-content: center; padding: 8px; }
+html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .app-brand {
     display: flex;
     align-items: center;
@@ -97,6 +129,7 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
     color: var(--text-strong);
     margin: 0;
 }
+.app-topbar > .report-back { margin-bottom: 0; font-size: 14px; }
 .app-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .app-content { flex: 1; padding: 24px; }
 
@@ -228,7 +261,7 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
 .rg-name { font-weight: 600; color: var(--text-strong, #1a1a1a); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rg-sub { font-size: 12px; color: var(--text-muted, #8a8a8a); }
 .rg-num { font-family: var(--font-mono); font-size: 13px; text-align: right; }
-.runs-grid-row .run-score { font-family: var(--font-mono); font-size: 13px; font-weight: 600; text-align: right; }
+.runs-grid-row .run-score { font-family: var(--font-mono); font-size: 13px; font-weight: 500; text-align: right; }
 .runs-grid-head span:nth-child(4) { text-align: right; }
 
 /* Run-overview pager: size picker on the left; count + prev/next on the right */
@@ -307,7 +340,7 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .rr-meta { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rr-row .run-score { font-family: var(--font-mono); font-size: 13px; font-weight: 600; }
+.rr-row .run-score { font-family: var(--font-mono); font-size: 13px; font-weight: 500; }
 /* Align the numeric Score column head + cell. */
 .rr-head span:nth-child(5), .rr-row .run-score { text-align: right; }
 
@@ -396,20 +429,7 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
 .donut-legend li { display: flex; align-items: center; gap: 8px; }
 .donut-key { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
 
-/* ==== ⌘K global search (topbar) ==================================== */
-.topbar-search { position: relative; margin-left: auto; margin-right: 14px; }
-.search-input {
-    width: 260px; max-width: 40vw; padding: 7px 30px 7px 12px;
-    font-family: var(--font-sans); font-size: 13px; color: var(--text-strong);
-    background: var(--surface-card, #fff); border: 1px solid var(--border, #e2e0da);
-    border-radius: 8px;
-}
-.search-input:focus { outline: none; border-color: var(--teal-600); }
-.search-kbd {
-    position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
-    font-family: var(--font-mono); font-size: 10px; color: var(--text-faint);
-    pointer-events: none;
-}
+/* ==== search results dropdown (styling retained for the /search route) === */
 .search-results {
     position: absolute; top: calc(100% + 6px); right: 0; width: 320px; max-width: 60vw;
     background: var(--surface-card, #fff); border: 1px solid var(--border, #e2e0da);
@@ -450,9 +470,9 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .run-row .run-meta { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
-.run-row .run-score { font-family: var(--font-mono); font-size: 13px; font-weight: 600; }
-.run-score.good { color: var(--green-600); }
-.run-score.warn { color: var(--amber-600); }
+.run-row .run-score { font-family: var(--font-mono); font-size: 13px; font-weight: 500; }
+.run-score.good { color: var(--teal-600); }
+.run-score.warn { color: var(--orange-700); }
 .run-score.none { color: var(--text-faint); }
 
 /* per-kind run-list screen: card-wrapped table with a header strip */
@@ -489,7 +509,6 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
 }
 
 /* ==== report view: filter sidebar + body =========================== */
-.report-head { margin-bottom: 18px; }
 .report-back {
     display: inline-flex; align-items: center; gap: 6px;
     color: var(--text-muted); font-size: 13px; text-decoration: none; margin-bottom: 12px;
@@ -560,6 +579,7 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
     padding: 0; margin: -1px; overflow: hidden;
     clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
 }
+.filter-chip:focus-within { outline: 2px solid var(--teal-600); outline-offset: 2px; }
 .filter-chip-dot {
     width: 5px; height: 5px; border-radius: 50%;
     background: var(--border-default);
@@ -647,14 +667,12 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
 }
 
 .filter-sidebar,
-.download-sidebar,
 .rt-panel {
     background: var(--surface-card);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
     padding: 18px;
 }
-.download-title { margin: 0 0 14px; font-size: 15px; font-family: var(--font-display); }
 .filter-sidebar { padding: 24px 22px; }
 .filter-title {
     margin: 0 0 20px;
@@ -689,21 +707,6 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
     cursor: pointer;
 }
 
-.download-sidebar { margin-top: 20px; }
-.download-link {
-    display: inline-block;
-    margin-right: 8px;
-    margin-top: 4px;
-    padding: 6px 14px;
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-    text-decoration: none;
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text-body);
-    background: var(--surface-card);
-}
-.download-link:hover { background: var(--app-gray-50); color: var(--text-strong); }
 
 /* ==== interactive panels ============================================ */
 .rt-interactive-panels, .sim-interactive-panels { margin-top: 32px; }
@@ -713,6 +716,11 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
 
 /* ==== report hero (above tabs) ===================================== */
 .report-hero { margin: 4px 0 20px; }
+.report-hero-kicker {
+    margin: 0 0 4px;
+    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-faint);
+}
 .report-hero-title {
     margin: 0;
     font-family: var(--font-display);
@@ -759,6 +767,8 @@ _TAB_RULES = ''.join(
     '{ color: var(--text-strong); border-bottom-color: var(--teal-600); }\n'
     f'.tabs > .tab-radio:nth-of-type({i}):checked ~ .tab-panels > .tab-panel:nth-child({i}) '
     '{ display: block; }\n'
+    f'.tabs > .tab-radio:nth-of-type({i}):focus-visible ~ .tab-bar > .tab-label:nth-child({i}) '
+    '{ outline: 2px solid var(--teal-600); outline-offset: 2px; border-radius: 4px; }\n'
     for i in range(1, 10)
 )
 
@@ -807,7 +817,6 @@ _SIM_REPORT_CSS = """
 .report-aligned .exec-summary {
     background: var(--surface-card);
     border: 1px solid var(--border-subtle);
-    border-left: 3px solid var(--orange-500);
     border-radius: 12px;
     padding: 16px 20px;
     margin: 16px 0;
@@ -878,6 +887,13 @@ _SIM_REPORT_CSS = """
     border: 1px solid var(--border-default); border-radius: 999px;
     padding: 1px 8px; margin-left: 8px; color: var(--text-muted);
 }
+
+.report-aligned .rk-pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 2px 9px; border-radius: 999px;
+    font-size: 11px; font-weight: 600; line-height: 1.5; white-space: nowrap;
+}
+.report-aligned .rk-pill-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
 
 /* ---- Personas panel (Overview) ---- */
 .sim-report .sim-persona-item + .sim-persona-item { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
@@ -977,6 +993,33 @@ _SIM_REPORT_CSS = """
 }
 
 /* ---- Config tab (spec §Config) ---- */
+/* Run-scale stat tiles (persona/scenario/conversation counts) — big number on
+   a sunken card so the run's scale reads at a glance above the textual config. */
+.report-aligned .rk-stat-row {
+    display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 22px;
+}
+.report-aligned .rk-stat {
+    flex: 1 1 120px; min-width: 120px;
+    display: flex; flex-direction: column; gap: 4px;
+    padding: 14px 16px; border-radius: 10px;
+    background: var(--surface-sunken); border: 1px solid var(--border-subtle);
+}
+.report-aligned .rk-stat-num {
+    font-family: var(--font-display); font-size: 28px; font-weight: 700;
+    line-height: 1; letter-spacing: -0.02em; color: var(--text-strong);
+}
+.report-aligned .rk-stat-cap {
+    font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--text-faint);
+}
+/* Grouped config metadata — a mono sub-label + divider per semantic cluster. */
+.report-aligned .rk-meta-group + .rk-meta-group { margin-top: 20px; }
+.report-aligned .rk-meta-group-title {
+    font-family: var(--font-mono); font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted);
+    padding-bottom: 8px; margin-bottom: 12px;
+    border-bottom: 1px solid var(--border-subtle);
+}
 /* Run-configuration meta grid (report_kit.meta_grid) */
 .report-aligned .rk-meta-grid {
     display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
@@ -989,25 +1032,55 @@ _SIM_REPORT_CSS = """
 .report-aligned .rk-meta-value {
     font-size: 13.5px; color: var(--text-body); margin-top: 4px;
 }
-/* Personas panel (name · communication style · background) */
+/* Personas panel — grid so name · tone · trait bars align under column headers */
+.sim-report .sim-config-persona-head,
 .sim-report .sim-config-persona-row {
-    display: flex; align-items: baseline; gap: 12px;
+    display: grid;
+    /* fixed widths (not auto/1fr per-content) so columns line up across the separate per-row grids;
+       trait columns are wider than the longest header label so the labels don't collide */
+    grid-template-columns: minmax(0, 1fr) 110px repeat(4, 104px);
+    align-items: center; gap: 16px;
+}
+.sim-report .sim-config-persona-head {
+    padding-bottom: 8px; margin-bottom: 12px; border-bottom: 1px solid var(--border-subtle);
+}
+.sim-report .sim-config-persona-head > span {
+    font-family: var(--font-mono); font-size: 10px; color: var(--text-faint);
+    white-space: nowrap;
+}
+.sim-report .sim-config-persona-row {
     margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-subtle);
 }
-.sim-report .sim-config-persona-row:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+.sim-report .sim-config-persona-row:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
 .sim-report .sim-config-persona-name {
-    font-size: 13px; font-weight: 600; color: var(--text-strong); min-width: 160px;
+    font-size: 13px; font-weight: 400; color: var(--text-strong);
 }
 .sim-report .sim-config-persona-style {
     font-family: var(--font-mono); font-size: 11px; color: var(--text-faint);
 }
 .sim-report .sim-config-persona-bg { font-size: 12.5px; color: var(--text-muted); }
 /* Scenarios panel (name + goal + criteria chips) */
+.sim-report .sim-config-scenario-head,
+.sim-report .sim-config-scenario-row {
+    display: grid;
+    /* fixed right columns so the header labels line up over the values across per-row grids */
+    grid-template-columns: minmax(0, 1fr) 200px 76px;
+    align-items: start; gap: 16px;
+}
+.sim-report .sim-config-scenario-head {
+    padding-bottom: 8px; margin-bottom: 12px; border-bottom: 1px solid var(--border-subtle);
+}
+.sim-report .sim-config-scenario-head > span {
+    font-family: var(--font-mono); font-size: 10px; color: var(--text-faint); white-space: nowrap;
+}
+.sim-report .sim-config-scenario-head > span:nth-child(n+2) { justify-self: end; }
+.sim-report .sim-config-scenario-checks,
+.sim-report .sim-config-scenario-rate-cell { justify-self: end; align-self: center; }
 .sim-report .sim-config-scenario-row {
     margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-subtle);
 }
-.sim-report .sim-config-scenario-row:first-child { margin-top: 0; padding-top: 0; border-top: none; }
-.sim-report .sim-config-scenario-name { font-size: 13px; font-weight: 600; color: var(--text-strong); }
+.sim-report .sim-config-scenario-row:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
+.sim-report .sim-config-scenario-name { font-size: 13px; font-weight: 400; color: var(--text-strong); }
 .sim-report .sim-config-scenario-goal { font-size: 12.5px; color: var(--text-muted); margin-top: 3px; }
 .sim-report .sim-config-criteria {
     display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
@@ -1053,7 +1126,7 @@ _SIM_TRANSCRIPT_CSS = """
 
 /* ---- Transcript fragment: judge callout / bubbles / criteria (Task 12) ---- */
 .sim-report .sim-judge {
-    background: var(--surface-sunken); border-left: 3px solid var(--teal-600);
+    background: var(--surface-sunken);
     border-radius: 4px; padding: 10px 14px; margin-bottom: 14px;
 }
 .sim-report .sim-judge-label {
@@ -1429,26 +1502,86 @@ _SIM_REPORT_OVERRIDES_CSS = """
 .sim-report .sim-entity-row:hover .sim-config-scenario-name,
 .sim-report .sim-entity-link:hover { color: var(--orange-500); }
 .sim-report .sim-config-persona-style {
-    font-family: var(--font-sans); font-size: 11px; color: var(--text-faint);
+    font-family: var(--font-sans); font-size: 12px; color: var(--text-muted);
 }
-.sim-report .sim-trait-minis {
-    display: inline-flex; align-items: center; gap: 6px; margin-left: auto;
-}
+/* display:contents lets the 4 bars sit as direct grid cells under the trait headers */
+.sim-report .sim-config-persona-row .sim-trait-minis { display: contents; }
 .sim-report .sim-trait-mini {
-    display: inline-block; width: 34px; height: 4px; border-radius: 999px;
-    background: var(--surface-sunken); overflow: hidden; vertical-align: middle;
+    position: relative; width: 34px; height: 8px; border-radius: 999px;
+    background: var(--surface-sunken); overflow: visible; vertical-align: middle;
 }
+.sim-report .sim-trait-mini--empty { background: transparent; }
 .sim-report .sim-trait-mini-fill {
     display: block; height: 100%; border-radius: inherit; background: var(--teal-600);
 }
-.sim-report .sim-config-check-count {
-    margin-left: auto; font-size: 12px; color: var(--text-muted);
+/* instant tooltip on hover — native title has a ~1s delay */
+.sim-report .sim-trait-mini[data-tip]:hover::after {
+    content: attr(data-tip);
+    position: absolute; bottom: calc(100% + 6px); left: 0;
+    padding: 3px 7px; border-radius: 5px; white-space: nowrap;
+    font-family: var(--font-sans); font-size: 11px; line-height: 1.2;
+    background: var(--text-strong); color: #fff;
+    box-shadow: var(--shadow-lg); pointer-events: none; z-index: 5;
 }
-.sim-report .sim-config-scenario-row { display: flex; align-items: baseline; gap: 12px; }
+.sim-report .sim-config-check-count {
+    font-size: 12px; color: var(--text-muted); white-space: nowrap;
+}
+.sim-report .sim-config-scenario-main { min-width: 0; }
 .sim-report .sim-config-criterion {
     font-family: var(--font-sans); font-size: 11.5px; background: var(--surface-sunken);
     border-radius: 6px; padding: 3px 9px;
 }
+
+/* Top failure modes panel — min-count slider filters bars client-side. */
+.sim-report .sim-fm-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+}
+.sim-report .sim-fm-filter {
+    display: flex; align-items: center; gap: 8px;
+    text-transform: none; letter-spacing: normal;
+}
+.sim-report .sim-fm-filter label {
+    font-family: var(--font-mono); font-size: 10px; color: var(--text-faint);
+}
+.sim-report .sim-fm-slider { width: 120px; accent-color: var(--red-600); }
+.sim-report .sim-fm-out {
+    font-family: var(--font-mono); font-size: 12px; font-weight: 600;
+    color: var(--text-strong); min-width: 1.4em; text-align: right;
+}
+.sim-report .sim-fm-bars { display: flex; flex-direction: column; gap: 8px; }
+.sim-report .sim-fm-row {
+    display: grid; grid-template-columns: minmax(0, 1fr) 200px 32px;
+    align-items: center; gap: 12px;
+}
+/* display:grid above beats the UA [hidden]{display:none}; restore it so the
+   server-side default filter and the slider actually hide sub-threshold rows. */
+.sim-report .sim-fm-row[hidden] { display: none; }
+.sim-report .sim-fm-label {
+    font-size: 12px; color: var(--text-body); white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+}
+.sim-report .sim-fm-track {
+    height: 14px; background: var(--chart-track); border-radius: 3px; overflow: hidden;
+}
+.sim-report .sim-fm-fill { display: block; height: 100%; background: var(--red-600); border-radius: 3px; }
+.sim-report .sim-fm-count {
+    font-family: var(--font-sans); font-size: 11px; font-weight: 600; color: var(--text-strong);
+}
+.sim-report .sim-fm-empty { font-size: 12px; color: var(--text-muted); margin: 8px 0 0; }
+
+/* Scenario pass-rate pill (Config panel) */
+.sim-report .sim-scenario-rate {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 2px 9px; border-radius: 999px;
+    font-family: var(--font-mono); font-size: 11px; font-weight: 400; white-space: nowrap;
+}
+.sim-report .sim-scenario-rate-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.sim-report .sim-scenario-rate--high { background: var(--green-100); color: var(--green-600); }
+.sim-report .sim-scenario-rate--high .sim-scenario-rate-dot { background: var(--green-600); }
+.sim-report .sim-scenario-rate--mid { background: var(--amber-100); color: var(--amber-600); }
+.sim-report .sim-scenario-rate--mid .sim-scenario-rate-dot { background: var(--amber-600); }
+.sim-report .sim-scenario-rate--low { background: var(--red-100); color: var(--red-600); }
+.sim-report .sim-scenario-rate--low .sim-scenario-rate-dot { background: var(--red-600); }
 .sim-report .sim-entity-link {
     border: 0; padding: 0; background: transparent; color: var(--text-strong);
     font: inherit; font-weight: 600; cursor: pointer; text-align: left;
@@ -1512,7 +1645,17 @@ _SIM_REPORT_OVERRIDES_CSS = """
     border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--surface-app);
     color: var(--text-body); padding: 6px 10px; font: inherit; cursor: pointer;
 }
-.sim-report .sim-entity-nav { font-family: var(--font-mono); min-width: 32px; }
+.sim-report .sim-entity-nav {
+    font-family: var(--font-mono); min-width: 32px;
+    display: inline-flex; align-items: center; gap: 6px;
+}
+/* j/k hotkey hint on the modal prev/next buttons. */
+.sim-report .sim-entity-kbd {
+    font-family: var(--font-mono); font-size: 10px; line-height: 1;
+    padding: 2px 5px; border-radius: 4px;
+    border: 1px solid var(--border-subtle); background: var(--surface-sunken);
+    color: var(--text-faint);
+}
 .sim-report .sim-entity-nav:hover,
 .sim-report .sim-entity-close:hover { border-color: var(--orange-500); color: var(--orange-500); }
 
@@ -1585,7 +1728,7 @@ _SIM_TRANSCRIPT_OVERRIDES_CSS = """
     font-family: var(--font-sans); font-size: 12px; color: var(--text-faint);
 }
 .sim-report .sim-judge {
-    background: var(--surface-sunken); border-left: 3px solid var(--teal-600);
+    background: var(--surface-sunken);
     border-radius: var(--radius-md); padding: 10px 14px; margin-bottom: 14px;
 }
 .sim-report .sim-judge-label {
@@ -1659,12 +1802,8 @@ _SIM_TRANSCRIPT_OVERRIDES_CSS = """
 # composition (hero agent pills, Overview 2-col grid, agents-under-test).
 _RT_REPORT_CSS = """
 /* ---- Run header (spec §Run header) ---- */
-.rt-hero-title {
-    margin: 0; display: flex; align-items: center; gap: 10px;
-    font-family: var(--font-display);
-    font-size: 19px; font-weight: 600; letter-spacing: -0.01em;
-    color: var(--text-strong);
-}
+/* Shares .report-hero-title's type scale; only adds the flex row for the inline agents pill. */
+.rt-hero-title { display: flex; align-items: center; gap: 10px; }
 .rt-hero-agents-pill {
     font-family: var(--font-mono); font-size: 11px;
     background: var(--surface-sunken); color: var(--text-muted);
@@ -1806,8 +1945,8 @@ _RT_REPORT_CSS = """
     color: var(--text-faint); display: block;
 }
 .rt-report .rt-verdict-body { font-size: 13px; line-height: 1.55; margin: 4px 0 0; color: var(--text-body); }
-.rt-report .rt-verdict-vuln { border-left: 3px solid var(--orange-500); }
-.rt-report .rt-verdict-safe { background: var(--green-50); border-left: 3px solid var(--green-600); }
+.rt-report .rt-verdict-vuln { background: var(--red-50); }
+.rt-report .rt-verdict-safe { background: var(--green-50); }
 .rt-report .rt-verdict-error .rt-verdict-body { color: var(--red-600); }
 
 /* ---- Attacks evidence table (spec §Attacks, Task 14) ---- */
@@ -1854,8 +1993,8 @@ _RT_REPORT_CSS = """
 /* Severity-definitions table (and any .severity-* label) uses the semantic
    --sev-* scale (4-step: critical/high/medium/low) so medium stays a neutral
    tint distinct from high, rather than collapsing onto --c-warn. */
-.rt-report .severity-critical { color: var(--sev-critical); }
-.rt-report .severity-high     { color: var(--sev-high); }
+.rt-report .severity-critical { color: var(--red-700); }
+.rt-report .severity-high     { color: var(--orange-700); }
 .rt-report .severity-medium   { color: var(--sev-medium); }
 .rt-report .severity-low      { color: var(--sev-low); }
 """
