@@ -478,7 +478,7 @@
   <section class="slide" id="s4">
     <div class="slide-inner">
       <div class="eyebrow">Live demo</div>
-      <h2>Three acts</h2>
+      <h2>Four acts</h2>
       <ul class="next-list">
         <li>Act 1 — From scratch, no data.
           <span class="sub">A live credit-card Q&amp;A agent, a test suite generated from nothing but its description.</span>
@@ -487,7 +487,10 @@
           <span class="sub">The same simulation against any OpenAI-compatible endpoint, HTTP agent, or framework via the SDK.</span>
         </li>
         <li>Act 3 — Working with data.
-          <span class="sub">Freeze the suite, change the agent, re-run like-for-like. Then extend it without losing anything.</span>
+          <span class="sub">Freeze the suite, extend it, share it as an orq dataset.</span>
+        </li>
+        <li>Act 4 — Inspect, harden, re-run.
+          <span class="sub">Read the results in the dashboard, fix the agent live, prove the fix on the frozen set.</span>
         </li>
       </ul>
       <div class="footnote">Everything shown is open source — evaluatorq, pip-installable.</div>
@@ -589,7 +592,7 @@ results = <span class="kw">await</span> simulate(target_callback=my_agent,
        ============================================================ -->
   <section class="slide" id="s8">
     <div class="slide-inner">
-      <div class="eyebrow">Demo · The results dashboard</div>
+      <div class="eyebrow">Demo · Act 4 — the results</div>
       <h2>One dashboard, four questions</h2>
 
       <div class="metrics">
@@ -619,7 +622,7 @@ results = <span class="kw">await</span> simulate(target_callback=my_agent,
           <span class="sub">Per-turn judge scores with reasoning; find the exact turn where it derails.</span>
         </li>
       </ul>
-      <div class="footnote">evaluatorq sim ui --latest</div>
+      <div class="footnote">make dashboard → 127.0.0.1:8000 · then: fix the agent live, `make rerun` the frozen set, watch the pass rate move</div>
     </div>
   </section>
 
@@ -634,8 +637,8 @@ results = <span class="kw">await</span> simulate(target_callback=my_agent,
         <li>Regression gate.
           <span class="sub">Frozen suite re-runs on every prompt or model change — in CI, before merge.</span>
         </li>
-        <li>Drive it from Claude Code (or any coding agent).
-          <span class="sub">CLI-first with JSON output: the agent runs the sim, reads the failing transcripts, patches the prompt, re-runs. You review the diff.</span>
+        <li>Drive it from Claude Code — you just watched it.
+          <span class="sub">CLI-first with JSON output: the agent read the failures, patched the instructions, re-ran the frozen set. You review the diff.</span>
         </li>
         <li>Self-improving workflows — with one caution.
           <span class="sub">The frozen suite is a fitness function for automated iteration. Keep held-out scenarios so you optimize the agent, not the judge.</span>

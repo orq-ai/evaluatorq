@@ -409,35 +409,40 @@
         </div>
 
         <div class="milestone">
-          <div class="when">32:00–38:00</div>
+          <div class="when">32:00–39:00</div>
           <div class="dot-col"><span class="dot"></span><span class="line"></span></div>
           <div class="body">
-            <h3>Results walkthrough — the dashboard</h3>
+            <h3>Demo · Act 4 — inspect, harden, re-run</h3>
             <p>
-              The dedicated results segment. Bauke opens
-              <code>evaluatorq sim ui --latest</code> on the Act 1 run and walks
-              it top-down as four questions: <em>how bad is it</em> (summary
-              strip: goal completion, avg score, turns, errors, tokens) →
+              The results segment, live end-to-end. <strong>4a — inspect:</strong>
+              Bauke opens the dashboard (<code>make dashboard</code> →
+              127.0.0.1:8000, or <code>sim ui</code> for a single run) and walks
+              it as four questions: <em>how bad is it</em> (summary strip) →
               <em>where does it break</em> (persona × scenario heatmap) →
               <em>why</em> (top failure modes, rules broken) → <em>show me</em>
-              (drill into one failing transcript, per-turn judge scores with
-              reasoning, find the turn where it derails). Arian drives with Q6
-              — this segment is the interview, on screen.
+              (failing transcript, per-turn judge scores with reasoning). Arian
+              drives with Q6. <strong>4b — harden:</strong> Arian asks Q7 as the
+              pivot; Claude Code reads the run, proposes the minimal instruction
+              fix, applies it live via <code>orq agents update</code>.
+              <strong>4c — prove it:</strong> <code>make rerun</code> on the
+              frozen set — pass rate moves up, the failing transcript now
+              passes. The loop, closed on camera.
             </p>
-            <div class="tags"><span class="tag bauke">Bauke drives</span><span class="tag arian">Arian Q6</span><span class="tag">deck s8</span><span class="tag">sim ui</span></div>
+            <div class="tags"><span class="tag bauke">Bauke drives</span><span class="tag arian">Arian Q6–Q8</span><span class="tag">deck s8</span><span class="tag">RUNBOOK Act 4</span></div>
           </div>
         </div>
 
         <div class="milestone">
-          <div class="when">38:00–42:00</div>
+          <div class="when">39:00–42:00</div>
           <div class="dot-col"><span class="dot"></span><span class="line"></span></div>
           <div class="body">
-            <h3>Interview block — results to workflow</h3>
+            <h3>Interview block — zoom out</h3>
             <p>
-              Screen share off, cameras on. Arian runs Q7–Q9: what to do once
-              you've seen the failures, Claude Code integration, self-improving
-              loops. This is the segment people clip and share — conversational,
-              opinionated, honest about limits.
+              Screen share off, cameras on. Arian runs Q9 (self-improving
+              loops and their limits) plus one reflection beat: what we just
+              watched was the whole workflow — simulate, inspect, harden,
+              re-run — and none of it needed a dataset to exist first.
+              Conversational, opinionated, honest about limits.
             </p>
             <div class="tags"><span class="tag arian">Arian leads</span><span class="tag bauke">Bauke answers</span><span class="tag">deck s9</span></div>
           </div>
@@ -643,33 +648,38 @@
               <li><strong>Transcript drill-down</strong> — "show me one." Beat: per-turn judge scores with reasoning; find the exact turn where it derails — usually a mid-conversation pivot, not turn one. Every failure is a bug report with the reproduction attached.</li>
             </ul>
           </div>
-          <div class="owner">Cue · results walkthrough (32:00), drives the whole segment · deck s8</div>
+          <div class="owner">Cue · Act 4a (32:00), drives the inspect segment · deck s8</div>
         </div>
 
         <div class="q">
-          <div class="qt">Q7 · "OK, I found the failure. What's the workflow from here — what do I actually do?"</div>
+          <div class="qt">Q7 · "OK, we found the failure. Don't tell me the workflow — show me. What do we actually do right now?"</div>
           <div class="qd">
-            Beats: fix the prompt/tool → re-run the <em>frozen</em> datapoints
-            (<code>--datapoints file.jsonl</code>) → compare like-for-like →
-            regressions become a gate, not a surprise. Wire it into CI: the
-            suite runs on every agent change like unit tests. And the suite is
-            shareable now — <code>sim upload-dataset</code> pushes it to an orq
-            dataset, <code>sim simulate --dataset-id</code> runs from it.
+            The pivot question — it launches Act 4b instead of getting a spoken
+            answer. Bauke hands the run to Claude Code: read
+            <code>.evaluatorq/sim-runs/</code>, summarize which criteria failed
+            for which personas, quote the derailing turns, propose the
+            <em>minimal</em> instruction fix, apply it live with
+            <code>orq agents update boh_creditcard_agent_demo --instructions
+            "..."</code>. While it works, Bauke narrates the frame: fix →
+            re-run frozen set → like-for-like compare → regression gate in CI.
+            Suite is shareable too (<code>sim upload-dataset</code> /
+            <code>--dataset-id</code>).
           </div>
-          <div class="owner">Cue · interview block opener (~38:00)</div>
+          <div class="owner">Cue · pivot into Act 4b (~35:00)</div>
         </div>
 
         <div class="q">
-          <div class="qt">Q8 · "Can I drive this from Claude Code? Could a coding agent run the whole loop for me?"</div>
+          <div class="qt">Q8 · "So that's Claude Code driving the whole loop. Where's the human in this?"</div>
           <div class="qd">
-            Beats:
+            Ask while the fix applies or right after <code>make rerun</code>
+            shows the pass rate move. Beats:
             <ul>
-              <li>Yes — it's CLI-first with machine-readable output, which is exactly what coding agents want.</li>
-              <li>The loop: Claude Code runs <code>sim run</code>, reads the failing transcripts, patches the system prompt, re-runs the frozen set, shows you the diff. Human reviews, agent iterates.</li>
+              <li>It works because evaluatorq is CLI-first with machine-readable output — exactly what coding agents want.</li>
+              <li>The loop we just watched: read failures → patch instructions → re-run frozen set → compare. Agent iterates, human reviews the diff.</li>
               <li>Honest note: the human stays on the diff. You're reviewing changes, not writing test cases.</li>
             </ul>
           </div>
-          <div class="owner">Cue · interview block (~40:00)</div>
+          <div class="owner">Cue · Act 4b/4c (~37:00), while the rerun streams</div>
         </div>
 
         <div class="q">
@@ -769,22 +779,26 @@ uv run evaluatorq sim simulate \
         </div>
 
         <div class="code-block">
-          <div class="file-label">Results walkthrough — the dashboard (32:00)</div>
-          <div class="code"><pre><span class="cm"># open the dashboard on the Act 1 run</span>
-uv run evaluatorq sim ui <span class="kw">--latest</span>
+          <div class="file-label">Act 4 — inspect, harden, re-run (32:00)</div>
+          <div class="code"><pre><span class="cm"># 4a. open the dashboard on the demo's run store</span>
+make dashboard              <span class="cm"># -> http://127.0.0.1:8000</span>
+<span class="cm"># or single run: uv run evaluatorq sim ui --latest</span>
 
 <span class="cm"># tour order — four questions, top to bottom:</span>
-<span class="cm">#  1. how bad?   summary strip (goal completion, avg</span>
-<span class="cm">#                score, conversations, turns, errors,</span>
-<span class="cm">#                tokens)</span>
+<span class="cm">#  1. how bad?   summary strip (goal completion,</span>
+<span class="cm">#                avg score, turns, errors, tokens)</span>
 <span class="cm">#  2. where?     persona × scenario heatmap</span>
-<span class="cm">#  3. why?       top failure modes · rules broken ·</span>
-<span class="cm">#                termination reasons</span>
-<span class="cm">#  4. show me.   drill-down: transcript, per-turn</span>
+<span class="cm">#  3. why?       top failure modes · rules broken</span>
+<span class="cm">#  4. show me.   transcript drill-down, per-turn</span>
 <span class="cm">#                judge scores + reasoning</span>
 
-<span class="cm"># park on a failing row BEFORE handing to Q&A —</span>
-<span class="cm"># pick it during the dry run, note persona+scenario</span></pre></div>
+<span class="cm"># 4b. harden — Claude Code reads the run, proposes</span>
+<span class="cm"># minimal instruction fix, applies it (validated):</span>
+orq agents update boh_creditcard_agent_demo \
+  <span class="kw">--instructions</span> <span class="str">"&lt;full updated instructions&gt;"</span>
+
+<span class="cm"># 4c. prove it — same frozen set, hardened agent</span>
+make rerun</pre></div>
         </div>
 
         <div class="code-block">
@@ -834,9 +848,14 @@ orq agents retrieve boh_creditcard_agent_demo
           <div class="cell">Arian fires Q1/Q2/Q3 to fill (that's what the cues are timed for). If &gt;2 min, open <code>backup_datapoints.jsonl</code> / the pre-baked run JSON in <code>sim ui</code> and keep the live one running in a second tab.</div>
         </div>
         <div class="row">
-          <div class="cell"><code>sim ui</code> fails to open or renders wrong on the shared screen.</div>
+          <div class="cell">Dashboard (<code>make dashboard</code> / <code>sim ui</code>) fails to open or renders wrong on the shared screen.</div>
           <div class="cell"><span class="sev med">MED</span></div>
-          <div class="cell">Fallback: <code>sim runs</code> table in the terminal + open the run JSON directly and read the failing transcript from it. Less pretty, same story.</div>
+          <div class="cell">Two viewers = mutual fallback (FastHTML on :8000, Streamlit via <code>sim ui</code>). Last resort: <code>sim runs</code> table + read the failing transcript from the run JSON. Less pretty, same story.</div>
+        </div>
+        <div class="row">
+          <div class="cell">Claude Code goes sideways during the live fix (Act 4b) — wrong diagnosis, over-broad edit, or just slow.</div>
+          <div class="cell"><span class="sev high">HIGH</span></div>
+          <div class="cell">Keep the dry run's known-good instruction fix in a scratch file; apply it manually with <code>orq agents update boh_creditcard_agent_demo --instructions "..."</code> and continue to <code>make rerun</code>. Narrate honestly: "the agent proposed something broader than I want on stage." Note: use <code>orq</code>, not <code>orqi</code> — <code>orqi agent update</code> 404s (RUNBOOK Gaps §6).</div>
         </div>
         <div class="row">
           <div class="cell">"Can I push the suite to an orq dataset and run from there?"</div>
