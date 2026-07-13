@@ -40,7 +40,7 @@ def _load_mark() -> str:
     return _mark_cache
 
 
-# Orange orq favicon, inlined as a base64 data-URI <link> so it works live, in
+# Green orq favicon, inlined as a base64 data-URI <link> so it works live, in
 # tests, and in static exports without depending on the /static/ route.
 _FAVICON_PATH = Path(__file__).parent / 'static' / 'orq-favicon.svg'
 _favicon_cache: str | None = None
