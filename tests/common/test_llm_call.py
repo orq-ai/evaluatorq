@@ -223,7 +223,9 @@ async def test_memoized_rejection_strips_reasoning_effort_up_front_no_second_400
 
     # No 400 round-trip: one call, and reasoning_effort was never sent.
     assert client.chat.completions.create.await_count == 1
-    assert 'reasoning_effort' not in client.chat.completions.create.await_args.kwargs
+    args = client.chat.completions.create.await_args
+    assert args is not None
+    assert 'reasoning_effort' not in args.kwargs
 
 
 @pytest.mark.asyncio

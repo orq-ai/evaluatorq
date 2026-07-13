@@ -56,13 +56,17 @@ async def fetch_agent_info(agent_key: str) -> dict[str, Any] | None:
         tools = [n for t in raw_tools or [] if (n := getattr(t, 'display_name', None) or getattr(t, 'key', None))]
 
         raw_kbs = getattr(agent_data, 'knowledge_bases', None) or []
-        knowledge_bases = [n for kb in raw_kbs if (n := kb if isinstance(kb, str) else getattr(kb, 'knowledge_id', None))]
+        knowledge_bases = [
+            n for kb in raw_kbs if (n := kb if isinstance(kb, str) else getattr(kb, 'knowledge_id', None))
+        ]
 
         raw_stores = getattr(agent_data, 'memory_stores', None) or []
         memory_stores = [n for ms in raw_stores if (n := ms if isinstance(ms, str) else getattr(ms, 'key', None))]
 
         raw_sub_agents = getattr(agent_data, 'team_of_agents', None) or []
-        sub_agents = [n for a in raw_sub_agents if (n := a.get('key') if isinstance(a, dict) else getattr(a, 'key', None))]
+        sub_agents = [
+            n for a in raw_sub_agents if (n := a.get('key') if isinstance(a, dict) else getattr(a, 'key', None))
+        ]
 
         from evaluatorq.dashboard.orq_links import orq_studio_url, studio_workspace_key
 

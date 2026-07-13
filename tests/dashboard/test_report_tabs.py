@@ -715,6 +715,7 @@ async def test_resolve_agent_info_missing_core_augments_filling_only_gaps(sim_ru
     monkeypatch.setattr(rt, '_orq_agent_info_cached', _fetch)
     display, original, source = await rt._resolve_agent_info(_orq_run(sim_run, agent_info=captured))
     assert source == 'augmented'
+    assert display is not None
     assert display['model'] == 'openai/gpt-5'  # gap filled from Orq
     assert display['description'] == 'AS-RUN description'  # captured value kept
     assert original is captured
@@ -732,6 +733,7 @@ async def test_resolve_agent_info_none_fetches_whole_card(sim_run, monkeypatch) 
     display, original, source = await rt._resolve_agent_info(_orq_run(sim_run, agent_info=None))
     assert source == 'fetched'
     assert original is None
+    assert display is not None
     assert display['key'] == _AGENT_INFO['key']
 
 

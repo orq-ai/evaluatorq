@@ -233,7 +233,7 @@ _CRIT_CARET = (
 )
 
 
-def _criteria_dots(criteria: list[dict]) -> str:
+def _criteria_dots(criteria: list[dict[str, Any]]) -> str:
     """Collapsed pass/fail dots that unfold to the full criteria text.
 
     Summary is a hover-lit pill of dots (each dot titled for a quick tooltip) plus

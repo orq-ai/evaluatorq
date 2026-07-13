@@ -286,12 +286,15 @@ def _sim_entity_modal(entity_context: dict[str, Any]) -> str:
 
 def _sim_persona_template(persona: dict[str, Any], entity_id: str, index: int, total: int) -> str:
     name = esc(persona.get('name', ''))
-    traits = persona.get('traits') if isinstance(persona.get('traits'), dict) else {}
-    style = traits.get('communication_style') if isinstance(traits, dict) else None
-    background = persona.get('background') or (traits.get('background') if isinstance(traits, dict) else None)
+    raw_traits = persona.get('traits')
+    traits: dict[str, Any] = raw_traits if isinstance(raw_traits, dict) else {}
+    style = traits.get('communication_style')
+    background = persona.get('background') or traits.get('background')
     conversations = persona.get('conversations')
     trait_rows = ''.join(
-        _sim_trait_detail(label, traits.get(key)) for key, label in _SIM_TRAIT_LABELS if isinstance(traits.get(key), int | float)
+        _sim_trait_detail(label, traits.get(key))
+        for key, label in _SIM_TRAIT_LABELS
+        if isinstance(traits.get(key), int | float)
     )
     meta = ''.join(
         item
@@ -327,7 +330,11 @@ def _sim_scenario_template(scenario: dict[str, Any], entity_id: str, index: int,
     context_html = f'<p class="sim-entity-prose">{esc(str(context))}</p>' if context else ''
     goal_section = f'<section><h3>Goal</h3>{goal_html}</section>' if goal_html else ''
     context_section = f'<section><h3>Context</h3>{context_html}</section>' if context_html else ''
-    criteria_section = f'<section><h3>Criteria</h3><ul class="sim-entity-criteria">{criteria_html}</ul></section>' if criteria_html else ''
+    criteria_section = (
+        f'<section><h3>Criteria</h3><ul class="sim-entity-criteria">{criteria_html}</ul></section>'
+        if criteria_html
+        else ''
+    )
     checks = f'{len(criteria)} {"check" if len(criteria) == 1 else "checks"}'
     body = (
         f'<div class="sim-entity-detail">'
@@ -585,7 +592,7 @@ def _sim_turn_quality(by_kind: dict[str, Any]) -> str:
     if len(turns) >= 2:
         x_labels = [f'Turn {t}' for t in turns]
         pretty_series = {
-            _TURN_METRIC_LABELS.get(name, name.replace('_', ' ')).capitalize(): values
+            (_TURN_METRIC_LABELS.get(name) or name.replace('_', ' ')).capitalize(): values
             for name, values in series.items()
         }
         chart = line_chart(x_labels, pretty_series)
@@ -635,11 +642,7 @@ def _sim_overview(rid: str, by_kind: dict[str, Any], rows: list[Any], run: Simul
     quality_tiles = _sim_avg_quality_tiles(metrics_data.get('avg_quality_metrics', {}))
     second_html = panel('Average quality metrics', quality_tiles) if quality_tiles else _sim_tokens_panel(tokens_data)
 
-    return (
-        f'{agent_card_html}'
-        f'{summary_html}{kpi_html}'
-        f'<div class="sim-overview-grid-2">{donut_html}{second_html}</div>'
-    )
+    return f'{agent_card_html}{summary_html}{kpi_html}<div class="sim-overview-grid-2">{donut_html}{second_html}</div>'
 
 
 # Scalar identity fields whose absence means the run's snapshot is incomplete
@@ -827,9 +830,7 @@ def _sim_agent_card(agent_info: dict[str, Any] | None, *, bare: bool = False, fo
 
     role_html = f'<span class="sim-agent-role">{esc(role)}</span>' if role else ''
     open_html = (
-        f'<a class="sim-agent-open" href="{esc(url)}" target="_blank" rel="noopener">Open in ORQ ↗</a>'
-        if url
-        else ''
+        f'<a class="sim-agent-open" href="{esc(url)}" target="_blank" rel="noopener">Open in ORQ ↗</a>' if url else ''
     )
     model_html = f'<div class="sim-agent-model">{esc(model)}</div>' if model else ''
     desc_html = f'<p class="sim-agent-desc">{esc(description)}</p>' if description else ''
@@ -1420,8 +1421,7 @@ def _rt_agent_card(agent_ctx: dict[str, Any] | None, key: str, stats: dict[str, 
         base_url=_resolve_orq_base_url(None),
     )
     studio_html = (
-        f'<a class="rt-agent-card-studio" href="{esc(studio_url)}" target="_blank" rel="noopener">'
-        'Open in Studio</a>'
+        f'<a class="rt-agent-card-studio" href="{esc(studio_url)}" target="_blank" rel="noopener">Open in Studio</a>'
         if studio_url
         else ''
     )
@@ -1601,7 +1601,11 @@ def _rt_config(by_kind: dict[str, Any], report: RedTeamReport) -> str:
     method_data: dict[str, Any] = methodology_section.data if methodology_section is not None else {}
 
     created_at = summary_data.get('created_at')
-    generated = created_at.date().isoformat() if hasattr(created_at, 'date') else (str(created_at) or None)
+    generated = (
+        created_at.date().isoformat()
+        if created_at is not None and hasattr(created_at, 'date')
+        else (str(created_at) or None)
+    )
 
     run_config_html = panel(
         'Run configuration',
