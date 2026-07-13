@@ -1148,10 +1148,20 @@ _SIM_TRANSCRIPT_CSS = """
 # diverge (font, spacing, frameless tables/heatmap, etc.) or are sim-only are
 # kept here.
 _SIM_REPORT_OVERRIDES_CSS = """
-/* Outcomes donut sits in a white .rk-panel on the sim report: center the
-   donut + legend row both axes so it fills the (stretched) panel height. */
-.sim-report .rk-panel .donut-wrap { flex-direction: column; justify-content: center; align-items: center; gap: 20px; height: 100%; }
-.sim-report .rk-panel .donut-legend { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 16px; }
+/* Outcomes donut lives in a .chart-card (not a .rk-panel). Give it the same
+   white-card chrome as its grid sibling so it doesn't sit bare on the page
+   background, and make it a flex column that stretches to the sibling's height
+   with the donut + legend centered on both axes. */
+.sim-report .chart-card {
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: 16px 20px;
+    margin: 0;
+}
+.sim-report .sim-overview-grid-2 > .chart-card { display: flex; flex-direction: column; }
+.sim-report .chart-card .donut-wrap { flex-direction: column; justify-content: center; align-items: center; gap: 20px; flex: 1; }
+.sim-report .chart-card .donut-legend { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 16px; }
 /* Sim report is all-sans to match the mockup (no monospace anywhere). */
 .sim-report .report-hero-sub { font-family: var(--font-sans); }
 
