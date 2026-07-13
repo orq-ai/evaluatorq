@@ -114,7 +114,7 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
     tabs = _tabs(
         'simtab',
         [
-            ('Overview', _sim_overview(by_kind, rows)),
+            ('Overview', _sim_overview(by_kind, rows, run)),
             ('Breakdown', _sim_breakdown(by_kind, render)),
             (
                 'Transcripts',
@@ -445,11 +445,12 @@ def _sim_turn_quality(by_kind: dict[str, Any]) -> str:
     return f'{callout_html}{chart_html}{grid_html}'
 
 
-def _sim_overview(by_kind: dict[str, Any], rows: list[Any]) -> str:
-    """Overview tab body: exec summary, 5-card KPI band, then two 2-col grids
-    (donut + avg-quality metrics; personas + scenarios). Spec §Overview."""
+def _sim_overview(by_kind: dict[str, Any], rows: list[Any], run: SimulationRun) -> str:
+    """Overview tab body: agent info card, exec summary, 5-card KPI band, then
+    two 2-col grids (donut + avg-quality metrics; personas + scenarios). Spec §Overview."""
     from evaluatorq.dashboard.report_kit import exec_summary, panel
 
+    agent_card_html = _sim_agent_card(run.agent_info)
     summary_section = by_kind.get('summary')
     overview_section = by_kind.get('overview')
     heatmap_section = by_kind.get('persona_scenario_heatmap')
@@ -477,9 +478,64 @@ def _sim_overview(by_kind: dict[str, Any], rows: list[Any]) -> str:
     scenarios_html = _sim_scenarios_panel(overview_data.get('scenarios', []))
 
     return (
+        f'{agent_card_html}'
         f'{summary_html}{kpi_html}'
         f'<div class="sim-overview-grid-2">{donut_html}{second_html}</div>'
         f'<div class="sim-overview-grid-2 sim-overview-grid-2--top">{personas_html}{scenarios_html}</div>'
+    )
+
+
+def _sim_agent_card(agent_info: dict[str, Any] | None) -> str:
+    """Agent-under-test card: name/role/model/description, sub-agent
+    delegates, and tools/knowledge/memory chip groups (Task 2)."""
+    if not agent_info:
+        return ''
+
+    key = agent_info.get('key') or ''
+    role = agent_info.get('role')
+    model = agent_info.get('model')
+    description = agent_info.get('description')
+    url = agent_info.get('url')
+    sub_agents = agent_info.get('sub_agents') or []
+    tools = agent_info.get('tools') or []
+    knowledge_bases = agent_info.get('knowledge_bases') or []
+    memory_stores = agent_info.get('memory_stores') or []
+
+    role_html = f'<span class="sim-agent-role">{esc(role)}</span>' if role else ''
+    open_html = (
+        f'<a class="sim-agent-open" href="{esc(url)}" target="_blank" rel="noopener">Open in ORQ ↗</a>'
+        if url
+        else ''
+    )
+    model_html = f'<div class="sim-agent-model">{esc(model)}</div>' if model else ''
+    desc_html = f'<p class="sim-agent-desc">{esc(description)}</p>' if description else ''
+
+    delegates_html = ''
+    if sub_agents:
+        chips = ''.join(f'<span class="sim-agent-chip">{esc(a)}</span>' for a in sub_agents)
+        delegates_html = f'<div class="sim-agent-delegates"><span>delegates to</span>{chips}</div>'
+
+    def _chip_group(label: str, items: list[str]) -> str:
+        if not items:
+            return ''
+        chips = ''.join(f'<span class="sim-agent-chip">{esc(v)}</span>' for v in items)
+        return f'<div class="sim-agent-group"><span class="sim-agent-group-label">{esc(label)}</span>{chips}</div>'
+
+    groups_html = (
+        f'{_chip_group("TOOLS", tools)}'
+        f'{_chip_group("KNOWLEDGE", knowledge_bases)}'
+        f'{_chip_group("MEMORY", memory_stores)}'
+    )
+    groups_wrap = f'<div class="sim-agent-groups">{groups_html}</div>' if groups_html else ''
+
+    return (
+        '<div class="rk-panel sim-agent-card">'
+        '<div class="sim-agent-head">'
+        f'<div><span class="sim-agent-name">{esc(key)}</span>{role_html}</div>'
+        f'{open_html}'
+        '</div>'
+        f'{model_html}{desc_html}{delegates_html}{groups_wrap}'
+        '</div>'
     )
 
 

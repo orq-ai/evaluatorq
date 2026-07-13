@@ -462,3 +462,61 @@ def test_rt_config_has_metagrid_and_jury(rt_report_multi):
     assert 'Run configuration' in html or 'rk-meta' in html
     assert 'Methodology' in html
     assert 'JURY RELIABILITY' in html  # deviation #12: jury block replaces mockup's JURY string
+
+
+_AGENT_INFO = {
+    'key': 'support-orchestrator',
+    'id': '01K8N...',
+    'role': 'Router',
+    'description': 'Front-door agent that triages requests.',
+    'model': 'openai/gpt-4o',
+    'tools': ['route_request', 'summarize'],
+    'knowledge_bases': ['acme-help-center'],
+    'memory_stores': [],
+    'sub_agents': ['billing-agent'],
+    'workspace_id': '624ccbbd-000',
+    'base_url': 'https://my.orq.ai',
+    'url': 'https://my.orq.ai/project/agents/01K8N...',
+}
+
+
+def test_sim_overview_agent_card_full(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    run = sim_run.model_copy(update={'agent_info': _AGENT_INFO})
+    html = sim_report_tabs('rid', run)
+    assert 'class="rk-panel sim-agent-card"' in html
+    assert 'support-orchestrator' in html
+    assert 'Router' in html
+    assert 'Front-door agent that triages requests.' in html
+    assert 'route_request' in html
+    assert 'href="https://my.orq.ai/project/agents/01K8N..."' in html
+    assert 'target="_blank"' in html
+
+
+def test_sim_overview_agent_card_absent_when_no_agent_info(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    run = sim_run.model_copy(update={'agent_info': None})
+    html = sim_report_tabs('rid', run)
+    assert 'sim-agent-card' not in html
+
+
+def test_sim_overview_agent_card_omits_open_link_without_url(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    agent_info = dict(_AGENT_INFO, url=None)
+    run = sim_run.model_copy(update={'agent_info': agent_info})
+    html = sim_report_tabs('rid', run)
+    assert 'class="rk-panel sim-agent-card"' in html
+    assert 'sim-agent-open' not in html
+
+
+def test_sim_overview_agent_card_escapes_description(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    agent_info = dict(_AGENT_INFO, description='<script>alert(1)</script>')
+    run = sim_run.model_copy(update={'agent_info': agent_info})
+    html = sim_report_tabs('rid', run)
+    assert '<script>' not in html
+    assert '&lt;script&gt;' in html

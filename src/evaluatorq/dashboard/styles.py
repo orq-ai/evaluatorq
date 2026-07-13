@@ -1220,6 +1220,45 @@ _SIM_REPORT_CSS = """
     font-family: var(--font-sans); font-size: 11.5px; background: var(--surface-sunken);
     border-radius: 6px; padding: 3px 9px;
 }
+
+/* ---- Agent info card ---- */
+.sim-report .sim-agent-card { margin-bottom: 16px; }
+.sim-report .sim-agent-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.sim-report .sim-agent-name {
+    font-family: var(--font-sans); font-size: 18px; font-weight: 600; color: var(--text-strong);
+}
+.sim-report .sim-agent-role, .sim-report .sim-agent-chip {
+    display: inline-block; font-family: var(--font-sans); font-size: 11.5px;
+    background: var(--surface-sunken); border-radius: 999px; padding: 2px 8px;
+    color: var(--text-muted); margin-left: 8px;
+}
+.sim-report .sim-agent-model {
+    font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); margin-top: 4px;
+}
+.sim-report .sim-agent-desc {
+    font-size: 14px; color: var(--text-body); max-width: 760px; margin-top: 8px;
+}
+.sim-report .sim-agent-delegates {
+    display: flex; align-items: center; gap: 8px; margin-top: 10px;
+    font-size: 12.5px; color: var(--text-muted);
+}
+.sim-report .sim-agent-delegates .sim-agent-chip { margin-left: 0; }
+.sim-report .sim-agent-groups {
+    display: flex; flex-wrap: wrap; gap: 32px; margin-top: 12px;
+}
+.sim-report .sim-agent-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.sim-report .sim-agent-group-label {
+    font-family: var(--font-sans); font-size: 10.5px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--text-faint); margin-right: 2px;
+}
+.sim-report .sim-agent-group .sim-agent-chip { margin-left: 0; }
+.sim-report .sim-agent-open {
+    border: 1px solid var(--border-subtle); border-radius: 8px; padding: 6px 12px;
+    font-size: 12px; color: var(--text-body); text-decoration: none; white-space: nowrap;
+}
+.sim-report .sim-agent-open:hover { background: var(--surface-sunken); }
 """
 
 # ==== .sim-report — Transcripts redesign (Tasks 11+12) ===================
