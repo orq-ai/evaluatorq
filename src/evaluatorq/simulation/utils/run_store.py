@@ -121,6 +121,7 @@ def build_simulation_run(
     target_model: str | None = None,
     max_turns: int | None = None,
     agent_info: AgentInfoSnapshot | None = None,
+    run_id: str | None = None,
 ) -> SimulationRun:
     """Build the full ``SimulationRun`` report model from results.
 
@@ -150,6 +151,7 @@ def build_simulation_run(
         target_model=target_model,
         max_turns=max_turns,
         agent_info=agent_info,
+        run_id=run_id,
         evaluator_names=evaluator_names,
         total_results=len(results),
         scorer_averages=scorer_averages,

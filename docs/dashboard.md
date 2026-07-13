@@ -45,6 +45,10 @@ eq dashboard .evaluatorq/runs/red-team_20260626_143024.json
 
 # Bind a custom host / port (default 127.0.0.1:8080)
 eq dashboard --host 0.0.0.0 --port 8888
+
+# Enable “View Traces” links in reports. Use the workspace slug from the
+# Orq URL (https://my.orq.ai/<workspace>/...), not an API key or workspace UUID.
+ORQ_WORKSPACE=orq-research eq dashboard
 ```
 
 | Invocation | What it scans |
@@ -55,6 +59,18 @@ eq dashboard --host 0.0.0.0 --port 8888
 
 With no `PATH` the server prints the local URL to open. Pointing at a file
 prints that report's direct URL so you land straight on it.
+
+### Orq trace links
+
+Set `ORQ_WORKSPACE` when launching the dashboard to show **View Traces** links
+for conversations and runs. Its value is the workspace slug in the Orq UI URL;
+for example, `https://my.orq.ai/orq-research/traces` uses
+`ORQ_WORKSPACE=orq-research`. It is configured explicitly and is not derived
+from `ORQ_API_KEY`. If it is unset, trace-link buttons are hidden.
+
+`ORQ_WORKSPACE_SLUG` remains supported as an alias. For a self-hosted or
+staging Orq UI, set `ORQ_UI_BASE_URL` as well; otherwise the dashboard uses
+`ORQ_BASE_URL`, then `https://my.orq.ai`.
 
 !!! note "Legacy Streamlit views"
     `eq redteam ui` and `eq sim ui` launch the older Streamlit dashboards,

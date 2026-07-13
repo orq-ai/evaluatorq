@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 from evaluatorq.common.reports import esc
+from evaluatorq.dashboard.trace_links import run_trace_url, trace_link_button
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -1181,12 +1182,14 @@ def _sim_hero(run: SimulationRun) -> str:
     # KPI cards intentionally omitted: the same metrics render in the 5-card
     # band inside the Overview tab (_sim_kpi_band), so a hero band duplicated
     # them above the tabs. Hero is now just title + subtitle.
+    run_btn = trace_link_button(run_trace_url(run.run_id), 'View all run traces ↗')
+    actions = f'<div class="report-hero-actions">{run_btn}</div>' if run_btn else ''
     return (
         '<header class="report-hero">'
         '<p class="report-hero-kicker">Agent Simulation</p>'
         f'<h2 class="report-hero-title">{esc(run.run_name)}</h2>'
         f'<p class="report-hero-sub">target {esc(run.target_kind)}</p>'
-        '</header>'
+        f'{actions}</header>'
     )
 
 
@@ -2072,10 +2075,13 @@ def _redteam_hero(summary_section: Any, report: RedTeamReport) -> str:
         agent_stats = _rt_agent_stats(report)
         pills = ''.join(_rt_agent_pill(stats) for stats in agent_stats.values())
         agent_pills_html = f'<div class="rt-hero-agent-row">{pills}</div>'
+    run_btn = trace_link_button(run_trace_url(report.run_id), 'View all run traces ↗')
+    actions = f'<div class="report-hero-actions">{run_btn}</div>' if run_btn else ''
     return (
         '<header class="report-hero rt-hero">'
         '<p class="report-hero-kicker">Red Team</p>'
         f'<h2 class="report-hero-title rt-hero-title">{esc(report.description or "Red teaming report")}{agents_pill}</h2>'
         f'{agent_pills_html}'
+        f'{actions}'
         '</header>'
     )

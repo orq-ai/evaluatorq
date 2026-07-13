@@ -333,6 +333,11 @@ class SimulationResult(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     criteria_results: dict[str, bool] | None = None
     total_turns: int | None = None
+    thread_id: str | None = Field(
+        default=None,
+        description='Orq observability thread id for this conversation (deterministic: f"{run_id}:{index}"). '
+        'None for runs saved before thread grouping existed.',
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +383,10 @@ class SimulationRun(BaseModel):
     total_results: int
     scorer_averages: dict[str, float]
     results: list[SimulationResult]
+    run_id: str | None = None
+    """Client-minted run-grouping id (uuid hex, not an Orq-side run id) shared by every
+    conversation's ``thread_id`` (``{run_id}:{index}``). Powers the dashboard's
+    'View all run traces' deep link. None for older runs."""
 
 
 # ---------------------------------------------------------------------------
@@ -431,3 +440,4 @@ class SimulationEntry(BaseModel):
     error: str | None
     evaluator_scores: dict[str, float]
     transcript: list[TranscriptMessage]
+    thread_id: str | None = None

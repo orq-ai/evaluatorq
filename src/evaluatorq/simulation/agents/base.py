@@ -17,6 +17,7 @@ from openai import BadRequestError
 
 from evaluatorq.common.llm_call import execute_chat_completion
 from evaluatorq.common.retry import with_retry
+from evaluatorq.common.thread_context import thread_body_param
 from evaluatorq.common.tracing import get_trace_context_headers, record_llm_input, record_llm_response
 from evaluatorq.contracts import (
     AgentResponse,
@@ -380,6 +381,9 @@ class BaseAgent(ABC):
                 call_kwargs: dict[str, Any] = dict(params)
                 if trace_headers:
                     call_kwargs['extra_headers'] = trace_headers
+                thread = thread_body_param()
+                if thread:
+                    call_kwargs['extra_body'] = {**call_kwargs.get('extra_body', {}), **thread}
                 try:
                     response = await asyncio.wait_for(
                         self._client.responses.create(**call_kwargs),

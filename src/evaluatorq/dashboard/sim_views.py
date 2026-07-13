@@ -24,6 +24,7 @@ from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import apply_or_all
+from evaluatorq.dashboard.trace_links import thread_trace_url, trace_link_button
 from evaluatorq.dashboard.view import _sim_rowlist_wrapper, render_message_list
 
 if TYPE_CHECKING:
@@ -126,8 +127,14 @@ def render_sim_row_list(rid: str, entries: list[SimulationEntry]) -> str:
             tint = 'sim-tint-missed'
             badge = status_badge('Goal missed', 'fail')
 
+        # Trace deep-link on the summary line, next to the outcome badge.
+        # stopPropagation so clicking it opens the trace without toggling the row.
+        trace_btn = trace_link_button(
+            thread_trace_url(e.thread_id), 'View Traces', onclick='event.stopPropagation()'
+        )
         right_cluster = (
-            f'{tag(f"{e.turn_count} turns")}{tag(f"score {e.goal_completion_score:.2f}")}{tag(e.terminated_by)}{badge}'
+            f'{tag(f"{e.turn_count} turns")}{tag(f"score {e.goal_completion_score:.2f}")}'
+            f'{tag(e.terminated_by)}{badge}{trace_btn}'
         )
         summary = (
             f'<summary class="sim-conv-summary {tint}">'

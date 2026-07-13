@@ -391,6 +391,7 @@ def dynamic_evaluatorq_results_to_report(
     duration_seconds: float | None = None,
     description: str | None = None,
     categories_tested: list[str] | None = None,  # deprecated, derived from results
+    run_id: str | None = None,
 ) -> RedTeamReport:
     """Convert evaluatorq dynamic results to a unified RedTeamReport."""
     unified: list[RedTeamResult] = []
@@ -517,6 +518,7 @@ def dynamic_evaluatorq_results_to_report(
                 error_stage=error_stage,
                 error_code=error_code,
                 error_details=error_details,
+                thread_id=job_output.thread_id,
             )
         )
 
@@ -543,6 +545,7 @@ def dynamic_evaluatorq_results_to_report(
         results=unified,
         summary=summary,
         duration_seconds=duration_seconds,
+        run_id=run_id,
     )
 
 
@@ -1126,4 +1129,5 @@ def merge_reports(
         agent_contexts=merged_agent_contexts,
         results=all_results,
         summary=summary,
+        run_id=next((r.run_id for r in reports if r.run_id), None),
     )
