@@ -98,6 +98,17 @@ def pct(rate: float) -> str:
     return f'{rate:.0%}'
 
 
+def humanize_duration(seconds: float | None) -> str:
+    """Human-friendly duration: '' for None/<=0, '45s' under a minute, else '2m 5s'."""
+    if not seconds or seconds <= 0:
+        return ''
+    total = int(seconds)
+    if total < 60:
+        return f'{total}s'
+    mins, secs = divmod(total, 60)
+    return f'{mins}m {secs}s'
+
+
 def truncate(text: str, max_chars: int = 800) -> str:
     """Truncate long text with a plain-text marker (no Markdown)."""
     if len(text) <= max_chars:

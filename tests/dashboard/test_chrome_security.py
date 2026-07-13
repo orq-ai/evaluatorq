@@ -34,7 +34,7 @@ def _client(roots: list[Path]) -> TestClient:
 def test_index_escapes_report_name(tmp_path: Path):
     rt = tmp_path / 'runs'
     rt.mkdir()
-    payload = _redteam(datetime.now(tz=timezone.utc).isoformat(), description="<script>alert(1)</script>")
+    payload = _redteam(datetime.now(tz=timezone.utc).isoformat(), description='<script>alert(1)</script>')
     (rt / 'rt_20260101_000000.json').write_text(json.dumps(payload))
     r = _client([rt]).get('/')
     assert r.status_code == 200
@@ -47,7 +47,7 @@ def test_report_title_escapes_description(tmp_path: Path):
     rt.mkdir()
     payload = _redteam(
         datetime.now(tz=timezone.utc).isoformat(),
-        description="</title><script>alert(1)</script>",
+        description='</title><script>alert(1)</script>',
     )
     p = rt / 'rt_20260101_000000.json'
     p.write_text(json.dumps(payload))
@@ -112,3 +112,14 @@ def test_transcript_criteria_escapes_html(tmp_path: Path):
     assert r.status_code == 200
     assert '<img src=x onerror=alert(1)>' not in r.text
     assert '&lt;img src=x onerror=alert(1)&gt;' in r.text
+
+
+def test_attack_fragment_escapes_html(rt_result_xss):
+    """Task 13: RT attack fragment (transcript + verdict) must escape
+    report-derived HTML — messages and evaluator explanations are
+    stored-XSS vectors."""
+    from evaluatorq.dashboard.redteam_transcripts import render_attack_fragment
+
+    html = render_attack_fragment(rt_result_xss)
+    assert '<script>' not in html
+    assert '&lt;script&gt;' in html

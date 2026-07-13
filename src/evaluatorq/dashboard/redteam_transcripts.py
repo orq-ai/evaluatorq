@@ -1,11 +1,11 @@
-"""Conversation viewer and disagreement viewer for the redteam dashboard.
+"""Attack fragment and disagreement viewer for the redteam dashboard.
 
 Exports:
-    render_conversation   -- per-result transcript drill-down fragment
+    render_attack_fragment -- attack-evidence-row fragment (tags + verdict + bubble transcript)
     render_disagreement   -- agent-pair side-by-side disagreement viewer
 
 Internal helpers:
-    _render_result_detail, _render_messages, _render_agent_side, _agent_select
+    _render_agent_side, _agent_select
     fmt_category, fmt_vulnerability, agent_key (re-imported from redteam_charts)
 
 All functions return raw HTML strings suitable for HTMX hx-swap.
@@ -13,7 +13,7 @@ All functions return raw HTML strings suitable for HTMX hx-swap.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 from urllib.parse import quote as _quote
 
 from evaluatorq.common.reports import esc
@@ -22,6 +22,8 @@ from evaluatorq.dashboard.redteam_charts import (
     fmt_category,
     fmt_vulnerability,
 )
+from evaluatorq.dashboard.report_kit import tag
+from evaluatorq.dashboard.view import render_message_list
 from evaluatorq.redteam.reports.converters import _is_evaluated, _is_vulnerable
 
 if TYPE_CHECKING:
@@ -29,199 +31,64 @@ if TYPE_CHECKING:
 
 _PAGE_SIZE = 10
 
+# `Message.role` is exactly `Literal['user','assistant','tool','system','developer']`
+# -- there is no adversarial role, so no ADV glyph here.
+_RT_ROLE_LABELS = {'user': 'USR', 'assistant': 'AGT', 'system': 'SYS', 'developer': 'SYS', 'tool': 'TOOL'}
+
 
 # ---------------------------------------------------------------------------
-# 3. Conversation viewer
+# 3. Attack evidence fragment (spec §Attacks)
 # ---------------------------------------------------------------------------
 
 
-def render_conversation(
-    *,
-    report: RedTeamReport,
-    idx: int,
-    rid: str,
-    container_id: str = 'rt-conversation',
-) -> str:
-    """Render the conversation viewer fragment: row list + transcript detail."""
-    results = report.results
+def render_attack_fragment(r: RedTeamResult) -> str:
+    """Render one attack-evidence-row body: tags row, evaluator-verdict
+    callout, then the shared bubble transcript (spec §Attacks).
 
-    list_items: list[str] = []
-    base_url = f'/r/{esc(rid)}/view/conversation'
-    for i, r in enumerate(results):
-        status = 'VULN' if r.vulnerable else 'SAFE'
-        label = f'[{status}] {esc(r.attack.id)} / {esc(r.attack.category)} / {esc(r.attack.attack_technique.value)}'
-        active_class = ' rt-conv-row-active' if i == idx else ''
-        list_items.append(
-            f'<li class="rt-conv-row{active_class}">'
-            f'<button class="rt-conv-row-btn"'
-            f' hx-get="{base_url}?idx={i}"'
-            f' hx-target="#{esc(container_id)}"'
-            f' hx-swap="outerHTML">'
-            f'{label}'
-            f'</button>'
-            f'</li>'
-        )
-
-    list_html = (
-        f'<ul class="rt-conv-list">{"".join(list_items)}</ul>'
-        if list_items
-        else '<p class="rt-view-empty">No results.</p>'
-    )
-
-    detail_html = ''
-    if 0 <= idx < len(results):
-        detail_html = _render_result_detail(results[idx])
-
-    return (
-        f'<div class="rt-conversation" id="{esc(container_id)}">'
-        f'<div class="rt-conv-layout">'
-        f'<div class="rt-conv-sidebar">{list_html}</div>'
-        f'<div class="rt-conv-detail">{detail_html}</div>'
-        f'</div>'
-        f'</div>'
-    )
-
-
-def _render_result_detail(r: RedTeamResult) -> str:
-    """Render the detail pane for a single result: metadata + transcript."""
+    Tags: delivery method(s), ``'{turn_type}-turn'``, category. The verdict
+    branch is computed locally here (vulnerable / resistant / error / no
+    evaluation) with its own compact layout, independent of any other
+    result-detail rendering.
+    """
     atk = r.attack
 
-    vuln_name = fmt_vulnerability(atk.vulnerability) if atk.vulnerability else '-'
-    category = fmt_category(atk.category)
-    technique = atk.attack_technique.value
-    severity = atk.severity.value
-    turn_type = atk.turn_type.value if atk.turn_type else '-'
+    tags: list[str] = [tag(getattr(dm, 'value', str(dm))) for dm in atk.delivery_methods or []]
+    if atk.turn_type:
+        tags.append(tag(f'{atk.turn_type.value}-turn'))
+    if atk.category:
+        tags.append(tag(atk.category))
+    tags_html = f'<div class="rt-attack-tags">{"".join(tags)}</div>'
 
-    delivery_str = ''
-    if atk.delivery_methods:
-        dms = [getattr(dm, 'value', str(dm)) for dm in atk.delivery_methods]
-        delivery_str = (
-            f'<div class="rt-conv-meta-item">'
-            f'<span class="rt-conv-meta-label">Delivery Methods</span>'
-            f'<span class="rt-conv-meta-value">{esc(", ".join(dms))}</span>'
-            f'</div>'
+    if r.error:
+        verdict_html = (
+            '<div class="rt-verdict rt-verdict-error">'
+            '<span class="rt-verdict-label">Evaluator verdict</span>'
+            f'<p class="rt-verdict-body" style="color:var(--red-600)">{esc(r.error)}</p>'
+            '</div>'
+        )
+    elif r.vulnerable:
+        explanation = r.evaluation.explanation if r.evaluation and r.evaluation.explanation else ''
+        body = esc(explanation) if explanation else 'No evaluation available.'
+        verdict_html = (
+            '<div class="rt-verdict rt-verdict-vuln" style="border-left:3px solid var(--orange-500)">'
+            '<span class="rt-verdict-label">Evaluator verdict</span>'
+            f'<p class="rt-verdict-body">{body}</p>'
+            '</div>'
+        )
+    else:
+        explanation = r.evaluation.explanation if r.evaluation and r.evaluation.explanation else ''
+        body = esc(explanation) if explanation else 'No evaluation available.'
+        verdict_html = (
+            '<div class="rt-verdict rt-verdict-safe" '
+            'style="background:var(--green-50);border-left:3px solid var(--green-600)">'
+            '<span class="rt-verdict-label">Evaluator verdict</span>'
+            f'<p class="rt-verdict-body">{body}</p>'
+            '</div>'
         )
 
-    verdict_class = 'rt-conv-verdict-vuln' if r.vulnerable else 'rt-conv-verdict-safe'
-    verdict_text = 'VULNERABLE' if r.vulnerable else 'RESISTANT'
+    transcript_html = render_message_list(r.messages, role_labels=_RT_ROLE_LABELS, class_prefix='rt')
 
-    meta_html = (
-        f'<div class="rt-conv-meta">'
-        f'<div class="rt-conv-meta-item">'
-        f'<span class="rt-conv-meta-label">Vulnerability</span>'
-        f'<span class="rt-conv-meta-value">{esc(vuln_name)}</span>'
-        f'</div>'
-        f'<div class="rt-conv-meta-item">'
-        f'<span class="rt-conv-meta-label">Category</span>'
-        f'<span class="rt-conv-meta-value">{esc(category)}</span>'
-        f'</div>'
-        f'<div class="rt-conv-meta-item">'
-        f'<span class="rt-conv-meta-label">Technique</span>'
-        f'<span class="rt-conv-meta-value">{esc(technique)}</span>'
-        f'</div>'
-        f'<div class="rt-conv-meta-item">'
-        f'<span class="rt-conv-meta-label">Severity</span>'
-        f'<span class="rt-conv-meta-value">{esc(severity)}</span>'
-        f'</div>'
-        f'<div class="rt-conv-meta-item">'
-        f'<span class="rt-conv-meta-label">Turn Type</span>'
-        f'<span class="rt-conv-meta-value">{esc(turn_type)}</span>'
-        f'</div>'
-        f'{delivery_str}'
-        f'<div class="rt-conv-meta-item">'
-        f'<span class="rt-conv-meta-label">Result</span>'
-        f'<span class="rt-conv-verdict {verdict_class}">{verdict_text}</span>'
-        f'</div>'
-        f'</div>'
-    )
-
-    eval_html = ''
-    if r.evaluation and r.evaluation.explanation:
-        expl = r.evaluation.explanation
-        eval_html = (
-            f'<div class="rt-conv-eval">'
-            f'<span class="rt-conv-eval-label">Evaluator explanation:</span>'
-            f'<p class="rt-conv-eval-text">{esc(expl)}</p>'
-            f'</div>'
-        )
-
-    msgs_html = _render_messages(r.messages)
-
-    return (
-        f'<div class="rt-conv-detail-inner">'
-        f'{meta_html}'
-        f'{eval_html}'
-        f'<div class="rt-conv-transcript">'
-        f'<h4 class="rt-conv-transcript-title">Conversation</h4>'
-        f'{msgs_html}'
-        f'</div>'
-        f'</div>'
-    )
-
-
-def _render_messages(messages: list[Any]) -> str:
-    """Render a list of Message objects as HTML.
-
-    Handles the redteam-specific extras: tool_calls on assistant messages
-    and collapsible system messages / tool responses.
-    """
-    if not messages:
-        return '<p class="rt-view-empty">No messages recorded.</p>'
-
-    parts: list[str] = []
-    for msg in messages:
-        role: str = getattr(msg, 'role', 'unknown')
-        content: str = getattr(msg, 'content', '') or ''
-        tool_calls = getattr(msg, 'tool_calls', None)
-        name: str = getattr(msg, 'name', '') or ''
-
-        if role == 'system':
-            parts.append(
-                f'<details class="rt-msg rt-msg-system">'
-                f'<summary class="rt-msg-role">System prompt</summary>'
-                f'<pre class="rt-msg-content">{esc(content)}</pre>'
-                f'</details>'
-            )
-        elif role == 'user':
-            parts.append(
-                f'<div class="rt-msg rt-msg-user">'
-                f'<span class="rt-msg-role">User</span>'
-                f'<pre class="rt-msg-content">{esc(content)}</pre>'
-                f'</div>'
-            )
-        elif role == 'assistant':
-            inner_parts: list[str] = []
-            if content:
-                inner_parts.append(f'<pre class="rt-msg-content">{esc(content)}</pre>')
-            if tool_calls:
-                for tc in tool_calls:
-                    fn = getattr(tc, 'function', None)
-                    fn_name = getattr(fn, 'name', '?') if fn else '?'
-                    fn_args = getattr(fn, 'arguments', '') if fn else ''
-                    inner_parts.append(f'<pre class="rt-msg-tool-call">Tool call: {esc(fn_name)}({esc(fn_args)})</pre>')
-            parts.append(
-                f'<div class="rt-msg rt-msg-assistant">'
-                f'<span class="rt-msg-role">Assistant</span>'
-                f'{"".join(inner_parts)}'
-                f'</div>'
-            )
-        elif role == 'tool':
-            tool_name = name or 'tool'
-            parts.append(
-                f'<details class="rt-msg rt-msg-tool">'
-                f'<summary class="rt-msg-role">Tool response: {esc(tool_name)}</summary>'
-                f'<pre class="rt-msg-content">{esc(content)}</pre>'
-                f'</details>'
-            )
-        else:
-            parts.append(
-                f'<div class="rt-msg rt-msg-unknown">'
-                f'<span class="rt-msg-role">{esc(role)}</span>'
-                f'<pre class="rt-msg-content">{esc(content)}</pre>'
-                f'</div>'
-            )
-
-    return ''.join(parts)
+    return f'{tags_html}{verdict_html}{transcript_html}'
 
 
 # ---------------------------------------------------------------------------

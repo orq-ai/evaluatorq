@@ -10,6 +10,7 @@ and in the ``.sim-report`` CSS block in ``styles.py``.
 from __future__ import annotations
 
 import itertools
+import math
 from operator import itemgetter
 from typing import TYPE_CHECKING, Any
 
@@ -17,7 +18,7 @@ from evaluatorq.common.reports import esc
 from evaluatorq.common.reports.html_helpers import pct
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
 
 def _best_worst_cells(heatmap_data: dict[str, Any]) -> tuple[dict | None, dict | None]:
@@ -64,13 +65,20 @@ def exec_summary(*, summary_data: dict[str, Any], heatmap_data: dict[str, Any], 
             f'<strong>{esc(worst["persona"])} &times; {esc(worst["scenario"])}</strong> ({pct(worst["success_rate"])}).'
         )
 
+    return callout(sentence, confidence=confidence)
+
+
+def callout(body_html: str, *, label: str = 'Executive summary', confidence: str | None = None) -> str:
+    """Shared orange-left-bar callout shell (spec §Overview.1 / §report_kit generalizations).
+    Sim's ``exec_summary`` builds its sentence then calls this; RT builds its own
+    sentence in ``report_tabs.py`` and calls this directly."""
     return (
         '<div class="exec-summary">'
         '<div class="es-head">'
-        '<span class="es-label">Executive summary</span>'
+        f'<span class="es-label">{esc(label)}</span>'
         f'{_confidence_pill(confidence)}'
         '</div>'
-        f'<p class="es-body">{sentence}</p>'
+        f'<p class="es-body">{body_html}</p>'
         '</div>'
     )
 
@@ -98,6 +106,113 @@ def tag(text: str, *, tone: str | None = None) -> str:
     return f'<span class="rk-tag"{style}>{esc(text)}</span>'
 
 
+def dial(value_text: str, fraction: float, *, radius: int, stroke: int, color: str, sub: str = '') -> str:
+    """SVG gauge: sunken track + colored arc, ``esc()`` on ``value_text``/``sub``
+    (spec §report_kit generalizations). ``fraction`` is clamped to [0, 1]."""
+    size = (radius + stroke) * 2
+    cx = cy = size / 2
+    circ = 2 * math.pi * radius
+    frac = max(0.0, min(1.0, fraction))
+    dash = frac * circ
+    sub_html = (
+        f'<tspan x="{cx}" dy="1.2em" font-size="10" font-weight="500" fill="var(--text-faint)">{esc(sub)}</tspan>'
+        if sub
+        else ''
+    )
+    return (
+        f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}" class="rk-dial">'
+        f'<circle cx="{cx}" cy="{cy}" r="{radius}" fill="none" stroke="var(--chart-track)" '
+        f'stroke-width="{stroke}"></circle>'
+        f'<circle cx="{cx}" cy="{cy}" r="{radius}" fill="none" stroke="{color}" stroke-width="{stroke}" '
+        f'stroke-linecap="round" stroke-dasharray="{dash:.1f} {circ:.1f}" '
+        f'transform="rotate(-90 {cx} {cy})"></circle>'
+        f'<text x="{cx}" y="{cy}" text-anchor="middle" dominant-baseline="middle" font-size="14" '
+        f'font-weight="600" fill="var(--text-strong)">{esc(value_text)}{sub_html}</text>'
+        '</svg>'
+    )
+
+
+# Semantic --outcome-*/--sev-* tokens (theme.py) so a single edit restyles every
+# pill. 'good' fg now tracks --outcome-resistant (was --teal-600, mismatching its
+# green dot).
+_PILL_TONES: dict[str, dict[str, str]] = {
+    'danger': {'bg': 'var(--red-100)', 'fg': 'var(--outcome-vulnerable)', 'dot': 'var(--outcome-vulnerable)'},
+    'danger-solid': {'bg': 'var(--sev-critical)', 'fg': '#fff', 'dot': '#fff'},
+    'warn': {'bg': 'var(--amber-100)', 'fg': 'var(--red-600)', 'dot': 'var(--outcome-error)'},
+    'good': {'bg': 'var(--green-100)', 'fg': 'var(--outcome-resistant)', 'dot': 'var(--outcome-resistant)'},
+    'neutral': {'bg': 'var(--sunken)', 'fg': 'var(--text-muted)', 'dot': 'var(--text-muted)'},
+}
+
+
+def pill(text: str, *, tone: str, dot: bool = False) -> str:
+    """Small rounded status pill (spec §report_kit generalizations / Deviation #14).
+    Tones: danger / danger-solid / warn / good / neutral. Optional leading dot."""
+    colors = _PILL_TONES.get(tone, _PILL_TONES['neutral'])
+    dot_html = f'<span class="rk-pill-dot" style="background:{colors["dot"]}"></span>' if dot else ''
+    return f'<span class="rk-pill" style="background:{colors["bg"]};color:{colors["fg"]}">{dot_html}{esc(text)}</span>'
+
+
+_SEVERITY_TONES: dict[str, str] = {'critical': 'danger-solid', 'high': 'warn', 'medium': 'neutral', 'low': 'good'}
+
+
+def severity_pill(level: str) -> str:
+    """SeverityBadge: critical->danger-solid, high->warn, medium->neutral, low->good."""
+    key = (level or '').lower()
+    return pill((level or '').capitalize(), tone=_SEVERITY_TONES.get(key, 'neutral'))
+
+
+_OUTCOME_TONES: dict[str, tuple[str, str]] = {
+    'vulnerable': ('danger', 'Vulnerable'),
+    'resistant': ('good', 'Resistant'),
+    'error': ('warn', 'Error'),
+}
+
+
+def outcome_pill(status: str) -> str:
+    """OutcomeBadge (dotted pill): vulnerable->danger, resistant->good, error->warn."""
+    tone, label = _OUTCOME_TONES.get((status or '').lower(), ('neutral', status or ''))
+    return pill(label, tone=tone, dot=True)
+
+
+def donut(
+    segments: list[dict[str, Any]],
+    center_value: str,
+    center_label: str,
+) -> str:
+    """Ring SVG + center text + legend list (extracted from the sim outcomes
+    donut per spec §Shared infrastructure #3). Each segment is
+    ``{'label': str, 'value': number, 'color': str}``. Callers own the
+    surrounding ``<figure>``/``panel()`` wrapper and caption."""
+    total = sum(s.get('value', 0) for s in segments)
+    radius = 60
+    circ = 2 * math.pi * radius
+    arcs: list[str] = []
+    offset = 0.0
+    for s in segments:
+        value = s.get('value', 0)
+        if value <= 0 or total <= 0:
+            continue
+        length = circ * value / total
+        arcs.append(
+            f'<circle cx="75" cy="75" r="{radius}" fill="none" stroke="{s.get("color", "")}" stroke-width="18"'
+            f' stroke-dasharray="{length:.1f} {circ - length:.1f}" stroke-dashoffset="{-offset:.1f}"/>'
+        )
+        offset += length
+    legend = ''.join(
+        f'<li><span class="donut-key" style="background:{s.get("color", "")}"></span>'
+        f'{esc(s.get("label", ""))} · {s.get("value", 0)}</li>'
+        for s in segments
+        if s.get('value', 0) > 0
+    )
+    return (
+        '<div class="donut-wrap"><div class="donut">'
+        f'<svg width="150" height="150" viewBox="0 0 150 150">{"".join(arcs)}</svg>'
+        f'<div class="donut-center"><span class="donut-value">{esc(center_value)}</span>'
+        f'<span class="donut-label">{esc(center_label)}</span></div></div>'
+        f'<ul class="donut-legend">{legend}</ul></div>'
+    )
+
+
 def panel(title: str, body: str, *, sub: str | None = None) -> str:
     """White card wrapper with a mono-label title and pre-rendered ``body`` HTML."""
     if not title:
@@ -117,13 +232,22 @@ def bar_rows(
     *,
     width: int,
     label_w: int,
-    color: str,
+    color: str = 'var(--chart-2)',
     fmt: Callable[[float], str] = str,
+    color_scale: Sequence[tuple[float, str]] | None = None,
+    max_value: float | None = None,
 ) -> str:
-    """Horizontal SVG bar rows; bar length proportional to value/max (spec §Overview.3 / §Breakdown.4 / §Turn.3)."""
+    """Horizontal SVG bar rows; bar length proportional to value/max (spec §Overview.3 / §Breakdown.4 / §Turn.3).
+
+    ``color_scale``, when given, interpolates each bar's fill via
+    ``_interp_color(value / max_v, stops=color_scale)`` instead of the flat
+    ``color``. ``max_value``, when given, overrides the computed
+    ``max(values)`` denominator used for bar scaling.
+    """
     if not rows:
         return ''
-    max_v = max((v for _, v in rows), default=0.0) or 1.0
+    computed_max = max((v for _, v in rows), default=0.0) or 1.0
+    max_v = max_value if max_value is not None else computed_max
     row_h = 28
     bar_h = 14
     track_w = max(width - label_w - 56, 10)
@@ -134,6 +258,7 @@ def bar_rows(
         cy = y + row_h / 2
         bar_w = (value / max_v) * track_w if max_v else 0.0
         bar_y = y + (row_h - bar_h) / 2
+        fill = _interp_color(value / max_v, stops=color_scale) if color_scale else color
         parts.extend((
             (
                 f'<text x="{label_w - 8}" y="{cy:.1f}" text-anchor="end" dominant-baseline="middle" '
@@ -146,7 +271,7 @@ def bar_rows(
             ),
             (
                 f'<rect x="{label_w}" y="{bar_y:.1f}" width="{bar_w:.1f}" height="{bar_h}" '
-                f'rx="3" fill="{color}"></rect>'
+                f'rx="3" fill="{fill}"></rect>'
             ),
             (
                 f'<text x="{label_w + bar_w + 8:.1f}" y="{cy:.1f}" dominant-baseline="middle" '
@@ -312,32 +437,66 @@ _HEAT_STOPS: tuple[tuple[float, tuple[int, int, int]], ...] = (
     (1.0, (0x29, 0x9D, 0x8F)),
 )
 
+# RT heat scale: "higher = worse" (low → light neutral, high → red).
+SCALE_HEAT_RT: tuple[tuple[float, str], ...] = (
+    (0.0, '#f3f1ee'),
+    (0.5, '#ff8f34'),
+    (1.0, '#df5325'),
+)
 
-def _interp_color(v: float) -> str:
-    """Piecewise-linear RGB interpolation over the 3-stop heatmap scale."""
+
+def _to_rgb(c: tuple[int, int, int] | str) -> tuple[int, int, int]:
+    """Normalize a stop color (int-triple or hex string) to an RGB int-triple."""
+    if isinstance(c, str):
+        h = c.lstrip('#')
+        return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+    return c
+
+
+def _interp_color(v: float, *, stops: Any = None) -> str:
+    """Piecewise-linear RGB interpolation over a 3-stop scale (sim default when
+    ``stops`` is not passed). Accepts either int-triple stops (``_HEAT_STOPS``)
+    or hex-string stops (``SCALE_HEAT_RT``)."""
     v = 0.0 if v < 0 else 1.0 if v > 1 else v
-    for (lo, c0), (hi, c1) in itertools.pairwise(_HEAT_STOPS):
+    raw = stops if stops is not None else _HEAT_STOPS
+    norm = [(pos, _to_rgb(c)) for pos, c in raw]
+    for (lo, c0), (hi, c1) in itertools.pairwise(norm):
         if lo <= v <= hi:
             t = 0.0 if hi == lo else (v - lo) / (hi - lo)
             r, g, b = (round(a + (b_ - a) * t) for a, b_ in zip(c0, c1, strict=True))
             return f'#{r:02x}{g:02x}{b:02x}'
-    return '#299d8f'
+    last = norm[-1][1]
+    return f'#{last[0]:02x}{last[1]:02x}{last[2]:02x}'
 
 
-def heatmap(personas: list[str], scenarios: list[str], cells: list[dict]) -> str:
-    """HTML-table persona x scenario heatmap (spec §Breakdown.1). Missing cells render sunken with "—"."""
-    lookup = {(c['persona'], c['scenario']): c for c in cells}
-    header = ''.join(f'<th class="rk-heat-col">{esc(s)}</th>' for s in scenarios)
+def heatmap(
+    row_labels: list[str],
+    col_labels: list[str],
+    cells: list[dict],
+    *,
+    row_key: str = 'persona',
+    col_key: str = 'scenario',
+    value_key: str = 'success_rate',
+    color_scale: Sequence[tuple[float, str]] | None = None,
+) -> str:
+    """HTML-table row x column heatmap (spec §Breakdown.1). Missing cells render sunken with "—".
+
+    Sim defaults (``row_key='persona'``, ``col_key='scenario'``,
+    ``value_key='success_rate'``, ``color_scale=None``) keep existing sim
+    call sites and rendering unchanged.
+    """
+    lookup = {(c[row_key], c[col_key]): c for c in cells}
+    header = ''.join(f'<th class="rk-heat-col">{esc(s)}</th>' for s in col_labels)
     body_rows: list[str] = []
-    for p in personas:
+    for p in row_labels:
         tds: list[str] = []
-        for s in scenarios:
+        for s in col_labels:
             cell = lookup.get((p, s))
             if cell is None:
                 tds.append('<td class="rk-heat-cell rk-heat-empty">—</td>')
                 continue
-            rate = cell.get('success_rate', 0.0)
-            bg = _interp_color(rate)
+            rate = cell.get(value_key, 0.0)
+            bg = _interp_color(rate, stops=color_scale)
             ink = 'var(--ink-900)' if rate <= 0.55 else '#fff'
             tds.append(f'<td class="rk-heat-cell" style="background:{bg};color:{ink}">{pct(rate)}</td>')
         body_rows.append(f'<tr><th class="rk-heat-row">{esc(p)}</th>{"".join(tds)}</tr>')

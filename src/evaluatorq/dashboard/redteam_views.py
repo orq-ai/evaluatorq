@@ -4,8 +4,8 @@ Routes (all return HTML fragments, no full page shell):
 
     GET /r/{rid}/view/breakdown?group_by=&stack_by=
     GET /r/{rid}/view/agent-heatmap?dim=
-    GET /r/{rid}/view/conversation?idx=
     GET /r/{rid}/view/disagreement?a=&b=&page=
+    GET /r/{rid}/redteam/attack?idx=
 
 Each route loads the RedTeamReport via library.resolve / surfaces.ADAPTERS['redteam'],
 applies the active filter selections, and delegates to the appropriate render
@@ -29,7 +29,7 @@ from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import apply_or_all
 from evaluatorq.dashboard.redteam_charts import render_agent_heatmap, render_breakdown
-from evaluatorq.dashboard.redteam_transcripts import render_conversation, render_disagreement
+from evaluatorq.dashboard.redteam_transcripts import render_disagreement
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -119,26 +119,24 @@ def register_redteam_view_routes(app: Any, roots: list[Any] | None = None) -> No
         html = render_agent_heatmap(report=filtered_report, dim=dim, rid=rid)
         return Response(html, media_type='text/html')
 
-    @app.get('/r/{rid}/view/conversation')
-    def view_conversation(rid: str, req: Request) -> Response:
+    @app.get('/r/{rid}/redteam/attack')
+    def view_attack(rid: str, req: Request) -> Response:
         try:
             idx = int(req.query_params.get('idx', '0'))
         except (ValueError, TypeError):
             idx = 0
-
         report = _load_report(rid, roots)
         if report is None:
             return Response(_404(f'Report {rid} not found'), status_code=404, media_type='text/html')
-
         selections = parse_selections(req, 'redteam')
-        filtered_results = apply_or_all(report, 'redteam', selections)
-        filtered_report = report.model_copy(update={'results': filtered_results})
-
-        if filtered_results and idx >= len(filtered_results):
+        filtered = apply_or_all(report, 'redteam', selections)
+        if not filtered:
+            return Response('<p class="rt-view-empty">No attack.</p>', media_type='text/html')
+        if idx < 0 or idx >= len(filtered):
             idx = 0
+        from evaluatorq.dashboard.redteam_transcripts import render_attack_fragment
 
-        html = render_conversation(report=filtered_report, idx=idx, rid=rid)
-        return Response(html, media_type='text/html')
+        return Response(render_attack_fragment(filtered[idx]), media_type='text/html')
 
     @app.get('/r/{rid}/view/disagreement')
     def view_disagreement(rid: str, req: Request) -> Response:

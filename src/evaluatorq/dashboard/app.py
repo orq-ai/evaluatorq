@@ -511,10 +511,10 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     # ------------------------------------------------------------------
     register_sim_view_routes(app, roots)
 
-    # Register static file handler LAST so its catch-all
-    # /{fname:path}.{ext:static} does not intercept the download routes above.
-    # Serve under /static/ (the prefix the head assets in view.py request); the
-    # default root mount would 404 those /static/*.js URLs.
+    # Register static file handler LAST so its catch-all /{fname}.{ext} does not
+    # intercept the download routes above. Serve under /static/ to match the page
+    # head's Script(src="/static/…") references (view.py head_assets); without the
+    # explicit prefix every /static/*.js request 404s and htmx/vega never load.
     app.static_route_exts(prefix='/static', static_path=str(_STATIC_DIR))
 
     return app

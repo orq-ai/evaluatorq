@@ -91,7 +91,8 @@ def render_sim_row_list(rid: str, entries: list[SimulationEntry]) -> str:
     right-aligned cluster of turn-count/score/terminated-by tags plus an
     outcome badge), tinted by outcome. The card body lazy-loads the full
     transcript fragment exactly once, on first expand, via
-    ``hx-trigger="click once"`` against the existing transcript endpoint —
+    ``hx-trigger="toggle once from:closest details"`` against the existing
+    transcript endpoint —
     so large runs ship no transcript markup up front.
 
     Args:

@@ -87,14 +87,14 @@ def test_sim_report_renders_tabs(client: TestClient, roots: list[Path]) -> None:
 def test_redteam_report_renders_tabs(client: TestClient, roots: list[Path]) -> None:
     rid = report_id(roots[0] / 'rt.json')
     labels = _tab_labels(client.get(f'/r/{rid}').text)
-    # Folded to Overview / Breakdowns / Evidence / (Error Analysis) / Config.
+    # 7-tab set: Overview / Agents / Focus areas / Breakdowns / Attacks / Usage / Config.
     assert 'Overview' in labels
     assert 'Breakdowns' in labels
-    assert 'Evidence' in labels
     assert 'Config' in labels
-    # Old tab names are gone; Error Analysis stays its own tab, never folded.
+    # Old (pre-alignment) tab names are gone.
     assert 'Summary' not in labels
     assert 'Methodology' not in labels
+    assert 'Evidence' not in labels
 
 
 def test_single_agent_report_has_no_comparison_tab(client: TestClient, roots: list[Path]) -> None:
@@ -142,7 +142,7 @@ def test_sim_overview_has_exec_summary_and_five_kpis(sim_run) -> None:
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
 
     html = sim_report_tabs('rid', sim_run)
-    assert 'class="sim-report"' in html
+    assert 'class="report-aligned sim-report"' in html
     assert 'Executive summary' in html
     # 5-card KPI band incl. Avg turns
     assert 'Avg turns' in html
@@ -287,3 +287,178 @@ def test_sim_config_tab_keeps_token_usage(sim_run) -> None:
     html = sim_report_tabs('rid', sim_run)
     config_html = html.split('Job-level metadata')[-1]
     assert 'Tokens' in config_html or 'token' in config_html.lower()
+
+
+def test_sim_outcomes_donut_still_wraps_in_chart_card(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import _sim_outcomes_donut
+
+    # NB: _sim_outcomes_donut returns '' for zero rows (early-out). Pass rows
+    # shaped like real sim results so the wrapper renders.
+    html = _sim_outcomes_donut(sim_run.results)
+    assert 'class="chart-card"' in html
+
+
+def test_sim_report_has_shared_aligned_class(sim_run):
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run)
+    assert 'class="report-aligned sim-report"' in html
+
+
+def test_redteam_hero_has_no_kpi_band(rt_report_single):
+    from evaluatorq.dashboard.report_tabs import _redteam_hero, _rt_by_kind
+
+    by = _rt_by_kind(rt_report_single)
+    html = _redteam_hero(by.get('summary'), rt_report_single)
+    assert 'report-hero' in html
+    assert 'kpi-band' not in html and 'kpi-card' not in html
+
+
+def test_redteam_hero_shows_agent_pills_multi(rt_report_multi):
+    from evaluatorq.dashboard.report_tabs import _redteam_hero, _rt_by_kind
+
+    by = _rt_by_kind(rt_report_multi)
+    html = _redteam_hero(by.get('summary'), rt_report_multi)
+    assert 'agents' in html  # "N agents" pill
+
+
+def test_rt_overview_has_exec_summary_and_five_kpis(rt_report_multi):
+    from evaluatorq.dashboard.report_tabs import redteam_report_tabs
+
+    html = redteam_report_tabs('rid', rt_report_multi)
+    assert 'class="report-aligned rt-report"' in html
+    assert 'Executive summary' in html
+    # 5 KPI cards
+    assert html.count('kpi-card') >= 5
+    assert 'Attack success rate' in html and 'Resistance rate' in html
+
+
+def test_rt_exec_summary_zero_vuln_fallback(rt_report_clean):
+    from evaluatorq.dashboard.report_tabs import _rt_by_kind, _rt_exec_summary
+
+    by = _rt_by_kind(rt_report_clean)
+    html = _rt_exec_summary(by['summary'].data, by)
+    assert 'resisted' in html.lower()
+    assert 'vulnerabilit' not in html.lower() or 'resisted all' in html.lower()
+
+
+def test_rt_tabs_seven_labels(rt_report_multi):
+    from evaluatorq.dashboard.report_tabs import redteam_report_tabs
+
+    html = redteam_report_tabs('rid', rt_report_multi)
+    for label in ['Overview', 'Agents', 'Focus areas', 'Breakdowns', 'Attacks', 'Usage', 'Config']:
+        assert label in html
+    assert 'Multi-turn' not in html  # folded into Breakdowns
+
+
+def test_rt_tab_count_pills(rt_report_multi):
+    # Count pills appear ONLY on Agents / Focus areas / Attacks (mockup parity).
+    from evaluatorq.dashboard.report_tabs import redteam_report_tabs
+
+    html = redteam_report_tabs('rid', rt_report_multi)
+    assert 'class="tab-count"' in html  # the raw-label 3-tuple pill
+
+
+def test_rt_exec_summary_multiturn_clause(rt_report_multi):
+    # rt_report_multi must include multi-turn results with rising ASR by depth.
+    from evaluatorq.dashboard.report_tabs import _rt_by_kind, _rt_exec_summary
+
+    by = _rt_by_kind(rt_report_multi)
+    html = _rt_exec_summary(by['summary'].data, by)
+    assert 'conversation depth' in html.lower()
+
+
+def test_rt_overview_end_to_end_wires_all_tabs(rt_report_multi):
+    # Guard against a helper (esp. Focus areas) being built but never spliced in.
+    from evaluatorq.dashboard.report_tabs import redteam_report_tabs
+
+    html = redteam_report_tabs('rid', rt_report_multi)
+    assert 'RISK' in html  # Focus-areas risk dial actually reaches the page
+    assert 'ASR' in html  # Agents ASR dial actually reaches the page
+    assert 'rk-heatmap' in html  # Breakdowns heatmap actually reaches the page
+
+
+def test_rt_breakdowns_has_heatmap_and_multiturn(rt_report_multi):
+    from evaluatorq.dashboard.report_tabs import _rt_breakdowns, _rt_by_kind
+
+    html = _rt_breakdowns(_rt_by_kind(rt_report_multi))
+    assert 'rk-heatmap' in html
+    assert 'category' in html.lower()
+    # multi-turn depth section present when turn_depth_analysis exists
+    assert 'conversation depth' in html.lower()
+
+
+def test_rt_breakdowns_omits_depth_when_absent(rt_report_single_turn):
+    from evaluatorq.dashboard.report_tabs import _rt_breakdowns, _rt_by_kind
+
+    html = _rt_breakdowns(_rt_by_kind(rt_report_single_turn))
+    assert 'conversation depth' not in html.lower()
+
+
+def test_rt_agents_single_agent_card(rt_report_single):
+    from evaluatorq.dashboard.report_tabs import _rt_agents, _rt_by_kind
+
+    html = _rt_agents(_rt_by_kind(rt_report_single), rt_report_single, 'rid')
+    assert 'ASR' in html  # dial sub-label
+    assert 'Single agent under assessment' in html
+
+
+def test_rt_config_no_agent_context(rt_report_single):
+    # The Config tab itself must not render agent_context chips (moved to Agents).
+    from evaluatorq.dashboard.report_tabs import _rt_by_kind, _rt_config
+
+    config_html = _rt_config(_rt_by_kind(rt_report_single), rt_report_single)
+    assert 'KNOWLEDGE' not in config_html  # tools/knowledge chip labels live only in Agents cards
+    assert 'Methodology' in config_html  # but Config still has its own content
+
+
+def test_rt_focus_tiers_and_dials(rt_report_multi):
+    from evaluatorq.dashboard.report_tabs import _rt_by_kind, _rt_focus
+
+    html = _rt_focus(_rt_by_kind(rt_report_multi))
+    assert 'RISK' in html  # risk dial sub-label
+    assert 'Recommended fix' in html or 'remediation' in html.lower()
+
+
+def test_rt_focus_empty_on_clean_run(rt_report_clean):
+    from evaluatorq.dashboard.report_tabs import _rt_by_kind, _rt_focus
+
+    assert _rt_focus(_rt_by_kind(rt_report_clean)) == ''
+
+
+def test_rt_focus_handles_absent_llm_recs(rt_report_static):
+    from evaluatorq.dashboard.report_tabs import _rt_by_kind, _rt_focus
+
+    # must not KeyError when 'llm_recommendations' key is absent
+    _rt_focus(_rt_by_kind(rt_report_static))
+
+
+def test_rt_report_empty_run_does_not_crash(rt_report_empty):
+    # 0-attack run: exec summary '', KPI zeros, no crash in any helper.
+    from evaluatorq.dashboard.report_tabs import redteam_report_tabs
+
+    html = redteam_report_tabs('rid', rt_report_empty)
+    assert 'class="report-aligned rt-report"' in html  # renders, doesn't raise
+
+
+def test_rt_attacks_rows_are_details(rt_report_multi):
+    from evaluatorq.dashboard.report_tabs import _rt_attacks
+
+    html = _rt_attacks(rt_report_multi, 'rid')
+    assert 'class="rt-attack-row"' in html
+    # lazy-load fires on the <details> toggle (open), targeting the inner body —
+    # a click trigger on the collapsed inner div never fires.
+    assert 'hx-trigger="toggle once"' in html
+    assert 'hx-target="find .rt-attack-row-body"' in html
+    assert '/r/rid/redteam/attack?idx=' in html
+    assert 'source' in html.lower()  # kept source_distribution renders below the table
+
+
+def test_rt_config_has_metagrid_and_jury(rt_report_multi):
+    # rt_report_multi fixture must set summary.jury_reliability so the block renders.
+    from evaluatorq.dashboard.report_tabs import _rt_by_kind, _rt_config
+
+    html = _rt_config(_rt_by_kind(rt_report_multi), rt_report_multi)
+    assert 'Run configuration' in html or 'rk-meta' in html
+    assert 'Methodology' in html
+    assert 'JURY RELIABILITY' in html  # deviation #12: jury block replaces mockup's JURY string

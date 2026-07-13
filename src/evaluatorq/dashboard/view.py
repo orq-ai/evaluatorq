@@ -611,7 +611,7 @@ def _chip(name: str, value: str, *, checked: bool, dot_cls: str) -> str:
     )
 
 
-def _sim_dropdown(dim: str, label: str, dim_opts: list[str], sel: list[str]) -> str:
+def _dropdown(dim: str, label: str, dim_opts: list[str], sel: list[str]) -> str:
     """One Persona/Scenario <details> dropdown with a stable id.
 
     ``sel`` empty means "all selected" (the default filter-route behaviour);
@@ -675,8 +675,8 @@ def _render_sim_filter_rail(
         _chip('terminated_by', opt, checked=(opt in term_sel), dot_cls='chip-dot-jade') for opt in term_opts
     )
 
-    persona_dd = _sim_dropdown('persona', 'Persona', opts.get('persona', []), selections.get('persona', []))
-    scenario_dd = _sim_dropdown('scenario', 'Scenario', opts.get('scenario', []), selections.get('scenario', []))
+    persona_dd = _dropdown('persona', 'Persona', opts.get('persona', []), selections.get('persona', []))
+    scenario_dd = _dropdown('scenario', 'Scenario', opts.get('scenario', []), selections.get('scenario', []))
 
     if shown is not None and total is not None and shown < total:
         counter = f'{shown} of {total} shown'
@@ -699,6 +699,131 @@ def _render_sim_filter_rail(
     )
     return (
         f'<form id="filter-form" class="filter-form filter-form--sim"'
+        f' hx-post="/r/{esc(rid)}/filter"'
+        f' hx-trigger="change"'
+        f' hx-target="#filter-swap"'
+        f' hx-swap="outerHTML">'
+        f'{inner}'
+        f'</form>'
+    )
+
+
+# Outcome chip dot colors (spec: Vulnerable red-600, Resistant green-600, Error amber-600).
+_RESULT_DOT_CLASS: dict[str, str] = {
+    'Vulnerable': 'chip-dot-red',
+    'Resistant': 'chip-dot-green',
+    'Error': 'chip-dot-amber',
+}
+
+# Severity chip dot colors, aligned with report_kit.severity_pill tones.
+_SEVERITY_DOT_CLASS: dict[str, str] = {
+    'critical': 'chip-dot-red',
+    'high': 'chip-dot-amber',
+    'medium': 'chip-dot-gray',
+    'low': 'chip-dot-green',
+}
+
+
+def _render_redteam_filter_rail(
+    rid: str,
+    opts: dict[str, list[str]],
+    selections: dict[str, list[str]],
+    *,
+    shown: int | None,
+    total: int | None,
+) -> str:
+    """Render the right-side redteam filter rail: chips + slider + dropdowns + counter.
+
+    Outcome / Severity render as chip toggles; a min-turns slider is shown
+    only when the run has any multi-turn attacks (``opts['max_turns'] > 1``);
+    Category / Agent render as ``<details>`` dropdowns (Agent only when there
+    is more than one agent); Technique / Delivery Method / Vulnerability are
+    tucked behind a ``<details id="filter-dd-more">`` "More filters" expander
+    to keep the rail short for the common single-agent, single-category run.
+    """
+    result_opts = opts.get('result', [])
+    result_sel = set(selections.get('result', []))
+    result_chips = ''.join(
+        _chip('result', opt, checked=(opt in result_sel), dot_cls=_RESULT_DOT_CLASS.get(opt, 'chip-dot-gray'))
+        for opt in result_opts
+    )
+
+    severity_opts = opts.get('severity', [])
+    severity_sel = set(selections.get('severity', [])) or set(severity_opts)
+    severity_chips = ''.join(
+        _chip(
+            'severity',
+            opt,
+            checked=(opt in severity_sel),
+            dot_cls=_SEVERITY_DOT_CLASS.get(opt.lower(), 'chip-dot-gray'),
+        )
+        for opt in severity_opts
+    )
+
+    max_turns = int(opts.get('max_turns', ['1'])[0] or 1)
+    min_turns_sel = selections.get('min_turns', ['1'])
+    min_turns = int(min_turns_sel[0]) if min_turns_sel and min_turns_sel[0] else 1
+    slider_html = ''
+    if max_turns > 1:
+        readout = 'all' if min_turns <= 1 else f'≥ {min_turns}'
+        slider_html = (
+            '<div class="filter-group" data-dim="min_turns">'
+            '<label class="filter-label">Min. Turns</label>'
+            '<div class="filter-slider-row">'
+            f'<input type="range" class="filter-slider" name="min_turns" min="1" max="{max_turns}"'
+            f' value="{min_turns}">'
+            f'<span class="filter-slider-readout">{esc(readout)}</span>'
+            '</div>'
+            '</div>'
+        )
+
+    category_dd = _dropdown('category', 'Category', opts.get('category', []), selections.get('category', []))
+
+    agent_opts = opts.get('agent', [])
+    agent_dd = ''
+    if len(agent_opts) > 1:
+        agent_dd = _dropdown('agent', 'Agent', agent_opts, selections.get('agent', []))
+
+    more_rows = ''.join([
+        _dropdown('technique', 'Technique', opts.get('technique', []), selections.get('technique', [])),
+        _dropdown(
+            'delivery_method', 'Delivery Method', opts.get('delivery_method', []), selections.get('delivery_method', [])
+        ),
+        _dropdown('vulnerability', 'Vulnerability', opts.get('vulnerability', []), selections.get('vulnerability', [])),
+    ])
+    more_dd = (
+        f'<details id="filter-dd-more" class="filter-dd filter-dd-more">'
+        f'<summary class="filter-dd-trigger">'
+        f'<span class="filter-dd-name">More filters</span>'
+        f'{_FILTER_CHEVRON}'
+        f'</summary>'
+        f'<div class="filter-dd-more-body">{more_rows}</div>'
+        f'</details>'
+    )
+
+    if shown is not None and total is not None and shown < total:
+        counter = f'{shown} of {total} shown'
+    else:
+        counter = 'Showing all results'
+
+    inner = (
+        f'<div class="filter-rail-header">{_SLIDERS_ICON}<span class="filter-rail-title">Filters</span></div>'
+        f'<div class="filter-group" data-dim="result">'
+        f'<label class="filter-label">Outcome</label>'
+        f'<div class="filter-chip-row">{result_chips}</div>'
+        f'</div>'
+        f'<div class="filter-group" data-dim="severity">'
+        f'<label class="filter-label">Severity</label>'
+        f'<div class="filter-chip-row">{severity_chips}</div>'
+        f'</div>'
+        f'{slider_html}'
+        f'<div class="filter-group" data-dim="category">{category_dd}</div>'
+        + (f'<div class="filter-group" data-dim="agent">{agent_dd}</div>' if agent_dd else '')
+        + f'<div class="filter-group" data-dim="more">{more_dd}</div>'
+        f'<div class="filter-rail-footer">{esc(counter)}</div>'
+    )
+    return (
+        f'<form id="filter-form" class="filter-form filter-form--redteam"'
         f' hx-post="/r/{esc(rid)}/filter"'
         f' hx-trigger="change"'
         f' hx-target="#filter-swap"'
@@ -738,6 +863,8 @@ def render_filter_form(
     """
     if surface == 'sim':
         return _render_sim_filter_rail(rid, opts, selections, shown=shown, total=total)
+    if surface == 'redteam':
+        return _render_redteam_filter_rail(rid, opts, selections, shown=shown, total=total)
 
     from evaluatorq.dashboard.filters import FILTERS
 
@@ -1045,105 +1172,4 @@ def sim_interactive_panels(rid: str, entries: list[Any]) -> str:
         f'<h1 class="sim-panels-title">Conversations</h1>'
         f'{_sim_rowlist_wrapper(rid, row_list)}'
         f'</section>'
-    )
-
-
-def redteam_interactive_panels(rid: str) -> str:
-    """Render the interactive dashboard panels section for a redteam report.
-
-    Returns an HTML ``<section>`` containing four HTMX-wired panels that load
-    their content via ``GET /r/{rid}/view/*`` routes:
-
-    - Interactive breakdown (group_by x stack_by bar chart)
-    - Agent heatmap (dimension selector — multi-agent reports only)
-    - Conversation viewer (per-row transcript drill-down)
-    - Disagreement viewer (agent-pair side-by-side — multi-agent only)
-
-    Each panel placeholder ``<div>`` carries:
-
-    - ``hx-trigger="load, orq:filter-changed from:body"`` so it fetches on
-      initial page load AND refetches whenever the filter form fires the
-      ``orq:filter-changed`` custom event (emitted by the POST /filter handler
-      via the ``HX-Trigger`` response header).
-    - ``hx-include="#filter-form"`` so each ``hx-get`` carries the current
-      filter selections as query params, giving the view routes the same filter
-      state the static body already uses.
-
-    The panel-own params (group_by, stack_by, dim, a, b, page, idx) live in the
-    ``hx-get`` URL and are preserved by ``hx-include`` being additive (it only
-    appends form fields; it does not replace URL params).  The filter dimension
-    names (result, agent, category, severity, technique, delivery_method,
-    vulnerability) do not collide with any panel-own param names.
-
-    Task 6's ``dashboard.js`` re-embeds ``render_embed`` Vega charts after
-    each HTMX swap.
-    """
-    return (
-        f'<section class="rt-interactive-panels">'
-        f'<h1 class="rt-panels-title">Interactive Analysis</h1>'
-        f'{rt_panel_breakdown(rid)}'
-        f'{rt_panel_agent_heatmap(rid)}'
-        f'{rt_panel_conversation(rid)}'
-        f'{rt_panel_disagreement(rid)}'
-        f'</section>'
-    )
-
-
-def _rt_lazy_panel(rid: str, *, panel_id: str, title: str, path: str, loading: str) -> str:
-    """One HTMX-lazy redteam panel: fetches ``/r/{rid}/view/{path}`` on load and
-    whenever the filter form fires ``orq:filter-changed``, carrying the current
-    filter selections via ``hx-include``."""
-    safe_rid = esc(rid)
-    return (
-        f'<div class="rt-panel" id="{panel_id}">'
-        f'<h2 class="rt-panel-title">{esc(title)}</h2>'
-        f'<div'
-        f' hx-get="/r/{safe_rid}/view/{path}"'
-        f' hx-trigger="load, orq:filter-changed from:body"'
-        f' hx-include="#filter-form"'
-        f' hx-target="this"'
-        f' hx-swap="outerHTML">'
-        f'<p class="rt-panel-loading">{esc(loading)}</p>'
-        f'</div>'
-        f'</div>'
-    )
-
-
-def rt_panel_breakdown(rid: str) -> str:
-    return _rt_lazy_panel(
-        rid,
-        panel_id='panel-breakdown',
-        title='Interactive Breakdown',
-        path='breakdown?group_by=vulnerability&amp;stack_by=none',
-        loading='Loading breakdown…',
-    )
-
-
-def rt_panel_agent_heatmap(rid: str) -> str:
-    return _rt_lazy_panel(
-        rid,
-        panel_id='panel-agent-heatmap',
-        title='Agent Heatmap',
-        path='agent-heatmap?dim=vulnerability',
-        loading='Loading heatmap…',
-    )
-
-
-def rt_panel_conversation(rid: str) -> str:
-    return _rt_lazy_panel(
-        rid,
-        panel_id='panel-conversation',
-        title='Conversation Viewer',
-        path='conversation?idx=0',
-        loading='Loading conversation viewer…',
-    )
-
-
-def rt_panel_disagreement(rid: str) -> str:
-    return _rt_lazy_panel(
-        rid,
-        panel_id='panel-disagreement',
-        title='Disagreement Viewer',
-        path='disagreement?page=1',
-        loading='Loading disagreement viewer…',
     )
