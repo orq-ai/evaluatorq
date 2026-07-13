@@ -513,6 +513,8 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
 
     # Register static file handler LAST so its catch-all
     # /{fname:path}.{ext:static} does not intercept the download routes above.
-    app.static_route_exts(static_path=str(_STATIC_DIR))
+    # Serve under /static/ (the prefix the head assets in view.py request); the
+    # default root mount would 404 those /static/*.js URLs.
+    app.static_route_exts(prefix='/static', static_path=str(_STATIC_DIR))
 
     return app
