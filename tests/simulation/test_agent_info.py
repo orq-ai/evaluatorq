@@ -20,6 +20,7 @@ def _agent_payload() -> SimpleNamespace:
     return SimpleNamespace(
         _id="01K8N1KMM5TBD3BTT2N2J5N0DK",
         key="simple-agent-1",
+        workspace_id="624ccbbd-a482-40e2-b3d9-3621e09da1f8",
         description="A helpful assistant for general tasks",
         role="Assistant",
         model=SimpleNamespace(id="openai/gpt-4o"),
@@ -64,7 +65,11 @@ async def test_fetch_agent_info_maps_payload(monkeypatch: pytest.MonkeyPatch) ->
     assert info["knowledge_bases"] == []
     assert info["memory_stores"] == []
     assert info["sub_agents"] == ["youth-agent"]
-    assert info["url"] == "https://my.orq.ai/project/agents/01K8N1KMM5TBD3BTT2N2J5N0DK"
+    assert info["workspace_id"] == "624ccbbd-a482-40e2-b3d9-3621e09da1f8"
+    assert (
+        info["url"]
+        == "https://my.orq.ai/624ccbbd-a482-40e2-b3d9-3621e09da1f8/agents/01K8N1KMM5TBD3BTT2N2J5N0DK"
+    )
     assert "instructions" not in info
     assert "system_prompt" not in info
 

@@ -62,8 +62,11 @@ async def fetch_agent_info(agent_key: str) -> dict[str, Any] | None:
         raw_sub_agents = getattr(agent_data, 'team_of_agents', None) or []
         sub_agents = [a.get('key') if isinstance(a, dict) else getattr(a, 'key', None) for a in raw_sub_agents]
 
+        from evaluatorq.dashboard.orq_links import orq_studio_url
+
+        workspace_id = getattr(agent_data, 'workspace_id', None)
         base_url = os.getenv('ORQ_BASE_URL', 'https://my.orq.ai').rstrip('/')
-        url = f'{base_url}/project/agents/{agent_id}' if agent_id else None
+        url = orq_studio_url(target_kind='agent', entity_id=agent_id, workspace_id=workspace_id, base_url=base_url)
 
         return {
             'key': agent_key,
@@ -75,6 +78,7 @@ async def fetch_agent_info(agent_key: str) -> dict[str, Any] | None:
             'knowledge_bases': knowledge_bases,
             'memory_stores': memory_stores,
             'sub_agents': sub_agents,
+            'workspace_id': workspace_id,
             'base_url': base_url,
             'url': url,
         }
