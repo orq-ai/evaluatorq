@@ -374,29 +374,17 @@
        ============================================================ -->
   <section class="slide" id="s2">
     <div class="slide-inner">
-      <div class="eyebrow">The problem</div>
-      <h2>Evaluate against <em>what</em>?</h2>
+      <div class="eyebrow">The gap — you already run evals</div>
+      <h2>Your evals are single-turn.<br>Your failures aren't.</h2>
       <ul class="ship-list">
         <li class="ship-item">
           <span class="ship-dot clay"></span>
           <div>
-            <div class="ship-title">You have no dataset yet</div>
-            <div class="ship-desc">
-              The agent hasn't shipped — there are no real conversations to
-              test with, and ground-truth data is one of the most expensive
-              assets to produce.
-            </div>
-          </div>
-          <span class="ship-ref">cold start</span>
-        </li>
-        <li class="ship-item">
-          <span class="ship-dot clay"></span>
-          <div>
-            <div class="ship-title">Failures are multi-turn</div>
+            <div class="ship-title">Golden sets + LLM-as-judge test responses, not conversations</div>
             <div class="ship-desc">
               Agents break when users change their mind, get impatient,
-              contradict themselves, or drift off-goal. Single-turn evals
-              never see it.
+              contradict themselves, or drift off-goal — conversational
+              dynamics no static golden set encodes.
             </div>
           </div>
           <span class="ship-ref">turn 7, not turn 1</span>
@@ -404,10 +392,22 @@
         <li class="ship-item">
           <span class="ship-dot clay"></span>
           <div>
-            <div class="ship-title">You don't know the failure modes yet</div>
+            <div class="ship-title">And at the start, there's no dataset at all</div>
             <div class="ship-desc">
-              You can't hand-write test cases for mistakes you haven't seen.
-              The blind spots are exactly the point.
+              The agent hasn't shipped — no production traces to mine,
+              and multi-turn ground truth is the most expensive kind to
+              hand-build.
+            </div>
+          </div>
+          <span class="ship-ref">cold start</span>
+        </li>
+        <li class="ship-item">
+          <span class="ship-dot clay"></span>
+          <div>
+            <div class="ship-title">You can't write test cases for failure modes you haven't met</div>
+            <div class="ship-desc">
+              The blind spots are exactly the point — coverage has to come
+              from somewhere other than your own imagination.
             </div>
           </div>
           <span class="ship-ref">unknown unknowns</span>

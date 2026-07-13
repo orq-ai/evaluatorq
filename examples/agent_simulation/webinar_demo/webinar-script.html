@@ -335,10 +335,12 @@
           <div class="body">
             <h3>Cold open</h3>
             <p>
-              Arian opens with the hook: <em>"Quick poll in the chat — do you
-              have an evaluation dataset for your agent? Be honest."</em>
-              Introduce Bauke. State the promise: in 45 minutes you'll see an
-              agent go from zero data to a reusable regression suite, live.
+              Audience knows evals — don't sell the concept, locate the gap.
+              Arian's poll: <em>"How do you eval your agent today — golden set +
+              LLM judge? Production traces? Anything multi-turn? Drop it in the
+              chat."</em> Introduce Bauke. State the promise (it's what both
+              LinkedIn posts sold): an agent goes from zero data to a reusable
+              multi-turn regression suite, live, in 45 minutes.
             </p>
             <div class="tags"><span class="tag arian">Arian leads</span><span class="tag">deck s1</span></div>
           </div>
@@ -348,13 +350,15 @@
           <div class="when">03:00–08:00</div>
           <div class="dot-col"><span class="dot"></span><span class="line"></span></div>
           <div class="body">
-            <h3>The problem &amp; the idea</h3>
+            <h3>The gap in your eval stack</h3>
             <p>
-              Bauke presents: why single-turn evals miss agent failures, why
-              there's no dataset at the start, what simulation does
-              (generate → simulate → judge → keep). This is where "what does
-              it do" and "what problem does it solve" get answered —
-              Arian holds questions unless something needs unpacking.
+              No evals-101. Bauke's argument, for people who already run evals:
+              your stack is single-turn — golden sets, LLM-as-judge on isolated
+              responses — but agent failures are conversational dynamics (the
+              user pivots, stalls, contradicts; turn 7, not turn 1). And at the
+              start there's no dataset that encodes those dynamics. Simulation
+              closes both: generate → simulate → judge → keep. Arian holds
+              questions unless something needs unpacking.
             </p>
             <div class="tags"><span class="tag bauke">Bauke leads</span><span class="tag">deck s2–s3</span></div>
           </div>
@@ -558,6 +562,10 @@
         Clay border = ask it. Olive border = Bauke's intro should already cover
         it — keep as a backup reformulation if the intro ran thin. Each card:
         the question as Arian asks it, the beats Bauke hits, and the cue.
+        H1–H5 at the bottom are the <strong>hard questions</strong> a technical
+        audience will ask anyway — Arian asks 2–3 of them at their anchored
+        demo moments (better we raise them than the chat); the rest double as
+        prepared answers for audience Q&amp;A.
       </p>
 
       <div class="open-q">
@@ -695,6 +703,71 @@
             you start before you have any, and the suite keeps growing after.
           </div>
           <div class="owner">Cue · interview block closer (~41:00), hand off to audience Q&amp;A</div>
+        </div>
+
+        <div class="q">
+          <div class="qt">H1 · "An LLM writing tests for an LLM — isn't that circular? Won't the generator share the agent's blind spots?"</div>
+          <div class="qd">
+            Beats: different models, different roles — the generator isn't asked
+            "what would this agent get wrong", it systematically explores
+            persona × goal × adversarial-strategy combinations, which is wider
+            than any dev's hand-written list. But concede the core: yes,
+            generated coverage has its own distribution. That's why you extend
+            the suite with production traces once you have them — simulation is
+            the bootstrap, not the endpoint (same line as both LinkedIn posts).
+          </div>
+          <div class="owner">Cue · right after the Act 1 payoff (Q2), while the generated row is on screen</div>
+        </div>
+
+        <div class="q">
+          <div class="qt">H2 · "How good is the judge? Did you validate it — TPR/TNR against human labels?"</div>
+          <div class="qd">
+            The question this audience will definitely ask. Honest beats:
+            <ul>
+              <li>Judges are prompt-based (goal_achieved, criteria_met) and every verdict ships with per-turn reasoning — you audit them, not trust them.</li>
+              <li>Criteria are explicit and per-scenario, so the judge grades against a written contract, not vibes.</li>
+              <li>No shipped TPR/TNR benchmark — say so. Recommended practice: spot-check verdicts on your first runs, tune criteria wording where the judge and you disagree. Same discipline as any LLM-as-judge.</li>
+            </ul>
+          </div>
+          <div class="owner">Cue · Act 4a, judge reasoning visible in the transcript drill-down</div>
+        </div>
+
+        <div class="q">
+          <div class="qt">H3 · "The conversations are stochastic — same frozen datapoints, different dialogue every run. How is that a regression gate?"</div>
+          <div class="qd">
+            Sharpest technical objection. Beats:
+            <ul>
+              <li>Freezing datapoints removes the biggest variance source — the test inputs. What varies is the path, not the goal.</li>
+              <li>Criteria are outcome-level ("balance disclosed only after verification"), not path-level — robust to different phrasings of the same conversation.</li>
+              <li>Gate on pass-rate deltas, not single binaries; re-run flaky rows like you re-run flaky tests. It's a statistical gate, same as any nondeterministic system test.</li>
+            </ul>
+          </div>
+          <div class="owner">Cue · Act 3a, the moment the frozen re-run is proposed</div>
+        </div>
+
+        <div class="q">
+          <div class="qt">H4 · "How many personas × scenarios is enough? Is there a coverage measure?"</div>
+          <div class="qd">
+            Honest beats: no formal coverage metric — heuristic is saturation.
+            Start 3 × 3, extend (Act 3b) until new scenarios stop surfacing new
+            failure modes. The persona × scenario heatmap doubles as the
+            coverage map: uniform green with sparse cells means generate more,
+            clustered red means fix before growing.
+          </div>
+          <div class="owner">Cue · Act 3b, while the extend command runs</div>
+        </div>
+
+        <div class="q">
+          <div class="qt">H5 · "Hundreds of multi-turn conversations, three LLM roles — what does a run actually cost?"</div>
+          <div class="qd">
+            Beats: the dashboard shows tokens total and per conversation — point
+            at it, don't hand-wave. Cost knobs: personas × scenarios count, max
+            turns, and model choice per role — the user-simulator and judge can
+            run on cheaper models than the agent under test. A 3 × 3 × ~10-turn
+            run is lunch money; the point is you spend it before users find the
+            failure, not after.
+          </div>
+          <div class="owner">Cue · Act 4a, tokens panel on screen — or audience Q&amp;A</div>
         </div>
       </div>
     </section>
@@ -871,6 +944,11 @@ orq agents retrieve boh_creditcard_agent_demo <span class="cm"># agent visible?<
           <div class="cell">"Can it seed from my existing data AND generate more in one go?"</div>
           <div class="cell"><span class="sev low">LOW</span></div>
           <div class="cell">Not natively yet — <code>dataset_id</code> is still mutually exclusive with personas/scenarios. Today: generate separately, then append locally (Act 3b) or <code>upload-dataset --dataset-id</code> to extend the platform copy. No LLM augmentation <em>from</em> existing rows yet. Say so plainly.</div>
+        </div>
+        <div class="row">
+          <div class="cell">"How does this compare to τ-bench, DeepEval's conversation simulator, LangSmith simulations?"</div>
+          <div class="cell"><span class="sev med">MED</span></div>
+          <div class="cell">Don't trash anyone — same family (persona-driven user simulation), credit the idea. Differentiators to name: suite generated from just an agent description, frozen JSONL is portable and diffable, targets are framework-agnostic (orq / OpenAI-compatible / HTTP / any Python callable), open source end to end. τ-bench is a fixed benchmark; this builds <em>your</em> benchmark.</div>
         </div>
       </div>
     </section>
