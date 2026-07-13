@@ -315,9 +315,13 @@ def test_sim_dashboard_adapter_preserves_full_run_narrative() -> None:
         executive_summary='The simulated user achieved a risky outcome.',
     )
 
-    assert run.executive_summary in ADAPTERS['sim'].body(run)
-    assert run.executive_summary in ADAPTERS['sim'].export(run)
-    assert run.executive_summary in ADAPTERS['sim'].export_markdown(run)  # type: ignore[operator]
+    narrative = run.executive_summary
+    assert narrative is not None
+    assert narrative in ADAPTERS['sim'].body(run)
+    assert narrative in ADAPTERS['sim'].export(run)
+    export_markdown = ADAPTERS['sim'].export_markdown
+    assert export_markdown is not None
+    assert narrative in export_markdown(run)
 
 
 def test_sim_tabbed_dashboard_preserves_only_full_run_narrative() -> None:
@@ -337,5 +341,7 @@ def test_sim_tabbed_dashboard_preserves_only_full_run_narrative() -> None:
         executive_summary='The simulated user achieved a risky outcome.',
     )
 
-    assert run.executive_summary in sim_report_tabs('run-1', run)
-    assert run.executive_summary not in sim_report_tabs('run-1', run, results=[])
+    narrative = run.executive_summary
+    assert narrative is not None
+    assert narrative in sim_report_tabs('run-1', run)
+    assert narrative not in sim_report_tabs('run-1', run, results=[])
