@@ -382,14 +382,10 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
     font-family: var(--font-display); font-size: 28px; font-weight: 600; color: var(--text-strong);
 }
 .donut .donut-label {
-    font-family: var(--font-sans); font-size: 10px; letter-spacing: 0.05em;
+    font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.05em;
     text-transform: uppercase; color: var(--text-faint);
 }
 .donut-wrap { gap: 20px; align-items: center; }
-/* Outcomes donut sits in a white .rk-panel on the sim report: center the
-   donut + legend row both axes so it fills the (stretched) panel height. */
-.sim-report .rk-panel .donut-wrap { flex-direction: column; justify-content: center; align-items: center; gap: 20px; height: 100%; }
-.sim-report .rk-panel .donut-legend { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 16px; }
 .donut-legend {
     list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column;
     gap: 6px; font-family: var(--font-sans); font-size: 12px; color: var(--text-muted);
@@ -512,10 +508,6 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
 .filter-form--redteam {
     flex: 0 0 208px;
     position: static;
-    /* Drop the rail down so its top lines up with the tab bar rather than the
-       hero title. ponytail: magic offset = hero (title+sub, no KPI cards) + tab
-       bar height; recompute if the hero grows a line or the tab bar resizes. */
-    margin-top: 138px;
     display: flex;
     flex-direction: column;
     gap: 16px;
@@ -533,14 +525,13 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
     color: var(--text-faint);
 }
 .filter-rail-title {
-    font-family: var(--font-sans);
-    font-size: 11px; font-weight: 400;
-    text-transform: uppercase; letter-spacing: 0.06em;
+    font-family: var(--font-mono);
+    font-size: 11px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.08em;
     color: var(--text-faint);
 }
 .filter-form--sim .filter-group { margin-bottom: 0; }
 .filter-form--sim .filter-label {
-    font-family: var(--font-sans);
     font-size: 10.5px; margin-bottom: 8px;
 }
 .filter-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -730,8 +721,6 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
     font-size: 13px; color: var(--text-muted);
     font-family: var(--font-mono);
 }
-/* Sim report is all-sans to match the mockup (no monospace anywhere). */
-.sim-report .report-hero-sub { font-family: var(--font-sans); }
 
 /* ==== CSS-only tabs (report bodies) ================================= */
 /* Radios carry the state; labels are the tab bar; panels show on :checked.
@@ -774,9 +763,6 @@ _DASHBOARD_CSS_TAIL = """
 @media (max-width: 760px) {
     .filter-swap-container { flex-direction: column; }
     .filter-form { position: static; flex-basis: auto; width: 100%; }
-    /* Rail stacks full-width here, so the tab-bar-alignment offset no longer
-       applies — drop it to avoid a dead gap above the stacked rail. */
-    .filter-form--sim { margin-top: 0; }
     .stat-band { grid-template-columns: repeat(2, 1fr); }
     .dash-row2, .dash-row-eq { grid-template-columns: 1fr; }
 }
@@ -810,8 +796,6 @@ _SIM_TAB_ACCENT = ''.join(
 _SIM_REPORT_CSS = """
 .report-aligned .tab-count {
     font-family: var(--font-mono); font-size: 11px; font-weight: 600;
-.sim-report .tab-count {
-    font-family: var(--font-sans); font-size: 11px; font-weight: 600;
     background: var(--surface-sunken); color: var(--text-muted);
     border-radius: 999px; padding: 1px 7px; margin-left: 5px;
 }
@@ -832,13 +816,6 @@ _SIM_REPORT_CSS = """
 }
 .report-aligned .es-confidence {
     font-family: var(--font-mono); font-size: 10px; font-weight: 600;
-.sim-report .es-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.sim-report .es-label {
-    font-family: var(--font-sans); font-size: 11px; font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint);
-}
-.sim-report .es-confidence {
-    font-family: var(--font-sans); font-size: 10px; font-weight: 600;
     border: 1px solid; border-radius: 999px; padding: 2px 8px;
 }
 .report-aligned .es-body {
@@ -866,17 +843,343 @@ _SIM_REPORT_CSS = """
 .report-aligned .kpi-card--neutral { border-top-color: var(--teal-600); }
 .report-aligned .kpi-value {
     font-family: var(--font-mono); font-size: 28px; font-weight: 600;
-.sim-report .kpi-card--pass    { border-top-color: var(--green-600); }
-.sim-report .kpi-card--fail    { border-top-color: var(--red-600); }
-.sim-report .kpi-card--warn    { border-top-color: var(--amber-600); }
-.sim-report .kpi-card--neutral { border-top-color: var(--teal-600); }
-.sim-report .kpi-value {
-    font-family: var(--font-sans); font-size: 28px; font-weight: 600;
     color: var(--text-strong); line-height: 1.1;
 }
 .report-aligned .kpi-label { font-size: 12px; color: var(--text-muted); margin-top: 7px; }
 
 /* ---- 2-col grids (donut+tokens, personas+scenarios) ---- */
+.sim-report .sim-overview-grid-2 {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0;
+}
+@media (max-width: 760px) {
+    .sim-report .sim-overview-grid-2 { grid-template-columns: 1fr; }
+}
+
+/* ---- Panel wrapper (report_kit.panel) ---- */
+.report-aligned .rk-panel {
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: 12px;
+    padding: 16px 20px;
+}
+.report-aligned .rk-panel-title {
+    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint);
+}
+.report-aligned .rk-panel-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.report-aligned .rk-panel-body { margin-top: 12px; }
+
+/* ---- Tag (report_kit.tag) ---- */
+.report-aligned .rk-tag {
+    display: inline-block; font-size: 11px; font-weight: 500;
+    border: 1px solid var(--border-default); border-radius: 999px;
+    padding: 1px 8px; margin-left: 8px; color: var(--text-muted);
+}
+
+/* ---- Personas panel (Overview) ---- */
+.sim-report .sim-persona-item + .sim-persona-item { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
+.sim-report .sim-persona-row { display: flex; align-items: center; gap: 4px; }
+.sim-report .sim-persona-name { font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--text-strong); }
+.sim-report .sim-persona-count { margin-left: auto; font-size: 11px; color: var(--text-faint); }
+.sim-report .sim-trait-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px;
+}
+.sim-report .sim-trait-bar { display: flex; align-items: center; gap: 6px; }
+.sim-report .sim-trait-label { width: 86px; flex-shrink: 0; font-size: 11px; color: var(--text-faint); }
+.sim-report .sim-trait-track {
+    flex: 1; height: 5px; border-radius: 3px; background: var(--surface-sunken); overflow: hidden;
+}
+.sim-report .sim-trait-fill { display: block; height: 100%; background: var(--teal-600); border-radius: 3px; }
+
+/* ---- Scenarios panel (Overview) ---- */
+.sim-report .sim-scenario-item + .sim-scenario-item { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
+.sim-report .sim-scenario-name { font-size: 13px; font-weight: 600; color: var(--text-strong); }
+.sim-report .sim-scenario-goal { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.sim-report .sim-criterion {
+    display: flex; align-items: baseline; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--text-muted);
+}
+.sim-report .sim-criterion-type {
+    font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; flex-shrink: 0;
+}
+
+/* ---- Breakdown tab: stacked panels + heatmap/histogram/tables ---- */
+.report-aligned .rk-panel + .rk-panel,
+.report-aligned .rk-panel + .report-card,
+.report-aligned .report-card + .rk-panel {
+    margin-top: 20px;
+}
+
+/* HTML-table heatmap (report_kit.heatmap) */
+.report-aligned .rk-heatmap { border-collapse: separate; border-spacing: 4px; }
+.report-aligned .rk-heat-col {
+    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    color: var(--text-muted); text-align: center; padding: 0 4px 6px;
+}
+.report-aligned .rk-heat-row {
+    font-size: 12px; font-weight: 600; color: var(--text-strong);
+    text-align: right; padding-right: 10px; white-space: nowrap;
+}
+.report-aligned .rk-heat-cell {
+    min-width: 50px; height: 34px; border-radius: 5px;
+    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    text-align: center; vertical-align: middle;
+}
+.report-aligned .rk-heat-empty { background: var(--surface-sunken); color: var(--text-faint); }
+
+/* Per-persona / per-scenario tables (html_table output) + failures table */
+.report-aligned .rk-panel-body { display: grid; }
+.report-aligned table {
+    width: 100%; border-collapse: collapse;
+}
+.report-aligned table thead th {
+    font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+    font-weight: 600; color: var(--text-faint); background: var(--surface-sunken);
+    padding: 11px 16px; text-align: left;
+}
+.report-aligned table tbody td {
+    font-size: 13px; padding: 12px 16px; border-bottom: 1px solid var(--border-subtle);
+}
+.report-aligned table tbody tr:last-child td { border-bottom: none; }
+.report-aligned table thead th:not(:first-child),
+.report-aligned table tbody td:not(:first-child) {
+    text-align: right; font-variant-numeric: tabular-nums;
+}
+.sim-report .sim-breakdown-grid-2 {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 20px;
+}
+@media (max-width: 760px) {
+    .sim-report .sim-breakdown-grid-2 { grid-template-columns: 1fr; }
+}
+
+/* ---- Turn quality tab (spec §Turn) ---- */
+/* Line chart legend (report_kit.line_chart) */
+.report-aligned .rk-legend {
+    display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px;
+}
+.report-aligned .rk-legend-item {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--text-muted);
+}
+.report-aligned .rk-legend-swatch {
+    display: inline-block; width: 8px; height: 8px; border-radius: 2px;
+}
+/* Average quality metric stat tiles (spec §Turn.3) */
+.sim-report .sim-stat-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+}
+.sim-report .sim-stat-tile {
+    background: var(--surface-sunken); border-radius: 8px; padding: 12px 14px;
+}
+.sim-report .sim-stat-value {
+    font-family: var(--font-mono); font-size: 24px; font-weight: 600;
+    color: var(--text-strong);
+}
+.sim-report .sim-stat-label {
+    font-size: 11px; color: var(--text-muted); margin-top: 4px;
+    text-transform: capitalize;
+}
+
+/* ---- Config tab (spec §Config) ---- */
+/* Run-configuration meta grid (report_kit.meta_grid) */
+.report-aligned .rk-meta-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 16px 24px;
+}
+.report-aligned .rk-meta-key {
+    font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--text-faint);
+}
+.report-aligned .rk-meta-value {
+    font-size: 13.5px; color: var(--text-body); margin-top: 4px;
+}
+/* Personas panel (name · communication style · background) */
+.sim-report .sim-config-persona-row {
+    display: flex; align-items: baseline; gap: 12px;
+    margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-subtle);
+}
+.sim-report .sim-config-persona-row:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+.sim-report .sim-config-persona-name {
+    font-size: 13px; font-weight: 600; color: var(--text-strong); min-width: 160px;
+}
+.sim-report .sim-config-persona-style {
+    font-family: var(--font-mono); font-size: 11px; color: var(--text-faint);
+}
+.sim-report .sim-config-persona-bg { font-size: 12.5px; color: var(--text-muted); }
+/* Scenarios panel (name + goal + criteria chips) */
+.sim-report .sim-config-scenario-row {
+    margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-subtle);
+}
+.sim-report .sim-config-scenario-row:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+.sim-report .sim-config-scenario-name { font-size: 13px; font-weight: 600; color: var(--text-strong); }
+.sim-report .sim-config-scenario-goal { font-size: 12.5px; color: var(--text-muted); margin-top: 3px; }
+.sim-report .sim-config-criteria {
+    display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
+}
+.sim-report .sim-config-criterion {
+    font-family: var(--font-mono); font-size: 11.5px; background: var(--surface-sunken);
+    border-radius: 6px; padding: 3px 9px;
+}
+"""
+
+# ==== .sim-report — Transcripts redesign (Tasks 11+12) ===================
+# Appended as its own block (rather than edited into _SIM_REPORT_CSS above)
+# so a concurrently-landing `.sim-report` CSS addition on another branch
+# merges cleanly. Covers: collapsed tinted conversation cards (Task 11) +
+# judge callout / chat bubbles / two-state criteria (Task 12), both scoped
+# under `.sim-report` per docs/superpowers/specs/2026-07-10-agent-sim-report-
+# alignment-design.md §Transcripts.
+_SIM_TRANSCRIPT_CSS = """
+/* ---- Conversation cards (spec §Transcripts, Task 11) ---- */
+.sim-report .sim-row-list { display: flex; flex-direction: column; gap: 10px; }
+.sim-report .sim-conv-card {
+    border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden;
+    background: var(--surface-app);
+}
+.sim-report .sim-conv-summary {
+    display: flex; align-items: center; gap: 8px; padding: 12px 16px;
+    cursor: pointer; list-style: none;
+}
+.sim-report .sim-conv-summary::-webkit-details-marker { display: none; }
+.sim-report .sim-conv-idx {
+    font-family: var(--font-mono); font-size: 12px; color: var(--text-faint);
+}
+.sim-report .sim-conv-persona { font-size: 14px; font-weight: 600; color: var(--text-strong); }
+.sim-report .sim-conv-sep { color: var(--text-faint); }
+.sim-report .sim-conv-scenario { font-size: 13px; color: var(--text-body); }
+.sim-report .sim-conv-right {
+    display: flex; align-items: center; gap: 6px; margin-left: auto;
+}
+.sim-report .sim-tint-achieved { background: var(--green-100); }
+.sim-report .sim-tint-missed { background: var(--red-100); }
+.sim-report .sim-tint-error { background: var(--amber-100); }
+.sim-report .sim-conv-body { padding: 16px; border-top: 1px solid var(--border-subtle); }
+
+/* ---- Transcript fragment: judge callout / bubbles / criteria (Task 12) ---- */
+.sim-report .sim-judge {
+    background: var(--surface-sunken); border-left: 3px solid var(--teal-600);
+    border-radius: 4px; padding: 10px 14px; margin-bottom: 14px;
+}
+.sim-report .sim-judge-label {
+    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; color: var(--teal-600); display: block;
+}
+.sim-report .sim-judge-reason { font-size: 13px; line-height: 1.55; margin: 4px 0 0; color: var(--text-body); }
+.sim-report .sim-transcript-error {
+    background: var(--red-100); color: var(--red-600); border-radius: 4px;
+    padding: 10px 14px; margin-bottom: 14px; font-size: 13px;
+}
+.sim-report .sim-transcript-grid {
+    display: grid; grid-template-columns: 1.6fr 1fr; gap: 20px;
+}
+@media (max-width: 760px) {
+    .sim-report .sim-transcript-grid { grid-template-columns: 1fr; }
+}
+
+/* Chat bubbles (render_message_list avatar + side extension). Shared with
+   the Red Team transcript fragment, which calls the same
+   `render_message_list` with `class_prefix='rt'` (spec 2026-07-10-redteam-
+   report-alignment-design.md §Shared infrastructure #4) — one declaration
+   set, two selectors per rule, so the two reports cannot drift. */
+.report-aligned .sim-msg, .report-aligned .rt-msg {
+    display: flex; gap: 8px; margin-bottom: 10px; max-width: 88%;
+}
+.report-aligned .sim-msg-user, .report-aligned .sim-msg-system,
+.report-aligned .rt-msg-user, .report-aligned .rt-msg-system {
+    margin-right: auto;
+}
+.report-aligned .sim-msg-assistant, .report-aligned .sim-msg-tool,
+.report-aligned .rt-msg-assistant, .report-aligned .rt-msg-tool {
+    margin-left: auto; flex-direction: row-reverse;
+}
+.report-aligned .sim-msg-avatar, .report-aligned .rt-msg-avatar {
+    flex-shrink: 0; width: 30px; height: 30px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono); font-size: 9px; font-weight: 600;
+    background: var(--ink-900); color: #fff;
+}
+.report-aligned .sim-msg-assistant .sim-msg-avatar, .report-aligned .sim-msg-tool .sim-msg-avatar,
+.report-aligned .rt-msg-assistant .rt-msg-avatar, .report-aligned .rt-msg-tool .rt-msg-avatar {
+    background: var(--teal-50); color: var(--teal-600);
+}
+.report-aligned .sim-msg-bubble, .report-aligned .rt-msg-bubble {
+    background: var(--surface-sunken); border-radius: 12px; padding: 9px 13px;
+}
+.report-aligned .sim-msg-assistant .sim-msg-bubble, .report-aligned .sim-msg-tool .sim-msg-bubble,
+.report-aligned .rt-msg-assistant .rt-msg-bubble, .report-aligned .rt-msg-tool .rt-msg-bubble {
+    background: var(--teal-50);
+}
+.report-aligned .sim-msg-role, .report-aligned .rt-msg-role {
+    display: block; font-family: var(--font-mono); font-size: 10px;
+    text-transform: uppercase; color: var(--text-faint); margin-bottom: 3px;
+}
+.report-aligned .sim-msg-content, .report-aligned .rt-msg-content {
+    font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+    margin: 0; font-family: inherit;
+}
+
+/* Criteria column (two-state per deviation #4) */
+.sim-report .sim-criteria-header {
+    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; color: var(--text-faint); margin-bottom: 8px;
+}
+.sim-report .sim-criteria-list { list-style: none; margin: 0; padding: 0; }
+.sim-report .sim-criterion {
+    display: flex; align-items: flex-start; gap: 8px; padding: 8px 0;
+    border-top: 1px solid var(--border-subtle);
+}
+.sim-report .sim-criterion:first-child { border-top: none; }
+.sim-report .sim-criterion-icon {
+    flex-shrink: 0; width: 18px; height: 18px; border-radius: 999px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; color: #fff;
+}
+.sim-report .sim-criterion-pass .sim-criterion-icon { background: var(--green-600); }
+.sim-report .sim-criterion-fail .sim-criterion-icon { background: var(--red-600); }
+.sim-report .sim-criterion-desc { font-size: 13px; color: var(--text-body); flex: 1; }
+.sim-report .sim-ctype {
+    font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+    color: var(--text-faint); white-space: nowrap;
+}
+.sim-report .sim-ctype-unsafe { color: var(--red-600); }
+"""
+
+# ==== .sim-report — Agent Sim overrides layered on `.report-aligned` ======
+# `.sim-report` and `.report-aligned` have equal specificity (one class
+# each), so these rules must stay *after* _SIM_REPORT_CSS / _SIM_TRANSCRIPT_CSS
+# in source order for the sim-specific values to win over the shared
+# `.report-aligned` defaults on the sim report only (Option 3: mostly split,
+# reuse identicals — spec docs/superpowers/specs/2026-07-10-agent-sim-report-
+# alignment-design.md). Rules whose declarations were identical to their
+# `.report-aligned` twin were dropped as redundant; only the ones that
+# diverge (font, spacing, frameless tables/heatmap, etc.) or are sim-only are
+# kept here.
+_SIM_REPORT_OVERRIDES_CSS = """
+/* Outcomes donut sits in a white .rk-panel on the sim report: center the
+   donut + legend row both axes so it fills the (stretched) panel height. */
+.sim-report .rk-panel .donut-wrap { flex-direction: column; justify-content: center; align-items: center; gap: 20px; height: 100%; }
+.sim-report .rk-panel .donut-legend { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 16px; }
+/* Sim report is all-sans to match the mockup (no monospace anywhere). */
+.sim-report .report-hero-sub { font-family: var(--font-sans); }
+
+.sim-report .tab-count {
+    font-family: var(--font-sans); font-size: 11px; font-weight: 600;
+    background: var(--surface-sunken); color: var(--text-muted);
+    border-radius: 999px; padding: 1px 7px; margin-left: 5px;
+}
+.sim-report .es-label {
+    font-family: var(--font-sans); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint);
+}
+.sim-report .es-confidence {
+    font-family: var(--font-sans); font-size: 10px; font-weight: 600;
+    border: 1px solid; border-radius: 999px; padding: 2px 8px;
+}
+.sim-report .kpi-value {
+    font-family: var(--font-sans); font-size: 28px; font-weight: 600;
+    color: var(--text-strong); line-height: 1.1;
+}
+
+/* ---- 2-col grids (donut+tokens, personas+scenarios): stretch-height fixes ---- */
 .sim-report .sim-overview-grid-2 {
     display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0;
     align-items: stretch;
@@ -904,19 +1207,12 @@ _SIM_REPORT_CSS = """
    rhythm (elements that need their own leading still override locally). */
 .sim-report { line-height: var(--leading-body); }
 
-/* ---- Panel wrapper (report_kit.panel) ---- */
-.report-aligned .rk-panel {
+.sim-report .rk-panel {
     background: var(--surface-card);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
     padding: 16px 20px;
 }
-.report-aligned .rk-panel-title {
-    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint);
-}
-.report-aligned .rk-panel-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
-.report-aligned .rk-panel-body { margin-top: 12px; }
 /* Panel titles match the mockup: serif (display), sentence-case, ~18px bold.
    Mono-uppercase is the mockup's *eyebrow* style (exec-summary label, filter
    labels, table column headers) — not panel titles. */
@@ -925,61 +1221,13 @@ _SIM_REPORT_CSS = """
     letter-spacing: -0.01em; color: var(--text-strong);
 }
 .sim-report .rk-panel-sub { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
-.sim-report .rk-panel-body { margin-top: 12px; }
 
-/* ---- Tag (report_kit.tag) ---- */
-.report-aligned .rk-tag {
-    display: inline-block; font-size: 11px; font-weight: 500;
-    border: 1px solid var(--border-default); border-radius: 999px;
-    padding: 1px 8px; margin-left: 8px; color: var(--text-muted);
-}
-
-/* ---- Personas panel (Overview) ---- */
-.sim-report .sim-persona-item + .sim-persona-item { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
-.sim-report .sim-persona-row { display: flex; align-items: center; gap: 4px; }
 .sim-report .sim-persona-name { font-family: var(--font-sans); font-size: 13px; font-weight: 600; color: var(--text-strong); }
-.sim-report .sim-persona-count { margin-left: auto; font-size: 11px; color: var(--text-faint); }
-.sim-report .sim-trait-grid {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px;
-}
-.sim-report .sim-trait-bar { display: flex; align-items: center; gap: 6px; }
-.sim-report .sim-trait-label { width: 86px; flex-shrink: 0; font-size: 11px; color: var(--text-faint); }
-.sim-report .sim-trait-track {
-    flex: 1; height: 5px; border-radius: 3px; background: var(--surface-sunken); overflow: hidden;
-}
-.sim-report .sim-trait-fill { display: block; height: 100%; background: var(--teal-600); border-radius: 3px; }
-
-/* ---- Scenarios panel (Overview) ---- */
-.sim-report .sim-scenario-item + .sim-scenario-item { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
-.sim-report .sim-scenario-name { font-size: 13px; font-weight: 600; color: var(--text-strong); }
-.sim-report .sim-scenario-goal { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
-.sim-report .sim-criterion {
-    display: flex; align-items: baseline; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--text-muted);
-}
 .sim-report .sim-criterion-type {
     font-family: var(--font-sans); font-size: 10px; text-transform: uppercase; flex-shrink: 0;
 }
 
-/* ---- Breakdown tab: stacked panels + heatmap/histogram/tables ---- */
-.report-aligned .rk-panel + .rk-panel,
-.report-aligned .rk-panel + .report-card,
-.report-aligned .report-card + .rk-panel {
-    margin-top: 20px;
-}
-
 /* HTML-table heatmap (report_kit.heatmap) */
-.report-aligned .rk-heatmap { border-collapse: separate; border-spacing: 4px; }
-.report-aligned .rk-heat-col {
-    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
-    color: var(--text-muted); text-align: center; padding: 0 4px 6px;
-}
-.report-aligned .rk-heat-row {
-    font-size: 12px; font-weight: 600; color: var(--text-strong);
-    text-align: right; padding-right: 10px; white-space: nowrap;
-}
-.report-aligned .rk-heat-cell {
-    min-width: 50px; height: 34px; border-radius: 5px;
-    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
 /* Cell metrics measured off the mockup DOM: 92x34, radius 5, 11px mono 600,
    compact (NOT full-width blow-up). border-spacing matches the mockup gap. */
 /* No table chrome: mockup floats the cells directly on the panel — no enclosing
@@ -1015,12 +1263,7 @@ _SIM_REPORT_CSS = """
     font-family: var(--font-sans); font-size: 16px; font-weight: 400;
     text-align: center; vertical-align: middle;
 }
-.report-aligned .rk-heat-empty { background: var(--surface-sunken); color: var(--text-faint); }
 
-/* Per-persona / per-scenario tables (html_table output) + failures table */
-.report-aligned .rk-panel-body { display: grid; }
-.report-aligned table {
-.sim-report .rk-panel-body { display: grid; }
 /* Data tables — exclude the heatmap (.rk-heatmap has its own cell styling; the
    generic thead rule was bleeding uppercase + sunken bg onto its headers). */
 /* Frameless like the mockup: strip the global report-table chrome (outer border,
@@ -1030,19 +1273,11 @@ _SIM_REPORT_CSS = """
     width: 100%; border-collapse: collapse;
     border: none; background: transparent; border-radius: 0; margin: 0;
 }
-.report-aligned table thead th {
-    font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
 .sim-report table:not(.rk-heatmap) thead th {
     font-family: var(--font-sans); font-size: 10px; text-transform: uppercase;
     font-weight: 600; color: var(--text-faint); background: var(--surface-sunken);
     padding: 11px 16px; text-align: left; border-bottom: 1px solid var(--border-subtle);
 }
-.report-aligned table tbody td {
-    font-size: 13px; padding: 12px 16px; border-bottom: 1px solid var(--border-subtle);
-}
-.report-aligned table tbody tr:last-child td { border-bottom: none; }
-.report-aligned table thead th:not(:first-child),
-.report-aligned table tbody td:not(:first-child) {
 .sim-report table:not(.rk-heatmap) tbody td {
     font-size: 13px; padding: 12px 16px; border-bottom: none;
 }
@@ -1052,6 +1287,7 @@ _SIM_REPORT_CSS = """
 .sim-report table:not(.rk-heatmap) tbody td:not(:first-child) {
     text-align: right; font-variant-numeric: tabular-nums;
 }
+
 /* Failures table: collapsed pass/fail dots that unfold to full criteria text.
    Height animates both ways via ::details-content + interpolate-size where
    supported (Chrome/Edge); elsewhere it snaps open — both fully usable. */
@@ -1115,39 +1351,25 @@ _SIM_REPORT_CSS = """
 .sim-report .sim-td-tint { font-weight: 600; }
 .sim-report .sim-breakdown-grid-2 {
     display: grid; grid-template-columns: 1fr 1fr; gap: 20px;
-    /* Top/bottom margin so the row doesn't hug the panel above it (this div isn't
-       a .rk-panel, so the `.rk-panel + .rk-panel` gap rule never fires for it). */
-    margin: 20px 0;
     /* Each table panel sizes to its own content — don't stretch the shorter one
        and leave a blank gap under its last row. */
     align-items: start;
 }
-/* Fixed-size SVG line chart: never upscale above native (that magnified the axis
-   text); shrink to fit on narrow screens. */
-.sim-report .rk-line-chart { max-width: 100%; height: auto; }
 /* The 2nd child otherwise matches the stacked-panel `.rk-panel + .rk-panel` rule
    and inherits its 20px top margin, pushing it below the first panel so their
    tops no longer line up. Zero it here (same fix as sim-overview-grid-2). */
 .sim-report .sim-breakdown-grid-2 > .rk-panel + .rk-panel { margin-top: 0; }
-@media (max-width: 760px) {
-    .sim-report .sim-breakdown-grid-2 { grid-template-columns: 1fr; }
-}
 
-/* ---- Turn quality tab (spec §Turn) ---- */
-/* Line chart legend (report_kit.line_chart) */
-.report-aligned .rk-legend {
-    display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px;
+/* ---- Turn quality tab: legend + editorial average-quality quadrants ---- */
 .sim-report .rk-legend {
     /* padding-left aligns the swatches with the chart's plot origin (line_chart
        pad_left = 36px), so the legend reads as belonging to the axes. */
     display: flex; flex-wrap: wrap; gap: 16px; margin-top: 10px; padding-left: 36px;
 }
-.report-aligned .rk-legend-item {
+.sim-report .rk-legend-item {
     display: inline-flex; align-items: center; gap: 6px;
     font-size: 12px; color: var(--text-muted);
 }
-.report-aligned .rk-legend-swatch {
-    display: inline-block; width: 8px; height: 8px; border-radius: 2px;
 .sim-report .rk-legend-swatch {
     /* A short bar (not a square dot) mirrors the line stroke it labels. */
     display: inline-block; width: 12px; height: 2.5px; border-radius: 2px;
@@ -1177,44 +1399,13 @@ _SIM_REPORT_CSS = """
     margin-right: 9px; vertical-align: middle; background: var(--aq-accent, var(--orange-500));
 }
 
-/* ---- Config tab (spec §Config) ---- */
-/* Run-configuration meta grid (report_kit.meta_grid) */
-.report-aligned .rk-meta-grid {
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-    gap: 16px 24px;
-}
-.report-aligned .rk-meta-key {
-    font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
-    letter-spacing: 0.04em; color: var(--text-faint);
+/* ---- Config tab: sans-serif label overrides ---- */
 .sim-report .rk-meta-key {
     font-family: var(--font-sans); font-size: 10px; text-transform: uppercase;
     letter-spacing: 0.06em; color: var(--text-faint);
 }
-.report-aligned .rk-meta-value {
-    font-size: 13.5px; color: var(--text-body); margin-top: 4px;
-}
-/* Personas panel (name · communication style · background) */
-.sim-report .sim-config-persona-row {
-    display: flex; align-items: baseline; gap: 12px;
-    margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-subtle);
-}
-.sim-report .sim-config-persona-row:first-child { margin-top: 0; padding-top: 0; border-top: none; }
-.sim-report .sim-config-persona-name {
-    font-size: 13px; font-weight: 600; color: var(--text-strong); min-width: 160px;
-}
 .sim-report .sim-config-persona-style {
     font-family: var(--font-sans); font-size: 11px; color: var(--text-faint);
-}
-.sim-report .sim-config-persona-bg { font-size: 12.5px; color: var(--text-muted); }
-/* Scenarios panel (name + goal + criteria chips) */
-.sim-report .sim-config-scenario-row {
-    margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-subtle);
-}
-.sim-report .sim-config-scenario-row:first-child { margin-top: 0; padding-top: 0; border-top: none; }
-.sim-report .sim-config-scenario-name { font-size: 13px; font-weight: 600; color: var(--text-strong); }
-.sim-report .sim-config-scenario-goal { font-size: 12.5px; color: var(--text-muted); margin-top: 3px; }
-.sim-report .sim-config-criteria {
-    display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
 }
 .sim-report .sim-config-criterion {
     font-family: var(--font-sans); font-size: 11.5px; background: var(--surface-sunken);
@@ -1261,40 +1452,20 @@ _SIM_REPORT_CSS = """
 .sim-report .sim-agent-open:hover { background: var(--surface-sunken); }
 """
 
-# ==== .sim-report — Transcripts redesign (Tasks 11+12) ===================
-# Appended as its own block (rather than edited into _SIM_REPORT_CSS above)
-# so a concurrently-landing `.sim-report` CSS addition on another branch
-# merges cleanly. Covers: collapsed tinted conversation cards (Task 11) +
-# judge callout / chat bubbles / two-state criteria (Task 12), both scoped
-# under `.sim-report` per docs/superpowers/specs/2026-07-10-agent-sim-report-
-# alignment-design.md §Transcripts.
-_SIM_TRANSCRIPT_CSS = """
-/* ---- Conversation cards (spec §Transcripts, Task 11) ---- */
-.sim-report .sim-row-list { display: flex; flex-direction: column; gap: 10px; }
+# ==== .sim-report — Transcript overrides layered on `.report-aligned` =====
+# Same equal-specificity/source-order rationale as _SIM_REPORT_OVERRIDES_CSS
+# above: the sim report gets its own conversation-card chrome and a distinct
+# chat-bubble skin (asymmetric tail, no in-bubble role label) instead of the
+# shared `.report-aligned .sim-msg/.rt-msg` bubbles used by the Red Team
+# report.
+_SIM_TRANSCRIPT_OVERRIDES_CSS = """
 .sim-report .sim-conv-card {
     border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); overflow: hidden;
     background: var(--surface-card);
 }
-.sim-report .sim-conv-summary {
-    display: flex; align-items: center; gap: 8px; padding: 12px 16px;
-    cursor: pointer; list-style: none;
-}
-.sim-report .sim-conv-summary::-webkit-details-marker { display: none; }
 .sim-report .sim-conv-idx {
     font-family: var(--font-sans); font-size: 12px; color: var(--text-faint);
 }
-.sim-report .sim-conv-persona { font-size: 14px; font-weight: 600; color: var(--text-strong); }
-.sim-report .sim-conv-sep { color: var(--text-faint); }
-.sim-report .sim-conv-scenario { font-size: 13px; color: var(--text-body); }
-.sim-report .sim-conv-right {
-    display: flex; align-items: center; gap: 6px; margin-left: auto;
-}
-.sim-report .sim-tint-achieved { background: var(--green-100); }
-.sim-report .sim-tint-missed { background: var(--red-100); }
-.sim-report .sim-tint-error { background: var(--amber-100); }
-.sim-report .sim-conv-body { padding: 16px; border-top: 1px solid var(--border-subtle); }
-
-/* ---- Transcript fragment: judge callout / bubbles / criteria (Task 12) ---- */
 .sim-report .sim-judge {
     background: var(--surface-sunken); border-left: 3px solid var(--teal-600);
     border-radius: var(--radius-md); padding: 10px 14px; margin-bottom: 14px;
@@ -1303,37 +1474,13 @@ _SIM_TRANSCRIPT_CSS = """
     font-family: var(--font-sans); font-size: 11px; font-weight: 600;
     text-transform: uppercase; color: var(--teal-600); display: block;
 }
-.sim-report .sim-judge-reason { font-size: 13px; line-height: 1.55; margin: 4px 0 0; color: var(--text-body); }
 .sim-report .sim-transcript-error {
     background: var(--red-100); color: var(--red-600); border-radius: var(--radius-md);
     padding: 10px 14px; margin-bottom: 14px; font-size: 13px;
 }
-.sim-report .sim-transcript-grid {
-    display: grid; grid-template-columns: 1.6fr 1fr; gap: 20px;
-}
-@media (max-width: 760px) {
-    .sim-report .sim-transcript-grid { grid-template-columns: 1fr; }
-}
 
-/* Chat bubbles (render_message_list avatar + side extension). Shared with
-   the Red Team transcript fragment, which calls the same
-   `render_message_list` with `class_prefix='rt'` (spec 2026-07-10-redteam-
-   report-alignment-design.md §Shared infrastructure #4) — one declaration
-   set, two selectors per rule, so the two reports cannot drift. */
-.report-aligned .sim-msg, .report-aligned .rt-msg {
-    display: flex; gap: 8px; margin-bottom: 10px; max-width: 88%;
-}
-.report-aligned .sim-msg-user, .report-aligned .sim-msg-system,
-.report-aligned .rt-msg-user, .report-aligned .rt-msg-system {
-    margin-right: auto;
-}
-.report-aligned .sim-msg-assistant, .report-aligned .sim-msg-tool,
-.report-aligned .rt-msg-assistant, .report-aligned .rt-msg-tool {
-    margin-left: auto; flex-direction: row-reverse;
-}
-.report-aligned .sim-msg-avatar, .report-aligned .rt-msg-avatar {
-    flex-shrink: 0; width: 30px; height: 30px; border-radius: 8px;
-/* Chat bubbles (render_message_list avatar + side extension) */
+/* Chat bubbles (render_message_list avatar + side extension) — sim-only skin,
+   distinct from the shared `.report-aligned .sim-msg/.rt-msg` bubbles. */
 .sim-report .sim-msg { display: flex; gap: 10px; margin-bottom: 10px; max-width: 88%; }
 .sim-report .sim-msg-user, .sim-report .sim-msg-system { margin-right: auto; }
 .sim-report .sim-msg-assistant, .sim-report .sim-msg-tool { margin-left: auto; flex-direction: row-reverse; }
@@ -1343,22 +1490,9 @@ _SIM_TRANSCRIPT_CSS = """
     font-family: var(--font-sans); font-size: 9px; font-weight: 600;
     background: var(--ink-900); color: #fff;
 }
-.report-aligned .sim-msg-assistant .sim-msg-avatar, .report-aligned .sim-msg-tool .sim-msg-avatar,
-.report-aligned .rt-msg-assistant .rt-msg-avatar, .report-aligned .rt-msg-tool .rt-msg-avatar {
+.sim-report .sim-msg-assistant .sim-msg-avatar, .sim-report .sim-msg-tool .sim-msg-avatar {
     background: var(--teal-50); color: var(--teal-600);
 }
-.report-aligned .sim-msg-bubble, .report-aligned .rt-msg-bubble {
-    background: var(--surface-sunken); border-radius: 12px; padding: 9px 13px;
-}
-.report-aligned .sim-msg-assistant .sim-msg-bubble, .report-aligned .sim-msg-tool .sim-msg-bubble,
-.report-aligned .rt-msg-assistant .rt-msg-bubble, .report-aligned .rt-msg-tool .rt-msg-bubble {
-    background: var(--teal-50);
-}
-.report-aligned .sim-msg-role, .report-aligned .rt-msg-role {
-    display: block; font-family: var(--font-mono); font-size: 10px;
-    text-transform: uppercase; color: var(--text-faint); margin-bottom: 3px;
-}
-.report-aligned .sim-msg-content, .report-aligned .rt-msg-content {
 /* Single flat bubble with an asymmetric tail corner, like the mockup — white +
    hairline border for the user, teal tint for the agent (tail mirrored to the
    avatar side). */
@@ -1384,25 +1518,18 @@ _SIM_TRANSCRIPT_CSS = """
     font-family: var(--font-sans); font-size: 11px; font-weight: 600;
     text-transform: uppercase; color: var(--text-faint); margin-bottom: 8px;
 }
-.sim-report .sim-criteria-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.sim-report .sim-criteria-list {
+    list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px;
+}
 /* Scoped to the criteria list so it no longer collides with the Scenarios-panel
    .sim-criterion rule above. Mockup uses a plain gapped column (no dividers). */
 .sim-report .sim-criteria-list .sim-criterion {
     display: flex; align-items: flex-start; gap: 8px;
 }
-.sim-report .sim-criterion-icon {
-    flex-shrink: 0; width: 18px; height: 18px; border-radius: 999px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 11px; color: #fff;
-}
-.sim-report .sim-criterion-pass .sim-criterion-icon { background: var(--green-600); }
-.sim-report .sim-criterion-fail .sim-criterion-icon { background: var(--red-600); }
-.sim-report .sim-criterion-desc { font-size: 13px; color: var(--text-body); flex: 1; }
 .sim-report .sim-ctype {
     font-family: var(--font-sans); font-size: 10px; text-transform: uppercase;
     color: var(--text-faint); white-space: nowrap;
 }
-.sim-report .sim-ctype-unsafe { color: var(--red-600); }
 """
 
 # ==== .rt-report — Red Team report design-mockup alignment ==============
@@ -1615,5 +1742,7 @@ DASHBOARD_CSS = (
     + _DASHBOARD_CSS_TAIL
     + _SIM_REPORT_CSS
     + _SIM_TRANSCRIPT_CSS
+    + _SIM_REPORT_OVERRIDES_CSS
+    + _SIM_TRANSCRIPT_OVERRIDES_CSS
     + _RT_REPORT_CSS
 )

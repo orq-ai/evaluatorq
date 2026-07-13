@@ -258,8 +258,8 @@ def _sim_breakdown(by_kind: dict[str, Any], render: Callable[..., str]) -> str:
         d = heatmap_section.data
         heatmap_html = panel(
             'Goal completion — persona × scenario',  # noqa: RUF001 (mockup wording — spec §Breakdown.1)
-            heatmap(d.get('personas', []), d.get('scenarios', []), d.get('cells', [])),
-            sub='Red → yellow → green as the goal-completion rate rises',
+            heatmap(d.get('personas', []), d.get('scenarios', []), d.get('cells', []), value_key='avg_score'),
+            sub='Red → yellow → green as the average goal-completion score rises',
         )
 
     dist_section = by_kind.get('score_distribution')

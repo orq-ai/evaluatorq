@@ -423,6 +423,7 @@ def _build_persona_scenario_heatmap_section(results: list[SimulationResult]) -> 
     personas: list[str] = []
     scenarios: list[str] = []
     agg: dict[tuple[str, str], list[bool]] = defaultdict(list)
+    scores: dict[tuple[str, str], list[float]] = defaultdict(list)
     for r in results:
         p, s = _persona_name(r), _scenario_name(r)
         if p not in personas:
@@ -430,8 +431,17 @@ def _build_persona_scenario_heatmap_section(results: list[SimulationResult]) -> 
         if s not in scenarios:
             scenarios.append(s)
         agg[p, s].append(r.goal_achieved)
+        scores[p, s].append(r.goal_completion_score)
     cells = [
-        {'persona': p, 'scenario': s, 'success_rate': (sum(v) / len(v)) if v else 0.0, 'n': len(v)}
+        {
+            'persona': p,
+            'scenario': s,
+            'success_rate': (sum(v) / len(v)) if v else 0.0,
+            # Continuous avg goal-completion score — the heatmap renders this so
+            # single-conversation cells show a gradient, not a 0/100 binary.
+            'avg_score': (sum(sc) / len(sc)) if (sc := scores[p, s]) else 0.0,
+            'n': len(v),
+        }
         for (p, s), v in agg.items()
     ]
     return ReportSection(
