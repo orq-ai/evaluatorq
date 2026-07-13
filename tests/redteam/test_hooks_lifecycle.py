@@ -496,7 +496,7 @@ class TestStaticPipelineHooks:
                 'agent:gpt-4o-mini',
                 mode='static',
                 hooks=spy,
-                output_dir=str(tmp_path),
+                artifacts_dir=str(tmp_path),
             )
 
         assert result is mock_report
