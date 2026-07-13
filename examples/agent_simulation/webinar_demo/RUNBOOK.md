@@ -72,7 +72,7 @@ can re-run the *exact same* set later (Act 3a).
 uv run evaluatorq sim run \
   --target agent:boh_creditcard_agent_demo \
   --num-personas 3 --num-scenarios 3 \
-  --save-datapoints boh_datapoints.jsonl \
+  --datapoints boh_datapoints.jsonl \
   --name boh-from-scratch
 ```
 

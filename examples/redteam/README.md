@@ -194,7 +194,7 @@ eq redteam run -t "agent:my-agent-key" \
 | `--attack-model`            | Model for adversarial prompt generation              |
 | `--evaluator-model`         | Model for evaluation scoring                         |
 | `--parallelism`             | Concurrent jobs                                     |
-| `--output-dir`              | Save intermediate artifacts for debugging           |
+| `--artifacts-dir`           | Save intermediate artifacts for debugging           |
 | `-n` / `--name`             | Experiment name (default: `red-team`)               |
 | `-y`                        | Skip confirmation prompt                            |
 | `-v` / `-vv`                | Info / debug verbosity                              |

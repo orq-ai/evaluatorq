@@ -119,7 +119,7 @@ Examples:
 
 ```bash
 eq sim run --target agent:refund-agent-fixed
-eq sim generate --target refund-agent-fixed --output dp.jsonl
+eq sim generate --target refund-agent-fixed --datapoints dp.jsonl
 eq sim simulate --datapoints dp.jsonl --target deployment:refund-agent
 ```
 

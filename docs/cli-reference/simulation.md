@@ -32,11 +32,11 @@ Targets — provide **exactly one**:
 | `--num-scenarios` | `int` / `5` | Number of scenarios to generate. |
 | `--evaluator` | `str` (repeatable) / API defaults | Evaluator name(s). Repeatable. |
 | `--no-save` | `bool` / `False` | Skip writing to `.evaluatorq/sim-runs/`. |
-| `--save-datapoints` | `Path \| None` / `None` | Write generated datapoints to JSONL for reproducible re-runs. |
-| `--output` / `-o` | `Path \| None` / `None` | Path to write results JSONL. |
-| `--report-output` | `Path \| None` / `None` | Path to write full SimulationRun report JSON. |
-| `--export-md` | `Path \| None` / `None` | Directory for an auto-named Markdown report. |
-| `--export-html` | `Path \| None` / `None` | Directory for an auto-named HTML report. |
+| `--datapoints` | `Path \| None` / `None` | Write generated datapoints to JSONL for reproducible re-runs. |
+| `--results` / `-o` | `Path \| None` / `None` | Path to write results JSONL. |
+| `--report` | `Path \| None` / `None` | Path to write full SimulationRun report JSON. |
+| `--report-md` | `Path \| None` / `None` | Directory for an auto-named Markdown report. |
+| `--report-html` | `Path \| None` / `None` | Directory for an auto-named HTML report. |
 | `--yes` / `-y` | `bool` / `False` | Skip interactive confirmation prompt. |
 | `--verbose` / `-v` | count / `0` | Increase verbosity. `-v` info; `-vv` debug. |
 | `--quiet` / `-q` | `bool` / `False` | Suppress non-error output. |
@@ -51,7 +51,7 @@ Run simulations from a pre-built datapoints JSONL file.
 eq sim simulate --datapoints dp.jsonl --target agent:<key>
 ```
 
-Targets — same three flags as `eq sim run`. All other flags match `eq sim run` except `--num-personas`, `--num-scenarios`, and `--save-datapoints` are absent (datapoints are already provided).
+Targets — same three flags as `eq sim run`. All other flags match `eq sim run` except `--num-personas`, `--num-scenarios`, and `--datapoints` (as a generated-output flag) are absent (datapoints are already provided).
 
 | Flag | Type / Default | Description |
 |---|---|---|
@@ -62,10 +62,10 @@ Targets — same three flags as `eq sim run`. All other flags match `eq sim run`
 | `--parallelism` | `int` / `5` | Concurrent simulations. |
 | `--evaluator` | `str` (repeatable) / API defaults | Evaluator name(s). Repeatable. |
 | `--no-save` | `bool` / `False` | Skip writing to `.evaluatorq/sim-runs/`. |
-| `--output` / `-o` | `Path \| None` / `None` | Path to write results JSONL. |
-| `--report-output` | `Path \| None` / `None` | Path to write full SimulationRun report JSON. |
-| `--export-md` | `Path \| None` / `None` | Directory for an auto-named Markdown report. |
-| `--export-html` | `Path \| None` / `None` | Directory for an auto-named HTML report. |
+| `--results` / `-o` | `Path \| None` / `None` | Path to write results JSONL. |
+| `--report` | `Path \| None` / `None` | Path to write full SimulationRun report JSON. |
+| `--report-md` | `Path \| None` / `None` | Directory for an auto-named Markdown report. |
+| `--report-html` | `Path \| None` / `None` | Directory for an auto-named HTML report. |
 | `--yes` / `-y` | `bool` / `False` | Skip interactive confirmation prompt. |
 | `--verbose` / `-v` | count / `0` | Increase verbosity. |
 | `--quiet` / `-q` | `bool` / `False` | Suppress non-error output. |
@@ -77,12 +77,12 @@ Targets — same three flags as `eq sim run`. All other flags match `eq sim run`
 Generate simulation datapoints only — no simulation is run.
 
 ```bash
-eq sim generate --output dp.jsonl --agent-description "..."
+eq sim generate --datapoints dp.jsonl --agent-description "..."
 ```
 
 | Flag | Type / Default | Description |
 |---|---|---|
-| `--output` / `-o` | `Path` (required) | Path to write generated datapoints JSONL. |
+| `--datapoints` / `-o` | `Path` (required) | Path to write generated datapoints JSONL. |
 | `--agent-description` | `str \| None` / `None` | Free-text description of the agent. |
 | `--target` | `str \| None` / `None` | Agent target used to fetch the description when `--agent-description` is omitted. Accepts `agent:<key>`. |
 | `--sim-model` | `str` / `openai/gpt-5.4-mini` | Model for persona/scenario/first-message generation. |

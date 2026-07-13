@@ -26,7 +26,7 @@ generate:
 simulate:
 	uv run evaluatorq sim run --target agent:$(AGENT) \
 		--num-personas $(PERSONAS) --num-scenarios $(SCENARIOS) \
-		--save-datapoints $(DATAPOINTS) --name boh
+		--datapoints $(DATAPOINTS) --name boh
 
 dashboard:
 	uv run evaluatorq dashboard .evaluatorq/sim-runs

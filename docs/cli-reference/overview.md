@@ -26,7 +26,7 @@ Two command groups have their own pages:
 eq redteam run -t agent:my-agent --max-per-category 1 --no-generate-strategies -q
 
 # Save full per-stage artifacts to a directory
-eq redteam run -t agent:my-agent --save detail --output-dir ./runs
+eq redteam run -t agent:my-agent --save detail --artifacts-dir ./runs
 
 # Quick simulation — two personas, two scenarios
 eq sim run -t agent:my-agent --num-personas 2 --num-scenarios 2

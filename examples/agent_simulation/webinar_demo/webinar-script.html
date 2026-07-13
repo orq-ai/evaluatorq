@@ -542,7 +542,7 @@
             <text x="462" y="118">agent reply</text>
             <text x="548" y="170">full transcript</text>
             <text x="742" y="118" text-anchor="end">verdicts + reasoning</text>
-            <text x="118" y="240">-o / --save-datapoints</text>
+            <text x="118" y="240">-o / --datapoints</text>
             <text x="300" y="282" fill="#D97757">re-run identical set on every agent change</text>
           </g>
         </svg>
@@ -797,7 +797,7 @@ uv run evaluatorq sim validate-dataset boh_datapoints.jsonl
 <span class="cm"># 3. run live, freeze the set for Act 3</span>
 uv run evaluatorq sim run \
   <span class="kw">--target</span> agent:boh_creditcard_agent_demo \
-  <span class="kw">--save-datapoints</span> boh_datapoints.jsonl \
+  <span class="kw">--datapoints</span> boh_datapoints.jsonl \
   <span class="kw">--name</span> boh-from-scratch
 
 <span class="cm"># 4. pass rate + a failing transcript</span>
