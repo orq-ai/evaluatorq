@@ -6,12 +6,13 @@ PERSONAS ?= 3
 SCENARIOS ?= 3
 DATAPOINTS ?= boh_datapoints.jsonl
 
-.PHONY: provision generate simulate rerun upload help
+.PHONY: provision generate simulate dashboard rerun upload help
 
 help:
 	@echo "make provision  - create Bank of Holland agent + tools + KB in Orq (idempotent)"
 	@echo "make generate   - generate personas x scenarios -> $(DATAPOINTS)"
 	@echo "make simulate   - run simulations against the agent, save datapoints"
+	@echo "make dashboard  - open the dashboard on this run store (.evaluatorq/sim-runs/)"
 	@echo "make rerun      - re-run the saved datapoints (compare after a change)"
 	@echo "make upload     - push the datapoints to an Orq dataset"
 
@@ -26,6 +27,9 @@ simulate:
 	uv run evaluatorq sim run --target agent:$(AGENT) \
 		--num-personas $(PERSONAS) --num-scenarios $(SCENARIOS) \
 		--save-datapoints $(DATAPOINTS) --name boh
+
+dashboard:
+	uv run evaluatorq dashboard .evaluatorq/sim-runs
 
 rerun:
 	uv run evaluatorq sim simulate --target agent:$(AGENT) --datapoints $(DATAPOINTS) --name boh-rerun

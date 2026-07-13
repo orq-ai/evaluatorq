@@ -112,7 +112,7 @@ async def my_agent(messages) -> str:
     ...  # call your model / graph / crew
 
 results = await simulate(
-    target_callback=my_agent,
+    target=my_agent,                   # unified param — same as the CLI's --target
     personas=[...], scenarios=[...],   # or omit to auto-generate
     evaluator_names=["goal_achieved", "criteria_met"],
 )
@@ -168,6 +168,52 @@ front if you'd rather inspect/version the exact upload shape.
 
 ---
 
+## Act 4 — Inspect in the dashboard, then harden the agent
+
+The payoff act: read the results, find *why* the agent failed, fix it, prove the fix.
+
+**4a. Inspect the run in the dashboard.** The dashboard scans this demo's run store
+(`.evaluatorq/sim-runs/`) — browse runs, filter to the failures, read the transcripts.
+
+```bash
+make dashboard                                    # -> http://127.0.0.1:8000
+# single run in the Streamlit viewer instead:
+uv run evaluatorq sim ui .evaluatorq/sim-runs/<run>.json
+```
+
+Look for a *pattern*: a criterion that fails repeatedly, a persona the agent mishandles,
+a turn where it over-promises or leaks something it shouldn't.
+
+**4b. Apply the insight to the existing agent — with Claude + the `orq` CLI.**
+Point Claude Code at the run and let it propose + apply a fix. Suggested prompts:
+
+> **Investigate:** "Read the latest simulation run under `.evaluatorq/sim-runs/`.
+> Summarise the failures — which criteria failed, for which personas/scenarios, and
+> the common root cause in the agent's behaviour. Quote the transcript turns that
+> show it."
+
+> **Apply:** "Propose the *minimal* edit to the `boh_creditcard_agent_demo` agent's
+> instructions that fixes the top failure mode without regressing the rest. Fetch the
+> current instructions, append your fix, and apply it with the orq CLI:
+> `orq agents update boh_creditcard_agent_demo --instructions \"<full updated instructions>\"`.
+> Then tell me to re-run."
+
+The working command (validated) is **`orq agents update <agent-key> --instructions "..."`**
+— partial update, effective immediately. (`orqi agent update` 404s for these agents —
+see Gaps §6.)
+
+**4c. Re-run the *same* set and compare.** Because the datapoints are frozen, the only
+variable is the instruction change — a clean before/after.
+
+```bash
+make rerun          # re-runs boh_datapoints.jsonl against the hardened agent
+```
+
+Show the pass rate move up (and the previously-failing transcript now pass) — the
+inspect → harden → re-run loop, closed live.
+
+---
+
 ## Gaps to call out honestly (the "it's new" story)
 
 1. **No `orq sim` command.** Simulation lives in `evaluatorq sim`; the `orq` CLI
@@ -185,10 +231,14 @@ front if you'd rather inspect/version the exact upload shape.
    `upload-dataset --dataset-id` (3c). No LLM augmentation *from* existing rows yet.
 5. **`orq datasets create` needs a `path`** (e.g. `"Default"`); `--example` errors
    with no generated body, and `expected_output` must be a string (not `null`).
+6. **Two CLIs, one works for agent updates.** `orq agents update <key> --instructions`
+   applies cleanly; the other CLI's `orqi agent update` returns `deployment_not_found`
+   for these agents (by key *and* by id). Use `orq agents update` in Act 4.
 
 ## Demo assets to capture (drop in `assets/`, wire into `presentation.qmd`)
 
 - [ ] Screenshot: pretty-printed generated persona/scenario (Act 1.2)
 - [ ] Screenshot/recording: `sim run` pass-rate output + a failing transcript in `sim ui`
+- [ ] Screenshot: the dashboard filtered to failures + a transcript (Act 4a)
 - [ ] Screenshot: orq platform experiment view for a run
 - [ ] The three-options diagram (from scratch / re-run / extend)
