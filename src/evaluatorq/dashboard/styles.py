@@ -944,12 +944,6 @@ _SIM_REPORT_CSS = """
 .report-aligned table tbody td:not(:first-child) {
     text-align: right; font-variant-numeric: tabular-nums;
 }
-.sim-report .sim-breakdown-grid-2 {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 20px;
-}
-@media (max-width: 760px) {
-    .sim-report .sim-breakdown-grid-2 { grid-template-columns: 1fr; }
-}
 
 /* ---- Turn quality tab (spec §Turn) ---- */
 /* Line chart legend (report_kit.line_chart) */
@@ -1351,14 +1345,23 @@ _SIM_REPORT_OVERRIDES_CSS = """
 .sim-report .sim-td-tint { font-weight: 600; }
 .sim-report .sim-breakdown-grid-2 {
     display: grid; grid-template-columns: 1fr 1fr; gap: 20px;
+    /* Top/bottom margin so the row doesn't hug the panel above it — this div isn't
+       a .rk-panel, so the `.rk-panel + .rk-panel` gap rule never fires for it. */
+    margin: 20px 0;
     /* Each table panel sizes to its own content — don't stretch the shorter one
        and leave a blank gap under its last row. */
     align-items: start;
+}
+@media (max-width: 760px) {
+    .sim-report .sim-breakdown-grid-2 { grid-template-columns: 1fr; }
 }
 /* The 2nd child otherwise matches the stacked-panel `.rk-panel + .rk-panel` rule
    and inherits its 20px top margin, pushing it below the first panel so their
    tops no longer line up. Zero it here (same fix as sim-overview-grid-2). */
 .sim-report .sim-breakdown-grid-2 > .rk-panel + .rk-panel { margin-top: 0; }
+/* Fixed-size SVG line chart: never upscale above native (that magnified the axis
+   text); shrink to fit on narrow (<720px) cards instead of overflowing. */
+.sim-report .rk-line-chart { max-width: 100%; height: auto; }
 
 /* ---- Turn quality tab: legend + editorial average-quality quadrants ---- */
 .sim-report .rk-legend {
