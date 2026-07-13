@@ -6,9 +6,10 @@ Uses Pydantic models for maximum compatibility with generators/runner/agents.
 from __future__ import annotations
 
 from datetime import datetime  # noqa: TC003
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+from typing_extensions import TypedDict
 
 from evaluatorq.contracts import Message, StrEnum, TokenUsage
 
@@ -383,6 +384,7 @@ class SimulationRun(BaseModel):
     total_results: int
     scorer_averages: dict[str, float]
     results: list[SimulationResult]
+    executive_summary: str | None = None
     run_id: str | None = None
     """Client-minted run-grouping id (uuid hex, not an Orq-side run id) shared by every
     conversation's ``thread_id`` (``{run_id}:{index}``). Powers the dashboard's

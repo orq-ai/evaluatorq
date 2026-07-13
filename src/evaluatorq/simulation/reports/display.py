@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 def print_simulation_summary(
     results: list[SimulationResult],
     *,
+    executive_summary: str | None = None,
     console: Console | None = None,
 ) -> None:
     """Print a Rich multi-section summary of simulation results to *console*.
@@ -35,6 +36,8 @@ def print_simulation_summary(
     console:
         Rich :class:`~rich.console.Console` to write to.  Defaults to a
         stderr console so the summary does not interfere with piped stdout.
+    executive_summary:
+        Optional LLM-generated narrative from the persisted simulation run.
     """
     from rich import box
     from rich.console import Console as RichConsole
@@ -51,11 +54,18 @@ def print_simulation_summary(
         console.print('[dim]No results (run aborted or produced nothing).[/dim]')
         return
 
-    sections = {s.kind: s for s in build_report_sections(results)}
+    sections = {s.kind: s for s in build_report_sections(results, executive_summary=executive_summary)}
 
-    # ── Summary stats ──────────────────────────────────────────────────
     summ = sections['summary'].data
     rate = summ['success_rate']
+
+    if summ.get('narrative'):
+        from rich.panel import Panel
+
+        console.print(Panel(str(summ['narrative']), title='Executive Summary', border_style='cyan'))
+        console.print()
+
+    # ── Summary stats ──────────────────────────────────────────────────
 
     stats = Table(show_header=True, header_style='bold', box=box.ROUNDED)
     stats.add_column('Metric', style='white', width=28)

@@ -1127,6 +1127,22 @@ def test_rich_run_complete_renders_once(sim_result_factory):
     assert 'ui --latest' in out
 
 
+def test_rich_deferred_summary_renders_once_with_narrative(sim_result_factory):
+    """CLI can defer the hook output until the executive narrative is ready."""
+    from rich.console import Console
+
+    buf = io.StringIO()
+    h = RichHooks(console=Console(file=buf, width=90, force_terminal=False), defer_summary=True)
+    results = [sim_result_factory(goal_achieved=True)]
+    asyncio.run(h.on_run_complete(results))
+    assert 'SIMULATION SUMMARY' not in buf.getvalue()
+
+    h.print_summary(results, executive_summary='The agent completed the scenario safely.')
+    out = buf.getvalue()
+    assert out.count('SIMULATION SUMMARY') == 1
+    assert 'The agent completed the scenario safely.' in out
+
+
 def test_rich_run_complete_summary_rendered_resets_on_new_run(sim_result_factory):
     """_reset_run_state must clear _summary_rendered so a reused RichHooks
     instance renders a fresh summary on the next on_run_start / on_run_complete

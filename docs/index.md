@@ -6,10 +6,6 @@ in Python — against any agent, with the Orq AI platform as optional infrastruc
 [Get Started](guides/getting-started.md){ .md-button .md-button--primary }
 [View on GitHub](https://github.com/orq-ai/evaluatorq){ .md-button }
 
-!!! info "Agent-readable docs"
-    Coding agents can start with `/llms.txt`, the curated Markdown index for this site.
-    That page points to `/llms-full.txt` when the full docs in one Markdown file is more useful.
-
 ## Install
 
 <!-- termynal -->
@@ -138,3 +134,9 @@ Detailed Results:
 - **[Custom Evaluators & Frameworks](custom-evaluators-and-frameworks.md)** — extend the registries.
 - **[API Reference](reference/evaluatorq.md)** — the full public API.
 - **[Roadmap](roadmap.md)** — what's planned next.
+
+<div style="display:none" markdown>
+For coding agents: this site publishes `/llms.txt` — a curated Markdown index —
+and `/llms-full.txt`, the full docs as one Markdown file. Start with the former
+and fall back to the latter.
+</div>

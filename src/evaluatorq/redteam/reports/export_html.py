@@ -22,6 +22,7 @@ from evaluatorq.common.reports import load_css as _load_css_common
 from evaluatorq.common.reports import load_logo_svg as _load_logo_svg
 from evaluatorq.common.reports import pct as _pct
 from evaluatorq.common.reports import render_donut_chart as _render_donut_chart_common
+from evaluatorq.common.reports import status_badge as _status_badge
 from evaluatorq.common.reports import truncate as _truncate
 from evaluatorq.common.reports.html_helpers import scale_color as _scale_color
 from evaluatorq.common.reports.vega import render_svg as _render_svg
@@ -296,6 +297,20 @@ def _render_kpi_cards(data: dict[str, Any]) -> str:
 
 def _render_summary_html(section: ReportSection) -> str:
     data = section.data
+    confidence = data.get('confidence', '')
+    confidence_note = data.get('confidence_note', '')
+    narrative = data.get('narrative')
+    pill = _status_badge(f'{confidence} CONFIDENCE', 'warn') if confidence else ''  # ponytail: cosmetic pill, color tunable
+    heading = f'<h2>{_esc(section.title)} {pill}</h2>'
+    narrative_html = ''
+    if narrative:
+        narrative_html = (
+            '<p class="exec-summary-narrative" '
+            'style="font-size:.98em;line-height:1.55;margin:.2rem 0 1rem">'
+            f'{_esc(str(narrative))}'
+            + (f'<br><span style="font-size:.8em;opacity:.7">{_esc(confidence_note)}</span>' if confidence_note else '')
+            + '</p>'
+        )
     rows = [
         ['Total Attacks', _esc(str(data.get('total_attacks', 0)))],
         ['Evaluated', _esc(str(data.get('evaluated_attacks', 0)))],
@@ -313,7 +328,7 @@ def _render_summary_html(section: ReportSection) -> str:
     table = _html_table(['Metric', 'Value'], rows)
     donut_chart = _render_donut_chart(data)
     severity_chart = _render_severity_bar_chart(data.get('by_severity', {}))
-    return f'<h2>{_esc(section.title)}</h2>\n{kpi_cards}\n{donut_chart}\n{severity_chart}\n{table}'
+    return f'{heading}\n{narrative_html}\n{kpi_cards}\n{donut_chart}\n{severity_chart}\n{table}'
 
 
 def _render_focus_areas_html(section: ReportSection) -> str:

@@ -226,7 +226,11 @@ def panel(title: str, body: str, *, sub: str | None = None, info: str | None = N
     if not title:
         return ''
     sub_html = f'<div class="rk-panel-sub">{esc(sub)}</div>' if sub else ''
-    info_html = f'<span class="rk-panel-info" title="{esc(info)}" role="img" aria-label="{esc(info)}">&#9432;</span>' if info else ''
+    info_html = (
+        f'<span class="rk-panel-info" title="{esc(info)}" role="img" aria-label="{esc(info)}">&#9432;</span>'
+        if info
+        else ''
+    )
     return (
         '<div class="rk-panel">'
         f'<div class="rk-panel-title">{esc(title)}{info_html}</div>'

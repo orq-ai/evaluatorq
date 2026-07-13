@@ -340,6 +340,13 @@ def run(
             help='Directory path to write an HTML report. Filename is auto-generated.',
         ),
     ] = None,
+    executive_summary: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option(
+            '--executive-summary/--no-executive-summary',
+            help='Generate an LLM narrative executive summary at the top of the report (needs LLM creds).',
+        ),
+    ] = True,
     system_prompt: Annotated[
         str | None,
         typer.Option('--system-prompt', help='System prompt for the target model/agent.'),
@@ -440,6 +447,7 @@ def run(
                 artifacts_dir=artifacts_dir,
                 save=save,
                 target_config=target_config,
+                generate_executive_summary=executive_summary,
                 attacker_instructions=attacker_instructions,
                 verbosity=verbose + 1,
             )

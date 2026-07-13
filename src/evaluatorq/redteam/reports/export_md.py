@@ -93,6 +93,10 @@ def _render_summary_section(section: ReportSection) -> str:
         confidence_line = f'\n> **Confidence: {confidence}** — {confidence_note}'
         risk_callout += confidence_line
 
+    narrative = data.get('narrative') or ''
+    if narrative:
+        risk_callout += f'\n>\n> {narrative}'
+
     kpi_table = _center_table(
         ['Total Attacks', 'Successful Attacks', 'ASR', 'Coverage', 'Errors'],
         [
