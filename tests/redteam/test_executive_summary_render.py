@@ -28,3 +28,20 @@ def test_html_omits_narrative_when_absent():
     report = _report()  # executive_summary is None
     html = export_html(report)
     assert 'exec-summary-narrative' not in html
+
+
+def test_terminal_summary_includes_narrative():
+    import io
+
+    from rich.console import Console
+
+    from evaluatorq.redteam.reports.display import print_report_summary
+
+    report = _report()
+    report.executive_summary = _NARRATIVE
+    buffer = io.StringIO()
+    console = Console(file=buffer, width=120, highlight=False, markup=False, no_color=True)
+
+    print_report_summary(report, console=console)
+
+    assert _NARRATIVE in buffer.getvalue()
