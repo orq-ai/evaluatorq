@@ -107,10 +107,19 @@ def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
             return d
         conversation: list[dict[str, Any]] = []
         final_response_text = ''
+
+        def _attacker_text(resp: dict[str, Any]) -> str:
+            """Attacker prompt from an AgentResponse dict (RES-883), falling back
+            to the pre-RES-883 ``generated_prompt`` field for older reports."""
+            for item in resp.get('output') or []:
+                if isinstance(item, dict) and item.get('type') == 'output_text' and (text := item.get('text', '')):
+                    return text
+            return resp.get('generated_prompt', '') or ''
+
         for t in turns_val:
             attacker = t.get('attacker') or {}
             target = t.get('target') or {}
-            conversation.append({'role': 'user', 'content': attacker.get('generated_prompt', '')})
+            conversation.append({'role': 'user', 'content': _attacker_text(attacker)})
             target_text = ''
             for item in target.get('output') or []:
                 if not isinstance(item, dict):

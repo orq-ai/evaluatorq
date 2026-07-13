@@ -9,13 +9,13 @@ from evaluatorq.contracts import (
     TextOutputItem,
     ToolCallOutputItem,
 )
-from evaluatorq.redteam.contracts import AttackerResponse, Turn, turns_to_messages
+from evaluatorq.redteam.contracts import AgentResponse, Turn, turns_to_messages
 
 
 def _turn(prompt: str, reply: str, *, error: bool = False) -> Turn:
     err = AgentResponseError(message=reply, error_type="timeout") if error else None
     return Turn(
-        attacker=AttackerResponse(generated_prompt=prompt),
+        attacker=AgentResponse(text=prompt),
         target=AgentResponse(output=[TextOutputItem(text=reply, annotations=[])], error=err),
     )
 
@@ -39,7 +39,7 @@ def test_multi_turn_alternation():
 
 def test_tool_calls_preserved():
     turn = Turn(
-        attacker=AttackerResponse(generated_prompt="go"),
+        attacker=AgentResponse(text="go"),
         target=AgentResponse(output=[
             ToolCallOutputItem(name="lookup", arguments='{"q":"x"}', id="c1", call_id="c1"),
         ]),
@@ -54,7 +54,7 @@ def test_tool_calls_preserved():
 def test_empty_output_emits_empty_assistant_row():
     """An empty target output still yields a user/assistant pair (alternation invariant)."""
     turn = Turn(
-        attacker=AttackerResponse(generated_prompt="q"),
+        attacker=AgentResponse(text="q"),
         target=AgentResponse(output=[]),
     )
     msgs = turns_to_messages([turn])
@@ -63,7 +63,7 @@ def test_empty_output_emits_empty_assistant_row():
 
 def test_tool_result_emits_following_tool_row():
     turn = Turn(
-        attacker=AttackerResponse(generated_prompt="go"),
+        attacker=AgentResponse(text="go"),
         target=AgentResponse(output=[
             ToolCallOutputItem(name="lookup", arguments='{"q":"x"}', id="c1", call_id="c1", result="found"),
         ]),
@@ -100,7 +100,7 @@ def test_reasoning_only_output_emits_empty_assistant_row():
     would 400 on the broken alternation.
     """
     turn = Turn(
-        attacker=AttackerResponse(generated_prompt="q"),
+        attacker=AgentResponse(text="q"),
         target=AgentResponse(output=[ReasoningOutputItem(text="thinking...")]),
     )
     msgs = turns_to_messages([turn])
@@ -110,7 +110,7 @@ def test_reasoning_only_output_emits_empty_assistant_row():
 def test_tool_call_with_result_does_not_emit_extra_assistant_row():
     """A turn ending in a tool result must not get a trailing empty assistant row."""
     turn = Turn(
-        attacker=AttackerResponse(generated_prompt="go"),
+        attacker=AgentResponse(text="go"),
         target=AgentResponse(output=[
             ToolCallOutputItem(name="lookup", arguments='{"q":"x"}', id="c1", call_id="c1", result="found"),
         ]),
@@ -122,7 +122,7 @@ def test_tool_call_with_result_does_not_emit_extra_assistant_row():
 def test_tool_call_preserves_responses_item_id():
     """Responses-API fc_* item id round-trips through StrategyToolCall.item_id."""
     turn = Turn(
-        attacker=AttackerResponse(generated_prompt="go"),
+        attacker=AgentResponse(text="go"),
         target=AgentResponse(output=[
             ToolCallOutputItem(name="lookup", arguments='{"q":"x"}', id="fc_abc", call_id="call_xyz"),
         ]),
@@ -141,7 +141,7 @@ def test_interleaved_text_tool_text_emits_three_assistant_rows():
     break multi-turn replay for agents that narrate around tool use.
     """
     turn = Turn(
-        attacker=AttackerResponse(generated_prompt="search"),
+        attacker=AgentResponse(text="search"),
         target=AgentResponse(output=[
             TextOutputItem(text="thinking...", annotations=[]),
             ToolCallOutputItem(name="lookup", arguments="{}", id="c1", call_id="c1"),
@@ -161,7 +161,7 @@ def test_consecutive_text_items_collapse_into_one_assistant_row():
     Documented in ``turns_to_messages``; pinning the behavior here.
     """
     turn = Turn(
-        attacker=AttackerResponse(generated_prompt="hi"),
+        attacker=AgentResponse(text="hi"),
         target=AgentResponse(output=[
             TextOutputItem(text="part one ", annotations=[]),
             TextOutputItem(text="part two", annotations=[]),
@@ -178,7 +178,7 @@ def test_tool_result_empty_string_still_emits_tool_row():
     to ``if item.result:`` would silently drop the row and break alternation.
     """
     turn = Turn(
-        attacker=AttackerResponse(generated_prompt="go"),
+        attacker=AgentResponse(text="go"),
         target=AgentResponse(output=[
             ToolCallOutputItem(name="noop", arguments="{}", id="c1", call_id="c1", result=""),
         ]),
@@ -196,7 +196,7 @@ def test_reasoning_interleaved_with_text_and_tool_dropped_silently():
     from evaluatorq.contracts import ReasoningOutputItem
 
     turn = Turn(
-        attacker=AttackerResponse(generated_prompt="q"),
+        attacker=AgentResponse(text="q"),
         target=AgentResponse(output=[
             TextOutputItem(text="hello", annotations=[]),
             ReasoningOutputItem(text="(internal)"),

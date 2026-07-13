@@ -882,28 +882,43 @@ def classify_error_type(error: str | None, *, existing_type: str | None = None) 
 # ---------------------------------------------------------------------------
 
 
-class AttackerResponse(BaseModel):
-    """Adversarial LLM output for a single attack turn.
+# ``AttackerResponse`` was unified onto :class:`evaluatorq.contracts.AgentResponse`
+# (RES-883): the attacker LLM output now uses the same response shape as targets and
+# simulation agents. ``generated_prompt`` maps to ``AgentResponse.text``, ``truncated``
+# is derivable from ``finish_reason == 'length'``, and the attacker gains the shared
+# per-response ``error`` field for free. Kept as a deprecated alias for import
+# compatibility; construct ``AgentResponse(text=...)`` directly.
+AttackerResponse = AgentResponse  # deprecated alias; use AgentResponse directly
 
-    ``generated_prompt`` is the text the attacker LLM produced this turn, which
-    is then sent to the target as the next user message.
+
+class Turn(BaseModel):
+    """One attacker→target exchange in a multi-turn attack.
+
+    Both sides are :class:`evaluatorq.contracts.AgentResponse` (RES-883). The
+    attacker's prompt is ``attacker.text``; ``attacker.finish_reason == 'length'``
+    means the adversarial LLM was truncated.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    generated_prompt: str = Field(description='Attack prompt produced by the adversarial LLM (sent to the target)')
-    usage: TokenUsage | None = Field(default=None, description='Token usage for this adversarial generation')
-    truncated: bool = Field(default=False, description='Adversarial LLM hit max_tokens on this turn')
-    finish_reason: str | None = Field(default=None, description='Adversarial LLM finish reason')
-
-
-class Turn(BaseModel):
-    """One attacker→target exchange in a multi-turn attack."""
-
-    model_config = ConfigDict(frozen=True)
-
-    attacker: AttackerResponse
+    attacker: AgentResponse
     target: AgentResponse
+
+    @model_validator(mode='before')
+    @classmethod
+    def _migrate_attacker_generated_prompt(cls, data: Any) -> Any:
+        """Load reports written before RES-883, where ``attacker`` carried
+        ``generated_prompt`` (+ a now-derived ``truncated``) instead of the
+        ``AgentResponse`` output shape. Maps ``generated_prompt`` → ``text`` and
+        drops ``truncated`` so the old wire format still validates."""
+        if isinstance(data, dict):
+            atk = data.get('attacker')
+            if isinstance(atk, dict) and 'generated_prompt' in atk and 'output' not in atk and 'text' not in atk:
+                atk = dict(atk)
+                atk['text'] = atk.pop('generated_prompt')
+                atk.pop('truncated', None)
+                data = {**data, 'attacker': atk}
+        return data
 
 
 def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[Message]:
@@ -925,7 +940,7 @@ def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[M
     for turn in turns:
         if skip_errors and turn.target.error is not None:
             continue
-        out.append(Message(role='user', content=turn.attacker.generated_prompt))
+        out.append(Message(role='user', content=turn.attacker.text))
         text_buffer: list[str] = []
         target = turn.target
 
@@ -1082,7 +1097,7 @@ class OrchestratorResult(BaseModel):
             Message(role='user', content=ADVERSARIAL_INITIAL_USER_PROMPT.format(max_turns=self.max_turns)),
         ]
         for prior in self.turns[:turn_index]:
-            msgs.append(Message(role='assistant', content=prior.attacker.generated_prompt))
+            msgs.append(Message(role='assistant', content=prior.attacker.text))
             wrapped = ADVERSARIAL_ANALYSIS_PROMPT.replace(
                 '{response}',
                 f'<target_response>\n{xml_escape(prior.target.text)}\n</target_response>',
