@@ -326,6 +326,7 @@ async def red_team(
     output_dir: Path | str | None = None,
     target_config: TargetConfig | None = None,
     generate_recommendations: bool = False,
+    generate_executive_summary: bool = True,
     attacker_instructions: str | None = None,
     verbosity: int = 0,
     save: SaveMode = SaveMode.FINAL,
@@ -396,6 +397,10 @@ async def red_team(
             recommendations for the top focus areas by analyzing failed traces.
             Requires an LLM client (explicit or via environment credentials).
             Defaults to ``False``.
+        generate_executive_summary: Whether to generate an LLM narrative
+            executive summary at the top of the report. Best-effort: silently
+            skipped (with a pipeline warning) when no LLM credentials are
+            configured. Defaults to ``True``.
         attacker_instructions: Optional domain-specific context to steer attack
             generation (e.g. "this agent handles financial transactions, try to
             get it to approve fraudulent ones"). Appended to adversarial system
@@ -699,6 +704,34 @@ async def red_team(
             logger.warning('Failed to generate focus area recommendations', exc_info=True)
             report.pipeline_warnings.append(
                 'Failed to generate focus area recommendations. Check LLM credentials and model configuration.'
+            )
+
+    # Generate the LLM narrative executive summary (on by default; silent skip
+    # when no LLM credentials are configured).
+    if generate_executive_summary:
+        from evaluatorq.common.reports.executive_summary import (
+            generate_executive_summary as _gen_exec_summary,
+        )
+        from evaluatorq.redteam.reports.executive_summary import build_redteam_facts
+
+        try:
+            es_client = llm_client or config.evaluator.client
+            if es_client is None:
+                es_client = create_async_llm_client(role_config=config.evaluator.as_call_config())
+            report.executive_summary = await _gen_exec_summary(
+                build_redteam_facts(report),
+                llm_client=es_client,
+                model=evaluator_model,
+                temperature=config.evaluator.temperature,
+                extra_body=config.retry_extra_body(es_client),
+                extra_kwargs=config.evaluator.extra_kwargs,
+            )
+        except (TypeError, AttributeError, ImportError, NameError, KeyError):
+            raise
+        except Exception:
+            logger.warning('Failed to generate executive summary', exc_info=True)
+            report.pipeline_warnings.append(
+                'Failed to generate executive summary. Check LLM credentials and model configuration.'
             )
 
     # Persist report according to the save mode. 'detail' mode already had
