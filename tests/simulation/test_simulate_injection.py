@@ -187,24 +187,19 @@ class TestDeprecatedTargetCallback:
     """target_callback= remains compatible but tells callers to migrate."""
 
     @pytest.mark.asyncio
-    async def test_target_callback_warns_and_target_takes_precedence(
+    async def test_target_callback_warns_and_executes(
         self, monkeypatch: pytest.MonkeyPatch
     ):
-        """target= wins while target_callback= emits a migration warning."""
+        """The legacy keyword still executes its target while warning callers."""
         monkeypatch.setenv("ORQ_API_KEY", "test-key")
 
         from evaluatorq.simulation.api import simulate
 
-        calls_a: list[int] = []
-        calls_b: list[int] = []
+        calls: list[int] = []
 
-        async def target_a(messages: list[Message]) -> str:
-            calls_a.append(1)
-            return "from A"
-
-        async def target_b(messages: list[Message]) -> str:
-            calls_b.append(1)
-            return "from B"
+        async def legacy_target(messages: list[Message]) -> str:
+            calls.append(1)
+            return "from legacy target"
 
         dp = _make_datapoint()
         sim = _make_mock_user_simulator()
@@ -223,7 +218,7 @@ class TestDeprecatedTargetCallback:
             def __init__(self, **kwargs: Any) -> None:
                 resolved.update(kwargs)
                 super().__init__(
-                    target=kwargs.get("target", target_a),
+                    target=kwargs.get("target"),
                     model=kwargs.get("model", "test"),
                     max_turns=1,
                     user_simulator=sim,
@@ -235,14 +230,14 @@ class TestDeprecatedTargetCallback:
             with patch("evaluatorq.simulation.runner.simulation.SimulationRunner", CapturingRunner):
                 with pytest.warns(DeprecationWarning, match="target_callback"):
                     await simulate(
-                        target=target_a,
-                        target_callback=target_b,
+                        target_callback=legacy_target,
                         datapoints=[dp],
                         sim_model="test",
                         max_turns=1,
                     )
 
-        assert resolved.get("target") is target_a
+        assert resolved.get("target") is legacy_target
+        assert calls
 
 
 class TestSimulateAutoRoutesAgentTarget:
