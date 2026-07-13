@@ -70,11 +70,17 @@ def run_trace_url(run_id: str | None) -> str | None:
     return _traces_url(f'thread_id:contains:{run_id}')
 
 
-def trace_link_button(url: str | None, label: str) -> str:
-    """Render a trace deep-link as a secondary button, or '' when *url* is None."""
+def trace_link_button(url: str | None, label: str, *, onclick: str | None = None) -> str:
+    """Render a trace deep-link as a secondary button, or '' when *url* is None.
+
+    ``onclick`` is for callers that embed the button inside a ``<summary>`` and
+    need ``event.stopPropagation()`` so clicking the link doesn't toggle the
+    surrounding ``<details>``.
+    """
     if not url:
         return ''
+    onclick_attr = f' onclick="{esc(onclick)}"' if onclick else ''
     return (
         f'<a class="btn-secondary trace-link" href="{esc(url)}" '
-        f'target="_blank" rel="noopener noreferrer">{esc(label)}</a>'
+        f'target="_blank" rel="noopener noreferrer"{onclick_attr}>{esc(label)}</a>'
     )

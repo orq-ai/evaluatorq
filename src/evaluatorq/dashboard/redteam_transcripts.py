@@ -91,7 +91,7 @@ def render_attack_fragment(r: RedTeamResult) -> str:
 
     # Deep-link to this conversation's Orq traces (hidden when unconfigured or
     # for older reports without a thread id).
-    trace_btn = trace_link_button(thread_trace_url(r.thread_id), 'View conversation traces ↗')
+    trace_btn = trace_link_button(thread_trace_url(r.thread_id), 'View Traces')
     trace_html = f'<div class="rt-conv-actions">{trace_btn}</div>' if trace_btn else ''
 
     return f'{tags_html}{verdict_html}{trace_html}{transcript_html}'

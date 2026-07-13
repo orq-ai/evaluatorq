@@ -133,8 +133,54 @@ class TestRedteamConversationTraceButton:
         monkeypatch.setenv('ORQ_WORKSPACE_SLUG', 'orq-research')
         html = render_attack_fragment(_make_result('run1:0'))
         assert 'class="btn-secondary trace-link"' in html
-        assert 'View conversation traces' in html
+        assert 'View Traces' in html
         assert f'href="{thread_trace_url("run1:0")}"' in html
+
+
+def _make_entry(thread_id: str | None) -> Any:
+    from evaluatorq.simulation.types import SimulationEntry
+
+    return SimulationEntry(
+        index=0,
+        persona='p',
+        scenario='s',
+        model='m',
+        target_model=None,
+        terminated_by='judge',
+        goal_achieved=False,
+        goal_completion_score=0.0,
+        rules_broken=[],
+        criteria=[],
+        turn_count=2,
+        total_tokens=0,
+        judge_reason='',
+        error=None,
+        evaluator_scores={},
+        transcript=[],
+        thread_id=thread_id,
+    )
+
+
+class TestSimRowTraceButton:
+    """The conversation trace button lives on the summary row (next to the
+    outcome badge), not in the expanded transcript fragment."""
+
+    def test_button_absent_without_workspace_slug(self) -> None:
+        from evaluatorq.dashboard.sim_views import render_sim_row_list
+
+        html = render_sim_row_list('rid', [_make_entry('run1:0')])
+        assert 'trace-link' not in html
+
+    def test_button_present_on_row_when_configured(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from evaluatorq.dashboard.sim_views import render_sim_row_list
+
+        monkeypatch.setenv('ORQ_WORKSPACE_SLUG', 'orq-research')
+        html = render_sim_row_list('rid', [_make_entry('run1:0')])
+        assert 'class="btn-secondary trace-link"' in html
+        assert 'View Traces' in html
+        assert f'href="{thread_trace_url("run1:0")}"' in html
+        # stopPropagation so clicking the link doesn't toggle the <details> row.
+        assert 'event.stopPropagation()' in html
 
 
 def test_button_helper_smoke() -> None:

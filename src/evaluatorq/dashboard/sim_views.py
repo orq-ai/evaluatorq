@@ -127,8 +127,14 @@ def render_sim_row_list(rid: str, entries: list[SimulationEntry]) -> str:
             tint = 'sim-tint-missed'
             badge = status_badge('Goal missed', 'fail')
 
+        # Trace deep-link on the summary line, next to the outcome badge.
+        # stopPropagation so clicking it opens the trace without toggling the row.
+        trace_btn = trace_link_button(
+            thread_trace_url(e.thread_id), 'View Traces', onclick='event.stopPropagation()'
+        )
         right_cluster = (
-            f'{tag(f"{e.turn_count} turns")}{tag(f"score {e.goal_completion_score:.2f}")}{tag(e.terminated_by)}{badge}'
+            f'{tag(f"{e.turn_count} turns")}{tag(f"score {e.goal_completion_score:.2f}")}'
+            f'{tag(e.terminated_by)}{badge}{trace_btn}'
         )
         summary = (
             f'<summary class="sim-conv-summary {tint}">'
@@ -223,11 +229,6 @@ def render_transcript_fragment(entry: SimulationEntry) -> str:
     judge_reason = esc(entry.judge_reason or '')
     error = entry.error
 
-    # Deep-link to this conversation's Orq traces (hidden when unconfigured or
-    # for older reports without a thread id).
-    trace_btn = trace_link_button(thread_trace_url(entry.thread_id), 'View conversation traces ↗')
-    trace_html = f'<div class="sim-transcript-actions">{trace_btn}</div>' if trace_btn else ''
-
     # No title here: the collapsed conversation card already shows
     # "#N · persona · scenario" directly above this fragment, so repeating it
     # (the old sim-transcript-header) was a duplicate the mockup doesn't have.
@@ -235,7 +236,7 @@ def render_transcript_fragment(entry: SimulationEntry) -> str:
 
     if error:
         error_html = f'<div class="sim-transcript-error"><strong>Error:</strong> {esc(str(error))}</div>'
-        return f'<div class="sim-transcript-detail">{trace_html}{error_html}{criteria_col}</div>'
+        return f'<div class="sim-transcript-detail">{error_html}{criteria_col}</div>'
 
     judge_html = ''
     if judge_reason:
@@ -263,7 +264,7 @@ def render_transcript_fragment(entry: SimulationEntry) -> str:
     )
     grid_html = f'<div class="sim-transcript-grid">{bubbles_html}{criteria_col}</div>'
 
-    return f'<div class="sim-transcript-detail">{trace_html}{judge_html}{grid_html}</div>'
+    return f'<div class="sim-transcript-detail">{judge_html}{grid_html}</div>'
 
 
 # ---------------------------------------------------------------------------
