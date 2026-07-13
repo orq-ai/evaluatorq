@@ -55,7 +55,6 @@ from evaluatorq.dashboard.surfaces import ADAPTERS
 from evaluatorq.dashboard.view import (
     RUN_PAGE_SIZES,
     SURFACE_LABELS,
-    download_sidebar,
     filter_fragment,
     landing_body,
     redteam_overview_body,
@@ -225,21 +224,12 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         form_html = render_filter_form(rid, surface or '', opts, {}, shown=total_results, total=total_results)
         body_with_filters = report_view_with_filters(rid, surface or '', body_html, form_html)
 
-        # Download sidebar — available exports per surface.
-        dl_sidebar = download_sidebar(
-            rid,
-            surface or '',
-            has_markdown=(adapter.export_markdown is not None),
-            has_csv=(surface == 'redteam'),
-        )
-        body_with_filters = body_with_filters + dl_sidebar
-
-        full_body = f'<div class="report-head">{back_link}</div>{body_with_filters}'
         html = page(
             name,
-            full_body,
+            body_with_filters,
             active_surface=surface,
             actions_html=report_actions(rid),
+            back_html=back_link,
         )
         return NotStr(html)
 
@@ -316,25 +306,13 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         )
         fragment_html = filter_fragment(rid, surface or '', body_html, form_html)
 
-        # OOB swap: re-render the download sidebar with the active filter
-        # querystring so that CSV/JSON links point at the filtered export.
-        # HTMX processes elements with hx-swap-oob="true" outside the primary
-        # swap target, updating #download-sidebar in-place.
-        oob_sidebar = download_sidebar(
-            rid,
-            surface or '',
-            selections=selections,
-            has_markdown=(adapter.export_markdown is not None),
-            has_csv=(surface == 'redteam'),
-            oob=True,
-        )
         # Signal interactive panels to refetch with the new filter.  Panels
         # that carry hx-trigger="load, orq:filter-changed from:body" and
         # hx-include="#filter-form" will catch this event, re-issue their
         # hx-get requests with the current form values, and re-render from the
         # filtered result set.
         return Response(
-            fragment_html + oob_sidebar,
+            fragment_html,
             media_type='text/html',
             headers={'HX-Trigger': 'orq:filter-changed'},
         )

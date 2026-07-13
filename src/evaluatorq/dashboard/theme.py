@@ -52,7 +52,7 @@ EDITORIAL_CSS = """
     --text-strong: #25232e;
     --text-body:   #4b4955;
     --text-muted:  #6f6d78;
-    --text-faint:  #9d9ba4;
+    --text-faint:  #6b6974;
     /* Darkest ink, for on-color text (e.g. heatmap cells on a light fill) */
     --ink-900: #25232e;
 
@@ -68,7 +68,7 @@ EDITORIAL_CSS = """
     --orange-50:  #fff5ea;
     --accent:       #ff8f34;
     --accent-hover: #df5325;
-    --text-link:    #df5325;
+    --text-link:    var(--red-700);
     --ring: 0 0 0 3px rgba(255,143,52,0.32);
 
     /* Primary action — ink */
@@ -77,7 +77,10 @@ EDITORIAL_CSS = """
 
     /* Status — danger=orange-dark, warn=orange, pass=jade */
     --red-600:   #df5325;
+    --red-700:    #b8341c;   /* AA-contrast red for small text on light bg */
+    --orange-700: #c2410c;   /* AA-contrast orange for small text on light bg */
     --red-100:   #fbe1d6;
+    --red-50:    #fdeee9;
     --amber-600: #ff8f34;
     --amber-100: #ffe8d2;
     --green-600: #299D8F;

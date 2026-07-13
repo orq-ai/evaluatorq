@@ -214,3 +214,46 @@
     openIds = [];
   });
 })();
+
+// Top failure modes panel — min-count slider filters bars client-side.
+(function () {
+  document.body.addEventListener('input', function (evt) {
+    var slider = evt.target.closest('[data-fm-slider]');
+    if (!slider) return;
+    var panel = slider.closest('[data-fm-panel]');
+    if (!panel) return;
+    var threshold = parseInt(slider.value, 10);
+    var out = panel.querySelector('[data-fm-out]');
+    if (out) out.textContent = threshold;
+    var visible = 0;
+    panel.querySelectorAll('.sim-fm-row').forEach(function (row) {
+      var show = parseInt(row.getAttribute('data-count'), 10) >= threshold;
+      row.hidden = !show;
+      if (show) visible++;
+    });
+    var empty = panel.querySelector('[data-fm-empty]');
+    if (empty) empty.hidden = visible > 0;
+  });
+})();
+
+// Failures table -> transcript drill-down. The scenario cell is <a href="#conv-N">;
+// the target card lives in a different CSS-radio tab, so a raw anchor can't reach it.
+// Flip to that panel's tab, open the <details> (fires its hx toggle load), scroll to it.
+(function () {
+  document.body.addEventListener('click', function (evt) {
+    var link = evt.target.closest('a[href^="#conv-"]');
+    if (!link) return;
+    var card = document.getElementById(link.getAttribute('href').slice(1));
+    if (!card) return;
+    evt.preventDefault();
+    var panel = card.closest('.tab-panel');
+    if (panel) {
+      var idx = Array.prototype.indexOf.call(panel.parentNode.children, panel);
+      var tabs = panel.closest('.tabs');
+      var radio = tabs && tabs.querySelectorAll('.tab-radio')[idx];
+      if (radio) radio.checked = true;
+    }
+    card.open = true;
+    card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+})();

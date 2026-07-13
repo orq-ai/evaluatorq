@@ -160,6 +160,7 @@ def _build_overview_section(results: list[SimulationResult]) -> ReportSection:
         personas[name]['conversations'] += 1
 
     scenarios: dict[str, dict[str, Any]] = {}
+    scenario_results: dict[str, list[SimulationResult]] = {}
     for r in results:
         name = _scenario_name(r)
         if name not in scenarios:
@@ -169,6 +170,11 @@ def _build_overview_section(results: list[SimulationResult]) -> ReportSection:
                 'context': r.metadata.get('scenario_context'),
                 'criteria': [{'description': c['description'], 'type': c['type']} for c in _criteria_rows(r)],
             }
+        scenario_results.setdefault(name, []).append(r)
+
+    for name, scenario in scenarios.items():
+        items = scenario_results.get(name, [])
+        scenario['pass_rate'] = (sum(1 for r in items if r.goal_achieved) / len(items)) if items else None
 
     return ReportSection(
         kind='overview',
@@ -251,6 +257,7 @@ def _build_scenario_breakdown_section(results: list[SimulationResult]) -> Report
             'success_rate': achieved / total,
             'avg_goal_completion_score': avg_score,
             'avg_turn_count': avg_turns,
+            'total_tokens': sum(r.token_usage.total_tokens for r in items),
         })
     rows.sort(key=operator.itemgetter('success_rate'))
     return ReportSection(

@@ -692,10 +692,11 @@ class TestCardDrilldownCarriesActiveFilter:
 
     def test_filtered_card_idx_resolves_to_same_persona_via_transcript_route(self, tmp_path: Path) -> None:
         """End-to-end guard: with personas [alice, alice, bob] and a persona=bob
-        filter active, bob's card renders at filtered idx=0. The transcript
-        route call that hx-include="#filter-form" produces — i.e. idx=0 PLUS
-        the active persona=bob filter param — must return bob's conversation,
-        not alice's (which sits at idx=0/1 in the unfiltered/full list).
+        filter active, bob's card carries his STABLE idx (2 — his position in
+        the full run), not a re-numbered filtered idx. The transcript route
+        resolves idx against the full, unfiltered run, so the drill-down returns
+        bob's conversation regardless of the active filter — and an unfiltered
+        row idx can never overflow a shorter filtered list (the original bug).
         """
         from evaluatorq.contracts import Message, TokenUsage
         from evaluatorq.dashboard.app import build_app
@@ -749,8 +750,9 @@ class TestCardDrilldownCarriesActiveFilter:
         # Fetch the row-list AS FILTERED to persona=bob — this is what the
         # browser actually has in the DOM when the user has bob selected in
         # the filter form (the row-list is re-rendered by the /filter POST
-        # body swap). Bob is the only entry, so his card renders at the
-        # *filtered* idx=0.
+        # body swap). Bob is the only visible entry, but his card must carry
+        # his *stable* idx (2 — his position in the full [alice, alice, bob]
+        # run), because filtering hides rows rather than renumbering them.
         row_list_html = client.get(f'/r/{rid}/sim/row-list?persona=bob').text
         assert 'BOB-ONE' not in row_list_html  # transcript body is lazy, not embedded
         card_start = row_list_html.find('sim-conv-body')
@@ -762,19 +764,16 @@ class TestCardDrilldownCarriesActiveFilter:
         hx_get_start = card_div.find('hx-get="') + len('hx-get="')
         hx_get_end = card_div.find('"', hx_get_start)
         hx_get_url = card_div[hx_get_start:hx_get_end]
-        assert 'idx=0' in hx_get_url  # bob is the only (filtered) entry
+        assert 'idx=2' in hx_get_url  # bob's STABLE position in the full run
 
-        # Simulate exactly what a real browser sends: the hx-get URL as-is,
-        # PLUS the filter-form fields ONLY IF the element actually carries
-        # hx-include="#filter-form" (that's what makes htmx merge them in).
-        # This is the crux of the regression: without the fix, the card has
-        # no hx-include, so the browser would send *only* hx_get_url — no
-        # persona param — and the route would silently resolve idx=0 against
-        # the FULL unfiltered list (alice), not the filtered one (bob).
-        if 'hx-include="#filter-form"' in card_div:
-            request_url = hx_get_url + '&persona=bob'
-        else:
-            request_url = hx_get_url
+        # Simulate exactly what a real browser sends: the hx-get URL plus the
+        # active filter-form fields (the card carries hx-include="#filter-form").
+        # The transcript route now resolves idx against the FULL run, so the
+        # persona param is irrelevant to the lookup — bob's stable idx=2 lands
+        # on bob whether or not the filter tags along. Without the fix, the card
+        # carried the *filtered* idx=0 and the route re-filtered to resolve it —
+        # fragile, and outright broken when the filter yielded fewer rows.
+        request_url = hx_get_url + '&persona=bob'
 
         r = client.get(request_url)
         assert r.status_code == 200

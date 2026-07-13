@@ -22,7 +22,6 @@ from __future__ import annotations
 from datetime import datetime
 from itertools import starmap
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlencode
 
 from fasthtml.common import Script
 
@@ -51,7 +50,11 @@ def head_assets() -> tuple[Script, ...]:
         Script(src='/static/vega.min.js'),
         Script(src='/static/vega-lite.min.js'),
         Script(src='/static/vega-embed.min.js'),
-        Script(src='/static/dashboard.js'),
+        # defer: dashboard.js runs at document.body-level (event delegation) — without
+        # defer it executes during <head> parse when document.body is still null and
+        # throws, aborting all its handlers (incl. the sim-entity modal). vega stays
+        # non-deferred: inline body scripts call vegaEmbed during parse.
+        Script(src='/static/dashboard.js', defer=True),
     )
 
 
@@ -990,74 +993,6 @@ def report_view_with_filters(
     return f'<section class="report-view">{swap}</section>'
 
 
-_DOWNLOAD_SIDEBAR_ID = 'download-sidebar'
-
-
-def download_sidebar(
-    rid: str,
-    surface: str,
-    *,
-    selections: dict[str, list[str]] | None = None,
-    has_markdown: bool = False,
-    has_csv: bool = False,
-    oob: bool = False,
-) -> str:
-    """Render the download links sidebar for a report page.
-
-    Generates a ``<section id="download-sidebar" class="download-sidebar">``
-    containing links for the available export formats for *surface*.  CSV/JSON
-    links carry the active filter query-string so the downloaded data reflects
-    the currently filtered set.
-
-    The sidebar has a stable ``id`` (``"download-sidebar"``) so it can be
-    targeted by HTMX out-of-band swaps after filter POSTs.
-
-    Args:
-        rid:          Report ID (URL-safe).
-        surface:      Surface key (``'redteam'`` | ``'sim'``).
-        selections:   Active filter selections as ``dict[str, list[str]]``.
-                      When provided, filter params are appended to CSV/JSON
-                      download links so the downloaded data reflects the
-                      currently filtered set.
-        has_markdown: Whether to include a Markdown download link.
-        has_csv:      Whether to include a CSV download link.
-        oob:          When ``True``, add ``hx-swap-oob="true"`` so HTMX
-                      replaces the sidebar in-place without it being inside
-                      the primary swap target.
-
-    Returns:
-        An HTML ``<section>`` fragment.
-    """
-    safe_rid = esc(rid)
-
-    # Build the query-string from selections (multi-value) using urlencode so
-    # that & separators are NOT HTML-escaped.  Only the rid path segment is
-    # escaped via esc().
-    if selections:
-        # Flatten dict[str, list[str]] → list of (key, val) pairs for urlencode.
-        pairs: list[tuple[str, str]] = [(k, v) for k, vals in selections.items() for v in vals]
-        qs = f'?{urlencode(pairs)}' if pairs else ''
-    else:
-        qs = ''
-
-    oob_attr = ' hx-swap-oob="true"' if oob else ''
-
-    links: list[str] = [
-        f'<a class="download-link" href="/r/{safe_rid}/export.html">HTML</a>',
-    ]
-    if has_markdown:
-        links.append(f'<a class="download-link" href="/r/{safe_rid}/export.md">Markdown</a>')
-    if has_csv:
-        links.append(f'<a class="download-link" href="/r/{safe_rid}/export.csv{qs}">CSV</a>')
-    links.append(f'<a class="download-link" href="/r/{safe_rid}/export.json{qs}">JSON</a>')
-
-    inner = '\n'.join(links)
-    return (
-        f'<section id="{_DOWNLOAD_SIDEBAR_ID}" class="download-sidebar"{oob_attr}>'
-        f'<h3 class="download-title">Downloads</h3>{inner}</section>'
-    )
-
-
 def render_message_list(
     messages: list[Any],
     *,
@@ -1186,7 +1121,7 @@ def sim_interactive_panels(rid: str, entries: list[Any]) -> str:
     row_list = render_sim_row_list(rid, entries)
     return (
         f'<section class="sim-interactive-panels">'
-        f'<h1 class="sim-panels-title">Conversations</h1>'
+        f'<h2 class="sim-panels-title">Conversations</h2>'
         f'{_sim_rowlist_wrapper(rid, row_list)}'
         f'</section>'
     )

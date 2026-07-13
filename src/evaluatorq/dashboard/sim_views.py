@@ -151,7 +151,9 @@ def render_sim_row_list(rid: str, entries: list[SimulationEntry]) -> str:
             f' hx-swap="innerHTML"'
             f' hx-include="#filter-form"></div>'
         )
-        cards_html.append(f'<details class="sim-conv-card">{summary}{body}</details>')
+        # id="conv-N" (N = 1-based) is the jump target for the Failures table's
+        # <a href="#conv-N"> links; dashboard.js flips to this tab and opens it.
+        cards_html.append(f'<details class="sim-conv-card" id="conv-{idx + 1}">{summary}{body}</details>')
 
     return f'<section class="sim-row-list">{"".join(cards_html)}</section>'
 
@@ -297,7 +299,11 @@ def register_sim_view_routes(app: Any, roots: list[Any] | None = None) -> None:
         filtered_results = apply_or_all(run, 'sim', selections)
         from evaluatorq.simulation.reports.sections import individual_entries
 
-        entries = individual_entries(filtered_results)
+        # Keep each surviving conversation's ORIGINAL index (its position in the
+        # full run) so drill-down links stay stable under filtering — filtering
+        # hides rows, it does not renumber them.
+        kept = {id(r) for r in filtered_results}
+        entries = [e for e, r in zip(individual_entries(run.results), run.results, strict=True) if id(r) in kept]
 
         html = render_sim_row_list(rid, entries)
         # Return wrapped in the same container div that sim_interactive_panels
@@ -328,13 +334,14 @@ def register_sim_view_routes(app: Any, roots: list[Any] | None = None) -> None:
                 media_type='text/html',
             )
 
-        # Apply any active filter before building the entry list so the idx
-        # refers to a position in the same filtered ordering as the row-list.
-        selections = parse_selections(req, 'sim')
-        filtered_results = apply_or_all(run, 'sim', selections)
+        # Resolve by stable index into the full, unfiltered run: the row-list
+        # carries each conversation's original position (see sim_row_list), so a
+        # visible row always maps to its transcript regardless of the active
+        # filter sent via hx-include. Re-applying the filter here would re-index
+        # the list and make an unfiltered row idx overflow the filtered list.
         from evaluatorq.simulation.reports.sections import individual_entries
 
-        entries = individual_entries(filtered_results)
+        entries = individual_entries(run.results)
 
         if not entries or idx < 0 or idx >= len(entries):
             return Response(

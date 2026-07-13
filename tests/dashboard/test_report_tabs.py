@@ -187,6 +187,19 @@ def test_sim_breakdown_no_vlconvert_heatmap_or_histogram(sim_run) -> None:
     assert 'vega' not in html.lower()
 
 
+def test_sim_breakdown_scenario_table_has_tokens_column(sim_run) -> None:
+    """Per-scenario breakdown table (spec §Breakdown.3) carries a Tokens column
+    alongside Conv/Goal rate/Avg score/Avg turns, formatted with thousands
+    separators from each result's total token usage."""
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run)
+    scenario_html = html.split('Per-scenario')[-1].split('Transcripts')[0]
+    assert '<th>Tokens</th>' in scenario_html
+    # sim_run fixture: two results, each with total_tokens=15 -> scenario sum 30.
+    assert 'data-label="Tokens">30<' in scenario_html
+
+
 def test_sim_transcripts_tab_drops_failure_mode(sim_run) -> None:
     """failure_mode moved to Breakdown (spec §Breakdown.4); Transcripts keeps
     only evaluator_scores / judge_verdicts / errors below the cards."""
@@ -194,6 +207,49 @@ def test_sim_transcripts_tab_drops_failure_mode(sim_run) -> None:
 
     html = sim_report_tabs('rid', sim_run)
     assert 'id="section-failure_mode"' not in html
+
+
+def test_sim_failure_modes_empty_rows_returns_empty_string() -> None:
+    from evaluatorq.dashboard.report_tabs import _sim_failure_modes
+
+    assert _sim_failure_modes([]) == ''
+
+
+def test_sim_failure_modes_default_threshold_hides_singletons() -> None:
+    from evaluatorq.dashboard.report_tabs import _sim_failure_modes
+
+    rows = [
+        ('Scenario A: criterion x', 3),
+        ('Scenario A: criterion y', 2),
+        ('Scenario B: criterion z', 1),
+    ]
+    html = _sim_failure_modes(rows)
+
+    assert 'data-fm-panel' in html
+    assert 'data-fm-empty' in html
+    assert 'data-fm-slider' in html
+    assert 'max="3"' in html
+    assert 'value="2"' in html
+
+    # The count-1 row is hidden by the default threshold; count-2/3 rows are not.
+    row_3 = html.split('data-count="3"')[1].split('</div>')[0]
+    row_2 = html.split('data-count="2"')[1].split('</div>')[0]
+    row_1 = html.split('data-count="1"')[1].split('</div>')[0]
+    assert 'hidden' not in row_3.split('>')[0]
+    assert 'hidden' not in row_2.split('>')[0]
+    assert 'hidden' in row_1.split('>')[0]
+
+
+def test_sim_failure_modes_all_singletons_no_hidden_rows() -> None:
+    from evaluatorq.dashboard.report_tabs import _sim_failure_modes
+
+    rows = [('a: b', 1), ('c: d', 1)]
+    html = _sim_failure_modes(rows)
+
+    assert 'value="1"' in html
+    assert 'max="1"' in html
+    bars_html = html.split('sim-fm-bars')[1].split('sim-fm-empty')[0]
+    assert 'hidden' not in bars_html
 
 
 def test_sim_turn_quality_tab_present_when_data(sim_run_with_turn_metrics) -> None:
@@ -235,9 +291,9 @@ def test_sim_turn_quality_stat_tiles_and_bar_rows(sim_run_with_turn_metrics) -> 
     assert '2 turns' in html
 
 
-def test_sim_turn_quality_single_turn_drops_empty_chart() -> None:
-    """A single-turn run has no trend to plot, so the per-turn line chart is
-    omitted (it would render an empty plot) while the avg-quality tiles remain."""
+def test_sim_turn_quality_single_turn_drops_tab() -> None:
+    """When every conversation is single-turn there's no per-turn story (no
+    trend, a one-bar distribution), so the whole Turn quality tab drops out."""
     from evaluatorq.contracts import TokenUsage
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
     from evaluatorq.simulation.types import TurnMetrics
@@ -257,10 +313,7 @@ def test_sim_turn_quality_single_turn_drops_empty_chart() -> None:
         turn_metrics_by_result=[[_tm()], [_tm()]],
     )
     html = sim_report_tabs('rid', run)
-    assert 'class="rk-line-chart"' not in html  # empty single-turn chart omitted
-    assert 'Per-turn quality' not in html
-    assert 'class="sim-aq-grid"' in html  # avg-quality tiles still shown
-    assert '1 turns' in html
+    assert 'Turn quality' not in _tab_labels(html)
 
 
 def test_sim_config_tab_has_metagrid(sim_run) -> None:
@@ -341,7 +394,7 @@ def test_sim_config_compacts_entities_and_prerenders_modal_details() -> None:
     assert 'data-entity-kind="persona"' in html
     assert 'data-entity-kind="scenario"' in html
     assert 'class="sim-trait-mini"' in html
-    assert 'title="patience: 0.20"' in html
+    assert 'data-tip="Patience 0.20"' in html
     assert '2 checks' in html
     assert 'Long persona background should only appear in modal detail.' in html
     assert 'Customer was charged twice.' in html
@@ -354,12 +407,19 @@ def test_sim_config_compacts_entities_and_prerenders_modal_details() -> None:
         {
             'name': 'Refund request',
             'goal': 'Resolve the refund without unnecessary back and forth.',
-            'criteria': [{'description': 'Confirm refund eligibility'}],
+            'criteria': [
+                {'description': 'Confirm refund eligibility', 'type': 'must_happen'},
+                {'description': 'Do not invent a policy', 'type': 'must_not_happen'},
+            ],
+            'pass_rate': 0.5,
         },
         'scenario-0',
     )
     assert 'Long persona background should only appear in modal detail.' not in persona_row
-    assert 'Resolve the refund without unnecessary back and forth.' not in scenario_row
+    # Goal one-liner, criteria split, and a colored pass-rate badge now render in the row.
+    assert 'Resolve the refund without unnecessary back and forth.' in scenario_row
+    assert 'must-happen' in scenario_row and 'must-not' in scenario_row
+    assert '50%' in scenario_row
 
 
 def test_sim_breakdown_entity_names_open_shared_modal(sim_run) -> None:

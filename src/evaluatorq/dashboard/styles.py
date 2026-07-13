@@ -844,15 +844,13 @@ _SIM_REPORT_CSS = """
 .report-aligned .kpi-card {
     background: var(--surface-card);
     border: 1px solid var(--border-subtle);
-    border-left: none;
-    border-top: 3px solid var(--teal-600);
     border-radius: 12px;
     padding: 15px 16px;
 }
-.report-aligned .kpi-card--pass    { border-top-color: var(--green-600); }
-.report-aligned .kpi-card--fail    { border-top-color: var(--red-600); }
-.report-aligned .kpi-card--warn    { border-top-color: var(--amber-600); }
-.report-aligned .kpi-card--neutral { border-top-color: var(--teal-600); }
+/* State lives on the number, not a bar. Neutral keeps --text-strong. */
+.report-aligned .kpi-card--pass .kpi-value { color: var(--green-600); }
+.report-aligned .kpi-card--fail .kpi-value { color: var(--red-600); }
+.report-aligned .kpi-card--warn .kpi-value { color: var(--amber-600); }
 .report-aligned .kpi-value {
     font-family: var(--font-mono); font-size: 28px; font-weight: 600;
     color: var(--text-strong); line-height: 1.1;
@@ -1301,6 +1299,8 @@ _SIM_REPORT_OVERRIDES_CSS = """
     letter-spacing: -0.01em; color: var(--text-strong);
 }
 .sim-report .rk-panel-sub { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
+.rk-panel-info { margin-left: 6px; color: var(--text-muted); cursor: help; font-size: 0.85em; vertical-align: middle; }
+.rk-panel-info:hover { color: var(--text-strong); }
 
 .sim-report .sim-persona-name { font-family: var(--font-sans); font-size: 13px; font-weight: 600; color: var(--text-strong); }
 .sim-report .sim-criterion-type {

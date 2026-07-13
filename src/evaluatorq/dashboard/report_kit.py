@@ -35,15 +35,17 @@ def _best_worst_cells(heatmap_data: dict[str, Any]) -> tuple[dict | None, dict |
 def _confidence_pill(confidence: str | None) -> str:
     if not confidence:
         return ''
-    tone = {'HIGH': 'green-600', 'MEDIUM': 'amber-600', 'LOW': 'red-600'}.get(confidence.upper(), 'teal-600')
+    tone = {'HIGH': '#025558', 'MEDIUM': 'var(--orange-700)', 'LOW': 'var(--red-700)'}.get(
+        confidence.upper(), '#025558'
+    )
     return (
-        f'<span class="es-confidence" style="border-color:var(--{tone});color:var(--{tone})">'
+        f'<span class="es-confidence" style="border-color:{tone};color:{tone}">'
         f'{esc(confidence.upper())} CONFIDENCE</span>'
     )
 
 
 def exec_summary(*, summary_data: dict[str, Any], heatmap_data: dict[str, Any], confidence: str | None) -> str:
-    """Orange-left-bar executive-summary callout (spec §Overview.1)."""
+    """Executive-summary callout (spec §Overview.1)."""
     total = summary_data.get('total_conversations', 0)
     if not total:
         return ''
@@ -69,7 +71,7 @@ def exec_summary(*, summary_data: dict[str, Any], heatmap_data: dict[str, Any], 
 
 
 def callout(body_html: str, *, label: str = 'Executive summary', confidence: str | None = None) -> str:
-    """Shared orange-left-bar callout shell (spec §Overview.1 / §report_kit generalizations).
+    """Shared executive-summary callout shell (spec §Overview.1 / §report_kit generalizations).
     Sim's ``exec_summary`` builds its sentence then calls this; RT builds its own
     sentence in ``report_tabs.py`` and calls this directly."""
     return (
@@ -133,13 +135,14 @@ def dial(value_text: str, fraction: float, *, radius: int, stroke: int, color: s
 
 
 # Semantic --outcome-*/--sev-* tokens (theme.py) so a single edit restyles every
-# pill. 'good' fg now tracks --outcome-resistant (was --teal-600, mismatching its
-# green dot).
+# pill. Foreground colors are darkened (--red-700 / --teal-600) for WCAG AA text
+# contrast, while each `dot` deliberately keeps the brighter semantic --outcome-*
+# color so the pill's status dot matches the chart/legend swatches.
 _PILL_TONES: dict[str, dict[str, str]] = {
-    'danger': {'bg': 'var(--red-100)', 'fg': 'var(--outcome-vulnerable)', 'dot': 'var(--outcome-vulnerable)'},
-    'danger-solid': {'bg': 'var(--sev-critical)', 'fg': '#fff', 'dot': '#fff'},
-    'warn': {'bg': 'var(--amber-100)', 'fg': 'var(--red-600)', 'dot': 'var(--outcome-error)'},
-    'good': {'bg': 'var(--green-100)', 'fg': 'var(--outcome-resistant)', 'dot': 'var(--outcome-resistant)'},
+    'danger': {'bg': 'var(--red-100)', 'fg': 'var(--red-700)', 'dot': 'var(--outcome-vulnerable)'},
+    'danger-solid': {'bg': 'var(--red-700)', 'fg': '#fff', 'dot': '#fff'},
+    'warn': {'bg': 'var(--amber-100)', 'fg': 'var(--red-700)', 'dot': 'var(--outcome-error)'},
+    'good': {'bg': 'var(--green-100)', 'fg': 'var(--teal-600)', 'dot': 'var(--outcome-resistant)'},
     'neutral': {'bg': 'var(--sunken)', 'fg': 'var(--text-muted)', 'dot': 'var(--text-muted)'},
 }
 
@@ -213,14 +216,20 @@ def donut(
     )
 
 
-def panel(title: str, body: str, *, sub: str | None = None) -> str:
-    """White card wrapper with a mono-label title and pre-rendered ``body`` HTML."""
+def panel(title: str, body: str, *, sub: str | None = None, info: str | None = None) -> str:
+    """White card wrapper with a mono-label title and pre-rendered ``body`` HTML.
+
+    ``info``, when given, renders a hoverable ``ⓘ`` next to the title using the
+    native ``title`` tooltip — no JS/library. ponytail: native tooltip; swap for
+    a popover only if the copy outgrows a one-line hover.
+    """
     if not title:
         return ''
     sub_html = f'<div class="rk-panel-sub">{esc(sub)}</div>' if sub else ''
+    info_html = f'<span class="rk-panel-info" title="{esc(info)}" role="img" aria-label="{esc(info)}">&#9432;</span>' if info else ''
     return (
         '<div class="rk-panel">'
-        f'<div class="rk-panel-title">{esc(title)}</div>'
+        f'<div class="rk-panel-title">{esc(title)}{info_html}</div>'
         f'{sub_html}'
         f'<div class="rk-panel-body">{body}</div>'
         '</div>'
