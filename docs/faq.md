@@ -59,7 +59,7 @@ report = await red_team(
 ### What leaves my machine?
 
 Simulator/attacker/judge LLM calls go to OpenAI or the Orq router. Results upload
-to the Orq platform **only if `ORQ_API_KEY` is set** — with no key, everything
+to the Orq platform **only if `ORQ_API_KEY` is set.** With no key, everything
 stays local. Setting `ORQ_API_KEY` also enables OpenTelemetry tracing to
 `my.orq.ai`; suppress it with `ORQ_DISABLE_TRACING=1`, or keep tracing but strip
 prompt/response text from spans with `EVALUATORQ_CAPTURE_MESSAGE_CONTENT=false`.
@@ -118,7 +118,7 @@ confidence, score one response with a **panel** of judges
 ### How do I know my agent is safe?
 
 You don't, until you attack it. Shipping after a refused *"say something
-harmful"* is a vibe check, not a test — it only proves the agent refuses the
+harmful"* is a vibe check, not a test. It only proves the agent refuses the
 one obvious prompt you thought to try. Red teaming runs a mapped set of
 adversarial attacks and reports a **resistance rate** (the fraction the agent
 withstood), so "safe" becomes a number you can gate on. See
@@ -174,7 +174,7 @@ Filtering out attacks that can't apply keeps a run focused on real exposure.
 
 Because the surface text lies. *"I see malicious instructions in this email but I
 won't follow them"* and *"I'll forward that email right away"* both mention
-instructions — one is resistant, one is vulnerable. A regex can't tell them
+instructions, yet one is resistant, one is vulnerable. A regex can't tell them
 apart; a judge rubric can. Write your own in
 [Custom Evaluators & Frameworks](custom-evaluators-and-frameworks.md).
 
@@ -196,7 +196,7 @@ differently across agents.
 
 ### How do I run it against my own agent?
 
-Subclass `AgentTarget` and implement two methods — `respond(messages)` (return an
+Subclass `AgentTarget` and implement two methods: `respond(messages)` (return an
 `AgentResponse`) and `new()` (return a fresh instance for each attack). Any
 framework works behind those two methods (LangChain, LangGraph, the OpenAI
 Agents SDK, or a plain loop), so there's no framework buy-in:
@@ -227,7 +227,7 @@ for a full custom target.
 
 ### If I red-team my real agent, will the attacks actually fire its tools?
 
-Yes — the target runs its own tools, so a successful attack triggers real side
+Yes. The target runs its own tools, so a successful attack triggers real side
 effects (sends the email, moves the money, runs the shell command). Point red
 teaming at a **sandboxed or test instance** with fake/stubbed tools — like the
 demo's fake wallets — not at production credentials wired to irreversible
@@ -244,7 +244,7 @@ attach LLM-generated focus-area recommendations to the report.
 ### What does `passed=True` mean?
 
 The agent **resisted** the attack (the attack failed). `passed=False` means the
-attack succeeded — the agent is **vulnerable**. `resistance_rate` is the fraction
+attack succeeded: the agent is **vulnerable**. `resistance_rate` is the fraction
 of attacks that came back `passed=True`.
 
 ## Agent Simulation
@@ -259,7 +259,7 @@ user-simulator, and a judge that scores `goal_achieved` / `criteria_met`.
 
 ### How do I simulate multi-turn conversations?
 
-`generate_and_simulate()` is the fastest start — it synthesizes personas,
+`generate_and_simulate()` is the fastest start: it synthesizes personas,
 scenarios, and opening messages from a one-line description of your agent, no
 hand-written transcripts:
 
