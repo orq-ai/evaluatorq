@@ -7,13 +7,30 @@ Structure mirrors the red-teaming demos (`../../redteam/refund_agent_demo`,
 agent the deck demos live. The presentation theme/assets are reused from those
 decks (orq brand teal `#025558`, orange `q`).
 
+## Start here
+
+Everything below needs an Orq API key for the workspace that will host the demo.
+Export it first (or copy `agent_build/.env.example` to `agent_build/.env` and fill it in):
+
+```bash
+export ORQ_API_KEY="sk-orq-..."     # the banking / CustomerDemo workspace key
+```
+
+Then provision the agent and run the flow:
+
+```bash
+cd examples/agent_simulation/webinar_demo
+make provision      # create the Bank of Holland agent + tools + KB in Orq (idempotent)
+make simulate       # run simulations against it
+```
+
 ## Status
 
 **Scaffold.** `RUNBOOK.md` has the full demo flow (steps + exact commands + known
 gaps), validated end-to-end. `presentation.qmd` is a bare themed skeleton — fill it
 from the runbook once the flow is signed off.
 
-- **`RUNBOOK.md`** — start here. The live-demo script: 3 Acts, real commands, gaps to call out.
+- **`RUNBOOK.md`** — the live-demo script: 3 Acts, real commands, gaps to call out.
 
 ## Slides
 
@@ -28,7 +45,7 @@ quarto render presentation.qmd     # → presentation.html + docs/
 
 ## Demo agent
 
-The spine is the **ICS (International Card Services / ABN AMRO) credit-card support
+The spine is the **Bank of Holland credit-card support
 agent** — `azure/gpt-5-mini`, a 99-question Dutch/English FAQ knowledge base, and two
 code tools (`get_card_info`, `get_transaction_details`). `make provision` recreates it
 (and its tools + KB) in Orq from the definitions in `agent_build/`, using distinct demo
@@ -38,7 +55,7 @@ keys so it never clobbers the customer's live entities.
 agent_build/
   provision.py            # idempotent Orq SDK provisioning (tools + KB + agent)
   config.py               # demo keys, path, embedding model
-  assets/ics_faq.txt      # the FAQ ingested into the knowledge base
+  assets/boh_faq.txt      # the FAQ ingested into the knowledge base
   orq_export/             # agent + tool + KB definitions exported from the platform
 ```
 

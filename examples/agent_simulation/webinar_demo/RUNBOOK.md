@@ -1,20 +1,20 @@
 # Runbook — Agent Simulation Webinar
 
 The live demo flow: ordered steps, exact commands, and what each one answers.
-Spine agent: the **ICS credit-card Q&A agent** (`make provision` recreates it in
+Spine agent: the **Bank of Holland credit-card Q&A agent** (`make provision` recreates it in
 the banking / CustomerDemo workspace). Platform ops (datasets, agents) use the
 **`orq` CLI**; the simulation engine is **`evaluatorq sim`** (the `orq` CLI has no
 simulation command — see Gaps §1).
 
 > Status: validated end-to-end against the real provisioned agent
-> (`ics_creditcard_agent_demo`). Set `ORQ_API_KEY` to the banking workspace key.
+> (`boh_creditcard_agent_demo`). Set `ORQ_API_KEY` to the banking workspace key.
 
 ## Audience questions this answers
 
 | Question | Step |
 |----------|------|
 | Do I need data to start? | Act 1 (no — generate from a description) |
-| Get started with an orq agent | Act 1 (`--target agent:ics_creditcard_agent_demo`) |
+| Get started with an orq agent | Act 1 (`--target agent:boh_creditcard_agent_demo`) |
 | Do it for a non-orq agent (CLI + SDK) | Act 2 |
 | Start with data / re-run from a run | Act 3a (datapoints JSONL) |
 | Extend existing data | Act 3b |
@@ -27,31 +27,31 @@ export ORQ_API_KEY="<banking / CustomerDemo key>"   # routes sim LLM + hosts the
 cd packages/evaluatorq-py
 uv sync --all-extras
 
-# Provision the ICS agent + its 2 code tools + FAQ knowledge base into Orq.
+# Provision the Bank of Holland agent + its 2 code tools + FAQ knowledge base into Orq.
 # Idempotent — safe to re-run. Uses distinct demo keys, never touches the
-# customer's live entities. Creates agent key `ics_creditcard_agent_demo`.
+# customer's live entities. Creates agent key `boh_creditcard_agent_demo`.
 cd examples/agent_simulation/webinar_demo && make provision
 ```
 
-The agent is the ICS (International Card Services / ABN AMRO) credit-card support
+The agent is the Bank of Holland credit-card support
 bot: `azure/gpt-5-mini`, a 99-question Dutch/English FAQ knowledge base, and two
 code tools (`get_card_info`, `get_transaction_details`). Definitions live in
-`agent_build/orq_export/` + `agent_build/assets/ics_faq.txt`; `agent_build/provision.py`
+`agent_build/orq_export/` + `agent_build/assets/boh_faq.txt`; `agent_build/provision.py`
 recreates them via the Orq Python SDK. All demo commands below default to
-`AGENT=ics_creditcard_agent_demo` (override on the `make` line).
+`AGENT=boh_creditcard_agent_demo` (override on the `make` line).
 
 ---
 
 ## Act 1 — From scratch, no data ("do I need data? No.")
 
 **1. Generate personas × scenarios from just the agent's description.**
-No dataset, no examples — the ICS agent's own description seeds it.
+No dataset, no examples — the Bank of Holland agent's own description seeds it.
 
 ```bash
 uv run evaluatorq sim generate \
-  --target agent:ics_creditcard_agent_demo \
+  --target agent:boh_creditcard_agent_demo \
   --num-personas 3 --num-scenarios 3 \
-  -o ics_datapoints.jsonl
+  -o boh_datapoints.jsonl
 ```
 (`--target` only fetches the description here; the agent is not called yet.
 Swap for `--agent-description "..."` if you'd rather not hit the platform.)
@@ -61,19 +61,19 @@ persona (patience/assertiveness/style/emotional-arc/background) crossed with a
 scenario (goal/context/criteria). This is the "coverage from nothing" moment.
 
 ```bash
-uv run evaluatorq sim validate-dataset ics_datapoints.jsonl   # sanity check
-python -m json.tool < <(head -1 ics_datapoints.jsonl)          # pretty-print one row
+uv run evaluatorq sim validate-dataset boh_datapoints.jsonl   # sanity check
+python -m json.tool < <(head -1 boh_datapoints.jsonl)          # pretty-print one row
 ```
 
-**3. Run the simulation against the live ICS agent** and save the datapoints so we
+**3. Run the simulation against the live Bank of Holland agent** and save the datapoints so we
 can re-run the *exact same* set later (Act 3a).
 
 ```bash
 uv run evaluatorq sim run \
-  --target agent:ics_creditcard_agent_demo \
+  --target agent:boh_creditcard_agent_demo \
   --num-personas 3 --num-scenarios 3 \
-  --save-datapoints ics_datapoints.jsonl \
-  --name ics-from-scratch
+  --save-datapoints boh_datapoints.jsonl \
+  --name boh-from-scratch
 ```
 
 **4. Show the results** — pass rate + a failing transcript in the run viewer.
@@ -94,11 +94,11 @@ Same simulation, agent that isn't hosted on orq. Show both surfaces.
 ```bash
 # OpenAI-compatible (vLLM / OpenRouter / local); OPENAI_API_KEY + OPENAI_BASE_URL
 uv run evaluatorq sim run --openai-model gpt-4o-mini \
-  --agent-description "Support agent for ..." --name ics-nonorq-cli
+  --agent-description "Support agent for ..." --name boh-nonorq-cli
 
 # or a deployed HTTP agent
 uv run evaluatorq sim run --vercel-url https://my-agent.vercel.app/api/chat \
-  --agent-description "..." --name ics-nonorq-http
+  --agent-description "..." --name boh-nonorq-http
 ```
 
 **SDK** — wrap any `async fn(messages) -> str`, or a framework agent via the
@@ -128,19 +128,19 @@ e.g. after tweaking the agent prompt — to compare like-for-like.
 
 ```bash
 uv run evaluatorq sim simulate \
-  --target agent:ics_creditcard_agent_demo \
-  --datapoints ics_datapoints.jsonl \
-  --name ics-rerun
+  --target agent:boh_creditcard_agent_demo \
+  --datapoints boh_datapoints.jsonl \
+  --name boh-rerun
 ```
 
 **3b. Extend the set.** Generate more personas/scenarios and append — your suite
 grows without discarding what you have.
 
 ```bash
-uv run evaluatorq sim generate --target agent:ics_creditcard_agent_demo \
+uv run evaluatorq sim generate --target agent:boh_creditcard_agent_demo \
   --num-personas 2 --num-scenarios 2 -o more.jsonl
-cat more.jsonl >> ics_datapoints.jsonl
-uv run evaluatorq sim validate-dataset ics_datapoints.jsonl
+cat more.jsonl >> boh_datapoints.jsonl
+uv run evaluatorq sim validate-dataset boh_datapoints.jsonl
 ```
 
 **3c. Publish the set as an orq dataset — and re-run from it.** New `eq sim`
@@ -149,14 +149,14 @@ run straight from the dataset.
 
 ```bash
 # push the frozen set to a new orq dataset (persona/scenario are auto-stringified)
-uv run evaluatorq sim upload-dataset -i ics_datapoints.jsonl -n "ICS Sim Set"
+uv run evaluatorq sim upload-dataset -i boh_datapoints.jsonl -n "Bank of Holland Sim Set"
 # -> Created dataset <id> ...  Uploaded N datapoint(s) -> dataset <id>
 
 # extend an existing dataset instead of creating one
 uv run evaluatorq sim upload-dataset -i more.jsonl --dataset-id <id>
 
 # re-run directly from the orq dataset (CLI-native now)
-uv run evaluatorq sim simulate --target agent:ics_creditcard_agent_demo --dataset-id <id> --name ics-from-dataset
+uv run evaluatorq sim simulate --target agent:boh_creditcard_agent_demo --dataset-id <id> --name boh-from-dataset
 ```
 
 `eq sim generate --dataset-format -o rows.jsonl` writes the dataset envelope up

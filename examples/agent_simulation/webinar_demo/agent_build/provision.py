@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Provision the ICS credit-card demo agent + its tools + knowledge base in Orq.
+"""Provision the Bank of Holland credit-card demo agent + its tools + knowledge base in Orq.
 
 Reads the definitions exported from the platform under ``orq_export/`` and the FAQ
 under ``assets/`` and (re)creates them via the Orq Python SDK. Idempotent: any
@@ -87,7 +87,7 @@ def provision_kb(client: Orq, kb_ids: dict[str, str]) -> str:
     )
     logger.info(f'Created knowledge base {config.KB_KEY} ({kb.id})')
 
-    datasource = client.knowledge.create_datasource(knowledge_id=kb.id, display_name='ics_faq')
+    datasource = client.knowledge.create_datasource(knowledge_id=kb.id, display_name='boh_faq')
     faq = (HERE / config.FAQ_FILE).read_text(encoding='utf-8')
     # Chunk on the FAQ's own "---" separators (one Q&A / section per chunk).
     chunks = [c.strip() for c in faq.split('\n---\n') if c.strip()]
@@ -117,8 +117,8 @@ def provision_agent(client: Orq, tool_keys: list[str], kb_id: str) -> str:
     )
     client.agents.create(
         key=config.AGENT_KEY,
-        role=agent.get('role') or 'ICS Creditcard Support Bot',
-        description=agent.get('description') or 'ICS credit-card support demo agent.',
+        role=agent.get('role') or 'Bank of Holland Creditcard Support Bot',
+        description=agent.get('description') or 'Bank of Holland credit-card support demo agent.',
         instructions=agent['instructions'],
         path=config.ORQ_PATH,
         model={'id': (agent.get('model') or {}).get('id', 'azure/gpt-5-mini')},
