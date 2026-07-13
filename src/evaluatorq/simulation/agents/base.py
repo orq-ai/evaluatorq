@@ -11,7 +11,7 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from openai import BadRequestError
 
@@ -97,6 +97,7 @@ class AgentConfig:
     model: str = DEFAULT_MODEL
     client: AsyncOpenAI | None = None
     api_key: str | None = None
+    api: Literal['chat_completions', 'responses'] = 'chat_completions'
 
 
 def _config_from_agent_config(agent_cfg: AgentConfig) -> tuple[LLMCallConfig, str | None]:
@@ -105,6 +106,7 @@ def _config_from_agent_config(agent_cfg: AgentConfig) -> tuple[LLMCallConfig, st
         LLMCallConfig(
             model=agent_cfg.model,
             client=agent_cfg.client,
+            api=agent_cfg.api,
         ),
         agent_cfg.api_key,
     )
