@@ -348,6 +348,7 @@ class SimulationRun(BaseModel):
     total_results: int
     scorer_averages: dict[str, float]
     results: list[SimulationResult]
+    executive_summary: str | None = None
 
 
 # ---------------------------------------------------------------------------
