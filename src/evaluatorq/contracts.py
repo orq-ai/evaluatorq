@@ -834,7 +834,7 @@ class AgentContext(BaseModel):
     key: str = Field(description='Agent identifier key')
     id: str | None = Field(default=None, description='Entity UUID (orq agent/deployment id), for deep-linking')
     workspace_id: str | None = Field(default=None, description='Orq workspace id, for deep-linking')
-    target_kind: str | None = Field(
+    target_kind: Literal['agent', 'deployment', 'direct', 'openai'] | None = Field(
         default=None,
         description="Target kind: 'agent' | 'deployment' | 'direct' | 'openai'. Gates the Studio deep-link.",
     )

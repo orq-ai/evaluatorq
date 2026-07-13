@@ -6,13 +6,36 @@ Uses Pydantic models for maximum compatibility with generators/runner/agents.
 from __future__ import annotations
 
 from datetime import datetime  # noqa: TC003
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 from pydantic import BaseModel, Field
 
 from evaluatorq.contracts import Message, StrEnum, TokenUsage
 
 DEFAULT_MODEL = 'openai/gpt-5.4-mini'
+
+
+class AgentInfoSnapshot(TypedDict, total=False):
+    """Best-effort snapshot of an ORQ agent's configuration, as fetched by
+    ``fetch_agent_info`` and stored on ``SimulationRun.agent_info``.
+
+    Deliberately excludes the agent's system prompt / instructions.
+    """
+
+    key: str
+    id: str | None
+    role: str | None
+    description: str | None
+    model: str | None
+    tools: list[str]
+    knowledge_bases: list[str]
+    memory_stores: list[str]
+    sub_agents: list[str]
+    workspace_id: str | None
+    workspace_key: str | None
+    base_url: str
+    url: str | None
+
 
 # Default evaluators applied when none are explicitly requested. Single source
 # of truth shared by ``api.simulate`` and the CLI run-store record.
@@ -350,7 +373,7 @@ class SimulationRun(BaseModel):
     # Snapshot of the ORQ agent's configuration at run time (orq_agent targets
     # only; None for other target kinds, fetch failures, and pre-existing runs).
     # Deliberately excludes the system prompt / instructions.
-    agent_info: dict[str, Any] | None = None
+    agent_info: AgentInfoSnapshot | None = None
     evaluator_names: list[str]
     total_results: int
     scorer_averages: dict[str, float]

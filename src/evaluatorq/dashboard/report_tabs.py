@@ -13,7 +13,7 @@ panels are slotted into the tab they belong to.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from evaluatorq.common.reports import esc
 
@@ -665,11 +665,16 @@ async def _orq_agent_info_cached(agent_key: str) -> dict[str, Any] | None:
     try:
         from evaluatorq.simulation.utils.run_store import fetch_agent_info
 
-        result = await fetch_agent_info(agent_key)
+        # fetch_agent_info returns a typed AgentInfoSnapshot; this cache and the
+        # merge logic below treat it as a plain dict, so widen the type here.
+        result = cast('dict[str, Any] | None', await fetch_agent_info(agent_key))
     except Exception as exc:  # never let a live fetch break a page render
         from loguru import logger
 
-        logger.debug('live agent_info fetch failed for {}: {}', agent_key, exc)
+        # fetch_agent_info owns fetch/network/auth errors (logs at warning, returns
+        # None), so this only fires if the import itself breaks — a real regression
+        # worth surfacing, hence warning rather than a silent debug line.
+        logger.warning('live agent_info enrichment unavailable for {}: {}', agent_key, exc)
     if result is not None:
         _AGENT_INFO_CACHE[agent_key] = result
     return result
@@ -683,7 +688,7 @@ def _agent_key_for(run: SimulationRun) -> str | None:
     just 404s and falls back to no card."""
     captured = run.agent_info if isinstance(run.agent_info, dict) else None
     if captured and captured.get('key'):
-        return str(captured['key'])
+        return str(captured.get('key'))
     if run.target:
         return run.target.removeprefix('agent:')
     rn = run.run_name or ''

@@ -30,17 +30,29 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Models that 400 on `reasoning_effort` when function tools are present (e.g.
-# gpt-5.4-mini on /v1/chat/completions). Populated on the first rejection so we
-# strip the param up front thereafter instead of re-paying a 400 + retry — and
-# an orphaned error trace — on every subsequent call. ponytail: process-lifetime
-# set, fine for a CLI run; not persisted across processes.
-_REASONING_EFFORT_REJECTORS: set[str] = set()
+# (model, has_tools) pairs that 400 on `reasoning_effort` (e.g. gpt-5.4-mini on
+# /v1/chat/completions rejects it only when function tools are present).
+# Populated on the first rejection so we strip the param up front thereafter
+# instead of re-paying a 400 + retry — and an orphaned error trace — on every
+# subsequent call. Keyed on has_tools too: a tools-only rejection must not strip
+# reasoning_effort from a later tool-free call that would accept it.
+# ponytail: process-lifetime set, fine for a CLI run; not persisted across processes.
+_REASONING_EFFORT_REJECTORS: set[tuple[str, bool]] = set()
+
+
+def reset_reasoning_rejectors() -> None:
+    """Clear the process-lifetime rejection memo; exists for test isolation."""
+    _REASONING_EFFORT_REJECTORS.clear()
+
+
+def _reasoning_key(model: str, params: dict[str, Any]) -> tuple[str, bool]:
+    """Memo key: the model paired with whether this call carries function tools."""
+    return (model, bool(params.get('tools')))
 
 
 def _strip_known_rejected_reasoning(model: str, params: dict[str, Any]) -> None:
-    """Drop `reasoning_effort` before the call if `model` already rejected it."""
-    if model in _REASONING_EFFORT_REJECTORS:
+    """Drop `reasoning_effort` before the call if this (model, has_tools) rejected it."""
+    if _reasoning_key(model, params) in _REASONING_EFFORT_REJECTORS:
         params.pop('reasoning_effort', None)
 
 
@@ -107,7 +119,7 @@ async def execute_chat_completion(
         # so later calls strip the param up front (see _strip_known_rejected_reasoning).
         if not _is_reasoning_effort_rejection(params, exc):
             raise
-        _REASONING_EFFORT_REJECTORS.add(model)
+        _REASONING_EFFORT_REJECTORS.add(_reasoning_key(model, params))
         logger.warning('Model %s rejected reasoning_effort; dropping it and retrying once', model)
         params.pop('reasoning_effort', None)
         response = await asyncio.wait_for(client.chat.completions.create(**params), timeout=timeout_s)
@@ -158,7 +170,7 @@ async def execute_chat_parse(
     except BadRequestError as exc:
         if not _is_reasoning_effort_rejection(params, exc):
             raise
-        _REASONING_EFFORT_REJECTORS.add(model)
+        _REASONING_EFFORT_REJECTORS.add(_reasoning_key(model, params))
         logger.warning('Model %s rejected reasoning_effort; dropping it and retrying once', model)
         params.pop('reasoning_effort', None)
         response = await asyncio.wait_for(client.chat.completions.parse(**params), timeout=timeout_s)

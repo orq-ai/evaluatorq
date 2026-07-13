@@ -13,12 +13,6 @@ from evaluatorq.common import llm_call
 from evaluatorq.common.llm_call import execute_chat_completion
 
 
-@pytest.fixture(autouse=True)
-def _reset_reasoning_rejectors() -> None:
-    """The per-model rejection memo is process-lifetime; isolate each test."""
-    llm_call._REASONING_EFFORT_REJECTORS.clear()
-
-
 def _bad_request(message: str) -> BadRequestError:
     request = httpx.Request('POST', 'https://example/v1/chat/completions')
     response = httpx.Response(400, request=request)
@@ -199,8 +193,9 @@ async def test_drops_reasoning_effort_and_retries_when_model_rejects_it(monkeypa
     # The retry must not carry reasoning_effort.
     assert client.chat.completions.create.await_args is not None
     assert 'reasoning_effort' not in client.chat.completions.create.await_args.kwargs
-    # The model is remembered so subsequent calls strip the param up front.
-    assert 'm' in llm_call._REASONING_EFFORT_REJECTORS
+    # The (model, has_tools) pair is remembered so subsequent like-shaped calls
+    # strip the param up front. This call carried no tools.
+    assert ('m', False) in llm_call._REASONING_EFFORT_REJECTORS
 
 
 @pytest.mark.asyncio
@@ -208,7 +203,7 @@ async def test_memoized_rejection_strips_reasoning_effort_up_front_no_second_400
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
-    llm_call._REASONING_EFFORT_REJECTORS.add('m')  # model already known to reject it
+    llm_call._REASONING_EFFORT_REJECTORS.add(('m', False))  # tool-free call known to reject it
     client = MagicMock()
     client.chat.completions.create = AsyncMock(return_value=_fake_response())
 
@@ -226,6 +221,32 @@ async def test_memoized_rejection_strips_reasoning_effort_up_front_no_second_400
     args = client.chat.completions.create.await_args
     assert args is not None
     assert 'reasoning_effort' not in args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_tools_rejection_does_not_strip_reasoning_effort_from_tool_free_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rejection recorded for tools-present calls must not downgrade a later
+    tool-free call to the same model — the param is stripped per (model, has_tools)."""
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    llm_call._REASONING_EFFORT_REJECTORS.add(('m', True))  # only the tools-present shape rejected it
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=_fake_response())
+
+    await execute_chat_completion(
+        client=client,
+        model='m',
+        messages=[{'role': 'user', 'content': 'x'}],
+        span=None,
+        timeout_s=5.0,
+        extra_kwargs={'reasoning_effort': 'low'},  # no tools on this call
+    )
+
+    # reasoning_effort is still sent: the tool-free shape was never rejected.
+    args = client.chat.completions.create.await_args
+    assert args is not None
+    assert args.kwargs.get('reasoning_effort') == 'low'
 
 
 @pytest.mark.asyncio

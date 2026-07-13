@@ -21,14 +21,14 @@ from pathlib import Path
 from typing import Any
 
 from evaluatorq.common.run_store_dir import get_store_dir
-from evaluatorq.simulation.types import SimulationRun
+from evaluatorq.simulation.types import AgentInfoSnapshot, SimulationRun
 
 logger = logging.getLogger(__name__)
 
 SIM_RUNS_DIR_NAME = Path('.evaluatorq') / 'sim-runs'
 
 
-async def fetch_agent_info(agent_key: str) -> dict[str, Any] | None:
+async def fetch_agent_info(agent_key: str) -> AgentInfoSnapshot | None:
     """Best-effort snapshot of an ORQ agent's configuration, for the run-store
     record. Never raises — no API key, network errors, and unknown agents all
     just result in ``None`` so a save can't be delayed or fail on this.
@@ -120,7 +120,7 @@ def build_simulation_run(
     target: str | None = None,
     target_model: str | None = None,
     max_turns: int | None = None,
-    agent_info: dict[str, Any] | None = None,
+    agent_info: AgentInfoSnapshot | None = None,
 ) -> SimulationRun:
     """Build the full ``SimulationRun`` report model from results.
 
