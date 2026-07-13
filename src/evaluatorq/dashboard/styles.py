@@ -1427,6 +1427,17 @@ _SIM_REPORT_OVERRIDES_CSS = """
 
 /* ---- Agent info card ---- */
 .sim-report .sim-agent-card { margin-bottom: 16px; }
+/* Provenance note + "show captured snapshot" disclosure (agent info enriched
+   live from Orq when the run didn't capture it). */
+.sim-report .sim-agent-source { margin-top: 14px; font-size: 12px; color: var(--text-muted); }
+.sim-report .sim-agent-original { margin-top: 8px; }
+.sim-report .sim-agent-original > summary {
+    cursor: pointer; font-size: 12px; font-weight: 500; color: var(--orange-500); width: fit-content;
+}
+.sim-report .sim-agent-original-body {
+    margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-subtle);
+}
+.sim-report .sim-agent-empty { margin: 0; font-size: 13px; color: var(--text-muted); }
 .sim-report .sim-agent-head {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
 }

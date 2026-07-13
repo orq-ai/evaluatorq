@@ -450,7 +450,7 @@ def _sim_overview(by_kind: dict[str, Any], rows: list[Any], run: SimulationRun) 
     two 2-col grids (donut + avg-quality metrics; personas + scenarios). Spec §Overview."""
     from evaluatorq.dashboard.report_kit import exec_summary, panel
 
-    agent_card_html = _sim_agent_card(run.agent_info)
+    agent_card_html = _sim_agent_section(run)
     summary_section = by_kind.get('summary')
     overview_section = by_kind.get('overview')
     heatmap_section = by_kind.get('persona_scenario_heatmap')
@@ -485,9 +485,100 @@ def _sim_overview(by_kind: dict[str, Any], rows: list[Any], run: SimulationRun) 
     )
 
 
-def _sim_agent_card(agent_info: dict[str, Any] | None) -> str:
+# Scalar identity fields whose absence means the run's snapshot is incomplete
+# (empty list fields like tools/sub_agents are legitimately empty, so they do
+# NOT trigger a live fetch on their own).
+_AGENT_CORE_FIELDS = ('key', 'model', 'description', 'url')
+# Process-lifetime cache keyed by agent key; None is cached too so a
+# missing-key / offline dashboard doesn't refetch on every render.
+_AGENT_INFO_CACHE: dict[str, dict[str, Any] | None] = {}
+
+
+def _orq_agent_info_cached(agent_key: str) -> dict[str, Any] | None:
+    """Sync, cached wrapper around the async run-store fetch. Safe to call from
+    the sync ``/r/{rid}`` route (Starlette runs it in a threadpool, so there's
+    no running event loop and ``asyncio.run`` works). Never raises — any failure
+    caches/returns ``None`` so the card silently falls back to captured data."""
+    if agent_key in _AGENT_INFO_CACHE:
+        return _AGENT_INFO_CACHE[agent_key]
+    import asyncio
+
+    result: dict[str, Any] | None = None
+    try:
+        from evaluatorq.simulation.utils.run_store import fetch_agent_info
+
+        result = asyncio.run(fetch_agent_info(agent_key))
+    except Exception as exc:  # never let a live fetch break a page render
+        from loguru import logger
+
+        logger.debug('live agent_info fetch failed for {}: {}', agent_key, exc)
+    _AGENT_INFO_CACHE[agent_key] = result
+    return result
+
+
+def _resolve_agent_info(
+    run: SimulationRun,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
+    """Resolve the agent card's data + provenance as ``(display, original, source)``.
+
+    ``source`` is one of:
+    - ``captured``  — the run's own snapshot is complete; no Orq call.
+    - ``augmented`` — snapshot present but missing a core field; gaps filled live.
+    - ``fetched``   — nothing captured; whole card loaded live from Orq.
+    - ``none``      — no data and nothing to fetch.
+
+    We only call Orq when the target is an Orq agent AND the captured snapshot is
+    absent or missing a core field.  Captured (as-run) values always win
+    per-field, so a live fetch only fills gaps — it never overwrites what the run
+    actually recorded.
+    """
+    captured = run.agent_info if isinstance(run.agent_info, dict) and run.agent_info else None
+    if run.target_kind != 'orq_agent' or not run.target:
+        return captured, captured, ('captured' if captured else 'none')
+
+    missing_core = captured is None or any(not captured.get(f) for f in _AGENT_CORE_FIELDS)
+    if not missing_core:
+        return captured, captured, 'captured'
+
+    agent_key = (captured or {}).get('key') or run.target.removeprefix('agent:')
+    fetched = _orq_agent_info_cached(agent_key)
+    if not fetched:
+        return captured, captured, ('captured' if captured else 'none')
+    if captured:
+        # Fill only missing attributes; captured values win per-field.
+        merged = {**fetched, **{k: v for k, v in captured.items() if v}}
+        return merged, captured, 'augmented'
+    return fetched, None, 'fetched'
+
+
+def _sim_agent_section(run: SimulationRun) -> str:
+    """Agent card + provenance note + (when enriched) a disclosure to view the
+    originally-captured snapshot."""
+    display, original, source = _resolve_agent_info(run)
+    if source in ('captured', 'none'):
+        return _sim_agent_card(display)
+
+    if source == 'augmented':
+        note = 'Missing fields loaded live from Orq — as-run values kept where captured.'
+        original_body = _sim_agent_card(original, bare=True) or '<p class="sim-agent-empty">Nothing captured.</p>'
+        toggle = (
+            '<details class="sim-agent-original"><summary>Show captured snapshot</summary>'
+            f'<div class="sim-agent-original-body">{original_body}</div></details>'
+        )
+    else:  # fetched
+        note = 'Loaded live from Orq — no agent config was captured in this run.'
+        toggle = ''
+    footer = f'<div class="sim-agent-source">{note}</div>{toggle}'
+    return _sim_agent_card(display, footer_html=footer)
+
+
+def _sim_agent_card(agent_info: dict[str, Any] | None, *, bare: bool = False, footer_html: str = '') -> str:
     """Agent-under-test card: name/role/model/description, sub-agent
-    delegates, and tools/knowledge/memory chip groups (Task 2)."""
+    delegates, and tools/knowledge/memory chip groups (Task 2).
+
+    ``bare`` drops the outer ``.rk-panel`` chrome (for nesting inside the
+    "show captured snapshot" disclosure); ``footer_html`` is appended inside the
+    card (provenance note + disclosure)."""
     if not agent_info:
         return ''
 
@@ -528,15 +619,15 @@ def _sim_agent_card(agent_info: dict[str, Any] | None) -> str:
     )
     groups_wrap = f'<div class="sim-agent-groups">{groups_html}</div>' if groups_html else ''
 
-    return (
-        '<div class="rk-panel sim-agent-card">'
+    inner = (
         '<div class="sim-agent-head">'
         f'<div><span class="sim-agent-name">{esc(key)}</span>{role_html}</div>'
         f'{open_html}'
         '</div>'
-        f'{model_html}{desc_html}{delegates_html}{groups_wrap}'
-        '</div>'
+        f'{model_html}{desc_html}{delegates_html}{groups_wrap}{footer_html}'
     )
+    outer_class = 'sim-agent-card' if bare else 'rk-panel sim-agent-card'
+    return f'<div class="{outer_class}">{inner}</div>'
 
 
 def _sim_kpi_band(summary_data: dict[str, Any]) -> str:

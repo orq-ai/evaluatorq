@@ -545,3 +545,73 @@ def test_sim_overview_agent_card_escapes_description(sim_run) -> None:
     html = sim_report_tabs('rid', run)
     assert '<script>' not in html
     assert '&lt;script&gt;' in html
+
+
+# --- agent-card live Orq fallback (_resolve_agent_info) ----------------------
+
+
+def _orq_run(sim_run, **updates):
+    """A sim_run posing as an Orq-agent target, with agent_info overrides."""
+    base = {'target_kind': 'orq_agent', 'target': 'agent:support-orchestrator'}
+    base.update(updates)
+    return sim_run.model_copy(update=base)
+
+
+def test_resolve_agent_info_complete_captured_skips_fetch(sim_run, monkeypatch) -> None:
+    """A complete captured snapshot never triggers a live Orq fetch."""
+    import evaluatorq.dashboard.report_tabs as rt
+
+    def _boom(_key):  # fetch must not be called
+        raise AssertionError('should not fetch when snapshot is complete')
+
+    monkeypatch.setattr(rt, '_orq_agent_info_cached', _boom)
+    run = _orq_run(sim_run, agent_info=dict(_AGENT_INFO))
+    display, original, source = rt._resolve_agent_info(run)
+    assert source == 'captured'
+    assert display is original
+
+
+def test_resolve_agent_info_missing_core_augments_filling_only_gaps(sim_run, monkeypatch) -> None:
+    """Missing a core field → fetch; captured values win, only gaps get filled."""
+    import evaluatorq.dashboard.report_tabs as rt
+
+    captured = dict(_AGENT_INFO, model='')  # model missing → incomplete
+    captured['description'] = 'AS-RUN description'
+    fetched = dict(_AGENT_INFO, model='openai/gpt-5', description='CURRENT description')
+    monkeypatch.setattr(rt, '_orq_agent_info_cached', lambda _key: fetched)
+    display, original, source = rt._resolve_agent_info(_orq_run(sim_run, agent_info=captured))
+    assert source == 'augmented'
+    assert display['model'] == 'openai/gpt-5'  # gap filled from Orq
+    assert display['description'] == 'AS-RUN description'  # captured value kept
+    assert original is captured
+
+
+def test_resolve_agent_info_none_fetches_whole_card(sim_run, monkeypatch) -> None:
+    """Nothing captured → whole card loaded live; no 'original' to show."""
+    import evaluatorq.dashboard.report_tabs as rt
+
+    monkeypatch.setattr(rt, '_orq_agent_info_cached', lambda _key: dict(_AGENT_INFO))
+    display, original, source = rt._resolve_agent_info(_orq_run(sim_run, agent_info=None))
+    assert source == 'fetched'
+    assert original is None
+    assert display['key'] == _AGENT_INFO['key']
+
+
+def test_resolve_agent_info_non_orq_target_never_fetches(sim_run, monkeypatch) -> None:
+    """A non-Orq target is never enriched, even with an incomplete snapshot."""
+    import evaluatorq.dashboard.report_tabs as rt
+
+    monkeypatch.setattr(rt, '_orq_agent_info_cached', lambda _key: (_ for _ in ()).throw(AssertionError('no fetch')))
+    run = sim_run.model_copy(update={'target_kind': 'openai_model', 'target': 'gpt-4o', 'agent_info': None})
+    _display, _original, source = rt._resolve_agent_info(run)
+    assert source == 'none'
+
+
+def test_sim_overview_augmented_card_shows_source_note_and_toggle(sim_run, monkeypatch) -> None:
+    import evaluatorq.dashboard.report_tabs as rt
+
+    monkeypatch.setattr(rt, '_orq_agent_info_cached', lambda _key: dict(_AGENT_INFO))
+    run = _orq_run(sim_run, agent_info=None)
+    html = rt.sim_report_tabs('rid', run)
+    assert 'sim-agent-source' in html
+    assert 'Loaded live from Orq' in html
