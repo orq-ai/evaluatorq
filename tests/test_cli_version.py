@@ -18,6 +18,7 @@ def test_version_flag_prints_version() -> None:
 
 
 def test_bare_invocation_shows_help() -> None:
-    # no_args_is_help=True → bare `eq` prints usage and exits non-zero.
+    # Bare `eq` (no subcommand) prints usage via the invoke_without_command
+    # callback in cli.py (the native no_args_is_help path is broken on Click >=8.2).
     result = runner.invoke(app, [])
     assert "Usage:" in result.stdout
