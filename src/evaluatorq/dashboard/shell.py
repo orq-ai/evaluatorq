@@ -24,6 +24,28 @@ from evaluatorq.dashboard.styles import DASHBOARD_CSS
 from evaluatorq.dashboard.theme import EDITORIAL_CSS
 from evaluatorq.dashboard.view import head_assets
 
+# Sidebar collapse: runs at body-top so the class lands on <html> before the
+# sidebar paints (no flash). State persists in localStorage across the full-page
+# navigations between reports. ponytail: inline over a /static file so it works
+# in tests and static exports too.
+_SIDEBAR_TOGGLE_SCRIPT = (
+    '<script>'
+    "(function(){try{if(localStorage.getItem('eq-sidebar-collapsed')==='1')"
+    "document.documentElement.classList.add('sidebar-collapsed');}catch(e){}})();"
+    'function eqToggleSidebar(){'
+    "var c=document.documentElement.classList.toggle('sidebar-collapsed');"
+    "try{localStorage.setItem('eq-sidebar-collapsed',c?'1':'0');}catch(e){}}"
+    "document.addEventListener('keydown',function(e){"
+    "if((e.metaKey||e.ctrlKey)&&!e.shiftKey&&!e.altKey&&e.key.toLowerCase()==='b')"
+    '{e.preventDefault();eqToggleSidebar();}});'
+    # Non-Mac shows "Ctrl B" instead of the ⌘B glyph on the hotkey hint.
+    'if(!/Mac|iPhone|iPad/.test(navigator.platform)){'
+    "document.addEventListener('DOMContentLoaded',function(){"
+    "document.querySelectorAll('.sidebar-toggle-kbd').forEach("
+    "function(k){k.textContent='Ctrl B';});});}"
+    '</script>\n'
+)
+
 # The v1 brand mark (orq ink-nodes logomark), vendored from the design system.
 # Inlined rather than served via /static/ so it renders in tests and exports too.
 _MARK_PATH = Path(__file__).parent / 'static' / 'orq-mark.svg'
@@ -40,7 +62,7 @@ def _load_mark() -> str:
     return _mark_cache
 
 
-# Orange orq favicon, inlined as a base64 data-URI <link> so it works live, in
+# Green orq favicon, inlined as a base64 data-URI <link> so it works live, in
 # tests, and in static exports without depending on the /static/ route.
 _FAVICON_PATH = Path(__file__).parent / 'static' / 'orq-favicon.svg'
 _favicon_cache: str | None = None
@@ -114,6 +136,13 @@ def _sidebar_html(active_nav: str) -> str:
         f'<a class="app-brand" href="/">{logo_html}'
         '<span class="brand-name">evaluator<span class="brand-q">q</span></span></a>'
         f'<nav class="app-nav" aria-label="Primary">{"".join(items)}</nav>'
+        '<button class="sidebar-toggle" type="button" aria-label="Toggle sidebar"'
+        ' onclick="eqToggleSidebar()">'
+        '<svg class="nav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"'
+        ' stroke="currentColor" stroke-width="2" stroke-linecap="round"'
+        ' stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>'
+        '<span>Collapse</span>'
+        '<kbd class="sidebar-toggle-kbd">⌘ B</kbd></button>'
         '</aside>'
     )
 
@@ -133,6 +162,7 @@ def page(
     active_surface: str | None = None,
     active_nav: str | None = None,
     actions_html: str = '',
+    back_html: str = '',
 ) -> str:
     """Render a complete HTML page in the dashboard sidebar shell.
 
@@ -153,6 +183,9 @@ def page(
     nav_key = _resolve_nav(active_surface, active_nav)
     sidebar = _sidebar_html(nav_key)
     scripts = ''.join(str(a) for a in head_assets())
+    # On report pages the run name is the hero H1, so the topbar carries the
+    # back link instead of repeating the title.
+    topbar_lead = back_html or f'<h1 class="app-title">{esc(title)}</h1>'
 
     return (
         '<!DOCTYPE html>\n'
@@ -168,19 +201,12 @@ def page(
         f'{scripts}\n'
         '</head>\n'
         '<body class="eq-dashboard">\n'
+        f'{_SIDEBAR_TOGGLE_SCRIPT}'
         '<div class="app-shell">\n'
         f'{sidebar}\n'
         '<div class="app-main">\n'
         '<header class="app-topbar">\n'
-        f'<h1 class="app-title">{esc(title)}</h1>\n'
-        '<div class="topbar-search">\n'
-        '<input class="search-input" type="search" name="q" placeholder="Search reports…"'
-        ' autocomplete="off" aria-label="Search reports"'
-        ' hx-get="/search" hx-trigger="input changed delay:200ms, focus"'
-        ' hx-target="#search-results" hx-swap="innerHTML">\n'
-        '<kbd class="search-kbd">⌘K</kbd>\n'
-        '<div id="search-results" class="search-results"></div>\n'
-        '</div>\n'
+        f'{topbar_lead}\n'
         f'<div class="app-actions">{actions_html}</div>\n'
         '</header>\n'
         '<main class="app-content">\n'

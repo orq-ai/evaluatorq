@@ -8,6 +8,7 @@ import inspect
 import json
 import os
 import re
+import uuid
 import warnings
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -1110,6 +1111,7 @@ async def _prepare_target(
     pipeline_config: LLMConfig | None = None,
     resolved_strategy_names: set[str] | None = None,
     resolved_delivery_methods: set[DeliveryMethod | str] | None = None,
+    run_id: str | None = None,
 ) -> PreparedTarget:
     """Prepare all per-target state for a dynamic or hybrid run.
 
@@ -1240,6 +1242,7 @@ async def _prepare_target(
         attacker_instructions=attacker_instructions,
         verbosity=verbosity,
         pipeline_config=pipeline_config,
+        run_id=run_id,
     )
 
     # --- Mode-specific path ---------------------------------------------------
@@ -1412,6 +1415,10 @@ async def _run_dynamic_or_hybrid(
     )
 
     resolved_name = name or 'red-team'
+
+    # One Orq observability run id shared across every target/attack in this run,
+    # so the dashboard "View all run traces" deep-link spans the whole invocation.
+    run_id = uuid.uuid4().hex
 
     resolved_hooks: PipelineHooks = hooks or DefaultHooks()
     pipeline_start = datetime.now(tz=timezone.utc).astimezone()
@@ -1767,6 +1774,7 @@ async def _run_dynamic_or_hybrid(
             pipeline_config=pipeline_config,
             resolved_strategy_names=resolved_strategy_names,
             resolved_delivery_methods=resolved_delivery_methods,
+            run_id=run_id,
         )
 
         prepared_targets: list[PreparedTarget]
@@ -1843,6 +1851,7 @@ async def _run_dynamic_or_hybrid(
                     attacker_instructions=attacker_instructions,
                     verbosity=verbosity,
                     pipeline_config=pipeline_config,
+                    run_id=run_id,
                 )
 
                 at_safe = _make_safe_target(at_label)
@@ -2188,6 +2197,7 @@ async def _run_dynamic_or_hybrid(
                         results=dynamic_results,
                         duration_seconds=pipeline_duration,
                         description=f'{description or "Hybrid"} ({pt.target}) (dynamic)',
+                        run_id=run_id,
                     )
                     target_sub_reports.append(dyn_report)
 
@@ -2221,6 +2231,7 @@ async def _run_dynamic_or_hybrid(
                         results=target_results,
                         duration_seconds=pipeline_duration,
                         description=f'{description or "Dynamic red teaming"} ({pt.target})',
+                        run_id=run_id,
                     )
                 else:
                     t_report = static_results_to_report(

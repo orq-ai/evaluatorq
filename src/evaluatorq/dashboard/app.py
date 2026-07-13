@@ -12,6 +12,7 @@
 - ``GET /r/{rid}/export.csv`` → CSV of (filtered) result rows
 - ``GET /r/{rid}/export.json``→ JSON of (filtered) result rows
 - ``GET /r/{rid}/sim/transcript?idx=`` → sim transcript fragment (HTMX)
+- ``GET /r/{rid}/sim/agent-card`` → asynchronously enriched sim agent card
 
 The ``roots`` parameter overrides the default scan directories so the app can
 be tested against a temporary fixture directory without touching the real run
@@ -54,7 +55,6 @@ from evaluatorq.dashboard.surfaces import ADAPTERS
 from evaluatorq.dashboard.view import (
     RUN_PAGE_SIZES,
     SURFACE_LABELS,
-    download_sidebar,
     filter_fragment,
     landing_body,
     redteam_overview_body,
@@ -220,26 +220,39 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
             body_html = adapter.body(report_obj)
 
         opts = filter_def.options(report_obj)
-        form_html = render_filter_form(rid, surface or '', opts, {})
+        total_results = len(report_obj.results)
+        form_html = render_filter_form(rid, surface or '', opts, {}, shown=total_results, total=total_results)
         body_with_filters = report_view_with_filters(rid, surface or '', body_html, form_html)
 
-        # Download sidebar — available exports per surface.
-        dl_sidebar = download_sidebar(
-            rid,
-            surface or '',
-            has_markdown=(adapter.export_markdown is not None),
-            has_csv=(surface == 'redteam'),
-        )
-        body_with_filters = body_with_filters + dl_sidebar
-
-        full_body = f'<div class="report-head">{back_link}</div>{body_with_filters}'
         html = page(
             name,
-            full_body,
+            body_with_filters,
             active_surface=surface,
             actions_html=report_actions(rid),
+            back_html=back_link,
         )
         return NotStr(html)
+
+    # ------------------------------------------------------------------
+    # Route: GET /r/{rid}/sim/agent-card — deferred live Orq enrichment
+    # ------------------------------------------------------------------
+    @app.get('/r/{rid}/sim/agent-card')
+    async def sim_agent_card(rid: str) -> NotStr | Response:
+        path = library.resolve(rid, roots)
+        if path is None:
+            return Response('404 Not Found', status_code=404, media_type='text/plain')
+        surface, _raw = library.load_surface(path)
+        if surface != 'sim':
+            return Response('404 Not Found', status_code=404, media_type='text/plain')
+        adapter = ADAPTERS.get(surface)
+        if adapter is None:
+            return Response('404 Not Found', status_code=404, media_type='text/plain')
+        try:
+            run = adapter.load(path)
+        except Exception as exc:
+            logger.warning('Failed to load sim report for agent card {}: {}', path.name, exc)
+            return Response('Error loading report', status_code=422, media_type='text/plain')
+        return NotStr(await report_tabs.sim_agent_card_fragment(run))
 
     # ------------------------------------------------------------------
     # Route: POST /r/{rid}/filter  — HTMX filter round-trip
@@ -288,28 +301,18 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         else:
             body_html = adapter.body_from_results(report_obj, filtered)
 
-        form_html = render_filter_form(rid, surface or '', new_opts, selections)
+        form_html = render_filter_form(
+            rid, surface or '', new_opts, selections, shown=len(filtered), total=len(report_obj.results)
+        )
         fragment_html = filter_fragment(rid, surface or '', body_html, form_html)
 
-        # OOB swap: re-render the download sidebar with the active filter
-        # querystring so that CSV/JSON links point at the filtered export.
-        # HTMX processes elements with hx-swap-oob="true" outside the primary
-        # swap target, updating #download-sidebar in-place.
-        oob_sidebar = download_sidebar(
-            rid,
-            surface or '',
-            selections=selections,
-            has_markdown=(adapter.export_markdown is not None),
-            has_csv=(surface == 'redteam'),
-            oob=True,
-        )
         # Signal interactive panels to refetch with the new filter.  Panels
         # that carry hx-trigger="load, orq:filter-changed from:body" and
         # hx-include="#filter-form" will catch this event, re-issue their
         # hx-get requests with the current form values, and re-render from the
         # filtered result set.
         return Response(
-            fragment_html + oob_sidebar,
+            fragment_html,
             media_type='text/html',
             headers={'HX-Trigger': 'orq:filter-changed'},
         )
@@ -508,8 +511,10 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     # ------------------------------------------------------------------
     register_sim_view_routes(app, roots)
 
-    # Register static file handler LAST so its catch-all
-    # /{fname:path}.{ext:static} does not intercept the download routes above.
-    app.static_route_exts(static_path=str(_STATIC_DIR))
+    # Register static file handler LAST so its catch-all /{fname}.{ext} does not
+    # intercept the download routes above. Serve under /static/ to match the page
+    # head's Script(src="/static/…") references (view.py head_assets); without the
+    # explicit prefix every /static/*.js request 404s and htmx/vega never load.
+    app.static_route_exts(prefix='/static', static_path=str(_STATIC_DIR))
 
     return app

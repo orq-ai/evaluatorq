@@ -163,6 +163,7 @@ def _build_overview_section(results: list[SimulationResult]) -> ReportSection:
         personas[name]['conversations'] += 1
 
     scenarios: dict[str, dict[str, Any]] = {}
+    scenario_results: dict[str, list[SimulationResult]] = {}
     for r in results:
         name = _scenario_name(r)
         if name not in scenarios:
@@ -172,6 +173,11 @@ def _build_overview_section(results: list[SimulationResult]) -> ReportSection:
                 'context': r.metadata.get('scenario_context'),
                 'criteria': [{'description': c['description'], 'type': c['type']} for c in _criteria_rows(r)],
             }
+        scenario_results.setdefault(name, []).append(r)
+
+    for name, scenario in scenarios.items():
+        items = scenario_results.get(name, [])
+        scenario['pass_rate'] = (sum(1 for r in items if r.goal_achieved) / len(items)) if items else None
 
     return ReportSection(
         kind='overview',
@@ -196,6 +202,11 @@ def _build_failures_first_section(results: list[SimulationResult]) -> ReportSect
             'persona': _persona_name(r),
             'scenario': _scenario_name(r),
             'violated': violated,
+            # All criteria (pass + fail) for the collapsible dot view; ``violated``
+            # is kept for the markdown renderer.
+            'criteria': [
+                {'description': c['description'], 'passed': c['passed'], 'safety': c['safety']} for c in rows_c
+            ],
             'has_safety': any(c['safety'] for c in rows_c),
             'terminated_by': r.terminated_by.value,
             'score': r.goal_completion_score,
@@ -249,6 +260,7 @@ def _build_scenario_breakdown_section(results: list[SimulationResult]) -> Report
             'success_rate': achieved / total,
             'avg_goal_completion_score': avg_score,
             'avg_turn_count': avg_turns,
+            'total_tokens': sum(r.token_usage.total_tokens for r in items),
         })
     rows.sort(key=operator.itemgetter('success_rate'))
     return ReportSection(
@@ -388,6 +400,7 @@ def individual_entries(results: list[SimulationResult]) -> list[SimulationEntry]
                 error=_error_message(r),
                 evaluator_scores=_evaluator_scores(r),
                 transcript=[TranscriptMessage(role=m.role, content=coerce_content_text(m.content)) for m in r.messages],
+                thread_id=r.thread_id,
             )
         )
     return entries
@@ -421,6 +434,7 @@ def _build_persona_scenario_heatmap_section(results: list[SimulationResult]) -> 
     personas: list[str] = []
     scenarios: list[str] = []
     agg: dict[tuple[str, str], list[bool]] = defaultdict(list)
+    scores: dict[tuple[str, str], list[float]] = defaultdict(list)
     for r in results:
         p, s = _persona_name(r), _scenario_name(r)
         if p not in personas:
@@ -428,8 +442,17 @@ def _build_persona_scenario_heatmap_section(results: list[SimulationResult]) -> 
         if s not in scenarios:
             scenarios.append(s)
         agg[p, s].append(r.goal_achieved)
+        scores[p, s].append(r.goal_completion_score)
     cells = [
-        {'persona': p, 'scenario': s, 'success_rate': (sum(v) / len(v)) if v else 0.0, 'n': len(v)}
+        {
+            'persona': p,
+            'scenario': s,
+            'success_rate': (sum(v) / len(v)) if v else 0.0,
+            # Continuous avg goal-completion score — the heatmap renders this so
+            # single-conversation cells show a gradient, not a 0/100 binary.
+            'avg_score': (sum(sc) / len(sc)) if (sc := scores[p, s]) else 0.0,
+            'n': len(v),
+        }
         for (p, s), v in agg.items()
     ]
     return ReportSection(

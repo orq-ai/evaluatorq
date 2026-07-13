@@ -685,6 +685,11 @@ class AgentResponse(BaseModel):
     usage: TokenUsage | None = None
     model: str | None = None
     response_id: str | None = None
+    # Orq trace id for this call (both the router and agents endpoints read
+    # `response.telemetry.trace_id` from the response body). Links this
+    # response back to the trace in Orq observability. None when not routed
+    # through Orq.
+    trace_id: str | None = None
     finish_reason: str | None = None
     error: AgentResponseError | None = None
 
@@ -698,6 +703,7 @@ class AgentResponse(BaseModel):
             usage: TokenUsage | None = None,
             model: str | None = None,
             response_id: str | None = None,
+            trace_id: str | None = None,
             finish_reason: str | None = None,
             error: AgentResponseError | None = None,
         ) -> None: ...
@@ -832,6 +838,12 @@ class AgentContext(BaseModel):
     """
 
     key: str = Field(description='Agent identifier key')
+    id: str | None = Field(default=None, description='Entity UUID (orq agent/deployment id), for deep-linking')
+    workspace_id: str | None = Field(default=None, description='Orq workspace id, for deep-linking')
+    target_kind: Literal['agent', 'deployment', 'direct', 'openai'] | None = Field(
+        default=None,
+        description="Target kind: 'agent' | 'deployment' | 'direct' | 'openai'. Gates the Studio deep-link.",
+    )
     display_name: str | None = Field(default=None, description='Agent display name')
     description: str | None = Field(default=None, description='Agent description')
     system_prompt: str | None = Field(default=None, description='Agent system prompt (used by deployments)')

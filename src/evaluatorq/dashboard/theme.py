@@ -27,6 +27,18 @@ rules.  To re-skin, edit the values here — nothing downstream changes.
 from __future__ import annotations
 
 EDITORIAL_CSS = """
+/* Orq brand fonts (self-hosted, same woff2 as the docs site). Served from the
+   dashboard's /static/fonts/ route. Body = Avio Sans, headings = Kurrent,
+   code = Kurrent Mono. */
+@font-face { font-family: "Avio Sans"; src: url("/static/fonts/AvioSans-Regular.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Avio Sans"; src: url("/static/fonts/AvioSans-RegularItalic.woff2") format("woff2"); font-weight: 400; font-style: italic; font-display: swap; }
+@font-face { font-family: "Avio Sans"; src: url("/static/fonts/AvioSans-Medium.woff2") format("woff2"); font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: "Avio Sans"; src: url("/static/fonts/AvioSans-SemiBold.woff2") format("woff2"); font-weight: 600; font-style: normal; font-display: swap; }
+@font-face { font-family: "Avio Sans"; src: url("/static/fonts/AvioSans-Bold.woff2") format("woff2"); font-weight: 700; font-style: normal; font-display: swap; }
+@font-face { font-family: "Kurrent"; src: url("/static/fonts/ESKlarheitKurrent-Md.woff2") format("woff2"); font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: "Kurrent"; src: url("/static/fonts/ESKlarheitKurrent-Smbd.woff2") format("woff2"); font-weight: 600; font-style: normal; font-display: swap; }
+@font-face { font-family: "Kurrent Mono"; src: url("/static/fonts/ESKlarheitKurrentMono-Md.woff2") format("woff2"); font-weight: 500; font-style: normal; font-display: swap; }
+
 :root {
     /* Surfaces — sand paper */
     --surface-app:    #f9f8f6;
@@ -40,7 +52,9 @@ EDITORIAL_CSS = """
     --text-strong: #25232e;
     --text-body:   #4b4955;
     --text-muted:  #6f6d78;
-    --text-faint:  #9d9ba4;
+    --text-faint:  #6b6974;
+    /* Darkest ink, for on-color text (e.g. heatmap cells on a light fill) */
+    --ink-900: #25232e;
 
     /* Borders — warm neutral hairlines */
     --border-subtle:  #e9e7e2;
@@ -54,7 +68,7 @@ EDITORIAL_CSS = """
     --orange-50:  #fff5ea;
     --accent:       #ff8f34;
     --accent-hover: #df5325;
-    --text-link:    #df5325;
+    --text-link:    var(--red-700);
     --ring: 0 0 0 3px rgba(255,143,52,0.32);
 
     /* Primary action — ink */
@@ -63,12 +77,26 @@ EDITORIAL_CSS = """
 
     /* Status — danger=orange-dark, warn=orange, pass=jade */
     --red-600:   #df5325;
+    --red-700:    #b8341c;   /* AA-contrast red for small text on light bg */
+    --orange-700: #c2410c;   /* AA-contrast orange for small text on light bg */
     --red-100:   #fbe1d6;
+    --red-50:    #fdeee9;
     --amber-600: #ff8f34;
     --amber-100: #ffe8d2;
     --green-600: #299D8F;
     --green-100: #d6ece8;
     --green-50:  #eef6f4;
+
+    /* Semantic red-team scale — one source of truth for severity + outcome
+       colours. Repoint these to restyle every severity pill, outcome badge and
+       the severity-definitions table at once. */
+    --sev-critical: var(--red-600);
+    --sev-high:     var(--amber-600);
+    --sev-medium:   var(--text-muted);
+    --sev-low:      var(--green-600);
+    --outcome-vulnerable: var(--red-600);
+    --outcome-resistant:  var(--green-600);
+    --outcome-error:      var(--amber-600);
 
     /* Brand */
     --teal-600: #025558;
@@ -86,10 +114,13 @@ EDITORIAL_CSS = """
     --chart-track: #ece9e4;
     --chart-axis:  #9d9ba4;
 
-    /* Type — serif headings, existing sans/mono for body + data */
-    --font-display: Georgia, 'Times New Roman', ui-serif, serif;
-    --font-sans:    var(--sans, 'Inter', system-ui, -apple-system, sans-serif);
-    --font-mono:    var(--mono, ui-monospace, 'SF Mono', Menlo, monospace);
+    /* Type — Orq brand fonts (self-hosted above), system fallbacks. */
+    --font-display: 'Kurrent', Georgia, 'Times New Roman', ui-serif, serif;
+    --font-sans:    'Avio Sans', var(--sans, system-ui, -apple-system, sans-serif);
+    --font-mono:    'Kurrent Mono', var(--mono, ui-monospace, 'SF Mono', Menlo, monospace);
+    /* Line-height — body copy (matches the mockup's 16px/24px = 1.5 rhythm,
+       overriding the report stylesheet's looser 1.65 default). */
+    --leading-body: 1.5;
 
     /* Corners — flat surfaces (no card shadows); soft lift for overlays only */
     --radius-md: 8px;

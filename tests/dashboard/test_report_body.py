@@ -204,8 +204,7 @@ class TestRedteamRenderReportBody:
         report = _make_redteam_report()
         fragment = render_report_body(report)
         assert _is_body_fragment(fragment), (
-            'render_report_body returned a full HTML document; expected a fragment without '
-            '<!doctype>, <html> or <head>'
+            'render_report_body returned a full HTML document; expected a fragment without <!doctype>, <html> or <head>'
         )
 
     def test_render_report_body_contains_section_content(self) -> None:
@@ -259,8 +258,7 @@ class TestSimRenderReportBody:
         results = _make_sim_results()
         fragment = render_report_body(results, target='test-agent')
         assert _is_body_fragment(fragment), (
-            'render_report_body returned a full HTML document; expected a fragment without '
-            '<!doctype>, <html> or <head>'
+            'render_report_body returned a full HTML document; expected a fragment without <!doctype>, <html> or <head>'
         )
 
     def test_render_report_body_contains_section_content(self) -> None:

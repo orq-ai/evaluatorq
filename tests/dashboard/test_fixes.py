@@ -27,33 +27,33 @@ from evaluatorq.dashboard.library import read_json, report_id
 
 def _redteam_payload() -> dict:
     return {
-        "version": "2.0.0",
-        "created_at": datetime.now(tz=timezone.utc).isoformat(),
-        "pipeline": "static",
-        "categories_tested": [],
-        "total_results": 0,
-        "results": [],
-        "summary": {},
+        'version': '2.0.0',
+        'created_at': datetime.now(tz=timezone.utc).isoformat(),
+        'pipeline': 'static',
+        'categories_tested': [],
+        'total_results': 0,
+        'results': [],
+        'summary': {},
     }
 
 
 def _sim_payload() -> dict:
     return {
-        "run_name": "demo-sim",
-        "created_at": datetime.now(tz=timezone.utc).isoformat(),
-        "mode": "run",
-        "target_kind": "orq_agent",
-        "evaluator_names": [],
-        "total_results": 1,
-        "scorer_averages": {},
-        "results": [
+        'run_name': 'demo-sim',
+        'created_at': datetime.now(tz=timezone.utc).isoformat(),
+        'mode': 'run',
+        'target_kind': 'orq_agent',
+        'evaluator_names': [],
+        'total_results': 1,
+        'scorer_averages': {},
+        'results': [
             {
-                "terminated_by": "judge",
-                "goal_achieved": True,
-                "goal_completion_score": 1.0,
-                "turn_count": 2,
-                "total_tokens": 10,
-                "metadata": {"persona": "alice", "scenario": "billing", "model": "gpt-5.4"},
+                'terminated_by': 'judge',
+                'goal_achieved': True,
+                'goal_completion_score': 1.0,
+                'turn_count': 2,
+                'total_tokens': 10,
+                'metadata': {'persona': 'alice', 'scenario': 'billing', 'model': 'gpt-5.4'},
             }
         ],
     }
@@ -61,12 +61,12 @@ def _sim_payload() -> dict:
 
 @pytest.fixture()
 def roots(tmp_path: Path) -> list[Path]:
-    rt = tmp_path / "runs"
-    sim = tmp_path / "sim-runs"
+    rt = tmp_path / 'runs'
+    sim = tmp_path / 'sim-runs'
     rt.mkdir()
     sim.mkdir()
-    (rt / "rt_fix_test.json").write_text(json.dumps(_redteam_payload()))
-    (sim / "sim_fix_test.json").write_text(json.dumps(_sim_payload()))
+    (rt / 'rt_fix_test.json').write_text(json.dumps(_redteam_payload()))
+    (sim / 'sim_fix_test.json').write_text(json.dumps(_sim_payload()))
     return [rt, sim]
 
 
@@ -96,21 +96,21 @@ class TestFix1CliDirectUrl:
 
         from evaluatorq.cli import app as cli_app
 
-        rt_dir = tmp_path / "runs"
+        rt_dir = tmp_path / 'runs'
         rt_dir.mkdir()
-        report_file = rt_dir / "rt_20260101_000000.json"
+        report_file = rt_dir / 'rt_20260101_000000.json'
         report_file.write_text(json.dumps(_redteam_payload()))
 
         rid = report_id(report_file)
         runner = CliRunner()
 
         # Invoke without actually starting uvicorn — patch serve to return immediately.
-        with patch("evaluatorq.dashboard.launch.serve"):
-            result = runner.invoke(cli_app, ["dashboard", str(report_file)])
+        with patch('evaluatorq.dashboard.launch.serve'):
+            result = runner.invoke(cli_app, ['dashboard', str(report_file)])
 
         assert result.exit_code == 0, result.output
         # The output must contain the direct report URL.
-        assert f"/r/{rid}" in result.output
+        assert f'/r/{rid}' in result.output
 
     def test_ui_file_path_scans_parent_dir(self, tmp_path: Path) -> None:
         """roots passed to serve() must be the file's parent directory."""
@@ -118,9 +118,9 @@ class TestFix1CliDirectUrl:
 
         from evaluatorq.cli import app as cli_app
 
-        rt_dir = tmp_path / "runs"
+        rt_dir = tmp_path / 'runs'
         rt_dir.mkdir()
-        report_file = rt_dir / "rt_20260101_000000.json"
+        report_file = rt_dir / 'rt_20260101_000000.json'
         report_file.write_text(json.dumps(_redteam_payload()))
 
         runner = CliRunner()
@@ -130,8 +130,8 @@ class TestFix1CliDirectUrl:
             nonlocal captured_roots
             captured_roots = roots
 
-        with patch("evaluatorq.dashboard.launch.serve", side_effect=_fake_serve):
-            runner.invoke(cli_app, ["dashboard", str(report_file)])
+        with patch('evaluatorq.dashboard.launch.serve', side_effect=_fake_serve):
+            runner.invoke(cli_app, ['dashboard', str(report_file)])
 
         assert captured_roots is not None
         assert captured_roots == [rt_dir]
@@ -142,14 +142,41 @@ class TestFix1CliDirectUrl:
 
         from evaluatorq.cli import app as cli_app
 
-        rt_dir = tmp_path / "runs"
+        rt_dir = tmp_path / 'runs'
         rt_dir.mkdir()
 
         runner = CliRunner()
-        with patch("evaluatorq.dashboard.launch.serve"):
-            result = runner.invoke(cli_app, ["dashboard", str(rt_dir)])
+        with patch('evaluatorq.dashboard.launch.serve'):
+            result = runner.invoke(cli_app, ['dashboard', str(rt_dir)])
 
-        assert "/r/" not in result.output
+        assert '/r/' not in result.output
+
+    def test_ui_repository_root_scans_hidden_report_stores(self, tmp_path: Path) -> None:
+        """A repository root includes the conventional .evaluatorq run stores."""
+        from typer.testing import CliRunner
+
+        from evaluatorq.cli import app as cli_app
+
+        repo = tmp_path / 'repo'
+        (repo / '.evaluatorq' / 'runs').mkdir(parents=True)
+        (repo / '.evaluatorq' / 'sim-runs').mkdir()
+        captured_roots: list[Path] | None = None
+
+        def _fake_serve(roots: list[Path], *, host: str, port: int) -> None:  # noqa: ARG001
+            nonlocal captured_roots
+            captured_roots = roots
+
+        with patch('evaluatorq.dashboard.launch.serve', side_effect=_fake_serve):
+            result = CliRunner().invoke(cli_app, ['dashboard', str(repo)])
+
+        assert result.exit_code == 0, result.output
+        assert captured_roots == [
+            repo,
+            repo / 'runs',
+            repo / 'sim-runs',
+            repo / '.evaluatorq' / 'runs',
+            repo / '.evaluatorq' / 'sim-runs',
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -160,59 +187,51 @@ class TestFix1CliDirectUrl:
 class TestFix2SurfaceNavFilter:
     """Fix 2 — ?surface query param filters the index page to one surface."""
 
-    def test_surface_sim_shows_only_sim_cards(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_surface_sim_shows_only_sim_cards(self, client: TestClient, roots: list[Path]) -> None:
         """GET /?surface=sim must show the sim overview and exclude the redteam one."""
-        r = client.get("/?surface=sim")
+        r = client.get('/?surface=sim')
         assert r.status_code == 200
         # The Agent Sim surface is the run-level overview (KPI cards + table).
-        assert "Recent runs" in r.text
-        assert "demo-sim" in r.text
+        assert 'Recent runs' in r.text
+        assert 'demo-sim' in r.text
         # Redteam report must not appear (its stem is rt_fix_test).
-        assert "rt_fix_test" not in r.text
+        assert 'rt_fix_test' not in r.text
 
-    def test_surface_redteam_shows_only_redteam_cards(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_surface_redteam_shows_only_redteam_cards(self, client: TestClient, roots: list[Path]) -> None:
         """GET /?surface=redteam must show the redteam report and exclude the sim one."""
-        r = client.get("/?surface=redteam")
+        r = client.get('/?surface=redteam')
         assert r.status_code == 200
         # Redteam report stem appears.
-        assert "rt_fix_test" in r.text or "Red Team" in r.text
+        assert 'rt_fix_test' in r.text or 'Red Team' in r.text
         # Sim report name must not appear.
-        assert "demo-sim" not in r.text
+        assert 'demo-sim' not in r.text
 
-    def test_no_surface_param_shows_all_cards(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_no_surface_param_shows_all_cards(self, client: TestClient, roots: list[Path]) -> None:
         """GET / with no surface param must show both surfaces."""
-        r = client.get("/")
+        r = client.get('/')
         assert r.status_code == 200
-        assert "demo-sim" in r.text
+        assert 'demo-sim' in r.text
 
-    def test_surface_nav_link_active_class_matches(
-        self, client: TestClient
-    ) -> None:
+    def test_surface_nav_link_active_class_matches(self, client: TestClient) -> None:
         """The sim nav link must carry class='active' when ?surface=sim is requested."""
-        r = client.get("/?surface=sim")
+        r = client.get('/?surface=sim')
         assert r.status_code == 200
         # The active sidebar nav item carries the active class and is the
         # Agent Sim link (/?surface=sim).
-        assert "nav-item active" in r.text
+        assert 'nav-item active' in r.text
         assert '<a class="nav-item active" href="/?surface=sim"' in r.text
 
     def test_nav_links_use_surface_hrefs(self, client: TestClient) -> None:
         """Nav links must point to /?surface=... not just /."""
-        r = client.get("/")
-        assert "/?surface=redteam" in r.text
-        assert "/?surface=sim" in r.text
+        r = client.get('/')
+        assert '/?surface=redteam' in r.text
+        assert '/?surface=sim' in r.text
 
     def test_unknown_surface_shows_empty_state(self, client: TestClient) -> None:
         """An unrecognised ?surface value must yield an empty-state page (not 500)."""
-        r = client.get("/?surface=unknown")
+        r = client.get('/?surface=unknown')
         assert r.status_code == 200
-        assert "no reports" in r.text.lower()
+        assert 'no reports' in r.text.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +247,7 @@ class TestFix3ParseCache:
         # Clear any existing cache entries to get a clean slate.
         read_json.cache_clear()
 
-        report_file = tmp_path / "rt_cache_test.json"
+        report_file = tmp_path / 'rt_cache_test.json'
         report_file.write_text(json.dumps(_redteam_payload()))
 
         mtime_ns = report_file.stat().st_mtime_ns
@@ -242,37 +261,37 @@ class TestFix3ParseCache:
                 call_count += 1
             return original_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
 
-        with patch.object(Path, "read_text", _counting_read_text):
+        with patch.object(Path, 'read_text', _counting_read_text):
             read_json(str(report_file.resolve()), mtime_ns)
             read_json(str(report_file.resolve()), mtime_ns)
 
-        assert call_count == 1, f"Expected 1 read_text call, got {call_count}"
+        assert call_count == 1, f'Expected 1 read_text call, got {call_count}'
 
     def test_mtime_change_invalidates_cache(self, tmp_path: Path) -> None:
         """A new mtime must cause a fresh read instead of returning stale data."""
         read_json.cache_clear()
 
-        report_file = tmp_path / "rt_mtime_test.json"
-        payload_v1 = {**_redteam_payload(), "run_name": "v1"}
+        report_file = tmp_path / 'rt_mtime_test.json'
+        payload_v1 = {**_redteam_payload(), 'run_name': 'v1'}
         report_file.write_text(json.dumps(payload_v1))
         mtime_v1 = report_file.stat().st_mtime_ns
 
         data_v1 = read_json(str(report_file.resolve()), mtime_v1)
-        assert data_v1.get("run_name") == "v1"
+        assert data_v1.get('run_name') == 'v1'
 
         # Simulate a file update with a different mtime.
-        payload_v2 = {**_redteam_payload(), "run_name": "v2"}
+        payload_v2 = {**_redteam_payload(), 'run_name': 'v2'}
         report_file.write_text(json.dumps(payload_v2))
         mtime_v2 = report_file.stat().st_mtime_ns + 1  # guarantee different
 
         data_v2 = read_json(str(report_file.resolve()), mtime_v2)
-        assert data_v2.get("run_name") == "v2"
+        assert data_v2.get('run_name') == 'v2'
 
     def test_cache_info_reports_hit(self, tmp_path: Path) -> None:
         """lru_cache.cache_info().hits must be > 0 after two identical calls."""
         read_json.cache_clear()
 
-        report_file = tmp_path / "rt_info_test.json"
+        report_file = tmp_path / 'rt_info_test.json'
         report_file.write_text(json.dumps(_redteam_payload()))
         mtime_ns = report_file.stat().st_mtime_ns
 
@@ -297,10 +316,10 @@ class TestFix4SingleFilterApply:
 
         from evaluatorq.dashboard.filters import FILTERS
 
-        sig = inspect.signature(FILTERS["redteam"].recompute_options)
+        sig = inspect.signature(FILTERS['redteam'].recompute_options)
         params = list(sig.parameters.keys())
         # New signature: a single positional param (the filtered list).
-        assert len(params) == 1, f"Expected 1 param, got {params}"
+        assert len(params) == 1, f'Expected 1 param, got {params}'
 
     def test_sim_recompute_options_takes_filtered_list(self) -> None:
         """FILTERS['sim'].recompute_options accepts a list, not (obj, sel)."""
@@ -308,17 +327,15 @@ class TestFix4SingleFilterApply:
 
         from evaluatorq.dashboard.filters import FILTERS
 
-        sig = inspect.signature(FILTERS["sim"].recompute_options)
+        sig = inspect.signature(FILTERS['sim'].recompute_options)
         params = list(sig.parameters.keys())
-        assert len(params) == 1, f"Expected 1 param, got {params}"
+        assert len(params) == 1, f'Expected 1 param, got {params}'
 
-    def test_apply_called_once_during_filter_post(
-        self, client: TestClient, roots: list[Path]
-    ) -> None:
+    def test_apply_called_once_during_filter_post(self, client: TestClient, roots: list[Path]) -> None:
         """POST /r/{rid}/filter must call the underlying apply logic exactly once."""
         from evaluatorq.dashboard import filters as _filters_mod
 
-        rt_path = roots[0] / "rt_fix_test.json"
+        rt_path = roots[0] / 'rt_fix_test.json'
         rid = report_id(rt_path)
 
         apply_calls: list[int] = []
@@ -328,7 +345,7 @@ class TestFix4SingleFilterApply:
             apply_calls.append(1)
             return original_apply(report, selections)  # type: ignore[arg-type]
 
-        with patch.object(_filters_mod, "_rt_apply", _counting_apply):
+        with patch.object(_filters_mod, '_rt_apply', _counting_apply):
             # Rebuild FILTERS with the patched apply so the route picks it up.
             from evaluatorq.dashboard.filters import FilterDef, _REDTEAM_DIMS, _rt_full_options, _rt_recompute_options
 
@@ -339,16 +356,14 @@ class TestFix4SingleFilterApply:
                 recompute_options=_rt_recompute_options,  # type: ignore[arg-type]
             )
             original_filters = _filters_mod.FILTERS.copy()
-            _filters_mod.FILTERS["redteam"] = patched_filter
+            _filters_mod.FILTERS['redteam'] = patched_filter
             try:
-                r = client.post(f"/r/{rid}/filter", data={"result": "All"})
+                r = client.post(f'/r/{rid}/filter', data={'result': 'All'})
             finally:
-                _filters_mod.FILTERS["redteam"] = original_filters["redteam"]
+                _filters_mod.FILTERS['redteam'] = original_filters['redteam']
 
         assert r.status_code == 200
-        assert len(apply_calls) == 1, (
-            f"apply() was called {len(apply_calls)} times; expected exactly 1"
-        )
+        assert len(apply_calls) == 1, f'apply() was called {len(apply_calls)} times; expected exactly 1'
 
     def test_redteam_recompute_options_produces_correct_output(self) -> None:
         """_rt_recompute_options(filtered_list) must still return valid option dicts."""
@@ -357,16 +372,16 @@ class TestFix4SingleFilterApply:
         from tests.redteam.reports.test_rebuild_filtered import _make_report, _make_result
 
         results = [
-            _make_result(category="ASI01", passed=True),
-            _make_result(category="ASI01", passed=False),
-            _make_result(category="LLM01", passed=False),
+            _make_result(category='ASI01', passed=True),
+            _make_result(category='ASI01', passed=False),
+            _make_result(category='LLM01', passed=False),
         ]
-        report = _make_report(results, tested_agents=["agent-a"])
+        report = _make_report(results, tested_agents=['agent-a'])
 
         # Manually filter to ASI01 results.
-        filtered = [r for r in report.results if r.attack.category == "ASI01"]
+        filtered = [r for r in report.results if r.attack.category == 'ASI01']
 
-        opts = FILTERS["redteam"].recompute_options(filtered)
-        assert "ASI01" in opts["category"]
-        assert "LLM01" not in opts["category"]
-        assert "result" in opts  # radio always present
+        opts = FILTERS['redteam'].recompute_options(filtered)
+        assert 'ASI01' in opts['category']
+        assert 'LLM01' not in opts['category']
+        assert 'result' in opts  # radio always present

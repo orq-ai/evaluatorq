@@ -18,8 +18,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.llm_client import resolve_results_base_url
+from evaluatorq.common.thread_context import build_thread_id
 from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MODEL
-from evaluatorq.simulation.utils.run_store import auto_save_run, build_simulation_run, write_report
+from evaluatorq.simulation.utils.run_store import auto_save_run, build_simulation_run, fetch_agent_info, write_report
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -172,7 +173,7 @@ async def simulate(
 async def generate_and_simulate(
     *,
     evaluation_name: str = '',
-    agent_description: str,
+    agent_description: str | None = None,
     target_callback: Callable[[list[Message]], str | Awaitable[str]] | None = None,
     target: str | Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = None,
     num_personas: int = 5,
@@ -209,7 +210,10 @@ async def generate_and_simulate(
     CI-gate behaviour and how to opt out. ``hooks`` mirrors :func:`simulate`;
     note the ``on_confirm`` gate fires AFTER persona/scenario/first-message
     generation, so those generation tokens are already spent when the gate is
-    consulted.
+    consulted. ``agent_description`` takes precedence when supplied. Otherwise,
+    an ``agent:<key>`` target (or bare agent key) resolves its description from
+    Orq; other targets must provide ``agent_description``. A missing or blank
+    description from both sources raises ``ValueError`` before generation begins.
 
     ``emit_datapoints``: Optional callback invoked with the generated datapoints
     before simulation — used by the CLI's ``--save-datapoints`` to persist the
@@ -234,6 +238,11 @@ async def generate_and_simulate(
                 'orq.simulation.parallelism': parallelism,
             },
         ) as pipeline_span:
+            resolved_agent_description = await _resolve_generation_agent_description(
+                agent_description=agent_description,
+                target=target,
+                target_callback=target_callback,
+            )
             # Build one shared client for all generation steps so the three
             # sub-functions don't each construct their own AsyncOpenAI pool.
             # Mirrors the pattern used in generate().
@@ -246,7 +255,7 @@ async def generate_and_simulate(
                 await await_maybe(gen_hooks.on_stage_start(SimStage.GENERATE, {}))
                 try:
                     gen_personas, gen_scenarios = await _generate_personas_scenarios(
-                        agent_description=agent_description,
+                        agent_description=resolved_agent_description,
                         num_personas=num_personas,
                         num_scenarios=num_scenarios,
                         model=sim_model,
@@ -509,6 +518,50 @@ async def generate_scenario(
 # ---------------------------------------------------------------------------
 
 
+async def _resolve_generation_agent_description(
+    *,
+    agent_description: str | None,
+    target: str | Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None,
+    target_callback: Callable[[list[Message]], str | Awaitable[str]] | None,
+) -> str:
+    """Return an explicit description or resolve one from an Orq agent target.
+
+    Generation needs a reliable, user-facing account of the target's role. An
+    ``agent:<key>`` target (or a bare agent key) can supply that through the
+    Orq agent context; a deployment, callable, and direct model cannot. Keep
+    this separate from
+    :func:`_resolve_target`: the execution target is a stateless Responses
+    target, while the composite red-team backend resolves platform metadata.
+    """
+    if agent_description and agent_description.strip():
+        return agent_description
+
+    resolved_target = target if target is not None else target_callback
+    if isinstance(resolved_target, str):
+        from evaluatorq.redteam.contracts import LLMConfig, TargetConfig, TargetKind
+        from evaluatorq.redteam.runner import _make_agent_backend, _parse_target
+
+        kind, agent_key = _parse_target(resolved_target)
+        if kind is TargetKind.AGENT:
+            backend = _make_agent_backend(
+                target_config=TargetConfig(system_prompt=None),
+                pipeline_config=LLMConfig(),
+            )
+            context = await backend.resolve_context(agent_key)
+        else:
+            context = None
+    else:
+        context = None
+
+    description = context.description if context is not None else None
+    if description and description.strip():
+        return description
+
+    raise ValueError(
+        'generate_and_simulate requires agent_description or an agent target with a non-empty description.'
+    )
+
+
 async def _generate_personas_scenarios(
     *,
     agent_description: str,
@@ -597,6 +650,11 @@ async def _simulate_core(
 
     target_callback_resolved, target_agent, target_kind_hint = _resolve_target(target, target_callback)
 
+    # One run id per run; each conversation's Orq thread id is f"{run_id}:{index}".
+    # Persisted on SimulationRun / SimulationResult so the dashboard can deep-link
+    # to the run's (or a single conversation's) traces in Orq observability.
+    run_id = uuid.uuid4().hex
+
     sim_datapoints = await _resolve_or_generate_datapoints(
         caller=caller,
         datapoints=datapoints,
@@ -677,6 +735,7 @@ async def _simulate_core(
             exit_on_failure=exit_on_failure,
             pipeline_span=pipeline_span,
             hooks=resolved_hooks,
+            run_id=run_id,
         )
         # Fire on_evaluator_complete here — AFTER results is assigned and
         # OUTSIDE evaluatorq's per-scorer try/except — so an unguarded hook
@@ -709,14 +768,21 @@ async def _simulate_core(
         # collision-exhaustion RuntimeError) must NOT discard a completed, paid-for
         # run. Log and still return results — the saved file is a convenience.
         try:
+            agent_info = None
+            if target_kind == 'orq_agent':
+                agent_key = getattr(target_agent, 'agent_key', None) or target_name.removeprefix('agent:')
+                agent_info = await fetch_agent_info(agent_key)
             run = build_simulation_run(
                 run_name=evaluation_name or 'sim',
                 mode='simulate' if caller == 'simulate' else 'run',
                 target_kind=target_kind,
                 target=target_name,
                 target_model=target_model if isinstance(target_model, str) else None,
+                max_turns=max_turns,
+                agent_info=agent_info,
                 evaluator_names=resolved_evaluator_names,
                 results=results,
+                run_id=run_id,
             )
             if run_output is not None:
                 write_report(run, Path(run_output))
@@ -936,6 +1002,7 @@ def _build_simulation_job_and_cache(
     judge: BaseAgent | None,
     generation_client: AsyncOpenAI | None,
     hooks: SimulationHooks | None,
+    run_id: str | None = None,
 ) -> tuple[
     Callable[[DataPoint, int], Awaitable[dict[str, Any]]],
     dict[int, SimulationResult],
@@ -1002,7 +1069,11 @@ def _build_simulation_job_and_cache(
             await await_maybe(resolved_hooks.on_datapoint_error(sim_dp, start_err))
             await await_maybe(resolved_hooks.on_datapoint_complete(err))
             raise
-        result = await runner.run(datapoint=sim_dp, max_turns=max_turns)
+        # Deterministic, run-scoped thread id groups this conversation's turns in
+        # Orq observability and powers the dashboard's per-conversation deep link.
+        # _row is the datapoint's index (stable across the run).
+        thread_id = build_thread_id(run_id, _row)
+        result = await runner.run(datapoint=sim_dp, max_turns=max_turns, thread_id=thread_id)
         result.metadata['datapoint_id'] = sim_dp.id
         result_cache[id(data)] = result
         if result.terminated_by in (TerminatedBy.error, TerminatedBy.timeout):
@@ -1080,6 +1151,7 @@ async def _simulate_via_evaluatorq(
     exit_on_failure: bool,
     pipeline_span: Span | None,
     hooks: SimulationHooks,
+    run_id: str | None = None,
 ) -> list[SimulationResult]:
     """Wrap simulation Datapoints as evaluatorq DataPoints and run."""
     from datetime import datetime, timezone
@@ -1109,6 +1181,7 @@ async def _simulate_via_evaluatorq(
         judge=judge,
         generation_client=generation_client,
         hooks=hooks,
+        run_id=run_id,
     )
 
     evaluators = [_adapt_simulation_scorer(name, fn, result_cache) for name, fn in scorers]

@@ -9,10 +9,34 @@ from datetime import datetime  # noqa: TC003
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+from typing_extensions import TypedDict
 
 from evaluatorq.contracts import Message, StrEnum, TokenUsage
 
 DEFAULT_MODEL = 'openai/gpt-5.4-mini'
+
+
+class AgentInfoSnapshot(TypedDict, total=False):
+    """Best-effort snapshot of an ORQ agent's configuration, as fetched by
+    ``fetch_agent_info`` and stored on ``SimulationRun.agent_info``.
+
+    Deliberately excludes the agent's system prompt / instructions.
+    """
+
+    key: str
+    id: str | None
+    role: str | None
+    description: str | None
+    model: str | None
+    tools: list[str]
+    knowledge_bases: list[str]
+    memory_stores: list[str]
+    sub_agents: list[str]
+    workspace_id: str | None
+    workspace_key: str | None
+    base_url: str
+    url: str | None
+
 
 # Default evaluators applied when none are explicitly requested. Single source
 # of truth shared by ``api.simulate`` and the CLI run-store record.
@@ -310,6 +334,11 @@ class SimulationResult(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     criteria_results: dict[str, bool] | None = None
     total_turns: int | None = None
+    thread_id: str | None = Field(
+        default=None,
+        description='Orq observability thread id for this conversation (deterministic: f"{run_id}:{index}"). '
+        'None for runs saved before thread grouping existed.',
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -344,11 +373,22 @@ class SimulationRun(BaseModel):
     # saved before these fields existed.
     target: str | None = None
     target_model: str | None = None
+    # Configured turn cap for the run. Optional for back-compat with runs saved
+    # before this field existed (older reports simply omit the Config row).
+    max_turns: int | None = None
+    # Snapshot of the ORQ agent's configuration at run time (orq_agent targets
+    # only; None for other target kinds, fetch failures, and pre-existing runs).
+    # Deliberately excludes the system prompt / instructions.
+    agent_info: AgentInfoSnapshot | None = None
     evaluator_names: list[str]
     total_results: int
     scorer_averages: dict[str, float]
     results: list[SimulationResult]
     executive_summary: str | None = None
+    run_id: str | None = None
+    """Client-minted run-grouping id (uuid hex, not an Orq-side run id) shared by every
+    conversation's ``thread_id`` (``{run_id}:{index}``). Powers the dashboard's
+    'View all run traces' deep link. None for older runs."""
 
 
 # ---------------------------------------------------------------------------
@@ -402,3 +442,4 @@ class SimulationEntry(BaseModel):
     error: str | None
     evaluator_scores: dict[str, float]
     transcript: list[TranscriptMessage]
+    thread_id: str | None = None

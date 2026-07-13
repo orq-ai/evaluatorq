@@ -11,9 +11,12 @@ Each ``FilterDef`` encapsulates all filter operations for a surface:
                             ``apply`` first and passing the result in.
 
 Selections are plain ``dict[str, list[str]]`` mapping dimension key to the
-list of selected values.  Radio dimensions (``result``, ``goal_outcome``) use
-a single-element list for the selected value.  Missing or empty selections
-default to "all selected" so a partial POST does not silently drop filters.
+list of selected values.  The ``result`` radio dimension uses a
+single-element list for the selected value.  The sim ``goal_outcome``
+dimension is a two-value multiselect (``Achieved`` / ``Not achieved``):
+selecting exactly one value narrows to that outcome; selecting zero or
+both values means "all".  Missing or empty selections default to "all
+selected" so a partial POST does not silently drop filters.
 """
 
 from __future__ import annotations
@@ -68,9 +71,10 @@ def _sel(selections: dict[str, list[str]], key: str, *, default: list[str]) -> l
 
 _REDTEAM_DIMS = [
     'result',
-    'agent',
-    'category',
     'severity',
+    'min_turns',
+    'category',
+    'agent',
     'technique',
     'delivery_method',
     'vulnerability',
@@ -90,14 +94,17 @@ def _rt_options_from_results(results: list[Any]) -> dict[str, list[str]]:
     all_vulnerabilities = sorted({r.attack.vulnerability for r in results if r.attack.vulnerability})
     all_agents = sorted({r.agent.key or r.agent.display_name or 'unknown' for r in results})
 
+    max_turns = max((r.execution.turns if r.execution else 1 for r in results), default=1)
+
     return {
-        'result': ['All', 'Vulnerable', 'Resistant', 'Error'],
+        'result': ['Vulnerable', 'Resistant', 'Error'],
         'agent': all_agents,
         'category': all_categories,
         'severity': all_severities,
         'technique': all_techniques,
         'delivery_method': all_delivery,
         'vulnerability': all_vulnerabilities,
+        'max_turns': [str(max_turns)],
     }
 
 
@@ -110,15 +117,25 @@ def _rt_apply(report: Any, selections: dict[str, list[str]]) -> list[Any]:
     results: list[Any] = list(report.results)
     full_opts = _rt_full_options(report)
 
-    # result (radio)
-    result_sel = selections.get('result', ['All'])
-    result_filter = result_sel[0] if result_sel else 'All'
-    if result_filter == 'Vulnerable':
-        results = [r for r in results if r.vulnerable]
-    elif result_filter == 'Resistant':
-        results = [r for r in results if not r.vulnerable and not r.error]
-    elif result_filter == 'Error':
-        results = [r for r in results if r.error]
+    # result (3-value multiselect: empty or all-3 => no filter)
+    result_sel = selections.get('result', [])
+    all_result = {'Vulnerable', 'Resistant', 'Error'}
+    if result_sel and set(result_sel) != all_result:
+
+        def _cls(r):
+            return 'Error' if r.error else 'Vulnerable' if r.vulnerable else 'Resistant'
+
+        chosen = set(result_sel)
+        results = [r for r in results if _cls(r) in chosen]
+
+    # min_turns (slider)
+    mt_sel = selections.get('min_turns', ['1'])
+    try:
+        min_turns = int(mt_sel[0]) if mt_sel else 1
+    except (ValueError, TypeError):
+        min_turns = 1
+    if min_turns > 1:
+        results = [r for r in results if (r.execution.turns if r.execution else 1) >= min_turns]
 
     # category (multiselect)
     all_categories = full_opts['category']
@@ -172,10 +189,7 @@ def _rt_recompute_options(filtered: list[Any]) -> dict[str, list[str]]:
     The caller is responsible for calling ``_rt_apply`` first and passing
     the result in, so that ``apply`` runs only once per POST.
     """
-    opts = _rt_options_from_results(filtered)
-    # The result radio always shows all four statuses regardless of filter state.
-    opts['result'] = ['All', 'Vulnerable', 'Resistant', 'Error']
-    return opts
+    return _rt_options_from_results(filtered)
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +216,7 @@ def _sim_options_from_results(results: list[Any]) -> dict[str, list[str]]:
         'persona': personas,
         'scenario': scenarios,
         'terminated_by': terminated,
-        'goal_outcome': ['All', 'Achieved', 'Not achieved'],
+        'goal_outcome': ['Achieved', 'Not achieved'],
     }
 
 
@@ -233,13 +247,11 @@ def _sim_apply(run: Any, selections: dict[str, list[str]]) -> list[Any]:
     if set(sel_terminated) != set(all_terminated):
         results = [r for r in results if r.terminated_by.value in sel_terminated]
 
-    # goal_outcome (radio)
-    goal_sel = selections.get('goal_outcome', ['All'])
-    goal_filter = goal_sel[0] if goal_sel else 'All'
-    if goal_filter == 'Achieved':
-        results = [r for r in results if r.goal_achieved]
-    elif goal_filter == 'Not achieved':
-        results = [r for r in results if not r.goal_achieved]
+    # goal_outcome (two-value multiselect: one => that outcome; zero/two => All)
+    goal_sel = [v for v in selections.get('goal_outcome', []) if v in {'Achieved', 'Not achieved'}]
+    if len(goal_sel) == 1:
+        want = goal_sel[0] == 'Achieved'
+        results = [r for r in results if bool(r.goal_achieved) == want]
 
     return results
 
@@ -251,8 +263,8 @@ def _sim_recompute_options(filtered: list[Any]) -> dict[str, list[str]]:
     the result in, so that ``apply`` runs only once per POST.
     """
     opts = _sim_options_from_results(filtered)
-    # The goal_outcome radio always shows all three values.
-    opts['goal_outcome'] = ['All', 'Achieved', 'Not achieved']
+    # The goal_outcome multiselect always shows both values.
+    opts['goal_outcome'] = ['Achieved', 'Not achieved']
     return opts
 
 

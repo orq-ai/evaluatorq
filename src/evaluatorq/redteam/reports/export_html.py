@@ -24,10 +24,10 @@ from evaluatorq.common.reports import pct as _pct
 from evaluatorq.common.reports import render_donut_chart as _render_donut_chart_common
 from evaluatorq.common.reports import status_badge as _status_badge
 from evaluatorq.common.reports import truncate as _truncate
+from evaluatorq.common.reports.html_helpers import scale_color as _scale_color
 from evaluatorq.common.reports.vega import render_svg as _render_svg
 from evaluatorq.common.reports.vega import vl_bar_h as _vl_bar_h
 from evaluatorq.common.reports.vega import vl_donut as _vl_donut
-from evaluatorq.common.reports.vega import vl_grouped_bar as _vl_grouped_bar
 from evaluatorq.redteam.reports.sections import build_report_sections
 
 if TYPE_CHECKING:
@@ -1036,21 +1036,11 @@ def _render_source_distribution_html(section: ReportSection) -> str:
     return f'<h2>{_esc(section.title)}</h2>\n{chart}\n{table}'
 
 
-def _asr_badge_color(asr: float) -> str:
-    """Return an inline background color interpolated from green (0%) to red (100%)."""
-    asr = max(0.0, min(1.0, asr))  # clamp to [0, 1]
-    # Linear interpolation: green (#2ebd85) at 0%, yellow (#f2b600) at 50%, red (#d92d20) at 100%
-    if asr <= 0.5:
-        t = asr / 0.5
-        r = int(46 + (242 - 46) * t)
-        g = int(189 + (182 - 189) * t)
-        b = int(133 + (0 - 133) * t)
-    else:
-        t = (asr - 0.5) / 0.5
-        r = int(242 + (217 - 242) * t)
-        g = int(182 + (45 - 182) * t)
-        b = int(0 + (32 - 0) * t)
-    return f'#{r:02X}{g:02X}{b:02X}'
+# RT ASR heat scale (0% safe -> 100% danger). Brand palette — mirrors the CSS
+# --green-600 / --amber-600 / --red-600 tokens so the server-rendered ASR
+# heatmap matches the rest of the report. Change here to restyle every
+# ASR-coloured cell/badge at once.
+_ASR_HEAT_SCALE: list[list[float | str]] = [[0.0, '#299D8F'], [0.5, '#ff8f34'], [1.0, '#df5325']]
 
 
 # ---------------------------------------------------------------------------
@@ -1059,54 +1049,8 @@ def _asr_badge_color(asr: float) -> str:
 
 
 def _asr_cell_color(asr_pct: float) -> str:
-    """Interpolate a background color for an ASR percentage cell.
-
-    0%   -> green  (#2ebd85)
-    50%  -> yellow (#f2b600)
-    100% -> red    (#d92d20)
-    """
-    t = max(0.0, min(100.0, asr_pct)) / 100.0
-
-    def _lerp(a: int, b: int, factor: float) -> int:
-        return round(a + (b - a) * factor)
-
-    if t <= 0.5:
-        n = t * 2
-        r = _lerp(0x2E, 0xF2, n)
-        g = _lerp(0xBD, 0xB6, n)
-        b = _lerp(0x85, 0x00, n)
-    else:
-        n = (t - 0.5) * 2
-        r = _lerp(0xF2, 0xD9, n)
-        g = _lerp(0xB6, 0x2D, n)
-        b = _lerp(0x00, 0x20, n)
-
-    return f'#{r:02x}{g:02x}{b:02x}'
-
-
-def _render_agent_comparison_grouped_bar(
-    vuln_asr_rows: list[dict[str, Any]],
-    agents: list[str],
-) -> str:
-    """Render a grouped horizontal bar chart of ASR by vulnerability per agent."""
-    if not vuln_asr_rows or not agents:
-        return ''
-
-    rows = vuln_asr_rows[:15]
-    categories = [r['vulnerability'] for r in rows]
-
-    series: list[tuple[str, list[float]]] = []
-    for agent_name in agents:
-        asr_values = [r['agents'].get(agent_name, {}).get('asr', 0.0) * 100 for r in rows]
-        series.append((agent_name, asr_values))
-
-    spec = _vl_grouped_bar(
-        categories=categories,
-        series=series,
-        x_title='Attack Success Rate (%)',
-    )
-    svg = _render_svg(spec)
-    return f'<div class="chart-container">{svg}</div>' if svg else ''
+    """Background colour for an ASR percentage cell on the brand heat scale."""
+    return _scale_color(asr_pct / 100.0, _ASR_HEAT_SCALE)
 
 
 def _render_framework_bar_chart(rows: list[dict[str, Any]]) -> str:
@@ -1121,7 +1065,7 @@ def _render_framework_bar_chart(rows: list[dict[str, Any]]) -> str:
     spec = _vl_bar_h(
         labels=labels,
         values=rates,
-        color=_COLORS['teal_400'],
+        color=_COLORS['orange_300'],  # brand orange, matching the sibling ASR bar charts
         x_title='ASR (%)',
         value_labels=[f'{rate:.1f}% n={n}' for rate, n in zip(rates, totals, strict=False)],
     )
@@ -1146,7 +1090,6 @@ def _render_agent_comparison_html(section: ReportSection) -> str:
     data = section.data
     agents: list[str] = data.get('agents', [])
     agent_metrics: list[dict[str, Any]] = data.get('agent_metrics', [])
-    vuln_asr_rows: list[dict[str, Any]] = data.get('vuln_asr_rows', [])
     heatmap: dict[str, Any] = data.get('heatmap', {})
 
     if len(agents) < 2:
@@ -1204,22 +1147,8 @@ def _render_agent_comparison_html(section: ReportSection) -> str:
         tbl_parts.append('</tbody></table></div>')
         parts.append('\n'.join(tbl_parts))
 
-    # Grouped bar chart: ASR by vulnerability per agent (with table fallback)
-    if vuln_asr_rows:
-        chart = _render_agent_comparison_grouped_bar(vuln_asr_rows, agents)
-        if chart:
-            parts.append(chart)
-        else:
-            table_headers = ['Vulnerability', *agents]
-            table_rows_data: list[list[str]] = []
-            for vrow in vuln_asr_rows[:20]:
-                row_cells = [_esc(vrow['vulnerability'])]
-                for ag in agents:
-                    ag_data = vrow['agents'].get(ag, {'asr': 0.0, 'total': 0})
-                    row_cells.append(f'{ag_data["asr"]:.0%} (n={ag_data["total"]})')
-                table_rows_data.append(row_cells)
-            parts.append(_html_table(table_headers, table_rows_data))
-
+    # The ASR heatmap above already shows ASR by vulnerability per agent; the
+    # grouped bar chart duplicated it, so it is intentionally omitted.
     return '\n'.join(parts)
 
 

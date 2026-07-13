@@ -12,18 +12,89 @@ Saved runs land in ``.evaluatorq/sim-runs/`` under collision-free
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from evaluatorq.common.run_store_dir import get_store_dir
-from evaluatorq.simulation.types import SimulationRun
+from evaluatorq.simulation.types import AgentInfoSnapshot, SimulationRun
 
 logger = logging.getLogger(__name__)
 
 SIM_RUNS_DIR_NAME = Path('.evaluatorq') / 'sim-runs'
+
+
+async def fetch_agent_info(agent_key: str) -> AgentInfoSnapshot | None:
+    """Best-effort snapshot of an ORQ agent's configuration, for the run-store
+    record. Never raises — no API key, network errors, and unknown agents all
+    just result in ``None`` so a save can't be delayed or fail on this.
+
+    Deliberately excludes the agent's system prompt / instructions.
+    """
+    api_key = os.getenv('ORQ_API_KEY')
+    if not api_key:
+        return None
+
+    try:
+        from evaluatorq.fetch_data import setup_orq_client
+
+        orq_client = setup_orq_client(api_key)
+        agent_data = await asyncio.to_thread(orq_client.agents.retrieve, agent_key=agent_key)
+
+        agent_id = getattr(agent_data, '_id', None) or getattr(agent_data, 'id', None)
+        model = getattr(agent_data, 'model', None)
+        model_id = getattr(model, 'id', None) if model is not None else None
+
+        # Entries with no resolvable name are dropped rather than persisted as
+        # None (the card would render them as literal "None" chips).
+        settings = getattr(agent_data, 'settings', None)
+        raw_tools = getattr(settings, 'tools', None) if settings is not None else None
+        tools = [n for t in raw_tools or [] if (n := getattr(t, 'display_name', None) or getattr(t, 'key', None))]
+
+        raw_kbs = getattr(agent_data, 'knowledge_bases', None) or []
+        knowledge_bases = [
+            n for kb in raw_kbs if (n := kb if isinstance(kb, str) else getattr(kb, 'knowledge_id', None))
+        ]
+
+        raw_stores = getattr(agent_data, 'memory_stores', None) or []
+        memory_stores = [n for ms in raw_stores if (n := ms if isinstance(ms, str) else getattr(ms, 'key', None))]
+
+        raw_sub_agents = getattr(agent_data, 'team_of_agents', None) or []
+        sub_agents = [
+            n for a in raw_sub_agents if (n := a.get('key') if isinstance(a, dict) else getattr(a, 'key', None))
+        ]
+
+        from evaluatorq.dashboard.orq_links import orq_studio_url, studio_workspace_key
+
+        workspace_id = getattr(agent_data, 'workspace_id', None)
+        # Entity APIs expose workspace_id (a UUID). Studio links instead use
+        # the configured ORQ_WORKSPACE key, captured here for future reports.
+        workspace_key = studio_workspace_key(getattr(agent_data, 'workspace_key', None))
+        base_url = os.getenv('ORQ_BASE_URL', 'https://my.orq.ai').rstrip('/')
+        url = orq_studio_url(target_kind='agent', entity_id=agent_id, workspace_id=workspace_key, base_url=base_url)
+
+        return {
+            'key': agent_key,
+            'id': agent_id,
+            'role': getattr(agent_data, 'role', None),
+            'description': getattr(agent_data, 'description', None),
+            'model': model_id,
+            'tools': tools,
+            'knowledge_bases': knowledge_bases,
+            'memory_stores': memory_stores,
+            'sub_agents': sub_agents,
+            'workspace_id': workspace_id,
+            'workspace_key': workspace_key,
+            'base_url': base_url,
+            'url': url,
+        }
+    except Exception as exc:
+        logger.warning('Failed to fetch agent_info for %r: %r', agent_key, exc)
+        return None
 
 
 def sanitise_run_name(name: str) -> str:
@@ -48,6 +119,9 @@ def build_simulation_run(
     results: list[Any],
     target: str | None = None,
     target_model: str | None = None,
+    max_turns: int | None = None,
+    agent_info: AgentInfoSnapshot | None = None,
+    run_id: str | None = None,
 ) -> SimulationRun:
     """Build the full ``SimulationRun`` report model from results.
 
@@ -75,6 +149,9 @@ def build_simulation_run(
         target_kind=target_kind,  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
         target=target,
         target_model=target_model,
+        max_turns=max_turns,
+        agent_info=agent_info,
+        run_id=run_id,
         evaluator_names=evaluator_names,
         total_results=len(results),
         scorer_averages=scorer_averages,

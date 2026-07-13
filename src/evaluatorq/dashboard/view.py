@@ -22,7 +22,6 @@ from __future__ import annotations
 from datetime import datetime
 from itertools import starmap
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlencode
 
 from fasthtml.common import Script
 
@@ -51,7 +50,11 @@ def head_assets() -> tuple[Script, ...]:
         Script(src='/static/vega.min.js'),
         Script(src='/static/vega-lite.min.js'),
         Script(src='/static/vega-embed.min.js'),
-        Script(src='/static/dashboard.js'),
+        # defer: dashboard.js runs at document.body-level (event delegation) — without
+        # defer it executes during <head> parse when document.body is still null and
+        # throws, aborting all its handlers (incl. the sim-entity modal). vega stays
+        # non-deferred: inline body scripts call vegaEmbed during parse.
+        Script(src='/static/dashboard.js', defer=True),
     )
 
 
@@ -290,6 +293,11 @@ _TARGET_ICONS: dict[str, str] = {
         '2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/>'
         '<path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5z"/></svg>'
     ),
+    'external': (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/>'
+        '<path d="M3 12h18M12 3a14.9 14.9 0 0 1 0 18M12 3a14.9 14.9 0 0 0 0 18"/></svg>'
+    ),
 }
 
 
@@ -300,9 +308,21 @@ _CHEVRON = (
 
 
 def _target_pill(label: str, kind: str) -> str:
-    """Target cell: kind icon (agent / llm / deployment) + label, dot fallback."""
-    icon = _TARGET_ICONS.get(kind, '<span class="dot"></span>')
-    return f'<span class="target-pill" data-kind="{esc(kind)}">{icon}{esc(label)}</span>'
+    """Target cell rendered exclusively from the saved run's target kind.
+
+    Older JSON and extensions may carry raw storage kinds rather than the
+    display categories emitted by metrics, so normalize here too. Unknown
+    targets are external entities, not green status dots.
+    """
+    display_kind = {
+        'orq_agent': 'agent',
+        'orq_deployment': 'deployment',
+        'openai_model': 'llm',
+        'vercel': 'deployment',
+        'callback': 'external',
+        'other': 'external',
+    }.get(kind, kind if kind in _TARGET_ICONS else 'external')
+    return f'<span class="target-pill" data-kind="{esc(display_kind)}">{_TARGET_ICONS[display_kind]}{esc(label)}</span>'
 
 
 # Run lifecycle → label for the solid status pill (mirrors the platform's
@@ -578,11 +598,269 @@ def report_broken(rid: str, filename: str, detail: str) -> str:
 _RADIO_DIMS: frozenset[str] = frozenset({'result', 'goal_outcome'})
 
 
+_SLIDERS_ICON = (
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+    ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>'
+    '<line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/>'
+    '<line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/>'
+    '<line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/>'
+    '<line x1="17" y1="16" x2="23" y2="16"/>'
+    '</svg>'
+)
+_FILTER_CHEVRON = (
+    '<svg class="filter-dd-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none"'
+    ' stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="m6 9 6 6 6-6"/></svg>'
+)
+
+# Goal-outcome chip dot colors (spec: Achieved green-600, Not achieved red-600).
+_GOAL_OUTCOME_DOT_CLASS: dict[str, str] = {'Achieved': 'chip-dot-green', 'Not achieved': 'chip-dot-red'}
+
+
+def _chip(name: str, value: str, *, checked: bool, dot_cls: str) -> str:
+    """One chip toggle: a <label>-wrapped visually-hidden checkbox."""
+    checked_attr = ' checked' if checked else ''
+    active_cls = ' is-active' if checked else ''
+    return (
+        f'<label class="filter-chip{active_cls}">'
+        f'<input type="checkbox" class="filter-chip-input" name="{esc(name)}" value="{esc(value)}"{checked_attr}>'
+        f'<span class="filter-chip-dot {dot_cls}"></span>'
+        f'<span class="filter-chip-label">{esc(value)}</span>'
+        f'</label>'
+    )
+
+
+def _dropdown(dim: str, label: str, dim_opts: list[str], sel: list[str]) -> str:
+    """One Persona/Scenario <details> dropdown with a stable id.
+
+    ``sel`` empty means "all selected" (the default filter-route behaviour);
+    the trigger status/label reflect that.
+    """
+    selected_set = set(sel) if sel else set(dim_opts)
+    n_selected = len(selected_set)
+    n_total = len(dim_opts)
+    if n_selected == n_total:
+        status_cls, status_label = 'is-all', 'All'
+    elif n_selected == 0:
+        status_cls, status_label = 'is-none', 'None'
+    else:
+        status_cls, status_label = 'is-partial', f'{n_selected} selected'
+
+    rows = ''.join(
+        f'<label class="filter-dd-row">'
+        f'<input type="checkbox" name="{esc(dim)}" value="{esc(opt)}"'
+        f'{" checked" if opt in selected_set else ""}>'
+        f'<span>{esc(opt)}</span>'
+        f'</label>'
+        for opt in dim_opts
+    )
+    return (
+        f'<details id="filter-dd-{esc(dim)}" class="filter-dd">'
+        f'<summary class="filter-dd-trigger">'
+        f'<span class="filter-dd-status {status_cls}"></span>'
+        f'<span class="filter-dd-name">{esc(label)}</span>'
+        f'<span class="filter-dd-value">{esc(status_label)}</span>'
+        f'{_FILTER_CHEVRON}'
+        f'</summary>'
+        f'<div class="filter-dd-menu">{rows}</div>'
+        f'</details>'
+    )
+
+
+def _render_sim_filter_rail(
+    rid: str,
+    opts: dict[str, list[str]],
+    selections: dict[str, list[str]],
+    *,
+    shown: int | None,
+    total: int | None,
+) -> str:
+    """Render the right-side sim filter rail: chips + dropdowns + counter.
+
+    Goal outcome / Terminated by render as chip toggles; Persona / Scenario
+    render as ``<details>`` dropdowns with stable ids (``filter-dd-persona``,
+    ``filter-dd-scenario``) so a later JS task can persist their open state
+    across the HTMX outerHTML swap.
+    """
+    goal_opts = [o for o in opts.get('goal_outcome', []) if o in _GOAL_OUTCOME_DOT_CLASS]
+    goal_sel = set(selections.get('goal_outcome', []))
+    goal_chips = ''.join(
+        _chip('goal_outcome', opt, checked=(opt in goal_sel), dot_cls=_GOAL_OUTCOME_DOT_CLASS[opt]) for opt in goal_opts
+    )
+
+    term_opts = opts.get('terminated_by', [])
+    term_sel = set(selections.get('terminated_by', [])) or set(term_opts)
+    term_chips = ''.join(
+        _chip('terminated_by', opt, checked=(opt in term_sel), dot_cls='chip-dot-jade') for opt in term_opts
+    )
+
+    persona_dd = _dropdown('persona', 'Persona', opts.get('persona', []), selections.get('persona', []))
+    scenario_dd = _dropdown('scenario', 'Scenario', opts.get('scenario', []), selections.get('scenario', []))
+
+    if shown is not None and total is not None and shown < total:
+        counter = f'{shown} of {total} shown'
+    else:
+        counter = 'Showing all results'
+
+    inner = (
+        f'<div class="filter-rail-header">{_SLIDERS_ICON}<span class="filter-rail-title">Filters</span></div>'
+        f'<div class="filter-group" data-dim="goal_outcome">'
+        f'<label class="filter-label">Goal Outcome</label>'
+        f'<div class="filter-chip-row">{goal_chips}</div>'
+        f'</div>'
+        f'<div class="filter-group" data-dim="terminated_by">'
+        f'<label class="filter-label">Terminated By</label>'
+        f'<div class="filter-chip-row">{term_chips}</div>'
+        f'</div>'
+        f'<div class="filter-group" data-dim="persona">{persona_dd}</div>'
+        f'<div class="filter-group" data-dim="scenario">{scenario_dd}</div>'
+        f'<div class="filter-rail-footer">{esc(counter)}</div>'
+    )
+    return (
+        f'<form id="filter-form" class="filter-form filter-form--sim"'
+        f' hx-post="/r/{esc(rid)}/filter"'
+        f' hx-trigger="change"'
+        f' hx-target="#filter-swap"'
+        f' hx-swap="outerHTML">'
+        f'{inner}'
+        f'</form>'
+    )
+
+
+# Outcome chip dot colors (spec: Vulnerable red-600, Resistant green-600, Error amber-600).
+_RESULT_DOT_CLASS: dict[str, str] = {
+    'Vulnerable': 'chip-dot-red',
+    'Resistant': 'chip-dot-green',
+    'Error': 'chip-dot-amber',
+}
+
+# Severity chip dot colors, aligned with report_kit.severity_pill tones.
+_SEVERITY_DOT_CLASS: dict[str, str] = {
+    'critical': 'chip-dot-red',
+    'high': 'chip-dot-amber',
+    'medium': 'chip-dot-gray',
+    'low': 'chip-dot-green',
+}
+
+
+def _render_redteam_filter_rail(
+    rid: str,
+    opts: dict[str, list[str]],
+    selections: dict[str, list[str]],
+    *,
+    shown: int | None,
+    total: int | None,
+) -> str:
+    """Render the right-side redteam filter rail: chips + slider + dropdowns + counter.
+
+    Outcome / Severity render as chip toggles; a min-turns slider is shown
+    only when the run has any multi-turn attacks (``opts['max_turns'] > 1``);
+    Category / Agent render as ``<details>`` dropdowns (Agent only when there
+    is more than one agent); Technique / Delivery Method / Vulnerability are
+    tucked behind a ``<details id="filter-dd-more">`` "More filters" expander
+    to keep the rail short for the common single-agent, single-category run.
+    """
+    result_opts = opts.get('result', [])
+    result_sel = set(selections.get('result', []))
+    result_chips = ''.join(
+        _chip('result', opt, checked=(opt in result_sel), dot_cls=_RESULT_DOT_CLASS.get(opt, 'chip-dot-gray'))
+        for opt in result_opts
+    )
+
+    severity_opts = opts.get('severity', [])
+    severity_sel = set(selections.get('severity', [])) or set(severity_opts)
+    severity_chips = ''.join(
+        _chip(
+            'severity',
+            opt,
+            checked=(opt in severity_sel),
+            dot_cls=_SEVERITY_DOT_CLASS.get(opt.lower(), 'chip-dot-gray'),
+        )
+        for opt in severity_opts
+    )
+
+    max_turns = int(opts.get('max_turns', ['1'])[0] or 1)
+    min_turns_sel = selections.get('min_turns', ['1'])
+    min_turns = int(min_turns_sel[0]) if min_turns_sel and min_turns_sel[0] else 1
+    slider_html = ''
+    if max_turns > 1:
+        readout = 'all' if min_turns <= 1 else f'≥ {min_turns}'
+        slider_html = (
+            '<div class="filter-group" data-dim="min_turns">'
+            '<label class="filter-label">Min. Turns</label>'
+            '<div class="filter-slider-row">'
+            f'<input type="range" class="filter-slider" name="min_turns" min="1" max="{max_turns}"'
+            f' value="{min_turns}">'
+            f'<span class="filter-slider-readout">{esc(readout)}</span>'
+            '</div>'
+            '</div>'
+        )
+
+    category_dd = _dropdown('category', 'Category', opts.get('category', []), selections.get('category', []))
+
+    agent_opts = opts.get('agent', [])
+    agent_dd = ''
+    if len(agent_opts) > 1:
+        agent_dd = _dropdown('agent', 'Agent', agent_opts, selections.get('agent', []))
+
+    more_rows = ''.join([
+        _dropdown('technique', 'Technique', opts.get('technique', []), selections.get('technique', [])),
+        _dropdown(
+            'delivery_method', 'Delivery Method', opts.get('delivery_method', []), selections.get('delivery_method', [])
+        ),
+        _dropdown('vulnerability', 'Vulnerability', opts.get('vulnerability', []), selections.get('vulnerability', [])),
+    ])
+    more_dd = (
+        f'<details id="filter-dd-more" class="filter-dd filter-dd-more">'
+        f'<summary class="filter-dd-trigger">'
+        f'<span class="filter-dd-name">More filters</span>'
+        f'{_FILTER_CHEVRON}'
+        f'</summary>'
+        f'<div class="filter-dd-more-body">{more_rows}</div>'
+        f'</details>'
+    )
+
+    if shown is not None and total is not None and shown < total:
+        counter = f'{shown} of {total} shown'
+    else:
+        counter = 'Showing all results'
+
+    inner = (
+        f'<div class="filter-rail-header">{_SLIDERS_ICON}<span class="filter-rail-title">Filters</span></div>'
+        f'<div class="filter-group" data-dim="result">'
+        f'<label class="filter-label">Outcome</label>'
+        f'<div class="filter-chip-row">{result_chips}</div>'
+        f'</div>'
+        f'<div class="filter-group" data-dim="severity">'
+        f'<label class="filter-label">Severity</label>'
+        f'<div class="filter-chip-row">{severity_chips}</div>'
+        f'</div>'
+        f'{slider_html}'
+        f'<div class="filter-group" data-dim="category">{category_dd}</div>'
+        + (f'<div class="filter-group" data-dim="agent">{agent_dd}</div>' if agent_dd else '')
+        + f'<div class="filter-group" data-dim="more">{more_dd}</div>'
+        f'<div class="filter-rail-footer">{esc(counter)}</div>'
+    )
+    return (
+        f'<form id="filter-form" class="filter-form filter-form--redteam"'
+        f' hx-post="/r/{esc(rid)}/filter"'
+        f' hx-trigger="change"'
+        f' hx-target="#filter-swap"'
+        f' hx-swap="outerHTML">'
+        f'{inner}'
+        f'</form>'
+    )
+
+
 def render_filter_form(
     rid: str,
     surface: str,
     opts: dict[str, list[str]],
     selections: dict[str, list[str]],
+    *,
+    shown: int | None = None,
+    total: int | None = None,
 ) -> str:
     """Render the HTMX filter sidebar form as an HTML fragment.
 
@@ -596,10 +874,18 @@ def render_filter_form(
         opts:       Option lists per dimension (from ``FilterDef.options`` or
                     ``FilterDef.recompute_options``).
         selections: Currently active selections per dimension.
+        shown:      Count of currently-shown results (sim rail footer counter).
+        total:      Total unfiltered result count (sim rail footer counter).
+                    Ignored by the redteam branch.
 
     Returns:
         An HTML ``<form>`` fragment suitable for injection into the sidebar.
     """
+    if surface == 'sim':
+        return _render_sim_filter_rail(rid, opts, selections, shown=shown, total=total)
+    if surface == 'redteam':
+        return _render_redteam_filter_rail(rid, opts, selections, shown=shown, total=total)
+
     from evaluatorq.dashboard.filters import FILTERS
 
     filter_def = FILTERS.get(surface)
@@ -684,10 +970,10 @@ def filter_fragment(
     return (
         f'<div id="filter-swap" class="filter-swap-container"'
         f' data-rid="{esc(rid)}">'
-        f'{form_html}'
         f'<div class="report-body-area">'
         f'{body_html}'
         f'</div>'
+        f'{form_html}'
         f'</div>'
     )
 
@@ -707,96 +993,39 @@ def report_view_with_filters(
     return f'<section class="report-view">{swap}</section>'
 
 
-_DOWNLOAD_SIDEBAR_ID = 'download-sidebar'
-
-
-def download_sidebar(
-    rid: str,
-    surface: str,
-    *,
-    selections: dict[str, list[str]] | None = None,
-    has_markdown: bool = False,
-    has_csv: bool = False,
-    oob: bool = False,
-) -> str:
-    """Render the download links sidebar for a report page.
-
-    Generates a ``<section id="download-sidebar" class="download-sidebar">``
-    containing links for the available export formats for *surface*.  CSV/JSON
-    links carry the active filter query-string so the downloaded data reflects
-    the currently filtered set.
-
-    The sidebar has a stable ``id`` (``"download-sidebar"``) so it can be
-    targeted by HTMX out-of-band swaps after filter POSTs.
-
-    Args:
-        rid:          Report ID (URL-safe).
-        surface:      Surface key (``'redteam'`` | ``'sim'``).
-        selections:   Active filter selections as ``dict[str, list[str]]``.
-                      When provided, filter params are appended to CSV/JSON
-                      download links so the downloaded data reflects the
-                      currently filtered set.
-        has_markdown: Whether to include a Markdown download link.
-        has_csv:      Whether to include a CSV download link.
-        oob:          When ``True``, add ``hx-swap-oob="true"`` so HTMX
-                      replaces the sidebar in-place without it being inside
-                      the primary swap target.
-
-    Returns:
-        An HTML ``<section>`` fragment.
-    """
-    safe_rid = esc(rid)
-
-    # Build the query-string from selections (multi-value) using urlencode so
-    # that & separators are NOT HTML-escaped.  Only the rid path segment is
-    # escaped via esc().
-    if selections:
-        # Flatten dict[str, list[str]] → list of (key, val) pairs for urlencode.
-        pairs: list[tuple[str, str]] = [(k, v) for k, vals in selections.items() for v in vals]
-        qs = f'?{urlencode(pairs)}' if pairs else ''
-    else:
-        qs = ''
-
-    oob_attr = ' hx-swap-oob="true"' if oob else ''
-
-    links: list[str] = [
-        f'<a class="download-link" href="/r/{safe_rid}/export.html">HTML</a>',
-    ]
-    if has_markdown:
-        links.append(f'<a class="download-link" href="/r/{safe_rid}/export.md">Markdown</a>')
-    if has_csv:
-        links.append(f'<a class="download-link" href="/r/{safe_rid}/export.csv{qs}">CSV</a>')
-    links.append(f'<a class="download-link" href="/r/{safe_rid}/export.json{qs}">JSON</a>')
-
-    inner = '\n'.join(links)
-    return (
-        f'<section id="{_DOWNLOAD_SIDEBAR_ID}" class="download-sidebar"{oob_attr}>'
-        f'<h3 class="download-title">Downloads</h3>{inner}</section>'
-    )
-
-
 def render_message_list(
     messages: list[Any],
     *,
     role_labels: dict[str, str],
     class_prefix: str,
 ) -> str:
-    """Render a role-labeled message list as a series of ``<div>`` elements.
+    """Render a role-labeled message list as a series of chat-bubble ``<div>``s.
 
     Each message produces:
 
     .. code-block:: html
 
         <div class="{class_prefix}-msg {class_prefix}-msg-{css_role}">
-          <span class="{class_prefix}-msg-role">{label}</span>
-          <pre class="{class_prefix}-msg-content">{esc(content)}</pre>
+          <span class="{class_prefix}-msg-avatar">{label}</span>
+          <div class="{class_prefix}-msg-bubble">
+            <span class="{class_prefix}-msg-role">{label}</span>
+            <pre class="{class_prefix}-msg-content">{esc(content)}</pre>
+          </div>
         </div>
 
     Where ``{css_role}`` is the raw role value when it is one of
     ``user``, ``assistant``, ``system``, ``tool``; otherwise ``unknown``.
+    The ``{class_prefix}-msg-avatar`` span is a short glyph (e.g. "USR" /
+    "AGT" / "SYS" / "TOOL") taken straight from *role_labels* — callers that
+    want a compact avatar should pass short labels; the ``{css_role}`` class
+    is what CSS uses to put user/system on the left and assistant/tool on
+    the right (spec §Transcripts), so no separate "side" marker is needed.
 
     Every content string is passed through ``esc()`` (HTML-escaping) to
-    prevent stored-XSS vectors.
+    prevent stored-XSS vectors. This is purely additive over the prior
+    shape (avatar span + bubble wrapper added); the ``{class_prefix}-msg
+    {class_prefix}-msg-{css_role}`` outer class and the ``-msg-role`` /
+    ``-msg-content`` elements are unchanged, so existing callers keep working.
 
     Args:
         messages:     Sequence of message dicts (``role`` / ``content`` keys)
@@ -824,11 +1053,15 @@ def render_message_list(
         content_text: str = raw_content if isinstance(raw_content, str) else str(raw_content or '')
         safe_content = esc(content_text)
         css_role = role if role in known_roles else 'unknown'
+        safe_label = esc(label)
 
         parts.append(
             f'<div class="{class_prefix}-msg {class_prefix}-msg-{esc(css_role)}">'
-            f'<span class="{class_prefix}-msg-role">{esc(label)}</span>'
+            f'<span class="{class_prefix}-msg-avatar">{safe_label}</span>'
+            f'<div class="{class_prefix}-msg-bubble">'
+            f'<span class="{class_prefix}-msg-role">{safe_label}</span>'
             f'<pre class="{class_prefix}-msg-content">{safe_content}</pre>'
+            f'</div>'
             f'</div>'
         )
 
@@ -836,32 +1069,30 @@ def render_message_list(
 
 
 def _sim_rowlist_wrapper(rid: str, inner: str) -> str:
-    """Wrap *inner* HTML in the HTMX container div for the sim row-list.
+    """Wrap *inner* HTML in a plain container div for the sim row-list.
 
-    The div re-fetches itself when the ``orq:filter-changed`` event fires,
-    carrying the current filter form values via ``hx-include``.  Both the
-    initial page render (``sim_interactive_panels``) and the HTMX fragment
-    route (``GET /r/{rid}/sim/row-list``) must return this identical wrapper
-    so that ``hx-swap="outerHTML"`` replaces the correct element.
+    Double-fetch removal (spec §Transcripts): ``POST /r/{rid}/filter`` already
+    re-renders the whole (filtered) report body — including this row list —
+    in a single response.  This wrapper previously *also* self-refetched via
+    ``hx-get``/``hx-trigger="orq:filter-changed"``, firing a redundant second
+    request for content the body swap had just delivered (about to get
+    heavier now that each row is a lazy-loading conversation card).  That
+    self-refetch is removed; the div is now an inert container and the
+    ``/filter`` POST body swap is the single refresh path.
+
+    ``GET /r/{rid}/sim/row-list`` stays registered as a route — it backs the
+    transcript endpoint's filtered-index contract for direct use — it is
+    simply no longer auto-triggered from here.
 
     Args:
         rid:   Report ID (URL-safe).
         inner: Already-rendered row-list HTML to embed inside the div.
 
     Returns:
-        An HTML ``<div hx-get=...>`` string.
+        An HTML ``<div>`` string wrapping *inner*.
     """
     safe_rid = esc(rid)
-    return (
-        f'<div'
-        f' hx-get="/r/{safe_rid}/sim/row-list"'
-        f' hx-trigger="orq:filter-changed from:body"'
-        f' hx-include="#filter-form"'
-        f' hx-target="this"'
-        f' hx-swap="outerHTML">'
-        f'{inner}'
-        f'</div>'
-    )
+    return f'<div id="sim-row-list-{safe_rid}">{inner}</div>'
 
 
 def sim_interactive_panels(rid: str, entries: list[Any]) -> str:
@@ -870,10 +1101,13 @@ def sim_interactive_panels(rid: str, entries: list[Any]) -> str:
     Embeds the sim row list table with HTMX-wired transcript drill-down panel.
     Parity: Streamlit ``_render_transcripts`` (dashboard.py:316-390).
 
-    The outer section carries ``hx-include="#filter-form"`` and
-    ``hx-trigger="load, orq:filter-changed from:body"`` so that every row's
-    ``hx-get`` request for the transcript detail automatically includes the
-    active filter selections, and the section reloads when the filter changes.
+    The row-list itself is a static container: it is refreshed wholesale by
+    the ``POST /r/{rid}/filter`` response body swap (see
+    ``_sim_rowlist_wrapper``), not by its own ``hx-trigger``. Each conversation
+    card's lazy-loaded transcript body carries ``hx-include="#filter-form"``
+    (see ``render_sim_row_list``), so its ``hx-get`` request for the
+    transcript detail includes the active filter selections and stays
+    consistent with the filtered list the card was rendered from.
 
     Args:
         rid:     Report ID (URL-safe).
@@ -887,108 +1121,7 @@ def sim_interactive_panels(rid: str, entries: list[Any]) -> str:
     row_list = render_sim_row_list(rid, entries)
     return (
         f'<section class="sim-interactive-panels">'
-        f'<h1 class="sim-panels-title">Conversations</h1>'
+        f'<h2 class="sim-panels-title">Conversations</h2>'
         f'{_sim_rowlist_wrapper(rid, row_list)}'
         f'</section>'
-    )
-
-
-def redteam_interactive_panels(rid: str) -> str:
-    """Render the interactive dashboard panels section for a redteam report.
-
-    Returns an HTML ``<section>`` containing four HTMX-wired panels that load
-    their content via ``GET /r/{rid}/view/*`` routes:
-
-    - Interactive breakdown (group_by x stack_by bar chart)
-    - Agent heatmap (dimension selector — multi-agent reports only)
-    - Conversation viewer (per-row transcript drill-down)
-    - Disagreement viewer (agent-pair side-by-side — multi-agent only)
-
-    Each panel placeholder ``<div>`` carries:
-
-    - ``hx-trigger="load, orq:filter-changed from:body"`` so it fetches on
-      initial page load AND refetches whenever the filter form fires the
-      ``orq:filter-changed`` custom event (emitted by the POST /filter handler
-      via the ``HX-Trigger`` response header).
-    - ``hx-include="#filter-form"`` so each ``hx-get`` carries the current
-      filter selections as query params, giving the view routes the same filter
-      state the static body already uses.
-
-    The panel-own params (group_by, stack_by, dim, a, b, page, idx) live in the
-    ``hx-get`` URL and are preserved by ``hx-include`` being additive (it only
-    appends form fields; it does not replace URL params).  The filter dimension
-    names (result, agent, category, severity, technique, delivery_method,
-    vulnerability) do not collide with any panel-own param names.
-
-    Task 6's ``dashboard.js`` re-embeds ``render_embed`` Vega charts after
-    each HTMX swap.
-    """
-    return (
-        f'<section class="rt-interactive-panels">'
-        f'<h1 class="rt-panels-title">Interactive Analysis</h1>'
-        f'{rt_panel_breakdown(rid)}'
-        f'{rt_panel_agent_heatmap(rid)}'
-        f'{rt_panel_conversation(rid)}'
-        f'{rt_panel_disagreement(rid)}'
-        f'</section>'
-    )
-
-
-def _rt_lazy_panel(rid: str, *, panel_id: str, title: str, path: str, loading: str) -> str:
-    """One HTMX-lazy redteam panel: fetches ``/r/{rid}/view/{path}`` on load and
-    whenever the filter form fires ``orq:filter-changed``, carrying the current
-    filter selections via ``hx-include``."""
-    safe_rid = esc(rid)
-    return (
-        f'<div class="rt-panel" id="{panel_id}">'
-        f'<h2 class="rt-panel-title">{esc(title)}</h2>'
-        f'<div'
-        f' hx-get="/r/{safe_rid}/view/{path}"'
-        f' hx-trigger="load, orq:filter-changed from:body"'
-        f' hx-include="#filter-form"'
-        f' hx-target="this"'
-        f' hx-swap="outerHTML">'
-        f'<p class="rt-panel-loading">{esc(loading)}</p>'
-        f'</div>'
-        f'</div>'
-    )
-
-
-def rt_panel_breakdown(rid: str) -> str:
-    return _rt_lazy_panel(
-        rid,
-        panel_id='panel-breakdown',
-        title='Interactive Breakdown',
-        path='breakdown?group_by=vulnerability&amp;stack_by=none',
-        loading='Loading breakdown…',
-    )
-
-
-def rt_panel_agent_heatmap(rid: str) -> str:
-    return _rt_lazy_panel(
-        rid,
-        panel_id='panel-agent-heatmap',
-        title='Agent Heatmap',
-        path='agent-heatmap?dim=vulnerability',
-        loading='Loading heatmap…',
-    )
-
-
-def rt_panel_conversation(rid: str) -> str:
-    return _rt_lazy_panel(
-        rid,
-        panel_id='panel-conversation',
-        title='Conversation Viewer',
-        path='conversation?idx=0',
-        loading='Loading conversation viewer…',
-    )
-
-
-def rt_panel_disagreement(rid: str) -> str:
-    return _rt_lazy_panel(
-        rid,
-        panel_id='panel-disagreement',
-        title='Disagreement Viewer',
-        path='disagreement?page=1',
-        loading='Loading disagreement viewer…',
     )

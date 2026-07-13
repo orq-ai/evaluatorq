@@ -2,6 +2,14 @@ import logging
 
 import pytest
 
+from evaluatorq.common.llm_call import reset_reasoning_rejectors
+
+
+@pytest.fixture(autouse=True)
+def _reset_reasoning_rejectors():
+    """The per-model rejection memo is process-lifetime; isolate each test."""
+    reset_reasoning_rejectors()
+
 
 @pytest.fixture(autouse=True)
 def _isolate_run_stores(tmp_path, monkeypatch):

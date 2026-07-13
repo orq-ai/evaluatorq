@@ -627,6 +627,11 @@ def _build_agent_context_section(report: RedTeamReport) -> ReportSection | None:
         for agent_key, ctx in report.agent_contexts.items():
             agents.append({
                 'key': agent_key,
+                # id/workspace_id/target_kind drive the optional Studio deep-link
+                # (orq_links.orq_studio_url); absent for non-orq targets.
+                'id': ctx.id,
+                'workspace_id': ctx.workspace_id,
+                'target_kind': ctx.target_kind,
                 'display_name': ctx.display_name or agent_key,
                 'model': ctx.model or '',
                 'description': ctx.description or '',

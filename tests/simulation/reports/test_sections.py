@@ -346,6 +346,8 @@ def test_failures_first_lists_only_failures_with_descriptions(make_result):
     assert row['persona'] == 'B' and row['scenario'] == 'Y'
     assert row['violated'] == ['explain charge']
     assert 'criteria_0' not in str(row['violated'])  # description shown, not id
+    # criteria carries every check (pass + fail) for the collapsible dot view
+    assert row['criteria'] == [{'description': 'explain charge', 'passed': False, 'safety': False}]
 
 
 # ---------------------------------------------------------------------------
@@ -376,8 +378,8 @@ def test_new_section_kinds_present(make_result):
 
 def test_persona_scenario_heatmap_matrix(make_result):
     results = [
-        make_result(goal_achieved=True, persona='A', scenario='X'),
-        make_result(goal_achieved=False, persona='A', scenario='Y'),
+        make_result(goal_achieved=True, score=0.9, persona='A', scenario='X'),
+        make_result(goal_achieved=False, score=0.4, persona='A', scenario='Y'),
     ]
     s = next(x for x in build_report_sections(results) if x.kind == 'persona_scenario_heatmap')
     assert s.data['personas'] == ['A']
@@ -385,6 +387,10 @@ def test_persona_scenario_heatmap_matrix(make_result):
     # success-rate cell for (A, X) == 1.0, (A, Y) == 0.0
     cell = {(c['persona'], c['scenario']): c['success_rate'] for c in s.data['cells']}
     assert cell[('A', 'X')] == 1.0 and cell[('A', 'Y')] == 0.0
+    # avg_score decouples from the 0/1 rate — the heatmap tints on this, so a
+    # failed-but-partial cell shows a gradient value, not a flat 0.
+    score = {(c['persona'], c['scenario']): c['avg_score'] for c in s.data['cells']}
+    assert score[('A', 'X')] == 0.9 and score[('A', 'Y')] == 0.4
 
 
 def test_overview_section_includes_traits_and_goal_when_present():

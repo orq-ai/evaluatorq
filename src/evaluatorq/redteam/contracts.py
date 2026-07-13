@@ -1247,6 +1247,7 @@ class JobOutputPayload(BaseModel):
     error_turn: int | None = None
     truncated_turns: list[int] = Field(default_factory=list)
     finish_reason: str | None = None
+    thread_id: str | None = None
 
     @property
     def response_text(self) -> str:
@@ -1300,6 +1301,10 @@ class RedTeamResult(BaseModel):
     error_stage: str | None = None
     error_code: str | None = None
     error_details: dict[str, Any] | None = None
+    thread_id: str | None = Field(
+        default=None,
+        description='Orq observability thread id ({run_id}:{agent_key}:{index}); None for older reports.',
+    )
 
     @property
     def error_info(self) -> 'RunError | None':
@@ -1503,6 +1508,12 @@ class RedTeamReport(BaseModel):
     duration_seconds: float | None = None
     pipeline_warnings: list[str] = Field(default_factory=list)
     experiment_url: str | None = None
+    run_id: str | None = Field(
+        default=None,
+        description='Client-minted run-grouping id (uuid hex, not an Orq-side run/experiment id) '
+        'shared by every attack\'s thread_id; powers the dashboard "View all run traces" '
+        'deep-link. None for older reports.',
+    )
 
     @field_validator('pipeline', mode='before')
     @classmethod

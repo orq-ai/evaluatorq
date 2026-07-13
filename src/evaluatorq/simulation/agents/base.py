@@ -11,12 +11,13 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from openai import BadRequestError
 
 from evaluatorq.common.llm_call import execute_chat_completion
 from evaluatorq.common.retry import with_retry
+from evaluatorq.common.thread_context import thread_body_param
 from evaluatorq.common.tracing import get_trace_context_headers, record_llm_input, record_llm_response
 from evaluatorq.contracts import (
     AgentResponse,
@@ -97,6 +98,7 @@ class AgentConfig:
     model: str = DEFAULT_MODEL
     client: AsyncOpenAI | None = None
     api_key: str | None = None
+    api: Literal['chat_completions', 'responses'] = 'chat_completions'
 
 
 def _config_from_agent_config(agent_cfg: AgentConfig) -> tuple[LLMCallConfig, str | None]:
@@ -105,6 +107,7 @@ def _config_from_agent_config(agent_cfg: AgentConfig) -> tuple[LLMCallConfig, st
         LLMCallConfig(
             model=agent_cfg.model,
             client=agent_cfg.client,
+            api=agent_cfg.api,
         ),
         agent_cfg.api_key,
     )
@@ -378,6 +381,9 @@ class BaseAgent(ABC):
                 call_kwargs: dict[str, Any] = dict(params)
                 if trace_headers:
                     call_kwargs['extra_headers'] = trace_headers
+                thread = thread_body_param()
+                if thread:
+                    call_kwargs['extra_body'] = {**call_kwargs.get('extra_body', {}), **thread}
                 try:
                     response = await asyncio.wait_for(
                         self._client.responses.create(**call_kwargs),

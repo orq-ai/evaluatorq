@@ -676,7 +676,7 @@ async def test_on_run_complete_gets_partial_results_when_a_row_is_dropped(datapo
             turn_metrics=[],
         )
 
-    async def fake_run(self, *, datapoint, max_turns):
+    async def fake_run(self, *, datapoint, max_turns, thread_id=None):
         # 'dp-bad' raises uncaught so its job is recorded with no cached result
         # (a dropped row); 'dp-good' returns a real result.
         if datapoint.id == 'dp-bad':

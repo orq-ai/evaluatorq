@@ -18,10 +18,18 @@ import typer
 # Top-level application
 # ---------------------------------------------------------------------------
 
+# Two CLI-help incompatibilities are worked around here (see tests/test_cli_version.py):
+#   1. rich_markup_mode=None — typer's Rich help renderer silently emits nothing
+#      with our pinned Rich (14.x), so `eq --help` printed an empty page. Falling
+#      back to Click's plain formatter fixes it; Rich is still used elsewhere
+#      (tables/progress).
+#   2. no_args_is_help is NOT set — on Click >=8.2 it raises NoArgsIsHelpError,
+#      which typer doesn't render, so bare `eq` exited 2 with no output. The
+#      callback below prints help explicitly instead (works across versions).
 app = typer.Typer(
     name='evaluatorq',
     help='Evaluation framework for AI systems.',
-    no_args_is_help=True,
+    rich_markup_mode=None,
 )
 
 
@@ -33,14 +41,20 @@ def _version_callback(value: bool) -> None:  # noqa: FBT001
         raise typer.Exit
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def _main(
+    ctx: typer.Context,
     version: Annotated[  # noqa: FBT002 — eager callback consumes it
         bool,
         typer.Option('--version', help='Show version and exit.', callback=_version_callback, is_eager=True),
     ] = False,
 ) -> None:
     """Evaluation framework for AI systems."""
+    # Bare `eq` (no subcommand) prints help and exits — replaces the unreliable
+    # no_args_is_help path (see the app definition above).
+    if ctx.invoked_subcommand is None:
+        typer.echo(ctx.get_help())
+        raise typer.Exit
 
 
 # ---------------------------------------------------------------------------
@@ -91,10 +105,15 @@ def dashboard(
     if path is None:
         roots = None  # library.py picks the defaults
     elif path.is_dir():
-        # Also include the store subdirs so pointing at a `.evaluatorq` root
-        # (which holds runs/ + sim-runs/, not top-level *.json) still resolves.
-        # Non-existent subdirs are skipped by the scanner.
-        roots = [path, path / 'runs', path / 'sim-runs']
+        # Include direct stores and the conventional repository-local
+        # `.evaluatorq/` stores. Non-existent subdirs are skipped by the scanner.
+        roots = [
+            path,
+            path / 'runs',
+            path / 'sim-runs',
+            path / '.evaluatorq' / 'runs',
+            path / '.evaluatorq' / 'sim-runs',
+        ]
     else:
         # Scan the parent so the report resolves, but surface the direct link.
         roots = [path.parent]
