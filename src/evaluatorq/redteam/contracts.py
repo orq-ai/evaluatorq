@@ -1494,6 +1494,11 @@ class RedTeamReport(BaseModel):
         description='LLM-generated actionable recommendations for top risk areas (populated when generate_recommendations=True)',
     )
 
+    executive_summary: str | None = Field(
+        default=None,
+        description='LLM-generated narrative executive summary (populated when generate_executive_summary=True)',
+    )
+
     token_usage_summary: TokenUsage | None = None
     duration_seconds: float | None = None
     pipeline_warnings: list[str] = Field(default_factory=list)
