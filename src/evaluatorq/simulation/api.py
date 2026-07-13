@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MODEL
-from evaluatorq.simulation.utils.run_store import auto_save_run, build_simulation_run, write_report
+from evaluatorq.simulation.utils.run_store import auto_save_run, build_simulation_run, fetch_agent_info, write_report
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -709,6 +709,10 @@ async def _simulate_core(
         # collision-exhaustion RuntimeError) must NOT discard a completed, paid-for
         # run. Log and still return results — the saved file is a convenience.
         try:
+            agent_info = None
+            if target_kind == 'orq_agent':
+                agent_key = getattr(target_agent, 'agent_key', None) or target_name.removeprefix('agent:')
+                agent_info = await fetch_agent_info(agent_key)
             run = build_simulation_run(
                 run_name=evaluation_name or 'sim',
                 mode='simulate' if caller == 'simulate' else 'run',
@@ -716,6 +720,7 @@ async def _simulate_core(
                 target=target_name,
                 target_model=target_model if isinstance(target_model, str) else None,
                 max_turns=max_turns,
+                agent_info=agent_info,
                 evaluator_names=resolved_evaluator_names,
                 results=results,
             )

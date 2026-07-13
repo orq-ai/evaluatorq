@@ -347,6 +347,10 @@ class SimulationRun(BaseModel):
     # Configured turn cap for the run. Optional for back-compat with runs saved
     # before this field existed (older reports simply omit the Config row).
     max_turns: int | None = None
+    # Snapshot of the ORQ agent's configuration at run time (orq_agent targets
+    # only; None for other target kinds, fetch failures, and pre-existing runs).
+    # Deliberately excludes the system prompt / instructions.
+    agent_info: dict[str, Any] | None = None
     evaluator_names: list[str]
     total_results: int
     scorer_averages: dict[str, float]

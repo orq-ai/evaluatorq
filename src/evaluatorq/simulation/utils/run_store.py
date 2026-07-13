@@ -12,7 +12,9 @@ Saved runs land in ``.evaluatorq/sim-runs/`` under collision-free
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +26,61 @@ from evaluatorq.simulation.types import SimulationRun
 logger = logging.getLogger(__name__)
 
 SIM_RUNS_DIR_NAME = Path('.evaluatorq') / 'sim-runs'
+
+
+async def fetch_agent_info(agent_key: str) -> dict[str, Any] | None:
+    """Best-effort snapshot of an ORQ agent's configuration, for the run-store
+    record. Never raises — no API key, network errors, and unknown agents all
+    just result in ``None`` so a save can't be delayed or fail on this.
+
+    Deliberately excludes the agent's system prompt / instructions.
+    """
+    api_key = os.getenv('ORQ_API_KEY')
+    if not api_key:
+        return None
+
+    try:
+        from evaluatorq.fetch_data import setup_orq_client
+
+        orq_client = setup_orq_client(api_key)
+        agent_data = await asyncio.to_thread(orq_client.agents.retrieve, agent_key=agent_key)
+
+        agent_id = getattr(agent_data, '_id', None) or getattr(agent_data, 'id', None)
+        model = getattr(agent_data, 'model', None)
+        model_id = getattr(model, 'id', None) if model is not None else None
+
+        settings = getattr(agent_data, 'settings', None)
+        raw_tools = getattr(settings, 'tools', None) if settings is not None else None
+        tools = [getattr(t, 'display_name', None) or getattr(t, 'key', None) for t in raw_tools or []]
+
+        raw_kbs = getattr(agent_data, 'knowledge_bases', None) or []
+        knowledge_bases = [kb if isinstance(kb, str) else getattr(kb, 'knowledge_id', None) for kb in raw_kbs]
+
+        raw_stores = getattr(agent_data, 'memory_stores', None) or []
+        memory_stores = [ms if isinstance(ms, str) else getattr(ms, 'key', None) for ms in raw_stores]
+
+        raw_sub_agents = getattr(agent_data, 'team_of_agents', None) or []
+        sub_agents = [a.get('key') if isinstance(a, dict) else getattr(a, 'key', None) for a in raw_sub_agents]
+
+        base_url = os.getenv('ORQ_BASE_URL', 'https://my.orq.ai').rstrip('/')
+        url = f'{base_url}/project/agents/{agent_id}' if agent_id else None
+
+        return {
+            'key': agent_key,
+            'id': agent_id,
+            'role': getattr(agent_data, 'role', None),
+            'description': getattr(agent_data, 'description', None),
+            'model': model_id,
+            'tools': tools,
+            'knowledge_bases': knowledge_bases,
+            'memory_stores': memory_stores,
+            'sub_agents': sub_agents,
+            'base_url': base_url,
+            'url': url,
+        }
+    except Exception as exc:
+        logger.warning('Failed to fetch agent_info for %r: %r', agent_key, exc)
+        return None
 
 
 def sanitise_run_name(name: str) -> str:
@@ -49,6 +106,7 @@ def build_simulation_run(
     target: str | None = None,
     target_model: str | None = None,
     max_turns: int | None = None,
+    agent_info: dict[str, Any] | None = None,
 ) -> SimulationRun:
     """Build the full ``SimulationRun`` report model from results.
 
@@ -77,6 +135,7 @@ def build_simulation_run(
         target=target,
         target_model=target_model,
         max_turns=max_turns,
+        agent_info=agent_info,
         evaluator_names=evaluator_names,
         total_results=len(results),
         scorer_averages=scorer_averages,
