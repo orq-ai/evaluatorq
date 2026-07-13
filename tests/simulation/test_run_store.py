@@ -346,7 +346,7 @@ def test_sim_runs_dir_name_is_path() -> None:
 
 
 # ---------------------------------------------------------------------------
-# SDK save wiring: simulate(save=..., run_output=...) through _simulate_core
+# SDK save wiring: simulate(save=..., report=...) through _simulate_core
 # (plan Verification §3). Patches the choke point _simulate_via_evaluatorq so
 # no LLM/runner is needed — exercises the save gate, target_kind, and branch.
 # ---------------------------------------------------------------------------
@@ -415,13 +415,21 @@ async def test_simulate_save_false_writes_nothing(tmp_path: Path, monkeypatch: p
 
 
 @pytest.mark.asyncio
-async def test_simulate_run_output_writes_explicit_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_simulate_report_writes_explicit_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     auto_dir = tmp_path / "auto"
     auto_dir.mkdir()
     explicit = tmp_path / "nested" / "explicit.json"
-    await _run_simulate(runs_dir=auto_dir, monkeypatch=monkeypatch, save=True, run_output=str(explicit))
+    await _run_simulate(runs_dir=auto_dir, monkeypatch=monkeypatch, save=True, report=str(explicit))
     assert explicit.exists()
     assert list(auto_dir.glob("*.json")) == []  # explicit path bypasses auto-save dir
+
+
+@pytest.mark.asyncio
+async def test_simulate_run_output_alias_deprecated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    explicit = tmp_path / "legacy.json"
+    with pytest.warns(DeprecationWarning, match="run_output"):
+        await _run_simulate(runs_dir=tmp_path, monkeypatch=monkeypatch, save=True, run_output=str(explicit))
+    assert explicit.exists()
 
 
 @pytest.mark.asyncio

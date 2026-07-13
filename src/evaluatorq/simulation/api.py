@@ -72,7 +72,7 @@ async def simulate(
     orq_results_path: str | None = None,
     exit_on_failure: bool = True,
     save: bool = False,
-    run_output: str | Path | None = None,
+    report: str | Path | None = None,
     **deprecated_kwargs: Any,
 ) -> list[SimulationResult]:
     """Run agent simulations through the evaluatorq() framework.
@@ -123,11 +123,26 @@ async def simulate(
             from ``simulate()`` itself. Both exit non-zero when uncaught. Pass
             ``False`` for interactive / exploratory runs where failures
             should surface as warnings + error metadata instead.
+        save: When ``True``, persist the completed run to the local run store
+            (``.evaluatorq/sim-runs/`` unless ``report`` is set). Unlike the CLI
+            (which auto-saves to ``.evaluatorq/sim-runs/`` by default), the SDK
+            defaults to ``save=False`` — the caller opts in.
+        report: Optional path to write the full SimulationRun report JSON
+            (results + scorer averages + metadata). When omitted and ``save``
+            is ``True``, the run is auto-saved under ``.evaluatorq/sim-runs/``.
+            ``run_output`` is accepted as a deprecated alias for this parameter.
     """
-    from evaluatorq.simulation._target_alias import resolve_target_alias
+    from evaluatorq.simulation._target_alias import resolve_renamed_kwarg, resolve_target_alias
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
 
+    report = resolve_renamed_kwarg(
+        new_value=report,
+        deprecated_kwargs=deprecated_kwargs,
+        old_name='run_output',
+        new_name='report',
+        caller='simulate',
+    )
     target = resolve_target_alias(target=target, deprecated_kwargs=deprecated_kwargs, caller='simulate')
     await init_tracing_if_needed()
 
@@ -160,7 +175,7 @@ async def simulate(
                 orq_results_path=orq_results_path,
                 exit_on_failure=exit_on_failure,
                 save=save,
-                run_output=run_output,
+                run_output=report,
                 pipeline_span=pipeline_span,
                 hooks=hooks,
             )
@@ -189,7 +204,7 @@ async def generate_and_simulate(
     exit_on_failure: bool = True,
     emit_datapoints: EmitDatapoints | None = None,
     save: bool = False,
-    run_output: str | Path | None = None,
+    report: str | Path | None = None,
     **deprecated_kwargs: Any,
 ) -> list[SimulationResult]:
     """Generate personas/scenarios, then run simulations via evaluatorq().
@@ -216,13 +231,30 @@ async def generate_and_simulate(
     ``emit_datapoints``: Optional callback invoked with the generated datapoints
     before simulation — used by the CLI's ``--save-datapoints`` to persist the
     exact inputs.
+
+    ``save``: When ``True``, persist the completed run to the local run store
+    (``.evaluatorq/sim-runs/`` unless ``report`` is set). Unlike the CLI (which
+    auto-saves to ``.evaluatorq/sim-runs/`` by default), the SDK defaults to
+    ``save=False`` — the caller opts in.
+
+    ``report``: Optional path to write the full SimulationRun report JSON
+    (results + scorer averages + metadata). When omitted and ``save`` is
+    ``True``, the run is auto-saved under ``.evaluatorq/sim-runs/``.
+    ``run_output`` is accepted as a deprecated alias for this parameter.
     """
     from evaluatorq.common.async_utils import await_maybe
-    from evaluatorq.simulation._target_alias import resolve_target_alias
+    from evaluatorq.simulation._target_alias import resolve_renamed_kwarg, resolve_target_alias
     from evaluatorq.simulation.hooks import DefaultHooks, SimStage
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
 
+    report = resolve_renamed_kwarg(
+        new_value=report,
+        deprecated_kwargs=deprecated_kwargs,
+        old_name='run_output',
+        new_name='report',
+        caller='generate_and_simulate',
+    )
     target = resolve_target_alias(
         target=target,
         deprecated_kwargs=deprecated_kwargs,
@@ -300,7 +332,7 @@ async def generate_and_simulate(
                     orq_results_path=orq_results_path,
                     exit_on_failure=exit_on_failure,
                     save=save,
-                    run_output=run_output,
+                    run_output=report,
                     pipeline_span=pipeline_span,
                     hooks=hooks,
                 )

@@ -195,8 +195,8 @@ def write_report(run: SimulationRun, output: Path) -> None:
     this honours the user-supplied path verbatim, creating parent dirs and
     **overwriting** any existing file. Prefer :func:`auto_save_run` for routine
     persistence — a fixed path here will clobber a prior run. Intentionally not
-    part of the public package API; it backs the explicit ``run_output``/
-    ``--report-output`` opt-in only.
+    part of the public package API; it backs the explicit ``report``/
+    ``--report`` opt-in only.
     """
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(run.model_dump_json(indent=2), encoding='utf-8')
