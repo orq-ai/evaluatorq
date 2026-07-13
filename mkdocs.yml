@@ -203,7 +203,6 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - FAQ: faq.md
   - Setup:
       - Configuration: configuration.md
       - Tracing: tracing.md
@@ -224,6 +223,7 @@ nav:
           - Overview: cli-reference/overview.md
           - Red Teaming: cli-reference/redteam.md
           - Simulation: cli-reference/simulation.md
+  - FAQ: faq.md
   - About:
       - Contributing: contributing.md
       - Changelog: changelog.md
