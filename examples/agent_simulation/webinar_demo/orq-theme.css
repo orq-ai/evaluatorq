@@ -1,0 +1,359 @@
+/* ORQ Research Update - RevealJS Custom Theme */
+
+/*-- scss:defaults --*/
+
+$presentation-heading-color: #000000;
+$body-color: #000000;
+$link-color: #FF6B4A;
+$presentation-font-size-root: 32px;
+
+/*-- scss:rules --*/
+
+/* === Color Variables === */
+:root {
+  --orq-orange: #FF6B4A;
+  --orq-orange-light: #FF8B6A;
+  --orq-red: #FF4A4A;
+  --orq-cyan: #00D4D4;
+  --orq-gray: #808080;
+  --orq-gray-light: #999999;
+  --orq-bg-light: #F5F5F5;
+  --orq-border-gray: #DDDDDD;
+  --orq-blue: #6B7FFF;
+  --orq-purple: #9B6BFF;
+}
+
+/* === Base Styling === */
+.reveal {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+}
+
+.reveal .slides {
+  text-align: left;
+}
+
+.reveal .slide-background {
+  background-color: var(--orq-bg-light);
+}
+
+/* === Title Slide === */
+.reveal .quarto-title-block {
+  text-align: left !important;
+}
+
+.reveal .quarto-title-block h1.title {
+  font-size: 6rem !important;
+  font-weight: 400 !important;
+  color: #000000 !important;
+  text-align: left !important;
+  position: absolute !important;
+  bottom: 20% !important;
+  left: 5% !important;
+  line-height: 1.1 !important;
+  text-transform: none !important;
+  margin: 0 !important;
+  max-width: 80%;
+}
+
+.reveal .quarto-title-block .subtitle,
+.reveal .quarto-title-block .quarto-title-authors,
+.reveal .quarto-title-block .quarto-title-author,
+.reveal .quarto-title-block .author,
+.reveal .quarto-title-block .date,
+.reveal .quarto-title-block .institute {
+  display: none !important;
+}
+
+/* Disable centering on title slide */
+.reveal .quarto-title-block.center {
+  text-align: left !important;
+}
+
+.reveal section.quarto-title-block.center > h1 {
+  text-align: left !important;
+}
+
+/* Logo positioning */
+.reveal .slide-logo {
+  position: fixed !important;
+  bottom: 1.5rem !important;
+  right: 1.5rem !important;
+  height: 32px !important;
+  max-height: 32px !important;
+  width: auto !important;
+}
+
+/* === Typography === */
+.reveal h1 {
+  font-size: 4rem;
+  font-weight: 700;
+  color: #000000;
+  text-transform: none;
+}
+
+.reveal h2 {
+  font-size: 3rem;
+  font-weight: 700;
+  color: #000000;
+  text-transform: none;
+  margin-bottom: 1rem;
+}
+
+.reveal h3 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: #000000;
+  text-transform: none;
+  margin-bottom: 0.75rem;
+  margin-top: 0;
+}
+
+.reveal h4 {
+  font-size: 1.2rem;
+  font-weight: 600;
+  font-style: italic;
+  color: #000000;
+  margin-bottom: 0.5rem;
+}
+
+/* === Section Header === */
+.section-header {
+  font-size: 1.1rem !important;
+  font-weight: 600 !important;
+  color: var(--orq-orange) !important;
+  text-transform: none !important;
+  margin-bottom: 1.5rem !important;
+  display: block;
+}
+
+/* === Quarter Title Styling === */
+.quarter-title {
+  font-size: 4rem !important;
+  font-weight: 700 !important;
+  color: #000000 !important;
+  display: block;
+  margin-bottom: 0.25rem !important;
+  line-height: 1 !important;
+}
+
+.quarter-subtitle {
+  font-size: 2rem !important;
+  font-weight: 400 !important;
+  color: var(--orq-gray) !important;
+  display: block;
+}
+
+/* === Two Column Layout === */
+.two-column-layout {
+  display: grid !important;
+  grid-template-columns: 30% 70% !important;
+  gap: 2rem !important;
+  height: 70vh !important;
+  align-items: start !important;
+  margin-top: 1rem;
+}
+
+.left-column {
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: flex-start !important;
+  padding-top: 0 !important;
+}
+
+.right-column {
+  height: 100%;
+}
+
+/* === 2x2 Grid Layout === */
+.grid-2x2 {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr !important;
+  grid-template-rows: 1fr 1fr !important;
+  gap: 0 !important;
+  border: 2px solid var(--orq-border-gray) !important;
+  height: 100% !important;
+  background: white;
+}
+
+.grid-item {
+  padding: 1.25rem !important;
+  border-right: 1px solid var(--orq-border-gray) !important;
+  border-bottom: 1px solid var(--orq-border-gray) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden;
+}
+
+.grid-item:nth-child(2),
+.grid-item:nth-child(4) {
+  border-right: none !important;
+}
+
+.grid-item:nth-child(3),
+.grid-item:nth-child(4) {
+  border-bottom: none !important;
+}
+
+.grid-item h3 {
+  font-size: 1.82rem !important;
+  font-weight: 600 !important;
+  color: #000000 !important;
+  margin-bottom: 0.75rem !important;
+  margin-top: 0 !important;
+}
+
+.grid-item ul {
+  list-style: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  font-size: 1.24rem !important;
+  line-height: 1.5 !important;
+  color: var(--orq-gray) !important;
+}
+
+.grid-item li {
+  margin-bottom: 0.4rem !important;
+  padding-left: 1rem;
+  position: relative;
+}
+
+.grid-item li::before {
+  content: '-' !important;
+  position: absolute !important;
+  left: 0 !important;
+  color: #000000 !important;
+}
+
+/* === Name Tags === */
+.name-tags {
+  display: flex !important;
+  gap: 0.5rem !important;
+  margin-bottom: 0.75rem !important;
+  flex-wrap: wrap !important;
+}
+
+.name-tag {
+  padding: 0.2rem 0.6rem !important;
+  border-radius: 0.4rem !important;
+  font-weight: 600 !important;
+  font-size: 1.04rem !important;
+  display: inline-block !important;
+  background: transparent !important;
+  border: 2px solid !important;
+}
+
+.name-tag.bauke {
+  border-color: var(--orq-cyan) !important;
+  color: var(--orq-cyan) !important;
+}
+
+.name-tag.chiel {
+  border-color: var(--orq-red) !important;
+  color: var(--orq-red) !important;
+}
+
+.name-tag.arian {
+  border-color: var(--orq-blue) !important;
+  color: var(--orq-blue) !important;
+}
+
+.name-tag.amina {
+  border-color: var(--orq-purple) !important;
+  color: var(--orq-purple) !important;
+}
+
+.name-tag.karina {
+  border-color: var(--orq-orange) !important;
+  color: var(--orq-orange) !important;
+}
+
+.name-tag.cameron {
+  border-color: #4CAF50 !important;
+  color: #4CAF50 !important;
+}
+
+/* === Team Changes Styling === */
+.team-changes {
+  font-size: 1.8rem !important;
+  line-height: 2.2 !important;
+  margin-top: 2rem;
+}
+
+.team-changes p {
+  margin: 0.5rem 0 !important;
+}
+
+.team-changes .add {
+  color: var(--orq-orange) !important;
+  font-weight: 700;
+}
+
+.team-changes .remove {
+  color: var(--orq-red) !important;
+  font-weight: 700;
+}
+
+/* === Reflection Layout === */
+.reflection-layout {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr !important;
+  gap: 4rem !important;
+  margin-top: 2rem !important;
+}
+
+.reflection-column h3 {
+  font-size: 2.34rem !important;
+  font-weight: 700 !important;
+  color: #000000 !important;
+  margin-bottom: 1.5rem !important;
+}
+
+.reflection-column ul {
+  font-size: 1.43rem !important;
+  line-height: 1.8 !important;
+  list-style: none !important;
+  padding-left: 0 !important;
+}
+
+.reflection-column li {
+  margin-bottom: 0.5rem;
+  padding-left: 1.5rem;
+  position: relative;
+}
+
+.reflection-column li::before {
+  content: '-';
+  position: absolute;
+  left: 0;
+}
+
+/* === Priority/Special Tags === */
+.tag-prio {
+  color: var(--orq-red) !important;
+  font-weight: 700 !important;
+}
+
+.tag-moonshot {
+  color: var(--orq-red) !important;
+  font-weight: 700 !important;
+}
+
+/* === Footer === */
+.reveal .footer {
+  font-size: 0.9rem;
+  color: var(--orq-gray-light);
+}
+
+/* === List Styling Global === */
+.reveal ul {
+  list-style: none;
+}
+
+.reveal ul li::marker {
+  content: none;
+}
+
+/* === Hide default logo on title slide === */
+.title-slide .slide-logo {
+  display: block !important;
+}
