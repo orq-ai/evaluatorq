@@ -278,9 +278,12 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
 
 /* Landing 'Recent runs' — airy aligned columns, no table chrome */
 .recent-runs { display: flex; flex-direction: column; }
+/* Fixed/fr columns only — NO content-based (auto/max-content) widths, so every
+   row (each its own grid) resolves identical column edges and the values align
+   with the header. Mirrors the runs-grid fix in .runs-grid-head/.runs-grid-row. */
 .rr-head, .rr-row {
     display: grid;
-    grid-template-columns: minmax(130px, 1.2fr) minmax(0, 2fr) auto auto 56px auto;
+    grid-template-columns: minmax(130px, 1.2fr) minmax(0, 2fr) 90px 130px 56px minmax(0, 0.8fr);
     align-items: center;
     gap: 16px;
 }
@@ -303,7 +306,7 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
     font-size: 13px; font-weight: 500; color: var(--text-strong);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.rr-meta { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
+.rr-meta { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rr-row .run-score { font-family: var(--font-mono); font-size: 13px; font-weight: 600; }
 /* Align the numeric Score column head + cell. */
 .rr-head span:nth-child(5), .rr-row .run-score { text-align: right; }
