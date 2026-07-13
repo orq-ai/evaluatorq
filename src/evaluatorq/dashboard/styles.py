@@ -1620,6 +1620,13 @@ _RT_REPORT_CSS = """
     font-family: var(--font-mono); font-size: 10px; font-weight: 600; text-transform: uppercase;
     color: var(--red-600); background: var(--red-100); border-radius: 5px; padding: 2px 6px;
 }
+.rt-report .rt-agent-card-studio {
+    margin-left: auto; font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    text-decoration: none; color: var(--teal-600); background: var(--teal-100);
+    border-radius: 5px; padding: 3px 9px; white-space: nowrap;
+    transition: background .15s ease, color .15s ease;
+}
+.rt-report .rt-agent-card-studio:hover { background: var(--teal-600); color: #fff; }
 .rt-report .rt-agent-card-model { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); margin-top: 3px; }
 .rt-report .rt-agent-card-desc { font-size: 13px; color: var(--text-body); margin-top: 6px; }
 .rt-report .rt-agent-card-stats {

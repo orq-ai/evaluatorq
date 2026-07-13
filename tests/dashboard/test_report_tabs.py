@@ -403,6 +403,31 @@ def test_rt_agents_single_agent_card(rt_report_single):
     assert 'Single agent under assessment' in html
 
 
+def test_rt_agent_card_studio_link_present_for_orq_target():
+    from evaluatorq.dashboard.report_tabs import _rt_agent_card
+
+    ctx = {
+        'display_name': 'Support Bot',
+        'id': 'abc123',
+        'workspace_id': 'ws9',
+        'target_kind': 'agent',
+        'tools': [],
+        'knowledge_bases': [],
+    }
+    html = _rt_agent_card(ctx, 'k', {'attacks': 5, 'vulns': 2, 'critical': 1, 'asr': 0.4})
+    assert 'Open in Studio' in html
+    assert 'ws9/agents/abc123' in html
+
+
+def test_rt_agent_card_studio_link_absent_without_ids():
+    from evaluatorq.dashboard.report_tabs import _rt_agent_card
+
+    # Non-orq / missing id+workspace_id → no Studio deep-link.
+    ctx = {'display_name': 'X', 'target_kind': 'agent', 'tools': [], 'knowledge_bases': []}
+    html = _rt_agent_card(ctx, 'k', {})
+    assert 'Open in Studio' not in html
+
+
 def test_rt_config_no_agent_context(rt_report_single):
     # The Config tab itself must not render agent_context chips (moved to Agents).
     from evaluatorq.dashboard.report_tabs import _rt_by_kind, _rt_config

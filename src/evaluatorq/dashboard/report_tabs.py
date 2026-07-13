@@ -1056,7 +1056,9 @@ def _rt_agent_card(agent_ctx: dict[str, Any] | None, key: str, stats: dict[str, 
     present in results but missing ``agent_context`` still render via
     ``stats``-only fallback (spec §Agents)."""
     from evaluatorq.common.reports.html_helpers import pct
+    from evaluatorq.dashboard.orq_links import orq_studio_url
     from evaluatorq.dashboard.report_kit import dial
+    from evaluatorq.fetch_data import _resolve_orq_base_url
 
     ctx = agent_ctx or {}
     display_name = ctx.get('display_name') or stats.get('display_name') or key
@@ -1064,6 +1066,21 @@ def _rt_agent_card(agent_ctx: dict[str, Any] | None, key: str, stats: dict[str, 
     description = ctx.get('description') or ''
     tools = ctx.get('tools') or []
     knowledge_bases = ctx.get('knowledge_bases') or []
+
+    # Optional Studio deep-link — only for orq agent/deployment targets that
+    # carry id + workspace_id; hidden otherwise (returns None).
+    studio_url = orq_studio_url(
+        target_kind=ctx.get('target_kind'),
+        entity_id=ctx.get('id'),
+        workspace_id=ctx.get('workspace_id'),
+        base_url=_resolve_orq_base_url(None),
+    )
+    studio_html = (
+        f'<a class="rt-agent-card-studio" href="{esc(studio_url)}" target="_blank" rel="noopener">'
+        'Open in Studio</a>'
+        if studio_url
+        else ''
+    )
 
     attacks = stats.get('attacks', 0)
     vulns = stats.get('vulns', 0)
@@ -1100,7 +1117,7 @@ def _rt_agent_card(agent_ctx: dict[str, Any] | None, key: str, stats: dict[str, 
         f'<div class="rt-agent-card-dial">{dial_html}</div>'
         '<div class="rt-agent-card-main">'
         f'<div class="rt-agent-card-name-row">'
-        f'<span class="rt-agent-card-name">{esc(display_name)}</span>{critical_chip}</div>'
+        f'<span class="rt-agent-card-name">{esc(display_name)}</span>{critical_chip}{studio_html}</div>'
         f'{model_html}{description_html}{stat_strip}{chips_html}'
         '</div>'
         '</div>'
