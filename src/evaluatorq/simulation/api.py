@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.llm_client import resolve_results_base_url
+from evaluatorq.common.thread_context import build_thread_id
 from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run, build_simulation_run, fetch_agent_info, write_report
 
@@ -1019,7 +1020,7 @@ def _build_simulation_job_and_cache(
         # Deterministic, run-scoped thread id groups this conversation's turns in
         # Orq observability and powers the dashboard's per-conversation deep link.
         # _row is the datapoint's index (stable across the run).
-        thread_id = f'{run_id}:{_row}' if run_id else None
+        thread_id = build_thread_id(run_id, _row)
         result = await runner.run(datapoint=sim_dp, max_turns=max_turns, thread_id=thread_id)
         result.metadata['datapoint_id'] = sim_dp.id
         result_cache[id(data)] = result

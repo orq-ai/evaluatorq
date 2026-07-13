@@ -1,5 +1,5 @@
 """Dashboard trace-link buttons — the three remaining insertions
-(``_sim_hero``, ``_redteam_hero``, ``redteam_transcripts._render_result_detail``).
+(``_sim_hero``, ``_redteam_hero``, ``redteam_transcripts.render_attack_fragment``).
 
 Confirms the deep-link anchor appears in real rendered HTML when
 ``ORQ_WORKSPACE_SLUG`` is configured, and is absent when it isn't (so
@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from evaluatorq.dashboard.redteam_transcripts import _render_result_detail
+from evaluatorq.dashboard.redteam_transcripts import render_attack_fragment
 from evaluatorq.dashboard.report_tabs import _redteam_hero, _sim_hero
 from evaluatorq.dashboard.trace_links import run_trace_url, thread_trace_url, trace_link_button
 from evaluatorq.redteam.contracts import (
@@ -89,18 +89,18 @@ def _make_report(run_id: str | None) -> RedTeamReport:
 
 class TestSimHeroTraceButton:
     def test_button_absent_without_workspace_slug(self) -> None:
-        html = _sim_hero(None, _make_run('run1'))
+        html = _sim_hero(_make_run('run1'))
         assert 'trace-link' not in html
         assert 'View all run traces' not in html
 
     def test_button_absent_without_run_id(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv('ORQ_WORKSPACE_SLUG', 'orq-research')
-        html = _sim_hero(None, _make_run(None))
+        html = _sim_hero(_make_run(None))
         assert 'trace-link' not in html
 
     def test_button_present_when_configured(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv('ORQ_WORKSPACE_SLUG', 'orq-research')
-        html = _sim_hero(None, _make_run('run1'))
+        html = _sim_hero(_make_run('run1'))
         assert 'class="btn-secondary trace-link"' in html
         assert 'View all run traces' in html
         assert f'href="{run_trace_url("run1")}"' in html
@@ -121,17 +121,17 @@ class TestRedteamHeroTraceButton:
 
 class TestRedteamConversationTraceButton:
     def test_button_absent_without_workspace_slug(self) -> None:
-        html = _render_result_detail(_make_result('run1:0'))
+        html = render_attack_fragment(_make_result('run1:0'))
         assert 'trace-link' not in html
 
     def test_button_absent_without_thread_id(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv('ORQ_WORKSPACE_SLUG', 'orq-research')
-        html = _render_result_detail(_make_result(None))
+        html = render_attack_fragment(_make_result(None))
         assert 'trace-link' not in html
 
     def test_button_present_when_configured(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv('ORQ_WORKSPACE_SLUG', 'orq-research')
-        html = _render_result_detail(_make_result('run1:0'))
+        html = render_attack_fragment(_make_result('run1:0'))
         assert 'class="btn-secondary trace-link"' in html
         assert 'View conversation traces' in html
         assert f'href="{thread_trace_url("run1:0")}"' in html

@@ -28,6 +28,26 @@ if TYPE_CHECKING:
 
 _thread_id: ContextVar[str | None] = ContextVar('orq_thread_id', default=None)
 
+# Separator joining the run id and the per-conversation discriminators into a
+# thread id. Kept out of the OQL query grammar's way: the run id is uuid hex and
+# the parts are ints / sanitized keys, so ':' never appears inside a segment.
+_THREAD_ID_SEP = ':'
+
+
+def build_thread_id(run_id: str | None, *parts: object) -> str | None:
+    """Compose a run-scoped thread id, or None when there is no run to link.
+
+    Single source of truth for the ``{run_id}:{...}`` format that the dashboard's
+    run-level deep link (``thread_id:contains:{run_id}``) depends on: sim passes
+    ``build_thread_id(run_id, index)`` → ``{run_id}:{index}``; red teaming passes
+    ``build_thread_id(run_id, agent_key, index)`` → ``{run_id}:{agent_key}:{index}``.
+    The ``run_id`` prefix is what makes the run-level ``contains`` query match
+    every conversation in the run.
+    """
+    if not run_id:
+        return None
+    return _THREAD_ID_SEP.join([run_id, *(str(p) for p in parts)])
+
 
 def current_thread_id() -> str | None:
     """Return the thread id for the active conversation, or None if unset."""
@@ -61,4 +81,4 @@ def conversation_thread(thread_id: str | None = None) -> Iterator[str]:
         _thread_id.reset(token)
 
 
-__all__ = ['conversation_thread', 'current_thread_id', 'thread_body_param']
+__all__ = ['build_thread_id', 'conversation_thread', 'current_thread_id', 'thread_body_param']

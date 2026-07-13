@@ -7,10 +7,25 @@ from __future__ import annotations
 import asyncio
 
 from evaluatorq.common.thread_context import (
+    build_thread_id,
     conversation_thread,
     current_thread_id,
     thread_body_param,
 )
+
+
+def test_build_thread_id_sim_and_redteam_shapes() -> None:
+    # Sim: {run_id}:{index}; redteam: {run_id}:{agent_key}:{index}. Both share the
+    # run_id prefix so `contains:{run_id}` matches every conversation in the run.
+    assert build_thread_id('run1', 3) == 'run1:3'
+    assert build_thread_id('run1', 'agent-a', 7) == 'run1:agent-a:7'
+    assert build_thread_id('run1', 3).startswith('run1')
+    assert build_thread_id('run1', 'agent-a', 7).startswith('run1')
+
+
+def test_build_thread_id_none_without_run() -> None:
+    assert build_thread_id(None, 3) is None
+    assert build_thread_id('', 3) is None
 
 
 def test_unset_is_none_and_empty() -> None:

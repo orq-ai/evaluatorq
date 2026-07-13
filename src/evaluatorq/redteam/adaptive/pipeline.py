@@ -23,7 +23,7 @@ from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, Job, job
 from evaluatorq.common.jury import append_jury_summary
-from evaluatorq.common.thread_context import conversation_thread
+from evaluatorq.common.thread_context import build_thread_id, conversation_thread
 from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentResponse, Message
 from evaluatorq.redteam.adaptive.attack_generator import generate_attack_prompt, generate_objective
@@ -344,7 +344,7 @@ def create_dynamic_redteam_job(
         category = str(inputs['category'])
         vulnerability = str(inputs.get('vulnerability', ''))
         effective_max_turns = 1 if strategy.turn_type == TurnType.SINGLE else max_turns
-        thread_id = f'{run_id}:{safe_agent_key}:{_row}' if run_id else None
+        thread_id = build_thread_id(run_id, safe_agent_key, _row)
 
         async with (
             with_redteam_span(
@@ -403,7 +403,7 @@ def create_dynamic_redteam_job(
                             'orq.redteam.input': truncate_for_span(prompt),
                         },
                     ) as tgt_span:
-                        with conversation_thread(thread_id):
+                        with conversation_thread(thread_id) as thread_id:
                             raw = await asyncio.wait_for(
                                 target.respond([Message(role='user', content=prompt)]),
                                 timeout=target_timeout_s,
@@ -502,7 +502,7 @@ def create_dynamic_redteam_job(
 
             try:
                 # One Orq thread per attack groups all its turns in observability.
-                with conversation_thread(thread_id):
+                with conversation_thread(thread_id) as thread_id:
                     result = await orchestrator.run_attack(
                         target=target,
                         strategy=strategy,

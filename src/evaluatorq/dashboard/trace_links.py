@@ -2,8 +2,10 @@
 
 Builds ``…/<workspace-slug>/traces?query=…`` URLs so a conversation or a whole
 run can be opened in the Orq traces UI. Each run mints a ``run_id`` and its
-conversations use ``thread_id = f"{run_id}:{seq}"`` (see
-``evaluatorq.common.thread_context``), so:
+conversations get a run-scoped ``thread_id`` built by
+``evaluatorq.common.thread_context.build_thread_id`` — ``{run_id}:{index}`` for
+simulations, ``{run_id}:{agent_key}:{index}`` for red-team attacks. Both share
+the ``run_id`` prefix, so:
 
 * a single conversation is matched with ``thread_id:is:<thread_id>``;
 * every conversation in a run is matched with ``thread_id:contains:<run_id>``.

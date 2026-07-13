@@ -1303,7 +1303,7 @@ class RedTeamResult(BaseModel):
     error_details: dict[str, Any] | None = None
     thread_id: str | None = Field(
         default=None,
-        description='Orq observability thread id ({run_id}:{index}); None for older reports.',
+        description='Orq observability thread id ({run_id}:{agent_key}:{index}); None for older reports.',
     )
 
     @property
@@ -1505,7 +1505,9 @@ class RedTeamReport(BaseModel):
     experiment_url: str | None = None
     run_id: str | None = Field(
         default=None,
-        description='Orq run id powering the dashboard "View all run traces" deep-link; None for older reports.',
+        description='Client-minted run-grouping id (uuid hex, not an Orq-side run/experiment id) '
+        'shared by every attack\'s thread_id; powers the dashboard "View all run traces" '
+        'deep-link. None for older reports.',
     )
 
     @field_validator('pipeline', mode='before')

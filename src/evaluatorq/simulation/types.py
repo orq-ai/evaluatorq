@@ -361,8 +361,9 @@ class SimulationRun(BaseModel):
     scorer_averages: dict[str, float]
     results: list[SimulationResult]
     run_id: str | None = None
-    """Run-scoped Orq id shared by every conversation's ``thread_id`` (``{run_id}:{index}``).
-    Powers the dashboard's 'View all run traces' deep link. None for older runs."""
+    """Client-minted run-grouping id (uuid hex, not an Orq-side run id) shared by every
+    conversation's ``thread_id`` (``{run_id}:{index}``). Powers the dashboard's
+    'View all run traces' deep link. None for older runs."""
 
 
 # ---------------------------------------------------------------------------
