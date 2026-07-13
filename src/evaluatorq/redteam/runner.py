@@ -79,6 +79,20 @@ if TYPE_CHECKING:
     from evaluatorq.types import DataPointResult
 
 
+def _resolve_artifacts_dir(*, artifacts_dir: Path | str | None, output_dir: Path | str | None) -> Path | str | None:
+    # ponytail: deprecation shim; delete the output_dir branch when the alias is removed.
+    """Return artifacts_dir, falling back to the deprecated output_dir with a warning."""
+    if output_dir is not None:
+        warnings.warn(
+            'red_team(output_dir=...) is deprecated; use red_team(artifacts_dir=...) instead.',
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        if artifacts_dir is None:
+            return output_dir
+    return artifacts_dir
+
+
 def _save_stage(output_dir: Path | None, filename: str, content: str) -> None:
     """Write a stage artifact to *output_dir* when saving is enabled.
 
@@ -324,6 +338,7 @@ async def red_team(
     description: str | None = None,
     dataset: Path | str | None = None,
     hooks: PipelineHooks | None = None,
+    artifacts_dir: Path | str | None = None,
     output_dir: Path | str | None = None,
     target_config: TargetConfig | None = None,
     generate_recommendations: bool = False,
@@ -384,13 +399,15 @@ async def red_team(
             ``"hf:org/repo/filename.json"``, or ``None`` for the default HuggingFace dataset.
         hooks: Optional ``PipelineHooks`` implementation. Defaults to
             ``DefaultHooks()`` (loguru output, auto-confirm).
-        output_dir: Directory for saved JSON files. Ignored when
+        artifacts_dir: Directory for saved JSON files. Ignored when
             ``save='none'``. For ``save='final'``, receives
             ``03_summary_report.json``; if ``None``, the summary is written
             to ``.evaluatorq/runs/<name>_<ts>.json`` instead so the run
             appears in ``evaluatorq redteam runs``. Required for
             ``save='detail'``, which writes ``01_all_datapoints.json``,
             ``02_attack_results.json``, and ``03_summary_report.json`` here.
+        output_dir: Deprecated alias for ``artifacts_dir``. Will be removed in
+            a future release.
         target_config: Optional backend-agnostic target configuration (e.g.
             system prompt for OpenAI targets).
         generate_recommendations: Whether to generate LLM-based actionable
@@ -412,7 +429,7 @@ async def red_team(
 
     Raises:
         ValueError: If mode is invalid, required arguments are missing, or
-            ``save='detail'`` is passed without ``output_dir``.
+            ``save='detail'`` is passed without ``artifacts_dir``.
         CancelledError: If hooks.on_confirm returns False.
     """
     resolved_hooks: PipelineHooks = hooks or DefaultHooks()
@@ -446,14 +463,15 @@ async def red_team(
         msg = f'Invalid save value {save!r}. Must be one of: {", ".join(SaveMode.__members__.values())}.'
         raise ValueError(msg)
 
-    user_output_dir = Path(output_dir) if output_dir is not None else None
+    artifacts_dir = _resolve_artifacts_dir(artifacts_dir=artifacts_dir, output_dir=output_dir)
+    user_output_dir = Path(artifacts_dir) if artifacts_dir is not None else None
     # Inner pipelines (_run_dynamic, _run_static) only write 01/02/03 to their
     # output_dir parameter, so we gate it on save='detail'. For 'final' the
     # outer red_team() does the single summary write after inner returns.
     resolved_output_dir: Path | None = None
     if save == 'detail':
         if user_output_dir is None:
-            msg = "save='detail' requires output_dir to be set."
+            msg = "save='detail' requires artifacts_dir to be set."
             raise ValueError(msg)
         resolved_output_dir = user_output_dir
 
