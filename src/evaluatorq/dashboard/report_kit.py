@@ -368,11 +368,13 @@ def line_chart(x_labels: list, series: dict[str, list[float | None]]) -> str:
     def y_at(v: float) -> float:
         return pad_top + plot_h * (1 - max(0.0, min(1.0, v)))
 
-    # width=100% + preserveAspectRatio lets the chart scale to its container
-    # instead of pinning to 720px; the viewBox keeps the internal coordinates.
+    # Fixed width/height (like bar_rows/histogram) so the 720-wide viewBox is NOT
+    # upscaled to the card width — width="100%" magnified the whole SVG, blowing
+    # the 10px axis text up ~5x. CSS `.rk-line-chart { max-width:100%; height:auto }`
+    # shrinks it on narrow screens without ever scaling above native size.
     parts = [
         (
-            f'<svg viewBox="0 0 {width} {height}" width="100%" preserveAspectRatio="xMidYMid meet" '
+            f'<svg viewBox="0 0 {width} {height}" width="{width}" height="{height}" '
             f'class="rk-line-chart" role="img">'
         )
     ]
