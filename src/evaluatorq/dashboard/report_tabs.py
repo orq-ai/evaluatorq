@@ -516,6 +516,23 @@ def _orq_agent_info_cached(agent_key: str) -> dict[str, Any] | None:
     return result
 
 
+def _agent_key_for(run: SimulationRun) -> str | None:
+    """Best-effort agent key for a live fetch: the captured key, else the run's
+    ``target`` (minus an ``agent:`` prefix), else the ``<key>`` segment parsed
+    from a ``sim:<key>:...`` run_name. The last case recovers legacy runs that
+    ran against an Orq agent but never persisted a ``target`` — a wrong guess
+    just 404s and falls back to no card."""
+    captured = run.agent_info if isinstance(run.agent_info, dict) else None
+    if captured and captured.get('key'):
+        return str(captured['key'])
+    if run.target:
+        return run.target.removeprefix('agent:')
+    rn = run.run_name or ''
+    if rn.startswith('sim:'):
+        return rn[len('sim:') :].split(':', 1)[0].strip() or None
+    return None
+
+
 def _resolve_agent_info(
     run: SimulationRun,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
@@ -533,14 +550,16 @@ def _resolve_agent_info(
     actually recorded.
     """
     captured = run.agent_info if isinstance(run.agent_info, dict) and run.agent_info else None
-    if run.target_kind != 'orq_agent' or not run.target:
+    if run.target_kind != 'orq_agent':
         return captured, captured, ('captured' if captured else 'none')
 
     missing_core = captured is None or any(not captured.get(f) for f in _AGENT_CORE_FIELDS)
     if not missing_core:
         return captured, captured, 'captured'
 
-    agent_key = (captured or {}).get('key') or run.target.removeprefix('agent:')
+    agent_key = _agent_key_for(run)
+    if not agent_key:
+        return captured, captured, ('captured' if captured else 'none')
     fetched = _orq_agent_info_cached(agent_key)
     if not fetched:
         return captured, captured, ('captured' if captured else 'none')

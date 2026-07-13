@@ -615,3 +615,21 @@ def test_sim_overview_augmented_card_shows_source_note_and_toggle(sim_run, monke
     html = rt.sim_report_tabs('rid', run)
     assert 'sim-agent-source' in html
     assert 'Loaded live from Orq' in html
+
+
+def test_agent_key_recovered_from_run_name_when_target_missing(sim_run) -> None:
+    """Legacy orq_agent runs with target=None recover the key from run_name
+    (sim:<key>:...), so the live fallback can still fetch."""
+    import evaluatorq.dashboard.report_tabs as rt
+
+    run = sim_run.model_copy(
+        update={'target_kind': 'orq_agent', 'target': None, 'agent_info': None, 'run_name': 'sim:refund-agent-fixed:tailscale-openai'}
+    )
+    assert rt._agent_key_for(run) == 'refund-agent-fixed'
+
+
+def test_agent_key_prefers_captured_then_target(sim_run) -> None:
+    import evaluatorq.dashboard.report_tabs as rt
+
+    assert rt._agent_key_for(sim_run.model_copy(update={'agent_info': {'key': 'k1'}, 'target': 'agent:k2'})) == 'k1'
+    assert rt._agent_key_for(sim_run.model_copy(update={'agent_info': None, 'target': 'agent:k2'})) == 'k2'
