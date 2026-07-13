@@ -50,6 +50,7 @@ from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.shell import page
+from evaluatorq.dashboard.sim_compare import register_sim_compare_routes
 from evaluatorq.dashboard.sim_views import register_sim_view_routes
 from evaluatorq.dashboard.surfaces import ADAPTERS
 from evaluatorq.dashboard.view import (
@@ -171,7 +172,8 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         label = SURFACE_LABELS.get(surface, 'Reports')
         pg, per_pg = _paging(req)
         if surface == 'sim':
-            body = sim_overview_body(metrics.sim_overview(roots, page=pg, per_page=per_pg))
+            sim_choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'sim']
+            body = sim_overview_body(metrics.sim_overview(roots, page=pg, per_page=per_pg), compare_choices=sim_choices)
         elif surface == 'redteam':
             body = redteam_overview_body(metrics.redteam_overview(roots, page=pg, per_page=per_pg))
         else:
@@ -546,6 +548,11 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     # Routes: GET /r/{rid}/sim/*  — sim interactive fragment views
     # ------------------------------------------------------------------
     register_sim_view_routes(app, roots)
+
+    # ------------------------------------------------------------------
+    # Routes: GET /compare/sim*  — side-by-side sim run comparison
+    # ------------------------------------------------------------------
+    register_sim_compare_routes(app, roots)
 
     # Register static file handler LAST so its catch-all /{fname}.{ext} does not
     # intercept the download routes above. Serve under /static/ to match the page

@@ -420,9 +420,34 @@ def _fmt_compact(n: int) -> str:
     return str(n)
 
 
-def sim_overview_body(data: SimOverview) -> str:
+def _sim_compare_bar(choices: list[tuple[str, str]]) -> str:
+    """Render the two-run compare picker (Run A / Run B → /compare/sim).
+
+    Plain GET form, no JS. Needs at least two sim runs to be useful; with fewer
+    it renders nothing so the overview stays clean.
+    """
+    if len(choices) < 2:
+        return ''
+    opts = ''.join(f'<option value="{esc(rid)}">{esc(name)}</option>' for rid, name in choices)
+    return (
+        '<form class="cmp-bar" action="/compare/sim" method="get"'
+        ' style="display:flex;gap:8px;align-items:center;margin:12px 0;flex-wrap:wrap">'
+        '<span class="cmp-bar-label" style="font-weight:600">Compare runs</span>'
+        f'<select name="a" aria-label="Run A">{opts}</select>'
+        '<span class="cmp-bar-vs">vs</span>'
+        f'<select name="b" aria-label="Run B">{opts}</select>'
+        '<button type="submit" class="btn-secondary">Compare</button>'
+        '</form>'
+    )
+
+
+def sim_overview_body(data: SimOverview, compare_choices: list[tuple[str, str]] | None = None) -> str:
     """Render the Agent Sim surface as the design's rich overview: 4 KPI cards
-    plus an item-level 'Recent simulations' table (RES-1022)."""
+    plus an item-level 'Recent simulations' table (RES-1022).
+
+    ``compare_choices`` is the (rid, name) list of all sim runs used to populate
+    the side-by-side compare picker (RES-1085); ``None`` hides the picker.
+    """
     from evaluatorq.common.reports.html_helpers import kpi_cards, pct
 
     if data.simulations_run == 0:
@@ -454,7 +479,8 @@ def sim_overview_body(data: SimOverview) -> str:
         'Latest agent simulation runs',
         _run_grid(data.recent) + _run_pager('sim', data.page, data.total_runs, data.per_page),
     )
-    return f'<section class="dash-wrap">{band}{panel}</section>'
+    compare_bar = _sim_compare_bar(compare_choices or [])
+    return f'<section class="dash-wrap">{band}{compare_bar}{panel}</section>'
 
 
 def search_results(cards: list[ReportCard], query: str) -> str:
