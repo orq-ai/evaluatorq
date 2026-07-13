@@ -269,10 +269,7 @@ def bar_rows(
                 f'<rect x="{label_w}" y="{bar_y:.1f}" width="{track_w}" height="{bar_h}" '
                 f'rx="3" fill="var(--chart-track)"></rect>'
             ),
-            (
-                f'<rect x="{label_w}" y="{bar_y:.1f}" width="{bar_w:.1f}" height="{bar_h}" '
-                f'rx="3" fill="{fill}"></rect>'
-            ),
+            (f'<rect x="{label_w}" y="{bar_y:.1f}" width="{bar_w:.1f}" height="{bar_h}" rx="3" fill="{fill}"></rect>'),
             (
                 f'<text x="{label_w + bar_w + 8:.1f}" y="{cy:.1f}" dominant-baseline="middle" '
                 f'font-family="var(--font-sans)" font-size="11" font-weight="600" fill="var(--text-strong)">'
@@ -373,10 +370,7 @@ def line_chart(x_labels: list, series: dict[str, list[float | None]]) -> str:
     # the 10px axis text up ~5x. CSS `.rk-line-chart { max-width:100%; height:auto }`
     # shrinks it on narrow screens without ever scaling above native size.
     parts = [
-        (
-            f'<svg viewBox="0 0 {width} {height}" width="{width}" height="{height}" '
-            f'class="rk-line-chart" role="img">'
-        )
+        (f'<svg viewBox="0 0 {width} {height}" width="{width}" height="{height}" class="rk-line-chart" role="img">')
     ]
     # Label paired with each gridline fraction. Rounded half-up (0.25 -> "0.3")
     # to match the mockup's JS toFixed(1); a bare f'{frac:.1f}' would round
