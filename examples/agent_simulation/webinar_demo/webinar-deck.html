@@ -1,0 +1,718 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Simulation — Webinar Deck · July 14</title>
+<style>
+  /* ------------------------------------------------------------------
+     Design tokens
+     ------------------------------------------------------------------ */
+  :root {
+    --ivory:   #FAF9F5;
+    --slate:   #141413;
+    --clay:    #D97757;
+    --oat:     #E3DACC;
+    --olive:   #788C5D;
+    --gray-150:#F0EEE6;
+    --gray-300:#D1CFC5;
+    --gray-500:#87867F;
+    --gray-700:#3D3D3A;
+
+    --serif: ui-serif, Georgia, "Times New Roman", serif;
+    --sans:  system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono:  ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: var(--sans);
+    background: var(--ivory);
+    color: var(--slate);
+    -webkit-font-smoothing: antialiased;
+    scroll-snap-type: y mandatory;
+    overflow-x: hidden;
+  }
+
+  /* ------------------------------------------------------------------
+     Slide shell
+     ------------------------------------------------------------------ */
+  .slide {
+    width: 100vw;
+    height: 100vh;
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8vh 6vw;
+  }
+
+  .slide-inner {
+    width: 100%;
+    max-width: 780px;
+  }
+
+  .slide.invert {
+    background: var(--slate);
+    color: var(--ivory);
+  }
+
+  /* ------------------------------------------------------------------
+     Typography
+     ------------------------------------------------------------------ */
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--gray-500);
+    margin-bottom: 28px;
+  }
+  .invert .eyebrow { color: var(--gray-300); }
+
+  h1 {
+    font-family: var(--serif);
+    font-weight: 500;
+    font-size: clamp(40px, 6vw, 64px);
+    line-height: 1.08;
+    letter-spacing: -0.01em;
+    margin-bottom: 20px;
+  }
+
+  h2 {
+    font-family: var(--serif);
+    font-weight: 500;
+    font-size: clamp(30px, 4vw, 42px);
+    line-height: 1.15;
+    letter-spacing: -0.005em;
+    margin-bottom: 44px;
+  }
+
+  .subtitle {
+    font-size: 17px;
+    line-height: 1.6;
+    color: var(--gray-700);
+    max-width: 520px;
+  }
+
+  .mono { font-family: var(--mono); }
+
+  /* ------------------------------------------------------------------
+     Slide 1 — title
+     ------------------------------------------------------------------ */
+  .title-slide .slide-inner { text-align: left; }
+
+  .ornament {
+    display: block;
+    margin: 0 0 40px 0;
+  }
+
+  .byline {
+    margin-top: 56px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--gray-500);
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+  }
+
+  /* ------------------------------------------------------------------
+     Ship list (headline + description rows)
+     ------------------------------------------------------------------ */
+  .ship-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+
+  .ship-item {
+    display: grid;
+    grid-template-columns: 14px 1fr auto;
+    column-gap: 20px;
+    align-items: baseline;
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--gray-150);
+  }
+  .ship-item:last-child { border-bottom: none; }
+
+  .ship-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--olive);
+    margin-top: 8px;
+    align-self: start;
+  }
+  .ship-dot.clay { background: var(--clay); }
+
+  .ship-title {
+    font-family: var(--serif);
+    font-size: 20px;
+    font-weight: 500;
+    margin-bottom: 6px;
+  }
+
+  .ship-desc {
+    font-size: 14px;
+    line-height: 1.55;
+    color: var(--gray-700);
+  }
+
+  .ship-ref {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--gray-500);
+    white-space: nowrap;
+    padding-top: 4px;
+  }
+
+  /* ------------------------------------------------------------------
+     Command blocks (new — follows .code pattern from sibling templates)
+     ------------------------------------------------------------------ */
+  .cmds {
+    background: var(--slate);
+    border-radius: 12px;
+    padding: 20px 24px;
+    overflow-x: auto;
+    margin-bottom: 20px;
+  }
+  .cmds pre {
+    font-family: var(--mono);
+    font-size: 13.5px;
+    line-height: 1.7;
+    color: #E8E6DE;
+    white-space: pre;
+  }
+  .cmds .kw  { color: var(--clay); }
+  .cmds .cm  { color: var(--gray-500); }
+  .cmds .str { color: var(--olive); }
+  .cmd-note {
+    font-size: 13px;
+    color: var(--gray-500);
+    line-height: 1.55;
+  }
+
+  /* ------------------------------------------------------------------
+     Metrics
+     ------------------------------------------------------------------ */
+  .metrics {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 56px;
+    margin-bottom: 48px;
+  }
+
+  .metric-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--gray-500);
+    margin-bottom: 14px;
+  }
+
+  .metric-value {
+    font-family: var(--serif);
+    font-size: 52px;
+    font-weight: 500;
+    line-height: 1;
+    letter-spacing: -0.01em;
+  }
+
+  .metric-delta {
+    font-family: var(--mono);
+    font-size: 13px;
+    margin-top: 12px;
+  }
+  .metric-delta.down { color: var(--olive); }
+  .metric-delta.up   { color: var(--clay); }
+
+  /* ------------------------------------------------------------------
+     Decision (inverted ask)
+     ------------------------------------------------------------------ */
+  .decision-card {
+    border: 1.5px solid var(--clay);
+    border-radius: 14px;
+    padding: 36px 38px;
+    background: rgba(217, 119, 87, 0.06);
+  }
+
+  .decision-q {
+    font-family: var(--serif);
+    font-size: 24px;
+    line-height: 1.4;
+    margin-bottom: 12px;
+  }
+
+  .decision-context {
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--gray-300);
+  }
+
+  .options {
+    display: flex;
+    gap: 14px;
+    margin-top: 32px;
+    flex-wrap: wrap;
+  }
+
+  .chip {
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 10px 18px;
+    border-radius: 999px;
+    border: 1px solid var(--gray-700);
+    color: var(--ivory);
+    background: transparent;
+  }
+  .chip.lean {
+    border-color: var(--clay);
+    color: var(--clay);
+  }
+  .slide:not(.invert) .chip { color: var(--slate); border-color: var(--gray-300); }
+  .slide:not(.invert) .chip.lean { color: var(--clay); border-color: var(--clay); }
+
+  /* ------------------------------------------------------------------
+     Next list (dash bullets)
+     ------------------------------------------------------------------ */
+  .next-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+  }
+
+  .next-list li {
+    font-family: var(--serif);
+    font-size: 21px;
+    line-height: 1.45;
+    padding-left: 36px;
+    position: relative;
+  }
+
+  .next-list li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.55em;
+    width: 18px;
+    height: 1.5px;
+    background: var(--clay);
+  }
+
+  .next-list .sub {
+    display: block;
+    font-family: var(--sans);
+    font-size: 14px;
+    color: var(--gray-500);
+    margin-top: 4px;
+  }
+
+  .footnote {
+    margin-top: 56px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--gray-500);
+  }
+
+  /* ------------------------------------------------------------------
+     Slide counter
+     ------------------------------------------------------------------ */
+  #counter {
+    position: fixed;
+    bottom: 22px;
+    right: 28px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--gray-500);
+    user-select: none;
+    z-index: 10;
+  }
+
+  @media (max-width: 640px) {
+    .metrics { grid-template-columns: 1fr; gap: 36px; }
+    .ship-item { grid-template-columns: 14px 1fr; }
+    .ship-ref { grid-column: 2; padding-top: 8px; }
+  }
+</style>
+</head>
+<body>
+
+  <!-- ============================================================
+       Slide 1 — Title
+       ============================================================ -->
+  <section class="slide title-slide" id="s1">
+    <div class="slide-inner">
+      <svg class="ornament" width="56" height="56" viewBox="0 0 56 56" aria-hidden="true">
+        <circle cx="28" cy="28" r="22" fill="none" stroke="#D1CFC5" stroke-width="1.5"/>
+        <path d="M16 28 H40 M28 16 V40" stroke="#D97757" stroke-width="1.5" stroke-linecap="round"/>
+        <circle cx="28" cy="28" r="3" fill="#141413"/>
+      </svg>
+      <h1>Agent Simulation</h1>
+      <p class="subtitle">
+        Stress-test your AI agent against synthetic users — hundreds of
+        realistic multi-turn conversations, before a real user ever touches it.
+      </p>
+      <div class="byline">
+        <span>Tuesday, July 14</span>
+        <span>Bauke Brenninkmeijer · lead</span>
+        <span>Arian Pasquali · interviewer</span>
+        <span>45 min · live demo</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Slide 2 — The problem
+       ============================================================ -->
+  <section class="slide" id="s2">
+    <div class="slide-inner">
+      <div class="eyebrow">The problem</div>
+      <h2>Evaluate against <em>what</em>?</h2>
+      <ul class="ship-list">
+        <li class="ship-item">
+          <span class="ship-dot clay"></span>
+          <div>
+            <div class="ship-title">You have no dataset yet</div>
+            <div class="ship-desc">
+              The agent hasn't shipped — there are no real conversations to
+              test with, and ground-truth data is one of the most expensive
+              assets to produce.
+            </div>
+          </div>
+          <span class="ship-ref">cold start</span>
+        </li>
+        <li class="ship-item">
+          <span class="ship-dot clay"></span>
+          <div>
+            <div class="ship-title">Failures are multi-turn</div>
+            <div class="ship-desc">
+              Agents break when users change their mind, get impatient,
+              contradict themselves, or drift off-goal. Single-turn evals
+              never see it.
+            </div>
+          </div>
+          <span class="ship-ref">turn 7, not turn 1</span>
+        </li>
+        <li class="ship-item">
+          <span class="ship-dot clay"></span>
+          <div>
+            <div class="ship-title">You don't know the failure modes yet</div>
+            <div class="ship-desc">
+              You can't hand-write test cases for mistakes you haven't seen.
+              The blind spots are exactly the point.
+            </div>
+          </div>
+          <span class="ship-ref">unknown unknowns</span>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Slide 3 — What agent simulation does
+       ============================================================ -->
+  <section class="slide" id="s3">
+    <div class="slide-inner">
+      <div class="eyebrow">The idea</div>
+      <h2>Scenarios in, evidence out</h2>
+      <ul class="ship-list">
+        <li class="ship-item">
+          <span class="ship-dot"></span>
+          <div>
+            <div class="ship-title">Generate</div>
+            <div class="ship-desc">
+              From a one-line agent description: personas × scenarios, each
+              with a goal, context, and pass/fail criteria.
+            </div>
+          </div>
+          <span class="ship-ref">sim generate</span>
+        </li>
+        <li class="ship-item">
+          <span class="ship-dot"></span>
+          <div>
+            <div class="ship-title">Simulate</div>
+            <div class="ship-desc">
+              A user-simulator agent plays each persona and drives a real
+              multi-turn conversation against your agent.
+            </div>
+          </div>
+          <span class="ship-ref">sim run</span>
+        </li>
+        <li class="ship-item">
+          <span class="ship-dot"></span>
+          <div>
+            <div class="ship-title">Judge</div>
+            <div class="ship-desc">
+              A judge agent scores every turn: goal achieved? criteria met?
+              With reasoning you can read.
+            </div>
+          </div>
+          <span class="ship-ref">goal_achieved · criteria_met</span>
+        </li>
+        <li class="ship-item">
+          <span class="ship-dot"></span>
+          <div>
+            <div class="ship-title">Keep</div>
+            <div class="ship-desc">
+              The generated set is saved as a frozen, reusable evaluation
+              dataset — your regression suite from day one.
+            </div>
+          </div>
+          <span class="ship-ref">datapoints.jsonl</span>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Slide 4 — Demo roadmap
+       ============================================================ -->
+  <section class="slide" id="s4">
+    <div class="slide-inner">
+      <div class="eyebrow">Live demo</div>
+      <h2>Three acts</h2>
+      <ul class="next-list">
+        <li>Act 1 — From scratch, no data.
+          <span class="sub">A live credit-card Q&amp;A agent, a test suite generated from nothing but its description.</span>
+        </li>
+        <li>Act 2 — Your agent, not ours.
+          <span class="sub">The same simulation against any OpenAI-compatible endpoint, HTTP agent, or framework via the SDK.</span>
+        </li>
+        <li>Act 3 — Working with data.
+          <span class="sub">Freeze the suite, change the agent, re-run like-for-like. Then extend it without losing anything.</span>
+        </li>
+      </ul>
+      <div class="footnote">Everything shown is open source — evaluatorq, pip-installable.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Slide 5 — Act 1
+       ============================================================ -->
+  <section class="slide" id="s5">
+    <div class="slide-inner">
+      <div class="eyebrow">Demo · Act 1</div>
+      <h2>From nothing to a test suite</h2>
+      <div class="cmds"><pre><span class="cm"># 1 — generate personas × scenarios from the agent's description</span>
+evaluatorq sim generate <span class="kw">--target</span> agent:ics-support \
+  <span class="kw">--num-personas</span> 3 <span class="kw">--num-scenarios</span> 3 <span class="kw">-o</span> datapoints.jsonl
+
+<span class="cm"># 2 — run the simulation against the live agent, freeze the set</span>
+evaluatorq sim run <span class="kw">--target</span> agent:ics-support \
+  <span class="kw">--save-datapoints</span> datapoints.jsonl <span class="kw">--name</span> from-scratch
+
+<span class="cm"># 3 — open the run viewer: pass rate + transcripts</span>
+evaluatorq sim ui .evaluatorq/sim-runs/&lt;run&gt;.json</pre></div>
+      <p class="cmd-note">
+        The payoff moment: open the JSONL and read one row — a persona with
+        patience, assertiveness, and an emotional arc, crossed with a scenario
+        that has a goal and explicit pass/fail criteria. Coverage from nothing.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Slide 6 — Act 2
+       ============================================================ -->
+  <section class="slide" id="s6">
+    <div class="slide-inner">
+      <div class="eyebrow">Demo · Act 2</div>
+      <h2>Not an orq agent? Still works.</h2>
+      <div class="cmds"><pre><span class="cm"># any OpenAI-compatible model or endpoint</span>
+evaluatorq sim run <span class="kw">--openai-model</span> gpt-4o-mini \
+  <span class="kw">--agent-description</span> <span class="str">"Support agent for ..."</span>
+
+<span class="cm"># any deployed HTTP agent</span>
+evaluatorq sim run <span class="kw">--vercel-url</span> https://my-agent.app/api/chat</pre></div>
+      <div class="cmds"><pre><span class="cm"># or the SDK — wrap any async fn(messages) -> str</span>
+<span class="kw">from</span> evaluatorq.simulation <span class="kw">import</span> simulate
+
+results = <span class="kw">await</span> simulate(target_callback=my_agent,
+    evaluator_names=[<span class="str">"goal_achieved"</span>, <span class="str">"criteria_met"</span>])</pre></div>
+      <p class="cmd-note">
+        Framework adapters included: LangGraph, CrewAI, OpenAI Agents SDK,
+        Pydantic AI — anything that can answer a message can be simulated.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Slide 7 — Act 3
+       ============================================================ -->
+  <section class="slide" id="s7">
+    <div class="slide-inner">
+      <div class="eyebrow">Demo · Act 3</div>
+      <h2>Three ways to work with data</h2>
+      <ul class="ship-list">
+        <li class="ship-item">
+          <span class="ship-dot"></span>
+          <div>
+            <div class="ship-title">① From scratch</div>
+            <div class="ship-desc">No data at all — generate the suite from the agent description. What we did in Act 1.</div>
+          </div>
+          <span class="ship-ref">sim generate</span>
+        </li>
+        <li class="ship-item">
+          <span class="ship-dot"></span>
+          <div>
+            <div class="ship-title">② Re-run frozen</div>
+            <div class="ship-desc">
+              Change the agent's prompt, re-run the <em>exact same</em>
+              datapoints. Like-for-like comparison — regressions become a
+              gate, not a surprise.
+            </div>
+          </div>
+          <span class="ship-ref">--datapoints file.jsonl</span>
+        </li>
+        <li class="ship-item">
+          <span class="ship-dot"></span>
+          <div>
+            <div class="ship-title">③ Extend</div>
+            <div class="ship-desc">Generate more personas and scenarios, append. The suite grows; nothing you built is thrown away.</div>
+          </div>
+          <span class="ship-ref">generate → append</span>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Slide 8 — Reading results
+       ============================================================ -->
+  <section class="slide" id="s8">
+    <div class="slide-inner">
+      <div class="eyebrow">Reading the results</div>
+      <h2>From pass rate to root cause</h2>
+
+      <div class="metrics">
+        <div class="metric">
+          <div class="metric-label">Pass rate (example run)</div>
+          <div class="metric-value">7<span style="font-size:28px">/9</span></div>
+          <div class="metric-delta up">2 scenarios failing</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Judge verdicts</div>
+          <div class="metric-value" style="font-size:30px; line-height:1.3;">goal_achieved<br>criteria_met</div>
+          <div class="metric-delta">per turn, with reasoning</div>
+        </div>
+      </div>
+
+      <ul class="next-list">
+        <li>Start at the pass rate — then ignore it.
+          <span class="sub">The number tells you *that* something broke. The transcript tells you *where*: read the failing conversation, find the turn where it derails.</span>
+        </li>
+        <li>Treat every failure as a bug report with a reproduction attached.
+          <span class="sub">Persona + scenario + full transcript + the judge's reasoning = everything needed to fix it.</span>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Slide 9 — Beyond the demo
+       ============================================================ -->
+  <section class="slide" id="s9">
+    <div class="slide-inner">
+      <div class="eyebrow">Beyond the demo</div>
+      <h2>What you do with it</h2>
+      <ul class="next-list">
+        <li>Regression gate.
+          <span class="sub">Frozen suite re-runs on every prompt or model change — in CI, before merge.</span>
+        </li>
+        <li>Drive it from Claude Code (or any coding agent).
+          <span class="sub">CLI-first with JSON output: the agent runs the sim, reads the failing transcripts, patches the prompt, re-runs. You review the diff.</span>
+        </li>
+        <li>Self-improving workflows — with one caution.
+          <span class="sub">The frozen suite is a fitness function for automated iteration. Keep held-out scenarios so you optimize the agent, not the judge.</span>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Slide 10 — The ask (inverted)
+       ============================================================ -->
+  <section class="slide invert" id="s10">
+    <div class="slide-inner">
+      <div class="eyebrow">The ask</div>
+      <h2>Run one simulation this week</h2>
+
+      <div class="decision-card">
+        <p class="decision-q">
+          Take your agent — any stack — and run one simulation against it
+          before Friday.
+        </p>
+        <p class="decision-context">
+          All it needs is a description of what your agent does. No dataset,
+          no labels, no platform migration. You'll get a reusable suite out
+          of it either way.
+        </p>
+      </div>
+
+      <div class="options">
+        <span class="chip lean">pip install evaluatorq</span>
+        <span class="chip">github.com/orq-ai/evaluatorq</span>
+        <span class="chip">open source</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Slide 11 — Q&A
+       ============================================================ -->
+  <section class="slide" id="s11">
+    <div class="slide-inner">
+      <div class="eyebrow">Q&amp;A</div>
+      <h2>Questions</h2>
+      <ul class="next-list">
+        <li>What would break <em>your</em> agent first — impatience, contradiction, or drift?</li>
+      </ul>
+      <div class="footnote">
+        Bauke Brenninkmeijer · Arian Pasquali · orq.ai — docs, examples, and today's demo commands in the follow-up email.
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Slide counter
+       ============================================================ -->
+  <div id="counter">1 / 11</div>
+
+<script>
+  (function () {
+    const slides = Array.from(document.querySelectorAll('.slide'));
+    const counter = document.getElementById('counter');
+    let current = 0;
+
+    function go(i) {
+      current = Math.max(0, Math.min(slides.length - 1, i));
+      slides[current].scrollIntoView({ behavior: 'smooth' });
+    }
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === ' ') { e.preventDefault(); go(current + 1); }
+      if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')                     { e.preventDefault(); go(current - 1); }
+    });
+
+    const obs = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (en.isIntersecting) {
+          current = slides.indexOf(en.target);
+          counter.textContent = (current + 1) + ' / ' + slides.length;
+        }
+      });
+    }, { threshold: 0.6 });
+
+    slides.forEach(function (s) { obs.observe(s); });
+  })();
+</script>
+</body>
+</html>
