@@ -519,8 +519,8 @@ def _sim_breakdown(
             heatmap(d.get('personas', []), d.get('scenarios', []), d.get('cells', []), value_key='avg_score'),
             sub='Red → yellow → green as the average goal-completion score rises',
             info=(
-                'Each cell is the average goal-completion score (0–100%) the judge gave the '
-                "agent across that persona × scenario's conversations — a continuous measure of "
+                'Each cell is the average goal-completion score (0–100%) the judge gave the '  # noqa: RUF001
+                "agent across that persona × scenario's conversations — a continuous measure of "  # noqa: RUF001
                 'how fully the goal was met, not a count of goals achieved. 100% = the goal was '
                 'fully accomplished in every conversation; a single half-met conversation reads '
                 '~50%. The binary pass/fail rate is shown separately as "Goal rate" in the tables below.'

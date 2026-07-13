@@ -6,9 +6,10 @@ Uses Pydantic models for maximum compatibility with generators/runner/agents.
 from __future__ import annotations
 
 from datetime import datetime  # noqa: TC003
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+from typing_extensions import TypedDict
 
 from evaluatorq.contracts import Message, StrEnum, TokenUsage
 
