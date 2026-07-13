@@ -26,22 +26,25 @@ quarto render presentation.qmd     # → presentation.html + docs/
 - `_quarto.yml`, `orq-theme.css`, `styles.scss` — Quarto + brand theme (reused)
 - `assets/` — brand media (logo, gradient background); add demo screenshots here
 
-## Demo agent (to build)
+## Demo agent
 
-The runnable demo goes here — a support agent driven by `evaluatorq.simulation.simulate()`
-against a persona × scenario matrix, plus a hardening pass. Start from the examples one
-level up (`../01_basic_simulation.py`, `../05_wrap_and_experiment.py`).
-
-Planned layout (mirrors `refund_agent_demo/agent_build/`):
+The spine is the **ICS (International Card Services / ABN AMRO) credit-card support
+agent** — `azure/gpt-5-mini`, a 99-question Dutch/English FAQ knowledge base, and two
+code tools (`get_card_info`, `get_transaction_details`). `make provision` recreates it
+(and its tools + KB) in Orq from the definitions in `agent_build/`, using distinct demo
+keys so it never clobbers the customer's live entities.
 
 ```
 agent_build/
-  build_agent.py     # idempotent orq setup (agent + tools)
-  run_simulation.py  # drives simulate() over the persona/scenario matrix
-  personas.py        # persona definitions
-  scenarios.py       # scenario + criteria definitions
-  tests/
+  provision.py            # idempotent Orq SDK provisioning (tools + KB + agent)
+  config.py               # demo keys, path, embedding model
+  assets/ics_faq.txt      # the FAQ ingested into the knowledge base
+  orq_export/             # agent + tool + KB definitions exported from the platform
 ```
+
+Run the demo flow with the Makefile: `make provision`, then `make generate`,
+`make simulate`, `make rerun`, `make upload`. See **`RUNBOOK.md`** for the narrated
+version with what each step demonstrates.
 
 ## Prereqs
 

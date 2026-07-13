@@ -1,0 +1,40 @@
+{
+  "_id": "01KCK54MEZZ6F1ENPDSE6YWXD0",
+  "path": "AgentSimulation",
+  "key": "GetCardInfo",
+  "display_name": "Get Card Info",
+  "description": "fdsa",
+  "status": "live",
+  "type": "code",
+  "code_tool": {
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "card_type": {
+          "type": "string",
+          "description": "Filter op kaarttype",
+          "enum": [
+            "visa",
+            "mastercard",
+            "gold",
+            "platinum",
+            "all"
+          ],
+          "default": "all"
+        }
+      },
+      "required": [
+        "card_type"
+      ],
+      "additionalProperties": false
+    },
+    "language": "python",
+    "code": "def get_card_info(\n    card_type: str = \"all\",\n) -> dict:\n    \"\"\"\n    Haal creditcard informatie op inclusief limieten, saldo en betaalstatus.\n    \n    Args:\n        card_type: Filter op kaarttype.\n                   Opties: \"visa\", \"mastercard\", \"gold\", \"platinum\", \"all\"\n        include_limits: Toon kredietlimiet en beschikbaar krediet.\n        include_payment_info: Toon betaalinformatie (saldo, vervaldatum).\n        include_security_status: Toon beveiligingsstatus en blokkades.\n    \n    Returns:\n        dict: Kaartinformatie met saldo, limieten en status.\n    \"\"\"\n    return {\n        \"timestamp\": \"2025-01-15T14:32:00Z\",\n        \"account_holder\": \"J. de Vries\",\n        \"cards\": [\n            {\n                \"card_type\": \"visa_gold\",\n                \"card_display\": \"VISA Gold •••• 4523\",\n                \"status\": \"actief\",\n                \"activation_date\": \"2023-03-15\",\n                \"expiry_date\": \"2027-03-31\",\n                \"credit_limit_eur\": 5000.00,\n                \"available_credit_eur\": 3247.50,\n                \"current_balance_eur\": 1752.50,\n                \"contactless_enabled\": True,\n                \"online_payments_enabled\": True,\n                \"international_payments_enabled\": True,\n                \"payment_info\": {\n                    \"minimum_payment_eur\": 52.58,\n                    \"due_date\": \"2025-01-28\",\n                    \"last_payment_date\": \"2024-12-27\",\n                    \"last_payment_amount_eur\": 1200.00,\n                    \"payment_method\": \"automatische_incasso\",\n                    \"debit_account\": \"NL91 ABNA 0417 1643 00\"\n                },\n                \"security_status\": {\n                    \"card_blocked\": False,\n                    \"temporary_block_active\": False,\n                    \"fraud_alert_active\": False,\n                    \"pin_attempts_remaining\": 3,\n                    \"last_used_location\": \"Amsterdam, NL\",\n                    \"last_used_date\": \"2025-01-14T19:23:00Z\"\n                }\n            },\n            {\n                \"card_type\": \"mastercard_standard\",\n                \"card_display\": \"Mastercard •••• 8721\",\n                \"status\": \"geblokkeerd\",\n                \"activation_date\": \"2022-11-20\",\n                \"expiry_date\": \"2026-11-30\",\n                \"credit_limit_eur\": 2500.00,\n                \"available_credit_eur\": 0.00,\n                \"current_balance_eur\": 421.30,\n                \"block_reason\": \"verloren_gemeld\",\n                \"block_date\": \"2025-01-10\",\n                \"replacement_card_ordered\": True,\n                \"expected_delivery\": \"2025-01-20\",\n                \"payment_info\": {\n                    \"minimum_payment_eur\": 42.13,\n                    \"due_date\": \"2025-01-25\",\n                    \"payment_method\": \"handmatig\",\n                    \"debit_account\": None\n                }\n            }\n        ],\n        \"account_summary\": {\n            \"total_credit_limit_eur\": 7500.00,\n            \"total_available_credit_eur\": 3247.50,\n            \"total_outstanding_balance_eur\": 2173.80,\n            \"total_minimum_payment_eur\": 94.71,\n            \"earliest_due_date\": \"2025-01-25\",\n            \"payment_status\": \"goed\",\n            \"missed_payments_12m\": 0\n        },\n        \"recommendations\": [\n            \"Overweeg automatische incasso voor Mastercard om gemiste betalingen te voorkomen\",\n            \"Vervangingskaart voor geblokkeerde Mastercard wordt binnen 5 werkdagen bezorgd\"\n        ]\n    }\n\n# Safely access parameters with default fallback\ncard_type = params.get('card_type', 'all')\nresult = get_card_info(\n    card_type=card_type,\n)"
+  },
+  "created": "2025-12-16T08:41:27.771Z",
+  "updated": "2025-12-16T12:16:56.055Z",
+  "workspace_id": "624ccbbd-a482-40e2-b3d9-3621e09da1f8",
+  "project_id": "019b263b-cf49-7000-9244-3f77b583597e",
+  "created_by_id": "a883f67e-e3f4-4e8f-b975-e69e3d9c1aeb",
+  "updated_by_id": "a883f67e-e3f4-4e8f-b975-e69e3d9c1aeb"
+}

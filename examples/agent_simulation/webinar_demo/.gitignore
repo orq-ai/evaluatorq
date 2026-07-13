@@ -1,13 +1,8 @@
 .env
-.venv/
-__pycache__/
-.pytest_cache/
-.ruff_cache/
-results/
-*.egg-info/
-.quarto/
-docs/
+*.jsonl
 .evaluatorq/
+docs/
+presentation.html
 
-/.quarto/
-**/*.quarto_ipynb
+__pycache__/
+.quarto/
