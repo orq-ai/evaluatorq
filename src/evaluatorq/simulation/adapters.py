@@ -1,6 +1,6 @@
-"""Convenience adapters for creating simulation targetCallbacks.
+"""Convenience adapters for creating simulation targets.
 
-These helpers create ``target_callback`` functions from common agent sources,
+These helpers create callables for the ``target=`` parameter from common agent sources,
 so users don't need to wire the plumbing themselves.
 """
 
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 def from_orq_deployment(
     agent_key: str,
 ) -> Callable[[list[Message]], Awaitable[str]]:
-    """Create a simulation ``target_callback`` from an Orq deployment key."""
+    """Create a simulation ``target`` callable from an Orq deployment key."""
     if not agent_key.strip():
         raise ValueError('agent_key must be a non-empty string')
 
@@ -41,7 +41,7 @@ def from_orq_deployment(
 def from_chat_completions(
     fn: Callable[[list[dict[str, str]]], Any],
 ) -> Callable[[list[Message]], Awaitable[str]]:
-    """Create a simulation ``target_callback`` from a chat completions function.
+    """Create a simulation ``target`` callable from a chat completions function.
 
     Useful for raw OpenAI SDK, Azure OpenAI, or any OpenAI-compatible provider.
     """

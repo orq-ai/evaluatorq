@@ -265,7 +265,7 @@ async def test_on_turn_complete_guard_does_not_corrupt_result(datapoint_factory)
             raise RuntimeError('hook boom')
 
     runner = SimulationRunner(
-        target_callback=_ok_target,
+        target=_ok_target,
         model='gpt-4o-mini',
         max_turns=1,
         user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
@@ -286,7 +286,7 @@ async def test_on_datapoint_error_fires_for_raising_target(datapoint_factory):
 
     hooks = RecordingHooks()
     runner = SimulationRunner(
-        target_callback=_boom_target,
+        target=_boom_target,
         model='gpt-4o-mini',
         max_turns=2,
         user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
@@ -305,7 +305,7 @@ async def test_on_turn_complete_fires_per_turn(datapoint_factory):
     """on_turn_complete must fire once per turn across a multi-turn run."""
     hooks = RecordingHooks()
     runner = SimulationRunner(
-        target_callback=_ok_target,
+        target=_ok_target,
         model='gpt-4o-mini',
         max_turns=3,
         user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
@@ -327,7 +327,7 @@ async def test_on_datapoint_error_fires_on_timeout(datapoint_factory):
 
     hooks = RecordingHooks()
     runner = SimulationRunner(
-        target_callback=_slow_target,
+        target=_slow_target,
         model='gpt-4o-mini',
         max_turns=2,
         user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
@@ -350,7 +350,7 @@ async def test_on_datapoint_error_fires_on_timeout(datapoint_factory):
 async def test_concurrency_attribution(datapoint_factory):
     hooks = RecordingHooks()
     runner = SimulationRunner(
-        target_callback=_ok_target,
+        target=_ok_target,
         model='gpt-4o-mini',
         max_turns=2,
         user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
@@ -788,7 +788,7 @@ async def test_on_datapoint_start_respects_concurrency(datapoint_factory):
         return 'fine'
 
     runner = SimulationRunner(
-        target_callback=slow_target,
+        target=slow_target,
         model='gpt-4o-mini',
         max_turns=1,
         user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
@@ -970,7 +970,7 @@ async def test_async_on_turn_complete_guard_does_not_corrupt_result(datapoint_fa
             raise RuntimeError('async hook boom')
 
     runner = SimulationRunner(
-        target_callback=_ok_target,
+        target=_ok_target,
         model='gpt-4o-mini',
         max_turns=1,
         user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]

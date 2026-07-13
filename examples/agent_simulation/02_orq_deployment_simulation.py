@@ -53,7 +53,7 @@ from evaluatorq.simulation import (
 
 
 def make_a2a_callback(agent_key: str) -> Callable[[list[Message]], Coroutine[Any, Any, str]]:
-    """Return a target_callback that calls an orq A2A agent via the Responses API.
+    """Return a target callable that calls an orq A2A agent via the Responses API.
 
     The Responses API (client.agents.responses.create) is the production path for
     full A2A agents in orq.ai - agents with memory, tool use, and multi-step
@@ -147,11 +147,11 @@ async def main() -> None:
         target_kwargs: dict[str, Any] = {"target": f"deployment:{target_key}"}
         logger.info(f"Target: deployment '{target_key}'")
     else:
-        # A2A agent path: wrap client.agents.responses.create as a target_callback.
+        # A2A agent path: wrap client.agents.responses.create as a target callable.
         # Use this for full agents with memory, tools, and multi-step reasoning.
         assert args.agent is not None, "argparse mutually-exclusive group guarantees one of --deployment/--agent"  # noqa: S101
         agent_description = args.description or f"orq.ai A2A agent '{args.agent}'"
-        target_kwargs = {"target_callback": make_a2a_callback(args.agent)}
+        target_kwargs = {"target": make_a2a_callback(args.agent)}
         logger.info(f"Target: A2A agent '{args.agent}' via Responses API")
 
     logger.info(f"Generating {args.num_personas} personas x {args.num_scenarios} scenarios...")

@@ -538,7 +538,7 @@ evaluatorq sim run <span class="kw">--vercel-url</span> https://my-agent.app/api
       <div class="cmds"><pre><span class="cm"># or the SDK — wrap any async fn(messages) -> str</span>
 <span class="kw">from</span> evaluatorq.simulation <span class="kw">import</span> simulate
 
-results = <span class="kw">await</span> simulate(target_callback=my_agent,
+results = <span class="kw">await</span> simulate(target=my_agent,
     evaluator_names=[<span class="str">"goal_achieved"</span>, <span class="str">"criteria_met"</span>])</pre></div>
       <p class="cmd-note">
         Framework adapters included: LangGraph, CrewAI, OpenAI Agents SDK,

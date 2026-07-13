@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 def wrap_simulation_agent(
     *,
     name: str = 'simulation',
-    target_callback: Callable[[list[Message]], str | Awaitable[str]] | None = None,
+    target: Callable[[list[Message]], str | Awaitable[str]] | None = None,
     agent_key: str | None = None,
     max_turns: int = 10,
     model: str | None = None,
@@ -48,7 +48,7 @@ def wrap_simulation_agent(
     ``evaluatorq()`` run finishes to release the connection pool — otherwise
     it leaks until process exit. Example::
 
-        job = wrap_simulation_agent(target_callback=cb)
+        job = wrap_simulation_agent(target=cb)
         try:
             await evaluatorq("run", data=[...], jobs=[job], evaluators=[...])
         finally:
@@ -64,19 +64,22 @@ def wrap_simulation_agent(
             "wrap_simulation_agent() no longer accepts 'evaluators='. Pass your "
             'evaluator list to evaluatorq(..., evaluators=...) instead. See CHANGELOG.'
         )
-    if deprecated_kwargs:
-        raise TypeError(f'wrap_simulation_agent() got unexpected keyword arguments: {sorted(deprecated_kwargs)}')
+    from evaluatorq.simulation._target_alias import resolve_target_alias
 
-    resolved_callback = target_callback
-    if not resolved_callback and agent_key:
-        resolved_callback = from_orq_deployment(agent_key)
-    if not resolved_callback:
-        raise ValueError('wrap_simulation_agent requires either target_callback or agent_key')
+    resolved_target = resolve_target_alias(
+        target=target,
+        deprecated_kwargs=deprecated_kwargs,
+        caller='wrap_simulation_agent',
+    )
+    if not resolved_target and agent_key:
+        resolved_target = from_orq_deployment(agent_key)
+    if not resolved_target:
+        raise ValueError('wrap_simulation_agent requires either target or agent_key')
 
     effective_model = model or DEFAULT_MODEL
 
     runner = SimulationRunner(
-        target_callback=resolved_callback,
+        target=resolved_target,
         model=effective_model,
         max_turns=max_turns,
         user_simulator=user_simulator,

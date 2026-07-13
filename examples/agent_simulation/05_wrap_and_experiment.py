@@ -128,7 +128,7 @@ async def main() -> None:
 
     # 3. Create the simulation job.
     #    agent_key= is the orq.ai deployment key - routes through from_orq_deployment() internally.
-    #    Use target_callback= for local functions or third-party agents.
+    #    Use target= for local functions or third-party agents.
     job = wrap_simulation_agent(
         name="support-simulation",
         agent_key=args.deployment,

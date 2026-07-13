@@ -54,7 +54,6 @@ from evaluatorq.simulation.exceptions import SimulationDroppedError
 async def simulate(
     *,
     evaluation_name: str = '',
-    target_callback: Callable[[list[Message]], str | Awaitable[str]] | None = None,
     target: str | Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = None,
     personas: list[Persona] | None = None,
     scenarios: list[Scenario] | None = None,
@@ -74,6 +73,7 @@ async def simulate(
     exit_on_failure: bool = True,
     save: bool = False,
     run_output: str | Path | None = None,
+    **deprecated_kwargs: Any,
 ) -> list[SimulationResult]:
     """Run agent simulations through the evaluatorq() framework.
 
@@ -84,15 +84,12 @@ async def simulate(
     callers continue to work.
 
     Args:
-        target_callback: Callable that receives the conversation history and
-            returns the agent's response. Kept for backwards compatibility.
-        target: The agent under test. Takes precedence over ``target_callback``
-            when both are supplied. Accepts a ``str`` (``"agent:<key>"`` or bare
+        target: The agent under test. Accepts a ``str`` (``"agent:<key>"`` or bare
             ``"<key>"`` → hosted Orq agent via the Responses router;
             ``"deployment:<key>"`` → Orq deployment), an ``AgentTarget``
             instance (routed to the runner's ``target_agent`` path; speaks
-            ``respond(messages)``), or a callable (same shape as
-            ``target_callback``).
+            ``respond(messages)``), or a callable that receives the conversation
+            history and returns the agent's response.
         user_simulator: Pre-constructed ``BaseAgent`` to drive the user side.
             When omitted a default ``UserSimulatorAgent`` is built from
             ``sim_model``. ``sim_model`` drives the user-simulator, the judge,
@@ -127,9 +124,11 @@ async def simulate(
             ``False`` for interactive / exploratory runs where failures
             should surface as warnings + error metadata instead.
     """
+    from evaluatorq.simulation._target_alias import resolve_target_alias
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
 
+    target = resolve_target_alias(target=target, deprecated_kwargs=deprecated_kwargs, caller='simulate')
     await init_tracing_if_needed()
 
     try:
@@ -144,7 +143,6 @@ async def simulate(
             return await _simulate_core(
                 caller='simulate',
                 evaluation_name=evaluation_name,
-                target_callback=target_callback,
                 target=target,
                 personas=personas,
                 scenarios=scenarios,
@@ -174,7 +172,6 @@ async def generate_and_simulate(
     *,
     evaluation_name: str = '',
     agent_description: str | None = None,
-    target_callback: Callable[[list[Message]], str | Awaitable[str]] | None = None,
     target: str | Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = None,
     num_personas: int = 5,
     num_scenarios: int = 5,
@@ -193,6 +190,7 @@ async def generate_and_simulate(
     emit_datapoints: EmitDatapoints | None = None,
     save: bool = False,
     run_output: str | Path | None = None,
+    **deprecated_kwargs: Any,
 ) -> list[SimulationResult]:
     """Generate personas/scenarios, then run simulations via evaluatorq().
 
@@ -220,10 +218,16 @@ async def generate_and_simulate(
     exact inputs.
     """
     from evaluatorq.common.async_utils import await_maybe
+    from evaluatorq.simulation._target_alias import resolve_target_alias
     from evaluatorq.simulation.hooks import DefaultHooks, SimStage
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
 
+    target = resolve_target_alias(
+        target=target,
+        deprecated_kwargs=deprecated_kwargs,
+        caller='generate_and_simulate',
+    )
     await init_tracing_if_needed()
 
     try:
@@ -241,7 +245,6 @@ async def generate_and_simulate(
             resolved_agent_description = await _resolve_generation_agent_description(
                 agent_description=agent_description,
                 target=target,
-                target_callback=target_callback,
             )
             # Build one shared client for all generation steps so the three
             # sub-functions don't each construct their own AsyncOpenAI pool.
@@ -280,7 +283,6 @@ async def generate_and_simulate(
                 return await _simulate_core(
                     caller='generate_and_simulate',
                     evaluation_name=evaluation_name,
-                    target_callback=target_callback,
                     target=target,
                     personas=None,
                     scenarios=None,
@@ -522,7 +524,6 @@ async def _resolve_generation_agent_description(
     *,
     agent_description: str | None,
     target: str | Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None,
-    target_callback: Callable[[list[Message]], str | Awaitable[str]] | None,
 ) -> str:
     """Return an explicit description or resolve one from an Orq agent target.
 
@@ -536,12 +537,11 @@ async def _resolve_generation_agent_description(
     if agent_description and agent_description.strip():
         return agent_description
 
-    resolved_target = target if target is not None else target_callback
-    if isinstance(resolved_target, str):
+    if isinstance(target, str):
         from evaluatorq.redteam.contracts import LLMConfig, TargetConfig, TargetKind
         from evaluatorq.redteam.runner import _make_agent_backend, _parse_target
 
-        kind, agent_key = _parse_target(resolved_target)
+        kind, agent_key = _parse_target(target)
         if kind is TargetKind.AGENT:
             backend = _make_agent_backend(
                 target_config=TargetConfig(system_prompt=None),
@@ -612,7 +612,6 @@ async def _simulate_core(
     *,
     caller: str,
     evaluation_name: str,
-    target_callback: Callable[[list[Message]], str | Awaitable[str]] | None,
     target: str | Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None,
     personas: list[Persona] | None,
     scenarios: list[Scenario] | None,
@@ -648,7 +647,7 @@ async def _simulate_core(
     from evaluatorq.simulation.exceptions import SimulationCancelledError
     from evaluatorq.simulation.hooks import DefaultHooks, SimStage, SimulationRunMeta
 
-    target_callback_resolved, target_agent, target_kind_hint = _resolve_target(target, target_callback)
+    target_callable, target_agent, target_kind_hint = _resolve_target(target)
 
     # One run id per run; each conversation's Orq thread id is f"{run_id}:{index}".
     # Persisted on SimulationRun / SimulationResult so the dashboard can deep-link
@@ -682,7 +681,7 @@ async def _simulate_core(
         target_label = f'agent:{agent_key_attr}' if agent_key_attr else 'agent'
         target_name = agent_key_attr or 'agent'
     elif target_kind_hint == 'orq_deployment':
-        dep_key = getattr(target_callback_resolved, 'deployment_key', None)
+        dep_key = getattr(target_callable, 'deployment_key', None)
         target_label = f'deployment:{dep_key}' if dep_key else 'deployment'
         target_name = dep_key or 'deployment'
     else:
@@ -690,7 +689,7 @@ async def _simulate_core(
         target_name = 'callback'
     # Model the target ran, only when the client knows it (e.g. an OpenAI-model
     # target exposes ``.model``); orq agents/deployments resolve it server-side.
-    target_model = getattr(target_agent, 'model', None) or getattr(target_callback_resolved, 'model', None)
+    target_model = getattr(target_agent, 'model', None) or getattr(target_callable, 'model', None)
     run_meta: SimulationRunMeta = {
         'num_datapoints': len(sim_datapoints),
         'model': model,
@@ -719,7 +718,7 @@ async def _simulate_core(
         results = await _simulate_via_evaluatorq(
             caller=caller,
             evaluation_name=evaluation_name,
-            target_callback=target_callback_resolved,
+            target=target_callable,
             target_agent=target_agent,
             sim_datapoints=sim_datapoints,
             max_turns=max_turns,
@@ -801,11 +800,9 @@ async def _simulate_core(
 
 def _resolve_target(
     target: str | Callable[..., Any] | AgentTarget | None,
-    target_callback: Callable[..., Any] | None,
 ) -> tuple[Callable[[list[Message]], str | Awaitable[str]] | None, AgentTarget | None, str | None]:
     """Resolve the simulation target into ``(callback, agent, kind_hint)`` for the runner.
 
-    ``target`` takes precedence over ``target_callback`` when both are given.
     Accepts:
 
     * an ``AgentTarget`` instance → routed to the runner's ``target_agent`` path
@@ -819,7 +816,7 @@ def _resolve_target(
     from evaluatorq.contracts import AgentTarget
     from evaluatorq.simulation.adapters import from_orq_deployment
 
-    resolved = target if target is not None else target_callback
+    resolved = target
 
     if isinstance(resolved, str):
         # NOTE: intentional coupling to red-team internals (`_parse_target`,
@@ -857,7 +854,7 @@ def _resolve_target(
     if resolved is None:
         raise ValueError(
             'A target is required: pass target= (an AgentTarget, a callable, '
-            "'agent:<key>', or 'deployment:<key>') or target_callback=."
+            "'agent:<key>', or 'deployment:<key>')."
         )
     if not callable(resolved):
         raise TypeError(
@@ -994,7 +991,7 @@ def _build_simulation_job_and_cache(
     *,
     job_name: str,
     sim_dp_by_id: dict[int, SimulationDatapoint],
-    target_callback: Callable[[list[Message]], str | Awaitable[str]] | None,
+    target: Callable[[list[Message]], str | Awaitable[str]] | None,
     target_agent: AgentTarget | None,
     model: str,
     max_turns: int,
@@ -1024,7 +1021,7 @@ def _build_simulation_job_and_cache(
     from evaluatorq.simulation.types import TerminatedBy
 
     runner = SimulationRunner(
-        target_callback=target_callback,
+        target=target,
         target_agent=target_agent,
         model=model,
         max_turns=max_turns,
@@ -1135,7 +1132,7 @@ async def _simulate_via_evaluatorq(
     *,
     caller: str,
     evaluation_name: str,
-    target_callback: Callable[[list[Message]], str | Awaitable[str]] | None,
+    target: Callable[[list[Message]], str | Awaitable[str]] | None,
     target_agent: AgentTarget | None,
     sim_datapoints: list[SimulationDatapoint],
     max_turns: int,
@@ -1173,7 +1170,7 @@ async def _simulate_via_evaluatorq(
     job_fn, result_cache, runner = _build_simulation_job_and_cache(
         job_name='simulation',
         sim_dp_by_id=sim_dp_by_id,
-        target_callback=target_callback,
+        target=target,
         target_agent=target_agent,
         model=model,
         max_turns=max_turns,
@@ -1216,7 +1213,7 @@ async def _simulate_via_evaluatorq(
             # Don't let runner-cleanup errors mask the primary exception
             # from evaluatorq() if there was one.
             logger.exception('SimulationRunner.close() raised during cleanup')
-        target_close = getattr(target_agent or target_callback, 'close', None)
+        target_close = getattr(target_agent or target, 'close', None)
         if callable(target_close):
             try:
                 maybe = target_close()

@@ -106,7 +106,7 @@ results = await simulate(target=LangGraphTarget(graph), personas=[...], scenario
 
 Custom framework not listed? Wrap any `fn(messages) -> str` with
 `CallableTarget` (`evaluatorq.integrations.callable_integration`), or pass a
-plain `target_callback`.
+plain `target` callable.
 
 ## Environment
 

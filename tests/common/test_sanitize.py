@@ -211,7 +211,7 @@ async def test_datapoint_system_prompt_always_rebuilt():
         from evaluatorq.simulation.runner.simulation import SimulationRunner
 
         runner = SimulationRunner(
-            target_callback=lambda msgs: "agent reply",
+            target=lambda msgs: "agent reply",
             model="test-model",
             max_turns=1,
         )

@@ -630,7 +630,7 @@
             Forces concreteness. Bauke's answer: ① <code>pip install
             evaluatorq</code> ② export your LLM key ③ <code>evaluatorq sim run
             --agent-description "..."</code> or ten lines of SDK
-            (<code>simulate(target_callback=...)</code>). Under five minutes to
+            (<code>simulate(target=...)</code>). Under five minutes to
             first transcript.
           </div>
           <div class="owner">Cue · end of Act 2, before Act 3</div>
@@ -750,7 +750,7 @@ uv run evaluatorq sim run \
 <span class="kw">async def</span> <span class="fn">my_agent</span>(messages) -&gt; str: ...
 
 results = <span class="kw">await</span> <span class="fn">simulate</span>(
-    target_callback=my_agent,
+    target=my_agent,
     evaluator_names=[<span class="str">"goal_achieved"</span>,
                      <span class="str">"criteria_met"</span>])</pre></div>
         </div>
@@ -812,7 +812,7 @@ cd examples/agent_simulation/webinar_demo
 make provision
 
 orq doctor                          <span class="cm"># CLI auth + reachability</span>
-orq agents retrieve boh_creditcard_agent_demo
+orq agents retrieve boh_creditcard_agent_demo <span class="cm"># agent visible?</span>
 
 <span class="cm"># full Act 1 dry run; keep the outputs as fallbacks:</span>
 <span class="cm">#   backup_datapoints.jsonl  +  a completed run JSON</span>

@@ -162,5 +162,6 @@ class TestFirstMessageGeneratorErrors:
 
     async def test_missing_api_key_raises_helpful_value_error(self, monkeypatch):
         monkeypatch.delenv("ORQ_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         with pytest.raises(ValueError, match="ORQ_API_KEY"):
             FirstMessageGenerator(model="gpt-4o")

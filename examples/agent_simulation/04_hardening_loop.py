@@ -152,7 +152,7 @@ async def main() -> None:
     async def agent_proxy(messages: list[Message]) -> str:
         return await current_agent[0](messages)
 
-    runner = SimulationRunner(target_callback=agent_proxy, max_turns=6)
+    runner = SimulationRunner(target=agent_proxy, max_turns=6)
 
     def on_instructions_updated(new_instructions: str) -> None:
         current_agent[0] = make_agent(new_instructions)

@@ -817,7 +817,7 @@ from evaluatorq.simulation.types import CommunicationStyle, Criterion, Persona, 
 
 results = await simulate(
     evaluation_name="support-agent-sim",
-    target="agent:my-support-agent",  # hosted Orq agent; or target_callback=<async fn> for a local agent
+    target="agent:my-support-agent",  # hosted Orq agent; or target=<async fn> for a local agent
     personas=[Persona(
         name="Impatient Customer",
         patience=0.2,

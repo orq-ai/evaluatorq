@@ -45,7 +45,7 @@ from evaluatorq.simulation.types import (
 async def support_agent(messages: list[Message]) -> str:  # noqa: RUF029
     """Simple mock customer support agent - replace with your own logic.
 
-    Declared `async` because target_callback must be awaitable per the simulation
+    Declared `async` because target must be awaitable per the simulation
     runner protocol; a real agent here would `await` an LLM/HTTP call.
     """
     last = (messages[-1].content or "").lower() if messages else ""
@@ -89,13 +89,13 @@ async def main() -> None:
     )
 
     # 3. Run simulation
-    # target_callback=: pass any async function; use target="agent:<key>" for orq.ai agents.
+    # target=: pass any async function; use target="agent:<key>" for orq.ai agents.
     # sim_model=: the LLM used for the UserSimulator and Judge (defaults to openai/gpt-5.4-mini).
     # evaluator_names=: scorers applied to each result (default: goal_achieved, criteria_met).
     logger.info("Running simulation...")
     results = await simulate(
         evaluation_name="basic-simulation-example",
-        target_callback=support_agent,
+        target=support_agent,
         personas=[persona],
         scenarios=[scenario],
         max_turns=6,
