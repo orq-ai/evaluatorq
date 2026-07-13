@@ -1,8 +1,7 @@
 # FAQ
 
-Common questions, grouped by area. **General** covers the cross-cutting stuff
-(install, keys, privacy, where results go); **Red Teaming** and **Evaluatorq**
-(evaluations + agent simulation) cover each product surface.
+Common questions, grouped by area — **General** (install, keys, privacy,
+running evaluations), **Red Teaming**, and **Agent Simulation**.
 
 ## General
 
@@ -79,6 +78,40 @@ report tracks spend in `report.summary.token_usage_total`.
 Runs auto-save locally (red-team runs to `.evaluatorq/runs/`). List and browse
 them in a local dashboard with `eq redteam runs` / `eq redteam ui`, or the
 FastHTML preview via `eq dashboard`. See [Dashboard](dashboard.md).
+
+### How do I run a plain evaluation?
+
+Decorate a function with `@job`, hand `evaluatorq()` your data and evaluators,
+and it runs the jobs in parallel and scores each row:
+
+```python
+from evaluatorq import DataPoint, evaluatorq, job, string_contains_evaluator
+
+
+@job("greet")
+async def greet_job(data: DataPoint, _row: int) -> str:
+    return f"Hello, {data.inputs['name']}!"
+
+
+await evaluatorq(
+    "smoke-test",
+    data=[DataPoint(inputs={"name": "Ada"}, expected_output="Hello, Ada!")],
+    jobs=[greet_job],
+    evaluators=[string_contains_evaluator()],
+    print_results=True,
+)
+```
+
+See [Getting Started](guides/getting-started.md).
+
+### What evaluators are built in, and can I write my own?
+
+There are deterministic ones (string match, JSON, regex) and LLM-judge ones. For
+custom logic, write a function that scores a row — see
+[Custom Evaluators & Frameworks](custom-evaluators-and-frameworks.md). For higher
+confidence, score one response with a **panel** of judges
+([LLM as a Jury](llm-as-a-jury.md)) or compare two responses head-to-head
+([Pairwise Judging](pairwise-judging.md)).
 
 ## Red Teaming
 
@@ -214,41 +247,7 @@ The agent **resisted** the attack (the attack failed). `passed=False` means the
 attack succeeded — the agent is **vulnerable**. `resistance_rate` is the fraction
 of attacks that came back `passed=True`.
 
-## Evaluatorq
-
-### How do I run a plain evaluation?
-
-Decorate a function with `@job`, hand `evaluatorq()` your data and evaluators,
-and it runs the jobs in parallel and scores each row:
-
-```python
-from evaluatorq import DataPoint, evaluatorq, job, string_contains_evaluator
-
-
-@job("greet")
-async def greet_job(data: DataPoint, _row: int) -> str:
-    return f"Hello, {data.inputs['name']}!"
-
-
-await evaluatorq(
-    "smoke-test",
-    data=[DataPoint(inputs={"name": "Ada"}, expected_output="Hello, Ada!")],
-    jobs=[greet_job],
-    evaluators=[string_contains_evaluator()],
-    print_results=True,
-)
-```
-
-See [Getting Started](guides/getting-started.md).
-
-### What evaluators are built in, and can I write my own?
-
-There are deterministic ones (string match, JSON, regex) and LLM-judge ones. For
-custom logic, write a function that scores a row — see
-[Custom Evaluators & Frameworks](custom-evaluators-and-frameworks.md). For higher
-confidence, score one response with a **panel** of judges
-([LLM as a Jury](llm-as-a-jury.md)) or compare two responses head-to-head
-([Pairwise Judging](pairwise-judging.md)).
+## Agent Simulation
 
 ### What is agent simulation, and how is it different from red teaming?
 
