@@ -424,64 +424,57 @@
       <div class="eyebrow">The idea</div>
       <h2>From nothing to a test suite</h2>
 
-      <svg viewBox="0 0 780 330" xmlns="http://www.w3.org/2000/svg" style="width:100%; display:block;" aria-label="Simulation pipeline: description to generate to simulate to judge to keep, with a re-run loop">
+      <svg viewBox="0 0 780 470" xmlns="http://www.w3.org/2000/svg" style="width:100%; display:block;" aria-label="Linear pipeline: agent description in, generate, simulate, judge, results out">
         <defs>
           <marker id="pArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M0,0 L10,5 L0,10 z" fill="#87867F"/>
-          </marker>
-          <marker id="pArrowClay" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M0,0 L10,5 L0,10 z" fill="#D97757"/>
           </marker>
         </defs>
 
         <!-- boxes -->
         <g font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace">
-          <rect x="10"  y="30" width="200" height="70" rx="12" fill="#FFFFFF" stroke="#D97757" stroke-width="1.5"/>
-          <text x="110" y="60" text-anchor="middle" font-size="15" font-weight="600" fill="#141413">agent description</text>
-          <text x="110" y="80" text-anchor="middle" font-size="11" fill="#87867F">one line is enough</text>
+          <rect x="220" y="6" width="340" height="64" rx="12" fill="#FFFFFF" stroke="#D97757" stroke-width="1.5"/>
+          <text x="390" y="33" text-anchor="middle" font-size="15" font-weight="600" fill="#141413">agent description</text>
+          <text x="390" y="52" text-anchor="middle" font-size="11" fill="#87867F">one line is enough</text>
 
-          <rect x="290" y="30" width="200" height="70" rx="12" fill="#FFFFFF" stroke="#D1CFC5" stroke-width="1.5"/>
-          <text x="390" y="60" text-anchor="middle" font-size="15" font-weight="600" fill="#141413">Generate</text>
-          <text x="390" y="80" text-anchor="middle" font-size="11" fill="#87867F">personas × scenarios · goals</text>
+          <rect x="220" y="106" width="340" height="64" rx="12" fill="#FFFFFF" stroke="#D1CFC5" stroke-width="1.5"/>
+          <text x="390" y="133" text-anchor="middle" font-size="15" font-weight="600" fill="#141413">Generate</text>
+          <text x="390" y="152" text-anchor="middle" font-size="11" fill="#87867F">personas × scenarios · goals · pass/fail criteria</text>
 
-          <rect x="570" y="30" width="200" height="70" rx="12" fill="#FFFFFF" stroke="#788C5D" stroke-width="1.5"/>
-          <text x="670" y="60" text-anchor="middle" font-size="15" font-weight="600" fill="#141413">Simulate</text>
-          <text x="670" y="80" text-anchor="middle" font-size="11" fill="#87867F">user-sim ⇄ your agent</text>
+          <rect x="220" y="206" width="340" height="64" rx="12" fill="#FFFFFF" stroke="#788C5D" stroke-width="1.5"/>
+          <text x="390" y="233" text-anchor="middle" font-size="15" font-weight="600" fill="#141413">Simulate</text>
+          <text x="390" y="252" text-anchor="middle" font-size="11" fill="#87867F">user-sim ⇄ your agent · multi-turn</text>
 
-          <rect x="570" y="200" width="200" height="70" rx="12" fill="#FFFFFF" stroke="#D1CFC5" stroke-width="1.5"/>
-          <text x="670" y="230" text-anchor="middle" font-size="15" font-weight="600" fill="#141413">Judge</text>
-          <text x="670" y="250" text-anchor="middle" font-size="11" fill="#87867F">goal_achieved · criteria_met</text>
+          <rect x="220" y="306" width="340" height="64" rx="12" fill="#FFFFFF" stroke="#D1CFC5" stroke-width="1.5"/>
+          <text x="390" y="333" text-anchor="middle" font-size="15" font-weight="600" fill="#141413">Judge</text>
+          <text x="390" y="352" text-anchor="middle" font-size="11" fill="#87867F">goal_achieved · criteria_met</text>
 
-          <rect x="290" y="200" width="200" height="70" rx="12" fill="#141413"/>
-          <text x="390" y="230" text-anchor="middle" font-size="15" font-weight="600" fill="#FAF9F5">Results</text>
-          <text x="390" y="250" text-anchor="middle" font-size="11" fill="#C9B98A">judge scores + dataset</text>
+          <rect x="220" y="406" width="340" height="64" rx="12" fill="#141413"/>
+          <text x="390" y="433" text-anchor="middle" font-size="15" font-weight="600" fill="#FAF9F5">Results</text>
+          <text x="390" y="452" text-anchor="middle" font-size="11" fill="#C9B98A">judge scores + dataset</text>
         </g>
 
-        <!-- solid flow -->
+        <!-- flow -->
         <g stroke="#87867F" stroke-width="1.5" fill="none">
-          <path d="M210 65 L290 65" marker-end="url(#pArrow)"/>
-          <path d="M490 65 L570 65" marker-end="url(#pArrow)"/>
-          <path d="M670 100 L670 200" marker-end="url(#pArrow)"/>
-          <path d="M570 235 L490 235" marker-end="url(#pArrow)"/>
+          <path d="M390 70 L390 106" marker-end="url(#pArrow)"/>
+          <path d="M390 170 L390 206" marker-end="url(#pArrow)"/>
+          <path d="M390 270 L390 306" marker-end="url(#pArrow)"/>
+          <path d="M390 370 L390 406" marker-end="url(#pArrow)"/>
         </g>
 
-        <!-- regression loop -->
-        <g stroke="#D97757" stroke-width="1.5" fill="none" stroke-dasharray="5 4">
-          <path d="M290 235 C 170 235, 170 152, 290 152 L 500 152 C 560 152, 605 140, 622 104" marker-end="url(#pArrowClay)"/>
-        </g>
-
-        <!-- edge labels -->
+        <!-- step labels -->
         <g font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="11" fill="#87867F">
-          <text x="222" y="52">sim generate</text>
-          <text x="510" y="52">sim run</text>
-          <text x="658" y="155" text-anchor="end">every turn scored,</text>
-          <text x="658" y="170" text-anchor="end">reasoning included</text>
-          <text x="300" y="140" fill="#D97757">re-run the frozen set on every agent change</text>
+          <text x="205" y="42" text-anchor="end" fill="#D97757">input</text>
+          <text x="410" y="94">sim generate</text>
+          <text x="410" y="194">sim run</text>
+          <text x="410" y="294">full transcript, every turn scored</text>
+          <text x="410" y="394">verdicts + reasoning</text>
+          <text x="205" y="442" text-anchor="end" fill="#D97757">output</text>
         </g>
       </svg>
       <p class="cmd-note" style="margin-top:18px;">
-        The loop is the point: the generated suite is frozen and reusable —
-        your regression gate from day one, before a single real user.
+        One input, one pass, two outputs: judge scores you can read, and a
+        reusable dataset for your evaluation pipeline.
       </p>
     </div>
   </section>
