@@ -28,10 +28,13 @@ def _make_response(text: str) -> MagicMock:
     usage = MagicMock()
     usage.input_tokens = 5
     usage.output_tokens = 3
+    telemetry = MagicMock()
+    telemetry.trace_id = None
     response = MagicMock()
     response.id = "resp"
     response.usage = usage
     response.output = [msg_item]
+    response.telemetry = telemetry
     return response
 
 

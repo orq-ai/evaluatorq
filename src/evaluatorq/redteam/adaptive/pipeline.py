@@ -23,6 +23,7 @@ from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, Job, job
 from evaluatorq.common.jury import append_jury_summary
+from evaluatorq.common.thread_context import conversation_thread
 from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentResponse, Message
 from evaluatorq.redteam.adaptive.attack_generator import generate_attack_prompt, generate_objective
@@ -306,6 +307,7 @@ def create_dynamic_redteam_job(
     verbosity: int = 0,
     llm_kwargs: dict[str, Any] | None = None,
     pipeline_config: LLMConfig | None = None,
+    run_id: str | None = None,
 ) -> Job:
     """Create an evaluatorq Job that runs a red-team attack.
 
@@ -342,6 +344,7 @@ def create_dynamic_redteam_job(
         category = str(inputs['category'])
         vulnerability = str(inputs.get('vulnerability', ''))
         effective_max_turns = 1 if strategy.turn_type == TurnType.SINGLE else max_turns
+        thread_id = f'{run_id}:{safe_agent_key}:{_row}' if run_id else None
 
         async with (
             with_redteam_span(
@@ -400,10 +403,11 @@ def create_dynamic_redteam_job(
                             'orq.redteam.input': truncate_for_span(prompt),
                         },
                     ) as tgt_span:
-                        raw = await asyncio.wait_for(
-                            target.respond([Message(role='user', content=prompt)]),
-                            timeout=target_timeout_s,
-                        )
+                        with conversation_thread(thread_id):
+                            raw = await asyncio.wait_for(
+                                target.respond([Message(role='user', content=prompt)]),
+                                timeout=target_timeout_s,
+                            )
                         agent_resp = _coerce_to_agent_response(raw)
                         response = agent_resp.text
                         token_usage: TokenUsage | None = agent_resp.usage
@@ -482,7 +486,7 @@ def create_dynamic_redteam_job(
                 if active_progress is not None:
                     await active_progress.finish_attack(None)
 
-                return {**result_dict.model_dump(mode='json'), 'max_turns': effective_max_turns}
+                return {**result_dict.model_dump(mode='json'), 'max_turns': effective_max_turns, 'thread_id': thread_id}
 
             # Dynamic single-turn (max_turns=1) or multi-turn — orchestrator handles both
             llm_client = attack_llm_client or create_async_llm_client()
@@ -497,13 +501,15 @@ def create_dynamic_redteam_job(
             )
 
             try:
-                result = await orchestrator.run_attack(
-                    target=target,
-                    strategy=strategy,
-                    objective=objective,
-                    agent_context=agent_context,
-                    max_turns=effective_max_turns,
-                )
+                # One Orq thread per attack groups all its turns in observability.
+                with conversation_thread(thread_id):
+                    result = await orchestrator.run_attack(
+                        target=target,
+                        strategy=strategy,
+                        objective=objective,
+                        agent_context=agent_context,
+                        max_turns=effective_max_turns,
+                    )
             except asyncio.TimeoutError as e:
                 tb = traceback.format_exc(limit=8)
                 mapped_code, mapped_msg = resolved_backend.map_error(e)
@@ -559,7 +565,7 @@ def create_dynamic_redteam_job(
             if result_dict.final_response:
                 set_span_attrs(attack_span, {'output': truncate_for_span(result_dict.final_response)})
             _set_attack_span_attrs(attack_span, result_dict)
-            return {**result_dict.model_dump(mode='json'), 'max_turns': effective_max_turns}
+            return {**result_dict.model_dump(mode='json'), 'max_turns': effective_max_turns, 'thread_id': thread_id}
 
     return dynamic_job
 

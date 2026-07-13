@@ -23,6 +23,7 @@ from evaluatorq.dashboard.redteam_charts import (
     fmt_vulnerability,
 )
 from evaluatorq.dashboard.report_kit import tag
+from evaluatorq.dashboard.trace_links import thread_trace_url, trace_link_button
 from evaluatorq.dashboard.view import render_message_list
 from evaluatorq.redteam.reports.converters import _is_evaluated, _is_vulnerable
 
@@ -88,7 +89,12 @@ def render_attack_fragment(r: RedTeamResult) -> str:
 
     transcript_html = render_message_list(r.messages, role_labels=_RT_ROLE_LABELS, class_prefix='rt')
 
-    return f'{tags_html}{verdict_html}{transcript_html}'
+    # Deep-link to this conversation's Orq traces (hidden when unconfigured or
+    # for older reports without a thread id).
+    trace_btn = trace_link_button(thread_trace_url(r.thread_id), 'View conversation traces ↗')
+    trace_html = f'<div class="rt-conv-actions">{trace_btn}</div>' if trace_btn else ''
+
+    return f'{tags_html}{verdict_html}{trace_html}{transcript_html}'
 
 
 # ---------------------------------------------------------------------------

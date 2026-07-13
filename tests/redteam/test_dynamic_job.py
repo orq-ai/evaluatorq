@@ -319,6 +319,55 @@ class TestTemplateSingleTurnPath:
         assert parsed.n_turns == 1
         assert parsed.error is None
 
+    @pytest.mark.asyncio
+    @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
+    @patch(_PATCH_SET_SPAN_ATTRS)
+    @patch(_PATCH_ATTACK_SPAN_ATTRS)
+    async def test_thread_id_flows_from_run_id_to_result_and_report(
+        self, _attrs, _set_attrs, _span
+    ):
+        """run_id -> job dict thread_id -> JobOutputPayload -> RedTeamResult, and
+        run_id -> RedTeamReport."""
+        from evaluatorq.redteam.adaptive.pipeline import create_dynamic_redteam_job
+        from evaluatorq.redteam.contracts import RedTeamReport, RedTeamResult
+        from evaluatorq.redteam.reports.converters import _coerce_job_output_payload
+
+        strategy = _make_strategy(
+            turn_type=TurnType.SINGLE,
+            prompt_template="Static attack prompt for {agent_name}.",
+        )
+        target = _make_target()
+        factory = _make_target_factory(target)
+        agent_context = _make_agent_context()
+        datapoint = _make_datapoint(strategy=strategy)
+
+        job_fn = create_dynamic_redteam_job(
+            agent_key="test-agent",
+            agent_context=agent_context,
+            backend=factory,
+            run_id="abc123",
+        )
+
+        with patch(
+            "evaluatorq.redteam.adaptive.orchestrator._get_active_progress",
+            return_value=None,
+        ):
+            output = await _call_dynamic_job(job_fn, datapoint, row=7)
+
+        # job dict -> JobOutputPayload survives coercion
+        assert output["thread_id"] == "abc123:test-agent:7"
+        payload = _coerce_job_output_payload(output)
+        assert payload.thread_id == "abc123:test-agent:7"
+
+        # thread_id lands on RedTeamResult; run_id lands on RedTeamReport
+        result = RedTeamResult.model_construct(thread_id=payload.thread_id)
+        assert result.thread_id == "abc123:test-agent:7"
+        assert result.model_dump()["thread_id"] == "abc123:test-agent:7"
+
+        report = RedTeamReport.model_construct(run_id="abc123")
+        assert report.run_id == "abc123"
+        assert report.model_dump()["run_id"] == "abc123"
+
 
 # ===========================================================================
 # 2. Dynamic multi-turn path (orchestrator used)

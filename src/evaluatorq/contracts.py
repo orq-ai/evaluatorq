@@ -685,6 +685,11 @@ class AgentResponse(BaseModel):
     usage: TokenUsage | None = None
     model: str | None = None
     response_id: str | None = None
+    # Orq trace id for this call (both the router and agents endpoints read
+    # `response.telemetry.trace_id` from the response body). Links this
+    # response back to the trace in Orq observability. None when not routed
+    # through Orq.
+    trace_id: str | None = None
     finish_reason: str | None = None
     error: AgentResponseError | None = None
 
@@ -698,6 +703,7 @@ class AgentResponse(BaseModel):
             usage: TokenUsage | None = None,
             model: str | None = None,
             response_id: str | None = None,
+            trace_id: str | None = None,
             finish_reason: str | None = None,
             error: AgentResponseError | None = None,
         ) -> None: ...

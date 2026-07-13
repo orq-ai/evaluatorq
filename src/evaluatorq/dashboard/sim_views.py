@@ -24,6 +24,7 @@ from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import apply_or_all
+from evaluatorq.dashboard.trace_links import thread_trace_url, trace_link_button
 from evaluatorq.dashboard.view import _sim_rowlist_wrapper, render_message_list
 
 if TYPE_CHECKING:
@@ -222,6 +223,11 @@ def render_transcript_fragment(entry: SimulationEntry) -> str:
     judge_reason = esc(entry.judge_reason or '')
     error = entry.error
 
+    # Deep-link to this conversation's Orq traces (hidden when unconfigured or
+    # for older reports without a thread id).
+    trace_btn = trace_link_button(thread_trace_url(entry.thread_id), 'View conversation traces ↗')
+    trace_html = f'<div class="sim-transcript-actions">{trace_btn}</div>' if trace_btn else ''
+
     # No title here: the collapsed conversation card already shows
     # "#N · persona · scenario" directly above this fragment, so repeating it
     # (the old sim-transcript-header) was a duplicate the mockup doesn't have.
@@ -229,7 +235,7 @@ def render_transcript_fragment(entry: SimulationEntry) -> str:
 
     if error:
         error_html = f'<div class="sim-transcript-error"><strong>Error:</strong> {esc(str(error))}</div>'
-        return f'<div class="sim-transcript-detail">{error_html}{criteria_col}</div>'
+        return f'<div class="sim-transcript-detail">{trace_html}{error_html}{criteria_col}</div>'
 
     judge_html = ''
     if judge_reason:
@@ -257,7 +263,7 @@ def render_transcript_fragment(entry: SimulationEntry) -> str:
     )
     grid_html = f'<div class="sim-transcript-grid">{bubbles_html}{criteria_col}</div>'
 
-    return f'<div class="sim-transcript-detail">{judge_html}{grid_html}</div>'
+    return f'<div class="sim-transcript-detail">{trace_html}{judge_html}{grid_html}</div>'
 
 
 # ---------------------------------------------------------------------------
