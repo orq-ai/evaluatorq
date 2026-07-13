@@ -32,10 +32,11 @@ Two command groups have their own pages:
 
     Unchanged: `sim export --output`, `--no-save`, `--dataset-format`, `redteam --save`.
 
-    **Deprecated aliases** — still work but emit a `DeprecationWarning`, to be removed in the next major:
+    **Deprecated aliases** — still work but warn, to be removed in the next major:
 
-    - SDK `simulate(run_output=...)` / `generate_and_simulate(run_output=...)` → use `report=...`
-    - SDK `red_team(output_dir=...)` → use `artifacts_dir=...`; CLI `--output-dir` → `--artifacts-dir`
+    - SDK `simulate(run_output=...)` / `generate_and_simulate(run_output=...)` → use `report=...` (emits a Python `DeprecationWarning`)
+    - SDK `red_team(output_dir=...)` → use `artifacts_dir=...` (emits a Python `DeprecationWarning`)
+    - CLI `redteam run --output-dir` → use `--artifacts-dir` (prints a deprecation notice to stderr)
 
 ## Top-level options
 
