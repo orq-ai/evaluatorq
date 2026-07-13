@@ -36,6 +36,7 @@ import typer
 from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run as _auto_save_run
 from evaluatorq.simulation.utils.run_store import build_simulation_run as _build_simulation_run
+from evaluatorq.simulation.utils.run_store import fetch_agent_info as _fetch_agent_info
 from evaluatorq.simulation.utils.run_store import get_sim_runs_dir as _get_sim_runs_dir
 from evaluatorq.simulation.utils.run_store import sanitise_run_name as _sanitise_run_name
 from evaluatorq.simulation.utils.run_store import write_report as _write_report
@@ -442,12 +443,17 @@ def simulate(
         _write_results(results, output)
 
     tgt_name, tgt_model = _target_identity(target=target, vercel_url=vercel_url, openai_model=openai_model)
+    agent_info = None
+    if target_kind == 'orq_agent' and tgt_name:
+        agent_info = asyncio.run(_fetch_agent_info(tgt_name))
     run = _build_simulation_run(
         run_name=name,
         mode='simulate',
         target_kind=target_kind,
         target=tgt_name,
         target_model=tgt_model,
+        max_turns=max_turns,
+        agent_info=agent_info,
         evaluator_names=evaluator_names or DEFAULT_EVALUATOR_NAMES,
         results=results,
     )
@@ -702,12 +708,17 @@ def run(
         _write_results(results, output)
 
     tgt_name, tgt_model = _target_identity(target=target, vercel_url=vercel_url, openai_model=openai_model)
+    agent_info = None
+    if target_kind == 'orq_agent' and tgt_name:
+        agent_info = asyncio.run(_fetch_agent_info(tgt_name))
     run = _build_simulation_run(
         run_name=name,
         mode='run',
         target_kind=target_kind,
         target=tgt_name,
         target_model=tgt_model,
+        max_turns=max_turns,
+        agent_info=agent_info,
         evaluator_names=evaluator_names or DEFAULT_EVALUATOR_NAMES,
         results=results,
     )

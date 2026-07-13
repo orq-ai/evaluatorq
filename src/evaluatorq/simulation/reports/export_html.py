@@ -227,23 +227,51 @@ def _render_overview_html(section: ReportSection) -> str:
     return f'<section class="report-card"><h2>{_esc(section.title)}</h2>{intro}{grid}</section>'
 
 
+_CRIT_CARET = (
+    '<svg class="crit-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+    'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>'
+)
+
+
+def _criteria_dots(criteria: list[dict[str, Any]]) -> str:
+    """Collapsed pass/fail dots that unfold to the full criteria text.
+
+    Summary is a hover-lit pill of dots (each dot titled for a quick tooltip) plus
+    a caret; opening reveals a tinted panel listing every criterion. Height animates
+    both ways via ``::details-content`` where supported and snaps otherwise.
+    """
+    if not criteria:
+        return '<span class="crit-empty">—</span>'
+    n_fail = sum(1 for c in criteria if not c['passed'])
+    dots, items = [], []
+    for c in criteria:
+        cls = 'safety' if (c.get('safety') and not c['passed']) else ('pass' if c['passed'] else 'fail')
+        dots.append(f'<span class="crit-dot crit-dot--{cls}" title="{_esc(c["description"])}"></span>')
+        items.append(f'<li class="crit-li crit-li--{cls}">{_esc(c["description"])}</li>')
+    label = f'{n_fail} of {len(criteria)} criteria failed — show details'
+    return (
+        f'<details class="crit-cell">'
+        f'<summary class="crit-summary" aria-label="{_esc(label)}" title="{_esc(label)}">'
+        f'<span class="crit-dots">{"".join(dots)}</span>{_CRIT_CARET}</summary>'
+        f'<ul class="crit-list">{"".join(items)}</ul></details>'
+    )
+
+
 def _render_failures_first_html(section: ReportSection) -> str:
     rows = section.data.get('rows', [])
     if not rows:
         return '<section class="report-card"><h2>Failures</h2><p>No failed conversations.</p></section>'
-    trs = []
-    for r in rows:
-        badges = ''.join(_status_badge(v, 'fail') for v in r['violated']) or '-'
-        safety = _status_badge('SAFETY', 'fail') if r['has_safety'] else ''
-        trs.append(
-            f'<tr><td><a href="#{r["anchor"]}">#{r["index"]}</a></td>'
-            f'<td>{_esc(r["persona"])}</td><td>{_esc(r["scenario"])}</td>'
-            f'<td>{badges} {safety}</td><td>{r["score"]:.2f}</td>'
-            f'<td>{_esc(r["terminated_by"])}</td></tr>'
-        )
+    trs = [
+        f'<tr><td><a href="#{r["anchor"]}">{_esc(r["scenario"])}</a></td>'
+        f'<td>{_esc(r["persona"])}</td>'
+        f'<td>{_criteria_dots(r["criteria"])}</td>'
+        f'<td>{r["score"]:.2f}</td>'
+        f'<td>{_esc(r["terminated_by"])}</td></tr>'
+        for r in rows
+    ]
     table = (
-        '<table><thead><tr><th>#</th><th>Persona</th><th>Scenario</th>'
-        '<th>Violated criteria</th><th>Score</th><th>Ended</th></tr></thead>'
+        '<table><thead><tr><th>Scenario</th><th>Persona</th>'
+        '<th>Criteria</th><th>Score</th><th>Ended</th></tr></thead>'
         f'<tbody>{"".join(trs)}</tbody></table>'
     )
     # Long failure lists get a scroll container with a sticky header so the

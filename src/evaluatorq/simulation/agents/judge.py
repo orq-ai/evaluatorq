@@ -180,6 +180,11 @@ class JudgeAgentConfig(AgentConfig):
         ground_truth: str = '',
         **kwargs: Any,
     ) -> None:
+        # Default the judge to the Responses API: it supports function tools +
+        # reasoning_effort together, which chat/completions rejects with a 400 for
+        # models like gpt-5.4-mini. Callers can still pass api='chat_completions'
+        # (and their own client/base_url) to override.
+        kwargs.setdefault('api', 'responses')
         super().__init__(**kwargs)
         self.goal = goal
         self.criteria = criteria

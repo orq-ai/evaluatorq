@@ -8,6 +8,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from evaluatorq.common.async_utils import await_maybe
+from evaluatorq.common.thread_context import conversation_thread
 from evaluatorq.common.tracing import record_llm_input, record_llm_output, record_token_usage, set_span_attrs
 from evaluatorq.contracts import TokenUsage
 from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
@@ -310,8 +311,15 @@ class SimulationRunner:
         datapoint: SimulationDatapoint | None = None,
         max_turns: int | None = None,
         first_message: str | None = None,
+        thread_id: str | None = None,
     ) -> SimulationResult:
-        """Run a single simulation. Never throws -- returns error SimulationResult on failure."""
+        """Run a single simulation. Never throws -- returns error SimulationResult on failure.
+
+        ``thread_id`` binds a deterministic, run-scoped Orq observability thread id
+        (``f"{run_id}:{index}"``) so every turn of this conversation groups under one
+        id in Orq. When ``None`` a fresh uuid is minted. The resolved id is stamped
+        onto the returned :class:`SimulationResult` so the dashboard can deep-link to it.
+        """
         # Resolve datapoint
         if datapoint:
             persona = datapoint.persona
@@ -332,55 +340,67 @@ class SimulationRunner:
         # Holder so the outer except can read partial token usage from agents
         # created inside _run_inner (mirrors TS getTotalUsage closure).
         usage_holder: dict[str, Callable[[], TokenUsage]] = {}
+        # Captured for the error path below (out of the `with` scope), so error
+        # results still carry the thread id for the dashboard deep-link.
+        bound_thread_id: str | None = None
 
         try:
-            async with with_simulation_span(
-                'orq.simulation.run',
-                {
-                    'orq.simulation.persona': persona.name if persona else None,
-                    'orq.simulation.scenario': scenario.name if scenario else None,
-                    'orq.simulation.max_turns': effective_max_turns,
-                    'orq.simulation.model': self._model,
-                },
-            ) as run_span:
-                try:
-                    return await self._run_inner(
-                        persona=persona,
-                        scenario=scenario,
-                        datapoint_id=datapoint_id,
-                        first_message=first_message,
-                        effective_max_turns=effective_max_turns,
-                        messages=messages,
-                        turn_metrics_list=turn_metrics_list,
-                        run_span=run_span,
-                        usage_holder=usage_holder,
-                    )
-                except BaseException:
-                    get_total_usage = usage_holder.get('get_total_usage')
+            # One Orq thread per simulation groups all its turns (target + user
+            # simulator + judge) under one id in Orq observability. ContextVar
+            # scoping keeps concurrent datapoints isolated. A run-scoped thread_id
+            # (f"{run_id}:{index}") is passed in when available; else one is minted.
+            with conversation_thread(thread_id) as thread_id:
+                bound_thread_id = thread_id
+                async with with_simulation_span(
+                    'orq.simulation.run',
+                    {
+                        'orq.simulation.persona': persona.name if persona else None,
+                        'orq.simulation.scenario': scenario.name if scenario else None,
+                        'orq.simulation.max_turns': effective_max_turns,
+                        'orq.simulation.model': self._model,
+                        'orq.thread_id': thread_id,
+                    },
+                ) as run_span:
                     try:
-                        usage = get_total_usage() if get_total_usage else ZERO_USAGE.model_copy()
-                    except Exception as usage_err:
-                        logger.error(
-                            'Failed to collect token usage during error path: %s',
-                            usage_err,
-                            exc_info=True,
+                        result = await self._run_inner(
+                            persona=persona,
+                            scenario=scenario,
+                            datapoint_id=datapoint_id,
+                            first_message=first_message,
+                            effective_max_turns=effective_max_turns,
+                            messages=messages,
+                            turn_metrics_list=turn_metrics_list,
+                            run_span=run_span,
+                            usage_holder=usage_holder,
                         )
-                        usage = ZERO_USAGE.model_copy()
-                    record_token_usage(
-                        run_span,
-                        prompt_tokens=usage.prompt_tokens,
-                        completion_tokens=usage.completion_tokens,
-                        total_tokens=usage.total_tokens,
-                    )
-                    set_span_attrs(
-                        run_span,
-                        {
-                            'orq.simulation.terminated_by': 'error',
-                            'orq.simulation.goal_achieved': False,
-                            'orq.simulation.turn_count': sum(1 for m in messages if m.role == 'assistant'),
-                        },
-                    )
-                    raise
+                        result.thread_id = thread_id
+                        return result
+                    except BaseException:
+                        get_total_usage = usage_holder.get('get_total_usage')
+                        try:
+                            usage = get_total_usage() if get_total_usage else ZERO_USAGE.model_copy()
+                        except Exception as usage_err:
+                            logger.error(
+                                'Failed to collect token usage during error path: %s',
+                                usage_err,
+                                exc_info=True,
+                            )
+                            usage = ZERO_USAGE.model_copy()
+                        record_token_usage(
+                            run_span,
+                            prompt_tokens=usage.prompt_tokens,
+                            completion_tokens=usage.completion_tokens,
+                            total_tokens=usage.total_tokens,
+                        )
+                        set_span_attrs(
+                            run_span,
+                            {
+                                'orq.simulation.terminated_by': 'error',
+                                'orq.simulation.goal_achieved': False,
+                                'orq.simulation.turn_count': sum(1 for m in messages if m.role == 'assistant'),
+                            },
+                        )
+                        raise
         except Exception as e:
             logger.error('SimulationRunner.run() failed: %s', e, exc_info=True)
             error_msg = str(e)
@@ -401,6 +421,7 @@ class SimulationRunner:
             result.turn_count = sum(1 for m in messages if m.role == 'assistant')
             result.turn_metrics = turn_metrics_list
             result.token_usage = usage
+            result.thread_id = bound_thread_id
             return result
 
     async def _run_inner(

@@ -110,4 +110,150 @@
       });
     });
   });
+
+  // Agent-simulation entity details: compact persona/scenario rows and
+  // breakdown-table labels open one shared dialog. j/k cycle within the same
+  // entity kind; Escape is handled natively by <dialog>.
+  (function () {
+    var activeKind = null;
+    var activeId = null;
+
+    function currentDialog() {
+      var dialog = document.querySelector('.sim-entity-dialog');
+      return dialog && dialog.showModal ? dialog : null;
+    }
+
+    function templatesFor(kind) {
+      return Array.prototype.slice.call(
+        document.querySelectorAll('[data-sim-entity-template][data-entity-kind="' + kind + '"]')
+      );
+    }
+
+    function render(template) {
+      var dialog = currentDialog();
+      if (!dialog) return;
+      var content = dialog.querySelector('[data-sim-entity-content]');
+      if (!template || !content) return;
+      activeKind = template.getAttribute('data-entity-kind');
+      activeId = template.getAttribute('data-entity-id');
+      content.innerHTML = template.innerHTML;
+      if (!dialog.open) dialog.showModal();
+    }
+
+    function openEntity(kind, id) {
+      var template = document.querySelector(
+        '[data-sim-entity-template][data-entity-kind="' + kind + '"][data-entity-id="' + id + '"]'
+      );
+      render(template);
+    }
+
+    function step(delta) {
+      if (!activeKind || !activeId) return;
+      var templates = templatesFor(activeKind);
+      if (!templates.length) return;
+      var current = templates.findIndex(function (template) {
+        return template.getAttribute('data-entity-id') === activeId;
+      });
+      if (current < 0) return;
+      var next = (current + delta + templates.length) % templates.length;
+      render(templates[next]);
+    }
+
+    document.body.addEventListener('click', function (evt) {
+      var trigger = evt.target.closest('[data-sim-entity-trigger]');
+      if (!trigger) return;
+      evt.preventDefault();
+      openEntity(trigger.getAttribute('data-entity-kind'), trigger.getAttribute('data-entity-id'));
+    });
+
+    document.body.addEventListener('click', function (evt) {
+      var dialog = currentDialog();
+      if (!dialog || !dialog.open) return;
+      if (evt.target === dialog || evt.target.closest('[data-sim-entity-close]')) {
+        dialog.close();
+      } else if (evt.target.closest('[data-sim-entity-prev]')) {
+        step(-1);
+      } else if (evt.target.closest('[data-sim-entity-next]')) {
+        step(1);
+      }
+    });
+
+    document.addEventListener('keydown', function (evt) {
+      var dialog = currentDialog();
+      if (!dialog || !dialog.open) return;
+      var tag = document.activeElement && document.activeElement.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (evt.key === 'j' || evt.key === 'J') {
+        evt.preventDefault();
+        step(1);
+      } else if (evt.key === 'k' || evt.key === 'K') {
+        evt.preventDefault();
+        step(-1);
+      }
+    });
+  })();
+})();
+
+// Persist open <details> filter dropdowns across HTMX filter swaps.
+// The filter POST outer-swaps #filter-swap, which would snap dropdowns shut.
+// Record which are open before the swap, re-open the same ids after.
+(function () {
+  var openIds = [];
+  document.body.addEventListener('htmx:beforeSwap', function () {
+    var form = document.getElementById('filter-form');
+    if (!form) return;
+    openIds = Array.prototype.slice
+      .call(form.querySelectorAll('details[id^="filter-dd"][open]'))
+      .map(function (d) { return d.id; });
+  });
+  document.body.addEventListener('htmx:afterSwap', function () {
+    openIds.forEach(function (id) {
+      var d = document.getElementById(id);
+      if (d) d.open = true;
+    });
+    openIds = [];
+  });
+})();
+
+// Top failure modes panel — min-count slider filters bars client-side.
+(function () {
+  document.body.addEventListener('input', function (evt) {
+    var slider = evt.target.closest('[data-fm-slider]');
+    if (!slider) return;
+    var panel = slider.closest('[data-fm-panel]');
+    if (!panel) return;
+    var threshold = parseInt(slider.value, 10);
+    var out = panel.querySelector('[data-fm-out]');
+    if (out) out.textContent = threshold;
+    var visible = 0;
+    panel.querySelectorAll('.sim-fm-row').forEach(function (row) {
+      var show = parseInt(row.getAttribute('data-count'), 10) >= threshold;
+      row.hidden = !show;
+      if (show) visible++;
+    });
+    var empty = panel.querySelector('[data-fm-empty]');
+    if (empty) empty.hidden = visible > 0;
+  });
+})();
+
+// Failures table -> transcript drill-down. The scenario cell is <a href="#conv-N">;
+// the target card lives in a different CSS-radio tab, so a raw anchor can't reach it.
+// Flip to that panel's tab, open the <details> (fires its hx toggle load), scroll to it.
+(function () {
+  document.body.addEventListener('click', function (evt) {
+    var link = evt.target.closest('a[href^="#conv-"]');
+    if (!link) return;
+    var card = document.getElementById(link.getAttribute('href').slice(1));
+    if (!card) return;
+    evt.preventDefault();
+    var panel = card.closest('.tab-panel');
+    if (panel) {
+      var idx = Array.prototype.indexOf.call(panel.parentNode.children, panel);
+      var tabs = panel.closest('.tabs');
+      var radio = tabs && tabs.querySelectorAll('.tab-radio')[idx];
+      if (radio) radio.checked = true;
+    }
+    card.open = true;
+    card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
 })();

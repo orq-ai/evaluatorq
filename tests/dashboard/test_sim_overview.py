@@ -248,6 +248,16 @@ class TestSimOverviewScreen:
         assert 'no reports' in r.text.lower()
 
 
+def test_target_pill_normalizes_persisted_kind_and_marks_external() -> None:
+    """Run-list target icons come only from saved JSON target kinds."""
+    from evaluatorq.dashboard.view import _target_pill
+
+    assert 'data-kind="agent"' in _target_pill('flight-delay-analyst', 'orq_agent')
+    external = _target_pill('tailscale-openai', 'callback')
+    assert 'data-kind="external"' in external
+    assert '<span class="dot"></span>' not in external
+
+
 class TestOutcomesDonut:
     def test_donut_on_report_overview(self, tmp_path: Path) -> None:
         from tests.dashboard.test_downloads import _make_sim_run

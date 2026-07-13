@@ -838,7 +838,7 @@ result = results[0]
 print(f"Goal achieved: {result.goal_achieved} (score {result.goal_completion_score:.2f})")
 ```
 
-No personas yet? `generate_and_simulate(agent_description=...)` invents personas and scenarios for you. Runs exit non-zero on failure by default (`exit_on_failure=True`) — drop straight into CI.
+No personas yet? `generate_and_simulate(agent_description=...)` invents personas and scenarios for you. With a hosted target (`target="agent:<key>"`), it uses the agent's stored description if you omit `agent_description`; it raises an error when neither source has one. Runs exit non-zero on failure by default (`exit_on_failure=True`) — drop straight into CI.
 
 **Learn more:**
 

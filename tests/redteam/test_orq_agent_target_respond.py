@@ -18,7 +18,9 @@ from evaluatorq.contracts import AgentResponse, Message
 from evaluatorq.redteam.backends.orq import ORQAgentTarget
 
 
-def _make_orq_response(text: str = "ok", task_id: str = "task-1") -> MagicMock:
+def _make_orq_response(
+    text: str = "ok", task_id: str = "task-1", trace_id: str | None = None
+) -> MagicMock:
     usage = MagicMock()
     usage.prompt_tokens = 5
     usage.completion_tokens = 3
@@ -34,6 +36,10 @@ def _make_orq_response(text: str = "ok", task_id: str = "task-1") -> MagicMock:
     response.output = [item]
     response.pending_tool_calls = []
     response.model = None
+    # The agents endpoint returns the root trace id in the body under telemetry.
+    telemetry = MagicMock()
+    telemetry.trace_id = trace_id
+    response.telemetry = telemetry
     return response
 
 
@@ -87,6 +93,65 @@ async def test_respond_forwards_only_last_user_message():
         "role": "user",
         "parts": [{"kind": "text", "text": "LATEST USER"}],
     }
+
+
+@pytest.mark.asyncio
+async def test_respond_captures_trace_id_from_telemetry():
+    """The agents endpoint returns the trace id in the body (telemetry.trace_id);
+    respond must surface it on AgentResponse.trace_id so it links back to Orq."""
+    target = ORQAgentTarget(agent_key="a", orq_client=MagicMock())
+
+    async def fake_to_thread(fn: Any, **kwargs: Any) -> Any:
+        return _make_orq_response(trace_id="trace-xyz-789")
+
+    with (
+        patch("asyncio.to_thread", side_effect=fake_to_thread),
+        patch("evaluatorq.redteam.tracing.get_tracer", return_value=None),
+    ):
+        result = await target.respond([Message(role="user", content="hi")])
+
+    assert result.trace_id == "trace-xyz-789"
+
+
+@pytest.mark.asyncio
+async def test_respond_sends_thread_param_when_conversation_active():
+    """Inside a conversation_thread, respond puts thread={'id': ...} into the SDK
+    kwargs so the agent turns group under one Orq thread."""
+    from evaluatorq.common.thread_context import conversation_thread
+
+    target = ORQAgentTarget(agent_key="a", orq_client=MagicMock())
+    captured: dict[str, Any] = {}
+
+    async def fake_to_thread(fn: Any, **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return _make_orq_response()
+
+    with (
+        patch("asyncio.to_thread", side_effect=fake_to_thread),
+        patch("evaluatorq.redteam.tracing.get_tracer", return_value=None),
+        conversation_thread("thread-abc"),
+    ):
+        await target.respond([Message(role="user", content="hi")])
+
+    assert captured["thread"] == {"id": "thread-abc"}
+
+
+@pytest.mark.asyncio
+async def test_respond_omits_thread_param_when_no_conversation():
+    target = ORQAgentTarget(agent_key="a", orq_client=MagicMock())
+    captured: dict[str, Any] = {}
+
+    async def fake_to_thread(fn: Any, **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return _make_orq_response()
+
+    with (
+        patch("asyncio.to_thread", side_effect=fake_to_thread),
+        patch("evaluatorq.redteam.tracing.get_tracer", return_value=None),
+    ):
+        await target.respond([Message(role="user", content="hi")])
+
+    assert "thread" not in captured
 
 
 def test_send_prompt_shim_removed():

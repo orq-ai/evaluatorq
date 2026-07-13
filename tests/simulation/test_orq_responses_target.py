@@ -36,6 +36,7 @@ def _make_response(
     response_id: str = "resp-123",
     input_tokens: int = 10,
     output_tokens: int = 5,
+    trace_id: str | None = None,
 ) -> MagicMock:
     """Build a mock Responses API response object."""
     usage = MagicMock()
@@ -50,10 +51,14 @@ def _make_response(
     msg_item.type = "message"
     msg_item.content = [part]
 
+    telemetry = MagicMock()
+    telemetry.trace_id = trace_id
+
     response = MagicMock()
     response.id = response_id
     response.usage = usage
     response.output = [msg_item]
+    response.telemetry = telemetry
     return response
 
 
@@ -109,6 +114,42 @@ class TestOrqResponsesTargetRespond:
 
         assert isinstance(result, AgentResponse)
         assert result.text == "world"
+
+    @pytest.mark.asyncio
+    async def test_respond_captures_trace_id_from_body(self):
+        client = _make_client()
+        client.responses.create = AsyncMock(
+            return_value=_make_response(text="world", trace_id="trace-abc123")
+        )
+        target = _make_target(client=client)
+
+        result = await target.respond(_make_messages())
+
+        assert result.trace_id == "trace-abc123"
+
+    @pytest.mark.asyncio
+    async def test_respond_sends_thread_param_when_conversation_active(self):
+        from evaluatorq.common.thread_context import conversation_thread
+
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = _make_target(client=client)
+
+        with conversation_thread("thread-xyz"):
+            await target.respond(_make_messages())
+
+        call_kwargs = client.responses.create.call_args.kwargs
+        assert call_kwargs["extra_body"]["thread"] == {"id": "thread-xyz"}
+
+    @pytest.mark.asyncio
+    async def test_respond_omits_thread_param_when_no_conversation(self):
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = _make_target(client=client)
+
+        await target.respond(_make_messages())
+
+        assert "extra_body" not in client.responses.create.call_args.kwargs
 
     @pytest.mark.asyncio
     async def test_respond_passes_full_message_list_as_input(self):

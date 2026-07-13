@@ -198,8 +198,8 @@ class TestLandingScreen:
         assert '<a class="nav-item active" href="/settings"' in r.text
 
     def test_global_search(self, client: TestClient) -> None:
-        # ⌘K search box is in the shell on every page.
-        assert 'class="search-input"' in client.get('/').text
+        # The topbar search box was removed, but the /search route still works.
+        assert 'class="search-input"' not in client.get('/').text
         # The search fragment matches report names case-insensitively.
         r = client.get('/search', params={'q': 'refund'})
         assert r.status_code == 200

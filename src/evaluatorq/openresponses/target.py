@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from typing_extensions import Self
 
 from evaluatorq.common.retry import with_retry
+from evaluatorq.common.thread_context import thread_body_param
 from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, LLMCallConfig, Message
 from evaluatorq.openresponses.client import build_simulation_client
 from evaluatorq.openresponses.tracing import (
@@ -135,6 +136,10 @@ class OrqResponsesTarget(AgentTarget):
                 kwargs['tools'] = self.tools
             if self.instructions is not None:
                 kwargs['instructions'] = self.instructions
+            # Group multi-turn calls in Orq observability under one thread.
+            thread = thread_body_param()
+            if thread:
+                kwargs['extra_body'] = {**kwargs.get('extra_body', {}), **thread}
 
             async with with_llm_span(
                 model=self.config.model,
@@ -145,7 +150,12 @@ class OrqResponsesTarget(AgentTarget):
                 record_openresponses_request(span, kwargs)
                 coro = self._client.responses.create(**kwargs)
                 response = await (asyncio.wait_for(coro, timeout=timeout_s) if timeout_s else coro)
+                # The Orq router returns the trace id in the response body under
+                # ``telemetry.trace_id`` (absent for plain OpenAI responses).
+                trace_id = getattr(getattr(response, 'telemetry', None), 'trace_id', None)
                 record_openresponses_response(span, response)
+                if span is not None and trace_id:
+                    span.set_attribute('orq.trace_id', trace_id)
 
             agent_response = AgentResponse.from_openresponses(response)
             if not agent_response.output:
@@ -155,6 +165,8 @@ class OrqResponsesTarget(AgentTarget):
                     f'an API error or unexpected response format.'
                 )
             updates: dict[str, Any] = {'model': agent_response.model or self.config.model}
+            if trace_id:
+                updates['trace_id'] = trace_id
             if agent_response.usage is not None:
                 updates['usage'] = agent_response.usage.model_copy(update={'calls': 1})
             return agent_response.model_copy(update=updates)

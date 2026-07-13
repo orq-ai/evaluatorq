@@ -9,7 +9,7 @@ so this module can be imported safely even when fasthtml / uvicorn are absent
 from __future__ import annotations
 
 import logging
-from pathlib import Path  # noqa: TC003
+from pathlib import Path
 
 from loguru import logger
 
@@ -54,13 +54,46 @@ class _InterceptHandler(logging.Handler):
         logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
 
 
+def _install_log_bridge() -> None:
+    """Route all stdlib logging (uvicorn access-log, starlette, etc.) through
+    loguru.  ``force=True`` replaces any pre-existing root-logger handlers."""
+    logging.basicConfig(handlers=[_InterceptHandler()], level=0, force=True)
+
+
+# Env var carrying the JSON-encoded roots to the reload subprocess. uvicorn's
+# --reload re-imports the app in a child process, so runtime args can't be
+# passed directly — the factory below reads them back from here.
+_ROOTS_ENV = 'EVALUATORQ_DASHBOARD_ROOTS'
+
+
+def build_app_from_env():
+    """uvicorn factory used under ``--reload``.  Runs in the reloader's worker
+    subprocess, so it (re)installs the loguru bridge and rebuilds the app from
+    the roots stashed in ``_ROOTS_ENV`` by :func:`serve`."""
+    import json
+    import os
+
+    from evaluatorq.dashboard.app import build_app
+
+    _install_log_bridge()
+    raw = os.environ.get(_ROOTS_ENV)
+    roots = [Path(p) for p in json.loads(raw)] if raw else None
+    return build_app(roots)
+
+
 def serve(
     roots: list[Path] | None,
     *,
     host: str = '127.0.0.1',
     port: int = 8080,
 ) -> None:
-    """Start the FastHTML dashboard under uvicorn.
+    """Start the FastHTML dashboard under uvicorn with hot-reload always on.
+
+    Reload watches the ``evaluatorq`` package source and restarts the worker on
+    any change, so an edit is picked up without a manual kill/restart (the
+    dashboard is a dev preview; a stale in-memory build was a recurring
+    footgun). ``roots`` are handed to the reload worker via ``_ROOTS_ENV`` since
+    uvicorn re-imports the app in a subprocess.
 
     Args:
         roots: Directories to scan for run reports.  ``None`` uses the
@@ -68,14 +101,28 @@ def serve(
         host:  Bind address (default ``127.0.0.1``).
         port:  TCP port (default ``8080``).
     """
-    ensure_fasthtml()
+    import os
 
-    # Route all stdlib logging (uvicorn access-log, starlette, etc.) through
-    # loguru.  ``force=True`` replaces any pre-existing root-logger handlers.
-    logging.basicConfig(handlers=[_InterceptHandler()], level=0, force=True)
+    ensure_fasthtml()
+    _install_log_bridge()
+
+    import json
 
     import uvicorn
 
-    from evaluatorq.dashboard.app import build_app
+    import evaluatorq
 
-    uvicorn.run(build_app(roots), host=host, port=port)
+    if roots is None:
+        os.environ.pop(_ROOTS_ENV, None)
+    else:
+        os.environ[_ROOTS_ENV] = json.dumps([str(p) for p in roots])
+
+    pkg_dir = str(Path(evaluatorq.__file__).parent)
+    uvicorn.run(
+        'evaluatorq.dashboard.launch:build_app_from_env',
+        factory=True,
+        host=host,
+        port=port,
+        reload=True,
+        reload_dirs=[pkg_dir],
+    )
