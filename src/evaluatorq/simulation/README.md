@@ -23,7 +23,7 @@ Two async functions, same target shapes and knobs:
 | Function | Use when |
 |----------|----------|
 | `simulate(...)` | You already have personas/scenarios/datapoints (or an Orq `dataset_id`). |
-| `generate_and_simulate(agent_description=..., num_personas=..., num_scenarios=...)` | You have nothing yet — the LLM invents personas and scenarios from a description of the agent. |
+| `generate_and_simulate(agent_description=..., num_personas=..., num_scenarios=...)` | You have nothing yet — the LLM invents personas and scenarios from a description of the agent. With `target="agent:<key>"`, it fetches the Orq agent description when omitted. |
 
 ```python
 from evaluatorq.simulation import simulate
@@ -61,6 +61,8 @@ On the CLI, prefer `--target` to mirror red teaming:
 - **`Scenario`** — *what* they want: `goal`, `context`, `starting_emotion`, and a list of `Criterion` (`must_happen` / `must_not_happen`) that become the judge's checklist. Flag adversarial cases with `is_edge_case=True`.
 
 `simulate()` takes the cartesian product (every persona × every scenario).
+
+For `generate_and_simulate()`, pass `agent_description` for any local, deployment, or callable target. When the target is a hosted Orq agent (`target="agent:<key>"` or a bare key), the SDK uses that agent's stored description if you omit it. An explicit description always takes precedence. The call raises `ValueError` before generation if neither source supplies a non-empty description.
 
 ## LLM configuration
 
