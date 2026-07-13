@@ -302,8 +302,10 @@
         <span class="label">Format</span>
         45-minute live session. Bauke leads and drives the demo; Arian plays
         the audience's advocate — asking the questions a skeptical engineer
-        would ask, at the moments they'd ask them. Demo spine: the ICS
-        credit-card Q&amp;A agent, simulated live with <code>evaluatorq sim</code>.
+        would ask, at the moments they'd ask them. Demo spine: the Bank of
+        Holland credit-card Q&amp;A agent (<code>boh_creditcard_agent_demo</code>,
+        provisioned via <code>make provision</code>), simulated live with
+        <code>evaluatorq sim</code>.
       </div>
     </header>
 
@@ -312,7 +314,7 @@
     <div class="summary">
       <div class="cell"><div class="k">Duration</div><div class="v accent">45 min</div></div>
       <div class="cell"><div class="k">Roles</div><div class="v">Bauke leads · Arian interviews</div></div>
-      <div class="cell"><div class="k">Demo</div><div class="v">3 acts, live CLI</div></div>
+      <div class="cell"><div class="k">Demo</div><div class="v">3 acts + results walkthrough</div></div>
       <div class="cell"><div class="k">Fallbacks</div><div class="v">pre-baked run + JSONL</div></div>
     </div>
 
@@ -391,36 +393,58 @@
         </div>
 
         <div class="milestone">
-          <div class="when">27:00–33:00</div>
+          <div class="when">27:00–32:00</div>
           <div class="dot-col"><span class="dot"></span><span class="line"></span></div>
           <div class="body">
             <h3>Demo · Act 3 — working with data</h3>
             <p>
               Re-run the frozen datapoints after a prompt tweak (like-for-like
-              comparison), then extend the suite by generating and appending.
-              Close on the three-options frame: from scratch / re-run / extend.
+              comparison), extend the suite by generating and appending, then
+              push it to an orq dataset with <code>sim upload-dataset</code> and
+              re-run from the platform. Close on the three-options frame:
+              from scratch / re-run / extend &amp; share.
             </p>
-            <div class="tags"><span class="tag bauke">Bauke drives</span><span class="tag">deck s7</span><span class="tag">RUNBOOK Act 3</span></div>
+            <div class="tags"><span class="tag bauke">Bauke drives</span><span class="tag">deck s7</span><span class="tag">RUNBOOK Act 3a–3c</span></div>
           </div>
         </div>
 
         <div class="milestone">
-          <div class="when">33:00–40:00</div>
+          <div class="when">32:00–38:00</div>
+          <div class="dot-col"><span class="dot"></span><span class="line"></span></div>
+          <div class="body">
+            <h3>Results walkthrough — the dashboard</h3>
+            <p>
+              The dedicated results segment. Bauke opens
+              <code>evaluatorq sim ui --latest</code> on the Act 1 run and walks
+              it top-down as four questions: <em>how bad is it</em> (summary
+              strip: goal completion, avg score, turns, errors, tokens) →
+              <em>where does it break</em> (persona × scenario heatmap) →
+              <em>why</em> (top failure modes, rules broken) → <em>show me</em>
+              (drill into one failing transcript, per-turn judge scores with
+              reasoning, find the turn where it derails). Arian drives with Q6
+              — this segment is the interview, on screen.
+            </p>
+            <div class="tags"><span class="tag bauke">Bauke drives</span><span class="tag arian">Arian Q6</span><span class="tag">deck s8</span><span class="tag">sim ui</span></div>
+          </div>
+        </div>
+
+        <div class="milestone">
+          <div class="when">38:00–42:00</div>
           <div class="dot-col"><span class="dot"></span><span class="line"></span></div>
           <div class="body">
             <h3>Interview block — results to workflow</h3>
             <p>
-              Screen share off, cameras on. Arian runs Q6–Q9: how to read the
-              results, what to do next, Claude Code integration, self-improving
+              Screen share off, cameras on. Arian runs Q7–Q9: what to do once
+              you've seen the failures, Claude Code integration, self-improving
               loops. This is the segment people clip and share — conversational,
               opinionated, honest about limits.
             </p>
-            <div class="tags"><span class="tag arian">Arian leads</span><span class="tag bauke">Bauke answers</span><span class="tag">deck s8–s9</span></div>
+            <div class="tags"><span class="tag arian">Arian leads</span><span class="tag bauke">Bauke answers</span><span class="tag">deck s9</span></div>
           </div>
         </div>
 
         <div class="milestone">
-          <div class="when">40:00–45:00</div>
+          <div class="when">42:00–45:00</div>
           <div class="dot-col"><span class="dot"></span><span class="line"></span></div>
           <div class="body">
             <h3>Audience Q&amp;A + the ask</h3>
@@ -608,17 +632,18 @@
         </div>
 
         <div class="q">
-          <div class="qt">Q6 · "We've got results on screen. Teach me to read them — what do I look at first?"</div>
+          <div class="qt">Q6 · "The dashboard's open. Teach me to read it — what do I look at first, and what do I ignore?"</div>
           <div class="qd">
-            Beats:
+            The results-walkthrough driver — one question, four screens. Arian
+            re-asks a sub-question at each screen as Bauke navigates:
             <ul>
-              <li>Pass rate first — then ignore it. It says <em>that</em> something broke, never <em>what</em>.</li>
-              <li>Open a failing transcript. Find the turn where it derails — usually a mid-conversation pivot, not turn one.</li>
-              <li>Read the judge's reasoning per turn (goal_achieved, criteria_met) — it's an explanation, not just a score.</li>
-              <li>Frame: every failure is a bug report with the reproduction attached — persona + scenario + transcript.</li>
+              <li><strong>Summary strip</strong> (goal completion, avg score, conversations, turns, errors, tokens) — "so 67% goal completion: good or bad?" Beat: it's a health check, not a diagnosis. The number says <em>that</em> something broke, never <em>what</em>.</li>
+              <li><strong>Persona × scenario heatmap</strong> — "where do I look next?" Beat: failures cluster. It's rarely "the agent is bad" — it's <em>this persona type</em> on <em>this scenario type</em>. That's already an actionable hypothesis.</li>
+              <li><strong>Top failure modes &amp; rules broken</strong> — "does it tell me why?" Beat: recurring patterns ranked across conversations; pick the biggest one to fix first.</li>
+              <li><strong>Transcript drill-down</strong> — "show me one." Beat: per-turn judge scores with reasoning; find the exact turn where it derails — usually a mid-conversation pivot, not turn one. Every failure is a bug report with the reproduction attached.</li>
             </ul>
           </div>
-          <div class="owner">Cue · interview block opener (~33:00), run viewer still fresh in memory</div>
+          <div class="owner">Cue · results walkthrough (32:00), drives the whole segment · deck s8</div>
         </div>
 
         <div class="q">
@@ -627,10 +652,11 @@
             Beats: fix the prompt/tool → re-run the <em>frozen</em> datapoints
             (<code>--datapoints file.jsonl</code>) → compare like-for-like →
             regressions become a gate, not a surprise. Wire it into CI: the
-            suite runs on every agent change like unit tests. The dataset can
-            also graduate to the orq platform for team-wide experiments.
+            suite runs on every agent change like unit tests. And the suite is
+            shareable now — <code>sim upload-dataset</code> pushes it to an orq
+            dataset, <code>sim simulate --dataset-id</code> runs from it.
           </div>
-          <div class="owner">Cue · interview block, directly after Q6</div>
+          <div class="owner">Cue · interview block opener (~38:00)</div>
         </div>
 
         <div class="q">
@@ -643,7 +669,7 @@
               <li>Honest note: the human stays on the diff. You're reviewing changes, not writing test cases.</li>
             </ul>
           </div>
-          <div class="owner">Cue · interview block (~36:00)</div>
+          <div class="owner">Cue · interview block (~40:00)</div>
         </div>
 
         <div class="q">
@@ -658,7 +684,7 @@
             Closing beat: simulation doesn't replace production data — it's how
             you start before you have any, and the suite keeps growing after.
           </div>
-          <div class="owner">Cue · interview block closer (~38:00), hand off to audience Q&amp;A</div>
+          <div class="owner">Cue · interview block closer (~41:00), hand off to audience Q&amp;A</div>
         </div>
       </div>
     </section>
@@ -669,7 +695,8 @@
       <div class="sec-head"><span class="num">04</span><h2>Demo cue sheet — exact commands</h2></div>
       <p class="sec-intro">
         Mirrors RUNBOOK.md in the repo (examples/agent_simulation/webinar_demo).
-        Fill the <code>&lt;ics-agent-key&gt;</code> placeholders before going live.
+        Agent is <code>boh_creditcard_agent_demo</code> — recreate any time with
+        <code>make provision</code>.
       </p>
 
       <div class="code-grid">
@@ -677,18 +704,18 @@
           <div class="file-label">Act 1 — from scratch (08:00)</div>
           <div class="code"><pre><span class="cm"># 1. generate from the agent's own description</span>
 uv run evaluatorq sim generate \
-  <span class="kw">--target</span> agent:&lt;ics-agent-key&gt; \
+  <span class="kw">--target</span> agent:boh_creditcard_agent_demo \
   <span class="kw">--num-personas</span> 3 <span class="kw">--num-scenarios</span> 3 \
-  <span class="kw">-o</span> ics_datapoints.jsonl
+  <span class="kw">-o</span> boh_datapoints.jsonl
 
 <span class="cm"># 2. the payoff — read one generated row aloud</span>
-uv run evaluatorq sim validate-dataset ics_datapoints.jsonl
+uv run evaluatorq sim validate-dataset boh_datapoints.jsonl
 
 <span class="cm"># 3. run live, freeze the set for Act 3</span>
 uv run evaluatorq sim run \
-  <span class="kw">--target</span> agent:&lt;ics-agent-key&gt; \
-  <span class="kw">--save-datapoints</span> ics_datapoints.jsonl \
-  <span class="kw">--name</span> ics-from-scratch
+  <span class="kw">--target</span> agent:boh_creditcard_agent_demo \
+  <span class="kw">--save-datapoints</span> boh_datapoints.jsonl \
+  <span class="kw">--name</span> boh-from-scratch
 
 <span class="cm"># 4. pass rate + a failing transcript</span>
 uv run evaluatorq sim runs
@@ -700,7 +727,7 @@ uv run evaluatorq sim ui .evaluatorq/sim-runs/&lt;run&gt;.json</pre></div>
           <div class="code"><pre><span class="cm"># CLI: any OpenAI-compatible endpoint</span>
 uv run evaluatorq sim run <span class="kw">--openai-model</span> gpt-4o-mini \
   <span class="kw">--agent-description</span> <span class="str">"Support agent for ..."</span> \
-  <span class="kw">--name</span> ics-nonorq-cli
+  <span class="kw">--name</span> boh-nonorq-cli
 
 <span class="cm"># CLI: any deployed HTTP agent</span>
 uv run evaluatorq sim run \
@@ -722,26 +749,56 @@ results = <span class="kw">await</span> <span class="fn">simulate</span>(
           <div class="file-label">Act 3 — working with data (27:00)</div>
           <div class="code"><pre><span class="cm"># 3a. re-run the EXACT same set after a prompt tweak</span>
 uv run evaluatorq sim simulate \
-  <span class="kw">--target</span> agent:&lt;ics-agent-key&gt; \
-  <span class="kw">--datapoints</span> ics_datapoints.jsonl \
-  <span class="kw">--name</span> ics-rerun
+  <span class="kw">--target</span> agent:boh_creditcard_agent_demo \
+  <span class="kw">--datapoints</span> boh_datapoints.jsonl \
+  <span class="kw">--name</span> boh-rerun
 
 <span class="cm"># 3b. extend the suite — generate more, append</span>
 uv run evaluatorq sim generate \
-  <span class="kw">--target</span> agent:&lt;ics-agent-key&gt; \
+  <span class="kw">--target</span> agent:boh_creditcard_agent_demo \
   <span class="kw">--num-personas</span> 2 <span class="kw">--num-scenarios</span> 2 <span class="kw">-o</span> more.jsonl
-cat more.jsonl &gt;&gt; ics_datapoints.jsonl
-uv run evaluatorq sim validate-dataset ics_datapoints.jsonl</pre></div>
+cat more.jsonl &gt;&gt; boh_datapoints.jsonl
+uv run evaluatorq sim validate-dataset boh_datapoints.jsonl
+
+<span class="cm"># 3c. push to an orq dataset + re-run from the platform</span>
+uv run evaluatorq sim upload-dataset \
+  <span class="kw">-i</span> boh_datapoints.jsonl <span class="kw">-n</span> <span class="str">"Bank of Holland Sim Set"</span>
+uv run evaluatorq sim simulate \
+  <span class="kw">--target</span> agent:boh_creditcard_agent_demo \
+  <span class="kw">--dataset-id</span> &lt;id&gt;</pre></div>
+        </div>
+
+        <div class="code-block">
+          <div class="file-label">Results walkthrough — the dashboard (32:00)</div>
+          <div class="code"><pre><span class="cm"># open the dashboard on the Act 1 run</span>
+uv run evaluatorq sim ui <span class="kw">--latest</span>
+
+<span class="cm"># tour order — four questions, top to bottom:</span>
+<span class="cm">#  1. how bad?   summary strip (goal completion, avg</span>
+<span class="cm">#                score, conversations, turns, errors,</span>
+<span class="cm">#                tokens)</span>
+<span class="cm">#  2. where?     persona × scenario heatmap</span>
+<span class="cm">#  3. why?       top failure modes · rules broken ·</span>
+<span class="cm">#                termination reasons</span>
+<span class="cm">#  4. show me.   drill-down: transcript, per-turn</span>
+<span class="cm">#                judge scores + reasoning</span>
+
+<span class="cm"># park on a failing row BEFORE handing to Q&A —</span>
+<span class="cm"># pick it during the dry run, note persona+scenario</span></pre></div>
         </div>
 
         <div class="code-block">
           <div class="file-label">Pre-flight — run once, off-camera</div>
-          <div class="code"><pre><span class="kw">export</span> ORQ_API_KEY=<span class="str">"&lt;customer-demo key&gt;"</span>
+          <div class="code"><pre><span class="kw">export</span> ORQ_API_KEY=<span class="str">"&lt;banking / CustomerDemo key&gt;"</span>
 cd packages/evaluatorq-py
 uv sync <span class="kw">--all-extras</span>
 
+<span class="cm"># provision the Bank of Holland agent (idempotent)</span>
+cd examples/agent_simulation/webinar_demo
+make provision
+
 orq doctor                          <span class="cm"># CLI auth + reachability</span>
-orq agents retrieve &lt;ics-agent-key&gt; <span class="cm"># agent visible?</span>
+orq agents retrieve boh_creditcard_agent_demo
 
 <span class="cm"># full Act 1 dry run; keep the outputs as fallbacks:</span>
 <span class="cm">#   backup_datapoints.jsonl  +  a completed run JSON</span>
@@ -767,7 +824,7 @@ orq agents retrieve &lt;ics-agent-key&gt; <span class="cm"># agent visible?</spa
           <div class="cell head">Response</div>
         </div>
         <div class="row">
-          <div class="cell">Live ICS agent unreachable mid-demo (platform hiccup, key expired).</div>
+          <div class="cell">Live Bank of Holland agent unreachable mid-demo (platform hiccup, key expired; <code>make provision</code> recreates it, but not on-stream).</div>
           <div class="cell"><span class="sev high">HIGH</span></div>
           <div class="cell">Switch to <code>--agent-description "..."</code> — no platform call needed for generation; for the run, fall back to the <code>--openai-model</code> stand-in agent rehearsed in the dry run. Narrate the switch: "this also shows it works without orq."</div>
         </div>
@@ -783,8 +840,8 @@ orq agents retrieve &lt;ics-agent-key&gt; <span class="cm"># agent visible?</spa
         </div>
         <div class="row">
           <div class="cell">"Can I push the suite to an orq dataset and run from there?"</div>
-          <div class="cell"><span class="sev med">MED</span></div>
-          <div class="cell">Honest answer: the CLI round-trip is rough today (dataset rows need stringified persona/scenario; no <code>--dataset-id</code> flag — dataset-backed runs are SDK-only via <code>simulate(dataset_id=...)</code>). Demo the local JSONL path; platform round-trip is on the roadmap.</div>
+          <div class="cell"><span class="sev low">LOW</span></div>
+          <div class="cell">Yes — new this week: <code>sim upload-dataset -i suite.jsonl -n "..."</code>, then <code>sim simulate --dataset-id &lt;id&gt;</code> (Act 3c shows it live). Honest caveat: the dataset API only takes scalar inputs, so persona/scenario display as JSON strings in the orq UI, not structured fields.</div>
         </div>
         <div class="row">
           <div class="cell">"Why is there no <code>orq sim</code> command?"</div>
@@ -794,7 +851,7 @@ orq agents retrieve &lt;ics-agent-key&gt; <span class="cm"># agent visible?</spa
         <div class="row">
           <div class="cell">"Can it seed from my existing data AND generate more in one go?"</div>
           <div class="cell"><span class="sev low">LOW</span></div>
-          <div class="cell">Not natively yet — <code>dataset_id</code> is mutually exclusive with personas/scenarios/datapoints. Today: generate separately and append (Act 3b shows exactly this). Say so plainly.</div>
+          <div class="cell">Not natively yet — <code>dataset_id</code> is still mutually exclusive with personas/scenarios. Today: generate separately, then append locally (Act 3b) or <code>upload-dataset --dataset-id</code> to extend the platform copy. No LLM augmentation <em>from</em> existing rows yet. Say so plainly.</div>
         </div>
       </div>
     </section>
@@ -805,8 +862,8 @@ orq agents retrieve &lt;ics-agent-key&gt; <span class="cm"># agent visible?</spa
       <div class="sec-head"><span class="num">06</span><h2>Open items before Tuesday</h2></div>
       <div class="open-q">
         <div class="q">
-          <div class="qt">Fill the placeholders</div>
-          <div class="qd">Real ICS agent key + <code>customer-demo</code> <code>ORQ_API_KEY</code> into the cue sheet and RUNBOOK; verify with <code>orq agents retrieve</code>.</div>
+          <div class="qt">Provision + verify the demo agent</div>
+          <div class="qd"><code>make provision</code> in <code>webinar_demo/</code> (idempotent) with the banking-workspace <code>ORQ_API_KEY</code>; verify with <code>orq agents retrieve boh_creditcard_agent_demo</code>. During the dry run, note one reliably failing persona + scenario to park the dashboard on.</div>
           <div class="owner">Owner · Bauke, Monday</div>
         </div>
         <div class="q">
