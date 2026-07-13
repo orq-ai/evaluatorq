@@ -103,6 +103,7 @@ plugins:
       sections:
         Getting started:
           - index.md: Overview, why evaluatorq, and installation.
+          - faq.md: Common questions about red teaming agents and how evaluatorq answers them.
           - guides/getting-started.md: Run your first evaluation end to end.
         Guides:
           - guides/agent-simulation.md: Multi-turn, persona-driven conversation testing with an LLM judge.
@@ -222,6 +223,7 @@ nav:
           - Overview: cli-reference/overview.md
           - Red Teaming: cli-reference/redteam.md
           - Simulation: cli-reference/simulation.md
+  - FAQ: faq.md
   - About:
       - Contributing: contributing.md
       - Changelog: changelog.md

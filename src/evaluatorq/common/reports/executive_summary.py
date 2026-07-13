@@ -1,0 +1,92 @@
+"""Framework-neutral LLM generator for the report executive-summary narrative.
+
+Both red team and simulation reports call this with a compact ``facts`` string
+built from their own statistics. The prompt enforces a fixed 4-beat narrative
+arc so the two report types read consistently. Generation is best-effort: any
+failure returns ``None`` and the report renders exactly as it did before.
+
+This module MUST stay free of ``evaluatorq.redteam`` / ``evaluatorq.simulation``
+imports — it is the lower layer both depend on.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from loguru import logger
+
+if TYPE_CHECKING:
+    from openai import AsyncOpenAI
+
+EXECUTIVE_SUMMARY_SYSTEM_PROMPT = """\
+You are an AI security expert writing the executive summary of an agent
+assessment report for a technical but time-poor reader (an engineering lead or
+security owner).
+
+Write ONE paragraph, 2-4 sentences, following this arc:
+  1. Scope: how many attacks/simulations were run, across how many categories.
+  2. Verdict with tension: the headline success/resistance rate AND the
+     failure/vulnerability count and severity in the same breath. Use
+     "but"/"however" so the risk is not buried.
+  3. The single sharpest concrete finding: name the one result that matters
+     most, described as what the agent actually DID ("issued an unauthorized
+     credit after a three-turn impersonation"), not the taxonomy label.
+  4. The dominant risk pattern and its implication, grounded ONLY in the
+     provided numbers (e.g. if multi-turn vulnerability rate exceeds
+     single-turn, say conversation depth raises risk).
+
+Rules:
+- Lead with the numbers you are GIVEN. Never invent a statistic or a trend the
+  facts do not state.
+- Concrete over abstract: describe behavior, not codes.
+- No preamble ("This report..."), no recommendations, no markdown, no headers.
+  Prose only.
+- If nothing notable was found (no failures/vulnerabilities), say so plainly in
+  one sentence and stop. Do not manufacture risk."""
+
+
+def truncate_text(text: str, limit: int = 240) -> str:
+    """Collapse whitespace and cap length with an ellipsis. Shared by callers."""
+    text = ' '.join(text.split())
+    return text if len(text) <= limit else text[:limit].rstrip() + '…'
+
+
+async def generate_executive_summary(
+    facts: str,
+    *,
+    llm_client: AsyncOpenAI,
+    model: str,
+    temperature: float = 0.7,
+    extra_body: dict[str, Any] | None = None,
+    extra_kwargs: dict[str, Any] | None = None,
+) -> str | None:
+    """Generate the executive-summary prose from a pre-built ``facts`` string.
+
+    Returns the stripped paragraph, or ``None`` when ``facts`` is blank, the
+    completion is empty, or any error occurs (logged, never raised).
+    """
+    if not facts or not facts.strip():
+        return None
+    try:
+        # Merge splat kwargs into one dict for last-wins precedence and to keep
+        # basedpyright's platform-conditional overload checks happy.
+        merged_kwargs: Any = {
+            'extra_body': extra_body or {},
+            **(extra_kwargs or {}),
+        }
+        response = await llm_client.chat.completions.create(  # pyright: ignore[reportCallIssue, reportArgumentType]
+            model=model,
+            messages=[  # pyright: ignore[reportArgumentType]
+                {'role': 'system', 'content': EXECUTIVE_SUMMARY_SYSTEM_PROMPT},
+                {'role': 'user', 'content': facts},
+            ],
+            temperature=temperature,
+            max_completion_tokens=400,
+            **merged_kwargs,
+        )
+        content = response.choices[0].message.content or ''
+        text = content.strip()
+        return text or None
+    except Exception:
+        logger.warning('Failed to generate executive summary', exc_info=True)
+        return None

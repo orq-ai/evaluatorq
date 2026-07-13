@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import io
 
-import pytest
 from rich.console import Console
 
 
@@ -78,6 +77,18 @@ def test_summary_shows_goals_achieved(sim_result_factory):
     out = buf.getvalue()
     # 1 achieved, 50% success rate
     assert "50%" in out
+
+
+def test_summary_shows_executive_narrative(sim_result_factory):
+    from evaluatorq.simulation.reports.display import print_simulation_summary
+
+    console, buf = _console()
+    print_simulation_summary(
+        [sim_result_factory()],
+        executive_summary='The agent completed its goal but disclosed sensitive data.',
+        console=console,
+    )
+    assert 'The agent completed its goal but disclosed sensitive data.' in buf.getvalue()
 
 
 # ---------------------------------------------------------------------------

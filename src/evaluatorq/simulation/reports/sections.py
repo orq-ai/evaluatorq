@@ -103,7 +103,7 @@ def _criteria_rows(result: SimulationResult) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def _build_summary_section(results: list[SimulationResult]) -> ReportSection:
+def _build_summary_section(results: list[SimulationResult], executive_summary: str | None = None) -> ReportSection:
     total = len(results)
     achieved = sum(1 for r in results if r.goal_achieved and not _is_errored(r))
     errored = sum(1 for r in results if _is_errored(r))
@@ -138,6 +138,7 @@ def _build_summary_section(results: list[SimulationResult]) -> ReportSection:
             'confidence': confidence,
             'confidence_note': confidence_note,
             'verdict': verdict,
+            'narrative': executive_summary,
         },
     )
 
@@ -510,14 +511,16 @@ def _build_failure_mode_section(results: list[SimulationResult]) -> ReportSectio
 # ---------------------------------------------------------------------------
 
 
-def build_report_sections(results: list[SimulationResult]) -> list[ReportSection]:
+def build_report_sections(
+    results: list[SimulationResult], *, executive_summary: str | None = None
+) -> list[ReportSection]:
     """Produce the ordered list of report sections from simulation results."""
     sections: list[ReportSection] = []
     # Order tells the story worst-first: verdict -> what failed -> how it failed
     # -> where (heatmaps) -> distributions/trends -> breakdowns -> diagnostics.
     # Token usage is operational trivia, so it sinks near the transcripts.
     sections.extend((
-        _build_summary_section(results),
+        _build_summary_section(results, executive_summary),
         _build_overview_section(results),
         _build_failures_first_section(results),
         _build_failure_mode_section(results),

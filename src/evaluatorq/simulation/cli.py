@@ -32,7 +32,9 @@ from pathlib import Path
 from typing import Annotated, Any, NoReturn
 
 import typer
+from loguru import logger
 
+from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run as _auto_save_run
 from evaluatorq.simulation.utils.run_store import build_simulation_run as _build_simulation_run
@@ -369,6 +371,13 @@ def simulate(
         Path | None,
         typer.Option('--export-html', help='Directory for an auto-named HTML report.'),
     ] = None,
+    executive_summary: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option(
+            '--executive-summary/--no-executive-summary',
+            help='Generate an LLM narrative executive summary at the top of the report (needs LLM creds).',
+        ),
+    ] = True,
 ) -> None:
     """Run simulations from a pre-built datapoints file.
 
@@ -396,6 +405,7 @@ def simulate(
         hooks = RichHooks(
             console=Console(stderr=True),
             skip_confirm=yes or not sys.stdin.isatty(),
+            defer_summary=executive_summary,
         )
 
     if not datapoints.exists():
@@ -457,6 +467,10 @@ def simulate(
         evaluator_names=evaluator_names or DEFAULT_EVALUATOR_NAMES,
         results=results,
     )
+
+    _maybe_generate_executive_summary(run, enabled=executive_summary, model=sim_model)
+    if hooks is not None and executive_summary:
+        hooks.print_summary(results, executive_summary=run.executive_summary)
 
     if export_md is not None:
         _export_report(run, export_md, fmt='md')
@@ -631,6 +645,13 @@ def run(
         Path | None,
         typer.Option('--export-html', help='Directory for an auto-named HTML report.'),
     ] = None,
+    executive_summary: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option(
+            '--executive-summary/--no-executive-summary',
+            help='Generate an LLM narrative executive summary at the top of the report (needs LLM creds).',
+        ),
+    ] = True,
 ) -> None:
     """Generate personas and scenarios, then run simulations (generate + simulate).
 
@@ -658,6 +679,7 @@ def run(
         hooks = RichHooks(
             console=Console(stderr=True),
             skip_confirm=yes or not sys.stdin.isatty(),
+            defer_summary=executive_summary,
         )
 
     try:
@@ -722,6 +744,10 @@ def run(
         evaluator_names=evaluator_names or DEFAULT_EVALUATOR_NAMES,
         results=results,
     )
+
+    _maybe_generate_executive_summary(run, enabled=executive_summary, model=sim_model)
+    if hooks is not None and executive_summary:
+        hooks.print_summary(results, executive_summary=run.executive_summary)
 
     if export_md is not None:
         _export_report(run, export_md, fmt='md')
@@ -1140,6 +1166,39 @@ def ui(
     launch_streamlit(dashboard_script, run_path, port=port, host=host, extra='simulation')
 
 
+def _maybe_generate_executive_summary(run: Any, *, enabled: bool, model: str) -> None:
+    """Populate ``run.executive_summary`` in place. Best-effort; never raises.
+
+    Skips silently when disabled, when there are no results, or when no LLM
+    credentials are configured, so a default-on run without creds still
+    produces a report. Uses the module-level ``resolve_llm_client`` so tests can
+    monkeypatch it.
+    """
+    if not enabled or not run.results:
+        return
+
+    from evaluatorq.common.llm_client import MissingLLMCredentialsError
+    from evaluatorq.common.reports.executive_summary import generate_executive_summary
+    from evaluatorq.simulation.reports.executive_summary import build_sim_facts
+
+    try:
+        resolved = resolve_llm_client()
+    except MissingLLMCredentialsError:
+        logger.warning('Skipping executive summary: no LLM credentials configured.')
+        return
+
+    try:
+        run.executive_summary = asyncio.run(
+            generate_executive_summary(
+                build_sim_facts(run.results),
+                llm_client=resolved.client,
+                model=model,
+            )
+        )
+    except Exception:
+        logger.warning('Failed to generate executive summary', exc_info=True)
+
+
 def _export_report(run: Any, directory: Path, *, fmt: str) -> None:
     """Write an auto-named Markdown or HTML report for *run* into *directory*."""
     from evaluatorq.common.reports import write_text_report
@@ -1148,9 +1207,9 @@ def _export_report(run: Any, directory: Path, *, fmt: str) -> None:
 
     stem = f'sim-report-{_sanitise_run_name(run.run_name)}-{run.created_at:%Y%m%d-%H%M%S}'
     if fmt == 'md':
-        content = export_markdown(run.results, run_date=run.created_at)
+        content = export_markdown(run.results, run_date=run.created_at, executive_summary=run.executive_summary)
     else:
-        content = export_html(run.results, run_date=run.created_at)
+        content = export_html(run.results, run_date=run.created_at, executive_summary=run.executive_summary)
     write_text_report(directory, stem=stem, fmt=fmt, content=content)
 
 

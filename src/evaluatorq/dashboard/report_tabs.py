@@ -97,7 +97,10 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
     from evaluatorq.simulation.reports.sections import build_report_sections, individual_entries
 
     rows = run.results if results is None else results
-    sections = build_report_sections(rows)
+    # The saved narrative describes the complete run. Suppress it on filtered
+    # views rather than presenting whole-run prose beside subset metrics.
+    narrative = run.executive_summary if results is None else None
+    sections = build_report_sections(rows, executive_summary=narrative)
     by_kind: dict[str, Any] = {}
     for s in sections:
         by_kind.setdefault(s.kind, s)
@@ -117,7 +120,7 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
     tabs = _tabs(
         'simtab',
         [
-            ('Overview', _sim_overview(rid, by_kind, rows, run)),
+            ('Overview', _sim_overview(rid, by_kind, rows, run, narrative_html=render('summary'))),
             ('Breakdown', _sim_breakdown(by_kind, render, entity_context)),
             (
                 'Transcripts',
@@ -758,7 +761,14 @@ def _sim_turn_quality(by_kind: dict[str, Any]) -> str:
     return f'{callout_html}{chart_html}{grid_html}'
 
 
-def _sim_overview(rid: str, by_kind: dict[str, Any], rows: list[Any], run: SimulationRun) -> str:
+def _sim_overview(
+    rid: str,
+    by_kind: dict[str, Any],
+    rows: list[Any],
+    run: SimulationRun,
+    *,
+    narrative_html: str = '',
+) -> str:
     """Overview tab body: agent info card, exec summary, KPI band, and a
     two-column outcomes/quality grid. Persona and scenario input live in Config."""
     from evaluatorq.dashboard.report_kit import exec_summary, panel
@@ -786,7 +796,7 @@ def _sim_overview(rid: str, by_kind: dict[str, Any], rows: list[Any], run: Simul
     quality_tiles = _sim_avg_quality_tiles(metrics_data.get('avg_quality_metrics', {}))
     second_html = panel('Average quality metrics', quality_tiles) if quality_tiles else _sim_tokens_panel(tokens_data)
 
-    return f'{agent_card_html}{summary_html}{kpi_html}<div class="sim-overview-grid-2">{donut_html}{second_html}</div>'
+    return f'{agent_card_html}{summary_html}{narrative_html}{kpi_html}<div class="sim-overview-grid-2">{donut_html}{second_html}</div>'
 
 
 # Scalar identity fields whose absence means the run's snapshot is incomplete

@@ -138,11 +138,13 @@ def _sim_adapter() -> SurfaceAdapter:
             run.results,
             target=run.target_kind,
             run_date=run.created_at,
+            executive_summary=run.executive_summary,
         ),
         export=lambda run: export_html(
             run.results,
             target=run.target_kind,
             run_date=run.created_at,
+            executive_summary=run.executive_summary,
         ),
         name=lambda run: run.run_name,
         created_at=lambda run: run.created_at,
@@ -151,7 +153,12 @@ def _sim_adapter() -> SurfaceAdapter:
             target=run.target_kind,
             run_date=run.created_at,
         ),
-        export_markdown=lambda run: _sim_export_md(run.results, target=run.target_kind, run_date=run.created_at),
+        export_markdown=lambda run: _sim_export_md(
+            run.results,
+            target=run.target_kind,
+            run_date=run.created_at,
+            executive_summary=run.executive_summary,
+        ),
         rows=_sim_rows,
     )
 

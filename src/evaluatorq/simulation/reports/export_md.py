@@ -60,6 +60,7 @@ def _render_summary_section(section: ReportSection) -> str:
     total_tokens = data.get('total_tokens', 0)
     confidence = data.get('confidence', '')
     confidence_note = data.get('confidence_note', '')
+    narrative = data.get('narrative') or ''
 
     if success_rate >= 0.80:
         callout, label = 'TIP', 'GOAL ACHIEVEMENT: STRONG'
@@ -73,6 +74,8 @@ def _render_summary_section(section: ReportSection) -> str:
     risk_callout = f'> [!{callout}]\n> {label} — success rate: **{_pct(success_rate)}**'
     if confidence:
         risk_callout += f'\n> **Confidence: {confidence}** — {confidence_note}'
+    if narrative:
+        risk_callout += f'\n>\n> {narrative}'
 
     kpi_table = _center_table(
         ['Conversations', 'Goals Achieved', 'Success Rate', 'Avg Score', 'Errors'],
@@ -467,6 +470,7 @@ def export_markdown(
     *,
     target: str = 'agent',
     run_date: datetime | None = None,
+    executive_summary: str | None = None,
 ) -> str:
     """Render a list of simulation results as a Markdown report.
 
@@ -474,8 +478,9 @@ def export_markdown(
         results: The simulation results to summarise.
         target: Human-readable target name for the document header.
         run_date: Timestamp shown in the header (defaults to now in UTC).
+        executive_summary: Optional LLM-generated narrative to surface in the summary section.
     """
-    sections = build_report_sections(results)
+    sections = build_report_sections(results, executive_summary=executive_summary)
     summary_data = next(
         (s.data for s in sections if s.kind == 'summary'),
         {},

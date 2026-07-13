@@ -52,6 +52,12 @@ def print_report_summary(report: RedTeamReport, *, console: Console | None = Non
     console.print('[bold underline white]RED TEAM REPORT SUMMARY[/bold underline white]')
     console.print()
 
+    if report.executive_summary:
+        from rich.panel import Panel
+
+        console.print(Panel(report.executive_summary, title='Executive Summary', border_style='cyan'))
+        console.print()
+
     # ── Summary stats table ────────────────────────────────────────────
     stats = Table(show_header=True, header_style='bold', box=box.ROUNDED)
     stats.add_column('Metric', style='white', width=22)

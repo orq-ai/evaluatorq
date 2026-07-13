@@ -15,10 +15,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import pytest
-
 from evaluatorq.contracts import ReportSection
-
 
 # ---------------------------------------------------------------------------
 # Helpers shared by multiple tests
@@ -298,3 +295,53 @@ class TestSimRenderReportBody:
         run_date = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
         fragment = render_report_body(results, target='test-agent', run_date=run_date)
         assert '2026-01-01' in fragment
+
+
+def test_sim_dashboard_adapter_preserves_full_run_narrative() -> None:
+    """The saved run's narrative must reach its unfiltered dashboard report."""
+    from evaluatorq.dashboard.surfaces import ADAPTERS
+    from evaluatorq.simulation.types import SimulationRun
+
+    results = _make_sim_results()
+    run = SimulationRun(
+        run_name='narrative-test',
+        created_at=datetime.now(tz=timezone.utc),
+        mode='simulate',
+        target_kind='callback',
+        evaluator_names=[],
+        total_results=len(results),
+        scorer_averages={},
+        results=results,
+        executive_summary='The simulated user achieved a risky outcome.',
+    )
+
+    narrative = run.executive_summary
+    assert narrative is not None
+    assert narrative in ADAPTERS['sim'].body(run)
+    assert narrative in ADAPTERS['sim'].export(run)
+    export_markdown = ADAPTERS['sim'].export_markdown
+    assert export_markdown is not None
+    assert narrative in export_markdown(run)
+
+
+def test_sim_tabbed_dashboard_preserves_only_full_run_narrative() -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+    from evaluatorq.simulation.types import SimulationRun
+
+    results = _make_sim_results()
+    run = SimulationRun(
+        run_name='narrative-test',
+        created_at=datetime.now(tz=timezone.utc),
+        mode='simulate',
+        target_kind='callback',
+        evaluator_names=[],
+        total_results=len(results),
+        scorer_averages={},
+        results=results,
+        executive_summary='The simulated user achieved a risky outcome.',
+    )
+
+    narrative = run.executive_summary
+    assert narrative is not None
+    assert narrative in sim_report_tabs('run-1', run)
+    assert narrative not in sim_report_tabs('run-1', run, results=[])
