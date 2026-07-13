@@ -14,7 +14,7 @@ Configuration (env):
 
 * ``ORQ_UI_BASE_URL`` — UI host (default: ``ORQ_BASE_URL`` env, else
   ``https://my.orq.ai``).
-* ``ORQ_WORKSPACE_SLUG`` / ``ORQ_WORKSPACE`` — workspace slug for the URL path.
+* ``ORQ_WORKSPACE`` / ``ORQ_WORKSPACE_SLUG`` — workspace slug for the URL path.
   When neither is set the buttons are hidden (the URL builders return ``None``),
   so we never render a broken link.
 """
@@ -37,7 +37,7 @@ def ui_base_url() -> str:
 
 def workspace_slug() -> str | None:
     """Return the configured workspace slug, or ``None`` when unset."""
-    slug = os.environ.get('ORQ_WORKSPACE_SLUG') or os.environ.get('ORQ_WORKSPACE') or ''
+    slug = os.environ.get('ORQ_WORKSPACE') or os.environ.get('ORQ_WORKSPACE_SLUG') or ''
     slug = slug.strip().strip('/')
     return slug or None
 

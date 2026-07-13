@@ -147,7 +147,7 @@ src/evaluatorq/
 - `ORQ_API_KEY` — ORQ platform authentication
 - `ORQ_BASE_URL` — ORQ API base URL (optional override; default `https://my.orq.ai`)
 - `OPENAI_API_KEY` — for direct OpenAI backend or pipeline LLM calls
-- `ORQ_WORKSPACE_SLUG` (or `ORQ_WORKSPACE`) — workspace slug for dashboard→Orq trace deep-links; buttons hidden when unset
+- `ORQ_WORKSPACE` (or `ORQ_WORKSPACE_SLUG`) — workspace slug for dashboard→Orq trace deep-links; buttons hidden when unset
 - `ORQ_UI_BASE_URL` — optional Orq UI base for deep-links (defaults to `ORQ_BASE_URL` or `https://my.orq.ai`)
 
 ### Code Style
