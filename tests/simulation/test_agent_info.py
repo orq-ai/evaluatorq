@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from evaluatorq.simulation.types import SimulationRun
+from evaluatorq.simulation.types import AgentInfoSnapshot, SimulationRun
 from evaluatorq.simulation.utils.run_store import fetch_agent_info
 
 # ---------------------------------------------------------------------------
@@ -57,18 +57,18 @@ async def test_fetch_agent_info_maps_payload(monkeypatch: pytest.MonkeyPatch) ->
     info = await fetch_agent_info("simple-agent-1")
 
     assert info is not None
-    assert info["key"] == "simple-agent-1"
-    assert info["id"] == "01K8N1KMM5TBD3BTT2N2J5N0DK"
-    assert info["role"] == "Assistant"
-    assert info["description"] == "A helpful assistant for general tasks"
-    assert info["model"] == "openai/gpt-4o"
-    assert info["tools"] == ["Current Date & Time"]
-    assert info["knowledge_bases"] == []
-    assert info["memory_stores"] == []
-    assert info["sub_agents"] == ["youth-agent"]
-    assert info["workspace_id"] == "624ccbbd-a482-40e2-b3d9-3621e09da1f8"
-    assert info["workspace_key"] == "research"
-    assert info["url"] == "https://my.orq.ai/research/agents/01K8N1KMM5TBD3BTT2N2J5N0DK"
+    assert info.get("key") == "simple-agent-1"
+    assert info.get("id") == "01K8N1KMM5TBD3BTT2N2J5N0DK"
+    assert info.get("role") == "Assistant"
+    assert info.get("description") == "A helpful assistant for general tasks"
+    assert info.get("model") == "openai/gpt-4o"
+    assert info.get("tools") == ["Current Date & Time"]
+    assert info.get("knowledge_bases") == []
+    assert info.get("memory_stores") == []
+    assert info.get("sub_agents") == ["youth-agent"]
+    assert info.get("workspace_id") == "624ccbbd-a482-40e2-b3d9-3621e09da1f8"
+    assert info.get("workspace_key") == "research"
+    assert info.get("url") == "https://my.orq.ai/research/agents/01K8N1KMM5TBD3BTT2N2J5N0DK"
     assert "instructions" not in info
     assert "system_prompt" not in info
 
@@ -119,7 +119,7 @@ def _minimal_run_kwargs() -> dict[str, Any]:
 
 
 def test_simulation_run_agent_info_round_trips_via_json() -> None:
-    agent_info = {
+    agent_info: AgentInfoSnapshot = {
         "key": "simple-agent-1",
         "id": "01K8N1KMM5TBD3BTT2N2J5N0DK",
         "role": "Assistant",
