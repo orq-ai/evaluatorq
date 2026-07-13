@@ -3,6 +3,7 @@ empty tabs (no data) drop out (RES-974)."""
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -148,9 +149,8 @@ def test_sim_overview_has_exec_summary_and_five_kpis(sim_run) -> None:
     assert 'Avg turns' in html
     assert 'Goal completion' in html
     assert 'goal met' in html
-    # Personas+scenarios row hugs content (no stretch void) — distinct from the
-    # donut row's intentional equal-height stretch.
-    assert 'sim-overview-grid-2--top' in html
+    # Persona/scenario configuration now lives in the Config tab.
+    assert 'sim-overview-grid-2--top' not in html
 
 
 def test_sim_kpi_goal_status_uses_verdict(sim_run) -> None:
@@ -281,6 +281,97 @@ def test_sim_config_tab_has_personas_and_scenarios(sim_run) -> None:
     assert 'billing' in html
 
 
+def test_sim_overview_omits_persona_and_scenario_config_panels(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run)
+    overview_html = html.split('Breakdown')[0]
+    assert 'Simulated user profiles' not in overview_html
+    assert 'Goals + pass/fail criteria' not in overview_html
+    assert 'sim-config-persona-row' not in overview_html
+    assert 'sim-config-scenario-row' not in overview_html
+
+
+def test_sim_config_compacts_entities_and_prerenders_modal_details() -> None:
+    from evaluatorq.contracts import TokenUsage
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+    from evaluatorq.simulation.types import SimulationResult, SimulationRun, TerminatedBy
+
+    traits = {
+        'patience': 0.2,
+        'assertiveness': 0.8,
+        'politeness': 0.6,
+        'technical_level': 0.4,
+        'communication_style': 'terse',
+        'background': 'Long persona background should only appear in modal detail.',
+    }
+    result = SimulationResult(
+        messages=[],
+        terminated_by=TerminatedBy.judge,
+        reason='done',
+        goal_achieved=True,
+        goal_completion_score=1.0,
+        rules_broken=[],
+        turn_count=2,
+        token_usage=TokenUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+        turn_metrics=[],
+        metadata={
+            'persona': 'Impatient buyer',
+            'scenario': 'Refund request',
+            'persona_traits': traits,
+            'scenario_goal': 'Resolve the refund without unnecessary back and forth.',
+            'scenario_context': 'Customer was charged twice.',
+        },
+        criteria_results={'Confirm refund eligibility': True, 'Do not invent a policy': False},
+    )
+    run = SimulationRun(
+        run_name='entity-detail-run',
+        created_at=datetime.now(tz=timezone.utc),
+        mode='run',
+        target_kind='orq_agent',
+        evaluator_names=['goal_achieved'],
+        total_results=1,
+        scorer_averages={'goal_achieved': 1.0},
+        results=[result],
+    )
+
+    html = sim_report_tabs('rid', run)
+    assert '<dialog class="sim-entity-dialog"' in html
+    assert 'data-sim-entity-trigger' in html
+    assert 'data-entity-kind="persona"' in html
+    assert 'data-entity-kind="scenario"' in html
+    assert 'class="sim-trait-mini"' in html
+    assert 'title="patience: 0.20"' in html
+    assert '2 checks' in html
+    assert 'Long persona background should only appear in modal detail.' in html
+    assert 'Customer was charged twice.' in html
+    assert 'Confirm refund eligibility' in html
+
+    from evaluatorq.dashboard.report_tabs import _sim_config_persona_row, _sim_config_scenario_row
+
+    persona_row = _sim_config_persona_row({'name': 'Impatient buyer', 'traits': traits}, 'persona-0')
+    scenario_row = _sim_config_scenario_row(
+        {
+            'name': 'Refund request',
+            'goal': 'Resolve the refund without unnecessary back and forth.',
+            'criteria': [{'description': 'Confirm refund eligibility'}],
+        },
+        'scenario-0',
+    )
+    assert 'Long persona background should only appear in modal detail.' not in persona_row
+    assert 'Resolve the refund without unnecessary back and forth.' not in scenario_row
+
+
+def test_sim_breakdown_entity_names_open_shared_modal(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run)
+    breakdown_html = html.split('Per-persona')[-1].split('Transcripts')[0]
+    assert 'data-sim-entity-trigger' in breakdown_html
+    assert 'data-entity-kind="persona"' in breakdown_html
+    assert 'data-entity-kind="scenario"' in breakdown_html
+
+
 def test_sim_config_tab_keeps_token_usage(sim_run) -> None:
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
 
@@ -403,9 +494,10 @@ def test_rt_agents_single_agent_card(rt_report_single):
     assert 'Single agent under assessment' in html
 
 
-def test_rt_agent_card_studio_link_present_for_orq_target():
+def test_rt_agent_card_studio_link_present_for_orq_target(monkeypatch):
     from evaluatorq.dashboard.report_tabs import _rt_agent_card
 
+    monkeypatch.delenv('ORQ_WORKSPACE', raising=False)
     ctx = {
         'display_name': 'Support Bot',
         'id': 'abc123',
@@ -505,9 +597,10 @@ _AGENT_INFO = {
 }
 
 
-def test_sim_overview_agent_card_full(sim_run) -> None:
+def test_sim_overview_agent_card_full(sim_run, monkeypatch) -> None:
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
 
+    monkeypatch.setenv('ORQ_WORKSPACE', 'research')
     run = sim_run.model_copy(update={'agent_info': _AGENT_INFO})
     html = sim_report_tabs('rid', run)
     assert 'class="rk-panel sim-agent-card"' in html
@@ -515,7 +608,7 @@ def test_sim_overview_agent_card_full(sim_run) -> None:
     assert 'Router' in html
     assert 'Front-door agent that triages requests.' in html
     assert 'route_request' in html
-    assert 'href="https://my.orq.ai/project/agents/01K8N..."' in html
+    assert 'href="https://my.orq.ai/research/agents/01K8N..."' in html
     assert 'target="_blank"' in html
 
 
@@ -527,14 +620,24 @@ def test_sim_overview_agent_card_absent_when_no_agent_info(sim_run) -> None:
     assert 'sim-agent-card' not in html
 
 
-def test_sim_overview_agent_card_omits_open_link_without_url(sim_run) -> None:
+def test_sim_overview_agent_card_omits_open_link_without_url(sim_run, monkeypatch) -> None:
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
 
+    monkeypatch.delenv('ORQ_WORKSPACE', raising=False)
     agent_info = dict(_AGENT_INFO, url=None)
     run = sim_run.model_copy(update={'agent_info': agent_info})
     html = sim_report_tabs('rid', run)
     assert 'class="rk-panel sim-agent-card"' in html
     assert 'sim-agent-open' not in html
+
+
+def test_sim_overview_agent_card_uses_configured_workspace_for_legacy_uuid_link(sim_run, monkeypatch) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    monkeypatch.setenv('ORQ_WORKSPACE', 'research')
+    agent_info = dict(_AGENT_INFO, workspace_id='624ccbbd-a482-40e2-b3d9-3621e09da1f8')
+    html = sim_report_tabs('rid', sim_run.model_copy(update={'agent_info': agent_info}))
+    assert 'href="https://my.orq.ai/research/agents/01K8N..."' in html
 
 
 def test_sim_overview_agent_card_escapes_description(sim_run) -> None:
@@ -547,6 +650,32 @@ def test_sim_overview_agent_card_escapes_description(sim_run) -> None:
     assert '&lt;script&gt;' in html
 
 
+def test_sim_overview_agent_card_uses_compact_description_not_prompt_content(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    agent_info = dict(
+        _AGENT_INFO,
+        description=(
+            'A concise description of the agent.\n\n'
+            'INSTRUCTIONS: this prompt-like configuration and its secrets must not appear in the overview.'
+        ),
+        instructions='This field must never be rendered.',
+    )
+    html = sim_report_tabs('rid', sim_run.model_copy(update={'agent_info': agent_info}))
+    assert 'A concise description of the agent.' in html
+    assert 'prompt-like configuration' not in html
+    assert 'This field must never be rendered.' not in html
+
+
+def test_agent_description_preview_caps_a_single_long_paragraph() -> None:
+    from evaluatorq.dashboard.report_tabs import _AGENT_DESCRIPTION_PREVIEW_LIMIT, _agent_description_preview
+
+    preview = _agent_description_preview('x' * (_AGENT_DESCRIPTION_PREVIEW_LIMIT + 10))
+    assert preview is not None
+    assert preview.endswith('...')
+    assert len(preview) == _AGENT_DESCRIPTION_PREVIEW_LIMIT + 3
+
+
 # --- agent-card live Orq fallback (_resolve_agent_info) ----------------------
 
 
@@ -557,7 +686,8 @@ def _orq_run(sim_run, **updates):
     return sim_run.model_copy(update=base)
 
 
-def test_resolve_agent_info_complete_captured_skips_fetch(sim_run, monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_resolve_agent_info_complete_captured_skips_fetch(sim_run, monkeypatch) -> None:
     """A complete captured snapshot never triggers a live Orq fetch."""
     import evaluatorq.dashboard.report_tabs as rt
 
@@ -566,55 +696,117 @@ def test_resolve_agent_info_complete_captured_skips_fetch(sim_run, monkeypatch) 
 
     monkeypatch.setattr(rt, '_orq_agent_info_cached', _boom)
     run = _orq_run(sim_run, agent_info=dict(_AGENT_INFO))
-    display, original, source = rt._resolve_agent_info(run)
+    display, original, source = await rt._resolve_agent_info(run)
     assert source == 'captured'
     assert display is original
 
 
-def test_resolve_agent_info_missing_core_augments_filling_only_gaps(sim_run, monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_resolve_agent_info_missing_core_augments_filling_only_gaps(sim_run, monkeypatch) -> None:
     """Missing a core field → fetch; captured values win, only gaps get filled."""
     import evaluatorq.dashboard.report_tabs as rt
 
     captured = dict(_AGENT_INFO, model='')  # model missing → incomplete
     captured['description'] = 'AS-RUN description'
     fetched = dict(_AGENT_INFO, model='openai/gpt-5', description='CURRENT description')
-    monkeypatch.setattr(rt, '_orq_agent_info_cached', lambda _key: fetched)
-    display, original, source = rt._resolve_agent_info(_orq_run(sim_run, agent_info=captured))
+    async def _fetch(_key):
+        return fetched
+
+    monkeypatch.setattr(rt, '_orq_agent_info_cached', _fetch)
+    display, original, source = await rt._resolve_agent_info(_orq_run(sim_run, agent_info=captured))
     assert source == 'augmented'
     assert display['model'] == 'openai/gpt-5'  # gap filled from Orq
     assert display['description'] == 'AS-RUN description'  # captured value kept
     assert original is captured
 
 
-def test_resolve_agent_info_none_fetches_whole_card(sim_run, monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_resolve_agent_info_none_fetches_whole_card(sim_run, monkeypatch) -> None:
     """Nothing captured → whole card loaded live; no 'original' to show."""
     import evaluatorq.dashboard.report_tabs as rt
 
-    monkeypatch.setattr(rt, '_orq_agent_info_cached', lambda _key: dict(_AGENT_INFO))
-    display, original, source = rt._resolve_agent_info(_orq_run(sim_run, agent_info=None))
+    async def _fetch(_key):
+        return dict(_AGENT_INFO)
+
+    monkeypatch.setattr(rt, '_orq_agent_info_cached', _fetch)
+    display, original, source = await rt._resolve_agent_info(_orq_run(sim_run, agent_info=None))
     assert source == 'fetched'
     assert original is None
     assert display['key'] == _AGENT_INFO['key']
 
 
-def test_resolve_agent_info_non_orq_target_never_fetches(sim_run, monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_resolve_agent_info_404_falls_back_to_saved_target(sim_run, monkeypatch) -> None:
+    """A deleted or inaccessible agent still renders the run's saved target."""
+    import evaluatorq.dashboard.report_tabs as rt
+
+    async def _missing(_key):
+        return None
+
+    monkeypatch.setattr(rt, '_orq_agent_info_cached', _missing)
+    run = _orq_run(sim_run, agent_info=None, target='agent:flight-delay-analyst', target_model='gpt-4o')
+    display, original, source = await rt._resolve_agent_info(run)
+    assert source == 'stored'
+    assert original is None
+    assert display == {'key': 'flight-delay-analyst', 'model': 'gpt-4o'}
+    html = await rt.sim_agent_card_fragment(run)
+    assert 'flight-delay-analyst' in html
+    assert 'live Orq details are unavailable' in html
+
+
+@pytest.mark.asyncio
+async def test_resolve_agent_info_non_orq_target_never_fetches(sim_run, monkeypatch) -> None:
     """A non-Orq target is never enriched, even with an incomplete snapshot."""
     import evaluatorq.dashboard.report_tabs as rt
 
-    monkeypatch.setattr(rt, '_orq_agent_info_cached', lambda _key: (_ for _ in ()).throw(AssertionError('no fetch')))
+    async def _boom(_key):
+        raise AssertionError('no fetch')
+
+    monkeypatch.setattr(rt, '_orq_agent_info_cached', _boom)
     run = sim_run.model_copy(update={'target_kind': 'openai_model', 'target': 'gpt-4o', 'agent_info': None})
-    _display, _original, source = rt._resolve_agent_info(run)
+    _display, _original, source = await rt._resolve_agent_info(run)
     assert source == 'none'
 
 
-def test_sim_overview_augmented_card_shows_source_note_and_toggle(sim_run, monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_sim_overview_augmented_card_shows_source_note_and_toggle(sim_run, monkeypatch) -> None:
     import evaluatorq.dashboard.report_tabs as rt
 
-    monkeypatch.setattr(rt, '_orq_agent_info_cached', lambda _key: dict(_AGENT_INFO))
+    async def _fetch(_key):
+        return dict(_AGENT_INFO)
+
+    monkeypatch.setattr(rt, '_orq_agent_info_cached', _fetch)
     run = _orq_run(sim_run, agent_info=None)
-    html = rt.sim_report_tabs('rid', run)
+    html = await rt.sim_agent_card_fragment(run)
     assert 'sim-agent-source' in html
     assert 'Loaded live from Orq' in html
+
+
+def test_sim_overview_defers_incomplete_agent_details(sim_run, monkeypatch) -> None:
+    import evaluatorq.dashboard.report_tabs as rt
+
+    async def _boom(_key):
+        raise AssertionError('initial report render must not fetch Orq')
+
+    monkeypatch.setattr(rt, '_orq_agent_info_cached', _boom)
+    run = _orq_run(sim_run, agent_info=None, target='agent:flight-delay-analyst')
+    html = rt.sim_report_tabs('run-id', run)
+    assert 'hx-get="/r/run-id/sim/agent-card"' in html
+    assert 'flight-delay-analyst' in html
+
+
+def test_sim_agent_card_endpoint_returns_deferred_fragment(client, roots, monkeypatch) -> None:
+    import evaluatorq.dashboard.report_tabs as rt
+
+    async def _fragment(run):
+        assert run.run_name == 'test-sim'
+        return '<div class="sim-agent-card">enriched</div>'
+
+    monkeypatch.setattr(rt, 'sim_agent_card_fragment', _fragment)
+    rid = report_id(roots[1] / 'sim.json')
+    response = client.get(f'/r/{rid}/sim/agent-card')
+    assert response.status_code == 200
+    assert response.text == '<div class="sim-agent-card">enriched</div>'
 
 
 def test_agent_key_recovered_from_run_name_when_target_missing(sim_run) -> None:

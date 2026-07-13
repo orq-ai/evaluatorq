@@ -290,6 +290,11 @@ _TARGET_ICONS: dict[str, str] = {
         '2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/>'
         '<path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5z"/></svg>'
     ),
+    'external': (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/>'
+        '<path d="M3 12h18M12 3a14.9 14.9 0 0 1 0 18M12 3a14.9 14.9 0 0 0 0 18"/></svg>'
+    ),
 }
 
 
@@ -300,9 +305,21 @@ _CHEVRON = (
 
 
 def _target_pill(label: str, kind: str) -> str:
-    """Target cell: kind icon (agent / llm / deployment) + label, dot fallback."""
-    icon = _TARGET_ICONS.get(kind, '<span class="dot"></span>')
-    return f'<span class="target-pill" data-kind="{esc(kind)}">{icon}{esc(label)}</span>'
+    """Target cell rendered exclusively from the saved run's target kind.
+
+    Older JSON and extensions may carry raw storage kinds rather than the
+    display categories emitted by metrics, so normalize here too. Unknown
+    targets are external entities, not green status dots.
+    """
+    display_kind = {
+        'orq_agent': 'agent',
+        'orq_deployment': 'deployment',
+        'openai_model': 'llm',
+        'vercel': 'deployment',
+        'callback': 'external',
+        'other': 'external',
+    }.get(kind, kind if kind in _TARGET_ICONS else 'external')
+    return f'<span class="target-pill" data-kind="{esc(display_kind)}">{_TARGET_ICONS[display_kind]}{esc(label)}</span>'
 
 
 # Run lifecycle → label for the solid status pill (mirrors the platform's

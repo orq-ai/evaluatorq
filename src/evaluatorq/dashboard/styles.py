@@ -1417,13 +1417,101 @@ _SIM_REPORT_OVERRIDES_CSS = """
     font-family: var(--font-sans); font-size: 10px; text-transform: uppercase;
     letter-spacing: 0.06em; color: var(--text-faint);
 }
+.sim-report .sim-entity-row {
+    width: 100%; border: 0; background: transparent; font: inherit; color: inherit;
+    appearance: none; padding-right: 0; padding-bottom: 0; padding-left: 0;
+    text-align: left; cursor: pointer;
+}
+.sim-report .sim-entity-row:hover .sim-config-persona-name,
+.sim-report .sim-entity-row:hover .sim-config-scenario-name,
+.sim-report .sim-entity-link:hover { color: var(--orange-500); }
 .sim-report .sim-config-persona-style {
     font-family: var(--font-sans); font-size: 11px; color: var(--text-faint);
 }
+.sim-report .sim-trait-minis {
+    display: inline-flex; align-items: center; gap: 6px; margin-left: auto;
+}
+.sim-report .sim-trait-mini {
+    display: inline-block; width: 34px; height: 4px; border-radius: 999px;
+    background: var(--surface-sunken); overflow: hidden; vertical-align: middle;
+}
+.sim-report .sim-trait-mini-fill {
+    display: block; height: 100%; border-radius: inherit; background: var(--teal-600);
+}
+.sim-report .sim-config-check-count {
+    margin-left: auto; font-size: 12px; color: var(--text-muted);
+}
+.sim-report .sim-config-scenario-row { display: flex; align-items: baseline; gap: 12px; }
 .sim-report .sim-config-criterion {
     font-family: var(--font-sans); font-size: 11.5px; background: var(--surface-sunken);
     border-radius: 6px; padding: 3px 9px;
 }
+.sim-report .sim-entity-link {
+    border: 0; padding: 0; background: transparent; color: var(--text-strong);
+    font: inherit; font-weight: 600; cursor: pointer; text-align: left;
+}
+.sim-report .sim-entity-dialog {
+    width: min(720px, calc(100vw - 32px)); max-height: min(780px, calc(100vh - 32px));
+    padding: 0; border: 1px solid var(--border-subtle); border-radius: 8px;
+    background: var(--surface-app); color: var(--text-body); box-shadow: var(--shadow-lg);
+}
+.sim-report .sim-entity-dialog::backdrop { background: rgb(18 17 15 / 0.42); }
+.sim-report .sim-entity-modal-shell { display: flex; flex-direction: column; max-height: inherit; }
+.sim-report .sim-entity-modal-content { padding: 24px; overflow: auto; }
+.sim-report .sim-entity-kicker {
+    font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .06em;
+}
+.sim-report .sim-entity-detail h2 {
+    margin: 6px 0 10px; font-size: 22px; line-height: 1.2; color: var(--text-strong);
+}
+.sim-report .sim-entity-detail h3 {
+    margin: 18px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--text-faint);
+}
+.sim-report .sim-entity-pills { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.sim-report .sim-entity-pill {
+    font-size: 12px; color: var(--text-muted); background: var(--surface-sunken);
+    border-radius: 999px; padding: 4px 9px;
+}
+.sim-report .sim-entity-prose {
+    margin: 10px 0 0; font-size: 13.5px; line-height: 1.55; color: var(--text-body);
+}
+.sim-report .sim-entity-traits { display: grid; gap: 8px; margin: 16px 0; }
+.sim-report .sim-entity-trait-row {
+    display: grid; grid-template-columns: 130px 1fr 44px; gap: 12px; align-items: center;
+    font-size: 13px;
+}
+.sim-report .sim-entity-trait-track {
+    height: 7px; border-radius: 999px; background: var(--surface-sunken); overflow: hidden;
+}
+.sim-report .sim-entity-trait-fill { display: block; height: 100%; background: var(--teal-600); }
+.sim-report .sim-entity-trait-value { font-variant-numeric: tabular-nums; color: var(--text-muted); }
+.sim-report .sim-entity-criteria {
+    list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 8px;
+}
+.sim-report .sim-entity-criterion {
+    display: grid; grid-template-columns: 18px 1fr auto; gap: 8px; align-items: start;
+    padding: 10px 12px; border-radius: 8px; background: var(--surface-sunken);
+    font-size: 13px; line-height: 1.4;
+}
+.sim-report .sim-entity-criterion-mark { font-weight: 700; }
+.sim-report .sim-entity-criterion--positive .sim-entity-criterion-mark { color: var(--green-600); }
+.sim-report .sim-entity-criterion--negative .sim-entity-criterion-mark { color: var(--red-600); }
+.sim-report .sim-entity-criterion-type {
+    font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .04em;
+}
+.sim-report .sim-entity-modal-actions {
+    display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px;
+    border-top: 1px solid var(--border-subtle); background: var(--surface-sunken);
+}
+.sim-report .sim-entity-nav,
+.sim-report .sim-entity-close {
+    border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--surface-app);
+    color: var(--text-body); padding: 6px 10px; font: inherit; cursor: pointer;
+}
+.sim-report .sim-entity-nav { font-family: var(--font-mono); min-width: 32px; }
+.sim-report .sim-entity-nav:hover,
+.sim-report .sim-entity-close:hover { border-color: var(--orange-500); color: var(--orange-500); }
 
 /* ---- Agent info card ---- */
 .sim-report .sim-agent-card { margin-bottom: 16px; }
@@ -1453,7 +1541,10 @@ _SIM_REPORT_OVERRIDES_CSS = """
     font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); margin-top: 4px;
 }
 .sim-report .sim-agent-desc {
-    font-size: 14px; color: var(--text-body); max-width: 760px; margin-top: 8px;
+    font-size: 14px; color: var(--text-body); max-width: 66.667%; margin-top: 8px;
+}
+@media (max-width: 760px) {
+    .sim-report .sim-agent-desc { max-width: 100%; }
 }
 .sim-report .sim-agent-delegates {
     display: flex; align-items: center; gap: 8px; margin-top: 10px;

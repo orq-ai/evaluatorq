@@ -12,6 +12,7 @@
 - ``GET /r/{rid}/export.csv`` → CSV of (filtered) result rows
 - ``GET /r/{rid}/export.json``→ JSON of (filtered) result rows
 - ``GET /r/{rid}/sim/transcript?idx=`` → sim transcript fragment (HTMX)
+- ``GET /r/{rid}/sim/agent-card`` → asynchronously enriched sim agent card
 
 The ``roots`` parameter overrides the default scan directories so the app can
 be tested against a temporary fixture directory without touching the real run
@@ -241,6 +242,27 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
             actions_html=report_actions(rid),
         )
         return NotStr(html)
+
+    # ------------------------------------------------------------------
+    # Route: GET /r/{rid}/sim/agent-card — deferred live Orq enrichment
+    # ------------------------------------------------------------------
+    @app.get('/r/{rid}/sim/agent-card')
+    async def sim_agent_card(rid: str) -> NotStr | Response:
+        path = library.resolve(rid, roots)
+        if path is None:
+            return Response('404 Not Found', status_code=404, media_type='text/plain')
+        surface, _raw = library.load_surface(path)
+        if surface != 'sim':
+            return Response('404 Not Found', status_code=404, media_type='text/plain')
+        adapter = ADAPTERS.get(surface)
+        if adapter is None:
+            return Response('404 Not Found', status_code=404, media_type='text/plain')
+        try:
+            run = adapter.load(path)
+        except Exception as exc:
+            logger.warning('Failed to load sim report for agent card {}: {}', path.name, exc)
+            return Response('Error loading report', status_code=422, media_type='text/plain')
+        return NotStr(await report_tabs.sim_agent_card_fragment(run))
 
     # ------------------------------------------------------------------
     # Route: POST /r/{rid}/filter  — HTMX filter round-trip

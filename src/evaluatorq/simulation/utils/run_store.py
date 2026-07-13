@@ -64,11 +64,14 @@ async def fetch_agent_info(agent_key: str) -> dict[str, Any] | None:
         raw_sub_agents = getattr(agent_data, 'team_of_agents', None) or []
         sub_agents = [n for a in raw_sub_agents if (n := a.get('key') if isinstance(a, dict) else getattr(a, 'key', None))]
 
-        from evaluatorq.dashboard.orq_links import orq_studio_url
+        from evaluatorq.dashboard.orq_links import orq_studio_url, studio_workspace_key
 
         workspace_id = getattr(agent_data, 'workspace_id', None)
+        # Entity APIs expose workspace_id (a UUID). Studio links instead use
+        # the configured ORQ_WORKSPACE key, captured here for future reports.
+        workspace_key = studio_workspace_key(getattr(agent_data, 'workspace_key', None))
         base_url = os.getenv('ORQ_BASE_URL', 'https://my.orq.ai').rstrip('/')
-        url = orq_studio_url(target_kind='agent', entity_id=agent_id, workspace_id=workspace_id, base_url=base_url)
+        url = orq_studio_url(target_kind='agent', entity_id=agent_id, workspace_id=workspace_key, base_url=base_url)
 
         return {
             'key': agent_key,
@@ -81,6 +84,7 @@ async def fetch_agent_info(agent_key: str) -> dict[str, Any] | None:
             'memory_stores': memory_stores,
             'sub_agents': sub_agents,
             'workspace_id': workspace_id,
+            'workspace_key': workspace_key,
             'base_url': base_url,
             'url': url,
         }

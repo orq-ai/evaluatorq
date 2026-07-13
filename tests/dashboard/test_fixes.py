@@ -151,6 +151,33 @@ class TestFix1CliDirectUrl:
 
         assert '/r/' not in result.output
 
+    def test_ui_repository_root_scans_hidden_report_stores(self, tmp_path: Path) -> None:
+        """A repository root includes the conventional .evaluatorq run stores."""
+        from typer.testing import CliRunner
+
+        from evaluatorq.cli import app as cli_app
+
+        repo = tmp_path / 'repo'
+        (repo / '.evaluatorq' / 'runs').mkdir(parents=True)
+        (repo / '.evaluatorq' / 'sim-runs').mkdir()
+        captured_roots: list[Path] | None = None
+
+        def _fake_serve(roots: list[Path], *, host: str, port: int) -> None:  # noqa: ARG001
+            nonlocal captured_roots
+            captured_roots = roots
+
+        with patch('evaluatorq.dashboard.launch.serve', side_effect=_fake_serve):
+            result = CliRunner().invoke(cli_app, ['dashboard', str(repo)])
+
+        assert result.exit_code == 0, result.output
+        assert captured_roots == [
+            repo,
+            repo / 'runs',
+            repo / 'sim-runs',
+            repo / '.evaluatorq' / 'runs',
+            repo / '.evaluatorq' / 'sim-runs',
+        ]
+
 
 # ---------------------------------------------------------------------------
 # Fix 2: GET /?surface=sim shows only sim cards
