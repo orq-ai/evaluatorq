@@ -267,9 +267,16 @@ def _target_identity(
 @app.command(no_args_is_help=True)
 def simulate(
     datapoints: Annotated[
-        Path,
-        typer.Option('--datapoints', '-d', help='Path to datapoints JSONL file.'),
-    ],
+        Path | None,
+        typer.Option('--datapoints', '-d', help='Path to datapoints JSONL file (or use --dataset-id).'),
+    ] = None,
+    dataset_id: Annotated[
+        str | None,
+        typer.Option(
+            '--dataset-id',
+            help='Fetch datapoints from this Orq dataset instead of a local file. Requires ORQ_API_KEY.',
+        ),
+    ] = None,
     target: Annotated[
         str | None,
         typer.Option(
@@ -398,8 +405,12 @@ def simulate(
             skip_confirm=yes or not sys.stdin.isatty(),
         )
 
-    if not datapoints.exists():
+    if (datapoints is None) == (dataset_id is None):
+        raise typer.BadParameter('Provide exactly one of --datapoints or --dataset-id.')
+    if datapoints is not None and not datapoints.exists():
         raise typer.BadParameter(f'Datapoints file not found: {datapoints}')
+    if dataset_id is not None:
+        _require_orq_api_key('--dataset-id')
 
     try:
         resolved_target = _resolve_target(
@@ -416,6 +427,7 @@ def simulate(
         results = asyncio.run(
             _simulate_impl(
                 datapoints_path=datapoints,
+                dataset_id=dataset_id,
                 target=resolved_target,
                 sim_model=sim_model,
                 max_turns=max_turns,
@@ -474,7 +486,8 @@ def simulate(
 
 async def _simulate_impl(
     *,
-    datapoints_path: Path,
+    datapoints_path: Path | None,
+    dataset_id: str | None = None,
     target: Any,
     sim_model: str,
     max_turns: int,
@@ -486,12 +499,17 @@ async def _simulate_impl(
     from evaluatorq.simulation.api import simulate
     from evaluatorq.simulation.utils.dataset_export import load_datapoints_from_jsonl
 
-    loaded = load_datapoints_from_jsonl(str(datapoints_path))
-    if not loaded:
-        raise ValueError(f'No datapoints loaded from {datapoints_path}')
+    loaded = None
+    if dataset_id is None:
+        if datapoints_path is None:  # the command guarantees exactly one source
+            raise ValueError('Either datapoints_path or dataset_id is required')
+        loaded = load_datapoints_from_jsonl(str(datapoints_path))
+        if not loaded:
+            raise ValueError(f'No datapoints loaded from {datapoints_path}')
 
     return await simulate(
         datapoints=loaded,
+        dataset_id=dataset_id,
         target=target,
         sim_model=sim_model,
         max_turns=max_turns,
@@ -827,6 +845,18 @@ def generate(
         int,
         typer.Option('--num-scenarios', min=1, help='Number of scenarios to generate.'),
     ] = 5,
+    dataset_format: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option(
+            '--dataset-format',
+            help=(
+                'Write the orq.ai dataset-row envelope (inputs/expected_output, '
+                'persona & scenario JSON-stringified) instead of raw datapoints. '
+                'Feed the raw form to `sim simulate --datapoints`; feed this form '
+                'to `sim upload-dataset` (or upload straight from the raw file).'
+            ),
+        ),
+    ] = False,
     verbose: Annotated[
         int,
         typer.Option(
@@ -880,7 +910,7 @@ def generate(
         # traceback (per the spec error-handling contract).
         _handle_cli_error(exc)
 
-    _write_datapoints(datapoints, output)
+    _write_datapoints(datapoints, output, dataset_format=dataset_format)
     typer.echo(f'Generated {len(datapoints)} datapoint(s) -> {output}', err=True)
 
 
@@ -981,6 +1011,72 @@ def validate_dataset(
         raise typer.Exit(1)
 
     typer.echo(f'OK — {len(valid_datapoints)} valid datapoint(s) in {path}')
+
+
+# ---------------------------------------------------------------------------
+# upload-dataset
+# ---------------------------------------------------------------------------
+
+
+@app.command('upload-dataset', no_args_is_help=True)
+def upload_dataset(
+    input_path: Annotated[
+        Path,
+        typer.Option('--input', '-i', help='Datapoints JSONL to upload (raw or --dataset-format).'),
+    ],
+    name: Annotated[
+        str | None,
+        typer.Option('--name', '-n', help='Display name for a new dataset (required unless --dataset-id).'),
+    ] = None,
+    path: Annotated[
+        str,
+        typer.Option('--path', help='Orq folder path for a new dataset.'),
+    ] = 'Default',
+    dataset_id: Annotated[
+        str | None,
+        typer.Option('--dataset-id', help='Append to this existing dataset instead of creating one.'),
+    ] = None,
+) -> None:
+    """Convert a simulation datapoints JSONL into an Orq dataset and upload it.
+
+    Accepts either the raw ``sim generate`` output or a ``--dataset-format`` file;
+    both are normalised, then persona/scenario are JSON-stringified into the
+    scalar-only ``inputs`` shape the datasets API requires (see
+    ``to_orq_dataset_rows``). Pass ``--dataset-id`` to *extend* an existing
+    dataset rather than create a new one. Requires ``ORQ_API_KEY``.
+    """
+    if not input_path.exists():
+        raise typer.BadParameter(f'File not found: {input_path}')
+    if dataset_id is None and not name:
+        raise typer.BadParameter('Provide --name to create a dataset, or --dataset-id to extend one.')
+
+    _require_orq_api_key('upload-dataset')
+
+    from evaluatorq.fetch_data import setup_orq_client
+    from evaluatorq.simulation.utils.dataset_export import load_datapoints_from_jsonl, to_orq_dataset_rows
+
+    try:
+        datapoints = load_datapoints_from_jsonl(str(input_path))
+    except Exception as exc:
+        raise typer.BadParameter(f'Failed to read {input_path}: {exc}') from exc
+    if not datapoints:
+        raise typer.BadParameter(f'No datapoints found in {input_path}')
+
+    rows = to_orq_dataset_rows(datapoints)
+    client = setup_orq_client(os.environ['ORQ_API_KEY'])
+
+    if dataset_id is None:
+        # name is guaranteed non-None here (validated above); SDK expects a TypedDict.
+        created = client.datasets.create(request={'display_name': name or '', 'path': path})
+        dataset_id = created.id
+        typer.echo(f'Created dataset {dataset_id} ("{name}")', err=True)
+
+    # ponytail: single bulk create; chunk if a set ever exceeds the API's array cap.
+    # rows are plain dicts matching the SDK's CreateDatasetItem TypedDict shape.
+    client.datasets.create_datapoint(dataset_id=dataset_id, request_body=rows)  # pyright: ignore[reportArgumentType]
+
+    base = os.environ.get('ORQ_BASE_URL', 'https://my.orq.ai').rstrip('/')
+    typer.echo(f'Uploaded {len(rows)} datapoint(s) -> dataset {dataset_id} ({base})')
 
 
 # ---------------------------------------------------------------------------
@@ -1162,16 +1258,23 @@ def _write_results(results: list[Any], output: Path) -> None:
     typer.echo(f'Results written to {output}')
 
 
-def _write_datapoints(datapoints: list[Any], output: Path) -> None:
-    """Write datapoints as raw ``SimulationDatapoint`` JSONL — one ``model_dump_json()``
-    per line. This is the canonical local handoff format: it preserves the
+def _write_datapoints(datapoints: list[Any], output: Path, *, dataset_format: bool = False) -> None:
+    """Write datapoints as JSONL — one row per line.
+
+    Default (raw) is the canonical local handoff format: it preserves the
     datapoint ``id``, round-trips through ``load_datapoints_from_jsonl`` (which
-    ``simulate`` uses), and validates under ``validate-dataset``. The Orq-dataset
-    *envelope* exporter (``export_datapoints_to_jsonl``) is a separate upload
-    format and is intentionally not used here.
+    ``simulate`` uses), and validates under ``validate-dataset``. With
+    ``dataset_format`` it writes the Orq-dataset envelope instead
+    (``to_orq_dataset_rows`` — inputs/expected_output, persona & scenario
+    JSON-stringified) for hand-off to ``sim upload-dataset`` or manual upload.
     """
     output.parent.mkdir(parents=True, exist_ok=True)
-    lines = [dp.model_dump_json() for dp in datapoints]
+    if dataset_format:
+        from evaluatorq.simulation.utils.dataset_export import to_orq_dataset_rows
+
+        lines = [json.dumps(row) for row in to_orq_dataset_rows(datapoints)]
+    else:
+        lines = [dp.model_dump_json() for dp in datapoints]
     output.write_text('\n'.join(lines) + '\n', encoding='utf-8')
 
 

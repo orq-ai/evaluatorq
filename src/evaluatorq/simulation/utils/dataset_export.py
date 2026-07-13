@@ -19,28 +19,53 @@ from evaluatorq.simulation.types import (
 logger = logging.getLogger(__name__)
 
 
+def _as_obj(value: Any) -> Any:
+    """Return a dict for a JSON-stringified object, else the value unchanged.
+
+    orq dataset rows store persona/scenario as JSON strings (the API forbids
+    nested objects); the readers accept either the string or a plain dict.
+    """
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (ValueError, TypeError):
+            return value
+    return value
+
+
 # ---------------------------------------------------------------------------
 # Export
 # ---------------------------------------------------------------------------
 
 
-def export_datapoints_to_jsonl(datapoints: list[SimulationDatapoint], output_path: str) -> None:
-    """Export datapoints to JSONL format for orq.ai datasets."""
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+def to_orq_dataset_rows(datapoints: list[SimulationDatapoint]) -> list[dict[str, Any]]:
+    """Convert simulation datapoints to orq.ai dataset-row dicts.
 
-    lines = [
-        json.dumps({
+    The orq datasets API rejects nested objects in ``inputs`` (each value must be
+    a scalar), so ``persona``/``scenario`` are JSON-*stringified* here and
+    ``expected_output`` is an empty string rather than ``null``. The read side
+    (:func:`load_datapoints_from_jsonl`, ``_extract_single_datapoint``) accepts
+    these stringified fields, so the round-trip holds.
+    """
+    return [
+        {
             'inputs': {
                 'category': f'{dp.persona.name} - {dp.scenario.name}',
-                'first_message': dp.first_message,
-                'user_system_prompt': dp.user_system_prompt,
-                'persona': dp.persona.model_dump(mode='json'),
-                'scenario': dp.scenario.model_dump(mode='json'),
+                'first_message': dp.first_message or '',
+                'user_system_prompt': dp.user_system_prompt or '',
+                'persona': dp.persona.model_dump_json(),
+                'scenario': dp.scenario.model_dump_json(),
             },
-            'expected_output': None,
-        })
+            'expected_output': '',
+        }
         for dp in datapoints
     ]
+
+
+def export_datapoints_to_jsonl(datapoints: list[SimulationDatapoint], output_path: str) -> None:
+    """Export datapoints to JSONL format for orq.ai datasets (one row per line)."""
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    lines = [json.dumps(row) for row in to_orq_dataset_rows(datapoints)]
     Path(output_path).write_text('\n'.join(lines) + '\n', encoding='utf-8')
 
 
@@ -86,9 +111,11 @@ def load_datapoints_from_jsonl(input_path: str) -> list[SimulationDatapoint]:
 
         inputs = data.get('inputs', {})
 
-        # Reconstruct persona
-        if isinstance(inputs.get('persona'), dict):
-            persona = Persona.model_validate(inputs['persona'])
+        # Reconstruct persona (accept dict or JSON-stringified object — the orq
+        # dataset envelope stringifies nested objects, see to_orq_dataset_rows).
+        persona_raw = _as_obj(inputs.get('persona'))
+        if isinstance(persona_raw, dict):
+            persona = Persona.model_validate(persona_raw)
         else:
             persona = Persona(
                 name=inputs.get('persona_name', 'Unknown'),
@@ -100,9 +127,10 @@ def load_datapoints_from_jsonl(input_path: str) -> list[SimulationDatapoint]:
                 background=inputs.get('context', ''),
             )
 
-        # Reconstruct scenario
-        if isinstance(inputs.get('scenario'), dict):
-            scenario = Scenario.model_validate(inputs['scenario'])
+        # Reconstruct scenario (dict or JSON-stringified, as with persona above)
+        scenario_raw = _as_obj(inputs.get('scenario'))
+        if isinstance(scenario_raw, dict):
+            scenario = Scenario.model_validate(scenario_raw)
         else:
             scenario = Scenario(
                 name=inputs.get('scenario_name', 'Unknown'),

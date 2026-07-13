@@ -132,16 +132,28 @@ cat more.jsonl >> ics_datapoints.jsonl
 uv run evaluatorq sim validate-dataset ics_datapoints.jsonl
 ```
 
-**The three-options slide** (build in `presentation.qmd`): **① from scratch**
-(Act 1) · **② re-run from data** (Act 3a) · **③ extend from data** (Act 3b).
-
-**Optional — publish the set as an orq dataset** (mention, don't dwell — see
-Gaps §2/§3 for why the CLI round-trip is rough):
+**3c. Publish the set as an orq dataset — and re-run from it.** New `eq sim`
+commands close the round-trip (see Gaps §2/§3): upload a datapoints JSONL, then
+run straight from the dataset.
 
 ```bash
-orq datasets create --stdin <<< '{"display_name":"ICS Sim Set","path":"Default"}'
-# then push rows wrapped under `inputs` with persona/scenario JSON-stringified
+# push the frozen set to a new orq dataset (persona/scenario are auto-stringified)
+uv run evaluatorq sim upload-dataset -i ics_datapoints.jsonl -n "ICS Sim Set"
+# -> Created dataset <id> ...  Uploaded N datapoint(s) -> dataset <id>
+
+# extend an existing dataset instead of creating one
+uv run evaluatorq sim upload-dataset -i more.jsonl --dataset-id <id>
+
+# re-run directly from the orq dataset (CLI-native now)
+uv run evaluatorq sim simulate --target agent:<ics-agent-key> --dataset-id <id> --name ics-from-dataset
 ```
+
+`eq sim generate --dataset-format -o rows.jsonl` writes the dataset envelope up
+front if you'd rather inspect/version the exact upload shape.
+
+**The three-options slide** (build in `presentation.qmd`): **① from scratch**
+(Act 1) · **② re-run from data** (Act 3a — local JSONL, or 3c — orq dataset) ·
+**③ extend from data** (Act 3b append, or 3c `--dataset-id`).
 
 ---
 
@@ -149,16 +161,17 @@ orq datasets create --stdin <<< '{"display_name":"ICS Sim Set","path":"Default"}
 
 1. **No `orq sim` command.** Simulation lives in `evaluatorq sim`; the `orq` CLI
    covers platform CRUD (agents, datasets, evals) only. Expected split, worth stating.
-2. **Run → orq dataset doesn't round-trip via the CLI.** `sim generate -o` writes
-   datapoints at top level; an orq dataset row needs them under `inputs`, and the
-   dataset API **rejects nested objects** (`inputs.*` must be scalar) — so
-   persona/scenario must be JSON-stringified to upload, but the sim dataset-reader
-   expects *objects*. No CLI flag emits dataset-shaped JSONL. → **For "re-use data",
-   demo the local datapoints JSONL path (3a), not an orq dataset.**
-3. **CLI has no `--dataset-id`.** Dataset-backed runs are SDK-only
-   (`simulate(dataset_id="...")`). The CLI's data-reuse surface is `--datapoints`.
-4. **No native "seed from data + generate more."** `dataset_id` is mutually
-   exclusive with personas/scenarios/datapoints — extension is manual JSONL append (3b).
+2. **Run → orq dataset — now handled by `sim upload-dataset`.** The dataset API
+   **rejects nested objects** (`inputs.*` must be scalar), so persona/scenario are
+   stored **JSON-stringified**; the sim reader now accepts that, so the round-trip
+   holds. Honest caveat to voice: in the orq UI those two columns show as JSON
+   strings, not structured fields. (`sim generate --dataset-format` emits the same
+   envelope for inspection.)
+3. **`sim simulate --dataset-id` — now CLI-native** (was SDK-only). `simulate`
+   takes exactly one of `--datapoints` (local JSONL) or `--dataset-id` (orq dataset).
+4. **No native "seed from data + generate more."** `dataset_id` is still mutually
+   exclusive with personas/scenarios — extension is JSONL append (3b) or
+   `upload-dataset --dataset-id` (3c). No LLM augmentation *from* existing rows yet.
 5. **`orq datasets create` needs a `path`** (e.g. `"Default"`); `--example` errors
    with no generated body, and `expected_output` must be a string (not `null`).
 
