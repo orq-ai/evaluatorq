@@ -11,7 +11,7 @@ source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = [ "src/evaluatorq" ]
-include = [ "src/evaluatorq/py.typed", "src/evaluatorq/**/*.css", "src/evaluatorq/**/*.js" ]
+include = [ "src/evaluatorq/py.typed", "src/evaluatorq/**/*.css", "src/evaluatorq/**/*.js", "src/evaluatorq/**/*.woff2", "src/evaluatorq/**/*.svg" ]
 
 [tool.hatch.build.targets.sdist]
 exclude = [ "examples/", ".venv/", "tests/" ]

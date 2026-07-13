@@ -27,6 +27,18 @@ rules.  To re-skin, edit the values here — nothing downstream changes.
 from __future__ import annotations
 
 EDITORIAL_CSS = """
+/* Orq brand fonts (self-hosted, same woff2 as the docs site). Served from the
+   dashboard's /static/fonts/ route. Body = Avio Sans, headings = Kurrent,
+   code = Kurrent Mono. */
+@font-face { font-family: "Avio Sans"; src: url("/static/fonts/AvioSans-Regular.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Avio Sans"; src: url("/static/fonts/AvioSans-RegularItalic.woff2") format("woff2"); font-weight: 400; font-style: italic; font-display: swap; }
+@font-face { font-family: "Avio Sans"; src: url("/static/fonts/AvioSans-Medium.woff2") format("woff2"); font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: "Avio Sans"; src: url("/static/fonts/AvioSans-SemiBold.woff2") format("woff2"); font-weight: 600; font-style: normal; font-display: swap; }
+@font-face { font-family: "Avio Sans"; src: url("/static/fonts/AvioSans-Bold.woff2") format("woff2"); font-weight: 700; font-style: normal; font-display: swap; }
+@font-face { font-family: "Kurrent"; src: url("/static/fonts/ESKlarheitKurrent-Md.woff2") format("woff2"); font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: "Kurrent"; src: url("/static/fonts/ESKlarheitKurrent-Smbd.woff2") format("woff2"); font-weight: 600; font-style: normal; font-display: swap; }
+@font-face { font-family: "Kurrent Mono"; src: url("/static/fonts/ESKlarheitKurrentMono-Md.woff2") format("woff2"); font-weight: 500; font-style: normal; font-display: swap; }
+
 :root {
     /* Surfaces — sand paper */
     --surface-app:    #f9f8f6;
@@ -99,10 +111,10 @@ EDITORIAL_CSS = """
     --chart-track: #ece9e4;
     --chart-axis:  #9d9ba4;
 
-    /* Type — serif headings, existing sans/mono for body + data */
-    --font-display: Georgia, 'Times New Roman', ui-serif, serif;
-    --font-sans:    var(--sans, 'Inter', system-ui, -apple-system, sans-serif);
-    --font-mono:    var(--mono, ui-monospace, 'SF Mono', Menlo, monospace);
+    /* Type — Orq brand fonts (self-hosted above), system fallbacks. */
+    --font-display: 'Kurrent', Georgia, 'Times New Roman', ui-serif, serif;
+    --font-sans:    'Avio Sans', var(--sans, system-ui, -apple-system, sans-serif);
+    --font-mono:    'Kurrent Mono', var(--mono, ui-monospace, 'SF Mono', Menlo, monospace);
     /* Line-height — body copy (matches the mockup's 16px/24px = 1.5 rhythm,
        overriding the report stylesheet's looser 1.65 default). */
     --leading-body: 1.5;
