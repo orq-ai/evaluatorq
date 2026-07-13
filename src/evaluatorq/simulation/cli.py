@@ -1190,9 +1190,9 @@ def _export_report(run: Any, directory: Path, *, fmt: str) -> None:
 
     stem = f'sim-report-{_sanitise_run_name(run.run_name)}-{run.created_at:%Y%m%d-%H%M%S}'
     if fmt == 'md':
-        content = export_markdown(run.results, run_date=run.created_at)
+        content = export_markdown(run.results, run_date=run.created_at, executive_summary=run.executive_summary)
     else:
-        content = export_html(run.results, run_date=run.created_at)
+        content = export_html(run.results, run_date=run.created_at, executive_summary=run.executive_summary)
     write_text_report(directory, stem=stem, fmt=fmt, content=content)
 
 

@@ -160,7 +160,20 @@ def _render_summary_html(section: ReportSection) -> str:
             '<section class="report-card"><h2>'
             f'{_esc(section.title)}</h2><p>No conversations to summarize.</p></section>'
         )
-    return ''
+    narrative = section.data.get('narrative')
+    if not narrative:
+        return ''
+    confidence = section.data.get('confidence', '')
+    confidence_note = section.data.get('confidence_note', '')
+    pill = _status_badge(f'{confidence} CONFIDENCE', 'warn') if confidence else ''  # ponytail: cosmetic pill
+    note = (
+        f'<br><span style="font-size:.8em;opacity:.7">{_esc(confidence_note)}</span>' if confidence_note else ''
+    )
+    return (
+        '<section class="report-card exec-summary-narrative"><h2>'
+        f'{_esc(section.title)} {pill}</h2>'
+        f'<p style="font-size:.98em;line-height:1.55">{_esc(str(narrative))}{note}</p></section>'
+    )
 
 
 def _render_overview_html(section: ReportSection) -> str:
@@ -563,6 +576,7 @@ def render_report_body(
     *,
     target: str = 'agent',
     run_date: datetime | None = None,
+    executive_summary: str | None = None,
 ) -> str:
     """Render simulation results as an HTML body fragment (no ``<html>`` or ``<head>`` wrapper).
 
@@ -579,7 +593,7 @@ def render_report_body(
     Returns:
         An HTML fragment string (no ``<!DOCTYPE>``, ``<html>``, or ``<head>``).
     """
-    sections = build_report_sections(results)
+    sections = build_report_sections(results, executive_summary=executive_summary)
     summary_data = next((s.data for s in sections if s.kind == 'summary'), {})
 
     sd = summary_data
@@ -632,6 +646,7 @@ def export_html(
     *,
     target: str = 'agent',
     run_date: datetime | None = None,
+    executive_summary: str | None = None,
 ) -> str:
     """Render a list of simulation results as a self-contained HTML document."""
     head = (
@@ -640,7 +655,9 @@ def export_html(
         '<title>Agent Simulation Report</title>\n'
         f'<style>\n{_load_css()}\n</style>'
     )
-    body_html = render_report_body(results, target=target, run_date=run_date)
+    body_html = render_report_body(
+        results, target=target, run_date=run_date, executive_summary=executive_summary
+    )
     return (
         '<!DOCTYPE html>\n'
         '<html lang="en">\n'
