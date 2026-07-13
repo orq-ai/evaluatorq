@@ -565,7 +565,7 @@
         <g font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="10.5" fill="#808080">
           <text x="225" y="38" text-anchor="middle">description seeds it all</text>
           <text x="118" y="118">sim generate</text>
-          <text x="118" y="240">-o / --save-datapoints</text>
+          <text x="118" y="240">-o / --datapoints</text>
           <text x="215" y="284">plays each datapoint</text>
           <text x="215" y="316" fill="#FF6B4A">re-run the identical suite on every agent change</text>
           <text x="330" y="118" text-anchor="end">user turn</text>
@@ -620,7 +620,7 @@ evaluatorq sim generate <span class="kw">--target</span> agent:boh_creditcard_ag
 
 <span class="cm"># 2. run the simulation against the live agent, freeze the set</span>
 evaluatorq sim run <span class="kw">--target</span> agent:boh_creditcard_agent_demo \
-  <span class="kw">--save-datapoints</span> datapoints.jsonl <span class="kw">--name</span> from-scratch
+  <span class="kw">--datapoints</span> datapoints.jsonl <span class="kw">--name</span> from-scratch
 
 <span class="cm"># 3. open the run viewer: pass rate + transcripts</span>
 evaluatorq sim ui .evaluatorq/sim-runs/&lt;run&gt;.json</pre></div>
