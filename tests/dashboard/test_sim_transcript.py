@@ -246,15 +246,17 @@ class TestSimTranscriptRoute:
     def test_transcript_contains_persona(
         self, client: TestClient, roots: list[Path]
     ) -> None:
+        # Persona/scenario now live on the collapsed conversation card (row-list),
+        # not in the transcript fragment — the fragment no longer repeats them.
         rid = report_id(_sim_path(roots))
-        r = client.get(f"/r/{rid}/sim/transcript?idx=0")
+        r = client.get(f"/r/{rid}/sim/row-list")
         assert "alice" in r.text
 
     def test_transcript_contains_scenario(
         self, client: TestClient, roots: list[Path]
     ) -> None:
         rid = report_id(_sim_path(roots))
-        r = client.get(f"/r/{rid}/sim/transcript?idx=0")
+        r = client.get(f"/r/{rid}/sim/row-list")
         assert "billing" in r.text.lower()
 
     def test_transcript_contains_message_markup(
@@ -295,7 +297,9 @@ class TestSimTranscriptRoute:
         rid = report_id(_sim_path(roots))
         r = client.get(f"/r/{rid}/sim/transcript?idx=1")
         assert r.status_code == 200
-        assert "bob" in r.text
+        # Second conversation is bob's — identify it by his unique refund content
+        # (the fragment no longer embeds the persona label).
+        assert "refund" in r.text.lower()
 
     def test_transcript_out_of_range_idx_no_500(
         self, client: TestClient, roots: list[Path]
@@ -365,7 +369,7 @@ class TestSimRowListOnReportPage:
         rid = report_id(_sim_path(roots))
         r = client.get(f"/r/{rid}")
         assert "sim-conv-card" in r.text
-        assert 'hx-trigger="click once"' in r.text
+        assert 'hx-trigger="toggle once from:closest details"' in r.text
 
     def test_sim_report_page_has_hx_get_links(
         self, client: TestClient, roots: list[Path]
@@ -412,7 +416,9 @@ class TestSimFilterAwareness:
         rid = report_id(_sim_path(roots))
         r = client.get(f"/r/{rid}/sim/transcript?idx=0&persona=alice")
         assert r.status_code == 200
-        assert "alice" in r.text
+        # Identify the conversation by its (unique) message content — the fragment
+        # no longer embeds the persona label (that lives on the card).
+        assert "Order 12345" in r.text
 
     def test_transcript_filter_drops_non_matching_persona(
         self, client: TestClient, roots: list[Path]
@@ -421,8 +427,9 @@ class TestSimFilterAwareness:
         rid = report_id(_sim_path(roots))
         r = client.get(f"/r/{rid}/sim/transcript?idx=0&persona=alice")
         assert r.status_code == 200
-        # With only alice in the filtered set, idx=0 is alice's entry.
-        assert "bob" not in r.text
+        # With only alice in the filtered set, idx=0 is alice's entry — bob's
+        # (unique) refund content must not appear.
+        assert "refund" not in r.text.lower()
 
     def test_transcript_out_of_range_after_filter_is_graceful(
         self, client: TestClient, roots: list[Path]
@@ -626,7 +633,7 @@ class TestConversationCards:
         assert "sim-tint-achieved" in html
         assert "sim-tint-missed" in html
         assert "sim-tint-error" in html
-        assert 'hx-trigger="click once"' in html
+        assert 'hx-trigger="toggle once from:closest details"' in html
 
     def test_row_list_summary_has_header_cluster(self, sim_entries) -> None:
         from evaluatorq.dashboard.sim_views import render_sim_row_list
@@ -681,7 +688,9 @@ class TestTranscriptFragmentRewrite:
         html = render_transcript_fragment(sim_entry_with_safety_criterion)
         assert "⛔" not in html  # three-state ⛔ icon gone
         assert "&#x26D4;" not in html
-        assert "must_not_happen" in html  # type label preserved (rendered red)
+        # type label preserved as words (mockup shows "MUST NOT HAPPEN") + rendered red
+        assert "must not happen" in html
+        assert "sim-ctype-unsafe" in html
         assert "sim-judge" in html  # judge callout present when reason set
 
     def test_transcript_fragment_criteria_two_state_icons(self, sim_entry_with_safety_criterion) -> None:

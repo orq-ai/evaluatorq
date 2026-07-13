@@ -148,6 +148,9 @@ def test_sim_overview_has_exec_summary_and_five_kpis(sim_run) -> None:
     assert 'Avg turns' in html
     assert 'Goal completion' in html
     assert 'goal met' in html
+    # Personas+scenarios row hugs content (no stretch void) — distinct from the
+    # donut row's intentional equal-height stretch.
+    assert 'sim-overview-grid-2--top' in html
 
 
 def test_sim_kpi_goal_status_uses_verdict(sim_run) -> None:
@@ -226,10 +229,38 @@ def test_sim_turn_quality_stat_tiles_and_bar_rows(sim_run_with_turn_metrics) -> 
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
 
     html = sim_report_tabs('rid', sim_run_with_turn_metrics)
-    assert 'class="sim-stat-grid"' in html
-    assert 'class="sim-stat-tile"' in html
+    assert 'class="sim-aq-grid"' in html
+    assert 'class="sim-aq-cell"' in html
     assert 'class="rk-bar-rows"' in html
     assert '2 turns' in html
+
+
+def test_sim_turn_quality_single_turn_drops_empty_chart() -> None:
+    """A single-turn run has no trend to plot, so the per-turn line chart is
+    omitted (it would render an empty plot) while the avg-quality tiles remain."""
+    from evaluatorq.contracts import TokenUsage
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+    from evaluatorq.simulation.types import TurnMetrics
+
+    def _tm() -> TurnMetrics:
+        return TurnMetrics(
+            turn_number=1,
+            token_usage=TokenUsage(input_tokens=5, output_tokens=5, total_tokens=10),
+            response_quality=0.6,
+            hallucination_risk=0.2,
+            judge_reason='ok',
+        )
+
+    run = _make_sim_run(
+        personas=['alice', 'bob'],
+        goal_achieved_flags=[True, False],
+        turn_metrics_by_result=[[_tm()], [_tm()]],
+    )
+    html = sim_report_tabs('rid', run)
+    assert 'class="rk-line-chart"' not in html  # empty single-turn chart omitted
+    assert 'Per-turn quality' not in html
+    assert 'class="sim-aq-grid"' in html  # avg-quality tiles still shown
+    assert '1 turns' in html
 
 
 def test_sim_config_tab_has_metagrid(sim_run) -> None:

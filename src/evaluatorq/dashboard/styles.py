@@ -382,10 +382,14 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
     font-family: var(--font-display); font-size: 28px; font-weight: 600; color: var(--text-strong);
 }
 .donut .donut-label {
-    font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.05em;
+    font-family: var(--font-sans); font-size: 10px; letter-spacing: 0.05em;
     text-transform: uppercase; color: var(--text-faint);
 }
 .donut-wrap { gap: 20px; align-items: center; }
+/* Outcomes donut sits in a white .rk-panel on the sim report: center the
+   donut + legend row both axes so it fills the (stretched) panel height. */
+.sim-report .rk-panel .donut-wrap { flex-direction: column; justify-content: center; align-items: center; gap: 20px; height: 100%; }
+.sim-report .rk-panel .donut-legend { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 16px; }
 .donut-legend {
     list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column;
     gap: 6px; font-family: var(--font-sans); font-size: 12px; color: var(--text-muted);
@@ -506,6 +510,10 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
 .filter-form--sim {
     flex: 0 0 208px;
     position: static;
+    /* Drop the rail down so its top lines up with the tab bar rather than the
+       hero title. ponytail: magic offset = hero (title+sub, no KPI cards) + tab
+       bar height; recompute if the hero grows a line or the tab bar resizes. */
+    margin-top: 138px;
     display: flex;
     flex-direction: column;
     gap: 16px;
@@ -519,13 +527,14 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
     color: var(--text-faint);
 }
 .filter-rail-title {
-    font-family: var(--font-mono);
-    font-size: 11px; font-weight: 500;
-    text-transform: uppercase; letter-spacing: 0.08em;
+    font-family: var(--font-sans);
+    font-size: 11px; font-weight: 400;
+    text-transform: uppercase; letter-spacing: 0.06em;
     color: var(--text-faint);
 }
 .filter-form--sim .filter-group { margin-bottom: 0; }
 .filter-form--sim .filter-label {
+    font-family: var(--font-sans);
     font-size: 10.5px; margin-bottom: 8px;
 }
 .filter-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -690,6 +699,8 @@ body.eq-dashboard { margin: 0; background: var(--surface-app); }
     font-size: 13px; color: var(--text-muted);
     font-family: var(--font-mono);
 }
+/* Sim report is all-sans to match the mockup (no monospace anywhere). */
+.sim-report .report-hero-sub { font-family: var(--font-sans); }
 
 /* ==== CSS-only tabs (report bodies) ================================= */
 /* Radios carry the state; labels are the tab bar; panels show on :checked.
@@ -732,6 +743,9 @@ _DASHBOARD_CSS_TAIL = """
 @media (max-width: 760px) {
     .filter-swap-container { flex-direction: column; }
     .filter-form { position: static; flex-basis: auto; width: 100%; }
+    /* Rail stacks full-width here, so the tab-bar-alignment offset no longer
+       applies — drop it to avoid a dead gap above the stacked rail. */
+    .filter-form--sim { margin-top: 0; }
     .stat-band { grid-template-columns: repeat(2, 1fr); }
     .dash-row2, .dash-row-eq { grid-template-columns: 1fr; }
 }
@@ -757,7 +771,7 @@ _SIM_TAB_ACCENT = ''.join(
 # tiles and the flat HTML export (which never carry this class) are untouched.
 _SIM_REPORT_CSS = """
 .sim-report .tab-count {
-    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    font-family: var(--font-sans); font-size: 11px; font-weight: 600;
     background: var(--surface-sunken); color: var(--text-muted);
     border-radius: 999px; padding: 1px 7px; margin-left: 5px;
 }
@@ -773,11 +787,11 @@ _SIM_REPORT_CSS = """
 }
 .sim-report .es-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .sim-report .es-label {
-    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    font-family: var(--font-sans); font-size: 11px; font-weight: 600;
     text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint);
 }
 .sim-report .es-confidence {
-    font-family: var(--font-mono); font-size: 10px; font-weight: 600;
+    font-family: var(--font-sans); font-size: 10px; font-weight: 600;
     border: 1px solid; border-radius: 999px; padding: 2px 8px;
 }
 .sim-report .es-body {
@@ -804,7 +818,7 @@ _SIM_REPORT_CSS = """
 .sim-report .kpi-card--warn    { border-top-color: var(--amber-600); }
 .sim-report .kpi-card--neutral { border-top-color: var(--teal-600); }
 .sim-report .kpi-value {
-    font-family: var(--font-mono); font-size: 28px; font-weight: 600;
+    font-family: var(--font-sans); font-size: 28px; font-weight: 600;
     color: var(--text-strong); line-height: 1.1;
 }
 .sim-report .kpi-label { font-size: 12px; color: var(--text-muted); margin-top: 7px; }
@@ -812,23 +826,46 @@ _SIM_REPORT_CSS = """
 /* ---- 2-col grids (donut+tokens, personas+scenarios) ---- */
 .sim-report .sim-overview-grid-2 {
     display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0;
+    align-items: stretch;
 }
+/* Panels in this grid stretch to equal height; let each panel's body fill that
+   height so the donut can center vertically and the stat grid fills its half. */
+.sim-report .sim-overview-grid-2 > .rk-panel { display: flex; flex-direction: column; }
+/* The 2nd grid child matches the stacked-panel `.rk-panel + .rk-panel` rule and
+   inherits its 20px top margin, which (in a stretch grid) shrinks its border-box
+   by 20px so the pair no longer matches. Same-specificity + later source = it wins,
+   so override with an extra-class selector. */
+.sim-report .sim-overview-grid-2 > .rk-panel + .rk-panel { margin-top: 0; }
+.sim-report .sim-overview-grid-2 > .rk-panel > .rk-panel-body { flex: 1; }
+.sim-report .sim-overview-grid-2 .sim-aq-grid { height: 100%; grid-auto-rows: 1fr; }
+/* Personas + scenarios row: unlike the donut row above it, these list-cards have
+   no reason to match heights — stretching the shorter one leaves a dead void.
+   Let each hug its content. */
+.sim-report .sim-overview-grid-2--top { align-items: start; }
 @media (max-width: 760px) {
     .sim-report .sim-overview-grid-2 { grid-template-columns: 1fr; }
 }
+
+/* Body rhythm: the report stylesheet sets line-height 1.65 globally; the mockup
+   is 1.5. Set it once at the region root so every tab inherits the tighter
+   rhythm (elements that need their own leading still override locally). */
+.sim-report { line-height: var(--leading-body); }
 
 /* ---- Panel wrapper (report_kit.panel) ---- */
 .sim-report .rk-panel {
     background: var(--surface-card);
     border: 1px solid var(--border-subtle);
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     padding: 16px 20px;
 }
+/* Panel titles match the mockup: serif (display), sentence-case, ~18px bold.
+   Mono-uppercase is the mockup's *eyebrow* style (exec-summary label, filter
+   labels, table column headers) — not panel titles. */
 .sim-report .rk-panel-title {
-    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint);
+    font-family: var(--font-display); font-size: 16px; font-weight: 600;
+    letter-spacing: -0.01em; color: var(--text-strong);
 }
-.sim-report .rk-panel-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.sim-report .rk-panel-sub { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
 .sim-report .rk-panel-body { margin-top: 12px; }
 
 /* ---- Tag (report_kit.tag) ---- */
@@ -841,7 +878,7 @@ _SIM_REPORT_CSS = """
 /* ---- Personas panel (Overview) ---- */
 .sim-report .sim-persona-item + .sim-persona-item { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
 .sim-report .sim-persona-row { display: flex; align-items: center; gap: 4px; }
-.sim-report .sim-persona-name { font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--text-strong); }
+.sim-report .sim-persona-name { font-family: var(--font-sans); font-size: 13px; font-weight: 600; color: var(--text-strong); }
 .sim-report .sim-persona-count { margin-left: auto; font-size: 11px; color: var(--text-faint); }
 .sim-report .sim-trait-grid {
     display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px;
@@ -861,7 +898,7 @@ _SIM_REPORT_CSS = """
     display: flex; align-items: baseline; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--text-muted);
 }
 .sim-report .sim-criterion-type {
-    font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; flex-shrink: 0;
+    font-family: var(--font-sans); font-size: 10px; text-transform: uppercase; flex-shrink: 0;
 }
 
 /* ---- Breakdown tab: stacked panels + heatmap/histogram/tables ---- */
@@ -872,43 +909,139 @@ _SIM_REPORT_CSS = """
 }
 
 /* HTML-table heatmap (report_kit.heatmap) */
-.sim-report .rk-heatmap { border-collapse: separate; border-spacing: 4px; }
+/* Cell metrics measured off the mockup DOM: 92x34, radius 5, 11px mono 600,
+   compact (NOT full-width blow-up). border-spacing matches the mockup gap. */
+/* No table chrome: mockup floats the cells directly on the panel — no enclosing
+   frame, no fill, no radius (the global report-table border/bg/radius must be
+   stripped here). */
+.sim-report .rk-heatmap {
+    border-collapse: separate; border-spacing: 6px;
+    border: none; background: transparent; border-radius: 0;
+}
+/* All heatmap header cells (incl. the empty top-left corner) are transparent and
+   carry no rules — mockup has no header underline or row-label divider. */
+.sim-report .rk-heatmap th { background: transparent; border: none; }
+.sim-report .rk-heatmap tbody tr,
+.sim-report .rk-heatmap tbody tr:hover,
+.sim-report .rk-heatmap tbody tr:nth-child(even) { background: transparent; }
+/* Both axes AND the cells use the same grotesque sans (--font-sans) in the mockup
+   — not mono for the x-axis and serif for the y-axis (that split read as two
+   mismatched fonts). Measured: col 11/600 muted, row 12/600 strong, cell 16/400. */
 .sim-report .rk-heat-col {
-    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
-    color: var(--text-muted); text-align: center; padding: 0 4px 6px;
+    font-family: var(--font-sans); font-size: 11px; font-weight: 600;
+    color: var(--text-muted); text-align: center; padding: 0 4px 8px;
+    text-transform: none;  /* override global report-table th uppercasing */
+    background: transparent;
 }
 .sim-report .rk-heat-row {
-    font-size: 12px; font-weight: 600; color: var(--text-strong);
-    text-align: right; padding-right: 10px; white-space: nowrap;
+    font-family: var(--font-sans); font-size: 12px; font-weight: 600;
+    color: var(--text-strong); text-align: right; padding-right: 16px; line-height: 1.3;
+    text-transform: none;  /* override global report-table th uppercasing */
+    background: transparent;
 }
 .sim-report .rk-heat-cell {
-    min-width: 50px; height: 34px; border-radius: 5px;
-    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    min-width: 88px; height: 34px; border-radius: 5px;
+    font-family: var(--font-sans); font-size: 16px; font-weight: 400;
     text-align: center; vertical-align: middle;
 }
 .sim-report .rk-heat-empty { background: var(--surface-sunken); color: var(--text-faint); }
 
 /* Per-persona / per-scenario tables (html_table output) + failures table */
 .sim-report .rk-panel-body { display: grid; }
-.sim-report table {
+/* Data tables — exclude the heatmap (.rk-heatmap has its own cell styling; the
+   generic thead rule was bleeding uppercase + sunken bg onto its headers). */
+/* Frameless like the mockup: strip the global report-table chrome (outer border,
+   surface fill, radius, margin) and the nth-child zebra. Rows are separated by
+   padding only — the mockup has no row dividers, just a header underline. */
+.sim-report table:not(.rk-heatmap) {
     width: 100%; border-collapse: collapse;
+    border: none; background: transparent; border-radius: 0; margin: 0;
 }
-.sim-report table thead th {
-    font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+.sim-report table:not(.rk-heatmap) thead th {
+    font-family: var(--font-sans); font-size: 10px; text-transform: uppercase;
     font-weight: 600; color: var(--text-faint); background: var(--surface-sunken);
-    padding: 11px 16px; text-align: left;
+    padding: 11px 16px; text-align: left; border-bottom: 1px solid var(--border-subtle);
 }
-.sim-report table tbody td {
-    font-size: 13px; padding: 12px 16px; border-bottom: 1px solid var(--border-subtle);
+.sim-report table:not(.rk-heatmap) tbody td {
+    font-size: 13px; padding: 12px 16px; border-bottom: none;
 }
-.sim-report table tbody tr:last-child td { border-bottom: none; }
-.sim-report table thead th:not(:first-child),
-.sim-report table tbody td:not(:first-child) {
+.sim-report table:not(.rk-heatmap) tbody tr,
+.sim-report table:not(.rk-heatmap) tbody tr:nth-child(even) { background: transparent; }
+.sim-report table:not(.rk-heatmap) thead th:not(:first-child),
+.sim-report table:not(.rk-heatmap) tbody td:not(:first-child) {
     text-align: right; font-variant-numeric: tabular-nums;
 }
+/* Failures table: collapsed pass/fail dots that unfold to full criteria text.
+   Height animates both ways via ::details-content + interpolate-size where
+   supported (Chrome/Edge); elsewhere it snaps open — both fully usable. */
+.sim-report .crit-cell { display: inline-block; interpolate-size: allow-keywords; }
+.sim-report .crit-summary {
+    list-style: none; cursor: pointer; display: inline-flex; gap: 6px;
+    align-items: center; justify-content: flex-end; padding: 3px 6px;
+    margin: -3px -6px; border-radius: 999px; border: 1px solid transparent;
+    transition: background .15s ease, border-color .15s ease;
+}
+.sim-report .crit-summary::-webkit-details-marker { display: none; }
+.sim-report .crit-summary:hover { background: var(--surface-sunken); border-color: var(--border-subtle); }
+.sim-report .crit-summary:focus-visible { outline: 2px solid var(--green-600); outline-offset: 2px; }
+.sim-report .crit-dots { display: inline-flex; gap: 4px; align-items: center; }
+.sim-report .crit-dot {
+    width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none;
+    transition: transform .15s ease;
+}
+.sim-report .crit-summary:hover .crit-dot { transform: scale(1.15); }
+.sim-report .crit-dot--pass { background: var(--green-600); }
+.sim-report .crit-dot--fail { background: var(--red-600); }
+.sim-report .crit-dot--safety { background: var(--orange-500); }
+.sim-report .crit-caret {
+    width: 13px; height: 13px; flex: none; color: var(--text-faint);
+    transition: transform .2s ease, color .15s ease;
+}
+.sim-report .crit-summary:hover .crit-caret { color: var(--text-muted); }
+.sim-report .crit-cell[open] .crit-caret { transform: rotate(180deg); }
+.sim-report .crit-empty { color: var(--text-faint); }
+.sim-report .crit-cell::details-content {
+    height: 0; overflow: hidden; opacity: 0;
+    transition: height .22s ease, opacity .18s ease, content-visibility .22s allow-discrete;
+    content-visibility: hidden;
+}
+.sim-report .crit-cell[open]::details-content { height: auto; opacity: 1; content-visibility: visible; }
+.sim-report .crit-list {
+    margin: 8px 0 0; padding: 10px 12px; list-style: none; text-align: left;
+    font-size: 12px; line-height: 1.45; min-width: 240px; max-width: 460px;
+    background: var(--surface-sunken); border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+}
+.sim-report .crit-li { padding: 3px 0 3px 16px; position: relative; color: var(--text-body); }
+.sim-report .crit-li + .crit-li { border-top: 1px solid var(--border-subtle); margin-top: 3px; padding-top: 6px; }
+.sim-report .crit-li::before {
+    content: ''; position: absolute; left: 0; top: 8px;
+    width: 7px; height: 7px; border-radius: 50%;
+}
+.sim-report .crit-li + .crit-li::before { top: 11px; }
+.sim-report .crit-li--pass::before { background: var(--green-600); }
+.sim-report .crit-li--fail::before { background: var(--red-600); }
+.sim-report .crit-li--safety::before { background: var(--orange-500); }
+@media (prefers-reduced-motion: reduce) {
+    .sim-report .crit-summary, .sim-report .crit-dot, .sim-report .crit-caret,
+    .sim-report .crit-cell::details-content { transition: none; }
+}
+
+/* Full-width per-persona / per-scenario tables: name column takes the slack so
+   long names sit on one line; goal-rate + avg-score values are tinted by value. */
+.sim-report .sim-bd-table th:first-child,
+.sim-report .sim-bd-table td:first-child { width: 52%; }
+.sim-report .sim-td-tint { font-weight: 600; }
 .sim-report .sim-breakdown-grid-2 {
     display: grid; grid-template-columns: 1fr 1fr; gap: 20px;
+    /* Each table panel sizes to its own content — don't stretch the shorter one
+       and leave a blank gap under its last row. */
+    align-items: start;
 }
+/* The 2nd child otherwise matches the stacked-panel `.rk-panel + .rk-panel` rule
+   and inherits its 20px top margin, pushing it below the first panel so their
+   tops no longer line up. Zero it here (same fix as sim-overview-grid-2). */
+.sim-report .sim-breakdown-grid-2 > .rk-panel + .rk-panel { margin-top: 0; }
 @media (max-width: 760px) {
     .sim-report .sim-breakdown-grid-2 { grid-template-columns: 1fr; }
 }
@@ -916,29 +1049,41 @@ _SIM_REPORT_CSS = """
 /* ---- Turn quality tab (spec §Turn) ---- */
 /* Line chart legend (report_kit.line_chart) */
 .sim-report .rk-legend {
-    display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px;
+    /* padding-left aligns the swatches with the chart's plot origin (line_chart
+       pad_left = 36px), so the legend reads as belonging to the axes. */
+    display: flex; flex-wrap: wrap; gap: 16px; margin-top: 10px; padding-left: 36px;
 }
 .sim-report .rk-legend-item {
     display: inline-flex; align-items: center; gap: 6px;
-    font-size: 11px; color: var(--text-muted);
+    font-size: 12px; color: var(--text-muted);
 }
 .sim-report .rk-legend-swatch {
-    display: inline-block; width: 8px; height: 8px; border-radius: 2px;
+    /* A short bar (not a square dot) mirrors the line stroke it labels. */
+    display: inline-block; width: 12px; height: 2.5px; border-radius: 2px;
 }
-/* Average quality metric stat tiles (spec §Turn.3) */
-.sim-report .sim-stat-grid {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+/* Average quality metrics — editorial quadrants: big mono values, small-caps
+   labels, per-metric accent tick (color from _interp_color). Dividers come from
+   a 1px grid gap over a tinted background so they render cleanly for any metric
+   count (1/2/3/4+), not just an exact 2x2. */
+.sim-report .sim-aq-grid {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 1px; background: var(--border-subtle);
 }
-.sim-report .sim-stat-tile {
-    background: var(--surface-sunken); border-radius: 8px; padding: 12px 14px;
+.sim-report .sim-aq-cell { background: var(--surface-card); padding: 14px 16px; }
+.sim-report .sim-aq-label {
+    font-family: var(--font-sans); font-size: 10px; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--text-faint);
+    /* Reserve two lines so single- and double-line labels keep their values on
+       a common baseline across the 2x2. */
+    min-height: 2.2em; line-height: 1.25;
 }
-.sim-report .sim-stat-value {
-    font-family: var(--font-mono); font-size: 24px; font-weight: 600;
-    color: var(--text-strong);
+.sim-report .sim-aq-value {
+    font-family: var(--font-sans); font-size: 30px; font-weight: 600; line-height: 1.1;
+    margin-top: 8px; color: var(--text-strong);
 }
-.sim-report .sim-stat-label {
-    font-size: 11px; color: var(--text-muted); margin-top: 4px;
-    text-transform: capitalize;
+.sim-report .sim-aq-value::before {
+    content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 2px;
+    margin-right: 9px; vertical-align: middle; background: var(--aq-accent, var(--orange-500));
 }
 
 /* ---- Config tab (spec §Config) ---- */
@@ -948,8 +1093,8 @@ _SIM_REPORT_CSS = """
     gap: 16px 24px;
 }
 .sim-report .rk-meta-key {
-    font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
-    letter-spacing: 0.04em; color: var(--text-faint);
+    font-family: var(--font-sans); font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--text-faint);
 }
 .sim-report .rk-meta-value {
     font-size: 13.5px; color: var(--text-body); margin-top: 4px;
@@ -964,7 +1109,7 @@ _SIM_REPORT_CSS = """
     font-size: 13px; font-weight: 600; color: var(--text-strong); min-width: 160px;
 }
 .sim-report .sim-config-persona-style {
-    font-family: var(--font-mono); font-size: 11px; color: var(--text-faint);
+    font-family: var(--font-sans); font-size: 11px; color: var(--text-faint);
 }
 .sim-report .sim-config-persona-bg { font-size: 12.5px; color: var(--text-muted); }
 /* Scenarios panel (name + goal + criteria chips) */
@@ -978,7 +1123,7 @@ _SIM_REPORT_CSS = """
     display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
 }
 .sim-report .sim-config-criterion {
-    font-family: var(--font-mono); font-size: 11.5px; background: var(--surface-sunken);
+    font-family: var(--font-sans); font-size: 11.5px; background: var(--surface-sunken);
     border-radius: 6px; padding: 3px 9px;
 }
 """
@@ -994,8 +1139,8 @@ _SIM_TRANSCRIPT_CSS = """
 /* ---- Conversation cards (spec §Transcripts, Task 11) ---- */
 .sim-report .sim-row-list { display: flex; flex-direction: column; gap: 10px; }
 .sim-report .sim-conv-card {
-    border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden;
-    background: var(--surface-app);
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); overflow: hidden;
+    background: var(--surface-card);
 }
 .sim-report .sim-conv-summary {
     display: flex; align-items: center; gap: 8px; padding: 12px 16px;
@@ -1003,7 +1148,7 @@ _SIM_TRANSCRIPT_CSS = """
 }
 .sim-report .sim-conv-summary::-webkit-details-marker { display: none; }
 .sim-report .sim-conv-idx {
-    font-family: var(--font-mono); font-size: 12px; color: var(--text-faint);
+    font-family: var(--font-sans); font-size: 12px; color: var(--text-faint);
 }
 .sim-report .sim-conv-persona { font-size: 14px; font-weight: 600; color: var(--text-strong); }
 .sim-report .sim-conv-sep { color: var(--text-faint); }
@@ -1019,15 +1164,15 @@ _SIM_TRANSCRIPT_CSS = """
 /* ---- Transcript fragment: judge callout / bubbles / criteria (Task 12) ---- */
 .sim-report .sim-judge {
     background: var(--surface-sunken); border-left: 3px solid var(--teal-600);
-    border-radius: 4px; padding: 10px 14px; margin-bottom: 14px;
+    border-radius: var(--radius-md); padding: 10px 14px; margin-bottom: 14px;
 }
 .sim-report .sim-judge-label {
-    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    font-family: var(--font-sans); font-size: 11px; font-weight: 600;
     text-transform: uppercase; color: var(--teal-600); display: block;
 }
 .sim-report .sim-judge-reason { font-size: 13px; line-height: 1.55; margin: 4px 0 0; color: var(--text-body); }
 .sim-report .sim-transcript-error {
-    background: var(--red-100); color: var(--red-600); border-radius: 4px;
+    background: var(--red-100); color: var(--red-600); border-radius: var(--radius-md);
     padding: 10px 14px; margin-bottom: 14px; font-size: 13px;
 }
 .sim-report .sim-transcript-grid {
@@ -1038,44 +1183,49 @@ _SIM_TRANSCRIPT_CSS = """
 }
 
 /* Chat bubbles (render_message_list avatar + side extension) */
-.sim-report .sim-msg { display: flex; gap: 8px; margin-bottom: 10px; max-width: 88%; }
+.sim-report .sim-msg { display: flex; gap: 10px; margin-bottom: 10px; max-width: 88%; }
 .sim-report .sim-msg-user, .sim-report .sim-msg-system { margin-right: auto; }
 .sim-report .sim-msg-assistant, .sim-report .sim-msg-tool { margin-left: auto; flex-direction: row-reverse; }
 .sim-report .sim-msg-avatar {
-    flex-shrink: 0; width: 30px; height: 30px; border-radius: 8px;
+    flex-shrink: 0; width: 30px; height: 30px; border-radius: var(--radius-md);
     display: flex; align-items: center; justify-content: center;
-    font-family: var(--font-mono); font-size: 9px; font-weight: 600;
+    font-family: var(--font-sans); font-size: 9px; font-weight: 600;
     background: var(--ink-900); color: #fff;
 }
 .sim-report .sim-msg-assistant .sim-msg-avatar, .sim-report .sim-msg-tool .sim-msg-avatar {
     background: var(--teal-50); color: var(--teal-600);
 }
+/* Single flat bubble with an asymmetric tail corner, like the mockup — white +
+   hairline border for the user, teal tint for the agent (tail mirrored to the
+   avatar side). */
 .sim-report .sim-msg-bubble {
-    background: var(--surface-sunken); border-radius: 12px; padding: 9px 13px;
+    background: var(--surface-card); border: 1px solid var(--border-subtle);
+    border-radius: 3px var(--radius-lg) var(--radius-lg) var(--radius-lg); padding: 9px 13px;
 }
 .sim-report .sim-msg-assistant .sim-msg-bubble, .sim-report .sim-msg-tool .sim-msg-bubble {
-    background: var(--teal-50);
+    background: var(--teal-50); border-radius: var(--radius-lg) 3px var(--radius-lg) var(--radius-lg);
 }
-.sim-report .sim-msg-role {
-    display: block; font-family: var(--font-mono); font-size: 10px;
-    text-transform: uppercase; color: var(--text-faint); margin-bottom: 3px;
-}
+/* The avatar already carries USR/AGT; the mockup has no second in-bubble label. */
+.sim-report .sim-msg-role { display: none; }
+/* .sim-msg-content is a <pre> — strip the global code-block chrome (bg, border,
+   radius, padding) so text sits flat in the bubble, not in a nested box. */
 .sim-report .sim-msg-content {
     font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
     margin: 0; font-family: inherit;
+    background: transparent; border: none; border-radius: 0; padding: 0;
 }
 
 /* Criteria column (two-state per deviation #4) */
 .sim-report .sim-criteria-header {
-    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    font-family: var(--font-sans); font-size: 11px; font-weight: 600;
     text-transform: uppercase; color: var(--text-faint); margin-bottom: 8px;
 }
-.sim-report .sim-criteria-list { list-style: none; margin: 0; padding: 0; }
-.sim-report .sim-criterion {
-    display: flex; align-items: flex-start; gap: 8px; padding: 8px 0;
-    border-top: 1px solid var(--border-subtle);
+.sim-report .sim-criteria-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+/* Scoped to the criteria list so it no longer collides with the Scenarios-panel
+   .sim-criterion rule above. Mockup uses a plain gapped column (no dividers). */
+.sim-report .sim-criteria-list .sim-criterion {
+    display: flex; align-items: flex-start; gap: 8px;
 }
-.sim-report .sim-criterion:first-child { border-top: none; }
 .sim-report .sim-criterion-icon {
     flex-shrink: 0; width: 18px; height: 18px; border-radius: 999px;
     display: flex; align-items: center; justify-content: center;
@@ -1085,7 +1235,7 @@ _SIM_TRANSCRIPT_CSS = """
 .sim-report .sim-criterion-fail .sim-criterion-icon { background: var(--red-600); }
 .sim-report .sim-criterion-desc { font-size: 13px; color: var(--text-body); flex: 1; }
 .sim-report .sim-ctype {
-    font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+    font-family: var(--font-sans); font-size: 10px; text-transform: uppercase;
     color: var(--text-faint); white-space: nowrap;
 }
 .sim-report .sim-ctype-unsafe { color: var(--red-600); }

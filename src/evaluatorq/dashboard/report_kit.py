@@ -133,18 +133,24 @@ def bar_rows(
         y = i * row_h
         cy = y + row_h / 2
         bar_w = (value / max_v) * track_w if max_v else 0.0
+        bar_y = y + (row_h - bar_h) / 2
         parts.extend((
             (
                 f'<text x="{label_w - 8}" y="{cy:.1f}" text-anchor="end" dominant-baseline="middle" '
                 f'font-size="12" fill="var(--text-body)">{esc(label)}</text>'
             ),
+            # Track behind the bar (mockup shows the unfilled remainder as a rail).
             (
-                f'<rect x="{label_w}" y="{y + (row_h - bar_h) / 2:.1f}" width="{bar_w:.1f}" height="{bar_h}" '
+                f'<rect x="{label_w}" y="{bar_y:.1f}" width="{track_w}" height="{bar_h}" '
+                f'rx="3" fill="var(--chart-track)"></rect>'
+            ),
+            (
+                f'<rect x="{label_w}" y="{bar_y:.1f}" width="{bar_w:.1f}" height="{bar_h}" '
                 f'rx="3" fill="{color}"></rect>'
             ),
             (
                 f'<text x="{label_w + bar_w + 8:.1f}" y="{cy:.1f}" dominant-baseline="middle" '
-                f'font-family="var(--font-mono)" font-size="11" font-weight="600" fill="var(--text-strong)">'
+                f'font-family="var(--font-sans)" font-size="11" font-weight="600" fill="var(--text-strong)">'
                 f'{esc(fmt(value))}</text>'
             ),
         ))
@@ -175,10 +181,18 @@ def histogram(values: list[float], *, bins: int = 10, mean_line: bool = True) ->
     parts = [f'<svg viewBox="0 0 {width} {height}" width="{width}" height="{height}" class="rk-histogram">']
     for i in range(3):
         gy = pad_top + plot_h * i / 2
-        parts.append(
-            f'<line x1="{pad_left}" y1="{gy:.1f}" x2="{width - pad_right}" y2="{gy:.1f}" '
-            f'stroke="var(--chart-grid)" stroke-width="1"></line>'
-        )
+        # Y-axis count label at each gridline: top = max_count, middle, 0 (mockup).
+        y_val = round(max_count * (1 - i / 2))
+        parts.extend((
+            (
+                f'<line x1="{pad_left}" y1="{gy:.1f}" x2="{width - pad_right}" y2="{gy:.1f}" '
+                f'stroke="var(--chart-grid)" stroke-width="1"></line>'
+            ),
+            (
+                f'<text x="{pad_left - 6}" y="{gy + 3:.1f}" text-anchor="end" font-family="var(--font-sans)" '
+                f'font-size="10" fill="var(--text-faint)">{y_val}</text>'
+            ),
+        ))
     for i, count in enumerate(counts):
         bar_h = plot_h * (count / max_count)
         x = pad_left + i * (plot_w / bins) + bar_gap / 2
@@ -188,11 +202,11 @@ def histogram(values: list[float], *, bins: int = 10, mean_line: bool = True) ->
         )
     parts.extend((
         (
-            f'<text x="{pad_left}" y="{height - 4}" font-family="var(--font-mono)" font-size="10" '
+            f'<text x="{pad_left}" y="{height - 4}" font-family="var(--font-sans)" font-size="10" '
             f'fill="var(--text-faint)">{esc(f"{lo:.2f}")}</text>'
         ),
         (
-            f'<text x="{width - pad_right}" y="{height - 4}" text-anchor="end" font-family="var(--font-mono)" '
+            f'<text x="{width - pad_right}" y="{height - 4}" text-anchor="end" font-family="var(--font-sans)" '
             f'font-size="10" fill="var(--text-faint)">{esc(f"{hi:.2f}")}</text>'
         ),
     ))
@@ -210,15 +224,18 @@ def histogram(values: list[float], *, bins: int = 10, mean_line: bool = True) ->
 _LINE_PALETTE: tuple[str, ...] = ('var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)')
 
 
-def line_chart(turns: list[int], series: dict[str, list[float | None]]) -> str:
-    """Multi-series SVG line chart with dots and a legend (spec §Turn.2). Empty ``series`` -> ``''``."""
+def line_chart(x_labels: list, series: dict[str, list[float | None]]) -> str:
+    """Multi-series SVG line chart with dots and a legend (spec §Turn.2). Empty ``series`` -> ``''``.
+
+    ``x_labels`` are rendered verbatim under the x-axis (str-coerced); the caller
+    supplies display text (e.g. "Turn 1"), and legend keys are used as-is."""
     if not series:
         return ''
     width, height = 720, 260
     pad_left, pad_right, pad_top, pad_bottom = 36, 16, 16, 28
     plot_w = width - pad_left - pad_right
     plot_h = height - pad_top - pad_bottom
-    n = len(turns)
+    n = len(x_labels)
 
     def x_at(i: int) -> float:
         return pad_left + (plot_w * i / (n - 1) if n > 1 else plot_w / 2)
@@ -226,8 +243,18 @@ def line_chart(turns: list[int], series: dict[str, list[float | None]]) -> str:
     def y_at(v: float) -> float:
         return pad_top + plot_h * (1 - max(0.0, min(1.0, v)))
 
-    parts = [f'<svg viewBox="0 0 {width} {height}" width="{width}" height="{height}" class="rk-line-chart">']
-    for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
+    # width=100% + preserveAspectRatio lets the chart scale to its container
+    # instead of pinning to 720px; the viewBox keeps the internal coordinates.
+    parts = [
+        (
+            f'<svg viewBox="0 0 {width} {height}" width="100%" preserveAspectRatio="xMidYMid meet" '
+            f'class="rk-line-chart" role="img">'
+        )
+    ]
+    # Label paired with each gridline fraction. Rounded half-up (0.25 -> "0.3")
+    # to match the mockup's JS toFixed(1); a bare f'{frac:.1f}' would round
+    # half-to-even and render "0.2".
+    for frac, flabel in ((0.0, '0.0'), (0.25, '0.3'), (0.5, '0.5'), (0.75, '0.8'), (1.0, '1.0')):
         gy = pad_top + plot_h * (1 - frac)
         parts.extend((
             (
@@ -235,14 +262,14 @@ def line_chart(turns: list[int], series: dict[str, list[float | None]]) -> str:
                 f'stroke="var(--chart-grid)" stroke-width="1"></line>'
             ),
             (
-                f'<text x="{pad_left - 6}" y="{gy + 3:.1f}" text-anchor="end" font-family="var(--font-mono)" '
-                f'font-size="10" fill="var(--text-faint)">{frac:.2f}</text>'
+                f'<text x="{pad_left - 6}" y="{gy + 3:.1f}" text-anchor="end" font-family="var(--font-sans)" '
+                f'font-size="10" fill="var(--text-faint)">{flabel}</text>'
             ),
         ))
-    for i, t in enumerate(turns):
+    for i, lbl in enumerate(x_labels):
         parts.append(
             f'<text x="{x_at(i):.1f}" y="{height - pad_bottom + 16}" text-anchor="middle" '
-            f'font-family="var(--font-mono)" font-size="10" fill="var(--text-faint)">{esc(str(t))}</text>'
+            f'font-family="var(--font-sans)" font-size="10" fill="var(--text-faint)">{esc(str(lbl))}</text>'
         )
 
     legend_items: list[str] = []

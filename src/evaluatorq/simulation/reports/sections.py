@@ -193,6 +193,11 @@ def _build_failures_first_section(results: list[SimulationResult]) -> ReportSect
             'persona': _persona_name(r),
             'scenario': _scenario_name(r),
             'violated': violated,
+            # All criteria (pass + fail) for the collapsible dot view; ``violated``
+            # is kept for the markdown renderer.
+            'criteria': [
+                {'description': c['description'], 'passed': c['passed'], 'safety': c['safety']} for c in rows_c
+            ],
             'has_safety': any(c['safety'] for c in rows_c),
             'terminated_by': r.terminated_by.value,
             'score': r.goal_completion_score,

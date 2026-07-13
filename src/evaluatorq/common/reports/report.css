@@ -330,6 +330,57 @@ tr:nth-child(even) { background: rgba(0,0,0,.015); }
 .status-badge--warn    { background: var(--c-warn); color: var(--slate); }
 .status-badge--neutral { background: var(--orq-orange); }
 
+/* ---- Failures criteria: collapsed dots that unfold to full text.
+   Height animates both ways via ::details-content + interpolate-size where
+   supported; elsewhere it snaps open — both fully usable. ---- */
+.crit-cell { display: inline-block; interpolate-size: allow-keywords; }
+.crit-summary {
+    list-style: none; cursor: pointer; display: inline-flex; gap: 6px; align-items: center;
+    padding: 3px 6px; margin: -3px -6px; border-radius: 999px; border: 1.5px solid transparent;
+    transition: background .15s ease, border-color .15s ease;
+}
+.crit-summary::-webkit-details-marker { display: none; }
+.crit-summary:hover { background: var(--gray-100); border-color: var(--gray-300); }
+.crit-summary:focus-visible { outline: 2px solid var(--c-pass); outline-offset: 2px; }
+.crit-dots { display: inline-flex; gap: 4px; align-items: center; }
+.crit-dot {
+    width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none;
+    transition: transform .15s ease;
+}
+.crit-summary:hover .crit-dot { transform: scale(1.15); }
+.crit-dot--pass { background: var(--c-pass); }
+.crit-dot--fail { background: var(--c-fail); }
+.crit-dot--safety { background: var(--c-warn); }
+.crit-caret {
+    width: 13px; height: 13px; flex: none; color: var(--gray-500);
+    transition: transform .2s ease, color .15s ease;
+}
+.crit-summary:hover .crit-caret { color: var(--gray-700); }
+.crit-cell[open] .crit-caret { transform: rotate(180deg); }
+.crit-cell::details-content {
+    height: 0; overflow: hidden; opacity: 0;
+    transition: height .22s ease, opacity .18s ease, content-visibility .22s allow-discrete;
+    content-visibility: hidden;
+}
+.crit-cell[open]::details-content { height: auto; opacity: 1; content-visibility: visible; }
+.crit-list {
+    margin: 8px 0 0; padding: 10px 12px; list-style: none; font-size: .8rem; line-height: 1.45;
+    text-align: left; min-width: 240px; max-width: 460px; background: var(--gray-100);
+    border: 1.5px solid var(--gray-300); border-radius: var(--radius-row);
+}
+.crit-li { padding: 3px 0 3px 16px; position: relative; color: var(--gray-700); }
+.crit-li + .crit-li { border-top: 1.5px solid var(--gray-300); margin-top: 3px; padding-top: 6px; }
+.crit-li::before {
+    content: ''; position: absolute; left: 0; top: 8px; width: 7px; height: 7px; border-radius: 50%;
+}
+.crit-li + .crit-li::before { top: 11px; }
+.crit-li--pass::before { background: var(--c-pass); }
+.crit-li--fail::before { background: var(--c-fail); }
+.crit-li--safety::before { background: var(--c-warn); }
+@media (prefers-reduced-motion: reduce) {
+    .crit-summary, .crit-dot, .crit-caret, .crit-cell::details-content { transition: none; }
+}
+
 /* ---- Score chips ---- */
 .score-chip {
     display: inline-block;

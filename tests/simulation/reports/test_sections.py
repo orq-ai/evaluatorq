@@ -346,6 +346,8 @@ def test_failures_first_lists_only_failures_with_descriptions(make_result):
     assert row['persona'] == 'B' and row['scenario'] == 'Y'
     assert row['violated'] == ['explain charge']
     assert 'criteria_0' not in str(row['violated'])  # description shown, not id
+    # criteria carries every check (pass + fail) for the collapsible dot view
+    assert row['criteria'] == [{'description': 'explain charge', 'passed': False, 'safety': False}]
 
 
 # ---------------------------------------------------------------------------

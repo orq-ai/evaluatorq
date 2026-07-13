@@ -105,7 +105,7 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
     def render(*kinds: str) -> str:
         return _render_sections(by_kind, _SECTION_RENDERERS, kinds)
 
-    hero = _sim_hero(by_kind.get('summary'), run)
+    hero = _sim_hero(run)
 
     entries = individual_entries(rows)
 
@@ -141,7 +141,12 @@ def _sim_config(by_kind: dict[str, Any], run: SimulationRun) -> str:
     scenarios: list[dict[str, Any]] = overview_data.get('scenarios', [])
 
     generated = run.created_at
-    generated_str = generated.date().isoformat() if hasattr(generated, 'date') else str(generated)[:10]
+    # Human month + time-of-day (e.g. "Jul 6, 2026 · 16:42 UTC"); created_at is
+    # stored UTC-aware. Fall back to a raw slice for anything without strftime.
+    if hasattr(generated, 'strftime'):
+        generated_str = f'{generated:%b} {generated.day}, {generated:%Y · %H:%M} UTC'
+    else:
+        generated_str = str(generated)[:16]
 
     config_html = panel(
         'Run configuration',
@@ -150,6 +155,7 @@ def _sim_config(by_kind: dict[str, Any], run: SimulationRun) -> str:
             ('Run name', run.run_name),
             ('Model', run.target_model),
             ('Mode', run.mode),
+            ('Max turns', str(run.max_turns) if run.max_turns is not None else None),
             ('Target kind', run.target_kind),
             ('Evaluators', ', '.join(run.evaluator_names) if run.evaluator_names else None),
             ('Personas', str(len(personas)) if personas else None),
@@ -212,9 +218,39 @@ def _sim_config_scenario_row(scenario: dict[str, Any]) -> str:
     )
 
 
+def _tinted(text: str, value: float) -> str:
+    """Wrap a cell value in a span tinted red->yellow->green by ``value`` (0-1,
+    higher = better - both goal rate and avg score are goal-completion metrics)."""
+    from evaluatorq.dashboard.report_kit import _interp_color
+
+    color = _interp_color(max(0.0, min(1.0, value)))
+    return f'<span class="sim-td-tint" style="color:{color}">{esc(text)}</span>'
+
+
+def _sim_breakdown_table(
+    section: Any,
+    title: str,
+    key: str,
+    headers: list[str],
+    cols: Callable[[dict[str, Any]], list[str]],
+) -> str:
+    """One Breakdown per-persona/per-scenario table (mockup columns), wrapped in
+    a serif-titled panel. ``key`` is the label column field; ``cols`` maps a row
+    to the remaining (numeric) cells. Empty section → ''."""
+    from evaluatorq.common.reports.html_helpers import html_table
+    from evaluatorq.dashboard.report_kit import panel
+
+    rows = section.data.get('rows', []) if section is not None else []
+    if not rows:
+        return ''
+    table = html_table(headers, [[esc(str(r[key])), *cols(r)] for r in rows])
+    return panel(title, f'<div class="sim-bd-table">{table}</div>')
+
+
 def _sim_breakdown(by_kind: dict[str, Any], render: Callable[..., str]) -> str:
     """Breakdown tab body: heatmap → score-distribution → per-persona/scenario
     tables → top failure modes → failures table (spec §Breakdown)."""
+    from evaluatorq.common.reports.html_helpers import pct
     from evaluatorq.dashboard.report_kit import bar_rows, heatmap, histogram, panel
 
     heatmap_section = by_kind.get('persona_scenario_heatmap')
@@ -233,18 +269,40 @@ def _sim_breakdown(by_kind: dict[str, Any], render: Callable[..., str]) -> str:
         scores = dist_section.data.get('scores', [])
         if scores:
             dist_html = panel(
-                'Score distribution',
+                'Goal-completion score distribution',
                 histogram(scores),
                 sub=f'{len(scores)} conversations · dashed line = mean',
             )
 
-    persona_html = render('persona_breakdown')
-    scenario_html = render('scenario_breakdown')
-    tables_html = (
-        f'<div class="sim-breakdown-grid-2">{persona_html}{scenario_html}</div>'
-        if persona_html or scenario_html
-        else ''
+    # Dashboard-specific tables (mockup columns), not the flat-export renderer
+    # (which carries extra Achieved/Success columns for the standalone HTML).
+    # Full-width stacked (not 2-col) so long persona/scenario names don't wrap and
+    # cram; Goal rate + Avg score are tinted red→green by value.
+    persona_html = _sim_breakdown_table(
+        by_kind.get('persona_breakdown'),
+        'Per-persona',
+        'persona',
+        ['Persona', 'Conv', 'Goal rate', 'Avg score', 'Tokens'],
+        lambda r: [
+            str(r['conversations']),
+            _tinted(pct(r['success_rate']), r['success_rate']),
+            _tinted(f'{r["avg_goal_completion_score"]:.2f}', r['avg_goal_completion_score']),
+            f'{r["total_tokens"]:,}' if r.get('total_tokens') else '—',
+        ],
     )
+    scenario_html = _sim_breakdown_table(
+        by_kind.get('scenario_breakdown'),
+        'Per-scenario',
+        'scenario',
+        ['Scenario', 'Conv', 'Goal rate', 'Avg score', 'Avg turns'],
+        lambda r: [
+            str(r['conversations']),
+            _tinted(pct(r['success_rate']), r['success_rate']),
+            _tinted(f'{r["avg_goal_completion_score"]:.2f}', r['avg_goal_completion_score']),
+            f'{r["avg_turn_count"]:.1f}',
+        ],
+    )
+    tables_html = f'{persona_html}{scenario_html}'
 
     failure_mode_section = by_kind.get('failure_mode')
     failure_html = ''
@@ -313,15 +371,24 @@ def _sim_turn_count_bar(turn_count_distribution: dict[int, int]) -> str:
 
 
 def _sim_avg_quality_tiles(avg_quality_metrics: dict[str, float]) -> str:
-    """Average quality metric stat tiles, 2-col grid (spec §Turn.3)."""
+    """Average-quality metric cells — editorial 2-col grid with a per-metric
+    accent tick colored by a "goodness" score (lower-is-better metrics inverted
+    via the shared ``_score_is_lower_better`` used by the flat HTML export)."""
+    from evaluatorq.dashboard.report_kit import _interp_color
+    from evaluatorq.simulation.reports.export_html import _score_is_lower_better
+
     if not avg_quality_metrics:
         return ''
-    tiles = ''.join(
-        f'<div class="sim-stat-tile"><div class="sim-stat-value">{value:.2f}</div>'
-        f'<div class="sim-stat-label">{esc(name.replace("_", " "))}</div></div>'
-        for name, value in avg_quality_metrics.items()
-    )
-    return f'<div class="sim-stat-grid">{tiles}</div>'
+    cells = []
+    for name, value in avg_quality_metrics.items():
+        score = (1.0 - value) if _score_is_lower_better(name) else value
+        color = _interp_color(score)
+        label = esc(name.replace('_', ' '))
+        cells.append(
+            f'<div class="sim-aq-cell"><div class="sim-aq-label">{label}</div>'
+            f'<div class="sim-aq-value" style="--aq-accent:{color}">{value:.2f}</div></div>'
+        )
+    return f'<div class="sim-aq-grid">{"".join(cells)}</div>'
 
 
 def _sim_turn_quality(by_kind: dict[str, Any]) -> str:
@@ -349,13 +416,24 @@ def _sim_turn_quality(by_kind: dict[str, Any]) -> str:
     callout_html = _turn_delta_callout(series)
 
     chart_html = ''
-    chart = line_chart(timeline_data.get('turns', []), series)
-    if chart:
-        chart_html = panel(
-            'Per-turn quality',
-            chart,
-            sub='Average across conversations, by turn index (0–1)',  # noqa: RUF001 (mockup wording — spec §Turn.2)
-        )
+    # Mockup: x-axis reads "Turn N" and the legend uses human labels, not raw keys.
+    turns = timeline_data.get('turns', [])
+    # A trend line needs ≥2 turns; with a single turn the chart is an empty plot
+    # (dots at one x, no lines) that leaves a large void above the metrics — skip
+    # it, the avg-quality tiles below already show the single-turn values.
+    if len(turns) >= 2:
+        x_labels = [f'Turn {t}' for t in turns]
+        pretty_series = {
+            _TURN_METRIC_LABELS.get(name, name.replace('_', ' ')).capitalize(): values
+            for name, values in series.items()
+        }
+        chart = line_chart(x_labels, pretty_series)
+        if chart:
+            chart_html = panel(
+                'Per-turn quality',
+                chart,
+                sub='Average across conversations, by turn index (0–1)',  # noqa: RUF001 (mockup wording — spec §Turn.2)
+            )
 
     dist_body = _sim_turn_count_bar(metrics_data.get('turn_count_distribution', {}))
     dist_html = panel('Turn-count distribution', dist_body) if dist_body else ''
@@ -370,18 +448,20 @@ def _sim_turn_quality(by_kind: dict[str, Any]) -> str:
 
 def _sim_overview(by_kind: dict[str, Any], rows: list[Any]) -> str:
     """Overview tab body: exec summary, 5-card KPI band, then two 2-col grids
-    (donut + tokens; personas + scenarios). Spec §Overview."""
-    from evaluatorq.dashboard.report_kit import exec_summary
+    (donut + avg-quality metrics; personas + scenarios). Spec §Overview."""
+    from evaluatorq.dashboard.report_kit import exec_summary, panel
 
     summary_section = by_kind.get('summary')
     overview_section = by_kind.get('overview')
     heatmap_section = by_kind.get('persona_scenario_heatmap')
     tokens_section = by_kind.get('token_usage')
+    metrics_section = by_kind.get('turn_metrics')
 
     summary_data = summary_section.data if summary_section is not None else {}
     overview_data = overview_section.data if overview_section is not None else {}
     heatmap_data = heatmap_section.data if heatmap_section is not None else {}
     tokens_data = tokens_section.data if tokens_section is not None else {}
+    metrics_data = metrics_section.data if metrics_section is not None else {}
 
     summary_html = exec_summary(
         summary_data=summary_data,
@@ -390,14 +470,17 @@ def _sim_overview(by_kind: dict[str, Any], rows: list[Any]) -> str:
     )
     kpi_html = _sim_kpi_band(summary_data)
     donut_html = _sim_outcomes_donut(rows)
-    tokens_html = _sim_tokens_panel(tokens_data)
+    # Second block: Average quality metrics (turn metrics); fall back to the
+    # token-usage summary for runs that carry no per-turn quality data.
+    quality_tiles = _sim_avg_quality_tiles(metrics_data.get('avg_quality_metrics', {}))
+    second_html = panel('Average quality metrics', quality_tiles) if quality_tiles else _sim_tokens_panel(tokens_data)
     personas_html = _sim_personas_panel(overview_data.get('personas', []))
     scenarios_html = _sim_scenarios_panel(overview_data.get('scenarios', []))
 
     return (
         f'{summary_html}{kpi_html}'
-        f'<div class="sim-overview-grid-2">{donut_html}{tokens_html}</div>'
-        f'<div class="sim-overview-grid-2">{personas_html}{scenarios_html}</div>'
+        f'<div class="sim-overview-grid-2">{donut_html}{second_html}</div>'
+        f'<div class="sim-overview-grid-2 sim-overview-grid-2--top">{personas_html}{scenarios_html}</div>'
     )
 
 
@@ -554,33 +637,26 @@ def _sim_outcomes_donut(rows: list[Any]) -> str:
         for (label, color), value in zip(_DONUT_SEGMENTS, counts, strict=True)
         if value > 0
     )
-    return (
-        '<figure class="chart-card"><figcaption>Outcomes</figcaption>'
+    from evaluatorq.dashboard.report_kit import panel
+
+    body = (
         '<div class="donut-wrap"><div class="donut">'
         f'<svg width="150" height="150" viewBox="0 0 150 150">{"".join(arcs)}</svg>'
         f'<div class="donut-center"><span class="donut-value">{pct_achieved}%</span>'
         '<span class="donut-label">goal met</span></div></div>'
-        f'<ul class="donut-legend">{legend}</ul></div></figure>'
+        f'<ul class="donut-legend">{legend}</ul></div>'
     )
+    return panel('Outcomes', body)
 
 
-def _sim_hero(summary_section: Any, run: SimulationRun) -> str:
-    from evaluatorq.common.reports.html_helpers import kpi_cards, pct
-
-    data = summary_section.data if summary_section is not None else {}
-    verdict = data.get('verdict', 'neutral')
-    success_status = 'pass' if verdict == 'pass' else ('warn' if verdict == 'warn' else 'fail')
-    errors = data.get('errors', 0)
-    cards = kpi_cards([
-        {'label': 'Success Rate', 'value': pct(data.get('success_rate', 0.0)), 'status': success_status},
-        {'label': 'Avg Score', 'value': f'{data.get("avg_goal_completion_score", 0.0):.2f}', 'status': 'neutral'},
-        {'label': 'Conversations', 'value': str(data.get('total_conversations', 0)), 'status': 'neutral'},
-        {'label': 'Runtime Errors', 'value': str(errors), 'status': 'warn' if errors else 'neutral'},
-    ])
+def _sim_hero(run: SimulationRun) -> str:
+    # KPI cards intentionally omitted: the same metrics render in the 5-card
+    # band inside the Overview tab (_sim_kpi_band), so a hero band duplicated
+    # them above the tabs. Hero is now just title + subtitle.
     return (
         f'<header class="report-hero"><h1 class="report-hero-title">Agent Simulation</h1>'
         f'<p class="report-hero-sub">{esc(run.run_name)} · target {esc(run.target_kind)}</p>'
-        f'{cards}</header>'
+        f'</header>'
     )
 
 

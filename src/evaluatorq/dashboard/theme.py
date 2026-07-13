@@ -92,6 +92,9 @@ EDITORIAL_CSS = """
     --font-display: Georgia, 'Times New Roman', ui-serif, serif;
     --font-sans:    var(--sans, 'Inter', system-ui, -apple-system, sans-serif);
     --font-mono:    var(--mono, ui-monospace, 'SF Mono', Menlo, monospace);
+    /* Line-height — body copy (matches the mockup's 16px/24px = 1.5 rhythm,
+       overriding the report stylesheet's looser 1.65 default). */
+    --leading-body: 1.5;
 
     /* Corners — flat surfaces (no card shadows); soft lift for overlays only */
     --radius-md: 8px;

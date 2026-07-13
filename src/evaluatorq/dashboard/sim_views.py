@@ -137,10 +137,15 @@ def render_sim_row_list(rid: str, entries: list[SimulationEntry]) -> str:
             f'<span class="sim-conv-right">{right_cluster}</span>'
             f'</summary>'
         )
+        # Load on expand: the body is display:none while the <details> is
+        # collapsed, so the first click lands on the <summary> and never reaches
+        # this div — "click" would need a second click. Listen for the parent
+        # details' `toggle` event instead (it doesn't bubble, hence from:closest),
+        # firing once on the first open.
         body = (
             f'<div class="sim-conv-body"'
             f' hx-get="/r/{safe_rid}/sim/transcript?idx={idx}"'
-            f' hx-trigger="click once"'
+            f' hx-trigger="toggle once from:closest details"'
             f' hx-target="this"'
             f' hx-swap="innerHTML"'
             f' hx-include="#filter-form"></div>'
@@ -170,7 +175,8 @@ def _render_criteria_column(entry: SimulationEntry) -> str:
         icon = '&#x2713;' if c.passed else '&#x2717;'  # ✓ / ✗
         ctype = c.type or ''
         type_class = 'sim-ctype sim-ctype-unsafe' if ctype == 'must_not_happen' else 'sim-ctype'
-        type_html = f'<span class="{type_class}">{esc(ctype)}</span>' if ctype else ''
+        # Mockup shows the requirement as words ("MUST HAPPEN"), not the raw enum.
+        type_html = f'<span class="{type_class}">{esc(ctype.replace("_", " "))}</span>' if ctype else ''
         desc = esc(c.description)
         items.append(
             f'<li class="sim-criterion {state_class}">'
@@ -212,18 +218,17 @@ def render_transcript_fragment(entry: SimulationEntry) -> str:
     Returns:
         An HTML fragment (no full-page shell).
     """
-    idx: int = entry.index
-    persona = esc(entry.persona)
-    scenario = esc(entry.scenario)
     judge_reason = esc(entry.judge_reason or '')
     error = entry.error
 
-    header = f'<h3 class="sim-transcript-header">#{idx + 1} &middot; {persona} &middot; {scenario}</h3>'
+    # No title here: the collapsed conversation card already shows
+    # "#N · persona · scenario" directly above this fragment, so repeating it
+    # (the old sim-transcript-header) was a duplicate the mockup doesn't have.
     criteria_col = _render_criteria_column(entry)
 
     if error:
         error_html = f'<div class="sim-transcript-error"><strong>Error:</strong> {esc(str(error))}</div>'
-        return f'<div class="sim-transcript-detail">{header}{error_html}{criteria_col}</div>'
+        return f'<div class="sim-transcript-detail">{error_html}{criteria_col}</div>'
 
     judge_html = ''
     if judge_reason:
@@ -251,7 +256,7 @@ def render_transcript_fragment(entry: SimulationEntry) -> str:
     )
     grid_html = f'<div class="sim-transcript-grid">{bubbles_html}{criteria_col}</div>'
 
-    return f'<div class="sim-transcript-detail">{header}{judge_html}{grid_html}</div>'
+    return f'<div class="sim-transcript-detail">{judge_html}{grid_html}</div>'
 
 
 # ---------------------------------------------------------------------------
