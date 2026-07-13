@@ -109,36 +109,52 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
 
     entries = individual_entries(rows)
 
+    entity_context = _sim_entity_context(by_kind)
+
     # Folded 7→5 to curb tab sprawl: Evaluators + Judge & errors → Transcripts
     # (all per-conversation verdicts); Tokens → Config. Turn quality is its own
     # tab (unfolded from Breakdown) and drops out when a run has no turn_metrics.
     tabs = _tabs(
         'simtab',
         [
-            ('Overview', _sim_overview(by_kind, rows, run)),
-            ('Breakdown', _sim_breakdown(by_kind, render)),
+            ('Overview', _sim_overview(rid, by_kind, rows, run)),
+            ('Breakdown', _sim_breakdown(by_kind, render, entity_context)),
             (
                 'Transcripts',
                 sim_interactive_panels(rid, entries) + render('evaluator_scores', 'judge_verdicts', 'errors'),
                 f'Transcripts <span class="tab-count">{len(entries)}</span>',
             ),
             ('Turn quality', _sim_turn_quality(by_kind)),
-            ('Config', _sim_config(by_kind, run) + render('token_usage')),
+            ('Config', _sim_config(by_kind, run, entity_context) + render('token_usage')),
         ],
     )
-    return f'<div class="report-aligned sim-report">{hero}{tabs}</div>'
+    return f'<div class="report-aligned sim-report">{hero}{tabs}{_sim_entity_modal(entity_context)}</div>'
 
 
-def _sim_config(by_kind: dict[str, Any], run: SimulationRun) -> str:
+def _sim_entity_context(by_kind: dict[str, Any]) -> dict[str, Any]:
+    overview_section = by_kind.get('overview')
+    overview_data = overview_section.data if overview_section is not None else {}
+    personas: list[dict[str, Any]] = overview_data.get('personas', [])
+    scenarios: list[dict[str, Any]] = overview_data.get('scenarios', [])
+    return {
+        'personas': personas,
+        'scenarios': scenarios,
+        'persona_ids': {str(p.get('name', '')): f'persona-{i}' for i, p in enumerate(personas)},
+        'scenario_ids': {str(s.get('name', '')): f'scenario-{i}' for i, s in enumerate(scenarios)},
+    }
+
+
+def _sim_config(by_kind: dict[str, Any], run: SimulationRun, entity_context: dict[str, Any] | None = None) -> str:
     """Config tab body: run-configuration meta grid → personas panel →
     scenarios panel (spec §Config.1-3). The kept ``token_usage`` table is
     appended by the caller."""
     from evaluatorq.dashboard.report_kit import meta_grid, panel
 
-    overview_section = by_kind.get('overview')
-    overview_data = overview_section.data if overview_section is not None else {}
-    personas: list[dict[str, Any]] = overview_data.get('personas', [])
-    scenarios: list[dict[str, Any]] = overview_data.get('scenarios', [])
+    entity_context = entity_context or _sim_entity_context(by_kind)
+    personas: list[dict[str, Any]] = entity_context.get('personas', [])
+    scenarios: list[dict[str, Any]] = entity_context.get('scenarios', [])
+    persona_ids: dict[str, str] = entity_context.get('persona_ids', {})
+    scenario_ids: dict[str, str] = entity_context.get('scenario_ids', {})
 
     generated = run.created_at
     # Human month + time-of-day (e.g. "Jul 6, 2026 · 16:42 UTC"); created_at is
@@ -168,53 +184,187 @@ def _sim_config(by_kind: dict[str, Any], run: SimulationRun) -> str:
 
     personas_html = ''
     if personas:
-        rows = ''.join(_sim_config_persona_row(p) for p in personas)
+        rows = ''.join(_sim_config_persona_row(p, persona_ids.get(str(p.get('name', '')))) for p in personas)
         personas_html = panel('Personas', rows, sub='Simulated user profiles')
 
     scenarios_html = ''
     if scenarios:
-        rows = ''.join(_sim_config_scenario_row(s) for s in scenarios)
+        rows = ''.join(_sim_config_scenario_row(s, scenario_ids.get(str(s.get('name', '')))) for s in scenarios)
         scenarios_html = panel('Scenarios', rows, sub='Goals + pass/fail criteria')
 
     return f'{config_html}{personas_html}{scenarios_html}'
 
 
-def _sim_config_persona_row(persona: dict[str, Any]) -> str:
-    """One Config-panel persona row: name · communication style · background
-    (spec §Config.2). Missing style/background fields are simply omitted."""
+def _sim_config_persona_row(persona: dict[str, Any], entity_id: str | None = None) -> str:
+    """One compact Config-panel persona row: name · style · trait mini-bars."""
     name = esc(persona.get('name', ''))
     traits = persona.get('traits')
     style = traits.get('communication_style') if isinstance(traits, dict) else None
-    background = persona.get('background') or (traits.get('background') if isinstance(traits, dict) else None)
     style_html = f'<span class="sim-config-persona-style">{esc(str(style))}</span>' if style else ''
-    background_html = f'<span class="sim-config-persona-bg">{esc(str(background))}</span>' if background else ''
+    traits_html = _sim_trait_minis(traits) if isinstance(traits, dict) else ''
+    trigger_attrs = _sim_entity_trigger_attrs('persona', entity_id)
     return (
-        '<div class="sim-config-persona-row">'
-        f'<span class="sim-config-persona-name">{name}</span>{style_html}{background_html}'
+        f'<button type="button" class="sim-config-persona-row sim-entity-row" {trigger_attrs}>'
+        f'<span class="sim-config-persona-name">{name}</span>{style_html}{traits_html}'
+        '</button>'
+    )
+
+
+def _sim_config_scenario_row(scenario: dict[str, Any], entity_id: str | None = None) -> str:
+    """One compact Config-panel scenario row: name + criteria count."""
+    name = esc(scenario.get('name', ''))
+    count = len(scenario.get('criteria') or [])
+    count_html = f'<span class="sim-config-check-count">{count} {"check" if count == 1 else "checks"}</span>'
+    trigger_attrs = _sim_entity_trigger_attrs('scenario', entity_id)
+    return (
+        f'<button type="button" class="sim-config-scenario-row sim-entity-row" {trigger_attrs}>'
+        f'<span class="sim-config-scenario-name">{name}</span>{count_html}'
+        '</button>'
+    )
+
+
+_SIM_TRAIT_LABELS: tuple[tuple[str, str], ...] = (
+    ('patience', 'Patience'),
+    ('assertiveness', 'Assertiveness'),
+    ('politeness', 'Politeness'),
+    ('technical_level', 'Technical'),
+)
+
+
+def _sim_trait_minis(traits: dict[str, Any]) -> str:
+    bars: list[str] = []
+    for key, label in _SIM_TRAIT_LABELS:
+        raw = traits.get(key)
+        if not isinstance(raw, int | float):
+            continue
+        value = max(0.0, min(1.0, float(raw)))
+        bars.append(
+            f'<span class="sim-trait-mini" title="{esc(label.lower())}: {value:.2f}" aria-label="{esc(label)} {value:.2f}">'
+            f'<span class="sim-trait-mini-fill" style="width:{value * 100:.0f}%"></span>'
+            f'</span>'
+        )
+    return f'<span class="sim-trait-minis">{"".join(bars)}</span>' if bars else ''
+
+
+def _sim_entity_trigger_attrs(kind: str, entity_id: str | None) -> str:
+    if not entity_id:
+        return 'disabled aria-disabled="true"'
+    return f'data-sim-entity-trigger data-entity-kind="{esc(kind)}" data-entity-id="{esc(entity_id)}"'
+
+
+def _sim_entity_button(label: str, kind: str, entity_id: str | None) -> str:
+    attrs = _sim_entity_trigger_attrs(kind, entity_id)
+    return f'<button type="button" class="sim-entity-link" {attrs}>{esc(label)}</button>'
+
+
+def _sim_entity_modal(entity_context: dict[str, Any]) -> str:
+    personas: list[dict[str, Any]] = entity_context.get('personas', [])
+    scenarios: list[dict[str, Any]] = entity_context.get('scenarios', [])
+    if not personas and not scenarios:
+        return ''
+
+    templates: list[str] = []
+    for i, persona in enumerate(personas):
+        templates.append(_sim_persona_template(persona, f'persona-{i}', i, len(personas)))
+    for i, scenario in enumerate(scenarios):
+        templates.append(_sim_scenario_template(scenario, f'scenario-{i}', i, len(scenarios)))
+
+    return (
+        '<dialog class="sim-entity-dialog" aria-label="Simulation entity detail">'
+        '<div class="sim-entity-modal-shell">'
+        '<div class="sim-entity-modal-content" data-sim-entity-content></div>'
+        '<div class="sim-entity-modal-actions">'
+        '<button type="button" class="sim-entity-nav" data-sim-entity-prev aria-label="Previous entity" title="Previous entity">&larr;</button>'
+        '<button type="button" class="sim-entity-nav" data-sim-entity-next aria-label="Next entity" title="Next entity">&rarr;</button>'
+        '<button type="button" class="sim-entity-close" data-sim-entity-close>Close</button>'
+        '</div>'
+        '</div>'
+        '</dialog>'
+        f'<div class="sim-entity-templates" hidden>{"".join(templates)}</div>'
+    )
+
+
+def _sim_persona_template(persona: dict[str, Any], entity_id: str, index: int, total: int) -> str:
+    name = esc(persona.get('name', ''))
+    traits = persona.get('traits') if isinstance(persona.get('traits'), dict) else {}
+    style = traits.get('communication_style') if isinstance(traits, dict) else None
+    background = persona.get('background') or (traits.get('background') if isinstance(traits, dict) else None)
+    conversations = persona.get('conversations')
+    trait_rows = ''.join(
+        _sim_trait_detail(label, traits.get(key)) for key, label in _SIM_TRAIT_LABELS if isinstance(traits.get(key), int | float)
+    )
+    meta = ''.join(
+        item
+        for item in [
+            f'<span class="sim-entity-pill">{esc(str(style))}</span>' if style else '',
+            f'<span class="sim-entity-pill">{esc(str(conversations))} conversations</span>' if conversations else '',
+        ]
+        if item
+    )
+    background_html = f'<p class="sim-entity-prose">{esc(str(background))}</p>' if background else ''
+    body = (
+        f'<div class="sim-entity-detail">'
+        f'<div class="sim-entity-kicker">Persona {index + 1} / {total}</div>'
+        f'<h2>{name}</h2>'
+        f'<div class="sim-entity-pills">{meta}</div>'
+        f'<div class="sim-entity-traits">{trait_rows}</div>'
+        f'{background_html}'
+        f'</div>'
+    )
+    return (
+        f'<template id="{esc(entity_id)}" data-sim-entity-template data-entity-kind="persona" '
+        f'data-entity-id="{esc(entity_id)}" data-entity-index="{index}">{body}</template>'
+    )
+
+
+def _sim_scenario_template(scenario: dict[str, Any], entity_id: str, index: int, total: int) -> str:
+    name = esc(scenario.get('name', ''))
+    goal = scenario.get('goal')
+    context = scenario.get('context')
+    criteria = scenario.get('criteria') or []
+    criteria_html = ''.join(_sim_criterion_detail(c) for c in criteria)
+    goal_html = f'<p class="sim-entity-prose">{esc(str(goal))}</p>' if goal else ''
+    context_html = f'<p class="sim-entity-prose">{esc(str(context))}</p>' if context else ''
+    goal_section = f'<section><h3>Goal</h3>{goal_html}</section>' if goal_html else ''
+    context_section = f'<section><h3>Context</h3>{context_html}</section>' if context_html else ''
+    criteria_section = f'<section><h3>Criteria</h3><ul class="sim-entity-criteria">{criteria_html}</ul></section>' if criteria_html else ''
+    checks = f'{len(criteria)} {"check" if len(criteria) == 1 else "checks"}'
+    body = (
+        f'<div class="sim-entity-detail">'
+        f'<div class="sim-entity-kicker">Scenario {index + 1} / {total}</div>'
+        f'<h2>{name}</h2>'
+        f'<div class="sim-entity-pills"><span class="sim-entity-pill">{checks}</span></div>'
+        f'{goal_section}{context_section}{criteria_section}'
+        f'</div>'
+    )
+    return (
+        f'<template id="{esc(entity_id)}" data-sim-entity-template data-entity-kind="scenario" '
+        f'data-entity-id="{esc(entity_id)}" data-entity-index="{index}">{body}</template>'
+    )
+
+
+def _sim_trait_detail(label: str, raw: Any) -> str:
+    value = max(0.0, min(1.0, float(raw)))
+    return (
+        '<div class="sim-entity-trait-row">'
+        f'<span>{esc(label)}</span><span class="sim-entity-trait-track">'
+        f'<span class="sim-entity-trait-fill" style="width:{value * 100:.0f}%"></span></span>'
+        f'<span class="sim-entity-trait-value">{value:.2f}</span>'
         '</div>'
     )
 
 
-def _sim_config_scenario_row(scenario: dict[str, Any]) -> str:
-    """One Config-panel scenario row: name + goal, then criteria chips
-    (spec §Config.3). ``must_not_happen`` → red "✗" prefix, else green "✓"."""
-    name = esc(scenario.get('name', ''))
-    goal = scenario.get('goal')
-    goal_html = f'<div class="sim-config-scenario-goal">{esc(str(goal))}</div>' if goal else ''
-    chips: list[str] = []
-    for c in scenario.get('criteria', []):
-        is_negative = c.get('type') == 'must_not_happen'
-        tone = 'red-600' if is_negative else 'green-600'
-        mark = '✗' if is_negative else '✓'
-        chips.append(
-            f'<span class="sim-config-criterion" style="color:var(--{tone})">'
-            f'{mark} {esc(c.get("description", ""))}</span>'
-        )
-    chips_html = f'<div class="sim-config-criteria">{"".join(chips)}</div>' if chips else ''
+def _sim_criterion_detail(criterion: dict[str, Any]) -> str:
+    ctype = criterion.get('type')
+    is_negative = ctype == 'must_not_happen'
+    mark = '&#x2717;' if is_negative else '&#x2713;'
+    cls = 'sim-entity-criterion--negative' if is_negative else 'sim-entity-criterion--positive'
+    type_html = f'<span class="sim-entity-criterion-type">{esc(str(ctype).replace("_", " "))}</span>' if ctype else ''
     return (
-        '<div class="sim-config-scenario-row">'
-        f'<div class="sim-config-scenario-name">{name}</div>{goal_html}{chips_html}'
-        '</div>'
+        f'<li class="sim-entity-criterion {cls}">'
+        f'<span class="sim-entity-criterion-mark">{mark}</span>'
+        f'<span>{esc(str(criterion.get("description", "")))}</span>{type_html}'
+        '</li>'
     )
 
 
@@ -233,6 +383,7 @@ def _sim_breakdown_table(
     key: str,
     headers: list[str],
     cols: Callable[[dict[str, Any]], list[str]],
+    label: Callable[[dict[str, Any]], str] | None = None,
 ) -> str:
     """One Breakdown per-persona/per-scenario table (mockup columns), wrapped in
     a serif-titled panel. ``key`` is the label column field; ``cols`` maps a row
@@ -243,15 +394,23 @@ def _sim_breakdown_table(
     rows = section.data.get('rows', []) if section is not None else []
     if not rows:
         return ''
-    table = html_table(headers, [[esc(str(r[key])), *cols(r)] for r in rows])
+    table = html_table(headers, [[label(r) if label else esc(str(r[key])), *cols(r)] for r in rows])
     return panel(title, f'<div class="sim-bd-table">{table}</div>')
 
 
-def _sim_breakdown(by_kind: dict[str, Any], render: Callable[..., str]) -> str:
+def _sim_breakdown(
+    by_kind: dict[str, Any],
+    render: Callable[..., str],
+    entity_context: dict[str, Any] | None = None,
+) -> str:
     """Breakdown tab body: heatmap → score-distribution → per-persona/scenario
     tables → top failure modes → failures table (spec §Breakdown)."""
     from evaluatorq.common.reports.html_helpers import pct
     from evaluatorq.dashboard.report_kit import bar_rows, heatmap, histogram, panel
+
+    entity_context = entity_context or _sim_entity_context(by_kind)
+    persona_ids: dict[str, str] = entity_context.get('persona_ids', {})
+    scenario_ids: dict[str, str] = entity_context.get('scenario_ids', {})
 
     heatmap_section = by_kind.get('persona_scenario_heatmap')
     heatmap_html = ''
@@ -289,6 +448,7 @@ def _sim_breakdown(by_kind: dict[str, Any], render: Callable[..., str]) -> str:
             _tinted(f'{r["avg_goal_completion_score"]:.2f}', r['avg_goal_completion_score']),
             f'{r["total_tokens"]:,}' if r.get('total_tokens') else '—',
         ],
+        label=lambda r: _sim_entity_button(str(r['persona']), 'persona', persona_ids.get(str(r['persona']))),
     )
     scenario_html = _sim_breakdown_table(
         by_kind.get('scenario_breakdown'),
@@ -301,6 +461,7 @@ def _sim_breakdown(by_kind: dict[str, Any], render: Callable[..., str]) -> str:
             _tinted(f'{r["avg_goal_completion_score"]:.2f}', r['avg_goal_completion_score']),
             f'{r["avg_turn_count"]:.1f}',
         ],
+        label=lambda r: _sim_entity_button(str(r['scenario']), 'scenario', scenario_ids.get(str(r['scenario']))),
     )
     tables_html = f'{persona_html}{scenario_html}'
 
@@ -446,20 +607,18 @@ def _sim_turn_quality(by_kind: dict[str, Any]) -> str:
     return f'{callout_html}{chart_html}{grid_html}'
 
 
-def _sim_overview(by_kind: dict[str, Any], rows: list[Any], run: SimulationRun) -> str:
-    """Overview tab body: agent info card, exec summary, 5-card KPI band, then
-    two 2-col grids (donut + avg-quality metrics; personas + scenarios). Spec §Overview."""
+def _sim_overview(rid: str, by_kind: dict[str, Any], rows: list[Any], run: SimulationRun) -> str:
+    """Overview tab body: agent info card, exec summary, KPI band, and a
+    two-column outcomes/quality grid. Persona and scenario input live in Config."""
     from evaluatorq.dashboard.report_kit import exec_summary, panel
 
-    agent_card_html = _sim_agent_section(run)
+    agent_card_html = _sim_agent_section(rid, run)
     summary_section = by_kind.get('summary')
-    overview_section = by_kind.get('overview')
     heatmap_section = by_kind.get('persona_scenario_heatmap')
     tokens_section = by_kind.get('token_usage')
     metrics_section = by_kind.get('turn_metrics')
 
     summary_data = summary_section.data if summary_section is not None else {}
-    overview_data = overview_section.data if overview_section is not None else {}
     heatmap_data = heatmap_section.data if heatmap_section is not None else {}
     tokens_data = tokens_section.data if tokens_section is not None else {}
     metrics_data = metrics_section.data if metrics_section is not None else {}
@@ -475,14 +634,11 @@ def _sim_overview(by_kind: dict[str, Any], rows: list[Any], run: SimulationRun) 
     # token-usage summary for runs that carry no per-turn quality data.
     quality_tiles = _sim_avg_quality_tiles(metrics_data.get('avg_quality_metrics', {}))
     second_html = panel('Average quality metrics', quality_tiles) if quality_tiles else _sim_tokens_panel(tokens_data)
-    personas_html = _sim_personas_panel(overview_data.get('personas', []))
-    scenarios_html = _sim_scenarios_panel(overview_data.get('scenarios', []))
 
     return (
         f'{agent_card_html}'
         f'{summary_html}{kpi_html}'
         f'<div class="sim-overview-grid-2">{donut_html}{second_html}</div>'
-        f'<div class="sim-overview-grid-2 sim-overview-grid-2--top">{personas_html}{scenarios_html}</div>'
     )
 
 
@@ -490,34 +646,16 @@ def _sim_overview(by_kind: dict[str, Any], rows: list[Any], run: SimulationRun) 
 # (empty list fields like tools/sub_agents are legitimately empty, so they do
 # NOT trigger a live fetch on their own).
 _AGENT_CORE_FIELDS = ('key', 'model', 'description', 'url')
-# Process-lifetime cache keyed by agent key; None is cached too so a
-# missing-key / offline dashboard doesn't refetch on every render.
+# An agent description belongs in the overview, but it must remain a compact
+# identity cue rather than a second copy of prompt/configuration content.
+_AGENT_DESCRIPTION_PREVIEW_LIMIT = 280
+# Process-lifetime cache keyed by agent key. Failed requests are deliberately
+# not cached so a temporary outage can recover on the next report visit.
 _AGENT_INFO_CACHE: dict[str, dict[str, Any] | None] = {}
 
 
-def _run_coro_blocking(coro: Any) -> Any:
-    """Run an async coroutine to completion from sync code, whether or not an
-    event loop is already running in this thread. FastHTML dispatches the sync
-    ``/r/{rid}`` route inside the running loop, so a bare ``asyncio.run`` raises
-    "cannot be called from a running event loop" — in that case run it in a
-    throwaway worker thread instead."""
-    import asyncio
-
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)  # no loop in this thread — safe
-    import concurrent.futures
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-        return ex.submit(asyncio.run, coro).result()
-
-
-def _orq_agent_info_cached(agent_key: str) -> dict[str, Any] | None:
-    """Sync, cached wrapper around the async run-store fetch. Loop-safe (see
-    ``_run_coro_blocking``). Never raises. Only successful results are cached, so
-    a transient failure (network blip, rate limit) is retried on the next
-    render rather than being pinned to ``None`` for the worker's lifetime."""
+async def _orq_agent_info_cached(agent_key: str) -> dict[str, Any] | None:
+    """Fetch and cache agent details without blocking the dashboard event loop."""
     if agent_key in _AGENT_INFO_CACHE:
         return _AGENT_INFO_CACHE[agent_key]
 
@@ -525,7 +663,7 @@ def _orq_agent_info_cached(agent_key: str) -> dict[str, Any] | None:
     try:
         from evaluatorq.simulation.utils.run_store import fetch_agent_info
 
-        result = _run_coro_blocking(fetch_agent_info(agent_key))
+        result = await fetch_agent_info(agent_key)
     except Exception as exc:  # never let a live fetch break a page render
         from loguru import logger
 
@@ -552,7 +690,22 @@ def _agent_key_for(run: SimulationRun) -> str | None:
     return None
 
 
-def _resolve_agent_info(
+def _stored_agent_info(run: SimulationRun) -> dict[str, Any] | None:
+    """Build the minimum card from the values persisted in the run JSON.
+
+    This is deliberately local-only: it gives a report a stable identity when
+    Orq cannot enrich an older run (for example, after an agent was deleted).
+    """
+    agent_key = _agent_key_for(run)
+    if not agent_key:
+        return None
+    info: dict[str, Any] = {'key': agent_key}
+    if run.target_model:
+        info['model'] = run.target_model
+    return info
+
+
+async def _resolve_agent_info(
     run: SimulationRun,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
     """Resolve the agent card's data + provenance as ``(display, original, source)``.
@@ -561,6 +714,7 @@ def _resolve_agent_info(
     - ``captured``  — the run's own snapshot is complete; no Orq call.
     - ``augmented`` — snapshot present but missing a core field; gaps filled live.
     - ``fetched``   — nothing captured; whole card loaded live from Orq.
+    - ``stored``    — Orq could not enrich the run; card uses saved target data.
     - ``none``      — no data and nothing to fetch.
 
     We only call Orq when the target is an Orq agent AND the captured snapshot is
@@ -579,9 +733,9 @@ def _resolve_agent_info(
     agent_key = _agent_key_for(run)
     if not agent_key:
         return captured, captured, ('captured' if captured else 'none')
-    fetched = _orq_agent_info_cached(agent_key)
+    fetched = await _orq_agent_info_cached(agent_key)
     if not fetched:
-        return captured, captured, ('captured' if captured else 'none')
+        return captured or _stored_agent_info(run), captured, ('captured' if captured else 'stored')
     if captured:
         # Fill only missing attributes; captured values win per-field.
         merged = {**fetched, **{k: v for k, v in captured.items() if v}}
@@ -589,10 +743,12 @@ def _resolve_agent_info(
     return fetched, None, 'fetched'
 
 
-def _sim_agent_section(run: SimulationRun) -> str:
-    """Agent card + provenance note + (when enriched) a disclosure to view the
-    originally-captured snapshot."""
-    display, original, source = _resolve_agent_info(run)
+def _sim_agent_card_with_source(
+    display: dict[str, Any] | None,
+    original: dict[str, Any] | None,
+    source: str,
+) -> str:
+    """Render an agent card once its captured/live provenance is known."""
     if source in ('captured', 'none'):
         return _sim_agent_card(display)
 
@@ -603,11 +759,41 @@ def _sim_agent_section(run: SimulationRun) -> str:
             '<details class="sim-agent-original"><summary>Show captured snapshot</summary>'
             f'<div class="sim-agent-original-body">{original_body}</div></details>'
         )
-    else:  # fetched
+    elif source == 'fetched':
         note = 'Loaded live from Orq — no agent config was captured in this run.'
+        toggle = ''
+    else:  # stored
+        note = 'Showing the target recorded in this run; live Orq details are unavailable.'
         toggle = ''
     footer = f'<div class="sim-agent-source">{note}</div>{toggle}'
     return _sim_agent_card(display, footer_html=footer)
+
+
+def _sim_agent_section(rid: str, run: SimulationRun) -> str:
+    """Initial card HTML, with live enrichment deferred until after page load."""
+    captured = run.agent_info if isinstance(run.agent_info, dict) and run.agent_info else None
+    if run.target_kind != 'orq_agent':
+        return _sim_agent_card(captured)
+
+    missing_core = captured is None or any(not captured.get(f) for f in _AGENT_CORE_FIELDS)
+    agent_key = _agent_key_for(run)
+    if not missing_core or not agent_key:
+        return _sim_agent_card(captured)
+
+    stored = captured or _stored_agent_info(run)
+    if not stored:
+        return ''
+    initial_card = _sim_agent_card(stored)
+    return (
+        f'<div class="sim-agent-async" hx-get="/r/{esc(rid)}/sim/agent-card" '
+        f'hx-trigger="load" hx-swap="outerHTML">{initial_card}</div>'
+    )
+
+
+async def sim_agent_card_fragment(run: SimulationRun) -> str:
+    """Async fragment for live agent details; the report itself stays local-only."""
+    display, original, source = await _resolve_agent_info(run)
+    return _sim_agent_card_with_source(display, original, source)
 
 
 def _sim_agent_card(agent_info: dict[str, Any] | None, *, bare: bool = False, footer_html: str = '') -> str:
@@ -623,8 +809,17 @@ def _sim_agent_card(agent_info: dict[str, Any] | None, *, bare: bool = False, fo
     key = agent_info.get('key') or ''
     role = agent_info.get('role')
     model = agent_info.get('model')
-    description = agent_info.get('description')
-    url = agent_info.get('url')
+    description = _agent_description_preview(agent_info.get('description'))
+    # Regenerate this process's Studio link from ORQ_WORKSPACE. This repairs
+    # older snapshots that captured a UUID-based URL without altering run JSON.
+    from evaluatorq.dashboard.orq_links import orq_studio_url
+
+    url = orq_studio_url(
+        target_kind='agent',
+        entity_id=agent_info.get('id'),
+        workspace_id=agent_info.get('workspace_key'),
+        base_url=agent_info.get('base_url') or 'https://my.orq.ai',
+    )
     sub_agents = agent_info.get('sub_agents') or []
     tools = agent_info.get('tools') or []
     knowledge_bases = agent_info.get('knowledge_bases') or []
@@ -666,6 +861,24 @@ def _sim_agent_card(agent_info: dict[str, Any] | None, *, bare: bool = False, fo
     )
     outer_class = 'sim-agent-card' if bare else 'rk-panel sim-agent-card'
     return f'<div class="{outer_class}">{inner}</div>'
+
+
+def _agent_description_preview(description: Any) -> str | None:
+    """Return a compact first-paragraph description safe for the overview.
+
+    Agent ``instructions`` are never part of the card data. Some agent
+    descriptions nevertheless contain extensive configuration, so render only
+    the first paragraph and cap it at a readable overview length.
+    """
+    if not isinstance(description, str):
+        return None
+    first_paragraph = description.split('\n\n', 1)[0].strip()
+    if not first_paragraph:
+        return None
+    compact = ' '.join(first_paragraph.split())
+    if len(compact) <= _AGENT_DESCRIPTION_PREVIEW_LIMIT:
+        return compact
+    return f'{compact[:_AGENT_DESCRIPTION_PREVIEW_LIMIT].rstrip()}...'
 
 
 def _sim_kpi_band(summary_data: dict[str, Any]) -> str:

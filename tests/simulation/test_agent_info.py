@@ -43,6 +43,7 @@ def _agent_payload() -> SimpleNamespace:
 @pytest.mark.asyncio
 async def test_fetch_agent_info_maps_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ORQ_API_KEY", "test-key")
+    monkeypatch.setenv("ORQ_WORKSPACE", "research")
     monkeypatch.delenv("ORQ_BASE_URL", raising=False)
 
     class _Agents:
@@ -66,10 +67,8 @@ async def test_fetch_agent_info_maps_payload(monkeypatch: pytest.MonkeyPatch) ->
     assert info["memory_stores"] == []
     assert info["sub_agents"] == ["youth-agent"]
     assert info["workspace_id"] == "624ccbbd-a482-40e2-b3d9-3621e09da1f8"
-    assert (
-        info["url"]
-        == "https://my.orq.ai/624ccbbd-a482-40e2-b3d9-3621e09da1f8/agents/01K8N1KMM5TBD3BTT2N2J5N0DK"
-    )
+    assert info["workspace_key"] == "research"
+    assert info["url"] == "https://my.orq.ai/research/agents/01K8N1KMM5TBD3BTT2N2J5N0DK"
     assert "instructions" not in info
     assert "system_prompt" not in info
 

@@ -110,6 +110,88 @@
       });
     });
   });
+
+  // Agent-simulation entity details: compact persona/scenario rows and
+  // breakdown-table labels open one shared dialog. j/k cycle within the same
+  // entity kind; Escape is handled natively by <dialog>.
+  (function () {
+    var activeKind = null;
+    var activeId = null;
+
+    function currentDialog() {
+      var dialog = document.querySelector('.sim-entity-dialog');
+      return dialog && dialog.showModal ? dialog : null;
+    }
+
+    function templatesFor(kind) {
+      return Array.prototype.slice.call(
+        document.querySelectorAll('[data-sim-entity-template][data-entity-kind="' + kind + '"]')
+      );
+    }
+
+    function render(template) {
+      var dialog = currentDialog();
+      if (!dialog) return;
+      var content = dialog.querySelector('[data-sim-entity-content]');
+      if (!template || !content) return;
+      activeKind = template.getAttribute('data-entity-kind');
+      activeId = template.getAttribute('data-entity-id');
+      content.innerHTML = template.innerHTML;
+      if (!dialog.open) dialog.showModal();
+    }
+
+    function openEntity(kind, id) {
+      var template = document.querySelector(
+        '[data-sim-entity-template][data-entity-kind="' + kind + '"][data-entity-id="' + id + '"]'
+      );
+      render(template);
+    }
+
+    function step(delta) {
+      if (!activeKind || !activeId) return;
+      var templates = templatesFor(activeKind);
+      if (!templates.length) return;
+      var current = templates.findIndex(function (template) {
+        return template.getAttribute('data-entity-id') === activeId;
+      });
+      if (current < 0) return;
+      var next = (current + delta + templates.length) % templates.length;
+      render(templates[next]);
+    }
+
+    document.body.addEventListener('click', function (evt) {
+      var trigger = evt.target.closest('[data-sim-entity-trigger]');
+      if (!trigger) return;
+      evt.preventDefault();
+      openEntity(trigger.getAttribute('data-entity-kind'), trigger.getAttribute('data-entity-id'));
+    });
+
+    document.body.addEventListener('click', function (evt) {
+      var dialog = currentDialog();
+      if (!dialog || !dialog.open) return;
+      if (evt.target === dialog || evt.target.closest('[data-sim-entity-close]')) {
+        dialog.close();
+      } else if (evt.target.closest('[data-sim-entity-prev]')) {
+        step(-1);
+      } else if (evt.target.closest('[data-sim-entity-next]')) {
+        step(1);
+      }
+    });
+
+    document.addEventListener('keydown', function (evt) {
+      var dialog = currentDialog();
+      if (!dialog || !dialog.open) return;
+      var tag = document.activeElement && document.activeElement.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (evt.key === 'j' || evt.key === 'J') {
+        evt.preventDefault();
+        step(1);
+      } else if (evt.key === 'k' || evt.key === 'K') {
+        evt.preventDefault();
+        step(-1);
+      }
+    });
+  })();
 })();
 
 // Persist open <details> filter dropdowns across HTMX filter swaps.

@@ -1,7 +1,8 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from evaluatorq.contracts import AgentContext
 from evaluatorq.simulation.api import generate, generate_and_simulate, simulate
 from evaluatorq.simulation.types import CommunicationStyle, Judgment, Persona, Scenario, SimulationDatapoint
 
@@ -42,6 +43,95 @@ async def test_generate_and_simulate_accepts_generation_client_without_orq(monke
                 num_scenarios=1,
                 generation_client=injected,
             )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["agent:support-agent", "support-agent"])
+async def test_generate_and_simulate_uses_orq_agent_description_when_omitted(monkeypatch, target):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    backend = MagicMock()
+    backend.resolve_context = AsyncMock(
+        return_value=AgentContext(key="support-agent", description="Handles customer refunds")
+    )
+    generated_descriptions: list[object] = []
+
+    def capture_generation(**kwargs: object) -> tuple[list[Persona], list[Scenario]]:
+        generated_descriptions.append(kwargs["agent_description"])
+        return [_persona()], [_scenario()]
+
+    with (
+        patch(
+            "evaluatorq.redteam.runner._make_agent_backend",
+            return_value=backend,
+        ),
+        patch(
+            "evaluatorq.simulation.api._generate_personas_scenarios",
+            new=AsyncMock(side_effect=capture_generation),
+        ),
+        patch(
+            "evaluatorq.simulation.api._resolve_or_generate_datapoints",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "evaluatorq.simulation.api._simulate_core",
+            new=AsyncMock(return_value=[]),
+        ),
+    ):
+        await generate_and_simulate(target=target)
+
+    assert generated_descriptions == ["Handles customer refunds"]
+    backend.resolve_context.assert_awaited_once_with("support-agent")
+
+
+@pytest.mark.asyncio
+async def test_generate_and_simulate_prefers_an_explicit_description(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    generated_descriptions: list[object] = []
+
+    def capture_generation(**kwargs: object) -> tuple[list[Persona], list[Scenario]]:
+        generated_descriptions.append(kwargs["agent_description"])
+        return [_persona()], [_scenario()]
+
+    with (
+        patch("evaluatorq.redteam.runner._make_agent_backend") as make_backend,
+        patch(
+            "evaluatorq.simulation.api._generate_personas_scenarios",
+            new=AsyncMock(side_effect=capture_generation),
+        ),
+        patch(
+            "evaluatorq.simulation.api._resolve_or_generate_datapoints",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "evaluatorq.simulation.api._simulate_core",
+            new=AsyncMock(return_value=[]),
+        ),
+    ):
+        await generate_and_simulate(
+            agent_description="Explicit description",
+            target="agent:support-agent",
+        )
+
+    assert generated_descriptions == ["Explicit description"]
+    make_backend.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_and_simulate_requires_an_explicit_or_target_description():
+    with pytest.raises(ValueError, match=r"agent_description.*description"):
+        await generate_and_simulate(target=lambda messages: "ok")
+
+
+@pytest.mark.asyncio
+async def test_generate_and_simulate_rejects_orq_agents_without_a_description():
+    backend = MagicMock()
+    backend.resolve_context = AsyncMock(return_value=AgentContext(key="support-agent"))
+
+    with (
+        patch("evaluatorq.redteam.runner._make_agent_backend", return_value=backend),
+        pytest.raises(ValueError, match=r"agent_description.*description"),
+    ):
+        await generate_and_simulate(target="agent:support-agent")
 
 
 @pytest.mark.asyncio
