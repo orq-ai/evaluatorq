@@ -339,6 +339,18 @@
   /* ------------------------------------------------------------------
      Slide counter
      ------------------------------------------------------------------ */
+  /* persistent brand logo, bottom-left, static to the viewport */
+  #brand-logo {
+    position: fixed;
+    bottom: 20px;
+    left: 28px;
+    height: 20px;
+    opacity: 0.75;
+    z-index: 10;
+    user-select: none;
+    pointer-events: none;
+  }
+
   #counter {
     position: fixed;
     bottom: 22px;
@@ -586,7 +598,7 @@
   <section class="slide" id="s4">
     <div class="slide-inner">
       <div class="eyebrow">Live demo</div>
-      <h1>Let's break an agent.</h1>
+      <h1>Let's simulate an agent.</h1>
       <p class="subtitle">
         A live credit-card support agent, zero test data. From here it's all
         terminal.
@@ -753,9 +765,12 @@ results = <span class="kw">await</span> simulate(target=my_agent,
   <!-- ============================================================
        Slide counter
        ============================================================ -->
+  <img id="brand-logo" alt="orq">
   <div id="counter">1 / 11</div>
 
 <script>
+  // reuse the title-slide ornament as the persistent corner logo
+  document.getElementById('brand-logo').src = document.querySelector('.ornament').src;
   (function () {
     const slides = Array.from(document.querySelectorAll('.slide'));
     const counter = document.getElementById('counter');
