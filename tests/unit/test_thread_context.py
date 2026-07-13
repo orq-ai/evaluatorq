@@ -19,8 +19,10 @@ def test_build_thread_id_sim_and_redteam_shapes() -> None:
     # run_id prefix so `contains:{run_id}` matches every conversation in the run.
     assert build_thread_id('run1', 3) == 'run1:3'
     assert build_thread_id('run1', 'agent-a', 7) == 'run1:agent-a:7'
-    assert build_thread_id('run1', 3).startswith('run1')
-    assert build_thread_id('run1', 'agent-a', 7).startswith('run1')
+    sim_thread_id = build_thread_id('run1', 3)
+    redteam_thread_id = build_thread_id('run1', 'agent-a', 7)
+    assert sim_thread_id is not None and sim_thread_id.startswith('run1')
+    assert redteam_thread_id is not None and redteam_thread_id.startswith('run1')
 
 
 def test_build_thread_id_none_without_run() -> None:

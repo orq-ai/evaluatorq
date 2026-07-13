@@ -9,6 +9,7 @@ older reports without ids, or unconfigured deployments, render fine).
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
 
