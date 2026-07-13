@@ -494,25 +494,43 @@ _AGENT_CORE_FIELDS = ('key', 'model', 'description', 'url')
 _AGENT_INFO_CACHE: dict[str, dict[str, Any] | None] = {}
 
 
+def _run_coro_blocking(coro: Any) -> Any:
+    """Run an async coroutine to completion from sync code, whether or not an
+    event loop is already running in this thread. FastHTML dispatches the sync
+    ``/r/{rid}`` route inside the running loop, so a bare ``asyncio.run`` raises
+    "cannot be called from a running event loop" — in that case run it in a
+    throwaway worker thread instead."""
+    import asyncio
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)  # no loop in this thread — safe
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(asyncio.run, coro).result()
+
+
 def _orq_agent_info_cached(agent_key: str) -> dict[str, Any] | None:
-    """Sync, cached wrapper around the async run-store fetch. Safe to call from
-    the sync ``/r/{rid}`` route (Starlette runs it in a threadpool, so there's
-    no running event loop and ``asyncio.run`` works). Never raises — any failure
-    caches/returns ``None`` so the card silently falls back to captured data."""
+    """Sync, cached wrapper around the async run-store fetch. Loop-safe (see
+    ``_run_coro_blocking``). Never raises. Only successful results are cached, so
+    a transient failure (network blip, rate limit) is retried on the next
+    render rather than being pinned to ``None`` for the worker's lifetime."""
     if agent_key in _AGENT_INFO_CACHE:
         return _AGENT_INFO_CACHE[agent_key]
-    import asyncio
 
     result: dict[str, Any] | None = None
     try:
         from evaluatorq.simulation.utils.run_store import fetch_agent_info
 
-        result = asyncio.run(fetch_agent_info(agent_key))
+        result = _run_coro_blocking(fetch_agent_info(agent_key))
     except Exception as exc:  # never let a live fetch break a page render
         from loguru import logger
 
         logger.debug('live agent_info fetch failed for {}: {}', agent_key, exc)
-    _AGENT_INFO_CACHE[agent_key] = result
+    if result is not None:
+        _AGENT_INFO_CACHE[agent_key] = result
     return result
 
 
