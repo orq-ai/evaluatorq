@@ -536,7 +536,7 @@ def test_simulate_success_no_save(tmp_path: Path) -> None:
     assert result.exit_code == 0
 
 
-def test_simulate_writes_output_file(tmp_path: Path) -> None:
+def test_simulate_writes_results_file(tmp_path: Path) -> None:
     dp_file = _make_datapoints_file(tmp_path)
     out_file = tmp_path / "out.jsonl"
     results = [_make_result()]
@@ -556,7 +556,7 @@ def test_simulate_writes_output_file(tmp_path: Path) -> None:
                 "simulate",
                 "--datapoints", str(dp_file),
                 "--openai-model", "gpt-4o",
-                "--output", str(out_file),
+                "--results", str(out_file),
                 "--no-save",
             ],
             env={"OPENAI_API_KEY": "test-key"},
@@ -566,7 +566,7 @@ def test_simulate_writes_output_file(tmp_path: Path) -> None:
     mock_export.assert_called_once()
 
 
-def test_simulate_report_output_writes_full_report(
+def test_simulate_report_writes_full_report(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -586,7 +586,7 @@ def test_simulate_report_output_writes_full_report(
                 "simulate",
                 "--datapoints", str(dp_file),
                 "--openai-model", "gpt-4o",
-                "--report-output", str(report),
+                "--report", str(report),
                 "--no-save",
             ],
             env={"OPENAI_API_KEY": "test-key"},
@@ -603,10 +603,10 @@ def test_simulate_report_output_writes_full_report(
     assert not (tmp_path / ".evaluatorq" / "sim-runs").exists()
 
 
-def test_run_report_output_and_autosave_both_written(
+def test_run_report_and_autosave_both_written(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Without --no-save, --report-output writes the explicit file AND the
+    # Without --no-save, --report writes the explicit file AND the
     # auto-save still lands under .evaluatorq/sim-runs/ (independent sinks).
     monkeypatch.chdir(tmp_path)
     report = tmp_path / "report.json"
@@ -624,7 +624,7 @@ def test_run_report_output_and_autosave_both_written(
                 "run",
                 "--agent-description", "bot",
                 "--openai-model", "gpt-4o",
-                "--report-output", str(report),
+                "--report", str(report),
             ],
             env={"OPENAI_API_KEY": "test-key"},
         )
@@ -1070,12 +1070,12 @@ def test_simulate_runtime_error_is_clean(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# --export-md / --export-html
+# --report-md / --report-html
 # ---------------------------------------------------------------------------
 
 
-def test_run_export_md_writes_dated_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """--export-md writes exactly one *.md with non-empty content."""
+def test_run_report_md_writes_dated_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--report-md writes exactly one *.md with non-empty content."""
     monkeypatch.chdir(tmp_path)
     results = [_make_result(scorer_scores={"goal_achieved": 1.0})]
     export_dir = tmp_path / "exports"
@@ -1095,7 +1095,7 @@ def test_run_export_md_writes_dated_file(tmp_path: Path, monkeypatch: pytest.Mon
                 "--openai-model", "gpt-4o-mini",
                 "--yes",
                 "--no-save",
-                "--export-md", str(export_dir),
+                "--report-md", str(export_dir),
             ],
             env={"OPENAI_API_KEY": "test-key"},
         )
@@ -1106,8 +1106,8 @@ def test_run_export_md_writes_dated_file(tmp_path: Path, monkeypatch: pytest.Mon
     assert mds[0].read_text().strip(), "Markdown file should be non-empty"
 
 
-def test_run_export_html_writes_dated_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """--export-html writes exactly one *.html with non-empty content."""
+def test_run_report_html_writes_dated_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--report-html writes exactly one *.html with non-empty content."""
     monkeypatch.chdir(tmp_path)
     results = [_make_result(scorer_scores={"goal_achieved": 1.0})]
     export_dir = tmp_path / "exports"
@@ -1127,7 +1127,7 @@ def test_run_export_html_writes_dated_file(tmp_path: Path, monkeypatch: pytest.M
                 "--openai-model", "gpt-4o-mini",
                 "--yes",
                 "--no-save",
-                "--export-html", str(export_dir),
+                "--report-html", str(export_dir),
             ],
             env={"OPENAI_API_KEY": "test-key"},
         )
@@ -1138,8 +1138,8 @@ def test_run_export_html_writes_dated_file(tmp_path: Path, monkeypatch: pytest.M
     assert htmls[0].read_text().strip(), "HTML file should be non-empty"
 
 
-def test_simulate_export_md_writes_dated_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """simulate --export-md writes exactly one *.md with non-empty content."""
+def test_simulate_report_md_writes_dated_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """simulate --report-md writes exactly one *.md with non-empty content."""
     monkeypatch.chdir(tmp_path)
     dp_file = _make_datapoints_file(tmp_path)
     results = [_make_result(scorer_scores={"goal_achieved": 1.0})]
@@ -1160,7 +1160,7 @@ def test_simulate_export_md_writes_dated_file(tmp_path: Path, monkeypatch: pytes
                 "--openai-model", "gpt-4o-mini",
                 "--yes",
                 "--no-save",
-                "--export-md", str(export_dir),
+                "--report-md", str(export_dir),
             ],
             env={"OPENAI_API_KEY": "test-key"},
         )
@@ -1176,8 +1176,8 @@ def test_simulate_export_md_writes_dated_file(tmp_path: Path, monkeypatch: pytes
 # ---------------------------------------------------------------------------
 
 
-def test_generate_requires_output(tmp_path: Path) -> None:
-    # --output is required: gen-only must write the datapoints somewhere.
+def test_generate_requires_datapoints(tmp_path: Path) -> None:
+    # --datapoints is required: gen-only must write the datapoints somewhere.
     result = runner.invoke(
         app,
         ["generate", "--agent-description", "A helpful bot"],
@@ -1199,7 +1199,7 @@ def test_generate_writes_datapoints(tmp_path: Path) -> None:
             [
                 "generate",
                 "--agent-description", "A helpful bot",
-                "--output", str(out_file),
+                "--datapoints", str(out_file),
             ],
             env={"OPENAI_API_KEY": "test-key"},
         )
@@ -1229,7 +1229,7 @@ def test_generate_target_agent_uses_context_description_when_omitted(tmp_path: P
             [
                 "generate",
                 "--target", "agent:refund-agent-fixed",
-                "--output", str(out_file),
+                "--datapoints", str(out_file),
             ],
             env={"ORQ_API_KEY": "test-key"},
         )
@@ -1242,7 +1242,7 @@ def test_generate_target_agent_uses_context_description_when_omitted(tmp_path: P
     assert mock_impl.call_args.kwargs["agent_description"] == "Context description"
 
 
-def test_generate_output_roundtrips_through_simulate_loader(tmp_path: Path) -> None:
+def test_generate_datapoints_roundtrips_through_simulate_loader(tmp_path: Path) -> None:
     # The whole point of gen-only: the file `generate` writes must load back
     # via the same loader `simulate --datapoints` uses, with id + fields intact.
     from evaluatorq.simulation.utils.dataset_export import load_datapoints_from_jsonl
@@ -1254,7 +1254,7 @@ def test_generate_output_roundtrips_through_simulate_loader(tmp_path: Path) -> N
         mock_impl.return_value = datapoints
         result = runner.invoke(
             app,
-            ["generate", "--agent-description", "bot", "--output", str(out_file)],
+            ["generate", "--agent-description", "bot", "--datapoints", str(out_file)],
             env={"OPENAI_API_KEY": "test-key"},
         )
 
@@ -1266,14 +1266,14 @@ def test_generate_output_roundtrips_through_simulate_loader(tmp_path: Path) -> N
     assert all(dp.first_message == "Hello" for dp in loaded)
 
 
-def test_generate_output_passes_validate_dataset(tmp_path: Path) -> None:
+def test_generate_datapoints_passes_validate_dataset(tmp_path: Path) -> None:
     # generate's output must validate under the tool's own validate-dataset.
     out_file = tmp_path / "dp.jsonl"
     with patch("evaluatorq.simulation.cli._generate_impl", new_callable=AsyncMock) as mock_impl:
         mock_impl.return_value = _make_datapoints(2)
         gen = runner.invoke(
             app,
-            ["generate", "--agent-description", "bot", "--output", str(out_file)],
+            ["generate", "--agent-description", "bot", "--datapoints", str(out_file)],
             env={"OPENAI_API_KEY": "test-key"},
         )
     assert gen.exit_code == 0, gen.output
@@ -1291,7 +1291,7 @@ def test_generate_no_datapoints_runtime_error_is_clean(tmp_path: Path) -> None:
         mock_impl.side_effect = RuntimeError("first-message generation produced no datapoints")
         result = runner.invoke(
             app,
-            ["generate", "--agent-description", "bot", "--output", str(out_file)],
+            ["generate", "--agent-description", "bot", "--datapoints", str(out_file)],
             env={"OPENAI_API_KEY": "test-key"},
         )
 
@@ -1307,7 +1307,7 @@ def test_generate_rejects_zero_personas(tmp_path: Path) -> None:
         [
             "generate",
             "--agent-description", "bot",
-            "--output", str(out_file),
+            "--datapoints", str(out_file),
             "--num-personas", "0",
         ],
         env={"OPENAI_API_KEY": "test-key"},
@@ -1330,7 +1330,7 @@ def test_generate_forwards_flags(tmp_path: Path) -> None:
             [
                 "generate",
                 "--agent-description", "A helpful bot",
-                "--output", str(out_file),
+                "--datapoints", str(out_file),
                 "--sim-model", "custom-model",
                 "--num-personas", "2",
                 "--num-scenarios", "4",
@@ -1402,7 +1402,7 @@ def test_generate_forwards_sim_model(monkeypatch):
         [
             "generate",
             "--agent-description", "x",
-            "--output", "dp.jsonl",
+            "--datapoints", "dp.jsonl",
             "--sim-model", "gpt-5.4-mini",
             "--num-personas", "1",
             "--num-scenarios", "1",
@@ -1432,12 +1432,12 @@ def test_old_model_flag_rejected(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# run --save-datapoints  (Task 3)
+# run --datapoints  (Task 3)
 # ---------------------------------------------------------------------------
 
 
-def test_run_save_datapoints_writes_inputs(tmp_path: Path) -> None:
-    """--save-datapoints writes the simulate inputs as JSONL and echoes a status message."""
+def test_run_datapoints_writes_inputs(tmp_path: Path) -> None:
+    """--datapoints writes the simulate inputs as JSONL and echoes a status message."""
     from evaluatorq.simulation.utils.dataset_export import load_datapoints_from_jsonl
 
     dp_file = tmp_path / "dp.jsonl"
@@ -1462,7 +1462,7 @@ def test_run_save_datapoints_writes_inputs(tmp_path: Path) -> None:
                 "run",
                 "--agent-description", "x",
                 "--openai-model", "gpt-4o",
-                "--save-datapoints", str(dp_file),
+                "--datapoints", str(dp_file),
                 "--no-save",
             ],
             env={"OPENAI_API_KEY": "test-key"},
@@ -1477,7 +1477,7 @@ def test_run_save_datapoints_writes_inputs(tmp_path: Path) -> None:
     assert "Datapoints saved" in result.output
 
 
-def test_run_save_datapoints_echoes_even_when_simulation_fails(tmp_path: Path) -> None:
+def test_run_datapoints_echoes_even_when_simulation_fails(tmp_path: Path) -> None:
     """The save confirmation must survive a later simulation failure.
 
     Datapoints are written (and emit_datapoints called) before simulation runs,
@@ -1506,7 +1506,7 @@ def test_run_save_datapoints_echoes_even_when_simulation_fails(tmp_path: Path) -
                 "run",
                 "--agent-description", "x",
                 "--openai-model", "gpt-4o",
-                "--save-datapoints", str(dp_file),
+                "--datapoints", str(dp_file),
                 "--no-save",
             ],
             env={"OPENAI_API_KEY": "test-key"},
@@ -1518,8 +1518,8 @@ def test_run_save_datapoints_echoes_even_when_simulation_fails(tmp_path: Path) -
     assert "Error: simulation produced no datapoints" in result.output
 
 
-def test_run_without_save_datapoints_writes_no_file(tmp_path: Path) -> None:
-    """When --save-datapoints is omitted, emit_datapoints=None is passed and no file is created."""
+def test_run_without_datapoints_writes_no_file(tmp_path: Path) -> None:
+    """When --datapoints is omitted, emit_datapoints=None is passed and no file is created."""
     captured_emit: dict[str, Any] = {}
 
     async def fake_generate_and_simulate(**kwargs: Any) -> list[Any]:

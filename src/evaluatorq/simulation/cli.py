@@ -9,13 +9,13 @@ Three execution verbs:
 under a single pipeline span (via ``generate_and_simulate``). It is not a literal
 ``generate`` + ``simulate`` pipe — it does not require an intermediate file. To
 capture the exact generated inputs for reproducible re-runs, pass
-``--save-datapoints PATH`` (then re-feed that file to ``sim simulate --datapoints``).
+``--datapoints PATH`` (then re-feed that file to ``sim simulate --datapoints``).
 
 Usage:
-    evaluatorq sim generate --agent-description "..." --output dp.jsonl
+    evaluatorq sim generate --agent-description "..." --datapoints dp.jsonl
     evaluatorq sim simulate --datapoints dp.jsonl --target my-agent
     evaluatorq sim run --agent-description "..." --openai-model gpt-4o-mini
-    evaluatorq sim run --agent-description "..." --target my-agent --save-datapoints dp.jsonl
+    evaluatorq sim run --agent-description "..." --target my-agent --datapoints dp.jsonl
     evaluatorq sim export --input results.jsonl --output payload.json
     evaluatorq sim validate-dataset dp.jsonl
     evaluatorq sim runs
@@ -302,14 +302,14 @@ def simulate(
             ),
         ),
     ] = None,
-    output: Annotated[
+    results_path: Annotated[
         Path | None,
-        typer.Option('--output', '-o', help='Path to write results JSONL.'),
+        typer.Option('--results', '-o', help='Path to write results JSONL.'),
     ] = None,
-    report_output: Annotated[
+    report_path: Annotated[
         Path | None,
         typer.Option(
-            '--report-output',
+            '--report',
             help=(
                 'Path to write the full SimulationRun report JSON (results + '
                 'scorer averages + metadata) to an explicit location, instead of '
@@ -368,13 +368,13 @@ def simulate(
         bool,
         typer.Option('--yes', '-y', help='Skip interactive confirmation prompt.'),
     ] = False,
-    export_md: Annotated[
+    report_md: Annotated[
         Path | None,
-        typer.Option('--export-md', help='Directory for an auto-named Markdown report.'),
+        typer.Option('--report-md', help='Directory for an auto-named Markdown report.'),
     ] = None,
-    export_html: Annotated[
+    report_html: Annotated[
         Path | None,
-        typer.Option('--export-html', help='Directory for an auto-named HTML report.'),
+        typer.Option('--report-html', help='Directory for an auto-named HTML report.'),
     ] = None,
 ) -> None:
     """Run simulations from a pre-built datapoints file.
@@ -451,8 +451,8 @@ def simulate(
         # traceback. Exit 1 keeps the CI-gate behaviour (still non-zero).
         _handle_cli_error(exc)
 
-    if output:
-        _write_results(results, output)
+    if results_path:
+        _write_results(results, results_path)
 
     tgt_name, tgt_model = _target_identity(target=target, vercel_url=vercel_url, openai_model=openai_model)
     agent_info = None
@@ -470,14 +470,14 @@ def simulate(
         results=results,
     )
 
-    if export_md is not None:
-        _export_report(run, export_md, fmt='md')
-    if export_html is not None:
-        _export_report(run, export_html, fmt='html')
+    if report_md is not None:
+        _export_report(run, report_md, fmt='md')
+    if report_html is not None:
+        _export_report(run, report_html, fmt='html')
 
-    if report_output is not None:
-        _write_report(run, report_output)
-        typer.echo(f'Report saved: {report_output}', err=True)
+    if report_path is not None:
+        _write_report(run, report_path)
+        typer.echo(f'Report saved: {report_path}', err=True)
 
     if not no_save:
         run_path = _auto_save_run(run=run, run_name=name)
@@ -556,14 +556,14 @@ def run(
             ),
         ),
     ] = None,
-    output: Annotated[
+    results_path: Annotated[
         Path | None,
-        typer.Option('--output', '-o', help='Path to write results JSONL.'),
+        typer.Option('--results', '-o', help='Path to write results JSONL.'),
     ] = None,
-    report_output: Annotated[
+    report_path: Annotated[
         Path | None,
         typer.Option(
-            '--report-output',
+            '--report',
             help=(
                 'Path to write the full SimulationRun report JSON (results + '
                 'scorer averages + metadata) to an explicit location, instead of '
@@ -614,10 +614,10 @@ def run(
         bool,
         typer.Option('--no-save', help='Skip writing to .evaluatorq/sim-runs/.'),
     ] = False,
-    save_datapoints: Annotated[
+    datapoints_path: Annotated[
         Path | None,
         typer.Option(
-            '--save-datapoints',
+            '--datapoints',
             help=(
                 'Also write the generated datapoints (the simulate inputs) to this '
                 'JSONL path, for reproducible re-runs via `sim simulate --datapoints`.'
@@ -641,13 +641,13 @@ def run(
         bool,
         typer.Option('--yes', '-y', help='Skip interactive confirmation prompt.'),
     ] = False,
-    export_md: Annotated[
+    report_md: Annotated[
         Path | None,
-        typer.Option('--export-md', help='Directory for an auto-named Markdown report.'),
+        typer.Option('--report-md', help='Directory for an auto-named Markdown report.'),
     ] = None,
-    export_html: Annotated[
+    report_html: Annotated[
         Path | None,
-        typer.Option('--export-html', help='Directory for an auto-named HTML report.'),
+        typer.Option('--report-html', help='Directory for an auto-named HTML report.'),
     ] = None,
 ) -> None:
     """Generate personas and scenarios, then run simulations (generate + simulate).
@@ -704,7 +704,7 @@ def run(
                 num_scenarios=num_scenarios,
                 evaluator_names=evaluator_names,
                 evaluation_name=name,
-                save_datapoints=save_datapoints,
+                save_datapoints=datapoints_path,
                 hooks=hooks,
             )
         )
@@ -722,8 +722,8 @@ def run(
         # traceback. Exit 1 keeps the CI-gate behaviour (still non-zero).
         _handle_cli_error(exc)
 
-    if output:
-        _write_results(results, output)
+    if results_path:
+        _write_results(results, results_path)
 
     tgt_name, tgt_model = _target_identity(target=target, vercel_url=vercel_url, openai_model=openai_model)
     agent_info = None
@@ -741,14 +741,14 @@ def run(
         results=results,
     )
 
-    if export_md is not None:
-        _export_report(run, export_md, fmt='md')
-    if export_html is not None:
-        _export_report(run, export_html, fmt='html')
+    if report_md is not None:
+        _export_report(run, report_md, fmt='md')
+    if report_html is not None:
+        _export_report(run, report_html, fmt='html')
 
-    if report_output is not None:
-        _write_report(run, report_output)
-        typer.echo(f'Report saved: {report_output}', err=True)
+    if report_path is not None:
+        _write_report(run, report_path)
+        typer.echo(f'Report saved: {report_path}', err=True)
 
     if not no_save:
         run_path = _auto_save_run(run=run, run_name=name)
@@ -806,9 +806,9 @@ async def _run_impl(
 
 @app.command(no_args_is_help=True)
 def generate(
-    output: Annotated[
+    datapoints_path: Annotated[
         Path,
-        typer.Option('--output', '-o', help='Path to write the generated datapoints JSONL.'),
+        typer.Option('--datapoints', '-o', help='Path to write the generated datapoints JSONL.'),
     ],
     agent_description: Annotated[
         str | None,
@@ -910,8 +910,8 @@ def generate(
         # traceback (per the spec error-handling contract).
         _handle_cli_error(exc)
 
-    _write_datapoints(datapoints, output, dataset_format=dataset_format)
-    typer.echo(f'Generated {len(datapoints)} datapoint(s) -> {output}', err=True)
+    _write_datapoints(datapoints, datapoints_path, dataset_format=dataset_format)
+    typer.echo(f'Generated {len(datapoints)} datapoint(s) -> {datapoints_path}', err=True)
 
 
 async def _generate_impl(
