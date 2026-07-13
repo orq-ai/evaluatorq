@@ -9,7 +9,14 @@ import httpx
 import pytest
 from openai import BadRequestError
 
+from evaluatorq.common import llm_call
 from evaluatorq.common.llm_call import execute_chat_completion
+
+
+@pytest.fixture(autouse=True)
+def _reset_reasoning_rejectors() -> None:
+    """The per-model rejection memo is process-lifetime; isolate each test."""
+    llm_call._REASONING_EFFORT_REJECTORS.clear()
 
 
 def _bad_request(message: str) -> BadRequestError:
@@ -191,6 +198,31 @@ async def test_drops_reasoning_effort_and_retries_when_model_rejects_it(monkeypa
     assert client.chat.completions.create.await_count == 2
     # The retry must not carry reasoning_effort.
     assert client.chat.completions.create.await_args is not None
+    assert 'reasoning_effort' not in client.chat.completions.create.await_args.kwargs
+    # The model is remembered so subsequent calls strip the param up front.
+    assert 'm' in llm_call._REASONING_EFFORT_REJECTORS
+
+
+@pytest.mark.asyncio
+async def test_memoized_rejection_strips_reasoning_effort_up_front_no_second_400(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    llm_call._REASONING_EFFORT_REJECTORS.add('m')  # model already known to reject it
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=_fake_response())
+
+    await execute_chat_completion(
+        client=client,
+        model='m',
+        messages=[{'role': 'user', 'content': 'x'}],
+        span=None,
+        timeout_s=5.0,
+        extra_kwargs={'reasoning_effort': 'low'},
+    )
+
+    # No 400 round-trip: one call, and reasoning_effort was never sent.
+    assert client.chat.completions.create.await_count == 1
     assert 'reasoning_effort' not in client.chat.completions.create.await_args.kwargs
 
 
