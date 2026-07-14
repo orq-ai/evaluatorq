@@ -51,6 +51,7 @@ from evaluatorq.common.reports import (
     svg_bar as _svg_bar,
 )
 from evaluatorq.common.reports.palette import COLORS
+from evaluatorq.dashboard.trace_links import trace_link_button
 from evaluatorq.simulation.reports.sections import build_report_sections
 
 if TYPE_CHECKING:
@@ -603,6 +604,7 @@ def render_report_body(
     target: str = 'agent',
     run_date: datetime | None = None,
     executive_summary: str | None = None,
+    experiment_url: str | None = None,
 ) -> str:
     """Render simulation results as an HTML body fragment (no ``<html>`` or ``<head>`` wrapper).
 
@@ -615,6 +617,10 @@ def render_report_body(
         results: Simulation results to render.
         target: Display name for the target agent.
         run_date: Report generation timestamp (defaults to now).
+        executive_summary: Optional narrative summary for the hero header.
+        experiment_url: Optional absolute URL to the uploaded Orq experiment
+            run; when set, renders an "Open experiment in Orq" button in the
+            hero header.
 
     Returns:
         An HTML fragment string (no ``<!DOCTYPE>``, ``<html>``, or ``<head>``).
@@ -654,11 +660,12 @@ def render_report_body(
     verdict_html = _build_verdict_line(sections, sd)
     summary_section = next((s for s in sections if s.kind == 'summary'), None)
     narrative_html = _render_summary_html(summary_section) if summary_section is not None else ''
+    experiment_link_html = trace_link_button(experiment_url, 'Open experiment in Orq')
     header_html = (
         '<header class="hero"><h1>Agent Simulation Report</h1>'
         f'<p><strong>Target:</strong> {_esc(target)} &nbsp;|&nbsp; '
         f'<strong>Date:</strong> {_format_date(run_date or datetime.now(tz=timezone.utc))}</p>'
-        f'{verdict_html}{narrative_html}{kpis}</header>'
+        f'{experiment_link_html}{verdict_html}{narrative_html}{kpis}</header>'
     )
 
     return _render_body(
@@ -675,6 +682,7 @@ def export_html(
     target: str = 'agent',
     run_date: datetime | None = None,
     executive_summary: str | None = None,
+    experiment_url: str | None = None,
 ) -> str:
     """Render a list of simulation results as a self-contained HTML document."""
     head = (
@@ -683,7 +691,13 @@ def export_html(
         '<title>Agent Simulation Report</title>\n'
         f'<style>\n{_load_css()}\n</style>'
     )
-    body_html = render_report_body(results, target=target, run_date=run_date, executive_summary=executive_summary)
+    body_html = render_report_body(
+        results,
+        target=target,
+        run_date=run_date,
+        executive_summary=executive_summary,
+        experiment_url=experiment_url,
+    )
     return (
         '<!DOCTYPE html>\n'
         '<html lang="en">\n'

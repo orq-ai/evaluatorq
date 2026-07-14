@@ -325,6 +325,54 @@ def test_sim_dashboard_adapter_preserves_full_run_narrative() -> None:
     assert summary in export_markdown(run)
 
 
+def test_sim_dashboard_adapter_passes_experiment_url_through() -> None:
+    """The run's experiment_url must reach the dashboard body, body_from_results,
+    and export outputs as an "Open experiment in Orq" link."""
+    from evaluatorq.dashboard.surfaces import ADAPTERS
+    from evaluatorq.simulation.types import SimulationRun
+
+    results = _make_sim_results()
+    url = 'https://my.orq.ai/workspace/experiments/abc123'
+    run = SimulationRun(
+        run_name='experiment-url-test',
+        created_at=datetime.now(tz=timezone.utc),
+        mode='simulate',
+        target_kind='callback',
+        evaluator_names=[],
+        total_results=len(results),
+        scorer_averages={},
+        results=results,
+        experiment_url=url,
+    )
+
+    adapter = ADAPTERS['sim']
+    assert url in adapter.body(run)
+    assert url in adapter.export(run)
+    assert url in adapter.body_from_results(run, results)
+
+
+def test_sim_dashboard_adapter_omits_experiment_url_when_unset() -> None:
+    from evaluatorq.dashboard.surfaces import ADAPTERS
+    from evaluatorq.simulation.types import SimulationRun
+
+    results = _make_sim_results()
+    run = SimulationRun(
+        run_name='no-experiment-url-test',
+        created_at=datetime.now(tz=timezone.utc),
+        mode='simulate',
+        target_kind='callback',
+        evaluator_names=[],
+        total_results=len(results),
+        scorer_averages={},
+        results=results,
+    )
+
+    adapter = ADAPTERS['sim']
+    assert 'trace-link' not in adapter.body(run)
+    assert 'trace-link' not in adapter.export(run)
+    assert 'trace-link' not in adapter.body_from_results(run, results)
+
+
 def test_sim_tabbed_dashboard_preserves_only_full_run_narrative() -> None:
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
     from evaluatorq.simulation.types import SimulationRun

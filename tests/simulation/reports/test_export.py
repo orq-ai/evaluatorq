@@ -242,6 +242,38 @@ def test_export_html_handles_empty_results():
     assert '<!DOCTYPE html>' in html
 
 
+def test_render_report_body_shows_experiment_link_when_set():
+    from evaluatorq.simulation.reports.export_html import render_report_body
+
+    results = [_result('Alice', achieved=True, score=1.0)]
+    url = 'https://my.orq.ai/workspace/experiments/abc123'
+    fragment = render_report_body(results, target='t', experiment_url=url)
+    assert url in fragment
+    assert 'trace-link' in fragment
+
+
+def test_render_report_body_omits_experiment_link_when_none():
+    from evaluatorq.simulation.reports.export_html import render_report_body
+
+    results = [_result('Alice', achieved=True, score=1.0)]
+    fragment = render_report_body(results, target='t')
+    assert 'trace-link' not in fragment
+
+
+def test_export_html_shows_experiment_link_when_set():
+    results = [_result('Alice', achieved=True, score=1.0)]
+    url = 'https://my.orq.ai/workspace/experiments/abc123'
+    html = export_html(results, target='t', experiment_url=url)
+    assert url in html
+    assert 'trace-link' in html
+
+
+def test_export_html_omits_experiment_link_when_none():
+    results = [_result('Alice', achieved=True, score=1.0)]
+    html = export_html(results, target='t')
+    assert 'trace-link' not in html
+
+
 def test_export_html_escapes_user_controlled_metadata():
     """Persona/scenario/transcript content must be HTML-escaped.
 

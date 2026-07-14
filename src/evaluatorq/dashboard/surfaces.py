@@ -139,12 +139,14 @@ def _sim_adapter() -> SurfaceAdapter:
             target=run.target_kind,
             run_date=run.created_at,
             executive_summary=run.executive_summary,
+            experiment_url=run.experiment_url,
         ),
         export=lambda run: export_html(
             run.results,
             target=run.target_kind,
             run_date=run.created_at,
             executive_summary=run.executive_summary,
+            experiment_url=run.experiment_url,
         ),
         name=lambda run: run.run_name,
         created_at=lambda run: run.created_at,
@@ -152,6 +154,7 @@ def _sim_adapter() -> SurfaceAdapter:
             filtered,
             target=run.target_kind,
             run_date=run.created_at,
+            experiment_url=run.experiment_url,
         ),
         export_markdown=lambda run: _sim_export_md(
             run.results,
