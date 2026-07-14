@@ -8,8 +8,8 @@ import pytest
 
 from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam import get_category_info, list_categories, red_team
-from evaluatorq.redteam.contracts import AgentResponse, Pipeline, RedTeamReport, ReportSummary
-from evaluatorq.redteam.runner import _deduplicate_target_labels, _parse_target
+from evaluatorq.redteam.contracts import AgentResponse, Pipeline, RedTeamReport, ReportSummary, parse_target
+from evaluatorq.redteam.runner import _deduplicate_target_labels
 from evaluatorq.redteam.vulnerability_registry import get_primary_category
 
 
@@ -34,31 +34,31 @@ class TestParseTarget:
     """Tests for target string parsing."""
 
     def test_agent_target(self):
-        kind, value = _parse_target('agent:my-agent-key')
+        kind, value = parse_target('agent:my-agent-key')
         assert kind == 'agent'
         assert value == 'my-agent-key'
 
     def test_openai_target(self):
         with pytest.raises(ValueError, match='OpenAIModelTarget'):
-            _parse_target('openai:gpt-4o')
+            parse_target('openai:gpt-4o')
 
     def test_bare_key_defaults_to_agent(self):
-        kind, value = _parse_target('my-agent-key')
+        kind, value = parse_target('my-agent-key')
         assert kind == 'agent'
         assert value == 'my-agent-key'
 
     def test_case_insensitive_kind(self):
-        kind, value = _parse_target('Agent:my-key')
+        kind, value = parse_target('Agent:my-key')
         assert kind == 'agent'
 
     def test_empty_value_raises(self):
         with pytest.raises(ValueError, match='missing a value'):
-            _parse_target('agent:')
+            parse_target('agent:')
 
     def test_multiple_colons(self):
         # openai:/llm: prefixes are removed; ensure migration error mentions OpenAIModelTarget.
         with pytest.raises(ValueError, match='OpenAIModelTarget'):
-            _parse_target('openai:org/gpt-4o:latest')
+            parse_target('openai:org/gpt-4o:latest')
 
 
 class _FakeTarget:

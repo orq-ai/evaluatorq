@@ -44,10 +44,9 @@ from evaluatorq.redteam.adaptive.strategy_registry import (
 from evaluatorq.redteam.backends.base import (
     Backend,
     BareTargetBackend,
-    HybridAgentBackend,
     _coerce_to_agent_response,
 )
-from evaluatorq.redteam.backends.registry import create_async_llm_client, resolve_backend
+from evaluatorq.redteam.backends.registry import create_async_llm_client, make_agent_backend, resolve_backend
 from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
     AgentContext,
@@ -61,6 +60,7 @@ from evaluatorq.redteam.contracts import (
     TargetKind,
     Vulnerability,
     normalize_category,
+    parse_target,
 )
 from evaluatorq.redteam.exceptions import CancelledError, CredentialError, RedTeamError
 from evaluatorq.redteam.hooks import ConfirmPayload, DefaultHooks, PipelineHooks
@@ -773,38 +773,6 @@ async def red_team(
 # ---------------------------------------------------------------------------
 
 
-def _parse_target(target: str) -> tuple[TargetKind, str]:
-    """Parse ``"kind:value"`` target string.
-
-    Returns:
-        Tuple of (TargetKind, value), e.g. (``TargetKind.AGENT``, ``"my-agent-key"``).
-    """
-    if ':' not in target:
-        return TargetKind.AGENT, target
-    kind, _, value = target.partition(':')
-    if not value:
-        raise ValueError(f'Target {target!r} is missing a value after the colon.')
-    if kind.lower() in ('llm', 'openai'):
-        raise ValueError(
-            f'The "{kind}:" target prefix has been removed. '
-            f'Use OpenAIModelTarget to test OpenAI models directly:\n'
-            f'    from evaluatorq.redteam import OpenAIModelTarget\n'
-            f'    await red_team(OpenAIModelTarget("{value}"))'
-        )
-    try:
-        kind_enum = TargetKind(kind.lower())
-    except ValueError:
-        valid = ', '.join(f'"{k.value}"' for k in TargetKind if k not in (TargetKind.DIRECT, TargetKind.OPENAI))
-        raise ValueError(f'Unknown target kind {kind!r} in {target!r}. Valid kinds: {valid}.') from None
-    if kind_enum is TargetKind.DIRECT:
-        valid = ', '.join(f'"{k.value}"' for k in TargetKind if k not in (TargetKind.DIRECT, TargetKind.OPENAI))
-        raise ValueError(
-            f'Target kind "direct" is not valid in string targets — '
-            f'pass an AgentTarget object directly instead. Valid string kinds: {valid}.'
-        )
-    return kind_enum, value
-
-
 def _safe_resolve_target_kind(at: Any) -> TargetKind:
     """Read ``target_kind`` from an AgentTarget, defaulting to DIRECT."""
     raw = getattr(at, 'target_kind', TargetKind.DIRECT)
@@ -953,11 +921,11 @@ def _create_job_for_target(
         A job callable as returned by ``create_model_job``.
     """
     cfg = pipeline_config or PIPELINE_CONFIG
-    kind, value = _parse_target(target)
+    kind, value = parse_target(target)
     common = dict(llm_client=llm_client, system_prompt=system_prompt)
     if kind == TargetKind.AGENT:
         tcfg = TargetConfig(system_prompt=system_prompt)
-        backend = _make_agent_backend(target_config=tcfg, pipeline_config=cfg)
+        backend = make_agent_backend(target_config=tcfg, pipeline_config=cfg)
         # Build a fresh owned target per row (composite prefixes -> model
         # "agent/<value>"); no long-lived parent target/client is left dangling.
         return _create_static_job_for_agent_target(lambda: backend.create_target(value), label=value)
@@ -969,32 +937,6 @@ def _create_job_for_target(
 # ---------------------------------------------------------------------------
 # Per-target preparation (dynamic and hybrid)
 # ---------------------------------------------------------------------------
-
-
-def _make_agent_backend(*, target_config: TargetConfig | None, pipeline_config: LLMConfig | None) -> Backend:
-    """Composite backend for ORQ agent targets: ORQ SDK for context+cleanup,
-    OrqResponses (Responses API) for execution.
-
-    The exec backend is built with ``llm_client=None`` on purpose: the
-    OpenResponses backend forwards its client to OrqResponsesTarget, and the
-    attacker LLM client must NOT become the *target* client — passing None lets
-    the target build its own env client routed to /v3/router. The OpenResponses
-    backend defaults to ``require_orq=True``, so that self-built client never
-    falls back to ``OPENAI_API_KEY``: an ``agent/<key>`` model only resolves on
-    the Orq router.
-    """
-    # Build the ORQ SDK context backend lazily: a static ``agent:`` run only ever
-    # calls exec (create_target), so deferring this avoids importing/requiring
-    # ``orq-ai-sdk`` for targets that never touch context resolution or memory cleanup.
-    exec_backend = resolve_backend(
-        'openresponses', llm_client=None, target_config=target_config, pipeline_config=pipeline_config
-    )
-    return HybridAgentBackend(
-        context_backend_factory=lambda: resolve_backend(
-            'orq', target_config=target_config, pipeline_config=pipeline_config
-        ),
-        exec_backend=exec_backend,
-    )
 
 
 def _delivery_method_values(delivery_methods: set[DeliveryMethod | str] | None) -> list[str] | None:
@@ -1135,11 +1077,11 @@ async def _prepare_target(
     Returns:
         A :class:`PreparedTarget` instance with all per-target state.
     """
-    target_kind, target_value = _parse_target(target)
+    target_kind, target_value = parse_target(target)
     safe_target = _make_safe_target(target_value)
 
     if target_kind == TargetKind.AGENT:
-        backend = _make_agent_backend(target_config=target_config, pipeline_config=pipeline_config)
+        backend = make_agent_backend(target_config=target_config, pipeline_config=pipeline_config)
     else:
         backend = resolve_backend(
             'orq', llm_client=llm_client, target_config=target_config, pipeline_config=pipeline_config
@@ -1431,7 +1373,7 @@ async def _run_dynamic_or_hybrid(
     resolved_agent_targets = agent_targets or []
     all_target_labels, agent_target_labels = _deduplicate_target_labels(targets, resolved_agent_targets)
     if targets:
-        target_kinds = {_parse_target(t)[0] for t in targets}
+        target_kinds = {parse_target(t)[0] for t in targets}
         if target_kinds == {TargetKind.AGENT}:
             backend_label = 'openresponses'
         elif TargetKind.AGENT not in target_kinds:
@@ -1465,13 +1407,13 @@ async def _run_dynamic_or_hybrid(
         # Only build the ORQ SDK backend when there are string targets to resolve
         # context for. A pure bring-your-own AgentTarget run never touches it, so this
         # avoids importing/requiring orq-ai-sdk for those runs (mirrors the lazy factory
-        # in _make_agent_backend for the static path).
+        # in make_agent_backend for the static path).
         if targets:
             orq_backend = resolve_backend(
                 'orq', llm_client=llm_client, target_config=target_config, pipeline_config=pipeline_config
             )
             for target_str in targets:
-                _kind, value = _parse_target(target_str)
+                _kind, value = parse_target(target_str)
                 ctx = await orq_backend.resolve_context(value)
                 all_agent_contexts[target_str] = ctx
         # Pre-fetch contexts for AgentTarget objects (they may provide their own context)
@@ -2576,7 +2518,7 @@ async def _run_static(
     # job objects so that we can populate agent_key / agent_model correctly.
     job_name_to_target: dict[str, tuple[TargetKind, str]] = {}
     for t in targets:
-        t_kind, t_value = _parse_target(t)
+        t_kind, t_value = parse_target(t)
         safe = _make_safe_target(t_value)
         # create_model_job names follow "redteam:static:<safe_target>" convention;
         # use the safe slug for the lookup key to handle collisions gracefully.
@@ -2612,7 +2554,7 @@ async def _run_static(
             'orq', llm_client=llm_client, target_config=target_config, pipeline_config=pipeline_config
         )
         for t in targets:
-            _kind, value = _parse_target(t)
+            _kind, value = parse_target(t)
             try:
                 ctx = await static_backend.resolve_context(value)
                 agent_contexts[value] = ctx

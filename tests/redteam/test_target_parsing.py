@@ -1,35 +1,34 @@
 # tests/redteam/test_target_parsing.py
 import pytest
-from evaluatorq.redteam.runner import _parse_target
-from evaluatorq.redteam.contracts import TargetKind
+from evaluatorq.redteam.contracts import TargetKind, parse_target
 
 
 def test_agent_prefix():
-    kind, value = _parse_target('agent:my-key')
+    kind, value = parse_target('agent:my-key')
     assert kind == TargetKind.AGENT
     assert value == 'my-key'
 
 
 def test_deployment_prefix():
-    kind, value = _parse_target('deployment:my-dep')
+    kind, value = parse_target('deployment:my-dep')
     assert kind == TargetKind.DEPLOYMENT
     assert value == 'my-dep'
 
 
 def test_no_prefix_defaults_to_agent():
-    kind, value = _parse_target('my-key')
+    kind, value = parse_target('my-key')
     assert kind == TargetKind.AGENT
     assert value == 'my-key'
 
 
 def test_llm_prefix_raises_with_migration_hint():
     with pytest.raises(ValueError, match='OpenAIModelTarget'):
-        _parse_target('llm:gpt-4o')
+        parse_target('llm:gpt-4o')
 
 
 def test_openai_prefix_raises_with_migration_hint():
     with pytest.raises(ValueError, match='OpenAIModelTarget'):
-        _parse_target('openai:gpt-4o')
+        parse_target('openai:gpt-4o')
 
 
 def test_backend_not_a_param():

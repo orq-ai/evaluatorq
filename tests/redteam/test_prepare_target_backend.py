@@ -1,15 +1,15 @@
-"""Tests for the _make_agent_backend helper and its wiring inside _prepare_target.
+"""Tests for the make_agent_backend helper and its wiring inside _prepare_target.
 
 Test approach
 -------------
-We test ``_make_agent_backend`` in isolation rather than calling ``_prepare_target``
+We test ``make_agent_backend`` in isolation rather than calling ``_prepare_target``
 directly.  ``_prepare_target`` is a deeply async function that requires a dozen
 mock parameters (LLM clients, hooks, dataset handles, etc.) and fires network I/O
 via ``resolve_context`` before it ever touches the backend.  Testing it end-to-end
 would require a second layer of async machinery and would make this a partial
 integration test, not a unit test.
 
-``_make_agent_backend`` is the unit of composition: it calls ``resolve_backend``
+``make_agent_backend`` is the unit of composition: it calls ``resolve_backend``
 twice (with different names) and wraps the results in a ``HybridAgentBackend``.
 Two targeted assertions cover the routing contract completely:
 
@@ -33,7 +33,7 @@ import pytest
 
 from evaluatorq.redteam.backends.base import HybridAgentBackend
 from evaluatorq.redteam.backends.openresponses import OpenResponsesBackend
-from evaluatorq.redteam.runner import _make_agent_backend
+from evaluatorq.redteam.backends.registry import make_agent_backend
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +55,7 @@ def _make_orq_backend_mock() -> MagicMock:
 
 
 class TestMakeAgentBackend:
-    """_make_agent_backend constructs a HybridAgentBackend with correct delegation."""
+    """make_agent_backend constructs a HybridAgentBackend with correct delegation."""
 
     def test_returns_hybrid_agent_backend(self):
         """Return type is always HybridAgentBackend."""
@@ -69,8 +69,8 @@ class TestMakeAgentBackend:
                 return openresponses_mock
             raise ValueError(f"Unexpected backend name: {name!r}")
 
-        with patch("evaluatorq.redteam.runner.resolve_backend", side_effect=_fake_resolve_backend):
-            result = _make_agent_backend(target_config=None, pipeline_config=None)
+        with patch("evaluatorq.redteam.backends.registry.resolve_backend", side_effect=_fake_resolve_backend):
+            result = make_agent_backend(target_config=None, pipeline_config=None)
 
         assert isinstance(result, HybridAgentBackend)
 
@@ -92,8 +92,8 @@ class TestMakeAgentBackend:
                 return openresponses_backend
             raise ValueError(f"Unexpected backend name: {name!r}")
 
-        with patch("evaluatorq.redteam.runner.resolve_backend", side_effect=_fake_resolve_backend):
-            hybrid = _make_agent_backend(target_config=None, pipeline_config=None)
+        with patch("evaluatorq.redteam.backends.registry.resolve_backend", side_effect=_fake_resolve_backend):
+            hybrid = make_agent_backend(target_config=None, pipeline_config=None)
 
         target = hybrid.create_target("my-agent")
         # OrqResponsesTarget stores the model in its config
@@ -119,8 +119,8 @@ class TestMakeAgentBackend:
                 return openresponses_mock
             raise ValueError(f"Unexpected backend name: {name!r}")
 
-        with patch("evaluatorq.redteam.runner.resolve_backend", side_effect=_fake_resolve_backend):
-            hybrid = _make_agent_backend(target_config=None, pipeline_config=None)
+        with patch("evaluatorq.redteam.backends.registry.resolve_backend", side_effect=_fake_resolve_backend):
+            hybrid = make_agent_backend(target_config=None, pipeline_config=None)
             # The ORQ context backend is built lazily on first context use, so resolve
             # inside the patch to capture the mocked backend.
             result = await hybrid.resolve_context("my-agent")
@@ -145,8 +145,8 @@ class TestMakeAgentBackend:
                 return openresponses_mock
             raise ValueError(f"Unexpected backend name: {name!r}")
 
-        with patch("evaluatorq.redteam.runner.resolve_backend", side_effect=_fake_resolve_backend):
-            _make_agent_backend(target_config=None, pipeline_config=None)
+        with patch("evaluatorq.redteam.backends.registry.resolve_backend", side_effect=_fake_resolve_backend):
+            make_agent_backend(target_config=None, pipeline_config=None)
 
         assert received_kwargs.get("llm_client") is None
 

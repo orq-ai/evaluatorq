@@ -165,7 +165,7 @@ class TestDeploymentBranchUnchanged:
 
 class TestModelBranchUnchanged:
     """Bare strings (no prefix) parse as TargetKind.AGENT and route through the
-    AGENT branch — _parse_target returns (TargetKind.AGENT, key) when there is
+    AGENT branch — parse_target returns (TargetKind.AGENT, key) when there is
     no colon. The fallback model branch in _create_job_for_target is therefore
     unreachable with valid TargetKind values; we verify the correct routing."""
 
