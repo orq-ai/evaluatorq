@@ -322,14 +322,14 @@ the exact same cases, or mine them for the archetypes that drive fresh ones.
 A `SimulationDatapoint` bundles one persona, one scenario, and the opening
 message. Every case simulation runs is one of these, and you can persist them for
 reuse. `eq sim generate` writes the cases it builds to a JSONL file with
-`--output PATH` (one datapoint per line); `eq sim run` does the same alongside a
+`--datapoints PATH` (one datapoint per line); `eq sim run` does the same alongside a
 live run with `--datapoints PATH`:
 
 ```bash
 # Generate cases once and keep them
 eq sim generate --agent-description "e-commerce support agent" \
   --num-personas 3 --num-scenarios 4 \
-  --output cases.jsonl
+  --datapoints cases.jsonl
 
 # Re-run the exact same cases against any target, as often as you like
 eq sim simulate --input cases.jsonl --target agent:my-support-agent
@@ -425,7 +425,7 @@ if __name__ == "__main__":
 The seed is a steer, not a transcript: generation fills in the persona traits and
 scenario criteria and writes a natural opening message, so each run explores the
 space around the pattern rather than replaying one recorded conversation. Persist
-the generated cases (`eq sim generate --output`, or `eq sim run
+the generated cases (`eq sim generate --datapoints`, or `eq sim run
 --datapoints`) and they become a replayable bank for the section above.
 
 !!! note "Reading the archetypes out of traces is manual today"

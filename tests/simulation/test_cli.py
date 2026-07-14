@@ -777,7 +777,7 @@ def test_simulate_writes_results_file(tmp_path: Path) -> None:
                 "simulate",
                 "--input", str(dp_file),
                 "--openai-model", "gpt-4o",
-                "--output", str(out_file),
+                "--results", str(out_file),
                 "--no-save",
             ],
             env={"OPENAI_API_KEY": "test-key"},
@@ -1485,7 +1485,7 @@ def test_generate_writes_datapoints(tmp_path: Path) -> None:
             [
                 "generate",
                 "--agent-description", "A helpful bot",
-                "--output", str(out_file),
+                "--datapoints", str(out_file),
             ],
             env={"OPENAI_API_KEY": "test-key"},
         )
@@ -1508,7 +1508,7 @@ def test_generate_forwards_seed_flags(tmp_path: Path) -> None:
             [
                 "generate",
                 "--agent-description", "A helpful bot",
-                "--output", str(out_file),
+                "--datapoints", str(out_file),
                 "--persona-seed", "angry retiree",
                 "--persona-seed", "fraud dispute",
                 "--scenario-seed", "disputes a refund denial",
@@ -1531,7 +1531,7 @@ def test_generate_no_seed_flags_pass_none(tmp_path: Path) -> None:
 
         result = runner.invoke(
             app,
-            ["generate", "--agent-description", "A helpful bot", "--output", str(out_file)],
+            ["generate", "--agent-description", "A helpful bot", "--datapoints", str(out_file)],
             env={"OPENAI_API_KEY": "test-key"},
         )
 
@@ -1556,7 +1556,7 @@ def test_generate_signposts_preview_and_next_step(tmp_path: Path) -> None:
                 "generate",
                 "--target", "agent:refund-agent-fixed",
                 "--agent-description", "A helpful bot",
-                "--output", str(out_file),
+                "--datapoints", str(out_file),
             ],
             env={"OPENAI_API_KEY": "test-key"},
         )
@@ -1575,7 +1575,7 @@ def test_generate_quiet_suppresses_preview_and_next_step(tmp_path: Path) -> None
         mock_impl.return_value = _make_datapoints(2)
         result = runner.invoke(
             app,
-            ["generate", "--agent-description", "A bot", "--output", str(out_file), "--quiet"],
+            ["generate", "--agent-description", "A bot", "--datapoints", str(out_file), "--quiet"],
             env={"OPENAI_API_KEY": "test-key"},
         )
 
@@ -1607,7 +1607,7 @@ def test_generate_target_agent_uses_context_description_when_omitted(tmp_path: P
             [
                 "generate",
                 "--target", "agent:refund-agent-fixed",
-                "--output", str(out_file),
+                "--datapoints", str(out_file),
             ],
             env={"ORQ_API_KEY": "test-key"},
         )
@@ -1632,7 +1632,7 @@ def test_generate_datapoints_roundtrips_through_simulate_loader(tmp_path: Path) 
         mock_impl.return_value = datapoints
         result = runner.invoke(
             app,
-            ["generate", "--agent-description", "bot", "--output", str(out_file)],
+            ["generate", "--agent-description", "bot", "--datapoints", str(out_file)],
             env={"ORQ_API_KEY": "", "OPENAI_API_KEY": "test-key"},
         )
 
@@ -1654,7 +1654,7 @@ def test_generate_datapoints_passes_validate_dataset(tmp_path: Path) -> None:
         mock_impl.return_value = _make_datapoints(2)
         gen = runner.invoke(
             app,
-            ["generate", "--agent-description", "bot", "--output", str(out_file)],
+            ["generate", "--agent-description", "bot", "--datapoints", str(out_file)],
             env={"OPENAI_API_KEY": "test-key"},
         )
     assert gen.exit_code == 0, gen.output
@@ -1672,7 +1672,7 @@ def test_generate_no_datapoints_runtime_error_is_clean(tmp_path: Path) -> None:
         mock_impl.side_effect = RuntimeError("first-message generation produced no datapoints")
         result = runner.invoke(
             app,
-            ["generate", "--agent-description", "bot", "--output", str(out_file)],
+            ["generate", "--agent-description", "bot", "--datapoints", str(out_file)],
             env={"OPENAI_API_KEY": "test-key"},
         )
 
@@ -1688,7 +1688,7 @@ def test_generate_rejects_zero_personas(tmp_path: Path) -> None:
         [
             "generate",
             "--agent-description", "bot",
-            "--output", str(out_file),
+            "--datapoints", str(out_file),
             "--num-personas", "0",
         ],
         env={"OPENAI_API_KEY": "test-key"},
@@ -1711,7 +1711,7 @@ def test_generate_forwards_flags(tmp_path: Path) -> None:
             [
                 "generate",
                 "--agent-description", "A helpful bot",
-                "--output", str(out_file),
+                "--datapoints", str(out_file),
                 "--sim-model", "custom-model",
                 "--num-personas", "2",
                 "--num-scenarios", "4",
@@ -1783,7 +1783,7 @@ def test_generate_forwards_sim_model(monkeypatch):
         [
             "generate",
             "--agent-description", "x",
-            "--output", "dp.jsonl",
+            "--datapoints", "dp.jsonl",
             "--sim-model", "gpt-5.4-mini",
             "--num-personas", "1",
             "--num-scenarios", "1",

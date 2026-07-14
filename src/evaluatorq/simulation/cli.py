@@ -416,17 +416,17 @@ _SIMULATE_EPILOG = _examples(
 _RUN_EPILOG = _examples(
     '# generate + simulate in one shot',
     'eq sim run --target agent:my-agent',
-    '# freeze the generated inputs for reproducible re-runs',
-    'eq sim run --target agent:my-agent --datapoints dp.jsonl',
+    '# --datapoints saves the generated inputs; --results saves the simulation output',
+    'eq sim run --target agent:my-agent --datapoints dp.jsonl --results out.jsonl',
     '# a non-orq target',
     'eq sim run --agent-description "refund bot" --openai-model gpt-4o-mini',
 )
 
 _GENERATE_EPILOG = _examples(
     "# auto-generate personas x scenarios from an agent's description",
-    'eq sim generate --target agent:my-agent -o dp.jsonl',
+    'eq sim generate --target agent:my-agent --datapoints dp.jsonl',
     '# steer with archetype seeds (overrides --num-personas)',
-    'eq sim generate --agent-description "refund bot" --persona-seed "angry retiree" -o dp.jsonl',
+    'eq sim generate --agent-description "refund bot" --persona-seed "angry retiree" --datapoints dp.jsonl',
     '# then run the frozen set',
     'eq sim simulate -i dp.jsonl --target agent:my-agent',
 )
@@ -488,7 +488,7 @@ def simulate(
     ] = None,
     results_path: Annotated[
         Path | None,
-        typer.Option('--output', '-o', help='Path to write results JSONL.'),
+        typer.Option('--results', '-r', help='Path to write results JSONL.'),
     ] = None,
     report_path: Annotated[
         Path | None,
@@ -756,7 +756,7 @@ def run(
     ] = None,
     results_path: Annotated[
         Path | None,
-        typer.Option('--output', '-o', help='Path to write results JSONL.'),
+        typer.Option('--results', '-r', help='Path to write results JSONL.'),
     ] = None,
     report_path: Annotated[
         Path | None,
@@ -817,6 +817,7 @@ def run(
         Path | None,
         typer.Option(
             '--datapoints',
+            '-d',
             help=(
                 'Also write the generated datapoints (the simulate inputs) to this '
                 'JSONL path, for reproducible re-runs via `sim simulate --input`.'
@@ -1020,7 +1021,7 @@ async def _run_impl(
 def generate(
     datapoints_path: Annotated[
         Path,
-        typer.Option('--output', '-o', help='Path to write the generated datapoints JSONL.'),
+        typer.Option('--datapoints', '-d', help='Path to write the generated datapoints JSONL.'),
     ],
     agent_description: Annotated[
         str | None,

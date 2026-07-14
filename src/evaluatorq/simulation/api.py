@@ -459,24 +459,28 @@ async def _generate_and_simulate_run(
             )
             gen_hooks = hooks or DefaultHooks()
             datapoints: list[SimulationDatapoint] = []
-            await await_maybe(gen_hooks.on_stage_start(SimStage.GENERATE, {}))
+            gen_client: AsyncOpenAI | None = None
+            gen_owned = False
+            # One try/finally owns the client close so it fires even if the
+            # emit_datapoints callback raises between generation and simulate.
             try:
-                datapoints, gen_client, gen_owned = await _generate_datapoints_inner(
-                    caller='generate_and_simulate',
-                    agent_description=resolved_agent_description,
-                    num_personas=num_personas,
-                    num_scenarios=num_scenarios,
-                    model=sim_model,
-                    generation_client=generation_client,
-                    hooks=hooks,
-                )
-                if emit_datapoints is not None:
-                    emit_datapoints(datapoints)
-            finally:
-                meta = {'num_datapoints': len(datapoints)} if datapoints else {}
-                await await_maybe(gen_hooks.on_stage_end(SimStage.GENERATE, meta))
+                await await_maybe(gen_hooks.on_stage_start(SimStage.GENERATE, {}))
+                try:
+                    datapoints, gen_client, gen_owned = await _generate_datapoints_inner(
+                        caller='generate_and_simulate',
+                        agent_description=resolved_agent_description,
+                        num_personas=num_personas,
+                        num_scenarios=num_scenarios,
+                        model=sim_model,
+                        generation_client=generation_client,
+                        hooks=hooks,
+                    )
+                    if emit_datapoints is not None:
+                        emit_datapoints(datapoints)
+                finally:
+                    meta = {'num_datapoints': len(datapoints)} if datapoints else {}
+                    await await_maybe(gen_hooks.on_stage_end(SimStage.GENERATE, meta))
 
-            try:
                 config = SimulationConfig(
                     evaluation_name=evaluation_name,
                     target=target,
@@ -505,7 +509,7 @@ async def _generate_and_simulate_run(
                     pipeline_span=pipeline_span,
                 )
             finally:
-                if gen_owned:
+                if gen_owned and gen_client is not None:
                     await gen_client.close()
     finally:
         await flush_tracing()

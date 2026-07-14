@@ -77,7 +77,7 @@ description — the "coverage from nothing" step.
 uv run evaluatorq sim generate \
   --target agent:sterling \
   --num-personas 3 --num-scenarios 3 \
-  -o boh_datapoints.jsonl
+  --datapoints boh_datapoints.jsonl
 ```
 
 (`--target` only fetches the description here; the agent is not called yet.
@@ -166,7 +166,7 @@ grows without discarding what you have.
 
 ```bash
 uv run evaluatorq sim generate --target agent:sterling \
-  --num-personas 2 --num-scenarios 2 -o more.jsonl
+  --num-personas 2 --num-scenarios 2 --datapoints more.jsonl
 cat more.jsonl >> boh_datapoints.jsonl
 uv run evaluatorq sim validate-dataset boh_datapoints.jsonl
 ```
@@ -187,7 +187,7 @@ uv run evaluatorq sim upload-dataset -i more.jsonl --dataset-id <id>
 uv run evaluatorq sim simulate --target agent:sterling --dataset-id <id> --name boh-from-dataset
 ```
 
-`eq sim generate --dataset-format -o rows.jsonl` writes the dataset envelope up
+`eq sim generate --dataset-format --datapoints rows.jsonl` writes the dataset envelope up
 front if you'd rather inspect/version the exact upload shape.
 
 **The three-options slide** (in `webinar-deck.html`): **① from scratch**

@@ -23,7 +23,7 @@ provision:
 
 generate:
 	uv run evaluatorq sim generate --target agent:$(AGENT) \
-		--num-personas $(PERSONAS) --num-scenarios $(SCENARIOS) -o $(DATAPOINTS)
+		--num-personas $(PERSONAS) --num-scenarios $(SCENARIOS) --datapoints $(DATAPOINTS)
 
 simulate:
 	uv run evaluatorq sim simulate --target agent:$(AGENT) \

@@ -26,18 +26,21 @@ Two command groups have their own pages:
 
 ## Canonical flag names
 
-!!! note "Simulation I/O flags are consistent across commands"
-    Use `--input` / `-i` for an input datapoints file and `--output` / `-o` for
-    generated datapoints or results. The older domain-specific names below have
-    been **removed** — use the current name instead:
+!!! note "Simulation I/O flags name the artifact they read or write"
+    Input is always `--input` / `-i`. Output flags are named for the artifact
+    each command writes:
 
-    | Removed | Use instead | Command(s) |
+    | Command | Output flag(s) | Writes |
     |---|---|---|
-    | `--datapoints` / `-d` | `--input` / `-i` | `sim simulate` |
-    | `--results` | `--output` / `-o` | `sim simulate`, `sim run` |
-    | `--datapoints` | `--output` / `-o` | `sim generate` |
-    `sim run --datapoints` remains the flag for saving the generated datapoints
-    used by that same run.
+    | `sim generate` | `--datapoints` / `-d` | generated datapoints JSONL |
+    | `sim simulate` | `--results` / `-r` | simulation results JSONL |
+    | `sim run` | `--datapoints` / `-d`, `--results` / `-r` | generated inputs, and the results |
+    | `sim export` | `--output` / `-o` | OpenResponses payload JSON |
+
+    The generic `--output` / `-o` was **removed** from `generate` / `simulate` /
+    `run` — it wrote a different artifact per command. `sim export` keeps it, as
+    it has a single output. On `sim simulate`, the input file is `--input` / `-i`
+    (there is no `--datapoints` input alias).
 
     Other historical migrations are:
 

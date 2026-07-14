@@ -21,7 +21,10 @@ objects that aren't JSON-serializable.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import (  # noqa: TC003 — used in real (non-TYPE_CHECKING) field annotations pydantic resolves at runtime
+    Awaitable,
+    Callable,
+)
 from pathlib import Path  # noqa: TC003 — used in a real (non-TYPE_CHECKING) field annotation, see note below
 from typing import Any
 
@@ -34,8 +37,6 @@ from pydantic import BaseModel, ConfigDict
 from evaluatorq.contracts import AgentTarget  # noqa: TC001
 from evaluatorq.simulation.hooks import SimulationHooks  # noqa: TC001
 from evaluatorq.simulation.types import DEFAULT_MODEL, Message, Persona, Scenario, SimulationDatapoint
-
-EmitDatapoints = Callable[[list[SimulationDatapoint]], None]
 
 
 class SimulationConfig(BaseModel):
@@ -74,10 +75,3 @@ class SimulationConfig(BaseModel):
     exit_on_failure: bool = True
     save: bool = False
     run_output: str | Path | None = None
-
-    # --- Generation subset (generate_and_simulate's own body still owns
-    # these directly for now; carried here for the R3 follow-up) -----------
-    agent_description: str | None = None
-    num_personas: int = 5
-    num_scenarios: int = 5
-    emit_datapoints: EmitDatapoints | None = None
