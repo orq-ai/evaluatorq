@@ -406,6 +406,9 @@ async def _generate_and_simulate_run(
                         model=sim_model,
                         generation_client=gen_client,
                     )
+                    await await_maybe(
+                        gen_hooks.on_generate_inputs_ready(len(gen_personas), len(gen_scenarios))
+                    )
 
                     datapoints = await _resolve_or_generate_datapoints(
                         caller='generate_and_simulate',
@@ -459,7 +462,10 @@ async def generate(
     num_personas: int = 5,
     num_scenarios: int = 5,
     sim_model: str = DEFAULT_MODEL,
+    hooks: SimulationHooks | None = None,
     generation_client: AsyncOpenAI | None = None,
+    persona_seeds: list[str] | None = None,
+    scenario_seeds: list[str] | None = None,
 ) -> list[SimulationDatapoint]:
     """Generate ready-to-run simulation ``SimulationDatapoint``s from an agent description.
 
@@ -467,6 +473,12 @@ async def generate(
     persona x scenario pair (each with a generated first message). Returns the
     datapoints without running any simulation — feed them to :func:`simulate`
     via ``datapoints=...``, or persist them (e.g. JSONL) and reuse.
+
+    Pass ``persona_seeds`` / ``scenario_seeds`` to steer a dimension: each seed
+    is an archetype (e.g. ``"angry retiree"``) the LLM fleshes out into one full
+    object, overriding ``num_personas`` / ``num_scenarios`` for that dimension.
+    The other dimension still auto-generates. Seeded x auto still crosses into
+    the full persona x scenario grid.
 
     This freezes the simulation *inputs* (personas, scenarios, first messages)
     so every :func:`simulate` run scores the same fixed dataset — useful for
@@ -479,7 +491,9 @@ async def generate(
     (with optional ``OPENAI_BASE_URL`` for an OpenAI-compatible endpoint).
     ``sim_model`` drives persona/scenario/first-message generation.
     """
+    from evaluatorq.common.async_utils import await_maybe
     from evaluatorq.openresponses.client import build_simulation_client
+    from evaluatorq.simulation.hooks import DefaultHooks, SimStage
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
 
@@ -500,22 +514,36 @@ async def generate(
             # once here.
             gen_client, gen_owned = build_simulation_client(generation_client)
             try:
-                gen_personas, gen_scenarios = await _generate_personas_scenarios(
-                    agent_description=agent_description,
-                    num_personas=num_personas,
-                    num_scenarios=num_scenarios,
-                    model=sim_model,
-                    generation_client=gen_client,
-                )
-                return await _resolve_or_generate_datapoints(
-                    caller='generate',
-                    datapoints=None,
-                    personas=gen_personas,
-                    scenarios=gen_scenarios,
-                    dataset_id=None,
-                    model=sim_model,
-                    generation_client=gen_client,
-                )
+                # Bracket generation with the same GENERATE stage hooks the
+                # generate_and_simulate path uses, so the standalone command
+                # isn't silent. Empty on_stage_end meta: the CLI prints its own
+                # "✓ Generated N datapoint(s)" line, so the count isn't doubled.
+                gen_hooks = hooks or DefaultHooks()
+                await await_maybe(gen_hooks.on_stage_start(SimStage.GENERATE, {}))
+                try:
+                    gen_personas, gen_scenarios = await _generate_personas_scenarios(
+                        agent_description=agent_description,
+                        num_personas=num_personas,
+                        num_scenarios=num_scenarios,
+                        model=sim_model,
+                        generation_client=gen_client,
+                        persona_seeds=persona_seeds,
+                        scenario_seeds=scenario_seeds,
+                    )
+                    await await_maybe(
+                        gen_hooks.on_generate_inputs_ready(len(gen_personas), len(gen_scenarios))
+                    )
+                    return await _resolve_or_generate_datapoints(
+                        caller='generate',
+                        datapoints=None,
+                        personas=gen_personas,
+                        scenarios=gen_scenarios,
+                        dataset_id=None,
+                        model=sim_model,
+                        generation_client=gen_client,
+                    )
+                finally:
+                    await await_maybe(gen_hooks.on_stage_end(SimStage.GENERATE, {}))
             finally:
                 if gen_owned:
                     await gen_client.close()
@@ -711,30 +739,52 @@ async def _generate_personas_scenarios(
     num_scenarios: int,
     model: str,
     generation_client: AsyncOpenAI | None,
+    persona_seeds: list[str] | None = None,
+    scenario_seeds: list[str] | None = None,
 ) -> tuple[list[Persona], list[Scenario]]:
     """Generate personas and scenarios concurrently from an agent description.
 
-    Shared by :func:`generate` and :func:`generate_and_simulate`. Provider is
-    resolved via the shared factory; the client is closed only when owned here
-    (i.e. not injected).
+    Shared by :func:`generate` and :func:`generate_and_simulate`. When
+    ``persona_seeds`` / ``scenario_seeds`` are given, that dimension is built one
+    object per seed — each seed is an archetype the LLM fleshes out (e.g.
+    ``"angry retiree"``) — instead of auto-generating ``num_*``; the other
+    dimension still auto-generates. Provider is resolved via the shared factory;
+    the client is closed only when owned here (i.e. not injected).
     """
     from evaluatorq.openresponses.client import build_simulation_client
+    from evaluatorq.simulation.exceptions import SimulationError
     from evaluatorq.simulation.generators import PersonaGenerator, ScenarioGenerator
 
     gen_client, gen_owned = build_simulation_client(generation_client)
     try:
         persona_gen = PersonaGenerator(model=model, client=gen_client)
         scenario_gen = ScenarioGenerator(model=model, client=gen_client)
-        gen_personas, gen_scenarios = await asyncio.gather(
-            persona_gen.generate(
-                agent_description=agent_description,
-                num_personas=num_personas,
-            ),
-            scenario_gen.generate(
-                agent_description=agent_description,
-                num_scenarios=num_scenarios,
-            ),
+
+        async def _seeded(gen: Any, seeds: list[str], kind: str, kwarg: str) -> list[Any]:
+            # One object per seed (seed=archetype, LLM fills the rest); no
+            # edge-case padding so the output maps 1:1 to the seeds given.
+            batches = await asyncio.gather(*[
+                gen.generate(agent_description=agent_description, edge_case_percentage=0.0, seed=s, **{kwarg: 1})
+                for s in seeds
+            ])
+            out: list[Any] = []
+            for seed, batch in zip(seeds, batches, strict=True):
+                if not batch:
+                    raise SimulationError(f'{kind} generation returned nothing for seed: {seed!r}')
+                out.append(batch[0])
+            return out
+
+        personas_coro = (
+            _seeded(persona_gen, persona_seeds, 'persona', 'num_personas')
+            if persona_seeds
+            else persona_gen.generate(agent_description=agent_description, num_personas=num_personas)
         )
+        scenarios_coro = (
+            _seeded(scenario_gen, scenario_seeds, 'scenario', 'num_scenarios')
+            if scenario_seeds
+            else scenario_gen.generate(agent_description=agent_description, num_scenarios=num_scenarios)
+        )
+        gen_personas, gen_scenarios = await asyncio.gather(personas_coro, scenarios_coro)
     finally:
         if gen_owned:
             await gen_client.close()

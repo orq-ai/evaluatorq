@@ -236,15 +236,47 @@ def _resolve_evaluators(evaluators: list[str] | None) -> list[str] | None:
     return list(evaluators)
 
 
+def _provider_label() -> str:
+    """The provider branch the environment resolves to for generation LLM calls."""
+    if os.environ.get('ORQ_API_KEY'):
+        return 'Orq router'
+    if os.environ.get('OPENAI_API_KEY'):
+        return 'OpenAI-compatible'
+    return 'unresolved provider'
+
+
 def _echo_using(model: str) -> None:
     """Show the provider branch selected by the environment for generations."""
-    if os.environ.get('ORQ_API_KEY'):
-        provider = 'Orq router'
-    elif os.environ.get('OPENAI_API_KEY'):
-        provider = 'OpenAI-compatible'
-    else:
-        provider = 'unresolved provider'
-    typer.echo(f'Using for generations: {provider} · {model}', err=True)
+    typer.echo(f'Using for generations: {_provider_label()} · {model}', err=True)
+
+
+def _echo_generate_plan(
+    *,
+    console: Any,
+    source: str,
+    model: str,
+    num_personas: int,
+    num_scenarios: int,
+    output: Path,
+) -> None:
+    """Render the informational 'Generate Plan' box (beats: input + what will happen).
+
+    Mirrors the simulate Run Plan box for a consistent pipeline look, but never
+    prompts — generation is cheap and approval is file-mediated (edit the JSONL),
+    so a confirm gate here would be friction, not clarity.
+    """
+    from evaluatorq.common.reports import confirm_run_plan
+
+    total = num_personas * num_scenarios
+    rows = [
+        ('Source', source),
+        ('Provider', f'{_provider_label()} · {model}'),
+        ('Building', f'{num_personas} personas x {num_scenarios} scenarios = {total} datapoints'),
+        ('Output', str(output)),
+    ]
+    asyncio.run(
+        confirm_run_plan(console, title='Generate Plan', rows=rows, prompt='', skip_confirm=True)
+    )
 
 
 def _shell_path(path: Path) -> str:
@@ -257,9 +289,17 @@ def _dashboard_command(directory: Path) -> str:
     return f'eq dashboard {_shell_path(directory)}'
 
 
+_TARGET_PLACEHOLDER = 'agent:<your-agent-key>'
+_TARGET_HINT = f'Replace {_TARGET_PLACEHOLDER} with your agent key, e.g. agent:support-bot.'
+
+
 def _simulate_command(datapoints_path: Path, target: str | None) -> str:
-    """Build the follow-on ``sim simulate`` command for a generated datapoints file."""
-    target_part = target or '<target>'
+    """Build the follow-on ``sim simulate`` command for a generated datapoints file.
+
+    When *target* is unknown, use a self-documenting placeholder (paired with
+    ``_TARGET_HINT`` at the call site) rather than a bare ``<target>``.
+    """
+    target_part = target or _TARGET_PLACEHOLDER
     return f'eq sim simulate -i {_shell_path(datapoints_path)} --target {target_part}'
 
 
@@ -287,11 +327,19 @@ def _recho(renderable: Any, *, soft_wrap: bool = False, err: bool = True) -> Non
     typer.echo(_render_rich(renderable, soft_wrap=soft_wrap), nl=False, err=err)
 
 
-def _echo_next(command: str) -> None:
-    """Print the signposted next-step command (the green seam between commands)."""
+def _echo_next(command: str, intent: str, *, hint: str | None = None) -> None:
+    """Print the signposted next-step call-to-action between commands.
+
+    Two-line form: a bold intent line ("▸ Next — run the simulation:"), then the
+    command on its own indented line so it reads as a clear, copyable action.
+    *hint* adds a dim follow-up line — used to explain a placeholder to fill in.
+    """
     from rich.markup import escape
 
-    _recho(f'[bold cyan]next:[/] {escape(command)}', soft_wrap=True)
+    body = f'\n[bold cyan]▸ Next[/] — {escape(intent)}:\n\n    [cyan]{escape(command)}[/]'
+    if hint:
+        body += f'\n  [dim]{escape(hint)}[/]'
+    _recho(body, soft_wrap=True)
 
 
 def _echo_saved(label: str, path: Path) -> None:
@@ -338,12 +386,63 @@ def _echo_generate_preview(datapoints: list[Any]) -> None:
         _recho(stable)
 
 
+def _examples(*lines: str) -> str:
+    """Build a command ``--help`` epilog from example lines.
+
+    Under ``rich_markup_mode='rich'`` the epilog is flowed like HTML — single
+    newlines collapse to spaces — so each visual line must be its own paragraph
+    (blank line between) to render one-per-row. Lines starting with ``#`` are
+    dimmed as comments; command lines render verbatim.
+    """
+    from rich.markup import escape
+
+    def render(line: str) -> str:
+        return f'[dim]{escape(line)}[/]' if line.lstrip().startswith('#') else escape(line)
+
+    return '\n\n'.join(['[bold]Examples[/]', *(render(line) for line in lines)])
+
+
+_SIMULATE_EPILOG = _examples(
+    '# run a frozen datapoints file against an orq agent',
+    'eq sim simulate -i dp.jsonl --target agent:my-agent',
+    '# against any OpenAI-compatible model',
+    'eq sim simulate -i dp.jsonl --openai-model gpt-4o-mini',
+    '# from an orq dataset instead of a local file',
+    'eq sim simulate --dataset-id ds_abc --target agent:my-agent',
+)
+
+_RUN_EPILOG = _examples(
+    '# generate + simulate in one shot',
+    'eq sim run --target agent:my-agent',
+    '# freeze the generated inputs for reproducible re-runs',
+    'eq sim run --target agent:my-agent --datapoints dp.jsonl',
+    '# a non-orq target',
+    'eq sim run --agent-description "refund bot" --openai-model gpt-4o-mini',
+)
+
+_GENERATE_EPILOG = _examples(
+    "# auto-generate personas x scenarios from an agent's description",
+    'eq sim generate --target agent:my-agent -o dp.jsonl',
+    '# steer with archetype seeds (overrides --num-personas)',
+    'eq sim generate --agent-description "refund bot" --persona-seed "angry retiree" -o dp.jsonl',
+    '# then run the frozen set',
+    'eq sim simulate -i dp.jsonl --target agent:my-agent',
+)
+
+_UPLOAD_DATASET_EPILOG = _examples(
+    '# push a local datapoints file to a new orq dataset',
+    'eq sim upload-dataset -i dp.jsonl -n "my sim set"',
+    '# append to an existing dataset',
+    'eq sim upload-dataset -i more.jsonl --dataset-id ds_abc',
+)
+
+
 # ---------------------------------------------------------------------------
 # simulate
 # ---------------------------------------------------------------------------
 
 
-@app.command(no_args_is_help=True)
+@app.command(no_args_is_help=True, epilog=_SIMULATE_EPILOG)
 def simulate(
     datapoints: Annotated[
         Path | None,
@@ -394,10 +493,11 @@ def simulate(
         typer.Option(
             '--report',
             help=(
-                'Path to write the full SimulationRun report JSON (results + '
-                'scorer averages + metadata) to an explicit location, instead of '
-                'only the auto-named file under .evaluatorq/sim-runs/. The '
-                'auto-save still happens unless --no-save.'
+                'Write the full SimulationRun report JSON (results + scorer '
+                'averages + metadata). Pass a file to write it there, or a '
+                'directory for an auto-named sim-report-*.json inside it — the '
+                'same target rule as --report-md / --report-html. The auto-save '
+                'under .evaluatorq/sim-runs/ still happens unless --no-save.'
             ),
         ),
     ] = None,
@@ -453,11 +553,23 @@ def simulate(
     ] = False,
     report_md: Annotated[
         Path | None,
-        typer.Option('--report-md', help='Directory for an auto-named Markdown report.'),
+        typer.Option(
+            '--report-md',
+            help=(
+                'Write a Markdown report. Pass a file to write it there, or a '
+                'directory for an auto-named sim-report-*.md inside it.'
+            ),
+        ),
     ] = None,
     report_html: Annotated[
         Path | None,
-        typer.Option('--report-html', help='Directory for an auto-named HTML report.'),
+        typer.Option(
+            '--report-html',
+            help=(
+                'Write an HTML report. Pass a file to write it there, or a '
+                'directory for an auto-named sim-report-*.html inside it.'
+            ),
+        ),
     ] = None,
     executive_summary: Annotated[  # noqa: FBT002
         bool,
@@ -556,13 +668,14 @@ def simulate(
         _export_report(run, report_html, fmt='html')
 
     if report_path is not None:
+        report_path = _resolve_report_target(report_path, ext='json', run=run)
         _write_report(run, report_path)
         _echo_saved('Report', report_path)
 
     if not no_save:
         run_path = _auto_save_run(run=run, run_name=name)
         _echo_saved('Run', run_path)
-        _echo_next(_dashboard_command(_get_sim_runs_dir()))
+        _echo_next(_dashboard_command(_get_sim_runs_dir()), 'explore the results')
     elif report_path is None:
         _recho('[yellow]Tip:[/] run without --no-save to browse results in the dashboard.', soft_wrap=True)
 
@@ -608,7 +721,7 @@ async def _simulate_impl(
 # ---------------------------------------------------------------------------
 
 
-@app.command(no_args_is_help=True)
+@app.command(no_args_is_help=True, epilog=_RUN_EPILOG)
 def run(
     agent_description: Annotated[
         str | None,
@@ -648,10 +761,11 @@ def run(
         typer.Option(
             '--report',
             help=(
-                'Path to write the full SimulationRun report JSON (results + '
-                'scorer averages + metadata) to an explicit location, instead of '
-                'only the auto-named file under .evaluatorq/sim-runs/. The '
-                'auto-save still happens unless --no-save.'
+                'Write the full SimulationRun report JSON (results + scorer '
+                'averages + metadata). Pass a file to write it there, or a '
+                'directory for an auto-named sim-report-*.json inside it — the '
+                'same target rule as --report-md / --report-html. The auto-save '
+                'under .evaluatorq/sim-runs/ still happens unless --no-save.'
             ),
         ),
     ] = None,
@@ -726,11 +840,23 @@ def run(
     ] = False,
     report_md: Annotated[
         Path | None,
-        typer.Option('--report-md', help='Directory for an auto-named Markdown report.'),
+        typer.Option(
+            '--report-md',
+            help=(
+                'Write a Markdown report. Pass a file to write it there, or a '
+                'directory for an auto-named sim-report-*.md inside it.'
+            ),
+        ),
     ] = None,
     report_html: Annotated[
         Path | None,
-        typer.Option('--report-html', help='Directory for an auto-named HTML report.'),
+        typer.Option(
+            '--report-html',
+            help=(
+                'Write an HTML report. Pass a file to write it there, or a '
+                'directory for an auto-named sim-report-*.html inside it.'
+            ),
+        ),
     ] = None,
     executive_summary: Annotated[  # noqa: FBT002
         bool,
@@ -827,13 +953,14 @@ def run(
         _export_report(run, report_html, fmt='html')
 
     if report_path is not None:
+        report_path = _resolve_report_target(report_path, ext='json', run=run)
         _write_report(run, report_path)
         _echo_saved('Report', report_path)
 
     if not no_save:
         run_path = _auto_save_run(run=run, run_name=name)
         _echo_saved('Run', run_path)
-        _echo_next(_dashboard_command(_get_sim_runs_dir()))
+        _echo_next(_dashboard_command(_get_sim_runs_dir()), 'explore the results')
     elif report_path is None:
         _recho('[yellow]Tip:[/] run without --no-save to browse results in the dashboard.', soft_wrap=True)
 
@@ -887,7 +1014,7 @@ async def _run_impl(
 # ---------------------------------------------------------------------------
 
 
-@app.command(no_args_is_help=True)
+@app.command(no_args_is_help=True, epilog=_GENERATE_EPILOG)
 def generate(
     datapoints_path: Annotated[
         Path,
@@ -928,6 +1055,28 @@ def generate(
         int,
         typer.Option('--num-scenarios', min=1, help='Number of scenarios to generate.'),
     ] = 5,
+    persona_seed: Annotated[
+        list[str] | None,
+        typer.Option(
+            '--persona-seed',
+            help=(
+                'Archetype seed for a persona, e.g. "angry retiree" (repeatable). '
+                'Each seed becomes one persona the LLM fleshes out — overrides '
+                '--num-personas. Omit to auto-generate.'
+            ),
+        ),
+    ] = None,
+    scenario_seed: Annotated[
+        list[str] | None,
+        typer.Option(
+            '--scenario-seed',
+            help=(
+                'Situation seed for a scenario, e.g. "disputes a refund denial" '
+                '(repeatable). Each seed becomes one scenario — overrides '
+                '--num-scenarios. Omit to auto-generate.'
+            ),
+        ),
+    ] = None,
     dataset_format: Annotated[  # noqa: FBT002
         bool,
         typer.Option(
@@ -965,8 +1114,29 @@ def generate(
     """
     if quiet:
         verbose = -1
-    _configure_logging(verbose)
-    _echo_using(sim_model)
+
+    hooks: Any = None
+    log_console: Any = None
+    if not quiet:
+        from rich.console import Console
+
+        from evaluatorq.simulation.hooks import RichHooks
+
+        log_console = Console(stderr=True)
+        hooks = RichHooks(console=log_console, verbose=verbose)
+    _configure_logging(verbose, console=log_console)
+    if not quiet:
+        # Plan box (beats 1+2: input + what will happen). Subsumes the plain
+        # "Using: <provider>" line — provider·model is a row here.
+        source = 'inline description' if agent_description else (target or '—')
+        _echo_generate_plan(
+            console=log_console,
+            source=source,
+            model=sim_model,
+            num_personas=num_personas,
+            num_scenarios=num_scenarios,
+            output=datapoints_path,
+        )
 
     try:
         resolved_agent_description = asyncio.run(
@@ -978,6 +1148,9 @@ def generate(
                 sim_model=sim_model,
                 num_personas=num_personas,
                 num_scenarios=num_scenarios,
+                hooks=hooks,
+                persona_seeds=persona_seed,
+                scenario_seeds=scenario_seed,
             )
         )
     except KeyboardInterrupt:
@@ -996,9 +1169,9 @@ def generate(
 
     _write_datapoints(datapoints, datapoints_path, dataset_format=dataset_format)
     if not quiet:
-        from rich.rule import Rule
-
-        _recho(Rule('Generated inputs', style='cyan', align='left'))
+        # The "Generating Datapoints" stage rule (from RichHooks.on_stage_start)
+        # already heads this block; the persona/scenario tables are self-titled,
+        # so no second "Generated inputs" rule is needed.
         _echo_generate_preview(datapoints)
     from rich.markup import escape
 
@@ -1006,7 +1179,14 @@ def generate(
         f'[green]✓[/] Generated [bold]{len(datapoints)}[/] datapoint(s) → {escape(str(datapoints_path))}',
         soft_wrap=True,
     )
-    _echo_next(_simulate_command(datapoints_path, target))
+    # --quiet is for scripts/pipes: the next-step CTA is non-error signposting,
+    # so suppress it. The one-line result above is the only kept confirmation.
+    if not quiet:
+        _echo_next(
+            _simulate_command(datapoints_path, target),
+            'run the simulation against your agent',
+            hint=None if target else _TARGET_HINT,
+        )
 
 
 async def _generate_impl(
@@ -1015,6 +1195,9 @@ async def _generate_impl(
     sim_model: str,
     num_personas: int,
     num_scenarios: int,
+    hooks: Any = None,
+    persona_seeds: list[str] | None = None,
+    scenario_seeds: list[str] | None = None,
 ) -> list[Any]:
     from evaluatorq.simulation.api import generate
 
@@ -1023,6 +1206,9 @@ async def _generate_impl(
         num_personas=num_personas,
         num_scenarios=num_scenarios,
         sim_model=sim_model,
+        hooks=hooks,
+        persona_seeds=persona_seeds,
+        scenario_seeds=scenario_seeds,
     )
 
 
@@ -1106,7 +1292,7 @@ def _validate_datapoints(path: Path) -> None:
         soft_wrap=True,
         err=False,
     )
-    _echo_next(_simulate_command(path, None))
+    _echo_next(_simulate_command(path, None), 'run the simulation', hint=_TARGET_HINT)
 
 
 @app.command('validate', no_args_is_help=True)
@@ -1145,7 +1331,7 @@ def validate_dataset(
 # ---------------------------------------------------------------------------
 
 
-@app.command('upload-dataset', no_args_is_help=True)
+@app.command('upload-dataset', no_args_is_help=True, epilog=_UPLOAD_DATASET_EPILOG)
 def upload_dataset(
     input_path: Annotated[
         Path,
@@ -1204,7 +1390,11 @@ def upload_dataset(
 
     base = os.environ.get('ORQ_BASE_URL', 'https://my.orq.ai').rstrip('/')
     typer.echo(f'Uploaded {len(rows)} datapoint(s) -> dataset {dataset_id} ({base})')
-    typer.echo(f'next: eq sim simulate --dataset-id {dataset_id} --target <target>')
+    _echo_next(
+        f'eq sim simulate --dataset-id {dataset_id} --target {_TARGET_PLACEHOLDER}',
+        'run the simulation on the uploaded dataset',
+        hint=_TARGET_HINT,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1222,6 +1412,10 @@ def runs(
         int,
         typer.Option('--limit', '-n', help='Maximum number of runs to show.'),
     ] = 20,
+    full: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option('--full', '-f', help='Render at full content width; do not truncate columns to the terminal.'),
+    ] = False,
 ) -> None:
     """List recent simulation runs."""
     runs_dir = directory or _get_sim_runs_dir()
@@ -1264,8 +1458,12 @@ def runs(
         from rich.table import Table
 
         table = Table(title='Simulation Runs')
-        for col in ('Name', 'Date', 'Mode', 'Target', 'N', 'Scores', 'File'):
+        for col in ('Name', 'Date', 'Mode', 'Target', 'N', 'Scores'):
             table.add_column(col)
+        # File is the unique identifier you copy into `eq sim ui <name>` / the
+        # dashboard, so it must never be ellipsised away on a narrow terminal —
+        # fold it onto extra lines instead of dropping characters.
+        table.add_column('File', overflow='fold')
         for row in rows:
             table.add_row(
                 row['name'],
@@ -1281,10 +1479,12 @@ def runs(
         # the Click/Typer stream so redirection and test capture both see it.
         # Width is taken from the real terminal (falling back to 80 when there
         # is no tty) so layout still adapts instead of being pinned to a
-        # constant.
+        # constant. --full renders at natural content width (a Table sizes to
+        # its content, not the console, when given ample room) so nothing is
+        # truncated — useful when piping/redirecting.
         import shutil
 
-        width = shutil.get_terminal_size(fallback=(80, 24)).columns
+        width = 10_000 if full else shutil.get_terminal_size(fallback=(80, 24)).columns
         buffer = io.StringIO()
         Console(file=buffer, width=width).print(table)
         typer.echo(buffer.getvalue(), nl=False)
@@ -1404,18 +1604,36 @@ def _maybe_generate_executive_summary(run: Any, *, enabled: bool, model: str) ->
         logger.warning('Failed to generate executive summary', exc_info=True)
 
 
-def _export_report(run: Any, directory: Path, *, fmt: str) -> None:
-    """Write an auto-named Markdown or HTML report for *run* into *directory*."""
-    from evaluatorq.common.reports import write_text_report
+def _resolve_report_target(target: Path, *, ext: str, run: Any) -> Path:
+    """Resolve a ``--report*`` target that may be a directory or an explicit file.
+
+    Uniform rule across ``--report`` / ``--report-md`` / ``--report-html``: a
+    directory (an existing dir, a trailing separator, or a suffixless path) gets
+    an auto-named ``sim-report-<name>-<timestamp>.<ext>`` inside it; an explicit
+    file path (one carrying a suffix) is honoured verbatim. Parent directories
+    are created either way. This is what makes the three report flags read the
+    same — same target semantics, only the format differs.
+    """
+    treat_as_dir = target.is_dir() or target.suffix == '' or str(target).endswith(('/', os.sep))
+    if treat_as_dir:
+        stem = f'sim-report-{_sanitise_run_name(run.run_name)}-{run.created_at:%Y%m%d-%H%M%S}'
+        target = target / f'{stem}.{ext}'
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def _export_report(run: Any, target: Path, *, fmt: str) -> None:
+    """Write a Markdown or HTML report for *run* to *target* (file or directory)."""
     from evaluatorq.simulation.reports.export_html import export_html
     from evaluatorq.simulation.reports.export_md import export_markdown
 
-    stem = f'sim-report-{_sanitise_run_name(run.run_name)}-{run.created_at:%Y%m%d-%H%M%S}'
     if fmt == 'md':
         content = export_markdown(run.results, run_date=run.created_at, executive_summary=run.executive_summary)
     else:
         content = export_html(run.results, run_date=run.created_at, executive_summary=run.executive_summary)
-    write_text_report(directory, stem=stem, fmt=fmt, content=content)
+    path = _resolve_report_target(target, ext=fmt, run=run)
+    path.write_text(content, encoding='utf-8')
+    typer.echo(f'Report written to {path}', err=True)
 
 
 def _write_results(results: list[Any], output: Path) -> None:

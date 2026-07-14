@@ -127,6 +127,7 @@ class SimulationHooks(Protocol):
     def on_run_start(self, meta: SimulationRunMeta) -> MaybeAsync[None]: ...
     def on_stage_start(self, stage: SimStage | str, meta: dict[str, Any]) -> MaybeAsync[None]: ...
     def on_stage_end(self, stage: SimStage | str, meta: dict[str, Any]) -> MaybeAsync[None]: ...
+    def on_generate_inputs_ready(self, num_personas: int, num_scenarios: int) -> MaybeAsync[None]: ...
     def on_datapoint_start(self, datapoint: SimulationDatapoint) -> MaybeAsync[None]: ...
     def on_turn_complete(self, datapoint_id: str, metrics: TurnMetrics) -> MaybeAsync[None]: ...
     def on_datapoint_complete(self, result: SimulationResult) -> MaybeAsync[None]: ...
@@ -167,6 +168,9 @@ class DefaultHooks:
 
     async def on_stage_end(self, stage: SimStage | str, meta: dict[str, Any]) -> None:
         logger.info(f'[simulation] Stage end: {_stage_label(stage)}')
+
+    async def on_generate_inputs_ready(self, num_personas: int, num_scenarios: int) -> None:
+        logger.info(f'[simulation] Inputs ready: {num_personas} personas, {num_scenarios} scenarios')
 
     async def on_datapoint_start(self, datapoint: SimulationDatapoint) -> None:
         logger.debug(f'[simulation] SimulationDatapoint start: {datapoint.id}')
@@ -244,6 +248,7 @@ class RichHooks:
         self._tasks: dict[str, int] = {}  # datapoint_id -> rich TaskID
         self._max_turns: int | None = None
         self._completed = 0
+        self._gen_status: Any = None  # rich.status.Status during the GENERATE stage
 
     async def on_confirm(self, meta: SimulationRunMeta) -> bool:
         from evaluatorq.common.reports import confirm_run_plan
@@ -271,8 +276,29 @@ class RichHooks:
 
     async def on_stage_start(self, stage: SimStage | str, meta: dict[str, Any]) -> None:
         self._console.rule(f'[bold cyan]{_stage_label(stage)}[/bold cyan]')
+        # Generation is two batched LLM calls + a first-message gather — no
+        # per-item progress to bar, so spin a transient status so the wait isn't
+        # dead air. Stopped in on_stage_end (before any simulate Progress starts,
+        # honouring the single-live-region invariant above).
+        if stage == SimStage.GENERATE:
+            # Phase-1 label; on_generate_inputs_ready switches it to phase 2 so
+            # the two sequential generation phases read as distinct steps.
+            self._gen_status = self._console.status(
+                '[cyan]Generating personas & scenarios…', spinner='dots'
+            )
+            self._gen_status.start()
+
+    async def on_generate_inputs_ready(self, num_personas: int, num_scenarios: int) -> None:
+        # Phase-1 done → leave a persistent checkpoint above the spinner, then
+        # flip the spinner to phase 2 (first-message generation, the NxM stage).
+        if self._gen_status is not None:
+            self._console.print(f'  [green]✓[/] {num_personas} personas · {num_scenarios} scenarios')
+            self._gen_status.update('[cyan]Writing first messages…')
 
     async def on_stage_end(self, stage: SimStage | str, meta: dict[str, Any]) -> None:
+        if stage == SimStage.GENERATE and self._gen_status is not None:
+            self._gen_status.stop()
+            self._gen_status = None
         if stage == SimStage.GENERATE and 'num_datapoints' in meta:
             self._console.print(f'[dim] {meta["num_datapoints"]} datapoints generated[/dim]')
 

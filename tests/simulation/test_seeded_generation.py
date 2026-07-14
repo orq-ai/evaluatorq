@@ -94,3 +94,26 @@ async def test_empty_seeds_raise(captured):
         await generate_personas([])
     with pytest.raises(ValueError):
         await generate_scenarios([])
+
+
+@pytest.mark.asyncio
+async def test_generate_personas_scenarios_seeds_override_num(captured):
+    """_generate_personas_scenarios: seeded dimension = one per seed (ignores num_*),
+    other dimension still auto-generates."""
+    from evaluatorq.simulation.api import _generate_personas_scenarios
+
+    personas, scenarios = await _generate_personas_scenarios(
+        agent_description="support agent",
+        num_personas=99,  # ignored — seeds win
+        num_scenarios=3,
+        model="m",
+        generation_client=object(),
+        persona_seeds=["angry retiree", "fraud dispute"],
+    )
+    # One persona per seed, each seed threaded into its prompt.
+    assert len(personas) == 2
+    joined = " ".join(captured["prompts"])
+    assert "angry retiree" in joined
+    assert "fraud dispute" in joined
+    # Scenarios auto-generated (no seeds) — still produced.
+    assert len(scenarios) >= 1

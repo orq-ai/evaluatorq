@@ -26,6 +26,48 @@ from evaluatorq.simulation.utils.run_store import build_simulation_run as _build
 runner = CliRunner()
 
 
+@pytest.mark.parametrize('command', ['simulate', 'run', 'generate', 'upload-dataset'])
+def test_command_help_shows_examples(command: str) -> None:
+    """The four non-trivial commands carry a copy-paste Examples block in --help."""
+    result = runner.invoke(app, [command, '--help'])
+    assert result.exit_code == 0, result.output
+    assert 'Examples' in result.output
+
+
+@pytest.mark.parametrize('command', ['simulate', 'run', 'generate', 'upload-dataset'])
+def test_epilog_examples_use_only_real_flags(command: str) -> None:
+    """Drift guard: every ``eq sim <cmd> …`` example line must use only real flags of
+    that <cmd> — so a rename can't leave a dead example behind. Example lines may
+    reference a *different* subcommand (e.g. generate shows the simulate hop); each
+    line is validated against the command it actually invokes."""
+    import re
+
+    import typer
+
+    click_group = typer.main.get_command(app)
+    subcommands = click_group.commands  # type: ignore[attr-defined]
+
+    def valid_flags(name: str) -> set[str]:
+        flags: set[str] = set()
+        for param in subcommands[name].params:
+            flags.update(param.opts)
+            flags.update(param.secondary_opts)
+        return flags
+
+    epilog = subcommands[command].epilog or ''
+    checked = 0
+    for line in epilog.splitlines():
+        m = re.search(r'eq sim ([a-z-]+)\b(.*)', line)
+        if not m or m.group(1) not in subcommands:
+            continue
+        invoked, rest = m.group(1), m.group(2)
+        used = set(re.findall(r'(?<!\w)(--[a-z][a-z-]+|-[a-z])\b', rest))
+        unknown = used - valid_flags(invoked)
+        assert not unknown, f'{command} epilog line invokes `{invoked}` with unknown flags: {sorted(unknown)}'
+        checked += 1
+    assert checked, f'{command} epilog had no recognizable `eq sim <cmd>` example lines'
+
+
 def test_sim_help_describes_the_pipeline() -> None:
     result = runner.invoke(app, ['--help'])
 
@@ -321,7 +363,7 @@ def test_validate_signposts_next_step(tmp_path: Path) -> None:
     dp_file = _make_datapoints_file(tmp_path, count=2)
     result = runner.invoke(app, ["validate", "--input", str(dp_file)])
     assert result.exit_code == 0
-    assert f"next: eq sim simulate -i {dp_file} --target <target>" in result.output
+    assert f"eq sim simulate -i {dp_file} --target agent:<your-agent-key>" in result.output
 
 
 def test_validate_dataset_missing_file(tmp_path: Path) -> None:
@@ -443,6 +485,33 @@ def test_runs_suggests_dashboard_directory(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     assert f"open: eq dashboard '{runs_dir}'" in result.stdout
+
+
+def test_runs_full_does_not_truncate(tmp_path: Path) -> None:
+    """--full renders at content width: the long filename and every scorer stay intact."""
+    runs_dir = tmp_path / "sim-runs"
+    runs_dir.mkdir()
+    long_name = "my-run_20260713-220000.json"
+    (runs_dir / long_name).write_text(
+        json.dumps({
+            "run_name": "sim",
+            "created_at": "2026-07-13T22:00:00+00:00",
+            "mode": "run",
+            "target_kind": "orq_agent",
+            "evaluator_names": ["goal_achieved", "criteria_met", "safety"],
+            "total_results": 9,
+            "scorer_averages": {"goal_achieved": 0.67, "criteria_met": 0.80, "safety": 0.55},
+            "results": [],
+        }),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["runs", str(runs_dir), "--full"])
+    assert result.exit_code == 0, result.output
+    # No ellipsis anywhere, filename contiguous, and the last (widest) scorer survives.
+    assert "…" not in result.stdout
+    assert long_name in result.stdout
+    assert "safety=0.55" in result.stdout
 
 
 def test_runs_skips_malformed(tmp_path: Path) -> None:
@@ -653,7 +722,10 @@ def test_simulate_saved_run_suggests_dashboard_directory(tmp_path: Path) -> None
         )
 
     assert result.exit_code == 0, result.output
-    handoff = result.stderr.split('next:', 1)[1]
+    # Scope to the next-step CTA — the run filename legitimately appears in other
+    # stderr lines (e.g. the "Run saved" log). The dashboard hand-off must point
+    # at the directory, not the specific run file.
+    handoff = result.stderr.split('▸ Next', 1)[1]
     assert "eq dashboard '" in handoff
     assert str(runs_dir) in handoff
     assert saved_run.name not in handoff
@@ -682,7 +754,7 @@ def test_run_saved_run_suggests_dashboard_directory(tmp_path: Path) -> None:
         )
 
     assert result.exit_code == 0, result.output
-    assert f"next: eq dashboard {runs_dir}" in result.stderr
+    assert f"eq dashboard {runs_dir}" in result.stderr
 
 
 def test_simulate_writes_results_file(tmp_path: Path) -> None:
@@ -1287,6 +1359,71 @@ def test_run_report_html_writes_dated_file(tmp_path: Path, monkeypatch: pytest.M
     assert htmls[0].read_text().strip(), "HTML file should be non-empty"
 
 
+def test_run_report_md_to_explicit_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--report-md with a file path (has a suffix) writes that exact file, not an auto-named one."""
+    monkeypatch.chdir(tmp_path)
+    results = [_make_result(scorer_scores={"goal_achieved": 1.0})]
+    out_file = tmp_path / "reports" / "my-report.md"
+
+    with (
+        patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
+        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
+    ):
+        mock_target.return_value = MagicMock()
+        mock_impl.return_value = _stub_run(results, mode="run")
+
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--agent-description", "A helpful bot",
+                "--openai-model", "gpt-4o-mini",
+                "--yes",
+                "--no-save",
+                "--report-md", str(out_file),
+            ],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    assert out_file.exists(), "explicit --report-md file path should be honoured verbatim"
+    assert out_file.read_text().strip()
+    # No auto-named sibling was created.
+    assert list((tmp_path / "reports").glob("sim-report-*.md")) == []
+
+
+def test_run_report_json_to_directory_autonames(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--report with a directory drops an auto-named sim-report-*.json inside — same rule as --report-md/html."""
+    monkeypatch.chdir(tmp_path)
+    results = [_make_result(scorer_scores={"goal_achieved": 1.0})]
+    out_dir = tmp_path / "json-reports"
+
+    with (
+        patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
+        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
+    ):
+        mock_target.return_value = MagicMock()
+        mock_impl.return_value = _stub_run(results, mode="run")
+
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--agent-description", "A helpful bot",
+                "--openai-model", "gpt-4o-mini",
+                "--yes",
+                "--no-save",
+                "--report", str(out_dir),
+            ],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    jsons = list(out_dir.glob("sim-report-*.json"))
+    assert len(jsons) == 1, f"Expected 1 auto-named .json, got {jsons}"
+    assert jsons[0].read_text().strip()
+
+
 def test_simulate_report_md_writes_dated_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """simulate --report-md writes exactly one *.md with non-empty content."""
     monkeypatch.chdir(tmp_path)
@@ -1359,6 +1496,51 @@ def test_generate_writes_datapoints(tmp_path: Path) -> None:
     assert len([ln for ln in out_file.read_text().splitlines() if ln.strip()]) == 3
 
 
+def test_generate_forwards_seed_flags(tmp_path: Path) -> None:
+    """--persona-seed / --scenario-seed (repeatable) reach generate() as lists."""
+    out_file = tmp_path / "dp.jsonl"
+
+    with patch("evaluatorq.simulation.cli._generate_impl", new_callable=AsyncMock) as mock_impl:
+        mock_impl.return_value = _make_datapoints(2)
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                "--agent-description", "A helpful bot",
+                "--output", str(out_file),
+                "--persona-seed", "angry retiree",
+                "--persona-seed", "fraud dispute",
+                "--scenario-seed", "disputes a refund denial",
+            ],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    kwargs = mock_impl.call_args.kwargs
+    assert kwargs["persona_seeds"] == ["angry retiree", "fraud dispute"]
+    assert kwargs["scenario_seeds"] == ["disputes a refund denial"]
+
+
+def test_generate_no_seed_flags_pass_none(tmp_path: Path) -> None:
+    """Without seed flags, generate() receives None (auto-generation path)."""
+    out_file = tmp_path / "dp.jsonl"
+
+    with patch("evaluatorq.simulation.cli._generate_impl", new_callable=AsyncMock) as mock_impl:
+        mock_impl.return_value = _make_datapoints(1)
+
+        result = runner.invoke(
+            app,
+            ["generate", "--agent-description", "A helpful bot", "--output", str(out_file)],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    kwargs = mock_impl.call_args.kwargs
+    assert kwargs["persona_seeds"] is None
+    assert kwargs["scenario_seeds"] is None
+
+
 def test_generate_signposts_preview_and_next_step(tmp_path: Path) -> None:
     # generate must end by naming the next hop (the loudest seam) and preview
     # the personas/scenarios it built.
@@ -1382,10 +1564,12 @@ def test_generate_signposts_preview_and_next_step(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert "Personas" in result.output and "User0" in result.output
     assert "Scenarios" in result.output
-    assert f"next: eq sim simulate -i {out_file} --target agent:refund-agent-fixed" in result.output
+    assert f"eq sim simulate -i {out_file} --target agent:refund-agent-fixed" in result.output
 
 
-def test_generate_quiet_suppresses_preview_but_keeps_next_step(tmp_path: Path) -> None:
+def test_generate_quiet_suppresses_preview_and_next_step(tmp_path: Path) -> None:
+    # --quiet is for scripts/pipes: suppress the plan box, preview, and next-step
+    # CTA (all non-error signposting). Keep only the one-line result confirmation.
     out_file = tmp_path / "dp.jsonl"
     with patch("evaluatorq.simulation.cli._generate_impl", new_callable=AsyncMock) as mock_impl:
         mock_impl.return_value = _make_datapoints(2)
@@ -1397,7 +1581,11 @@ def test_generate_quiet_suppresses_preview_but_keeps_next_step(tmp_path: Path) -
 
     assert result.exit_code == 0, result.output
     assert "Personas" not in result.output
-    assert "next: eq sim simulate" in result.output
+    assert "Generate Plan" not in result.output
+    assert "▸ Next" not in result.output
+    assert "eq sim simulate" not in result.output
+    # the one-line result is still shown
+    assert "Generated" in result.output and "datapoint(s)" in result.output
 
 
 def test_generate_target_agent_uses_context_description_when_omitted(tmp_path: Path) -> None:
@@ -1449,7 +1637,9 @@ def test_generate_datapoints_roundtrips_through_simulate_loader(tmp_path: Path) 
         )
 
     assert result.exit_code == 0, result.output
-    assert 'Using for generations: OpenAI-compatible · openai/gpt-5.4-mini' in result.stderr
+    # The Generate Plan box surfaces the resolved provider + model (beats 1+2).
+    assert 'Generate Plan' in result.stderr
+    assert 'OpenAI-compatible' in result.stderr and 'openai/gpt-5.4-mini' in result.stderr
     loaded = load_datapoints_from_jsonl(str(out_file))
     assert [dp.id for dp in loaded] == ["dp-0", "dp-1"]  # id round-trips (not re-fabricated)
     assert [dp.persona.name for dp in loaded] == ["User0", "User1"]

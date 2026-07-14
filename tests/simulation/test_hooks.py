@@ -1086,6 +1086,42 @@ def test_rich_stage_end_simulate_prints_nothing():
     assert buf.getvalue() == ''
 
 
+def test_rich_generate_stage_spinner_starts_and_stops():
+    """The GENERATE stage spins a transient status that must be stopped on end.
+
+    Guards the single-live-region invariant: a leaked Status would tear the
+    simulate Progress that follows in the `run` path.
+    """
+    from rich.console import Console
+
+    h = RichHooks(console=Console(file=io.StringIO(), width=80, force_terminal=False))
+    asyncio.run(h.on_stage_start(SimStage.GENERATE, {}))
+    assert h._gen_status is not None
+    asyncio.run(h.on_stage_end(SimStage.GENERATE, {}))
+    assert h._gen_status is None
+
+
+def test_rich_generate_inputs_ready_prints_checkpoint():
+    """on_generate_inputs_ready prints the phase-1 checkpoint so the two
+    generation phases read as distinct steps (not one atomic request)."""
+    from rich.console import Console
+
+    # force_terminal=False: the Status live region emits no cursor-control codes,
+    # so the printed checkpoint line stays clean and greppable.
+    buf = io.StringIO()
+    h = RichHooks(console=Console(file=buf, width=90, force_terminal=False))
+    asyncio.run(h.on_stage_start(SimStage.GENERATE, {}))
+    asyncio.run(h.on_generate_inputs_ready(2, 3))
+    asyncio.run(h.on_stage_end(SimStage.GENERATE, {}))
+    out = buf.getvalue()
+    assert '2 personas' in out and '3 scenarios' in out
+
+
+def test_default_hooks_generate_inputs_ready_is_silent(caplog):
+    """DefaultHooks.on_generate_inputs_ready logs at INFO, never raises."""
+    asyncio.run(DefaultHooks().on_generate_inputs_ready(3, 3))  # must not raise
+
+
 def test_default_hooks_stage_methods_are_silent():
     """DefaultHooks.on_stage_start and on_stage_end run without raising."""
     hooks = DefaultHooks()
@@ -1228,3 +1264,54 @@ def test_default_hooks_on_run_complete_warns_on_errors(caplog, sim_result_factor
         asyncio.run(hooks.on_run_complete(results))
     assert any(r.levelname == 'WARNING' for r in caplog.records)
     assert 'errored' in caplog.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_generate_fires_generate_stage_hooks(monkeypatch):
+    """Standalone generate() must bracket generation with GENERATE stage hooks.
+
+    Level-1 signposting: the CLI `generate` command was silent because
+    `generate()` took no hooks param. This asserts the wiring — hooks fire
+    around the (patched-out) generation calls, with no network.
+    """
+    import contextlib
+
+    from evaluatorq.simulation import api
+
+    events: list[tuple[str, str]] = []
+
+    class StageRecorder(DefaultHooks):
+        async def on_stage_start(self, stage, meta):
+            events.append(('start', str(stage)))
+
+        async def on_stage_end(self, stage, meta):
+            events.append(('end', str(stage)))
+
+    # Stub the two generation internals so no LLM is called.
+    async def _fake_personas_scenarios(**_kwargs):
+        return [], []
+
+    async def _fake_resolve(**_kwargs):
+        return ['dp']  # sentinel — generate() returns this list verbatim
+
+    @contextlib.asynccontextmanager
+    async def _fake_span(*_args, **_kwargs):
+        yield None
+
+    async def _noop():
+        return None
+
+    monkeypatch.setattr(api, '_generate_personas_scenarios', _fake_personas_scenarios)
+    monkeypatch.setattr(api, '_resolve_or_generate_datapoints', _fake_resolve)
+    monkeypatch.setattr(
+        'evaluatorq.openresponses.client.build_simulation_client',
+        lambda _client: (object(), False),
+    )
+    monkeypatch.setattr('evaluatorq.simulation.tracing.with_simulation_span', _fake_span)
+    monkeypatch.setattr('evaluatorq.tracing.setup.init_tracing_if_needed', _noop)
+    monkeypatch.setattr('evaluatorq.tracing.setup.flush_tracing', _noop)
+
+    result = await api.generate(agent_description='x', hooks=StageRecorder())
+
+    assert result == ['dp']
+    assert events == [('start', str(SimStage.GENERATE)), ('end', str(SimStage.GENERATE))]
