@@ -1,7 +1,7 @@
 # Runbook — Agent Simulation Webinar
 
 The live demo flow: ordered steps, exact commands, and what each one answers.
-Spine agent: the **Bank of Holland credit-card Q&A agent** (`make provision` recreates it in
+Spine agent: **Sterling**, the **Bank of Holland credit-card Q&A agent** (`make provision` recreates it in
 the banking / CustomerDemo workspace). Platform ops (datasets, agents) use the
 **`orq` CLI**; the simulation engine is **`evaluatorq sim`** (the `orq` CLI has no
 simulation command — see Gaps §1).
@@ -57,7 +57,7 @@ uv sync --all-extras
 cd examples/agent_simulation/webinar_demo && make provision
 ```
 
-The agent is the Bank of Holland credit-card support
+The agent is **Sterling**, the Bank of Holland credit-card support
 bot: `azure/gpt-5-mini`, a 99-question Dutch/English FAQ knowledge base, and two
 code tools (`get_card_info`, `get_transaction_details`). Definitions live in
 `agent_build/orq_export/` + `agent_build/assets/boh_faq.txt`; `agent_build/provision.py`
@@ -88,7 +88,7 @@ scenario (goal/context/criteria). This is the "coverage from nothing" moment.
 
 ```bash
 uv run evaluatorq sim validate-dataset boh_datapoints.jsonl   # sanity check
-python -m json.tool < <(head -1 boh_datapoints.jsonl)          # pretty-print one row
+python3 -m json.tool < <(head -1 boh_datapoints.jsonl)         # pretty-print one row
 ```
 
 **3. Run the simulation against the live Bank of Holland agent** using the frozen datapoints
@@ -99,7 +99,7 @@ the judge LLM scores whether the agent met the goal + criteria.
 ```bash
 uv run evaluatorq sim simulate \
   --target agent:boh_creditcard_agent_demo \
-  --datapoints boh_datapoints.jsonl \
+  -i boh_datapoints.jsonl \
   --name boh-from-scratch
 ```
 
@@ -156,7 +156,7 @@ e.g. after tweaking the agent prompt — to compare like-for-like.
 ```bash
 uv run evaluatorq sim simulate \
   --target agent:boh_creditcard_agent_demo \
-  --datapoints boh_datapoints.jsonl \
+  -i boh_datapoints.jsonl \
   --name boh-rerun
 ```
 
@@ -251,7 +251,7 @@ inspect → harden → re-run loop, closed live.
    strings, not structured fields. (`sim generate --dataset-format` emits the same
    envelope for inspection.)
 3. **`sim simulate --dataset-id` — now CLI-native** (was SDK-only). `simulate`
-   takes exactly one of `--datapoints` (local JSONL) or `--dataset-id` (orq dataset).
+   takes exactly one of `-i`/`--input` (local JSONL) or `--dataset-id` (orq dataset).
 4. **No native "seed from data + generate more."** `dataset_id` is still mutually
    exclusive with personas/scenarios — extension is JSONL append (3b) or
    `upload-dataset --dataset-id` (3c). No LLM augmentation *from* existing rows yet.

@@ -302,8 +302,8 @@
         <span class="label">Format</span>
         45-minute live session. Bauke leads and drives the demo; Arian plays
         the audience's advocate — asking the questions a skeptical engineer
-        would ask, at the moments they'd ask them. Demo spine: the Bank of
-        Holland credit-card Q&amp;A agent (<code>boh_creditcard_agent_demo</code>,
+        would ask, at the moments they'd ask them. Demo spine: <strong>Sterling</strong>,
+        the Bank of Holland credit-card Q&amp;A agent (<code>boh_creditcard_agent_demo</code>,
         provisioned via <code>make provision</code>), simulated live with
         <code>evaluatorq sim</code>.
       </div>
@@ -797,7 +797,7 @@ uv run evaluatorq sim validate-dataset boh_datapoints.jsonl
 <span class="cm"># 3. run live, freeze the set for Act 3</span>
 uv run evaluatorq sim simulate \
   <span class="kw">--target</span> agent:boh_creditcard_agent_demo \
-  <span class="kw">--datapoints</span> boh_datapoints.jsonl \
+  <span class="kw">-i</span> boh_datapoints.jsonl \
   <span class="kw">--name</span> boh-from-scratch
 
 <span class="cm"># 4. pass rate + a failing transcript</span>
@@ -833,7 +833,7 @@ results = <span class="kw">await</span> <span class="fn">simulate</span>(
           <div class="code"><pre><span class="cm"># 3a. re-run the EXACT same set after a prompt tweak</span>
 uv run evaluatorq sim simulate \
   <span class="kw">--target</span> agent:boh_creditcard_agent_demo \
-  <span class="kw">--datapoints</span> boh_datapoints.jsonl \
+  <span class="kw">-i</span> boh_datapoints.jsonl \
   <span class="kw">--name</span> boh-rerun
 
 <span class="cm"># 3b. extend the suite — generate more, append</span>

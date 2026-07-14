@@ -11,7 +11,7 @@ PARALLELISM ?= 5
 .PHONY: provision generate simulate dashboard rerun upload help
 
 help:
-	@echo "make provision  - create Bank of Holland agent + tools + KB in Orq (idempotent)"
+	@echo "make provision  - create Sterling (Bank of Holland agent) + tools + KB in Orq (idempotent)"
 	@echo "make generate   - generate personas x scenarios -> $(DATAPOINTS)"
 	@echo "make simulate   - run the generated datapoints against the agent"
 	@echo "make dashboard  - open the dashboard on this run store (.evaluatorq/sim-runs/)"
@@ -27,15 +27,15 @@ generate:
 
 simulate:
 	uv run evaluatorq sim simulate --target agent:$(AGENT) \
-		--datapoints $(DATAPOINTS) --max-turns $(MAX_TURNS) \
-		--parallelism $(PARALLELISM) --name boh
+		--input $(DATAPOINTS) --max-turns $(MAX_TURNS) \
+		--parallelism $(PARALLELISM) --name sterling
 
 dashboard:
 	uv run evaluatorq dashboard .evaluatorq/sim-runs
 
 rerun:
 	uv run evaluatorq sim simulate --target agent:$(AGENT) --input $(DATAPOINTS) \
-		--max-turns $(MAX_TURNS) --parallelism $(PARALLELISM) --name boh-rerun
+		--max-turns $(MAX_TURNS) --parallelism $(PARALLELISM) --name sterling-rerun
 
 upload:
 	uv run evaluatorq sim upload-dataset -i $(DATAPOINTS) -n "Bank of Holland Sim Set"
