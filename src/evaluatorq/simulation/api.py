@@ -340,6 +340,71 @@ async def generate_and_simulate(
     return run.results
 
 
+async def _generate_datapoints_inner(
+    *,
+    caller: str,
+    agent_description: str,
+    num_personas: int,
+    num_scenarios: int,
+    model: str,
+    generation_client: AsyncOpenAI | None,
+    hooks: SimulationHooks | None = None,
+    persona_seeds: list[str] | None = None,
+    scenario_seeds: list[str] | None = None,
+) -> tuple[list[SimulationDatapoint], AsyncOpenAI, bool]:
+    """Shared generation trio: personas/scenarios + first-message datapoints.
+
+    Builds one shared generation client (mirrors the pattern both callers
+    used inline) and runs the two-step pipeline shared by :func:`generate`
+    and :func:`_generate_and_simulate_run`: ``_generate_personas_scenarios``
+    followed by ``_resolve_or_generate_datapoints``, with the
+    ``on_generate_inputs_ready`` hook fired in between exactly as both
+    callers previously did inline. Must be called from inside the caller's
+    own tracing span so child spans nest correctly (span nesting is
+    implicit via OTel contextvars).
+
+    Returns ``(datapoints, gen_client, gen_owned)``. Callers own closing the
+    client: :func:`generate` has no further use for it and closes it right
+    away, while :func:`_generate_and_simulate_run` keeps it open to pass
+    into ``SimulationConfig.generation_client`` for the simulate stage and
+    closes it only after ``_simulate_core`` returns. On any exception raised
+    from within this helper (before the client is handed back to the
+    caller), the client is closed here so it can't leak.
+    """
+    from evaluatorq.common.async_utils import await_maybe
+    from evaluatorq.openresponses.client import build_simulation_client
+    from evaluatorq.simulation.hooks import DefaultHooks
+
+    gen_client, gen_owned = build_simulation_client(generation_client)
+    try:
+        gen_hooks = hooks or DefaultHooks()
+        gen_personas, gen_scenarios = await _generate_personas_scenarios(
+            agent_description=agent_description,
+            num_personas=num_personas,
+            num_scenarios=num_scenarios,
+            model=model,
+            generation_client=gen_client,
+            persona_seeds=persona_seeds,
+            scenario_seeds=scenario_seeds,
+        )
+        await await_maybe(gen_hooks.on_generate_inputs_ready(len(gen_personas), len(gen_scenarios)))
+
+        datapoints = await _resolve_or_generate_datapoints(
+            caller=caller,
+            datapoints=None,
+            personas=gen_personas,
+            scenarios=gen_scenarios,
+            dataset_id=None,
+            model=model,
+            generation_client=gen_client,
+        )
+    except BaseException:
+        if gen_owned:
+            await gen_client.close()
+        raise
+    return datapoints, gen_client, gen_owned
+
+
 async def _generate_and_simulate_run(
     *,
     evaluation_name: str = '',
@@ -392,43 +457,26 @@ async def _generate_and_simulate_run(
                 agent_description=agent_description,
                 target=target,
             )
-            # Build one shared client for all generation steps so the three
-            # sub-functions don't each construct their own AsyncOpenAI pool.
-            # Mirrors the pattern used in generate().
-            from evaluatorq.openresponses.client import build_simulation_client
-
-            gen_client, gen_owned = build_simulation_client(generation_client)
+            gen_hooks = hooks or DefaultHooks()
+            datapoints: list[SimulationDatapoint] = []
+            await await_maybe(gen_hooks.on_stage_start(SimStage.GENERATE, {}))
             try:
-                gen_hooks = hooks or DefaultHooks()
-                datapoints: list[SimulationDatapoint] = []
-                await await_maybe(gen_hooks.on_stage_start(SimStage.GENERATE, {}))
-                try:
-                    gen_personas, gen_scenarios = await _generate_personas_scenarios(
-                        agent_description=resolved_agent_description,
-                        num_personas=num_personas,
-                        num_scenarios=num_scenarios,
-                        model=sim_model,
-                        generation_client=gen_client,
-                    )
-                    await await_maybe(
-                        gen_hooks.on_generate_inputs_ready(len(gen_personas), len(gen_scenarios))
-                    )
+                datapoints, gen_client, gen_owned = await _generate_datapoints_inner(
+                    caller='generate_and_simulate',
+                    agent_description=resolved_agent_description,
+                    num_personas=num_personas,
+                    num_scenarios=num_scenarios,
+                    model=sim_model,
+                    generation_client=generation_client,
+                    hooks=hooks,
+                )
+                if emit_datapoints is not None:
+                    emit_datapoints(datapoints)
+            finally:
+                meta = {'num_datapoints': len(datapoints)} if datapoints else {}
+                await await_maybe(gen_hooks.on_stage_end(SimStage.GENERATE, meta))
 
-                    datapoints = await _resolve_or_generate_datapoints(
-                        caller='generate_and_simulate',
-                        datapoints=None,
-                        personas=gen_personas,
-                        scenarios=gen_scenarios,
-                        dataset_id=None,
-                        model=sim_model,
-                        generation_client=gen_client,
-                    )
-                    if emit_datapoints is not None:
-                        emit_datapoints(datapoints)
-                finally:
-                    meta = {'num_datapoints': len(datapoints)} if datapoints else {}
-                    await await_maybe(gen_hooks.on_stage_end(SimStage.GENERATE, meta))
-
+            try:
                 config = SimulationConfig(
                     evaluation_name=evaluation_name,
                     target=target,
@@ -499,7 +547,6 @@ async def generate(
     ``sim_model`` drives persona/scenario/first-message generation.
     """
     from evaluatorq.common.async_utils import await_maybe
-    from evaluatorq.openresponses.client import build_simulation_client
     from evaluatorq.simulation.hooks import DefaultHooks, SimStage
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
@@ -515,45 +562,32 @@ async def generate(
                 'orq.simulation.num_scenarios': num_scenarios,
             },
         ):
-            # Build one client and inject it into both the persona/scenario and
-            # first-message stages so the generation path constructs a single
-            # AsyncOpenAI client (injected → owned=False downstream), closing it
-            # once here.
-            gen_client, gen_owned = build_simulation_client(generation_client)
+            # Bracket generation with the same GENERATE stage hooks the
+            # generate_and_simulate path uses, so the standalone command
+            # isn't silent. Empty on_stage_end meta: the CLI prints its own
+            # "✓ Generated N datapoint(s)" line, so the count isn't doubled.
+            gen_hooks = hooks or DefaultHooks()
+            await await_maybe(gen_hooks.on_stage_start(SimStage.GENERATE, {}))
             try:
-                # Bracket generation with the same GENERATE stage hooks the
-                # generate_and_simulate path uses, so the standalone command
-                # isn't silent. Empty on_stage_end meta: the CLI prints its own
-                # "✓ Generated N datapoint(s)" line, so the count isn't doubled.
-                gen_hooks = hooks or DefaultHooks()
-                await await_maybe(gen_hooks.on_stage_start(SimStage.GENERATE, {}))
-                try:
-                    gen_personas, gen_scenarios = await _generate_personas_scenarios(
-                        agent_description=agent_description,
-                        num_personas=num_personas,
-                        num_scenarios=num_scenarios,
-                        model=sim_model,
-                        generation_client=gen_client,
-                        persona_seeds=persona_seeds,
-                        scenario_seeds=scenario_seeds,
-                    )
-                    await await_maybe(
-                        gen_hooks.on_generate_inputs_ready(len(gen_personas), len(gen_scenarios))
-                    )
-                    return await _resolve_or_generate_datapoints(
-                        caller='generate',
-                        datapoints=None,
-                        personas=gen_personas,
-                        scenarios=gen_scenarios,
-                        dataset_id=None,
-                        model=sim_model,
-                        generation_client=gen_client,
-                    )
-                finally:
-                    await await_maybe(gen_hooks.on_stage_end(SimStage.GENERATE, {}))
+                datapoints, gen_client, gen_owned = await _generate_datapoints_inner(
+                    caller='generate',
+                    agent_description=agent_description,
+                    num_personas=num_personas,
+                    num_scenarios=num_scenarios,
+                    model=sim_model,
+                    generation_client=generation_client,
+                    hooks=hooks,
+                    persona_seeds=persona_seeds,
+                    scenario_seeds=scenario_seeds,
+                )
             finally:
-                if gen_owned:
-                    await gen_client.close()
+                await await_maybe(gen_hooks.on_stage_end(SimStage.GENERATE, {}))
+            # generate() has no further use for the client (unlike
+            # _generate_and_simulate_run, which keeps it open for the
+            # simulate stage), so close it here once generation is done.
+            if gen_owned:
+                await gen_client.close()
+            return datapoints
     finally:
         await flush_tracing()
 
