@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 import typer
 from loguru import logger
 
+from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.simulation.types import DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run as _auto_save_run

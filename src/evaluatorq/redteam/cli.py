@@ -14,6 +14,7 @@ from typing import Annotated, Any
 
 import typer
 
+from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
 from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, DeliveryMethod, SaveMode, Vulnerability
 
 app = typer.Typer(

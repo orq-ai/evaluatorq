@@ -14,6 +14,8 @@ from typing import Annotated
 
 import typer
 
+from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
+
 # ---------------------------------------------------------------------------
 # Top-level application
 # ---------------------------------------------------------------------------
