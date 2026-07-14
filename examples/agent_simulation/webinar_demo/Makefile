@@ -1,7 +1,7 @@
 # Agent Simulation webinar demo — provision the Bank of Holland agent and drive simulations.
 # Requires ORQ_API_KEY in the environment or agent_build/.env.
 
-AGENT ?= boh_creditcard_agent_demo
+AGENT ?= sterling
 PERSONAS ?= 3
 SCENARIOS ?= 3
 DATAPOINTS ?= boh_datapoints.jsonl

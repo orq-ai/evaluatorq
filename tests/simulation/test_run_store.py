@@ -446,6 +446,75 @@ async def test_simulate_save_true_callable_target_kind_is_callback(
 
 
 @pytest.mark.asyncio
+async def test_simulate_save_true_openai_model_target_kind_is_openai_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression: _resolve_target flattened every AgentTarget (including
+    # OpenAIModelTarget, used by `eq sim run --openai-model`) to 'orq_agent',
+    # which mislabeled the saved run and fired a spurious fetch_agent_info() call.
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from evaluatorq.redteam.backends.openai import OpenAIModelTarget
+    from evaluatorq.simulation.api import simulate
+
+    monkeypatch.setattr("evaluatorq.simulation.utils.run_store.get_sim_runs_dir", lambda: tmp_path)
+    results = [_make_result(scorer_scores={"goal_achieved": 1.0})]
+    target = OpenAIModelTarget(model="gpt-4o-mini", client=MagicMock())
+
+    with (
+        patch("evaluatorq.simulation.api._simulate_via_evaluatorq", AsyncMock(return_value=results)),
+        patch("evaluatorq.simulation.api.fetch_agent_info", AsyncMock()) as mock_fetch,
+    ):
+        await simulate(
+            target=target,
+            datapoints=[_make_datapoint()],
+            sim_model="test",
+            upload_results=False,
+            save=True,
+        )
+        mock_fetch.assert_not_called()
+
+    data = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert data["target_kind"] == "openai_model"
+    assert data["target"] == "gpt-4o-mini"
+    assert data["target_model"] == "gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_simulate_save_true_vercel_target_kind_is_vercel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression: same flattening bug as the openai-model case, for
+    # `eq sim run --vercel-url`.
+    from unittest.mock import AsyncMock, patch
+
+    from evaluatorq.integrations.vercel_ai_sdk_integration import VercelAISdkTarget
+    from evaluatorq.simulation.api import simulate
+
+    monkeypatch.setattr("evaluatorq.simulation.utils.run_store.get_sim_runs_dir", lambda: tmp_path)
+    results = [_make_result(scorer_scores={"goal_achieved": 1.0})]
+    target = VercelAISdkTarget("https://x.example/api/chat")
+
+    with (
+        patch("evaluatorq.simulation.api._simulate_via_evaluatorq", AsyncMock(return_value=results)),
+        patch("evaluatorq.simulation.api.fetch_agent_info", AsyncMock()) as mock_fetch,
+    ):
+        await simulate(
+            target=target,
+            datapoints=[_make_datapoint()],
+            sim_model="test",
+            upload_results=False,
+            save=True,
+        )
+        mock_fetch.assert_not_called()
+
+    data = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert data["target_kind"] == "vercel"
+    assert data["target"] == "https://x.example/api/chat"
+    assert data["target_model"] is None
+
+
+@pytest.mark.asyncio
 async def test_simulate_save_false_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     await _run_simulate(runs_dir=tmp_path, monkeypatch=monkeypatch, save=False)
     assert list(tmp_path.glob("*.json")) == []

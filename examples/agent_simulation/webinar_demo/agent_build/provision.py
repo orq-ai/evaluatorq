@@ -121,7 +121,7 @@ def provision_agent(client: Orq, tool_keys: list[str], kb_id: str) -> str:
         description=agent.get('description') or 'Bank of Holland credit-card support demo agent.',
         instructions=agent['instructions'],
         path=config.ORQ_PATH,
-        model={'id': (agent.get('model') or {}).get('id', 'azure/gpt-5-mini')},
+        model={'id': config.MODEL},
         settings=settings,
         knowledge_bases=[{'knowledge_id': kb_id}],
     )

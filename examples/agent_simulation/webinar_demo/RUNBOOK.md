@@ -7,7 +7,7 @@ the banking / CustomerDemo workspace). Platform ops (datasets, agents) use the
 simulation command — see Gaps §1).
 
 > Status: validated end-to-end against the real provisioned agent
-> (`boh_creditcard_agent_demo`). Set `ORQ_API_KEY` to the banking workspace key.
+> (`sterling`). Set `ORQ_API_KEY` to the banking workspace key.
 
 ## Act 0 — Framing (open the talk, ~5 min)
 
@@ -38,7 +38,7 @@ versions: webinar-script.html §01 open + §02 diagram + Q&A bank.)
 | Question | Step |
 |----------|------|
 | Do I need data to start? | Act 1 (no — generate from a description) |
-| Get started with an orq agent | Act 1 (`--target agent:boh_creditcard_agent_demo`) |
+| Get started with an orq agent | Act 1 (`--target agent:sterling`) |
 | Do it for a non-orq agent (CLI + SDK) | Act 2 |
 | Start with data / re-run from a run | Act 3a (datapoints JSONL) |
 | Extend existing data | Act 3b |
@@ -53,7 +53,7 @@ uv sync --all-extras
 
 # Provision the Bank of Holland agent + its 2 code tools + FAQ knowledge base into Orq.
 # Idempotent — safe to re-run. Uses distinct demo keys, never touches the
-# customer's live entities. Creates agent key `boh_creditcard_agent_demo`.
+# customer's live entities. Creates agent key `sterling`.
 cd examples/agent_simulation/webinar_demo && make provision
 ```
 
@@ -62,7 +62,7 @@ bot: `azure/gpt-5-mini`, a 99-question Dutch/English FAQ knowledge base, and two
 code tools (`get_card_info`, `get_transaction_details`). Definitions live in
 `agent_build/orq_export/` + `agent_build/assets/boh_faq.txt`; `agent_build/provision.py`
 recreates them via the Orq Python SDK. All demo commands below default to
-`AGENT=boh_creditcard_agent_demo` (override on the `make` line).
+`AGENT=sterling` (override on the `make` line).
 
 ---
 
@@ -75,7 +75,7 @@ description — the "coverage from nothing" step.
 
 ```bash
 uv run evaluatorq sim generate \
-  --target agent:boh_creditcard_agent_demo \
+  --target agent:sterling \
   --num-personas 3 --num-scenarios 3 \
   -o boh_datapoints.jsonl
 ```
@@ -98,7 +98,7 @@ the judge LLM scores whether the agent met the goal + criteria.
 
 ```bash
 uv run evaluatorq sim simulate \
-  --target agent:boh_creditcard_agent_demo \
+  --target agent:sterling \
   -i boh_datapoints.jsonl \
   --name boh-from-scratch
 ```
@@ -155,7 +155,7 @@ e.g. after tweaking the agent prompt — to compare like-for-like.
 
 ```bash
 uv run evaluatorq sim simulate \
-  --target agent:boh_creditcard_agent_demo \
+  --target agent:sterling \
   -i boh_datapoints.jsonl \
   --name boh-rerun
 ```
@@ -164,7 +164,7 @@ uv run evaluatorq sim simulate \
 grows without discarding what you have.
 
 ```bash
-uv run evaluatorq sim generate --target agent:boh_creditcard_agent_demo \
+uv run evaluatorq sim generate --target agent:sterling \
   --num-personas 2 --num-scenarios 2 -o more.jsonl
 cat more.jsonl >> boh_datapoints.jsonl
 uv run evaluatorq sim validate-dataset boh_datapoints.jsonl
@@ -183,7 +183,7 @@ uv run evaluatorq sim upload-dataset -i boh_datapoints.jsonl -n "Bank of Holland
 uv run evaluatorq sim upload-dataset -i more.jsonl --dataset-id <id>
 
 # re-run directly from the orq dataset (CLI-native now)
-uv run evaluatorq sim simulate --target agent:boh_creditcard_agent_demo --dataset-id <id> --name boh-from-dataset
+uv run evaluatorq sim simulate --target agent:sterling --dataset-id <id> --name boh-from-dataset
 ```
 
 `eq sim generate --dataset-format -o rows.jsonl` writes the dataset envelope up
@@ -218,10 +218,10 @@ Point Claude Code at the run and let it propose + apply a fix. Suggested prompts
 > the common root cause in the agent's behaviour. Quote the transcript turns that
 > show it."
 
-> **Apply:** "Propose the *minimal* edit to the `boh_creditcard_agent_demo` agent's
+> **Apply:** "Propose the *minimal* edit to the `sterling` agent's
 > instructions that fixes the top failure mode without regressing the rest. Fetch the
 > current instructions, append your fix, and apply it with the orq CLI:
-> `orq agents update boh_creditcard_agent_demo --instructions \"<full updated instructions>\"`.
+> `orq agents update sterling --instructions \"<full updated instructions>\"`.
 > Then tell me to re-run."
 
 The working command (validated) is **`orq agents update <agent-key> --instructions "..."`**

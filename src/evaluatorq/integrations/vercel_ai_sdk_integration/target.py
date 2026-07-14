@@ -129,6 +129,11 @@ class VercelAISdkTarget(AgentTarget):
         text_item: OutputMessage = TextOutputItem(text=text, annotations=[])
         return AgentResponse(output=[text_item], usage=usage)
 
+    @property
+    def name(self) -> str:
+        """Return the endpoint URL as the display name for reports and the sim run store."""
+        return self._url
+
     async def get_agent_context(self) -> AgentContext:
         """Return the user-provided agent context, or a minimal placeholder."""
         if self._agent_context is not None:

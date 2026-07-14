@@ -226,31 +226,6 @@ def _resolve_evaluators(evaluators: list[str] | None) -> list[str] | None:
     return list(evaluators)
 
 
-# ---------------------------------------------------------------------------
-# Target / target-kind inference
-# ---------------------------------------------------------------------------
-
-
-def _infer_target_kind(
-    *,
-    target: str | None,
-    vercel_url: str | None,
-    openai_model: str | None,
-) -> str:
-    if target is not None:
-        from evaluatorq.redteam.contracts import TargetKind
-
-        kind, _ = _parse_target_spec(target)
-        if kind == TargetKind.AGENT:
-            return 'orq_agent'
-        if kind == TargetKind.DEPLOYMENT:
-            return 'orq_deployment'
-        return str(kind)
-    if vercel_url is not None:
-        return 'vercel'
-    return 'openai_model'
-
-
 def _echo_using(model: str) -> None:
     """Show the provider branch selected by the environment."""
     if os.environ.get('ORQ_API_KEY'):
@@ -270,6 +245,40 @@ def _shell_path(path: Path) -> str:
 def _dashboard_command(directory: Path) -> str:
     """Build the canonical multi-run dashboard command for *directory*."""
     return f'eq dashboard {_shell_path(directory)}'
+
+
+def _simulate_command(datapoints_path: Path, target: str | None) -> str:
+    """Build the follow-on ``sim simulate`` command for a generated datapoints file."""
+    target_part = target or '<target>'
+    return f'eq sim simulate -i {_shell_path(datapoints_path)} --target {target_part}'
+
+
+def _echo_generate_preview(datapoints: list[Any]) -> None:
+    """Print a compact persona/scenario preview of freshly generated datapoints.
+
+    Best-effort and cosmetic: silently skips anything that doesn't expose the
+    expected persona/scenario shape, so it can never break ``generate``.
+    """
+    personas: dict[str, Any] = {}
+    scenarios: dict[str, Any] = {}
+    for dp in datapoints:
+        persona = getattr(dp, 'persona', None)
+        scenario = getattr(dp, 'scenario', None)
+        if persona is not None:
+            personas.setdefault(persona.name, persona)
+        if scenario is not None:
+            scenarios.setdefault(scenario.name, scenario)
+    if personas:
+        typer.echo('Personas', err=True)
+        for p in personas.values():
+            typer.echo(
+                f'  {p.name}  patience {p.patience:g} · assertive {p.assertiveness:g} · {p.communication_style}',
+                err=True,
+            )
+    if scenarios:
+        typer.echo('Scenarios', err=True)
+        for s in scenarios.values():
+            typer.echo(f'  {s.name}', err=True)
 
 
 # ---------------------------------------------------------------------------
@@ -923,7 +932,10 @@ def generate(
         _handle_cli_error(exc)
 
     _write_datapoints(datapoints, datapoints_path, dataset_format=dataset_format)
+    if not quiet:
+        _echo_generate_preview(datapoints)
     typer.echo(f'Generated {len(datapoints)} datapoint(s) -> {datapoints_path}', err=True)
+    typer.echo(f'next: {_simulate_command(datapoints_path, target)}', err=True)
 
 
 async def _generate_impl(

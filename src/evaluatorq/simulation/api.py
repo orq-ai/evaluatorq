@@ -801,9 +801,13 @@ async def _simulate_core(
     # (the single choke point both this path and direct runner use share).
     resolved_evaluator_names = evaluator_names if evaluator_names is not None else DEFAULT_EVALUATOR_NAMES
     # Derive a human-readable target label mirroring the save block's precedence:
-    # AgentTarget instances → "agent:<key>", deployment strings → "deployment:<key>",
-    # plain callables → "callback".
-    if target_agent is not None:
+    # AgentTarget instances → "agent:<key>" (or, for the self-describing
+    # openai_model/vercel targets, their own `.name`), deployment strings →
+    # "deployment:<key>", plain callables → "callback".
+    if target_agent is not None and target_kind_hint in ('openai_model', 'vercel'):
+        target_name = getattr(target_agent, 'name', None) or target_kind_hint
+        target_label = target_name
+    elif target_agent is not None:
         agent_key_attr = getattr(target_agent, 'agent_key', None)
         target_label = f'agent:{agent_key_attr}' if agent_key_attr else 'agent'
         target_name = agent_key_attr or 'agent'
@@ -943,7 +947,12 @@ def _resolve_target(
     Accepts:
 
     * an ``AgentTarget`` instance → routed to the runner's ``target_agent`` path
-      (it speaks ``respond(messages)``); kind hint ``"orq_agent"``;
+      (it speaks ``respond(messages)``); kind hint is ``"orq_agent"`` for the
+      generic/Orq case, but the two concrete non-Orq subclasses self-describe
+      via a distinct hint (``"openai_model"`` for ``OpenAIModelTarget``,
+      ``"vercel"`` for ``VercelAISdkTarget``) so CLI ``--openai-model`` /
+      ``--vercel-url`` runs don't get mislabeled as Orq agents (and don't
+      trigger a spurious ``fetch_agent_info`` round-trip);
     * a ``str`` → ``"agent:<key>"`` or bare ``"<key>"`` builds a hosted Orq agent
       target via the Responses router (hint ``"orq_agent"``) — the same backend
       the ``eq sim`` CLI uses for ``--target agent:<key>``; ``"deployment:<key>"``
@@ -951,6 +960,8 @@ def _resolve_target(
     * a plain callable → callback path (hint ``None`` → ``"callback"``).
     """
     from evaluatorq.contracts import AgentTarget
+    from evaluatorq.integrations.vercel_ai_sdk_integration import VercelAISdkTarget
+    from evaluatorq.redteam.backends.openai import OpenAIModelTarget
     from evaluatorq.simulation.adapters import from_orq_deployment
 
     resolved = target
@@ -986,6 +997,10 @@ def _resolve_target(
             "use 'agent:<key>', 'deployment:<key>', an AgentTarget, or a callable."
         )
 
+    if isinstance(resolved, OpenAIModelTarget):
+        return None, resolved, 'openai_model'
+    if isinstance(resolved, VercelAISdkTarget):
+        return None, resolved, 'vercel'
     if isinstance(resolved, AgentTarget):
         return None, resolved, 'orq_agent'
     if resolved is None:

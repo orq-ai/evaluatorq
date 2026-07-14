@@ -13,7 +13,7 @@ import os
 ORQ_PATH = os.environ.get('BOH_DEMO_PATH', 'AgentSimulation/webinar-demo')
 
 # Entity keys (workspace-unique). Suffixed to avoid clobbering the source agent.
-AGENT_KEY = 'boh_creditcard_agent_demo'
+AGENT_KEY = 'sterling'
 KB_KEY = 'boh_faq_kb_demo'
 TOOL_KEYS = {
     # our demo key -> exported definition file under orq_export/tools/
@@ -21,5 +21,6 @@ TOOL_KEYS = {
     'boh_get_transaction_details': 'get_transaction_details2.json',
 }
 
+MODEL = 'openai/gpt-5.6-luna'
 EMBEDDING_MODEL = 'cohere/embed-multilingual-v3.0'
 FAQ_FILE = 'assets/boh_faq.txt'

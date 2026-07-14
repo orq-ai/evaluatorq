@@ -303,7 +303,7 @@
         45-minute live session. Bauke leads and drives the demo; Arian plays
         the audience's advocate — asking the questions a skeptical engineer
         would ask, at the moments they'd ask them. Demo spine: <strong>Sterling</strong>,
-        the Bank of Holland credit-card Q&amp;A agent (<code>boh_creditcard_agent_demo</code>,
+        the Bank of Holland credit-card Q&amp;A agent (<code>sterling</code>,
         provisioned via <code>make provision</code>), simulated live with
         <code>evaluatorq sim</code>.
       </div>
@@ -667,7 +667,7 @@
             <code>.evaluatorq/sim-runs/</code>, summarize which criteria failed
             for which personas, quote the derailing turns, propose the
             <em>minimal</em> instruction fix, apply it live with
-            <code>orq agents update boh_creditcard_agent_demo --instructions
+            <code>orq agents update sterling --instructions
             "..."</code>. While it works, Bauke narrates the frame: fix →
             re-run frozen set → like-for-like compare → regression gate in CI.
             Suite is shareable too (<code>sim upload-dataset</code> /
@@ -778,7 +778,7 @@
       <div class="sec-head"><span class="num">04</span><h2>Demo cue sheet — exact commands</h2></div>
       <p class="sec-intro">
         Mirrors RUNBOOK.md in the repo (examples/agent_simulation/webinar_demo).
-        Agent is <code>boh_creditcard_agent_demo</code> — recreate any time with
+        Agent is <code>sterling</code> — recreate any time with
         <code>make provision</code>.
       </p>
 
@@ -787,7 +787,7 @@
           <div class="file-label">Act 1 — from scratch (08:00)</div>
           <div class="code"><pre><span class="cm"># 1. generate from the agent's own description</span>
 uv run evaluatorq sim generate \
-  <span class="kw">--target</span> agent:boh_creditcard_agent_demo \
+  <span class="kw">--target</span> agent:sterling \
   <span class="kw">--num-personas</span> 3 <span class="kw">--num-scenarios</span> 3 \
   <span class="kw">-o</span> boh_datapoints.jsonl
 
@@ -796,7 +796,7 @@ uv run evaluatorq sim validate-dataset boh_datapoints.jsonl
 
 <span class="cm"># 3. run live, freeze the set for Act 3</span>
 uv run evaluatorq sim simulate \
-  <span class="kw">--target</span> agent:boh_creditcard_agent_demo \
+  <span class="kw">--target</span> agent:sterling \
   <span class="kw">-i</span> boh_datapoints.jsonl \
   <span class="kw">--name</span> boh-from-scratch
 
@@ -832,13 +832,13 @@ results = <span class="kw">await</span> <span class="fn">simulate</span>(
           <div class="file-label">Act 3 — working with data (27:00)</div>
           <div class="code"><pre><span class="cm"># 3a. re-run the EXACT same set after a prompt tweak</span>
 uv run evaluatorq sim simulate \
-  <span class="kw">--target</span> agent:boh_creditcard_agent_demo \
+  <span class="kw">--target</span> agent:sterling \
   <span class="kw">-i</span> boh_datapoints.jsonl \
   <span class="kw">--name</span> boh-rerun
 
 <span class="cm"># 3b. extend the suite — generate more, append</span>
 uv run evaluatorq sim generate \
-  <span class="kw">--target</span> agent:boh_creditcard_agent_demo \
+  <span class="kw">--target</span> agent:sterling \
   <span class="kw">--num-personas</span> 2 <span class="kw">--num-scenarios</span> 2 <span class="kw">-o</span> more.jsonl
 cat more.jsonl &gt;&gt; boh_datapoints.jsonl
 uv run evaluatorq sim validate-dataset boh_datapoints.jsonl
@@ -847,7 +847,7 @@ uv run evaluatorq sim validate-dataset boh_datapoints.jsonl
 uv run evaluatorq sim upload-dataset \
   <span class="kw">-i</span> boh_datapoints.jsonl <span class="kw">-n</span> <span class="str">"Bank of Holland Sim Set"</span>
 uv run evaluatorq sim simulate \
-  <span class="kw">--target</span> agent:boh_creditcard_agent_demo \
+  <span class="kw">--target</span> agent:sterling \
   <span class="kw">--dataset-id</span> &lt;id&gt;</pre></div>
         </div>
 
@@ -866,7 +866,7 @@ uv run evaluatorq dashboard .evaluatorq/sim-runs   <span class="cm"># -> http://
 
 <span class="cm"># 4b. harden — Claude Code reads the run, proposes</span>
 <span class="cm"># minimal instruction fix, applies it (validated):</span>
-orq agents update boh_creditcard_agent_demo \
+orq agents update sterling \
   <span class="kw">--instructions</span> <span class="str">"&lt;full updated instructions&gt;"</span>
 
 <span class="cm"># 4c. prove it — same frozen set, hardened agent</span>
@@ -884,7 +884,7 @@ cd examples/agent_simulation/webinar_demo
 make provision
 
 orq doctor                          <span class="cm"># CLI auth + reachability</span>
-orq agents retrieve boh_creditcard_agent_demo <span class="cm"># agent visible?</span>
+orq agents retrieve sterling <span class="cm"># agent visible?</span>
 
 <span class="cm"># full Act 1 dry run; keep the outputs as fallbacks:</span>
 <span class="cm">#   backup_datapoints.jsonl  +  a completed run JSON</span>
@@ -927,7 +927,7 @@ orq agents retrieve boh_creditcard_agent_demo <span class="cm"># agent visible?<
         <div class="row">
           <div class="cell">Claude Code goes sideways during the live fix (Act 4b) — wrong diagnosis, over-broad edit, or just slow.</div>
           <div class="cell"><span class="sev high">HIGH</span></div>
-          <div class="cell">Keep the dry run's known-good instruction fix in a scratch file; apply it manually with <code>orq agents update boh_creditcard_agent_demo --instructions "..."</code> and continue to <code>make rerun</code>. Narrate honestly: "the agent proposed something broader than I want on stage." Note: use <code>orq</code>, not <code>orqi</code> — <code>orqi agent update</code> 404s (RUNBOOK Gaps §6).</div>
+          <div class="cell">Keep the dry run's known-good instruction fix in a scratch file; apply it manually with <code>orq agents update sterling --instructions "..."</code> and continue to <code>make rerun</code>. Narrate honestly: "the agent proposed something broader than I want on stage." Note: use <code>orq</code>, not <code>orqi</code> — <code>orqi agent update</code> 404s (RUNBOOK Gaps §6).</div>
         </div>
         <div class="row">
           <div class="cell">"Can I push the suite to an orq dataset and run from there?"</div>
@@ -959,7 +959,7 @@ orq agents retrieve boh_creditcard_agent_demo <span class="cm"># agent visible?<
       <div class="open-q">
         <div class="q">
           <div class="qt">Provision + verify the demo agent</div>
-          <div class="qd"><code>make provision</code> in <code>webinar_demo/</code> (idempotent) with the banking-workspace <code>ORQ_API_KEY</code>; verify with <code>orq agents retrieve boh_creditcard_agent_demo</code>. During the dry run, note one reliably failing persona + scenario to park the dashboard on.</div>
+          <div class="qd"><code>make provision</code> in <code>webinar_demo/</code> (idempotent) with the banking-workspace <code>ORQ_API_KEY</code>; verify with <code>orq agents retrieve sterling</code>. During the dry run, note one reliably failing persona + scenario to park the dashboard on.</div>
           <div class="owner">Owner · Bauke, Monday</div>
         </div>
         <div class="q">

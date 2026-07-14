@@ -1163,7 +1163,7 @@ evaluatorq sim --help         <span class="cm"># 'eq' works too</span></pre>
   <section class="slide chapter" id="s4">
     <div class="slide-inner">
       <div class="eyebrow">Live demo</div>
-      <h1>Let's break Sterling.</h1>
+      <h1>Lets test Sterling</h1>
       <p class="subtitle">
         A live credit-card support agent, zero test data. From here it's all
         terminal.
@@ -1368,14 +1368,14 @@ evaluatorq sim --help         <span class="cm"># 'eq' works too</span></pre>
       <div class="cmds">
         <pre><span class="cm"># 1. generate personas × scenarios from the agent's description</span>
 evaluatorq sim generate \
-  <span class="kw">--target</span> agent:boh_creditcard_agent_demo \
+  <span class="kw">--target</span> agent:sterling \
   <span class="kw">--num-personas</span> 3 \
   <span class="kw">--num-scenarios</span> 3 \
   <span class="kw">--output</span> datapoints.jsonl
 
 <span class="cm"># 2. run the simulation against the live agent, freeze the set</span>
 evaluatorq sim simulate \
-  <span class="kw">--target</span> agent:boh_creditcard_agent_demo \
+  <span class="kw">--target</span> agent:sterling \
   <span class="kw">--input</span> datapoints.jsonl \
   <span class="kw">--name</span> from-scratch
 
@@ -1470,11 +1470,19 @@ results = <span class="kw">await</span> simulate(
   </section>
 
   <!-- ============================================================
+       Slide 6c — Demo
+       ============================================================ -->
+  <section class="slide chapter" id="s6c">
+    <div class="slide-inner">
+      <h1>Demo</h1>
+    </div>
+  </section>
+
+  <!-- ============================================================
        Slide 7 — Act 3
        ============================================================ -->
   <section class="slide" id="s7">
     <div class="slide-inner">
-      <div class="eyebrow">Demo · Act 3</div>
       <h2>Three ways to work with data</h2>
       <ul class="ways">
         <li class="way way-scratch">

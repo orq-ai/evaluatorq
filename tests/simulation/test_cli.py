@@ -14,7 +14,6 @@ from evaluatorq.simulation.cli import (
     _configure_logging,
     _echo_using,
     _format_scorer_averages,
-    _infer_target_kind,
     _resolve_agent_description,
     _resolve_target,
     _sanitise_run_name,
@@ -232,31 +231,6 @@ def test_sanitise_run_name_empty_fallback() -> None:
 def test_sanitise_run_name_strips_leading_trailing_underscores() -> None:
     assert not _sanitise_run_name("__hello__").startswith("_")
     assert not _sanitise_run_name("__hello__").endswith("_")
-
-
-# ---------------------------------------------------------------------------
-# _infer_target_kind
-# ---------------------------------------------------------------------------
-
-
-def test_infer_target_kind_agent_target() -> None:
-    assert _infer_target_kind(target="agent:k", vercel_url=None, openai_model=None) == "orq_agent"
-
-
-def test_infer_target_kind_bare_target_defaults_agent() -> None:
-    assert _infer_target_kind(target="k", vercel_url=None, openai_model=None) == "orq_agent"
-
-
-def test_infer_target_kind_deployment_target() -> None:
-    assert _infer_target_kind(target="deployment:k", vercel_url=None, openai_model=None) == "orq_deployment"
-
-
-def test_infer_target_kind_vercel() -> None:
-    assert _infer_target_kind(target=None, vercel_url="http://x", openai_model=None) == "vercel"
-
-
-def test_infer_target_kind_openai() -> None:
-    assert _infer_target_kind(target=None, vercel_url=None, openai_model="gpt-4o") == "openai_model"
 
 
 # ---------------------------------------------------------------------------
@@ -1376,6 +1350,47 @@ def test_generate_writes_datapoints(tmp_path: Path) -> None:
     assert "Generated 3 datapoint" in result.output
     assert out_file.exists()
     assert len([ln for ln in out_file.read_text().splitlines() if ln.strip()]) == 3
+
+
+def test_generate_signposts_preview_and_next_step(tmp_path: Path) -> None:
+    # generate must end by naming the next hop (the loudest seam) and preview
+    # the personas/scenarios it built.
+    out_file = tmp_path / "dp.jsonl"
+    datapoints = _make_datapoints(2)
+
+    with patch("evaluatorq.simulation.cli._generate_impl", new_callable=AsyncMock) as mock_impl:
+        mock_impl.return_value = datapoints
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                "--target", "agent:refund-agent-fixed",
+                "--agent-description", "A helpful bot",
+                "--output", str(out_file),
+            ],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "Personas" in result.output and "User0" in result.output
+    assert "Scenarios" in result.output
+    assert f"next: eq sim simulate -i {out_file} --target agent:refund-agent-fixed" in result.output
+
+
+def test_generate_quiet_suppresses_preview_but_keeps_next_step(tmp_path: Path) -> None:
+    out_file = tmp_path / "dp.jsonl"
+    with patch("evaluatorq.simulation.cli._generate_impl", new_callable=AsyncMock) as mock_impl:
+        mock_impl.return_value = _make_datapoints(2)
+        result = runner.invoke(
+            app,
+            ["generate", "--agent-description", "A bot", "--output", str(out_file), "--quiet"],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    assert "Personas" not in result.output
+    assert "next: eq sim simulate" in result.output
 
 
 def test_generate_target_agent_uses_context_description_when_omitted(tmp_path: Path) -> None:
