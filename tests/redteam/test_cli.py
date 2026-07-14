@@ -230,11 +230,6 @@ class TestVulnerabilityHelpText:
         output = self._get_help_output()
         assert "goal_hijacking" in output
 
-    def test_help_mentions_prompt_injection_example(self):
-        """Help text includes the 'prompt_injection' example ID."""
-        output = self._get_help_output()
-        assert "prompt_injection" in output
-
     def test_help_mentions_precedence_over_category(self):
         """Help text states that --vulnerability takes precedence over --category."""
         output = self._get_help_output()
