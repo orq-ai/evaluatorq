@@ -1380,7 +1380,10 @@ def _maybe_generate_executive_summary(run: Any, *, enabled: bool, model: str) ->
 
     from evaluatorq.common.llm_client import MissingLLMCredentialsError
     from evaluatorq.common.reports.executive_summary import generate_executive_summary
-    from evaluatorq.simulation.reports.executive_summary import build_sim_facts
+    from evaluatorq.simulation.reports.executive_summary import (
+        SIM_EXECUTIVE_SUMMARY_SYSTEM_PROMPT,
+        build_sim_facts,
+    )
 
     try:
         resolved = resolve_llm_client()
@@ -1394,6 +1397,7 @@ def _maybe_generate_executive_summary(run: Any, *, enabled: bool, model: str) ->
                 build_sim_facts(run.results),
                 llm_client=resolved.client,
                 model=model,
+                system_prompt=SIM_EXECUTIVE_SUMMARY_SYSTEM_PROMPT,
             )
         )
     except Exception:

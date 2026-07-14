@@ -52,6 +52,24 @@ logger = logging.getLogger(__name__)
 from evaluatorq.simulation.exceptions import SimulationDroppedError
 
 
+def _agent_key_of(target: object) -> str | None:
+    """Best-effort bare agent key from an AgentTarget, or None if not an agent.
+
+    ``ORQAgentTarget`` exposes ``.agent_key`` directly. The Responses-router
+    ``OrqResponsesTarget`` (what ``agent:<key>`` actually resolves to) has no
+    such attribute — it carries the key as ``config.model == 'agent/<key>'``.
+    Both paths must yield the bare ``<key>`` so the run label and the
+    ``fetch_agent_info`` snapshot use the real key instead of a literal 'agent'.
+    """
+    key = getattr(target, 'agent_key', None)
+    if key:
+        return key
+    model = getattr(getattr(target, 'config', None), 'model', None)
+    if isinstance(model, str) and model.startswith('agent/'):
+        return model.removeprefix('agent/') or None
+    return None
+
+
 async def simulate(
     *,
     evaluation_name: str = '',
@@ -808,7 +826,7 @@ async def _simulate_core(
         target_name = getattr(target_agent, 'name', None) or target_kind_hint
         target_label = target_name
     elif target_agent is not None:
-        agent_key_attr = getattr(target_agent, 'agent_key', None)
+        agent_key_attr = _agent_key_of(target_agent)
         target_label = f'agent:{agent_key_attr}' if agent_key_attr else 'agent'
         target_name = agent_key_attr or 'agent'
     elif target_kind_hint == 'orq_deployment':
@@ -900,8 +918,9 @@ async def _simulate_core(
     target_kind = target_kind_hint or 'callback'
     agent_info = None
     if target_kind == 'orq_agent':
-        agent_key = getattr(target_agent, 'agent_key', None) or target_name.removeprefix('agent:')
-        agent_info = await fetch_agent_info(agent_key)
+        agent_key = _agent_key_of(target_agent) or target_name.removeprefix('agent:')
+        if agent_key and agent_key != 'agent':
+            agent_info = await fetch_agent_info(agent_key)
     run = build_simulation_run(
         run_name=evaluation_name or 'sim',
         mode='simulate' if caller == 'simulate' else 'run',
@@ -1355,6 +1374,10 @@ async def _simulate_via_evaluatorq(
             parallelism=parallelism,
             description=evaluation_description,
             path=orq_results_path,
+            # Suppress the inner ProgressService spinner + results table: the
+            # simulation drives its own RichHooks progress bar and summary, and
+            # two concurrent rich.Live regions flicker against each other.
+            print_results=False,
             _send_results=upload_results,
             _exit_on_failure=exit_on_failure,
             _base_url=upload_base_url,

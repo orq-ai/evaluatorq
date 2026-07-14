@@ -355,7 +355,8 @@ class RichHooks:
         elif dp_id and not self._show_per_datapoint:
             # default (-v): no live per-datapoint bar; print a one-line completion
             # notice above the overall bar (rich moves it above the live region).
-            self._console.print(f'  [{color}]{escape(dp_id)}[/{color}] {result.terminated_by}')
+            glyph = '✗' if color == 'red' else '✓'
+            self._console.print(f'  [{color}]{glyph} {escape(dp_id)}[/{color}]')
         self._completed += 1
         if self._overall_task_id is not None:
             self._progress.update(self._overall_task_id, completed=self._completed)

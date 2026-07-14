@@ -93,7 +93,10 @@ async def fetch_agent_info(agent_key: str) -> AgentInfoSnapshot | None:
             'url': url,
         }
     except Exception as exc:
-        logger.warning('Failed to fetch agent_info for %r: %r', agent_key, exc)
+        # Best-effort snapshot: a missing agent (404) or any transient error just
+        # degrades to None. Log at debug with a concise message — the raw SDK
+        # error repr dumps the full response (headers, body) and reads as alarming.
+        logger.debug('Skipping agent_info for %r: %s', agent_key, type(exc).__name__)
         return None
 
 
