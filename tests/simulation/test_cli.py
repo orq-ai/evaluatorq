@@ -42,7 +42,7 @@ def test_provider_context_prefers_orq(monkeypatch: pytest.MonkeyPatch, capsys: p
     _echo_using('openai/gpt-5.4-mini')
 
     output = capsys.readouterr().err
-    assert output == 'Using: Orq router · openai/gpt-5.4-mini\n'
+    assert output == 'Using for generations: Orq router · openai/gpt-5.4-mini\n'
     assert 'secret' not in output
 
 
@@ -56,7 +56,7 @@ def test_provider_context_uses_openai_when_orq_is_absent(
     _echo_using('gpt-4o-mini')
 
     output = capsys.readouterr().err
-    assert output == 'Using: OpenAI-compatible · gpt-4o-mini\n'
+    assert output == 'Using for generations: OpenAI-compatible · gpt-4o-mini\n'
     assert 'secret' not in output
 
 
@@ -315,6 +315,13 @@ def test_validate_dataset_valid(tmp_path: Path) -> None:
     result = runner.invoke(app, ["validate-dataset", str(dp_file)])
     assert result.exit_code == 0
     assert "3 valid" in result.stdout
+
+
+def test_validate_signposts_next_step(tmp_path: Path) -> None:
+    dp_file = _make_datapoints_file(tmp_path, count=2)
+    result = runner.invoke(app, ["validate", "--input", str(dp_file)])
+    assert result.exit_code == 0
+    assert f"next: eq sim simulate -i {dp_file} --target <target>" in result.output
 
 
 def test_validate_dataset_missing_file(tmp_path: Path) -> None:
@@ -1442,7 +1449,7 @@ def test_generate_datapoints_roundtrips_through_simulate_loader(tmp_path: Path) 
         )
 
     assert result.exit_code == 0, result.output
-    assert 'Using: OpenAI-compatible · openai/gpt-5.4-mini' in result.stderr
+    assert 'Using for generations: OpenAI-compatible · openai/gpt-5.4-mini' in result.stderr
     loaded = load_datapoints_from_jsonl(str(out_file))
     assert [dp.id for dp in loaded] == ["dp-0", "dp-1"]  # id round-trips (not re-fabricated)
     assert [dp.persona.name for dp in loaded] == ["User0", "User1"]
@@ -1766,7 +1773,7 @@ def test_simulate_yes_exits_clean(tmp_path: Path) -> None:
         )
 
     assert result.exit_code == 0, result.output
-    assert 'Using: OpenAI-compatible · openai/gpt-5.4-mini' in result.stderr
+    assert 'Using for generations: OpenAI-compatible · openai/gpt-5.4-mini' in result.stderr
 
 
 def test_run_yes_exits_clean(tmp_path: Path) -> None:
@@ -1793,4 +1800,4 @@ def test_run_yes_exits_clean(tmp_path: Path) -> None:
         )
 
     assert result.exit_code == 0, result.output
-    assert 'Using: OpenAI-compatible · openai/gpt-5.4-mini' in result.stderr
+    assert 'Using for generations: OpenAI-compatible · openai/gpt-5.4-mini' in result.stderr

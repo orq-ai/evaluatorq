@@ -130,7 +130,7 @@ def provision_agent(client: Orq, tool_keys: list[str], kb_id: str) -> str:
 
 
 def main() -> None:
-    load_dotenv()
+    load_dotenv(override=True)
     api_key = os.environ.get('ORQ_API_KEY')
     if not api_key:
         raise SystemExit('ORQ_API_KEY is required (export it or put it in .env).')

@@ -55,7 +55,7 @@ app = typer.Typer(
         'Use `eq sim COMMAND --help` for command-specific options.'
     ),
     no_args_is_help=True,
-    rich_markup_mode=None,
+    rich_markup_mode='rich',
 )
 
 
@@ -64,7 +64,7 @@ app = typer.Typer(
 # ---------------------------------------------------------------------------
 
 
-def _configure_logging(verbosity: int) -> None:
+def _configure_logging(verbosity: int, console: Any = None) -> None:
     if verbosity < 0:
         level = logging.ERROR
     elif verbosity == 0:
@@ -74,17 +74,26 @@ def _configure_logging(verbosity: int) -> None:
     else:
         level = logging.DEBUG
 
+    # When a Rich console is provided (a live Progress region is active), route
+    # both log streams through it so writes are serialised with the live region
+    # instead of racing it on raw stderr — that race is what caused the flicker.
     logger = logging.getLogger('evaluatorq')
     logger.setLevel(level)
     if not logger.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
+        if console is not None:
+            from rich.logging import RichHandler
+
+            handler: logging.Handler = RichHandler(console=console, show_path=False, rich_tracebacks=True)
+        else:
+            handler = logging.StreamHandler()
+            handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
         logger.addHandler(handler)
     try:
         from loguru import logger as loguru_logger
 
         loguru_logger.remove()
-        loguru_logger.add(sys.stderr, level=level)
+        sink = (lambda m: console.print(m, end='')) if console is not None else sys.stderr
+        loguru_logger.add(sink, level=level)
     except ImportError:
         pass
 
@@ -227,14 +236,14 @@ def _resolve_evaluators(evaluators: list[str] | None) -> list[str] | None:
 
 
 def _echo_using(model: str) -> None:
-    """Show the provider branch selected by the environment."""
+    """Show the provider branch selected by the environment for generations."""
     if os.environ.get('ORQ_API_KEY'):
         provider = 'Orq router'
     elif os.environ.get('OPENAI_API_KEY'):
         provider = 'OpenAI-compatible'
     else:
         provider = 'unresolved provider'
-    typer.echo(f'Using: {provider} · {model}', err=True)
+    typer.echo(f'Using for generations: {provider} · {model}', err=True)
 
 
 def _shell_path(path: Path) -> str:
@@ -253,12 +262,52 @@ def _simulate_command(datapoints_path: Path, target: str | None) -> str:
     return f'eq sim simulate -i {_shell_path(datapoints_path)} --target {target_part}'
 
 
+def _render_rich(renderable: Any, *, soft_wrap: bool = False) -> str:
+    """Render a Rich renderable to text at the current terminal width.
+
+    Written to a buffer (not Rich's own handle) so Typer/Click redirection and
+    test capture both see it. ``rich`` is a core runtime dep, so no fallback.
+    """
+    import io
+    import shutil
+
+    from rich.console import Console
+
+    width = shutil.get_terminal_size(fallback=(100, 24)).columns
+    buffer = io.StringIO()
+    # highlight=False: only our explicit markup styles apply, not Rich's
+    # repr auto-highlighter (which mis-colours things like "datapoint(s)").
+    Console(file=buffer, width=width, soft_wrap=soft_wrap, highlight=False).print(renderable)
+    return buffer.getvalue()
+
+
+def _recho(renderable: Any, *, soft_wrap: bool = False, err: bool = True) -> None:
+    """Echo a Rich renderable onto the Typer output stream (stderr by default)."""
+    typer.echo(_render_rich(renderable, soft_wrap=soft_wrap), nl=False, err=err)
+
+
+def _echo_next(command: str) -> None:
+    """Print the signposted next-step command (the green seam between commands)."""
+    from rich.markup import escape
+
+    _recho(f'[bold cyan]next:[/] {escape(command)}', soft_wrap=True)
+
+
+def _echo_saved(label: str, path: Path) -> None:
+    """Print a styled ``✓ <label> saved → <path>`` line (green tick, bold label)."""
+    from rich.markup import escape
+
+    _recho(f'[green]✓[/] [bold]{label}[/] saved [dim]→[/] {escape(str(path))}', soft_wrap=True)
+
+
 def _echo_generate_preview(datapoints: list[Any]) -> None:
     """Print a compact persona/scenario preview of freshly generated datapoints.
 
     Best-effort and cosmetic: silently skips anything that doesn't expose the
     expected persona/scenario shape, so it can never break ``generate``.
     """
+    from rich.table import Table
+
     personas: dict[str, Any] = {}
     scenarios: dict[str, Any] = {}
     for dp in datapoints:
@@ -268,17 +317,24 @@ def _echo_generate_preview(datapoints: list[Any]) -> None:
             personas.setdefault(persona.name, persona)
         if scenario is not None:
             scenarios.setdefault(scenario.name, scenario)
+
     if personas:
-        typer.echo('Personas', err=True)
+        ptable = Table(title='Personas', title_style='bold', title_justify='left', header_style='dim', border_style='cyan')
+        ptable.add_column('Name', style='cyan', no_wrap=True)
+        ptable.add_column('Patience', justify='right')
+        ptable.add_column('Assertive', justify='right')
+        ptable.add_column('Style')
         for p in personas.values():
-            typer.echo(
-                f'  {p.name}  patience {p.patience:g} · assertive {p.assertiveness:g} · {p.communication_style}',
-                err=True,
-            )
+            ptable.add_row(p.name, f'{p.patience:g}', f'{p.assertiveness:g}', str(p.communication_style))
+        _recho(ptable)
+
     if scenarios:
-        typer.echo('Scenarios', err=True)
+        stable = Table(title='Scenarios', title_style='bold', title_justify='left', header_style='dim', border_style='cyan')
+        stable.add_column('Name', style='green')
+        stable.add_column('Goal', style='dim')
         for s in scenarios.values():
-            typer.echo(f'  {s.name}', err=True)
+            stable.add_row(s.name, str(getattr(s, 'goal', '') or ''))
+        _recho(stable)
 
 
 # ---------------------------------------------------------------------------
@@ -425,20 +481,23 @@ def simulate(
     """
     if quiet:
         verbose = -1
-    _configure_logging(verbose)
-    _echo_using(sim_model)
 
     hooks: Any = None
+    log_console: Any = None
     if not quiet:
         from rich.console import Console
 
         from evaluatorq.simulation.hooks import RichHooks
 
+        log_console = Console(stderr=True)
         hooks = RichHooks(
-            console=Console(stderr=True),
+            console=log_console,
             skip_confirm=yes or not sys.stdin.isatty(),
             defer_summary=executive_summary,
+            verbose=verbose,
         )
+    _configure_logging(verbose, console=log_console)
+    _echo_using(sim_model)
 
     if (datapoints is None) == (dataset_id is None):
         raise typer.BadParameter('Provide exactly one of --datapoints or --dataset-id.')
@@ -497,14 +556,14 @@ def simulate(
 
     if report_path is not None:
         _write_report(run, report_path)
-        typer.echo(f'Report saved: {report_path}', err=True)
+        _echo_saved('Report', report_path)
 
     if not no_save:
         run_path = _auto_save_run(run=run, run_name=name)
-        typer.echo(f'Run saved: {run_path}', err=True)
-        typer.echo(f'next: {_dashboard_command(_get_sim_runs_dir())}', err=True)
+        _echo_saved('Run', run_path)
+        _echo_next(_dashboard_command(_get_sim_runs_dir()))
     elif report_path is None:
-        typer.echo('Tip: run without --no-save to browse results in the dashboard.', err=True)
+        _recho('[yellow]Tip:[/] run without --no-save to browse results in the dashboard.', soft_wrap=True)
 
 
 async def _simulate_impl(
@@ -695,20 +754,23 @@ def run(
     """
     if quiet:
         verbose = -1
-    _configure_logging(verbose)
-    _echo_using(sim_model)
 
     hooks: Any = None
+    log_console: Any = None
     if not quiet:
         from rich.console import Console
 
         from evaluatorq.simulation.hooks import RichHooks
 
+        log_console = Console(stderr=True)
         hooks = RichHooks(
-            console=Console(stderr=True),
+            console=log_console,
             skip_confirm=yes or not sys.stdin.isatty(),
             defer_summary=executive_summary,
+            verbose=verbose,
         )
+    _configure_logging(verbose, console=log_console)
+    _echo_using(sim_model)
 
     try:
         resolved_agent_description = asyncio.run(
@@ -765,14 +827,14 @@ def run(
 
     if report_path is not None:
         _write_report(run, report_path)
-        typer.echo(f'Report saved: {report_path}', err=True)
+        _echo_saved('Report', report_path)
 
     if not no_save:
         run_path = _auto_save_run(run=run, run_name=name)
-        typer.echo(f'Run saved: {run_path}', err=True)
-        typer.echo(f'next: {_dashboard_command(_get_sim_runs_dir())}', err=True)
+        _echo_saved('Run', run_path)
+        _echo_next(_dashboard_command(_get_sim_runs_dir()))
     elif report_path is None:
-        typer.echo('Tip: run without --no-save to browse results in the dashboard.', err=True)
+        _recho('[yellow]Tip:[/] run without --no-save to browse results in the dashboard.', soft_wrap=True)
 
 
 async def _run_impl(
@@ -933,9 +995,17 @@ def generate(
 
     _write_datapoints(datapoints, datapoints_path, dataset_format=dataset_format)
     if not quiet:
+        from rich.rule import Rule
+
+        _recho(Rule('Generated inputs', style='cyan', align='left'))
         _echo_generate_preview(datapoints)
-    typer.echo(f'Generated {len(datapoints)} datapoint(s) -> {datapoints_path}', err=True)
-    typer.echo(f'next: {_simulate_command(datapoints_path, target)}', err=True)
+    from rich.markup import escape
+
+    _recho(
+        f'[green]✓[/] Generated [bold]{len(datapoints)}[/] datapoint(s) → {escape(str(datapoints_path))}',
+        soft_wrap=True,
+    )
+    _echo_next(_simulate_command(datapoints_path, target))
 
 
 async def _generate_impl(
@@ -1024,11 +1094,18 @@ def _validate_datapoints(path: Path) -> None:
             typer.echo(f'Line {i}: {exc}', err=True)
             bad_count += 1
 
+    from rich.markup import escape
+
     if bad_count:
-        typer.echo(f'{bad_count} invalid line(s) in {path}', err=True)
+        _recho(f'[red]✗[/] [bold]{bad_count}[/] invalid line(s) in {escape(str(path))}', soft_wrap=True)
         raise typer.Exit(1)
 
-    typer.echo(f'OK — {len(valid_datapoints)} valid datapoint(s) in {path}')
+    _recho(
+        f'[green]✓[/] [bold]{len(valid_datapoints)}[/] valid datapoint(s) in {escape(str(path))}',
+        soft_wrap=True,
+        err=False,
+    )
+    _echo_next(_simulate_command(path, None))
 
 
 @app.command('validate', no_args_is_help=True)

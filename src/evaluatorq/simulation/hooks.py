@@ -217,6 +217,8 @@ class RichHooks:
 
     Args:
         console: a ``rich.console.Console``; a new one is created when ``None``.
+        verbose: verbosity count. Per-datapoint bars only render at ``>= 2``
+            (``-vv``); the default shows just the single overall bar.
     """
 
     def __init__(
@@ -225,6 +227,7 @@ class RichHooks:
         console: RichConsole | None = None,
         skip_confirm: bool = False,
         defer_summary: bool = False,
+        verbose: int = 0,
     ) -> None:
         if console is None:
             from rich.console import Console
@@ -233,6 +236,7 @@ class RichHooks:
         self._console = console
         self._skip_confirm = skip_confirm
         self._defer_summary = defer_summary
+        self._show_per_datapoint = verbose >= 2
         self._summary_rendered = False
         self._progress: Any = None  # rich.progress.Progress
         self._overall_task_id: Any = None  # rich.progress.TaskID | None
@@ -310,6 +314,8 @@ class RichHooks:
         from rich.markup import escape
 
         self._ensure_started()
+        if not self._show_per_datapoint:
+            return  # default: single overall bar only, gate per-datapoint bars behind -vv
         if datapoint.id in self._tasks:
             return
         self._tasks[datapoint.id] = self._progress.add_task(
@@ -332,19 +338,23 @@ class RichHooks:
         from evaluatorq.simulation.types import TerminatedBy
 
         dp_id = result.metadata.get('datapoint_id')
+        color = 'red' if result.terminated_by in (TerminatedBy.error, TerminatedBy.timeout) else 'green'
         task_id = self._tasks.get(dp_id) if dp_id else None
         if dp_id and task_id is not None:
-            # Keep error/timeout rows red (on_datapoint_error already set that),
-            # don't overwrite with green — otherwise a failed run reads as a green
-            # success labelled "error". Fill the per-task bar to 100%: a
+            # -vv: fill the per-task bar to 100%. Keep error/timeout rows red
+            # (on_datapoint_error already set that), don't overwrite with green —
+            # otherwise a failed run reads as a green success labelled "error". A
             # judge-terminated run stops before max_turns, leaving e.g. 3/10. When
             # _max_turns is None (lazy-start path, task total=None) this is a no-op.
-            color = 'red' if result.terminated_by in (TerminatedBy.error, TerminatedBy.timeout) else 'green'
             self._progress.update(
                 task_id,
                 description=f'  [{color}]{escape(dp_id)}[/{color}] {result.terminated_by}',
                 completed=self._max_turns,
             )
+        elif dp_id and not self._show_per_datapoint:
+            # default (-v): no live per-datapoint bar; print a one-line completion
+            # notice above the overall bar (rich moves it above the live region).
+            self._console.print(f'  [{color}]{escape(dp_id)}[/{color}] {result.terminated_by}')
         self._completed += 1
         if self._overall_task_id is not None:
             self._progress.update(self._overall_task_id, completed=self._completed)

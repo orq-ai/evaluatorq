@@ -20,7 +20,7 @@ app = typer.Typer(
     name='redteam',
     help='Red teaming CLI for evaluatorq.',
     no_args_is_help=True,
-    rich_markup_mode=None,
+    rich_markup_mode='rich',
 )
 
 

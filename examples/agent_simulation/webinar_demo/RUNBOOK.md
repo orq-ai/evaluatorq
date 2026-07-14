@@ -79,6 +79,7 @@ uv run evaluatorq sim generate \
   --num-personas 3 --num-scenarios 3 \
   -o boh_datapoints.jsonl
 ```
+
 (`--target` only fetches the description here; the agent is not called yet.
 Swap for `--agent-description "..."` if you'd rather not hit the platform.)
 
@@ -268,3 +269,10 @@ inspect → harden → re-run loop, closed live.
 - [ ] Screenshot: the dashboard filtered to failures + a transcript (Act 4a)
 - [ ] Screenshot: orq platform experiment view for a run
 - [ ] The three-options diagram (from scratch / re-run / extend)
+
+Steps
+
+- Walk through orq agent on orq, and local files we have.
+- explain the initial scripts/commands that we run for agents.
+- Show the output on the dashboard
+-

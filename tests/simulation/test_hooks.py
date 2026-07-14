@@ -192,7 +192,7 @@ def test_rich_hooks_tolerates_runner_only_lifecycle(datapoint_factory):
 
     from evaluatorq.simulation.hooks import RichHooks
 
-    hooks = RichHooks(console=Console())
+    hooks = RichHooks(console=Console(), verbose=2)  # -vv: per-datapoint bars
     dp = datapoint_factory('dp1')
 
     asyncio.run(hooks.on_datapoint_start(dp))  # lazily starts Progress, creates task
@@ -207,7 +207,7 @@ def test_rich_hooks_full_lifecycle(datapoint_factory):
 
     from evaluatorq.simulation.hooks import RichHooks
 
-    hooks = RichHooks(console=Console())
+    hooks = RichHooks(console=Console(), verbose=2)  # -vv: per-datapoint bars
     asyncio.run(hooks.on_run_start(_meta()))  # creates overall bar
     dp = datapoint_factory('dp1')
     asyncio.run(hooks.on_datapoint_start(dp))
@@ -221,6 +221,21 @@ def test_rich_hooks_full_lifecycle(datapoint_factory):
     asyncio.run(hooks.on_run_complete([_result()]))  # double-call safe, no raise
 
 
+def test_rich_hooks_default_verbosity_no_per_datapoint_bars(datapoint_factory):
+    """Default (verbose=0): no per-datapoint bar, but the overall bar still advances."""
+    from rich.console import Console
+
+    from evaluatorq.simulation.hooks import RichHooks
+
+    hooks = RichHooks(console=Console())
+    asyncio.run(hooks.on_run_start(_meta()))  # creates overall bar
+    dp = datapoint_factory('dp1')
+    asyncio.run(hooks.on_datapoint_start(dp))
+    assert hooks._tasks == {}  # no per-datapoint task
+    asyncio.run(hooks.on_datapoint_complete(_result()))
+    assert hooks._completed == 1  # overall bar still advances
+
+
 def test_rich_hooks_error_row_stays_red_after_complete(datapoint_factory):
     """on_datapoint_complete must not overwrite on_datapoint_error's red label
     with green for error/timeout results."""
@@ -228,7 +243,7 @@ def test_rich_hooks_error_row_stays_red_after_complete(datapoint_factory):
 
     from evaluatorq.simulation.hooks import RichHooks
 
-    hooks = RichHooks(console=Console())
+    hooks = RichHooks(console=Console(), verbose=2)  # -vv: per-datapoint bars
     asyncio.run(hooks.on_run_start(_meta()))
     dp = datapoint_factory('dp1')
     asyncio.run(hooks.on_datapoint_start(dp))
