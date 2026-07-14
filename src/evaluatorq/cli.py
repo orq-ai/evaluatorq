@@ -2,7 +2,7 @@
 
 Usage:
     evaluatorq redteam run --target agent:my-agent
-    evaluatorq redteam ui report.json
+    evaluatorq dashboard .evaluatorq/runs
     evaluatorq dashboard
     evaluatorq dashboard /path/to/run.json
 """
@@ -14,22 +14,19 @@ from typing import Annotated
 
 import typer
 
+from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
+
 # ---------------------------------------------------------------------------
 # Top-level application
 # ---------------------------------------------------------------------------
 
-# Two CLI-help incompatibilities are worked around here (see tests/test_cli_version.py):
-#   1. rich_markup_mode=None — typer's Rich help renderer silently emits nothing
-#      with our pinned Rich (14.x), so `eq --help` printed an empty page. Falling
-#      back to Click's plain formatter fixes it; Rich is still used elsewhere
-#      (tables/progress).
-#   2. no_args_is_help is NOT set — on Click >=8.2 it raises NoArgsIsHelpError,
-#      which typer doesn't render, so bare `eq` exited 2 with no output. The
-#      callback below prints help explicitly instead (works across versions).
+# no_args_is_help is NOT set — on Click >=8.2 it raises NoArgsIsHelpError, which
+# typer doesn't render, so bare `eq` exited 2 with no output. The callback below
+# prints help explicitly instead (works across versions).
 app = typer.Typer(
     name='evaluatorq',
     help='Evaluation framework for AI systems.',
-    rich_markup_mode=None,
+    rich_markup_mode='rich',
 )
 
 
@@ -142,7 +139,7 @@ def main() -> None:
     try:
         from evaluatorq.simulation.cli import app as sim_app
 
-        app.add_typer(sim_app, name='sim', help='Agent simulation commands.')
+        app.add_typer(sim_app, name='sim', help='Agent simulation pipeline.')
     except ImportError:
         pass
 

@@ -231,6 +231,38 @@ class TargetKind(StrEnum):
         return self == TargetKind.OPENAI
 
 
+def parse_target(target: str) -> tuple[TargetKind, str]:
+    """Parse ``"kind:value"`` target string.
+
+    Returns:
+        Tuple of (TargetKind, value), e.g. (``TargetKind.AGENT``, ``"my-agent-key"``).
+    """
+    if ':' not in target:
+        return TargetKind.AGENT, target
+    kind, _, value = target.partition(':')
+    if not value:
+        raise ValueError(f'Target {target!r} is missing a value after the colon.')
+    if kind.lower() in ('llm', 'openai'):
+        raise ValueError(
+            f'The "{kind}:" target prefix has been removed. '
+            f'Use OpenAIModelTarget to test OpenAI models directly:\n'
+            f'    from evaluatorq.redteam import OpenAIModelTarget\n'
+            f'    await red_team(OpenAIModelTarget("{value}"))'
+        )
+    try:
+        kind_enum = TargetKind(kind.lower())
+    except ValueError:
+        valid = ', '.join(f'"{k.value}"' for k in TargetKind if k not in (TargetKind.DIRECT, TargetKind.OPENAI))
+        raise ValueError(f'Unknown target kind {kind!r} in {target!r}. Valid kinds: {valid}.') from None
+    if kind_enum is TargetKind.DIRECT:
+        valid = ', '.join(f'"{k.value}"' for k in TargetKind if k not in (TargetKind.DIRECT, TargetKind.OPENAI))
+        raise ValueError(
+            f'Target kind "direct" is not valid in string targets — '
+            f'pass an AgentTarget object directly instead. Valid string kinds: {valid}.'
+        )
+    return kind_enum, value
+
+
 class Pipeline(StrEnum):
     """Supported unified report pipeline identifiers."""
 

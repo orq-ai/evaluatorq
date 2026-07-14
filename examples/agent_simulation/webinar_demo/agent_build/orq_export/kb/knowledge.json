@@ -1,0 +1,18 @@
+{
+  "_id": "01KCK5RK62QS25QH0GG8EY6WRB",
+  "created": "2025-12-16T08:52:21.826Z",
+  "created_by_id": "a883f67e-e3f4-4e8f-b975-e69e3d9c1aeb",
+  "key": "boh_kb",
+  "path": "AgentSimulation/agents",
+  "domain_id": "019b263b-cf49-7000-9244-3f77b583597e",
+  "updated": "2025-12-16T08:52:21.826Z",
+  "description": "",
+  "updated_by_id": "a883f67e-e3f4-4e8f-b975-e69e3d9c1aeb",
+  "type": "internal",
+  "model": "cohere/embed-multilingual-v3.0",
+  "retrieval_settings": {
+    "retrieval_type": "hybrid_search",
+    "top_k": 5,
+    "threshold": 0
+  }
+}

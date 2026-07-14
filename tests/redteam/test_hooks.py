@@ -136,7 +136,7 @@ class TestDefaultHooks:
             assert mock_logger.info.called
 
     def test_default_on_complete_logs_ui_hint(self):
-        """DefaultHooks.on_complete should log a tip about 'evaluatorq redteam ui'."""
+        """DefaultHooks.on_complete should log a tip about the multi-run dashboard."""
         from evaluatorq.redteam.hooks import DefaultHooks
 
         hooks = DefaultHooks()
@@ -461,7 +461,7 @@ class TestRichHooks:
             assert args[0] is report
 
     def test_rich_on_complete_renders_ui_hint(self):
-        """on_complete should render a hint about 'evaluatorq redteam ui'."""
+        """on_complete should render a hint about the multi-run dashboard."""
         hooks, buf = self._make_rich_hooks()
         report = _make_report()
         with patch('evaluatorq.redteam.hooks.print_report_summary'):

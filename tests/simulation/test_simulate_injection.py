@@ -1,8 +1,8 @@
 """Tests for injected target/user_simulator params and update_context propagation.
 
 Verifies:
-- simulate() accepts target= as alias for target_callback=
-- target= takes precedence over target_callback= when both are supplied
+- simulate() uses target= for every supported target shape
+- target_callback= remains a deprecated compatibility alias
 - injected user_simulator is used instead of the default
 - update_context is called per simulation with persona/scenario context
 - passing a BaseAgent lacking generate_first_message raises TypeError
@@ -100,17 +100,16 @@ def _make_mock_judge(*, judgment: MagicMock | None = None) -> MagicMock:
 
 def _make_runner_with_mocks(
     *,
-    target_callback: Any = None,
     target: Any = None,
     user_simulator: Any = None,
     judge: Any = None,
     model: str = "test-model",
     max_turns: int = 1,
 ) -> SimulationRunner:
-    """Build a SimulationRunner; target_callback or target must be provided."""
-    cb = target_callback or target or (lambda msgs: "agent reply")  # pyright: ignore[reportUnknownLambdaType]
+    """Build a SimulationRunner with a target callable."""
+    resolved_target = target or (lambda msgs: "agent reply")  # pyright: ignore[reportUnknownLambdaType]
     return SimulationRunner(
-        target_callback=cb,
+        target=resolved_target,
         model=model,
         max_turns=max_turns,
         user_simulator=user_simulator,
@@ -142,7 +141,7 @@ class TestSimulateWithInjectedTarget:
         judge = _make_mock_judge()
 
         runner = _make_runner_with_mocks(
-            target_callback=my_target,
+            target=my_target,
             user_simulator=sim,
             judge=judge,
             max_turns=1,
@@ -169,7 +168,7 @@ class TestSimulateWithInjectedTarget:
         judge = _make_mock_judge()
 
         runner = _make_runner_with_mocks(
-            target_callback=my_target,
+            target=my_target,
             user_simulator=sim,
             judge=judge,
             max_turns=1,
@@ -184,66 +183,29 @@ class TestSimulateWithInjectedTarget:
         assert any(m.role == "user" for m in first_call)
 
 
-class TestSimulateTargetPrecedence:
-    """When both target= and target_callback= are given, target= wins."""
+class TestDeprecatedTargetCallback:
+    """target_callback= is no longer accepted; callers must use target=."""
 
     @pytest.mark.asyncio
-    async def test_target_takes_precedence_over_target_callback(
+    async def test_target_callback_is_rejected(
         self, monkeypatch: pytest.MonkeyPatch
     ):
-        """target= is called, not target_callback=, when both supplied to simulate()."""
         monkeypatch.setenv("ORQ_API_KEY", "test-key")
 
         from evaluatorq.simulation.api import simulate
 
-        calls_a: list[int] = []
-        calls_b: list[int] = []
-
-        async def target_a(messages: list[Message]) -> str:
-            calls_a.append(1)
-            return "from A"
-
-        async def target_b(messages: list[Message]) -> str:
-            calls_b.append(1)
-            return "from B"
+        async def legacy_target(messages: list[Message]) -> str:
+            return "from legacy target"
 
         dp = _make_datapoint()
-        sim = _make_mock_user_simulator()
-        judge = _make_mock_judge()
 
-        resolved: dict[str, Any] = {}
-
-        # simulate() imports SimulationRunner inside the function body, so we
-        # patch the class where it is defined (the runner module) then also
-        # patch the name that simulate() binds locally.
-        import evaluatorq.simulation.runner.simulation as runner_mod
-
-        original_cls = runner_mod.SimulationRunner
-
-        class CapturingRunner(original_cls):  # type: ignore[valid-type]
-            def __init__(self, **kwargs: Any) -> None:
-                resolved.update(kwargs)
-                super().__init__(
-                    target_callback=kwargs.get("target_callback", target_a),
-                    model=kwargs.get("model", "test"),
-                    max_turns=1,
-                    user_simulator=sim,
-                    judge=judge,
-                )
-
-        with patch.object(runner_mod, "SimulationRunner", CapturingRunner):
-            # Also patch where simulate() imports it from
-            with patch("evaluatorq.simulation.runner.simulation.SimulationRunner", CapturingRunner):
-                await simulate(
-                    target=target_a,
-                    target_callback=target_b,
-                    datapoints=[dp],
-                    sim_model="test",
-                    max_turns=1,
-                )
-
-        # target= takes precedence, so resolved_callback must be target_a
-        assert resolved.get("target_callback") is target_a
+        with pytest.raises(TypeError, match="target_callback"):
+            await simulate(
+                target_callback=legacy_target,  # pyright: ignore[reportCallIssue]
+                datapoints=[dp],
+                sim_model="test",
+                max_turns=1,
+            )
 
 
 class TestSimulateAutoRoutesAgentTarget:
@@ -290,7 +252,7 @@ class TestSimulateAutoRoutesAgentTarget:
             await simulate(target=agent_target, datapoints=[dp], sim_model="test", max_turns=1)
 
         assert resolved.get("target_agent") is agent_target
-        assert resolved.get("target_callback") is None
+        assert resolved.get("target") is None
 
 
 class TestSimulateWithInjectedUserSimulator:
@@ -436,4 +398,4 @@ class TestInvalidUserSimulatorRaisesTypeError:
 
 def _make_runner_that_captures(kw: dict[str, Any]) -> SimulationRunner:
     """Placeholder — not actually used in the test above."""
-    return SimulationRunner(target_callback=kw.get("target_callback", lambda m: "ok"))  # pyright: ignore[reportUnknownLambdaType]
+    return SimulationRunner(target=kw.get("target", lambda m: "ok"))  # pyright: ignore[reportUnknownLambdaType]

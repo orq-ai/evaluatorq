@@ -16,7 +16,7 @@ Prerequisites:
     .env with ORQ_API_KEY (+ OPENAI_API_KEY / OPENAI_BASE_URL).
 
 Usage:
-    cd packages/evaluatorq-py
+    # from the evaluatorq repository root
     uv run python examples/agent_simulation/08_pydantic_ai_simulation.py
     uv run python examples/agent_simulation/08_pydantic_ai_simulation.py --upload
 """

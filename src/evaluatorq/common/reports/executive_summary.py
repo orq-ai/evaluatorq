@@ -1,9 +1,10 @@
 """Framework-neutral LLM generator for the report executive-summary narrative.
 
 Both red team and simulation reports call this with a compact ``facts`` string
-built from their own statistics. The prompt enforces a fixed 4-beat narrative
-arc so the two report types read consistently. Generation is best-effort: any
-failure returns ``None`` and the report renders exactly as it did before.
+AND their own ``system_prompt`` (each surface owns its voice — red team narrates
+in security terms, simulation in goal-completion terms). This module is just the
+plumbing: send system+facts, return the paragraph. Generation is best-effort:
+any failure returns ``None`` and the report renders exactly as it did before.
 
 This module MUST stay free of ``evaluatorq.redteam`` / ``evaluatorq.simulation``
 imports — it is the lower layer both depend on.
@@ -11,13 +12,34 @@ imports — it is the lower layer both depend on.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any, Protocol
 
 from loguru import logger
 
-if TYPE_CHECKING:
-    from openai import AsyncOpenAI
 
+class _ChatCompletions(Protocol):
+    async def create(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
+class _Chat(Protocol):
+    @property
+    def completions(self) -> _ChatCompletions: ...
+
+
+class AsyncChatCompletionsClient(Protocol):
+    """Structural contract for the async chat-completions client this module needs.
+
+    Based on the subset of ``openai.AsyncOpenAI`` used here, so the real client
+    stays valid while structurally-equivalent test doubles are accepted.
+    """
+
+    @property
+    def chat(self) -> _Chat: ...
+
+
+# Default prompt (red-team voice). Kept as the module-level constant so callers
+# that don't pass their own `system_prompt` — red team, existing tests — behave
+# exactly as before. Simulation supplies its own via SIM_..._SYSTEM_PROMPT.
 EXECUTIVE_SUMMARY_SYSTEM_PROMPT = """\
 You are an AI security expert writing the executive summary of an agent
 assessment report for a technical but time-poor reader (an engineering lead or
@@ -54,8 +76,9 @@ def truncate_text(text: str, limit: int = 240) -> str:
 async def generate_executive_summary(
     facts: str,
     *,
-    llm_client: AsyncOpenAI,
+    llm_client: AsyncChatCompletionsClient,
     model: str,
+    system_prompt: str = EXECUTIVE_SUMMARY_SYSTEM_PROMPT,
     temperature: float = 0.7,
     extra_body: dict[str, Any] | None = None,
     extra_kwargs: dict[str, Any] | None = None,
@@ -77,7 +100,7 @@ async def generate_executive_summary(
         response = await llm_client.chat.completions.create(  # pyright: ignore[reportCallIssue, reportArgumentType]
             model=model,
             messages=[  # pyright: ignore[reportArgumentType]
-                {'role': 'system', 'content': EXECUTIVE_SUMMARY_SYSTEM_PROMPT},
+                {'role': 'system', 'content': system_prompt},
                 {'role': 'user', 'content': facts},
             ],
             temperature=temperature,

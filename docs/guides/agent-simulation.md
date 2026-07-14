@@ -83,7 +83,7 @@ and opening messages from a short description of your agent — no hand-written
 === "OpenAI"
 
     Pass `sim_model=` to route the simulator and judge through OpenAI directly.
-    Use `target_callback=` for the agent under test.
+    Use `target=` for the agent under test.
 
     ```python
     import asyncio
@@ -108,7 +108,7 @@ and opening messages from a short description of your agent — no hand-written
     async def main():
         results = await generate_and_simulate(
             evaluation_name="support-agent-sim-openai",
-            target_callback=openai_agent,
+            target=openai_agent,
             agent_description=(
                 "Customer support agent for an e-commerce store; "
                 "handles refunds, orders, and product questions."
@@ -241,7 +241,7 @@ A persona requires its core traits — `name`, `patience`, `assertiveness`,
 
 === "OpenAI"
 
-    Use `target_callback=` with any async function that maps the conversation to
+    Use `target=` with any async function that maps the conversation to
     your agent's reply. Pass `sim_model=` to run the simulator and judge on OpenAI
     directly. Set `upload_results=False` for a local-only run.
 
@@ -284,7 +284,7 @@ A persona requires its core traits — `name`, `patience`, `assertiveness`,
 
         results = await simulate(
             evaluation_name="openai-agent-simulation",
-            target_callback=openai_agent,        # your OpenAI agent
+            target=openai_agent,                 # your OpenAI agent
             personas=[persona],
             scenarios=[scenario],
             sim_model="gpt-4o-mini",             # simulator + judge on OpenAI directly
@@ -306,7 +306,7 @@ One persona × one scenario yields one `SimulationResult` with `goal_achieved`,
 `goal_completion_score`, `turn_count`, `rules_broken`, and the full message
 transcript.
 
-The `target_callback` is the only structural difference from the Orq path —
+The callable passed to `target` is the only structural difference from the Orq path —
 personas, scenarios, criteria, and the result shape are identical. Swap the
 callback body for any HTTP/LLM agent.
 
@@ -322,17 +322,17 @@ the exact same cases, or mine them for the archetypes that drive fresh ones.
 A `SimulationDatapoint` bundles one persona, one scenario, and the opening
 message. Every case simulation runs is one of these, and you can persist them for
 reuse. `eq sim generate` writes the cases it builds to a JSONL file with
-`--output PATH` (one datapoint per line); `eq sim run` does the same alongside a
-live run with `--save-datapoints PATH`:
+`--datapoints PATH` (one datapoint per line); `eq sim run` does the same alongside a
+live run with `--datapoints PATH`:
 
 ```bash
 # Generate cases once and keep them
 eq sim generate --agent-description "e-commerce support agent" \
   --num-personas 3 --num-scenarios 4 \
-  --output cases.jsonl
+  --datapoints cases.jsonl
 
 # Re-run the exact same cases against any target, as often as you like
-eq sim simulate --datapoints cases.jsonl --target agent:my-support-agent
+eq sim simulate --input cases.jsonl --target agent:my-support-agent
 ```
 
 Because the file pins the personas, scenarios, and first messages, the run is
@@ -425,8 +425,8 @@ if __name__ == "__main__":
 The seed is a steer, not a transcript: generation fills in the persona traits and
 scenario criteria and writes a natural opening message, so each run explores the
 space around the pattern rather than replaying one recorded conversation. Persist
-the generated cases (`eq sim generate --output`, or `eq sim run
---save-datapoints`) and they become a replayable bank for the section above.
+the generated cases (`eq sim generate --datapoints`, or `eq sim run
+--datapoints`) and they become a replayable bank for the section above.
 
 !!! note "Reading the archetypes out of traces is manual today"
     Turning raw traces into seed phrases is a step you do yourself, by reading the

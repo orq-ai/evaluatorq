@@ -240,7 +240,7 @@ class SimulationRunner:
         self,
         *,
         target_agent: AgentTarget | None = None,
-        target_callback: Callable[[list[Message]], str | Awaitable[str]] | None = None,
+        target: Callable[[list[Message]], str | Awaitable[str]] | None = None,
         model: str = DEFAULT_MODEL,
         max_turns: int = 10,
         user_simulator: BaseAgent | None = None,
@@ -248,8 +248,8 @@ class SimulationRunner:
         hooks: SimulationHooks | None = None,
         llm_client: AsyncOpenAI | None = None,
     ) -> None:
-        if not target_agent and not target_callback:
-            raise ValueError('Must provide either target_agent or target_callback')
+        if not target_agent and not target:
+            raise ValueError('Must provide either target_agent or target')
         if max_turns < 1:
             raise ValueError(f'max_turns must be >= 1, got {max_turns}')
         if not model.strip():
@@ -265,7 +265,7 @@ class SimulationRunner:
             raise TypeError('judge must implement evaluate(). Use JudgeAgent or a subclass.')
 
         self._target_agent = target_agent
-        self._target_callback = target_callback
+        self._target = target
         self._model = model
         self._max_turns = max_turns
         self._shared_client: AsyncOpenAI | None = llm_client
@@ -727,12 +727,12 @@ class SimulationRunner:
         if self._target_agent:
             resp = await self._target_agent.respond(messages)
             return resp.text, resp.usage, resp.model
-        if self._target_callback:
-            result = self._target_callback(messages)
+        if self._target:
+            result = self._target(messages)
             if inspect.isawaitable(result):
                 return await result, None, None
             return result, None, None
-        raise RuntimeError('No target agent or callback configured')
+        raise RuntimeError('No target agent configured')
 
     @staticmethod
     def _build_criteria_results(scenario: Scenario, judgment: Judgment) -> dict[str, bool]:

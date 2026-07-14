@@ -9,6 +9,7 @@ so this module can be imported safely even when fasthtml / uvicorn are absent
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 from loguru import logger
@@ -56,8 +57,14 @@ class _InterceptHandler(logging.Handler):
 
 def _install_log_bridge() -> None:
     """Route all stdlib logging (uvicorn access-log, starlette, etc.) through
-    loguru.  ``force=True`` replaces any pre-existing root-logger handlers."""
-    logging.basicConfig(handlers=[_InterceptHandler()], level=0, force=True)
+    loguru.  ``force=True`` replaces any pre-existing root-logger handlers.
+
+    Defaults to INFO so third-party DEBUG chatter (watchfiles reload scans,
+    httpx request logs, uvicorn internals) stays out of the console. Override
+    with ``EVALUATORQ_LOG_LEVEL=DEBUG`` (or any level name) when diagnosing.
+    """
+    level: int | str = os.environ.get('EVALUATORQ_LOG_LEVEL', '').upper() or logging.INFO
+    logging.basicConfig(handlers=[_InterceptHandler()], level=level, force=True)
 
 
 # Env var carrying the JSON-encoded roots to the reload subprocess. uvicorn's

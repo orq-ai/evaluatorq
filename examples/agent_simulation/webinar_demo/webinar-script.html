@@ -1,0 +1,980 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Webinar script — Agent Simulation · July 14</title>
+  <style>
+    :root {
+      --ivory:    #FAF9F5;
+      --slate:    #141413;
+      --clay:     #D97757;
+      --oat:      #E3DACC;
+      --olive:    #788C5D;
+      --gray-150: #F0EEE6;
+      --gray-300: #D1CFC5;
+      --gray-500: #87867F;
+      --gray-700: #3D3D3A;
+      --white:    #FFFFFF;
+
+      --serif: ui-serif, Georgia, 'Times New Roman', serif;
+      --sans:  system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      --mono:  ui-monospace, 'SF Mono', Menlo, Monaco, monospace;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: var(--sans);
+      background: var(--ivory);
+      color: var(--gray-700);
+      line-height: 1.55;
+      padding: 56px 32px 120px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .page { max-width: 1120px; margin: 0 auto; }
+
+    /* ---------- header ---------- */
+
+    header.page-head { margin-bottom: 48px; max-width: 820px; }
+
+    .eyebrow {
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--gray-500);
+      margin-bottom: 12px;
+    }
+
+    h1 {
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: 38px;
+      line-height: 1.15;
+      color: var(--slate);
+      margin-bottom: 18px;
+      letter-spacing: -0.01em;
+    }
+
+    .prompt-box {
+      background: var(--gray-150);
+      border: 1.5px solid var(--gray-300);
+      border-radius: 12px;
+      padding: 16px 20px;
+      font-size: 14.5px;
+      color: var(--gray-700);
+    }
+    .prompt-box .label {
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--gray-500);
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    /* ---------- section chrome ---------- */
+
+    section { margin-bottom: 64px; }
+
+    .sec-head {
+      display: flex;
+      align-items: baseline;
+      gap: 14px;
+      margin-bottom: 8px;
+    }
+    .sec-head .num {
+      font-family: var(--mono);
+      font-size: 12px;
+      background: var(--oat);
+      color: var(--slate);
+      padding: 3px 9px;
+      border-radius: 8px;
+    }
+    .sec-head h2 {
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: 26px;
+      color: var(--slate);
+      letter-spacing: -0.01em;
+    }
+    .sec-intro {
+      font-size: 14.5px;
+      color: var(--gray-500);
+      max-width: 720px;
+      margin-bottom: 28px;
+    }
+
+    /* ---------- summary strip ---------- */
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 64px;
+    }
+    @media (max-width: 900px) { .summary { grid-template-columns: repeat(2, 1fr); } }
+    .summary .cell {
+      background: var(--white);
+      border: 1.5px solid var(--gray-300);
+      border-radius: 12px;
+      padding: 18px 20px;
+    }
+    .summary .k {
+      font-family: var(--mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--gray-500);
+      margin-bottom: 6px;
+    }
+    .summary .v {
+      font-size: 17px;
+      color: var(--slate);
+      font-weight: 600;
+    }
+    .summary .v.accent { color: var(--clay); }
+
+    /* ---------- milestone timeline ---------- */
+
+    .milestones { display: flex; flex-direction: column; gap: 0; }
+    .milestone {
+      display: grid;
+      grid-template-columns: 120px 28px 1fr;
+      gap: 0 18px;
+      position: relative;
+    }
+    .milestone .when {
+      text-align: right;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--gray-500);
+      padding-top: 4px;
+    }
+    .milestone .dot-col {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .milestone .dot {
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: var(--white);
+      border: 3px solid var(--clay);
+      margin-top: 4px;
+      flex-shrink: 0;
+    }
+    .milestone .dot.done { background: var(--olive); border-color: var(--olive); }
+    .milestone .line {
+      width: 2px;
+      flex: 1;
+      background: var(--gray-300);
+      margin: 4px 0;
+    }
+    .milestone:last-child .line { display: none; }
+    .milestone .body { padding-bottom: 36px; }
+    .milestone .body h3 {
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: 19px;
+      color: var(--slate);
+      margin-bottom: 4px;
+    }
+    .milestone .body p { font-size: 14px; color: var(--gray-500); margin-bottom: 10px; max-width: 620px; }
+    .milestone .tags { display: flex; gap: 8px; flex-wrap: wrap; }
+    .milestone .tag {
+      font-family: var(--mono);
+      font-size: 11.5px;
+      background: var(--gray-150);
+      border: 1px solid var(--gray-300);
+      border-radius: 6px;
+      padding: 3px 8px;
+      color: var(--gray-700);
+    }
+    .milestone .tag.arian { border-color: var(--clay); color: var(--clay); background: var(--white); }
+    .milestone .tag.bauke { border-color: var(--olive); color: var(--olive); background: var(--white); }
+
+    /* ---------- data flow diagram ---------- */
+
+    .diagram {
+      background: var(--white);
+      border: 1.5px solid var(--gray-300);
+      border-radius: 12px;
+      padding: 28px;
+      overflow-x: auto;
+    }
+    .diagram svg { display: block; min-width: 760px; }
+    .diagram text { font-family: var(--mono); }
+    .caption { font-size: 13px; color: var(--gray-500); margin-top: 12px; }
+
+    /* ---------- code panel ---------- */
+
+    .code-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+    @media (max-width: 980px) { .code-grid { grid-template-columns: 1fr; } }
+    .code-block { display: flex; flex-direction: column; gap: 10px; }
+    .code-block .file-label {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--gray-500);
+    }
+    .code {
+      background: var(--slate);
+      border-radius: 12px;
+      padding: 18px 20px;
+      overflow-x: auto;
+      flex: 1;
+    }
+    .code pre {
+      font-family: var(--mono);
+      font-size: 12.5px;
+      line-height: 1.65;
+      color: #E8E6DE;
+      white-space: pre;
+    }
+    .code .kw  { color: var(--clay); }
+    .code .str { color: var(--olive); }
+    .code .cm  { color: var(--gray-500); }
+    .code .fn  { color: #C9B98A; }
+
+    /* ---------- risk table ---------- */
+
+    .risks {
+      border: 1.5px solid var(--gray-300);
+      border-radius: 12px;
+      overflow: hidden;
+      background: var(--white);
+    }
+    .risks .row {
+      display: grid;
+      grid-template-columns: 1.6fr 90px 1.6fr;
+      gap: 0;
+    }
+    @media (max-width: 780px) { .risks .row { grid-template-columns: 1fr; } }
+    .risks .row + .row { border-top: 1.5px solid var(--gray-300); }
+    .risks .cell { padding: 14px 18px; font-size: 13.5px; }
+    .risks .cell + .cell { border-left: 1.5px solid var(--gray-300); }
+    @media (max-width: 780px) { .risks .cell + .cell { border-left: none; border-top: 1px dashed var(--gray-300); } }
+    .risks .head { background: var(--gray-150); font-weight: 600; color: var(--slate); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .sev {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-weight: 600;
+    }
+    .sev.high { background: #F3D9CC; color: #8A3B1E; }
+    .sev.med  { background: var(--oat); color: var(--slate); }
+    .sev.low  { background: #E4E9DC; color: #4B5C39; }
+
+    /* ---------- question bank ---------- */
+
+    .open-q { display: flex; flex-direction: column; gap: 14px; max-width: 900px; }
+    .q {
+      background: var(--white);
+      border: 1.5px solid var(--gray-300);
+      border-left: 4px solid var(--clay);
+      border-radius: 10px;
+      padding: 16px 20px;
+    }
+    .q.covered { border-left-color: var(--olive); }
+    .q .qt { font-weight: 600; font-size: 15px; color: var(--slate); margin-bottom: 4px; }
+    .q .qd { font-size: 13.5px; color: var(--gray-500); }
+    .q .qd ul { margin: 8px 0 0 18px; }
+    .q .qd li { margin-bottom: 5px; }
+    .q .owner {
+      font-family: var(--mono);
+      font-size: 11.5px;
+      color: var(--gray-500);
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+
+    <header class="page-head">
+      <div class="eyebrow">Webinar run of show · Tuesday, July 14 · orq.ai</div>
+      <h1>Agent Simulation: Stress-Test Agents Against Synthetic Users</h1>
+      <div class="prompt-box">
+        <span class="label">Format</span>
+        45-minute live session. Bauke leads and drives the demo; Arian plays
+        the audience's advocate — asking the questions a skeptical engineer
+        would ask, at the moments they'd ask them. Demo spine: <strong>Sterling</strong>,
+        the Bank of Holland credit-card Q&amp;A agent (<code>sterling</code>,
+        provisioned via <code>make provision</code>), simulated live with
+        <code>evaluatorq sim</code>.
+      </div>
+    </header>
+
+    <!-- ============================================================= -->
+
+    <div class="summary">
+      <div class="cell"><div class="k">Duration</div><div class="v accent">45 min</div></div>
+      <div class="cell"><div class="k">Roles</div><div class="v">Bauke leads · Arian interviews</div></div>
+      <div class="cell"><div class="k">Demo</div><div class="v">3 acts + results walkthrough</div></div>
+      <div class="cell"><div class="k">Fallbacks</div><div class="v">pre-baked run + JSONL</div></div>
+    </div>
+
+    <!-- ============================================================= -->
+
+    <section>
+      <div class="sec-head"><span class="num">01</span><h2>Run of show</h2></div>
+      <p class="sec-intro">
+        Minute marks are targets, not handcuffs — but Act 1 must start by 08:00
+        or the interview block gets squeezed. Arian owns the clock: if a
+        segment runs over, cut from the interview block, never from the demo.
+      </p>
+
+      <div class="milestones">
+        <div class="milestone">
+          <div class="when">00:00–03:00</div>
+          <div class="dot-col"><span class="dot"></span><span class="line"></span></div>
+          <div class="body">
+            <h3>Cold open</h3>
+            <p>
+              Audience knows evals — don't sell the concept, locate the gap.
+              Arian's poll: <em>"How do you eval your agent today — golden set +
+              LLM judge? Production traces? Anything multi-turn? Drop it in the
+              chat."</em> Introduce Bauke. State the promise (it's what both
+              LinkedIn posts sold): an agent goes from zero data to a reusable
+              multi-turn regression suite, live, in 45 minutes.
+            </p>
+            <div class="tags"><span class="tag arian">Arian leads</span><span class="tag">deck s1</span></div>
+          </div>
+        </div>
+
+        <div class="milestone">
+          <div class="when">03:00–08:00</div>
+          <div class="dot-col"><span class="dot"></span><span class="line"></span></div>
+          <div class="body">
+            <h3>The gap in your eval stack</h3>
+            <p>
+              No evals-101. Bauke's argument, for people who already run evals:
+              your stack is single-turn — golden sets, LLM-as-judge on isolated
+              responses — but agent failures are conversational dynamics (the
+              user pivots, stalls, contradicts; turn 7, not turn 1). And at the
+              start there's no dataset that encodes those dynamics. Simulation
+              closes both: generate → simulate → judge → keep. Arian holds
+              questions unless something needs unpacking.
+            </p>
+            <div class="tags"><span class="tag bauke">Bauke leads</span><span class="tag">deck s1b–s3c (orq.ai · gap · idea · system · evaluatorq)</span></div>
+          </div>
+        </div>
+
+        <div class="milestone">
+          <div class="when">08:00–20:00</div>
+          <div class="dot-col"><span class="dot"></span><span class="line"></span></div>
+          <div class="body">
+            <h3>Demo · Act 1 — from scratch, no data</h3>
+            <p>
+              Generate personas × scenarios from the agent description, open
+              the JSONL and read one row aloud (the payoff moment), run the
+              simulation against the live agent, open the run viewer on a
+              failing transcript. Arian interjects Q1–Q3 during natural pauses
+              (while generation streams, while the sim runs).
+            </p>
+            <div class="tags"><span class="tag bauke">Bauke drives</span><span class="tag arian">Arian Q1–Q3</span><span class="tag">deck s4–s5</span><span class="tag">RUNBOOK Act 1</span></div>
+          </div>
+        </div>
+
+        <div class="milestone">
+          <div class="when">20:00–27:00</div>
+          <div class="dot-col"><span class="dot"></span><span class="line"></span></div>
+          <div class="body">
+            <h3>Demo · Act 2 — your agent, not ours</h3>
+            <p>
+              Same simulation against a non-orq target: <code>--openai-model</code>
+              flag, <code>--vercel-url</code>, then the SDK callback for
+              LangGraph / CrewAI / OpenAI Agents SDK / Pydantic AI. This is
+              where Arian lands the open-source question (Q4–Q5) — it's the
+              audience's biggest silent objection.
+            </p>
+            <div class="tags"><span class="tag bauke">Bauke drives</span><span class="tag arian">Arian Q4–Q5</span><span class="tag">deck s6–s6b</span><span class="tag">RUNBOOK Act 2</span></div>
+          </div>
+        </div>
+
+        <div class="milestone">
+          <div class="when">27:00–32:00</div>
+          <div class="dot-col"><span class="dot"></span><span class="line"></span></div>
+          <div class="body">
+            <h3>Demo · Act 3 — working with data</h3>
+            <p>
+              Re-run the frozen datapoints after a prompt tweak (like-for-like
+              comparison), extend the suite by generating and appending, then
+              push it to an orq dataset with <code>sim upload-dataset</code> and
+              re-run from the platform. Close on the three-options frame:
+              from scratch / re-run / extend &amp; share.
+            </p>
+            <div class="tags"><span class="tag bauke">Bauke drives</span><span class="tag">deck s7</span><span class="tag">RUNBOOK Act 3a–3c</span></div>
+          </div>
+        </div>
+
+        <div class="milestone">
+          <div class="when">32:00–39:00</div>
+          <div class="dot-col"><span class="dot"></span><span class="line"></span></div>
+          <div class="body">
+            <h3>Demo · Act 4 — inspect, harden, re-run</h3>
+            <p>
+              The results segment, live end-to-end. <strong>4a — inspect:</strong>
+              Bauke opens the dashboard (<code>uv run evaluatorq dashboard .evaluatorq/sim-runs</code> →
+              127.0.0.1:8080, showing every run in the store) and walks
+              it as four questions: <em>how bad is it</em> (summary strip) →
+              <em>where does it break</em> (persona × scenario heatmap) →
+              <em>why</em> (top failure modes, rules broken) → <em>show me</em>
+              (failing transcript, per-turn judge scores with reasoning). Arian
+              drives with Q6. <strong>4b — harden:</strong> Arian asks Q7 as the
+              pivot; Claude Code reads the run, proposes the minimal instruction
+              fix, applies it live via <code>orq agents update</code>.
+              <strong>4c — prove it:</strong> <code>make rerun</code> on the
+              frozen set — pass rate moves up, the failing transcript now
+              passes. The loop, closed on camera.
+            </p>
+            <div class="tags"><span class="tag bauke">Bauke drives</span><span class="tag arian">Arian Q6–Q8</span><span class="tag">no slide during walkthrough — dashboard is the visual; deck s8p recaps the before/after after `make rerun`</span><span class="tag">RUNBOOK Act 4</span></div>
+          </div>
+        </div>
+
+        <div class="milestone">
+          <div class="when">39:00–42:00</div>
+          <div class="dot-col"><span class="dot"></span><span class="line"></span></div>
+          <div class="body">
+            <h3>Interview block — zoom out</h3>
+            <p>
+              Screen share off, cameras on. Arian runs Q9 (self-improving
+              loops and their limits) plus one reflection beat: what we just
+              watched was the whole workflow — simulate, inspect, harden,
+              re-run — and none of it needed a dataset to exist first.
+              Conversational, opinionated, honest about limits.
+            </p>
+            <div class="tags"><span class="tag arian">Arian leads</span><span class="tag bauke">Bauke answers</span><span class="tag">deck s9–s9b</span></div>
+          </div>
+        </div>
+
+        <div class="milestone">
+          <div class="when">42:00–45:00</div>
+          <div class="dot-col"><span class="dot"></span><span class="line"></span></div>
+          <div class="body">
+            <h3>Audience Q&amp;A + the ask</h3>
+            <p>
+              Arian triages chat questions (prioritize ones the demo already
+              answered — quick wins). Bauke closes on the ask slide: run one
+              simulation against your own agent this week —
+              <code>pip install "evaluatorq[simulation]"</code>.
+            </p>
+            <div class="tags"><span class="tag arian">Arian triages</span><span class="tag bauke">Bauke closes</span><span class="tag">deck s11</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================= -->
+
+    <section>
+      <div class="sec-head"><span class="num">02</span><h2>The simulation loop</h2></div>
+      <p class="sec-intro">
+        Reference diagram — keep it in a second monitor. Every audience question
+        maps onto one box; when someone asks something mid-demo, point at the box.
+      </p>
+
+      <div class="diagram">
+        <svg viewBox="0 0 860 340" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="#87867F"/>
+            </marker>
+            <marker id="arrowClay" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="#D97757"/>
+            </marker>
+          </defs>
+
+          <!-- boxes -->
+          <g font-size="12" fill="#141413">
+            <rect x="20"  y="20"  width="180" height="54" rx="10" fill="#FFFFFF" stroke="#D97757" stroke-width="1.5"/>
+            <text x="110" y="43" text-anchor="middle" font-weight="600">agent description</text>
+            <text x="110" y="60" text-anchor="middle" fill="#87867F" font-size="10.5">one line is enough</text>
+
+            <rect x="20"  y="150" width="180" height="54" rx="10" fill="#FFFFFF" stroke="#D1CFC5" stroke-width="1.5"/>
+            <text x="110" y="173" text-anchor="middle" font-weight="600">generator</text>
+            <text x="110" y="190" text-anchor="middle" fill="#87867F" font-size="10.5">personas × scenarios</text>
+
+            <rect x="340" y="150" width="180" height="54" rx="10" fill="#FFFFFF" stroke="#D1CFC5" stroke-width="1.5"/>
+            <text x="430" y="173" text-anchor="middle" font-weight="600">user-simulator</text>
+            <text x="430" y="190" text-anchor="middle" fill="#87867F" font-size="10.5">plays each persona</text>
+
+            <rect x="340" y="20"  width="180" height="54" rx="10" fill="#FFFFFF" stroke="#788C5D" stroke-width="1.5"/>
+            <text x="430" y="43" text-anchor="middle" font-weight="600">your agent</text>
+            <text x="430" y="60" text-anchor="middle" fill="#87867F" font-size="9.5">orq · OpenAI · HTTP · SDK</text>
+
+            <rect x="660" y="150" width="180" height="54" rx="10" fill="#FFFFFF" stroke="#D1CFC5" stroke-width="1.5"/>
+            <text x="750" y="173" text-anchor="middle" font-weight="600">judge agent</text>
+            <text x="750" y="190" text-anchor="middle" fill="#87867F" font-size="9.5">goal_achieved · criteria_met</text>
+
+            <rect x="660" y="20"  width="180" height="54" rx="10" fill="#FFFFFF" stroke="#D1CFC5" stroke-width="1.5"/>
+            <text x="750" y="43" text-anchor="middle" font-weight="600">run report</text>
+            <text x="750" y="60" text-anchor="middle" fill="#87867F" font-size="10.5">pass rate + transcripts</text>
+
+            <rect x="20"  y="266" width="180" height="54" rx="10" fill="#141413" stroke="#141413"/>
+            <text x="110" y="289" text-anchor="middle" font-weight="600" fill="#FAF9F5">datapoints.jsonl</text>
+            <text x="110" y="306" text-anchor="middle" fill="#C9B98A" font-size="10.5">frozen, reusable suite</text>
+          </g>
+
+          <!-- arrows -->
+          <g stroke="#87867F" stroke-width="1.5" fill="none">
+            <path d="M110 74 L110 150" marker-end="url(#arrow)"/>
+            <path d="M200 177 L340 177" marker-end="url(#arrow)"/>
+            <path d="M410 150 L410 74" marker-end="url(#arrow)"/>
+            <path d="M450 74 L450 150" marker-end="url(#arrow)"/>
+            <path d="M520 177 L660 177" marker-end="url(#arrow)"/>
+            <path d="M750 150 L750 74" marker-end="url(#arrow)"/>
+            <path d="M110 204 L110 266" marker-end="url(#arrow)"/>
+          </g>
+          <g stroke="#D97757" stroke-width="1.5" fill="none" stroke-dasharray="5 4">
+            <path d="M200 300 C 340 300, 400 260, 415 204" marker-end="url(#arrowClay)"/>
+          </g>
+
+          <!-- edge labels -->
+          <g font-size="10.5" fill="#87867F">
+            <text x="118" y="118">sim generate</text>
+            <text x="240" y="170">each datapoint</text>
+            <text x="330" y="118" text-anchor="end">user turn</text>
+            <text x="462" y="118">agent reply</text>
+            <text x="548" y="170">full transcript</text>
+            <text x="742" y="118" text-anchor="end">verdicts + reasoning</text>
+            <text x="118" y="240">--datapoints / -d</text>
+            <text x="300" y="282" fill="#D97757">re-run identical set on every agent change</text>
+          </g>
+        </svg>
+        <p class="caption">
+          Solid = one simulation run. Dashed clay = the regression loop — the
+          reason the suite outlives the demo. Multi-turn happens in the
+          user-simulator ↔ your-agent pair (typically 5–15 turns per scenario).
+        </p>
+      </div>
+    </section>
+
+    <!-- ============================================================= -->
+
+    <section>
+      <div class="sec-head"><span class="num">03</span><h2>Interviewer question bank — Arian's cards</h2></div>
+      <p class="sec-intro">
+        Clay border = ask it. Olive border = Bauke's intro should already cover
+        it — keep as a backup reformulation if the intro ran thin. Each card:
+        the question as Arian asks it, the beats Bauke hits, and the cue.
+        H1–H5 at the bottom are the <strong>hard questions</strong> a technical
+        audience will ask anyway — Arian asks 2–3 of them at their anchored
+        demo moments (better we raise them than the chat); the rest double as
+        prepared answers for audience Q&amp;A.
+      </p>
+
+      <div class="open-q">
+        <div class="q covered">
+          <div class="qt">Q0 · "So in one sentence — what did we just watch?"</div>
+          <div class="qd">
+            Backup only: the intro (03:00–08:00) answers "what does it do" and
+            "what problem does it solve". Use this reformulation after Act 1 if
+            the intro was rushed — it gives Bauke a clean recap beat:
+            <em>synthetic users stress-test your agent in multi-turn
+            conversations, and a judge tells you where it breaks.</em>
+          </div>
+          <div class="owner">Cue · only if needed, after Act 1 step 4</div>
+        </div>
+
+        <div class="q">
+          <div class="qt">Q1 · "What do we actually need to use this? What's the shopping list?"</div>
+          <div class="qd">
+            Beats for Bauke:
+            <ul>
+              <li>Python 3.10+, <code>pip install "evaluatorq[simulation]"</code> — that's the install.</li>
+              <li>An LLM key for the simulator and judge (OpenAI key or orq key — the sim's own brains).</li>
+              <li>Your agent: an orq agent key, any OpenAI-compatible endpoint, an HTTP URL, or a Python callback.</li>
+              <li>Punchline: <em>no dataset, no labels, no annotation budget.</em></li>
+            </ul>
+          </div>
+          <div class="owner">Cue · Act 1, while `sim generate` streams (~08:30)</div>
+        </div>
+
+        <div class="q">
+          <div class="qt">Q2 · "Hold on — walk me through what it just generated. What am I looking at?"</div>
+          <div class="qd">
+            The payoff question. Bauke opens one JSONL row and reads it like a
+            character sheet: persona (patience, assertiveness, style, emotional
+            arc, background) × scenario (goal, context, pass/fail criteria).
+            Arian's follow-up jab: <em>"Would you have written that test case
+            yourself?"</em> — the honest answer is no, and that's the point.
+          </div>
+          <div class="owner">Cue · Act 1 step 2, JSONL open on screen</div>
+        </div>
+
+        <div class="q">
+          <div class="qt">Q3 · "The user-simulator got impatient with the agent just now. Who decided it should be impatient?"</div>
+          <div class="qd">
+            Lands during the live run when a persona's style shows in the
+            transcript. Beat: personality comes from the generated persona —
+            emotional arc is scripted, the conversation is not. This separates
+            simulation from "replaying canned prompts".
+          </div>
+          <div class="owner">Cue · Act 1 step 3, mid-simulation, react to a real transcript moment</div>
+        </div>
+
+        <div class="q">
+          <div class="qt">Q4 · "Is this open source? Because most people watching don't run their agents on orq."</div>
+          <div class="qd">
+            Ask it bluntly — it's the audience's biggest silent objection.
+            Beats:
+            <ul>
+              <li>Yes — evaluatorq is open source (github.com/orq-ai/evaluatorq), pip-installable, runs anywhere.</li>
+              <li>The simulation engine has no platform dependency: <code>--openai-model</code> for any OpenAI-compatible endpoint (vLLM, OpenRouter, local), <code>--vercel-url</code> for any HTTP agent.</li>
+              <li>SDK: wrap any <code>async fn(messages) → str</code>. Adapters shipped for LangGraph, CrewAI, OpenAI Agents SDK, Pydantic AI.</li>
+            </ul>
+          </div>
+          <div class="owner">Cue · opens Act 2 (~20:00) — this question IS the act transition</div>
+        </div>
+
+        <div class="q">
+          <div class="qt">Q5 · "So minimum viable start: I have a LangGraph agent on my laptop. What are my first three commands?"</div>
+          <div class="qd">
+            Forces concreteness. Bauke's answer: ① <code>pip install
+            evaluatorq[simulation]</code> ② export your LLM key ③ <code>evaluatorq sim run
+            --agent-description "..."</code> or ten lines of SDK
+            (<code>simulate(target=...)</code>). Under five minutes to
+            first transcript.
+          </div>
+          <div class="owner">Cue · end of Act 2, before Act 3</div>
+        </div>
+
+        <div class="q">
+          <div class="qt">Q6 · "The dashboard's open. Teach me to read it — what do I look at first, and what do I ignore?"</div>
+          <div class="qd">
+            The results-walkthrough driver — one question, four screens. Arian
+            re-asks a sub-question at each screen as Bauke navigates:
+            <ul>
+              <li><strong>Summary strip</strong> (goal completion, avg score, conversations, turns, errors, tokens) — "so 67% goal completion: good or bad?" Beat: it's a health check, not a diagnosis. The number says <em>that</em> something broke, never <em>what</em>.</li>
+              <li><strong>Persona × scenario heatmap</strong> — "where do I look next?" Beat: failures cluster. It's rarely "the agent is bad" — it's <em>this persona type</em> on <em>this scenario type</em>. That's already an actionable hypothesis.</li>
+              <li><strong>Top failure modes &amp; rules broken</strong> — "does it tell me why?" Beat: recurring patterns ranked across conversations; pick the biggest one to fix first.</li>
+              <li><strong>Transcript drill-down</strong> — "show me one." Beat: per-turn judge scores with reasoning; find the exact turn where it derails — usually a mid-conversation pivot, not turn one. Every failure is a bug report with the reproduction attached.</li>
+            </ul>
+          </div>
+          <div class="owner">Cue · Act 4a (32:00), drives the inspect segment — dashboard on screen, no slide</div>
+        </div>
+
+        <div class="q">
+          <div class="qt">Q7 · "OK, we found the failure. Don't tell me the workflow — show me. What do we actually do right now?"</div>
+          <div class="qd">
+            The pivot question — it launches Act 4b instead of getting a spoken
+            answer. Bauke hands the run to Claude Code: read
+            <code>.evaluatorq/sim-runs/</code>, summarize which criteria failed
+            for which personas, quote the derailing turns, propose the
+            <em>minimal</em> instruction fix, apply it live with
+            <code>orq agents update sterling --instructions
+            "..."</code>. While it works, Bauke narrates the frame: fix →
+            re-run frozen set → like-for-like compare → regression gate in CI.
+            Suite is shareable too (<code>sim upload-dataset</code> /
+            <code>--dataset-id</code>).
+          </div>
+          <div class="owner">Cue · pivot into Act 4b (~35:00)</div>
+        </div>
+
+        <div class="q">
+          <div class="qt">Q8 · "So that's Claude Code driving the whole loop. Where's the human in this?"</div>
+          <div class="qd">
+            Ask while the fix applies or right after <code>make rerun</code>
+            shows the pass rate move. Beats:
+            <ul>
+              <li>It works because evaluatorq is CLI-first with machine-readable output — exactly what coding agents want.</li>
+              <li>The loop we just watched: read failures → patch instructions → re-run frozen set → compare. Agent iterates, human reviews the diff.</li>
+              <li>Honest note: the human stays on the diff. You're reviewing changes, not writing test cases.</li>
+            </ul>
+          </div>
+          <div class="owner">Cue · Act 4b/4c (~37:00), while the rerun streams</div>
+        </div>
+
+        <div class="q">
+          <div class="qt">Q9 · "That's basically a self-improving agent. Is that safe? What goes wrong?"</div>
+          <div class="qd">
+            The expert-credibility card — invite Bauke to caveat:
+            <ul>
+              <li>The frozen suite works as a fitness function for automated iteration — that part is real.</li>
+              <li>The trap is Goodhart: optimize hard against one judge and you overfit to the judge, not the user.</li>
+              <li>Mitigations: hold out scenarios the loop never sees; extend the suite as the agent improves; periodically eyeball transcripts yourself.</li>
+            </ul>
+            Closing beat: simulation doesn't replace production data — it's how
+            you start before you have any, and the suite keeps growing after.
+          </div>
+          <div class="owner">Cue · interview block closer (~41:00), hand off to audience Q&amp;A</div>
+        </div>
+
+        <div class="q">
+          <div class="qt">H1 · "An LLM writing tests for an LLM — isn't that circular? Won't the generator share the agent's blind spots?"</div>
+          <div class="qd">
+            Beats: different models, different roles — the generator isn't asked
+            "what would this agent get wrong", it systematically explores
+            persona × goal × adversarial-strategy combinations, which is wider
+            than any dev's hand-written list. But concede the core: yes,
+            generated coverage has its own distribution. That's why you extend
+            the suite with production traces once you have them — simulation is
+            the bootstrap, not the endpoint (same line as both LinkedIn posts).
+          </div>
+          <div class="owner">Cue · right after the Act 1 payoff (Q2), while the generated row is on screen</div>
+        </div>
+
+        <div class="q">
+          <div class="qt">H2 · "How good is the judge? Did you validate it — TPR/TNR against human labels?"</div>
+          <div class="qd">
+            The question this audience will definitely ask. Honest beats:
+            <ul>
+              <li>Judges are prompt-based (goal_achieved, criteria_met) and every verdict ships with per-turn reasoning — you audit them, not trust them.</li>
+              <li>Criteria are explicit and per-scenario, so the judge grades against a written contract, not vibes.</li>
+              <li>No shipped TPR/TNR benchmark — say so. Recommended practice: spot-check verdicts on your first runs, tune criteria wording where the judge and you disagree. Same discipline as any LLM-as-judge.</li>
+            </ul>
+          </div>
+          <div class="owner">Cue · Act 4a, judge reasoning visible in the transcript drill-down</div>
+        </div>
+
+        <div class="q">
+          <div class="qt">H3 · "The conversations are stochastic — same frozen datapoints, different dialogue every run. How is that a regression gate?"</div>
+          <div class="qd">
+            Sharpest technical objection. Beats:
+            <ul>
+              <li>Freezing datapoints removes the biggest variance source — the test inputs. What varies is the path, not the goal.</li>
+              <li>Criteria are outcome-level ("balance disclosed only after verification"), not path-level — robust to different phrasings of the same conversation.</li>
+              <li>Gate on pass-rate deltas, not single binaries; re-run flaky rows like you re-run flaky tests. It's a statistical gate, same as any nondeterministic system test.</li>
+            </ul>
+          </div>
+          <div class="owner">Cue · Act 3a, the moment the frozen re-run is proposed</div>
+        </div>
+
+        <div class="q">
+          <div class="qt">H4 · "How many personas × scenarios is enough? Is there a coverage measure?"</div>
+          <div class="qd">
+            Honest beats: no formal coverage metric — heuristic is saturation.
+            Start 3 × 3, extend (Act 3b) until new scenarios stop surfacing new
+            failure modes. The persona × scenario heatmap doubles as the
+            coverage map: uniform green with sparse cells means generate more,
+            clustered red means fix before growing.
+          </div>
+          <div class="owner">Cue · Act 3b, while the extend command runs</div>
+        </div>
+
+        <div class="q">
+          <div class="qt">H5 · "Hundreds of multi-turn conversations, three LLM roles — what does a run actually cost?"</div>
+          <div class="qd">
+            Beats: the dashboard shows tokens total and per conversation — point
+            at it, don't hand-wave. Cost knobs: personas × scenarios count, max
+            turns, and model choice per role — the user-simulator and judge can
+            run on cheaper models than the agent under test. A 3 × 3 × ~10-turn
+            run is lunch money; the point is you spend it before users find the
+            failure, not after.
+          </div>
+          <div class="owner">Cue · Act 4a, tokens panel on screen — or audience Q&amp;A</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================= -->
+
+    <section>
+      <div class="sec-head"><span class="num">04</span><h2>Demo cue sheet — exact commands</h2></div>
+      <p class="sec-intro">
+        Mirrors RUNBOOK.md in the repo (examples/agent_simulation/webinar_demo).
+        Agent is <code>sterling</code> — recreate any time with
+        <code>make provision</code>.
+      </p>
+
+      <div class="code-grid">
+        <div class="code-block">
+          <div class="file-label">Act 1 — from scratch (08:00)</div>
+          <div class="code"><pre><span class="cm"># 1. generate from the agent's own description</span>
+uv run evaluatorq sim generate \
+  <span class="kw">--target</span> agent:sterling \
+  <span class="kw">--num-personas</span> 3 <span class="kw">--num-scenarios</span> 3 \
+  <span class="kw">--datapoints</span> boh_datapoints.jsonl
+
+<span class="cm"># 2. the payoff — read one generated row aloud</span>
+uv run evaluatorq sim validate-dataset boh_datapoints.jsonl
+
+<span class="cm"># 3. run live, freeze the set for Act 3</span>
+uv run evaluatorq sim simulate \
+  <span class="kw">--target</span> agent:sterling \
+  <span class="kw">-i</span> boh_datapoints.jsonl \
+  <span class="kw">--name</span> boh-from-scratch
+
+<span class="cm"># 4. pass rate + a failing transcript</span>
+uv run evaluatorq sim runs
+uv run evaluatorq dashboard .evaluatorq/sim-runs</pre></div>
+        </div>
+
+        <div class="code-block">
+          <div class="file-label">Act 2 — non-orq agents (20:00)</div>
+          <div class="code"><pre><span class="cm"># CLI: any OpenAI-compatible endpoint</span>
+uv run evaluatorq sim run <span class="kw">--openai-model</span> gpt-4o-mini \
+  <span class="kw">--agent-description</span> <span class="str">"Support agent for ..."</span> \
+  <span class="kw">--name</span> boh-nonorq-cli
+
+<span class="cm"># CLI: any deployed HTTP agent</span>
+uv run evaluatorq sim run \
+  <span class="kw">--vercel-url</span> https://my-agent.vercel.app/api/chat \
+  <span class="kw">--agent-description</span> <span class="str">"..."</span>
+
+<span class="cm"># SDK: wrap anything that answers a message</span>
+<span class="kw">from</span> evaluatorq.simulation <span class="kw">import</span> simulate
+
+<span class="kw">async def</span> <span class="fn">my_agent</span>(messages) -&gt; str: ...
+
+results = <span class="kw">await</span> <span class="fn">simulate</span>(
+    target=my_agent,
+    evaluator_names=[<span class="str">"goal_achieved"</span>,
+                     <span class="str">"criteria_met"</span>])</pre></div>
+        </div>
+
+        <div class="code-block">
+          <div class="file-label">Act 3 — working with data (27:00)</div>
+          <div class="code"><pre><span class="cm"># 3a. re-run the EXACT same set after a prompt tweak</span>
+uv run evaluatorq sim simulate \
+  <span class="kw">--target</span> agent:sterling \
+  <span class="kw">-i</span> boh_datapoints.jsonl \
+  <span class="kw">--name</span> boh-rerun
+
+<span class="cm"># 3b. extend the suite — generate more, append</span>
+uv run evaluatorq sim generate \
+  <span class="kw">--target</span> agent:sterling \
+  <span class="kw">--num-personas</span> 2 <span class="kw">--num-scenarios</span> 2 <span class="kw">--datapoints</span> more.jsonl
+cat more.jsonl &gt;&gt; boh_datapoints.jsonl
+uv run evaluatorq sim validate-dataset boh_datapoints.jsonl
+
+<span class="cm"># 3c. push to an orq dataset + re-run from the platform</span>
+uv run evaluatorq sim upload-dataset \
+  <span class="kw">-i</span> boh_datapoints.jsonl <span class="kw">-n</span> <span class="str">"Bank of Holland Sim Set"</span>
+uv run evaluatorq sim simulate \
+  <span class="kw">--target</span> agent:sterling \
+  <span class="kw">--dataset-id</span> &lt;id&gt;</pre></div>
+        </div>
+
+        <div class="code-block">
+          <div class="file-label">Act 4 — inspect, harden, re-run (32:00)</div>
+          <div class="code"><pre><span class="cm"># 4a. open the dashboard on the demo's run store</span>
+uv run evaluatorq dashboard .evaluatorq/sim-runs   <span class="cm"># -> http://127.0.0.1:8080 ; shows all runs</span>
+
+<span class="cm"># tour order — four questions, top to bottom:</span>
+<span class="cm">#  1. how bad?   summary strip (goal completion,</span>
+<span class="cm">#                avg score, turns, errors, tokens)</span>
+<span class="cm">#  2. where?     persona × scenario heatmap</span>
+<span class="cm">#  3. why?       top failure modes · rules broken</span>
+<span class="cm">#  4. show me.   transcript drill-down, per-turn</span>
+<span class="cm">#                judge scores + reasoning</span>
+
+<span class="cm"># 4b. harden — Claude Code reads the run, proposes</span>
+<span class="cm"># minimal instruction fix, applies it (validated):</span>
+orq agents update sterling \
+  <span class="kw">--instructions</span> <span class="str">"&lt;full updated instructions&gt;"</span>
+
+<span class="cm"># 4c. prove it — same frozen set, hardened agent</span>
+make rerun</pre></div>
+        </div>
+
+        <div class="code-block">
+          <div class="file-label">Pre-flight — run once, off-camera</div>
+          <div class="code"><pre><span class="kw">export</span> ORQ_API_KEY=<span class="str">"&lt;banking / CustomerDemo key&gt;"</span>
+# Run from the evaluatorq repository root (this checkout).
+uv sync <span class="kw">--all-extras</span>
+
+<span class="cm"># provision the Bank of Holland agent (idempotent)</span>
+cd examples/agent_simulation/webinar_demo
+make provision
+
+orq doctor                          <span class="cm"># CLI auth + reachability</span>
+orq agents retrieve sterling <span class="cm"># agent visible?</span>
+
+<span class="cm"># full Act 1 dry run; keep the outputs as fallbacks:</span>
+<span class="cm">#   backup_datapoints.jsonl  +  a completed run JSON</span>
+<span class="cm"># bump terminal font, clean prompt, no secrets in env dump</span></pre></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================= -->
+
+    <section>
+      <div class="sec-head"><span class="num">05</span><h2>If it breaks — contingencies &amp; honest answers</h2></div>
+      <p class="sec-intro">
+        First three are demo failures with a rehearsed fallback. Last three are
+        audience questions that deserve an honest "not yet" — saying it
+        confidently is part of the "this is new and moving fast" story.
+      </p>
+
+      <div class="risks">
+        <div class="row">
+          <div class="cell head">Situation</div>
+          <div class="cell head">Sev</div>
+          <div class="cell head">Response</div>
+        </div>
+        <div class="row">
+          <div class="cell">Live Bank of Holland agent unreachable mid-demo (platform hiccup, key expired; <code>make provision</code> recreates it, but not on-stream).</div>
+          <div class="cell"><span class="sev high">HIGH</span></div>
+          <div class="cell">Switch to <code>--agent-description "..."</code> — no platform call needed for generation; for the run, fall back to the <code>--openai-model</code> stand-in agent rehearsed in the dry run. Narrate the switch: "this also shows it works without orq."</div>
+        </div>
+        <div class="row">
+          <div class="cell">Generation or simulation runs slow on the stream — dead air.</div>
+          <div class="cell"><span class="sev high">HIGH</span></div>
+          <div class="cell">Arian fires Q1/Q2/Q3 to fill (that's what the cues are timed for). If &gt;2 min, open <code>backup_datapoints.jsonl</code> / the pre-baked run JSON in the dashboard and keep the live one running in a second tab.</div>
+        </div>
+        <div class="row">
+          <div class="cell">Dashboard (<code>uv run evaluatorq dashboard .evaluatorq/sim-runs</code>) fails to open or renders wrong on the shared screen.</div>
+          <div class="cell"><span class="sev med">MED</span></div>
+          <div class="cell">If the dashboard fails to open, fall back to the <code>sim runs</code> table + read the failing transcript from the run JSON. Less pretty, same story.</div>
+        </div>
+        <div class="row">
+          <div class="cell">Claude Code goes sideways during the live fix (Act 4b) — wrong diagnosis, over-broad edit, or just slow.</div>
+          <div class="cell"><span class="sev high">HIGH</span></div>
+          <div class="cell">Keep the dry run's known-good instruction fix in a scratch file; apply it manually with <code>orq agents update sterling --instructions "..."</code> and continue to <code>make rerun</code>. Narrate honestly: "the agent proposed something broader than I want on stage." Note: use <code>orq</code>, not <code>orqi</code> — <code>orqi agent update</code> 404s (RUNBOOK Gaps §6).</div>
+        </div>
+        <div class="row">
+          <div class="cell">"Can I push the suite to an orq dataset and run from there?"</div>
+          <div class="cell"><span class="sev low">LOW</span></div>
+          <div class="cell">Yes — new this week: <code>sim upload-dataset -i suite.jsonl -n "..."</code>, then <code>sim simulate --dataset-id &lt;id&gt;</code> (Act 3c shows it live). Honest caveat: the dataset API only takes scalar inputs, so persona/scenario display as JSON strings in the orq UI, not structured fields.</div>
+        </div>
+        <div class="row">
+          <div class="cell">"Why is there no <code>orq sim</code> command?"</div>
+          <div class="cell"><span class="sev low">LOW</span></div>
+          <div class="cell">Deliberate split: <code>orq</code> CLI = platform CRUD (agents, datasets, evals); <code>evaluatorq</code> = the open-source evaluation engine. Simulation lives with the engine.</div>
+        </div>
+        <div class="row">
+          <div class="cell">"Can it seed from my existing data AND generate more in one go?"</div>
+          <div class="cell"><span class="sev low">LOW</span></div>
+          <div class="cell">Not natively yet — <code>dataset_id</code> is still mutually exclusive with personas/scenarios. Today: generate separately, then append locally (Act 3b) or <code>upload-dataset --dataset-id</code> to extend the platform copy. No LLM augmentation <em>from</em> existing rows yet. Say so plainly.</div>
+        </div>
+        <div class="row">
+          <div class="cell">"How does this compare to τ-bench, DeepEval's conversation simulator, LangSmith simulations?"</div>
+          <div class="cell"><span class="sev med">MED</span></div>
+          <div class="cell">Don't trash anyone — same family (persona-driven user simulation), credit the idea. Differentiators to name: suite generated from just an agent description, frozen JSONL is portable and diffable, targets are framework-agnostic (orq / OpenAI-compatible / HTTP / any Python callable), open source end to end. τ-bench is a fixed benchmark; this builds <em>your</em> benchmark.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================= -->
+
+    <section>
+      <div class="sec-head"><span class="num">06</span><h2>Open items before Tuesday</h2></div>
+      <div class="open-q">
+        <div class="q">
+          <div class="qt">Provision + verify the demo agent</div>
+          <div class="qd"><code>make provision</code> in <code>webinar_demo/</code> (idempotent) with the banking-workspace <code>ORQ_API_KEY</code>; verify with <code>orq agents retrieve sterling</code>. During the dry run, note one reliably failing persona + scenario to park the dashboard on.</div>
+          <div class="owner">Owner · Bauke, Monday</div>
+        </div>
+        <div class="q">
+          <div class="qt">One full dry run together</div>
+          <div class="qd">Run the entire 45 minutes once, with Arian actually interrupting at the cue marks — the interjections only feel natural if the pauses are rehearsed. Capture the backup artifacts (datapoints JSONL + completed run JSON) from this run.</div>
+          <div class="owner">Owner · both, Monday</div>
+        </div>
+        <div class="q">
+          <div class="qt">Registration link + follow-up email</div>
+          <div class="qd">Deck s11 promises "demo commands in the follow-up email" — prepare that email (commands + GitHub + docs links) before the session so it ships within the hour.</div>
+          <div class="owner">Owner · Arian, Monday</div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</body>
+</html>

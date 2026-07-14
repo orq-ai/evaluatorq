@@ -153,6 +153,31 @@ def test_sim_overview_has_exec_summary_and_five_kpis(sim_run) -> None:
     assert 'sim-overview-grid-2--top' not in html
 
 
+def test_sim_overview_single_exec_summary_card_with_narrative(sim_run) -> None:
+    # Regression: a saved narrative + the computed sentence used to render two
+    # "Executive summary" cards. With a narrative present, show only the
+    # narrative in the callout — not the computed "average score of ..." line.
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    sim_run.executive_summary = 'NARRATIVE_MARKER: the agent held the line.'
+    html = sim_report_tabs('rid', sim_run)
+    assert 'NARRATIVE_MARKER' in html
+    # Exactly one exec-summary callout shell in the overview.
+    assert html.count('<div class="exec-summary">') == 1
+    # The computed stat sentence must not render alongside the narrative.
+    assert 'goal-completion rate at an average score' not in html
+
+
+def test_sim_overview_falls_back_to_computed_summary(sim_run) -> None:
+    # With no saved narrative, the computed stat sentence is the summary.
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    sim_run.executive_summary = None
+    html = sim_report_tabs('rid', sim_run)
+    assert 'goal-completion rate at an average score' in html
+    assert html.count('<div class="exec-summary">') == 1
+
+
 def test_sim_kpi_goal_status_uses_verdict(sim_run) -> None:
     # Goal-completion KPI status must equal summary verdict (pass/warn/fail), not an ad-hoc threshold.
     from evaluatorq.dashboard.report_tabs import sim_report_tabs

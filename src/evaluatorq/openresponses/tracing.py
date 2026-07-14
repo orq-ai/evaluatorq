@@ -131,7 +131,10 @@ def record_openresponses_response(span: Span | None, response: Any) -> None:
         return
     record_llm_response(span, response)
     try:
-        payload = response.model_dump(mode='json') if hasattr(response, 'model_dump') else response
+        # warnings=False: Response.output is a non-discriminated union, so a
+        # partially-constructed item makes Pydantic try every member and warn
+        # once each. This is a best-effort diagnostic dump — silence the spam.
+        payload = response.model_dump(mode='json', warnings=False) if hasattr(response, 'model_dump') else response
     except Exception as exc:
         logger.debug(
             'record_openresponses_response: model_dump failed ({}); falling back to repr',

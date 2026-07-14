@@ -5,7 +5,7 @@ Python examples for simulating user interactions against AI agents - testing goa
 ## Prerequisites
 
 ```bash
-uv pip install evaluatorq
+uv pip install "evaluatorq[simulation]"
 ```
 
 > **Examples 03 and 04** (`03_tool_simulation.py`, `04_hardening_loop.py`) are **preview**: they depend on the
@@ -15,7 +15,7 @@ uv pip install evaluatorq
 > uv pip install "agent-simulation @ git+https://github.com/orq-ai/research.git#subdirectory=projects/agent-simulation"
 > ```
 >
-> Examples 01, 02, and 05 only need `evaluatorq` and are the recommended starting points.
+> Examples 01, 02, and 05 use only the production evaluatorq SDK and are the recommended starting points.
 
 ## Where to start
 
@@ -106,7 +106,7 @@ results = await simulate(target=LangGraphTarget(graph), personas=[...], scenario
 
 Custom framework not listed? Wrap any `fn(messages) -> str` with
 `CallableTarget` (`evaluatorq.integrations.callable_integration`), or pass a
-plain `target_callback`.
+plain `target` callable.
 
 ## Environment
 

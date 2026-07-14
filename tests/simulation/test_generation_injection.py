@@ -61,7 +61,7 @@ async def test_generate_and_simulate_uses_orq_agent_description_when_omitted(mon
 
     with (
         patch(
-            "evaluatorq.redteam.runner._make_agent_backend",
+            "evaluatorq.redteam.backends.registry.make_agent_backend",
             return_value=backend,
         ),
         patch(
@@ -74,7 +74,7 @@ async def test_generate_and_simulate_uses_orq_agent_description_when_omitted(mon
         ),
         patch(
             "evaluatorq.simulation.api._simulate_core",
-            new=AsyncMock(return_value=[]),
+            new=AsyncMock(return_value=MagicMock(results=[])),
         ),
     ):
         await generate_and_simulate(target=target)
@@ -93,7 +93,7 @@ async def test_generate_and_simulate_prefers_an_explicit_description(monkeypatch
         return [_persona()], [_scenario()]
 
     with (
-        patch("evaluatorq.redteam.runner._make_agent_backend") as make_backend,
+        patch("evaluatorq.redteam.backends.registry.make_agent_backend") as make_backend,
         patch(
             "evaluatorq.simulation.api._generate_personas_scenarios",
             new=AsyncMock(side_effect=capture_generation),
@@ -104,7 +104,7 @@ async def test_generate_and_simulate_prefers_an_explicit_description(monkeypatch
         ),
         patch(
             "evaluatorq.simulation.api._simulate_core",
-            new=AsyncMock(return_value=[]),
+            new=AsyncMock(return_value=MagicMock(results=[])),
         ),
     ):
         await generate_and_simulate(
@@ -128,10 +128,27 @@ async def test_generate_and_simulate_rejects_orq_agents_without_a_description():
     backend.resolve_context = AsyncMock(return_value=AgentContext(key="support-agent"))
 
     with (
-        patch("evaluatorq.redteam.runner._make_agent_backend", return_value=backend),
+        patch("evaluatorq.redteam.backends.registry.make_agent_backend", return_value=backend),
         pytest.raises(ValueError, match=r"agent_description.*description"),
     ):
         await generate_and_simulate(target="agent:support-agent")
+
+
+@pytest.mark.asyncio
+async def test_generate_and_simulate_rejects_target_callback(monkeypatch):
+    monkeypatch.delenv("ORQ_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    from openai import AsyncOpenAI
+
+    injected = AsyncOpenAI(api_key="sk-test", base_url="https://example.test/v1")
+    with pytest.raises(TypeError, match="target_callback"):
+        await generate_and_simulate(
+            agent_description="a test agent",
+            target_callback=lambda messages: "ok",  # pyright: ignore[reportCallIssue]
+            num_personas=1,
+            num_scenarios=1,
+            generation_client=injected,
+        )
 
 
 @pytest.mark.asyncio
@@ -231,7 +248,7 @@ async def test_generate_and_simulate_emit_datapoints_called_once(monkeypatch):
         ),
         patch(
             "evaluatorq.simulation.api._simulate_core",
-            new=AsyncMock(return_value=[]),
+            new=AsyncMock(return_value=MagicMock(results=[])),
         ),
     ):
         await generate_and_simulate(
@@ -294,4 +311,151 @@ async def test_simulate_uses_generation_client_for_default_user_and_judge(monkey
             upload_results=False,
         )
 
-    assert results[0].goal_achieved is True
+    assert results[0].goal_achieved
+
+
+# ---------------------------------------------------------------------------
+# Behavioral regression tests: sim_model -> config.model, and owned
+# generation-client close semantics through generate_and_simulate().
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sim_model_propagates_to_config_model(monkeypatch):
+    """sim_model flows through to SimulationConfig.model at the innermost seam.
+
+    A broken `model=sim_model` mapping in _generate_and_simulate_run (e.g.
+    reverting to DEFAULT_MODEL) makes this assertion fail.
+    """
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    fake_datapoints = [_make_datapoint("dp-0")]
+    captured: dict[str, object] = {}
+
+    def capture_simulate_via_evaluatorq(*, config, **kwargs):  # noqa: ANN003
+        captured["model"] = config.model
+        return []
+
+    with (
+        patch(
+            "evaluatorq.simulation.api._generate_datapoints_inner",
+            new=AsyncMock(return_value=(fake_datapoints, MagicMock(), False)),
+        ),
+        patch(
+            "evaluatorq.simulation.api._simulate_via_evaluatorq",
+            new=AsyncMock(side_effect=capture_simulate_via_evaluatorq),
+        ),
+    ):
+        await generate_and_simulate(
+            agent_description="test agent",
+            target=lambda messages: "ok",
+            sim_model="distinct-model-xyz",
+        )
+
+    assert captured["model"] == "distinct-model-xyz"
+
+
+@pytest.mark.asyncio
+async def test_generate_and_simulate_closes_owned_generation_client_once(monkeypatch):
+    """An internally-built (owned) generation client is closed exactly once on success."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    mock_client = MagicMock()
+    mock_client.close = AsyncMock()
+
+    with (
+        patch(
+            "evaluatorq.openresponses.client.build_simulation_client",
+            return_value=(mock_client, True),
+        ),
+        patch(
+            "evaluatorq.simulation.api._generate_personas_scenarios",
+            new=AsyncMock(return_value=([_persona()], [_scenario()])),
+        ),
+        patch(
+            "evaluatorq.simulation.api._resolve_or_generate_datapoints",
+            new=AsyncMock(return_value=[_make_datapoint()]),
+        ),
+        patch(
+            "evaluatorq.simulation.api._simulate_via_evaluatorq",
+            new=AsyncMock(return_value=[]),
+        ),
+    ):
+        await generate_and_simulate(
+            agent_description="test agent",
+            target=lambda messages: "ok",
+        )
+
+    mock_client.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_generate_and_simulate_does_not_close_injected_generation_client(monkeypatch):
+    """An injected (not owned) generation client is never closed by the pipeline."""
+    monkeypatch.delenv("ORQ_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    from openai import AsyncOpenAI
+
+    injected = AsyncOpenAI(api_key="sk-test", base_url="https://example.test/v1")
+    injected.close = AsyncMock()  # type: ignore[method-assign]
+
+    with (
+        patch(
+            "evaluatorq.simulation.api._generate_personas_scenarios",
+            new=AsyncMock(return_value=([_persona()], [_scenario()])),
+        ),
+        patch(
+            "evaluatorq.simulation.api._resolve_or_generate_datapoints",
+            new=AsyncMock(return_value=[_make_datapoint()]),
+        ),
+        patch(
+            "evaluatorq.simulation.api._simulate_via_evaluatorq",
+            new=AsyncMock(return_value=[]),
+        ),
+    ):
+        await generate_and_simulate(
+            agent_description="test agent",
+            target=lambda messages: "ok",
+            generation_client=injected,
+        )
+
+    injected.close.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_and_simulate_closes_owned_client_when_emit_datapoints_raises(monkeypatch):
+    """Regression: emit_datapoints raising must still close the owned generation client.
+
+    Before the fix, the close call lived in a try block the exception from
+    emit_datapoints skipped over, leaking the client.
+    """
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    mock_client = MagicMock()
+    mock_client.close = AsyncMock()
+
+    def failing_sink(dps: list[SimulationDatapoint]) -> None:
+        raise RuntimeError("sink exploded")
+
+    with (
+        patch(
+            "evaluatorq.openresponses.client.build_simulation_client",
+            return_value=(mock_client, True),
+        ),
+        patch(
+            "evaluatorq.simulation.api._generate_personas_scenarios",
+            new=AsyncMock(return_value=([_persona()], [_scenario()])),
+        ),
+        patch(
+            "evaluatorq.simulation.api._resolve_or_generate_datapoints",
+            new=AsyncMock(return_value=[_make_datapoint()]),
+        ),
+        pytest.raises(RuntimeError, match="sink exploded"),
+    ):
+        await generate_and_simulate(
+            agent_description="test agent",
+            target=lambda messages: "ok",
+            emit_datapoints=failing_sink,
+        )
+
+    mock_client.close.assert_awaited_once()

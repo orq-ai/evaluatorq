@@ -20,7 +20,7 @@ Prerequisites:
     own model). Both sim-side and agent-side calls route through the Orq router.
 
 Usage:
-    cd packages/evaluatorq-py
+    # from the evaluatorq repository root
     uv run python examples/agent_simulation/06_langgraph_simulation.py
     uv run python examples/agent_simulation/06_langgraph_simulation.py --upload
 """

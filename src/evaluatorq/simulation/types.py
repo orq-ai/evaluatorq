@@ -389,6 +389,10 @@ class SimulationRun(BaseModel):
     """Client-minted run-grouping id (uuid hex, not an Orq-side run id) shared by every
     conversation's ``thread_id`` (``{run_id}:{index}``). Powers the dashboard's
     'View all run traces' deep link. None for older runs."""
+    experiment_url: str | None = None
+    """Absolute URL of the Orq experiment this run was uploaded to, captured from the
+    results upload. Powers the terminal 'View on Orq' line and the dashboard's
+    'Open experiment' button. None when upload was skipped/failed or for older runs."""
 
 
 # ---------------------------------------------------------------------------

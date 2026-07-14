@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import re
+import shlex
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,14 +14,19 @@ from typing import Annotated, Any
 
 import typer
 
+from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
 from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, DeliveryMethod, SaveMode, Vulnerability
 
 app = typer.Typer(
     name='redteam',
     help='Red teaming CLI for evaluatorq.',
     no_args_is_help=True,
-    rich_markup_mode=None,
+    rich_markup_mode='rich',
 )
+
+
+def _dashboard_command(directory: Path) -> str:
+    return f'eq dashboard {shlex.quote(str(directory))}'
 
 
 def _split_csv(values: list[str] | None) -> list[str] | None:
@@ -291,9 +297,9 @@ def run(
         str | None,
         typer.Option(help='Dataset source: local path, "hf:org/repo", or "hf:org/repo/file.json".'),
     ] = None,
-    output_dir: Annotated[
+    artifacts_dir: Annotated[
         Path | None,
-        typer.Option(help='Directory for saved JSON files. Required with --save detail.'),
+        typer.Option('--artifacts-dir', help='Directory for saved JSON files. Required with --save detail.'),
     ] = None,
     save: Annotated[
         SaveMode,
@@ -318,21 +324,21 @@ def run(
         bool,
         typer.Option('--quiet', '-q', help='Suppress progress bars and non-error output.'),
     ] = False,
-    save_report: Annotated[
+    report_path: Annotated[
         Path | None,
-        typer.Option(help='Path to write the report JSON.'),
+        typer.Option('--report', help='Path to write the report JSON.'),
     ] = None,
-    export_md: Annotated[
+    report_md: Annotated[
         Path | None,
         typer.Option(
-            '--export-md',
+            '--report-md',
             help='Directory path to write a Markdown report. Filename is auto-generated.',
         ),
     ] = None,
-    export_html: Annotated[
+    report_html: Annotated[
         Path | None,
         typer.Option(
-            '--export-html',
+            '--report-html',
             help='Directory path to write an HTML report. Filename is auto-generated.',
         ),
     ] = None,
@@ -435,7 +441,7 @@ def run(
                 cleanup_memory=not no_cleanup_memory,
                 dataset=dataset,
                 hooks=RichHooks(skip_confirm=yes),
-                output_dir=output_dir,
+                artifacts_dir=artifacts_dir,
                 save=save,
                 target_config=target_config,
                 generate_executive_summary=executive_summary,
@@ -461,19 +467,19 @@ def run(
         typer.echo(f'Error: {e}', err=True)
         raise typer.Exit(code=1)
 
-    if save_report:
-        save_report.parent.mkdir(parents=True, exist_ok=True)
-        save_report.write_text(json.dumps(report.model_dump(mode='json'), indent=2, default=str))
-        typer.echo(f'Report saved to {save_report}')
+    if report_path:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(report.model_dump(mode='json'), indent=2, default=str))
+        typer.echo(f'Report saved to {report_path}')
 
-    if export_md:
+    if report_md:
         target_label = targets if isinstance(targets, str) else ', '.join(targets)
-        md_path = write_markdown_report(report, output_dir=export_md, target=target_label)
+        md_path = write_markdown_report(report, output_dir=report_md, target=target_label)
         typer.echo(f'Markdown report written to {md_path}')
 
-    if export_html:
+    if report_html:
         target_label = targets if isinstance(targets, str) else ', '.join(targets)
-        html_path = write_html_report(report, output_dir=export_html, target=target_label)
+        html_path = write_html_report(report, output_dir=report_html, target=target_label)
         typer.echo(f'HTML report written to {html_path}')
 
 
@@ -497,6 +503,7 @@ def ui(
     ] = 'localhost',
 ) -> None:
     """Launch the interactive Streamlit dashboard for a red team report."""
+    typer.echo('Warning: eq redteam ui is deprecated; use eq dashboard instead.', err=True)
     from evaluatorq.redteam.runner import get_runs_dir
 
     if report_path is None or latest:
@@ -746,3 +753,6 @@ def runs(
                 f'Warning: {skipped} file(s) could not be parsed and were skipped.',
                 err=True,
             )
+
+    if run_files:
+        typer.echo(f'open: {_dashboard_command(runs_dir)}')

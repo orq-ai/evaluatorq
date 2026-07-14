@@ -7,7 +7,7 @@ be circular, since ``cli`` imports ``api``).
 
 Saved runs land in ``.evaluatorq/sim-runs/`` under collision-free
 ``<run-name>_<timestamp>.json`` names, which ``evaluatorq sim runs`` lists and
-``evaluatorq sim ui`` opens.
+``evaluatorq dashboard .evaluatorq/sim-runs`` browses.
 """
 
 from __future__ import annotations
@@ -93,7 +93,14 @@ async def fetch_agent_info(agent_key: str) -> AgentInfoSnapshot | None:
             'url': url,
         }
     except Exception as exc:
-        logger.warning('Failed to fetch agent_info for %r: %r', agent_key, exc)
+        # Best-effort snapshot: a missing agent (404) is expected for non-Orq
+        # targets and degrades to None quietly. Anything else (bad ORQ_API_KEY,
+        # network, backend error) is unexpected — surface it at warning so it is
+        # not silently swallowed. Log the status/type only; the raw SDK repr
+        # dumps the full response (headers, body) and reads as alarming.
+        status = getattr(getattr(exc, 'raw_response', None), 'status_code', None)
+        log = logger.debug if status == 404 else logger.warning
+        log('Skipping agent_info for %r: %s (status=%s)', agent_key, type(exc).__name__, status)
         return None
 
 
@@ -122,6 +129,7 @@ def build_simulation_run(
     max_turns: int | None = None,
     agent_info: AgentInfoSnapshot | None = None,
     run_id: str | None = None,
+    experiment_url: str | None = None,
 ) -> SimulationRun:
     """Build the full ``SimulationRun`` report model from results.
 
@@ -152,6 +160,7 @@ def build_simulation_run(
         max_turns=max_turns,
         agent_info=agent_info,
         run_id=run_id,
+        experiment_url=experiment_url,
         evaluator_names=evaluator_names,
         total_results=len(results),
         scorer_averages=scorer_averages,
@@ -195,8 +204,8 @@ def write_report(run: SimulationRun, output: Path) -> None:
     this honours the user-supplied path verbatim, creating parent dirs and
     **overwriting** any existing file. Prefer :func:`auto_save_run` for routine
     persistence — a fixed path here will clobber a prior run. Intentionally not
-    part of the public package API; it backs the explicit ``run_output``/
-    ``--report-output`` opt-in only.
+    part of the public package API; it backs the explicit ``report``/
+    ``--report`` opt-in only.
     """
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(run.model_dump_json(indent=2), encoding='utf-8')

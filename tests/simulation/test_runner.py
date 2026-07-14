@@ -32,6 +32,10 @@ def _make_scenario():
 
 
 class TestSimulationRunnerValidation:
+    def test_target_callback_is_rejected(self):
+        with pytest.raises(TypeError, match="target_callback"):
+            SimulationRunner(target_callback=lambda msgs: "ok")  # pyright: ignore[reportCallIssue]
+
     def test_requires_target(self):
         with pytest.raises(ValueError, match="Must provide either"):
             SimulationRunner(model="test")
@@ -39,14 +43,14 @@ class TestSimulationRunnerValidation:
     def test_max_turns_validation(self):
         with pytest.raises(ValueError, match="max_turns must be >= 1"):
             SimulationRunner(
-                target_callback=lambda msgs: "ok",
+                target=lambda msgs: "ok",
                 max_turns=0,
             )
 
     def test_model_validation(self):
         with pytest.raises(ValueError, match="model must be a non-empty"):
             SimulationRunner(
-                target_callback=lambda msgs: "ok",
+                target=lambda msgs: "ok",
                 model="   ",
             )
 
@@ -54,7 +58,7 @@ class TestSimulationRunnerValidation:
 class TestSimulationRunnerRun:
     @pytest.mark.asyncio
     async def test_run_requires_persona_or_datapoint(self):
-        runner = SimulationRunner(target_callback=lambda msgs: "ok")
+        runner = SimulationRunner(target=lambda msgs: "ok")
         result = await runner.run(persona=_make_persona())
         assert result.terminated_by == TerminatedBy.error
         assert "Must provide either datapoint" in result.reason
@@ -66,7 +70,7 @@ class TestSimulationRunnerRun:
         async def failing_callback(msgs):
             raise RuntimeError("API down")
 
-        runner = SimulationRunner(target_callback=failing_callback, model="test-model")
+        runner = SimulationRunner(target=failing_callback, model="test-model")
         result = await runner.run(
             persona=_make_persona(),
             scenario=_make_scenario(),
@@ -79,7 +83,7 @@ class TestSimulationRunnerRun:
 class TestSimulationRunnerMisc:
     def test_accepts_valid_config(self):
         runner = SimulationRunner(
-            target_callback=lambda msgs: "ok",
+            target=lambda msgs: "ok",
             model="azure/gpt-4o-mini",
             max_turns=5,
         )
@@ -87,14 +91,14 @@ class TestSimulationRunnerMisc:
 
     @pytest.mark.asyncio
     async def test_close_can_be_called_multiple_times(self):
-        runner = SimulationRunner(target_callback=lambda msgs: "ok")
+        runner = SimulationRunner(target=lambda msgs: "ok")
         await runner.close()
         await runner.close()
 
     @pytest.mark.asyncio
     async def test_run_batch_empty_datapoints(self, monkeypatch):
         monkeypatch.setenv("ORQ_API_KEY", "test-key")
-        runner = SimulationRunner(target_callback=lambda msgs: "ok")
+        runner = SimulationRunner(target=lambda msgs: "ok")
         results = await runner.run_batch([])
         assert results == []
 
@@ -166,12 +170,12 @@ class TestInvertRolesForSimulator:
 class TestSimulationRunnerBatchValidation:
     @pytest.mark.asyncio
     async def test_max_concurrency_validation(self):
-        runner = SimulationRunner(target_callback=lambda msgs: "ok")
+        runner = SimulationRunner(target=lambda msgs: "ok")
         with pytest.raises(ValueError, match="max_concurrency must be >= 1"):
             await runner.run_batch([], max_concurrency=0)
 
     @pytest.mark.asyncio
     async def test_negative_max_concurrency_validation(self):
-        runner = SimulationRunner(target_callback=lambda msgs: "ok")
+        runner = SimulationRunner(target=lambda msgs: "ok")
         with pytest.raises(ValueError, match="max_concurrency must be >= 1"):
             await runner.run_batch([], max_concurrency=-5)

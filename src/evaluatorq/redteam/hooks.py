@@ -17,6 +17,7 @@ Public API:
 from __future__ import annotations
 
 import asyncio
+import shlex
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict, runtime_checkable
 
@@ -29,7 +30,11 @@ if TYPE_CHECKING:
     from rich.console import Console as RichConsole
 
     from evaluatorq.common.async_utils import MaybeAsync
-    from evaluatorq.redteam.contracts import RedTeamReport
+from evaluatorq.redteam.contracts import RedTeamReport
+
+
+def _dashboard_hint(directory: str | Path) -> str:
+    return f'eq dashboard {shlex.quote(str(directory))}'
 
 
 # Capabilities that meaningfully expand an agent's blast radius. Surfaced
@@ -250,19 +255,12 @@ class DefaultHooks:
             f'attacks={summary.total_attacks}'
         )
         if output_dir:
-            try:
-                report_path = str(Path(output_dir, '03_summary_report.json').relative_to(Path.cwd()))
-            except ValueError:
-                report_path = f'{output_dir}/03_summary_report.json'
-            logger.info(f'[redteam] Tip: visualise results with  "evaluatorq redteam ui {report_path}"')
+            dashboard_dir = output_dir
         elif auto_save_path:
-            try:
-                report_path = str(Path(auto_save_path).relative_to(Path.cwd()))
-            except ValueError:
-                report_path = auto_save_path
-            logger.info(f'[redteam] Tip: visualise results with  "evaluatorq redteam ui {report_path}"')
+            dashboard_dir = str(Path(auto_save_path).parent)
         else:
-            logger.info('[redteam] Tip: visualise results with  "evaluatorq redteam ui <report.json>"')
+            dashboard_dir = '.evaluatorq/runs'
+        logger.info(f'[redteam] Tip: visualise results with  "{_dashboard_hint(dashboard_dir)}"')
 
 
 # ---------------------------------------------------------------------------
@@ -768,12 +766,13 @@ class RichHooks:
             report_path = None
 
         if report_path:
+            dashboard_dir = Path(report_path).parent
             self._console.print(
-                f'[dim]Tip:[/dim] Visualise results interactively with '
-                f'[bold cyan]"evaluatorq redteam ui {report_path}"[/bold cyan]'
+                '[dim]Tip:[/dim] Visualise results interactively with '
+                f'[bold cyan]"{_dashboard_hint(dashboard_dir)}"[/bold cyan]'
             )
         else:
             self._console.print(
                 '[dim]Tip:[/dim] Visualise results interactively with '
-                '[bold cyan]"evaluatorq redteam ui <report.json>"[/bold cyan]'
+                f'[bold cyan]"{_dashboard_hint(".evaluatorq/runs")}"[/bold cyan]'
             )

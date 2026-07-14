@@ -127,6 +127,7 @@ class SimulationHooks(Protocol):
     def on_run_start(self, meta: SimulationRunMeta) -> MaybeAsync[None]: ...
     def on_stage_start(self, stage: SimStage | str, meta: dict[str, Any]) -> MaybeAsync[None]: ...
     def on_stage_end(self, stage: SimStage | str, meta: dict[str, Any]) -> MaybeAsync[None]: ...
+    def on_generate_inputs_ready(self, num_personas: int, num_scenarios: int) -> MaybeAsync[None]: ...
     def on_datapoint_start(self, datapoint: SimulationDatapoint) -> MaybeAsync[None]: ...
     def on_turn_complete(self, datapoint_id: str, metrics: TurnMetrics) -> MaybeAsync[None]: ...
     def on_datapoint_complete(self, result: SimulationResult) -> MaybeAsync[None]: ...
@@ -168,6 +169,9 @@ class DefaultHooks:
     async def on_stage_end(self, stage: SimStage | str, meta: dict[str, Any]) -> None:
         logger.info(f'[simulation] Stage end: {_stage_label(stage)}')
 
+    async def on_generate_inputs_ready(self, num_personas: int, num_scenarios: int) -> None:
+        logger.info(f'[simulation] Inputs ready: {num_personas} personas, {num_scenarios} scenarios')
+
     async def on_datapoint_start(self, datapoint: SimulationDatapoint) -> None:
         logger.debug(f'[simulation] SimulationDatapoint start: {datapoint.id}')
 
@@ -204,7 +208,7 @@ class DefaultHooks:
         )
         if errored:
             logger.warning(f'[simulation] {errored}/{total} simulations errored')
-        logger.info('[simulation] Tip: explore results with "eq sim ui --latest"')
+        logger.info('[simulation] Tip: explore results with "eq dashboard .evaluatorq/sim-runs"')
 
 
 class RichHooks:
@@ -217,6 +221,9 @@ class RichHooks:
 
     Args:
         console: a ``rich.console.Console``; a new one is created when ``None``.
+        verbose: verbosity count. Default (``-v`` and below) shows the overall
+            bar plus a one-line completion notice per datapoint; ``>= 2``
+            (``-vv``) adds a live per-datapoint turn-progress bar for each.
     """
 
     def __init__(
@@ -225,6 +232,7 @@ class RichHooks:
         console: RichConsole | None = None,
         skip_confirm: bool = False,
         defer_summary: bool = False,
+        verbose: int = 0,
     ) -> None:
         if console is None:
             from rich.console import Console
@@ -233,12 +241,14 @@ class RichHooks:
         self._console = console
         self._skip_confirm = skip_confirm
         self._defer_summary = defer_summary
+        self._show_per_datapoint = verbose >= 2
         self._summary_rendered = False
         self._progress: Any = None  # rich.progress.Progress
         self._overall_task_id: Any = None  # rich.progress.TaskID | None
         self._tasks: dict[str, int] = {}  # datapoint_id -> rich TaskID
         self._max_turns: int | None = None
         self._completed = 0
+        self._gen_status: Any = None  # rich.status.Status during the GENERATE stage
 
     async def on_confirm(self, meta: SimulationRunMeta) -> bool:
         from evaluatorq.common.reports import confirm_run_plan
@@ -266,8 +276,27 @@ class RichHooks:
 
     async def on_stage_start(self, stage: SimStage | str, meta: dict[str, Any]) -> None:
         self._console.rule(f'[bold cyan]{_stage_label(stage)}[/bold cyan]')
+        # Generation is two batched LLM calls + a first-message gather — no
+        # per-item progress to bar, so spin a transient status so the wait isn't
+        # dead air. Stopped in on_stage_end (before any simulate Progress starts,
+        # honouring the single-live-region invariant above).
+        if stage == SimStage.GENERATE:
+            # Phase-1 label; on_generate_inputs_ready switches it to phase 2 so
+            # the two sequential generation phases read as distinct steps.
+            self._gen_status = self._console.status('[cyan]Generating personas & scenarios…', spinner='dots')
+            self._gen_status.start()
+
+    async def on_generate_inputs_ready(self, num_personas: int, num_scenarios: int) -> None:
+        # Phase-1 done → leave a persistent checkpoint above the spinner, then
+        # flip the spinner to phase 2 (first-message generation, the NxM stage).
+        if self._gen_status is not None:
+            self._console.print(f'  [green]✓[/] {num_personas} personas · {num_scenarios} scenarios')
+            self._gen_status.update('[cyan]Writing first messages…')
 
     async def on_stage_end(self, stage: SimStage | str, meta: dict[str, Any]) -> None:
+        if stage == SimStage.GENERATE and self._gen_status is not None:
+            self._gen_status.stop()
+            self._gen_status = None
         if stage == SimStage.GENERATE and 'num_datapoints' in meta:
             self._console.print(f'[dim] {meta["num_datapoints"]} datapoints generated[/dim]')
 
@@ -310,6 +339,8 @@ class RichHooks:
         from rich.markup import escape
 
         self._ensure_started()
+        if not self._show_per_datapoint:
+            return  # default (-v): overall bar + completion lines only; live bars gated behind -vv
         if datapoint.id in self._tasks:
             return
         self._tasks[datapoint.id] = self._progress.add_task(
@@ -332,19 +363,24 @@ class RichHooks:
         from evaluatorq.simulation.types import TerminatedBy
 
         dp_id = result.metadata.get('datapoint_id')
+        color = 'red' if result.terminated_by in (TerminatedBy.error, TerminatedBy.timeout) else 'green'
         task_id = self._tasks.get(dp_id) if dp_id else None
         if dp_id and task_id is not None:
-            # Keep error/timeout rows red (on_datapoint_error already set that),
-            # don't overwrite with green — otherwise a failed run reads as a green
-            # success labelled "error". Fill the per-task bar to 100%: a
+            # -vv: fill the per-task bar to 100%. Keep error/timeout rows red
+            # (on_datapoint_error already set that), don't overwrite with green —
+            # otherwise a failed run reads as a green success labelled "error". A
             # judge-terminated run stops before max_turns, leaving e.g. 3/10. When
             # _max_turns is None (lazy-start path, task total=None) this is a no-op.
-            color = 'red' if result.terminated_by in (TerminatedBy.error, TerminatedBy.timeout) else 'green'
             self._progress.update(
                 task_id,
                 description=f'  [{color}]{escape(dp_id)}[/{color}] {result.terminated_by}',
                 completed=self._max_turns,
             )
+        elif dp_id and not self._show_per_datapoint:
+            # default (-v): no live per-datapoint bar; print a one-line completion
+            # notice above the overall bar (rich moves it above the live region).
+            glyph = '✗' if color == 'red' else '✓'
+            self._console.print(f'  [{color}]{glyph} {escape(dp_id)}[/{color}]')
         self._completed += 1
         if self._overall_task_id is not None:
             self._progress.update(self._overall_task_id, completed=self._completed)
@@ -379,12 +415,23 @@ class RichHooks:
             return
         self.print_summary(results)
 
-    def print_summary(self, results: list[SimulationResult], *, executive_summary: str | None = None) -> None:
+    def print_summary(
+        self,
+        results: list[SimulationResult],
+        *,
+        executive_summary: str | None = None,
+        experiment_url: str | None = None,
+    ) -> None:
         """Print the final summary once, optionally including generated prose."""
         if self._summary_rendered:
             return
         self._summary_rendered = True
         from evaluatorq.simulation.reports.display import print_simulation_summary
 
-        print_simulation_summary(results, executive_summary=executive_summary, console=self._console)
-        self._console.print('[dim]Tip: explore results with "eq sim ui --latest"[/dim]')
+        print_simulation_summary(
+            results,
+            executive_summary=executive_summary,
+            experiment_url=experiment_url,
+            console=self._console,
+        )
+        self._console.print('[dim]Tip: explore results with "eq dashboard .evaluatorq/sim-runs"[/dim]')

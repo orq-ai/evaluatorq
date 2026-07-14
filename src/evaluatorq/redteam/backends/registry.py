@@ -130,3 +130,30 @@ def _create_openresponses_backend(
 register_backend('openai', _create_openai_backend)
 register_backend('orq', _create_orq_backend)
 register_backend('openresponses', _create_openresponses_backend)
+
+
+def make_agent_backend(*, target_config: TargetConfig | None, pipeline_config: LLMConfig | None) -> Backend:
+    """Composite backend for ORQ agent targets: ORQ SDK for context+cleanup, OrqResponses (Responses API) for execution.
+
+    The exec backend is built with ``llm_client=None`` on purpose: the
+    OpenResponses backend forwards that client to OrqResponsesTarget, but the
+    attacker LLM client must NOT become the *target* client — passing None lets
+    the target build its own env client routed to /v3/router. Since the
+    OpenResponses backend defaults to ``require_orq=True``, that self-built client
+    never falls back to ``OPENAI_API_KEY``: an ``agent/<key>`` model only resolves
+    on the Orq router.
+    """
+    from evaluatorq.redteam.backends.base import HybridAgentBackend
+
+    # Build the ORQ SDK context backend lazily: a static ``agent:`` run only ever
+    # calls exec (create_target), so deferring this avoids importing/requiring
+    # ``orq-ai-sdk`` for targets that never touch context resolution or memory cleanup.
+    exec_backend = resolve_backend(
+        'openresponses', llm_client=None, target_config=target_config, pipeline_config=pipeline_config
+    )
+    return HybridAgentBackend(
+        context_backend_factory=lambda: resolve_backend(
+            'orq', target_config=target_config, pipeline_config=pipeline_config
+        ),
+        exec_backend=exec_backend,
+    )

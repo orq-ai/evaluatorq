@@ -7,7 +7,7 @@ Demonstrates the core simulation loop with a local mock agent:
 - Inspect the conversation and result
 
 Usage:
-    cd packages/evaluatorq-py
+    # from the evaluatorq repository root
     uv run python examples/agent_simulation/01_basic_simulation.py
 
 Where outputs land:
@@ -45,8 +45,8 @@ from evaluatorq.simulation.types import (
 async def support_agent(messages: list[Message]) -> str:  # noqa: RUF029
     """Simple mock customer support agent - replace with your own logic.
 
-    Declared `async` because target_callback must be awaitable per the simulation
-    runner protocol; a real agent here would `await` an LLM/HTTP call.
+    Declared `async` because this example awaits an LLM/HTTP call. Simulation
+    targets may be synchronous or asynchronous callables.
     """
     last = (messages[-1].content or "").lower() if messages else ""
     if "refund" in last:
@@ -89,13 +89,13 @@ async def main() -> None:
     )
 
     # 3. Run simulation
-    # target_callback=: pass any async function; use target="agent:<key>" for orq.ai agents.
+    # target=: pass any sync or async function; use target="agent:<key>" for orq.ai agents.
     # sim_model=: the LLM used for the UserSimulator and Judge (defaults to openai/gpt-5.4-mini).
     # evaluator_names=: scorers applied to each result (default: goal_achieved, criteria_met).
     logger.info("Running simulation...")
     results = await simulate(
         evaluation_name="basic-simulation-example",
-        target_callback=support_agent,
+        target=support_agent,
         personas=[persona],
         scenarios=[scenario],
         max_turns=6,

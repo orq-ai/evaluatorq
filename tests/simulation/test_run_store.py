@@ -346,7 +346,7 @@ def test_sim_runs_dir_name_is_path() -> None:
 
 
 # ---------------------------------------------------------------------------
-# SDK save wiring: simulate(save=..., run_output=...) through _simulate_core
+# SDK save wiring: simulate(save=..., report=...) through _simulate_core
 # (plan Verification §3). Patches the choke point _simulate_via_evaluatorq so
 # no LLM/runner is needed — exercises the save gate, target_kind, and branch.
 # ---------------------------------------------------------------------------
@@ -391,6 +391,43 @@ async def _run_simulate(*, runs_dir: Path, monkeypatch: pytest.MonkeyPatch, **kw
 
 
 @pytest.mark.asyncio
+async def test_simulate_experiment_url_populated_from_upload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The URL that ``evaluatorq()`` smuggles out via ``_experiment_url_out`` ends
+    up on the saved ``SimulationRun``, and public ``simulate()`` still returns the
+    plain results list (not the run)."""
+    from unittest.mock import AsyncMock, patch
+
+    from evaluatorq.simulation.api import simulate
+
+    monkeypatch.setattr("evaluatorq.simulation.utils.run_store.get_sim_runs_dir", lambda: tmp_path)
+    results = [_make_result(scorer_scores={"goal_achieved": 1.0})]
+    known_url = "https://my.orq.ai/experiments/exp-123"
+
+    async def fake_simulate_via_evaluatorq(*, experiment_url_out: list[str] | None = None, **_kwargs: Any) -> Any:
+        if experiment_url_out is not None:
+            experiment_url_out.append(known_url)
+        return results
+
+    with patch(
+        "evaluatorq.simulation.api._simulate_via_evaluatorq",
+        AsyncMock(side_effect=fake_simulate_via_evaluatorq),
+    ):
+        out = await simulate(
+            target=lambda _messages: "hi",
+            datapoints=[_make_datapoint()],
+            sim_model="test",
+            upload_results=False,
+            save=True,
+        )
+
+    assert out == results  # public simulate() still returns the plain results list
+    saved = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert saved["experiment_url"] == known_url
+
+
+@pytest.mark.asyncio
 async def test_simulate_save_true_writes_one_run_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     await _run_simulate(runs_dir=tmp_path, monkeypatch=monkeypatch, save=True)
     assert len(list(tmp_path.glob("*.json"))) == 1
@@ -409,19 +446,96 @@ async def test_simulate_save_true_callable_target_kind_is_callback(
 
 
 @pytest.mark.asyncio
+async def test_simulate_save_true_openai_model_target_kind_is_openai_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression: _resolve_target flattened every AgentTarget (including
+    # OpenAIModelTarget, used by `eq sim run --openai-model`) to 'orq_agent',
+    # which mislabeled the saved run and fired a spurious fetch_agent_info() call.
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from evaluatorq.redteam.backends.openai import OpenAIModelTarget
+    from evaluatorq.simulation.api import simulate
+
+    monkeypatch.setattr("evaluatorq.simulation.utils.run_store.get_sim_runs_dir", lambda: tmp_path)
+    results = [_make_result(scorer_scores={"goal_achieved": 1.0})]
+    target = OpenAIModelTarget(model="gpt-4o-mini", client=MagicMock())
+
+    with (
+        patch("evaluatorq.simulation.api._simulate_via_evaluatorq", AsyncMock(return_value=results)),
+        patch("evaluatorq.simulation.api.fetch_agent_info", AsyncMock()) as mock_fetch,
+    ):
+        await simulate(
+            target=target,
+            datapoints=[_make_datapoint()],
+            sim_model="test",
+            upload_results=False,
+            save=True,
+        )
+        mock_fetch.assert_not_called()
+
+    data = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert data["target_kind"] == "openai_model"
+    assert data["target"] == "gpt-4o-mini"
+    assert data["target_model"] == "gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_simulate_save_true_vercel_target_kind_is_vercel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression: same flattening bug as the openai-model case, for
+    # `eq sim run --vercel-url`.
+    from unittest.mock import AsyncMock, patch
+
+    from evaluatorq.integrations.vercel_ai_sdk_integration import VercelAISdkTarget
+    from evaluatorq.simulation.api import simulate
+
+    monkeypatch.setattr("evaluatorq.simulation.utils.run_store.get_sim_runs_dir", lambda: tmp_path)
+    results = [_make_result(scorer_scores={"goal_achieved": 1.0})]
+    target = VercelAISdkTarget("https://x.example/api/chat")
+
+    with (
+        patch("evaluatorq.simulation.api._simulate_via_evaluatorq", AsyncMock(return_value=results)),
+        patch("evaluatorq.simulation.api.fetch_agent_info", AsyncMock()) as mock_fetch,
+    ):
+        await simulate(
+            target=target,
+            datapoints=[_make_datapoint()],
+            sim_model="test",
+            upload_results=False,
+            save=True,
+        )
+        mock_fetch.assert_not_called()
+
+    data = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert data["target_kind"] == "vercel"
+    assert data["target"] == "https://x.example/api/chat"
+    assert data["target_model"] is None
+
+
+@pytest.mark.asyncio
 async def test_simulate_save_false_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     await _run_simulate(runs_dir=tmp_path, monkeypatch=monkeypatch, save=False)
     assert list(tmp_path.glob("*.json")) == []
 
 
 @pytest.mark.asyncio
-async def test_simulate_run_output_writes_explicit_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_simulate_report_writes_explicit_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     auto_dir = tmp_path / "auto"
     auto_dir.mkdir()
     explicit = tmp_path / "nested" / "explicit.json"
-    await _run_simulate(runs_dir=auto_dir, monkeypatch=monkeypatch, save=True, run_output=str(explicit))
+    await _run_simulate(runs_dir=auto_dir, monkeypatch=monkeypatch, save=True, report=str(explicit))
     assert explicit.exists()
     assert list(auto_dir.glob("*.json")) == []  # explicit path bypasses auto-save dir
+
+
+@pytest.mark.asyncio
+async def test_simulate_run_output_alias_removed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    explicit = tmp_path / "legacy.json"
+    with pytest.raises(TypeError, match="run_output"):
+        await _run_simulate(runs_dir=tmp_path, monkeypatch=monkeypatch, save=True, run_output=str(explicit))
+    assert not explicit.exists()
 
 
 @pytest.mark.asyncio

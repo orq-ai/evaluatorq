@@ -758,14 +758,21 @@ class AgentResponse(BaseModel):
                     for part in _gf(item, 'content') or []
                     if _gf(part, 'type') == 'output_text' and _gf(part, 'text')
                 )
-            elif item_type == 'function_call':
+            # 'function_call' is the standard Responses shape; the Orq router
+            # instead types agent tool calls as 'orq:<tool_name>' (e.g.
+            # 'orq:query_knowledge_base'). Treat both as tool calls so the
+            # agent's tool activity is captured rather than silently dropped.
+            elif item_type == 'function_call' or (isinstance(item_type, str) and item_type.startswith('orq:')):
                 raw_args = _gf(item, 'arguments') or '{}'
                 call_id = _gf(item, 'call_id') or _gf(item, 'id') or ''
                 result = _gf(item, 'result')
+                if result is None:
+                    result = _gf(item, 'output')
+                name = _gf(item, 'name') or (item_type.split(':', 1)[1] if item_type.startswith('orq:') else '')
                 items.append(
                     ToolCallOutputItem(
                         type='function_call',
-                        name=str(_gf(item, 'name') or ''),
+                        name=str(name),
                         call_id=str(call_id),
                         arguments=raw_args if isinstance(raw_args, str) else json.dumps(raw_args),
                         result=str(result) if result is not None else None,

@@ -607,7 +607,7 @@ async def test_end_to_end_simulation_produces_full_span_tree(
         return f'agent reply #{len(target_calls)}'
 
     runner = SimulationRunner(
-        target_callback=target_cb,
+        target=target_cb,
         model='azure/gpt-4o-mini',
         max_turns=3,
         user_simulator=user_sim,
@@ -942,7 +942,7 @@ async def test_run_span_records_error_metadata_and_usage(
         return 'agent reply'
 
     runner = SimulationRunner(
-        target_callback=target_cb,
+        target=target_cb,
         model='test',
         max_turns=1,
         user_simulator=user_sim,
@@ -1133,7 +1133,7 @@ async def test_run_span_records_cancellation_metadata_and_usage(
         return 'agent reply'
 
     runner = SimulationRunner(
-        target_callback=target_cb,
+        target=target_cb,
         model='test',
         max_turns=1,
         user_simulator=user_sim,

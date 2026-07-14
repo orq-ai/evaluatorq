@@ -117,7 +117,7 @@ async def test_static_output_artifacts(
             parallelism=2,
             dataset=str(static_dataset_path),
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
-            output_dir=output_dir,
+            artifacts_dir=output_dir,
             save=SaveMode.DETAIL,
         )
 
@@ -149,7 +149,7 @@ async def test_dynamic_output_artifacts(
             generate_strategies=False,
             parallelism=2,
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
-            output_dir=output_dir,
+            artifacts_dir=output_dir,
             save=SaveMode.DETAIL,
         )
 

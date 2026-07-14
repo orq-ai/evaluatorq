@@ -10,6 +10,7 @@ Covers:
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from click.testing import Result as CliResult
@@ -18,6 +19,33 @@ from typer.testing import CliRunner
 from evaluatorq.redteam.cli import app
 
 runner = CliRunner()
+
+
+def test_ui_warns_that_dashboard_is_deprecated(tmp_path: Path) -> None:
+    report = tmp_path / 'report.json'
+    report.write_text('{}', encoding='utf-8')
+
+    with patch('evaluatorq.common.ui.launch.launch_streamlit'):
+        result = runner.invoke(app, ['ui', str(report)])
+
+    assert result.exit_code == 0, result.output
+    assert 'deprecated' in result.stderr.lower()
+    assert 'eq dashboard' in result.stderr
+
+
+def test_runs_suggests_dashboard_directory(tmp_path: Path) -> None:
+    report = tmp_path / 'run.json'
+    report.write_text(
+        '{"run_name":"demo","created_at":"2026-07-13T12:00:00",'
+        '"pipeline":"dynamic","tested_agents":["agent:test"],'
+        '"summary":{"total_attacks":1,"vulnerability_rate":0.0}}',
+        encoding='utf-8',
+    )
+
+    result = runner.invoke(app, ['runs', str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert f'open: eq dashboard {tmp_path}' in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -201,11 +229,6 @@ class TestVulnerabilityHelpText:
         """Help text includes the 'goal_hijacking' example ID."""
         output = self._get_help_output()
         assert "goal_hijacking" in output
-
-    def test_help_mentions_prompt_injection_example(self):
-        """Help text includes the 'prompt_injection' example ID."""
-        output = self._get_help_output()
-        assert "prompt_injection" in output
 
     def test_help_mentions_precedence_over_category(self):
         """Help text states that --vulnerability takes precedence over --category."""

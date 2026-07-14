@@ -8,7 +8,7 @@ openai/gpt-5.4-mini. Pass ``--sim-provider tailscale`` to switch those calls
 back to the Tailscale OpenAI-compatible endpoint.
 
 Usage:
-    cd packages/evaluatorq-py
+    # from the evaluatorq repository root
     export ORQ_API_KEY=...
     uv run python examples/agent_simulation/orq_agent_tailscale_openai.py \
         --agent refund-agent-fixed
@@ -362,7 +362,7 @@ async def main() -> None:
             saved.write_text(run.model_dump_json(indent=2), encoding="utf-8")
         else:
             saved = auto_save_run(run=run, run_name=run.run_name)
-        print(f'\nLoad in dashboard:  evaluatorq sim ui "{saved}"')
+        print('\nLoad in dashboard:  evaluatorq dashboard .evaluatorq/sim-runs')
 
 
 if __name__ == "__main__":

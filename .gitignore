@@ -65,3 +65,6 @@ docs/superpowers/
 
 # FastHTML runtime session key
 .sesskey
+
+# Generated sim/redteam datapoint scratch output at repo root
+/datapoints.jsonl

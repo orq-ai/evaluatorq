@@ -540,7 +540,7 @@ def test_record_openresponses_response_sets_gen_ai_attrs() -> None:
         output = [_OutputItem()]
         status = 'completed'
 
-        def model_dump(self, *, mode: str = 'json') -> dict[str, Any]:
+        def model_dump(self, *, mode: str = 'json', **_: Any) -> dict[str, Any]:
             return {'id': self.id, 'model': self.model, 'status': self.status}
 
     span = MagicMock()
@@ -573,7 +573,7 @@ def test_record_openresponses_response_respects_capture_gate(monkeypatch: pytest
         output = []
         status = 'completed'
 
-        def model_dump(self, *, mode: str = 'json') -> dict[str, Any]:
+        def model_dump(self, *, mode: str = 'json', **_: Any) -> dict[str, Any]:
             return {'id': self.id}
 
     span = MagicMock()

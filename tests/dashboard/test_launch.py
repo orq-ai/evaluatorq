@@ -104,14 +104,41 @@ def test_intercept_handler_uses_numeric_fallback_for_unknown_level() -> None:
 
 
 # ---------------------------------------------------------------------------
-# CLI help smoke-tests (eq dashboard, redteam ui, sim ui)
+# _install_log_bridge — default level
+# ---------------------------------------------------------------------------
+
+
+def test_log_bridge_defaults_to_info(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The bridge installs at INFO by default so third-party DEBUG stays silent."""
+    from evaluatorq.dashboard import launch
+
+    monkeypatch.delenv('EVALUATORQ_LOG_LEVEL', raising=False)
+    with patch('evaluatorq.dashboard.launch.logging.basicConfig') as mock_cfg:
+        launch._install_log_bridge()
+
+    assert mock_cfg.call_args.kwargs['level'] == logging.INFO
+
+
+def test_log_bridge_respects_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """EVALUATORQ_LOG_LEVEL=DEBUG re-enables debug capture."""
+    from evaluatorq.dashboard import launch
+
+    monkeypatch.setenv('EVALUATORQ_LOG_LEVEL', 'debug')
+    with patch('evaluatorq.dashboard.launch.logging.basicConfig') as mock_cfg:
+        launch._install_log_bridge()
+
+    assert mock_cfg.call_args.kwargs['level'] == 'DEBUG'
+
+
+# ---------------------------------------------------------------------------
+# CLI help smoke-tests (eq dashboard plus deprecated legacy UI aliases)
 # ---------------------------------------------------------------------------
 
 
 def test_eq_dashboard_help() -> None:
     """eq dashboard --help exits 0 and lists the FastHTML dashboard command."""
-    # The FastHTML dashboard lives under ``eq dashboard`` (preview); the ``ui``
-    # commands still serve the Streamlit dashboards while it is in development.
+    # The FastHTML dashboard is the primary multi-run UI; the ``ui`` commands
+    # remain callable as deprecated Streamlit compatibility aliases.
     from evaluatorq.cli import app
 
     runner = CliRunner()

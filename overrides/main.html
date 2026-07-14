@@ -9,7 +9,6 @@
       hand-designed static card (docs/assets/og-image.png, see
       scripts/gen_og_card.py) as an absolute URL off site_url. -#}
 {% block extrahead %}
-  <link rel="alternate" type="text/markdown" href="{{ 'llms.txt' | url }}" title="llms.txt (agent-readable docs)">
   {% set page_title = (page.title if page and page.title else config.site_name) | striptags %}
   {% set page_desc = (page.meta.description if page and page.meta.description else config.site_description) %}
   {% set og_image = config.site_url ~ "assets/og-image.png" %}
@@ -24,4 +23,7 @@
   <meta name="twitter:title" content="{{ page_title }}">
   <meta name="twitter:description" content="{{ page_desc }}">
   <meta name="twitter:image" content="{{ og_image }}">
+  <!-- Advertise the agent-readable docs (RES-1037): a machine-discoverable pointer
+       to /llms.txt in every page's <head>. -->
+  <link rel="alternate" type="text/markdown" href="{{ 'llms.txt' | url }}" title="llms.txt (agent-readable docs)">
 {% endblock %}

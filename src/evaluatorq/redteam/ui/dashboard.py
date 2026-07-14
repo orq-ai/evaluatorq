@@ -1,6 +1,7 @@
-"""Interactive Streamlit dashboard for exploring red team reports.
+"""Legacy Streamlit dashboard for exploring one red team report.
 
-Launch via CLI:  evaluatorq redteam ui /path/to/report.json
+The primary multi-run UI is ``evaluatorq dashboard .evaluatorq/runs``.
+Launch this legacy view via CLI:  evaluatorq redteam ui /path/to/report.json
 Or directly:     streamlit run dashboard.py
 """
 
@@ -513,8 +514,8 @@ def _render_dashboard() -> None:
             report = _parse_report(data)
         else:
             st.info(
-                '**Welcome to the Red Team Dashboard**\n\n'
-                'Upload a report JSON file in the sidebar, or launch via CLI:\n\n'
+                '**Legacy Red Team Dashboard**\n\n'
+                'Upload a report JSON file in the sidebar, or use the multi-run dashboard:\n\n'
                 '```\nevaluatorq redteam ui /path/to/report.json\n```'
             )
             st.stop()

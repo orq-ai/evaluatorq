@@ -1,7 +1,7 @@
 """Tests for target_model provenance in SimulationResult.metadata.
 
 Verifies:
-- A plain target_callback run does NOT set metadata["target_model"] to the runner's
+- A plain callable target run does NOT set metadata["target_model"] to the runner's
   configured model (or any runner-internal value).
 - An AgentTarget whose respond() returns AgentResponse(model="x") surfaces that model
   as metadata["target_model"] on the SimulationResult.
@@ -124,11 +124,11 @@ class _SilentTarget(AgentTarget):
 
 
 class TestTargetModelCallback:
-    """plain target_callback → target_model MUST NOT be set to the runner's model."""
+    """A plain callable target must not set target_model to the runner's model."""
 
     @pytest.mark.asyncio
     async def test_callback_target_does_not_set_target_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """metadata["target_model"] must be absent (or None) when using target_callback.
+        """metadata["target_model"] must be absent (or None) when using a callable target.
 
         The WRONG behaviour is metadata["target_model"] == runner._model (the
         user-simulator/judge model). A plain callback can call any provider and we
@@ -145,7 +145,7 @@ class TestTargetModelCallback:
         judge = _make_mock_judge(should_terminate=True)
 
         runner = SimulationRunner(
-            target_callback=my_callback,
+            target=my_callback,
             model=runner_model,
             max_turns=1,
             user_simulator=sim,
@@ -164,7 +164,7 @@ class TestTargetModelCallback:
 
     @pytest.mark.asyncio
     async def test_callback_target_target_model_is_absent_or_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """When using target_callback, metadata["target_model"] should be absent or None."""
+        """When using a callable target, metadata["target_model"] should be absent or None."""
         monkeypatch.setenv('ORQ_API_KEY', 'test-key')
 
         async def my_callback(messages: list[Message]) -> str:
@@ -174,7 +174,7 @@ class TestTargetModelCallback:
         judge = _make_mock_judge(should_terminate=True)
 
         runner = SimulationRunner(
-            target_callback=my_callback,
+            target=my_callback,
             model='some-runner-model',
             max_turns=1,
             user_simulator=sim,

@@ -4,7 +4,7 @@ Usage:
     cd packages/evaluatorq-py
     uv run python scripts/manual_tests/simulation_report_demo.py
 
-Uses a local target_callback (a customer-support agent driven by the ORQ
+Uses a local target callable (a customer-support agent driven by the ORQ
 router) so no deployed agent is required. Writes report.html / report.md
 next to this script.
 """
@@ -45,7 +45,7 @@ async def main() -> None:
         "explain next steps."
     )
 
-    async def target_callback(messages: list[Message]) -> str:
+    async def support_agent(messages: list[Message]) -> str:
         chat = [{"role": "system", "content": system}]
         for m in messages:
             chat.append({"role": m.role, "content": m.content or ""})
@@ -99,7 +99,7 @@ async def main() -> None:
     print("Running simulation (2 personas x 2 scenarios)...")
     results = await simulate(
         evaluation_name="report-demo",
-        target_callback=target_callback,
+        target=support_agent,
         personas=personas,
         scenarios=scenarios,
         max_turns=5,

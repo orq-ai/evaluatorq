@@ -120,7 +120,7 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
     tabs = _tabs(
         'simtab',
         [
-            ('Overview', _sim_overview(rid, by_kind, rows, run, narrative_html=render('summary'))),
+            ('Overview', _sim_overview(rid, by_kind, rows, run)),
             ('Breakdown', _sim_breakdown(by_kind, render, entity_context)),
             (
                 'Transcripts',
@@ -766,12 +766,10 @@ def _sim_overview(
     by_kind: dict[str, Any],
     rows: list[Any],
     run: SimulationRun,
-    *,
-    narrative_html: str = '',
 ) -> str:
     """Overview tab body: agent info card, exec summary, KPI band, and a
     two-column outcomes/quality grid. Persona and scenario input live in Config."""
-    from evaluatorq.dashboard.report_kit import exec_summary, panel
+    from evaluatorq.dashboard.report_kit import callout, exec_summary, panel
 
     agent_card_html = _sim_agent_section(rid, run)
     summary_section = by_kind.get('summary')
@@ -784,11 +782,20 @@ def _sim_overview(
     tokens_data = tokens_section.data if tokens_section is not None else {}
     metrics_data = metrics_section.data if metrics_section is not None else {}
 
-    summary_html = exec_summary(
-        summary_data=summary_data,
-        heatmap_data=heatmap_data,
-        confidence=summary_data.get('confidence'),
-    )
+    # One executive-summary card. When the run carries a saved narrative, show
+    # it (richer prose) in the shared callout shell; otherwise fall back to the
+    # computed stat sentence. Rendering both — as before — duplicated the card.
+    # summary_data['narrative'] is None on filtered subset views, so those keep
+    # the computed sentence describing the subset.
+    narrative = summary_data.get('narrative')
+    if narrative:
+        summary_html = callout(esc(str(narrative)), confidence=summary_data.get('confidence'))
+    else:
+        summary_html = exec_summary(
+            summary_data=summary_data,
+            heatmap_data=heatmap_data,
+            confidence=summary_data.get('confidence'),
+        )
     kpi_html = _sim_kpi_band(summary_data)
     donut_html = _sim_outcomes_donut(rows)
     # Second block: Average quality metrics (turn metrics); fall back to the
@@ -796,7 +803,7 @@ def _sim_overview(
     quality_tiles = _sim_avg_quality_tiles(metrics_data.get('avg_quality_metrics', {}))
     second_html = panel('Average quality metrics', quality_tiles) if quality_tiles else _sim_tokens_panel(tokens_data)
 
-    return f'{agent_card_html}{summary_html}{narrative_html}{kpi_html}<div class="sim-overview-grid-2">{donut_html}{second_html}</div>'
+    return f'{agent_card_html}{summary_html}{kpi_html}<div class="sim-overview-grid-2">{donut_html}{second_html}</div>'
 
 
 # Scalar identity fields whose absence means the run's snapshot is incomplete

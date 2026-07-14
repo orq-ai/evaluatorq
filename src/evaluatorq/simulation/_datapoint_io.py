@@ -9,12 +9,28 @@ need to normalise an evaluatorq ``DataPoint`` into a single simulation
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.simulation.types import Persona, Scenario, SimulationDatapoint
 
 if TYPE_CHECKING:
     from evaluatorq.types import DataPoint
+
+
+def _as_obj(value: Any) -> Any:
+    """Coerce a JSON-stringified object to a dict; pass anything else through.
+
+    orq dataset rows store persona/scenario as JSON strings (the datasets API
+    rejects nested objects in ``inputs``), so a dataset-backed run arrives here
+    with stringified fields. See ``dataset_export.to_orq_dataset_rows``.
+    """
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (ValueError, TypeError):
+            return value
+    return value
 
 
 def _validate_shape(value: Any, label: str, required_keys: list[str]) -> None:
@@ -52,10 +68,12 @@ def _extract_single_datapoint(data: DataPoint) -> SimulationDatapoint:
         _validate_shape(dps[0], 'datapoints[]', ['persona', 'scenario', 'first_message'])
         return SimulationDatapoint.model_validate(dps[0])
     if 'persona' in inputs and 'scenario' in inputs:
-        _validate_shape(inputs['persona'], 'persona', ['name'])
-        _validate_shape(inputs['scenario'], 'scenario', ['name', 'goal'])
-        persona = Persona.model_validate(inputs['persona'])
-        scenario = Scenario.model_validate(inputs['scenario'])
+        persona_raw = _as_obj(inputs['persona'])
+        scenario_raw = _as_obj(inputs['scenario'])
+        _validate_shape(persona_raw, 'persona', ['name'])
+        _validate_shape(scenario_raw, 'scenario', ['name', 'goal'])
+        persona = Persona.model_validate(persona_raw)
+        scenario = Scenario.model_validate(scenario_raw)
         return SimulationDatapoint(
             id=f'{persona.name}-{scenario.name}',
             persona=persona,

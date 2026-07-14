@@ -192,7 +192,7 @@ def test_rich_hooks_tolerates_runner_only_lifecycle(datapoint_factory):
 
     from evaluatorq.simulation.hooks import RichHooks
 
-    hooks = RichHooks(console=Console())
+    hooks = RichHooks(console=Console(), verbose=2)  # -vv: per-datapoint bars
     dp = datapoint_factory('dp1')
 
     asyncio.run(hooks.on_datapoint_start(dp))  # lazily starts Progress, creates task
@@ -207,7 +207,7 @@ def test_rich_hooks_full_lifecycle(datapoint_factory):
 
     from evaluatorq.simulation.hooks import RichHooks
 
-    hooks = RichHooks(console=Console())
+    hooks = RichHooks(console=Console(), verbose=2)  # -vv: per-datapoint bars
     asyncio.run(hooks.on_run_start(_meta()))  # creates overall bar
     dp = datapoint_factory('dp1')
     asyncio.run(hooks.on_datapoint_start(dp))
@@ -221,6 +221,29 @@ def test_rich_hooks_full_lifecycle(datapoint_factory):
     asyncio.run(hooks.on_run_complete([_result()]))  # double-call safe, no raise
 
 
+def test_rich_hooks_default_verbosity_no_per_datapoint_bars(datapoint_factory):
+    """Default (-v): no live per-datapoint bar; overall bar advances and each
+    datapoint prints a one-line completion notice."""
+    import io
+
+    from rich.console import Console
+
+    from evaluatorq.simulation.hooks import RichHooks
+
+    buf = io.StringIO()
+    hooks = RichHooks(console=Console(file=buf, width=80))
+    asyncio.run(hooks.on_run_start(_meta()))  # creates overall bar
+    dp = datapoint_factory('dp1')
+    asyncio.run(hooks.on_datapoint_start(dp))
+    assert hooks._tasks == {}  # no per-datapoint task
+    res = _result()
+    res.metadata['datapoint_id'] = 'dp1'
+    asyncio.run(hooks.on_datapoint_complete(res))
+    assert hooks._completed == 1  # overall bar still advances
+    asyncio.run(hooks.on_run_complete([res]))  # stop live region, flush
+    assert 'dp1' in buf.getvalue()  # completion notice printed
+
+
 def test_rich_hooks_error_row_stays_red_after_complete(datapoint_factory):
     """on_datapoint_complete must not overwrite on_datapoint_error's red label
     with green for error/timeout results."""
@@ -228,7 +251,7 @@ def test_rich_hooks_error_row_stays_red_after_complete(datapoint_factory):
 
     from evaluatorq.simulation.hooks import RichHooks
 
-    hooks = RichHooks(console=Console())
+    hooks = RichHooks(console=Console(), verbose=2)  # -vv: per-datapoint bars
     asyncio.run(hooks.on_run_start(_meta()))
     dp = datapoint_factory('dp1')
     asyncio.run(hooks.on_datapoint_start(dp))
@@ -265,7 +288,7 @@ async def test_on_turn_complete_guard_does_not_corrupt_result(datapoint_factory)
             raise RuntimeError('hook boom')
 
     runner = SimulationRunner(
-        target_callback=_ok_target,
+        target=_ok_target,
         model='gpt-4o-mini',
         max_turns=1,
         user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
@@ -286,7 +309,7 @@ async def test_on_datapoint_error_fires_for_raising_target(datapoint_factory):
 
     hooks = RecordingHooks()
     runner = SimulationRunner(
-        target_callback=_boom_target,
+        target=_boom_target,
         model='gpt-4o-mini',
         max_turns=2,
         user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
@@ -305,7 +328,7 @@ async def test_on_turn_complete_fires_per_turn(datapoint_factory):
     """on_turn_complete must fire once per turn across a multi-turn run."""
     hooks = RecordingHooks()
     runner = SimulationRunner(
-        target_callback=_ok_target,
+        target=_ok_target,
         model='gpt-4o-mini',
         max_turns=3,
         user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
@@ -327,7 +350,7 @@ async def test_on_datapoint_error_fires_on_timeout(datapoint_factory):
 
     hooks = RecordingHooks()
     runner = SimulationRunner(
-        target_callback=_slow_target,
+        target=_slow_target,
         model='gpt-4o-mini',
         max_turns=2,
         user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
@@ -350,7 +373,7 @@ async def test_on_datapoint_error_fires_on_timeout(datapoint_factory):
 async def test_concurrency_attribution(datapoint_factory):
     hooks = RecordingHooks()
     runner = SimulationRunner(
-        target_callback=_ok_target,
+        target=_ok_target,
         model='gpt-4o-mini',
         max_turns=2,
         user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
@@ -788,7 +811,7 @@ async def test_on_datapoint_start_respects_concurrency(datapoint_factory):
         return 'fine'
 
     runner = SimulationRunner(
-        target_callback=slow_target,
+        target=slow_target,
         model='gpt-4o-mini',
         max_turns=1,
         user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
@@ -970,7 +993,7 @@ async def test_async_on_turn_complete_guard_does_not_corrupt_result(datapoint_fa
             raise RuntimeError('async hook boom')
 
     runner = SimulationRunner(
-        target_callback=_ok_target,
+        target=_ok_target,
         model='gpt-4o-mini',
         max_turns=1,
         user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
@@ -1063,6 +1086,42 @@ def test_rich_stage_end_simulate_prints_nothing():
     assert buf.getvalue() == ''
 
 
+def test_rich_generate_stage_spinner_starts_and_stops():
+    """The GENERATE stage spins a transient status that must be stopped on end.
+
+    Guards the single-live-region invariant: a leaked Status would tear the
+    simulate Progress that follows in the `run` path.
+    """
+    from rich.console import Console
+
+    h = RichHooks(console=Console(file=io.StringIO(), width=80, force_terminal=False))
+    asyncio.run(h.on_stage_start(SimStage.GENERATE, {}))
+    assert h._gen_status is not None
+    asyncio.run(h.on_stage_end(SimStage.GENERATE, {}))
+    assert h._gen_status is None
+
+
+def test_rich_generate_inputs_ready_prints_checkpoint():
+    """on_generate_inputs_ready prints the phase-1 checkpoint so the two
+    generation phases read as distinct steps (not one atomic request)."""
+    from rich.console import Console
+
+    # force_terminal=False: the Status live region emits no cursor-control codes,
+    # so the printed checkpoint line stays clean and greppable.
+    buf = io.StringIO()
+    h = RichHooks(console=Console(file=buf, width=90, force_terminal=False))
+    asyncio.run(h.on_stage_start(SimStage.GENERATE, {}))
+    asyncio.run(h.on_generate_inputs_ready(2, 3))
+    asyncio.run(h.on_stage_end(SimStage.GENERATE, {}))
+    out = buf.getvalue()
+    assert '2 personas' in out and '3 scenarios' in out
+
+
+def test_default_hooks_generate_inputs_ready_is_silent(caplog):
+    """DefaultHooks.on_generate_inputs_ready logs at INFO, never raises."""
+    asyncio.run(DefaultHooks().on_generate_inputs_ready(3, 3))  # must not raise
+
+
 def test_default_hooks_stage_methods_are_silent():
     """DefaultHooks.on_stage_start and on_stage_end run without raising."""
     hooks = DefaultHooks()
@@ -1124,7 +1183,7 @@ def test_rich_run_complete_renders_once(sim_result_factory):
     asyncio.run(h.on_run_complete(results))   # second call must be a no-op
     out = buf.getvalue()
     assert out.count('SIMULATION SUMMARY') == 1
-    assert 'ui --latest' in out
+    assert 'eq dashboard .evaluatorq/sim-runs' in out
 
 
 def test_rich_deferred_summary_renders_once_with_narrative(sim_result_factory):
@@ -1205,3 +1264,54 @@ def test_default_hooks_on_run_complete_warns_on_errors(caplog, sim_result_factor
         asyncio.run(hooks.on_run_complete(results))
     assert any(r.levelname == 'WARNING' for r in caplog.records)
     assert 'errored' in caplog.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_generate_fires_generate_stage_hooks(monkeypatch):
+    """Standalone generate() must bracket generation with GENERATE stage hooks.
+
+    Level-1 signposting: the CLI `generate` command was silent because
+    `generate()` took no hooks param. This asserts the wiring — hooks fire
+    around the (patched-out) generation calls, with no network.
+    """
+    import contextlib
+
+    from evaluatorq.simulation import api
+
+    events: list[tuple[str, str]] = []
+
+    class StageRecorder(DefaultHooks):
+        async def on_stage_start(self, stage, meta):
+            events.append(('start', str(stage)))
+
+        async def on_stage_end(self, stage, meta):
+            events.append(('end', str(stage)))
+
+    # Stub the two generation internals so no LLM is called.
+    async def _fake_personas_scenarios(**_kwargs):
+        return [], []
+
+    async def _fake_resolve(**_kwargs):
+        return ['dp']  # sentinel — generate() returns this list verbatim
+
+    @contextlib.asynccontextmanager
+    async def _fake_span(*_args, **_kwargs):
+        yield None
+
+    async def _noop():
+        return None
+
+    monkeypatch.setattr(api, '_generate_personas_scenarios', _fake_personas_scenarios)
+    monkeypatch.setattr(api, '_resolve_or_generate_datapoints', _fake_resolve)
+    monkeypatch.setattr(
+        'evaluatorq.openresponses.client.build_simulation_client',
+        lambda _client: (object(), False),
+    )
+    monkeypatch.setattr('evaluatorq.simulation.tracing.with_simulation_span', _fake_span)
+    monkeypatch.setattr('evaluatorq.tracing.setup.init_tracing_if_needed', _noop)
+    monkeypatch.setattr('evaluatorq.tracing.setup.flush_tracing', _noop)
+
+    result = await api.generate(agent_description='x', hooks=StageRecorder())
+
+    assert result == ['dp']
+    assert events == [('start', str(SimStage.GENERATE)), ('end', str(SimStage.GENERATE))]

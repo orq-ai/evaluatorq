@@ -66,6 +66,10 @@ _FULL_SCENARIO = {
 
 
 class TestWrapSimulationAgent:
+    def test_target_callback_is_rejected(self):
+        with pytest.raises(TypeError, match="target_callback"):
+            wrap_simulation_agent(target_callback=lambda _messages: "unused")
+
     @pytest.mark.asyncio
     async def test_returns_output_for_single_result(self, monkeypatch):
         async def fake_run(**_kwargs):
@@ -78,7 +82,7 @@ class TestWrapSimulationAgent:
         )
 
         job = wrap_simulation_agent(
-            target_callback=lambda _messages: "unused",
+            target=lambda _messages: "unused",
         )
         result = await job(
             DataPoint(
@@ -105,7 +109,7 @@ class TestWrapSimulationAgent:
         )
 
         job = wrap_simulation_agent(
-            target_callback=lambda _messages: "unused",
+            target=lambda _messages: "unused",
         )
         result = await job(
             DataPoint(
@@ -122,7 +126,7 @@ class TestWrapSimulationAgent:
     @pytest.mark.asyncio
     async def test_rejects_multiple_datapoints(self):
         job = wrap_simulation_agent(
-            target_callback=lambda _messages: "unused",
+            target=lambda _messages: "unused",
         )
         dp = {
             "persona": _FULL_PERSONA,
@@ -138,7 +142,7 @@ class TestWrapSimulationAgent:
     @pytest.mark.asyncio
     async def test_rejects_multiple_personas_or_scenarios(self):
         job = wrap_simulation_agent(
-            target_callback=lambda _messages: "unused",
+            target=lambda _messages: "unused",
         )
         with pytest.raises(ValueError, match="exactly one persona-scenario pair"):
             await job(
@@ -154,7 +158,7 @@ class TestWrapSimulationAgent:
     @pytest.mark.asyncio
     async def test_rejects_multiple_scenarios(self):
         job = wrap_simulation_agent(
-            target_callback=lambda _messages: "unused",
+            target=lambda _messages: "unused",
         )
         with pytest.raises(ValueError, match="exactly one persona-scenario pair"):
             await job(
@@ -175,6 +179,6 @@ async def test_wrap_simulation_agent_rejects_removed_evaluators_kwarg():
     silently losing their scoring."""
     with pytest.raises(TypeError, match="evaluators"):
         wrap_simulation_agent(
-            target_callback=lambda _msgs: "ok",
+            target=lambda _msgs: "ok",
             evaluators=["goal_achieved"],  # type: ignore[call-arg]
         )

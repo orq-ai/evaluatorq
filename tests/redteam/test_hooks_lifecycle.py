@@ -449,7 +449,7 @@ class TestStaticPipelineHooks:
             new_callable=AsyncMock,
             return_value=mock_report,
         ):
-            result = await red_team('agent:gpt-4o-mini', mode='static', hooks=spy, output_dir=None)
+            result = await red_team('agent:gpt-4o-mini', mode='static', hooks=spy)
 
         assert result is mock_report
         assert spy.received_complete_report is mock_report
@@ -457,7 +457,7 @@ class TestStaticPipelineHooks:
 
     @pytest.mark.asyncio
     async def test_on_complete_static_no_output_dir(self) -> None:
-        """on_complete is called with the final report and output_dir=None when not set."""
+        """on_complete is called with the final report and output_dir=None when artifacts_dir is not set."""
         from evaluatorq.redteam.runner import red_team
 
         mock_report = _make_report(pipeline=Pipeline.STATIC)
@@ -472,7 +472,6 @@ class TestStaticPipelineHooks:
                 'agent:gpt-4o-mini',
                 mode='static',
                 hooks=spy,
-                output_dir=None,
             )
 
         assert result is mock_report
@@ -496,7 +495,7 @@ class TestStaticPipelineHooks:
                 'agent:gpt-4o-mini',
                 mode='static',
                 hooks=spy,
-                output_dir=str(tmp_path),
+                artifacts_dir=str(tmp_path),
             )
 
         assert result is mock_report
@@ -687,7 +686,6 @@ class TestDynamicInternalStageOrdering:
                 description='test',
                 dataset=None,
                 hooks=spy,
-                output_dir=None,
                 target_config=None,
             )
 
@@ -805,7 +803,6 @@ class TestDynamicInternalStageOrdering:
                 description='test',
                 dataset=None,
                 hooks=spy,
-                output_dir=None,
                 target_config=None,
             )
 
@@ -917,7 +914,6 @@ class TestDynamicConfirmPayload:
                 description='test',
                 dataset=None,
                 hooks=spy,
-                output_dir=None,
                 target_config=None,
             )
 
@@ -1016,7 +1012,6 @@ class TestDynamicConfirmPayload:
                     description='test',
                     dataset=None,
                     hooks=spy,
-                    output_dir=None,
                     target_config=None,
                 )
 
@@ -1115,7 +1110,6 @@ class TestDynamicConfirmPayload:
                 description='test',
                 dataset=None,
                 hooks=spy,
-                output_dir=None,
                 target_config=None,
             )
 

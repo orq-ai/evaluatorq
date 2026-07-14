@@ -9,13 +9,13 @@ Three execution verbs:
 under a single pipeline span (via ``generate_and_simulate``). It is not a literal
 ``generate`` + ``simulate`` pipe — it does not require an intermediate file. To
 capture the exact generated inputs for reproducible re-runs, pass
-``--save-datapoints PATH`` (then re-feed that file to ``sim simulate --datapoints``).
+``--datapoints PATH`` (then re-feed that file to ``sim simulate --input``).
 
 Usage:
-    evaluatorq sim generate --agent-description "..." --output dp.jsonl
-    evaluatorq sim simulate --datapoints dp.jsonl --target my-agent
+    evaluatorq sim generate --agent-description "..." --datapoints dp.jsonl
+    evaluatorq sim simulate --input dp.jsonl --target my-agent
     evaluatorq sim run --agent-description "..." --openai-model gpt-4o-mini
-    evaluatorq sim run --agent-description "..." --target my-agent --save-datapoints dp.jsonl
+    evaluatorq sim run --agent-description "..." --target my-agent --datapoints dp.jsonl
     evaluatorq sim export --input results.jsonl --output payload.json
     evaluatorq sim validate-dataset dp.jsonl
     evaluatorq sim runs
@@ -27,26 +27,36 @@ import asyncio
 import json
 import logging
 import os
+import shlex
 import sys
 from pathlib import Path
-from typing import Annotated, Any, NoReturn
+from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 
 import typer
 from loguru import logger
 
+from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
 from evaluatorq.common.llm_client import resolve_llm_client
-from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MODEL
+from evaluatorq.simulation.types import DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run as _auto_save_run
-from evaluatorq.simulation.utils.run_store import build_simulation_run as _build_simulation_run
-from evaluatorq.simulation.utils.run_store import fetch_agent_info as _fetch_agent_info
 from evaluatorq.simulation.utils.run_store import get_sim_runs_dir as _get_sim_runs_dir
 from evaluatorq.simulation.utils.run_store import sanitise_run_name as _sanitise_run_name
 from evaluatorq.simulation.utils.run_store import write_report as _write_report
 
+if TYPE_CHECKING:
+    from evaluatorq.simulation.types import SimulationRun
+
 app = typer.Typer(
     name='sim',
-    help='Agent simulation commands.',
+    help=(
+        'Agent simulation pipeline.\n\n'
+        '  generate  ->  simulate  ->  dashboard   freeze inputs, run them, explore\n'
+        '  run                                  generate + simulate in one shot\n'
+        '  upload-dataset / --dataset-id       round-trip through an Orq dataset\n\n'
+        'Use `eq sim COMMAND --help` for command-specific options.'
+    ),
     no_args_is_help=True,
+    rich_markup_mode='rich',
 )
 
 
@@ -55,7 +65,7 @@ app = typer.Typer(
 # ---------------------------------------------------------------------------
 
 
-def _configure_logging(verbosity: int) -> None:
+def _configure_logging(verbosity: int, console: Any = None) -> None:
     if verbosity < 0:
         level = logging.ERROR
     elif verbosity == 0:
@@ -65,17 +75,28 @@ def _configure_logging(verbosity: int) -> None:
     else:
         level = logging.DEBUG
 
+    # When a Rich console is provided (a live Progress region is active), route
+    # both log streams through it so writes are serialised with the live region
+    # instead of racing it on raw stderr — that race is what caused the flicker.
     logger = logging.getLogger('evaluatorq')
     logger.setLevel(level)
     if not logger.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
+        if console is not None:
+            from rich.logging import RichHandler
+
+            handler: logging.Handler = RichHandler(console=console, show_path=False, rich_tracebacks=True)
+        else:
+            handler = logging.StreamHandler()
+            handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
         logger.addHandler(handler)
     try:
         from loguru import logger as loguru_logger
 
         loguru_logger.remove()
-        loguru_logger.add(sys.stderr, level=level)
+        # markup=False: loguru lines start with a literal '[simulation]' tag which
+        # Rich would otherwise parse as a (non-existent) style and silently strip.
+        sink = (lambda m: console.print(m, end='', markup=False)) if console is not None else sys.stderr
+        loguru_logger.add(sink, level=level)
     except ImportError:
         pass
 
@@ -141,16 +162,16 @@ def _require_orq_api_key(flag: str) -> None:
 
 
 def _parse_target_spec(target: str) -> tuple[Any, str]:
-    from evaluatorq.redteam.runner import _parse_target
+    from evaluatorq.redteam.contracts import parse_target
 
-    return _parse_target(target)
+    return parse_target(target)
 
 
 def _make_sim_agent_backend() -> Any:
+    from evaluatorq.redteam.backends.registry import make_agent_backend
     from evaluatorq.redteam.contracts import LLMConfig, TargetConfig
-    from evaluatorq.redteam.runner import _make_agent_backend
 
-    return _make_agent_backend(
+    return make_agent_backend(
         target_config=TargetConfig(system_prompt=None),
         pipeline_config=LLMConfig(),
     )
@@ -217,48 +238,207 @@ def _resolve_evaluators(evaluators: list[str] | None) -> list[str] | None:
     return list(evaluators)
 
 
-# ---------------------------------------------------------------------------
-# Target / target-kind inference
-# ---------------------------------------------------------------------------
+def _provider_label() -> str:
+    """The provider branch the environment resolves to for generation LLM calls."""
+    if os.environ.get('ORQ_API_KEY'):
+        return 'Orq router'
+    if os.environ.get('OPENAI_API_KEY'):
+        return 'OpenAI-compatible'
+    return 'unresolved provider'
 
 
-def _infer_target_kind(
+def _echo_using(model: str) -> None:
+    """Show the provider branch selected by the environment for generations."""
+    typer.echo(f'Using for generations: {_provider_label()} · {model}', err=True)
+
+
+def _echo_generate_plan(
     *,
-    target: str | None,
-    vercel_url: str | None,
-    openai_model: str | None,
-) -> str:
-    if target is not None:
-        from evaluatorq.redteam.contracts import TargetKind
+    console: Any,
+    source: str,
+    model: str,
+    num_personas: int,
+    num_scenarios: int,
+    output: Path,
+) -> None:
+    """Render the informational 'Generate Plan' box (beats: input + what will happen).
 
-        kind, _ = _parse_target_spec(target)
-        if kind == TargetKind.AGENT:
-            return 'orq_agent'
-        if kind == TargetKind.DEPLOYMENT:
-            return 'orq_deployment'
-        return str(kind)
-    if vercel_url is not None:
-        return 'vercel'
-    return 'openai_model'
+    Mirrors the simulate Run Plan box for a consistent pipeline look, but never
+    prompts — generation is cheap and approval is file-mediated (edit the JSONL),
+    so a confirm gate here would be friction, not clarity.
+    """
+    from evaluatorq.common.reports import confirm_run_plan
+
+    total = num_personas * num_scenarios
+    rows = [
+        ('Source', source),
+        ('Provider', f'{_provider_label()} · {model}'),
+        ('Building', f'{num_personas} personas x {num_scenarios} scenarios = {total} datapoints'),
+        ('Output', str(output)),
+    ]
+    asyncio.run(confirm_run_plan(console, title='Generate Plan', rows=rows, prompt='', skip_confirm=True))
 
 
-def _target_identity(
-    *,
-    target: str | None,
-    vercel_url: str | None,
-    openai_model: str | None,
-) -> tuple[str | None, str | None]:
-    """(target_name, target_model) persisted on the run so the dashboard can name
-    the target. Model is only client-known for OpenAI-model targets; agents /
-    deployments resolve it server-side, so it stays None there."""
-    if target is not None:
-        _, value = _parse_target_spec(target)
-        return (str(value) if value else None, None)
-    if vercel_url is not None:
-        return (vercel_url, None)
-    if openai_model is not None:
-        return (openai_model, openai_model)
-    return (None, None)
+def _shell_path(path: Path) -> str:
+    """Render a path safely for a copyable shell command."""
+    return shlex.quote(str(path))
+
+
+def _dashboard_command(directory: Path) -> str:
+    """Build the canonical multi-run dashboard command for *directory*."""
+    return f'eq dashboard {_shell_path(directory)}'
+
+
+_TARGET_PLACEHOLDER = 'agent:<your-agent-key>'
+_TARGET_HINT = f'Replace {_TARGET_PLACEHOLDER} with your agent key, e.g. agent:support-bot.'
+
+
+def _simulate_command(datapoints_path: Path, target: str | None) -> str:
+    """Build the follow-on ``sim simulate`` command for a generated datapoints file.
+
+    When *target* is unknown, use a self-documenting placeholder (paired with
+    ``_TARGET_HINT`` at the call site) rather than a bare ``<target>``.
+    """
+    target_part = target or _TARGET_PLACEHOLDER
+    return f'eq sim simulate -i {_shell_path(datapoints_path)} --target {target_part}'
+
+
+def _render_rich(renderable: Any, *, soft_wrap: bool = False) -> str:
+    """Render a Rich renderable to text at the current terminal width.
+
+    Written to a buffer (not Rich's own handle) so Typer/Click redirection and
+    test capture both see it. ``rich`` is a core runtime dep, so no fallback.
+    """
+    import io
+    import shutil
+
+    from rich.console import Console
+
+    width = shutil.get_terminal_size(fallback=(100, 24)).columns
+    buffer = io.StringIO()
+    # highlight=False: only our explicit markup styles apply, not Rich's
+    # repr auto-highlighter (which mis-colours things like "datapoint(s)").
+    Console(file=buffer, width=width, soft_wrap=soft_wrap, highlight=False).print(renderable)
+    return buffer.getvalue()
+
+
+def _recho(renderable: Any, *, soft_wrap: bool = False, err: bool = True) -> None:
+    """Echo a Rich renderable onto the Typer output stream (stderr by default)."""
+    typer.echo(_render_rich(renderable, soft_wrap=soft_wrap), nl=False, err=err)
+
+
+def _echo_next(command: str, intent: str, *, hint: str | None = None) -> None:
+    """Print the signposted next-step call-to-action between commands.
+
+    Two-line form: a bold intent line ("▸ Next — run the simulation:"), then the
+    command on its own indented line so it reads as a clear, copyable action.
+    *hint* adds a dim follow-up line — used to explain a placeholder to fill in.
+    """
+    from rich.markup import escape
+
+    body = f'\n[bold cyan]▸ Next[/] — {escape(intent)}:\n\n    [cyan]{escape(command)}[/]'
+    if hint:
+        body += f'\n  [dim]{escape(hint)}[/]'
+    _recho(body, soft_wrap=True)
+
+
+def _echo_saved(label: str, path: Path) -> None:
+    """Print a styled ``✓ <label> saved → <path>`` line (green tick, bold label)."""
+    from rich.markup import escape
+
+    _recho(f'[green]✓[/] [bold]{label}[/] saved [dim]→[/] {escape(str(path))}', soft_wrap=True)
+
+
+def _echo_generate_preview(datapoints: list[Any]) -> None:
+    """Print a compact persona/scenario preview of freshly generated datapoints.
+
+    Best-effort and cosmetic: silently skips anything that doesn't expose the
+    expected persona/scenario shape, so it can never break ``generate``.
+    """
+    from rich.table import Table
+
+    personas: dict[str, Any] = {}
+    scenarios: dict[str, Any] = {}
+    for dp in datapoints:
+        persona = getattr(dp, 'persona', None)
+        scenario = getattr(dp, 'scenario', None)
+        if persona is not None:
+            personas.setdefault(persona.name, persona)
+        if scenario is not None:
+            scenarios.setdefault(scenario.name, scenario)
+
+    if personas:
+        ptable = Table(
+            title='Personas', title_style='bold', title_justify='left', header_style='dim', border_style='cyan'
+        )
+        ptable.add_column('Name', style='cyan', no_wrap=True)
+        ptable.add_column('Patience', justify='right')
+        ptable.add_column('Assertive', justify='right')
+        ptable.add_column('Style')
+        for p in personas.values():
+            ptable.add_row(p.name, f'{p.patience:g}', f'{p.assertiveness:g}', str(p.communication_style))
+        _recho(ptable)
+
+    if scenarios:
+        stable = Table(
+            title='Scenarios', title_style='bold', title_justify='left', header_style='dim', border_style='cyan'
+        )
+        stable.add_column('Name', style='green')
+        stable.add_column('Goal', style='dim')
+        for s in scenarios.values():
+            stable.add_row(s.name, str(getattr(s, 'goal', '') or ''))
+        _recho(stable)
+
+
+def _examples(*lines: str) -> str:
+    """Build a command ``--help`` epilog from example lines.
+
+    Under ``rich_markup_mode='rich'`` the epilog is flowed like HTML — single
+    newlines collapse to spaces — so each visual line must be its own paragraph
+    (blank line between) to render one-per-row. Lines starting with ``#`` are
+    dimmed as comments; command lines render verbatim.
+    """
+    from rich.markup import escape
+
+    def render(line: str) -> str:
+        return f'[dim]{escape(line)}[/]' if line.lstrip().startswith('#') else escape(line)
+
+    return '\n\n'.join(['[bold]Examples[/]', *(render(line) for line in lines)])
+
+
+_SIMULATE_EPILOG = _examples(
+    '# run a frozen datapoints file against an orq agent',
+    'eq sim simulate -i dp.jsonl --target agent:my-agent',
+    '# against any OpenAI-compatible model',
+    'eq sim simulate -i dp.jsonl --openai-model gpt-4o-mini',
+    '# from an orq dataset instead of a local file',
+    'eq sim simulate --dataset-id ds_abc --target agent:my-agent',
+)
+
+_RUN_EPILOG = _examples(
+    '# generate + simulate in one shot',
+    'eq sim run --target agent:my-agent',
+    '# --datapoints saves the generated inputs; --results saves the simulation output',
+    'eq sim run --target agent:my-agent --datapoints dp.jsonl --results out.jsonl',
+    '# a non-orq target',
+    'eq sim run --agent-description "refund bot" --openai-model gpt-4o-mini',
+)
+
+_GENERATE_EPILOG = _examples(
+    "# auto-generate personas x scenarios from an agent's description",
+    'eq sim generate --target agent:my-agent --datapoints dp.jsonl',
+    '# steer with archetype seeds (overrides --num-personas)',
+    'eq sim generate --agent-description "refund bot" --persona-seed "angry retiree" --datapoints dp.jsonl',
+    '# then run the frozen set',
+    'eq sim simulate -i dp.jsonl --target agent:my-agent',
+)
+
+_UPLOAD_DATASET_EPILOG = _examples(
+    '# push a local datapoints file to a new orq dataset',
+    'eq sim upload-dataset -i dp.jsonl -n "my sim set"',
+    '# append to an existing dataset',
+    'eq sim upload-dataset -i more.jsonl --dataset-id ds_abc',
+)
 
 
 # ---------------------------------------------------------------------------
@@ -266,12 +446,23 @@ def _target_identity(
 # ---------------------------------------------------------------------------
 
 
-@app.command(no_args_is_help=True)
+@app.command(no_args_is_help=True, epilog=_SIMULATE_EPILOG)
 def simulate(
     datapoints: Annotated[
-        Path,
-        typer.Option('--datapoints', '-d', help='Path to datapoints JSONL file.'),
-    ],
+        Path | None,
+        typer.Option(
+            '--input',
+            '-i',
+            help='Path to datapoints JSONL file (or use --dataset-id).',
+        ),
+    ] = None,
+    dataset_id: Annotated[
+        str | None,
+        typer.Option(
+            '--dataset-id',
+            help='Fetch datapoints from this Orq dataset instead of a local file. Requires ORQ_API_KEY.',
+        ),
+    ] = None,
     target: Annotated[
         str | None,
         typer.Option(
@@ -297,19 +488,20 @@ def simulate(
             ),
         ),
     ] = None,
-    output: Annotated[
+    results_path: Annotated[
         Path | None,
-        typer.Option('--output', '-o', help='Path to write results JSONL.'),
+        typer.Option('--results', '-r', help='Path to write results JSONL.'),
     ] = None,
-    report_output: Annotated[
+    report_path: Annotated[
         Path | None,
         typer.Option(
-            '--report-output',
+            '--report',
             help=(
-                'Path to write the full SimulationRun report JSON (results + '
-                'scorer averages + metadata) to an explicit location, instead of '
-                'only the auto-named file under .evaluatorq/sim-runs/. The '
-                'auto-save still happens unless --no-save.'
+                'Write the full SimulationRun report JSON (results + scorer '
+                'averages + metadata). Pass a file to write it there, or a '
+                'directory for an auto-named sim-report-*.json inside it — the '
+                'same target rule as --report-md / --report-html. The auto-save '
+                'under .evaluatorq/sim-runs/ still happens unless --no-save.'
             ),
         ),
     ] = None,
@@ -363,13 +555,25 @@ def simulate(
         bool,
         typer.Option('--yes', '-y', help='Skip interactive confirmation prompt.'),
     ] = False,
-    export_md: Annotated[
+    report_md: Annotated[
         Path | None,
-        typer.Option('--export-md', help='Directory for an auto-named Markdown report.'),
+        typer.Option(
+            '--report-md',
+            help=(
+                'Write a Markdown report. Pass a file to write it there, or a '
+                'directory for an auto-named sim-report-*.md inside it.'
+            ),
+        ),
     ] = None,
-    export_html: Annotated[
+    report_html: Annotated[
         Path | None,
-        typer.Option('--export-html', help='Directory for an auto-named HTML report.'),
+        typer.Option(
+            '--report-html',
+            help=(
+                'Write an HTML report. Pass a file to write it there, or a '
+                'directory for an auto-named sim-report-*.html inside it.'
+            ),
+        ),
     ] = None,
     executive_summary: Annotated[  # noqa: FBT002
         bool,
@@ -394,22 +598,30 @@ def simulate(
     """
     if quiet:
         verbose = -1
-    _configure_logging(verbose)
 
     hooks: Any = None
+    log_console: Any = None
     if not quiet:
         from rich.console import Console
 
         from evaluatorq.simulation.hooks import RichHooks
 
+        log_console = Console(stderr=True)
         hooks = RichHooks(
-            console=Console(stderr=True),
+            console=log_console,
             skip_confirm=yes or not sys.stdin.isatty(),
             defer_summary=executive_summary,
+            verbose=verbose,
         )
+    _configure_logging(verbose, console=log_console)
+    _echo_using(sim_model)
 
-    if not datapoints.exists():
+    if (datapoints is None) == (dataset_id is None):
+        raise typer.BadParameter('Provide exactly one of --input or --dataset-id.')
+    if datapoints is not None and not datapoints.exists():
         raise typer.BadParameter(f'Datapoints file not found: {datapoints}')
+    if dataset_id is not None:
+        _require_orq_api_key('--dataset-id')
 
     try:
         resolved_target = _resolve_target(
@@ -418,14 +630,10 @@ def simulate(
             openai_model=openai_model,
         )
         evaluator_names = _resolve_evaluators(evaluator)
-        target_kind = _infer_target_kind(
-            target=target,
-            vercel_url=vercel_url,
-            openai_model=openai_model,
-        )
-        results = asyncio.run(
+        run = asyncio.run(
             _simulate_impl(
                 datapoints_path=datapoints,
+                dataset_id=dataset_id,
                 target=resolved_target,
                 sim_model=sim_model,
                 max_turns=max_turns,
@@ -449,46 +657,37 @@ def simulate(
         # traceback. Exit 1 keeps the CI-gate behaviour (still non-zero).
         _handle_cli_error(exc)
 
-    if output:
-        _write_results(results, output)
+    results = run.results
 
-    tgt_name, tgt_model = _target_identity(target=target, vercel_url=vercel_url, openai_model=openai_model)
-    agent_info = None
-    if target_kind == 'orq_agent' and tgt_name:
-        agent_info = asyncio.run(_fetch_agent_info(tgt_name))
-    run = _build_simulation_run(
-        run_name=name,
-        mode='simulate',
-        target_kind=target_kind,
-        target=tgt_name,
-        target_model=tgt_model,
-        max_turns=max_turns,
-        agent_info=agent_info,
-        evaluator_names=evaluator_names or DEFAULT_EVALUATOR_NAMES,
-        results=results,
-    )
+    if results_path:
+        _write_results(results, results_path)
 
     _maybe_generate_executive_summary(run, enabled=executive_summary, model=sim_model)
     if hooks is not None and executive_summary:
-        hooks.print_summary(results, executive_summary=run.executive_summary)
+        hooks.print_summary(results, executive_summary=run.executive_summary, experiment_url=run.experiment_url)
 
-    if export_md is not None:
-        _export_report(run, export_md, fmt='md')
-    if export_html is not None:
-        _export_report(run, export_html, fmt='html')
+    if report_md is not None:
+        _export_report(run, report_md, fmt='md')
+    if report_html is not None:
+        _export_report(run, report_html, fmt='html')
 
-    if report_output is not None:
-        _write_report(run, report_output)
-        typer.echo(f'Report saved: {report_output}', err=True)
+    if report_path is not None:
+        report_path = _resolve_report_target(report_path, ext='json', run=run)
+        _write_report(run, report_path)
+        _echo_saved('Report', report_path)
 
     if not no_save:
         run_path = _auto_save_run(run=run, run_name=name)
-        typer.echo(f'Run saved: {run_path}', err=True)
+        _echo_saved('Run', run_path)
+        _echo_next(_dashboard_command(_get_sim_runs_dir()), 'explore the results')
+    elif report_path is None:
+        _recho('[yellow]Tip:[/] run without --no-save to browse results in the dashboard.', soft_wrap=True)
 
 
 async def _simulate_impl(
     *,
-    datapoints_path: Path,
+    datapoints_path: Path | None,
+    dataset_id: str | None = None,
     target: Any,
     sim_model: str,
     max_turns: int,
@@ -496,16 +695,21 @@ async def _simulate_impl(
     evaluator_names: list[str] | None,
     evaluation_name: str,
     hooks: Any = None,
-) -> list[Any]:
-    from evaluatorq.simulation.api import simulate
+) -> SimulationRun:
+    from evaluatorq.simulation.api import _simulate_run
     from evaluatorq.simulation.utils.dataset_export import load_datapoints_from_jsonl
 
-    loaded = load_datapoints_from_jsonl(str(datapoints_path))
-    if not loaded:
-        raise ValueError(f'No datapoints loaded from {datapoints_path}')
+    loaded = None
+    if dataset_id is None:
+        if datapoints_path is None:  # the command guarantees exactly one source
+            raise ValueError('Either datapoints_path or dataset_id is required')
+        loaded = load_datapoints_from_jsonl(str(datapoints_path))
+        if not loaded:
+            raise ValueError(f'No datapoints loaded from {datapoints_path}')
 
-    return await simulate(
+    return await _simulate_run(
         datapoints=loaded,
+        dataset_id=dataset_id,
         target=target,
         sim_model=sim_model,
         max_turns=max_turns,
@@ -521,7 +725,7 @@ async def _simulate_impl(
 # ---------------------------------------------------------------------------
 
 
-@app.command(no_args_is_help=True)
+@app.command(no_args_is_help=True, epilog=_RUN_EPILOG)
 def run(
     agent_description: Annotated[
         str | None,
@@ -552,19 +756,20 @@ def run(
             ),
         ),
     ] = None,
-    output: Annotated[
+    results_path: Annotated[
         Path | None,
-        typer.Option('--output', '-o', help='Path to write results JSONL.'),
+        typer.Option('--results', '-r', help='Path to write results JSONL.'),
     ] = None,
-    report_output: Annotated[
+    report_path: Annotated[
         Path | None,
         typer.Option(
-            '--report-output',
+            '--report',
             help=(
-                'Path to write the full SimulationRun report JSON (results + '
-                'scorer averages + metadata) to an explicit location, instead of '
-                'only the auto-named file under .evaluatorq/sim-runs/. The '
-                'auto-save still happens unless --no-save.'
+                'Write the full SimulationRun report JSON (results + scorer '
+                'averages + metadata). Pass a file to write it there, or a '
+                'directory for an auto-named sim-report-*.json inside it — the '
+                'same target rule as --report-md / --report-html. The auto-save '
+                'under .evaluatorq/sim-runs/ still happens unless --no-save.'
             ),
         ),
     ] = None,
@@ -610,13 +815,14 @@ def run(
         bool,
         typer.Option('--no-save', help='Skip writing to .evaluatorq/sim-runs/.'),
     ] = False,
-    save_datapoints: Annotated[
+    datapoints_path: Annotated[
         Path | None,
         typer.Option(
-            '--save-datapoints',
+            '--datapoints',
+            '-d',
             help=(
                 'Also write the generated datapoints (the simulate inputs) to this '
-                'JSONL path, for reproducible re-runs via `sim simulate --datapoints`.'
+                'JSONL path, for reproducible re-runs via `sim simulate --input`.'
             ),
         ),
     ] = None,
@@ -637,13 +843,25 @@ def run(
         bool,
         typer.Option('--yes', '-y', help='Skip interactive confirmation prompt.'),
     ] = False,
-    export_md: Annotated[
+    report_md: Annotated[
         Path | None,
-        typer.Option('--export-md', help='Directory for an auto-named Markdown report.'),
+        typer.Option(
+            '--report-md',
+            help=(
+                'Write a Markdown report. Pass a file to write it there, or a '
+                'directory for an auto-named sim-report-*.md inside it.'
+            ),
+        ),
     ] = None,
-    export_html: Annotated[
+    report_html: Annotated[
         Path | None,
-        typer.Option('--export-html', help='Directory for an auto-named HTML report.'),
+        typer.Option(
+            '--report-html',
+            help=(
+                'Write an HTML report. Pass a file to write it there, or a '
+                'directory for an auto-named sim-report-*.html inside it.'
+            ),
+        ),
     ] = None,
     executive_summary: Annotated[  # noqa: FBT002
         bool,
@@ -668,19 +886,23 @@ def run(
     """
     if quiet:
         verbose = -1
-    _configure_logging(verbose)
 
     hooks: Any = None
+    log_console: Any = None
     if not quiet:
         from rich.console import Console
 
         from evaluatorq.simulation.hooks import RichHooks
 
+        log_console = Console(stderr=True)
         hooks = RichHooks(
-            console=Console(stderr=True),
+            console=log_console,
             skip_confirm=yes or not sys.stdin.isatty(),
             defer_summary=executive_summary,
+            verbose=verbose,
         )
+    _configure_logging(verbose, console=log_console)
+    _echo_using(sim_model)
 
     try:
         resolved_agent_description = asyncio.run(
@@ -692,12 +914,7 @@ def run(
             openai_model=openai_model,
         )
         evaluator_names = _resolve_evaluators(evaluator)
-        target_kind = _infer_target_kind(
-            target=target,
-            vercel_url=vercel_url,
-            openai_model=openai_model,
-        )
-        results = asyncio.run(
+        run = asyncio.run(
             _run_impl(
                 agent_description=resolved_agent_description,
                 target=resolved_target,
@@ -708,7 +925,7 @@ def run(
                 num_scenarios=num_scenarios,
                 evaluator_names=evaluator_names,
                 evaluation_name=name,
-                save_datapoints=save_datapoints,
+                save_datapoints=datapoints_path,
                 hooks=hooks,
             )
         )
@@ -726,41 +943,31 @@ def run(
         # traceback. Exit 1 keeps the CI-gate behaviour (still non-zero).
         _handle_cli_error(exc)
 
-    if output:
-        _write_results(results, output)
+    results = run.results
 
-    tgt_name, tgt_model = _target_identity(target=target, vercel_url=vercel_url, openai_model=openai_model)
-    agent_info = None
-    if target_kind == 'orq_agent' and tgt_name:
-        agent_info = asyncio.run(_fetch_agent_info(tgt_name))
-    run = _build_simulation_run(
-        run_name=name,
-        mode='run',
-        target_kind=target_kind,
-        target=tgt_name,
-        target_model=tgt_model,
-        max_turns=max_turns,
-        agent_info=agent_info,
-        evaluator_names=evaluator_names or DEFAULT_EVALUATOR_NAMES,
-        results=results,
-    )
+    if results_path:
+        _write_results(results, results_path)
 
     _maybe_generate_executive_summary(run, enabled=executive_summary, model=sim_model)
     if hooks is not None and executive_summary:
-        hooks.print_summary(results, executive_summary=run.executive_summary)
+        hooks.print_summary(results, executive_summary=run.executive_summary, experiment_url=run.experiment_url)
 
-    if export_md is not None:
-        _export_report(run, export_md, fmt='md')
-    if export_html is not None:
-        _export_report(run, export_html, fmt='html')
+    if report_md is not None:
+        _export_report(run, report_md, fmt='md')
+    if report_html is not None:
+        _export_report(run, report_html, fmt='html')
 
-    if report_output is not None:
-        _write_report(run, report_output)
-        typer.echo(f'Report saved: {report_output}', err=True)
+    if report_path is not None:
+        report_path = _resolve_report_target(report_path, ext='json', run=run)
+        _write_report(run, report_path)
+        _echo_saved('Report', report_path)
 
     if not no_save:
         run_path = _auto_save_run(run=run, run_name=name)
-        typer.echo(f'Run saved: {run_path}', err=True)
+        _echo_saved('Run', run_path)
+        _echo_next(_dashboard_command(_get_sim_runs_dir()), 'explore the results')
+    elif report_path is None:
+        _recho('[yellow]Tip:[/] run without --no-save to browse results in the dashboard.', soft_wrap=True)
 
 
 async def _run_impl(
@@ -776,8 +983,8 @@ async def _run_impl(
     evaluation_name: str,
     save_datapoints: Path | None = None,
     hooks: Any = None,
-) -> list[Any]:
-    from evaluatorq.simulation.api import generate_and_simulate
+) -> SimulationRun:
+    from evaluatorq.simulation.api import _generate_and_simulate_run
 
     emit = None
     if save_datapoints is not None:
@@ -792,7 +999,7 @@ async def _run_impl(
 
         emit = _emit
 
-    return await generate_and_simulate(
+    return await _generate_and_simulate_run(
         agent_description=agent_description,
         target=target,
         sim_model=sim_model,
@@ -812,11 +1019,11 @@ async def _run_impl(
 # ---------------------------------------------------------------------------
 
 
-@app.command(no_args_is_help=True)
+@app.command(no_args_is_help=True, epilog=_GENERATE_EPILOG)
 def generate(
-    output: Annotated[
+    datapoints_path: Annotated[
         Path,
-        typer.Option('--output', '-o', help='Path to write the generated datapoints JSONL.'),
+        typer.Option('--datapoints', '-d', help='Path to write the generated datapoints JSONL.'),
     ],
     agent_description: Annotated[
         str | None,
@@ -853,6 +1060,40 @@ def generate(
         int,
         typer.Option('--num-scenarios', min=1, help='Number of scenarios to generate.'),
     ] = 5,
+    persona_seed: Annotated[
+        list[str] | None,
+        typer.Option(
+            '--persona-seed',
+            help=(
+                'Archetype seed for a persona, e.g. "angry retiree" (repeatable). '
+                'Each seed becomes one persona the LLM fleshes out — overrides '
+                '--num-personas. Omit to auto-generate.'
+            ),
+        ),
+    ] = None,
+    scenario_seed: Annotated[
+        list[str] | None,
+        typer.Option(
+            '--scenario-seed',
+            help=(
+                'Situation seed for a scenario, e.g. "disputes a refund denial" '
+                '(repeatable). Each seed becomes one scenario — overrides '
+                '--num-scenarios. Omit to auto-generate.'
+            ),
+        ),
+    ] = None,
+    dataset_format: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option(
+            '--dataset-format',
+            help=(
+                'Write the orq.ai dataset-row envelope (inputs/expected_output, '
+                'persona & scenario JSON-stringified) instead of raw datapoints. '
+                'Feed the raw form to `sim simulate --input`; feed this form '
+                'to `sim upload-dataset` (or upload straight from the raw file).'
+            ),
+        ),
+    ] = False,
     verbose: Annotated[
         int,
         typer.Option(
@@ -870,7 +1111,7 @@ def generate(
     """Generate simulation datapoints from an agent description (no simulation).
 
     Builds personas x scenarios with generated first messages and writes them
-    as a datapoints JSONL file. Feed that file to ``sim simulate --datapoints``
+    as a datapoints JSONL file. Feed that file to ``sim simulate --input``
     to run — splitting generation out keeps the datapoint set frozen across
     simulate runs. No execution target is contacted; ``--target agent:<key>``
     is only used to fetch the agent description when ``--agent-description`` is
@@ -878,7 +1119,29 @@ def generate(
     """
     if quiet:
         verbose = -1
-    _configure_logging(verbose)
+
+    hooks: Any = None
+    log_console: Any = None
+    if not quiet:
+        from rich.console import Console
+
+        from evaluatorq.simulation.hooks import RichHooks
+
+        log_console = Console(stderr=True)
+        hooks = RichHooks(console=log_console, verbose=verbose)
+    _configure_logging(verbose, console=log_console)
+    if not quiet:
+        # Plan box (beats 1+2: input + what will happen). Subsumes the plain
+        # "Using: <provider>" line — provider·model is a row here.
+        source = 'inline description' if agent_description else (target or '—')
+        _echo_generate_plan(
+            console=log_console,
+            source=source,
+            model=sim_model,
+            num_personas=num_personas,
+            num_scenarios=num_scenarios,
+            output=datapoints_path,
+        )
 
     try:
         resolved_agent_description = asyncio.run(
@@ -890,6 +1153,9 @@ def generate(
                 sim_model=sim_model,
                 num_personas=num_personas,
                 num_scenarios=num_scenarios,
+                hooks=hooks,
+                persona_seeds=persona_seed,
+                scenario_seeds=scenario_seed,
             )
         )
     except KeyboardInterrupt:
@@ -906,8 +1172,26 @@ def generate(
         # traceback (per the spec error-handling contract).
         _handle_cli_error(exc)
 
-    _write_datapoints(datapoints, output)
-    typer.echo(f'Generated {len(datapoints)} datapoint(s) -> {output}', err=True)
+    _write_datapoints(datapoints, datapoints_path, dataset_format=dataset_format)
+    if not quiet:
+        # The "Generating Datapoints" stage rule (from RichHooks.on_stage_start)
+        # already heads this block; the persona/scenario tables are self-titled,
+        # so no second "Generated inputs" rule is needed.
+        _echo_generate_preview(datapoints)
+    from rich.markup import escape
+
+    _recho(
+        f'[green]✓[/] Generated [bold]{len(datapoints)}[/] datapoint(s) → {escape(str(datapoints_path))}',
+        soft_wrap=True,
+    )
+    # --quiet is for scripts/pipes: the next-step CTA is non-error signposting,
+    # so suppress it. The one-line result above is the only kept confirmation.
+    if not quiet:
+        _echo_next(
+            _simulate_command(datapoints_path, target),
+            'run the simulation against your agent',
+            hint=None if target else _TARGET_HINT,
+        )
 
 
 async def _generate_impl(
@@ -916,6 +1200,9 @@ async def _generate_impl(
     sim_model: str,
     num_personas: int,
     num_scenarios: int,
+    hooks: Any = None,
+    persona_seeds: list[str] | None = None,
+    scenario_seeds: list[str] | None = None,
 ) -> list[Any]:
     from evaluatorq.simulation.api import generate
 
@@ -924,6 +1211,9 @@ async def _generate_impl(
         num_personas=num_personas,
         num_scenarios=num_scenarios,
         sim_model=sim_model,
+        hooks=hooks,
+        persona_seeds=persona_seeds,
+        scenario_seeds=scenario_seeds,
     )
 
 
@@ -972,13 +1262,7 @@ def export(
 # ---------------------------------------------------------------------------
 
 
-@app.command('validate-dataset', no_args_is_help=True)
-def validate_dataset(
-    path: Annotated[
-        Path,
-        typer.Argument(help='Path to datapoints JSONL file to validate.'),
-    ],
-) -> None:
+def _validate_datapoints(path: Path) -> None:
     """Validate a simulation datapoints JSONL file."""
     if not path.exists():
         raise typer.BadParameter(f'File not found: {path}')
@@ -1002,11 +1286,120 @@ def validate_dataset(
             typer.echo(f'Line {i}: {exc}', err=True)
             bad_count += 1
 
+    from rich.markup import escape
+
     if bad_count:
-        typer.echo(f'{bad_count} invalid line(s) in {path}', err=True)
+        _recho(f'[red]✗[/] [bold]{bad_count}[/] invalid line(s) in {escape(str(path))}', soft_wrap=True)
         raise typer.Exit(1)
 
-    typer.echo(f'OK — {len(valid_datapoints)} valid datapoint(s) in {path}')
+    _recho(
+        f'[green]✓[/] [bold]{len(valid_datapoints)}[/] valid datapoint(s) in {escape(str(path))}',
+        soft_wrap=True,
+        err=False,
+    )
+    _echo_next(_simulate_command(path, None), 'run the simulation', hint=_TARGET_HINT)
+
+
+@app.command('validate', no_args_is_help=True)
+def validate(
+    input_path: Annotated[
+        Path | None,
+        typer.Option('--input', '-i', help='Path to datapoints JSONL file to validate.'),
+    ] = None,
+    path: Annotated[
+        Path | None,
+        typer.Argument(help='Path to datapoints JSONL file (legacy positional form).'),
+    ] = None,
+) -> None:
+    """Validate a simulation datapoints JSONL file before running it."""
+    if input_path is not None and path is not None:
+        raise typer.BadParameter('Provide the input path once, either as an argument or with --input.')
+    selected_path = input_path or path
+    if selected_path is None:
+        raise typer.BadParameter('Provide a datapoints file with --input PATH.')
+    _validate_datapoints(selected_path)
+
+
+@app.command('validate-dataset', no_args_is_help=True)
+def validate_dataset(
+    path: Annotated[
+        Path,
+        typer.Argument(help='Path to datapoints JSONL file to validate.'),
+    ],
+) -> None:
+    """Deprecated alias for :command:`validate`."""
+    _validate_datapoints(path)
+
+
+# ---------------------------------------------------------------------------
+# upload-dataset
+# ---------------------------------------------------------------------------
+
+
+@app.command('upload-dataset', no_args_is_help=True, epilog=_UPLOAD_DATASET_EPILOG)
+def upload_dataset(
+    input_path: Annotated[
+        Path,
+        typer.Option('--input', '-i', help='Datapoints JSONL to upload (raw or --dataset-format).'),
+    ],
+    name: Annotated[
+        str | None,
+        typer.Option('--name', '-n', help='Display name for a new dataset (required unless --dataset-id).'),
+    ] = None,
+    path: Annotated[
+        str,
+        typer.Option('--path', help='Orq folder path for a new dataset.'),
+    ] = 'Default',
+    dataset_id: Annotated[
+        str | None,
+        typer.Option('--dataset-id', help='Append to this existing dataset instead of creating one.'),
+    ] = None,
+) -> None:
+    """Convert a simulation datapoints JSONL into an Orq dataset and upload it.
+
+    Accepts either the raw ``sim generate`` output or a ``--dataset-format`` file;
+    both are normalised, then persona/scenario are JSON-stringified into the
+    scalar-only ``inputs`` shape the datasets API requires (see
+    ``to_orq_dataset_rows``). Pass ``--dataset-id`` to *extend* an existing
+    dataset rather than create a new one. Requires ``ORQ_API_KEY``.
+    """
+    if not input_path.exists():
+        raise typer.BadParameter(f'File not found: {input_path}')
+    if dataset_id is None and not name:
+        raise typer.BadParameter('Provide --name to create a dataset, or --dataset-id to extend one.')
+
+    _require_orq_api_key('upload-dataset')
+
+    from evaluatorq.fetch_data import setup_orq_client
+    from evaluatorq.simulation.utils.dataset_export import load_datapoints_from_jsonl, to_orq_dataset_rows
+
+    try:
+        datapoints = load_datapoints_from_jsonl(str(input_path))
+    except Exception as exc:
+        raise typer.BadParameter(f'Failed to read {input_path}: {exc}') from exc
+    if not datapoints:
+        raise typer.BadParameter(f'No datapoints found in {input_path}')
+
+    rows = to_orq_dataset_rows(datapoints)
+    client = setup_orq_client(os.environ['ORQ_API_KEY'])
+
+    if dataset_id is None:
+        # name is guaranteed non-None here (validated above); SDK expects a TypedDict.
+        created = client.datasets.create(request={'display_name': name or '', 'path': path})
+        dataset_id = created.id
+        typer.echo(f'Created dataset {dataset_id} ("{name}")', err=True)
+
+    # ponytail: single bulk create; chunk if a set ever exceeds the API's array cap.
+    # rows are plain dicts matching the SDK's CreateDatasetItem TypedDict shape.
+    client.datasets.create_datapoint(dataset_id=dataset_id, request_body=rows)  # pyright: ignore[reportArgumentType]
+
+    base = os.environ.get('ORQ_BASE_URL', 'https://my.orq.ai').rstrip('/')
+    typer.echo(f'Uploaded {len(rows)} datapoint(s) -> dataset {dataset_id} ({base})')
+    _echo_next(
+        f'eq sim simulate --dataset-id {dataset_id} --target {_TARGET_PLACEHOLDER}',
+        'run the simulation on the uploaded dataset',
+        hint=_TARGET_HINT,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1024,6 +1417,10 @@ def runs(
         int,
         typer.Option('--limit', '-n', help='Maximum number of runs to show.'),
     ] = 20,
+    full: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option('--full', '-f', help='Render at full content width; do not truncate columns to the terminal.'),
+    ] = False,
 ) -> None:
     """List recent simulation runs."""
     runs_dir = directory or _get_sim_runs_dir()
@@ -1066,8 +1463,12 @@ def runs(
         from rich.table import Table
 
         table = Table(title='Simulation Runs')
-        for col in ('Name', 'Date', 'Mode', 'Target', 'N', 'Scores', 'File'):
+        for col in ('Name', 'Date', 'Mode', 'Target', 'N', 'Scores'):
             table.add_column(col)
+        # File is the unique identifier you copy into `eq sim ui <name>` / the
+        # dashboard, so it must never be ellipsised away on a narrow terminal —
+        # fold it onto extra lines instead of dropping characters.
+        table.add_column('File', overflow='fold')
         for row in rows:
             table.add_row(
                 row['name'],
@@ -1083,10 +1484,12 @@ def runs(
         # the Click/Typer stream so redirection and test capture both see it.
         # Width is taken from the real terminal (falling back to 80 when there
         # is no tty) so layout still adapts instead of being pinned to a
-        # constant.
+        # constant. --full renders at natural content width (a Table sizes to
+        # its content, not the console, when given ample room) so nothing is
+        # truncated — useful when piping/redirecting.
         import shutil
 
-        width = shutil.get_terminal_size(fallback=(80, 24)).columns
+        width = 10_000 if full else shutil.get_terminal_size(fallback=(80, 24)).columns
         buffer = io.StringIO()
         Console(file=buffer, width=width).print(table)
         typer.echo(buffer.getvalue(), nl=False)
@@ -1102,6 +1505,8 @@ def runs(
 
     if malformed:
         typer.echo(f'Warning: {malformed} malformed run file(s) skipped.', err=True)
+    if rows:
+        typer.echo(f'open: {_dashboard_command(runs_dir)}')
 
 
 def _format_scorer_averages(averages: dict[str, float]) -> str:
@@ -1135,6 +1540,7 @@ def ui(
     ] = 'localhost',
 ) -> None:
     """Launch the interactive Streamlit dashboard for a simulation run."""
+    typer.echo('Warning: eq sim ui is deprecated; use eq dashboard instead.', err=True)
     from evaluatorq.common.ui.launch import launch_streamlit
 
     runs_dir = _get_sim_runs_dir()
@@ -1179,7 +1585,10 @@ def _maybe_generate_executive_summary(run: Any, *, enabled: bool, model: str) ->
 
     from evaluatorq.common.llm_client import MissingLLMCredentialsError
     from evaluatorq.common.reports.executive_summary import generate_executive_summary
-    from evaluatorq.simulation.reports.executive_summary import build_sim_facts
+    from evaluatorq.simulation.reports.executive_summary import (
+        SIM_EXECUTIVE_SUMMARY_SYSTEM_PROMPT,
+        build_sim_facts,
+    )
 
     try:
         resolved = resolve_llm_client()
@@ -1193,24 +1602,43 @@ def _maybe_generate_executive_summary(run: Any, *, enabled: bool, model: str) ->
                 build_sim_facts(run.results),
                 llm_client=resolved.client,
                 model=model,
+                system_prompt=SIM_EXECUTIVE_SUMMARY_SYSTEM_PROMPT,
             )
         )
     except Exception:
         logger.warning('Failed to generate executive summary', exc_info=True)
 
 
-def _export_report(run: Any, directory: Path, *, fmt: str) -> None:
-    """Write an auto-named Markdown or HTML report for *run* into *directory*."""
-    from evaluatorq.common.reports import write_text_report
+def _resolve_report_target(target: Path, *, ext: str, run: Any) -> Path:
+    """Resolve a ``--report*`` target that may be a directory or an explicit file.
+
+    Uniform rule across ``--report`` / ``--report-md`` / ``--report-html``: a
+    directory (an existing dir, a trailing separator, or a suffixless path) gets
+    an auto-named ``sim-report-<name>-<timestamp>.<ext>`` inside it; an explicit
+    file path (one carrying a suffix) is honoured verbatim. Parent directories
+    are created either way. This is what makes the three report flags read the
+    same — same target semantics, only the format differs.
+    """
+    treat_as_dir = target.is_dir() or target.suffix == '' or str(target).endswith(('/', os.sep))
+    if treat_as_dir:
+        stem = f'sim-report-{_sanitise_run_name(run.run_name)}-{run.created_at:%Y%m%d-%H%M%S}'
+        target = target / f'{stem}.{ext}'
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def _export_report(run: Any, target: Path, *, fmt: str) -> None:
+    """Write a Markdown or HTML report for *run* to *target* (file or directory)."""
     from evaluatorq.simulation.reports.export_html import export_html
     from evaluatorq.simulation.reports.export_md import export_markdown
 
-    stem = f'sim-report-{_sanitise_run_name(run.run_name)}-{run.created_at:%Y%m%d-%H%M%S}'
     if fmt == 'md':
         content = export_markdown(run.results, run_date=run.created_at, executive_summary=run.executive_summary)
     else:
         content = export_html(run.results, run_date=run.created_at, executive_summary=run.executive_summary)
-    write_text_report(directory, stem=stem, fmt=fmt, content=content)
+    path = _resolve_report_target(target, ext=fmt, run=run)
+    path.write_text(content, encoding='utf-8')
+    typer.echo(f'Report written to {path}', err=True)
 
 
 def _write_results(results: list[Any], output: Path) -> None:
@@ -1221,16 +1649,23 @@ def _write_results(results: list[Any], output: Path) -> None:
     typer.echo(f'Results written to {output}')
 
 
-def _write_datapoints(datapoints: list[Any], output: Path) -> None:
-    """Write datapoints as raw ``SimulationDatapoint`` JSONL — one ``model_dump_json()``
-    per line. This is the canonical local handoff format: it preserves the
+def _write_datapoints(datapoints: list[Any], output: Path, *, dataset_format: bool = False) -> None:
+    """Write datapoints as JSONL — one row per line.
+
+    Default (raw) is the canonical local handoff format: it preserves the
     datapoint ``id``, round-trips through ``load_datapoints_from_jsonl`` (which
-    ``simulate`` uses), and validates under ``validate-dataset``. The Orq-dataset
-    *envelope* exporter (``export_datapoints_to_jsonl``) is a separate upload
-    format and is intentionally not used here.
+    ``simulate`` uses), and validates under ``validate-dataset``. With
+    ``dataset_format`` it writes the Orq-dataset envelope instead
+    (``to_orq_dataset_rows`` — inputs/expected_output, persona & scenario
+    JSON-stringified) for hand-off to ``sim upload-dataset`` or manual upload.
     """
     output.parent.mkdir(parents=True, exist_ok=True)
-    lines = [dp.model_dump_json() for dp in datapoints]
+    if dataset_format:
+        from evaluatorq.simulation.utils.dataset_export import to_orq_dataset_rows
+
+        lines = [json.dumps(row) for row in to_orq_dataset_rows(datapoints)]
+    else:
+        lines = [dp.model_dump_json() for dp in datapoints]
     output.write_text('\n'.join(lines) + '\n', encoding='utf-8')
 
 

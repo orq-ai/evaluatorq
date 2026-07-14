@@ -11,7 +11,7 @@ Prerequisites:
         uv pip install "agent-simulation @ git+https://github.com/orq-ai/research.git#subdirectory=projects/agent-simulation"
 
 Usage:
-    cd packages/evaluatorq-py
+    # from the evaluatorq repository root
     uv run python examples/agent_simulation/03_tool_simulation.py
 
 Where outputs land:
@@ -175,10 +175,10 @@ async def main() -> None:
     )
 
     # 4. Run simulation
-    # target_callback= accepts any async function; use target="agent:<key>" for orq.ai agents.
+    # target= accepts any async function; use target="agent:<key>" for orq.ai agents.
     results = await simulate(
         evaluation_name="tool-simulation-example",
-        target_callback=agent_with_tools,
+        target=agent_with_tools,
         personas=[persona],
         scenarios=[scenario],
         max_turns=6,
