@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
-from typing import Any
+from openai import AsyncOpenAI
 
 from evaluatorq.common.reports.executive_summary import (
     EXECUTIVE_SUMMARY_SYSTEM_PROMPT,
@@ -31,7 +33,7 @@ class _StubCompletions:
         self._raise = raise_exc
         self.calls: list[dict[str, Any]] = []
 
-    async def create(self, **kwargs):
+    async def create(self, **kwargs: Any) -> _StubResponse:
         self.calls.append(kwargs)
         if self._raise is not None:
             raise self._raise
@@ -58,7 +60,7 @@ async def test_generate_returns_prose_and_passes_prompt():
     client = _StubClient('  Across 10 attacks, the agent resisted 80%.  ')
     out = await generate_executive_summary(
         'Total attacks: 10',
-        llm_client=client,
+        llm_client=cast(AsyncOpenAI, cast(object, client)),
         model='openai/gpt-4o-mini',
         temperature=0.3,
         extra_body={'foo': 'bar'},
@@ -77,7 +79,7 @@ async def test_generate_returns_prose_and_passes_prompt():
 @pytest.mark.asyncio
 async def test_generate_returns_none_on_blank_facts():
     client = _StubClient('should not be called')
-    out = await generate_executive_summary('   ', llm_client=client, model='m')
+    out = await generate_executive_summary('   ', llm_client=cast(AsyncOpenAI, cast(object, client)), model='m')
     assert out is None
     assert client.chat.completions.calls == []
 
@@ -85,12 +87,12 @@ async def test_generate_returns_none_on_blank_facts():
 @pytest.mark.asyncio
 async def test_generate_returns_none_on_empty_completion():
     client = _StubClient(None)
-    out = await generate_executive_summary('facts', llm_client=client, model='m')
+    out = await generate_executive_summary('facts', llm_client=cast(AsyncOpenAI, cast(object, client)), model='m')
     assert out is None
 
 
 @pytest.mark.asyncio
 async def test_generate_returns_none_on_exception():
     client = _StubClient(None, raise_exc=RuntimeError('boom'))
-    out = await generate_executive_summary('facts', llm_client=client, model='m')
+    out = await generate_executive_summary('facts', llm_client=cast(AsyncOpenAI, cast(object, client)), model='m')
     assert out is None
