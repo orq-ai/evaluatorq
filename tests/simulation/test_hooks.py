@@ -222,18 +222,26 @@ def test_rich_hooks_full_lifecycle(datapoint_factory):
 
 
 def test_rich_hooks_default_verbosity_no_per_datapoint_bars(datapoint_factory):
-    """Default (verbose=0): no per-datapoint bar, but the overall bar still advances."""
+    """Default (-v): no live per-datapoint bar; overall bar advances and each
+    datapoint prints a one-line completion notice."""
+    import io
+
     from rich.console import Console
 
     from evaluatorq.simulation.hooks import RichHooks
 
-    hooks = RichHooks(console=Console())
+    buf = io.StringIO()
+    hooks = RichHooks(console=Console(file=buf, width=80))
     asyncio.run(hooks.on_run_start(_meta()))  # creates overall bar
     dp = datapoint_factory('dp1')
     asyncio.run(hooks.on_datapoint_start(dp))
     assert hooks._tasks == {}  # no per-datapoint task
-    asyncio.run(hooks.on_datapoint_complete(_result()))
+    res = _result()
+    res.metadata['datapoint_id'] = 'dp1'
+    asyncio.run(hooks.on_datapoint_complete(res))
     assert hooks._completed == 1  # overall bar still advances
+    asyncio.run(hooks.on_run_complete([res]))  # stop live region, flush
+    assert 'dp1' in buf.getvalue()  # completion notice printed
 
 
 def test_rich_hooks_error_row_stays_red_after_complete(datapoint_factory):

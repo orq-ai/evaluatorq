@@ -1369,8 +1369,8 @@ evaluatorq sim --help         <span class="cm"># 'eq' works too</span></pre>
         <pre><span class="cm"># 1. generate personas × scenarios from the agent's description</span>
 evaluatorq sim generate \
   <span class="kw">--target</span> agent:sterling \
-  <span class="kw">--num-personas</span> 3 \
-  <span class="kw">--num-scenarios</span> 3 \
+  <span class="kw">--num-personas</span> 2 \
+  <span class="kw">--num-scenarios</span> 2 \
   <span class="kw">--output</span> datapoints.jsonl
 
 <span class="cm"># 2. run the simulation against the live agent, freeze the set</span>
@@ -1409,8 +1409,8 @@ evaluatorq dashboard .evaluatorq/sim-runs</pre>
 <span class="cm"># 1. freeze personas × scenarios from a description</span>
 datapoints = <span class="kw">await</span> generate(
     agent_description=<span class="str">"Credit-card support agent"</span>,
-    num_personas=3,
-    num_scenarios=3,
+    num_personas=2,
+    num_scenarios=2,
 )
 
 <span class="cm"># 2. run the sim against your agent, score every turn</span>

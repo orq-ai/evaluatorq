@@ -217,8 +217,9 @@ class RichHooks:
 
     Args:
         console: a ``rich.console.Console``; a new one is created when ``None``.
-        verbose: verbosity count. Per-datapoint bars only render at ``>= 2``
-            (``-vv``); the default shows just the single overall bar.
+        verbose: verbosity count. Default (``-v`` and below) shows the overall
+            bar plus a one-line completion notice per datapoint; ``>= 2``
+            (``-vv``) adds a live per-datapoint turn-progress bar for each.
     """
 
     def __init__(
@@ -315,7 +316,7 @@ class RichHooks:
 
         self._ensure_started()
         if not self._show_per_datapoint:
-            return  # default: single overall bar only, gate per-datapoint bars behind -vv
+            return  # default (-v): overall bar + completion lines only; live bars gated behind -vv
         if datapoint.id in self._tasks:
             return
         self._tasks[datapoint.id] = self._progress.add_task(
