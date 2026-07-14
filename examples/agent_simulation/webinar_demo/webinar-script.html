@@ -789,7 +789,7 @@
 uv run evaluatorq sim generate \
   <span class="kw">--target</span> agent:sterling \
   <span class="kw">--num-personas</span> 3 <span class="kw">--num-scenarios</span> 3 \
-  <span class="kw">-o</span> boh_datapoints.jsonl
+  <span class="kw">--datapoints</span> boh_datapoints.jsonl
 
 <span class="cm"># 2. the payoff — read one generated row aloud</span>
 uv run evaluatorq sim validate-dataset boh_datapoints.jsonl
@@ -839,7 +839,7 @@ uv run evaluatorq sim simulate \
 <span class="cm"># 3b. extend the suite — generate more, append</span>
 uv run evaluatorq sim generate \
   <span class="kw">--target</span> agent:sterling \
-  <span class="kw">--num-personas</span> 2 <span class="kw">--num-scenarios</span> 2 <span class="kw">-o</span> more.jsonl
+  <span class="kw">--num-personas</span> 2 <span class="kw">--num-scenarios</span> 2 <span class="kw">--datapoints</span> more.jsonl
 cat more.jsonl &gt;&gt; boh_datapoints.jsonl
 uv run evaluatorq sim validate-dataset boh_datapoints.jsonl
 

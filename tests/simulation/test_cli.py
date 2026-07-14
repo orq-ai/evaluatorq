@@ -68,6 +68,25 @@ def test_epilog_examples_use_only_real_flags(command: str) -> None:
     assert checked, f'{command} epilog had no recognizable `eq sim <cmd>` example lines'
 
 
+@pytest.mark.parametrize(
+    ('command', 'long', 'short'),
+    [
+        ('generate', '--datapoints', '-d'),
+        ('simulate', '--results', '-r'),
+        ('run', '--datapoints', '-d'),
+        ('run', '--results', '-r'),
+    ],
+)
+def test_output_flags_expose_short_aliases(command: str, long: str, short: str) -> None:
+    """Guard the self-describing output flags keep both their long and short spellings."""
+    import typer
+
+    subcommands = typer.main.get_command(app).commands  # type: ignore[attr-defined]
+    opts = {opt for param in subcommands[command].params for opt in param.opts}
+    assert long in opts, f'{command} missing {long}'
+    assert short in opts, f'{command} missing {short}'
+
+
 def test_sim_help_describes_the_pipeline() -> None:
     result = runner.invoke(app, ['--help'])
 

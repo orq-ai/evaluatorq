@@ -27,8 +27,9 @@ Two command groups have their own pages:
 ## Canonical flag names
 
 !!! note "Simulation I/O flags name the artifact they read or write"
-    Input is always `--input` / `-i`. Output flags are named for the artifact
-    each command writes:
+    Commands that read a datapoints file use `--input` / `-i` (`simulate`,
+    `export`, `upload-dataset`). Output flags are named for the artifact each
+    command writes:
 
     | Command | Output flag(s) | Writes |
     |---|---|---|
@@ -78,7 +79,7 @@ eq redteam run -t agent:my-agent --max-per-category 1 --no-generate-strategies -
 eq redteam run -t agent:my-agent --save detail --artifacts-dir ./runs
 
 # Quick simulation — two personas, two scenarios
-eq sim run -t agent:my-agent --num-personas 2 --num-scenarios 2
+eq sim run --target agent:my-agent --num-personas 2 --num-scenarios 2
 ```
 
 ## Where to next
