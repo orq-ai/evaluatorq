@@ -17,11 +17,11 @@ import pytest
 
 pytest.importorskip('pydantic_ai')
 
-from pydantic_ai.messages import TextPart, ToolCallPart, ToolReturnPart  # noqa: E402
+from pydantic_ai.messages import TextPart, ToolCallPart, ToolReturnPart
 
-from evaluatorq.contracts import Message, ToolCallOutputItem  # noqa: E402
-from evaluatorq.integrations.pydantic_ai_integration import PydanticAITarget  # noqa: E402
-from evaluatorq.redteam.contracts import AgentResponse  # noqa: E402
+from evaluatorq.contracts import Message, ToolCallOutputItem
+from evaluatorq.integrations.pydantic_ai_integration import PydanticAITarget
+from evaluatorq.redteam.contracts import AgentResponse
 
 
 def _agent(result: Any) -> MagicMock:

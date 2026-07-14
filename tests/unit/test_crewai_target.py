@@ -17,9 +17,9 @@ import pytest
 
 pytest.importorskip('crewai')
 
-from evaluatorq.contracts import Message  # noqa: E402
-from evaluatorq.integrations.crewai_integration import CrewAITarget  # noqa: E402
-from evaluatorq.redteam.contracts import AgentResponse  # noqa: E402
+from evaluatorq.contracts import Message
+from evaluatorq.integrations.crewai_integration import CrewAITarget
+from evaluatorq.redteam.contracts import AgentResponse
 
 
 def _crew(raw: object = 'Hello from the crew', usage: object = None) -> MagicMock:
