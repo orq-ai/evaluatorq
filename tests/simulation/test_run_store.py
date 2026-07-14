@@ -391,6 +391,43 @@ async def _run_simulate(*, runs_dir: Path, monkeypatch: pytest.MonkeyPatch, **kw
 
 
 @pytest.mark.asyncio
+async def test_simulate_experiment_url_populated_from_upload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The URL that ``evaluatorq()`` smuggles out via ``_experiment_url_out`` ends
+    up on the saved ``SimulationRun``, and public ``simulate()`` still returns the
+    plain results list (not the run)."""
+    from unittest.mock import AsyncMock, patch
+
+    from evaluatorq.simulation.api import simulate
+
+    monkeypatch.setattr("evaluatorq.simulation.utils.run_store.get_sim_runs_dir", lambda: tmp_path)
+    results = [_make_result(scorer_scores={"goal_achieved": 1.0})]
+    known_url = "https://my.orq.ai/experiments/exp-123"
+
+    async def fake_simulate_via_evaluatorq(*, experiment_url_out: list[str] | None = None, **_kwargs: Any) -> Any:
+        if experiment_url_out is not None:
+            experiment_url_out.append(known_url)
+        return results
+
+    with patch(
+        "evaluatorq.simulation.api._simulate_via_evaluatorq",
+        AsyncMock(side_effect=fake_simulate_via_evaluatorq),
+    ):
+        out = await simulate(
+            target=lambda _messages: "hi",
+            datapoints=[_make_datapoint()],
+            sim_model="test",
+            upload_results=False,
+            save=True,
+        )
+
+    assert out == results  # public simulate() still returns the plain results list
+    saved = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert saved["experiment_url"] == known_url
+
+
+@pytest.mark.asyncio
 async def test_simulate_save_true_writes_one_run_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     await _run_simulate(runs_dir=tmp_path, monkeypatch=monkeypatch, save=True)
     assert len(list(tmp_path.glob("*.json"))) == 1

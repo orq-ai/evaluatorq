@@ -24,6 +24,7 @@ def print_simulation_summary(
     results: list[SimulationResult],
     *,
     executive_summary: str | None = None,
+    experiment_url: str | None = None,
     console: Console | None = None,
 ) -> None:
     """Print a Rich multi-section summary of simulation results to *console*.
@@ -134,6 +135,11 @@ def print_simulation_summary(
             display_msg = (msg[:80] + '…') if len(msg) > 80 else msg
             et.add_row(display_msg, str(count))
         console.print(et)
+        console.print()
+
+    # ── Orq experiment link ────────────────────────────────────────────
+    if experiment_url:
+        console.print(f'[bold]View on Orq:[/bold] [link={experiment_url}]{experiment_url}[/link]')
         console.print()
 
 

@@ -30,19 +30,20 @@ import os
 import shlex
 import sys
 from pathlib import Path
-from typing import Annotated, Any, NoReturn
+from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 
 import typer
 from loguru import logger
 
 from evaluatorq.common.llm_client import resolve_llm_client
-from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MODEL
+from evaluatorq.simulation.types import DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run as _auto_save_run
-from evaluatorq.simulation.utils.run_store import build_simulation_run as _build_simulation_run
-from evaluatorq.simulation.utils.run_store import fetch_agent_info as _fetch_agent_info
 from evaluatorq.simulation.utils.run_store import get_sim_runs_dir as _get_sim_runs_dir
 from evaluatorq.simulation.utils.run_store import sanitise_run_name as _sanitise_run_name
 from evaluatorq.simulation.utils.run_store import write_report as _write_report
+
+if TYPE_CHECKING:
+    from evaluatorq.simulation.types import SimulationRun
 
 app = typer.Typer(
     name='sim',
@@ -250,25 +251,6 @@ def _infer_target_kind(
     return 'openai_model'
 
 
-def _target_identity(
-    *,
-    target: str | None,
-    vercel_url: str | None,
-    openai_model: str | None,
-) -> tuple[str | None, str | None]:
-    """(target_name, target_model) persisted on the run so the dashboard can name
-    the target. Model is only client-known for OpenAI-model targets; agents /
-    deployments resolve it server-side, so it stays None there."""
-    if target is not None:
-        _, value = _parse_target_spec(target)
-        return (str(value) if value else None, None)
-    if vercel_url is not None:
-        return (vercel_url, None)
-    if openai_model is not None:
-        return (openai_model, openai_model)
-    return (None, None)
-
-
 def _echo_using(model: str) -> None:
     """Show the provider branch selected by the environment."""
     if os.environ.get('ORQ_API_KEY'):
@@ -463,12 +445,7 @@ def simulate(
             openai_model=openai_model,
         )
         evaluator_names = _resolve_evaluators(evaluator)
-        target_kind = _infer_target_kind(
-            target=target,
-            vercel_url=vercel_url,
-            openai_model=openai_model,
-        )
-        results = asyncio.run(
+        run = asyncio.run(
             _simulate_impl(
                 datapoints_path=datapoints,
                 dataset_id=dataset_id,
@@ -495,28 +472,14 @@ def simulate(
         # traceback. Exit 1 keeps the CI-gate behaviour (still non-zero).
         _handle_cli_error(exc)
 
+    results = run.results
+
     if results_path:
         _write_results(results, results_path)
 
-    tgt_name, tgt_model = _target_identity(target=target, vercel_url=vercel_url, openai_model=openai_model)
-    agent_info = None
-    if target_kind == 'orq_agent' and tgt_name:
-        agent_info = asyncio.run(_fetch_agent_info(tgt_name))
-    run = _build_simulation_run(
-        run_name=name,
-        mode='simulate',
-        target_kind=target_kind,
-        target=tgt_name,
-        target_model=tgt_model,
-        max_turns=max_turns,
-        agent_info=agent_info,
-        evaluator_names=evaluator_names or DEFAULT_EVALUATOR_NAMES,
-        results=results,
-    )
-
     _maybe_generate_executive_summary(run, enabled=executive_summary, model=sim_model)
     if hooks is not None and executive_summary:
-        hooks.print_summary(results, executive_summary=run.executive_summary)
+        hooks.print_summary(results, executive_summary=run.executive_summary, experiment_url=run.experiment_url)
 
     if report_md is not None:
         _export_report(run, report_md, fmt='md')
@@ -546,8 +509,8 @@ async def _simulate_impl(
     evaluator_names: list[str] | None,
     evaluation_name: str,
     hooks: Any = None,
-) -> list[Any]:
-    from evaluatorq.simulation.api import simulate
+) -> SimulationRun:
+    from evaluatorq.simulation.api import _simulate_run
     from evaluatorq.simulation.utils.dataset_export import load_datapoints_from_jsonl
 
     loaded = None
@@ -558,7 +521,7 @@ async def _simulate_impl(
         if not loaded:
             raise ValueError(f'No datapoints loaded from {datapoints_path}')
 
-    return await simulate(
+    return await _simulate_run(
         datapoints=loaded,
         dataset_id=dataset_id,
         target=target,
@@ -748,12 +711,7 @@ def run(
             openai_model=openai_model,
         )
         evaluator_names = _resolve_evaluators(evaluator)
-        target_kind = _infer_target_kind(
-            target=target,
-            vercel_url=vercel_url,
-            openai_model=openai_model,
-        )
-        results = asyncio.run(
+        run = asyncio.run(
             _run_impl(
                 agent_description=resolved_agent_description,
                 target=resolved_target,
@@ -782,28 +740,14 @@ def run(
         # traceback. Exit 1 keeps the CI-gate behaviour (still non-zero).
         _handle_cli_error(exc)
 
+    results = run.results
+
     if results_path:
         _write_results(results, results_path)
 
-    tgt_name, tgt_model = _target_identity(target=target, vercel_url=vercel_url, openai_model=openai_model)
-    agent_info = None
-    if target_kind == 'orq_agent' and tgt_name:
-        agent_info = asyncio.run(_fetch_agent_info(tgt_name))
-    run = _build_simulation_run(
-        run_name=name,
-        mode='run',
-        target_kind=target_kind,
-        target=tgt_name,
-        target_model=tgt_model,
-        max_turns=max_turns,
-        agent_info=agent_info,
-        evaluator_names=evaluator_names or DEFAULT_EVALUATOR_NAMES,
-        results=results,
-    )
-
     _maybe_generate_executive_summary(run, enabled=executive_summary, model=sim_model)
     if hooks is not None and executive_summary:
-        hooks.print_summary(results, executive_summary=run.executive_summary)
+        hooks.print_summary(results, executive_summary=run.executive_summary, experiment_url=run.experiment_url)
 
     if report_md is not None:
         _export_report(run, report_md, fmt='md')
@@ -835,8 +779,8 @@ async def _run_impl(
     evaluation_name: str,
     save_datapoints: Path | None = None,
     hooks: Any = None,
-) -> list[Any]:
-    from evaluatorq.simulation.api import generate_and_simulate
+) -> SimulationRun:
+    from evaluatorq.simulation.api import _generate_and_simulate_run
 
     emit = None
     if save_datapoints is not None:
@@ -851,7 +795,7 @@ async def _run_impl(
 
         emit = _emit
 
-    return await generate_and_simulate(
+    return await _generate_and_simulate_run(
         agent_description=agent_description,
         target=target,
         sim_model=sim_model,

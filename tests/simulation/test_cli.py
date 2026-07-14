@@ -11,7 +11,6 @@ from typer.testing import CliRunner
 
 from evaluatorq.simulation.cli import (
     _auto_save_run,
-    _build_simulation_run,
     _configure_logging,
     _echo_using,
     _format_scorer_averages,
@@ -23,6 +22,7 @@ from evaluatorq.simulation.cli import (
     _write_report,
     app,
 )
+from evaluatorq.simulation.utils.run_store import build_simulation_run as _build_simulation_run
 
 runner = CliRunner()
 
@@ -140,6 +140,31 @@ def _make_results_file(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return out
+
+
+def _stub_run(
+    results: list[Any] | None = None,
+    *,
+    mode: str = "simulate",
+    evaluator_names: list[str] | None = None,
+    experiment_url: str | None = None,
+) -> Any:
+    """Build a real ``SimulationRun`` for mocking ``_simulate_impl``/``_run_impl``.
+
+    The CLI now passes the run straight into real (unmocked) helpers like
+    ``_auto_save_run``/``_write_report`` which need a genuine pydantic model,
+    not a ``MagicMock``.
+    """
+    return _build_simulation_run(
+        run_name="test-run",
+        mode=mode,
+        target_kind="openai_model",
+        target="gpt-4o",
+        target_model="gpt-4o",
+        evaluator_names=evaluator_names or [],
+        results=results if results is not None else [_make_result()],
+        experiment_url=experiment_url,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -353,7 +378,7 @@ def test_simulate_accepts_input_option(tmp_path: Path) -> None:
 
     with (
         patch("evaluatorq.simulation.cli._resolve_target", return_value=MagicMock()),
-        patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock, return_value=[]),
+        patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock, return_value=_stub_run([], mode="simulate")),
     ):
         result = runner.invoke(
             app,
@@ -604,7 +629,7 @@ def test_simulate_success_no_save(tmp_path: Path) -> None:
         patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock) as mock_impl,
     ):
         mock_target.return_value = MagicMock()
-        mock_impl.return_value = results
+        mock_impl.return_value = _stub_run(results, mode="simulate")
 
         result = runner.invoke(
             app,
@@ -630,7 +655,7 @@ def test_simulate_saved_run_suggests_dashboard_directory(tmp_path: Path) -> None
 
     with (
         patch("evaluatorq.simulation.cli._resolve_target", return_value=MagicMock()),
-        patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock, return_value=[]),
+        patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock, return_value=_stub_run([], mode="simulate")),
         patch("evaluatorq.simulation.cli._auto_save_run", return_value=saved_run),
         patch("evaluatorq.simulation.cli._get_sim_runs_dir", return_value=runs_dir),
     ):
@@ -659,7 +684,7 @@ def test_run_saved_run_suggests_dashboard_directory(tmp_path: Path) -> None:
 
     with (
         patch("evaluatorq.simulation.cli._resolve_target", return_value=MagicMock()),
-        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock, return_value=[]),
+        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock, return_value=_stub_run([], mode="run")),
         patch("evaluatorq.simulation.cli._auto_save_run", return_value=saved_run),
         patch("evaluatorq.simulation.cli._get_sim_runs_dir", return_value=runs_dir),
     ):
@@ -690,7 +715,7 @@ def test_simulate_writes_results_file(tmp_path: Path) -> None:
         patch("evaluatorq.simulation.utils.dataset_export.export_results_to_jsonl") as mock_export,
     ):
         mock_target.return_value = MagicMock()
-        mock_impl.return_value = results
+        mock_impl.return_value = _stub_run(results, mode="simulate")
         mock_export.return_value = None
 
         result = runner.invoke(
@@ -721,7 +746,7 @@ def test_simulate_report_writes_full_report(
         patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock) as mock_impl,
     ):
         mock_target.return_value = MagicMock()
-        mock_impl.return_value = [_make_result(scorer_scores={"goal_achieved": 1.0})]
+        mock_impl.return_value = _stub_run([_make_result(scorer_scores={"goal_achieved": 1.0})], mode="simulate")
 
         result = runner.invoke(
             app,
@@ -759,7 +784,7 @@ def test_run_report_and_autosave_both_written(
         patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
     ):
         mock_target.return_value = MagicMock()
-        mock_impl.return_value = [_make_result()]
+        mock_impl.return_value = _stub_run([_make_result()], mode="run")
 
         result = runner.invoke(
             app,
@@ -809,7 +834,7 @@ def test_simulate_forwards_flags(tmp_path: Path) -> None:
         patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock) as mock_impl,
     ):
         mock_target.return_value = MagicMock()
-        mock_impl.return_value = []
+        mock_impl.return_value = _stub_run([], mode="simulate")
 
         result = runner.invoke(
             app,
@@ -841,11 +866,11 @@ def test_simulate_impl_forwards_sim_model_to_simulate(tmp_path: Path, monkeypatc
     dp_file = _make_datapoints_file(tmp_path)
     captured = {}
 
-    async def fake_simulate(**kwargs):
+    async def fake_simulate_run(**kwargs):
         captured.update(kwargs)
-        return []
+        return _stub_run([])
 
-    monkeypatch.setattr("evaluatorq.simulation.api.simulate", fake_simulate)
+    monkeypatch.setattr("evaluatorq.simulation.api._simulate_run", fake_simulate_run)
     with patch("evaluatorq.simulation.cli._resolve_target") as mock_target:
         mock_target.return_value = MagicMock()
         result = runner.invoke(
@@ -871,7 +896,7 @@ def test_simulate_evaluator_absent_forwards_none(tmp_path: Path) -> None:
         patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock) as mock_impl,
     ):
         mock_target.return_value = MagicMock()
-        mock_impl.return_value = []
+        mock_impl.return_value = _stub_run([], mode="simulate")
 
         result = runner.invoke(
             app,
@@ -890,7 +915,7 @@ def test_simulate_evaluator_repeated_forwards_list(tmp_path: Path) -> None:
         patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock) as mock_impl,
     ):
         mock_target.return_value = MagicMock()
-        mock_impl.return_value = []
+        mock_impl.return_value = _stub_run([], mode="simulate")
 
         result = runner.invoke(
             app,
@@ -1028,7 +1053,7 @@ def test_run_target_agent_uses_context_description_when_omitted(tmp_path: Path) 
     ):
         mock_target.return_value = MagicMock()
         mock_description.return_value = "Context description"
-        mock_impl.return_value = results
+        mock_impl.return_value = _stub_run(results, mode="run")
 
         result = runner.invoke(
             app,
@@ -1061,7 +1086,7 @@ def test_run_explicit_agent_description_does_not_resolve_context(tmp_path: Path)
     ):
         mock_target.return_value = MagicMock()
         mock_description.return_value = "Explicit description"
-        mock_impl.return_value = results
+        mock_impl.return_value = _stub_run(results, mode="run")
 
         result = runner.invoke(
             app,
@@ -1122,7 +1147,7 @@ def test_run_success_no_save(tmp_path: Path) -> None:
         patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
     ):
         mock_target.return_value = MagicMock()
-        mock_impl.return_value = results
+        mock_impl.return_value = _stub_run(results, mode="run")
 
         result = runner.invoke(
             app,
@@ -1147,7 +1172,7 @@ def test_run_forwards_flags(tmp_path: Path) -> None:
         patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
     ):
         mock_target.return_value = MagicMock()
-        mock_impl.return_value = [_make_result()]
+        mock_impl.return_value = _stub_run([_make_result()], mode="run")
 
         result = runner.invoke(
             app,
@@ -1228,7 +1253,7 @@ def test_run_report_md_writes_dated_file(tmp_path: Path, monkeypatch: pytest.Mon
         patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
     ):
         mock_target.return_value = MagicMock()
-        mock_impl.return_value = results
+        mock_impl.return_value = _stub_run(results, mode="run")
 
         result = runner.invoke(
             app,
@@ -1260,7 +1285,7 @@ def test_run_report_html_writes_dated_file(tmp_path: Path, monkeypatch: pytest.M
         patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
     ):
         mock_target.return_value = MagicMock()
-        mock_impl.return_value = results
+        mock_impl.return_value = _stub_run(results, mode="run")
 
         result = runner.invoke(
             app,
@@ -1293,7 +1318,7 @@ def test_simulate_report_md_writes_dated_file(tmp_path: Path, monkeypatch: pytes
         patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock) as mock_impl,
     ):
         mock_target.return_value = MagicMock()
-        mock_impl.return_value = results
+        mock_impl.return_value = _stub_run(results, mode="simulate")
 
         result = runner.invoke(
             app,
@@ -1504,12 +1529,12 @@ def test_run_forwards_sim_model(monkeypatch):
 
     captured = {}
 
-    async def fake_generate_and_simulate(**kwargs):
+    async def fake_generate_and_simulate_run(**kwargs):
         captured.update(kwargs)
-        return []
+        return _stub_run([], mode="run")
 
     monkeypatch.setattr(
-        "evaluatorq.simulation.api.generate_and_simulate", fake_generate_and_simulate
+        "evaluatorq.simulation.api._generate_and_simulate_run", fake_generate_and_simulate_run
     )
     result = CliRunner().invoke(
         sim_cli.app,
@@ -1586,16 +1611,16 @@ def test_run_datapoints_writes_inputs(tmp_path: Path) -> None:
 
     dp_file = tmp_path / "dp.jsonl"
 
-    async def fake_generate_and_simulate(**kwargs: Any) -> list[Any]:
+    async def fake_generate_and_simulate_run(**kwargs: Any) -> Any:
         emit = kwargs.get("emit_datapoints")
         if emit is not None:
             emit(_make_datapoints(2))
-        return []
+        return _stub_run([], mode="run")
 
     with (
         patch(
-            "evaluatorq.simulation.api.generate_and_simulate",
-            side_effect=fake_generate_and_simulate,
+            "evaluatorq.simulation.api._generate_and_simulate_run",
+            side_effect=fake_generate_and_simulate_run,
         ),
         patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
     ):
@@ -1630,7 +1655,7 @@ def test_run_datapoints_echoes_even_when_simulation_fails(tmp_path: Path) -> Non
     """
     dp_file = tmp_path / "dp.jsonl"
 
-    async def fake_generate_and_simulate(**kwargs: Any) -> list[Any]:
+    async def fake_generate_and_simulate_run(**kwargs: Any) -> Any:
         emit = kwargs.get("emit_datapoints")
         if emit is not None:
             emit(_make_datapoints(2))
@@ -1638,8 +1663,8 @@ def test_run_datapoints_echoes_even_when_simulation_fails(tmp_path: Path) -> Non
 
     with (
         patch(
-            "evaluatorq.simulation.api.generate_and_simulate",
-            side_effect=fake_generate_and_simulate,
+            "evaluatorq.simulation.api._generate_and_simulate_run",
+            side_effect=fake_generate_and_simulate_run,
         ),
         patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
     ):
@@ -1666,14 +1691,14 @@ def test_run_without_datapoints_writes_no_file(tmp_path: Path) -> None:
     """When --datapoints is omitted, emit_datapoints=None is passed and no file is created."""
     captured_emit: dict[str, Any] = {}
 
-    async def fake_generate_and_simulate(**kwargs: Any) -> list[Any]:
+    async def fake_generate_and_simulate_run(**kwargs: Any) -> Any:
         captured_emit["emit"] = kwargs.get("emit_datapoints")
-        return []
+        return _stub_run([], mode="run")
 
     with (
         patch(
-            "evaluatorq.simulation.api.generate_and_simulate",
-            side_effect=fake_generate_and_simulate,
+            "evaluatorq.simulation.api._generate_and_simulate_run",
+            side_effect=fake_generate_and_simulate_run,
         ),
         patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
     ):
@@ -1711,7 +1736,7 @@ def test_simulate_yes_exits_clean(tmp_path: Path) -> None:
         patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock) as mock_impl,
     ):
         mock_target.return_value = MagicMock()
-        mock_impl.return_value = results
+        mock_impl.return_value = _stub_run(results, mode="simulate")
 
         result = runner.invoke(
             app,
@@ -1738,7 +1763,7 @@ def test_run_yes_exits_clean(tmp_path: Path) -> None:
         patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
     ):
         mock_target.return_value = MagicMock()
-        mock_impl.return_value = results
+        mock_impl.return_value = _stub_run(results, mode="run")
 
         result = runner.invoke(
             app,

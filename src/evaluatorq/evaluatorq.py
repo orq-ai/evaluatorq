@@ -119,6 +119,7 @@ async def evaluatorq(
     _send_results: bool = True,
     _base_url: str | None = None,
     _trace_type: str = 'evaluatorq',
+    _experiment_url_out: list[str] | None = None,
 ) -> EvaluatorqResult:
     """
     Run an evaluation with the given parameters.
@@ -382,7 +383,7 @@ async def evaluatorq(
 
     # Upload results to Orq platform if API key is available
     if orq_api_key and _send_results:
-        _ = await send_results_to_orq(
+        experiment_url = await send_results_to_orq(
             orq_api_key,
             name,
             description,
@@ -393,6 +394,10 @@ async def evaluatorq(
             path=path,
             base_url=_base_url,
         )
+        # Hand the created experiment's URL back to callers that opted in with a
+        # sink list (e.g. simulation persists it on the SimulationRun report).
+        if _experiment_url_out is not None and experiment_url:
+            _experiment_url_out.append(experiment_url)
 
     # Shutdown tracing gracefully
     if tracing_enabled:

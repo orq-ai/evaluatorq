@@ -39,6 +39,7 @@ if TYPE_CHECKING:
         Scenario,
         SimulationDatapoint,
         SimulationResult,
+        SimulationRun,
     )
     from evaluatorq.types import DataPoint, DataPointResult, Evaluator
 
@@ -110,8 +111,11 @@ async def simulate(
         upload_results: When ``True`` (the default) and ``ORQ_API_KEY`` is set,
             results are uploaded to the Orq platform as an experiment. Pass
             ``False`` to suppress the upload (e.g. for local-only runs).
-        evaluation_description: Optional description attached to the
-            experiment. Mirrors ``evaluatorq()``.
+        evaluation_description: Optional human-readable note passed straight
+            through to ``evaluatorq(description=...)`` and shown as the
+            experiment's description in the Orq UI. Pure metadata — nothing
+            branches on it, and it only matters when results are uploaded
+            (``upload_results=True``). Leave ``None`` for local-only runs.
         orq_results_path: Optional Orq folder path (e.g. ``"MyProject/MyFolder"``).
         exit_on_failure: When ``True`` (the default), exit non-zero if any
             datapoint or evaluator produced a failure — this is the "CI
@@ -129,6 +133,61 @@ async def simulate(
         report: Optional path to write the full SimulationRun report JSON
             (results + scorer averages + metadata). When omitted and ``save``
             is ``True``, the run is auto-saved under ``.evaluatorq/sim-runs/``.
+    """
+    run = await _simulate_run(
+        evaluation_name=evaluation_name,
+        target=target,
+        personas=personas,
+        scenarios=scenarios,
+        datapoints=datapoints,
+        dataset_id=dataset_id,
+        max_turns=max_turns,
+        sim_model=sim_model,
+        evaluator_names=evaluator_names,
+        parallelism=parallelism,
+        user_simulator=user_simulator,
+        judge=judge,
+        hooks=hooks,
+        generation_client=generation_client,
+        upload_results=upload_results,
+        evaluation_description=evaluation_description,
+        orq_results_path=orq_results_path,
+        exit_on_failure=exit_on_failure,
+        save=save,
+        report=report,
+    )
+    return run.results
+
+
+async def _simulate_run(
+    *,
+    evaluation_name: str = '',
+    target: str | Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = None,
+    personas: list[Persona] | None = None,
+    scenarios: list[Scenario] | None = None,
+    datapoints: list[SimulationDatapoint] | None = None,
+    dataset_id: str | None = None,
+    max_turns: int = 10,
+    sim_model: str = DEFAULT_MODEL,
+    evaluator_names: list[str] | None = None,
+    parallelism: int = 5,
+    user_simulator: BaseAgent | None = None,
+    judge: BaseAgent | None = None,
+    hooks: SimulationHooks | None = None,
+    generation_client: AsyncOpenAI | None = None,
+    upload_results: bool = True,
+    evaluation_description: str | None = None,
+    orq_results_path: str | None = None,
+    exit_on_failure: bool = True,
+    save: bool = False,
+    report: str | Path | None = None,
+) -> SimulationRun:
+    """Internal counterpart of :func:`simulate` that returns the full ``SimulationRun``.
+
+    Same keyword-only signature as :func:`simulate` (which is a thin
+    ``.results`` unwrapper around this). Exists so callers that need the full
+    run (e.g. the CLI, for its experiment URL / executive summary / save
+    plumbing) don't have to rebuild it from the results list.
     """
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
@@ -216,6 +275,11 @@ async def generate_and_simulate(
     Orq; other targets must provide ``agent_description``. A missing or blank
     description from both sources raises ``ValueError`` before generation begins.
 
+    ``evaluation_description``: Optional human-readable note passed straight
+    through to the uploaded experiment (shown as its description in the Orq UI).
+    Pure metadata — nothing branches on it, and it only matters when
+    ``upload_results`` is ``True``. Leave ``None`` for local-only runs.
+
     ``emit_datapoints``: Optional callback invoked with the generated datapoints
     before simulation — used by the CLI's ``--datapoints`` to persist the
     exact inputs.
@@ -228,6 +292,60 @@ async def generate_and_simulate(
     ``report``: Optional path to write the full SimulationRun report JSON
     (results + scorer averages + metadata). When omitted and ``save`` is
     ``True``, the run is auto-saved under ``.evaluatorq/sim-runs/``.
+    """
+    run = await _generate_and_simulate_run(
+        evaluation_name=evaluation_name,
+        agent_description=agent_description,
+        target=target,
+        num_personas=num_personas,
+        num_scenarios=num_scenarios,
+        max_turns=max_turns,
+        sim_model=sim_model,
+        evaluator_names=evaluator_names,
+        parallelism=parallelism,
+        user_simulator=user_simulator,
+        judge=judge,
+        hooks=hooks,
+        generation_client=generation_client,
+        upload_results=upload_results,
+        evaluation_description=evaluation_description,
+        orq_results_path=orq_results_path,
+        exit_on_failure=exit_on_failure,
+        emit_datapoints=emit_datapoints,
+        save=save,
+        report=report,
+    )
+    return run.results
+
+
+async def _generate_and_simulate_run(
+    *,
+    evaluation_name: str = '',
+    agent_description: str | None = None,
+    target: str | Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = None,
+    num_personas: int = 5,
+    num_scenarios: int = 5,
+    max_turns: int = 10,
+    sim_model: str = DEFAULT_MODEL,
+    evaluator_names: list[str] | None = None,
+    parallelism: int = 5,
+    user_simulator: BaseAgent | None = None,
+    judge: BaseAgent | None = None,
+    hooks: SimulationHooks | None = None,
+    generation_client: AsyncOpenAI | None = None,
+    upload_results: bool = True,
+    evaluation_description: str | None = None,
+    orq_results_path: str | None = None,
+    exit_on_failure: bool = True,
+    emit_datapoints: EmitDatapoints | None = None,
+    save: bool = False,
+    report: str | Path | None = None,
+) -> SimulationRun:
+    """Internal counterpart of :func:`generate_and_simulate` returning the full ``SimulationRun``.
+
+    Same keyword-only signature as :func:`generate_and_simulate` (which is a
+    thin ``.results`` unwrapper around this). See :func:`_simulate_run` for
+    why this split exists.
     """
     from evaluatorq.common.async_utils import await_maybe
     from evaluatorq.simulation.hooks import DefaultHooks, SimStage
@@ -638,7 +756,7 @@ async def _simulate_core(
     hooks: SimulationHooks | None = None,
     save: bool = False,
     run_output: str | Path | None = None,
-) -> list[SimulationResult]:
+) -> SimulationRun:
     """Core simulation logic (runs inside the orq.simulation.pipeline span).
 
     Resolves the target (callable, ``AgentTarget``, or ``"agent:"``/``"deployment:"`` string),
@@ -646,7 +764,10 @@ async def _simulate_core(
     hooks (``on_confirm`` gate → ``on_run_start`` → ``on_run_complete``) around
     ``_simulate_via_evaluatorq``, which routes execution through evaluatorq's
     upload, CI gating, and results display. Per-datapoint / per-turn hooks fire
-    inside ``SimulationRunner``.
+    inside ``SimulationRunner``. Always builds and returns the full
+    ``SimulationRun`` on the success path; only persists it to disk when
+    ``save`` is ``True``. The ``SimulationDroppedError`` abort path re-raises
+    with partial results instead of returning a run.
     """
     from evaluatorq.common.async_utils import await_maybe
     from evaluatorq.common.tracing import set_span_attrs
@@ -719,6 +840,9 @@ async def _simulate_core(
     # hook exception policy); runner/target cleanup lives inside
     # _simulate_via_evaluatorq's own finally, so it runs regardless.
     results: list[SimulationResult] = []
+    # Filled by evaluatorq() with the uploaded experiment's URL (if any) so we can
+    # persist it on the SimulationRun and surface it in the terminal / dashboard.
+    experiment_url_out: list[str] = []
     await await_maybe(resolved_hooks.on_run_start(run_meta))
     try:
         results = await _simulate_via_evaluatorq(
@@ -741,6 +865,7 @@ async def _simulate_core(
             pipeline_span=pipeline_span,
             hooks=resolved_hooks,
             run_id=run_id,
+            experiment_url_out=experiment_url_out,
         )
         # Fire on_evaluator_complete here — AFTER results is assigned and
         # OUTSIDE evaluatorq's per-scorer try/except — so an unguarded hook
@@ -761,34 +886,40 @@ async def _simulate_core(
         await await_maybe(resolved_hooks.on_run_complete(results))
         await await_maybe(resolved_hooks.on_stage_end(SimStage.SIMULATE, {'num_results': len(results)}))
 
-    # Persist only on the success path (an aborted run re-raised above).
-    # _resolve_target's kind hint resolves the target_kind the dashboard reads.
+    # Always build the run on the success path (an aborted run re-raised
+    # above) so every caller — SDK and CLI alike — gets the full
+    # SimulationRun (target/agent metadata, run_id, experiment_url) without
+    # having to rebuild it from the bare results list.
+    # _resolve_target's kind hint resolves the target_kind the dashboard reads;
+    # hint is 'orq_agent' for AgentTarget / "agent:" strings, 'orq_deployment'
+    # for "deployment:" strings, and None for plain callables.
+    target_kind = target_kind_hint or 'callback'
+    agent_info = None
+    if target_kind == 'orq_agent':
+        agent_key = getattr(target_agent, 'agent_key', None) or target_name.removeprefix('agent:')
+        agent_info = await fetch_agent_info(agent_key)
+    run = build_simulation_run(
+        run_name=evaluation_name or 'sim',
+        mode='simulate' if caller == 'simulate' else 'run',
+        target_kind=target_kind,
+        target=target_name,
+        target_model=target_model if isinstance(target_model, str) else None,
+        max_turns=max_turns,
+        agent_info=agent_info,
+        evaluator_names=resolved_evaluator_names,
+        results=results,
+        run_id=run_id,
+        experiment_url=experiment_url_out[0] if experiment_url_out else None,
+    )
+
+    # Persist only when the caller opts in (save=True).
     # TODO(RES-963): inline because on_run_complete carries no run metadata and
     # hooks aren't yet composable; move to a save hook once that lands.
     if save:
-        # hint is 'orq_agent' for AgentTarget / "agent:" strings, 'orq_deployment'
-        # for "deployment:" strings, and None for plain callables.
-        target_kind = target_kind_hint or 'callback'
         # A persistence failure (disk full, read-only .evaluatorq/, perms, or the
         # collision-exhaustion RuntimeError) must NOT discard a completed, paid-for
-        # run. Log and still return results — the saved file is a convenience.
+        # run. Log and still return the run — the saved file is a convenience.
         try:
-            agent_info = None
-            if target_kind == 'orq_agent':
-                agent_key = getattr(target_agent, 'agent_key', None) or target_name.removeprefix('agent:')
-                agent_info = await fetch_agent_info(agent_key)
-            run = build_simulation_run(
-                run_name=evaluation_name or 'sim',
-                mode='simulate' if caller == 'simulate' else 'run',
-                target_kind=target_kind,
-                target=target_name,
-                target_model=target_model if isinstance(target_model, str) else None,
-                max_turns=max_turns,
-                agent_info=agent_info,
-                evaluator_names=resolved_evaluator_names,
-                results=results,
-                run_id=run_id,
-            )
             if run_output is not None:
                 write_report(run, Path(run_output))
                 saved_path = Path(run_output)
@@ -801,7 +932,7 @@ async def _simulate_core(
             # collision RuntimeError, and pydantic serialization errors
             # (PydanticSerializationError <: ValueError) from model_dump_json.
             logger.exception(f'Failed to save simulation run (results still returned): {exc}')
-    return results
+    return run
 
 
 def _resolve_target(
@@ -1154,8 +1285,13 @@ async def _simulate_via_evaluatorq(
     pipeline_span: Span | None,
     hooks: SimulationHooks,
     run_id: str | None = None,
+    experiment_url_out: list[str] | None = None,
 ) -> list[SimulationResult]:
-    """Wrap simulation Datapoints as evaluatorq DataPoints and run."""
+    """Wrap simulation Datapoints as evaluatorq DataPoints and run.
+
+    ``experiment_url_out``, when provided, is populated with the uploaded Orq
+    experiment's URL (empty when the upload is skipped or fails).
+    """
     from datetime import datetime, timezone
 
     from evaluatorq.common.tracing import record_token_usage, set_span_attrs
@@ -1207,6 +1343,7 @@ async def _simulate_via_evaluatorq(
             _send_results=upload_results,
             _exit_on_failure=exit_on_failure,
             _base_url=upload_base_url,
+            _experiment_url_out=experiment_url_out,
         )
     finally:
         # Close the runner, then any target that owns resources (e.g.

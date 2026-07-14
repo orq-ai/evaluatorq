@@ -74,7 +74,7 @@ async def test_generate_and_simulate_uses_orq_agent_description_when_omitted(mon
         ),
         patch(
             "evaluatorq.simulation.api._simulate_core",
-            new=AsyncMock(return_value=[]),
+            new=AsyncMock(return_value=MagicMock(results=[])),
         ),
     ):
         await generate_and_simulate(target=target)
@@ -104,7 +104,7 @@ async def test_generate_and_simulate_prefers_an_explicit_description(monkeypatch
         ),
         patch(
             "evaluatorq.simulation.api._simulate_core",
-            new=AsyncMock(return_value=[]),
+            new=AsyncMock(return_value=MagicMock(results=[])),
         ),
     ):
         await generate_and_simulate(
@@ -248,7 +248,7 @@ async def test_generate_and_simulate_emit_datapoints_called_once(monkeypatch):
         ),
         patch(
             "evaluatorq.simulation.api._simulate_core",
-            new=AsyncMock(return_value=[]),
+            new=AsyncMock(return_value=MagicMock(results=[])),
         ),
     ):
         await generate_and_simulate(

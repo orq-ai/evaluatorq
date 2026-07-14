@@ -379,12 +379,23 @@ class RichHooks:
             return
         self.print_summary(results)
 
-    def print_summary(self, results: list[SimulationResult], *, executive_summary: str | None = None) -> None:
+    def print_summary(
+        self,
+        results: list[SimulationResult],
+        *,
+        executive_summary: str | None = None,
+        experiment_url: str | None = None,
+    ) -> None:
         """Print the final summary once, optionally including generated prose."""
         if self._summary_rendered:
             return
         self._summary_rendered = True
         from evaluatorq.simulation.reports.display import print_simulation_summary
 
-        print_simulation_summary(results, executive_summary=executive_summary, console=self._console)
+        print_simulation_summary(
+            results,
+            executive_summary=executive_summary,
+            experiment_url=experiment_url,
+            console=self._console,
+        )
         self._console.print('[dim]Tip: explore results with "eq dashboard .evaluatorq/sim-runs"[/dim]')
