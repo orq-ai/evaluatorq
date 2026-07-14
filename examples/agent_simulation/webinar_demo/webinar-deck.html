@@ -983,7 +983,7 @@
 
       <svg viewBox="0 0 1580 300" xmlns="http://www.w3.org/2000/svg"
         style="width:100%; display:block; margin:36px auto 0;"
-        aria-label="Left-to-right pipeline: agent description in, generate, simulate, judge, results out">
+        aria-label="Left-to-right pipeline: generate, simulate, judge">
         <defs>
           <marker id="pArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
             orient="auto-start-reverse">
@@ -992,46 +992,34 @@
         </defs>
 
         <!-- boxes -->
-        <g font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="27" font-weight="600"
+        <g font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="30" font-weight="600"
           text-anchor="middle">
-          <rect x="10" y="105" width="250" height="120" rx="14" fill="#FFFFFF" stroke="#FF6B4A" stroke-width="1.75" />
-          <text x="135" y="158" fill="#141319">agent</text>
-          <text x="135" y="190" fill="#141319">description</text>
+          <rect x="190" y="100" width="280" height="128" rx="16" fill="#FFFFFF" stroke="#DDDDDD" stroke-width="1.75" />
+          <text x="330" y="176" fill="#141319">Generate</text>
 
-          <rect x="338" y="105" width="250" height="120" rx="14" fill="#FFFFFF" stroke="#DDDDDD" stroke-width="1.75" />
-          <text x="463" y="176" fill="#141319">Generate</text>
+          <rect x="650" y="100" width="280" height="128" rx="16" fill="#FFFFFF" stroke="#025558" stroke-width="1.75" />
+          <text x="790" y="176" fill="#141319">Simulate</text>
 
-          <rect x="666" y="105" width="250" height="120" rx="14" fill="#FFFFFF" stroke="#025558" stroke-width="1.75" />
-          <text x="791" y="176" fill="#141319">Simulate</text>
-
-          <rect x="994" y="105" width="250" height="120" rx="14" fill="#FFFFFF" stroke="#DDDDDD" stroke-width="1.75" />
-          <text x="1119" y="176" fill="#141319">Judge</text>
-
-          <rect x="1322" y="105" width="250" height="120" rx="14" fill="#141319" />
-          <text x="1447" y="176" fill="#F5F5F5">Results</text>
+          <rect x="1110" y="100" width="280" height="128" rx="16" fill="#FFFFFF" stroke="#DDDDDD" stroke-width="1.75" />
+          <text x="1250" y="176" fill="#141319">Judge</text>
         </g>
 
         <!-- flow -->
         <g stroke="#808080" stroke-width="1.75" fill="none">
-          <path d="M260 165 L338 165" marker-end="url(#pArrow)" />
-          <path d="M588 165 L666 165" marker-end="url(#pArrow)" />
-          <path d="M916 165 L994 165" marker-end="url(#pArrow)" />
-          <path d="M1244 165 L1322 165" marker-end="url(#pArrow)" />
+          <path d="M470 164 L650 164" marker-end="url(#pArrow)" />
+          <path d="M930 164 L1110 164" marker-end="url(#pArrow)" />
         </g>
 
         <!-- step labels -->
-        <g font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="15" fill="#808080"
+        <g font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="16" fill="#808080"
           text-anchor="middle">
-          <text x="135" y="92" fill="#FF6B4A">input</text>
-          <text x="1447" y="92" fill="#FF6B4A">output</text>
-
-          <text x="299" y="147">sim generate</text>
-          <text x="627" y="147">sim run</text>
+          <text x="330" y="86" fill="#FF6B4A">sim generate</text>
+          <text x="790" y="86" fill="#FF6B4A">sim run</text>
         </g>
       </svg>
       <p class="cmd-note" style="margin-top:18px;">
-        One input, one pass, two outputs: judge scores you can read, and a
-        reusable dataset for your evaluation pipeline.
+        Generate the tests, simulate multi-turn, judge every turn — scores you
+        can read and a dataset you can reuse.
       </p>
     </div>
   </section>

@@ -425,11 +425,11 @@ async def test_simulate_report_writes_explicit_path(tmp_path: Path, monkeypatch:
 
 
 @pytest.mark.asyncio
-async def test_simulate_run_output_alias_deprecated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_simulate_run_output_alias_removed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     explicit = tmp_path / "legacy.json"
-    with pytest.warns(DeprecationWarning, match="run_output"):
+    with pytest.raises(TypeError, match="run_output"):
         await _run_simulate(runs_dir=tmp_path, monkeypatch=monkeypatch, save=True, run_output=str(explicit))
-    assert explicit.exists()
+    assert not explicit.exists()
 
 
 @pytest.mark.asyncio

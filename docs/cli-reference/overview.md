@@ -17,7 +17,7 @@ Subcommands are registered at startup. `eq redteam` requires the `redteam` extra
     .evaluatorq/sim-runs` scopes to simulation. Passing a single JSON report file
     is an optional direct deep-link. The legacy `eq redteam ui` / `eq sim ui`
     Streamlit commands remain callable but are deprecated. See
-    [Dashboard](dashboard.md) and [Simulation](simulation.md).
+    [Dashboard](../dashboard.md) and [Simulation](simulation.md).
 
 Two command groups have their own pages:
 
@@ -28,10 +28,10 @@ Two command groups have their own pages:
 
 !!! note "Simulation I/O flags are consistent across commands"
     Use `--input` / `-i` for an input datapoints file and `--output` / `-o` for
-    generated datapoints or results. The older domain-specific names remain as
-    compatibility aliases:
+    generated datapoints or results. The older domain-specific names below have
+    been **removed** — use the current name instead:
 
-    | Old | New | Command(s) |
+    | Removed | Use instead | Command(s) |
     |---|---|---|
     | `--datapoints` / `-d` | `--input` / `-i` | `sim simulate` |
     | `--results` | `--output` / `-o` | `sim simulate`, `sim run` |
@@ -51,11 +51,11 @@ Two command groups have their own pages:
 
     Unchanged: `sim export --output`, `--no-save`, `--dataset-format`, `redteam --save`.
 
-    **Deprecated aliases** — still work but warn, to be removed in the next major:
+    **Removed aliases** — these no longer work; calling them raises an error:
 
-    - SDK `simulate(run_output=...)` / `generate_and_simulate(run_output=...)` → use `report=...` (emits a Python `DeprecationWarning`)
-    - SDK `red_team(output_dir=...)` → use `artifacts_dir=...` (emits a Python `DeprecationWarning`)
-    - CLI `redteam run --output-dir` → use `--artifacts-dir` (prints a deprecation notice to stderr)
+    - SDK `simulate(run_output=...)` / `generate_and_simulate(run_output=...)` — removed, use `report=...` (raises `TypeError`)
+    - SDK `red_team(output_dir=...)` — removed, use `artifacts_dir=...` (raises `TypeError`)
+    - CLI `redteam run --output-dir` — removed, use `--artifacts-dir` (no such option)
 
 !!! note "Simulation validation"
     Use `eq sim validate --input PATH`. The older `eq sim validate-dataset PATH`

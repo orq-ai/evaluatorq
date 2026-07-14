@@ -271,7 +271,7 @@ from evaluatorq.simulation import generate_and_simulate
 
 results = await generate_and_simulate(
     evaluation_name="support-agent-sim",
-    target="agent:my-support-agent",     # or target_callback= for your own agent
+    target="agent:my-support-agent",     # or pass a callable as target= for your own agent
     agent_description="Customer support agent handling refunds and orders.",
     num_personas=3,
     num_scenarios=4,                     # → 12 persona × scenario simulations
@@ -295,5 +295,5 @@ cases against any target. See
 ### Which agent frameworks does simulation work with?
 
 LangGraph, the OpenAI Agents SDK, Pydantic AI, CrewAI, a plain async callback
-(`target_callback=`), or a hosted Orq agent (`target="agent:<key>"`) — see the
+(passed as `target=`), or a hosted Orq agent (`target="agent:<key>"`) — see the
 [framework demos](guides/agent-simulation.md#external-framework-demos).

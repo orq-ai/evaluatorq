@@ -31,7 +31,7 @@ eq redteam run --target agent:<key> [OPTIONS]
 | `--max-static-datapoints` | `int \| None` / `None` | Cap static (dataset) datapoints. |
 | `--no-cleanup-memory` | `bool` / `False` | Skip memory entity cleanup after dynamic runs. |
 | `--dataset` | `str \| None` / `None` | Dataset source: local path, `hf:org/repo`, or `hf:org/repo/file.json`. |
-| `--artifacts-dir` | `Path \| None` / `None` | Directory for saved JSON files. Required when `--save detail`. (`--output-dir` is a deprecated alias.) |
+| `--artifacts-dir` | `Path \| None` / `None` | Directory for saved JSON files. Required when `--save detail`. (`--output-dir` was removed; use `--artifacts-dir`.) |
 | `--save` | `none \| final \| detail` / `final` | What to persist: `none` (no files), `final` (summary only), or `detail` (all stage artifacts). |
 | `--report` | `Path \| None` / `None` | Path to write the report JSON. |
 | `--report-md` | `Path \| None` / `None` | Directory for an auto-named Markdown report. |
@@ -43,7 +43,7 @@ eq redteam run --target agent:<key> [OPTIONS]
 
 **Delivery methods** (`--delivery-method`): `DAN`, `role-play`, `skeleton-key`, `base64`, `leetspeak`, `multilingual`, `character-spacing`, `crescendo`, `many-shot`, `authority-impersonation`, `refusal-suppression`, `direct-request`, `code-elicitation`, `code-assistance`, `tool-response`, `word-substitution`.
 
-**Saving results.** Persistence is controlled by two flags. `--save` accepts `none` (no files), `final` (summary JSON only), or `detail` (all per-stage artifacts). `--artifacts-dir DIR` sets where JSON is written and is **required** when `--save detail` (`--output-dir` is accepted as a deprecated alias).
+**Saving results.** Persistence is controlled by two flags. `--save` accepts `none` (no files), `final` (summary JSON only), or `detail` (all per-stage artifacts). `--artifacts-dir DIR` sets where JSON is written and is **required** when `--save detail` (`--output-dir` was removed; use `--artifacts-dir`).
 
 ---
 

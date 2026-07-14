@@ -247,11 +247,7 @@ class SimulationRunner:
         judge: BaseAgent | None = None,
         hooks: SimulationHooks | None = None,
         llm_client: AsyncOpenAI | None = None,
-        **deprecated_kwargs: Any,
     ) -> None:
-        from evaluatorq.simulation._target_alias import resolve_target_alias
-
-        target = resolve_target_alias(target=target, deprecated_kwargs=deprecated_kwargs, caller='SimulationRunner')
         if not target_agent and not target:
             raise ValueError('Must provide either target_agent or target')
         if max_turns < 1:

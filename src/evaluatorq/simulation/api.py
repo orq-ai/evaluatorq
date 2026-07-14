@@ -73,7 +73,6 @@ async def simulate(
     exit_on_failure: bool = True,
     save: bool = False,
     report: str | Path | None = None,
-    **deprecated_kwargs: Any,
 ) -> list[SimulationResult]:
     """Run agent simulations through the evaluatorq() framework.
 
@@ -130,20 +129,10 @@ async def simulate(
         report: Optional path to write the full SimulationRun report JSON
             (results + scorer averages + metadata). When omitted and ``save``
             is ``True``, the run is auto-saved under ``.evaluatorq/sim-runs/``.
-            ``run_output`` is accepted as a deprecated alias for this parameter.
     """
-    from evaluatorq.simulation._target_alias import resolve_renamed_kwarg, resolve_target_alias
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
 
-    report = resolve_renamed_kwarg(
-        new_value=report,
-        deprecated_kwargs=deprecated_kwargs,
-        old_name='run_output',
-        new_name='report',
-        caller='simulate',
-    )
-    target = resolve_target_alias(target=target, deprecated_kwargs=deprecated_kwargs, caller='simulate')
     await init_tracing_if_needed()
 
     try:
@@ -205,7 +194,6 @@ async def generate_and_simulate(
     emit_datapoints: EmitDatapoints | None = None,
     save: bool = False,
     report: str | Path | None = None,
-    **deprecated_kwargs: Any,
 ) -> list[SimulationResult]:
     """Generate personas/scenarios, then run simulations via evaluatorq().
 
@@ -240,26 +228,12 @@ async def generate_and_simulate(
     ``report``: Optional path to write the full SimulationRun report JSON
     (results + scorer averages + metadata). When omitted and ``save`` is
     ``True``, the run is auto-saved under ``.evaluatorq/sim-runs/``.
-    ``run_output`` is accepted as a deprecated alias for this parameter.
     """
     from evaluatorq.common.async_utils import await_maybe
-    from evaluatorq.simulation._target_alias import resolve_renamed_kwarg, resolve_target_alias
     from evaluatorq.simulation.hooks import DefaultHooks, SimStage
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
 
-    report = resolve_renamed_kwarg(
-        new_value=report,
-        deprecated_kwargs=deprecated_kwargs,
-        old_name='run_output',
-        new_name='report',
-        caller='generate_and_simulate',
-    )
-    target = resolve_target_alias(
-        target=target,
-        deprecated_kwargs=deprecated_kwargs,
-        caller='generate_and_simulate',
-    )
     await init_tracing_if_needed()
 
     try:
@@ -885,8 +859,7 @@ def _resolve_target(
         return None, resolved, 'orq_agent'
     if resolved is None:
         raise ValueError(
-            'A target is required: pass target= (an AgentTarget, a callable, '
-            "'agent:<key>', or 'deployment:<key>')."
+            "A target is required: pass target= (an AgentTarget, a callable, 'agent:<key>', or 'deployment:<key>')."
         )
     if not callable(resolved):
         raise TypeError(

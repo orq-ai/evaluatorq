@@ -135,25 +135,20 @@ async def test_generate_and_simulate_rejects_orq_agents_without_a_description():
 
 
 @pytest.mark.asyncio
-async def test_generate_and_simulate_deprecates_target_callback(monkeypatch):
+async def test_generate_and_simulate_rejects_target_callback(monkeypatch):
     monkeypatch.delenv("ORQ_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     from openai import AsyncOpenAI
 
     injected = AsyncOpenAI(api_key="sk-test", base_url="https://example.test/v1")
-    with patch(
-        "evaluatorq.simulation.generators.PersonaGenerator.generate",
-        new=AsyncMock(side_effect=RuntimeError("reached-generation")),
-    ):
-        with pytest.warns(DeprecationWarning, match="target_callback"):
-            with pytest.raises(RuntimeError, match="reached-generation"):
-                await generate_and_simulate(
-                    agent_description="a test agent",
-                    target_callback=lambda messages: "ok",
-                    num_personas=1,
-                    num_scenarios=1,
-                    generation_client=injected,
-                )
+    with pytest.raises(TypeError, match="target_callback"):
+        await generate_and_simulate(
+            agent_description="a test agent",
+            target_callback=lambda messages: "ok",
+            num_personas=1,
+            num_scenarios=1,
+            generation_client=injected,
+        )
 
 
 @pytest.mark.asyncio

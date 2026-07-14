@@ -543,7 +543,7 @@ def test_ui_missing_path_errors(tmp_path: Path) -> None:
 
 def test_simulate_requires_target(tmp_path: Path) -> None:
     dp_file = _make_datapoints_file(tmp_path)
-    result = runner.invoke(app, ["simulate", "--datapoints", str(dp_file)])
+    result = runner.invoke(app, ["simulate", "--input", str(dp_file)])
     assert result.exit_code != 0
 
 
@@ -553,7 +553,7 @@ def test_simulate_rejects_multiple_targets(tmp_path: Path) -> None:
         app,
         [
             "simulate",
-            "--datapoints", str(dp_file),
+            "--input", str(dp_file),
             "--target", "agent:k",
             "--agent-key", "k",
         ],
@@ -567,7 +567,7 @@ def test_simulate_missing_datapoints_file(tmp_path: Path) -> None:
         app,
         [
             "simulate",
-            "--datapoints", str(tmp_path / "no.jsonl"),
+            "--input", str(tmp_path / "no.jsonl"),
             "--openai-model", "gpt-4o",
         ],
         env={"OPENAI_API_KEY": "test-key"},
@@ -581,7 +581,7 @@ def test_simulate_unknown_evaluator(tmp_path: Path) -> None:
         app,
         [
             "simulate",
-            "--datapoints", str(dp_file),
+            "--input", str(dp_file),
             "--openai-model", "gpt-4o",
             "--evaluator", "nonexistent_evaluator_xyz",
         ],
@@ -610,7 +610,7 @@ def test_simulate_success_no_save(tmp_path: Path) -> None:
             app,
             [
                 "simulate",
-                "--datapoints", str(dp_file),
+                "--input", str(dp_file),
                 "--openai-model", "gpt-4o",
                 "--no-save",
             ],
@@ -697,7 +697,7 @@ def test_simulate_writes_results_file(tmp_path: Path) -> None:
             app,
             [
                 "simulate",
-                "--datapoints", str(dp_file),
+                "--input", str(dp_file),
                 "--openai-model", "gpt-4o",
                 "--output", str(out_file),
                 "--no-save",
@@ -727,7 +727,7 @@ def test_simulate_report_writes_full_report(
             app,
             [
                 "simulate",
-                "--datapoints", str(dp_file),
+                "--input", str(dp_file),
                 "--openai-model", "gpt-4o",
                 "--report", str(report),
                 "--no-save",
@@ -785,7 +785,7 @@ def test_simulate_rejects_three_targets(tmp_path: Path) -> None:
         app,
         [
             "simulate",
-            "--datapoints", str(dp_file),
+            "--input", str(dp_file),
             "--agent-key", "k",
             "--vercel-url", "http://x",
             "--openai-model", "gpt-4o",
@@ -815,7 +815,7 @@ def test_simulate_forwards_flags(tmp_path: Path) -> None:
             app,
             [
                 "simulate",
-                "--datapoints", str(dp_file),
+                "--input", str(dp_file),
                 "--openai-model", "gpt-4o",
                 "--sim-model", "custom-model",
                 "--max-turns", "7",
@@ -852,7 +852,7 @@ def test_simulate_impl_forwards_sim_model_to_simulate(tmp_path: Path, monkeypatc
             app,
             [
                 "simulate",
-                "--datapoints", str(dp_file),
+                "--input", str(dp_file),
                 "--openai-model", "gpt-4o",
                 "--sim-model", "custom-model",
                 "--no-save",
@@ -875,7 +875,7 @@ def test_simulate_evaluator_absent_forwards_none(tmp_path: Path) -> None:
 
         result = runner.invoke(
             app,
-            ["simulate", "--datapoints", str(dp_file), "--openai-model", "gpt-4o", "--no-save"],
+            ["simulate", "--input", str(dp_file), "--openai-model", "gpt-4o", "--no-save"],
             env={"OPENAI_API_KEY": "test-key"},
         )
 
@@ -896,7 +896,7 @@ def test_simulate_evaluator_repeated_forwards_list(tmp_path: Path) -> None:
             app,
             [
                 "simulate",
-                "--datapoints", str(dp_file),
+                "--input", str(dp_file),
                 "--openai-model", "gpt-4o",
                 "--evaluator", "goal_achieved",
                 "--evaluator", "criteria_met",
@@ -1101,7 +1101,7 @@ def test_simulate_invalid_target_prefix_is_clean(tmp_path: Path) -> None:
         app,
         [
             "simulate",
-            "--datapoints", str(dp_file),
+            "--input", str(dp_file),
             "--target", "unknown:refund-agent-fixed",
             "--no-save",
         ],
@@ -1203,7 +1203,7 @@ def test_simulate_runtime_error_is_clean(tmp_path: Path) -> None:
 
         result = runner.invoke(
             app,
-            ["simulate", "--datapoints", str(dp_file), "--openai-model", "gpt-4o", "--no-save"],
+            ["simulate", "--input", str(dp_file), "--openai-model", "gpt-4o", "--no-save"],
             env={"OPENAI_API_KEY": "test-key"},
         )
 
@@ -1299,7 +1299,7 @@ def test_simulate_report_md_writes_dated_file(tmp_path: Path, monkeypatch: pytes
             app,
             [
                 "simulate",
-                "--datapoints", str(dp_file),
+                "--input", str(dp_file),
                 "--openai-model", "gpt-4o-mini",
                 "--yes",
                 "--no-save",
@@ -1372,7 +1372,7 @@ def test_generate_target_agent_uses_context_description_when_omitted(tmp_path: P
             [
                 "generate",
                 "--target", "agent:refund-agent-fixed",
-                "--datapoints", str(out_file),
+                "--output", str(out_file),
             ],
             env={"ORQ_API_KEY": "test-key"},
         )
@@ -1397,7 +1397,7 @@ def test_generate_datapoints_roundtrips_through_simulate_loader(tmp_path: Path) 
         mock_impl.return_value = datapoints
         result = runner.invoke(
             app,
-            ["generate", "--agent-description", "bot", "--datapoints", str(out_file)],
+            ["generate", "--agent-description", "bot", "--output", str(out_file)],
             env={"ORQ_API_KEY": "", "OPENAI_API_KEY": "test-key"},
         )
 
@@ -1417,7 +1417,7 @@ def test_generate_datapoints_passes_validate_dataset(tmp_path: Path) -> None:
         mock_impl.return_value = _make_datapoints(2)
         gen = runner.invoke(
             app,
-            ["generate", "--agent-description", "bot", "--datapoints", str(out_file)],
+            ["generate", "--agent-description", "bot", "--output", str(out_file)],
             env={"OPENAI_API_KEY": "test-key"},
         )
     assert gen.exit_code == 0, gen.output
@@ -1435,7 +1435,7 @@ def test_generate_no_datapoints_runtime_error_is_clean(tmp_path: Path) -> None:
         mock_impl.side_effect = RuntimeError("first-message generation produced no datapoints")
         result = runner.invoke(
             app,
-            ["generate", "--agent-description", "bot", "--datapoints", str(out_file)],
+            ["generate", "--agent-description", "bot", "--output", str(out_file)],
             env={"OPENAI_API_KEY": "test-key"},
         )
 
@@ -1451,7 +1451,7 @@ def test_generate_rejects_zero_personas(tmp_path: Path) -> None:
         [
             "generate",
             "--agent-description", "bot",
-            "--datapoints", str(out_file),
+            "--output", str(out_file),
             "--num-personas", "0",
         ],
         env={"OPENAI_API_KEY": "test-key"},
@@ -1474,7 +1474,7 @@ def test_generate_forwards_flags(tmp_path: Path) -> None:
             [
                 "generate",
                 "--agent-description", "A helpful bot",
-                "--datapoints", str(out_file),
+                "--output", str(out_file),
                 "--sim-model", "custom-model",
                 "--num-personas", "2",
                 "--num-scenarios", "4",
@@ -1546,7 +1546,7 @@ def test_generate_forwards_sim_model(monkeypatch):
         [
             "generate",
             "--agent-description", "x",
-            "--datapoints", "dp.jsonl",
+            "--output", "dp.jsonl",
             "--sim-model", "gpt-5.4-mini",
             "--num-personas", "1",
             "--num-scenarios", "1",
@@ -1717,7 +1717,7 @@ def test_simulate_yes_exits_clean(tmp_path: Path) -> None:
             app,
             [
                 "simulate",
-                "--datapoints", str(dp_file),
+                "--input", str(dp_file),
                 "--openai-model", "gpt-4o",
                 "--yes",
                 "--no-save",

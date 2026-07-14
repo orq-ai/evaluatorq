@@ -40,7 +40,7 @@ Targets — provide **exactly one**:
 | `--evaluator` | `str` (repeatable) / API defaults | Evaluator name(s). Repeatable. |
 | `--no-save` | `bool` / `False` | Skip writing to `.evaluatorq/sim-runs/`. |
 | `--datapoints` | `Path \| None` / `None` | Write generated datapoints to JSONL for reproducible re-runs. |
-| `--output` / `-o` | `Path \| None` / `None` | Path to write results JSONL. (`--results` is a compatibility alias.) |
+| `--output` / `-o` | `Path \| None` / `None` | Path to write results JSONL. (`--results` was removed; use `--output`.) |
 | `--report` | `Path \| None` / `None` | Path to write full SimulationRun report JSON. |
 | `--report-md` | `Path \| None` / `None` | Directory for an auto-named Markdown report. |
 | `--report-html` | `Path \| None` / `None` | Directory for an auto-named HTML report. |
@@ -64,7 +64,7 @@ and `--dataset-id`; the latter fetches the datapoints from an Orq dataset.
 
 | Flag | Type / Default | Description |
 |---|---|---|
-| `--input` / `-i` | `Path \| None` | Path to datapoints JSONL file. Mutually exclusive with `--dataset-id`. (`--datapoints` / `-d` are compatibility aliases.) |
+| `--input` / `-i` | `Path \| None` | Path to datapoints JSONL file. Mutually exclusive with `--dataset-id`. (`--datapoints` / `-d` were removed; use `--input`.) |
 | `--dataset-id` | `str \| None` | Fetch datapoints from an Orq dataset instead of a local file. Requires `ORQ_API_KEY`. |
 | `--name` / `-n` | `str` / `sim` | Run name for the run-store entry. |
 | `--sim-model` | `str` / `openai/gpt-5.4-mini` | Model for user-simulator and judge. |
@@ -72,7 +72,7 @@ and `--dataset-id`; the latter fetches the datapoints from an Orq dataset.
 | `--parallelism` | `int` / `5` | Concurrent simulations. |
 | `--evaluator` | `str` (repeatable) / API defaults | Evaluator name(s). Repeatable. |
 | `--no-save` | `bool` / `False` | Skip writing to `.evaluatorq/sim-runs/`. |
-| `--output` / `-o` | `Path \| None` / `None` | Path to write results JSONL. (`--results` is a compatibility alias.) |
+| `--output` / `-o` | `Path \| None` / `None` | Path to write results JSONL. (`--results` was removed; use `--output`.) |
 | `--report` | `Path \| None` / `None` | Path to write full SimulationRun report JSON. |
 | `--report-md` | `Path \| None` / `None` | Directory for an auto-named Markdown report. |
 | `--report-html` | `Path \| None` / `None` | Directory for an auto-named HTML report. |
@@ -116,7 +116,7 @@ eq sim generate --output dp.jsonl --agent-description "..."
 
 | Flag | Type / Default | Description |
 |---|---|---|
-| `--output` / `-o` | `Path` (required) | Path to write generated datapoints JSONL. (`--datapoints` is a compatibility alias.) |
+| `--output` / `-o` | `Path` (required) | Path to write generated datapoints JSONL. (`--datapoints` was removed; use `--output`.) |
 | `--agent-description` | `str \| None` / `None` | Free-text description of the agent. |
 | `--target` | `str \| None` / `None` | Agent target used to fetch the description when `--agent-description` is omitted. Accepts `agent:<key>`. |
 | `--sim-model` | `str` / `openai/gpt-5.4-mini` | Model for persona/scenario/first-message generation. |

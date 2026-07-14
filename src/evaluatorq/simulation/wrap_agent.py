@@ -64,13 +64,12 @@ def wrap_simulation_agent(
             "wrap_simulation_agent() no longer accepts 'evaluators='. Pass your "
             'evaluator list to evaluatorq(..., evaluators=...) instead. See CHANGELOG.'
         )
-    from evaluatorq.simulation._target_alias import resolve_target_alias
+    if deprecated_kwargs:
+        raise TypeError(
+            f'wrap_simulation_agent() got unexpected keyword argument(s): {", ".join(sorted(deprecated_kwargs))}'
+        )
 
-    resolved_target = resolve_target_alias(
-        target=target,
-        deprecated_kwargs=deprecated_kwargs,
-        caller='wrap_simulation_agent',
-    )
+    resolved_target = target
     if not resolved_target and agent_key:
         resolved_target = from_orq_deployment(agent_key)
     if not resolved_target:

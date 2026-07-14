@@ -166,9 +166,7 @@ def _render_summary_html(section: ReportSection) -> str:
     confidence = section.data.get('confidence', '')
     confidence_note = section.data.get('confidence_note', '')
     pill = _status_badge(f'{confidence} CONFIDENCE', 'warn') if confidence else ''  # ponytail: cosmetic pill
-    note = (
-        f'<br><span style="font-size:.8em;opacity:.7">{_esc(confidence_note)}</span>' if confidence_note else ''
-    )
+    note = f'<br><span style="font-size:.8em;opacity:.7">{_esc(confidence_note)}</span>' if confidence_note else ''
     return (
         '<section class="report-card exec-summary-narrative"><h2>'
         f'{_esc(section.title)} {pill}</h2>'
@@ -685,9 +683,7 @@ def export_html(
         '<title>Agent Simulation Report</title>\n'
         f'<style>\n{_load_css()}\n</style>'
     )
-    body_html = render_report_body(
-        results, target=target, run_date=run_date, executive_summary=executive_summary
-    )
+    body_html = render_report_body(results, target=target, run_date=run_date, executive_summary=executive_summary)
     return (
         '<!DOCTYPE html>\n'
         '<html lang="en">\n'

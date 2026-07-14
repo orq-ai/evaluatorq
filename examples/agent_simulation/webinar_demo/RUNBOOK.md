@@ -9,6 +9,30 @@ simulation command — see Gaps §1).
 > Status: validated end-to-end against the real provisioned agent
 > (`boh_creditcard_agent_demo`). Set `ORQ_API_KEY` to the banking workspace key.
 
+## Act 0 — Framing (open the talk, ~5 min)
+
+Cue bullets for the opening — say these before touching a terminal. The room may
+not know orq, the problem, or what "agent simulation" even means. (Fuller
+versions: webinar-script.html §01 open + §02 diagram + Q&A bank.)
+
+- **Who.** orq.ai = generative-AI collaboration platform: one control plane to
+  **build** agents · **ship** via the model router · **optimize** with
+  observability + evals. `evaluatorq` = the open-source eval engine (pip-install,
+  runs anywhere) — the sim we're demoing lives here, no platform lock-in.
+- **The problem.** Everyone here already evals — but the stack is *single-turn*:
+  golden sets + LLM-as-judge on isolated responses. Agent failures are
+  conversational — the user pivots, stalls, contradicts; it breaks at **turn 7,
+  not turn 1**. And on day one there's no dataset that encodes those dynamics.
+- **What agent simulation is.** Three LLMs in a loop: a **generator** writes
+  personas × scenarios from just the agent's description → a **user-simulator**
+  plays each persona multi-turn against **your agent** → a **judge** scores
+  whether it hit the goal. (Point at webinar-script.html §02 diagram.)
+- **Who this is for.** Anyone who's run a golden-set eval or shipped an agent.
+  No prior sim knowledge assumed — no dataset, labels, or annotation budget to start.
+- **Cooperative, not adversarial.** This is *not* red teaming. Red teaming is a
+  hostile attacker hunting exploits; simulation plays **realistic users trying to
+  get their job done**, and shows where the agent fails them.
+
 ## Audience questions this answers
 
 | Question | Step |
@@ -46,6 +70,8 @@ recreates them via the Orq Python SDK. All demo commands below default to
 
 **1. Generate personas × scenarios from just the agent's description.**
 No dataset, no examples — the Bank of Holland agent's own description seeds it.
+*What happens:* a generator LLM writes the persona × scenario grid from the
+description — the "coverage from nothing" step.
 
 ```bash
 uv run evaluatorq sim generate \
@@ -67,6 +93,8 @@ python -m json.tool < <(head -1 boh_datapoints.jsonl)          # pretty-print on
 
 **3. Run the simulation against the live Bank of Holland agent** using the frozen datapoints
 so we can re-run the *exact same* set later (Act 3a).
+*What happens:* the user-simulator LLM drives each conversation turn-by-turn;
+the judge LLM scores whether the agent met the goal + criteria.
 
 ```bash
 uv run evaluatorq sim simulate \

@@ -184,60 +184,28 @@ class TestSimulateWithInjectedTarget:
 
 
 class TestDeprecatedTargetCallback:
-    """target_callback= remains compatible but tells callers to migrate."""
+    """target_callback= is no longer accepted; callers must use target=."""
 
     @pytest.mark.asyncio
-    async def test_target_callback_warns_and_executes(
+    async def test_target_callback_is_rejected(
         self, monkeypatch: pytest.MonkeyPatch
     ):
-        """The legacy keyword still executes its target while warning callers."""
         monkeypatch.setenv("ORQ_API_KEY", "test-key")
 
         from evaluatorq.simulation.api import simulate
 
-        calls: list[int] = []
-
         async def legacy_target(messages: list[Message]) -> str:
-            calls.append(1)
             return "from legacy target"
 
         dp = _make_datapoint()
-        sim = _make_mock_user_simulator()
-        judge = _make_mock_judge()
 
-        resolved: dict[str, Any] = {}
-
-        # simulate() imports SimulationRunner inside the function body, so we
-        # patch the class where it is defined (the runner module) then also
-        # patch the name that simulate() binds locally.
-        import evaluatorq.simulation.runner.simulation as runner_mod
-
-        original_cls = runner_mod.SimulationRunner
-
-        class CapturingRunner(original_cls):  # type: ignore[valid-type]
-            def __init__(self, **kwargs: Any) -> None:
-                resolved.update(kwargs)
-                super().__init__(
-                    target=kwargs.get("target"),
-                    model=kwargs.get("model", "test"),
-                    max_turns=1,
-                    user_simulator=sim,
-                    judge=judge,
-                )
-
-        with patch.object(runner_mod, "SimulationRunner", CapturingRunner):
-            # Also patch where simulate() imports it from
-            with patch("evaluatorq.simulation.runner.simulation.SimulationRunner", CapturingRunner):
-                with pytest.warns(DeprecationWarning, match="target_callback"):
-                    await simulate(
-                        target_callback=legacy_target,
-                        datapoints=[dp],
-                        sim_model="test",
-                        max_turns=1,
-                    )
-
-        assert resolved.get("target") is legacy_target
-        assert calls
+        with pytest.raises(TypeError, match="target_callback"):
+            await simulate(
+                target_callback=legacy_target,
+                datapoints=[dp],
+                sim_model="test",
+                max_turns=1,
+            )
 
 
 class TestSimulateAutoRoutesAgentTarget:

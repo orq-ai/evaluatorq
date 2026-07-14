@@ -66,8 +66,8 @@ _FULL_SCENARIO = {
 
 
 class TestWrapSimulationAgent:
-    def test_target_callback_is_deprecated(self):
-        with pytest.warns(DeprecationWarning, match="target_callback"):
+    def test_target_callback_is_rejected(self):
+        with pytest.raises(TypeError, match="target_callback"):
             wrap_simulation_agent(target_callback=lambda _messages: "unused")
 
     @pytest.mark.asyncio

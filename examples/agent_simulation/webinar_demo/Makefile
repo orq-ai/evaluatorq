@@ -34,7 +34,7 @@ dashboard:
 	uv run evaluatorq dashboard .evaluatorq/sim-runs
 
 rerun:
-	uv run evaluatorq sim simulate --target agent:$(AGENT) --datapoints $(DATAPOINTS) \
+	uv run evaluatorq sim simulate --target agent:$(AGENT) --input $(DATAPOINTS) \
 		--max-turns $(MAX_TURNS) --parallelism $(PARALLELISM) --name boh-rerun
 
 upload:

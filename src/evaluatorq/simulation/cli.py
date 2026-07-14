@@ -9,11 +9,11 @@ Three execution verbs:
 under a single pipeline span (via ``generate_and_simulate``). It is not a literal
 ``generate`` + ``simulate`` pipe — it does not require an intermediate file. To
 capture the exact generated inputs for reproducible re-runs, pass
-``--datapoints PATH`` (then re-feed that file to ``sim simulate --datapoints``).
+``--datapoints PATH`` (then re-feed that file to ``sim simulate --input``).
 
 Usage:
     evaluatorq sim generate --agent-description "..." --datapoints dp.jsonl
-    evaluatorq sim simulate --datapoints dp.jsonl --target my-agent
+    evaluatorq sim simulate --input dp.jsonl --target my-agent
     evaluatorq sim run --agent-description "..." --openai-model gpt-4o-mini
     evaluatorq sim run --agent-description "..." --target my-agent --datapoints dp.jsonl
     evaluatorq sim export --input results.jsonl --output payload.json
@@ -302,8 +302,6 @@ def simulate(
         typer.Option(
             '--input',
             '-i',
-            '--datapoints',
-            '-d',
             help='Path to datapoints JSONL file (or use --dataset-id).',
         ),
     ] = None,
@@ -341,7 +339,7 @@ def simulate(
     ] = None,
     results_path: Annotated[
         Path | None,
-        typer.Option('--output', '-o', '--results', help='Path to write results JSONL.'),
+        typer.Option('--output', '-o', help='Path to write results JSONL.'),
     ] = None,
     report_path: Annotated[
         Path | None,
@@ -611,7 +609,7 @@ def run(
     ] = None,
     results_path: Annotated[
         Path | None,
-        typer.Option('--output', '-o', '--results', help='Path to write results JSONL.'),
+        typer.Option('--output', '-o', help='Path to write results JSONL.'),
     ] = None,
     report_path: Annotated[
         Path | None,
@@ -673,7 +671,7 @@ def run(
             '--datapoints',
             help=(
                 'Also write the generated datapoints (the simulate inputs) to this '
-                'JSONL path, for reproducible re-runs via `sim simulate --datapoints`.'
+                'JSONL path, for reproducible re-runs via `sim simulate --input`.'
             ),
         ),
     ] = None,
@@ -877,7 +875,7 @@ async def _run_impl(
 def generate(
     datapoints_path: Annotated[
         Path,
-        typer.Option('--output', '-o', '--datapoints', help='Path to write the generated datapoints JSONL.'),
+        typer.Option('--output', '-o', help='Path to write the generated datapoints JSONL.'),
     ],
     agent_description: Annotated[
         str | None,
@@ -921,7 +919,7 @@ def generate(
             help=(
                 'Write the orq.ai dataset-row envelope (inputs/expected_output, '
                 'persona & scenario JSON-stringified) instead of raw datapoints. '
-                'Feed the raw form to `sim simulate --datapoints`; feed this form '
+                'Feed the raw form to `sim simulate --input`; feed this form '
                 'to `sim upload-dataset` (or upload straight from the raw file).'
             ),
         ),
@@ -943,7 +941,7 @@ def generate(
     """Generate simulation datapoints from an agent description (no simulation).
 
     Builds personas x scenarios with generated first messages and writes them
-    as a datapoints JSONL file. Feed that file to ``sim simulate --datapoints``
+    as a datapoints JSONL file. Feed that file to ``sim simulate --input``
     to run — splitting generation out keeps the datapoint set frozen across
     simulate runs. No execution target is contacted; ``--target agent:<key>``
     is only used to fetch the agent description when ``--agent-description`` is

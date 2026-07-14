@@ -42,9 +42,7 @@ def build_redteam_facts(report: RedTeamReport) -> str:
     ]
 
     sev_bits = [
-        f'{name}: {summ.vulnerabilities_found}'
-        for name, summ in s.by_severity.items()
-        if summ.vulnerabilities_found
+        f'{name}: {summ.vulnerabilities_found}' for name, summ in s.by_severity.items() if summ.vulnerabilities_found
     ]
     if sev_bits:
         lines.append('Vulnerabilities by severity: ' + ', '.join(sev_bits))
@@ -54,18 +52,16 @@ def build_redteam_facts(report: RedTeamReport) -> str:
         cat = finding.attack.category
         cat_name = OWASP_CATEGORY_NAMES.get(cat, cat)
         explanation = finding.evaluation.explanation if finding.evaluation else ''
-        lines.extend(
-            [
-                (
-                    'Most severe confirmed finding — '
-                    f'severity {finding.attack.severity.value}, category {cat} ({cat_name}), '
-                    f'technique {finding.attack.attack_technique.value}, '
-                    f'{finding.execution.turns if finding.execution else 1} turn(s).'
-                ),
-                f'  Attack prompt: {truncate_text(extract_prompt(finding))}',
-                f'  Agent response: {truncate_text(extract_response(finding))}',
-            ]
-        )
+        lines.extend([
+            (
+                'Most severe confirmed finding — '
+                f'severity {finding.attack.severity.value}, category {cat} ({cat_name}), '
+                f'technique {finding.attack.attack_technique.value}, '
+                f'{finding.execution.turns if finding.execution else 1} turn(s).'
+            ),
+            f'  Attack prompt: {truncate_text(extract_prompt(finding))}',
+            f'  Agent response: {truncate_text(extract_response(finding))}',
+        ])
         if explanation:
             lines.append(f'  Evaluator rationale: {truncate_text(explanation)}')
 

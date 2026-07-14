@@ -32,8 +32,8 @@ def _make_scenario():
 
 
 class TestSimulationRunnerValidation:
-    def test_target_callback_is_deprecated(self):
-        with pytest.warns(DeprecationWarning, match="target_callback"):
+    def test_target_callback_is_rejected(self):
+        with pytest.raises(TypeError, match="target_callback"):
             SimulationRunner(target_callback=lambda msgs: "ok")
 
     def test_requires_target(self):

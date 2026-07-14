@@ -300,10 +300,6 @@ def run(
         Path | None,
         typer.Option('--artifacts-dir', help='Directory for saved JSON files. Required with --save detail.'),
     ] = None,
-    output_dir: Annotated[
-        Path | None,
-        typer.Option('--output-dir', hidden=True, help='Deprecated alias for --artifacts-dir.'),
-    ] = None,
     save: Annotated[
         SaveMode,
         typer.Option(
@@ -366,10 +362,6 @@ def run(
     from evaluatorq.redteam.contracts import EvaluatorConfig, LLMCallConfig, LLMConfig, TargetConfig
     from evaluatorq.redteam.exceptions import CancelledError, RedTeamError
     from evaluatorq.redteam.hooks import RichHooks
-
-    if output_dir is not None and artifacts_dir is None:
-        typer.echo('Warning: --output-dir is deprecated; use --artifacts-dir.', err=True)
-        artifacts_dir = output_dir
 
     # Allow comma-separated values within repeatable flags (-s a,b == -s a -s b).
     # Done before validation so the checks below see individual tokens.

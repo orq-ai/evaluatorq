@@ -300,7 +300,9 @@ def _render_summary_html(section: ReportSection) -> str:
     confidence = data.get('confidence', '')
     confidence_note = data.get('confidence_note', '')
     narrative = data.get('narrative')
-    pill = _status_badge(f'{confidence} CONFIDENCE', 'warn') if confidence else ''  # ponytail: cosmetic pill, color tunable
+    pill = (
+        _status_badge(f'{confidence} CONFIDENCE', 'warn') if confidence else ''
+    )  # ponytail: cosmetic pill, color tunable
     heading = f'<h2>{_esc(section.title)} {pill}</h2>'
     narrative_html = ''
     if narrative:

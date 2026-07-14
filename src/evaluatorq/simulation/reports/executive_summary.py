@@ -33,13 +33,10 @@ def build_sim_facts(results: list[SimulationResult]) -> str:
     broken = Counter(rule for r in results for rule in r.rules_broken)
     if broken:
         top_rule, top_count = broken.most_common(1)[0]
-        lines.extend(
-            [
-                f'Most-broken rule: {top_rule} (broken in {top_count} simulation(s))',
-                'Rules broken (by frequency): '
-                + ', '.join(f'{rule}: {count}' for rule, count in broken.most_common()),
-            ]
-        )
+        lines.extend([
+            f'Most-broken rule: {top_rule} (broken in {top_count} simulation(s))',
+            'Rules broken (by frequency): ' + ', '.join(f'{rule}: {count}' for rule, count in broken.most_common()),
+        ])
         example = next(
             (r for r in results if top_rule in r.rules_broken and not r.goal_achieved),
             None,

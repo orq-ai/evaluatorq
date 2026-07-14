@@ -103,9 +103,7 @@ def _criteria_rows(result: SimulationResult) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def _build_summary_section(
-    results: list[SimulationResult], executive_summary: str | None = None
-) -> ReportSection:
+def _build_summary_section(results: list[SimulationResult], executive_summary: str | None = None) -> ReportSection:
     total = len(results)
     achieved = sum(1 for r in results if r.goal_achieved and not _is_errored(r))
     errored = sum(1 for r in results if _is_errored(r))
