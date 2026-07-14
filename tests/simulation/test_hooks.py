@@ -1124,7 +1124,7 @@ def test_rich_run_complete_renders_once(sim_result_factory):
     asyncio.run(h.on_run_complete(results))   # second call must be a no-op
     out = buf.getvalue()
     assert out.count('SIMULATION SUMMARY') == 1
-    assert 'ui --latest' in out
+    assert 'eq dashboard .evaluatorq/sim-runs' in out
 
 
 def test_rich_deferred_summary_renders_once_with_narrative(sim_result_factory):

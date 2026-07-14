@@ -11,12 +11,30 @@ imports — it is the lower layer both depend on.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any, Protocol
 
 from loguru import logger
 
-if TYPE_CHECKING:
-    from openai import AsyncOpenAI
+
+class _ChatCompletions(Protocol):
+    async def create(self, *args: Any, **kwargs: Any) -> Any: ...
+
+
+class _Chat(Protocol):
+    @property
+    def completions(self) -> _ChatCompletions: ...
+
+
+class AsyncChatCompletionsClient(Protocol):
+    """Structural contract for the async chat-completions client this module needs.
+
+    Based on the subset of ``openai.AsyncOpenAI`` used here, so the real client
+    stays valid while structurally-equivalent test doubles are accepted.
+    """
+
+    @property
+    def chat(self) -> _Chat: ...
+
 
 EXECUTIVE_SUMMARY_SYSTEM_PROMPT = """\
 You are an AI security expert writing the executive summary of an agent
@@ -54,7 +72,7 @@ def truncate_text(text: str, limit: int = 240) -> str:
 async def generate_executive_summary(
     facts: str,
     *,
-    llm_client: AsyncOpenAI,
+    llm_client: AsyncChatCompletionsClient,
     model: str,
     temperature: float = 0.7,
     extra_body: dict[str, Any] | None = None,

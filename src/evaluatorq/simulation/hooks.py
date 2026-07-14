@@ -204,7 +204,7 @@ class DefaultHooks:
         )
         if errored:
             logger.warning(f'[simulation] {errored}/{total} simulations errored')
-        logger.info('[simulation] Tip: explore results with "eq sim ui --latest"')
+        logger.info('[simulation] Tip: explore results with "eq dashboard .evaluatorq/sim-runs"')
 
 
 class RichHooks:
@@ -387,4 +387,4 @@ class RichHooks:
         from evaluatorq.simulation.reports.display import print_simulation_summary
 
         print_simulation_summary(results, executive_summary=executive_summary, console=self._console)
-        self._console.print('[dim]Tip: explore results with "eq sim ui --latest"[/dim]')
+        self._console.print('[dim]Tip: explore results with "eq dashboard .evaluatorq/sim-runs"[/dim]')

@@ -104,14 +104,14 @@ def test_intercept_handler_uses_numeric_fallback_for_unknown_level() -> None:
 
 
 # ---------------------------------------------------------------------------
-# CLI help smoke-tests (eq dashboard, redteam ui, sim ui)
+# CLI help smoke-tests (eq dashboard plus deprecated legacy UI aliases)
 # ---------------------------------------------------------------------------
 
 
 def test_eq_dashboard_help() -> None:
     """eq dashboard --help exits 0 and lists the FastHTML dashboard command."""
-    # The FastHTML dashboard lives under ``eq dashboard`` (preview); the ``ui``
-    # commands still serve the Streamlit dashboards while it is in development.
+    # The FastHTML dashboard is the primary multi-run UI; the ``ui`` commands
+    # remain callable as deprecated Streamlit compatibility aliases.
     from evaluatorq.cli import app
 
     runner = CliRunner()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from typing import Any
 
 from evaluatorq.common.reports.executive_summary import (
     EXECUTIVE_SUMMARY_SYSTEM_PROMPT,
@@ -28,7 +29,7 @@ class _StubCompletions:
     def __init__(self, content: str | None, *, raise_exc: Exception | None = None) -> None:
         self._content = content
         self._raise = raise_exc
-        self.calls: list[dict] = []
+        self.calls: list[dict[str, Any]] = []
 
     async def create(self, **kwargs):
         self.calls.append(kwargs)

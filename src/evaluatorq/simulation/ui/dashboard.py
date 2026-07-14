@@ -1,6 +1,7 @@
-"""Interactive Streamlit dashboard for exploring agent-simulation runs.
+"""Legacy Streamlit dashboard for exploring one agent-simulation run.
 
-Launch via CLI:  evaluatorq sim ui /path/to/run.json
+The primary multi-run UI is ``evaluatorq dashboard .evaluatorq/sim-runs``.
+Launch this legacy view via CLI:  evaluatorq sim ui /path/to/run.json
 Or directly:     streamlit run dashboard.py -- /path/to/run.json
 
 The dashboard is a *renderer* over the shared section layer in
@@ -550,7 +551,7 @@ def _render_dashboard() -> None:
     if run is None:
         st.info(
             '**Agent Simulation Dashboard**\n\n'
-            'Upload a run JSON in the sidebar, or launch via CLI:\n\n'
+            'Upload a run JSON in the sidebar, or use the multi-run dashboard:\n\n'
             '```\nevaluatorq sim ui /path/to/run.json\n```'
         )
         st.stop()

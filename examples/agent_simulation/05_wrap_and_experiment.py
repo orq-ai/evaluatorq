@@ -20,7 +20,7 @@ a simpler call without composing alongside other evaluatorq evaluators, or
 when you want to pass upload_results=False to suppress the Experiment upload.
 
 Usage:
-    cd packages/evaluatorq-py
+    # from the evaluatorq repository root
     uv run python examples/agent_simulation/05_wrap_and_experiment.py \
         --deployment my-support-agent
 

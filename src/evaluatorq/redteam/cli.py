@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import re
+import shlex
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +22,10 @@ app = typer.Typer(
     no_args_is_help=True,
     rich_markup_mode=None,
 )
+
+
+def _dashboard_command(directory: Path) -> str:
+    return f'eq dashboard {shlex.quote(str(directory))}'
 
 
 def _split_csv(values: list[str] | None) -> list[str] | None:
@@ -362,10 +367,9 @@ def run(
     from evaluatorq.redteam.exceptions import CancelledError, RedTeamError
     from evaluatorq.redteam.hooks import RichHooks
 
-    if output_dir is not None:
+    if output_dir is not None and artifacts_dir is None:
         typer.echo('Warning: --output-dir is deprecated; use --artifacts-dir.', err=True)
-        if artifacts_dir is None:
-            artifacts_dir = output_dir
+        artifacts_dir = output_dir
 
     # Allow comma-separated values within repeatable flags (-s a,b == -s a -s b).
     # Done before validation so the checks below see individual tokens.
@@ -506,6 +510,7 @@ def ui(
     ] = 'localhost',
 ) -> None:
     """Launch the interactive Streamlit dashboard for a red team report."""
+    typer.echo('Warning: eq redteam ui is deprecated; use eq dashboard instead.', err=True)
     from evaluatorq.redteam.runner import get_runs_dir
 
     if report_path is None or latest:
@@ -755,3 +760,6 @@ def runs(
                 f'Warning: {skipped} file(s) could not be parsed and were skipped.',
                 err=True,
             )
+
+    if run_files:
+        typer.echo(f'open: {_dashboard_command(runs_dir)}')

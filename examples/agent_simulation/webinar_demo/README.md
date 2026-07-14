@@ -26,20 +26,24 @@ make simulate       # run simulations against it
 
 ## Status
 
-**Scaffold.** `RUNBOOK.md` has the full demo flow (steps + exact commands + known
-gaps), validated end-to-end. `presentation.qmd` is a bare themed skeleton — fill it
-from the runbook once the flow is signed off.
+The runnable webinar materials are ready: `webinar-deck.html` is the presentation
+deck and `webinar-script.html` is the speaker run-of-show. `RUNBOOK.md` contains
+the terminal flow and the known platform-dependent gaps.
 
-- **`RUNBOOK.md`** — the live-demo script: 3 Acts, real commands, gaps to call out.
+- **`RUNBOOK.md`** — the live-demo script: 4 Acts, real commands, gaps to call out.
+- **`webinar-deck.html`** — the self-contained presentation deck.
+- **`webinar-script.html`** — the speaker script and Q&A prompts.
 
 ## Slides
 
 ```bash
-quarto render presentation.qmd     # → presentation.html + docs/
-# or just open presentation.html in a browser (self-contained, no deps)
+# The ready-to-present deck is self-contained:
+open webinar-deck.html
+# Optional: render the themed Quarto scaffold for future deck edits.
+quarto render presentation.qmd
 ```
 
-- `presentation.qmd` — deck source
+- `presentation.qmd` — optional Quarto theme scaffold (not the webinar deck source)
 - `_quarto.yml`, `orq-theme.css`, `styles.scss` — Quarto + brand theme (reused)
 - `assets/` — brand media (logo, gradient background); add demo screenshots here
 

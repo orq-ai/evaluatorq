@@ -24,7 +24,7 @@ simulation command — see Gaps §1).
 
 ```bash
 export ORQ_API_KEY="<banking / CustomerDemo key>"   # routes sim LLM + hosts the agent
-cd packages/evaluatorq-py
+# Run from the evaluatorq repository root (this checkout).
 uv sync --all-extras
 
 # Provision the Bank of Holland agent + its 2 code tools + FAQ knowledge base into Orq.
@@ -65,13 +65,12 @@ uv run evaluatorq sim validate-dataset boh_datapoints.jsonl   # sanity check
 python -m json.tool < <(head -1 boh_datapoints.jsonl)          # pretty-print one row
 ```
 
-**3. Run the simulation against the live Bank of Holland agent** and save the datapoints so we
-can re-run the *exact same* set later (Act 3a).
+**3. Run the simulation against the live Bank of Holland agent** using the frozen datapoints
+so we can re-run the *exact same* set later (Act 3a).
 
 ```bash
-uv run evaluatorq sim run \
+uv run evaluatorq sim simulate \
   --target agent:boh_creditcard_agent_demo \
-  --num-personas 3 --num-scenarios 3 \
   --datapoints boh_datapoints.jsonl \
   --name boh-from-scratch
 ```
@@ -80,7 +79,7 @@ uv run evaluatorq sim run \
 
 ```bash
 uv run evaluatorq sim runs                      # list saved runs
-uv run evaluatorq sim ui .evaluatorq/sim-runs/<run>.json
+uv run evaluatorq dashboard .evaluatorq/sim-runs    # multi-run viewer
 ```
 
 ---
@@ -162,7 +161,7 @@ uv run evaluatorq sim simulate --target agent:boh_creditcard_agent_demo --datase
 `eq sim generate --dataset-format -o rows.jsonl` writes the dataset envelope up
 front if you'd rather inspect/version the exact upload shape.
 
-**The three-options slide** (build in `presentation.qmd`): **① from scratch**
+**The three-options slide** (in `webinar-deck.html`): **① from scratch**
 (Act 1) · **② re-run from data** (Act 3a — local JSONL, or 3c — orq dataset) ·
 **③ extend from data** (Act 3b append, or 3c `--dataset-id`).
 
@@ -172,13 +171,12 @@ front if you'd rather inspect/version the exact upload shape.
 
 The payoff act: read the results, find *why* the agent failed, fix it, prove the fix.
 
-**4a. Inspect the run in the dashboard.** The dashboard scans this demo's run store
-(`.evaluatorq/sim-runs/`) — browse runs, filter to the failures, read the transcripts.
+**4a. Inspect the runs in the dashboard.** The dashboard scans this demo's run store
+(`.evaluatorq/sim-runs/`) and shows every run together — browse runs, filter to the
+failures, read the transcripts.
 
 ```bash
-make dashboard                                    # -> http://127.0.0.1:8000
-# single run in the Streamlit viewer instead:
-uv run evaluatorq sim ui .evaluatorq/sim-runs/<run>.json
+uv run evaluatorq dashboard .evaluatorq/sim-runs    # -> http://127.0.0.1:8080
 ```
 
 Look for a *pattern*: a criterion that fails repeatedly, a persona the agent mishandles,
@@ -235,10 +233,10 @@ inspect → harden → re-run loop, closed live.
    applies cleanly; the other CLI's `orqi agent update` returns `deployment_not_found`
    for these agents (by key *and* by id). Use `orq agents update` in Act 4.
 
-## Demo assets to capture (drop in `assets/`, wire into `presentation.qmd`)
+## Demo assets to capture (drop in `assets/`, then wire into `webinar-deck.html`)
 
 - [ ] Screenshot: pretty-printed generated persona/scenario (Act 1.2)
-- [ ] Screenshot/recording: `sim run` pass-rate output + a failing transcript in `sim ui`
+- [ ] Screenshot/recording: `sim run` pass-rate output + a failing transcript in the dashboard
 - [ ] Screenshot: the dashboard filtered to failures + a transcript (Act 4a)
 - [ ] Screenshot: orq platform experiment view for a run
 - [ ] The three-options diagram (from scratch / re-run / extend)

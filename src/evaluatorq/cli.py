@@ -2,7 +2,7 @@
 
 Usage:
     evaluatorq redteam run --target agent:my-agent
-    evaluatorq redteam ui report.json
+    evaluatorq dashboard .evaluatorq/runs
     evaluatorq dashboard
     evaluatorq dashboard /path/to/run.json
 """
@@ -142,7 +142,7 @@ def main() -> None:
     try:
         from evaluatorq.simulation.cli import app as sim_app
 
-        app.add_typer(sim_app, name='sim', help='Agent simulation commands.')
+        app.add_typer(sim_app, name='sim', help='Agent simulation pipeline.')
     except ImportError:
         pass
 

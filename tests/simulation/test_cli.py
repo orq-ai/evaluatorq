@@ -13,16 +13,56 @@ from evaluatorq.simulation.cli import (
     _auto_save_run,
     _build_simulation_run,
     _configure_logging,
+    _echo_using,
     _format_scorer_averages,
     _infer_target_kind,
     _resolve_agent_description,
     _resolve_target,
     _sanitise_run_name,
+    _shell_path,
     _write_report,
     app,
 )
 
 runner = CliRunner()
+
+
+def test_sim_help_describes_the_pipeline() -> None:
+    result = runner.invoke(app, ['--help'])
+
+    assert result.exit_code == 0, result.output
+    assert 'generate' in result.output
+    assert 'simulate' in result.output
+    assert 'dashboard' in result.output
+
+
+def test_provider_context_prefers_orq(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setenv('ORQ_API_KEY', 'orq-secret')
+    monkeypatch.setenv('OPENAI_API_KEY', 'openai-secret')
+
+    _echo_using('openai/gpt-5.4-mini')
+
+    output = capsys.readouterr().err
+    assert output == 'Using: Orq router · openai/gpt-5.4-mini\n'
+    assert 'secret' not in output
+
+
+def test_provider_context_uses_openai_when_orq_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+    monkeypatch.setenv('OPENAI_API_KEY', 'openai-secret')
+
+    _echo_using('gpt-4o-mini')
+
+    output = capsys.readouterr().err
+    assert output == 'Using: OpenAI-compatible · gpt-4o-mini\n'
+    assert 'secret' not in output
+
+
+def test_shell_path_quotes_paths_with_spaces() -> None:
+    assert _shell_path(Path('/tmp/sim runs')) == "'/tmp/sim runs'"
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +330,40 @@ def test_validate_dataset_bad_lines(tmp_path: Path) -> None:
     assert result.exit_code == 1
 
 
+def test_validate_accepts_input_option(tmp_path: Path) -> None:
+    dp_file = _make_datapoints_file(tmp_path, count=2)
+
+    result = runner.invoke(app, ["validate", "--input", str(dp_file)])
+
+    assert result.exit_code == 0, result.output
+    assert "2 valid" in result.stdout
+
+
+def test_validate_rejects_duplicate_input_paths(tmp_path: Path) -> None:
+    dp_file = _make_datapoints_file(tmp_path)
+
+    result = runner.invoke(app, ["validate", str(dp_file), "--input", str(dp_file)])
+
+    assert result.exit_code != 0
+    assert "once" in result.output
+
+
+def test_simulate_accepts_input_option(tmp_path: Path) -> None:
+    dp_file = _make_datapoints_file(tmp_path)
+
+    with (
+        patch("evaluatorq.simulation.cli._resolve_target", return_value=MagicMock()),
+        patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock, return_value=[]),
+    ):
+        result = runner.invoke(
+            app,
+            ["simulate", "--input", str(dp_file), "--openai-model", "gpt-4o", "--no-save"],
+            env={"ORQ_API_KEY": "", "OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+
+
 # ---------------------------------------------------------------------------
 # export command
 # ---------------------------------------------------------------------------
@@ -352,6 +426,17 @@ def test_runs_lists_files(tmp_path: Path) -> None:
     result = runner.invoke(app, ["runs", str(runs_dir)])
     assert result.exit_code == 0
     assert "my-run" in result.stdout
+
+
+def test_runs_suggests_dashboard_directory(tmp_path: Path) -> None:
+    runs_dir = tmp_path / 'sim runs'
+    runs_dir.mkdir()
+    _write_run_file(runs_dir / 'my-run_20260101-000000.json', name='my-run')
+
+    result = runner.invoke(app, ["runs", str(runs_dir)])
+
+    assert result.exit_code == 0, result.output
+    assert f"open: eq dashboard '{runs_dir}'" in result.stdout
 
 
 def test_runs_skips_malformed(tmp_path: Path) -> None:
@@ -426,6 +511,8 @@ def test_ui_explicit_path(tmp_path: Path) -> None:
         result = runner.invoke(app, ["ui", str(run_file)])
     assert result.exit_code == 0
     assert launch.call_args.args[1] == run_file.resolve()
+    assert 'deprecated' in result.stderr.lower()
+    assert 'eq dashboard' in result.stderr
 
 
 def test_ui_bare_filename_fallback(tmp_path: Path) -> None:
@@ -536,6 +623,62 @@ def test_simulate_success_no_save(tmp_path: Path) -> None:
     assert result.exit_code == 0
 
 
+def test_simulate_saved_run_suggests_dashboard_directory(tmp_path: Path) -> None:
+    dp_file = _make_datapoints_file(tmp_path)
+    runs_dir = tmp_path / 'sim runs'
+    saved_run = runs_dir / 'sim_20260713-220000.json'
+
+    with (
+        patch("evaluatorq.simulation.cli._resolve_target", return_value=MagicMock()),
+        patch("evaluatorq.simulation.cli._simulate_impl", new_callable=AsyncMock, return_value=[]),
+        patch("evaluatorq.simulation.cli._auto_save_run", return_value=saved_run),
+        patch("evaluatorq.simulation.cli._get_sim_runs_dir", return_value=runs_dir),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "simulate",
+                "--input", str(dp_file),
+                "--openai-model", "gpt-4o",
+                "--yes",
+                "--no-executive-summary",
+            ],
+            env={"ORQ_API_KEY": "", "OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    handoff = result.stderr.split('next:', 1)[1]
+    assert "eq dashboard '" in handoff
+    assert str(runs_dir) in handoff
+    assert saved_run.name not in handoff
+
+
+def test_run_saved_run_suggests_dashboard_directory(tmp_path: Path) -> None:
+    runs_dir = tmp_path / 'sim-runs'
+    saved_run = runs_dir / 'run_20260713-220000.json'
+
+    with (
+        patch("evaluatorq.simulation.cli._resolve_target", return_value=MagicMock()),
+        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock, return_value=[]),
+        patch("evaluatorq.simulation.cli._auto_save_run", return_value=saved_run),
+        patch("evaluatorq.simulation.cli._get_sim_runs_dir", return_value=runs_dir),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--agent-description", "A helpful bot",
+                "--openai-model", "gpt-4o",
+                "--yes",
+                "--no-executive-summary",
+            ],
+            env={"ORQ_API_KEY": "", "OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    assert f"next: eq dashboard {runs_dir}" in result.stderr
+
+
 def test_simulate_writes_results_file(tmp_path: Path) -> None:
     dp_file = _make_datapoints_file(tmp_path)
     out_file = tmp_path / "out.jsonl"
@@ -556,7 +699,7 @@ def test_simulate_writes_results_file(tmp_path: Path) -> None:
                 "simulate",
                 "--datapoints", str(dp_file),
                 "--openai-model", "gpt-4o",
-                "--results", str(out_file),
+                "--output", str(out_file),
                 "--no-save",
             ],
             env={"OPENAI_API_KEY": "test-key"},
@@ -1199,7 +1342,7 @@ def test_generate_writes_datapoints(tmp_path: Path) -> None:
             [
                 "generate",
                 "--agent-description", "A helpful bot",
-                "--datapoints", str(out_file),
+                "--output", str(out_file),
             ],
             env={"OPENAI_API_KEY": "test-key"},
         )
@@ -1255,10 +1398,11 @@ def test_generate_datapoints_roundtrips_through_simulate_loader(tmp_path: Path) 
         result = runner.invoke(
             app,
             ["generate", "--agent-description", "bot", "--datapoints", str(out_file)],
-            env={"OPENAI_API_KEY": "test-key"},
+            env={"ORQ_API_KEY": "", "OPENAI_API_KEY": "test-key"},
         )
 
     assert result.exit_code == 0, result.output
+    assert 'Using: OpenAI-compatible · openai/gpt-5.4-mini' in result.stderr
     loaded = load_datapoints_from_jsonl(str(out_file))
     assert [dp.id for dp in loaded] == ["dp-0", "dp-1"]  # id round-trips (not re-fabricated)
     assert [dp.persona.name for dp in loaded] == ["User0", "User1"]
@@ -1335,7 +1479,7 @@ def test_generate_forwards_flags(tmp_path: Path) -> None:
                 "--num-personas", "2",
                 "--num-scenarios", "4",
             ],
-            env={"OPENAI_API_KEY": "test-key"},
+            env={"ORQ_API_KEY": "", "OPENAI_API_KEY": "test-key"},
         )
 
     assert result.exit_code == 0, result.output
@@ -1465,7 +1609,7 @@ def test_run_datapoints_writes_inputs(tmp_path: Path) -> None:
                 "--datapoints", str(dp_file),
                 "--no-save",
             ],
-            env={"OPENAI_API_KEY": "test-key"},
+            env={"ORQ_API_KEY": "", "OPENAI_API_KEY": "test-key"},
         )
 
     assert result.exit_code == 0, result.output
@@ -1578,10 +1722,11 @@ def test_simulate_yes_exits_clean(tmp_path: Path) -> None:
                 "--yes",
                 "--no-save",
             ],
-            env={"OPENAI_API_KEY": "test-key"},
+            env={"ORQ_API_KEY": "", "OPENAI_API_KEY": "test-key"},
         )
 
     assert result.exit_code == 0, result.output
+    assert 'Using: OpenAI-compatible · openai/gpt-5.4-mini' in result.stderr
 
 
 def test_run_yes_exits_clean(tmp_path: Path) -> None:
@@ -1604,7 +1749,8 @@ def test_run_yes_exits_clean(tmp_path: Path) -> None:
                 "--yes",
                 "--no-save",
             ],
-            env={"OPENAI_API_KEY": "test-key"},
+            env={"ORQ_API_KEY": "", "OPENAI_API_KEY": "test-key"},
         )
 
     assert result.exit_code == 0, result.output
+    assert 'Using: OpenAI-compatible · openai/gpt-5.4-mini' in result.stderr

@@ -27,6 +27,7 @@ import asyncio
 import json
 import logging
 import os
+import shlex
 import sys
 from pathlib import Path
 from typing import Annotated, Any, NoReturn
@@ -45,8 +46,15 @@ from evaluatorq.simulation.utils.run_store import write_report as _write_report
 
 app = typer.Typer(
     name='sim',
-    help='Agent simulation commands.',
+    help=(
+        'Agent simulation pipeline.\n\n'
+        '  generate  ->  simulate  ->  dashboard   freeze inputs, run them, explore\n'
+        '  run                                  generate + simulate in one shot\n'
+        '  upload-dataset / --dataset-id       round-trip through an Orq dataset\n\n'
+        'Use `eq sim COMMAND --help` for command-specific options.'
+    ),
     no_args_is_help=True,
+    rich_markup_mode=None,
 )
 
 
@@ -261,6 +269,27 @@ def _target_identity(
     return (None, None)
 
 
+def _echo_using(model: str) -> None:
+    """Show the provider branch selected by the environment."""
+    if os.environ.get('ORQ_API_KEY'):
+        provider = 'Orq router'
+    elif os.environ.get('OPENAI_API_KEY'):
+        provider = 'OpenAI-compatible'
+    else:
+        provider = 'unresolved provider'
+    typer.echo(f'Using: {provider} · {model}', err=True)
+
+
+def _shell_path(path: Path) -> str:
+    """Render a path safely for a copyable shell command."""
+    return shlex.quote(str(path))
+
+
+def _dashboard_command(directory: Path) -> str:
+    """Build the canonical multi-run dashboard command for *directory*."""
+    return f'eq dashboard {_shell_path(directory)}'
+
+
 # ---------------------------------------------------------------------------
 # simulate
 # ---------------------------------------------------------------------------
@@ -270,7 +299,13 @@ def _target_identity(
 def simulate(
     datapoints: Annotated[
         Path | None,
-        typer.Option('--datapoints', '-d', help='Path to datapoints JSONL file (or use --dataset-id).'),
+        typer.Option(
+            '--input',
+            '-i',
+            '--datapoints',
+            '-d',
+            help='Path to datapoints JSONL file (or use --dataset-id).',
+        ),
     ] = None,
     dataset_id: Annotated[
         str | None,
@@ -306,7 +341,7 @@ def simulate(
     ] = None,
     results_path: Annotated[
         Path | None,
-        typer.Option('--results', '-o', help='Path to write results JSONL.'),
+        typer.Option('--output', '-o', '--results', help='Path to write results JSONL.'),
     ] = None,
     report_path: Annotated[
         Path | None,
@@ -402,6 +437,7 @@ def simulate(
     if quiet:
         verbose = -1
     _configure_logging(verbose)
+    _echo_using(sim_model)
 
     hooks: Any = None
     if not quiet:
@@ -496,6 +532,9 @@ def simulate(
     if not no_save:
         run_path = _auto_save_run(run=run, run_name=name)
         typer.echo(f'Run saved: {run_path}', err=True)
+        typer.echo(f'next: {_dashboard_command(_get_sim_runs_dir())}', err=True)
+    elif report_path is None:
+        typer.echo('Tip: run without --no-save to browse results in the dashboard.', err=True)
 
 
 async def _simulate_impl(
@@ -572,7 +611,7 @@ def run(
     ] = None,
     results_path: Annotated[
         Path | None,
-        typer.Option('--results', '-o', help='Path to write results JSONL.'),
+        typer.Option('--output', '-o', '--results', help='Path to write results JSONL.'),
     ] = None,
     report_path: Annotated[
         Path | None,
@@ -687,6 +726,7 @@ def run(
     if quiet:
         verbose = -1
     _configure_logging(verbose)
+    _echo_using(sim_model)
 
     hooks: Any = None
     if not quiet:
@@ -779,6 +819,9 @@ def run(
     if not no_save:
         run_path = _auto_save_run(run=run, run_name=name)
         typer.echo(f'Run saved: {run_path}', err=True)
+        typer.echo(f'next: {_dashboard_command(_get_sim_runs_dir())}', err=True)
+    elif report_path is None:
+        typer.echo('Tip: run without --no-save to browse results in the dashboard.', err=True)
 
 
 async def _run_impl(
@@ -834,7 +877,7 @@ async def _run_impl(
 def generate(
     datapoints_path: Annotated[
         Path,
-        typer.Option('--datapoints', '-o', help='Path to write the generated datapoints JSONL.'),
+        typer.Option('--output', '-o', '--datapoints', help='Path to write the generated datapoints JSONL.'),
     ],
     agent_description: Annotated[
         str | None,
@@ -909,6 +952,7 @@ def generate(
     if quiet:
         verbose = -1
     _configure_logging(verbose)
+    _echo_using(sim_model)
 
     try:
         resolved_agent_description = asyncio.run(
@@ -1002,13 +1046,7 @@ def export(
 # ---------------------------------------------------------------------------
 
 
-@app.command('validate-dataset', no_args_is_help=True)
-def validate_dataset(
-    path: Annotated[
-        Path,
-        typer.Argument(help='Path to datapoints JSONL file to validate.'),
-    ],
-) -> None:
+def _validate_datapoints(path: Path) -> None:
     """Validate a simulation datapoints JSONL file."""
     if not path.exists():
         raise typer.BadParameter(f'File not found: {path}')
@@ -1037,6 +1075,37 @@ def validate_dataset(
         raise typer.Exit(1)
 
     typer.echo(f'OK — {len(valid_datapoints)} valid datapoint(s) in {path}')
+
+
+@app.command('validate', no_args_is_help=True)
+def validate(
+    input_path: Annotated[
+        Path | None,
+        typer.Option('--input', '-i', help='Path to datapoints JSONL file to validate.'),
+    ] = None,
+    path: Annotated[
+        Path | None,
+        typer.Argument(help='Path to datapoints JSONL file (legacy positional form).'),
+    ] = None,
+) -> None:
+    """Validate a simulation datapoints JSONL file before running it."""
+    if input_path is not None and path is not None:
+        raise typer.BadParameter('Provide the input path once, either as an argument or with --input.')
+    selected_path = input_path or path
+    if selected_path is None:
+        raise typer.BadParameter('Provide a datapoints file with --input PATH.')
+    _validate_datapoints(selected_path)
+
+
+@app.command('validate-dataset', no_args_is_help=True)
+def validate_dataset(
+    path: Annotated[
+        Path,
+        typer.Argument(help='Path to datapoints JSONL file to validate.'),
+    ],
+) -> None:
+    """Deprecated alias for :command:`validate`."""
+    _validate_datapoints(path)
 
 
 # ---------------------------------------------------------------------------
@@ -1103,6 +1172,7 @@ def upload_dataset(
 
     base = os.environ.get('ORQ_BASE_URL', 'https://my.orq.ai').rstrip('/')
     typer.echo(f'Uploaded {len(rows)} datapoint(s) -> dataset {dataset_id} ({base})')
+    typer.echo(f'next: eq sim simulate --dataset-id {dataset_id} --target <target>')
 
 
 # ---------------------------------------------------------------------------
@@ -1198,6 +1268,8 @@ def runs(
 
     if malformed:
         typer.echo(f'Warning: {malformed} malformed run file(s) skipped.', err=True)
+    if rows:
+        typer.echo(f'open: {_dashboard_command(runs_dir)}')
 
 
 def _format_scorer_averages(averages: dict[str, float]) -> str:
@@ -1231,6 +1303,7 @@ def ui(
     ] = 'localhost',
 ) -> None:
     """Launch the interactive Streamlit dashboard for a simulation run."""
+    typer.echo('Warning: eq sim ui is deprecated; use eq dashboard instead.', err=True)
     from evaluatorq.common.ui.launch import launch_streamlit
 
     runs_dir = _get_sim_runs_dir()

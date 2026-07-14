@@ -11,7 +11,7 @@ Prerequisites:
         uv pip install "agent-simulation @ git+https://github.com/orq-ai/research.git#subdirectory=projects/agent-simulation"
 
 Usage:
-    cd packages/evaluatorq-py
+    # from the evaluatorq repository root
     uv run python examples/agent_simulation/03_tool_simulation.py
 
 Where outputs land:

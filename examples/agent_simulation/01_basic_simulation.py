@@ -7,7 +7,7 @@ Demonstrates the core simulation loop with a local mock agent:
 - Inspect the conversation and result
 
 Usage:
-    cd packages/evaluatorq-py
+    # from the evaluatorq repository root
     uv run python examples/agent_simulation/01_basic_simulation.py
 
 Where outputs land:

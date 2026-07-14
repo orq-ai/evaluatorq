@@ -229,7 +229,7 @@ async def generate_and_simulate(
     description from both sources raises ``ValueError`` before generation begins.
 
     ``emit_datapoints``: Optional callback invoked with the generated datapoints
-    before simulation — used by the CLI's ``--save-datapoints`` to persist the
+    before simulation — used by the CLI's ``--datapoints`` to persist the
     exact inputs.
 
     ``save``: When ``True``, persist the completed run to the local run store
@@ -637,7 +637,7 @@ def _log_saved_run(path: Path) -> None:
         display = path.relative_to(Path.cwd())
     except ValueError:
         display = path
-    logger.info(f'Run saved: {display} — load with: evaluatorq sim ui "{display}"')
+    logger.info(f'Run saved: {display} — explore with: eq dashboard {display.parent}')
 
 
 async def _simulate_core(

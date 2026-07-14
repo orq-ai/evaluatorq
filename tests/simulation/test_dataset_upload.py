@@ -106,6 +106,7 @@ def test_upload_dataset_creates_and_uploads(tmp_path: Path, fake_client: _FakeDa
     dataset_id, rows = fake_client.appended
     assert dataset_id == 'ds_new'
     assert len(rows) == 1
+    assert 'next: eq sim simulate --dataset-id ds_new --target <target>' in result.stdout
 
 
 def test_upload_dataset_extends_existing(tmp_path: Path, fake_client: _FakeDatasets) -> None:

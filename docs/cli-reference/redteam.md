@@ -47,7 +47,13 @@ eq redteam run --target agent:<key> [OPTIONS]
 
 ---
 
-## `eq redteam ui`
+## `eq redteam ui` (deprecated)
+
+!!! warning "Deprecated — use `eq dashboard`"
+    `eq redteam ui` is a deprecated legacy Streamlit command. The primary UI for
+    browsing red-team runs is the multi-run FastHTML dashboard: `eq dashboard`
+    (both stores) or `eq dashboard .evaluatorq/runs` (red team only). Passing a
+    single JSON report file to `eq dashboard` is an optional direct deep-link.
 
 Launch the Streamlit dashboard for a saved red-team run.
 

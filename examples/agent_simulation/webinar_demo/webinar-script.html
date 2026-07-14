@@ -419,8 +419,8 @@
             <h3>Demo · Act 4 — inspect, harden, re-run</h3>
             <p>
               The results segment, live end-to-end. <strong>4a — inspect:</strong>
-              Bauke opens the dashboard (<code>make dashboard</code> →
-              127.0.0.1:8000, or <code>sim ui</code> for a single run) and walks
+              Bauke opens the dashboard (<code>uv run evaluatorq dashboard .evaluatorq/sim-runs</code> →
+              127.0.0.1:8080, showing every run in the store) and walks
               it as four questions: <em>how bad is it</em> (summary strip) →
               <em>where does it break</em> (persona × scenario heatmap) →
               <em>why</em> (top failure modes, rules broken) → <em>show me</em>
@@ -461,7 +461,7 @@
               Arian triages chat questions (prioritize ones the demo already
               answered — quick wins). Bauke closes on the ask slide: run one
               simulation against your own agent this week —
-              <code>pip install evaluatorq</code>.
+              <code>pip install "evaluatorq[simulation]"</code>.
             </p>
             <div class="tags"><span class="tag arian">Arian triages</span><span class="tag bauke">Bauke closes</span><span class="tag">deck s13–s14</span></div>
           </div>
@@ -542,7 +542,7 @@
             <text x="462" y="118">agent reply</text>
             <text x="548" y="170">full transcript</text>
             <text x="742" y="118" text-anchor="end">verdicts + reasoning</text>
-            <text x="118" y="240">-o / --save-datapoints</text>
+            <text x="118" y="240">-o / --datapoints</text>
             <text x="300" y="282" fill="#D97757">re-run identical set on every agent change</text>
           </g>
         </svg>
@@ -586,7 +586,7 @@
           <div class="qd">
             Beats for Bauke:
             <ul>
-              <li>Python 3.10+, <code>pip install evaluatorq</code> — that's the install.</li>
+              <li>Python 3.10+, <code>pip install "evaluatorq[simulation]"</code> — that's the install.</li>
               <li>An LLM key for the simulator and judge (OpenAI key or orq key — the sim's own brains).</li>
               <li>Your agent: an orq agent key, any OpenAI-compatible endpoint, an HTTP URL, or a Python callback.</li>
               <li>Punchline: <em>no dataset, no labels, no annotation budget.</em></li>
@@ -636,7 +636,7 @@
           <div class="qt">Q5 · "So minimum viable start: I have a LangGraph agent on my laptop. What are my first three commands?"</div>
           <div class="qd">
             Forces concreteness. Bauke's answer: ① <code>pip install
-            evaluatorq</code> ② export your LLM key ③ <code>evaluatorq sim run
+            evaluatorq[simulation]</code> ② export your LLM key ③ <code>evaluatorq sim run
             --agent-description "..."</code> or ten lines of SDK
             (<code>simulate(target=...)</code>). Under five minutes to
             first transcript.
@@ -795,14 +795,14 @@ uv run evaluatorq sim generate \
 uv run evaluatorq sim validate-dataset boh_datapoints.jsonl
 
 <span class="cm"># 3. run live, freeze the set for Act 3</span>
-uv run evaluatorq sim run \
+uv run evaluatorq sim simulate \
   <span class="kw">--target</span> agent:boh_creditcard_agent_demo \
-  <span class="kw">--save-datapoints</span> boh_datapoints.jsonl \
+  <span class="kw">--datapoints</span> boh_datapoints.jsonl \
   <span class="kw">--name</span> boh-from-scratch
 
 <span class="cm"># 4. pass rate + a failing transcript</span>
 uv run evaluatorq sim runs
-uv run evaluatorq sim ui .evaluatorq/sim-runs/&lt;run&gt;.json</pre></div>
+uv run evaluatorq dashboard .evaluatorq/sim-runs</pre></div>
         </div>
 
         <div class="code-block">
@@ -854,8 +854,7 @@ uv run evaluatorq sim simulate \
         <div class="code-block">
           <div class="file-label">Act 4 — inspect, harden, re-run (32:00)</div>
           <div class="code"><pre><span class="cm"># 4a. open the dashboard on the demo's run store</span>
-make dashboard              <span class="cm"># -> http://127.0.0.1:8000</span>
-<span class="cm"># or single run: uv run evaluatorq sim ui --latest</span>
+uv run evaluatorq dashboard .evaluatorq/sim-runs   <span class="cm"># -> http://127.0.0.1:8080 ; shows all runs</span>
 
 <span class="cm"># tour order — four questions, top to bottom:</span>
 <span class="cm">#  1. how bad?   summary strip (goal completion,</span>
@@ -877,7 +876,7 @@ make rerun</pre></div>
         <div class="code-block">
           <div class="file-label">Pre-flight — run once, off-camera</div>
           <div class="code"><pre><span class="kw">export</span> ORQ_API_KEY=<span class="str">"&lt;banking / CustomerDemo key&gt;"</span>
-cd packages/evaluatorq-py
+# Run from the evaluatorq repository root (this checkout).
 uv sync <span class="kw">--all-extras</span>
 
 <span class="cm"># provision the Bank of Holland agent (idempotent)</span>
@@ -918,12 +917,12 @@ orq agents retrieve boh_creditcard_agent_demo <span class="cm"># agent visible?<
         <div class="row">
           <div class="cell">Generation or simulation runs slow on the stream — dead air.</div>
           <div class="cell"><span class="sev high">HIGH</span></div>
-          <div class="cell">Arian fires Q1/Q2/Q3 to fill (that's what the cues are timed for). If &gt;2 min, open <code>backup_datapoints.jsonl</code> / the pre-baked run JSON in <code>sim ui</code> and keep the live one running in a second tab.</div>
+          <div class="cell">Arian fires Q1/Q2/Q3 to fill (that's what the cues are timed for). If &gt;2 min, open <code>backup_datapoints.jsonl</code> / the pre-baked run JSON in the dashboard and keep the live one running in a second tab.</div>
         </div>
         <div class="row">
-          <div class="cell">Dashboard (<code>make dashboard</code> / <code>sim ui</code>) fails to open or renders wrong on the shared screen.</div>
+          <div class="cell">Dashboard (<code>uv run evaluatorq dashboard .evaluatorq/sim-runs</code>) fails to open or renders wrong on the shared screen.</div>
           <div class="cell"><span class="sev med">MED</span></div>
-          <div class="cell">Two viewers = mutual fallback (FastHTML on :8000, Streamlit via <code>sim ui</code>). Last resort: <code>sim runs</code> table + read the failing transcript from the run JSON. Less pretty, same story.</div>
+          <div class="cell">If the dashboard fails to open, fall back to the <code>sim runs</code> table + read the failing transcript from the run JSON. Less pretty, same story.</div>
         </div>
         <div class="row">
           <div class="cell">Claude Code goes sideways during the live fix (Act 4b) — wrong diagnosis, over-broad edit, or just slow.</div>

@@ -10,20 +10,39 @@ eq         = "evaluatorq.cli:main"
 
 Subcommands are registered at startup. `eq redteam` requires the `redteam` extra; `eq sim` requires the `simulation` extra.
 
+!!! note "Primary UI — `eq dashboard`"
+    The recommended way to browse saved runs is the multi-run FastHTML dashboard,
+    `eq dashboard`. The canonical invocation scans a run directory — `eq dashboard`
+    browses both default stores (red team + simulation), and `eq dashboard
+    .evaluatorq/sim-runs` scopes to simulation. Passing a single JSON report file
+    is an optional direct deep-link. The legacy `eq redteam ui` / `eq sim ui`
+    Streamlit commands remain callable but are deprecated. See
+    [Dashboard](dashboard.md) and [Simulation](simulation.md).
+
 Two command groups have their own pages:
 
 - **[Red Teaming](redteam.md)** — adversarial testing (`eq redteam`).
 - **[Simulation](simulation.md)** — multi-turn user simulation (`eq sim`; `sim` is shorthand).
 
-## Output flag renames (breaking)
+## Canonical flag names
 
-!!! warning "Output flags were unified across `eq sim` and `eq redteam`"
-    The old CLI flag names are **removed** (no alias). Update any scripts:
+!!! note "Simulation I/O flags are consistent across commands"
+    Use `--input` / `-i` for an input datapoints file and `--output` / `-o` for
+    generated datapoints or results. The older domain-specific names remain as
+    compatibility aliases:
 
     | Old | New | Command(s) |
     |---|---|---|
-    | `--output` | `--datapoints` | `sim generate` |
-    | `--output` | `--results` | `sim simulate`, `sim run` |
+    | `--datapoints` / `-d` | `--input` / `-i` | `sim simulate` |
+    | `--results` | `--output` / `-o` | `sim simulate`, `sim run` |
+    | `--datapoints` | `--output` / `-o` | `sim generate` |
+    `sim run --datapoints` remains the flag for saving the generated datapoints
+    used by that same run.
+
+    Other historical migrations are:
+
+    | Historical | Current | Command(s) |
+    |---|---|---|
     | `--report-output` | `--report` | `sim simulate`, `sim run` |
     | `--save-datapoints` | `--datapoints` | `sim run` |
     | `--export-md` / `--export-html` | `--report-md` / `--report-html` | `sim simulate`/`run`, `redteam run` |
@@ -37,6 +56,10 @@ Two command groups have their own pages:
     - SDK `simulate(run_output=...)` / `generate_and_simulate(run_output=...)` → use `report=...` (emits a Python `DeprecationWarning`)
     - SDK `red_team(output_dir=...)` → use `artifacts_dir=...` (emits a Python `DeprecationWarning`)
     - CLI `redteam run --output-dir` → use `--artifacts-dir` (prints a deprecation notice to stderr)
+
+!!! note "Simulation validation"
+    Use `eq sim validate --input PATH`. The older `eq sim validate-dataset PATH`
+    command remains as a compatibility alias (see [Simulation](simulation.md)).
 
 ## Top-level options
 

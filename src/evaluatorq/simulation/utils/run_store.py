@@ -7,7 +7,7 @@ be circular, since ``cli`` imports ``api``).
 
 Saved runs land in ``.evaluatorq/sim-runs/`` under collision-free
 ``<run-name>_<timestamp>.json`` names, which ``evaluatorq sim runs`` lists and
-``evaluatorq sim ui`` opens.
+``evaluatorq dashboard .evaluatorq/sim-runs`` browses.
 """
 
 from __future__ import annotations

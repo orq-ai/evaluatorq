@@ -1,10 +1,13 @@
 # Dashboard
 
-!!! note "Preview — not yet generally available"
-    The combined `eq dashboard` documented here is an unreleased preview and is
-    not linked from the site navigation yet. For a stable local view of a saved
-    run, use `eq redteam ui` / `eq sim ui` (see the
-    [CLI Reference](cli-reference/overview.md)).
+!!! note "Primary UI — FastHTML `eq dashboard`"
+    The combined `eq dashboard` documented here is the primary way to browse
+    saved runs. Its canonical invocation scans a run directory and opens the
+    multi-run FastHTML UI — `eq dashboard` (no path) browses both default stores,
+    and `eq dashboard .evaluatorq/sim-runs` scopes to simulation. Passing a single
+    JSON report file is an optional direct deep-link to that report. The older
+    `eq redteam ui` / `eq sim ui` remain callable as deprecated legacy Streamlit
+    commands (see the [CLI Reference](cli-reference/overview.md)).
 
 evaluatorq ships a built-in web dashboard for browsing red team and simulation
 reports.  It is powered by **FastHTML** (a lightweight Python web framework)
@@ -36,11 +39,16 @@ Launch it with `eq dashboard` (the `evaluatorq` and `eq` entry points are
 interchangeable):
 
 ```bash
-# Browse both default stores at once — red team + simulation
+# Canonical — browse both default stores at once (red team + simulation)
 eq dashboard
 
-# Scope to a directory of exported reports, or a single report file
+# Canonical — scope to the simulation run store
+eq dashboard .evaluatorq/sim-runs
+
+# Scope to any directory of exported reports
 eq dashboard /path/to/my/reports
+
+# Optional direct deep-link — open a single report file
 eq dashboard .evaluatorq/runs/red-team_20260626_143024.json
 
 # Bind a custom host / port (default 127.0.0.1:8080)
@@ -54,11 +62,14 @@ ORQ_WORKSPACE=orq-research eq dashboard
 | Invocation | What it scans |
 |---|---|
 | `eq dashboard` | Both default stores: `.evaluatorq/runs` (red team) and `.evaluatorq/sim-runs` (simulation) |
-| `eq dashboard PATH` | Only that directory; pass a file to scope to its parent and print the report's direct URL |
-| `eq redteam ui` / `eq sim ui` | Legacy Streamlit views, scoped to a single surface (see the note below) |
+| `eq dashboard <dir>` | Only that directory (e.g. `eq dashboard .evaluatorq/sim-runs`) |
+| `eq dashboard <file>.json` | Optional direct deep-link; prints that report's direct URL so you land straight on it |
+| `eq redteam ui` / `eq sim ui` | Deprecated legacy Streamlit views, scoped to a single surface (see the note below) |
 
-With no `PATH` the server prints the local URL to open. Pointing at a file
-prints that report's direct URL so you land straight on it.
+With no `PATH` the server prints the local URL to open. Pointing at a directory
+(`eq dashboard .evaluatorq/sim-runs`) scopes the UI to that store. Passing a
+single JSON report file is an optional direct deep-link that prints that
+report's direct URL.
 
 ### Orq trace links
 
@@ -72,11 +83,12 @@ from `ORQ_API_KEY`. If it is unset, trace-link buttons are hidden.
 staging Orq UI, set `ORQ_UI_BASE_URL` as well; otherwise the dashboard uses
 `ORQ_BASE_URL`, then `https://my.orq.ai`.
 
-!!! note "Legacy Streamlit views"
-    `eq redteam ui` and `eq sim ui` launch the older Streamlit dashboards,
+!!! note "Deprecated legacy Streamlit views"
+    `eq redteam ui` and `eq sim ui` are deprecated legacy Streamlit commands,
     scoped to a single surface. The FastHTML `eq dashboard` documented here is
-    the preview replacement that browses both surfaces together. The CLI surface
-    is still being consolidated — see the [CLI Reference](cli-reference/overview.md).
+    the primary UI that browses both surfaces together (`eq dashboard` for both
+    stores, `eq dashboard .evaluatorq/sim-runs` for simulation). See the
+    [CLI Reference](cli-reference/overview.md).
 
 ---
 

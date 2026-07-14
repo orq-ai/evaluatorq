@@ -8,7 +8,7 @@ Demonstrates how to:
 - Export results to JSONL
 
 Usage:
-    cd packages/evaluatorq-py
+    # from the evaluatorq repository root
 
     # Against an orq.ai deployment (prompt + model config in AI Studio)
     uv run python examples/agent_simulation/02_orq_deployment_simulation.py \
@@ -132,7 +132,7 @@ async def main() -> None:
     parser.add_argument("--num-personas", type=int, default=3)
     parser.add_argument("--num-scenarios", type=int, default=4)
     parser.add_argument("--max-turns", type=int, default=8)
-    parser.add_argument("--output", default="data/results.jsonl", help="Output path for JSONL results (relative to packages/evaluatorq-py/)")
+    parser.add_argument("--output", default="data/results.jsonl", help="Output path for JSONL results (relative to the current directory)")
     args = parser.parse_args()
 
     if not os.getenv("ORQ_API_KEY"):
