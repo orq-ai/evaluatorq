@@ -161,8 +161,14 @@
       font-size: 15.6px;
       color: var(--gray-500);
       display: flex;
-      gap: 24px;
+      gap: 16px;
       flex-wrap: wrap;
+    }
+
+    .byline span + span::before {
+      content: "·";
+      margin-right: 16px;
+      color: var(--gray-300);
     }
 
     /* ------------------------------------------------------------------
@@ -224,6 +230,54 @@
     }
 
     /* ------------------------------------------------------------------
+     Three-ways slide — numbered cards (scoped to #s7)
+     ------------------------------------------------------------------ */
+    #s7 .ways {
+      list-style: none;
+      margin-top: 44px;
+      background: #FFFFFF;
+      border: 1px solid var(--gray-300);
+      border-radius: 16px;
+      padding: 4px 48px;
+    }
+
+    #s7 .way {
+      display: grid;
+      grid-template-columns: 104px 1fr;
+      column-gap: 8px;
+      align-items: baseline;
+      padding: 36px 0;
+    }
+
+    #s7 .way + .way {
+      border-top: 1px solid var(--gray-150);
+    }
+
+    #s7 .way-num {
+      font-family: var(--mono);
+      font-size: 34px;
+      font-weight: 600;
+      color: var(--olive);
+      line-height: 1;
+    }
+
+    #s7 .way-title {
+      font-family: var(--sans);
+      font-size: 26px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--slate);
+      margin-bottom: 10px;
+    }
+
+    #s7 .way-desc {
+      font-size: 19px;
+      line-height: 1.55;
+      color: var(--gray-700);
+      max-width: 72ch;
+    }
+
+    /* ------------------------------------------------------------------
      Command blocks (new — follows .code pattern from sibling templates)
      ------------------------------------------------------------------ */
     .cmds {
@@ -251,7 +305,7 @@
     }
 
     .cmds .str {
-      color: var(--olive);
+      color: #8fce9b;
     }
 
     .cmd-note {
@@ -366,35 +420,46 @@
       list-style: none;
       display: flex;
       flex-direction: column;
-      gap: 22px;
+      gap: 18px;
+      margin-top: 40px;
     }
 
+    /* color-blocked lanes — each idea reads as its own thing */
     .next-list li {
       font-family: var(--sans);
       font-size: 24.7px;
       font-weight: 600;
       letter-spacing: -0.01em;
-      line-height: 1.45;
-      padding-left: 36px;
+      line-height: 1.4;
       position: relative;
+      padding: 24px 30px 24px 84px;
+      border-radius: 14px;
+      border: 1px solid var(--gray-150);
     }
 
-    .next-list li::before {
-      content: "";
+    .next-list .do-gate { background: rgba(2, 85, 88, 0.05); border-color: rgba(2, 85, 88, 0.16); }
+    .next-list .do-cli  { background: #FFFFFF; }
+    .next-list .do-loop { background: rgba(255, 107, 74, 0.06); border-color: rgba(255, 107, 74, 0.24); }
+
+    .next-list .do-ic {
       position: absolute;
-      left: 0;
-      top: 0.55em;
-      width: 18px;
-      height: 1.5px;
-      background: var(--clay);
+      left: 28px;
+      top: 26px;
+      width: 34px;
+      height: 34px;
     }
+    .next-list .do-gate .do-ic { color: var(--olive); }
+    .next-list .do-cli  .do-ic { color: var(--slate); }
+    .next-list .do-loop .do-ic { color: var(--clay); }
 
     .next-list .sub {
       display: block;
       font-family: var(--sans);
       font-size: 18.2px;
-      color: var(--gray-500);
-      margin-top: 4px;
+      font-weight: 500;
+      color: var(--gray-700);
+      margin-top: 6px;
+      max-width: 82ch;
     }
 
     .footnote {
@@ -416,6 +481,18 @@
       color: var(--gray-500);
       user-select: none;
       z-index: 10;
+    }
+
+    /* persistent brand logo, bottom-left, static to the viewport */
+    #brand-logo {
+      position: fixed;
+      bottom: 20px;
+      left: 28px;
+      height: 20px;
+      opacity: 0.75;
+      z-index: 10;
+      user-select: none;
+      pointer-events: none;
     }
 
     @media (max-width: 640px) {
@@ -449,6 +526,14 @@
     .slide.chapter h1,
     .slide.chapter h2 {
       color: var(--ivory);
+    }
+
+    .slide.chapter .subtitle {
+      color: var(--on-green);
+    }
+
+    .slide.chapter .footnote {
+      color: var(--on-green-soft);
     }
 
     .eyebrow.act {
@@ -674,7 +759,6 @@
         <span>Tuesday, July 14</span>
         <span>Bauke Brenninkmeijer</span>
         <span>Arian Pasquali</span>
-        <span>45 min · live demo</span>
       </div>
     </div>
   </section>
@@ -893,83 +977,28 @@
         <h2>It already went wrong</h2>
       </div>
       <div class="body" style="justify-content:center;">
-        <p class="lead" style="margin-top:6px;margin-bottom:2px;">Both agents passed their single-turn checks. Both
-          broke once a real customer kept talking.</p>
         <div class="timeline">
           <div class="tl-entry">
             <span class="tl-dot danger"></span>
             <div class="tl-head">
               <span class="tl-name">Chevy of Watsonville</span>
-              <span class="tl-pill">goal hijacking</span>
             </div>
             <div class="tl-body">A customer talked the dealership's support bot into selling a $76k Tahoe for
-              <strong>$1</strong> — and getting it to agree, <em>"that's a legally binding offer — no
+              <strong>$1</strong>, then got it to agree: <em>"that's a legally binding offer, no
                 takesies-backsies."</em></div>
           </div>
           <div class="tl-entry">
             <span class="tl-dot danger"></span>
             <div class="tl-head">
               <span class="tl-name">Air Canada</span>
-              <span class="tl-pill">liability</span>
             </div>
             <div class="tl-body">The support bot invented a bereavement-fare refund policy that didn't exist. A
               tribunal ruled the airline had to <strong>honour it</strong>.</div>
           </div>
         </div>
-        <div class="callout"><span>Neither showed up in turn 1 — it took a <strong>conversation</strong> to get
+        <div class="callout"><span>Neither showed up in turn 1. It took a <strong>conversation</strong> to get
             there. That's exactly the surface single-turn evals never touch.</span></div>
       </div>
-    </div>
-  </section>
-
-  <!-- ============================================================
-       Slide 2 — The problem
-       ============================================================ -->
-  <section class="slide" id="s2">
-    <div class="slide-inner">
-      <div class="eyebrow">The gap · you already run evals</div>
-      <h2>Single-turn evals, multi-turn failures</h2>
-      <p class="lead">
-        The majority of evaluation datasets are single-turn, but production
-        failures usually happen many turns into a conversation.
-      </p>
-      <ul class="ship-list">
-        <li class="ship-item">
-          <span class="ship-dot clay"></span>
-          <div>
-            <div class="ship-title">Golden sets + LLM-as-judge test responses, not conversations</div>
-            <div class="ship-desc">
-              Agents break when users change their mind, get impatient,
-              contradict themselves, or drift off-goal: conversational
-              dynamics no static golden set encodes.
-            </div>
-          </div>
-          <span class="ship-ref">turn 7, not turn 1</span>
-        </li>
-        <li class="ship-item">
-          <span class="ship-dot clay"></span>
-          <div>
-            <div class="ship-title">And at the start, there's no dataset at all</div>
-            <div class="ship-desc">
-              The agent hasn't shipped: no production traces to mine,
-              and multi-turn ground truth is the most expensive kind to
-              hand-build.
-            </div>
-          </div>
-          <span class="ship-ref">cold start</span>
-        </li>
-        <li class="ship-item">
-          <span class="ship-dot clay"></span>
-          <div>
-            <div class="ship-title">You can't write test cases for failure modes you haven't met</div>
-            <div class="ship-desc">
-              The blind spots are exactly the point: coverage has to come
-              from somewhere other than your own imagination.
-            </div>
-          </div>
-          <span class="ship-ref">unknown unknowns</span>
-        </li>
-      </ul>
     </div>
   </section>
 
@@ -979,15 +1008,19 @@
   <section class="slide" id="s3">
     <div class="slide-inner">
       <div class="eyebrow">The idea</div>
-      <h2>From nothing to a test suite</h2>
+      <h2>Agent Simulation: Stress-Test Agents Against Synthetic Users</h2>
 
-      <svg viewBox="0 0 1580 300" xmlns="http://www.w3.org/2000/svg"
+      <svg viewBox="0 0 1900 300" xmlns="http://www.w3.org/2000/svg"
         style="width:100%; display:block; margin:36px auto 0;"
-        aria-label="Left-to-right pipeline: generate, simulate, judge">
+        aria-label="Left-to-right pipeline: generate, simulate, judge, improve">
         <defs>
           <marker id="pArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
             orient="auto-start-reverse">
             <path d="M0,0 L10,5 L0,10 z" fill="#808080" />
+          </marker>
+          <marker id="pArrowLoop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+            orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#FF6B4A" />
           </marker>
         </defs>
 
@@ -997,17 +1030,26 @@
           <rect x="190" y="100" width="280" height="128" rx="16" fill="#FFFFFF" stroke="#DDDDDD" stroke-width="1.75" />
           <text x="330" y="176" fill="#141319">Generate</text>
 
-          <rect x="650" y="100" width="280" height="128" rx="16" fill="#FFFFFF" stroke="#025558" stroke-width="1.75" />
+          <rect x="650" y="100" width="280" height="128" rx="16" fill="#FFFFFF" stroke="#DDDDDD" stroke-width="1.75" />
           <text x="790" y="176" fill="#141319">Simulate</text>
 
           <rect x="1110" y="100" width="280" height="128" rx="16" fill="#FFFFFF" stroke="#DDDDDD" stroke-width="1.75" />
           <text x="1250" y="176" fill="#141319">Judge</text>
+
+          <rect x="1570" y="100" width="280" height="128" rx="16" fill="#FFFFFF" stroke="#FF6B4A" stroke-width="1.75" />
+          <text x="1710" y="176" fill="#141319">Improve</text>
         </g>
 
         <!-- flow -->
         <g stroke="#808080" stroke-width="1.75" fill="none">
           <path d="M470 164 L650 164" marker-end="url(#pArrow)" />
           <path d="M930 164 L1110 164" marker-end="url(#pArrow)" />
+          <path d="M1390 164 L1570 164" marker-end="url(#pArrow)" />
+        </g>
+
+        <!-- reuse loop: improve back into generate -->
+        <g stroke="#FF6B4A" stroke-width="1.75" fill="none" stroke-dasharray="6 6">
+          <path d="M1710 228 L1710 280 L330 280 L330 228" marker-end="url(#pArrowLoop)" />
         </g>
 
         <!-- step labels -->
@@ -1018,7 +1060,7 @@
         </g>
       </svg>
       <p class="cmd-note" style="margin-top:18px;">
-        Generate the tests, simulate multi-turn, judge every turn — scores you
+        Generate the tests, simulate multi-turn, judge every turn: scores you
         can read and a dataset you can reuse.
       </p>
     </div>
@@ -1047,79 +1089,44 @@
 
         <!-- boxes -->
         <g font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="16.9" fill="#141319">
-          <rect x="322" y="20" width="216" height="54" rx="10" fill="#FFFFFF" stroke="#025558" stroke-width="1.5" />
-          <text x="430" y="43" text-anchor="middle" font-weight="600">your agent</text>
-          <text x="430" y="60" text-anchor="middle" fill="#808080" font-size="12.3">orq · OpenAI · HTTP · SDK</text>
+          <rect x="2" y="20" width="216" height="54" rx="10" fill="#FFFFFF" stroke="#025558" stroke-width="1.5" />
+          <text x="110" y="53" text-anchor="middle" font-weight="600">your agent</text>
+          <rect x="2" y="2" width="74" height="28" rx="14" fill="#df5325" />
+          <text x="39" y="21" text-anchor="middle" font-weight="600" font-size="14" fill="#FFFFFF">Start</text>
 
           <rect x="2" y="150" width="216" height="54" rx="10" fill="#FFFFFF" stroke="#DDDDDD" stroke-width="1.5" />
-          <text x="110" y="173" text-anchor="middle" font-weight="600">generator</text>
-          <text x="110" y="190" text-anchor="middle" fill="#808080" font-size="12.3">creates personas × scenarios</text>
+          <text x="110" y="183" text-anchor="middle" font-weight="600">generator</text>
 
           <rect x="322" y="150" width="216" height="54" rx="10" fill="#FFFFFF" stroke="#DDDDDD" stroke-width="1.5" />
-          <text x="430" y="173" text-anchor="middle" font-weight="600">user-simulator</text>
-          <text x="430" y="190" text-anchor="middle" fill="#808080" font-size="13.7">plays the test suite</text>
+          <text x="430" y="183" text-anchor="middle" font-weight="600">user-simulator</text>
 
           <rect x="642" y="150" width="216" height="54" rx="10" fill="#FFFFFF" stroke="#DDDDDD" stroke-width="1.5" />
-          <text x="750" y="173" text-anchor="middle" font-weight="600">judge agent</text>
-          <text x="750" y="190" text-anchor="middle" fill="#808080" font-size="12.3">goal_achieved · criteria_met</text>
+          <text x="750" y="183" text-anchor="middle" font-weight="600">judge agent</text>
 
           <rect x="642" y="20" width="216" height="54" rx="10" fill="#FFFFFF" stroke="#DDDDDD" stroke-width="1.5" />
-          <text x="750" y="43" text-anchor="middle" font-weight="600">run report</text>
-          <text x="750" y="60" text-anchor="middle" fill="#808080" font-size="13.7">pass rate + transcripts</text>
+          <text x="750" y="53" text-anchor="middle" font-weight="600">run report</text>
 
           <rect x="2" y="266" width="216" height="54" rx="10" fill="#141319" />
-          <text x="110" y="289" text-anchor="middle" font-weight="600" fill="#F5F5F5">test suite</text>
-          <text x="110" y="306" text-anchor="middle" fill="#FF8B6A" font-size="12.3">datapoints.jsonl · reusable</text>
+          <text x="110" y="299" text-anchor="middle" font-weight="600" fill="#F5F5F5">test suite</text>
         </g>
 
         <!-- solid flow -->
         <g stroke="#808080" stroke-width="1.5" fill="none">
-          <path d="M322 47 L110 47 L110 150" marker-end="url(#sArrow)" />
+          <path d="M110 74 L110 150" marker-end="url(#sArrow)" />
           <path d="M110 204 L110 266" marker-end="url(#sArrow)" />
           <path d="M218 293 L430 293 L430 204" marker-end="url(#sArrow)" />
-          <path d="M410 150 L410 74" marker-end="url(#sArrow)" />
-          <path d="M450 74 L450 150" marker-end="url(#sArrow)" />
+          <path d="M390 150 L390 54 L218 54" marker-end="url(#sArrow)" />
+          <path d="M218 40 L430 40 L430 150" marker-end="url(#sArrow)" />
           <path d="M538 177 L642 177" marker-end="url(#sArrow)" />
           <path d="M750 150 L750 74" marker-end="url(#sArrow)" />
         </g>
 
-        <!-- edge labels -->
+        <!-- edge labels: only the round-trip that carries the loop -->
         <g font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="13.7" fill="#808080">
-          <text x="200" y="38" text-anchor="middle">description seeds it all</text>
-          <text x="118" y="118">sim generate</text>
-          <text x="118" y="240">--datapoints</text>
-          <text x="230" y="284">plays each datapoint</text>
-          <text x="230" y="316" fill="#FF6B4A">re-run the identical suite on every agent change</text>
-          <text x="330" y="118" text-anchor="end">user turn</text>
-          <text x="462" y="118">agent reply</text>
-          <text x="590" y="170" text-anchor="middle" font-size="11">full transcript</text>
-          <text x="742" y="118" text-anchor="end">verdicts + reasoning</text>
-        </g>
-
-        <!-- extension-point badges -->
-        <g font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="15.6" font-weight="700">
-          <circle cx="545" cy="26" r="11" fill="#FF6B4A" /><text x="545" y="30" text-anchor="middle"
-            fill="#F5F5F5">1</text>
-          <circle cx="865" cy="156" r="11" fill="#FF6B4A" /><text x="865" y="160" text-anchor="middle"
-            fill="#F5F5F5">2</text>
-          <circle cx="225" cy="272" r="11" fill="#FF6B4A" /><text x="225" y="276" text-anchor="middle"
-            fill="#F5F5F5">3</text>
-          <circle cx="865" cy="26" r="11" fill="#FF6B4A" /><text x="865" y="30" text-anchor="middle"
-            fill="#F5F5F5">4</text>
+          <text x="300" y="72" text-anchor="middle">user turn</text>
+          <text x="324" y="33" text-anchor="middle">agent reply</text>
         </g>
       </svg>
-
-      <p class="cmd-note" style="margin-top:16px; line-height:1.7;">
-        <strong style="color:#FF6B4A;">1</strong> Target: anything that answers a message: <span
-          class="mono">AgentTarget</span> protocol; adapters for LangGraph, CrewAI, OpenAI Agents SDK, Pydantic
-        AI.&ensp;
-        <strong style="color:#FF6B4A;">2</strong> Judge: choose evaluators per run (<span
-          class="mono">evaluator_names=[...]</span>) or write your own.&ensp;
-        <strong style="color:#FF6B4A;">3</strong> Test suite: skip generation and bring your own: <span
-          class="mono">--datapoints</span> JSONL or <span class="mono">--dataset-id</span>; extend and upload
-        back.&ensp;
-        <strong style="color:#FF6B4A;">4</strong> Outputs: run store feeds the dashboard, CI gates, and orq experiments.
-      </p>
     </div>
   </section>
 
@@ -1262,8 +1269,8 @@ evaluatorq sim --help         <span class="cm"># 'eq' works too</span></pre>
         <h2>Meet Sterling</h2>
       </div>
       <div class="body" style="justify-content:center;">
-        <p class="lead" style="margin-top:6px;margin-bottom:24px;">The bank's credit-card concierge. Buttoned-up,
-          by-the-book — his job is to help without ever crossing a line.</p>
+        <p class="lead" style="margin-top:6px;margin-bottom:24px;">The bank's credit-card concierge. Buttoned-up
+          and by-the-book. His job is to help without ever crossing a line.</p>
         <div class="hero">
           <div class="face">
             <span class="live">live</span>
@@ -1272,11 +1279,11 @@ evaluatorq sim --help         <span class="cm"># 'eq' works too</span></pre>
           <div class="traits">
             <div class="trait">
               <span class="tk">01</span>
-              <span class="tt">Runs live on <strong>orq · gpt-5.4-mini</strong> — a real deployed agent, not a mock.</span>
+              <span class="tt">Runs live on <strong>orq</strong>. A real deployed agent, not a mock.</span>
             </div>
             <div class="trait">
               <span class="tk">02</span>
-              <span class="tt">One job: <strong>credit-card support</strong>. Balances, disputes, replacements — helpful and polite.</span>
+              <span class="tt">One job: <strong>credit-card support</strong>. Balances, disputes, replacements, helpful and polite.</span>
             </div>
             <div class="trait">
               <span class="tk">03</span>
@@ -1299,15 +1306,20 @@ evaluatorq sim --help         <span class="cm"># 'eq' works too</span></pre>
       <h2>Three commands, one suite</h2>
       <div class="cmds">
         <pre><span class="cm"># 1. generate personas × scenarios from the agent's description</span>
-evaluatorq sim generate <span class="kw">--target</span> agent:boh_creditcard_agent_demo \
-  <span class="kw">--num-personas</span> 3 <span class="kw">--num-scenarios</span> 3 <span class="kw">-o</span> datapoints.jsonl
+evaluatorq sim generate \
+  <span class="kw">--target</span> agent:boh_creditcard_agent_demo \
+  <span class="kw">--num-personas</span> 3 \
+  <span class="kw">--num-scenarios</span> 3 \
+  <span class="kw">--output</span> datapoints.jsonl
 
 <span class="cm"># 2. run the simulation against the live agent, freeze the set</span>
-evaluatorq sim run <span class="kw">--target</span> agent:boh_creditcard_agent_demo \
-  <span class="kw">--datapoints</span> datapoints.jsonl <span class="kw">--name</span> from-scratch
+evaluatorq sim simulate \
+  <span class="kw">--target</span> agent:boh_creditcard_agent_demo \
+  <span class="kw">--input</span> datapoints.jsonl \
+  <span class="kw">--name</span> from-scratch
 
 <span class="cm"># 3. open the run viewer: pass rate + transcripts</span>
-evaluatorq sim ui .evaluatorq/sim-runs/&lt;run&gt;.json</pre>
+evaluatorq dashboard .evaluatorq/sim-runs</pre>
       </div>
       <p class="cmd-note">
         The payoff moment: open the JSONL and read one row: a persona with
@@ -1323,21 +1335,17 @@ evaluatorq sim ui .evaluatorq/sim-runs/&lt;run&gt;.json</pre>
   <section class="slide" id="s6">
     <div class="slide-inner">
       <div class="eyebrow">Demo · Act 2</div>
-      <h2>Not an orq agent? Bring them in</h2>
+      <h2>Bring your own agent: one function</h2>
       <div class="cmds">
-        <pre><span class="cm"># any OpenAI-compatible model or endpoint</span>
-evaluatorq sim run <span class="kw">--openai-model</span> gpt-4o-mini \
-  <span class="kw">--agent-description</span> <span class="str">"Support agent for ..."</span>
+        <pre><span class="cm"># the SDK: wrap any async fn(messages) -> str</span>
+<span class="kw">from</span> evaluatorq.simulation <span class="kw">import</span> generate_and_simulate
 
-<span class="cm"># any deployed HTTP agent</span>
-evaluatorq sim run <span class="kw">--vercel-url</span> https://my-agent.app/api/chat</pre>
-      </div>
-      <div class="cmds">
-        <pre><span class="cm"># or the SDK: wrap any async fn(messages) -> str</span>
-<span class="kw">from</span> evaluatorq.simulation <span class="kw">import</span> simulate
+<span class="kw">async def</span> my_agent(messages):
+    resp = <span class="kw">await</span> client.chat.completions.create(
+        model=<span class="str">"gpt-5.6-luna"</span>, messages=messages)
+    <span class="kw">return</span> resp.choices[0].message.content
 
-results = <span class="kw">await</span> simulate(target=my_agent,
-    evaluator_names=[<span class="str">"goal_achieved"</span>, <span class="str">"criteria_met"</span>])</pre>
+results = <span class="kw">await</span> generate_and_simulate(target=my_agent)</pre>
       </div>
       <p class="cmd-note">
         Framework adapters included: LangGraph, CrewAI, OpenAI Agents SDK,
@@ -1353,36 +1361,32 @@ results = <span class="kw">await</span> simulate(target=my_agent,
     <div class="slide-inner">
       <div class="eyebrow">Demo · Act 3</div>
       <h2>Three ways to work with data</h2>
-      <ul class="ship-list">
-        <li class="ship-item">
-          <span class="ship-dot"></span>
+      <ul class="ways">
+        <li class="way">
+          <span class="way-num">01</span>
           <div>
-            <div class="ship-title">From scratch</div>
-            <div class="ship-desc">No data at all: generate the suite from the agent description. What we did in Act 1.
-            </div>
+            <div class="way-title">From scratch</div>
+            <div class="way-desc">No data at all: generate the suite from the agent description. What we did in Act 1.</div>
           </div>
-          <span class="ship-ref">sim generate</span>
         </li>
-        <li class="ship-item">
-          <span class="ship-dot"></span>
+        <li class="way">
+          <span class="way-num">02</span>
           <div>
-            <div class="ship-title">Re-run frozen</div>
-            <div class="ship-desc">
+            <div class="way-title">Re-run frozen</div>
+            <div class="way-desc">
               Change the agent's prompt, re-run the <em>exact same</em>
               datapoints, from a local JSONL or an orq dataset. Like-for-like
               comparison; regressions become a gate, not a surprise.
             </div>
           </div>
-          <span class="ship-ref">--datapoints · --dataset-id</span>
         </li>
-        <li class="ship-item">
-          <span class="ship-dot"></span>
+        <li class="way">
+          <span class="way-num">03</span>
           <div>
-            <div class="ship-title">Extend &amp; share</div>
-            <div class="ship-desc">Generate more personas and scenarios, append, or push the suite to an orq dataset for
+            <div class="way-title">Extend &amp; share</div>
+            <div class="way-desc">Generate more personas and scenarios, append, or push the suite to an orq dataset for
               the whole team (<code>sim upload-dataset</code>).</div>
           </div>
-          <span class="ship-ref">generate → append → upload</span>
         </li>
       </ul>
     </div>
@@ -1397,11 +1401,9 @@ results = <span class="kw">await</span> simulate(target=my_agent,
     <div class="slide-inner fill">
       <div class="slide-head">
         <p class="eyebrow act">The payoff</p>
-        <h2>What one loop bought</h2>
+        <h2>Iteratively improve your agent</h2>
       </div>
       <div class="body" style="justify-content:flex-start;">
-        <p class="lead" style="margin-top:16px;margin-bottom:20px;">The dashboard you just saw, as numbers — the same
-          24 scenarios, before and after one round of hardening.</p>
         <div style="display:flex;gap:28px;align-items:stretch;">
           <div
             style="flex:1;background:var(--surface);border:1px solid var(--danger-bd);border-radius:14px;padding:26px 28px;">
@@ -1419,7 +1421,7 @@ results = <span class="kw">await</span> simulate(target=my_agent,
           </div>
           <div
             style="flex:1;background:var(--surface);border:1px solid var(--safe-bd);border-radius:14px;padding:26px 28px;">
-            <div style="font-family:var(--mono);font-size:21px;color:var(--gray-500);">sterling-v2 · hardened</div>
+            <div style="font-family:var(--mono);font-size:21px;color:var(--gray-500);">sterling-v2 · improved</div>
             <div style="display:flex;align-items:baseline;gap:10px;margin-top:8px;">
               <div style="font-family:var(--serif);font-size:96px;font-weight:700;line-height:1;color:var(--safe);">
                 88<span style="font-size:48px;">%</span></div>
@@ -1432,8 +1434,8 @@ results = <span class="kw">await</span> simulate(target=my_agent,
               <strong>frozen set</strong></div>
           </div>
         </div>
-        <div class="callout"><span>One <strong>generate → simulate → judge → harden</strong> loop. The failures that
-            only surface deep in a conversation are exactly the ones it closed.</span></div>
+        <div class="callout"><span>One <strong>generate → simulate → judge → improve</strong> loop closes the failures
+            that only surface deep in a conversation.</span></div>
       </div>
     </div>
   </section>
@@ -1446,17 +1448,26 @@ results = <span class="kw">await</span> simulate(target=my_agent,
       <div class="eyebrow">Beyond the demo</div>
       <h2>What you do with it</h2>
       <ul class="next-list">
-        <li>Regression gate.
-          <span class="sub">Frozen suite re-runs on every prompt or model change, in CI, before merge.</span>
+        <li class="do-lane do-gate">
+          <svg class="do-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 3l7 3v5c0 4.5-3 7.6-7 9-4-1.4-7-4.5-7-9V6l7-3z"/><path d="M9 12l2 2 4-4"/>
+          </svg>
+          Regression gate.
+          <span class="sub">Frozen suite re-runs on every prompt or model change — in CI, before merge.</span>
         </li>
-        <li>Use the simulation CLI from any coding agent, with our skills.
-          <span class="sub">CLI-first with JSON output plus ready-made agent skills: Claude Code, Cursor, or any coding
-            agent runs the sim, reads the failures, patches the instructions, re-runs the frozen set. You review the
-            diff.</span>
+        <li class="do-lane do-cli">
+          <svg class="do-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3"/><path d="M13 15h4"/>
+          </svg>
+          Use the simulation CLI from any coding agent, with our skills.
+          <span class="sub">JSON-first, with ready-made skills — Claude Code or Cursor runs the sim, patches, re-runs, you review the diff.</span>
         </li>
-        <li>Self-improving workflows, with one caution.
-          <span class="sub">The frozen suite is a fitness function for automated iteration. Keep held-out scenarios so
-            you optimize the agent, not the judge.</span>
+        <li class="do-lane do-loop">
+          <svg class="do-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/>
+          </svg>
+          Self-improving workflows, with one caution.
+          <span class="sub">A fitness function for automated iteration — keep held-out scenarios so you tune the agent, not the judge.</span>
         </li>
       </ul>
     </div>
@@ -1471,14 +1482,13 @@ results = <span class="kw">await</span> simulate(target=my_agent,
       <h2>Our skills drive the simulation CLI for you</h2>
       <p class="lead">
         orq-ai/assistant-plugins ships Agent Skills for the Build, Evaluate,
-        Optimize lifecycle. Works with Claude Code, Cursor, Codex, Gemini CLI,
-        and any Agent Skills-compatible assistant.
+        Optimize lifecycle.
       </p>
       <div class="cmds">
         <pre><span class="cm"># in Claude Code:</span>
 /plugin marketplace add orq-ai/assistant-plugins
 /plugin install orq-skills@orq-claude-plugin
-/orq:quickstart               <span class="cm"># checks key, MCP, credentials</span></pre>
+<span class="str">"simulate my agent over 24 conversations"</span>  <span class="cm"># fires the orq-simulate-agent skill</span></pre>
       </div>
       <p class="cmd-note">
         Your assistant then knows the workflows: run a simulation, read the
@@ -1493,46 +1503,38 @@ results = <span class="kw">await</span> simulate(target=my_agent,
   </section>
 
   <!-- ============================================================
-       Slide 10 — The ask (inverted)
-       ============================================================ -->
-  <section class="slide invert" id="s10">
-    <div class="slide-inner">
-      <div class="eyebrow">The ask</div>
-      <h2>Run one simulation this week</h2>
-
-      <div class="decision-card">
-        <p class="decision-q">
-          Take your agent, any stack, and run one simulation against it
-          before Friday.
-        </p>
-        <p class="decision-context">
-          All it needs is a description of what your agent does. No dataset,
-          no labels, no platform migration. You'll get a reusable suite out
-          of it either way.
-        </p>
-      </div>
-
-      <div class="options">
-        <span class="chip lean">pip install evaluatorq</span>
-        <span class="chip">github.com/orq-ai/evaluatorq</span>
-        <span class="chip">open source</span>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============================================================
        Slide 11 — Q&A
        ============================================================ -->
   <section class="slide" id="s11">
-    <div class="slide-inner">
-      <div class="eyebrow">Q&amp;A</div>
-      <h2>Questions</h2>
-      <ul class="next-list">
-        <li>What would break <em>your</em> agent first: impatience, contradiction, or drift?</li>
-      </ul>
-      <div class="footnote">
-        Bauke Brenninkmeijer · Arian Pasquali · orq.ai · docs, examples, and today's demo commands in the follow-up
-        email.
+    <div class="slide-inner" style="display:flex; flex-direction:column; gap:40px;">
+      <div style="background:rgba(255,107,74,.10); border:1px solid rgba(255,107,74,.28); border-radius:20px; padding:32px 40px; display:flex; flex-direction:column; gap:22px;">
+        <div>
+          <div class="eyebrow" style="color:var(--clay);">Q&amp;A</div>
+          <h2 style="margin:0;">Questions?</h2>
+        </div>
+        <a href="https://github.com/orq-ai/evaluatorq/tree/main" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">
+        <div style="background:#FFFFFF; border:1px solid var(--gray-300); border-radius:16px; padding:12px; box-shadow:0 16px 44px rgba(20,19,25,.14); text-align:center;">
+          <img src="assets/github-repo.jpg" alt="orq-ai/evaluatorq on GitHub" style="display:block; width:100%; height:auto; max-height:50vh; object-fit:contain; border-radius:8px;" />
+          <div style="margin-top:10px; font-family:var(--mono); font-size:14px; font-weight:600; color:var(--olive); letter-spacing:.04em; text-transform:uppercase;">github.com/orq-ai/evaluatorq</div>
+        </div>
+      </a>
+      </div>
+      <div style="width:100%; background:var(--slate); border-radius:20px; padding:32px 40px; display:flex; align-items:center; justify-content:space-between; gap:40px;">
+        <div style="flex:1 1 auto; min-width:0;">
+          <div class="eyebrow" style="color:var(--clay);">Get Started Now</div>
+          <div style="font-size:30px; font-weight:600; color:#FFFFFF; margin-top:10px; line-height:1.3;">Run your first agent simulation straight from the tutorial.</div>
+          <div style="font-family:var(--mono); font-size:16px; color:var(--gray-300); margin-top:14px;">orq-ai.github.io/evaluatorq/guides/agent-simulation</div>
+        </div>
+        <div style="flex:0 0 auto;">
+        <a href="https://orq-ai.github.io/evaluatorq/guides/agent-simulation/" target="_blank" rel="noopener" style="flex:0 0 auto; text-decoration:none; color:inherit;">
+        <div style="background:#FFFFFF; border:1px solid var(--gray-300); border-radius:20px; padding:20px 20px 14px; box-shadow:0 16px 44px rgba(20,19,25,.14); text-align:center;">
+          <svg viewBox="0 0 37 37" width="250" height="250" shape-rendering="crispEdges" style="display:block;">
+            <path fill="none" stroke="#141319" stroke-width="1" d="M2 2.5h7m2 0h1m1 0h1m2 0h1m1 0h1m1 0h2m1 0h1m1 0h1m2 0h7m-33 1h1m5 0h1m2 0h1m1 0h2m2 0h1m6 0h1m3 0h1m5 0h1m-33 1h1m1 0h3m1 0h1m1 0h1m2 0h2m2 0h2m2 0h1m1 0h2m1 0h1m1 0h1m1 0h3m1 0h1m-33 1h1m1 0h3m1 0h1m1 0h1m2 0h1m5 0h1m2 0h1m1 0h1m1 0h1m1 0h1m1 0h3m1 0h1m-33 1h1m1 0h3m1 0h1m1 0h1m1 0h1m4 0h1m1 0h4m2 0h1m2 0h1m1 0h3m1 0h1m-33 1h1m5 0h1m1 0h1m5 0h4m2 0h2m4 0h1m5 0h1m-33 1h7m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h7m-25 1h2m4 0h1m1 0h1m1 0h1m1 0h3m1 0h1m-25 1h1m1 0h5m3 0h1m2 0h2m2 0h1m1 0h1m4 0h1m1 0h5m-31 1h2m1 0h1m1 0h1m3 0h1m2 0h2m2 0h6m1 0h1m2 0h2m1 0h4m-32 1h3m2 0h1m3 0h2m1 0h4m3 0h3m3 0h1m1 0h1m1 0h2m-31 1h2m4 0h2m3 0h2m1 0h1m2 0h1m1 0h3m2 0h1m2 0h5m-31 1h7m1 0h1m1 0h1m1 0h2m1 0h1m4 0h4m1 0h3m1 0h2m-31 1h4m2 0h2m1 0h1m5 0h4m2 0h1m2 0h1m3 0h3m-32 1h1m4 0h1m1 0h2m1 0h2m2 0h1m2 0h1m1 0h1m1 0h1m2 0h2m4 0h1m-31 1h5m2 0h3m1 0h3m1 0h1m4 0h1m1 0h1m1 0h2m2 0h2m-31 1h2m1 0h2m1 0h2m6 0h1m2 0h1m1 0h2m1 0h4m1 0h3m2 0h1m-26 1h3m3 0h2m1 0h1m1 0h3m2 0h2m1 0h2m1 0h2m1 0h1m-33 1h8m1 0h1m2 0h4m2 0h1m3 0h1m2 0h1m1 0h2m1 0h2m-32 1h1m1 0h1m1 0h2m2 0h4m4 0h1m4 0h1m2 0h1m2 0h4m-30 1h1m1 0h1m2 0h3m2 0h1m2 0h2m1 0h1m1 0h1m2 0h1m1 0h2m2 0h2m1 0h1m-32 1h3m2 0h1m1 0h7m2 0h2m1 0h6m1 0h1m3 0h1m1 0h1m-33 1h1m2 0h1m1 0h2m3 0h3m1 0h4m2 0h1m1 0h1m2 0h2m1 0h4m-32 1h1m2 0h2m5 0h2m4 0h1m2 0h1m1 0h6m3 0h1m-31 1h1m2 0h1m1 0h2m1 0h6m2 0h3m3 0h1m1 0h5m2 0h2m-25 1h2m1 0h4m1 0h1m1 0h4m1 0h2m3 0h1m1 0h3m-33 1h7m2 0h2m1 0h2m1 0h2m4 0h4m1 0h1m1 0h1m1 0h2m-32 1h1m5 0h1m1 0h1m2 0h3m1 0h2m1 0h1m1 0h2m1 0h2m3 0h4m-32 1h1m1 0h3m1 0h1m1 0h1m4 0h1m1 0h1m1 0h1m2 0h1m3 0h6m-30 1h1m1 0h3m1 0h1m1 0h1m5 0h1m1 0h5m4 0h1m2 0h2m1 0h2m-33 1h1m1 0h3m1 0h1m1 0h2m1 0h2m2 0h3m2 0h2m2 0h4m1 0h1m-30 1h1m5 0h1m2 0h2m1 0h1m2 0h1m4 0h4m1 0h1m2 0h3m-31 1h7m1 0h4m1 0h1m3 0h1m1 0h2m1 0h4m1 0h1m3 0h1" />
+          </svg>
+          <div style="margin-top:12px; font-family:var(--mono); font-size:14px; font-weight:600; color:var(--olive); letter-spacing:.04em; text-transform:uppercase;">Tutorial</div>
+        </div>
+      </a>
+        </div>
       </div>
     </div>
   </section>
@@ -1540,13 +1542,17 @@ results = <span class="kw">await</span> simulate(target=my_agent,
   <!-- ============================================================
        Slide counter
        ============================================================ -->
-  <div id="counter">1 / 14</div>
+  <div id="counter">1 / 15</div>
+  <img id="brand-logo" alt="orq">
 
   <script>
     (function () {
       const slides = Array.from(document.querySelectorAll('.slide'));
       const counter = document.getElementById('counter');
       let current = 0;
+
+      // reuse the title-slide ornament as the persistent corner logo
+      document.getElementById('brand-logo').src = document.querySelector('.ornament').src;
 
       function go(i) {
         current = Math.max(0, Math.min(slides.length - 1, i));
