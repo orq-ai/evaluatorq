@@ -201,7 +201,7 @@ class TestDeprecatedTargetCallback:
 
         with pytest.raises(TypeError, match="target_callback"):
             await simulate(
-                target_callback=legacy_target,
+                target_callback=legacy_target,  # pyright: ignore[reportCallIssue]
                 datapoints=[dp],
                 sim_model="test",
                 max_turns=1,

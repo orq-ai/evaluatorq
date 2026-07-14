@@ -283,9 +283,7 @@ class RichHooks:
         if stage == SimStage.GENERATE:
             # Phase-1 label; on_generate_inputs_ready switches it to phase 2 so
             # the two sequential generation phases read as distinct steps.
-            self._gen_status = self._console.status(
-                '[cyan]Generating personas & scenarios…', spinner='dots'
-            )
+            self._gen_status = self._console.status('[cyan]Generating personas & scenarios…', spinner='dots')
             self._gen_status.start()
 
     async def on_generate_inputs_ready(self, num_personas: int, num_scenarios: int) -> None:

@@ -144,7 +144,7 @@ async def test_generate_and_simulate_rejects_target_callback(monkeypatch):
     with pytest.raises(TypeError, match="target_callback"):
         await generate_and_simulate(
             agent_description="a test agent",
-            target_callback=lambda messages: "ok",
+            target_callback=lambda messages: "ok",  # pyright: ignore[reportCallIssue]
             num_personas=1,
             num_scenarios=1,
             generation_client=injected,

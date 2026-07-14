@@ -276,9 +276,7 @@ def _echo_generate_plan(
         ('Building', f'{num_personas} personas x {num_scenarios} scenarios = {total} datapoints'),
         ('Output', str(output)),
     ]
-    asyncio.run(
-        confirm_run_plan(console, title='Generate Plan', rows=rows, prompt='', skip_confirm=True)
-    )
+    asyncio.run(confirm_run_plan(console, title='Generate Plan', rows=rows, prompt='', skip_confirm=True))
 
 
 def _shell_path(path: Path) -> str:
@@ -370,7 +368,9 @@ def _echo_generate_preview(datapoints: list[Any]) -> None:
             scenarios.setdefault(scenario.name, scenario)
 
     if personas:
-        ptable = Table(title='Personas', title_style='bold', title_justify='left', header_style='dim', border_style='cyan')
+        ptable = Table(
+            title='Personas', title_style='bold', title_justify='left', header_style='dim', border_style='cyan'
+        )
         ptable.add_column('Name', style='cyan', no_wrap=True)
         ptable.add_column('Patience', justify='right')
         ptable.add_column('Assertive', justify='right')
@@ -380,7 +380,9 @@ def _echo_generate_preview(datapoints: list[Any]) -> None:
         _recho(ptable)
 
     if scenarios:
-        stable = Table(title='Scenarios', title_style='bold', title_justify='left', header_style='dim', border_style='cyan')
+        stable = Table(
+            title='Scenarios', title_style='bold', title_justify='left', header_style='dim', border_style='cyan'
+        )
         stable.add_column('Name', style='green')
         stable.add_column('Goal', style='dim')
         for s in scenarios.values():

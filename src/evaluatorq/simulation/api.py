@@ -900,9 +900,7 @@ async def _simulate_core(
     resolved_hooks = config.hooks or DefaultHooks()
     # The sync-hook deprecation nudge fires once in SimulationRunner.__init__
     # (the single choke point both this path and direct runner use share).
-    resolved_evaluator_names = (
-        config.evaluator_names if config.evaluator_names is not None else DEFAULT_EVALUATOR_NAMES
-    )
+    resolved_evaluator_names = config.evaluator_names if config.evaluator_names is not None else DEFAULT_EVALUATOR_NAMES
     # Derive a human-readable target label mirroring the save block's precedence:
     # AgentTarget instances → "agent:<key>" (or, for the self-describing
     # openai_model/vercel targets, their own `.name`), deployment strings →
@@ -1402,9 +1400,7 @@ async def _simulate_via_evaluatorq(
     orq_results_path = config.orq_results_path
     exit_on_failure = config.exit_on_failure
 
-    resolved_evaluator_names = (
-        config.evaluator_names if config.evaluator_names is not None else DEFAULT_EVALUATOR_NAMES
-    )
+    resolved_evaluator_names = config.evaluator_names if config.evaluator_names is not None else DEFAULT_EVALUATOR_NAMES
     scorers = [(name, get_evaluator(name)) for name in resolved_evaluator_names]
 
     eq_datapoints = [DataPoint(inputs={'datapoint': dp.model_dump(mode='json')}) for dp in sim_datapoints]

@@ -107,7 +107,7 @@ async def test_generate_personas_scenarios_seeds_override_num(captured):
         num_personas=99,  # ignored — seeds win
         num_scenarios=3,
         model="m",
-        generation_client=object(),
+        generation_client=object(),  # pyright: ignore[reportArgumentType]
         persona_seeds=["angry retiree", "fraud dispute"],
     )
     # One persona per seed, each seed threaded into its prompt.

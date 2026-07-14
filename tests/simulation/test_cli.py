@@ -45,7 +45,7 @@ def test_epilog_examples_use_only_real_flags(command: str) -> None:
     import typer
 
     click_group = typer.main.get_command(app)
-    subcommands = click_group.commands  # type: ignore[attr-defined]
+    subcommands = click_group.commands  # pyright: ignore[reportAttributeAccessIssue]
 
     def valid_flags(name: str) -> set[str]:
         flags: set[str] = set()
@@ -81,7 +81,7 @@ def test_output_flags_expose_short_aliases(command: str, long: str, short: str) 
     """Guard the self-describing output flags keep both their long and short spellings."""
     import typer
 
-    subcommands = typer.main.get_command(app).commands  # type: ignore[attr-defined]
+    subcommands = typer.main.get_command(app).commands  # pyright: ignore[reportAttributeAccessIssue]
     opts = {opt for param in subcommands[command].params for opt in param.opts}
     assert long in opts, f'{command} missing {long}'
     assert short in opts, f'{command} missing {short}'
