@@ -6,23 +6,45 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Simulation · Webinar Deck · July 14</title>
   <style>
+    @font-face { font-family: "Avio Sans"; src: url('assets/fonts/AvioSans-Regular.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: swap; }
+    @font-face { font-family: "Avio Sans"; src: url('assets/fonts/AvioSans-RegularItalic.woff2') format('woff2'); font-weight: 400; font-style: italic; font-display: swap; }
+    @font-face { font-family: "Avio Sans"; src: url('assets/fonts/AvioSans-Medium.woff2') format('woff2'); font-weight: 500; font-style: normal; font-display: swap; }
+    @font-face { font-family: "Avio Sans"; src: url('assets/fonts/AvioSans-SemiBold.woff2') format('woff2'); font-weight: 600; font-style: normal; font-display: swap; }
+    @font-face { font-family: "Avio Sans"; src: url('assets/fonts/AvioSans-Bold.woff2') format('woff2'); font-weight: 700; font-style: normal; font-display: swap; }
+    @font-face { font-family: "Kurrent Mono"; src: url('assets/fonts/ESKlarheitKurrentMono-Md.woff2') format('woff2'); font-weight: 500; font-style: normal; font-display: swap; }
+
     /* ------------------------------------------------------------------
      Design tokens
      ------------------------------------------------------------------ */
     :root {
-      --ivory: #F5F5F5;
+      --ivory: #FAF9F5;
+      --surface: #FFFDF8;
       --slate: #141319;
       --clay: #FF6B4A;
       --oat: #E4E4E4;
       --olive: #025558;
-      --gray-150: #EAEAEA;
-      --gray-300: #DDDDDD;
-      --gray-500: #808080;
-      --gray-700: #3D3D40;
+      --gray-150: #F0EEE6;
+      --gray-300: #D1CFC5;
+      --gray-500: #87867F;
+      --gray-700: #3D3D3A;
 
-      --serif: ui-serif, Georgia, "Times New Roman", serif;
-      --sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      --orq-green: #025558;
+      --orq-orange: #ff8f34;
+      --orq-orange-deep: #df5325;
+      --on-green: #dff1ef;
+      --on-green-soft: #9fcfca;
+
+      --danger: #d92d20;
+      --danger-bg: #fdecec;
+      --danger-bd: #f9c5c5;
+      --safe: #156245;
+      --safe-bg: #eafcf7;
+      --safe-bd: #d6f2e4;
+
+      --display: "Avio Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --serif: var(--display);
+      --sans: "Avio Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      --mono: "Kurrent Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     }
 
     * {
@@ -411,6 +433,225 @@
         padding-top: 8px;
       }
     }
+
+    /* ------------------------------------------------------------------
+     Shared components ported from the security-of-ai-agents deck
+     ------------------------------------------------------------------ */
+    .slide.chapter {
+      background: var(--orq-green);
+      color: var(--ivory);
+    }
+
+    .slide.chapter .eyebrow {
+      color: var(--on-green-soft);
+    }
+
+    .slide.chapter h1,
+    .slide.chapter h2 {
+      color: var(--ivory);
+    }
+
+    .eyebrow.act {
+      color: var(--orq-green);
+    }
+
+    .slide-inner.fill {
+      max-width: 1260px;
+      height: 86vh;
+      max-height: 940px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .slide-inner.fill .body {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      padding-top: 1vh;
+      min-height: 0;
+    }
+
+    .slide-inner.fill h2 {
+      font-size: clamp(42px, 5vw, 62px);
+    }
+
+    .slide-inner.fill .lead {
+      font-size: 30px;
+      line-height: 1.32;
+      color: var(--gray-700);
+      max-width: 1000px;
+      margin-top: 12px;
+    }
+
+    .slide-head {
+      margin-bottom: 8px;
+    }
+
+    .slide-head h2 {
+      margin-bottom: 0;
+    }
+
+    .slide-head::after {
+      content: "";
+      display: block;
+      width: 60px;
+      height: 4px;
+      border-radius: 2px;
+      background: var(--orq-orange-deep);
+      margin-top: 12px;
+    }
+
+    .rows {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .rows .row {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 26px;
+      padding: 13px 0;
+      border-top: 1px solid var(--gray-300);
+      align-items: start;
+    }
+
+    .rows .row:last-child {
+      border-bottom: 1px solid var(--gray-300);
+    }
+
+    .row .num {
+      font-family: var(--mono);
+      font-size: 30px;
+      font-weight: 600;
+      color: var(--orq-green);
+      padding-top: 5px;
+      min-width: 32px;
+    }
+
+    .row .rc {
+      min-width: 0;
+    }
+
+    .row .rt {
+      font-family: var(--serif);
+      font-size: 38px;
+      font-weight: 600;
+      line-height: 1.15;
+    }
+
+    .row .rs {
+      font-size: 25px;
+      line-height: 1.35;
+      color: var(--gray-700);
+      margin-top: 3px;
+    }
+
+    .row .rs em {
+      color: var(--slate);
+      font-style: italic;
+    }
+
+    .callout {
+      margin-top: 18px;
+      background: var(--orq-green);
+      color: var(--ivory);
+      padding: 14px 22px;
+      border-radius: 12px;
+      font-size: 25px;
+      line-height: 1.3;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .callout::before {
+      content: "\2192";
+      font-size: 31px;
+      opacity: .75;
+    }
+
+    .callout strong {
+      color: var(--ivory);
+    }
+
+    .timeline {
+      position: relative;
+      padding: 6px 0 6px 26px;
+      margin-top: 14px;
+    }
+
+    .timeline::before {
+      content: "";
+      position: absolute;
+      left: 6px;
+      top: 12px;
+      bottom: 12px;
+      width: 2px;
+      background: var(--gray-300);
+    }
+
+    .tl-entry {
+      position: relative;
+      padding: 0 0 28px 30px;
+    }
+
+    .tl-entry:last-child {
+      padding-bottom: 4px;
+    }
+
+    .tl-dot {
+      position: absolute;
+      left: -6px;
+      top: 6px;
+      width: 15px;
+      height: 15px;
+      border-radius: 50%;
+      background: var(--gray-500);
+      box-shadow: 0 0 0 4px var(--ivory);
+    }
+
+    .tl-dot.danger {
+      background: var(--danger);
+    }
+
+    .tl-head {
+      display: flex;
+      align-items: baseline;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .tl-name {
+      font-family: var(--serif);
+      font-size: 37px;
+      font-weight: 600;
+      line-height: 1.2;
+    }
+
+    .tl-pill {
+      font-family: var(--mono);
+      font-size: 16px;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: var(--danger);
+      background: var(--danger-bg);
+      border: 1px solid var(--danger-bd);
+      padding: 3px 10px;
+      border-radius: 999px;
+    }
+
+    .tl-body {
+      font-size: 25px;
+      line-height: 1.5;
+      color: var(--gray-700);
+      margin-top: 6px;
+    }
+
+    .tl-body em {
+      color: var(--slate);
+      font-style: italic;
+    }
   </style>
 </head>
 
@@ -439,103 +680,245 @@
   </section>
 
   <!-- ============================================================
-       Slide 1b · About orq.ai
+       Slide s1b — What is orq.ai? (ported from security deck)
        ============================================================ -->
   <style>
-    /* Slide s1b — editorial orq.ai hero with bold colour blocks (native elements) */
-    #s1b {
-      background:
-        radial-gradient(120% 90% at 12% 8%, rgba(2, 85, 88, 0.10) 0%, rgba(2, 85, 88, 0) 55%),
-        radial-gradient(120% 100% at 92% 100%, rgba(255, 107, 74, 0.12) 0%, rgba(255, 107, 74, 0) 55%),
-        var(--ivory);
+    #s1b .body {
+      justify-content: flex-start !important;
+      padding-top: 3vh !important;
+      gap: 22px;
     }
 
-    #s1b h2 {
-      max-width: 20ch;
-    }
-
-    #s1b .hero-blocks {
-      list-style: none;
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 1.4vw;
-      margin-top: 4vh;
-    }
-
-    #s1b .hero-block {
-      border-radius: 14px;
-      padding: 2.4vh 1.6vw;
+    #s1b .intro {
       display: flex;
-      flex-direction: column;
-      gap: 1.2vh;
-      min-height: 0;
-    }
-
-    #s1b .hero-block .bk-title {
-      font-family: var(--serif);
-      font-size: clamp(1.5rem, 2.3vw, 2.1rem);
-      line-height: 1.05;
-    }
-
-    #s1b .hero-block .bk-desc {
-      font-size: clamp(0.9rem, 1.05vw, 1.05rem);
-      line-height: 1.4;
-    }
-
-    #s1b .hero-block .bk-ref {
-      margin-top: auto;
-      font-family: var(--mono);
-      font-size: 0.78rem;
-      letter-spacing: 0.02em;
-      opacity: 0.75;
-    }
-
-    /* teal block */
-    #s1b .hero-block.teal {
-      background: var(--olive);
+      align-items: center;
+      gap: 22px;
+      background: var(--orq-green);
+      border-radius: 18px;
+      padding: 22px 30px;
       color: var(--ivory);
     }
 
-    /* orange accent block — the emphasised capability */
-    #s1b .hero-block.orange {
-      background: var(--clay);
-      color: var(--slate);
+    #s1b .intro-mark {
+      flex: 0 0 auto;
+      width: 56px;
+      height: 56px;
+      display: grid;
+      place-items: center;
+      background: rgba(255, 255, 255, 0.12);
+      border-radius: 14px;
+      color: var(--ivory);
     }
 
-    /* mint block — light teal tint */
-    #s1b .hero-block.mint {
-      background: #DCEBEB;
-      color: var(--slate);
+    #s1b .intro-mark svg {
+      width: 34px;
+      height: 34px;
+    }
+
+    #s1b .intro-text {
+      font-size: 27px;
+      line-height: 1.45;
+    }
+
+    #s1b .intro-text strong {
+      font-weight: 700;
+    }
+
+    #s1b .intro-text .muted {
+      color: var(--on-green-soft);
+    }
+
+    #s1b .cards {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+      flex: 1;
+      min-height: 0;
+    }
+
+    #s1b .cc {
+      border-radius: 18px;
+      padding: 24px 24px 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    #s1b .cc.build {
+      background: var(--orq-green);
+      color: var(--ivory);
+    }
+
+    #s1b .cc.ship {
+      background: #1cd3ac;
+      color: #0a2f2c;
+    }
+
+    #s1b .cc.optimize {
+      background: var(--orq-orange-deep);
+      color: var(--ivory);
+    }
+
+    #s1b .cc-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    #s1b .cc-mark {
+      width: 38px;
+      height: 38px;
+      opacity: 0.95;
+    }
+
+    #s1b .cc-verb {
+      font-family: var(--mono);
+      font-size: 16.5px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      padding: 5px 11px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.16);
+    }
+
+    #s1b .cc.ship .cc-verb {
+      background: rgba(10, 47, 44, 0.14);
+    }
+
+    #s1b .cc-name {
+      font-size: 40.5px;
+      font-weight: 700;
+      line-height: 1.05;
+      margin-top: 4px;
+    }
+
+    #s1b .cc-desc {
+      font-size: 22px;
+      line-height: 1.5;
+      opacity: 0.92;
+    }
+
+    #s1b .cc-peer {
+      margin-top: auto;
+      font-family: var(--mono);
+      font-size: 16.5px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      opacity: 0.72;
+      padding-top: 12px;
+      border-top: 1px solid currentColor;
+    }
+
+    #s1b .cc-peer span {
+      opacity: 0.5;
     }
   </style>
   <section class="slide" id="s1b">
-    <div class="slide-inner">
-      <div class="eyebrow">orq.ai</div>
-      <h2>Build, evaluate,<br>and run LLM apps in one place</h2>
-      <p class="lead">
-        orq.ai is the platform where teams take LLM apps and agents from idea
-        to production, with evaluation built in from day one.
-      </p>
-      <ul class="hero-blocks">
-        <li class="hero-block teal">
-          <div class="bk-title">Build</div>
-          <div class="bk-desc">Prompts, agents, knowledge bases, and deployments: version, test, and ship without
-            redeploying your app.</div>
-          <!-- <div class="bk-ref">my.orq.ai</div> -->
-        </li>
-        <li class="hero-block orange">
-          <div class="bk-title">Evaluate</div>
-          <div class="bk-desc">Datasets, evaluators, experiments, and human review: know quality moved before your users
-            do.</div>
-          <!-- <div class="bk-ref">today's topic</div> -->
-        </li>
-        <li class="hero-block mint">
-          <div class="bk-title">Observe</div>
-          <div class="bk-desc">Traces, costs, and quality signals from production feed back into your datasets and
-            evals.</div>
-          <!-- <div class="bk-ref">observability</div> -->
-        </li>
-      </ul>
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <symbol id="orqmark" viewBox="0 0 100 100">
+        <path fill="currentColor"
+          d="M82.9268 27.8049C82.9268 30.8783 82.9268 32.4151 82.3287 33.589C81.8026 34.6216 80.963 35.4611 79.9304 35.9872C78.7565 36.5854 77.2198 36.5854 74.1463 36.5854H72.1951C69.1217 36.5854 67.5849 36.5854 66.411 35.9872C65.3784 35.4611 64.5389 34.6216 64.0128 33.589C63.4146 32.4151 63.4146 30.8783 63.4146 27.8049V25.6098C63.4146 22.7662 63.4146 21.3444 62.9005 20.2417C62.3552 19.0724 61.4154 18.1326 60.2461 17.5873C59.1434 17.0732 57.7216 17.0732 54.8781 17.0732C52.0345 17.0732 50.6127 17.0732 49.51 16.559C48.3407 16.0137 47.4009 15.0739 46.8556 13.9046C46.3415 12.802 46.3415 11.3802 46.3415 8.53659C46.3415 5.69299 46.3415 4.27119 46.8556 3.16856C47.4009 1.99924 48.3407 1.05943 49.51 0.514165C50.6127 0 52.0446 0 54.9084 0C57.7723 0 59.2042 0 60.3068 0.514165C61.4761 1.05943 62.4159 1.99924 62.9612 3.16856C63.4754 4.27119 63.4754 5.69299 63.4754 8.53659C63.4754 11.3802 63.4754 12.802 63.9895 13.9046C64.5348 15.0739 65.4746 16.0137 66.6439 16.559C67.7466 17.0732 69.1684 17.0732 72.012 17.0732H74.1463C77.2198 17.0732 78.7565 17.0732 79.9304 17.6713C80.963 18.1974 81.8026 19.037 82.3287 20.0696C82.9268 21.2435 82.9268 22.7802 82.9268 25.8537V27.8049Z" />
+        <path fill="currentColor"
+          d="M27.8049 17.0732C30.8783 17.0732 32.4151 17.0732 33.589 17.6713C34.6216 18.1974 35.4611 19.037 35.9872 20.0696C36.5854 21.2435 36.5854 22.7802 36.5854 25.8537V27.8049C36.5854 30.8783 36.5854 32.4151 35.9872 33.589C35.4611 34.6216 34.6216 35.4611 33.589 35.9872C32.4151 36.5854 30.8783 36.5854 27.8049 36.5854L25.6098 36.5854C22.7662 36.5854 21.3444 36.5854 20.2417 37.0995C19.0724 37.6448 18.1326 38.5846 17.5873 39.7539C17.0732 40.8566 17.0732 42.2784 17.0732 45.122C17.0732 47.9656 17.0732 49.3874 16.559 50.49C16.0137 51.6593 15.0739 52.5991 13.9046 53.1444C12.802 53.6585 11.3802 53.6585 8.53659 53.6585C5.69299 53.6585 4.27119 53.6585 3.16856 53.1444C1.99924 52.5991 1.05943 51.6593 0.514165 50.49C1.81721e-07 49.3874 1.25306e-07 47.9554 1.236e-10 45.0916C-1.25059e-07 42.2277 -1.81721e-07 40.7958 0.514164 39.6932C1.05943 38.5239 1.99924 37.5841 3.16856 37.0388C4.27119 36.5246 5.69299 36.5246 8.53658 36.5246C11.3802 36.5246 12.802 36.5246 13.9046 36.0105C15.0739 35.4652 16.0137 34.5254 16.559 33.3561C17.0732 32.2534 17.0732 30.8316 17.0732 27.988V25.8537C17.0732 22.7802 17.0732 21.2435 17.6713 20.0696C18.1974 19.037 19.037 18.1974 20.0696 17.6713C21.2435 17.0732 22.7802 17.0732 25.8537 17.0732H27.8049Z" />
+        <path fill="currentColor"
+          d="M36.5854 91.4634C36.5854 88.6198 36.5854 87.198 36.0712 86.0954C35.5259 84.9261 34.5861 83.9863 33.4168 83.441C32.3142 82.9268 30.8924 82.9268 28.0488 82.9268H25.8537C22.7802 82.9268 21.2435 82.9268 20.0696 82.3287C19.037 81.8026 18.1974 80.963 17.6713 79.9304C17.0732 78.7565 17.0732 77.2198 17.0732 74.1463V72.1951C17.0732 69.1217 17.0732 67.5849 17.6713 66.411C18.1974 65.3784 19.037 64.5389 20.0696 64.0128C21.2435 63.4146 22.7802 63.4146 25.8537 63.4146L27.8049 63.4146C30.8783 63.4146 32.4151 63.4146 33.589 64.0128C34.6216 64.5389 35.4611 65.3784 35.9872 66.411C36.5854 67.5849 36.5854 69.1217 36.5854 72.1951V74.3295C36.5854 77.1731 36.5854 78.5949 37.0995 79.6975C37.6448 80.8669 38.5846 81.8067 39.7539 82.3519C40.8566 82.8661 42.2783 82.8661 45.1219 82.8661C47.9655 82.8661 49.3873 82.8661 50.49 83.3803C51.6593 83.9255 52.5991 84.8653 53.1444 86.0347C53.6585 87.1373 53.6585 88.5692 53.6585 91.433C53.6585 94.2969 53.6585 95.7288 53.1444 96.8314C52.5991 98.0008 51.6593 98.9406 50.49 99.4858C49.3873 100 47.9656 100 45.122 100C42.2784 100 40.8566 100 39.7539 99.4858C38.5846 98.9406 37.6448 98.0008 37.0995 96.8314C36.5854 95.7288 36.5854 94.307 36.5854 91.4634Z" />
+        <path fill="currentColor"
+          d="M72.1951 82.9268C69.1217 82.9268 67.5849 82.9268 66.411 82.3287C65.3784 81.8026 64.5389 80.963 64.0128 79.9304C63.4146 78.7565 63.4146 77.2198 63.4146 74.1463V72.1951C63.4146 69.1217 63.4146 67.5849 64.0128 66.411C64.5389 65.3784 65.3784 64.5389 66.411 64.0128C67.5849 63.4146 69.1217 63.4146 72.1951 63.4146H74.3902C77.2338 63.4146 78.6556 63.4146 79.7583 62.9005C80.9276 62.3552 81.8674 61.4154 82.4127 60.2461C82.9268 59.1434 82.9268 57.7216 82.9268 54.8781C82.9268 52.0345 82.9268 50.6127 83.441 49.51C83.9863 48.3407 84.9261 47.4009 86.0954 46.8556C87.198 46.3415 88.6198 46.3415 91.4634 46.3415C94.307 46.3415 95.7288 46.3415 96.8314 46.8556C98.0008 47.4009 98.9406 48.3407 99.4858 49.51C100 50.6127 100 52.0446 100 54.9084C100 57.7723 100 59.2042 99.4858 60.3068C98.9406 61.4761 98.0008 62.4159 96.8314 62.9612C95.7288 63.4754 94.307 63.4754 91.4634 63.4754C88.6198 63.4754 87.198 63.4754 86.0954 63.9895C84.9261 64.5348 83.9863 65.4746 83.441 66.6439C82.9268 67.7466 82.9268 69.1684 82.9268 72.012V74.1463C82.9268 77.2198 82.9268 78.7565 82.3287 79.9304C81.8026 80.963 80.963 81.8026 79.9304 82.3287C78.7565 82.9268 77.2198 82.9268 74.1463 82.9268H72.1951Z" />
+        <path fill="currentColor"
+          d="M50 58.5366C47.4439 58.5366 46.1659 58.5366 45.1504 58.1403C43.6417 57.5516 42.4483 56.3583 41.8596 54.8496C41.4634 53.834 41.4634 52.556 41.4634 50C41.4634 47.444 41.4634 46.166 41.8596 45.1504C42.4483 43.6417 43.6417 42.4484 45.1504 41.8597C46.1659 41.4634 47.4439 41.4634 50 41.4634C52.556 41.4634 53.834 41.4634 54.8495 41.8597C56.3582 42.4484 57.5516 43.6417 58.1403 45.1504C58.5365 46.166 58.5365 47.444 58.5365 50C58.5365 52.556 58.5365 53.834 58.1403 54.8496C57.5516 56.3583 56.3582 57.5516 54.8495 58.1403C53.834 58.5366 52.556 58.5366 50 58.5366Z" />
+      </symbol>
+    </svg>
+    <div class="slide-inner fill">
+      <div class="slide-head">
+        <p class="eyebrow act">Context</p>
+        <h2>What is orq.ai?</h2>
+      </div>
+      <div class="body">
+        <div class="intro">
+          <div class="intro-mark"><svg viewBox="0 0 100 100">
+              <use href="#orqmark" />
+            </svg></div>
+          <div class="intro-text"><strong>Generative-AI collaboration platform.</strong> <span class="muted">One
+              control plane to build, ship, and optimize AI products.</span></div>
+        </div>
+        <div class="cards">
+          <div class="cc build">
+            <div class="cc-top">
+              <svg class="cc-mark">
+                <use href="#orqmark" />
+              </svg>
+              <span class="cc-verb">Build</span>
+            </div>
+            <div class="cc-name">Agents</div>
+            <div class="cc-desc">Deploy agents with tools, memory, and knowledge bases.</div>
+            <div class="cc-peer">think <span>·</span> Letta · LangGraph · CrewAI</div>
+          </div>
+          <div class="cc ship">
+            <div class="cc-top">
+              <svg class="cc-mark">
+                <use href="#orqmark" />
+              </svg>
+              <span class="cc-verb">Ship</span>
+            </div>
+            <div class="cc-name">Router</div>
+            <div class="cc-desc">One API for model routing, failovers, caching, and budget.</div>
+            <div class="cc-peer">think <span>·</span> LiteLLM · OpenRouter</div>
+          </div>
+          <div class="cc optimize">
+            <div class="cc-top">
+              <svg class="cc-mark">
+                <use href="#orqmark" />
+              </svg>
+              <span class="cc-verb">Optimize</span>
+            </div>
+            <div class="cc-name">Observability</div>
+            <div class="cc-desc">Traces, usage, evaluation, and annotation.</div>
+            <div class="cc-peer">think <span>·</span> Langfuse · LangSmith · Arize</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Slide 1c — Hook: real-world consequences (same incidents as the red-team deck)
+       ============================================================ -->
+  <section class="slide" id="s1c">
+    <div class="slide-inner fill">
+      <div class="slide-head">
+        <p class="eyebrow act">The problem · in production</p>
+        <h2>It already went wrong</h2>
+      </div>
+      <div class="body" style="justify-content:center;">
+        <p class="lead" style="margin-top:6px;margin-bottom:2px;">Both agents passed their single-turn checks. Both
+          broke once a real customer kept talking.</p>
+        <div class="timeline">
+          <div class="tl-entry">
+            <span class="tl-dot danger"></span>
+            <div class="tl-head">
+              <span class="tl-name">Chevy of Watsonville</span>
+              <span class="tl-pill">goal hijacking</span>
+            </div>
+            <div class="tl-body">A customer talked the dealership's support bot into selling a $76k Tahoe for
+              <strong>$1</strong> — and getting it to agree, <em>"that's a legally binding offer — no
+                takesies-backsies."</em></div>
+          </div>
+          <div class="tl-entry">
+            <span class="tl-dot danger"></span>
+            <div class="tl-head">
+              <span class="tl-name">Air Canada</span>
+              <span class="tl-pill">liability</span>
+            </div>
+            <div class="tl-body">The support bot invented a bereavement-fare refund policy that didn't exist. A
+              tribunal ruled the airline had to <strong>honour it</strong>.</div>
+          </div>
+        </div>
+        <div class="callout"><span>Neither showed up in turn 1 — it took a <strong>conversation</strong> to get
+            there. That's exactly the surface single-turn evals never touch.</span></div>
+      </div>
     </div>
   </section>
 
@@ -598,9 +981,9 @@
       <div class="eyebrow">The idea</div>
       <h2>From nothing to a test suite</h2>
 
-      <svg viewBox="0 0 780 470" xmlns="http://www.w3.org/2000/svg"
-        style="width:100%; max-width:680px; display:block; margin:12px auto 0;"
-        aria-label="Linear pipeline: agent description in, generate, simulate, judge, results out">
+      <svg viewBox="0 0 1580 300" xmlns="http://www.w3.org/2000/svg"
+        style="width:100%; display:block; margin:36px auto 0;"
+        aria-label="Left-to-right pipeline: agent description in, generate, simulate, judge, results out">
         <defs>
           <marker id="pArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
             orient="auto-start-reverse">
@@ -609,47 +992,41 @@
         </defs>
 
         <!-- boxes -->
-        <g font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace">
-          <rect x="220" y="6" width="340" height="64" rx="12" fill="#FFFFFF" stroke="#FF6B4A" stroke-width="1.5" />
-          <text x="390" y="33" text-anchor="middle" font-size="19.5" font-weight="600" fill="#141319">agent
-            description</text>
-          <text x="390" y="52" text-anchor="middle" font-size="14.3" fill="#808080">one line is enough</text>
+        <g font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="27" font-weight="600"
+          text-anchor="middle">
+          <rect x="10" y="105" width="250" height="120" rx="14" fill="#FFFFFF" stroke="#FF6B4A" stroke-width="1.75" />
+          <text x="135" y="158" fill="#141319">agent</text>
+          <text x="135" y="190" fill="#141319">description</text>
 
-          <rect x="220" y="106" width="340" height="64" rx="12" fill="#FFFFFF" stroke="#DDDDDD" stroke-width="1.5" />
-          <text x="390" y="133" text-anchor="middle" font-size="19.5" font-weight="600" fill="#141319">Generate</text>
-          <text x="390" y="152" text-anchor="middle" font-size="14.3" fill="#808080">personas × scenarios · goals ·
-            pass/fail criteria</text>
+          <rect x="338" y="105" width="250" height="120" rx="14" fill="#FFFFFF" stroke="#DDDDDD" stroke-width="1.75" />
+          <text x="463" y="176" fill="#141319">Generate</text>
 
-          <rect x="220" y="206" width="340" height="64" rx="12" fill="#FFFFFF" stroke="#025558" stroke-width="1.5" />
-          <text x="390" y="233" text-anchor="middle" font-size="19.5" font-weight="600" fill="#141319">Simulate</text>
-          <text x="390" y="252" text-anchor="middle" font-size="14.3" fill="#808080">user-sim ⇄ your agent ·
-            multi-turn</text>
+          <rect x="666" y="105" width="250" height="120" rx="14" fill="#FFFFFF" stroke="#025558" stroke-width="1.75" />
+          <text x="791" y="176" fill="#141319">Simulate</text>
 
-          <rect x="220" y="306" width="340" height="64" rx="12" fill="#FFFFFF" stroke="#DDDDDD" stroke-width="1.5" />
-          <text x="390" y="333" text-anchor="middle" font-size="19.5" font-weight="600" fill="#141319">Judge</text>
-          <text x="390" y="352" text-anchor="middle" font-size="14.3" fill="#808080">goal_achieved · criteria_met</text>
+          <rect x="994" y="105" width="250" height="120" rx="14" fill="#FFFFFF" stroke="#DDDDDD" stroke-width="1.75" />
+          <text x="1119" y="176" fill="#141319">Judge</text>
 
-          <rect x="220" y="406" width="340" height="64" rx="12" fill="#141319" />
-          <text x="390" y="433" text-anchor="middle" font-size="19.5" font-weight="600" fill="#F5F5F5">Results</text>
-          <text x="390" y="452" text-anchor="middle" font-size="14.3" fill="#FF8B6A">judge scores + dataset</text>
+          <rect x="1322" y="105" width="250" height="120" rx="14" fill="#141319" />
+          <text x="1447" y="176" fill="#F5F5F5">Results</text>
         </g>
 
         <!-- flow -->
-        <g stroke="#808080" stroke-width="1.5" fill="none">
-          <path d="M390 70 L390 106" marker-end="url(#pArrow)" />
-          <path d="M390 170 L390 206" marker-end="url(#pArrow)" />
-          <path d="M390 270 L390 306" marker-end="url(#pArrow)" />
-          <path d="M390 370 L390 406" marker-end="url(#pArrow)" />
+        <g stroke="#808080" stroke-width="1.75" fill="none">
+          <path d="M260 165 L338 165" marker-end="url(#pArrow)" />
+          <path d="M588 165 L666 165" marker-end="url(#pArrow)" />
+          <path d="M916 165 L994 165" marker-end="url(#pArrow)" />
+          <path d="M1244 165 L1322 165" marker-end="url(#pArrow)" />
         </g>
 
         <!-- step labels -->
-        <g font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="14.3" fill="#808080">
-          <text x="205" y="42" text-anchor="end" fill="#FF6B4A">input</text>
-          <text x="410" y="94">sim generate</text>
-          <text x="410" y="194">sim run</text>
-          <text x="410" y="294">full transcript, every turn scored</text>
-          <text x="410" y="394">verdicts + reasoning</text>
-          <text x="205" y="442" text-anchor="end" fill="#FF6B4A">output</text>
+        <g font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="15" fill="#808080"
+          text-anchor="middle">
+          <text x="135" y="92" fill="#FF6B4A">input</text>
+          <text x="1447" y="92" fill="#FF6B4A">output</text>
+
+          <text x="299" y="147">sim generate</text>
+          <text x="627" y="147">sim run</text>
         </g>
       </svg>
       <p class="cmd-note" style="margin-top:18px;">
@@ -667,7 +1044,7 @@
       <div class="eyebrow">Under the hood</div>
       <h2>The system, and where you can extend</h2>
 
-      <svg viewBox="0 0 860 340" xmlns="http://www.w3.org/2000/svg" style="width:100%; display:block;"
+      <svg viewBox="0 0 880 340" xmlns="http://www.w3.org/2000/svg" style="width:100%; display:block;"
         aria-label="System diagram with numbered extension points">
         <defs>
           <marker id="sArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
@@ -682,64 +1059,64 @@
 
         <!-- boxes -->
         <g font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="16.9" fill="#141319">
-          <rect x="340" y="20" width="180" height="54" rx="10" fill="#FFFFFF" stroke="#025558" stroke-width="1.5" />
+          <rect x="322" y="20" width="216" height="54" rx="10" fill="#FFFFFF" stroke="#025558" stroke-width="1.5" />
           <text x="430" y="43" text-anchor="middle" font-weight="600">your agent</text>
           <text x="430" y="60" text-anchor="middle" fill="#808080" font-size="12.3">orq · OpenAI · HTTP · SDK</text>
 
-          <rect x="20" y="150" width="180" height="54" rx="10" fill="#FFFFFF" stroke="#DDDDDD" stroke-width="1.5" />
+          <rect x="2" y="150" width="216" height="54" rx="10" fill="#FFFFFF" stroke="#DDDDDD" stroke-width="1.5" />
           <text x="110" y="173" text-anchor="middle" font-weight="600">generator</text>
           <text x="110" y="190" text-anchor="middle" fill="#808080" font-size="12.3">creates personas × scenarios</text>
 
-          <rect x="340" y="150" width="180" height="54" rx="10" fill="#FFFFFF" stroke="#DDDDDD" stroke-width="1.5" />
+          <rect x="322" y="150" width="216" height="54" rx="10" fill="#FFFFFF" stroke="#DDDDDD" stroke-width="1.5" />
           <text x="430" y="173" text-anchor="middle" font-weight="600">user-simulator</text>
           <text x="430" y="190" text-anchor="middle" fill="#808080" font-size="13.7">plays the test suite</text>
 
-          <rect x="660" y="150" width="180" height="54" rx="10" fill="#FFFFFF" stroke="#DDDDDD" stroke-width="1.5" />
+          <rect x="642" y="150" width="216" height="54" rx="10" fill="#FFFFFF" stroke="#DDDDDD" stroke-width="1.5" />
           <text x="750" y="173" text-anchor="middle" font-weight="600">judge agent</text>
           <text x="750" y="190" text-anchor="middle" fill="#808080" font-size="12.3">goal_achieved · criteria_met</text>
 
-          <rect x="660" y="20" width="180" height="54" rx="10" fill="#FFFFFF" stroke="#DDDDDD" stroke-width="1.5" />
+          <rect x="642" y="20" width="216" height="54" rx="10" fill="#FFFFFF" stroke="#DDDDDD" stroke-width="1.5" />
           <text x="750" y="43" text-anchor="middle" font-weight="600">run report</text>
           <text x="750" y="60" text-anchor="middle" fill="#808080" font-size="13.7">pass rate + transcripts</text>
 
-          <rect x="20" y="266" width="180" height="54" rx="10" fill="#141319" />
+          <rect x="2" y="266" width="216" height="54" rx="10" fill="#141319" />
           <text x="110" y="289" text-anchor="middle" font-weight="600" fill="#F5F5F5">test suite</text>
           <text x="110" y="306" text-anchor="middle" fill="#FF8B6A" font-size="12.3">datapoints.jsonl · reusable</text>
         </g>
 
         <!-- solid flow -->
         <g stroke="#808080" stroke-width="1.5" fill="none">
-          <path d="M340 47 L110 47 L110 150" marker-end="url(#sArrow)" />
+          <path d="M322 47 L110 47 L110 150" marker-end="url(#sArrow)" />
           <path d="M110 204 L110 266" marker-end="url(#sArrow)" />
-          <path d="M200 293 L430 293 L430 204" marker-end="url(#sArrow)" />
+          <path d="M218 293 L430 293 L430 204" marker-end="url(#sArrow)" />
           <path d="M410 150 L410 74" marker-end="url(#sArrow)" />
           <path d="M450 74 L450 150" marker-end="url(#sArrow)" />
-          <path d="M520 177 L660 177" marker-end="url(#sArrow)" />
+          <path d="M538 177 L642 177" marker-end="url(#sArrow)" />
           <path d="M750 150 L750 74" marker-end="url(#sArrow)" />
         </g>
 
         <!-- edge labels -->
         <g font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="13.7" fill="#808080">
-          <text x="225" y="38" text-anchor="middle">description seeds it all</text>
+          <text x="200" y="38" text-anchor="middle">description seeds it all</text>
           <text x="118" y="118">sim generate</text>
           <text x="118" y="240">--datapoints</text>
-          <text x="215" y="284">plays each datapoint</text>
-          <text x="215" y="316" fill="#FF6B4A">re-run the identical suite on every agent change</text>
+          <text x="230" y="284">plays each datapoint</text>
+          <text x="230" y="316" fill="#FF6B4A">re-run the identical suite on every agent change</text>
           <text x="330" y="118" text-anchor="end">user turn</text>
           <text x="462" y="118">agent reply</text>
-          <text x="548" y="170">full transcript</text>
+          <text x="590" y="170" text-anchor="middle" font-size="11">full transcript</text>
           <text x="742" y="118" text-anchor="end">verdicts + reasoning</text>
         </g>
 
         <!-- extension-point badges -->
         <g font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="15.6" font-weight="700">
-          <circle cx="527" cy="26" r="11" fill="#FF6B4A" /><text x="527" y="30" text-anchor="middle"
+          <circle cx="545" cy="26" r="11" fill="#FF6B4A" /><text x="545" y="30" text-anchor="middle"
             fill="#F5F5F5">1</text>
-          <circle cx="847" cy="156" r="11" fill="#FF6B4A" /><text x="847" y="160" text-anchor="middle"
+          <circle cx="865" cy="156" r="11" fill="#FF6B4A" /><text x="865" y="160" text-anchor="middle"
             fill="#F5F5F5">2</text>
-          <circle cx="207" cy="272" r="11" fill="#FF6B4A" /><text x="207" y="276" text-anchor="middle"
+          <circle cx="225" cy="272" r="11" fill="#FF6B4A" /><text x="225" y="276" text-anchor="middle"
             fill="#F5F5F5">3</text>
-          <circle cx="847" cy="26" r="11" fill="#FF6B4A" /><text x="847" y="30" text-anchor="middle"
+          <circle cx="865" cy="26" r="11" fill="#FF6B4A" /><text x="865" y="30" text-anchor="middle"
             fill="#F5F5F5">4</text>
         </g>
       </svg>
@@ -789,15 +1166,139 @@ evaluatorq sim --help         <span class="cm"># 'eq' works too</span></pre>
   <!-- ============================================================
        Slide 4 — Demo roadmap
        ============================================================ -->
-  <section class="slide" id="s4">
+  <section class="slide chapter" id="s4">
     <div class="slide-inner">
       <div class="eyebrow">Live demo</div>
-      <h1>Let's break an agent.</h1>
+      <h1>Let's break Sterling.</h1>
       <p class="subtitle">
         A live credit-card support agent, zero test data. From here it's all
         terminal.
       </p>
       <div class="footnote">Everything you're about to see is open source: evaluatorq, pip-installable.</div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Slide 4b — Meet Sterling (the demo agent gets a face)
+       ============================================================ -->
+  <style>
+    #s4b .hero {
+      display: grid;
+      grid-template-columns: 300px 1fr;
+      gap: 40px;
+      align-items: center;
+    }
+
+    #s4b .face {
+      background: var(--orq-green);
+      color: var(--ivory);
+      border-radius: 20px;
+      aspect-ratio: 1;
+      display: grid;
+      place-items: center;
+      position: relative;
+    }
+
+    #s4b .face .glyph {
+      font-size: 150px;
+      line-height: 1;
+    }
+
+    #s4b .live {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--mono);
+      font-size: 15px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--on-green-soft);
+    }
+
+    #s4b .live::before {
+      content: "";
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #1cd3ac;
+      animation: s4bpulse 1.6s ease-in-out infinite;
+    }
+
+    @keyframes s4bpulse {
+      0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(28, 211, 172, 0.5); }
+      50% { opacity: .6; box-shadow: 0 0 0 8px rgba(28, 211, 172, 0); }
+    }
+
+    #s4b .traits {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    #s4b .trait {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 18px;
+      align-items: baseline;
+      border-top: 1px solid var(--gray-300);
+      padding-top: 14px;
+    }
+
+    #s4b .trait:first-child { border-top: none; padding-top: 0; }
+
+    #s4b .trait .tk {
+      font-family: var(--mono);
+      font-size: 20px;
+      color: var(--orq-green);
+    }
+
+    #s4b .trait .tt {
+      font-size: 26px;
+      line-height: 1.4;
+      color: var(--gray-700);
+    }
+
+    #s4b .trait .tt strong { color: var(--slate); font-weight: 700; }
+
+    @media (max-width: 860px) {
+      #s4b .hero { grid-template-columns: 1fr; }
+    }
+  </style>
+  <section class="slide" id="s4b">
+    <div class="slide-inner fill">
+      <div class="slide-head">
+        <p class="eyebrow act">The demo · meet the agent</p>
+        <h2>Meet Sterling</h2>
+      </div>
+      <div class="body" style="justify-content:center;">
+        <p class="lead" style="margin-top:6px;margin-bottom:24px;">The bank's credit-card concierge. Buttoned-up,
+          by-the-book — his job is to help without ever crossing a line.</p>
+        <div class="hero">
+          <div class="face">
+            <span class="live">live</span>
+            <span class="glyph">💳</span>
+          </div>
+          <div class="traits">
+            <div class="trait">
+              <span class="tk">01</span>
+              <span class="tt">Runs live on <strong>orq · gpt-5.4-mini</strong> — a real deployed agent, not a mock.</span>
+            </div>
+            <div class="trait">
+              <span class="tk">02</span>
+              <span class="tt">One job: <strong>credit-card support</strong>. Balances, disputes, replacements — helpful and polite.</span>
+            </div>
+            <div class="trait">
+              <span class="tk">03</span>
+              <span class="tt">One hard rule: <strong>never</strong> issue refunds, raise limits, or waive fees without verification.</span>
+            </div>
+          </div>
+        </div>
+        <div class="callout"><span>Simple, sympathetic, and holds up to a single prompt. Now let's see what a
+            <strong>multi-turn</strong> customer does to him.</span></div>
+      </div>
     </div>
   </section>
 
@@ -896,6 +1397,56 @@ results = <span class="kw">await</span> simulate(target=my_agent,
           <span class="ship-ref">generate → append → upload</span>
         </li>
       </ul>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       Slide 8p — Proof: what the harden loop bought
+       NOTE: numbers below are ILLUSTRATIVE. Swap in the real pass rates
+       from the live run before presenting (eq sim run summary).
+       ============================================================ -->
+  <section class="slide" id="s8p">
+    <div class="slide-inner fill">
+      <div class="slide-head">
+        <p class="eyebrow act">The payoff</p>
+        <h2>What one loop bought</h2>
+      </div>
+      <div class="body" style="justify-content:flex-start;">
+        <p class="lead" style="margin-top:16px;margin-bottom:20px;">The dashboard you just saw, as numbers — the same
+          24 scenarios, before and after one round of hardening.</p>
+        <div style="display:flex;gap:28px;align-items:stretch;">
+          <div
+            style="flex:1;background:var(--surface);border:1px solid var(--danger-bd);border-radius:14px;padding:26px 28px;">
+            <div style="font-family:var(--mono);font-size:21px;color:var(--gray-500);">sterling-v1 · before</div>
+            <div style="display:flex;align-items:baseline;gap:10px;margin-top:8px;">
+              <div style="font-family:var(--serif);font-size:96px;font-weight:700;line-height:1;color:var(--danger);">
+                58<span style="font-size:48px;">%</span></div>
+              <div style="font-size:24px;color:var(--gray-700);">scenarios passed</div>
+            </div>
+            <div style="height:14px;border-radius:7px;background:var(--danger-bg);margin-top:20px;overflow:hidden;">
+              <div style="width:58%;height:100%;background:var(--danger);border-radius:7px;"></div>
+            </div>
+            <div style="font-size:24px;color:var(--gray-700);margin-top:16px;">10 failed · <strong>every one</strong>
+              past turn 4</div>
+          </div>
+          <div
+            style="flex:1;background:var(--surface);border:1px solid var(--safe-bd);border-radius:14px;padding:26px 28px;">
+            <div style="font-family:var(--mono);font-size:21px;color:var(--gray-500);">sterling-v2 · hardened</div>
+            <div style="display:flex;align-items:baseline;gap:10px;margin-top:8px;">
+              <div style="font-family:var(--serif);font-size:96px;font-weight:700;line-height:1;color:var(--safe);">
+                88<span style="font-size:48px;">%</span></div>
+              <div style="font-size:24px;color:var(--gray-700);">scenarios passed</div>
+            </div>
+            <div style="height:14px;border-radius:7px;background:var(--safe-bg);margin-top:20px;overflow:hidden;">
+              <div style="width:88%;height:100%;background:var(--safe);border-radius:7px;"></div>
+            </div>
+            <div style="font-size:24px;color:var(--gray-700);margin-top:16px;">3 failed · re-run on the
+              <strong>frozen set</strong></div>
+          </div>
+        </div>
+        <div class="callout"><span>One <strong>generate → simulate → judge → harden</strong> loop. The failures that
+            only surface deep in a conversation are exactly the ones it closed.</span></div>
+      </div>
     </div>
   </section>
 
