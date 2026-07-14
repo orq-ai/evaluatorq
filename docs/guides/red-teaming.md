@@ -158,6 +158,88 @@ this same pattern.
 
 --8<-- "docs/_snippets/dashboard-tip.md"
 
+## External agent frameworks
+
+`red_team()` accepts any `AgentTarget`, and each supported framework ships a
+wrapper that adapts its agent into one — so you red-team an agent built in your
+framework of choice without rewriting it. Install the matching extra, wrap the
+agent, and pass it straight to `red_team()`:
+
+```python
+from langchain_openai import ChatOpenAI
+from langgraph.prebuilt import create_react_agent
+
+from evaluatorq.integrations.langgraph_integration import LangGraphTarget
+from evaluatorq.redteam import red_team
+
+graph = create_react_agent(ChatOpenAI(model="gpt-4o-mini"), tools=[...], prompt="...")
+report = await red_team(LangGraphTarget(graph), categories=["LLM01", "ASI01"])
+```
+
+| Framework | Wrapper | Extra | Runnable example |
+|---|---|---|---|
+| LangGraph | `LangGraphTarget` | `evaluatorq[langgraph]` | [`17_langgraph_target.py`](../examples/redteam/17_langgraph_target.md) |
+| OpenAI Agents SDK | `OpenAIAgentTarget` | `evaluatorq[openai-agents]` | [`18_openai_agents_target.py`](../examples/redteam/18_openai_agents_target.md) |
+| Pydantic AI | `PydanticAITarget` | `evaluatorq[pydantic-ai]` | [`19_pydantic_ai_target.py`](../examples/redteam/19_pydantic_ai_target.md) |
+| CrewAI | `CrewAITarget` | `evaluatorq[crewai]` | [`20_crewai_target.py`](../examples/redteam/20_crewai_target.md) |
+
+### Demo runs
+
+Live runs of the four examples above (dynamic mode, 3 attacks each, routed through
+the Orq AI Router) with real attack transcripts and judge verdicts are captured in
+`examples/redteam/_sample_output/RES-931-external-framework-runs.md`. The headline:
+LangGraph, OpenAI Agents, and Pydantic AI each execute an indirect prompt injection
+(goal hijack via tool output); CrewAI resists all three.
+
+Screen recordings of each run:
+
+#### LangGraph
+
+<video controls muted playsinline preload="metadata" width="100%">
+  <source src="../../assets/redteam-langgraph.mp4" type="video/mp4">
+  Your browser does not support the video tag —
+  <a href="../../assets/redteam-langgraph.mp4">download the recording</a>.
+</video>
+
+#### OpenAI Agents SDK
+
+<video controls muted playsinline preload="metadata" width="100%">
+  <source src="../../assets/redteam-openai-agents.mp4" type="video/mp4">
+  Your browser does not support the video tag —
+  <a href="../../assets/redteam-openai-agents.mp4">download the recording</a>.
+</video>
+
+#### Pydantic AI
+
+<video controls muted playsinline preload="metadata" width="100%">
+  <source src="../../assets/redteam-pydantic-ai.mp4" type="video/mp4">
+  Your browser does not support the video tag —
+  <a href="../../assets/redteam-pydantic-ai.mp4">download the recording</a>.
+</video>
+
+#### CrewAI
+
+<video controls muted playsinline preload="metadata" width="100%">
+  <source src="../../assets/redteam-crewai.mp4" type="video/mp4">
+  Your browser does not support the video tag —
+  <a href="../../assets/redteam-crewai.mp4">download the recording</a>.
+</video>
+
+### Known limitations
+
+Verified edge cases and framework-specific quirks to know before you rely on
+external-framework targets:
+
+| Area | Behavior | Applies to |
+|---|---|---|
+| **Conversation state** | Stateful targets own history internally and thread it across turns; call `.new()` for each parallel attack job to avoid cross-talk. | LangGraph, Pydantic AI |
+| **First-turn role** | `respond()` requires the last message to be `role="user"`; other roles raise `ValueError`. | LangGraph, Pydantic AI, CrewAI |
+| **Tool-call visibility** | Tool calls are surfaced to the judge, so tool-misuse (ASI) attacks are scored. | LangGraph, OpenAI Agents, Pydantic AI |
+| **CrewAI is opaque** | A crew exposes only its final output — intermediate agent/tool steps are not surfaced, so **tool-misuse (ASI) attacks can't be scored**; use LLM-tier categories. The whole transcript is flattened into one `{conversation}` input per turn (no native turn memory), so very long conversations may approach task-description limits. | CrewAI |
+| **Token usage** | Best-effort. Frameworks that don't surface usage metadata report `usage=None` (never a false non-zero). | all |
+| **Tool arguments** | Non-JSON-object tool arguments are normalized before scoring; exotic argument shapes may be simplified. | LangGraph, OpenAI Agents |
+| **Routing / keys** | The examples point each framework's model at the Orq AI Router with `ORQ_API_KEY` (model id `openai/gpt-4o-mini`), so no OpenAI key is needed — the attacker and judge auto-route the same way. The client is constructed eagerly, so `ORQ_API_KEY` must be set even to *build* the target. | all |
+
 ## Where to next
 
 - **[Examples › Red Teaming](../examples/index.md)** — static datasets, category filtering, custom clients, multi-target, report inspection, custom hooks.
