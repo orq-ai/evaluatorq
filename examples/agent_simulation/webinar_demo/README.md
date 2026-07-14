@@ -50,7 +50,7 @@ quarto render presentation.qmd
 ## Demo agent
 
 The spine is **Sterling**, the **Bank of Holland credit-card support
-agent** — `azure/gpt-5-mini`, a 99-question Dutch/English FAQ knowledge base, and two
+agent** — `openai/gpt-5.6-luna`, a 99-question Dutch/English FAQ knowledge base, and two
 code tools (`get_card_info`, `get_transaction_details`). `make provision` recreates it
 (and its tools + KB) in Orq from the definitions in `agent_build/`, using distinct demo
 keys so it never clobbers the customer's live entities.

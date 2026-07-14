@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.thread_context import build_thread_id
+from evaluatorq.simulation._config import SimulationConfig
 from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run, build_simulation_run, fetch_agent_info, write_report
 
@@ -221,8 +222,7 @@ async def _simulate_run(
                 'orq.simulation.parallelism': parallelism,
             },
         ) as pipeline_span:
-            return await _simulate_core(
-                caller='simulate',
+            config = SimulationConfig(
                 evaluation_name=evaluation_name,
                 target=target,
                 personas=personas,
@@ -242,8 +242,12 @@ async def _simulate_run(
                 exit_on_failure=exit_on_failure,
                 save=save,
                 run_output=report,
-                pipeline_span=pipeline_span,
                 hooks=hooks,
+            )
+            return await _simulate_core(
+                config=config,
+                caller='simulate',
+                pipeline_span=pipeline_span,
             )
     finally:
         await flush_tracing()
@@ -425,8 +429,7 @@ async def _generate_and_simulate_run(
                     meta = {'num_datapoints': len(datapoints)} if datapoints else {}
                     await await_maybe(gen_hooks.on_stage_end(SimStage.GENERATE, meta))
 
-                return await _simulate_core(
-                    caller='generate_and_simulate',
+                config = SimulationConfig(
                     evaluation_name=evaluation_name,
                     target=target,
                     personas=None,
@@ -446,8 +449,12 @@ async def _generate_and_simulate_run(
                     exit_on_failure=exit_on_failure,
                     save=save,
                     run_output=report,
-                    pipeline_span=pipeline_span,
                     hooks=hooks,
+                )
+                return await _simulate_core(
+                    config=config,
+                    caller='generate_and_simulate',
+                    pipeline_span=pipeline_span,
                 )
             finally:
                 if gen_owned:
@@ -708,12 +715,12 @@ async def _resolve_generation_agent_description(
         return agent_description
 
     if isinstance(target, str):
-        from evaluatorq.redteam.contracts import LLMConfig, TargetConfig, TargetKind
-        from evaluatorq.redteam.runner import _make_agent_backend, _parse_target
+        from evaluatorq.redteam.backends.registry import make_agent_backend
+        from evaluatorq.redteam.contracts import LLMConfig, TargetConfig, TargetKind, parse_target
 
-        kind, agent_key = _parse_target(target)
+        kind, agent_key = parse_target(target)
         if kind is TargetKind.AGENT:
-            backend = _make_agent_backend(
+            backend = make_agent_backend(
                 target_config=TargetConfig(system_prompt=None),
                 pipeline_config=LLMConfig(),
             )
@@ -802,28 +809,9 @@ def _log_saved_run(path: Path) -> None:
 
 async def _simulate_core(
     *,
+    config: SimulationConfig,
     caller: str,
-    evaluation_name: str,
-    target: str | Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None,
-    personas: list[Persona] | None,
-    scenarios: list[Scenario] | None,
-    datapoints: list[SimulationDatapoint] | None,
-    dataset_id: str | None,
-    max_turns: int,
-    model: str,
-    evaluator_names: list[str] | None,
-    parallelism: int,
-    user_simulator: BaseAgent | None,
-    judge: BaseAgent | None,
-    generation_client: AsyncOpenAI | None,
-    upload_results: bool,
-    evaluation_description: str | None,
-    orq_results_path: str | None,
-    exit_on_failure: bool,
     pipeline_span: Span | None,
-    hooks: SimulationHooks | None = None,
-    save: bool = False,
-    run_output: str | Path | None = None,
 ) -> SimulationRun:
     """Core simulation logic (runs inside the orq.simulation.pipeline span).
 
@@ -842,7 +830,14 @@ async def _simulate_core(
     from evaluatorq.simulation.exceptions import SimulationCancelledError
     from evaluatorq.simulation.hooks import DefaultHooks, SimStage, SimulationRunMeta
 
-    target_callable, target_agent, target_kind_hint = _resolve_target(target)
+    evaluation_name = config.evaluation_name
+    max_turns = config.max_turns
+    model = config.model
+    parallelism = config.parallelism
+    save = config.save
+    run_output = config.run_output
+
+    target_callable, target_agent, target_kind_hint = _resolve_target(config.target)
 
     # One run id per run; each conversation's Orq thread id is f"{run_id}:{index}".
     # Persisted on SimulationRun / SimulationResult so the dashboard can deep-link
@@ -851,12 +846,12 @@ async def _simulate_core(
 
     sim_datapoints = await _resolve_or_generate_datapoints(
         caller=caller,
-        datapoints=datapoints,
-        personas=personas,
-        scenarios=scenarios,
-        dataset_id=dataset_id,
+        datapoints=config.datapoints,
+        personas=config.personas,
+        scenarios=config.scenarios,
+        dataset_id=config.dataset_id,
         model=model,
-        generation_client=generation_client,
+        generation_client=config.generation_client,
     )
 
     set_span_attrs(
@@ -864,10 +859,12 @@ async def _simulate_core(
         {'orq.simulation.datapoints_count': len(sim_datapoints)},
     )
 
-    resolved_hooks = hooks or DefaultHooks()
+    resolved_hooks = config.hooks or DefaultHooks()
     # The sync-hook deprecation nudge fires once in SimulationRunner.__init__
     # (the single choke point both this path and direct runner use share).
-    resolved_evaluator_names = evaluator_names if evaluator_names is not None else DEFAULT_EVALUATOR_NAMES
+    resolved_evaluator_names = (
+        config.evaluator_names if config.evaluator_names is not None else DEFAULT_EVALUATOR_NAMES
+    )
     # Derive a human-readable target label mirroring the save block's precedence:
     # AgentTarget instances → "agent:<key>" (or, for the self-describing
     # openai_model/vercel targets, their own `.name`), deployment strings →
@@ -918,22 +915,11 @@ async def _simulate_core(
     await await_maybe(resolved_hooks.on_run_start(run_meta))
     try:
         results = await _simulate_via_evaluatorq(
+            config=config,
             caller=caller,
-            evaluation_name=evaluation_name,
             target=target_callable,
             target_agent=target_agent,
             sim_datapoints=sim_datapoints,
-            max_turns=max_turns,
-            model=model,
-            evaluator_names=evaluator_names,
-            parallelism=parallelism,
-            user_simulator=user_simulator,
-            judge=judge,
-            generation_client=generation_client,
-            upload_results=upload_results,
-            evaluation_description=evaluation_description,
-            orq_results_path=orq_results_path,
-            exit_on_failure=exit_on_failure,
             pipeline_span=pipeline_span,
             hooks=resolved_hooks,
             run_id=run_id,
@@ -1036,25 +1022,19 @@ def _resolve_target(
     resolved = target
 
     if isinstance(resolved, str):
-        # NOTE: intentional coupling to red-team internals (`_parse_target`,
-        # `_make_agent_backend` below) so the SDK's `agent:<key>` path uses the
-        # exact same Responses-router backend as `eq sim` / `red_team()`. If those
-        # private helpers are renamed/moved, update here or promote them to a
-        # shared non-underscore module both packages import.
-        from evaluatorq.redteam.contracts import TargetKind
-        from evaluatorq.redteam.runner import _parse_target
+        from evaluatorq.redteam.contracts import TargetKind, parse_target
 
         if not resolved.strip():
             raise ValueError("Target string is empty; use 'agent:<key>', 'deployment:<key>', or a bare '<key>'.")
-        kind, value = _parse_target(resolved)
+        kind, value = parse_target(resolved)
         if kind is TargetKind.AGENT:
             # Same composite backend the CLI / red-team runner use for
             # ``agent:<key>``: exec via the Responses router (``agent/<key>``),
             # NOT the ORQ SDK agents endpoint. Keeps SDK and CLI on one path.
+            from evaluatorq.redteam.backends.registry import make_agent_backend
             from evaluatorq.redteam.contracts import LLMConfig, TargetConfig
-            from evaluatorq.redteam.runner import _make_agent_backend
 
-            backend = _make_agent_backend(
+            backend = make_agent_backend(
                 target_config=TargetConfig(system_prompt=None),
                 pipeline_config=LLMConfig(),
             )
@@ -1350,22 +1330,11 @@ def _adapt_simulation_scorer(
 
 async def _simulate_via_evaluatorq(
     *,
+    config: SimulationConfig,
     caller: str,
-    evaluation_name: str,
     target: Callable[[list[Message]], str | Awaitable[str]] | None,
     target_agent: AgentTarget | None,
     sim_datapoints: list[SimulationDatapoint],
-    max_turns: int,
-    model: str,
-    evaluator_names: list[str] | None,
-    parallelism: int,
-    user_simulator: BaseAgent | None,
-    judge: BaseAgent | None,
-    generation_client: AsyncOpenAI | None,
-    upload_results: bool,
-    evaluation_description: str | None,
-    orq_results_path: str | None,
-    exit_on_failure: bool,
     pipeline_span: Span | None,
     hooks: SimulationHooks,
     run_id: str | None = None,
@@ -1383,7 +1352,21 @@ async def _simulate_via_evaluatorq(
     from evaluatorq.simulation.evaluators import get_evaluator
     from evaluatorq.types import DataPoint
 
-    resolved_evaluator_names = evaluator_names if evaluator_names is not None else DEFAULT_EVALUATOR_NAMES
+    evaluation_name = config.evaluation_name
+    max_turns = config.max_turns
+    model = config.model
+    parallelism = config.parallelism
+    user_simulator = config.user_simulator
+    judge = config.judge
+    generation_client = config.generation_client
+    upload_results = config.upload_results
+    evaluation_description = config.evaluation_description
+    orq_results_path = config.orq_results_path
+    exit_on_failure = config.exit_on_failure
+
+    resolved_evaluator_names = (
+        config.evaluator_names if config.evaluator_names is not None else DEFAULT_EVALUATOR_NAMES
+    )
     scorers = [(name, get_evaluator(name)) for name in resolved_evaluator_names]
 
     eq_datapoints = [DataPoint(inputs={'datapoint': dp.model_dump(mode='json')}) for dp in sim_datapoints]

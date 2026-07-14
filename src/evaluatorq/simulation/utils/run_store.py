@@ -93,10 +93,14 @@ async def fetch_agent_info(agent_key: str) -> AgentInfoSnapshot | None:
             'url': url,
         }
     except Exception as exc:
-        # Best-effort snapshot: a missing agent (404) or any transient error just
-        # degrades to None. Log at debug with a concise message — the raw SDK
-        # error repr dumps the full response (headers, body) and reads as alarming.
-        logger.debug('Skipping agent_info for %r: %s', agent_key, type(exc).__name__)
+        # Best-effort snapshot: a missing agent (404) is expected for non-Orq
+        # targets and degrades to None quietly. Anything else (bad ORQ_API_KEY,
+        # network, backend error) is unexpected — surface it at warning so it is
+        # not silently swallowed. Log the status/type only; the raw SDK repr
+        # dumps the full response (headers, body) and reads as alarming.
+        status = getattr(getattr(exc, 'raw_response', None), 'status_code', None)
+        log = logger.debug if status == 404 else logger.warning
+        log('Skipping agent_info for %r: %s (status=%s)', agent_key, type(exc).__name__, status)
         return None
 
 

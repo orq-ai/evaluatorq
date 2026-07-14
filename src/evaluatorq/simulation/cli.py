@@ -93,7 +93,9 @@ def _configure_logging(verbosity: int, console: Any = None) -> None:
         from loguru import logger as loguru_logger
 
         loguru_logger.remove()
-        sink = (lambda m: console.print(m, end='')) if console is not None else sys.stderr
+        # markup=False: loguru lines start with a literal '[simulation]' tag which
+        # Rich would otherwise parse as a (non-existent) style and silently strip.
+        sink = (lambda m: console.print(m, end='', markup=False)) if console is not None else sys.stderr
         loguru_logger.add(sink, level=level)
     except ImportError:
         pass
@@ -160,16 +162,16 @@ def _require_orq_api_key(flag: str) -> None:
 
 
 def _parse_target_spec(target: str) -> tuple[Any, str]:
-    from evaluatorq.redteam.runner import _parse_target
+    from evaluatorq.redteam.contracts import parse_target
 
-    return _parse_target(target)
+    return parse_target(target)
 
 
 def _make_sim_agent_backend() -> Any:
+    from evaluatorq.redteam.backends.registry import make_agent_backend
     from evaluatorq.redteam.contracts import LLMConfig, TargetConfig
-    from evaluatorq.redteam.runner import _make_agent_backend
 
-    return _make_agent_backend(
+    return make_agent_backend(
         target_config=TargetConfig(system_prompt=None),
         pipeline_config=LLMConfig(),
     )
@@ -613,7 +615,7 @@ def simulate(
     _echo_using(sim_model)
 
     if (datapoints is None) == (dataset_id is None):
-        raise typer.BadParameter('Provide exactly one of --datapoints or --dataset-id.')
+        raise typer.BadParameter('Provide exactly one of --input or --dataset-id.')
     if datapoints is not None and not datapoints.exists():
         raise typer.BadParameter(f'Datapoints file not found: {datapoints}')
     if dataset_id is not None:

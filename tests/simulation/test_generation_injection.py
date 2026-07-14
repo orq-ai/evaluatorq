@@ -61,7 +61,7 @@ async def test_generate_and_simulate_uses_orq_agent_description_when_omitted(mon
 
     with (
         patch(
-            "evaluatorq.redteam.runner._make_agent_backend",
+            "evaluatorq.redteam.backends.registry.make_agent_backend",
             return_value=backend,
         ),
         patch(
@@ -93,7 +93,7 @@ async def test_generate_and_simulate_prefers_an_explicit_description(monkeypatch
         return [_persona()], [_scenario()]
 
     with (
-        patch("evaluatorq.redteam.runner._make_agent_backend") as make_backend,
+        patch("evaluatorq.redteam.backends.registry.make_agent_backend") as make_backend,
         patch(
             "evaluatorq.simulation.api._generate_personas_scenarios",
             new=AsyncMock(side_effect=capture_generation),
@@ -128,7 +128,7 @@ async def test_generate_and_simulate_rejects_orq_agents_without_a_description():
     backend.resolve_context = AsyncMock(return_value=AgentContext(key="support-agent"))
 
     with (
-        patch("evaluatorq.redteam.runner._make_agent_backend", return_value=backend),
+        patch("evaluatorq.redteam.backends.registry.make_agent_backend", return_value=backend),
         pytest.raises(ValueError, match=r"agent_description.*description"),
     ):
         await generate_and_simulate(target="agent:support-agent")

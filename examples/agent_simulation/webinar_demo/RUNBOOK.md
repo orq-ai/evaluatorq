@@ -58,7 +58,7 @@ cd examples/agent_simulation/webinar_demo && make provision
 ```
 
 The agent is **Sterling**, the Bank of Holland credit-card support
-bot: `azure/gpt-5-mini`, a 99-question Dutch/English FAQ knowledge base, and two
+bot: `openai/gpt-5.6-luna`, a 99-question Dutch/English FAQ knowledge base, and two
 code tools (`get_card_info`, `get_transaction_details`). Definitions live in
 `agent_build/orq_export/` + `agent_build/assets/boh_faq.txt`; `agent_build/provision.py`
 recreates them via the Orq Python SDK. All demo commands below default to
@@ -269,10 +269,3 @@ inspect → harden → re-run loop, closed live.
 - [ ] Screenshot: the dashboard filtered to failures + a transcript (Act 4a)
 - [ ] Screenshot: orq platform experiment view for a run
 - [ ] The three-options diagram (from scratch / re-run / extend)
-
-Steps
-
-- Walk through orq agent on orq, and local files we have.
-- explain the initial scripts/commands that we run for agents.
-- Show the output on the dashboard
--

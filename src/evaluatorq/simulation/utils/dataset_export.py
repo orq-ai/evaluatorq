@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any, TypeVar
 
+from evaluatorq.simulation._datapoint_io import _as_obj
 from evaluatorq.simulation.types import (
     CommunicationStyle,
     Persona,
@@ -17,20 +18,6 @@ from evaluatorq.simulation.types import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _as_obj(value: Any) -> Any:
-    """Return a dict for a JSON-stringified object, else the value unchanged.
-
-    orq dataset rows store persona/scenario as JSON strings (the API forbids
-    nested objects); the readers accept either the string or a plain dict.
-    """
-    if isinstance(value, str):
-        try:
-            return json.loads(value)
-        except (ValueError, TypeError):
-            return value
-    return value
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +104,14 @@ def load_datapoints_from_jsonl(input_path: str) -> list[SimulationDatapoint]:
         if isinstance(persona_raw, dict):
             persona = Persona.model_validate(persona_raw)
         else:
+            # A present-but-unparseable value is corruption, not the legacy flat
+            # format (where 'persona' is simply absent) — don't discard it silently.
+            if inputs.get('persona') is not None:
+                logger.warning(
+                    "load_datapoints_from_jsonl: 'persona' present but not a parseable object "
+                    '(got %s); falling back to flat fields.',
+                    type(persona_raw).__name__,
+                )
             persona = Persona(
                 name=inputs.get('persona_name', 'Unknown'),
                 patience=0.5,
@@ -132,6 +127,12 @@ def load_datapoints_from_jsonl(input_path: str) -> list[SimulationDatapoint]:
         if isinstance(scenario_raw, dict):
             scenario = Scenario.model_validate(scenario_raw)
         else:
+            if inputs.get('scenario') is not None:
+                logger.warning(
+                    "load_datapoints_from_jsonl: 'scenario' present but not a parseable object "
+                    '(got %s); falling back to flat fields.',
+                    type(scenario_raw).__name__,
+                )
             scenario = Scenario(
                 name=inputs.get('scenario_name', 'Unknown'),
                 goal=inputs.get('goal', ''),
