@@ -236,6 +236,22 @@ def test_compare_corrupt_report_is_422(tmp_path: Path):
     assert resp.status_code == 422
 
 
+def test_compare_syntactically_corrupt_report_is_422(tmp_path: Path):
+    # A file that isn't even valid JSON must be reported as corrupt (422), not masked
+    # as "not found" (404). Guards the load_surface_strict path in _resolve_run.
+    sim = tmp_path / 'sim-runs'
+    sim.mkdir()
+    (sim / 'good.json').write_text(_run_a().model_dump_json())
+    (sim / 'bad.json').write_text('{not valid json at all')
+    from evaluatorq.dashboard.library import report_id
+
+    client = TestClient(build_app([tmp_path / 'runs', sim]))
+    good = report_id(sim / 'good.json')
+    bad = report_id(sim / 'bad.json')
+    resp = client.get(f'/compare/sim?a={good}&b={bad}')
+    assert resp.status_code == 422
+
+
 def test_compare_transcript_invalid_index_is_400(roots: list[Path]):
     client = TestClient(build_app(roots))
     rid_a, rid_b = _rids(roots)

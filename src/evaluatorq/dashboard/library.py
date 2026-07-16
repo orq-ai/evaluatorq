@@ -90,10 +90,26 @@ def sniff_kind(data: dict[str, object]) -> str | None:
 
 
 def load_surface(path: Path) -> tuple[str | None, dict[str, object]]:
+    """Lenient surface sniff for directory scans: a corrupt/unreadable file is masked
+    as an unknown surface (``None``) so one bad file can't break a whole listing."""
     try:
         data = read_json_cached(path)
     except (json.JSONDecodeError, OSError):
         return None, {}
+    return sniff_kind(data), data
+
+
+def load_surface_strict(path: Path) -> tuple[str | None, dict[str, object]]:
+    """Like :func:`load_surface`, but lets a corrupt/unreadable file raise instead of
+    masking it as an unknown surface. Callers resolving a *specific requested* report
+    (not scanning a directory) use this so a syntactically corrupt file is reported as
+    corrupt rather than "not found".
+
+    Raises:
+        json.JSONDecodeError: the file content is not valid JSON.
+        OSError: the file cannot be read.
+    """
+    data = read_json_cached(path)
     return sniff_kind(data), data
 
 

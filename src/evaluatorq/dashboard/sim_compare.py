@@ -491,17 +491,26 @@ def _resolve_run(rid: str, roots: list[Path] | None) -> tuple[str, Any | None]:
     """Load a sim run by report id.
 
     Returns ``('ok', run)``, ``('missing', None)`` when the id resolves to no
-    file or a non-sim report, or ``('error', None)`` when a matching sim file
-    fails to load/parse — the last is logged with a stack so a corrupt report is
-    debuggable rather than silently reported as "not found".
+    file or a valid-but-non-sim report, or ``('error', None)`` when a matching
+    sim file fails to load/parse — including a *syntactically* corrupt file, so it
+    is reported as corrupt (422) rather than "not found" (404). The error case is
+    logged with a stack so a corrupt report is debuggable.
     """
+    import json
+
     from evaluatorq.dashboard import library
     from evaluatorq.dashboard.surfaces import ADAPTERS
 
     path = library.resolve(rid, roots)
     if path is None:
         return 'missing', None
-    surface, _raw = library.load_surface(path)
+    # Strict read: a corrupt/unreadable file must surface as an error, not be masked
+    # as an unknown surface (which load_surface does for lenient directory scans).
+    try:
+        surface, _raw = library.load_surface_strict(path)
+    except (json.JSONDecodeError, OSError):
+        logger.opt(exception=True).warning('compare: corrupt/unreadable sim report {}', rid)
+        return 'error', None
     if surface != 'sim':
         return 'missing', None
     adapter = ADAPTERS.get('sim')
