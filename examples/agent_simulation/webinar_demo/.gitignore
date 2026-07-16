@@ -1,11 +1,5 @@
 .env
 *.jsonl
 .evaluatorq/
-docs/
-presentation.html
 
 __pycache__/
-.quarto/
-
-/.quarto/
-**/*.quarto_ipynb

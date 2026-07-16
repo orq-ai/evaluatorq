@@ -11,7 +11,6 @@ import pytest
 from evaluatorq.redteam.backends.base import _coerce_to_agent_response
 from evaluatorq.redteam.contracts import (
     AgentResponse,
-    AttackerResponse,
     Message,
     OrchestratorResult,
     OutputMessage,
@@ -162,7 +161,7 @@ class TestOrchestratorResultToolCalls:
         result = OrchestratorResult(
             turns=[
                 Turn(
-                    attacker=AttackerResponse(generated_prompt='do it'),
+                    attacker=AgentResponse(text='do it'),
                     target=AgentResponse(
                         output=[
                             TextOutputItem(text='done', annotations=[]),
@@ -180,7 +179,7 @@ class TestOrchestratorResultToolCalls:
         result = OrchestratorResult(
             turns=[
                 Turn(
-                    attacker=AttackerResponse(generated_prompt='hi'),
+                    attacker=AgentResponse(text='hi'),
                     target=AgentResponse(text='hello'),
                 )
             ],
@@ -442,11 +441,11 @@ class TestCreateDynamicEvaluatorScorer:
         attack_output = AttackOutput(
             turns=[
                 Turn(
-                    attacker=AttackerResponse(generated_prompt='hi'),
+                    attacker=AgentResponse(text='hi'),
                     target=AgentResponse(output=[TextOutputItem(text='ok', annotations=[]), tc_a]),
                 ),
                 Turn(
-                    attacker=AttackerResponse(generated_prompt='again'),
+                    attacker=AgentResponse(text='again'),
                     target=AgentResponse(output=[TextOutputItem(text='done', annotations=[]), tc_b]),
                 ),
             ],
@@ -484,7 +483,7 @@ class TestCreateDynamicEvaluatorScorer:
         attack_output = AttackOutput(
             turns=[
                 Turn(
-                    attacker=AttackerResponse(generated_prompt='hi'),
+                    attacker=AgentResponse(text='hi'),
                     target=AgentResponse(text='nope'),
                 ),
             ],

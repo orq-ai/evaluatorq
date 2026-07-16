@@ -141,7 +141,7 @@ def turns_to_openresponses_input(
     """Convert redteam turns to an OpenResponses input array."""
     out: list[dict[str, Any]] = []
     for idx, turn in enumerate(turns):
-        out.append(user_input_item(turn.attacker.generated_prompt))
+        out.append(user_input_item(turn.attacker.text))
         if idx == len(turns) - 1 and not include_final_assistant:
             continue
         append_assistant_turn(out, turn.target)

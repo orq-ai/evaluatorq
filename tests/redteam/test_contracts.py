@@ -14,7 +14,6 @@ from evaluatorq.contracts import (
 )
 from evaluatorq.redteam.contracts import (
     AgentContext,
-    AttackerResponse,
     AttackInfo,
     AttackOutput,
     CategorySummary,
@@ -211,7 +210,7 @@ class TestCategorySummary:
 
 def _turn(prompt: str = "hi", reply: str = "ok") -> Turn:
     return Turn(
-        attacker=AttackerResponse(generated_prompt=prompt),
+        attacker=AgentResponse(text=prompt),
         target=AgentResponse(text=reply),
     )
 
@@ -286,7 +285,7 @@ class TestChatCompletionsOrdering:
         return OrchestratorResult(
             turns=[
                 Turn(
-                    attacker=AttackerResponse(generated_prompt="please call tools"),
+                    attacker=AgentResponse(text="please call tools"),
                     target=AgentResponse(output=output_items),
                 )
             ]
@@ -372,7 +371,7 @@ class TestChatCompletionsOrdering:
         result = OrchestratorResult(
             turns=[
                 Turn(
-                    attacker=AttackerResponse(generated_prompt="ping"),
+                    attacker=AgentResponse(text="ping"),
                     target=AgentResponse(output=[]),
                 )
             ]
@@ -408,3 +407,31 @@ def test_job_output_payload_tolerates_legacy_tool_calls_per_turn_key():
         'tool_calls_per_turn': [[{'type': 'function_call', 'name': 'search', 'arguments': '{}'}]],
     })
     assert payload.final_response == 'ok'
+
+
+class TestAttackerResponseUnifiedOntoAgentResponse:
+    """RES-883: the attacker side uses AgentResponse (not a separate type)."""
+
+    def test_turn_attacker_is_agent_response_with_error_field(self):
+        turn = Turn(attacker=AgentResponse(text='attack'), target=AgentResponse(text='resp'))
+        assert isinstance(turn.attacker, AgentResponse)
+        assert turn.attacker.text == 'attack'
+        # attacker now carries the shared per-response error field
+        assert turn.attacker.error is None
+
+    def test_truncated_is_derivable_from_finish_reason(self):
+        turn = Turn(
+            attacker=AgentResponse(text='attack', finish_reason='length'),
+            target=AgentResponse(text='resp'),
+        )
+        assert turn.attacker.finish_reason == 'length'  # was the separate `truncated` bool
+
+    def test_pre_res883_report_json_migrates(self):
+        # Reports written before RES-883 carried generated_prompt (+ a now-derived
+        # truncated) on the attacker; they must still load.
+        turn = Turn.model_validate({
+            'attacker': {'generated_prompt': 'legacy attack', 'truncated': True, 'finish_reason': 'length'},
+            'target': {'output': []},
+        })
+        assert turn.attacker.text == 'legacy attack'
+        assert turn.attacker.finish_reason == 'length'
