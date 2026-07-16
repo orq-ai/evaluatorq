@@ -3,9 +3,9 @@
 Working dir for the agent-simulation webinar: slides + runnable demo.
 
 Structure mirrors the red-teaming demos (`../../redteam/refund_agent_demo`,
-`../../redteam/crypto_stealing_demo`): a Quarto Reveal.js deck plus a runnable
-agent the deck demos live. The presentation theme/assets are reused from those
-decks (orq brand teal `#025558`, orange `q`).
+`../../redteam/crypto_stealing_demo`): a self-contained HTML deck plus a runnable
+agent the deck demos live. The presentation theme/assets follow the orq brand
+(teal `#025558`, orange `q`).
 
 ## Start here
 
@@ -39,12 +39,11 @@ the terminal flow and the known platform-dependent gaps.
 ```bash
 # The ready-to-present deck is self-contained:
 open webinar-deck.html
-# Optional: render the themed Quarto scaffold for future deck edits.
-quarto render presentation.qmd
 ```
 
-- `presentation.qmd` — optional Quarto theme scaffold (not the webinar deck source)
-- `_quarto.yml`, `orq-theme.css`, `styles.scss` — Quarto + brand theme (reused)
+- `webinar-deck.html` — the ready-to-present deck (self-contained, inline styles)
+- `webinar-deck.pdf` — PDF export of the deck (colours/backgrounds preserved)
+- `webinar-script.html` — speaker script
 - `assets/` — brand media (logo, gradient background); add demo screenshots here
 
 ## Demo agent
@@ -71,4 +70,3 @@ version with what each step demonstrates.
 
 - `ORQ_API_KEY` exported in env
 - Python 3.11+, [uv](https://docs.astral.sh/uv/)
-- [Quarto](https://quarto.org) (only to re-render slides)
