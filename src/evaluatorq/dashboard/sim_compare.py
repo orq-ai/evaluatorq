@@ -475,10 +475,12 @@ def render_compare_page(rid_a: str, rid_b: str, run_a: SimulationRun, run_b: Sim
     )
     return (
         f'{_hero(run_a, run_b, matching)}'
+        '<div class="cmp-body">'
         f'{kpi_section}{charts}'
         f'{_delta_chart(matching)}'
         f'{_all_metrics_table(kpis, name_a, name_b)}'
         f'{_diff_table(rid_a, rid_b, matching)}'
+        '</div>'
     )
 
 

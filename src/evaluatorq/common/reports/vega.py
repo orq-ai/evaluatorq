@@ -28,16 +28,22 @@ from evaluatorq.common.reports.palette import COLORS, QUALITATIVE
 
 ORQ_VL_CONFIG: dict[str, Any] = {
     'background': 'transparent',
-    'font': 'Inter, system-ui, -apple-system, sans-serif',
+    # vl-convert renders server-side and has no access to the brand webfonts; it
+    # also can't resolve 'system-ui'/'-apple-system' and would fall back to a
+    # serif. List concrete sans families so it lands on a clean sans everywhere.
+    'font': 'Inter, Helvetica Neue, Helvetica, Arial, sans-serif',
     'axis': {
         'labelColor': COLORS['ink_700'],
         'titleColor': COLORS['ink_700'],
         'gridColor': COLORS['sand_400'],
+        'gridOpacity': 0.6,
         'domainColor': COLORS['sand_400'],
         'tickColor': COLORS['sand_400'],
     },
     'legend': {'labelColor': COLORS['ink_700'], 'titleColor': COLORS['ink_700']},
     'view': {'stroke': 'transparent'},
+    # Softly rounded bar ends read cleaner and match the dashboard's card radii.
+    'bar': {'cornerRadiusEnd': 3},
     'range': {'category': QUALITATIVE},
 }
 

@@ -2292,8 +2292,16 @@ _SIM_COMPARE_CSS = """
 .cmp-sub { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); }
 .cmp-note { font-size: 12px; color: var(--text-muted); margin: 0 0 12px; }
 .cmp-warn { color: var(--orange-700, #b3540f); font-weight: 600; }
-.cmp-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+.cmp-body { display: flex; flex-direction: column; gap: 24px; }
+.cmp-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(480px, 1fr)); gap: 24px; }
 .cmp-charts .panel { margin: 0; }
+/* Vega SVGs carry a viewBox, so max-width:100% + height:auto scales them DOWN to
+   fit their column and keeps aspect ratio — never upscaling past native size
+   (which made full-width charts oversized). Centered for the odd/full-width one. */
+.cmp-body svg.marks { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+/* The full-width charts (direct children of cmp-body, not in the 2-up grid) fill
+   their panel instead of sitting capped-and-centered with whitespace either side. */
+.cmp-body > .panel svg.marks { width: 100%; }
 .cmp-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .cmp-table th { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
   letter-spacing: .06em; color: var(--text-faint); text-align: left; padding: 6px 10px;
