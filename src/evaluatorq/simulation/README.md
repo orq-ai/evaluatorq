@@ -95,6 +95,31 @@ Set `dataset_id="..."` to pull simulation datapoints from a named Orq dataset
 instead of inline personas/scenarios. Each row's `inputs` must already match a
 simulation input shape (`datapoint`, or `persona` + `scenario`).
 
+## Data sources
+
+Where cases come from, and what you can do with each. **Replay** re-runs the
+exact same cases (reproducible compare across agent versions/evaluators);
+**Seed new cases** mines a source for archetypes that generate *fresh*
+personas/scenarios (extends the dataset).
+
+| Source | Replay (re-use exact cases) | Seed new cases (extend) |
+|--------|:---------------------------:|:-----------------------:|
+| Inline `personas` + `scenarios` | ✅ | — (they *are* the new cases) |
+| JSONL datapoints (`--datapoints` / `load_datapoints_from_jsonl()`) | ✅ | ⚠️ manual (hand-pick seeds) |
+| Orq dataset (`dataset_id=`) | ✅ | ⚠️ manual |
+| Previous runs (persisted to JSONL via `eq sim generate --datapoints`) | ✅ | ⚠️ manual |
+| Production traces | ❌ no importer | ⚠️ manual (read traces → seed phrases) |
+
+Legend: ✅ built-in · ⚠️ possible but manual · ❌ not supported yet.
+
+`dataset_id`, `datapoints`, and `personas` + `scenarios` are mutually
+exclusive — pass exactly one source per run.
+
+No built-in trace-to-persona extractor yet: turning raw traces (or previous
+runs) into seed phrases for `generate_personas()` / `generate_scenarios()` is a
+manual step. See the [guide](../../../docs/guides/agent-simulation.md) for the
+replay + trace-grounding walkthroughs.
+
 ## Tracing & PII
 
 Runs emit OTel spans under `orq.simulation.pipeline` (auto-visible in orq.ai when
