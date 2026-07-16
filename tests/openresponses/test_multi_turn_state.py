@@ -17,7 +17,7 @@ from evaluatorq.openresponses import (
     turns_to_openresponses_input,
     user_input_item,
 )
-from evaluatorq.redteam.contracts import AgentResponse, Turn
+from evaluatorq.redteam.contracts import Turn
 
 
 def _agent_text(text: str) -> AgentResponse:

@@ -9,7 +9,7 @@ from evaluatorq.contracts import (
     TextOutputItem,
     ToolCallOutputItem,
 )
-from evaluatorq.redteam.contracts import AgentResponse, Turn, turns_to_messages
+from evaluatorq.redteam.contracts import Turn, turns_to_messages
 
 
 def _turn(prompt: str, reply: str, *, error: bool = False) -> Turn:

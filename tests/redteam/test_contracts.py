@@ -14,7 +14,6 @@ from evaluatorq.contracts import (
 )
 from evaluatorq.redteam.contracts import (
     AgentContext,
-    AgentResponse,
     AttackInfo,
     AttackOutput,
     CategorySummary,

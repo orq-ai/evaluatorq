@@ -869,12 +869,12 @@ class MultiTurnOrchestrator:
                         # The rationale is kept OUT of the transcript on purpose: it is a
                         # signal, not evidence, and must never reach the scorer/judge.
                         attack_prompt = marker_prompt
-                        # Rebuild attacker record with the stripped prompt as its text,
-                        # preserving usage/finish_reason (RES-883: attacker is an AgentResponse).
-                        current_attacker = AgentResponse(
-                            text=attack_prompt,
-                            usage=current_attacker.usage,
-                            finish_reason=current_attacker.finish_reason,
+                        # Rebuild the attacker record with the stripped prompt as its
+                        # only text item, preserving every other field (usage,
+                        # finish_reason, model, response_id, error) via model_copy
+                        # (RES-883: attacker is an AgentResponse).
+                        current_attacker = current_attacker.model_copy(
+                            update={'output': [TextOutputItem(text=attack_prompt, annotations=[])]}
                         )
                         if not attack_prompt:
                             # Nothing left to send. Distinguish a genuine accepted

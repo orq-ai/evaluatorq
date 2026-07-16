@@ -11,7 +11,6 @@ import pytest
 from evaluatorq.redteam.backends.base import _coerce_to_agent_response
 from evaluatorq.redteam.contracts import (
     AgentResponse,
-    AgentResponse,
     Message,
     OrchestratorResult,
     OutputMessage,

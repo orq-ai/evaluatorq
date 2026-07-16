@@ -130,7 +130,7 @@ def _make_target_factory(target: MagicMock | None = None) -> MagicMock:
 
 def _make_orchestrator_result(*, error: str | None = None) -> OrchestratorResult:
     from evaluatorq.contracts import AgentResponse
-    from evaluatorq.redteam.contracts import AgentResponse, Turn
+    from evaluatorq.redteam.contracts import Turn
 
     return OrchestratorResult(
         turns=[

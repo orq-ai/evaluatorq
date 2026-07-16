@@ -35,6 +35,7 @@ from evaluatorq.redteam.contracts import (
     SeveritySummary,
     TechniqueSummary,
     TokenUsage,
+    Turn,
     TurnTypeSummary,
     UnifiedEvaluationResult,
     Vulnerability,
@@ -108,26 +109,22 @@ def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
         conversation: list[dict[str, Any]] = []
         final_response_text = ''
 
-        def _attacker_text(resp: dict[str, Any]) -> str:
-            """Attacker prompt from an AgentResponse dict (RES-883), falling back
-            to the pre-RES-883 ``generated_prompt`` field for older reports."""
-            for item in resp.get('output') or []:
-                if isinstance(item, dict) and item.get('type') == 'output_text' and (text := item.get('text', '')):
-                    return text
-            return resp.get('generated_prompt', '') or ''
-
+        # Validate each turn through the Turn model — the single migration authority
+        # (its validator maps the pre-RES-883 ``generated_prompt`` to ``text``) — then
+        # read canonical ``AgentResponse.text`` (joins every text item, matching what
+        # turns_to_messages/the judge saw). A turn that fails validation degrades to
+        # empty text for that row rather than dropping the whole coercion.
         for t in turns_val:
-            attacker = t.get('attacker') or {}
-            target = t.get('target') or {}
-            conversation.append({'role': 'user', 'content': _attacker_text(attacker)})
-            target_text = ''
-            for item in target.get('output') or []:
-                if not isinstance(item, dict):
-                    continue
-                if item.get('type') == 'output_text':
-                    target_text = item.get('text', '') or target_text
-            conversation.append({'role': 'assistant', 'content': target_text})
-            final_response_text = target_text or final_response_text
+            try:
+                turn = Turn.model_validate(t)
+                atk_text, tgt_text = turn.attacker.text, turn.target.text
+            except ValidationError:
+                atk_text = tgt_text = ''
+            conversation.extend((
+                {'role': 'user', 'content': atk_text},
+                {'role': 'assistant', 'content': tgt_text},
+            ))
+            final_response_text = tgt_text or final_response_text
         out = dict(d)
         out['turns'] = len(turns_val)
         out.setdefault('conversation', conversation)

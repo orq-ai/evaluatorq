@@ -882,13 +882,15 @@ def classify_error_type(error: str | None, *, existing_type: str | None = None) 
 # ---------------------------------------------------------------------------
 
 
-# ``AttackerResponse`` was unified onto :class:`evaluatorq.contracts.AgentResponse`
-# (RES-883): the attacker LLM output now uses the same response shape as targets and
-# simulation agents. ``generated_prompt`` maps to ``AgentResponse.text``, ``truncated``
-# is derivable from ``finish_reason == 'length'``, and the attacker gains the shared
-# per-response ``error`` field for free. Kept as a deprecated alias for import
-# compatibility; construct ``AgentResponse(text=...)`` directly.
-AttackerResponse = AgentResponse  # deprecated alias; use AgentResponse directly
+# RES-883: the attacker LLM output was unified onto
+# :class:`evaluatorq.contracts.AgentResponse` — the same response shape used by
+# targets and simulation agents. ``generated_prompt`` is now ``AgentResponse.text``
+# and ``truncated`` is derivable from ``finish_reason == 'length'``. The former
+# ``AttackerResponse`` type is removed outright (a ``feat!`` breaking change) rather
+# than left as a silent alias: ``AttackerResponse = AgentResponse`` would have made
+# ``AttackerResponse(generated_prompt=...)`` quietly drop the prompt (AgentResponse
+# ignores unknown kwargs) and collapse ``isinstance`` discrimination. Construct
+# ``AgentResponse(text=...)`` directly.
 
 
 class Turn(BaseModel):
