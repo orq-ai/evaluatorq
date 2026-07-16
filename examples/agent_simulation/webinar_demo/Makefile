@@ -8,15 +8,19 @@ DATAPOINTS ?= boh_datapoints.jsonl
 MAX_TURNS ?= 10
 PARALLELISM ?= 5
 
-.PHONY: provision generate simulate dashboard rerun upload help
+.PHONY: provision generate simulate dashboard rerun upload pdf help
 
 help:
+	@echo "make pdf        - render webinar-deck.html -> webinar-deck.pdf (styling preserved)"
 	@echo "make provision  - create Sterling (Bank of Holland agent) + tools + KB in Orq (idempotent)"
 	@echo "make generate   - generate personas x scenarios -> $(DATAPOINTS)"
 	@echo "make simulate   - run the generated datapoints against the agent"
 	@echo "make dashboard  - open the dashboard on this run store (.evaluatorq/sim-runs/)"
 	@echo "make rerun      - re-run the saved datapoints (compare after a change)"
 	@echo "make upload     - push the datapoints to an Orq dataset"
+
+pdf:
+	python3 build_pdf.py
 
 provision:
 	cd agent_build && uv run python provision.py
