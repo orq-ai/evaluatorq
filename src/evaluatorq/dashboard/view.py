@@ -428,14 +428,22 @@ def _sim_compare_bar(choices: list[tuple[str, str]]) -> str:
     """
     if len(choices) < 2:
         return ''
-    opts = ''.join(f'<option value="{esc(rid)}">{esc(name)}</option>' for rid, name in choices)
+
+    def _opts(selected_idx: int) -> str:
+        # Default each select to a different run so the first Compare click is a
+        # real A-vs-B comparison, not run-vs-itself (all-zero deltas).
+        return ''.join(
+            f'<option value="{esc(rid)}"{" selected" if i == selected_idx else ""}>{esc(name)}</option>'
+            for i, (rid, name) in enumerate(choices)
+        )
+
     return (
         '<form class="cmp-bar" action="/compare/sim" method="get"'
         ' style="display:flex;gap:8px;align-items:center;margin:12px 0;flex-wrap:wrap">'
         '<span class="cmp-bar-label" style="font-weight:600">Compare runs</span>'
-        f'<select name="a" aria-label="Run A">{opts}</select>'
+        f'<select name="a" aria-label="Run A">{_opts(0)}</select>'
         '<span class="cmp-bar-vs">vs</span>'
-        f'<select name="b" aria-label="Run B">{opts}</select>'
+        f'<select name="b" aria-label="Run B">{_opts(1)}</select>'
         '<button type="submit" class="btn-secondary">Compare</button>'
         '</form>'
     )

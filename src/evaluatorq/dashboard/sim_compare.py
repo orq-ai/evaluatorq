@@ -7,16 +7,18 @@ runner or data model — it only reads two already-stored ``SimulationRun`` obje
 Routes (registered by ``register_sim_compare_routes``):
 
     GET /compare/sim?a={ridA}&b={ridB}
-        Full page: header for both runs, a KPI delta table (aggregates +
-        per-scorer + terminated-by), and an outcome-diff table matching
-        conversations by ``(persona, scenario)``.
+        Full page: hero, KPI delta cards, A-vs-B charts, an all-metrics table,
+        and an outcome-diff table matching conversations by ``(persona, scenario)``.
 
     GET /compare/sim/transcript?a={ridA}&b={ridB}&ia={idxA}&ib={idxB}
         Side-by-side transcript fragment for one matched conversation pair.
 
 Conversations are matched by ``(persona, scenario)`` (the ticket's chosen key):
-runs that share a dataset line up; anything unmatched is listed separately so a
-mismatched dataset is visible rather than silently dropped.
+runs that share a dataset line up; anything unmatched is listed separately (with a
+low-overlap warning) so a mismatched dataset is visible rather than silently dropped.
+
+Charts are Vega-Lite specs rendered server-side to SVG via the shared
+``common.reports.vega`` helpers — no client JS, no ``/static`` dependency.
 """
 
 from __future__ import annotations
@@ -26,18 +28,25 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects at runtime
 from starlette.responses import Response
 
 from evaluatorq.common.reports import esc
 from evaluatorq.common.reports.html_helpers import kpi_cards, pct
+from evaluatorq.common.reports.palette import COLORS
+from evaluatorq.common.reports.vega import render_svg, vl_bar_h, vl_grouped_bar
 from evaluatorq.dashboard.shell import page
-from evaluatorq.dashboard.sim_views import _load_run, render_transcript_fragment
+from evaluatorq.dashboard.sim_views import _entries_from_run, render_transcript_fragment
+from evaluatorq.dashboard.view import _panel
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from evaluatorq.simulation.types import SimulationEntry, SimulationRun
+
+_UP = COLORS['success_400']  # improved / higher in B
+_DOWN = COLORS['red_400']  # regressed / lower in B
 
 
 # ---------------------------------------------------------------------------
@@ -50,17 +59,20 @@ class KpiRow:
     """One comparison row: a label, the two run values, and their delta.
 
     ``kind`` drives formatting: ``'rate'`` (0..1 → %), ``'score'`` (2dp),
-    ``'turns'`` (1dp), ``'count'`` (int). ``a``/``b`` are floats; a metric
-    absent from one run is treated as 0.0 so the delta is still meaningful.
+    ``'turns'`` (1dp), ``'count'`` (int). ``a`` / ``b`` may be ``None`` when a
+    metric was not measured by that run (e.g. a scorer only one run used); such a
+    row renders ``n/a`` and carries no delta arrow rather than a fabricated 0.0.
     """
 
     label: str
-    a: float
-    b: float
+    a: float | None
+    b: float | None
     kind: str
 
     @property
-    def delta(self) -> float:
+    def delta(self) -> float | None:
+        if self.a is None or self.b is None:
+            return None
         return self.b - self.a
 
 
@@ -75,6 +87,8 @@ def compare_kpis(
 
     Aggregates are computed from the entry lists (so they track the conversations
     actually present); per-scorer values come from each run's ``scorer_averages``.
+    A scorer present in only one run keeps ``None`` on the other side — it is not
+    a real 0.0 and must not read as a regression.
     """
     rows: list[KpiRow] = [
         KpiRow('Conversations', float(len(entries_a)), float(len(entries_b)), 'count'),
@@ -98,12 +112,12 @@ def compare_kpis(
         ),
     ]
 
-    # Per-scorer averages — union of both runs' scorer_averages keys, sorted.
+    # Per-scorer averages — union of keys, but a missing scorer stays None (n/a),
+    # never 0.0, so a run that never measured it shows no fabricated regression.
     sa_a = run_a.scorer_averages or {}
     sa_b = run_b.scorer_averages or {}
     rows.extend(
-        KpiRow(f'Scorer: {key}', float(sa_a.get(key, 0.0)), float(sa_b.get(key, 0.0)), 'score')
-        for key in sorted(set(sa_a) | set(sa_b))
+        KpiRow(f'Scorer: {key}', sa_a.get(key), sa_b.get(key), 'score') for key in sorted(set(sa_a) | set(sa_b))
     )
 
     # Terminated-by distribution — counts per reason, union of labels.
@@ -117,7 +131,9 @@ def compare_kpis(
     return rows
 
 
-def _fmt(value: float, kind: str) -> str:
+def _fmt(value: float | None, kind: str) -> str:
+    if value is None:
+        return 'n/a'
     if kind == 'rate':
         return f'{value * 100:.0f}%'
     if kind == 'score':
@@ -129,6 +145,8 @@ def _fmt(value: float, kind: str) -> str:
 
 def _fmt_delta(row: KpiRow) -> str:
     d = row.delta
+    if d is None:
+        return '<span class="cmp-delta cmp-flat">—</span>'
     if abs(d) < 1e-9:
         return '<span class="cmp-delta cmp-flat">0</span>'
     arrow = '&#x25B2;' if d > 0 else '&#x25BC;'  # ▲ / ▼
@@ -162,12 +180,19 @@ class Matching:
     a_only: list[SimulationEntry]
     b_only: list[SimulationEntry]
 
+    @property
+    def match_rate(self) -> float:
+        """Share of all conversations that paired up (0..1). 1.0 = identical key sets."""
+        total = 2 * len(self.matched) + len(self.a_only) + len(self.b_only)
+        return (2 * len(self.matched) / total) if total else 0.0
+
 
 def match_entries(entries_a: list[SimulationEntry], entries_b: list[SimulationEntry]) -> Matching:
     """Pair conversations across runs by ``(persona, scenario)``.
 
     Duplicate keys within a run are paired positionally (first A with first B,
-    etc.); any leftovers on either side fall into ``a_only`` / ``b_only``.
+    etc.) — an approximation surfaced by the low-overlap note on the page; any
+    leftovers on either side fall into ``a_only`` / ``b_only``.
     """
     by_key_b: dict[tuple[str, str], list[SimulationEntry]] = defaultdict(list)
     for e in entries_b:
@@ -176,7 +201,6 @@ def match_entries(entries_a: list[SimulationEntry], entries_b: list[SimulationEn
     matched: list[MatchedPair] = []
     a_only: list[SimulationEntry] = []
     consumed_b: set[int] = set()
-    # Track position within each key's B-list as we consume duplicates.
     cursor: dict[tuple[str, str], int] = defaultdict(int)
 
     for ea in entries_a:
@@ -198,20 +222,6 @@ def match_entries(entries_a: list[SimulationEntry], entries_b: list[SimulationEn
 # ---------------------------------------------------------------------------
 # Rendering
 # ---------------------------------------------------------------------------
-
-
-def _entries(run: SimulationRun) -> list[SimulationEntry]:
-    from evaluatorq.simulation.reports.sections import individual_entries
-
-    return individual_entries(run.results)
-
-
-def _panel(title: str, sub: str, inner: str) -> str:
-    """Framed section matching the dashboard's ``.panel`` chrome (theme-styled)."""
-    return (
-        f'<div class="panel"><div class="panel-title">{esc(title)}</div>'
-        f'<div class="panel-sub">{esc(sub)}</div>{inner}</div>'
-    )
 
 
 def _agg(entries: list[SimulationEntry]) -> tuple[float, float, float]:
@@ -256,143 +266,71 @@ def _kpi_band(entries_a: list[SimulationEntry], entries_b: list[SimulationEntry]
     return kpi_cards(cards)
 
 
-# --- Inline-SVG charts --------------------------------------------------------
-# Server-rendered SVG (no JS, no /static dependency) so charts always render — in
-# the dashboard, in tests, and in static HTML exports alike. Colours are the orq
-# brand palette; A is green, B is rust (the brand accent).
-_SERIES_A = '#0f9d6b'
-_SERIES_B = '#df5325'
-_AXIS = '#d8d3cc'
-_LBL = '#6b7280'
-_VAL = '#25232e'
-_MONO = 'ui-monospace, SFMono-Regular, Menlo, monospace'
+# --- Charts: Vega-Lite specs rendered server-side to SVG (no JS / no /static) ---
 
 
-def _svg_grouped_bars(categories: list[str], series: list[tuple[str, str, list[float]]], *, value_kind: str) -> str:
-    """Grouped horizontal bar SVG. ``series`` = [(name, colour, values)];
-    ``value_kind`` is ``'rate'`` (0..1 → %) or ``'count'`` (integer)."""
-    if not categories or not series:
-        return ''
-    all_vals = [v for _, _, vs in series for v in vs]
-    vmax = 1.0 if value_kind == 'rate' else (max(all_vals) or 1.0)
-    n = len(series)
-    bar_h, bar_gap, group_gap = 12, 3, 14
-    lbl_w, plot_x, plot_w, top, right_pad = 150, 158, 250, 34, 52
-    group_h = n * (bar_h + bar_gap) + group_gap
-    height = top + len(categories) * group_h + 8
-    width = plot_x + plot_w + right_pad
-
-    def fmt(v: float) -> str:
-        return f'{v * 100:.0f}%' if value_kind == 'rate' else f'{v:.0f}'
-
-    p: list[str] = [f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" style="max-width:{width}px">']
-    lx = plot_x
-    for name, color, _ in series:
-        p.append(
-            f'<rect x="{lx}" y="12" width="10" height="10" rx="2" fill="{color}"/>'
-            f'<text x="{lx + 15}" y="21" font-family="{_MONO}" font-size="11" fill="{_LBL}">{esc(name)}</text>'
-        )
-        lx += 15 + int(len(name) * 6.7) + 18
-    p.append(f'<line x1="{plot_x}" y1="{top}" x2="{plot_x}" y2="{height - 8}" stroke="{_AXIS}"/>')
-    for ci, cat in enumerate(categories):
-        gy = top + ci * group_h
-        cy = gy + n * (bar_h + bar_gap) / 2
-        p.append(
-            f'<text x="{lbl_w - 8}" y="{cy + 3:.0f}" text-anchor="end" font-family="{_MONO}" '
-            f'font-size="11" fill="{_LBL}">{esc(cat)}</text>'
-        )
-        for si, (_, color, vs) in enumerate(series):
-            v = vs[ci] if ci < len(vs) else 0.0
-            bw = max(0.0, v / vmax * plot_w)
-            by = gy + si * (bar_h + bar_gap)
-            p.append(
-                f'<rect x="{plot_x}" y="{by}" width="{bw:.1f}" height="{bar_h}" rx="2" fill="{color}"/>'
-                f'<text x="{plot_x + bw + 5:.1f}" y="{by + bar_h - 2}" font-family="{_MONO}" '
-                f'font-size="10" fill="{_VAL}">{fmt(v)}</text>'
-            )
-    p.append('</svg>')
-    return ''.join(p)
-
-
-def _svg_diverging(rows: list[tuple[str, float]]) -> str:
-    """Diverging horizontal bars around a zero line (positive right/green,
-    negative left/rust). ``rows`` = [(label, delta)]."""
-    if not rows:
-        return ''
-    vmax = max((abs(d) for _, d in rows), default=0.0) or 1.0
-    bar_h, gap = 13, 6
-    lbl_w, half, right_pad, top = 160, 120, 46, 12
-    mid_x = lbl_w + half
-    width = lbl_w + half * 2 + right_pad
-    height = top + len(rows) * (bar_h + gap) + 6
-    p: list[str] = [f'<svg viewBox="0 0 {width} {height}" width="100%" role="img" style="max-width:{width}px">']
-    p.append(f'<line x1="{mid_x}" y1="{top - 4}" x2="{mid_x}" y2="{height - 6}" stroke="{_AXIS}"/>')
-    for i, (label, d) in enumerate(rows):
-        y = top + i * (bar_h + gap)
-        w = abs(d) / vmax * half
-        if d >= 0:
-            x, color, tx, anchor = mid_x, _SERIES_A, mid_x + w + 5, 'start'
-        else:
-            x, color, tx, anchor = mid_x - w, _SERIES_B, mid_x - w - 5, 'end'
-        p.append(
-            f'<text x="{lbl_w - 8}" y="{y + bar_h - 2}" text-anchor="end" font-family="{_MONO}" '
-            f'font-size="10" fill="{_LBL}">{esc(label)}</text>'
-            f'<rect x="{x:.1f}" y="{y}" width="{w:.1f}" height="{bar_h}" rx="2" fill="{color}"/>'
-            f'<text x="{tx:.1f}" y="{y + bar_h - 2}" text-anchor="{anchor}" font-family="{_MONO}" '
-            f'font-size="10" fill="{_VAL}">{d:+.2f}</text>'
-        )
-    p.append('</svg>')
-    return ''.join(p)
+def _chart_panel(title: str, sub: str, spec: dict[str, Any]) -> str:
+    """Render a Vega-Lite spec to SVG and wrap it in a titled panel. Omits the
+    panel entirely when the chart can't render (empty data / vl-convert absent)."""
+    svg = render_svg(spec)
+    return _panel(title, sub, svg) if svg else ''
 
 
 def _outcomes_chart(
     entries_a: list[SimulationEntry], entries_b: list[SimulationEntry], name_a: str, name_b: str
 ) -> str:
-    """A-vs-B bars for the two headline 0..1 metrics."""
+    """A-vs-B grouped bars for the two headline 0..1 metrics."""
     rate_a, score_a, _ = _agg(entries_a)
     rate_b, score_b, _ = _agg(entries_b)
-    svg = _svg_grouped_bars(
-        ['Goal-achieved rate', 'Mean goal score'],
-        [(name_a, _SERIES_A, [rate_a, score_a]), (name_b, _SERIES_B, [rate_b, score_b])],
-        value_kind='rate',
+    spec = vl_grouped_bar(
+        categories=['Goal-achieved rate', 'Mean goal score'],
+        series=[(name_a, [rate_a, score_a]), (name_b, [rate_b, score_b])],
+        x_title='0 to 1',
     )
-    return _panel('Outcomes', 'Goal rate and mean score · A vs B', svg)
+    return _chart_panel('Outcomes', 'Goal rate and mean score · A vs B', spec)
 
 
 def _scorer_chart(run_a: SimulationRun, run_b: SimulationRun, name_a: str, name_b: str) -> str:
-    """A-vs-B bars over the union of both runs' scorer averages."""
+    """A-vs-B grouped bars over the scorers BOTH runs measured. Scorers used by
+    only one run are listed, not charted as a fake 0.0."""
     sa_a = run_a.scorer_averages or {}
     sa_b = run_b.scorer_averages or {}
-    keys = sorted(set(sa_a) | set(sa_b))
-    if not keys:
+    shared = sorted(set(sa_a) & set(sa_b))
+    if not shared:
         return ''
-    svg = _svg_grouped_bars(
-        keys,
-        [(name_a, _SERIES_A, [sa_a.get(k, 0.0) for k in keys]), (name_b, _SERIES_B, [sa_b.get(k, 0.0) for k in keys])],
-        value_kind='rate',
+    spec = vl_grouped_bar(
+        categories=shared,
+        series=[(name_a, [sa_a[k] for k in shared]), (name_b, [sa_b[k] for k in shared])],
+        x_title='Average score',
     )
-    return _panel('Scorer averages', 'Per-scorer mean · A vs B', svg)
+    svg = render_svg(spec)
+    if not svg:
+        return ''
+    only = sorted((set(sa_a) | set(sa_b)) - set(shared))
+    note = f'<p class="cmp-note">Not compared (measured by one run only): {esc(", ".join(only))}</p>' if only else ''
+    return _panel('Scorer averages', 'Per-scorer mean · shared scorers only', svg + note)
 
 
 def _terminated_chart(
     entries_a: list[SimulationEntry], entries_b: list[SimulationEntry], name_a: str, name_b: str
 ) -> str:
-    """A-vs-B bars for how conversations ended."""
+    """A-vs-B grouped bars for how conversations ended."""
     tb_a = Counter(e.terminated_by for e in entries_a)
     tb_b = Counter(e.terminated_by for e in entries_b)
     labels = sorted(set(tb_a) | set(tb_b))
     if not labels:
         return ''
-    svg = _svg_grouped_bars(
-        labels,
-        [(name_a, _SERIES_A, [float(tb_a[x]) for x in labels]), (name_b, _SERIES_B, [float(tb_b[x]) for x in labels])],
-        value_kind='count',
+    spec = vl_grouped_bar(
+        categories=labels,
+        series=[(name_a, [float(tb_a[x]) for x in labels]), (name_b, [float(tb_b[x]) for x in labels])],
+        x_title='Conversations',
     )
-    return _panel('How conversations ended', 'Terminated-by counts · A vs B', svg)
+    return _chart_panel('How conversations ended', 'Terminated-by counts · A vs B', spec)
 
 
 def _delta_chart(matching: Matching) -> str:
-    """Per-conversation goal-score change (B - A) over matched pairs, sorted."""
+    """Per-conversation goal-score change (B - A) over matched pairs, sorted;
+    green bars improved in B, red regressed."""
     if not matching.matched:
         return ''
     rows = sorted(
@@ -402,10 +340,21 @@ def _delta_chart(matching: Matching) -> str:
         ),
         key=operator.itemgetter(1),
     )
-    return _panel(
+    labels = [r[0] for r in rows]
+    values = [r[1] for r in rows]
+    colors = [_UP if v >= 0 else _DOWN for v in values]
+    spec = vl_bar_h(
+        labels=labels,
+        values=values,
+        color=_UP,
+        colors=colors,
+        x_title='B minus A (goal score)',
+        value_labels=[f'{v:+.2f}' for v in values],
+    )
+    return _chart_panel(
         'Per-conversation score change',
-        'B minus A on matched conversations · green improved, rust regressed',
-        _svg_diverging(rows),
+        'B minus A on matched conversations · green improved, red regressed',
+        spec,
     )
 
 
@@ -485,24 +434,33 @@ def render_compare_transcript(entry_a: SimulationEntry, entry_b: SimulationEntry
     )
 
 
-def _hero(run_a: SimulationRun, run_b: SimulationRun) -> str:
-    """Editorial header: mono kicker, display headline, run names + dates."""
+def _hero(run_a: SimulationRun, run_b: SimulationRun, matching: Matching) -> str:
+    """Editorial header + a match summary line (with a low-overlap warning)."""
     date_a = run_a.created_at.strftime('%Y-%m-%d %H:%M')
     date_b = run_b.created_at.strftime('%Y-%m-%d %H:%M')
+    n_matched, n_a, n_b = len(matching.matched), len(matching.a_only), len(matching.b_only)
+    summary = f'{n_matched} matched · {n_a} only in A · {n_b} only in B'
+    # A low match rate means the diff/transcript compare covers only a slice — say so.
+    warn = (
+        f' <span class="cmp-warn">low overlap ({matching.match_rate:.0%}) — the two runs share few '
+        "(persona, scenario) pairs, so most conversations can't be compared directly.</span>"
+        if matching.match_rate < 0.5
+        else ''
+    )
     return (
         '<div class="report-head"><a class="report-back" href="/?surface=sim">&larr; Agent sim runs</a></div>'
         '<section class="cmp-hero">'
         '<div class="cmp-kicker">Agent sim // run comparison</div>'
         f'<h1 class="cmp-title">{esc(run_a.run_name)} <span class="cmp-vs">vs</span> {esc(run_b.run_name)}</h1>'
         f'<p class="cmp-sub">A: {esc(run_a.run_name)} · {date_a} &nbsp;&nbsp; B: {esc(run_b.run_name)} · {date_b}</p>'
-        '</section>'
+        f'</section><p class="cmp-note">{summary}.{warn}</p>'
     )
 
 
 def render_compare_page(rid_a: str, rid_b: str, run_a: SimulationRun, run_b: SimulationRun) -> str:
     """Full compare-page body: hero, KPI deltas + charts, all-metrics, diffs."""
-    entries_a = _entries(run_a)
-    entries_b = _entries(run_b)
+    entries_a = _entries_from_run(run_a)
+    entries_b = _entries_from_run(run_b)
     kpis = compare_kpis(entries_a, entries_b, run_a, run_b)
     matching = match_entries(entries_a, entries_b)
     name_a, name_b = run_a.run_name, run_b.run_name
@@ -516,7 +474,7 @@ def render_compare_page(rid_a: str, rid_b: str, run_a: SimulationRun, run_b: Sim
         '</div>'
     )
     return (
-        f'{_COMPARE_CSS}{_hero(run_a, run_b)}'
+        f'{_hero(run_a, run_b, matching)}'
         f'{kpi_section}{charts}'
         f'{_delta_chart(matching)}'
         f'{_all_metrics_table(kpis, name_a, name_b)}'
@@ -524,33 +482,41 @@ def render_compare_page(rid_a: str, rid_b: str, run_a: SimulationRun, run_b: Sim
     )
 
 
-_COMPARE_CSS = (
-    '<style>'
-    '.cmp-hero { margin: 4px 0 18px; }'
-    '.cmp-kicker { font-family: var(--font-mono); font-size: 11px; letter-spacing: .14em;'
-    ' text-transform: uppercase; color: var(--text-faint); }'
-    '.cmp-title { font-family: var(--font-display); font-size: 26px; font-weight: 700;'
-    ' color: var(--text-strong); margin: 6px 0 4px; }'
-    '.cmp-title .cmp-vs { color: var(--orange-500); }'
-    '.cmp-sub { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); }'
-    '.cmp-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }'
-    '.cmp-charts .panel { margin: 0; }'
-    '.cmp-table { width: 100%; border-collapse: collapse; font-size: 13px; }'
-    '.cmp-table th { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;'
-    ' letter-spacing: .06em; color: var(--text-faint); text-align: left; padding: 6px 10px;'
-    ' border-bottom: 1px solid var(--border-subtle); }'
-    '.cmp-table td { padding: 7px 10px; border-bottom: 1px solid var(--border-subtle); color: var(--text-body); }'
-    '.cmp-diff-row:hover { background: var(--app-gray-100); }'
-    '.cmp-delta { font-variant-numeric: tabular-nums; font-family: var(--font-mono); }'
-    '.cmp-up { color: #0f9d6b; } .cmp-down { color: #df5325; } .cmp-flat { color: var(--text-faint); }'
-    '.cmp-flip { color: #df5325; font-weight: 600; font-size: 11px; margin-left: 6px; font-family: var(--font-mono); }'
-    '.cmp-unmatched { margin-top: 12px; font-size: 12px; color: var(--text-muted); }'
-    '.cmp-unmatched ul { margin: 4px 0 0; padding-left: 18px; }'
-    '.cmp-transcript-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px; }'
-    '.cmp-side-title { font-family: var(--font-mono); font-size: 11px; text-transform: uppercase;'
-    ' letter-spacing: .06em; color: var(--text-muted); margin: 0 0 8px; }'
-    '</style>'
-)
+# ---------------------------------------------------------------------------
+# Loading (distinguishes not-found from load-failure, unlike sim_views._load_run)
+# ---------------------------------------------------------------------------
+
+
+def _resolve_run(rid: str, roots: list[Path] | None) -> tuple[str, Any | None]:
+    """Load a sim run by report id.
+
+    Returns ``('ok', run)``, ``('missing', None)`` when the id resolves to no
+    file or a non-sim report, or ``('error', None)`` when a matching sim file
+    fails to load/parse — the last is logged with a stack so a corrupt report is
+    debuggable rather than silently reported as "not found".
+    """
+    from evaluatorq.dashboard import library
+    from evaluatorq.dashboard.surfaces import ADAPTERS
+
+    path = library.resolve(rid, roots)
+    if path is None:
+        return 'missing', None
+    surface, _raw = library.load_surface(path)
+    if surface != 'sim':
+        return 'missing', None
+    adapter = ADAPTERS.get('sim')
+    if adapter is None:
+        return 'missing', None
+    try:
+        return 'ok', adapter.load(path)
+    except Exception:
+        logger.opt(exception=True).warning('compare: failed to load sim report {}', rid)
+        return 'error', None
+
+
+def _error_page(message: str, status: int) -> Response:
+    body = f'<section class="cmp-hero"><h1 class="cmp-title">Run comparison</h1><p class="sim-empty">{esc(message)}</p></section>'
+    return Response(page('Compare', body, active_surface='sim'), status_code=status, media_type='text/html')
 
 
 # ---------------------------------------------------------------------------
@@ -566,15 +532,18 @@ def register_sim_compare_routes(app: Any, roots: list[Path] | None = None) -> No
         rid_a = req.query_params.get('a') or ''
         rid_b = req.query_params.get('b') or ''
         if not rid_a or not rid_b:
-            body = '<section class="cmp-header"><h1>Run comparison</h1><p class="sim-empty">Pick two runs to compare.</p></section>'
-            return Response(page('Compare', body, active_surface='sim'), status_code=400, media_type='text/html')
+            return _error_page('Pick two runs to compare.', 400)
+        if rid_a == rid_b:
+            return _error_page('Pick two different runs to compare.', 400)
 
-        run_a = _load_run(rid_a, roots)
-        run_b = _load_run(rid_b, roots)
+        status_a, run_a = _resolve_run(rid_a, roots)
+        status_b, run_b = _resolve_run(rid_b, roots)
+        if 'error' in (status_a, status_b):
+            which = 'A' if status_a == 'error' else 'B'
+            return _error_page(f'Run {which} could not be loaded (the report may be corrupt).', 422)
         if run_a is None or run_b is None:
-            missing = 'A' if run_a is None else 'B'
-            body = f'<section class="cmp-header"><h1>Run comparison</h1><p class="sim-empty">Run {missing} not found or not a simulation run.</p></section>'
-            return Response(page('Compare', body, active_surface='sim'), status_code=404, media_type='text/html')
+            which = 'A' if run_a is None else 'B'
+            return _error_page(f'Run {which} was not found or is not a simulation run.', 404)
 
         body = render_compare_page(rid_a, rid_b, run_a, run_b)
         return Response(page('Compare', body, active_surface='sim'), media_type='text/html')
@@ -587,18 +556,28 @@ def register_sim_compare_routes(app: Any, roots: list[Path] | None = None) -> No
             ia = int(req.query_params.get('ia', ''))
             ib = int(req.query_params.get('ib', ''))
         except (TypeError, ValueError):
-            return Response('<p class="sim-empty">Invalid conversation index.</p>', media_type='text/html')
+            return Response(
+                '<p class="sim-empty">Invalid conversation index.</p>', status_code=400, media_type='text/html'
+            )
 
-        run_a = _load_run(rid_a, roots)
-        run_b = _load_run(rid_b, roots)
+        status_a, run_a = _resolve_run(rid_a, roots)
+        status_b, run_b = _resolve_run(rid_b, roots)
+        if 'error' in (status_a, status_b):
+            return Response(
+                '<p class="sim-empty">A run could not be loaded (report may be corrupt).</p>',
+                status_code=422,
+                media_type='text/html',
+            )
         if run_a is None or run_b is None:
             return Response('<p class="sim-empty">Run not found.</p>', status_code=404, media_type='text/html')
 
-        entries_a = _entries(run_a)
-        entries_b = _entries(run_b)
+        entries_a = _entries_from_run(run_a)
+        entries_b = _entries_from_run(run_b)
         ea = next((e for e in entries_a if e.index == ia), None)
         eb = next((e for e in entries_b if e.index == ib), None)
         if ea is None or eb is None:
-            return Response('<p class="sim-empty">No conversation at that index.</p>', media_type='text/html')
+            return Response(
+                '<p class="sim-empty">No conversation at that index.</p>', status_code=404, media_type='text/html'
+            )
 
         return Response(render_compare_transcript(ea, eb, run_a.run_name, run_b.run_name), media_type='text/html')

@@ -172,7 +172,11 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         label = SURFACE_LABELS.get(surface, 'Reports')
         pg, per_pg = _paging(req)
         if surface == 'sim':
-            sim_choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'sim']
+            # Compare picker options: sim runs only, excluding error-flagged runs
+            # (they route to a 404), newest-first, capped so the dropdown stays
+            # usable on large stores. library.scan reuses the mtime-keyed JSON
+            # cache metrics.sim_overview already warmed, so this is not a full re-parse.
+            sim_choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'sim' and not c.error][:100]
             body = sim_overview_body(metrics.sim_overview(roots, page=pg, per_page=per_pg), compare_choices=sim_choices)
         elif surface == 'redteam':
             body = redteam_overview_body(metrics.redteam_overview(roots, page=pg, per_page=per_pg))

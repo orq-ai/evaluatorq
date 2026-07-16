@@ -124,9 +124,12 @@ def test_compare_kpis_covers_aggregates_scorers_and_terminated():
     # A: 2/3 achieved; B: 2/3 achieved.
     assert by_label['Goal-achieved rate'].a == pytest.approx(2 / 3)
     assert by_label['Goal-achieved rate'].b == pytest.approx(2 / 3)
-    # per-scorer union: goal_achieved (both), criteria_met (A only), safety (B only)
+    # per-scorer union: goal_achieved (both), criteria_met (A only), safety (B only).
+    # A scorer only one run measured stays None (n/a) — never a fabricated 0.0 regression.
     assert by_label['Scorer: criteria_met'].a == 0.5
-    assert by_label['Scorer: criteria_met'].b == 0.0
+    assert by_label['Scorer: criteria_met'].b is None
+    assert by_label['Scorer: criteria_met'].delta is None
+    assert by_label['Scorer: safety'].a is None
     assert by_label['Scorer: safety'].b == 1.0
     # terminated-by distribution present
     assert by_label['Terminated: judge'].a == 3.0  # A: all judge
@@ -198,6 +201,53 @@ def test_compare_unknown_rid_is_404(roots: list[Path]):
     rid_a, _ = _rids(roots)
     resp = client.get(f'/compare/sim?a={rid_a}&b=deadbeef')
     assert resp.status_code == 404
+
+
+def test_compare_self_compare_is_400(roots: list[Path]):
+    client = TestClient(build_app(roots))
+    rid_a, _ = _rids(roots)
+    resp = client.get(f'/compare/sim?a={rid_a}&b={rid_a}')
+    assert resp.status_code == 400
+
+
+def test_compare_absent_scorer_renders_na_not_zero(roots: list[Path]):
+    # criteria_met is measured by run A only; safety by run B only. Neither should
+    # render as a 0.00 with a red downward delta — they show n/a with no arrow.
+    client = TestClient(build_app(roots))
+    rid_a, rid_b = _rids(roots)
+    html = client.get(f'/compare/sim?a={rid_a}&b={rid_b}').text
+    assert 'n/a' in html
+    # the scorer chart only compares scorers both runs measured
+    assert 'shared scorers only' in html
+
+
+def test_compare_corrupt_report_is_422(tmp_path: Path):
+    sim = tmp_path / 'sim-runs'
+    sim.mkdir()
+    (sim / 'good.json').write_text(_run_a().model_dump_json())
+    # a file that sniffs as sim ('mode' present) but fails model validation
+    (sim / 'bad.json').write_text('{"mode": "run", "results": "not-a-list"}')
+    from evaluatorq.dashboard.library import report_id
+
+    client = TestClient(build_app([tmp_path / 'runs', sim]))
+    good = report_id(sim / 'good.json')
+    bad = report_id(sim / 'bad.json')
+    resp = client.get(f'/compare/sim?a={good}&b={bad}')
+    assert resp.status_code == 422
+
+
+def test_compare_transcript_invalid_index_is_400(roots: list[Path]):
+    client = TestClient(build_app(roots))
+    rid_a, rid_b = _rids(roots)
+    resp = client.get(f'/compare/sim/transcript?a={rid_a}&b={rid_b}&ia=x&ib=0')
+    assert resp.status_code == 400
+
+
+def test_compare_bar_defaults_to_two_different_runs(roots: list[Path]):
+    client = TestClient(build_app(roots))
+    html = client.get('/?surface=sim').text
+    # both selects present, each with a different pre-selected option
+    assert html.count(' selected>') >= 2
 
 
 def test_compare_bar_on_sim_overview(roots: list[Path]):
