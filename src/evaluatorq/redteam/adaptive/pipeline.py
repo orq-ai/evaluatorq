@@ -39,7 +39,6 @@ from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
     JURY_RAW_OUTPUT_KEY,
     PIPELINE_CONFIG,
-    AttackerResponse,
     AttackOutput,
     AttackStrategy,
     DeliveryMethod,
@@ -448,7 +447,7 @@ def create_dynamic_redteam_job(
                 result_dict = AttackOutput(
                     turns=[
                         Turn(
-                            attacker=AttackerResponse(generated_prompt=prompt),
+                            attacker=AgentResponse(text=prompt),
                             target=agent_resp
                             if agent_resp.output
                             else AgentResponse(
@@ -667,7 +666,7 @@ def create_dynamic_evaluator(
 
         category = output.category or data.inputs.get('category', '')
         vulnerability = output.vulnerability or data.inputs.get('vulnerability', '')
-        input_messages = [{'role': 'user', 'content': t.attacker.generated_prompt} for t in output.turns]
+        input_messages = [{'role': 'user', 'content': t.attacker.text} for t in output.turns]
         output_messages = [item for t in output.turns for item in t.target.output]
 
         # Prefer vulnerability-first path when a valid Vulnerability enum can be resolved

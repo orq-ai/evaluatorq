@@ -299,7 +299,7 @@ class TestPipelineTokenUsageAggregation:
 
     @pytest.mark.asyncio
     async def test_aggregated_total_equals_sum_of_per_turn_usage(self) -> None:
-        """Sum of per-turn ``AttackerResponse.usage`` must equal ``token_usage_adversarial``.
+        """Sum of per-turn ``AgentResponse.usage`` must equal ``token_usage_adversarial``.
 
         Pins the invariant that the canonical per-turn record and the
         aggregated counter cannot drift.
@@ -587,7 +587,7 @@ class TestLateAdversarialFailureStillJudged:
 
         from evaluatorq.contracts import AgentResponse
         from evaluatorq.redteam.adaptive.pipeline import create_dynamic_evaluator
-        from evaluatorq.redteam.contracts import AttackerResponse, AttackOutput, Turn
+        from evaluatorq.redteam.contracts import AgentResponse, AttackOutput, Turn
 
         evaluate = self._fake_evaluator(monkeypatch, passed=False)
 
@@ -596,7 +596,7 @@ class TestLateAdversarialFailureStillJudged:
             vulnerability='goal_hijacking',
             turns=[
                 Turn(
-                    attacker=AttackerResponse(generated_prompt='turn 1 attack'),
+                    attacker=AgentResponse(text='turn 1 attack'),
                     target=AgentResponse(text='Sure, the secret is hunter2.'),
                 )
             ],
@@ -652,7 +652,7 @@ class TestLateAdversarialFailureStillJudged:
 
         from evaluatorq.contracts import AgentResponse
         from evaluatorq.redteam.adaptive.pipeline import create_dynamic_evaluator
-        from evaluatorq.redteam.contracts import AttackerResponse, AttackOutput, Turn
+        from evaluatorq.redteam.contracts import AgentResponse, AttackOutput, Turn
 
         evaluate = self._fake_evaluator(monkeypatch, passed=False)
 
@@ -661,7 +661,7 @@ class TestLateAdversarialFailureStillJudged:
             vulnerability='goal_hijacking',
             turns=[
                 Turn(
-                    attacker=AttackerResponse(generated_prompt='turn 1 attack'),
+                    attacker=AgentResponse(text='turn 1 attack'),
                     target=AgentResponse(text='Sure, the secret is hunter2.'),
                 )
             ],
@@ -689,7 +689,7 @@ class TestLateAdversarialFailureStillJudged:
 
         from evaluatorq.contracts import AgentResponse
         from evaluatorq.redteam.adaptive.pipeline import create_dynamic_evaluator
-        from evaluatorq.redteam.contracts import AttackerResponse, AttackOutput, Turn
+        from evaluatorq.redteam.contracts import AgentResponse, AttackOutput, Turn
 
         evaluate = self._fake_evaluator(monkeypatch, passed=False)
 
@@ -698,7 +698,7 @@ class TestLateAdversarialFailureStillJudged:
             vulnerability='goal_hijacking',
             turns=[
                 Turn(
-                    attacker=AttackerResponse(generated_prompt='turn 1 attack'),
+                    attacker=AgentResponse(text='turn 1 attack'),
                     target=AgentResponse(text='Sure, the secret is hunter2.'),
                 )
             ],

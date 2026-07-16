@@ -353,7 +353,7 @@ class TestToolCallOutputRoundTrip:
     async def test_function_call_output_attaches_result_to_matching_call(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from evaluatorq.redteam.contracts import turns_to_messages, Turn, AttackerResponse
+        from evaluatorq.redteam.contracts import turns_to_messages, Turn, AgentResponse
 
         result = MagicMock()
         result.final_output = "done"
@@ -390,7 +390,7 @@ class TestToolCallOutputRoundTrip:
         # Round-trip through transcript replay: the orphan-function_call bug
         # would show up here as a missing ``tool`` row, which then renders to a
         # Responses-API function_call without function_call_output.
-        turn = Turn(attacker=AttackerResponse(generated_prompt="lookup x"), target=response)
+        turn = Turn(attacker=AgentResponse(text="lookup x"), target=response)
         msgs = turns_to_messages([turn])
         roles = [m.role for m in msgs]
         assert "tool" in roles, "tool result row missing — function_call_output was dropped"

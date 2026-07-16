@@ -35,6 +35,7 @@ from evaluatorq.redteam.contracts import (
     SeveritySummary,
     TechniqueSummary,
     TokenUsage,
+    Turn,
     TurnTypeSummary,
     UnifiedEvaluationResult,
     Vulnerability,
@@ -107,18 +108,23 @@ def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
             return d
         conversation: list[dict[str, Any]] = []
         final_response_text = ''
+
+        # Validate each turn through the Turn model — the single migration authority
+        # (its validator maps the pre-RES-883 ``generated_prompt`` to ``text``) — then
+        # read canonical ``AgentResponse.text`` (joins every text item, matching what
+        # turns_to_messages/the judge saw). A turn that fails validation degrades to
+        # empty text for that row rather than dropping the whole coercion.
         for t in turns_val:
-            attacker = t.get('attacker') or {}
-            target = t.get('target') or {}
-            conversation.append({'role': 'user', 'content': attacker.get('generated_prompt', '')})
-            target_text = ''
-            for item in target.get('output') or []:
-                if not isinstance(item, dict):
-                    continue
-                if item.get('type') == 'output_text':
-                    target_text = item.get('text', '') or target_text
-            conversation.append({'role': 'assistant', 'content': target_text})
-            final_response_text = target_text or final_response_text
+            try:
+                turn = Turn.model_validate(t)
+                atk_text, tgt_text = turn.attacker.text, turn.target.text
+            except ValidationError:
+                atk_text = tgt_text = ''
+            conversation.extend((
+                {'role': 'user', 'content': atk_text},
+                {'role': 'assistant', 'content': tgt_text},
+            ))
+            final_response_text = tgt_text or final_response_text
         out = dict(d)
         out['turns'] = len(turns_val)
         out.setdefault('conversation', conversation)

@@ -130,12 +130,12 @@ def _make_target_factory(target: MagicMock | None = None) -> MagicMock:
 
 def _make_orchestrator_result(*, error: str | None = None) -> OrchestratorResult:
     from evaluatorq.contracts import AgentResponse
-    from evaluatorq.redteam.contracts import AttackerResponse, Turn
+    from evaluatorq.redteam.contracts import Turn
 
     return OrchestratorResult(
         turns=[
             Turn(
-                attacker=AttackerResponse(generated_prompt="Attack prompt"),
+                attacker=AgentResponse(text="Attack prompt"),
                 target=AgentResponse(text="Agent response"),
             )
         ],
@@ -238,7 +238,8 @@ class TestTemplateSingleTurnPath:
         # Output should have exactly 1 turn (attacker + target pair)
         assert len(output["turns"]) == 1
         turn0 = output["turns"][0]
-        assert turn0["attacker"]["generated_prompt"]
+        # RES-883: attacker is an AgentResponse — its prompt is the output text.
+        assert turn0["attacker"]["output"][0]["text"]
         assert turn0["target"]["output"]
 
     @pytest.mark.asyncio

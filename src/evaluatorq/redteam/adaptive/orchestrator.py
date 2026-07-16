@@ -36,7 +36,6 @@ from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
     PIPELINE_CONFIG,
     AgentContext,
-    AttackerResponse,
     AttackStrategy,
     LLMConfig,
     OrchestratorResult,
@@ -786,12 +785,9 @@ class MultiTurnOrchestrator:
                     # Build the canonical attacker record for this turn (used whether
                     # the target then succeeds or fails).
                     fr = finish_reason if isinstance(finish_reason, str) else None
-                    current_attacker = AttackerResponse(
-                        generated_prompt=attack_prompt,
-                        usage=usage,
-                        truncated=fr == 'length',
-                        finish_reason=fr,
-                    )
+                    # Attacker output is an AgentResponse (RES-883): the prompt is the
+                    # response text; truncation is derivable from finish_reason == 'length'.
+                    current_attacker = AgentResponse(text=attack_prompt, usage=usage, finish_reason=fr)
 
                     # Abort if adversarial LLM returned empty content
                     if not attack_prompt.strip():
@@ -873,8 +869,13 @@ class MultiTurnOrchestrator:
                         # The rationale is kept OUT of the transcript on purpose: it is a
                         # signal, not evidence, and must never reach the scorer/judge.
                         attack_prompt = marker_prompt
-                        # Rebuild attacker record with stripped prompt
-                        current_attacker = current_attacker.model_copy(update={'generated_prompt': attack_prompt})
+                        # Rebuild the attacker record with the stripped prompt as its
+                        # only text item, preserving every other field (usage,
+                        # finish_reason, model, response_id, error) via model_copy
+                        # (RES-883: attacker is an AgentResponse).
+                        current_attacker = current_attacker.model_copy(
+                            update={'output': [TextOutputItem(text=attack_prompt, annotations=[])]}
+                        )
                         if not attack_prompt:
                             # Nothing left to send. Distinguish a genuine accepted
                             # success from a rejected turn-0 marker (objective_achieved

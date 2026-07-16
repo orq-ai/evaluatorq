@@ -17,7 +17,7 @@ from evaluatorq.openresponses import (
     turns_to_openresponses_input,
     user_input_item,
 )
-from evaluatorq.redteam.contracts import AttackerResponse, Turn
+from evaluatorq.redteam.contracts import Turn
 
 
 def _agent_text(text: str) -> AgentResponse:
@@ -26,7 +26,7 @@ def _agent_text(text: str) -> AgentResponse:
 
 def _turn(attacker_prompt: str, agent_text: str) -> Turn:
     return Turn(
-        attacker=AttackerResponse(generated_prompt=attacker_prompt),
+        attacker=AgentResponse(text=attacker_prompt),
         target=_agent_text(agent_text),
     )
 

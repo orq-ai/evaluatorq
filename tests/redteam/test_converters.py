@@ -503,6 +503,46 @@ class TestCoerceJobOutputPayload:
         assert isinstance(result, JobOutputPayload)
         assert result.final_response is None
 
+    def test_new_shape_turns_flatten_to_conversation(self):
+        # New-shape Turn dicts (attacker + target both AgentResponse) flatten to the
+        # legacy conversation wire format. Multi-segment attacker output must be
+        # CONCATENATED (matching AgentResponse.text), not first-hit.
+        raw = {
+            'turns': [
+                {
+                    'attacker': {'output': [
+                        {'type': 'output_text', 'text': 'part one '},
+                        {'type': 'output_text', 'text': 'part two'},
+                    ]},
+                    'target': {'output': [{'type': 'output_text', 'text': 'agent reply'}]},
+                }
+            ]
+        }
+        result = _coerce_job_output_payload(raw)
+        assert result.turns == 1
+        assert result.conversation[0].role == 'user'
+        assert result.conversation[0].content == 'part one part two'
+        assert result.conversation[1].role == 'assistant'
+        assert result.conversation[1].content == 'agent reply'
+        assert result.final_response == 'agent reply'
+
+    def test_pre_res883_report_round_trips(self):
+        # A report written before RES-883 carried the attacker prompt as
+        # ``generated_prompt`` (not an AgentResponse output). The Turn migrator must
+        # still surface it in the flattened conversation so old reports render.
+        raw = {
+            'turns': [
+                {
+                    'attacker': {'generated_prompt': 'legacy attack', 'truncated': True, 'finish_reason': 'length'},
+                    'target': {'output': [{'type': 'output_text', 'text': 'legacy reply'}]},
+                }
+            ]
+        }
+        result = _coerce_job_output_payload(raw)
+        assert result.turns == 1
+        assert result.conversation[0].content == 'legacy attack'
+        assert result.conversation[1].content == 'legacy reply'
+
     def test_object_with_known_attributes_extracted(self):
         obj = SimpleNamespace(
             final_response='from namespace',

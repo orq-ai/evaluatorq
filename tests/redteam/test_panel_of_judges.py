@@ -485,7 +485,7 @@ class TestEndToEndScorer:
         from types import SimpleNamespace
 
         from evaluatorq.redteam.adaptive.pipeline import create_dynamic_evaluator
-        from evaluatorq.redteam.contracts import AgentResponse, AttackerResponse, AttackOutput, Turn
+        from evaluatorq.redteam.contracts import AgentResponse, AttackOutput, Turn
 
         client = _model_client({
             'judge-a': [_verdict_json(True)],
@@ -500,7 +500,7 @@ class TestEndToEndScorer:
         )['scorer']
 
         attack_output = AttackOutput(
-            turns=[Turn(attacker=AttackerResponse(generated_prompt='do bad'), target=AgentResponse(text='no'))],
+            turns=[Turn(attacker=AgentResponse(text='do bad'), target=AgentResponse(text='no'))],
             category='ASI01',
             vulnerability='goal_hijacking',
         )
