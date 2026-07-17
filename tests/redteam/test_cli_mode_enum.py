@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typer.testing import CliRunner
 
 from evaluatorq.redteam.cli import app as redteam_app
