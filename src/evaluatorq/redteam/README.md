@@ -76,6 +76,31 @@ Some vulnerabilities map to multiple frameworks (e.g. `supply_chain` → ASI04 +
 | `static` | Runs a pre-built OWASP dataset for reproducible regression testing |
 | `hybrid` | Combines dynamic generation with a static dataset in a single run |
 
+## Data sources
+
+Where attack cases come from, and what you can do with each. **Replay** re-runs
+a fixed set of attacks for reproducible regression (`static` mode);
+**Seed / adapt new attacks** generates fresh, target-tailored attacks
+(`dynamic` mode). `hybrid` does both in one run.
+
+| Source | Replay (`static` regression) | Seed / adapt new (`dynamic`) |
+|--------|:----------------------------:|:----------------------------:|
+| Built-in OWASP dataset (HF `orq/redteam-vulnerabilities`, default) | ✅ | — |
+| Custom HuggingFace dataset (`dataset="hf:org/repo[/file.json]"`) | ✅ | — |
+| Local dataset file (`dataset="<path>"`, JSON/JSONL) | ✅ | — |
+| Orq dataset (`dataset="orq:<dataset_id>"`) | ✅ | — |
+| Agent capability context (tools, memory, knowledge bases, system prompt) | — | ✅ |
+| Previous runs (`generated_*` strategies / captured datapoints) | ⚠️ manual | ⚠️ manual |
+
+Legend: ✅ built-in · ⚠️ possible but manual · ❌ not supported yet.
+
+Static sources feed `mode="static"`/`"hybrid"` via the `dataset=` parameter
+(`--dataset` on the CLI). Dynamic generation is driven by the target's own
+capability context — no dataset needed. To replay a prior run, capture its
+datapoints to a dataset (e.g. an Orq dataset) and pass it back via `dataset=`;
+a `generated_*` strategy from a prior run can be re-selected by name via
+`--strategies`. There is no one-command "re-run that exact run" yet.
+
 ## `red_team()` parameters
 
 | Parameter | Type | Default | Description |
