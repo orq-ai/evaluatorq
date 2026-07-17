@@ -2,39 +2,35 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+    from typing import Any
 
-
-def _number(data: Mapping[str, Any], canonical_key: str, legacy_key: str | None = None) -> int | float:
-    value = data.get(canonical_key)
-    if value is None and legacy_key is not None:
-        value = data.get(legacy_key)
-    return value if isinstance(value, int | float) and not isinstance(value, bool) else 0
+from evaluatorq.simulation.token_usage import token_value
 
 
 def build_token_usage_rows(data: Mapping[str, Any]) -> list[list[str]]:
     """Build canonical token-usage rows, reading legacy keys from saved reports."""
     rows = [
-        ['Input Tokens (total)', f'{_number(data, "input_tokens", "prompt_tokens"):,}'],
-        ['Output Tokens (total)', f'{_number(data, "output_tokens", "completion_tokens"):,}'],
-        ['Total Tokens', f'{_number(data, "total_tokens"):,}'],
-        ['Avg Total / Conversation', f'{_number(data, "avg_total_per_conversation"):.0f}'],
+        ['Input Tokens (total)', f'{token_value(data, "input_tokens", "prompt_tokens"):,}'],
+        ['Output Tokens (total)', f'{token_value(data, "output_tokens", "completion_tokens"):,}'],
+        ['Total Tokens', f'{token_value(data, "total_tokens"):,}'],
+        ['Avg Total / Conversation', f'{token_value(data, "avg_total_per_conversation"):.0f}'],
         [
             'Avg Input / Conversation',
-            f'{_number(data, "avg_input_per_conversation", "avg_prompt_per_conversation"):.0f}',
+            f'{token_value(data, "avg_input_per_conversation", "avg_prompt_per_conversation"):.0f}',
         ],
         [
             'Avg Output / Conversation',
-            f'{_number(data, "avg_output_per_conversation", "avg_completion_per_conversation"):.0f}',
+            f'{token_value(data, "avg_output_per_conversation", "avg_completion_per_conversation"):.0f}',
         ],
     ]
-    cached = _number(data, 'cached_tokens')
+    cached = token_value(data, 'cached_tokens')
     if cached:
         rows.append(['Cached Tokens (retrieved)', f'{cached:,}'])
-    reasoning = _number(data, 'reasoning_tokens')
+    reasoning = token_value(data, 'reasoning_tokens')
     if reasoning:
         rows.append(['Reasoning Tokens', f'{reasoning:,}'])
     return rows
