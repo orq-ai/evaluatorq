@@ -1327,7 +1327,7 @@ def validate_dataset(
         typer.Argument(help='Path to datapoints JSONL file to validate.'),
     ],
 ) -> None:
-    """Deprecated alias for :command:`validate`."""
+    """Deprecated alias for `validate`."""
     _validate_datapoints(path)
 
 
