@@ -37,6 +37,7 @@ from loguru import logger
 
 from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
 from evaluatorq.common.cli_help import CONTEXT_SETTINGS
+from evaluatorq.common.cli_tty import should_skip_confirm
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.simulation.types import DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run as _auto_save_run
@@ -611,7 +612,7 @@ def simulate(
         log_console = Console(stderr=True)
         hooks = RichHooks(
             console=log_console,
-            skip_confirm=yes or not sys.stdin.isatty(),
+            skip_confirm=should_skip_confirm(yes),
             defer_summary=executive_summary,
             verbose=verbose,
         )
@@ -899,7 +900,7 @@ def run(
         log_console = Console(stderr=True)
         hooks = RichHooks(
             console=log_console,
-            skip_confirm=yes or not sys.stdin.isatty(),
+            skip_confirm=should_skip_confirm(yes),
             defer_summary=executive_summary,
             verbose=verbose,
         )

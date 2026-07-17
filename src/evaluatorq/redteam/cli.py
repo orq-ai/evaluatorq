@@ -16,6 +16,7 @@ import typer
 
 from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
 from evaluatorq.common.cli_help import CONTEXT_SETTINGS
+from evaluatorq.common.cli_tty import should_skip_confirm
 from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, DeliveryMethod, Pipeline, SaveMode, Vulnerability
 
 app = typer.Typer(
@@ -442,7 +443,7 @@ def run(
                 max_static_datapoints=max_static_datapoints,
                 cleanup_memory=not no_cleanup_memory,
                 dataset=dataset,
-                hooks=RichHooks(skip_confirm=yes),
+                hooks=RichHooks(skip_confirm=should_skip_confirm(yes)),
                 artifacts_dir=artifacts_dir,
                 save=save,
                 target_config=target_config,
