@@ -314,6 +314,8 @@ def record_llm_response(
             cache_creation_input_tokens=cache_creation,
         )
         completion_details = _field(usage, 'completion_tokens_details')
+        if completion_details is None:
+            completion_details = _field(usage, 'output_tokens_details')
         if completion_details is not None:
             reasoning = _field(completion_details, 'reasoning_tokens')
             if reasoning is not None:

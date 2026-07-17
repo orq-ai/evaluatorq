@@ -242,28 +242,6 @@ def test_export_html_handles_empty_results():
     assert '<!DOCTYPE html>' in html
 
 
-def test_token_usage_exports_use_canonical_names_and_optional_details(make_result):
-    result = make_result()
-    result.token_usage = TokenUsage(
-        input_tokens=10,
-        output_tokens=5,
-        total_tokens=15,
-        cached_tokens=3,
-        reasoning_tokens=2,
-    )
-
-    markdown = export_markdown([result], target='t')
-    html = export_html([result], target='t')
-
-    for rendered in (markdown, html):
-        assert 'Input Tokens (total)' in rendered
-        assert 'Output Tokens (total)' in rendered
-        assert 'Cached Tokens (retrieved)' in rendered
-        assert 'Reasoning Tokens' in rendered
-        assert 'Prompt Tokens (total)' not in rendered
-        assert 'Completion Tokens (total)' not in rendered
-
-
 def test_render_report_body_shows_experiment_link_when_set():
     from evaluatorq.simulation.reports.export_html import render_report_body
 

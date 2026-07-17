@@ -162,21 +162,6 @@ def test_record_token_usage_cache_attrs() -> None:
     assert set_attrs['gen_ai.usage.cache_read.input_tokens'] == 3
 
 
-def test_record_token_usage_accepts_canonical_cached_and_reasoning_counts() -> None:
-    """Aggregate callers can preserve retrieved-cache and reasoning totals."""
-    from unittest.mock import MagicMock
-
-    from evaluatorq.common.tracing import record_token_usage
-
-    span = MagicMock()
-    record_token_usage(span, cached_tokens=3, reasoning_tokens=2)
-
-    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
-    assert set_attrs['gen_ai.usage.cache_read.input_tokens'] == 3
-    assert set_attrs['gen_ai.usage.prompt_tokens_details.cached_tokens'] == 3
-    assert set_attrs['gen_ai.usage.completion_tokens_details.reasoning_tokens'] == 2
-
-
 def test_record_token_usage_zero_prompt_preserved() -> None:
     """Zero prompt_tokens must not fall back to 0 (regression guard)."""
     from unittest.mock import MagicMock

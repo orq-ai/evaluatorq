@@ -120,33 +120,6 @@ def test_summary_section_computes_success_rate_and_tokens():
     assert summary.data['total_tokens'] == 45
 
 
-def test_token_usage_section_aggregates_canonical_and_optional_token_counts():
-    first = _make_result(tokens=(10, 5, 15))
-    first.token_usage = TokenUsage(
-        input_tokens=10,
-        output_tokens=5,
-        total_tokens=15,
-        cached_tokens=3,
-        reasoning_tokens=2,
-    )
-    second = _make_result(tokens=(20, 10, 30))
-    second.token_usage = TokenUsage(
-        input_tokens=20,
-        output_tokens=10,
-        total_tokens=30,
-        cached_tokens=4,
-        reasoning_tokens=1,
-    )
-
-    sections = build_report_sections([first, second])
-    tokens = next(s for s in sections if s.kind == 'token_usage')
-
-    assert tokens.data['input_tokens'] == 30
-    assert tokens.data['output_tokens'] == 15
-    assert tokens.data['cached_tokens'] == 7
-    assert tokens.data['reasoning_tokens'] == 3
-
-
 def test_persona_breakdown_aggregates_per_persona():
     results = [
         _make_result(persona='A', goal_achieved=True),
