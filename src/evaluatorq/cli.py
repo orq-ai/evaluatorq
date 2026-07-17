@@ -15,6 +15,7 @@ from typing import Annotated
 import typer
 
 from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
+from evaluatorq.common.cli_help import CONTEXT_SETTINGS
 
 # ---------------------------------------------------------------------------
 # Top-level application
@@ -27,6 +28,7 @@ app = typer.Typer(
     name='evaluatorq',
     help='Evaluation framework for AI systems.',
     rich_markup_mode='rich',
+    context_settings=CONTEXT_SETTINGS,
 )
 
 

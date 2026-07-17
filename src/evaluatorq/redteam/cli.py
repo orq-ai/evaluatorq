@@ -15,6 +15,7 @@ from typing import Annotated, Any
 import typer
 
 from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
+from evaluatorq.common.cli_help import CONTEXT_SETTINGS
 from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, DeliveryMethod, SaveMode, Vulnerability
 
 app = typer.Typer(
@@ -22,6 +23,7 @@ app = typer.Typer(
     help='Red teaming CLI for evaluatorq.',
     no_args_is_help=True,
     rich_markup_mode='rich',
+    context_settings=CONTEXT_SETTINGS,
 )
 
 

@@ -36,6 +36,7 @@ import typer
 from loguru import logger
 
 from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
+from evaluatorq.common.cli_help import CONTEXT_SETTINGS
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.simulation.types import DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run as _auto_save_run
@@ -57,6 +58,7 @@ app = typer.Typer(
     ),
     no_args_is_help=True,
     rich_markup_mode='rich',
+    context_settings=CONTEXT_SETTINGS,
 )
 
 
