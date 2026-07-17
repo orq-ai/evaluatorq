@@ -1019,7 +1019,14 @@ async def test_target_agent_usage_aggregated_into_run_result(
         def new(self) -> '_FakeAgentTarget':
             return _FakeAgentTarget(self._usage)
 
-    target_usage = TokenUsage(prompt_tokens=9, completion_tokens=11, total_tokens=20, calls=1)
+    target_usage = TokenUsage(
+        input_tokens=9,
+        output_tokens=11,
+        total_tokens=20,
+        cached_tokens=2,
+        reasoning_tokens=3,
+        calls=1,
+    )
     user_sim_usage = TokenUsage(prompt_tokens=2, completion_tokens=3, total_tokens=5, calls=1)
     judge_usage = TokenUsage(prompt_tokens=5, completion_tokens=7, total_tokens=12, calls=1)
 
@@ -1098,6 +1105,15 @@ async def test_target_agent_usage_aggregated_into_run_result(
     run = _find(span_collector, 'orq.simulation.run')
     attrs = _attrs(run)
     assert attrs['gen_ai.usage.total_tokens'] == expected_total
+
+    target_span = _find(span_collector, 'orq.simulation.target_call')
+    target_attrs = _attrs(target_span)
+    assert target_attrs['gen_ai.usage.input_tokens'] == 9
+    assert target_attrs['gen_ai.usage.output_tokens'] == 11
+    assert target_attrs['gen_ai.usage.total_tokens'] == 20
+    assert target_attrs['gen_ai.usage.calls'] == 1
+    assert target_attrs['gen_ai.usage.cache_read.input_tokens'] == 2
+    assert target_attrs['gen_ai.usage.completion_tokens_details.reasoning_tokens'] == 3
 
 
 @pytest.mark.asyncio

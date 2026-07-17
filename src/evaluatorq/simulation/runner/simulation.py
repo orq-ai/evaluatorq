@@ -391,6 +391,8 @@ class SimulationRunner:
                             prompt_tokens=usage.prompt_tokens,
                             completion_tokens=usage.completion_tokens,
                             total_tokens=usage.total_tokens,
+                            cached_tokens=usage.cached_tokens,
+                            reasoning_tokens=usage.reasoning_tokens,
                         )
                         set_span_attrs(
                             run_span,
@@ -554,6 +556,15 @@ class SimulationRunner:
                     )
                     if agent_response_usage is not None:
                         target_usage_acc['acc'] = target_usage_acc['acc'] + agent_response_usage
+                        record_token_usage(
+                            target_span,
+                            prompt_tokens=agent_response_usage.input_tokens,
+                            completion_tokens=agent_response_usage.output_tokens,
+                            total_tokens=agent_response_usage.total_tokens,
+                            calls=agent_response_usage.calls,
+                            cached_tokens=agent_response_usage.cached_tokens,
+                            reasoning_tokens=agent_response_usage.reasoning_tokens,
+                        )
                     # Capture the first non-None model the target reports; it
                     # should be stable across turns for a given target.
                     if agent_response_model is not None and target_model_holder['model'] is None:
@@ -599,6 +610,8 @@ class SimulationRunner:
                     prompt_tokens=final_usage.prompt_tokens,
                     completion_tokens=final_usage.completion_tokens,
                     total_tokens=final_usage.total_tokens,
+                    cached_tokens=final_usage.cached_tokens,
+                    reasoning_tokens=final_usage.reasoning_tokens,
                 )
                 set_span_attrs(
                     run_span,
@@ -635,6 +648,8 @@ class SimulationRunner:
             prompt_tokens=final_usage.prompt_tokens,
             completion_tokens=final_usage.completion_tokens,
             total_tokens=final_usage.total_tokens,
+            cached_tokens=final_usage.cached_tokens,
+            reasoning_tokens=final_usage.reasoning_tokens,
         )
         set_span_attrs(
             run_span,

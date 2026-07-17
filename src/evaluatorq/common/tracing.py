@@ -229,6 +229,8 @@ def record_token_usage(
     completion_tokens: int | None = None,
     total_tokens: int | None = None,
     calls: int = 0,
+    cached_tokens: int | None = None,
+    reasoning_tokens: int | None = None,
     cache_read_input_tokens: int | None = None,
     cache_creation_input_tokens: int | None = None,
 ) -> None:
@@ -255,10 +257,13 @@ def record_token_usage(
     if calls:
         span.set_attribute('gen_ai.usage.calls', calls)
         span.set_attribute('calls', calls)
-    if cache_read_input_tokens is not None:
-        span.set_attribute('gen_ai.usage.cache_read.input_tokens', cache_read_input_tokens)
+    cache_read = cached_tokens if cached_tokens is not None else cache_read_input_tokens
+    if cache_read is not None:
+        span.set_attribute('gen_ai.usage.cache_read.input_tokens', cache_read)
         # Legacy attribute name emitted by the former redteam impl — kept for platform dashboard compat.
-        span.set_attribute('gen_ai.usage.prompt_tokens_details.cached_tokens', cache_read_input_tokens)
+        span.set_attribute('gen_ai.usage.prompt_tokens_details.cached_tokens', cache_read)
+    if reasoning_tokens is not None:
+        span.set_attribute('gen_ai.usage.completion_tokens_details.reasoning_tokens', reasoning_tokens)
     if cache_creation_input_tokens is not None:
         span.set_attribute('gen_ai.usage.cache_creation.input_tokens', cache_creation_input_tokens)
 
@@ -309,6 +314,8 @@ def record_llm_response(
             cache_creation_input_tokens=cache_creation,
         )
         completion_details = _field(usage, 'completion_tokens_details')
+        if completion_details is None:
+            completion_details = _field(usage, 'output_tokens_details')
         if completion_details is not None:
             reasoning = _field(completion_details, 'reasoning_tokens')
             if reasoning is not None:

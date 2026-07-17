@@ -35,6 +35,7 @@ from evaluatorq.simulation.ui.colors import (
     ORQ_SCALE_HEAT,
     QUALITATIVE,
 )
+from evaluatorq.simulation.ui.token_display import token_metric_specs, token_overview_caption
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import ReportSection
@@ -179,11 +180,7 @@ def _render_overview(sections: list[ReportSection]) -> None:
         st.subheader('Tokens')
         tokens = _section(sections, 'token_usage')
         st.metric('Total tokens', f'{tokens.get("total_tokens", 0):,}')
-        st.caption(
-            f'Prompt {tokens.get("prompt_tokens", 0):,} · '
-            f'Completion {tokens.get("completion_tokens", 0):,} · '
-            f'Avg {tokens.get("avg_total_per_conversation", 0.0):.0f}/conv'
-        )
+        st.caption(token_overview_caption(tokens))
 
     overview = _section(sections, 'overview')
     personas = overview.get('personas', [])
@@ -443,10 +440,10 @@ def _render_turn_quality(sections: list[ReportSection]) -> None:
 
 def _render_tokens(sections: list[ReportSection]) -> None:
     tokens = _section(sections, 'token_usage')
-    cols = st.columns(3)
-    cols[0].metric('Prompt', f'{tokens.get("prompt_tokens", 0):,}')
-    cols[1].metric('Completion', f'{tokens.get("completion_tokens", 0):,}')
-    cols[2].metric('Total', f'{tokens.get("total_tokens", 0):,}')
+    metrics = token_metric_specs(tokens)
+    cols = st.columns(len(metrics))
+    for col, (label, value) in zip(cols, metrics, strict=False):
+        col.metric(label, value)
 
     entries = _section(sections, 'individual_results').get('entries', [])
     if entries:
