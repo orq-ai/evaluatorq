@@ -30,7 +30,7 @@ _ROOT_EPILOG = examples(
     'eq redteam run -t agent:my-agent',
     '# explore saved runs in the dashboard',
     'eq dashboard',
-    '# docs: https://github.com/orq-ai/evaluatorq',
+    '# docs: https://orq-ai.github.io/evaluatorq/',
     '# report issues: https://github.com/orq-ai/evaluatorq/issues',
 )
 

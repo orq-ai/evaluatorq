@@ -1449,6 +1449,9 @@ def runs(
             except (json.JSONDecodeError, OSError):
                 malformed_json += 1
                 continue
+            if not isinstance(data, dict):
+                malformed_json += 1
+                continue
             records.append({
                 'report_id': report_id(run_file),
                 'run_name': data.get('run_name'),

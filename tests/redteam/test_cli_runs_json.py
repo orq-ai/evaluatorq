@@ -1,5 +1,7 @@
 # ruff: noqa: S101
 
+from __future__ import annotations
+
 import json
 
 from typer.testing import CliRunner
@@ -34,3 +36,23 @@ def test_runs_json_serialises_raw_fields(tmp_path):
     assert records[0]['vulnerability_rate'] == 0.42
     assert records[0]['total_attacks'] == 3
     assert records[0]['report_id']
+
+
+def test_runs_json_skips_valid_json_with_an_invalid_report_shape(tmp_path):
+    (tmp_path / 'invalid-report.json').write_text('[]')
+
+    result = CliRunner().invoke(redteam_app, ['runs', str(tmp_path), '--json'])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == []
+    assert 'Warning: 1 file(s) could not be parsed and were skipped.' in result.stderr
+
+
+def test_runs_json_skips_valid_json_with_an_invalid_summary_shape(tmp_path):
+    (tmp_path / 'invalid-summary.json').write_text(json.dumps({'summary': []}))
+
+    result = CliRunner().invoke(redteam_app, ['runs', str(tmp_path), '--json'])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == []
+    assert 'Warning: 1 file(s) could not be parsed and were skipped.' in result.stderr

@@ -712,7 +712,13 @@ def runs(
             except (json.JSONDecodeError, OSError):
                 skipped += 1
                 continue
+            if not isinstance(data, dict):
+                skipped += 1
+                continue
             summary = data.get('summary', {})
+            if not isinstance(summary, dict):
+                skipped += 1
+                continue
             records.append({
                 'report_id': report_id(f),
                 'run_name': data.get('run_name', f.stem),
