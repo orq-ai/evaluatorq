@@ -351,17 +351,24 @@ def _build_evaluator_scores_section(results: list[SimulationResult]) -> ReportSe
 
 
 def _build_token_usage_section(results: list[SimulationResult]) -> ReportSection:
-    prompt = sum(r.token_usage.prompt_tokens for r in results)
-    completion = sum(r.token_usage.completion_tokens for r in results)
+    prompt = sum(r.token_usage.input_tokens for r in results)
+    completion = sum(r.token_usage.output_tokens for r in results)
     total = sum(r.token_usage.total_tokens for r in results)
+    cached = sum(r.token_usage.cached_tokens for r in results)
+    reasoning = sum(r.token_usage.reasoning_tokens for r in results)
     n = len(results) or 1
     return ReportSection(
         kind='token_usage',
         title='Token Usage',
         data={
+            # Legacy prompt_/completion_ keys retained for downstream consumers.
             'prompt_tokens': prompt,
             'completion_tokens': completion,
+            'input_tokens': prompt,
+            'output_tokens': completion,
             'total_tokens': total,
+            'cached_tokens': cached,
+            'reasoning_tokens': reasoning,
             'avg_total_per_conversation': total / n,
             'avg_prompt_per_conversation': prompt / n,
             'avg_completion_per_conversation': completion / n,

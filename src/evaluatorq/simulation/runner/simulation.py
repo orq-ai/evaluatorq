@@ -391,6 +391,8 @@ class SimulationRunner:
                             prompt_tokens=usage.prompt_tokens,
                             completion_tokens=usage.completion_tokens,
                             total_tokens=usage.total_tokens,
+                            cached_tokens=usage.cached_tokens,
+                            reasoning_tokens=usage.reasoning_tokens,
                         )
                         set_span_attrs(
                             run_span,
@@ -599,6 +601,8 @@ class SimulationRunner:
                     prompt_tokens=final_usage.prompt_tokens,
                     completion_tokens=final_usage.completion_tokens,
                     total_tokens=final_usage.total_tokens,
+                    cached_tokens=final_usage.cached_tokens,
+                    reasoning_tokens=final_usage.reasoning_tokens,
                 )
                 set_span_attrs(
                     run_span,
@@ -635,6 +639,8 @@ class SimulationRunner:
             prompt_tokens=final_usage.prompt_tokens,
             completion_tokens=final_usage.completion_tokens,
             total_tokens=final_usage.total_tokens,
+            cached_tokens=final_usage.cached_tokens,
+            reasoning_tokens=final_usage.reasoning_tokens,
         )
         set_span_attrs(
             run_span,

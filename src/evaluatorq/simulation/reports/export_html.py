@@ -485,16 +485,22 @@ def _render_evaluator_scores_html(section: ReportSection) -> str:
 def _render_token_usage_html(section: ReportSection) -> str:
     data = section.data
     rows = [
-        ['Prompt Tokens (total)', f'{data.get("prompt_tokens", 0):,}'],
-        ['Completion Tokens (total)', f'{data.get("completion_tokens", 0):,}'],
+        ['Input Tokens (total)', f'{data.get("input_tokens", data.get("prompt_tokens", 0)):,}'],
+        ['Output Tokens (total)', f'{data.get("output_tokens", data.get("completion_tokens", 0)):,}'],
         ['Total Tokens', f'{data.get("total_tokens", 0):,}'],
         ['Avg Total / Conversation', f'{data.get("avg_total_per_conversation", 0):,.0f}'],
-        ['Avg Prompt / Conversation', f'{data.get("avg_prompt_per_conversation", 0):,.0f}'],
+        ['Avg Input / Conversation', f'{data.get("avg_prompt_per_conversation", 0):,.0f}'],
         [
-            'Avg Completion / Conversation',
+            'Avg Output / Conversation',
             f'{data.get("avg_completion_per_conversation", 0):,.0f}',
         ],
     ]
+    cached = data.get('cached_tokens', 0)
+    if cached:
+        rows.append(['Cached Tokens (retrieved)', f'{cached:,}'])
+    reasoning = data.get('reasoning_tokens', 0)
+    if reasoning:
+        rows.append(['Reasoning Tokens', f'{reasoning:,}'])
     table = _html_table(['Metric', 'Value'], rows)
     return f'<section class="report-card"><h2>{_esc(section.title)}</h2>{table}</section>'
 
