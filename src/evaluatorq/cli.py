@@ -15,6 +15,7 @@ from typing import Annotated
 import typer
 
 from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
+from evaluatorq.common.cli_epilog import examples
 from evaluatorq.common.cli_help import CONTEXT_SETTINGS
 
 # ---------------------------------------------------------------------------
@@ -24,11 +25,21 @@ from evaluatorq.common.cli_help import CONTEXT_SETTINGS
 # no_args_is_help is NOT set — on Click >=8.2 it raises NoArgsIsHelpError, which
 # typer doesn't render, so bare `eq` exited 2 with no output. The callback below
 # prints help explicitly instead (works across versions).
+_ROOT_EPILOG = examples(
+    '# red team an agent',
+    'eq redteam run -t agent:my-agent',
+    '# explore saved runs in the dashboard',
+    'eq dashboard',
+    '# docs: https://github.com/orq-ai/evaluatorq',
+    '# report issues: https://github.com/orq-ai/evaluatorq/issues',
+)
+
 app = typer.Typer(
     name='evaluatorq',
     help='Evaluation framework for AI systems.',
     rich_markup_mode='rich',
     context_settings=CONTEXT_SETTINGS,
+    epilog=_ROOT_EPILOG,
 )
 
 
@@ -61,7 +72,7 @@ def _main(
 # ---------------------------------------------------------------------------
 
 
-@app.command()
+@app.command(epilog=_ROOT_EPILOG)
 def dashboard(
     path: Annotated[
         Path | None,

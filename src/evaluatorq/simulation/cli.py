@@ -36,6 +36,7 @@ import typer
 from loguru import logger
 
 from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
+from evaluatorq.common.cli_epilog import examples as _examples
 from evaluatorq.common.cli_help import CONTEXT_SETTINGS
 from evaluatorq.common.cli_tty import should_skip_confirm
 from evaluatorq.common.llm_client import resolve_llm_client
@@ -391,22 +392,6 @@ def _echo_generate_preview(datapoints: list[Any]) -> None:
         for s in scenarios.values():
             stable.add_row(s.name, str(getattr(s, 'goal', '') or ''))
         _recho(stable)
-
-
-def _examples(*lines: str) -> str:
-    """Build a command ``--help`` epilog from example lines.
-
-    Under ``rich_markup_mode='rich'`` the epilog is flowed like HTML — single
-    newlines collapse to spaces — so each visual line must be its own paragraph
-    (blank line between) to render one-per-row. Lines starting with ``#`` are
-    dimmed as comments; command lines render verbatim.
-    """
-    from rich.markup import escape
-
-    def render(line: str) -> str:
-        return f'[dim]{escape(line)}[/]' if line.lstrip().startswith('#') else escape(line)
-
-    return '\n\n'.join(['[bold]Examples[/]', *(render(line) for line in lines)])
 
 
 _SIMULATE_EPILOG = _examples(

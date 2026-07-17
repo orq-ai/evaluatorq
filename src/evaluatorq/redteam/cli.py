@@ -15,6 +15,7 @@ from typing import Annotated, Any
 import typer
 
 from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
+from evaluatorq.common.cli_epilog import examples
 from evaluatorq.common.cli_help import CONTEXT_SETTINGS
 from evaluatorq.common.cli_tty import should_skip_confirm
 from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, DeliveryMethod, Pipeline, SaveMode, Vulnerability
@@ -25,6 +26,15 @@ app = typer.Typer(
     no_args_is_help=True,
     rich_markup_mode='rich',
     context_settings=CONTEXT_SETTINGS,
+)
+
+_RUN_EPILOG = examples(
+    '# dynamic run against an orq agent',
+    'eq redteam run -t agent:my-agent',
+    '# static + generated attacks from an OWASP dataset',
+    'eq redteam run -t agent:my-agent --mode hybrid',
+    '# scope to one OWASP category, machine-readable later via `eq redteam runs --json`',
+    'eq redteam run -t agent:my-agent -c ASI01',
 )
 
 
@@ -181,7 +191,7 @@ def write_html_report(
     return output_path
 
 
-@app.command(no_args_is_help=True)
+@app.command(no_args_is_help=True, epilog=_RUN_EPILOG)
 def run(
     target: Annotated[
         list[str],
