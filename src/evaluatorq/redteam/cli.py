@@ -16,7 +16,7 @@ import typer
 
 from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
 from evaluatorq.common.cli_help import CONTEXT_SETTINGS
-from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, DeliveryMethod, SaveMode, Vulnerability
+from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, DeliveryMethod, Pipeline, SaveMode, Vulnerability
 
 app = typer.Typer(
     name='redteam',
@@ -195,9 +195,9 @@ def run(
         typer.Option('--name', '-n', help="Experiment name (defaults to 'red-team')."),
     ] = None,
     mode: Annotated[
-        str,
-        typer.Option(help='Execution mode: "dynamic", "static", or "hybrid".'),
-    ] = 'dynamic',
+        Pipeline,
+        typer.Option(help='Execution mode.'),
+    ] = Pipeline.DYNAMIC,
     categories: Annotated[
         list[str] | None,
         typer.Option(
