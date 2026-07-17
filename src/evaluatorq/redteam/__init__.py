@@ -13,24 +13,6 @@ Semantic convention throughout this package:
 
 from __future__ import annotations
 
-
-def _check_redteam_deps() -> None:  # noqa: RUF067
-    missing = []
-    for mod in ('openai', 'typer'):
-        try:
-            __import__(mod)
-        except ImportError:  # noqa: PERF203
-            missing.append(mod)
-    if missing:
-        raise ImportError(
-            f'Red teaming requires optional dependencies: {", ".join(missing)}. '
-            f"Install with: pip install 'evaluatorq[redteam]'"
-        )
-
-
-_check_redteam_deps()  # noqa: RUF067
-
-
 from evaluatorq.contracts import AgentTarget
 from evaluatorq.openresponses import (
     append_assistant_turn,

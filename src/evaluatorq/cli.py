@@ -140,25 +140,29 @@ def dashboard(
 # ---------------------------------------------------------------------------
 
 
+def _register_subapps(app: typer.Typer) -> None:
+    """Register the redteam and sim sub-apps.
+
+    Their deps are core, so a failing import here means a broken install — let it
+    surface (via run_guarded) rather than silently dropping the subcommand
+    (clig.dev: no silent failure).
+    """
+    from evaluatorq.redteam.cli import app as redteam_app
+    from evaluatorq.simulation.cli import app as sim_app
+
+    app.add_typer(redteam_app, name='redteam', help='Red teaming commands.')
+    app.add_typer(sim_app, name='sim', help='Agent simulation pipeline.')
+
+
 def main() -> None:
-    """Entry point that lazily assembles sub-commands and runs the CLI."""
+    """Entry point that assembles sub-commands and runs the CLI under a guard."""
     from evaluatorq.common.cli_errors import run_guarded
 
-    try:
-        from evaluatorq.redteam.cli import app as redteam_app
+    def _run() -> None:
+        _register_subapps(app)
+        app()
 
-        app.add_typer(redteam_app, name='redteam', help='Red teaming commands.')
-    except ImportError:
-        pass
-
-    try:
-        from evaluatorq.simulation.cli import app as sim_app
-
-        app.add_typer(sim_app, name='sim', help='Agent simulation pipeline.')
-    except ImportError:
-        pass
-
-    run_guarded(app)
+    run_guarded(_run)
 
 
 # Allow `python -m evaluatorq.cli` as well as the entry point.
