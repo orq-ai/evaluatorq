@@ -15,6 +15,8 @@ from typing import Annotated
 import typer
 
 from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
+from evaluatorq.common.cli_epilog import examples
+from evaluatorq.common.cli_help import CONTEXT_SETTINGS
 
 # ---------------------------------------------------------------------------
 # Top-level application
@@ -23,10 +25,21 @@ from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TT
 # no_args_is_help is NOT set — on Click >=8.2 it raises NoArgsIsHelpError, which
 # typer doesn't render, so bare `eq` exited 2 with no output. The callback below
 # prints help explicitly instead (works across versions).
+_ROOT_EPILOG = examples(
+    '# red team an agent',
+    'eq redteam run -t agent:my-agent',
+    '# explore saved runs in the dashboard',
+    'eq dashboard',
+    '# docs: https://orq-ai.github.io/evaluatorq/',
+    '# report issues: https://github.com/orq-ai/evaluatorq/issues',
+)
+
 app = typer.Typer(
     name='evaluatorq',
     help='Evaluation framework for AI systems.',
     rich_markup_mode='rich',
+    context_settings=CONTEXT_SETTINGS,
+    epilog=_ROOT_EPILOG,
 )
 
 
@@ -59,7 +72,7 @@ def _main(
 # ---------------------------------------------------------------------------
 
 
-@app.command()
+@app.command(epilog=_ROOT_EPILOG)
 def dashboard(
     path: Annotated[
         Path | None,
@@ -127,23 +140,29 @@ def dashboard(
 # ---------------------------------------------------------------------------
 
 
+def _register_subapps(app: typer.Typer) -> None:
+    """Register the redteam and sim sub-apps.
+
+    Their deps are core, so a failing import here means a broken install — let it
+    surface (via run_guarded) rather than silently dropping the subcommand
+    (clig.dev: no silent failure).
+    """
+    from evaluatorq.redteam.cli import app as redteam_app
+    from evaluatorq.simulation.cli import app as sim_app
+
+    app.add_typer(redteam_app, name='redteam', help='Red teaming commands.')
+    app.add_typer(sim_app, name='sim', help='Agent simulation pipeline.')
+
+
 def main() -> None:
-    """Entry point that lazily assembles sub-commands and runs the CLI."""
-    try:
-        from evaluatorq.redteam.cli import app as redteam_app
+    """Entry point that assembles sub-commands and runs the CLI under a guard."""
+    from evaluatorq.common.cli_errors import run_guarded
 
-        app.add_typer(redteam_app, name='redteam', help='Red teaming commands.')
-    except ImportError:
-        pass
+    def _run() -> None:
+        _register_subapps(app)
+        app()
 
-    try:
-        from evaluatorq.simulation.cli import app as sim_app
-
-        app.add_typer(sim_app, name='sim', help='Agent simulation pipeline.')
-    except ImportError:
-        pass
-
-    app()
+    run_guarded(_run)
 
 
 # Allow `python -m evaluatorq.cli` as well as the entry point.

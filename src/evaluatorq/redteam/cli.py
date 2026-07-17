@@ -15,13 +15,28 @@ from typing import Annotated, Any
 import typer
 
 from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
-from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, DeliveryMethod, SaveMode, Vulnerability
+from evaluatorq.common.cli_epilog import examples
+from evaluatorq.common.cli_help import CONTEXT_SETTINGS
+from evaluatorq.common.cli_json import echo_json
+from evaluatorq.common.cli_tty import should_skip_confirm
+from evaluatorq.dashboard.library import report_id
+from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, DeliveryMethod, Pipeline, SaveMode, Vulnerability
 
 app = typer.Typer(
     name='redteam',
     help='Red teaming CLI for evaluatorq.',
     no_args_is_help=True,
     rich_markup_mode='rich',
+    context_settings=CONTEXT_SETTINGS,
+)
+
+_RUN_EPILOG = examples(
+    '# dynamic run against an orq agent',
+    'eq redteam run -t agent:my-agent',
+    '# static + generated attacks from an OWASP dataset',
+    'eq redteam run -t agent:my-agent --mode hybrid',
+    '# scope to one OWASP category, machine-readable later via `eq redteam runs --json`',
+    'eq redteam run -t agent:my-agent -c ASI01',
 )
 
 
@@ -178,7 +193,7 @@ def write_html_report(
     return output_path
 
 
-@app.command(no_args_is_help=True)
+@app.command(no_args_is_help=True, epilog=_RUN_EPILOG)
 def run(
     target: Annotated[
         list[str],
@@ -193,9 +208,9 @@ def run(
         typer.Option('--name', '-n', help="Experiment name (defaults to 'red-team')."),
     ] = None,
     mode: Annotated[
-        str,
-        typer.Option(help='Execution mode: "dynamic", "static", or "hybrid".'),
-    ] = 'dynamic',
+        Pipeline,
+        typer.Option(help='Execution mode.'),
+    ] = Pipeline.DYNAMIC,
     categories: Annotated[
         list[str] | None,
         typer.Option(
@@ -440,7 +455,7 @@ def run(
                 max_static_datapoints=max_static_datapoints,
                 cleanup_memory=not no_cleanup_memory,
                 dataset=dataset,
-                hooks=RichHooks(skip_confirm=yes),
+                hooks=RichHooks(skip_confirm=should_skip_confirm(yes)),
                 artifacts_dir=artifacts_dir,
                 save=save,
                 target_config=target_config,
@@ -662,21 +677,62 @@ def runs(
         int,
         typer.Option('--limit', '-n', help='Maximum number of runs to show.'),
     ] = 20,
+    json_output: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option('--json', help='Emit runs as a JSON array on stdout (machine-readable).'),
+    ] = False,
 ) -> None:
     """List previous red team runs saved locally."""
     from evaluatorq.redteam.runner import get_runs_dir
 
     runs_dir = Path(path) if path is not None else get_runs_dir()
     if not runs_dir.exists():
+        if json_output:
+            echo_json([])
+            raise typer.Exit(code=0)
         typer.echo(f'No runs found (directory {runs_dir} does not exist).')
         raise typer.Exit(code=0)
 
     run_files = sorted(runs_dir.glob('*.json'), key=lambda p: p.stat().st_mtime, reverse=True)
     if not run_files:
+        if json_output:
+            echo_json([])
+            raise typer.Exit(code=0)
         typer.echo(f'No runs found in {runs_dir}.')
         raise typer.Exit(code=0)
 
     run_files = run_files[:limit]
+
+    if json_output:
+        records: list[dict[str, Any]] = []
+        skipped = 0
+        for f in run_files:
+            try:
+                data = json.loads(f.read_text(encoding='utf-8'))
+            except (json.JSONDecodeError, OSError):
+                skipped += 1
+                continue
+            if not isinstance(data, dict):
+                skipped += 1
+                continue
+            summary = data.get('summary', {})
+            if not isinstance(summary, dict):
+                skipped += 1
+                continue
+            records.append({
+                'report_id': report_id(f),
+                'run_name': data.get('run_name', f.stem),
+                'created_at': data.get('created_at'),
+                'pipeline': data.get('pipeline'),
+                'tested_agents': data.get('tested_agents', []),
+                'total_attacks': summary.get('total_attacks', data.get('total_results')),
+                'vulnerability_rate': summary.get('vulnerability_rate'),
+                'file': f.name,
+            })
+        echo_json(records)
+        if skipped:
+            typer.echo(f'Warning: {skipped} file(s) could not be parsed and were skipped.', err=True)
+        raise typer.Exit(code=0)
 
     try:
         from rich import box

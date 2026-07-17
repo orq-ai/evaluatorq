@@ -36,7 +36,13 @@ import typer
 from loguru import logger
 
 from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
+from evaluatorq.common.cli_epilog import examples as _examples
+from evaluatorq.common.cli_errors import emit_error
+from evaluatorq.common.cli_help import CONTEXT_SETTINGS
+from evaluatorq.common.cli_json import echo_json
+from evaluatorq.common.cli_tty import should_skip_confirm
 from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.dashboard.library import report_id
 from evaluatorq.simulation.types import DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run as _auto_save_run
 from evaluatorq.simulation.utils.run_store import get_sim_runs_dir as _get_sim_runs_dir
@@ -57,6 +63,7 @@ app = typer.Typer(
     ),
     no_args_is_help=True,
     rich_markup_mode='rich',
+    context_settings=CONTEXT_SETTINGS,
 )
 
 
@@ -200,7 +207,7 @@ async def _resolve_agent_description(
 
 
 def _handle_cli_error(exc: Exception) -> NoReturn:
-    typer.echo(f'Error: {exc}', err=True)
+    emit_error(exc)
     raise typer.Exit(1) from None
 
 
@@ -388,22 +395,6 @@ def _echo_generate_preview(datapoints: list[Any]) -> None:
         for s in scenarios.values():
             stable.add_row(s.name, str(getattr(s, 'goal', '') or ''))
         _recho(stable)
-
-
-def _examples(*lines: str) -> str:
-    """Build a command ``--help`` epilog from example lines.
-
-    Under ``rich_markup_mode='rich'`` the epilog is flowed like HTML — single
-    newlines collapse to spaces — so each visual line must be its own paragraph
-    (blank line between) to render one-per-row. Lines starting with ``#`` are
-    dimmed as comments; command lines render verbatim.
-    """
-    from rich.markup import escape
-
-    def render(line: str) -> str:
-        return f'[dim]{escape(line)}[/]' if line.lstrip().startswith('#') else escape(line)
-
-    return '\n\n'.join(['[bold]Examples[/]', *(render(line) for line in lines)])
 
 
 _SIMULATE_EPILOG = _examples(
@@ -609,7 +600,7 @@ def simulate(
         log_console = Console(stderr=True)
         hooks = RichHooks(
             console=log_console,
-            skip_confirm=yes or not sys.stdin.isatty(),
+            skip_confirm=should_skip_confirm(yes),
             defer_summary=executive_summary,
             verbose=verbose,
         )
@@ -897,7 +888,7 @@ def run(
         log_console = Console(stderr=True)
         hooks = RichHooks(
             console=log_console,
-            skip_confirm=yes or not sys.stdin.isatty(),
+            skip_confirm=should_skip_confirm(yes),
             defer_summary=executive_summary,
             verbose=verbose,
         )
@@ -1327,7 +1318,7 @@ def validate_dataset(
         typer.Argument(help='Path to datapoints JSONL file to validate.'),
     ],
 ) -> None:
-    """Deprecated alias for :command:`validate`."""
+    """Deprecated alias for `validate`."""
     _validate_datapoints(path)
 
 
@@ -1421,11 +1412,18 @@ def runs(
         bool,
         typer.Option('--full', '-f', help='Render at full content width; do not truncate columns to the terminal.'),
     ] = False,
+    json_output: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option('--json', help='Emit runs as a JSON array on stdout (machine-readable).'),
+    ] = False,
 ) -> None:
     """List recent simulation runs."""
     runs_dir = directory or _get_sim_runs_dir()
 
     if not runs_dir.exists():
+        if json_output:
+            echo_json([])
+            raise typer.Exit(0)
         typer.echo(f'No sim-runs directory found at {runs_dir}')
         raise typer.Exit(0)
 
@@ -1436,7 +1434,37 @@ def runs(
     )[:limit]
 
     if not run_files:
+        if json_output:
+            echo_json([])
+            raise typer.Exit(0)
         typer.echo(f'No runs found in {runs_dir}')
+        raise typer.Exit(0)
+
+    if json_output:
+        records: list[dict[str, Any]] = []
+        malformed_json = 0
+        for run_file in run_files:
+            try:
+                data = json.loads(run_file.read_text(encoding='utf-8'))
+            except (json.JSONDecodeError, OSError):
+                malformed_json += 1
+                continue
+            if not isinstance(data, dict):
+                malformed_json += 1
+                continue
+            records.append({
+                'report_id': report_id(run_file),
+                'run_name': data.get('run_name'),
+                'created_at': data.get('created_at'),
+                'mode': data.get('mode'),
+                'target_kind': data.get('target_kind'),
+                'total_results': data.get('total_results'),
+                'scorer_averages': data.get('scorer_averages', {}),
+                'file': run_file.name,
+            })
+        echo_json(records)
+        if malformed_json:
+            typer.echo(f'Warning: {malformed_json} malformed file(s) skipped.', err=True)
         raise typer.Exit(0)
 
     rows: list[dict[str, Any]] = []
