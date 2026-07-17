@@ -53,6 +53,7 @@ from evaluatorq.common.reports import (
 from evaluatorq.common.reports.palette import COLORS
 from evaluatorq.dashboard.trace_links import trace_link_button
 from evaluatorq.simulation.reports.sections import build_report_sections
+from evaluatorq.simulation.reports.token_usage import build_token_usage_rows
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import ReportSection
@@ -483,19 +484,7 @@ def _render_evaluator_scores_html(section: ReportSection) -> str:
 
 
 def _render_token_usage_html(section: ReportSection) -> str:
-    data = section.data
-    rows = [
-        ['Prompt Tokens (total)', f'{data.get("prompt_tokens", 0):,}'],
-        ['Completion Tokens (total)', f'{data.get("completion_tokens", 0):,}'],
-        ['Total Tokens', f'{data.get("total_tokens", 0):,}'],
-        ['Avg Total / Conversation', f'{data.get("avg_total_per_conversation", 0):,.0f}'],
-        ['Avg Prompt / Conversation', f'{data.get("avg_prompt_per_conversation", 0):,.0f}'],
-        [
-            'Avg Completion / Conversation',
-            f'{data.get("avg_completion_per_conversation", 0):,.0f}',
-        ],
-    ]
-    table = _html_table(['Metric', 'Value'], rows)
+    table = _html_table(['Metric', 'Value'], build_token_usage_rows(section.data))
     return f'<section class="report-card"><h2>{_esc(section.title)}</h2>{table}</section>'
 
 

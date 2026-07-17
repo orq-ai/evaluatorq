@@ -1498,11 +1498,15 @@ async def _simulate_via_evaluatorq(
     total_prompt = sum((r.token_usage.prompt_tokens or 0) for r in results)
     total_completion = sum((r.token_usage.completion_tokens or 0) for r in results)
     total_total = sum((r.token_usage.total_tokens or 0) for r in results)
+    total_cached = sum((r.token_usage.cached_tokens or 0) for r in results)
+    total_reasoning = sum((r.token_usage.reasoning_tokens or 0) for r in results)
     record_token_usage(
         pipeline_span,
         prompt_tokens=total_prompt,
         completion_tokens=total_completion,
         total_tokens=total_total,
+        cached_tokens=total_cached,
+        reasoning_tokens=total_reasoning,
     )
     set_span_attrs(
         pipeline_span,
