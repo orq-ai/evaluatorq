@@ -38,8 +38,10 @@ from loguru import logger
 from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
 from evaluatorq.common.cli_epilog import examples as _examples
 from evaluatorq.common.cli_help import CONTEXT_SETTINGS
+from evaluatorq.common.cli_json import echo_json
 from evaluatorq.common.cli_tty import should_skip_confirm
 from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.dashboard.library import report_id
 from evaluatorq.simulation.types import DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run as _auto_save_run
 from evaluatorq.simulation.utils.run_store import get_sim_runs_dir as _get_sim_runs_dir
@@ -1409,11 +1411,18 @@ def runs(
         bool,
         typer.Option('--full', '-f', help='Render at full content width; do not truncate columns to the terminal.'),
     ] = False,
+    json_output: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option('--json', help='Emit runs as a JSON array on stdout (machine-readable).'),
+    ] = False,
 ) -> None:
     """List recent simulation runs."""
     runs_dir = directory or _get_sim_runs_dir()
 
     if not runs_dir.exists():
+        if json_output:
+            echo_json([])
+            raise typer.Exit(0)
         typer.echo(f'No sim-runs directory found at {runs_dir}')
         raise typer.Exit(0)
 
@@ -1424,7 +1433,34 @@ def runs(
     )[:limit]
 
     if not run_files:
+        if json_output:
+            echo_json([])
+            raise typer.Exit(0)
         typer.echo(f'No runs found in {runs_dir}')
+        raise typer.Exit(0)
+
+    if json_output:
+        records: list[dict[str, Any]] = []
+        malformed_json = 0
+        for run_file in run_files:
+            try:
+                data = json.loads(run_file.read_text(encoding='utf-8'))
+            except (json.JSONDecodeError, OSError):
+                malformed_json += 1
+                continue
+            records.append({
+                'report_id': report_id(run_file),
+                'run_name': data.get('run_name'),
+                'created_at': data.get('created_at'),
+                'mode': data.get('mode'),
+                'target_kind': data.get('target_kind'),
+                'total_results': data.get('total_results'),
+                'scorer_averages': data.get('scorer_averages', {}),
+                'file': run_file.name,
+            })
+        echo_json(records)
+        if malformed_json:
+            typer.echo(f'Warning: {malformed_json} malformed file(s) skipped.', err=True)
         raise typer.Exit(0)
 
     rows: list[dict[str, Any]] = []
