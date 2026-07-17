@@ -142,6 +142,8 @@ def dashboard(
 
 def main() -> None:
     """Entry point that lazily assembles sub-commands and runs the CLI."""
+    from evaluatorq.common.cli_errors import run_guarded
+
     try:
         from evaluatorq.redteam.cli import app as redteam_app
 
@@ -156,7 +158,7 @@ def main() -> None:
     except ImportError:
         pass
 
-    app()
+    run_guarded(app)
 
 
 # Allow `python -m evaluatorq.cli` as well as the entry point.

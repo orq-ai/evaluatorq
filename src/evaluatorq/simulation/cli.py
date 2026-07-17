@@ -37,6 +37,7 @@ from loguru import logger
 
 from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
 from evaluatorq.common.cli_epilog import examples as _examples
+from evaluatorq.common.cli_errors import emit_error
 from evaluatorq.common.cli_help import CONTEXT_SETTINGS
 from evaluatorq.common.cli_json import echo_json
 from evaluatorq.common.cli_tty import should_skip_confirm
@@ -206,7 +207,7 @@ async def _resolve_agent_description(
 
 
 def _handle_cli_error(exc: Exception) -> NoReturn:
-    typer.echo(f'Error: {exc}', err=True)
+    emit_error(exc)
     raise typer.Exit(1) from None
 
 
