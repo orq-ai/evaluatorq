@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from evaluatorq.common.tracing import record_llm_response
-from evaluatorq.contracts import Message, TokenUsage
+from evaluatorq.contracts import Message, ReportSection, TokenUsage
 from evaluatorq.simulation.convert import to_open_responses
 from evaluatorq.simulation.reports import export_html, export_markdown
 from evaluatorq.simulation.reports.sections import build_report_sections
@@ -107,6 +107,80 @@ def test_token_section_aggregates_canonical_and_optional_counts() -> None:
     assert tokens.data['output_tokens'] == 15
     assert tokens.data['cached_tokens'] == 7
     assert tokens.data['reasoning_tokens'] == 3
+    assert tokens.data['avg_input_per_conversation'] == 15
+    assert tokens.data['avg_output_per_conversation'] == 7.5
+
+
+def test_token_usage_rows_share_canonical_labels_and_legacy_fallbacks() -> None:
+    from evaluatorq.simulation.reports.token_usage import build_token_usage_rows
+
+    rows = build_token_usage_rows({
+        'input_tokens': 10,
+        'output_tokens': 5,
+        'total_tokens': 15,
+        'cached_tokens': 3,
+        'reasoning_tokens': 2,
+        'avg_total_per_conversation': 15,
+        'avg_input_per_conversation': 10,
+        'avg_output_per_conversation': 5,
+    })
+
+    assert rows == [
+        ['Input Tokens (total)', '10'],
+        ['Output Tokens (total)', '5'],
+        ['Total Tokens', '15'],
+        ['Avg Total / Conversation', '15'],
+        ['Avg Input / Conversation', '10'],
+        ['Avg Output / Conversation', '5'],
+        ['Cached Tokens (retrieved)', '3'],
+        ['Reasoning Tokens', '2'],
+    ]
+    assert build_token_usage_rows({
+        'prompt_tokens': 10,
+        'completion_tokens': 5,
+        'total_tokens': 15,
+        'avg_total_per_conversation': 15,
+        'avg_prompt_per_conversation': 10,
+        'avg_completion_per_conversation': 5,
+    })[0:2] == [
+        ['Input Tokens (total)', '10'],
+        ['Output Tokens (total)', '5'],
+    ]
+
+
+def test_token_usage_export_sections_render_the_same_rows() -> None:
+    from evaluatorq.simulation.reports.export_html import _render_token_usage_html
+    from evaluatorq.simulation.reports.export_md import _render_token_usage_section
+
+    section = ReportSection(
+        kind='token_usage',
+        title='Token Usage',
+        data={
+            'input_tokens': 10,
+            'output_tokens': 5,
+            'total_tokens': 15,
+            'cached_tokens': 3,
+            'reasoning_tokens': 2,
+            'avg_total_per_conversation': 15,
+            'avg_input_per_conversation': 10,
+            'avg_output_per_conversation': 5,
+        },
+    )
+    markdown = _render_token_usage_section(section)
+    html = _render_token_usage_html(section)
+
+    for label, value in [
+        ('Input Tokens (total)', '10'),
+        ('Output Tokens (total)', '5'),
+        ('Total Tokens', '15'),
+        ('Avg Total / Conversation', '15'),
+        ('Avg Input / Conversation', '10'),
+        ('Avg Output / Conversation', '5'),
+        ('Cached Tokens (retrieved)', '3'),
+        ('Reasoning Tokens', '2'),
+    ]:
+        assert f'| {label} | {value} |' in markdown
+        assert f'<td data-label="Metric">{label}</td><td data-label="Value">{value}</td>' in html
 
 
 def test_token_usage_exports_use_canonical_names_and_optional_details() -> None:

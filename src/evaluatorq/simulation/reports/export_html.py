@@ -53,6 +53,7 @@ from evaluatorq.common.reports import (
 from evaluatorq.common.reports.palette import COLORS
 from evaluatorq.dashboard.trace_links import trace_link_button
 from evaluatorq.simulation.reports.sections import build_report_sections
+from evaluatorq.simulation.reports.token_usage import build_token_usage_rows
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import ReportSection
@@ -483,25 +484,7 @@ def _render_evaluator_scores_html(section: ReportSection) -> str:
 
 
 def _render_token_usage_html(section: ReportSection) -> str:
-    data = section.data
-    rows = [
-        ['Input Tokens (total)', f'{data.get("input_tokens", data.get("prompt_tokens", 0)):,}'],
-        ['Output Tokens (total)', f'{data.get("output_tokens", data.get("completion_tokens", 0)):,}'],
-        ['Total Tokens', f'{data.get("total_tokens", 0):,}'],
-        ['Avg Total / Conversation', f'{data.get("avg_total_per_conversation", 0):,.0f}'],
-        ['Avg Input / Conversation', f'{data.get("avg_prompt_per_conversation", 0):,.0f}'],
-        [
-            'Avg Output / Conversation',
-            f'{data.get("avg_completion_per_conversation", 0):,.0f}',
-        ],
-    ]
-    cached = data.get('cached_tokens', 0)
-    if cached:
-        rows.append(['Cached Tokens (retrieved)', f'{cached:,}'])
-    reasoning = data.get('reasoning_tokens', 0)
-    if reasoning:
-        rows.append(['Reasoning Tokens', f'{reasoning:,}'])
-    table = _html_table(['Metric', 'Value'], rows)
+    table = _html_table(['Metric', 'Value'], build_token_usage_rows(section.data))
     return f'<section class="report-card"><h2>{_esc(section.title)}</h2>{table}</section>'
 
 
