@@ -108,6 +108,7 @@ personas/scenarios (extends the dataset).
 | JSONL datapoints (`--datapoints` / `load_datapoints_from_jsonl()`) | ✅ | ⚠️ manual (hand-pick seeds) |
 | Orq dataset (`dataset_id=`) | ✅ | ⚠️ manual |
 | Previous runs (persisted to JSONL via `eq sim generate --datapoints`) | ✅ | ⚠️ manual |
+| Orq experiment | ❌ no importer | ⚠️ manual (read run rows → seed phrases) |
 | Production traces | ❌ no importer | ⚠️ manual (read traces → seed phrases) |
 
 Legend: ✅ built-in · ⚠️ possible but manual · ❌ not supported yet.
