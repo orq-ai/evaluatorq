@@ -85,16 +85,10 @@ def _entries_from_run(run: Any) -> list[SimulationEntry]:
 
 
 def render_sim_row_list(rid: str, entries: list[SimulationEntry]) -> str:
-    """Render the conversation-cards panel for a sim report (spec §Transcripts).
+    """Render flat, lazy drawer-trigger conversation rows for a sim report.
 
-    One collapsed ``<details class="sim-conv-card">`` per entry. The
-    ``<summary>`` is the design header row (index, persona, scenario, and a
-    right-aligned cluster of turn-count/score/terminated-by tags plus an
-    outcome badge), tinted by outcome. The card body lazy-loads the full
-    transcript fragment exactly once, on first expand, via
-    ``hx-trigger="toggle once from:closest details"`` against the existing
-    transcript endpoint —
-    so large runs ship no transcript markup up front.
+    Each row contains the summary metadata and a ``data-drawer-url`` for its
+    transcript. The transcript body remains absent until the drawer opens.
 
     Args:
         rid:     Report ID (URL-safe).
@@ -110,7 +104,7 @@ def render_sim_row_list(rid: str, entries: list[SimulationEntry]) -> str:
     from evaluatorq.dashboard.report_kit import tag
 
     safe_rid = esc(rid)
-    cards_html: list[str] = []
+    rows_html: list[str] = []
     for e in entries:
         idx = e.index
         persona = esc(e.persona)
@@ -127,40 +121,29 @@ def render_sim_row_list(rid: str, entries: list[SimulationEntry]) -> str:
             tint = 'sim-tint-missed'
             badge = status_badge('Goal missed', 'fail')
 
-        # Trace deep-link on the summary line, next to the outcome badge.
-        # stopPropagation so clicking it opens the trace without toggling the row.
+        # Trace deep-link on the row, next to the outcome badge. stopPropagation
+        # keeps it from opening the conversation drawer.
         trace_btn = trace_link_button(thread_trace_url(e.thread_id), 'View Traces', onclick='event.stopPropagation()')
         right_cluster = (
             f'{tag(f"{e.turn_count} turns")}{tag(f"score {e.goal_completion_score:.2f}")}'
             f'{tag(e.terminated_by)}{badge}{trace_btn}'
         )
-        summary = (
-            f'<summary class="sim-conv-summary {tint}">'
+        row_attrs = (
+            f'class="sim-conv-row {tint}" role="button" tabindex="0" '
+            'data-sim-entity-trigger data-entity-kind="conversation" '
+            f'data-drawer-url="/r/{safe_rid}/sim/transcript?idx={idx}"'
+        )
+        rows_html.append(
+            f'<div {row_attrs}>'
             f'<span class="sim-conv-idx">#{idx + 1}</span>'
             f'<span class="sim-conv-persona">{persona}</span>'
             f'<span class="sim-conv-sep">&middot;</span>'
             f'<span class="sim-conv-scenario">{scenario}</span>'
             f'<span class="sim-conv-right">{right_cluster}</span>'
-            f'</summary>'
+            '</div>'
         )
-        # Load on expand: the body is display:none while the <details> is
-        # collapsed, so the first click lands on the <summary> and never reaches
-        # this div — "click" would need a second click. Listen for the parent
-        # details' `toggle` event instead (it doesn't bubble, hence from:closest),
-        # firing once on the first open.
-        body = (
-            f'<div class="sim-conv-body"'
-            f' hx-get="/r/{safe_rid}/sim/transcript?idx={idx}"'
-            f' hx-trigger="toggle once from:closest details"'
-            f' hx-target="this"'
-            f' hx-swap="innerHTML"'
-            f' hx-include="#filter-form"></div>'
-        )
-        # id="conv-N" (N = 1-based) is the jump target for the Failures table's
-        # <a href="#conv-N"> links; dashboard.js flips to this tab and opens it.
-        cards_html.append(f'<details class="sim-conv-card" id="conv-{idx + 1}">{summary}{body}</details>')
 
-    return f'<section class="sim-row-list">{"".join(cards_html)}</section>'
+    return f'<section class="sim-row-list">{"".join(rows_html)}</section>'
 
 
 # ---------------------------------------------------------------------------
@@ -279,10 +262,8 @@ def register_sim_view_routes(app: Any, roots: list[Any] | None = None) -> None:
 
     Routes registered here:
 
-    - ``GET /r/{rid}/sim/transcript?idx=`` — transcript drill-down fragment.
-      Reads filter dimension query params (via ``hx-include="#filter-form"``)
-      and indexes into the FILTERED entry list so the transcript panel stays
-      consistent with the row-list.
+    - ``GET /r/{rid}/sim/transcript?idx=`` — transcript drill-down fragment,
+      resolved against the full run by the row's stable index.
 
     - ``GET /r/{rid}/sim/row-list`` — filtered row list fragment.  Used by the
       sim interactive panel container to refetch the conversation table when the
@@ -319,12 +300,9 @@ def register_sim_view_routes(app: Any, roots: list[Any] | None = None) -> None:
     def sim_transcript(rid: str, req: Request) -> Response:
         """Return the transcript drill-down fragment for a sim result row.
 
-        Query param ``idx`` selects which entry in the filtered result list to
-        render (0-based).  Filter dimensions from the active filter form are
-        read from the query-string via ``hx-include="#filter-form"`` and
-        applied before indexing, so the transcript panel stays consistent with
-        the row-list.  Missing or out-of-range ``idx`` returns a graceful
-        empty message rather than a 500.
+        Query param ``idx`` selects the full run's 0-based result position.
+        Missing or out-of-range ``idx`` returns a graceful empty message rather
+        than a 500.
         """
         try:
             idx = int(req.query_params.get('idx', '0'))

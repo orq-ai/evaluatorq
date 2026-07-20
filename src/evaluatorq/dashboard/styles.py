@@ -1092,22 +1092,23 @@ _SIM_REPORT_CSS = """
 # ==== .sim-report — Transcripts redesign (Tasks 11+12) ===================
 # Appended as its own block (rather than edited into _SIM_REPORT_CSS above)
 # so a concurrently-landing `.sim-report` CSS addition on another branch
-# merges cleanly. Covers: collapsed tinted conversation cards (Task 11) +
+# merges cleanly. Covers: tinted conversation drawer rows (Task 11) +
 # judge callout / chat bubbles / two-state criteria (Task 12), both scoped
 # under `.sim-report` per docs/superpowers/specs/2026-07-10-agent-sim-report-
 # alignment-design.md §Transcripts.
 _SIM_TRANSCRIPT_CSS = """
-/* ---- Conversation cards (spec §Transcripts, Task 11) ---- */
+/* ---- Conversation rows (spec §Transcripts, Task 11) ---- */
 .sim-report .sim-row-list { display: flex; flex-direction: column; gap: 10px; }
-.sim-report .sim-conv-card {
+.sim-report .sim-conv-row {
     border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden;
     background: var(--surface-app);
-}
-.sim-report .sim-conv-summary {
     display: flex; align-items: center; gap: 8px; padding: 12px 16px;
-    cursor: pointer; list-style: none;
+    cursor: pointer; transition: border-color 120ms ease, box-shadow 120ms ease;
 }
-.sim-report .sim-conv-summary::-webkit-details-marker { display: none; }
+.sim-report .sim-conv-row:hover { border-color: var(--teal-600); }
+.sim-report .sim-conv-row:focus-visible {
+    outline: 2px solid var(--teal-600); outline-offset: 2px;
+}
 .sim-report .sim-conv-idx {
     font-family: var(--font-mono); font-size: 12px; color: var(--text-faint);
 }
@@ -1120,7 +1121,6 @@ _SIM_TRANSCRIPT_CSS = """
 .sim-report .sim-tint-achieved { background: var(--green-100); }
 .sim-report .sim-tint-missed { background: var(--red-100); }
 .sim-report .sim-tint-error { background: var(--amber-100); }
-.sim-report .sim-conv-body { padding: 16px; border-top: 1px solid var(--border-subtle); }
 
 /* ---- Transcript fragment: judge callout / bubbles / criteria (Task 12) ---- */
 .sim-report .sim-judge {
@@ -1715,12 +1715,12 @@ _SIM_REPORT_OVERRIDES_CSS = """
 
 # ==== .sim-report — Transcript overrides layered on `.report-aligned` =====
 # Same equal-specificity/source-order rationale as _SIM_REPORT_OVERRIDES_CSS
-# above: the sim report gets its own conversation-card chrome and a distinct
+# above: the sim report gets its own conversation-row chrome and a distinct
 # chat-bubble skin (asymmetric tail, no in-bubble role label) instead of the
 # shared `.report-aligned .sim-msg/.rt-msg` bubbles used by the Red Team
 # report.
 _SIM_TRANSCRIPT_OVERRIDES_CSS = """
-.sim-report .sim-conv-card {
+.sim-report .sim-conv-row {
     border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); overflow: hidden;
     background: var(--surface-card);
 }

@@ -1096,22 +1096,20 @@ def _sim_rowlist_wrapper(rid: str, inner: str) -> str:
 
 
 def sim_interactive_panels(rid: str, entries: list[Any]) -> str:
-    """Render the interactive sim panels section (conversation list + transcript).
+    """Render the interactive sim panel section (conversation list).
 
-    Embeds the sim row list table with HTMX-wired transcript drill-down panel.
+    Embeds the sim row list with lazy drawer-trigger conversation rows.
     Parity: Streamlit ``_render_transcripts`` (dashboard.py:316-390).
 
     The row-list itself is a static container: it is refreshed wholesale by
     the ``POST /r/{rid}/filter`` response body swap (see
-    ``_sim_rowlist_wrapper``), not by its own ``hx-trigger``. Each conversation
-    card's lazy-loaded transcript body carries ``hx-include="#filter-form"``
-    (see ``render_sim_row_list``), so its ``hx-get`` request for the
-    transcript detail includes the active filter selections and stays
-    consistent with the filtered list the card was rendered from.
+    ``_sim_rowlist_wrapper``), not by its own ``hx-trigger``. Entries retain
+    their full-run indexes so each conversation drawer URL resolves directly
+    to its transcript regardless of the active filter.
 
     Args:
         rid:     Report ID (URL-safe).
-        entries: Individual-results entries from the section layer.
+        entries: Individual-result entries with stable full-run indexes.
 
     Returns:
         An HTML ``<section class="sim-interactive-panels">`` fragment.

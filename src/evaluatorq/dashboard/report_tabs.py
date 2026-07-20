@@ -82,6 +82,17 @@ def _tabs(group: str, items: list[tuple[str, str] | tuple[str, str, str]]) -> st
 # ---------------------------------------------------------------------------
 
 
+def _stable_entries(run: SimulationRun, rows: list[Any]) -> list[Any]:
+    """Build entries for *rows* while retaining their full-run indexes."""
+    from evaluatorq.simulation.reports.sections import individual_entries
+
+    full_indexes = {id(result): index for index, result in enumerate(run.results)}
+    return [
+        entry.model_copy(update={'index': full_indexes[id(result)]})
+        for result, entry in zip(rows, individual_entries(rows), strict=True)
+    ]
+
+
 def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = None) -> str:
     """Render the Agent Sim report body as Streamlit-aligned tabs.
 
@@ -94,7 +105,7 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
     """
     from evaluatorq.dashboard.view import sim_interactive_panels
     from evaluatorq.simulation.reports.export_html import _SECTION_RENDERERS
-    from evaluatorq.simulation.reports.sections import build_report_sections, individual_entries
+    from evaluatorq.simulation.reports.sections import build_report_sections
 
     rows = run.results if results is None else results
     # The saved narrative describes the complete run. Suppress it on filtered
@@ -110,7 +121,7 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
 
     hero = _sim_hero(run)
 
-    entries = individual_entries(rows)
+    entries = _stable_entries(run, rows)
 
     entity_context = _sim_entity_context(by_kind)
 

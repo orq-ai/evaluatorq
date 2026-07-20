@@ -335,16 +335,16 @@ class TestSimRowListOnReportPage:
         assert r.status_code == 200
         assert 'sim-row-list' in r.text or 'sim-row-table' in r.text
 
-    def test_sim_report_page_cards_lazy_load_body(self, client: TestClient, roots: list[Path]) -> None:
+    def test_sim_report_page_has_clickable_conversation_rows(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
         r = client.get(f"/r/{rid}")
-        assert "sim-conv-card" in r.text
-        assert 'hx-trigger="toggle once from:closest details"' in r.text
+        assert "sim-conv-row" in r.text
+        assert 'data-entity-kind="conversation"' in r.text
 
-    def test_sim_report_page_has_hx_get_links(self, client: TestClient, roots: list[Path]) -> None:
+    def test_sim_report_page_has_transcript_drawer_urls(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
         r = client.get(f'/r/{rid}')
-        # Each row must have an hx-get pointing to the transcript endpoint.
+        # Each row must carry a lazy drawer URL for the transcript endpoint.
         assert '/sim/transcript' in r.text
 
     def test_sim_report_page_shows_persona_names(self, client: TestClient, roots: list[Path]) -> None:
@@ -360,12 +360,7 @@ class TestSimRowListOnReportPage:
 
 
 class TestSimFilterAwareness:
-    """Verify that the sim transcript route applies filter params from the query-string.
-
-    The filter dimensions (persona, scenario, terminated_by, goal_outcome) are
-    carried by hx-include="#filter-form" so each transcript hx-get request
-    automatically includes the active filter selections.
-    """
+    """Verify row-list filtering while transcript lookup remains full-run indexed."""
 
     def test_transcript_with_persona_filter_returns_200(self, client: TestClient, roots: list[Path]) -> None:
         """Transcript route with a persona filter param must return 200."""
@@ -374,7 +369,7 @@ class TestSimFilterAwareness:
         assert r.status_code == 200
 
     def test_transcript_persona_filter_shows_matching_entry(self, client: TestClient, roots: list[Path]) -> None:
-        """When filtering to persona=alice, idx=0 in the filtered list maps to alice."""
+        """Full-run idx=0 remains Alice when an irrelevant filter is supplied."""
         rid = report_id(_sim_path(roots))
         r = client.get(f'/r/{rid}/sim/transcript?idx=0&persona=alice')
         assert r.status_code == 200
@@ -387,15 +382,14 @@ class TestSimFilterAwareness:
         rid = report_id(_sim_path(roots))
         r = client.get(f'/r/{rid}/sim/transcript?idx=0&persona=alice')
         assert r.status_code == 200
-        # With only alice in the filtered set, idx=0 is alice's entry — bob's
-        # (unique) refund content must not appear.
+        # Full-run idx=0 is Alice, so Bob's unique refund content cannot appear.
         assert "refund" not in r.text.lower()
 
     def test_transcript_out_of_range_after_filter_is_graceful(self, client: TestClient, roots: list[Path]) -> None:
-        """Filtering to a single persona leaves 1 entry; idx=1 must not 500."""
+        """An optional filter parameter does not make transcript lookup raise."""
         rid = report_id(_sim_path(roots))
         r = client.get(f'/r/{rid}/sim/transcript?idx=1&persona=alice')
-        # Out-of-range idx after filtering → graceful empty, not 500.
+        # Full-run lookup remains graceful regardless of the filter parameter.
         assert r.status_code in (200, 404)
         assert r.status_code != 500
 
@@ -404,7 +398,7 @@ class TestSimFilterAwareness:
         rid = report_id(_sim_path(roots))
         r = client.get(f'/r/{rid}/sim/row-list')
         assert r.status_code == 200
-        assert 'sim-row' in r.text or 'sim-conv-card' in r.text
+        assert 'sim-row' in r.text or 'sim-conv-row' in r.text
 
     def test_sim_row_list_with_filter_returns_fewer_rows(self, client: TestClient, roots: list[Path]) -> None:
         """Filtered row-list should contain fewer persona rows than unfiltered."""
@@ -412,8 +406,8 @@ class TestSimFilterAwareness:
         html_all = client.get(f'/r/{rid}/sim/row-list').text
         html_alice = client.get(f'/r/{rid}/sim/row-list?persona=alice').text
         # Count sim-row-item occurrences as proxy for number of rows.
-        all_count = html_all.count('sim-conv-card')
-        alice_count = html_alice.count('sim-conv-card')
+        all_count = html_all.count('sim-conv-row')
+        alice_count = html_alice.count('sim-conv-row')
         assert alice_count < all_count, (
             f'Expected fewer rows when filtering to persona=alice: unfiltered={all_count}, filtered={alice_count}'
         )
@@ -428,10 +422,9 @@ class TestSimFilterAwareness:
         hx-include/hx-trigger of its own — the /filter POST body swap is the
         single refresh path (spec §Transcripts double-fetch fix).
 
-        Note: per-card transcript bodies DO carry hx-include="#filter-form"
-        (see TestCardDrilldownCarriesActiveFilter) so the filter reaches the
-        drill-down request; this test only guards the outer wrapper div,
-        which must stay an inert container with no hx-trigger of its own.
+        Conversation drawer rows no longer issue their own HTMX requests; this
+        test only guards the outer wrapper div, which must stay an inert
+        container with no hx-trigger of its own.
         """
         rid = report_id(_sim_path(roots))
         r = client.get(f'/r/{rid}')
@@ -567,18 +560,20 @@ def sim_entry_xss_criterion():
     )
 
 
-class TestConversationCards:
-    """Task 11: collapsed tinted `<details>` conversation cards."""
+class TestConversationRows:
+    """Conversation list entries are lazy drawer triggers, not foldout cards."""
 
-    def test_row_list_renders_details_cards_with_tint(self, sim_entries) -> None:
+    def test_row_list_renders_clickable_conversation_rows(self, sim_entries) -> None:
         from evaluatorq.dashboard.sim_views import render_sim_row_list
 
-        html = render_sim_row_list("rid", sim_entries)
-        assert "<details" in html and "sim-conv-card" in html
-        assert "sim-tint-achieved" in html
-        assert "sim-tint-missed" in html
-        assert "sim-tint-error" in html
-        assert 'hx-trigger="toggle once from:closest details"' in html
+        html = render_sim_row_list('rid', sim_entries)
+        assert '<details' not in html
+        assert 'sim-conv-card' not in html
+        assert html.count('data-sim-entity-trigger') == len(sim_entries)
+        assert 'data-entity-kind="conversation"' in html
+        assert 'data-drawer-url="/r/rid/sim/transcript?idx=0"' in html
+        assert 'role="button" tabindex="0"' in html
+        assert 'hx-trigger="toggle once' not in html
 
     def test_row_list_summary_has_header_cluster(self, sim_entries) -> None:
         from evaluatorq.dashboard.sim_views import render_sim_row_list
@@ -671,26 +666,14 @@ class TestTranscriptCriteriaXssEscaping:
 
 
 # ---------------------------------------------------------------------------
-# Regression: card drill-down must carry the active filter (task-11/12 fix).
-#
-# ``individual_entries()`` re-indexes 0..M-1 over whatever list it is given.
-# Each card's ``idx`` is a position within the list the row-list was rendered
-# from. If a filter is active, that list is the *filtered* list, so the
-# card's transcript hx-get MUST also send the filter — otherwise the
-# transcript route indexes the *full* (unfiltered) list and idx no longer
-# refers to the same conversation the card summarized.
+# Regression: conversation drawer URLs keep their full-run identity after a
+# filter response. ``sim_transcript`` deliberately resolves ``idx`` against
+# the full run, so the filtered row must retain that original index.
 # ---------------------------------------------------------------------------
 
 
-class TestCardDrilldownCarriesActiveFilter:
-    def test_card_body_hx_get_includes_filter_form(self, sim_entries) -> None:
-        """render_sim_row_list's card body must carry hx-include="#filter-form"."""
-        from evaluatorq.dashboard.sim_views import render_sim_row_list
-
-        html = render_sim_row_list('rid', sim_entries)
-        assert 'hx-include="#filter-form"' in html
-
-    def test_filtered_card_idx_resolves_to_same_persona_via_transcript_route(self, tmp_path: Path) -> None:
+class TestFilteredConversationDrawerIndex:
+    def test_filtered_row_idx_resolves_to_same_persona_via_transcript_route(self, tmp_path: Path) -> None:
         """End-to-end guard: with personas [alice, alice, bob] and a persona=bob
         filter active, bob's card carries his STABLE idx (2 — his position in
         the full run), not a re-numbered filtered idx. The transcript route
@@ -747,39 +730,22 @@ class TestCardDrilldownCarriesActiveFilter:
         client = TestClient(app, raise_server_exceptions=True)
         rid = report_id(run_path)
 
-        # Fetch the row-list AS FILTERED to persona=bob — this is what the
-        # browser actually has in the DOM when the user has bob selected in
-        # the filter form (the row-list is re-rendered by the /filter POST
-        # body swap). Bob is the only visible entry, but his card must carry
+        # Filter the report to persona=bob — this is the full /filter response
+        # that replaces the report body in the browser. Bob is the only visible
+        # entry, but his drawer row must carry
         # his *stable* idx (2 — his position in the full [alice, alice, bob]
         # run), because filtering hides rows rather than renumbering them.
-        row_list_html = client.get(f'/r/{rid}/sim/row-list?persona=bob').text
-        assert 'BOB-ONE' not in row_list_html  # transcript body is lazy, not embedded
-        card_start = row_list_html.find('sim-conv-body')
-        assert card_start >= 0, 'no conversation card found in filtered row-list'
-        card_div_start = row_list_html.rfind('<div', 0, card_start)
-        card_div_end = row_list_html.find('></div>', card_div_start) + len('></div>')
-        card_div = row_list_html[card_div_start:card_div_end]
+        filtered_html = client.post(f'/r/{rid}/filter', data={'persona': 'bob'}).text
+        drawer_url = f'/r/{rid}/sim/transcript?idx=2'
+        assert drawer_url in filtered_html
 
-        hx_get_start = card_div.find('hx-get="') + len('hx-get="')
-        hx_get_end = card_div.find('"', hx_get_start)
-        hx_get_url = card_div[hx_get_start:hx_get_end]
-        assert 'idx=2' in hx_get_url  # bob's STABLE position in the full run
-
-        # Simulate exactly what a real browser sends: the hx-get URL plus the
-        # active filter-form fields (the card carries hx-include="#filter-form").
-        # The transcript route now resolves idx against the FULL run, so the
-        # persona param is irrelevant to the lookup — bob's stable idx=2 lands
-        # on bob whether or not the filter tags along. Without the fix, the card
-        # carried the *filtered* idx=0 and the route re-filtered to resolve it —
-        # fragile, and outright broken when the filter yielded fewer rows.
-        request_url = hx_get_url + '&persona=bob'
-
-        r = client.get(request_url)
+        # The endpoint's full-run resolver maps Bob's stable idx directly to
+        # Bob; no filter parameters are needed for identity resolution.
+        r = client.get(drawer_url)
         assert r.status_code == 200
         assert 'BOB-ONE' in r.text, (
-            f"Expected bob's conversation from the exact request a real "
-            f'browser would send for this card ({request_url!r}), got: '
+            f"Expected bob's conversation from the filtered drawer URL "
+            f'({drawer_url!r}), got: '
             f'{r.text!r}'
         )
         assert 'ALICE-ONE' not in r.text
