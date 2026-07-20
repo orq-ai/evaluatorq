@@ -270,6 +270,12 @@ def _criteria_dots(criteria: list[dict[str, Any]]) -> str:
     )
 
 
+def _cap(text: str, max_chars: int = 90) -> str:
+    """Single-line cap for table cells; full text lives in the title tooltip."""
+    text = ' '.join(text.split())
+    return text if len(text) <= max_chars else text[: max_chars - 1].rstrip() + '…'
+
+
 def _render_failures_first_html(section: ReportSection) -> str:
     rows = section.data.get('rows', [])
     if not rows:
@@ -277,14 +283,14 @@ def _render_failures_first_html(section: ReportSection) -> str:
     trs = [
         f'<tr><td><a href="#{r["anchor"]}">{_esc(r["scenario"])}</a></td>'
         f'<td>{_esc(r["persona"])}</td>'
+        f'<td class="fail-why" title="{_esc(r.get("reason", ""))}">{_esc(_cap(r.get("reason", "")))}</td>'
         f'<td>{_criteria_dots(r["criteria"])}</td>'
-        f'<td>{r["score"]:.2f}</td>'
-        f'<td>{_esc(r["terminated_by"])}</td></tr>'
+        f'<td>{r["score"]:.2f}</td></tr>'
         for r in rows
     ]
     table = (
         '<table><thead><tr><th>Scenario</th><th>Persona</th>'
-        '<th>Criteria</th><th>Score</th><th>Ended</th></tr></thead>'
+        '<th>Why</th><th>Criteria</th><th>Score</th></tr></thead>'
         f'<tbody>{"".join(trs)}</tbody></table>'
     )
     # Long failure lists get a scroll container with a sticky header so the

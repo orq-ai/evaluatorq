@@ -504,8 +504,8 @@ def _sim_breakdown(
     render: Callable[..., str],
     entity_context: dict[str, Any] | None = None,
 ) -> str:
-    """Breakdown tab body: heatmap → score-distribution → per-persona/scenario
-    tables → top failure modes → failures table (spec §Breakdown)."""
+    """Breakdown tab body: heatmap → failures table → top failure modes →
+    score-distribution → per-persona/scenario tables (spec §Breakdown)."""
     from evaluatorq.common.reports.html_helpers import pct
     from evaluatorq.dashboard.report_kit import heatmap, histogram, panel
 
@@ -582,7 +582,7 @@ def _sim_breakdown(
 
     failures_html = render('failures_first')
 
-    return f'{heatmap_html}{dist_html}{tables_html}{failure_html}{failures_html}'
+    return f'{heatmap_html}{failures_html}{failure_html}{dist_html}{tables_html}'
 
 
 def _sim_failure_modes(rows: list[tuple[str, int]]) -> str:
@@ -796,7 +796,11 @@ def _sim_overview(
             heatmap_data=heatmap_data,
             confidence=summary_data.get('confidence'),
         )
-    kpi_html = _sim_kpi_band(summary_data)
+    kpi_html = _sim_kpi_band(
+        summary_data,
+        n_personas=len(heatmap_data.get('personas', [])),
+        n_scenarios=len(heatmap_data.get('scenarios', [])),
+    )
     donut_html = _sim_outcomes_donut(rows)
     # Second block: Average quality metrics (turn metrics); fall back to the
     # token-usage summary for runs that carry no per-turn quality data.
@@ -1048,16 +1052,15 @@ def _agent_description_preview(description: Any) -> str | None:
     return f'{compact[:_AGENT_DESCRIPTION_PREVIEW_LIMIT].rstrip()}...'
 
 
-def _sim_kpi_band(summary_data: dict[str, Any]) -> str:
-    """5-card KPI band (spec §Overview.2). Goal-completion status is the
-    summary verdict (pass/warn/fail) — never an ad-hoc threshold."""
-    from evaluatorq.common.reports.html_helpers import kpi_cards, pct
+def _sim_kpi_band(summary_data: dict[str, Any], n_personas: int = 0, n_scenarios: int = 0) -> str:
+    """6-card KPI band (spec §Overview.2). Leads with the persona/scenario
+    matrix dimensions; goal-completion status is the summary verdict."""
+    from evaluatorq.common.reports.html_helpers import kpi_cards
 
-    verdict = summary_data.get('verdict', 'neutral')
-    goal_status = verdict if verdict in {'pass', 'warn', 'fail'} else 'neutral'
     errors = summary_data.get('errors', 0)
     return kpi_cards([
-        {'label': 'Goal completion', 'value': pct(summary_data.get('success_rate', 0.0)), 'status': goal_status},
+        {'label': 'Personas', 'value': str(n_personas), 'status': 'neutral'},
+        {'label': 'Scenarios', 'value': str(n_scenarios), 'status': 'neutral'},
         {
             'label': 'Avg score',
             'value': f'{summary_data.get("avg_goal_completion_score", 0.0):.2f}',
