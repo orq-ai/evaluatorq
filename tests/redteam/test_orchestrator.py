@@ -6,7 +6,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from evaluatorq.contracts import AgentResponse, Message
-from evaluatorq.redteam.contracts import AgentContext, AttackStrategy, AttackTechnique, DeliveryMethod, SendResult, TokenUsage, TurnType
+from evaluatorq.redteam.contracts import (
+    AgentContext,
+    AttackStrategy,
+    AttackTechnique,
+    DeliveryMethod,
+    SendResult,
+    TokenUsage,
+    TurnType,
+)
 from evaluatorq.redteam.adaptive.orchestrator import (
     ADVERSARIAL_SYSTEM_PROMPT,
     MultiTurnOrchestrator,
@@ -121,9 +129,7 @@ class TestORQAgentTarget:
         first_response = MagicMock()
         first_response.output = []
         first_response.task_id = 'task_123'
-        first_response.pending_tool_calls = [
-            {'id': 'call_1', 'name': 'bad_tool', 'arguments': 'not-json'}
-        ]
+        first_response.pending_tool_calls = [{'id': 'call_1', 'name': 'bad_tool', 'arguments': 'not-json'}]
 
         final_response = MagicMock()
         final_response.output = []
@@ -326,9 +332,7 @@ class TestMultiTurnOrchestrator:
 
         target_usage = TokenUsage(prompt_tokens=12, completion_tokens=7, total_tokens=19, calls=1)
         mock_target = AsyncMock()
-        mock_target.respond = AsyncMock(
-            return_value=AgentResponse(text='ok', usage=target_usage)
-        )
+        mock_target.respond = AsyncMock(return_value=AgentResponse(text='ok', usage=target_usage))
 
         orchestrator = MultiTurnOrchestrator(llm_client=mock_llm, model='azure/gpt-5-mini')
         strategy = AttackStrategy(
@@ -448,9 +452,7 @@ class TestTimeoutHandling:
 
         mock_target = AsyncMock()
         # First call times out, second succeeds
-        mock_target.respond = AsyncMock(
-            side_effect=[asyncio.TimeoutError, AgentResponse(text='Agent response')]
-        )
+        mock_target.respond = AsyncMock(side_effect=[asyncio.TimeoutError, AgentResponse(text='Agent response')])
         mock_target.consume_last_token_usage = lambda: None
 
         orchestrator = MultiTurnOrchestrator(llm_client=mock_llm, model='azure/gpt-5-mini')
@@ -641,10 +643,14 @@ class TestOrchestratorSanitization:
         # Find any user message across all LLM calls that contains target_response
         all_messages = [m for call in captured_messages for m in call]
         analysis_msg = next(
-            (m for m in all_messages if isinstance(m, dict) and m.get('role') == 'user' and 'target_response' in str(m.get('content', ''))),
+            (
+                m
+                for m in all_messages
+                if isinstance(m, dict) and m.get('role') == 'user' and 'target_response' in str(m.get('content', ''))
+            ),
             None,
         )
-        assert analysis_msg is not None, "Analysis prompt with target_response not found in adversarial messages"
+        assert analysis_msg is not None, 'Analysis prompt with target_response not found in adversarial messages'
         content = str(analysis_msg['content'])
 
         # xml_escape should have escaped ALL angle brackets

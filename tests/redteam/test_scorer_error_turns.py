@@ -39,7 +39,7 @@ def _clean_turn(attack: str, reply: str) -> Turn:
     )
 
 
-def _params(output: AttackOutput) -> dict:
+def _params(output: AttackOutput) -> dict[str, object]:
     return {'data': SimpleNamespace(inputs={}), 'output': output}
 
 
@@ -65,7 +65,9 @@ async def test_all_error_turns_scored_as_error_not_resistant():
 @pytest.mark.asyncio
 async def test_all_error_turns_with_missing_codes_does_not_crash():
     """AgentResponseError.code is Optional; a None code must not crash the summary."""
-    output = AttackOutput(vulnerability=VULN, turns=[_error_turn('a', code=None), _error_turn('b', code='orq.http.502')])
+    output = AttackOutput(
+        vulnerability=VULN, turns=[_error_turn('a', code=None), _error_turn('b', code='orq.http.502')]
+    )
     judge = AsyncMock(return_value=_resistant())
 
     with patch('evaluatorq.redteam.adaptive.pipeline.OWASPEvaluator') as cls:

@@ -674,7 +674,7 @@ class AgentResponse(BaseModel):
     (``output_text``, ``function_call``, ``reasoning``).
 
     Accessors:
-        ``.text``       — last ``TextOutputItem`` content, or ``""`` if none
+        ``.text``       — all ``TextOutputItem`` contents concatenated, or ``""`` if none
         ``.tool_calls`` — list of :class:`ToolCallOutputItem` filtered from
         :attr:`output` in order
     """

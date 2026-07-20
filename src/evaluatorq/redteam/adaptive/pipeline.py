@@ -683,13 +683,19 @@ def create_dynamic_evaluator(
         scorable_turns = [t for t in output.turns if not t.errored and _has_content(t)]
         if len(scorable_turns) < len(output.turns):
             dropped = len(output.turns) - len(scorable_turns)
-            codes = ', '.join(sorted({t.target.error.code for t in output.turns if t.target.error and t.target.error.code})) or 'none'
+            codes = (
+                ', '.join(sorted({t.target.error.code for t in output.turns if t.target.error and t.target.error.code}))
+                or 'none'
+            )
             logger.warning(
                 f'Dropped {dropped}/{len(output.turns)} errored/empty target turn(s) before scoring '
                 f'(codes: {codes}); judging {len(scorable_turns)} remaining.'
             )
         if output.turns and not scorable_turns:
-            codes = ', '.join(sorted({t.target.error.code for t in output.turns if t.target.error and t.target.error.code})) or 'unknown'
+            codes = (
+                ', '.join(sorted({t.target.error.code for t in output.turns if t.target.error and t.target.error.code}))
+                or 'unknown'
+            )
             return EvaluationResult(
                 value='error',
                 explanation=f'Skipped: no scorable target turns (errored or empty; codes: {codes}) — nothing to evaluate',
