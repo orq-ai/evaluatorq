@@ -136,7 +136,25 @@
     function openDialog() {
       var dialog = currentDialog();
       if (!dialog) return;
+      dialog.classList.remove('sim-entity-dialog--closing');
       if (!dialog.open) dialog.showModal();
+    }
+
+    function closeDrawer() {
+      var dialog = currentDialog();
+      if (!dialog || !dialog.open || dialog.classList.contains('sim-entity-dialog--closing')) return;
+      dialog.classList.add('sim-entity-dialog--closing');
+      var finished = false;
+      var fallback;
+      function finishClose() {
+        if (finished) return;
+        finished = true;
+        window.clearTimeout(fallback);
+        dialog.classList.remove('sim-entity-dialog--closing');
+        dialog.close();
+      }
+      dialog.addEventListener('animationend', finishClose, { once: true });
+      fallback = window.setTimeout(finishClose, 220);
     }
 
     function formValues() {
@@ -268,7 +286,7 @@
       var dialog = currentDialog();
       if (!dialog || !dialog.open) return;
       if (evt.target === dialog || evt.target.closest('[data-sim-entity-close]')) {
-        dialog.close();
+        closeDrawer();
       } else if (evt.target.closest('[data-sim-entity-back]')) {
         restoreState(drillStack.pop());
       } else if (evt.target.closest('[data-sim-entity-prev]')) {

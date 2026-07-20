@@ -1113,33 +1113,54 @@ _SIM_REPORT_CSS = """
 # under `.sim-report` per docs/superpowers/specs/2026-07-10-agent-sim-report-
 # alignment-design.md §Transcripts.
 _SIM_TRANSCRIPT_CSS = """
-/* ---- Conversation rows (spec §Transcripts, Task 11) ---- */
-.sim-report .sim-row-list { display: flex; flex-direction: column; gap: 10px; }
-.sim-report .sim-conv-row-shell { display: flex; align-items: center; gap: 8px; }
-.sim-report .sim-conv-row {
+/* ---- Conversation table (sortable + paginated) ---- */
+.sim-report .sim-conv-table {
+    width: 100%; border-collapse: collapse; font-size: 13px;
     border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden;
-    background: var(--surface-app);
-    display: flex; align-items: center; gap: 8px; padding: 12px 16px;
-    cursor: pointer; transition: border-color 120ms ease, box-shadow 120ms ease;
-    flex: 1; min-width: 0;
 }
-.sim-report .sim-conv-row-shell > .trace-link { flex: 0 0 auto; white-space: nowrap; }
-.sim-report .sim-conv-row:hover { border-color: var(--teal-600); }
+.sim-report .sim-conv-table thead th {
+    text-align: left; padding: 0; background: var(--surface-sunken);
+    border-bottom: 1px solid var(--border-subtle); white-space: nowrap;
+}
+.sim-report .sim-th-sort {
+    display: inline-flex; align-items: center; gap: 4px; width: 100%;
+    padding: 10px 12px; background: none; border: 0; cursor: pointer;
+    font: inherit; font-weight: 600; color: var(--text-strong); text-align: left;
+}
+.sim-report .sim-th-sort:hover { color: var(--teal-600); }
+/* Inactive sortable columns show a faint ⇅; it strengthens on hover so the
+   header reads as clickable. The active column's ▲/▼ is always full-strength. */
+.sim-report .sim-th-caret { font-size: 9px; color: var(--text-faint); }
+.sim-report .sim-th-sort:hover .sim-th-caret { color: var(--teal-600); }
+.sim-report .sim-th-caret-active { color: var(--teal-600); }
+.sim-report .sim-conv-table tbody td { padding: 10px 12px; }
+.sim-report .sim-conv-row {
+    border-top: 1px solid var(--border-subtle);
+    cursor: pointer;
+}
 .sim-report .sim-conv-row:focus-visible {
-    outline: 2px solid var(--teal-600); outline-offset: 2px;
+    outline: 2px solid var(--teal-600); outline-offset: -2px;
 }
-.sim-report .sim-conv-idx {
-    font-family: var(--font-mono); font-size: 12px; color: var(--text-faint);
-}
-.sim-report .sim-conv-persona { font-size: 14px; font-weight: 600; color: var(--text-strong); }
-.sim-report .sim-conv-sep { color: var(--text-faint); }
-.sim-report .sim-conv-scenario { font-size: 13px; color: var(--text-body); }
-.sim-report .sim-conv-right {
-    display: flex; align-items: center; gap: 6px; margin-left: auto;
-}
+.sim-report .sim-conv-idx { font-family: var(--font-mono); font-size: 12px; color: var(--text-faint); }
+.sim-report .sim-conv-persona { font-weight: 600; color: var(--text-strong); }
+.sim-report .sim-conv-scenario { color: var(--text-body); }
+.sim-report .sim-conv-turns, .sim-report .sim-conv-score { font-variant-numeric: tabular-nums; }
+.sim-report .sim-conv-trace .trace-link { white-space: nowrap; }
 .sim-report .sim-tint-achieved { background: var(--green-100); }
 .sim-report .sim-tint-missed { background: var(--red-100); }
 .sim-report .sim-tint-error { background: var(--amber-100); }
+
+/* ---- Pager ---- */
+.sim-report .sim-pager {
+    display: flex; align-items: center; justify-content: flex-end; gap: 12px;
+    margin-top: 10px; font-size: 12px; color: var(--text-faint);
+}
+.sim-report .sim-pager-btn {
+    padding: 5px 12px; border: 1px solid var(--border-subtle); border-radius: 6px;
+    background: var(--surface-app); color: var(--text-body); cursor: pointer; font: inherit;
+}
+.sim-report .sim-pager-btn:hover:not([disabled]) { border-color: var(--teal-600); color: var(--teal-600); }
+.sim-report .sim-pager-btn[disabled] { opacity: 0.4; cursor: default; }
 
 /* ---- Transcript fragment: judge callout / bubbles / criteria (Task 12) ---- */
 .sim-report .sim-judge {
@@ -1155,11 +1176,11 @@ _SIM_TRANSCRIPT_CSS = """
     background: var(--red-100); color: var(--red-600); border-radius: 4px;
     padding: 10px 14px; margin-bottom: 14px; font-size: 13px;
 }
-.sim-report .sim-transcript-grid {
-    display: grid; grid-template-columns: 1.6fr 1fr; gap: 20px;
-}
-@media (max-width: 760px) {
-    .sim-report .sim-transcript-grid { grid-template-columns: 1fr; }
+.sim-report .sim-transcript-grid { display: flex; flex-direction: column; gap: 0; }
+/* Hairline between the criteria block and the conversation below it, matching
+   the summary's bottom rule so the drawer reads as three stacked sections. */
+.sim-report .sim-transcript-grid > * + * {
+    margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--border-subtle);
 }
 
 /* Chat bubbles (render_message_list avatar + side extension). Shared with
@@ -1601,16 +1622,21 @@ _SIM_REPORT_OVERRIDES_CSS = """
 .sim-report .sim-scenario-rate--low { background: var(--red-100); color: var(--red-600); }
 .sim-report .sim-scenario-rate--low .sim-scenario-rate-dot { background: var(--red-600); }
 .sim-report .sim-entity-dialog {
-    inset: 0 0 0 auto; margin: 0; width: min(560px, 92vw); height: 100vh; max-height: 100vh;
+    inset: 0 0 0 auto; margin: 0; width: 60vw; height: 100vh; max-height: 100vh;
     padding: 0; border: 0; border-left: 1px solid var(--border-subtle); border-radius: 12px 0 0 12px;
     background: var(--surface-app); color: var(--text-body); box-shadow: var(--shadow-lg);
 }
 .sim-report .sim-entity-dialog[open] { animation: sim-drawer-in 160ms ease-out; }
 @keyframes sim-drawer-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
+.sim-report .sim-entity-dialog--closing { animation: sim-drawer-out 160ms ease-in forwards; }
+@keyframes sim-drawer-out { from { transform: translateX(0); } to { transform: translateX(100%); } }
 .sim-report .sim-entity-dialog::backdrop { background: rgb(18 17 15 / 0.42); }
 .sim-report .sim-entity-modal-shell { display: flex; flex-direction: column; height: 100%; max-height: none; }
 .sim-report .sim-entity-modal-content { flex: 1; min-height: 0; padding: 24px; overflow: auto; }
 .sim-report .sim-entity-dialog .sim-transcript-grid > * { min-width: 0; }
+@media (max-width: 760px) {
+    .sim-report .sim-entity-dialog { width: 100vw; border-radius: 0; }
+}
 .sim-report .sim-drawer-row,
 .sim-report .sim-conv-row {
     cursor: pointer; transition: background 120ms ease, border-color 120ms ease;
@@ -1806,8 +1832,11 @@ _SIM_TRANSCRIPT_OVERRIDES_CSS = """
 /* Chat bubbles (render_message_list avatar + side extension) — sim-only skin,
    distinct from the shared `.report-aligned .sim-msg/.rt-msg` bubbles. */
 .sim-report .sim-msg { display: flex; gap: 10px; margin-bottom: 10px; max-width: 88%; }
-.sim-report .sim-msg-user, .sim-report .sim-msg-system { margin-right: auto; }
-.sim-report .sim-msg-assistant, .sim-report .sim-msg-tool { margin-left: auto; flex-direction: row-reverse; }
+/* Sim swaps sides vs the shared `.report-aligned` base (user right, agent left),
+   so it must reset BOTH margins + flex-direction — the element matches both the
+   base rule and this one (drawer lives inside `.report-aligned sim-report`). */
+.sim-report .sim-msg-user, .sim-report .sim-msg-system { margin: 0 0 16px auto; flex-direction: row-reverse; }
+.sim-report .sim-msg-assistant, .sim-report .sim-msg-tool { margin: 0 auto 16px 0; flex-direction: row; }
 .sim-report .sim-msg-avatar {
     flex-shrink: 0; width: 30px; height: 30px; border-radius: var(--radius-md);
     display: flex; align-items: center; justify-content: center;
@@ -1822,10 +1851,10 @@ _SIM_TRANSCRIPT_OVERRIDES_CSS = """
    avatar side). */
 .sim-report .sim-msg-bubble {
     background: var(--surface-card); border: 1px solid var(--border-subtle);
-    border-radius: 3px var(--radius-lg) var(--radius-lg) var(--radius-lg); padding: 9px 13px;
+    border-radius: var(--radius-lg) 3px var(--radius-lg) var(--radius-lg); padding: 9px 13px;
 }
 .sim-report .sim-msg-assistant .sim-msg-bubble, .sim-report .sim-msg-tool .sim-msg-bubble {
-    background: var(--teal-50); border-radius: var(--radius-lg) 3px var(--radius-lg) var(--radius-lg);
+    background: var(--teal-50); border-radius: 3px var(--radius-lg) var(--radius-lg) var(--radius-lg);
 }
 /* The avatar already carries USR/AGT; the mockup has no second in-bubble label. */
 .sim-report .sim-msg-role { display: none; }
@@ -1837,22 +1866,75 @@ _SIM_TRANSCRIPT_OVERRIDES_CSS = """
     background: transparent; border: none; border-radius: 0; padding: 0;
 }
 
+/* Conversation summary header: persona + scenario recap and turn-count chip,
+   shown above the criteria and transcript inside the drawer. */
+.sim-report .sim-conv-summary {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 16px; margin-bottom: 20px;
+    padding-bottom: 16px; border-bottom: 1px solid var(--border-subtle);
+}
+.sim-report .sim-conv-meta {
+    display: flex; flex-direction: column; gap: 8px; min-width: 0;
+}
+.sim-report .sim-conv-field {
+    display: flex; flex-direction: column; gap: 2px; min-width: 0;
+}
+.sim-report .sim-conv-label {
+    font-family: var(--font-sans); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-faint);
+}
+.sim-report .sim-conv-value {
+    font-size: 14px; color: var(--text-body); line-height: 1.4;
+}
+.sim-report .sim-conv-turns-pill {
+    flex-shrink: 0; font-family: var(--font-sans); font-size: 12px; font-weight: 600;
+    white-space: nowrap; padding: 3px 10px; border-radius: 999px;
+    color: var(--text-muted); background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+}
+
 /* Criteria column (two-state per deviation #4) */
+.sim-report .sim-criteria-head {
+    display: flex; align-items: baseline; gap: 10px;
+    margin-bottom: 8px;
+}
 .sim-report .sim-criteria-header {
     font-family: var(--font-sans); font-size: 11px; font-weight: 600;
-    text-transform: uppercase; color: var(--text-faint); margin-bottom: 8px;
+    text-transform: uppercase; color: var(--text-faint); margin-bottom: 0;
+    margin-right: auto;
+}
+.sim-report .sim-criteria-verdict {
+    font-family: var(--font-sans); font-size: 12px; font-weight: 700;
+    letter-spacing: 0.02em; white-space: nowrap;
+}
+.sim-report .sim-criteria-verdict--pass { color: var(--green-600); }
+.sim-report .sim-criteria-verdict--fail { color: var(--red-600); }
+.sim-report .sim-criteria-count {
+    font-family: var(--font-sans); font-size: 12px; color: var(--text-faint); white-space: nowrap;
 }
 .sim-report .sim-criteria-list {
     list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px;
 }
 /* Scoped to the criteria list so it no longer collides with the Scenarios-panel
-   .sim-criterion rule above. Mockup uses a plain gapped column (no dividers). */
+   .sim-criterion rule above. Plain gapped column (no dividers). */
 .sim-report .sim-criteria-list .sim-criterion {
-    display: flex; align-items: flex-start; gap: 8px;
+    display: flex; align-items: center; gap: 8px;
+    /* Reset the row-divider + padding the legacy `.sim-criterion` rule adds; the
+       criteria list is a plain gapped column so only the section-level rules
+       (general info ↔ criteria ↔ conversation) draw dividers. */
+    padding: 0; border-top: none;
 }
+/* The requirement chip sits right after the result icon so the reader never has
+   to reconcile a green check against a far-right "must not happen" label. */
 .sim-report .sim-ctype {
-    font-family: var(--font-sans); font-size: 10px; text-transform: uppercase;
-    color: var(--text-faint); white-space: nowrap;
+    flex-shrink: 0; font-family: var(--font-sans); font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.03em; white-space: nowrap;
+    padding: 2px 7px; border-radius: 999px;
+    color: var(--text-faint); background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+}
+.sim-report .sim-ctype-unsafe {
+    color: var(--red-600); background: var(--red-100); border-color: transparent;
 }
 """
 

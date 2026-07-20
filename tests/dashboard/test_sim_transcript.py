@@ -271,6 +271,24 @@ class TestSimTranscriptRoute:
         assert 'sim-transcript-grid' in r.text
         assert 'sim-criteria' in r.text
 
+    def test_transcript_summary_shows_persona_scenario_and_turns(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        rid = report_id(_sim_path(roots))
+        r = client.get(f'/r/{rid}/sim/transcript?idx=0')
+        # Conversation summary header recaps persona + scenario and a turn chip.
+        assert 'sim-conv-summary' in r.text
+        assert 'sim-conv-turns-pill' in r.text
+        assert '3 turns' in r.text  # fixture idx0 has turn_count=3
+
+    def test_transcript_criteria_precedes_conversation(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        rid = report_id(_sim_path(roots))
+        r = client.get(f'/r/{rid}/sim/transcript?idx=0')
+        # Criteria block must render before the chat bubbles inside the grid.
+        assert r.text.index('sim-criteria') < r.text.index('sim-transcript-bubbles')
+
     def test_transcript_contains_judge_reason(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
         r = client.get(f'/r/{rid}/sim/transcript?idx=0')
@@ -586,29 +604,32 @@ class TestConversationRows:
         html = render_sim_row_list('rid', sim_entries)
         assert '#1' in html
         assert 'alice' in html
-        assert '3 turns' in html
-        assert 'score 0.82' in html
+        assert '<td class="sim-conv-turns">3</td>' in html
+        assert '<td class="sim-conv-score">0.82</td>' in html
         assert 'Goal met' in html
         assert 'Goal missed' in html
         assert 'Error' in html
 
-    def test_trace_anchor_is_outside_keyboard_drawer_trigger(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_trace_anchor_carries_no_drawer_optout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The trace link lives in a row cell (aligned columns), so it nests
+        inside the ``role=button`` row. ``data-no-drawer`` is what keeps a
+        trace-link click/keypress from also firing the drawer (dashboard.js
+        bails on the ``[data-no-drawer]`` ancestor for both events)."""
         from evaluatorq.dashboard.sim_views import render_sim_row_list
 
         monkeypatch.setenv('ORQ_WORKSPACE_SLUG', 'workspace')
         entry = _entry().model_copy(update={'thread_id': 'run:0'})
         html = render_sim_row_list('rid', [entry])
 
-        trigger_start = html.index('<div class="sim-conv-row ')
-        trigger_end = html.index('</div>', trigger_start)
-        trace_start = html.index('<a class="btn-secondary trace-link"')
-        trigger = html[trigger_start:trigger_end]
+        row_start = html.index('<tr class="sim-conv-row ')
+        row_end = html.index('</tr>', row_start)
+        row = html[row_start:row_end]
 
-        assert 'role="button" tabindex="0"' in trigger
-        assert 'data-sim-entity-trigger' in trigger
-        assert 'trace-link' not in trigger
-        assert trace_start > trigger_end
-        assert 'data-no-drawer' in html[trace_start:]
+        assert 'role="button" tabindex="0"' in row
+        assert 'data-sim-entity-trigger' in row
+        # The trace anchor is inside the row but opts out of the drawer.
+        trace_start = row.index('<a class="btn-secondary trace-link"')
+        assert 'data-no-drawer' in row[trace_start:]
 
     def test_row_list_error_takes_precedence_over_goal_achieved(self) -> None:
         """terminated_by == 'error' tints error, regardless of goal_achieved."""
@@ -618,6 +639,42 @@ class TestConversationRows:
         html = render_sim_row_list('rid', [entry])
         assert 'sim-tint-error' in html
         assert 'sim-tint-achieved' not in html
+
+    def test_row_list_sorts_by_column(self) -> None:
+        """Sorting reorders visible rows without renumbering their index links."""
+        from evaluatorq.dashboard.sim_views import render_sim_row_list
+
+        entries = [
+            _entry(index=0, persona='carol', turn_count=5),
+            _entry(index=1, persona='alice', turn_count=9),
+            _entry(index=2, persona='bob', turn_count=1),
+        ]
+        html = render_sim_row_list('rid', entries, sort='turn_count', direction='desc')
+        positions = [html.index(f'>{p}<') for p in ('alice', 'carol', 'bob')]  # 9, 5, 1
+        assert positions == sorted(positions)
+        assert 'aria-sort="descending"' in html
+        # Index links stay stable — sorting reorders display, not the run position.
+        assert 'transcript?idx=1' in html
+
+    def test_row_list_paginates(self) -> None:
+        """Only page_size rows render per page; the pager reflects the split."""
+        from evaluatorq.dashboard.sim_views import render_sim_row_list
+
+        entries = [_entry(index=i, persona=f'p{i}') for i in range(30)]
+        page1 = render_sim_row_list('rid', entries, page=1, page_size=25)
+        page2 = render_sim_row_list('rid', entries, page=2, page_size=25)
+        assert page1.count('sim-conv-row') == 25
+        assert page2.count('sim-conv-row') == 5
+        assert 'Page 1 of 2' in page1
+        # Out-of-range page clamps to the last page rather than rendering empty.
+        assert 'Page 2 of 2' in render_sim_row_list('rid', entries, page=99, page_size=25)
+
+    def test_pager_hidden_for_single_page(self) -> None:
+        from evaluatorq.dashboard.sim_views import render_sim_row_list
+
+        html = render_sim_row_list('rid', [_entry(index=0)])
+        assert 'sim-pager-btn' not in html
+        assert '1 conversations' in html
 
 
 class TestRowlistWrapperNoSelfRefetch:
@@ -651,8 +708,8 @@ class TestTranscriptFragmentRewrite:
         html = render_transcript_fragment(sim_entry_with_safety_criterion)
         assert "⛔" not in html  # three-state ⛔ icon gone
         assert "&#x26D4;" not in html
-        # type label preserved as words (mockup shows "MUST NOT HAPPEN") + rendered red
-        assert "must not happen" in html
+        # Polarity chip sits beside the result icon; must_not_happen reads red.
+        assert "Prohibited" in html
         assert "sim-ctype-unsafe" in html
         assert "sim-judge" in html  # judge callout present when reason set
 
@@ -663,12 +720,48 @@ class TestTranscriptFragmentRewrite:
         assert 'sim-criterion-pass' in html
         assert 'sim-criterion-fail' in html
 
+    def test_transcript_fragment_criteria_verdict(self, sim_entry_with_safety_criterion) -> None:
+        from evaluatorq.dashboard.sim_views import render_transcript_fragment
+
+        html = render_transcript_fragment(sim_entry_with_safety_criterion)
+        # goal_achieved defaults True, one of two criteria passed. Goal outcome and
+        # criteria tally are shown as separate spans (not "PASS · 1/2 met").
+        assert 'sim-criteria-verdict--pass' in html
+        assert 'Goal met' in html
+        assert '1/2 criteria met' in html
+
     def test_transcript_fragment_bubbles_present(self, sim_entry_with_transcript) -> None:
         from evaluatorq.dashboard.sim_views import render_transcript_fragment
 
         html = render_transcript_fragment(sim_entry_with_transcript)
         assert 'sim-msg-avatar' in html
         assert 'sim-transcript-grid' in html
+
+    def test_drawer_stacks_criteria_above_conversation_and_swaps_message_sides(self) -> None:
+        """The wide drawer stacks criteria above the transcript, divided by a rule."""
+        from evaluatorq.dashboard.styles import DASHBOARD_CSS
+
+        assert '.sim-report .sim-entity-dialog' in DASHBOARD_CSS
+        assert 'width: 60vw;' in DASHBOARD_CSS
+        assert '.sim-report .sim-transcript-grid { display: flex; flex-direction: column; gap: 0; }' in DASHBOARD_CSS
+        # Hairline divider between stacked sections (criteria ↔ conversation).
+        assert '.sim-report .sim-transcript-grid > * + * {' in DASHBOARD_CSS
+        # User right / agent left. Must reset BOTH margins + flex-direction so the
+        # shared `.report-aligned` base rules (which also match the drawer) can't
+        # leave the opposite margin at `auto` and center the bubble.
+        # Margin shorthand carries the side-swap (auto) AND the vertical gap in the
+        # bottom slot — a `margin: 0 X 0 auto` form would zero out margin-bottom.
+        assert '.sim-report .sim-msg-user, .sim-report .sim-msg-system { margin: 0 0 16px auto; flex-direction: row-reverse; }' in DASHBOARD_CSS
+        assert '.sim-report .sim-msg-assistant, .sim-report .sim-msg-tool { margin: 0 auto 16px 0; flex-direction: row; }' in DASHBOARD_CSS
+
+    def test_backdrop_close_waits_for_drawer_exit_animation(self) -> None:
+        source = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
+        from evaluatorq.dashboard.styles import DASHBOARD_CSS
+
+        assert 'function closeDrawer()' in source
+        assert "dialog.addEventListener('animationend', finishClose, { once: true });" in source
+        assert 'sim-entity-dialog--closing' in source
+        assert '.sim-report .sim-entity-dialog--closing { animation: sim-drawer-out 160ms ease-in forwards; }' in DASHBOARD_CSS
 
     def test_transcript_fragment_error_entry_shows_error_message(self) -> None:
         from evaluatorq.dashboard.sim_views import render_transcript_fragment

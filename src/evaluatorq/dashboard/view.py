@@ -1115,6 +1115,11 @@ def sim_interactive_panels(rid: str, entries: list[Any]) -> str:
     """
     from evaluatorq.dashboard.sim_views import render_sim_row_list
 
+    # ponytail: the initial render (and the /filter body-swap that reuses this)
+    # always starts at page 1 / default sort. Sort + page live on the
+    # /sim/row-list GET; carrying them through a filter change would mean
+    # threading them into the POST too — add that only if losing sort-on-filter
+    # actually annoys anyone.
     row_list = render_sim_row_list(rid, entries)
     return (
         f'<section class="sim-interactive-panels">'

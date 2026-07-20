@@ -60,9 +60,13 @@ JUDGE_TOOLS: list[dict[str, Any]] = [
                         'type': 'string',
                         'description': 'Brief explanation of why the conversation should continue',
                     },
+                    'goal_completion_score': {
+                        'type': 'number',
+                        'description': 'How much of the goal is achieved SO FAR, 0.0 (none) to 1.0 (fully). Assess every turn — if the run hits max turns this is the final score.',
+                    },
                     **_QUALITY_SCORE_PROPERTIES,
                 },
-                'required': ['reason'],
+                'required': ['reason', 'goal_completion_score'],
             },
         },
     },
@@ -291,7 +295,9 @@ class JudgeAgent(BaseAgent):
                 reason=str(args.get('reason', '')),
                 goal_achieved=False,
                 rules_broken=[],
-                goal_completion_score=0.0,
+                # Partial progress, so max_turns runs get a real score instead of a
+                # hardcoded 0 (the judge never reaches finish_conversation there).
+                goal_completion_score=_clamp(_to_number(args.get('goal_completion_score'), 0.0)),
                 **quality_scores,
             )
 

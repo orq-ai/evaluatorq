@@ -635,12 +635,12 @@ def _tinted(text: str, value: float) -> str:
 def _sim_failures_table(section: Any, rid: str) -> str:
     """Dashboard-only failure rows, which open their transcripts in the drawer."""
     from evaluatorq.common.reports.html_helpers import html_table
-    from evaluatorq.simulation.reports.export_html import _cap
+    from evaluatorq.simulation.reports.export_html import _cap, _criteria_dots
 
     rows = section.data.get('rows', []) if section is not None else []
     if not rows:
         return '<section class="report-card"><h2>Failures</h2><p>No failed conversations.</p></section>'
-    headers = ['Scenario', 'Persona', 'Why', 'Score']
+    headers = ['Scenario', 'Persona', 'Why', 'Criteria', 'Score']
     table_rows = [
         [
             esc(str(row['scenario'])),
@@ -649,6 +649,8 @@ def _sim_failures_table(section: Any, rid: str) -> str:
                 f'<span class="fail-why" data-no-drawer title="{esc(str(row.get("reason", "")))}">'
                 f'{esc(_cap(str(row.get("reason", ""))))}</span>'
             ),
+            # data-no-drawer so unfolding the dots foldout doesn't open the drawer.
+            f'<span data-no-drawer>{_criteria_dots(row.get("criteria", []))}</span>',
             f'{float(row["score"]):.2f}',
         ]
         for row in rows

@@ -312,13 +312,13 @@ def test_sim_failure_modes_all_singletons_no_hidden_rows() -> None:
     assert 'hidden' not in bars_html
 
 
-def test_dashboard_failures_use_four_columns_and_drawer_rows(sim_run) -> None:
+def test_dashboard_failures_use_five_columns_and_drawer_rows(sim_run) -> None:
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
 
     html = sim_report_tabs('rid', sim_run)
     failures = html.split('id="section-failures_first"', 1)[1].split('</section>', 1)[0]
-    assert ['Scenario', 'Persona', 'Why', 'Score'] == _headers(failures)
-    assert 'Criteria' not in failures
+    assert ['Scenario', 'Persona', 'Why', 'Criteria', 'Score'] == _headers(failures)
+    assert 'crit-' in failures  # criteria dots cell rendered (dots or empty-dash)
     assert 'href="#conv-' not in failures
     assert 'data-entity-kind="conversation"' in failures
     assert 'data-drawer-url="/r/rid/sim/transcript?idx=1"' in failures
@@ -584,7 +584,7 @@ def test_sim_entity_dialog_is_a_right_side_drawer() -> None:
 
     css = DASHBOARD_CSS
     assert 'inset: 0 0 0 auto' in css
-    assert 'width: min(560px, 92vw)' in css
+    assert 'width: 60vw' in css
     assert 'height: 100vh' in css
     assert '.sim-entity-dialog::backdrop' in css
     assert '@media (max-width: 480px)' in css
