@@ -1582,13 +1582,54 @@ _SIM_REPORT_OVERRIDES_CSS = """
 .sim-report .sim-scenario-rate--low { background: var(--red-100); color: var(--red-600); }
 .sim-report .sim-scenario-rate--low .sim-scenario-rate-dot { background: var(--red-600); }
 .sim-report .sim-entity-dialog {
-    width: min(720px, calc(100vw - 32px)); max-height: min(780px, calc(100vh - 32px));
-    padding: 0; border: 1px solid var(--border-subtle); border-radius: 8px;
+    inset: 0 0 0 auto; margin: 0; width: min(560px, 92vw); height: 100vh; max-height: 100vh;
+    padding: 0; border: 0; border-left: 1px solid var(--border-subtle); border-radius: 12px 0 0 12px;
     background: var(--surface-app); color: var(--text-body); box-shadow: var(--shadow-lg);
 }
+.sim-report .sim-entity-dialog[open] { animation: sim-drawer-in 160ms ease-out; }
+@keyframes sim-drawer-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
 .sim-report .sim-entity-dialog::backdrop { background: rgb(18 17 15 / 0.42); }
-.sim-report .sim-entity-modal-shell { display: flex; flex-direction: column; max-height: inherit; }
-.sim-report .sim-entity-modal-content { padding: 24px; overflow: auto; }
+.sim-report .sim-entity-modal-shell { display: flex; flex-direction: column; height: 100%; max-height: none; }
+.sim-report .sim-entity-modal-content { flex: 1; min-height: 0; padding: 24px; overflow: auto; }
+.sim-report .sim-entity-dialog .sim-transcript-grid > * { min-width: 0; }
+.sim-report .sim-drawer-row,
+.sim-report .sim-conv-row {
+    cursor: pointer; transition: background 120ms ease, border-color 120ms ease;
+}
+.sim-report .sim-drawer-row:hover,
+.sim-report .sim-conv-row:hover { background: var(--surface-sunken); }
+.sim-report .sim-drawer-row:focus-visible,
+.sim-report .sim-conv-row:focus-visible {
+    outline: 2px solid var(--teal-600); outline-offset: 2px;
+}
+.sim-report .sim-cohort-stats {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;
+    margin: 12px 0 16px;
+}
+.sim-report .sim-cohort-stats span {
+    display: grid; gap: 2px; padding: 8px 10px; border-radius: 6px;
+    background: var(--surface-sunken); font-size: 12px; color: var(--text-body);
+}
+.sim-report .sim-cohort-stats b {
+    font-family: var(--font-mono); font-size: 10px; font-weight: 500;
+    text-transform: uppercase; color: var(--text-faint);
+}
+.sim-report .sim-cohort-conversations { margin-top: 18px; }
+.sim-report .sim-cohort-conversations h3 { margin-bottom: 8px; }
+.sim-report .sim-cohort-list { display: grid; gap: 6px; }
+.sim-report .sim-cohort-conversation {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%;
+    padding: 9px 10px; border: 1px solid var(--border-subtle); border-radius: 6px;
+    background: var(--surface-app); color: var(--text-body); font: inherit; text-align: left;
+    cursor: pointer; transition: background 120ms ease, border-color 120ms ease;
+}
+.sim-report .sim-cohort-conversation:hover {
+    background: var(--surface-sunken); border-color: var(--teal-600);
+}
+.sim-report .sim-cohort-conversation:focus-visible {
+    outline: 2px solid var(--teal-600); outline-offset: 2px;
+}
+.sim-report .sim-cohort-empty { margin: 8px 0 0; color: var(--text-muted); font-size: 13px; }
 .sim-report .sim-entity-kicker {
     font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .06em;
 }
@@ -1653,6 +1694,12 @@ _SIM_REPORT_OVERRIDES_CSS = """
 }
 .sim-report .sim-entity-nav:hover,
 .sim-report .sim-entity-close:hover { border-color: var(--orange-500); color: var(--orange-500); }
+@media (max-width: 480px) {
+    .sim-report .sim-entity-dialog { width: 92vw; border-radius: 10px 0 0 10px; }
+    .sim-report .sim-entity-modal-content { padding: 16px; }
+    .sim-report .sim-entity-trait-row { grid-template-columns: 88px minmax(0, 1fr) 36px; gap: 8px; }
+    .sim-report .sim-entity-modal-actions { padding: 10px 12px; }
+}
 
 /* ---- Agent info card ---- */
 .sim-report .sim-agent-card { margin-bottom: 16px; }

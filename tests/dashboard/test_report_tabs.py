@@ -532,6 +532,17 @@ def test_sim_config_compacts_entities_and_prerenders_modal_details() -> None:
     assert '50%' in scenario_row
 
 
+def test_sim_entity_dialog_is_a_right_side_drawer() -> None:
+    from evaluatorq.dashboard.styles import DASHBOARD_CSS
+
+    css = DASHBOARD_CSS
+    assert 'inset: 0 0 0 auto' in css
+    assert 'width: min(560px, 92vw)' in css
+    assert 'height: 100vh' in css
+    assert '.sim-entity-dialog::backdrop' in css
+    assert '@media (max-width: 480px)' in css
+
+
 def test_sim_drawer_has_back_nav_close_controls(sim_run) -> None:
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
 
