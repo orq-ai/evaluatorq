@@ -607,6 +607,12 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
     min-width: 2.5em; text-align: right;
     flex-shrink: 0;
 }
+.filter-slider-max {
+    font-family: var(--font-mono);
+    font-size: 10.5px; font-weight: 500;
+    color: var(--text-faint);
+    flex-shrink: 0;
+}
 
 /* "More filters" expander (redteam rail: technique/delivery/vulnerability).
    Styled as a subtle text toggle — not a boxed card — so it reads as a
@@ -1152,15 +1158,30 @@ _SIM_TRANSCRIPT_CSS = """
 
 /* ---- Pager ---- */
 .sim-report .sim-pager {
-    display: flex; align-items: center; justify-content: flex-end; gap: 12px;
+    display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
     margin-top: 10px; font-size: 12px; color: var(--text-faint);
 }
+/* Pager group centred (col 2); size selector pinned right (col 3). */
+.sim-report .sim-pager-nav { grid-column: 2; display: flex; align-items: center; gap: 12px; }
+.sim-report .sim-size { grid-column: 3; justify-self: end; }
 .sim-report .sim-pager-btn {
     padding: 5px 12px; border: 1px solid var(--border-subtle); border-radius: 6px;
     background: var(--surface-app); color: var(--text-body); cursor: pointer; font: inherit;
 }
 .sim-report .sim-pager-btn:hover:not([disabled]) { border-color: var(--teal-600); color: var(--teal-600); }
 .sim-report .sim-pager-btn[disabled] { opacity: 0.4; cursor: default; }
+.sim-report .sim-size { display: flex; align-items: center; gap: 4px; }
+.sim-report .sim-size-label { margin-right: 2px; }
+.sim-report .sim-size-btn {
+    padding: 4px 9px; border: 1px solid var(--border-subtle); border-radius: 6px;
+    background: var(--surface-app); color: var(--text-body); cursor: pointer; font: inherit;
+}
+.sim-report .sim-size-btn:hover:not([disabled]) { border-color: var(--teal-600); color: var(--teal-600); }
+/* Active size is disabled (current selection), so give it the teal fill instead of the faded look. */
+.sim-report .sim-size-btn[aria-current="true"] {
+    opacity: 1; cursor: default; border-color: var(--teal-600);
+    background: var(--teal-600); color: var(--surface-app);
+}
 
 /* ---- Transcript fragment: judge callout / bubbles / criteria (Task 12) ---- */
 .sim-report .sim-judge {

@@ -99,24 +99,34 @@ _SIM_COLUMNS: list[tuple[str, str, Any]] = [
 _SORT_KEYS: dict[str, Any] = {param: key for param, _, key in _SIM_COLUMNS}
 _DEFAULT_SORT = 'index'
 _PAGE_SIZE = 25
+_PAGE_SIZES = (5, 10, 25)  # selectable rows-per-page; last is the default
 
 
-def _hx_control(rid: str, sort: str, direction: str, page: int) -> str:
-    """Shared HTMX attributes for a header/pager control.
+def _coerce_page_size(raw: str | int | None) -> int:
+    """Clamp an incoming page-size to an allowed option; bad input → default."""
+    try:
+        n = int(raw)  # type: ignore[arg-type]
+    except (ValueError, TypeError):
+        return _PAGE_SIZE
+    return n if n in _PAGE_SIZES else _PAGE_SIZE
 
-    Each control re-fetches ``/sim/row-list`` with the new sort/page, pulling
-    the current filter state in via ``hx-include`` so sorting and filtering
-    compose, and swaps the whole ``#sim-row-list-{rid}`` wrapper.
+
+def _hx_control(rid: str, sort: str, direction: str, page: int, size: int) -> str:
+    """Shared HTMX attributes for a header/pager/size control.
+
+    Each control re-fetches ``/sim/row-list`` with the new sort/page/size,
+    pulling the current filter state in via ``hx-include`` so sorting and
+    filtering compose, and swaps the whole ``#sim-row-list-{rid}`` wrapper.
     """
     safe_rid = esc(rid)
     return (
-        f'hx-get="/r/{safe_rid}/sim/row-list?sort={esc(sort)}&dir={esc(direction)}&page={page}" '
+        f'hx-get="/r/{safe_rid}/sim/row-list?sort={esc(sort)}&dir={esc(direction)}&page={page}&size={size}" '
         'hx-include="#filter-form" '
         f'hx-target="#sim-row-list-{safe_rid}" hx-swap="outerHTML"'
     )
 
 
-def _sim_header_row(rid: str, sort: str, direction: str) -> str:
+def _sim_header_row(rid: str, sort: str, direction: str, size: int) -> str:
     """Build the sortable ``<thead>`` row. Clicking a header toggles direction."""
     cells: list[str] = []
     for param, label, _key in _SIM_COLUMNS:
@@ -135,7 +145,7 @@ def _sim_header_row(rid: str, sort: str, direction: str) -> str:
             caret_cls = 'sim-th-caret'
         cells.append(
             f'<th scope="col" aria-sort="{aria}">'
-            f'<button type="button" class="sim-th-sort" {_hx_control(rid, param, next_dir, 1)}>'
+            f'<button type="button" class="sim-th-sort" {_hx_control(rid, param, next_dir, 1, size)}>'
             f'{esc(label)}<span class="{caret_cls}">{caret}</span>'
             f'</button></th>'
         )
@@ -144,23 +154,41 @@ def _sim_header_row(rid: str, sort: str, direction: str) -> str:
     return f'<thead><tr>{"".join(cells)}</tr></thead>'
 
 
-def _sim_pager(rid: str, sort: str, direction: str, page: int, pages: int, total: int) -> str:
-    """Render the pager nav; navigation buttons carry sort + filter state."""
+def _sim_size_selector(rid: str, sort: str, direction: str, size: int) -> str:
+    """Rows-per-page selector (5/10/25). Changing size resets to page 1."""
+    opts = ''.join(
+        (
+            f'<button type="button" class="sim-size-btn" disabled aria-current="true">{n}</button>'
+            if n == size
+            else f'<button type="button" class="sim-size-btn" {_hx_control(rid, sort, direction, 1, n)}>{n}</button>'
+        )
+        for n in _PAGE_SIZES
+    )
+    return f'<div class="sim-size" role="group" aria-label="Rows per page"><span class="sim-size-label">Show</span>{opts}</div>'
+
+
+def _sim_pager(rid: str, sort: str, direction: str, page: int, pages: int, total: int, size: int) -> str:
+    """Render the pager nav + rows-per-page selector; buttons carry sort + filter state."""
+    selector = _sim_size_selector(rid, sort, direction, size)
+    # 3-column grid centres the pager group (col 2) while the selector stays
+    # pinned right (col 3); col 1 is an empty spacer that balances the selector.
     if pages <= 1:
-        return f'<nav class="sim-pager"><span class="sim-pager-info">{total} conversations</span></nav>'
+        nav = f'<div class="sim-pager-nav"><span class="sim-pager-info">{total} conversations</span></div>'
+        return f'<nav class="sim-pager">{nav}{selector}</nav>'
 
     def btn(label: str, target_page: int, *, disabled: bool) -> str:
         if disabled:
             return f'<button type="button" class="sim-pager-btn" disabled>{label}</button>'
-        return f'<button type="button" class="sim-pager-btn" {_hx_control(rid, sort, direction, target_page)}>{label}</button>'
+        return f'<button type="button" class="sim-pager-btn" {_hx_control(rid, sort, direction, target_page, size)}>{label}</button>'
 
-    return (
-        '<nav class="sim-pager">'
+    nav = (
+        '<div class="sim-pager-nav">'
         f'{btn("&#x2039; Prev", page - 1, disabled=page <= 1)}'
         f'<span class="sim-pager-info">Page {page} of {pages} &middot; {total} conversations</span>'
         f'{btn("Next &#x203A;", page + 1, disabled=page >= pages)}'
-        '</nav>'
+        '</div>'
     )
+    return f'<nav class="sim-pager">{nav}{selector}</nav>'
 
 
 def render_sim_row_list(
@@ -199,6 +227,8 @@ def render_sim_row_list(
         sort = _DEFAULT_SORT
     if direction not in ('asc', 'desc'):
         direction = 'asc'
+    if page_size not in _PAGE_SIZES:
+        page_size = _PAGE_SIZE
 
     ordered = sorted(entries, key=_SORT_KEYS[sort], reverse=(direction == 'desc'))
     total = len(ordered)
@@ -244,8 +274,8 @@ def render_sim_row_list(
             '</tr>'
         )
 
-    header = _sim_header_row(rid, sort, direction)
-    pager = _sim_pager(rid, sort, direction, page, pages, total)
+    header = _sim_header_row(rid, sort, direction, page_size)
+    pager = _sim_pager(rid, sort, direction, page, pages, total, page_size)
     return (
         f'<section class="sim-row-list">'
         f'<table class="sim-conv-table">{header}<tbody>{"".join(rows_html)}</tbody></table>'
@@ -342,6 +372,7 @@ def _render_conversation_summary(entry: SimulationEntry) -> str:
     turn_word = 'turn' if turns == 1 else 'turns'
     return (
         f'<div class="sim-conv-summary">'
+        f'<span class="sim-conv-index">#{entry.index}</span>'
         f'<div class="sim-conv-meta">'
         f'<div class="sim-conv-field"><span class="sim-conv-label">Persona</span>'
         f'<span class="sim-conv-value">{esc(entry.persona)}</span></div>'
@@ -455,8 +486,9 @@ def register_sim_view_routes(app: Any, roots: list[Any] | None = None) -> None:
             page = int(req.query_params.get('page', '1'))
         except (ValueError, TypeError):
             page = 1
+        page_size = _coerce_page_size(req.query_params.get('size'))
 
-        html = render_sim_row_list(rid, entries, sort=sort, direction=direction, page=page)
+        html = render_sim_row_list(rid, entries, sort=sort, direction=direction, page=page, page_size=page_size)
         # Return wrapped in the same container div that sim_interactive_panels
         # renders so the outerHTML swap replaces the correct element.
         return Response(_sim_rowlist_wrapper(rid, html), media_type='text/html')

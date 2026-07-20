@@ -685,13 +685,18 @@ def _range_control(
     step: str,
     sel: list[str],
     floor: bool,
+    show_max: bool = False,
+    bound_when_unset: bool = False,
 ) -> str:
     """One min/max range control shared by raw-count and score thresholds.
 
     ``floor`` selects both the unset ("no-op") end of the range — ``min_val``
     for a floor (e.g. min turns), ``max_val`` for a ceiling (e.g. max goal
     score) — and the readout glyph (``≥`` for floors, ``≤`` for ceilings).
-    An absent selection renders "all" rather than a numeric readout.
+    An absent selection renders "all" rather than a numeric readout, unless
+    ``bound_when_unset`` is set (then the unset default renders numerically —
+    e.g. ``≤ 1`` for the goal-score ceiling). ``show_max`` appends the slider's
+    upper bound beside the readout (e.g. min-turns shows the run's max turns).
     """
     raw = sel[0] if sel else None
     default = min_val if floor else max_val
@@ -699,7 +704,13 @@ def _range_control(
         value = float(raw) if raw is not None else default
     except (ValueError, TypeError):
         value = default
-    readout = 'all' if raw is None else f'{"≥" if floor else "≤"} {_fmt_range_value(value, step)}'
+    if raw is None and not bound_when_unset:
+        readout = 'all'
+    else:
+        readout = f'{"≥" if floor else "≤"} {_fmt_range_value(value, step)}'
+    max_span = (
+        f'<span class="filter-slider-max">/ {_fmt_range_value(max_val, step)}</span>' if show_max else ''
+    )
     return (
         f'<div class="filter-group" data-dim="{esc(dim)}">'
         f'<label class="filter-label">{esc(label)}</label>'
@@ -707,6 +718,7 @@ def _range_control(
         f'<input type="range" class="filter-slider" name="{esc(dim)}" min="{_fmt_range_value(min_val, step)}"'
         f' max="{_fmt_range_value(max_val, step)}" step="{esc(step)}" value="{_fmt_range_value(value, step)}">'
         f'<span class="filter-slider-readout">{esc(readout)}</span>'
+        f'{max_span}'
         f'</div>'
         f'</div>'
     )
@@ -762,6 +774,7 @@ def _render_sim_filter_rail(
         step='0.05',
         sel=selections.get('max_goal_score', []),
         floor=False,
+        bound_when_unset=True,
     )
 
     # Min turns (floor, raw run-length integer — never normalized).
@@ -774,6 +787,7 @@ def _render_sim_filter_rail(
         step='1',
         sel=selections.get('min_turns', []),
         floor=True,
+        show_max=True,
     )
 
     # More expander: min total tokens (raw floor) + every available metric

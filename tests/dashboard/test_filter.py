@@ -896,6 +896,32 @@ def test_sim_rail_uses_raw_count_maxima():
     assert 'name="rule_broken" value="yes"' in html
 
 
+def test_sim_rail_min_turns_shows_max_beside_slider():
+    from evaluatorq.dashboard.view import render_filter_form
+
+    html = render_filter_form(
+        'rid',
+        'sim',
+        {'persona': [], 'scenario': [], 'terminated_by': [], 'goal_outcome': [], 'max_turns': ['8']},
+        {},
+    )
+    assert '<span class="filter-slider-max">/ 8</span>' in html
+
+
+def test_sim_rail_goal_score_unset_shows_max_not_all():
+    from evaluatorq.dashboard.view import render_filter_form
+
+    html = render_filter_form(
+        'rid',
+        'sim',
+        {'persona': [], 'scenario': [], 'terminated_by': [], 'goal_outcome': []},
+        {},  # no max_goal_score selection
+    )
+    # Goal-score ceiling renders its bound (≤ 1) when unset, not "all".
+    # (No metrics supplied, so no other ceiling control renders a ≤ readout.)
+    assert '<span class="filter-slider-readout">≤ 1</span>' in html
+
+
 def test_sim_rail_hides_unavailable_metrics():
     from evaluatorq.dashboard.view import render_filter_form
 

@@ -280,6 +280,17 @@ class TestSimTranscriptRoute:
         assert 'sim-conv-summary' in r.text
         assert 'sim-conv-turns-pill' in r.text
         assert '3 turns' in r.text  # fixture idx0 has turn_count=3
+        assert 'sim-conv-index' in r.text  # teal #index badge, top-left
+
+    def test_transcript_judge_folded_into_criteria(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        rid = report_id(_sim_path(roots))
+        r = client.get(f'/r/{rid}/sim/transcript?idx=0')
+        # Judge rationale lives inside the criteria block, not a standalone callout.
+        assert 'sim-judge' in r.text
+        crit = r.text.index('sim-criteria')
+        assert crit < r.text.index('sim-judge') < r.text.index('sim-transcript-bubbles')
 
     def test_transcript_criteria_precedes_conversation(
         self, client: TestClient, roots: list[Path]
@@ -675,6 +686,33 @@ class TestConversationRows:
         html = render_sim_row_list('rid', [_entry(index=0)])
         assert 'sim-pager-btn' not in html
         assert '1 conversations' in html
+        # Size selector shows even with a single page so you can shrink from 25.
+        assert 'sim-size' in html
+
+    def test_row_list_size_selector(self) -> None:
+        """Size selector offers 5/10/25; the active size is the disabled/current one
+        and other options re-fetch with that size and page reset to 1."""
+        from evaluatorq.dashboard.sim_views import render_sim_row_list
+
+        entries = [_entry(index=i, persona=f'p{i}') for i in range(30)]
+        html = render_sim_row_list('rid', entries, page=1, page_size=10)
+        assert html.count('sim-conv-row') == 10
+        assert 'Page 1 of 3' in html
+        # Active option (10) is disabled + aria-current; others link with size=.
+        assert 'aria-current="true">10<' in html
+        assert 'size=5&' not in html  # size is the last query param, no trailing &
+        assert 'page=1&size=5"' in html
+        assert 'page=1&size=25"' in html
+
+    def test_page_size_coercion_rejects_bad_values(self) -> None:
+        from evaluatorq.dashboard.sim_views import _PAGE_SIZE, _coerce_page_size
+
+        assert _coerce_page_size('5') == 5
+        assert _coerce_page_size('10') == 10
+        assert _coerce_page_size('25') == 25
+        assert _coerce_page_size('7') == _PAGE_SIZE  # not an allowed option
+        assert _coerce_page_size(None) == _PAGE_SIZE
+        assert _coerce_page_size('abc') == _PAGE_SIZE
 
 
 class TestRowlistWrapperNoSelfRefetch:
