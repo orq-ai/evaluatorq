@@ -173,20 +173,17 @@ class TestOrchestratorTranscript:
     @patch(_PATCH_RECORD_LLM)
     @patch(_PATCH_LLM_SPAN, side_effect=_noop_span_ctx)
     @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
-    async def test_errored_turn_excluded_from_transcript(self, _rs: Any, _ls: Any, _rl: Any) -> None:
-        """A recovered timeout error (single, not consecutive) is excluded from the transcript.
+    async def test_timeout_retries_with_unchanged_transcript(self, _rs: Any, _ls: Any, _rl: Any) -> None:
+        """A recovered timeout retries the same target transcript without a gap.
 
         Turn 1: success (q1 / a1).
-        Turn 2: target raises asyncio.TimeoutError — the orchestrator records an error
-                AgentResponse with AgentResponseError, recovers, and continues.
-        Turn 3: success (q3 / a3). The transcript passed to turn 3's target.respond
-                must NOT include q2 or the timed-out reply, because skip_errors=True
-                filters it out.
+        Turn 2: target raises asyncio.TimeoutError, then succeeds on a retry of q2.
+        Turn 3: success (q3 / a4). The retry receives the same q1/a1 transcript and
+        q2 prompt; turn 3 receives the completed q1/a1 and q2/a3 conversation.
         """
         orchestrator, mock_llm = _make_orchestrator()
 
-        # Target: turn 1 succeeds, turn 2 times out, turn 3 succeeds.
-        # We use a custom target that raises TimeoutError on the 2nd call.
+        # Target: q1 succeeds; q2's first attempt times out and its retry succeeds.
         class _TimingOutTarget(AgentTarget):
             def __init__(self) -> None:
                 super().__init__(memory_entity_id=None)
@@ -220,30 +217,21 @@ class TestOrchestratorTranscript:
             max_turns=3,
         )
 
-        # Attack should have completed (single timeout, not consecutive)
+        # The recovered retry produces a complete transcript with no error turns.
         assert result.error_type is None
         assert result.n_turns == 3
+        assert not any(t.target.error is not None for t in result.turns)
 
-        # The recorded errored turn carries a typed timeout marker (this is what
-        # drives skip_errors — a mislabeled marker would silently change replay).
-        errored = [t for t in result.turns if t.target.error is not None]
-        assert len(errored) == 1
-        assert errored[0].target.error is not None
-        assert errored[0].target.error.error_type == "timeout"
-        assert errored[0].target.error.code == "target.timeout"
+        # Calls 2 and 3 are the failed attempt and retry of exactly the same exchange.
+        assert target.calls[1] == target.calls[2]
 
-        # Turn 3's transcript should NOT contain q2 or its failed reply
-        turn3_messages = target.calls[2]
+        # Turn 3 receives q2 and the successful retry response, not a spliced transcript.
+        turn3_messages = target.calls[3]
         turn3_pairs = [(m.role, m.content) for m in turn3_messages]
-
-        # q2 should be absent (errored turn was skipped)
-        assert ("user", "q2") not in turn3_pairs
-
-        # But q1/a1 context is still there
         assert ("user", "q1") in turn3_pairs
         assert ("assistant", "a1") in turn3_pairs
-
-        # And the current prompt q3 is the last user message
+        assert ("user", "q2") in turn3_pairs
+        assert ("assistant", "a3") in turn3_pairs
         assert turn3_messages[-1] == Message(role="user", content="q3")
 
     @pytest.mark.asyncio
@@ -264,7 +252,7 @@ class TestOrchestratorTranscript:
             async def respond(self, messages: list[Message]) -> AgentResponse:
                 self.calls.append(list(messages))
                 self._call_count += 1
-                if self._call_count == 2:
+                if self._call_count >= 2:
                     raise RuntimeError("rate limit exceeded")
                 text = f"a{self._call_count}"
                 return AgentResponse(output=[TextOutputItem(text=text, annotations=[])])
@@ -276,7 +264,6 @@ class TestOrchestratorTranscript:
         mock_llm.chat.completions.create.side_effect = [
             _make_completion("q1"),
             _make_completion("q2"),
-            _make_completion("q3"),
         ]
 
         result = await orchestrator.run_attack(
@@ -287,7 +274,7 @@ class TestOrchestratorTranscript:
             max_turns=3,
         )
 
-        assert result.n_turns == 3
+        assert result.n_turns == 2
         errored = [t for t in result.turns if t.target.error is not None]
         assert len(errored) == 1
         assert errored[0].target.error is not None

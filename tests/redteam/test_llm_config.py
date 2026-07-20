@@ -56,6 +56,7 @@ def test_llm_config_has_retry_and_timeout_fields():
     cfg = LLMConfig()
     assert cfg.retry_count == 3
     assert cfg.cleanup_timeout_ms == 60_000
+    assert cfg.max_target_retries == 2
 
 
 def test_llm_config_no_backend_field():

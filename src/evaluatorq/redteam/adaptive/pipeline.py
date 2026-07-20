@@ -25,7 +25,7 @@ from evaluatorq import DataPoint, EvaluationResult, Job, job
 from evaluatorq.common.jury import append_jury_summary
 from evaluatorq.common.thread_context import build_thread_id, conversation_thread
 from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
-from evaluatorq.contracts import AgentResponse, Message
+from evaluatorq.contracts import AgentResponse, AgentResponseError, Message
 from evaluatorq.redteam.adaptive.attack_generator import generate_attack_prompt, generate_objective
 from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator, _get_active_progress
@@ -49,7 +49,6 @@ from evaluatorq.redteam.contracts import (
     LLMConfig,
     OrchestratorResult,
     TextOutputItem,
-    TokenUsage,
     ToolCallOutputItem,
     Turn,
     TurnType,
@@ -410,59 +409,101 @@ def create_dynamic_redteam_job(
                 token_usage = None
                 agent_resp: AgentResponse = AgentResponse()
                 target_timeout_s = cfg.target_agent_timeout_ms / 1000.0
-                try:
-                    async with with_redteam_span(
-                        'orq.redteam.target_call',
-                        {
-                            'orq.redteam.category': category,
-                            'orq.redteam.strategy_name': strategy.name,
-                            'orq.redteam.turn': 1,
-                            'input': truncate_for_span(prompt),
-                            'orq.redteam.input': truncate_for_span(prompt),
-                        },
-                    ) as tgt_span:
-                        with conversation_thread(thread_id) as thread_id:
-                            raw = await asyncio.wait_for(
-                                target.respond([Message(role='user', content=prompt)]),
-                                timeout=target_timeout_s,
-                            )
-                        agent_resp = _coerce_to_agent_response(raw)
-                        response = agent_resp.text
-                        token_usage: TokenUsage | None = agent_resp.usage
-                        resp_text = truncate_for_span(response or '')
-                        set_span_attrs(
-                            tgt_span,
+                response = ''
+                max_target_attempts = max(1, cfg.max_target_retries + 1)
+                target_succeeded = False
+                target_error: str | None = None
+                target_error_code: str | None = None
+                target_error_details: dict[str, Any] | None = None
+                for target_attempt in range(max_target_attempts):
+                    try:
+                        async with with_redteam_span(
+                            'orq.redteam.target_call',
                             {
-                                'output': resp_text,
-                                'orq.redteam.output': resp_text,
+                                'orq.redteam.category': category,
+                                'orq.redteam.strategy_name': strategy.name,
+                                'orq.redteam.turn': 1,
+                                'orq.redteam.target_attempt': target_attempt + 1,
+                                'input': truncate_for_span(prompt),
+                                'orq.redteam.input': truncate_for_span(prompt),
                             },
+                        ) as tgt_span:
+                            with conversation_thread(thread_id) as thread_id:
+                                raw = await asyncio.wait_for(
+                                    target.respond([Message(role='user', content=prompt)]),
+                                    timeout=target_timeout_s,
+                                )
+                            agent_resp = _coerce_to_agent_response(raw)
+                            response = agent_resp.text
+                            if agent_resp.error is None:
+                                token_usage = agent_resp.usage
+                                resp_text = truncate_for_span(response or '')
+                                set_span_attrs(
+                                    tgt_span,
+                                    {
+                                        'output': resp_text,
+                                        'orq.redteam.output': resp_text,
+                                    },
+                                )
+                                target_succeeded = True
+                                break
+
+                            response_error = agent_resp.error
+                            target_error = (
+                                f'Target agent returned error after {max_target_attempts} attempt(s), '
+                                f'code={response_error.code or "target_error"}, details={response_error.message}'
+                            )
+                            target_error_code = response_error.code or 'target_error'
+                            target_error_details = {
+                                'response_error_type': response_error.error_type,
+                                'raw_message': response_error.message,
+                                'attempts': target_attempt + 1,
+                            }
+                    except asyncio.TimeoutError:
+                        response = f'[ERROR: Target agent timed out after {target_timeout_s:.0f}s]'
+                        agent_resp = AgentResponse(
+                            output=[TextOutputItem(text=response, annotations=[])],
+                            error=AgentResponseError(message=response, error_type='timeout', code='target.timeout'),
                         )
-                except asyncio.TimeoutError:
-                    logger.error(
-                        f'Single-turn attack timed out for {category}/{strategy.name} after {target_timeout_s:.0f}s'
-                    )
-                    response = f'[ERROR: Target agent timed out after {target_timeout_s:.0f}s]'
-                    error = f'Target agent timed out after {target_timeout_s:.0f}s'
+                        target_error = f'Target agent timed out after {max_target_attempts} attempt(s)'
+                        target_error_code = 'target.timeout'
+                        target_error_details = {
+                            'timeout_ms': cfg.target_agent_timeout_ms,
+                            'attempts': target_attempt + 1,
+                        }
+                    except Exception as e:
+                        if isinstance(e, (TypeError, AttributeError, ImportError, NameError)):
+                            raise
+                        mapped_code, mapped_msg = resolved_backend.map_error(e)
+                        response = f'[ERROR: {mapped_msg}]'
+                        agent_resp = AgentResponse(
+                            output=[TextOutputItem(text=response, annotations=[])],
+                            error=AgentResponseError(
+                                message=response,
+                                error_type='target_error',
+                                code=mapped_code,
+                            ),
+                        )
+                        target_error = f'Target agent failed after {max_target_attempts} attempt(s): {mapped_msg}'
+                        target_error_code = mapped_code
+                        target_error_details = {
+                            'exception_type': type(e).__name__,
+                            'raw_message': str(e),
+                            'attempts': target_attempt + 1,
+                        }
+
+                    if target_attempt + 1 < max_target_attempts:
+                        logger.warning(
+                            f'Single-turn target call failed for {category}/{strategy.name}; '
+                            f'retrying same exchange ({target_attempt + 2}/{max_target_attempts})'
+                        )
+
+                if not target_succeeded:
+                    error = target_error
                     error_type = 'target_error'
                     error_stage = 'target_call'
-                    error_code = 'target.timeout'
-                    error_details = {
-                        'timeout_ms': cfg.target_agent_timeout_ms,
-                    }
-                except Exception as e:
-                    if isinstance(e, (TypeError, AttributeError, ImportError, NameError)):
-                        raise
-                    mapped_code, mapped_msg = resolved_backend.map_error(e)
-                    logger.error(f'Single-turn attack failed for {category}/{strategy.name}: {mapped_msg}')
-                    response = f'[ERROR: {mapped_msg}]'
-                    error = mapped_msg
-                    error_type = 'target_error'
-                    error_stage = 'target_call'
-                    error_code = mapped_code
-                    error_details = {
-                        'exception_type': type(e).__name__,
-                        'raw_message': str(e),
-                    }
+                    error_code = target_error_code
+                    error_details = target_error_details
                 result_dict = AttackOutput(
                     turns=[
                         Turn(
@@ -485,6 +526,7 @@ def create_dynamic_redteam_job(
                     error_stage=error_stage,
                     error_code=error_code,
                     error_details=error_details,
+                    error_turn=1 if error is not None else None,
                     category=category,
                     vulnerability=vulnerability,
                 )
@@ -662,49 +704,36 @@ def create_dynamic_evaluator(
                 explanation=f'Unexpected job output type: {type(raw_output).__name__}',
             )
 
-        # Skip evaluation when the run errored — UNLESS the failure happened during
-        # adversarial generation on a late turn (turn > 1). In that case the earlier,
-        # fully-completed turns are intact real target responses and may already
-        # demonstrate the vulnerability, so judge them (conversation truncated) rather
-        # than discarding a real finding. Turn-1 failures and target-side errors have
-        # nothing trustworthy to evaluate and are still skipped.
+        # An error means the attempted conversation did not complete. Preserve the
+        # transcript for diagnosis, but do not score a partial exchange as either
+        # RESISTANT or VULNERABLE.
         if output.error:
-            late_adversarial_failure = (
-                output.error_stage == 'adversarial_generation' and (output.error_turn or 0) > 1 and bool(output.turns)
-            )
-            if not late_adversarial_failure:
-                return EvaluationResult(
-                    value='error',
-                    explanation=f'Skipped: target returned error — {output.error}',
-                )
-            logger.warning(
-                f'Adversarial generation failed at turn {output.error_turn} '
-                f'({output.error_code}); judging {len(output.turns)} completed turn(s) '
-                '(conversation truncated).'
+            return EvaluationResult(
+                value='error',
+                explanation=f'Skipped: incomplete attack run — {output.error}',
             )
 
         category = output.category or data.inputs.get('category', '')
         vulnerability = output.vulnerability or data.inputs.get('vulnerability', '')
 
-        # Only score turns with a real target reply. Drop turns that errored (Turn.errored,
-        # same predicate as turns_to_messages(skip_errors=True)) or produced no judgeable
-        # content (empty-body 200, reasoning-only — see _turn_has_content). Feeding either
-        # to the judge scores an infra failure / non-response as RESISTANT (a timeout counted
-        # as a defense). A tool-call-only reply is kept. When turns exist but none are
-        # scorable there is nothing trustworthy to judge, so report an error rather than a
-        # false success. (A zero-turn output is left to the judge — some datapoints are
-        # scored on category alone.)
-        scorable_turns = [t for t in output.turns if not t.errored and _turn_has_content(t)]
-        dropped = len(output.turns) - len(scorable_turns)
-        if output.turns and not scorable_turns:
+        # A red-team score requires at least one complete, judgeable target response.
+        # ``inconclusive`` distinguishes a non-response with no explicit transport error
+        # from a failed run, while an errored turn remains an explicit run error even for
+        # historical outputs that predate the orchestrator's same-exchange retry policy.
+        if not output.turns:
             return EvaluationResult(
-                value='error',
-                explanation=f'Skipped: no scorable target turns (errored or empty; codes: {_error_codes(output.turns)}) — nothing to evaluate',
+                value='inconclusive',
+                explanation='Skipped: target produced no responses, so there is no evidence to evaluate.',
             )
-        if dropped:
-            logger.warning(
-                f'Dropped {dropped}/{len(output.turns)} errored/empty target turn(s) before scoring '
-                f'(codes: {_error_codes(output.turns)}); judging {len(scorable_turns)} remaining.'
+        scorable_turns = [t for t in output.turns if not t.errored and _turn_has_content(t)]
+        if len(scorable_turns) != len(output.turns):
+            value = 'error' if any(t.errored for t in output.turns) else 'inconclusive'
+            return EvaluationResult(
+                value=value,
+                explanation=(
+                    f'Skipped: incomplete target transcript (errored or empty; '
+                    f'codes: {_error_codes(output.turns)}) — nothing to evaluate'
+                ),
             )
         input_messages = [{'role': 'user', 'content': t.attacker.text} for t in scorable_turns]
         output_messages = [item for t in scorable_turns for item in t.target.output]

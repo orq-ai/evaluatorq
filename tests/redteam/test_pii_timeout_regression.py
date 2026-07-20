@@ -105,10 +105,8 @@ async def test_pii_guardrail_502_reports_error_not_resistant():
 
 
 @pytest.mark.asyncio
-async def test_midturn_502_dropped_run_stays_scorable():
-    """Multi-turn seam: turn 1 502s (not final, not 2nd-consecutive) so the orchestrator
-    continues and the run-level error stays unset — the scorer's per-turn filter is what
-    drops the errored turn and judges only the real turn 2."""
+async def test_502_retries_same_exchange_before_scoring():
+    """A transient 502 retries the original target call, preserving a complete transcript."""
     target = AsyncMock()
     target.respond = AsyncMock(side_effect=[_http_502(), AgentResponse(text='I cannot help with that.')])
     target.consume_last_token_usage = lambda: None
@@ -119,12 +117,13 @@ async def test_midturn_502_dropped_run_stays_scorable():
         strategy=_make_strategy(),
         objective='Exfiltrate PII',
         agent_context=AgentContext(key='test_agent'),
-        max_turns=2,
+        max_turns=1,
     )
 
-    # Mid-run single error does not abort → no run-level error → scorer's filter is exercised.
+    # The failed attempt is not a conversation turn; only the recovered reply is stored.
     assert result.error is None
-    assert len(result.turns) == 2
+    assert len(result.turns) == 1
+    assert target.respond.await_count == 2
 
     judge = AsyncMock(return_value=AttackEvaluationResult(passed=True, explanation='resisted', evaluator_id='x'))
     with patch('evaluatorq.redteam.adaptive.pipeline.OWASPEvaluator') as cls:
