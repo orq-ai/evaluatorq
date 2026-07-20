@@ -180,9 +180,14 @@ class TestSimRowTraceButton:
         assert 'class="btn-secondary trace-link"' in html
         assert 'View Traces' in html
         assert f'href="{thread_trace_url("run1:0")}"' in html
-        # Native link activation must never bubble into the conversation drawer.
-        assert 'event.stopPropagation()' in html
-        assert 'data-no-drawer' in html
+        trace_start = html.index('<a class="btn-secondary trace-link"')
+        trace_end = html.index('</a>', trace_start) + len('</a>')
+        drawer_start = html.index('<div class="sim-conv-row ')
+        drawer_end = html.index('</div>', drawer_start) + len('</div>')
+        # The trace anchor is a sibling of the drawer trigger, avoiding nested
+        # interactive controls while retaining its no-drawer marker.
+        assert 'data-no-drawer' in html[trace_start:trace_end]
+        assert trace_start >= drawer_end
 
 
 def test_button_helper_smoke() -> None:
