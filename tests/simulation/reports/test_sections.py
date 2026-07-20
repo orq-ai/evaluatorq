@@ -190,6 +190,34 @@ def test_scenario_breakdown_keeps_same_named_distinct_scenarios_separate():
     assert len({row['id'] for row in rows}) == 2
 
 
+def test_scenario_breakdown_ignores_judgment_outcomes_when_identifying_cohorts():
+    criteria = [{'id': 'explain_charge', 'description': 'Explain the charge', 'type': 'must_happen', 'passed': True}]
+    results = [
+        _make_result(scenario='Billing', criteria_meta=criteria, rules_broken=[]),
+        _make_result(
+            scenario='Billing',
+            criteria_meta=[{**criteria[0], 'passed': False}],
+            rules_broken=['explain_charge'],
+        ),
+    ]
+    rows = _section(build_report_sections(results), 'scenario_breakdown').data['rows']
+    assert len(rows) == 1
+    assert rows[0]['conversations'] == 2
+
+
+def test_heatmap_disambiguates_colliding_persona_labels():
+    results = [
+        _make_result(persona='Alex', persona_traits={'patience': 0.1}),
+        _make_result(persona='Alex', persona_traits={'patience': 0.2}),
+        _make_result(persona='Alex (2)', persona_traits={'patience': 0.3}),
+    ]
+    heatmap = _section(build_report_sections(results), 'persona_scenario_heatmap').data
+    assert len(heatmap['personas']) == len(set(heatmap['personas'])) == 3
+    assert len(heatmap['cells']) == 3
+    assert len({cell['persona'] for cell in heatmap['cells']}) == 3
+    assert len({cell['persona_id'] for cell in heatmap['cells']}) == 3
+
+
 def test_overview_entities_and_breakdown_rows_share_the_same_cohort_id():
     sections = build_report_sections([_result(persona='Alex', traits={'patience': 0.1})])
     overview = _section(sections, 'overview').data['personas'][0]

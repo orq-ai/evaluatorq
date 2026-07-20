@@ -100,7 +100,14 @@ def _cohort_id(result: SimulationResult, kind: Literal['persona', 'scenario']) -
             'name': _scenario_name(result),
             'goal': result.metadata.get('scenario_goal'),
             'context': result.metadata.get('scenario_context'),
-            'criteria': _criteria_meta(result),
+            'criteria': [
+                {
+                    'id': criterion.get('id'),
+                    'description': criterion.get('description'),
+                    'type': criterion.get('type'),
+                }
+                for criterion in _criteria_meta(result)
+            ],
         }
     payload = json.dumps(snapshot, sort_keys=True, separators=(',', ':'), default=str)
     return f'{kind}:{sha256(payload.encode()).hexdigest()[:16]}'
@@ -487,11 +494,20 @@ def _build_persona_scenario_heatmap_section(results: list[SimulationResult]) -> 
         scores[persona_id, scenario_id].append(r.goal_completion_score)
 
     def labels(names: dict[str, str]) -> dict[str, str]:
-        occurrences: Counter[str] = Counter()
+        raw_names = set(names.values())
+        used: set[str] = set()
         disambiguated: dict[str, str] = {}
         for cohort_id, name in names.items():
-            occurrences[name] += 1
-            disambiguated[cohort_id] = name if occurrences[name] == 1 else f'{name} ({occurrences[name]})'
+            label = name
+            if label in used:
+                suffix = 2
+                label = f'{name} ({suffix})'
+                suffix += 1
+                while label in raw_names or label in used:
+                    label = f'{name} ({suffix})'
+                    suffix += 1
+            disambiguated[cohort_id] = label
+            used.add(label)
         return disambiguated
 
     persona_labels = labels(persona_names)
