@@ -109,10 +109,9 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
     from evaluatorq.simulation.reports.sections import build_report_sections
 
     rows = run.results if results is None else results
-    # The saved narrative describes the complete run. Suppress it on filtered
-    # views rather than presenting whole-run prose beside subset metrics.
-    narrative = run.executive_summary if results is None else None
-    sections = build_report_sections(rows, executive_summary=narrative)
+    # The executive summary describes the complete run and always stays visible,
+    # even on filtered views — it is whole-run context, not a subset metric.
+    sections = build_report_sections(rows, executive_summary=run.executive_summary)
     by_kind: dict[str, Any] = {}
     for s in sections:
         by_kind.setdefault(s.kind, s)
@@ -986,11 +985,19 @@ def _sim_overview(
         n_personas=len(heatmap_data.get('personas', [])),
         n_scenarios=len(heatmap_data.get('scenarios', [])),
     )
-    donut_html = _sim_outcomes_donut(rows)
-    # Second block: Average quality metrics (turn metrics); fall back to the
-    # token-usage summary for runs that carry no per-turn quality data.
-    quality_tiles = _sim_avg_quality_tiles(metrics_data.get('avg_quality_metrics', {}))
-    second_html = panel('Average quality metrics', quality_tiles) if quality_tiles else _sim_tokens_panel(tokens_data)
+    # Outcomes + Average quality metrics. When a filter matches no conversations
+    # both blocks would otherwise collapse to empty; render an explicit "no
+    # matches" state instead so the Overview keeps its structure.
+    if not rows:
+        empty = '<p class="sim-empty-note">No conversations match the current filter.</p>'
+        donut_html = f'<figure class="chart-card"><figcaption>Outcomes</figcaption>{empty}</figure>'
+        second_html = panel('Average quality metrics', empty)
+    else:
+        donut_html = _sim_outcomes_donut(rows)
+        # Average quality metrics (turn metrics); fall back to the token-usage
+        # summary for runs that carry no per-turn quality data.
+        quality_tiles = _sim_avg_quality_tiles(metrics_data.get('avg_quality_metrics', {}))
+        second_html = panel('Average quality metrics', quality_tiles) if quality_tiles else _sim_tokens_panel(tokens_data)
 
     return f'{summary_html}{agent_card_html}{kpi_html}<div class="sim-overview-grid-2">{donut_html}{second_html}</div>'
 

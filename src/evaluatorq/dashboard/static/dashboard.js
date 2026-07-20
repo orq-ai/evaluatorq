@@ -270,8 +270,10 @@
         openConversation(trigger, fromDrawer);
         return;
       }
-      drillStack = [];
-      openTemplate(kind, trigger.getAttribute('data-entity-id'), false, trigger.parentElement);
+      // Drilling persona/scenario from inside the conversation drawer keeps the
+      // stack so Back returns to the conversation; from the page it starts fresh.
+      if (!fromDrawer) drillStack = [];
+      openTemplate(kind, trigger.getAttribute('data-entity-id'), fromDrawer, trigger.parentElement);
     }
 
     document.body.addEventListener('click', function (evt) {

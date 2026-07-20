@@ -79,6 +79,34 @@ def _entries_from_run(run: Any) -> list[SimulationEntry]:
     return individual_entries(run.results)
 
 
+def _entity_dom_ids(run: Any, idx: int) -> tuple[str | None, str | None]:
+    """Resolve the persona/scenario cohort-card DOM ids for ``run.results[idx]``.
+
+    The cohort cards (report_tabs `_sim_entity_modal`) key their ``<template>``
+    ids as ``persona-{i}`` / ``scenario-{i}`` where ``i`` is the cohort's index
+    in first-seen order across the full run — the same order the overview
+    section builds. We recompute that ordering here so the conversation drawer's
+    persona/scenario values can trigger the matching card. Returns (None, None)
+    if idx is out of range or the cohort ids can't be resolved.
+    """
+    from evaluatorq.simulation.reports.sections import _persona_cohort_id, _scenario_cohort_id
+
+    results = run.results
+    if idx < 0 or idx >= len(results):
+        return None, None
+
+    def _dom_id(cohort_fn: Any, prefix: str) -> str | None:
+        order: dict[str, int] = {}
+        for r in results:
+            cid = cohort_fn(r)
+            if cid not in order:
+                order[cid] = len(order)
+        target = cohort_fn(results[idx])
+        return f'{prefix}-{order[target]}' if target in order else None
+
+    return _dom_id(_persona_cohort_id, 'persona'), _dom_id(_scenario_cohort_id, 'scenario')
+
+
 # ---------------------------------------------------------------------------
 # Row list (embedded in the sim report page, not a separate HTMX route)
 # ---------------------------------------------------------------------------
@@ -360,31 +388,60 @@ def _render_criteria_column(entry: SimulationEntry) -> str:
     )
 
 
-def _render_conversation_summary(entry: SimulationEntry) -> str:
+def _sim_conv_value(text: str, kind: str, entity_id: str | None) -> str:
+    """A persona/scenario value; a click-through to its cohort card when we know
+    the entity's DOM id, otherwise plain text.
+
+    The trigger reuses the same ``data-sim-entity-trigger`` contract the cohort
+    cards use, so clicking the value inside the conversation drawer opens the
+    persona/scenario card (with a Back button, via the shared drawer JS).
+    """
+    safe = esc(text)
+    if not entity_id:
+        return f'<span class="sim-conv-value">{safe}</span>'
+    return (
+        f'<button type="button" class="sim-conv-value sim-conv-value--link" '
+        f'data-sim-entity-trigger data-entity-kind="{esc(kind)}" data-entity-id="{esc(entity_id)}">'
+        f'{safe}</button>'
+    )
+
+
+def _render_conversation_summary(
+    entry: SimulationEntry,
+    persona_entity_id: str | None = None,
+    scenario_entity_id: str | None = None,
+) -> str:
     """Persona + scenario recap and a turn-count chip for the drawer header.
 
     The collapsed row shows only "#N · persona · scenario" truncated; here we
     give the full text so the reader has the setup in view while reading the
-    transcript. All fields are user-supplied — esc() guards the stored-XSS
-    vector.
+    transcript. When the persona/scenario resolve to a cohort card, the value is
+    a click-through trigger. All fields are user-supplied — esc() guards the
+    stored-XSS vector.
     """
     turns = entry.turn_count
     turn_word = 'turn' if turns == 1 else 'turns'
+    persona_val = _sim_conv_value(entry.persona, 'persona', persona_entity_id)
+    scenario_val = _sim_conv_value(entry.scenario, 'scenario', scenario_entity_id)
     return (
         f'<div class="sim-conv-summary">'
         f'<span class="sim-conv-index">#{entry.index}</span>'
         f'<div class="sim-conv-meta">'
         f'<div class="sim-conv-field"><span class="sim-conv-label">Persona</span>'
-        f'<span class="sim-conv-value">{esc(entry.persona)}</span></div>'
+        f'{persona_val}</div>'
         f'<div class="sim-conv-field"><span class="sim-conv-label">Scenario</span>'
-        f'<span class="sim-conv-value">{esc(entry.scenario)}</span></div>'
+        f'{scenario_val}</div>'
         f'</div>'
         f'<span class="sim-conv-turns-pill">{turns} {turn_word}</span>'
         f'</div>'
     )
 
 
-def render_transcript_fragment(entry: SimulationEntry) -> str:
+def render_transcript_fragment(
+    entry: SimulationEntry,
+    persona_entity_id: str | None = None,
+    scenario_entity_id: str | None = None,
+) -> str:
     """Render the drill-down transcript fragment for a single sim result entry.
 
     Design-aligned layout (spec §Transcripts): a Judge callout (sunken
@@ -411,7 +468,7 @@ def render_transcript_fragment(entry: SimulationEntry) -> str:
     error = entry.error
 
     criteria_col = _render_criteria_column(entry)
-    summary_html = _render_conversation_summary(entry)
+    summary_html = _render_conversation_summary(entry, persona_entity_id, scenario_entity_id)
 
     if error:
         error_html = f'<div class="sim-transcript-error"><strong>Error:</strong> {esc(str(error))}</div>'
@@ -530,5 +587,6 @@ def register_sim_view_routes(app: Any, roots: list[Any] | None = None) -> None:
                 media_type='text/html',
             )
 
-        fragment = render_transcript_fragment(entries[idx])
+        persona_id, scenario_id = _entity_dom_ids(run, idx)
+        fragment = render_transcript_fragment(entries[idx], persona_id, scenario_id)
         return Response(fragment, media_type='text/html')

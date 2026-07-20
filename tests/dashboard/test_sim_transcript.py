@@ -282,6 +282,17 @@ class TestSimTranscriptRoute:
         assert '3 turns' in r.text  # fixture idx0 has turn_count=3
         assert 'sim-conv-index' in r.text  # teal #index badge, top-left
 
+    def test_transcript_persona_scenario_are_clickthrough(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        rid = report_id(_sim_path(roots))
+        r = client.get(f'/r/{rid}/sim/transcript?idx=0')
+        # Persona/scenario values are cohort-card triggers, ids matching the
+        # `persona-{i}` / `scenario-{i}` templates rendered on the report page.
+        assert 'data-sim-entity-trigger data-entity-kind="persona" data-entity-id="persona-0"' in r.text
+        assert 'data-sim-entity-trigger data-entity-kind="scenario" data-entity-id="scenario-0"' in r.text
+        assert 'sim-conv-value--link' in r.text
+
     def test_transcript_judge_folded_into_criteria(
         self, client: TestClient, roots: list[Path]
     ) -> None:

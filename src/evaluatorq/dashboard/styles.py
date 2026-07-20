@@ -1333,6 +1333,7 @@ _SIM_REPORT_OVERRIDES_CSS = """
 .sim-report .sim-overview-grid-2 > .rk-panel + .rk-panel { margin-top: 0; }
 .sim-report .sim-overview-grid-2 > .rk-panel > .rk-panel-body { flex: 1; }
 .sim-report .sim-overview-grid-2 .sim-aq-grid { height: 100%; grid-auto-rows: 1fr; }
+.sim-empty-note { color: var(--text-faint); font-size: 12px; padding: 12px 2px; margin: 0; }
 /* Personas + scenarios row: unlike the donut row above it, these list-cards have
    no reason to match heights — stretching the shorter one leaves a dead void.
    Let each hug its content. */
@@ -1915,6 +1916,21 @@ _SIM_TRANSCRIPT_OVERRIDES_CSS = """
 }
 .sim-report .sim-conv-value {
     font-size: 14px; color: var(--text-body); line-height: 1.4;
+}
+/* Click-through persona/scenario value: opens the cohort card. Reset button
+   chrome, keep it inline text with a teal underline affordance. */
+.sim-report button.sim-conv-value--link {
+    display: inline; margin: 0; padding: 0; border: none; background: none;
+    font: inherit; text-align: left; cursor: pointer;
+    color: var(--teal-600); text-decoration: underline;
+    text-decoration-color: var(--teal-100); text-underline-offset: 3px;
+    transition: text-decoration-color 150ms ease;
+}
+.sim-report button.sim-conv-value--link:hover {
+    text-decoration-color: var(--teal-600);
+}
+.sim-report button.sim-conv-value--link:focus-visible {
+    outline: 2px solid var(--teal-600); outline-offset: 2px; border-radius: 3px;
 }
 .sim-report .sim-conv-turns-pill {
     flex-shrink: 0; font-family: var(--font-sans); font-size: 12px; font-weight: 600;
