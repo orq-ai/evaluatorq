@@ -669,15 +669,25 @@ def create_dynamic_evaluator(
 
         # Only score turns with a real target reply. Drop turns that errored (e.g. a 502
         # from a guardrail/PII-detection timeout — Turn.errored, same predicate as
-        # turns_to_messages(skip_errors=True)) OR that returned no content (e.g. an
+        # turns_to_messages(skip_errors=True)) OR that produced no content at all (e.g. an
         # empty-body 200 where a guardrail silently blocked). Feeding either to the judge
         # scores an infra failure / non-response as RESISTANT (a timeout counted as a
-        # defense). When turns exist but none are scorable there is nothing trustworthy
-        # to judge, so report an error rather than a false success. (A zero-turn output
-        # is left to the judge — some datapoints are scored on category alone.)
-        # ponytail: "no content" == blank text; a tool-call-only reply would also be
-        # dropped — fine for text-graded red-team evals, revisit if tool-only turns score.
-        scorable_turns = [t for t in output.turns if not t.errored and t.target.text.strip()]
+        # defense). A tool-call-only reply (no text but a real tool invocation — often the
+        # vulnerability itself for agent targets) counts as content and is kept. When turns
+        # exist but none are scorable there is nothing trustworthy to judge, so report an
+        # error rather than a false success. (A zero-turn output is left to the judge — some
+        # datapoints are scored on category alone.)
+        def _has_content(turn: Turn) -> bool:
+            return any(not isinstance(item, TextOutputItem) or item.text.strip() for item in turn.target.output)
+
+        scorable_turns = [t for t in output.turns if not t.errored and _has_content(t)]
+        if len(scorable_turns) < len(output.turns):
+            dropped = len(output.turns) - len(scorable_turns)
+            codes = ', '.join(sorted({t.target.error.code for t in output.turns if t.target.error and t.target.error.code})) or 'none'
+            logger.warning(
+                f'Dropped {dropped}/{len(output.turns)} errored/empty target turn(s) before scoring '
+                f'(codes: {codes}); judging {len(scorable_turns)} remaining.'
+            )
         if output.turns and not scorable_turns:
             codes = ', '.join(sorted({t.target.error.code for t in output.turns if t.target.error and t.target.error.code})) or 'unknown'
             return EvaluationResult(

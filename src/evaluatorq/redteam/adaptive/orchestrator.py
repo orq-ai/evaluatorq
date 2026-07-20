@@ -952,8 +952,11 @@ class MultiTurnOrchestrator:
                         # Abort (and surface a run-level error) when the target is
                         # persistently failing OR when this is the final turn — a
                         # last-turn error has no future turn to redeem it, so the run
-                        # must report an error rather than a (mis)scored result. This is
-                        # the only path that sets run-level error for a single-turn attack.
+                        # must report an error rather than a (mis)scored result. For a
+                        # single-turn attack consecutive_agent_errors >= 2 can never hold,
+                        # so this final-turn clause is what promotes a lone *target* error
+                        # to a run-level error (adversarial-generation failures set the
+                        # run-level error via their own paths above).
                         if consecutive_agent_errors >= 2 or turn == max_turns - 1:
                             error = (
                                 f'Target agent timed out {consecutive_agent_errors} consecutive turns'
@@ -1006,9 +1009,11 @@ class MultiTurnOrchestrator:
 
                         # Abort (and surface a run-level error) on persistent failure OR
                         # when this is the final turn — a last-turn error has no future
-                        # turn to redeem it, so the run must report an error rather than
-                        # a (mis)scored result. Only path that sets run-level error for a
-                        # single-turn attack.
+                        # turn to redeem it, so the run must report an error rather than a
+                        # (mis)scored result. For a single-turn attack consecutive_agent_errors
+                        # >= 2 can never hold, so this final-turn clause is what promotes a
+                        # lone *target* error to a run-level error (adversarial-generation
+                        # failures set the run-level error via their own paths above).
                         if consecutive_agent_errors >= 2 or turn == max_turns - 1:
                             error = (
                                 f'Target agent failed {consecutive_agent_errors} consecutive turns, '

