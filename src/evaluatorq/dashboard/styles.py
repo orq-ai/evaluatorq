@@ -629,6 +629,10 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
     min-width: 2.5em; text-align: right;
     flex-shrink: 0;
 }
+/* A slider moved off its no-op bound is actively filtering — promote the
+   readout (teal + bold) so it reads as engaged, matching the chip/dropdown
+   selection vocabulary. */
+.filter-slider-readout.is-engaged { color: var(--teal-600); font-weight: 700; }
 .filter-slider-max {
     font-family: var(--font-mono);
     font-size: 10.5px; font-weight: 500;
@@ -648,6 +652,17 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
     color: var(--text-faint);
 }
 .filter-dd-more .filter-dd-trigger:hover { color: var(--text-body); }
+/* Count of active filters hidden inside the collapsed expander (teal pill) so
+   engaged controls are never silent. */
+.filter-dd-more-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 15px; height: 15px; padding: 0 4px;
+    border-radius: 999px;
+    background: var(--teal-600); color: #fff;
+    font-size: 9.5px; font-weight: 700; line-height: 1;
+    letter-spacing: 0;
+    flex-shrink: 0;
+}
 .filter-dd-more-body {
     display: flex; flex-direction: column; gap: 10px;
     margin-top: 10px;
@@ -670,11 +685,18 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
     background: var(--border-default);
     flex-shrink: 0;
 }
+/* Status dots use only tokens that clear WCAG 1.4.11 (≥3:1 non-text) against
+   the white trigger; a narrowed filter (partial) reads orange = "engaged", an
+   exclude-all filter (none) reads red — never a decorative chart hue. */
 .filter-dd-status.is-all { background: var(--green-600); }
-.filter-dd-status.is-partial { background: var(--chart-3); }
-.filter-dd-status.is-none { background: var(--border-default); }
+.filter-dd-status.is-partial { background: var(--orange-600); }
+.filter-dd-status.is-none { background: var(--red-700); }
 .filter-dd-name { color: var(--text-faint); }
 .filter-dd-value { flex: 1 1 auto; color: var(--text-body); font-weight: 500; }
+/* Engaged states also promote the status text so the trigger differs at a
+   glance from the "All" default without parsing the 6px dot. */
+.filter-dd-value.is-engaged { color: var(--teal-600); font-weight: 700; }
+.filter-dd-value.is-none { color: var(--red-700); font-weight: 700; }
 .filter-dd-chevron { flex-shrink: 0; color: var(--text-faint); }
 .filter-dd[open] .filter-dd-chevron { transform: rotate(180deg); }
 .filter-dd-menu {
@@ -1913,30 +1935,35 @@ _SIM_TRANSCRIPT_OVERRIDES_CSS = """
 /* Conversation summary header: persona + scenario recap and turn-count chip,
    shown above the criteria and transcript inside the drawer. */
 .sim-report .sim-conv-summary {
-    display: flex; align-items: flex-start;
-    gap: 14px; margin-bottom: 20px;
+    display: flex; flex-direction: column;
+    gap: 16px; margin-bottom: 20px;
     padding-bottom: 16px; border-bottom: 1px solid var(--border-subtle);
 }
-/* Teal index chip, top-left — the conversation's # from the row table, styled
-   so the drawer opens with a small anchor of identity (DESIGN.md: teal leads). */
+/* Index row: the large # identity anchor left, turn count right. */
+.sim-report .sim-conv-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 14px;
+}
+/* Teal index chip — the conversation's # from the row table, sized up as the
+   drawer's identity anchor (DESIGN.md: teal leads). */
 .sim-report .sim-conv-index {
     flex-shrink: 0; font-family: var(--font-mono);
-    font-size: 13px; font-weight: 700; line-height: 1;
+    font-size: 20px; font-weight: 700; line-height: 1;
     color: #fff; background: var(--teal-600);
-    padding: 6px 9px; border-radius: var(--radius-md);
+    padding: 8px 12px; border-radius: var(--radius-md);
     font-variant-numeric: tabular-nums;
 }
 .sim-report .sim-conv-meta {
-    display: flex; flex-direction: column; gap: 8px; min-width: 0; flex: 1;
+    display: flex; flex-direction: column; gap: 10px; min-width: 0;
 }
 .sim-report .sim-conv-field {
     display: flex; align-items: flex-start; gap: 10px; min-width: 0;
 }
-/* Teal glyph tile anchoring each field (Option A). */
+/* Glyph tile anchoring each field (Option A). Orange punctuation accent —
+   DESIGN.md: teal carries (index chip + value links), orange punctuates. */
 .sim-report .sim-conv-ico {
     flex-shrink: 0; width: 26px; height: 26px; border-radius: 8px;
     display: grid; place-items: center;
-    background: var(--teal-50); color: var(--teal-600);
+    background: var(--orange-50); color: var(--orange-700);
 }
 .sim-report .sim-conv-ico svg { width: 15px; height: 15px; }
 .sim-report .sim-conv-field-text {

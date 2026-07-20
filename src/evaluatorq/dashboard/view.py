@@ -642,11 +642,11 @@ def _dropdown(dim: str, label: str, dim_opts: list[str], sel: list[str]) -> str:
     n_selected = len(selected_set)
     n_total = len(dim_opts)
     if n_selected == n_total:
-        status_cls, status_label = 'is-all', 'All'
+        status_cls, status_label, value_cls = 'is-all', 'All', 'filter-dd-value'
     elif n_selected == 0:
-        status_cls, status_label = 'is-none', 'None'
+        status_cls, status_label, value_cls = 'is-none', 'None', 'filter-dd-value is-none'
     else:
-        status_cls, status_label = 'is-partial', f'{n_selected} selected'
+        status_cls, status_label, value_cls = 'is-partial', f'{n_selected} selected', 'filter-dd-value is-engaged'
 
     rows = ''.join(
         f'<label class="filter-dd-row">'
@@ -661,7 +661,7 @@ def _dropdown(dim: str, label: str, dim_opts: list[str], sel: list[str]) -> str:
         f'<summary class="filter-dd-trigger">'
         f'<span class="filter-dd-status {status_cls}"></span>'
         f'<span class="filter-dd-name">{esc(label)}</span>'
-        f'<span class="filter-dd-value">{esc(status_label)}</span>'
+        f'<span class="{value_cls}">{esc(status_label)}</span>'
         f'{_FILTER_CHEVRON}'
         f'</summary>'
         f'<div class="filter-dd-menu">{rows}</div>'
@@ -675,6 +675,19 @@ def _fmt_range_value(value: float, step: str) -> str:
     if step == '1':
         return str(int(value))
     return f'{value:g}'
+
+
+def _range_engaged(sel: list[str], *, min_val: float, max_val: float, floor: bool) -> bool:
+    """True when a range control is actively constraining results, i.e. its
+    value differs from the no-op default bound (``min_val`` for floors,
+    ``max_val`` for ceilings). Absent/unparseable selections are not engaged."""
+    if not sel:
+        return False
+    try:
+        value = float(sel[0])
+    except (ValueError, TypeError):
+        return False
+    return value != (min_val if floor else max_val)
 
 
 def _range_control(
@@ -695,7 +708,9 @@ def _range_control(
     score) — and the readout glyph (``≥`` for floors, ``≤`` for ceilings).
     An absent selection renders the default bound numerically (never "all").
     ``show_max`` appends the slider's upper bound beside the readout (e.g.
-    min-turns shows the run's max turns).
+    min-turns shows the run's max turns). The readout gains ``is-engaged`` when
+    the slider is moved off its no-op bound, so an active filter reads at a
+    glance without comparing numbers.
     """
     raw = sel[0] if sel else None
     default = min_val if floor else max_val
@@ -703,6 +718,8 @@ def _range_control(
         value = float(raw) if raw is not None else default
     except (ValueError, TypeError):
         value = default
+    engaged = _range_engaged(sel, min_val=min_val, max_val=max_val, floor=floor)
+    readout_cls = 'filter-slider-readout is-engaged' if engaged else 'filter-slider-readout'
     readout = f'{"≥" if floor else "≤"} {_fmt_range_value(value, step)}'
     max_span = (
         f'<span class="filter-slider-max">/ {_fmt_range_value(max_val, step)}</span>' if show_max else ''
@@ -713,7 +730,7 @@ def _range_control(
         f'<div class="filter-slider-row">'
         f'<input type="range" class="filter-slider" name="{esc(dim)}" min="{_fmt_range_value(min_val, step)}"'
         f' max="{_fmt_range_value(max_val, step)}" step="{esc(step)}" value="{_fmt_range_value(value, step)}">'
-        f'<span class="filter-slider-readout">{esc(readout)}</span>'
+        f'<span class="{readout_cls}">{esc(readout)}</span>'
         f'{max_span}'
         f'</div>'
         f'</div>'
@@ -789,8 +806,11 @@ def _render_sim_filter_rail(
     # threshold. Skipped entirely (no empty expander) when there is nothing
     # to show.
     more_rows: list[str] = []
+    more_active = 0  # controls hidden inside the expander that are actively filtering
     max_total_tokens = int(opts.get('max_total_tokens', ['0'])[0] or 0)
     if max_total_tokens > 0:
+        tok_sel = selections.get('min_total_tokens', [])
+        more_active += _range_engaged(tok_sel, min_val=0, max_val=max_total_tokens, floor=True)
         more_rows.append(
             _range_control(
                 'min_total_tokens',
@@ -798,7 +818,7 @@ def _render_sim_filter_rail(
                 min_val=0,
                 max_val=max_total_tokens,
                 step='1',
-                sel=selections.get('min_total_tokens', []),
+                sel=tok_sel,
                 floor=True,
             )
         )
@@ -808,6 +828,8 @@ def _render_sim_filter_rail(
             continue
         dim_key = _sim_metric_dim_key(metric.key, high_is_risky=metric.high_is_risky)
         prefix = 'Min.' if metric.high_is_risky else 'Max.'
+        metric_sel = selections.get(dim_key, [])
+        more_active += _range_engaged(metric_sel, min_val=0.0, max_val=1.0, floor=metric.high_is_risky)
         more_rows.append(
             _range_control(
                 dim_key,
@@ -815,17 +837,22 @@ def _render_sim_filter_rail(
                 min_val=0.0,
                 max_val=1.0,
                 step='0.05',
-                sel=selections.get(dim_key, []),
+                sel=metric_sel,
                 floor=metric.high_is_risky,
             )
         )
 
     more_dd = ''
     if more_rows:
+        # Surface any active filters hidden in the collapsed panel so they are
+        # never silently narrowing results (audit finding: the expander gave no
+        # trace of engaged controls when closed).
+        badge = f'<span class="filter-dd-more-badge">{more_active}</span>' if more_active else ''
         more_dd = (
             f'<details id="filter-dd-more" class="filter-dd filter-dd-more">'
             f'<summary class="filter-dd-trigger">'
             f'<span class="filter-dd-name">More filters</span>'
+            f'{badge}'
             f'{_FILTER_CHEVRON}'
             f'</summary>'
             f'<div class="filter-dd-more-body">{"".join(more_rows)}</div>'

@@ -1020,3 +1020,46 @@ def test_sim_rail_more_expander_holds_tokens_and_metrics():
     assert 'name="rule_broken"' not in more_section
     assert 'name="max_goal_score"' not in more_section
     assert 'name="min_turns"' not in more_section
+
+
+# ---------------------------------------------------------------------------
+# Rail "engaged" affordances: sliders, dropdown status, More-filters badge.
+# ---------------------------------------------------------------------------
+
+
+def _sim_rail(opts, selections):
+    from evaluatorq.dashboard.view import render_filter_form
+
+    base = {'persona': [], 'scenario': [], 'terminated_by': [], 'goal_outcome': []}
+    base.update(opts)
+    return render_filter_form('rid', 'sim', base, selections)
+
+
+def test_slider_readout_engaged_only_when_off_default():
+    # min_turns default floor is 1 → not engaged; moved to 3 → engaged.
+    off = _sim_rail({'max_turns': ['8']}, {'min_turns': ['1']})
+    assert 'filter-slider-readout is-engaged' not in off
+    on = _sim_rail({'max_turns': ['8']}, {'min_turns': ['3']})
+    assert 'filter-slider-readout is-engaged' in on
+
+
+def test_dropdown_status_marks_partial():
+    # A narrowed persona selection reads as engaged (partial), not the "All"
+    # default. (Empty selection means "all" by filter convention, so is-none is
+    # a defensive style, not reachable through this render path.)
+    partial = _sim_rail({'persona': ['a', 'b', 'c']}, {'persona': ['a']})
+    assert 'filter-dd-status is-partial' in partial
+    assert 'filter-dd-value is-engaged' in partial
+    full = _sim_rail({'persona': ['a', 'b', 'c']}, {'persona': ['a', 'b', 'c']})
+    assert 'filter-dd-status is-all' in full
+    assert 'is-engaged' not in full
+
+
+def test_more_filters_badge_counts_active_controls():
+    opts = {'max_total_tokens': ['2500'], 'metrics': ['hallucination_risk']}
+    # min_total_tokens default floor is 0 → no badge.
+    inactive = _sim_rail(opts, {'min_total_tokens': ['0']})
+    assert 'filter-dd-more-badge' not in inactive
+    # Moved off default → badge shows 1.
+    active = _sim_rail(opts, {'min_total_tokens': ['500']})
+    assert '<span class="filter-dd-more-badge">1</span>' in active
