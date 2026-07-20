@@ -23,13 +23,17 @@ from typing import TYPE_CHECKING, Any, Protocol, TypedDict, runtime_checkable
 
 from loguru import logger
 
+from evaluatorq.common.async_utils import await_maybe, fan_out
 from evaluatorq.redteam.contracts import AgentCapability, PipelineStage
 from evaluatorq.redteam.reports.display import print_report_summary
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from rich.console import Console as RichConsole
 
     from evaluatorq.common.async_utils import MaybeAsync
+    from evaluatorq.common.run_manifest import ManifestWriter
 from evaluatorq.redteam.contracts import RedTeamReport
 
 
@@ -261,6 +265,90 @@ class DefaultHooks:
         else:
             dashboard_dir = '.evaluatorq/runs'
         logger.info(f'[redteam] Tip: visualise results with  "{_dashboard_hint(dashboard_dir)}"')
+
+
+# ---------------------------------------------------------------------------
+# CompositePipelineHooks — fan a single call out to many child hooks
+# ---------------------------------------------------------------------------
+
+
+class CompositePipelineHooks:
+    """Fan every ``PipelineHooks`` call out to a list of child hooks.
+
+    Implements ``PipelineHooks`` structurally. Void methods delegate to the
+    shared :func:`~evaluatorq.common.async_utils.fan_out` policy: run ALL
+    children, capture the first exception, re-raise it after the loop. So a
+    child that raises never prevents a later child from running.
+
+    ``on_confirm`` uses the **same** run-all-then-reraise policy (not a
+    fail-fast comprehension), then combines the child verdicts with ``all()`` —
+    the run proceeds only if every child approves. A single child behaves
+    identically to calling it directly (``all([x]) == bool(x)``).
+    """
+
+    def __init__(self, children: Iterable[Any]) -> None:
+        self._hooks: list[Any] = list(children)
+
+    async def on_stage_start(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
+        await fan_out(self._hooks, 'on_stage_start', stage, meta)
+
+    async def on_stage_end(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
+        await fan_out(self._hooks, 'on_stage_end', stage, meta)
+
+    async def on_complete(
+        self, report: RedTeamReport, *, output_dir: str | None = None, auto_save_path: str | None = None
+    ) -> None:
+        await fan_out(self._hooks, 'on_complete', report, output_dir=output_dir, auto_save_path=auto_save_path)
+
+    async def on_confirm(self, payload: ConfirmPayload) -> bool:
+        results: list[bool] = []
+        first_exc: BaseException | None = None
+        for hook in self._hooks:
+            try:
+                results.append(bool(await await_maybe(hook.on_confirm(payload))))
+            except BaseException as exc:  # noqa: PERF203 — per-child capture is the point
+                first_exc = first_exc or exc
+        if first_exc is not None:
+            raise first_exc
+        return all(results)
+
+
+# ---------------------------------------------------------------------------
+# ManifestStageHooks — record stage transitions into a ManifestWriter
+# ---------------------------------------------------------------------------
+
+
+class ManifestStageHooks:
+    """Record pipeline stage transitions into a :class:`ManifestWriter`.
+
+    Implements ``PipelineHooks`` structurally with no-op bodies for every method
+    except ``on_stage_start``/``on_stage_end`` (which delegate to the writer) and
+    ``on_confirm`` (which always returns ``True`` — the manifest never vetoes the
+    confirm gate). It deliberately does **not** subclass :class:`DefaultHooks`,
+    whose methods log; composing both would double every log line.
+
+    Registered *first* in the composite so a stage's status is durable before any
+    user hook runs (and can throw). Stage/enum normalization happens inside the
+    writer's ``start_stage``/``end_stage`` — this hook passes the raw stage and a
+    per-target label read from ``meta['target']`` (``None`` for aggregate stages).
+    """
+
+    def __init__(self, writer: ManifestWriter) -> None:
+        self._writer = writer
+
+    async def on_stage_start(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
+        self._writer.start_stage(stage, target=meta.get('target'))
+
+    async def on_stage_end(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
+        self._writer.end_stage(stage, target=meta.get('target'), error=meta.get('error'))
+
+    async def on_confirm(self, payload: ConfirmPayload) -> bool:
+        return True
+
+    async def on_complete(
+        self, report: RedTeamReport, *, output_dir: str | None = None, auto_save_path: str | None = None
+    ) -> None:
+        return None
 
 
 # ---------------------------------------------------------------------------

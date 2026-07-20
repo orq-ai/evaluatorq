@@ -22,15 +22,13 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.redteam.contracts import (
-    ManifestStatus as Status,
-)
-from evaluatorq.redteam.contracts import (
-    ManifestSurface as Surface,
-)
-from evaluatorq.redteam.contracts import (
+from evaluatorq.contracts import (
+    ManifestStatus,
     RunManifest,
     StageRecord,
+)
+from evaluatorq.contracts import (
+    ManifestSurface as Surface,
 )
 
 if TYPE_CHECKING:
@@ -62,83 +60,111 @@ class ManifestWriter:
         except OSError as exc:
             logger.debug(f'Failed to write run manifest {self.path}: {exc}')
 
-    def _open_stage(self, name: str | None = None) -> StageRecord | None:
-        """Most-recent still-open stage record (optionally matching *name*)."""
+    def _open_stage(self, name: str | None = None, target: str | None = None) -> StageRecord | None:
+        """Most-recent still-open stage record matching *name* and *target*.
+
+        A ``None`` filter matches any value, so per-target concurrent stages
+        (Dec2) never close each other's records.
+        """
         for rec in reversed(self.manifest.stages):
-            if rec.ended_at is None and (name is None or rec.name == name):
+            if (
+                rec.ended_at is None
+                and (name is None or rec.name == name)
+                and (target is None or rec.target == target)
+            ):
                 return rec
         return None
 
-    def start_stage(self, name: str | None) -> None:
+    def _close(self, rec: StageRecord, status: ManifestStatus) -> None:
+        """Close a stage record: set its terminal status + end time."""
+        rec.status = status
+        rec.ended_at = datetime.now(tz=timezone.utc)
+
+    def start_stage(self, stage: Any, *, target: str | None = None) -> None:
         """Open a new stage record. Leaves the run's overall status unchanged."""
-        if name is None or self.manifest.status != 'running':
+        name = getattr(stage, 'value', stage)  # normalize enum → value once (R3)
+        if name is None or self.manifest.status != ManifestStatus.RUNNING:
             return
         now = datetime.now(tz=timezone.utc)
-        # Defensive: close any dangling open stage (a missing on_stage_end)
-        # rather than leaving two stages 'running' at once.
-        prev = self._open_stage()
+        # Defensive: close any dangling open stage for this target (a missing
+        # on_stage_end) rather than leaving two stages 'running' at once.
+        prev = self._open_stage(target=target)
         if prev is not None:
-            prev.status = 'completed'
-            prev.ended_at = now
-        self.manifest.stages.append(StageRecord(name=str(name), status='running', started_at=now))
+            self._close(prev, ManifestStatus.COMPLETED)
+        self.manifest.stages.append(
+            StageRecord(name=str(name), target=target, status=ManifestStatus.RUNNING, started_at=now)
+        )
         self.manifest.stage = str(name)
         self.flush()
 
-    def end_stage(self, name: str | None, *, status: Status = 'completed') -> None:
-        """Close the matching open stage record with *status* + an end time."""
-        if self.manifest.status != 'running':
+    def end_stage(self, stage: Any, *, target: str | None = None, error: Any = None) -> None:
+        """Close the matching open stage record. ``error`` → status ``error``."""
+        name = getattr(stage, 'value', stage)  # normalize enum → value once (R3)
+        if self.manifest.status != ManifestStatus.RUNNING:
             return
-        rec = self._open_stage(str(name) if name is not None else None)
+        rec = self._open_stage(str(name) if name is not None else None, target)
         if rec is None:
             return
-        rec.status = status
-        rec.ended_at = datetime.now(tz=timezone.utc)
+        self._close(rec, ManifestStatus.ERROR if error else ManifestStatus.COMPLETED)
         self.flush()
 
     def complete(self, report_path: str | Path | None = None) -> None:
-        if self.manifest.status != 'running':
+        if self.manifest.status != ManifestStatus.RUNNING:
             return  # terminal transitions are idempotent — first one wins
         now = datetime.now(tz=timezone.utc)
         # Close any stage left open (e.g. a final stage with no on_stage_end).
         for rec in self.manifest.stages:
             if rec.ended_at is None:
-                rec.status = 'completed'
+                rec.status = ManifestStatus.COMPLETED
                 rec.ended_at = now
-        self.manifest.status = 'completed'
+        self.manifest.status = ManifestStatus.COMPLETED
         self.manifest.ended_at = now
         if report_path is not None:
             self.manifest.report_path = str(report_path)
         self.flush()
 
+    def cancel(self) -> None:
+        """Terminate as ``cancelled`` (declined run). Stages are left untouched.
+
+        A finished stage stays truthful — cancellation happens outside a stage,
+        so nothing is relabeled (Dec1).
+        """
+        if self.manifest.status != ManifestStatus.RUNNING:
+            return  # terminal transitions are idempotent — first one wins
+        self.manifest.status = ManifestStatus.CANCELLED
+        self.manifest.ended_at = datetime.now(tz=timezone.utc)
+        self.flush()
+
     def fail(self, error: str, stage: Any = None) -> None:
-        if self.manifest.status != 'running':
+        if self.manifest.status != ManifestStatus.RUNNING:
             return  # terminal transitions are idempotent — first one wins
         now = datetime.now(tz=timezone.utc)
-        # Normalize an enum stage to its value so it matches the record keys
-        # opened by start_stage (which uses ``getattr(stage, 'value', stage)``).
-        stage = getattr(stage, 'value', stage)
-        # Mark the failing stage errored (prefer a named match, else the open
-        # one); the run failed here, so this is the meaningful stage to flag.
-        rec = self._open_stage(str(stage) if stage is not None else None) or self._open_stage()
-        if rec is not None:
-            rec.status = 'error'
-            rec.ended_at = now
-        elif stage is not None:
-            self.manifest.stage = str(stage)
-        self.manifest.status = 'error'
+        # Close every still-open stage as errored (R2). A stage that already
+        # finished stays 'completed' — never relabel a succeeded stage (R1).
+        any_open = False
+        for rec in self.manifest.stages:
+            if rec.ended_at is None:
+                rec.status = ManifestStatus.ERROR
+                rec.ended_at = now
+                any_open = True
+        # If nothing was open, only record where we failed — do NOT flip a
+        # closed stage's status (R1 revised).
+        if not any_open and stage is not None:
+            self.manifest.stage = getattr(stage, 'value', stage)
+        self.manifest.status = ManifestStatus.ERROR
         self.manifest.error = error
         self.manifest.ended_at = now
         self.flush()
 
 
-def start_manifest(*, run_id: str, surface: Surface, run_name: str, runs_dir: Path) -> ManifestWriter:
+def start_manifest(*, run_id: str, surface: Surface | str, run_name: str, runs_dir: Path) -> ManifestWriter:
     """Create + persist a ``running`` manifest, returning its writer."""
     now = datetime.now(tz=timezone.utc)
     manifest = RunManifest(
         run_id=run_id,
-        surface=surface,
+        surface=Surface(surface),
         run_name=run_name,
-        status='running',
+        status=ManifestStatus.RUNNING,
         started_at=now,
         updated_at=now,
     )
@@ -162,24 +188,28 @@ def list_manifests(runs_dir: Path) -> list[RunManifest]:
 
 
 def active_manifests(runs_dir: Path) -> list[RunManifest]:
-    """Manifests for runs that are not completed (i.e. running or errored)."""
-    return [m for m in list_manifests(runs_dir) if m.status != 'completed']
+    """Manifests for runs that are not completed (running, errored, cancelled)."""
+    return [m for m in list_manifests(runs_dir) if m.status != ManifestStatus.COMPLETED]
 
 
 def format_active_lines(runs_dir: Path) -> list[str]:
-    """Human-readable one-liners for running/errored runs, newest first.
+    """Human-readable one-liners for non-completed runs, newest first.
 
     Empty when nothing is active. Completed runs are omitted — their report file
-    already shows in the runs listing.
+    already shows in the runs listing. Running, errored, and cancelled runs are
+    all surfaced.
     """
     now = datetime.now(tz=timezone.utc)
     lines: list[str] = []
     for m in active_manifests(runs_dir):
-        done = sum(1 for s in m.stages if s.status == 'completed')
-        if m.status == 'running':
+        done = sum(1 for s in m.stages if s.status == ManifestStatus.COMPLETED)
+        if m.status == ManifestStatus.RUNNING:
             elapsed = (now - m.started_at).total_seconds()
             stage = m.stage or 'starting'
             detail = f'stage {done + 1}: {stage} — {elapsed:.0f}s elapsed'
+        elif m.status == ManifestStatus.CANCELLED:
+            where = f' at {m.stage}' if m.stage else ''
+            detail = f'cancelled{where}'
         else:  # error
             where = f' at {m.stage}' if m.stage else ''
             detail = f'error{where}: {m.error}' if m.error else f'error{where}'
@@ -203,42 +233,3 @@ def echo_active_runs(runs_dir: Path) -> None:
     for line in lines:
         typer.echo(line)
     typer.echo('')
-
-
-class _ManifestHooks:
-    """Wrap a hooks object, recording per-stage status + timing on the manifest.
-
-    Delegates every other attribute to the wrapped hooks unchanged, so it drops
-    in for any sim/redteam hooks implementation. This is the hook-integration
-    seam: the ``on_stage_start``/``on_stage_end`` transitions the pipeline
-    already emits open and close the manifest's per-stage records, without the
-    runner having to know each stage.
-
-    Both overrides return the wrapped call's result verbatim — a coroutine for
-    async hooks, None for sync ones — preserving the wrapped hook's sync/async
-    nature (callers use ``await_maybe``), so a sync hook that raises still
-    raises synchronously.
-    """
-
-    def __init__(self, wrapped: Any, writer: ManifestWriter) -> None:
-        self._wrapped = wrapped
-        self._writer = writer
-
-    def on_stage_start(self, stage: Any, meta: dict[str, Any]) -> Any:
-        self._writer.start_stage(getattr(stage, 'value', stage))
-        return self._wrapped.on_stage_start(stage, meta)
-
-    def on_stage_end(self, stage: Any, meta: dict[str, Any]) -> Any:
-        self._writer.end_stage(getattr(stage, 'value', stage))
-        return self._wrapped.on_stage_end(stage, meta)
-
-    def __getattr__(self, name: str) -> Any:
-        # Only reached for attributes not defined above — forward verbatim.
-        return getattr(self._wrapped, name)
-
-
-def wrap_hooks(hooks: Any, writer: ManifestWriter | None) -> Any:
-    """Return *hooks* wrapped for manifest stage updates, or unchanged if no writer."""
-    if writer is None:
-        return hooks
-    return _ManifestHooks(hooks, writer)

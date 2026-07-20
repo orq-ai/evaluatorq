@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, cast
 from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, job
-from evaluatorq.common.async_utils import await_maybe, warn_if_sync_hooks
+from evaluatorq.common.async_utils import await_maybe, normalize_to_list, warn_if_sync_hooks
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.run_store_dir import get_store_dir
@@ -63,7 +63,13 @@ from evaluatorq.redteam.contracts import (
     parse_target,
 )
 from evaluatorq.redteam.exceptions import CancelledError, CredentialError, RedTeamError
-from evaluatorq.redteam.hooks import ConfirmPayload, DefaultHooks, PipelineHooks
+from evaluatorq.redteam.hooks import (
+    CompositePipelineHooks,
+    ConfirmPayload,
+    DefaultHooks,
+    ManifestStageHooks,
+    PipelineHooks,
+)
 from evaluatorq.redteam.reports.recommendations import generate_focus_area_recommendations
 from evaluatorq.redteam.runtime.jobs import _build_messages, _sanitize_job_name, create_model_job
 from evaluatorq.redteam.tracing import with_redteam_span
@@ -323,7 +329,7 @@ async def red_team(
     name: str | None = None,
     description: str | None = None,
     dataset: Path | str | None = None,
-    hooks: PipelineHooks | None = None,
+    hooks: PipelineHooks | Sequence[PipelineHooks] | None = None,
     artifacts_dir: Path | str | None = None,
     target_config: TargetConfig | None = None,
     generate_recommendations: bool = False,
@@ -420,14 +426,18 @@ async def red_team(
             ``save='detail'`` is passed without ``artifacts_dir``.
         CancelledError: If hooks.on_confirm returns False.
     """
-    resolved_hooks: PipelineHooks = hooks or DefaultHooks()
-    # Public entry point: nudge sync hooks toward async once. The same resolved
-    # instance flows down into _run_dynamic_or_hybrid / _run_static, so the
-    # re-resolution there never sees a different object — warn only here.
-    warn_if_sync_hooks(
-        resolved_hooks,
-        ('on_stage_start', 'on_stage_end', 'on_confirm', 'on_complete'),
-    )
+    # Public API accepts one hook or a sequence. Normalize to a list, then warn
+    # per-child BEFORE composing — the async composite would otherwise mask a
+    # sync child from warn_if_sync_hooks. The composed hooks (manifest first, then
+    # the user hooks or a DefaultHooks fallback) are built after argument
+    # validation, alongside the manifest, so a pure config error leaves nothing
+    # stuck behind. See the manifest block below.
+    user_hooks = normalize_to_list(hooks)
+    for user_hook in user_hooks:
+        warn_if_sync_hooks(
+            user_hook,
+            ('on_stage_start', 'on_stage_end', 'on_confirm', 'on_complete'),
+        )
 
     if config is not None:
         if llm_config is not None:
@@ -634,7 +644,7 @@ async def red_team(
     if save != 'none':
         import uuid
 
-        from evaluatorq.common.run_manifest import start_manifest, wrap_hooks
+        from evaluatorq.common.run_manifest import start_manifest
 
         manifest_writer = start_manifest(
             run_id=uuid.uuid4().hex,
@@ -642,7 +652,17 @@ async def red_team(
             run_name=name or 'red-team',
             runs_dir=get_runs_dir(),
         )
-        resolved_hooks = wrap_hooks(resolved_hooks, manifest_writer)
+        # Register the manifest as the FIRST composed hook (Q3) so a stage's
+        # status is durable before any user hook runs — and can throw. The raw
+        # manifest_writer reference above is retained for the terminal
+        # complete()/fail()/cancel() calls below: those never route through the
+        # composite, because a hook can't guarantee a terminal write on crash.
+        manifest_hook = ManifestStageHooks(manifest_writer)
+        resolved_hooks: PipelineHooks = CompositePipelineHooks([manifest_hook, *(user_hooks or [DefaultHooks()])])
+    else:
+        # Not persisting → no manifest, but still compose so multi-hooks and the
+        # DefaultHooks fallback behave identically to the saving path.
+        resolved_hooks = CompositePipelineHooks(user_hooks or [DefaultHooks()])
 
     # Everything from here through on_complete is guarded: any failure marks the
     # manifest 'error' (BaseException also captures cancellation), so a run can
@@ -796,6 +816,13 @@ async def red_team(
         # Fully finished — including on_complete. Now mark the manifest completed.
         if manifest_writer is not None:
             manifest_writer.complete(report_path=auto_save_path)
+    except CancelledError:
+        # The run was declined at the confirm gate (on_confirm returned False,
+        # surfaced as CancelledError). That is a distinct terminal status, not an
+        # error — finished stages stay truthful, nothing is relabeled (Dec1).
+        if manifest_writer is not None:
+            manifest_writer.cancel()
+        raise
     except BaseException as exc:
         if manifest_writer is not None:
             manifest_writer.fail(str(exc) or type(exc).__name__)
@@ -1133,6 +1160,9 @@ async def _prepare_target(
             hooks.on_stage_end(
                 PipelineStage.CONTEXT_RETRIEVAL,
                 {
+                    # Per-target stage: carry the target label so the manifest keys
+                    # this record to the same target as its on_stage_start (Dec2).
+                    'target': target_value,
                     'num_tools': len(agent_context.tools) if agent_context.tools else 0,
                     'num_memory_stores': len(agent_context.memory_stores) if agent_context.memory_stores else 0,
                     'num_knowledge_bases': len(agent_context.knowledge_bases) if agent_context.knowledge_bases else 0,
@@ -1263,6 +1293,8 @@ async def _prepare_target(
                 hooks.on_stage_end(
                     PipelineStage.DATAPOINT_GENERATION,
                     {
+                        # Per-target stage: match the on_stage_start target key (Dec2).
+                        'target': target,
                         'num_datapoints': len(all_datapoints),
                         'num_dynamic': len(dynamic_datapoints),
                         'num_static': len(static_datapoints),
@@ -1298,7 +1330,10 @@ async def _prepare_target(
 
         if shared_datapoints is None:
             await await_maybe(
-                hooks.on_stage_end(PipelineStage.DATAPOINT_GENERATION, {'num_datapoints': len(all_datapoints)})
+                hooks.on_stage_end(
+                    PipelineStage.DATAPOINT_GENERATION,
+                    {'target': target, 'num_datapoints': len(all_datapoints)},
+                )
             )
             _check_filter_results(all_datapoints, resolved_strategy_names, resolved_delivery_methods)
 

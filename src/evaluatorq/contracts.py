@@ -6,6 +6,7 @@ import json
 import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime  # noqa: TC003 — runtime-required by pydantic manifest models
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias
 
 from loguru import logger
@@ -1016,6 +1017,69 @@ class ReportSection:
     data: dict[str, Any] = field(default_factory=dict)
 
 
+# ---------------------------------------------------------------------------
+# Run lifecycle manifest
+# ---------------------------------------------------------------------------
+# Shared by red teaming and agent simulation to track a run's stage + status on
+# disk while it executes (the report only lands on completion). Behaviour lives
+# in ``evaluatorq.common.run_manifest``; the data models live here per the
+# "all shared cross-surface data models in contracts.py" convention.
+
+
+class ManifestSurface(StrEnum):
+    """Which runner produced a manifest."""
+
+    SIM = 'sim'
+    REDTEAM = 'redteam'
+
+
+class ManifestStatus(StrEnum):
+    """Terminal / in-flight status of a run or one of its stages."""
+
+    RUNNING = 'running'
+    COMPLETED = 'completed'
+    ERROR = 'error'
+    CANCELLED = 'cancelled'
+
+
+class StageRecord(BaseModel):
+    """One pipeline stage's own status + timing within a run."""
+
+    name: str
+    target: str | None = None
+    status: ManifestStatus = ManifestStatus.RUNNING
+    started_at: datetime
+    ended_at: datetime | None = None
+
+    @property
+    def duration_seconds(self) -> float | None:
+        if self.ended_at is None:
+            return None
+        return (self.ended_at - self.started_at).total_seconds()
+
+
+class RunManifest(BaseModel):
+    """Lifecycle record for a single run. One file per run, keyed by run_id."""
+
+    run_id: str
+    surface: ManifestSurface
+    run_name: str
+    status: ManifestStatus = ManifestStatus.RUNNING
+    stage: str | None = None  # name of the current / most-recent stage
+    stages: list[StageRecord] = Field(default_factory=list)
+    started_at: datetime
+    updated_at: datetime
+    ended_at: datetime | None = None  # set when the run reaches a terminal status
+    error: str | None = None
+    report_path: str | None = None
+
+    @property
+    def duration_seconds(self) -> float | None:
+        if self.ended_at is None:
+            return None
+        return (self.ended_at - self.started_at).total_seconds()
+
+
 __all__ = [
     'DEFAULT_PIPELINE_MODEL',
     'DEFAULT_TARGET_MAX_TOKENS',
@@ -1032,12 +1096,16 @@ __all__ = [
     'JuryVote',
     'KnowledgeBaseInfo',
     'LLMCallConfig',
+    'ManifestStatus',
+    'ManifestSurface',
     'MemoryStoreInfo',
     'Message',
     'OutputMessage',
     'ReasoningOutputItem',
     'ReportSection',
     'ReportSectionKind',
+    'RunManifest',
+    'StageRecord',
     'StrategyToolCall',
     'TextOutputItem',
     'TokenUsage',

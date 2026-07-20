@@ -13,6 +13,7 @@ import asyncio
 import inspect
 import logging
 import os
+import sys
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -24,11 +25,12 @@ from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run, build_simulation_run, fetch_agent_info, write_report
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Sequence
 
     from openai import AsyncOpenAI
     from opentelemetry.trace import Span
 
+    from evaluatorq.common.run_manifest import ManifestWriter
     from evaluatorq.contracts import AgentTarget
     from evaluatorq.simulation.agents.base import BaseAgent
     from evaluatorq.simulation.evaluators.scorers import SimulationScorer
@@ -71,6 +73,70 @@ def _agent_key_of(target: object) -> str | None:
     return None
 
 
+# Method names inspected for the sync-hook deprecation nudge. Fired per user
+# child BEFORE composing — once composed, the async CompositeSimulationHooks
+# would mask a sync child from the runner's own (now-redundant) check.
+_SIM_HOOK_METHOD_NAMES: tuple[str, ...] = (
+    'on_confirm',
+    'on_run_start',
+    'on_stage_start',
+    'on_stage_end',
+    'on_generate_inputs_ready',
+    'on_datapoint_start',
+    'on_turn_complete',
+    'on_datapoint_complete',
+    'on_evaluator_complete',
+    'on_datapoint_error',
+    'on_run_complete',
+)
+
+
+def _compose_sim_hooks(
+    hooks: SimulationHooks | Sequence[SimulationHooks] | None,
+    *,
+    save: bool,
+    run_id: str,
+    run_name: str,
+    run_output: str | Path | None,
+) -> tuple[SimulationHooks, ManifestWriter | None]:
+    """Compose user hooks (+ manifest) once, at the outer entry point.
+
+    Normalises ``hooks`` to a list, warns per sync child, then builds one
+    ``CompositeSimulationHooks``. When ``save`` is set, a fresh
+    ``ManifestWriter`` is minted and its ``ManifestStageHooks`` registered
+    FIRST so stage status is durable before any user hook runs; the raw writer
+    is returned alongside for the runner's terminal ``complete``/``cancel``/
+    ``fail`` calls (§4.5). When not saving there is no manifest (``None``).
+
+    Preserves today's default: with no user hooks a ``DefaultHooks()`` is still
+    composed in, so the confirm-plan log + completion summary aren't lost.
+    """
+    from evaluatorq.common.async_utils import normalize_to_list, warn_if_sync_hooks
+    from evaluatorq.simulation.hooks import CompositeSimulationHooks, DefaultHooks, ManifestStageHooks
+
+    user_hooks = normalize_to_list(hooks)
+    for child in user_hooks:
+        warn_if_sync_hooks(child, _SIM_HOOK_METHOD_NAMES)
+    base: list[SimulationHooks] = user_hooks or [DefaultHooks()]
+
+    manifest_writer: ManifestWriter | None = None
+    if save:
+        from evaluatorq.common.run_manifest import start_manifest
+        from evaluatorq.simulation.utils.run_store import get_sim_runs_dir
+
+        manifest_runs_dir = Path(run_output).parent if run_output is not None else get_sim_runs_dir()
+        manifest_writer = start_manifest(
+            run_id=run_id,
+            surface='sim',
+            run_name=run_name,
+            runs_dir=manifest_runs_dir,
+        )
+        composed: SimulationHooks = CompositeSimulationHooks([ManifestStageHooks(manifest_writer), *base])
+    else:
+        composed = CompositeSimulationHooks(base)
+    return composed, manifest_writer
+
+
 async def simulate(
     *,
     evaluation_name: str = '',
@@ -85,7 +151,7 @@ async def simulate(
     parallelism: int = 5,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
-    hooks: SimulationHooks | None = None,
+    hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
     generation_client: AsyncOpenAI | None = None,
     upload_results: bool = True,
     evaluation_description: str | None = None,
@@ -192,7 +258,7 @@ async def _simulate_run(
     parallelism: int = 5,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
-    hooks: SimulationHooks | None = None,
+    hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
     generation_client: AsyncOpenAI | None = None,
     upload_results: bool = True,
     evaluation_description: str | None = None,
@@ -222,6 +288,20 @@ async def _simulate_run(
                 'orq.simulation.parallelism': parallelism,
             },
         ) as pipeline_span:
+            # Mint the run id + manifest at the outer entry so the same id flows
+            # to the manifest and to _simulate_core's experiment linking, and so
+            # the manifest brackets the whole run (bare simulate has only the
+            # SIMULATE stage — no GENERATE phase). Compose once; the manifest hook
+            # is registered first, and the raw writer is retained for terminal
+            # complete/cancel/fail calls.
+            run_id = uuid.uuid4().hex
+            composed_hooks, manifest_writer = _compose_sim_hooks(
+                hooks,
+                save=save,
+                run_id=run_id,
+                run_name=evaluation_name or 'sim',
+                run_output=report,
+            )
             config = SimulationConfig(
                 evaluation_name=evaluation_name,
                 target=target,
@@ -242,12 +322,14 @@ async def _simulate_run(
                 exit_on_failure=exit_on_failure,
                 save=save,
                 run_output=report,
-                hooks=hooks,
+                hooks=composed_hooks,
             )
             return await _simulate_core(
                 config=config,
                 caller='simulate',
                 pipeline_span=pipeline_span,
+                run_id=run_id,
+                manifest_writer=manifest_writer,
             )
     finally:
         await flush_tracing()
@@ -266,7 +348,7 @@ async def generate_and_simulate(
     parallelism: int = 5,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
-    hooks: SimulationHooks | None = None,
+    hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
     generation_client: AsyncOpenAI | None = None,
     upload_results: bool = True,
     evaluation_description: str | None = None,
@@ -418,7 +500,7 @@ async def _generate_and_simulate_run(
     parallelism: int = 5,
     user_simulator: BaseAgent | None = None,
     judge: BaseAgent | None = None,
-    hooks: SimulationHooks | None = None,
+    hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
     generation_client: AsyncOpenAI | None = None,
     upload_results: bool = True,
     evaluation_description: str | None = None,
@@ -435,7 +517,7 @@ async def _generate_and_simulate_run(
     why this split exists.
     """
     from evaluatorq.common.async_utils import await_maybe
-    from evaluatorq.simulation.hooks import DefaultHooks, SimStage
+    from evaluatorq.simulation.hooks import SimStage
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
 
@@ -457,14 +539,26 @@ async def _generate_and_simulate_run(
                 agent_description=agent_description,
                 target=target,
             )
-            gen_hooks = hooks or DefaultHooks()
+            # Mint the run id + manifest at the outer entry, BEFORE the generate
+            # phase, gated on save (D3: the GENERATE stage must reach the manifest
+            # too). The SAME composed hooks thread through both the generate phase
+            # and _simulate_core, so both stages are recorded; the raw writer is
+            # retained for terminal complete/cancel/fail calls.
+            run_id = uuid.uuid4().hex
+            composed_hooks, manifest_writer = _compose_sim_hooks(
+                hooks,
+                save=save,
+                run_id=run_id,
+                run_name=evaluation_name or 'sim',
+                run_output=report,
+            )
             datapoints: list[SimulationDatapoint] = []
             gen_client: AsyncOpenAI | None = None
             gen_owned = False
             # One try/finally owns the client close so it fires even if the
             # emit_datapoints callback raises between generation and simulate.
             try:
-                await await_maybe(gen_hooks.on_stage_start(SimStage.GENERATE, {}))
+                await await_maybe(composed_hooks.on_stage_start(SimStage.GENERATE, {}))
                 try:
                     datapoints, gen_client, gen_owned = await _generate_datapoints_inner(
                         caller='generate_and_simulate',
@@ -473,13 +567,13 @@ async def _generate_and_simulate_run(
                         num_scenarios=num_scenarios,
                         model=sim_model,
                         generation_client=generation_client,
-                        hooks=hooks,
+                        hooks=composed_hooks,
                     )
                     if emit_datapoints is not None:
                         emit_datapoints(datapoints)
                 finally:
                     meta = {'num_datapoints': len(datapoints)} if datapoints else {}
-                    await await_maybe(gen_hooks.on_stage_end(SimStage.GENERATE, meta))
+                    await await_maybe(composed_hooks.on_stage_end(SimStage.GENERATE, meta))
 
                 config = SimulationConfig(
                     evaluation_name=evaluation_name,
@@ -501,12 +595,14 @@ async def _generate_and_simulate_run(
                     exit_on_failure=exit_on_failure,
                     save=save,
                     run_output=report,
-                    hooks=hooks,
+                    hooks=composed_hooks,
                 )
                 return await _simulate_core(
                     config=config,
                     caller='generate_and_simulate',
                     pipeline_span=pipeline_span,
+                    run_id=run_id,
+                    manifest_writer=manifest_writer,
                 )
             finally:
                 if gen_owned and gen_client is not None:
@@ -850,6 +946,8 @@ async def _simulate_core(
     config: SimulationConfig,
     caller: str,
     pipeline_span: Span | None,
+    run_id: str,
+    manifest_writer: ManifestWriter | None = None,
 ) -> SimulationRun:
     """Core simulation logic (runs inside the orq.simulation.pipeline span).
 
@@ -877,10 +975,11 @@ async def _simulate_core(
 
     target_callable, target_agent, target_kind_hint = _resolve_target(config.target)
 
-    # One run id per run; each conversation's Orq thread id is f"{run_id}:{index}".
-    # Persisted on SimulationRun / SimulationResult so the dashboard can deep-link
-    # to the run's (or a single conversation's) traces in Orq observability.
-    run_id = uuid.uuid4().hex
+    # ``run_id`` is minted at the outer entry (_simulate_run /
+    # _generate_and_simulate_run) so the same id brackets the manifest and this
+    # core's experiment linking. Each conversation's Orq thread id is
+    # f"{run_id}:{index}"; persisted on SimulationRun / SimulationResult so the
+    # dashboard can deep-link to the run's traces in Orq observability.
 
     sim_datapoints = await _resolve_or_generate_datapoints(
         caller=caller,
@@ -931,34 +1030,23 @@ async def _simulate_core(
         'evaluator_names': resolved_evaluator_names,
         'target': target_label,
     }
-    # Gate first — before the evaluatorq run is built. A decline is a clean abort.
-    if not await await_maybe(resolved_hooks.on_confirm(run_meta)):
-        raise SimulationCancelledError('Simulation run declined by on_confirm hook')
-
-    # Lifecycle manifest: track this run's stage/status on disk while it runs, so
-    # a still-running or crashed run is visible (the report only lands on
-    # completion). Only when persisting — an unsaved SDK run leaves no trace by
-    # design. Wrapping the hooks feeds stage transitions into the manifest.
-    manifest_writer = None
-    if save:
-        from evaluatorq.common.run_manifest import start_manifest, wrap_hooks
-        from evaluatorq.simulation.utils.run_store import get_sim_runs_dir
-
-        manifest_runs_dir = Path(run_output).parent if run_output is not None else get_sim_runs_dir()
-        manifest_writer = start_manifest(
-            run_id=run_id,
-            surface='sim',
-            run_name=evaluation_name or 'sim',
-            runs_dir=manifest_runs_dir,
-        )
-        resolved_hooks = wrap_hooks(resolved_hooks, manifest_writer)
-
-    # Everything from the first hook call through save is guarded by the outer
+    # The manifest was minted at the outer entry and composed in as the first
+    # hook (ManifestStageHooks), so stage transitions reach disk automatically.
+    # The raw ``manifest_writer`` reference is retained here purely for the
+    # terminal complete/cancel/fail transitions (§4.5) — those cannot be a hook
+    # because a hook can't guarantee a terminal write on crash.
+    #
+    # Everything from the confirm gate through save is guarded by the outer
     # try/except: any failure — including a hook raising before/inside the inner
-    # try or in its finally — marks the manifest 'error', so a run can never stay
-    # 'running' once it has finished. Terminal transitions are idempotent, so the
-    # single completion / failure that lands first wins.
+    # try or in its finally — marks the manifest 'error' (or 'cancelled' on a
+    # declined confirm), so a run can never stay 'running' once it has finished.
+    # Terminal transitions are idempotent, so the single one that lands first wins.
     try:
+        # Gate first — before the evaluatorq run is built. A decline is a clean
+        # cancel (SimulationCancelledError → writer.cancel below), never an error.
+        if not await await_maybe(resolved_hooks.on_confirm(run_meta)):
+            raise SimulationCancelledError('Simulation run declined by on_confirm hook')
+
         # SIMULATE stage brackets the run: start fires after on_confirm passes and
         # before on_run_start (which opens the live Progress region); end fires in
         # the finally after on_run_complete (which closes it). Never emit between
@@ -1001,8 +1089,17 @@ async def _simulate_core(
             results = dropped.partial_results
             raise
         finally:
+            # Truthful stage status (§4.4): on_stage_end always fires (RichHooks
+            # render pairing) but reports the in-flight exception via
+            # sys.exc_info()[1] — None on the success path (stage → 'completed'),
+            # the live exception on failure (stage → 'error' in the manifest).
             await await_maybe(resolved_hooks.on_run_complete(results))
-            await await_maybe(resolved_hooks.on_stage_end(SimStage.SIMULATE, {'num_results': len(results)}))
+            await await_maybe(
+                resolved_hooks.on_stage_end(
+                    SimStage.SIMULATE,
+                    {'num_results': len(results), 'error': sys.exc_info()[1]},
+                )
+            )
 
         # Always build the run on the success path (an aborted run re-raised
         # above) so every caller — SDK and CLI alike — gets the full
@@ -1057,10 +1154,19 @@ async def _simulate_core(
         # the save succeeded) even if the report write itself failed.
         if manifest_writer is not None:
             manifest_writer.complete(report_path=saved_path)
+    except SimulationCancelledError:
+        # A declined on_confirm is a clean cancel, not a failure (Dec1): the run
+        # is 'cancelled' and any already-completed stage (e.g. GENERATE in the
+        # generate_and_simulate path) stays 'completed' — nothing is relabeled.
+        if manifest_writer is not None:
+            manifest_writer.cancel()
+        raise
     except BaseException as exc:
-        # Any failure marks the manifest errored before propagating — otherwise it
-        # would read as 'running' forever. BaseException so KeyboardInterrupt /
-        # CancelledError are captured too; always re-raised.
+        # Any other failure marks the manifest errored before propagating —
+        # otherwise it would read as 'running' forever. fail() closes only
+        # still-open stages 'error' (a stage that already finished stays
+        # truthful). BaseException so KeyboardInterrupt / CancelledError are
+        # captured too; always re-raised.
         if manifest_writer is not None:
             manifest_writer.fail(str(exc) or type(exc).__name__, stage=SimStage.SIMULATE)
         raise

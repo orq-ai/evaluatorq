@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import inspect
 import warnings
-from collections.abc import Awaitable
-from typing import TypeAlias, TypeVar
+from collections.abc import Awaitable, Iterable, Sequence
+from typing import Any, TypeAlias, TypeVar
 
 _T = TypeVar('_T')
 
@@ -37,6 +37,41 @@ async def await_maybe(value: MaybeAsync[_T]) -> _T:
     # isawaitable is False here, so value is the bare _T; the checker cannot
     # narrow the union via isawaitable, hence the cast-free ignore.
     return value  # type: ignore[return-value]
+
+
+async def fan_out(children: Iterable[Any], method_name: str, *args: Any, **kwargs: Any) -> None:
+    """Call ``method_name`` on every child (via :func:`await_maybe`).
+
+    Runs ALL children, captures the FIRST exception, then re-raises it after the
+    loop — a uniform run-all-then-reraise policy for every void hook method. No
+    ``getattr(..., None)`` skip branch: children are full protocol
+    implementations, so a missing method is a real bug and should raise.
+    """
+    first_exc: BaseException | None = None
+    for child in children:
+        try:
+            await await_maybe(getattr(child, method_name)(*args, **kwargs))
+        except BaseException as exc:  # noqa: PERF203 — per-child capture is the point of fan-out
+            first_exc = first_exc or exc
+    if first_exc is not None:
+        raise first_exc
+
+
+def normalize_to_list(value: Any) -> list[Any]:
+    """Coerce a single item, a sequence, or ``None`` into a list.
+
+    ``None`` → ``[]``; a list/tuple → ``list(value)``; any other single object
+    (including ``str``/``bytes``, treated as scalar) → ``[value]``. Modeled on
+    the list-or-single idiom used for ``target`` in the redteam runner. Empty
+    inputs are returned empty — callers apply their own defaults.
+    """
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)):
+        return [value]
+    if isinstance(value, Sequence):
+        return list(value)
+    return [value]
 
 
 def warn_if_sync_hooks(hooks: object, method_names: tuple[str, ...]) -> None:
