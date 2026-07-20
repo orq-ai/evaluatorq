@@ -123,7 +123,12 @@ def render_sim_row_list(rid: str, entries: list[SimulationEntry]) -> str:
 
         # Trace deep-link on the row, next to the outcome badge. stopPropagation
         # keeps it from opening the conversation drawer.
-        trace_btn = trace_link_button(thread_trace_url(e.thread_id), 'View Traces', onclick='event.stopPropagation()')
+        trace_btn = trace_link_button(
+            thread_trace_url(e.thread_id),
+            'View Traces',
+            onclick='event.stopPropagation()',
+            extra_attributes={'data-no-drawer': None},
+        )
         right_cluster = (
             f'{tag(f"{e.turn_count} turns")}{tag(f"score {e.goal_completion_score:.2f}")}'
             f'{tag(e.terminated_by)}{badge}{trace_btn}'

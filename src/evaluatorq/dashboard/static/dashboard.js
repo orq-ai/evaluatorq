@@ -279,6 +279,7 @@
     });
 
     document.body.addEventListener('keydown', function (evt) {
+      if (evt.target.closest('[data-no-drawer]')) return;
       var trigger = evt.target.closest('[data-sim-entity-trigger]');
       if (trigger && (evt.key === 'Enter' || evt.key === ' ')) {
         evt.preventDefault();

@@ -54,6 +54,17 @@ def test_button_renders_anchor(monkeypatch: pytest.MonkeyPatch) -> None:
     assert 'target="_blank"' in html
 
 
+def test_button_renders_extra_attributes() -> None:
+    html = trace_links.trace_link_button(
+        'https://x/y',
+        'View traces',
+        extra_attributes={'data-no-drawer': None, 'data-origin': 'conversation'},
+    )
+
+    assert 'data-no-drawer' in html
+    assert 'data-origin="conversation"' in html
+
+
 if __name__ == '__main__':
     import subprocess
     import sys

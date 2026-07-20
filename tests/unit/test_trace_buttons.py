@@ -180,8 +180,9 @@ class TestSimRowTraceButton:
         assert 'class="btn-secondary trace-link"' in html
         assert 'View Traces' in html
         assert f'href="{thread_trace_url("run1:0")}"' in html
-        # stopPropagation so clicking the link doesn't toggle the <details> row.
+        # Native link activation must never bubble into the conversation drawer.
         assert 'event.stopPropagation()' in html
+        assert 'data-no-drawer' in html
 
 
 def test_button_helper_smoke() -> None:
