@@ -19,9 +19,11 @@ Section kinds:
 
 from __future__ import annotations
 
+import json
 import operator
 from collections import Counter, defaultdict
-from typing import TYPE_CHECKING, Any
+from hashlib import sha256
+from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
 
@@ -82,6 +84,34 @@ def _criteria_meta(result: SimulationResult) -> list[dict[str, Any]]:
         {'id': f'criteria_{i}', 'description': desc, 'type': None, 'passed': bool(passed)}
         for i, (desc, passed) in enumerate(cr.items())
     ]
+
+
+def _cohort_id(result: SimulationResult, kind: Literal['persona', 'scenario']) -> str:
+    explicit = result.metadata.get(f'{kind}_id')
+    if explicit:
+        return f'{kind}:{explicit}'
+    if kind == 'persona':
+        snapshot = {
+            'name': _persona_name(result),
+            'traits': result.metadata.get('persona_traits') or {},
+        }
+    else:
+        snapshot = {
+            'name': _scenario_name(result),
+            'goal': result.metadata.get('scenario_goal'),
+            'context': result.metadata.get('scenario_context'),
+            'criteria': _criteria_meta(result),
+        }
+    payload = json.dumps(snapshot, sort_keys=True, separators=(',', ':'), default=str)
+    return f'{kind}:{sha256(payload.encode()).hexdigest()[:16]}'
+
+
+def _persona_cohort_id(result: SimulationResult) -> str:
+    return _cohort_id(result, 'persona')
+
+
+def _scenario_cohort_id(result: SimulationResult) -> str:
+    return _cohort_id(result, 'scenario')
 
 
 def _criteria_rows(result: SimulationResult) -> list[dict[str, Any]]:
@@ -149,32 +179,36 @@ def _build_overview_section(results: list[SimulationResult]) -> ReportSection:
     persisted; older results fall back to names + recovered criteria only."""
     personas: dict[str, dict[str, Any]] = {}
     for r in results:
+        cohort_id = _persona_cohort_id(r)
         name = _persona_name(r)
-        if name not in personas:
+        if cohort_id not in personas:
             traits = r.metadata.get('persona_traits')
-            personas[name] = {
+            personas[cohort_id] = {
+                'id': cohort_id,
                 'name': name,
                 'conversations': 0,
                 'traits': traits if isinstance(traits, dict) else None,
                 'background': (traits or {}).get('background') if isinstance(traits, dict) else None,
             }
-        personas[name]['conversations'] += 1
+        personas[cohort_id]['conversations'] += 1
 
     scenarios: dict[str, dict[str, Any]] = {}
     scenario_results: dict[str, list[SimulationResult]] = {}
     for r in results:
+        cohort_id = _scenario_cohort_id(r)
         name = _scenario_name(r)
-        if name not in scenarios:
-            scenarios[name] = {
+        if cohort_id not in scenarios:
+            scenarios[cohort_id] = {
+                'id': cohort_id,
                 'name': name,
                 'goal': r.metadata.get('scenario_goal'),
                 'context': r.metadata.get('scenario_context'),
                 'criteria': [{'description': c['description'], 'type': c['type']} for c in _criteria_rows(r)],
             }
-        scenario_results.setdefault(name, []).append(r)
+        scenario_results.setdefault(cohort_id, []).append(r)
 
-    for name, scenario in scenarios.items():
-        items = scenario_results.get(name, [])
+    for cohort_id, scenario in scenarios.items():
+        items = scenario_results.get(cohort_id, [])
         scenario['pass_rate'] = (sum(1 for r in items if r.goal_achieved) / len(items)) if items else None
 
     return ReportSection(
@@ -217,16 +251,17 @@ def _build_failures_first_section(results: list[SimulationResult]) -> ReportSect
 def _build_persona_breakdown_section(results: list[SimulationResult]) -> ReportSection:
     by_persona: dict[str, list[SimulationResult]] = defaultdict(list)
     for r in results:
-        by_persona[_persona_name(r)].append(r)
+        by_persona[_persona_cohort_id(r)].append(r)
 
     rows: list[dict[str, Any]] = []
-    for name, items in by_persona.items():
+    for cohort_id, items in by_persona.items():
         total = len(items)
         achieved = sum(1 for r in items if r.goal_achieved and not _is_errored(r))
         avg_score = sum(r.goal_completion_score for r in items) / total
         tokens = sum(r.token_usage.total_tokens for r in items)
         rows.append({
-            'persona': name,
+            'id': cohort_id,
+            'persona': _persona_name(items[0]),
             'conversations': total,
             'goals_achieved': achieved,
             'success_rate': achieved / total,
@@ -244,16 +279,17 @@ def _build_persona_breakdown_section(results: list[SimulationResult]) -> ReportS
 def _build_scenario_breakdown_section(results: list[SimulationResult]) -> ReportSection:
     by_scenario: dict[str, list[SimulationResult]] = defaultdict(list)
     for r in results:
-        by_scenario[_scenario_name(r)].append(r)
+        by_scenario[_scenario_cohort_id(r)].append(r)
 
     rows: list[dict[str, Any]] = []
-    for name, items in by_scenario.items():
+    for cohort_id, items in by_scenario.items():
         total = len(items)
         achieved = sum(1 for r in items if r.goal_achieved and not _is_errored(r))
         avg_score = sum(r.goal_completion_score for r in items) / total
         avg_turns = sum(r.turn_count for r in items) / total
         rows.append({
-            'scenario': name,
+            'id': cohort_id,
+            'scenario': _scenario_name(items[0]),
             'conversations': total,
             'goals_achieved': achieved,
             'success_rate': achieved / total,
@@ -439,34 +475,45 @@ def _build_errors_section(results: list[SimulationResult]) -> ReportSection | No
 
 
 def _build_persona_scenario_heatmap_section(results: list[SimulationResult]) -> ReportSection:
-    personas: list[str] = []
-    scenarios: list[str] = []
+    persona_names: dict[str, str] = {}
+    scenario_names: dict[str, str] = {}
     agg: dict[tuple[str, str], list[bool]] = defaultdict(list)
     scores: dict[tuple[str, str], list[float]] = defaultdict(list)
     for r in results:
-        p, s = _persona_name(r), _scenario_name(r)
-        if p not in personas:
-            personas.append(p)
-        if s not in scenarios:
-            scenarios.append(s)
-        agg[p, s].append(r.goal_achieved)
-        scores[p, s].append(r.goal_completion_score)
+        persona_id, scenario_id = _persona_cohort_id(r), _scenario_cohort_id(r)
+        persona_names.setdefault(persona_id, _persona_name(r))
+        scenario_names.setdefault(scenario_id, _scenario_name(r))
+        agg[persona_id, scenario_id].append(r.goal_achieved)
+        scores[persona_id, scenario_id].append(r.goal_completion_score)
+
+    def labels(names: dict[str, str]) -> dict[str, str]:
+        occurrences: Counter[str] = Counter()
+        disambiguated: dict[str, str] = {}
+        for cohort_id, name in names.items():
+            occurrences[name] += 1
+            disambiguated[cohort_id] = name if occurrences[name] == 1 else f'{name} ({occurrences[name]})'
+        return disambiguated
+
+    persona_labels = labels(persona_names)
+    scenario_labels = labels(scenario_names)
     cells = [
         {
-            'persona': p,
-            'scenario': s,
+            'persona_id': persona_id,
+            'scenario_id': scenario_id,
+            'persona': persona_labels[persona_id],
+            'scenario': scenario_labels[scenario_id],
             'success_rate': (sum(v) / len(v)) if v else 0.0,
             # Continuous avg goal-completion score — the heatmap renders this so
             # single-conversation cells show a gradient, not a 0/100 binary.
-            'avg_score': (sum(sc) / len(sc)) if (sc := scores[p, s]) else 0.0,
+            'avg_score': (sum(sc) / len(sc)) if (sc := scores[persona_id, scenario_id]) else 0.0,
             'n': len(v),
         }
-        for (p, s), v in agg.items()
+        for (persona_id, scenario_id), v in agg.items()
     ]
     return ReportSection(
         kind='persona_scenario_heatmap',
         title='Persona x Scenario Success',
-        data={'personas': personas, 'scenarios': scenarios, 'cells': cells},
+        data={'personas': list(persona_labels.values()), 'scenarios': list(scenario_labels.values()), 'cells': cells},
     )
 
 

@@ -55,6 +55,10 @@ def _make_result(
     tokens: tuple[int, int, int] = (10, 5, 15),
     evaluator_scores: dict[str, float] | None = None,
     error: str | None = None,
+    persona_traits: dict[str, object] | None = None,
+    scenario_goal: str | None = None,
+    scenario_context: str | None = None,
+    criteria_meta: list[dict[str, object]] | None = None,
     terminated_by: TerminatedBy = TerminatedBy.judge,
 ) -> SimulationResult:
     metadata: dict[str, object] = {
@@ -66,6 +70,14 @@ def _make_result(
         metadata['evaluator_scores'] = evaluator_scores
     if error is not None:
         metadata['error'] = error
+    if persona_traits is not None:
+        metadata['persona_traits'] = persona_traits
+    if scenario_goal is not None:
+        metadata['scenario_goal'] = scenario_goal
+    if scenario_context is not None:
+        metadata['scenario_context'] = scenario_context
+    if criteria_meta is not None:
+        metadata['criteria_meta'] = criteria_meta
     return SimulationResult(
         messages=[
             Message(role='user', content='hi'),
@@ -85,6 +97,27 @@ def _make_result(
         turn_metrics=[TurnMetrics(turn_number=1, token_usage=TokenUsage(), judge_reason='ok')],
         metadata=metadata,
     )
+
+
+def _result(
+    *,
+    persona: str = 'Tester',
+    traits: dict[str, object] | None = None,
+    scenario: str = 'Smoke',
+    scenario_goal: str | None = None,
+    score: float = 1.0,
+) -> SimulationResult:
+    return _make_result(
+        persona=persona,
+        persona_traits=traits,
+        scenario=scenario,
+        scenario_goal=scenario_goal,
+        goal_completion_score=score,
+    )
+
+
+def _section(sections, kind):
+    return next(section for section in sections if section.kind == kind)
 
 
 def test_build_report_sections_emits_core_sections():
@@ -133,6 +166,35 @@ def test_persona_breakdown_aggregates_per_persona():
     assert rows['A']['goals_achieved'] == 1
     assert rows['A']['success_rate'] == 0.5
     assert rows['B']['success_rate'] == 1.0
+
+
+def test_persona_breakdown_keeps_same_named_distinct_personas_separate():
+    sections = build_report_sections([
+        _result(persona='Alex', traits={'patience': 0.1}, score=0.2),
+        _result(persona='Alex', traits={'patience': 0.9}, score=0.8),
+    ])
+    rows = _section(sections, 'persona_breakdown').data['rows']
+    assert len(rows) == 2
+    assert {row['persona'] for row in rows} == {'Alex'}
+    assert len({row['id'] for row in rows}) == 2
+
+
+def test_scenario_breakdown_keeps_same_named_distinct_scenarios_separate():
+    sections = build_report_sections([
+        _result(scenario='Billing', scenario_goal='Explain the charge'),
+        _result(scenario='Billing', scenario_goal='Issue a refund'),
+    ])
+    rows = _section(sections, 'scenario_breakdown').data['rows']
+    assert len(rows) == 2
+    assert {row['scenario'] for row in rows} == {'Billing'}
+    assert len({row['id'] for row in rows}) == 2
+
+
+def test_overview_entities_and_breakdown_rows_share_the_same_cohort_id():
+    sections = build_report_sections([_result(persona='Alex', traits={'patience': 0.1})])
+    overview = _section(sections, 'overview').data['personas'][0]
+    breakdown = _section(sections, 'persona_breakdown').data['rows'][0]
+    assert overview['id'] == breakdown['id']
 
 
 def test_overview_section_lists_personas_and_scenario_criteria(make_result):
