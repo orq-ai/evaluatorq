@@ -11,7 +11,7 @@ The rail keeps the existing Persona, Scenario, Goal Outcome, and Terminated By c
 - an **Any rule broken** boolean chip;
 - a maximum **Goal score** slider (0.00–1.00), for finding incomplete outcomes;
 - a minimum **Turns** slider (1 through the run maximum);
-- a minimum **Total tokens** range with an adaptive step, capped at roughly 100 selectable positions across the observed run range;
+- a minimum **Total tokens** slider (0 through the observed run maximum, in raw token counts);
 - four per-turn threshold sliders in a **More filters** expander:
   - minimum hallucination risk, applied to the maximum risk seen in a run;
   - maximum response-quality score, applied to the minimum quality seen in a run;
@@ -22,7 +22,7 @@ Named rules and failed criteria are deliberately not filters. The judge emits lo
 
 ## Behaviour
 
-All controls use the complete run to determine their range and remain visible after filtering. Score bounds are fixed at 0.00–1.00; turns and tokens use the observed maximum. A default threshold is non-restrictive: goal-score ceiling 1.0, turns 1, tokens 0, hallucination risk 0, and the three quality ceilings 1.0. The token range uses ``max(1, ceil(run_max_tokens / 100))`` as its step, so every value is reachable in at most 100 slider positions.
+All controls use the complete run to determine their range and remain visible after filtering. Score bounds are fixed at 0.00–1.00; turns and tokens use their observed integer maximums without normalisation. A default threshold is non-restrictive: goal-score ceiling 1.0, turns 1, tokens 0, hallucination risk 0, and the three quality ceilings 1.0. Turn and token sliders use their raw units and a step of 1.
 
 Per-turn scores are aggregated conservatively for discovery: a run matches a risk threshold when any scored turn reaches it, and matches a quality threshold when any scored turn falls at or below it. Existing turn-quality reporting already represents unmeasured values as gaps, so filtering preserves that policy: a run with no usable score for a selected metric remains visible rather than being misclassified as a pass or failure. A partially scored run aggregates only its numeric turn values. Token usage has no separate unknown state because the persisted model represents absent usage as zero.
 
@@ -34,4 +34,4 @@ The primary rail shows Rule adherence, Goal Outcome, Terminated By, Goal score, 
 
 ## Testing
 
-Tests cover each filter’s predicate, conservative per-turn aggregation, missing score handling, adaptive token steps, bounds clamping, checked/default states, and the HTMX rendering path. A shared turn-metric descriptor (key, label, and whether high values are risky) supplies the four controls and the existing report renderers, avoiding another hard-coded metric list. Existing filter tests continue to verify fixed full-run option lists.
+Tests cover each filter’s predicate, conservative per-turn aggregation, missing score handling, raw-unit bounds, bounds clamping, checked/default states, and the HTMX rendering path. A shared turn-metric descriptor (key, label, and whether high values are risky) supplies the four controls and the existing report renderers, avoiding another hard-coded metric list. Existing filter tests continue to verify fixed full-run option lists.
