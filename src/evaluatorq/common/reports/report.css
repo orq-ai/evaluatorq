@@ -549,6 +549,9 @@ details pre { background: var(--gray-100); padding: 1rem; border-radius: 4px; ov
 @media (max-width: 640px) {
     .container { padding: 24px 16px 60px; }
     .intro-grid { grid-template-columns: 1fr; }
+    /* Re-enable wrapping (base rule is nowrap) so cards stack instead of being
+       crushed onto one non-wrapping row. */
+    .kpi-band, .kpi-row { flex-wrap: wrap; }
     .kpi-card { flex: 1 1 100%; }
     .report-card, .card { padding: 1rem; }
     table:not(.heatmap-table) thead { display: none; }

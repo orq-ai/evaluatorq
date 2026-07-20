@@ -308,28 +308,7 @@ class TestFix3ParseCache:
 
 
 class TestFix4SingleFilterApply:
-    """Fix 4 — recompute_options takes an already-filtered list (no double apply)."""
-
-    def test_recompute_options_takes_filtered_list(self) -> None:
-        """FILTERS['redteam'].recompute_options accepts a list, not (obj, sel)."""
-        import inspect
-
-        from evaluatorq.dashboard.filters import FILTERS
-
-        sig = inspect.signature(FILTERS['redteam'].recompute_options)
-        params = list(sig.parameters.keys())
-        # New signature: a single positional param (the filtered list).
-        assert len(params) == 1, f'Expected 1 param, got {params}'
-
-    def test_sim_recompute_options_takes_filtered_list(self) -> None:
-        """FILTERS['sim'].recompute_options accepts a list, not (obj, sel)."""
-        import inspect
-
-        from evaluatorq.dashboard.filters import FILTERS
-
-        sig = inspect.signature(FILTERS['sim'].recompute_options)
-        params = list(sig.parameters.keys())
-        assert len(params) == 1, f'Expected 1 param, got {params}'
+    """A filter POST applies the filter exactly once and keeps options full."""
 
     def test_apply_called_once_during_filter_post(self, client: TestClient, roots: list[Path]) -> None:
         """POST /r/{rid}/filter must call the underlying apply logic exactly once."""
@@ -347,13 +326,12 @@ class TestFix4SingleFilterApply:
 
         with patch.object(_filters_mod, '_rt_apply', _counting_apply):
             # Rebuild FILTERS with the patched apply so the route picks it up.
-            from evaluatorq.dashboard.filters import FilterDef, _REDTEAM_DIMS, _rt_full_options, _rt_recompute_options
+            from evaluatorq.dashboard.filters import FilterDef, _REDTEAM_DIMS, _rt_full_options
 
             patched_filter = FilterDef(
                 dimensions=_REDTEAM_DIMS,
                 options=_rt_full_options,
                 apply=_counting_apply,
-                recompute_options=_rt_recompute_options,  # type: ignore[arg-type]
             )
             original_filters = _filters_mod.FILTERS.copy()
             _filters_mod.FILTERS['redteam'] = patched_filter
@@ -364,24 +342,3 @@ class TestFix4SingleFilterApply:
 
         assert r.status_code == 200
         assert len(apply_calls) == 1, f'apply() was called {len(apply_calls)} times; expected exactly 1'
-
-    def test_redteam_recompute_options_produces_correct_output(self) -> None:
-        """_rt_recompute_options(filtered_list) must still return valid option dicts."""
-        from evaluatorq.dashboard.filters import FILTERS
-
-        from tests.redteam.reports.test_rebuild_filtered import _make_report, _make_result
-
-        results = [
-            _make_result(category='ASI01', passed=True),
-            _make_result(category='ASI01', passed=False),
-            _make_result(category='LLM01', passed=False),
-        ]
-        report = _make_report(results, tested_agents=['agent-a'])
-
-        # Manually filter to ASI01 results.
-        filtered = [r for r in report.results if r.attack.category == 'ASI01']
-
-        opts = FILTERS['redteam'].recompute_options(filtered)
-        assert 'ASI01' in opts['category']
-        assert 'LLM01' not in opts['category']
-        assert 'result' in opts  # radio always present

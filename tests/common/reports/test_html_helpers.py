@@ -381,6 +381,14 @@ def test_report_css_has_new_design_tokens():
         assert token in css, f'missing {token}'
 
 
+def test_report_css_stacks_kpi_cards_on_narrow_screens():
+    """The desktop no-wrap rule must be overridden for phone-width reports."""
+    css = load_css()
+    mobile = css.split('@media (max-width: 640px)', 1)[1]
+    assert '.kpi-band, .kpi-row { flex-wrap: wrap; }' in mobile
+    assert '.kpi-card { flex: 1 1 100%; }' in mobile
+
+
 # ---------------------------------------------------------------------------
 # Other primitive tests
 # ---------------------------------------------------------------------------

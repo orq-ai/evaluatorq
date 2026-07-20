@@ -154,16 +154,18 @@ def test_tabs_three_tuple_renders_raw_label_html() -> None:
     assert '<span class="pill">5</span>' in html
 
 
-def test_sim_overview_has_exec_summary_and_five_kpis(sim_run) -> None:
+def test_sim_overview_has_exec_summary_and_six_kpis(sim_run) -> None:
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
 
     html = sim_report_tabs('rid', sim_run)
     assert 'class="report-aligned sim-report"' in html
     assert 'Executive summary' in html
-    # 5-card KPI band incl. Avg turns
-    assert 'Avg turns' in html
-    assert 'Goal completion' in html
-    assert 'goal met' in html
+    # Six KPI cards: the overview no longer has a Goal-completion card.
+    kpi_band = html.split('<div class="kpi-band">', 1)[1].split('</div><div class="sim-overview-grid-2">', 1)[0]
+    assert kpi_band.count('class="kpi-card ') == 6
+    for label in ('Personas', 'Scenarios', 'Conversations', 'Avg score', 'Avg turns', 'Errors'):
+        assert f'<div class="kpi-label">{label}</div>' in kpi_band
+    assert 'Goal completion' not in kpi_band
     # Persona/scenario configuration now lives in the Config tab.
     assert 'sim-overview-grid-2--top' not in html
 
@@ -193,13 +195,20 @@ def test_sim_overview_falls_back_to_computed_summary(sim_run) -> None:
     assert html.count('<div class="exec-summary">') == 1
 
 
-def test_sim_kpi_goal_status_uses_verdict(sim_run) -> None:
-    # Goal-completion KPI status must equal summary verdict (pass/warn/fail), not an ad-hoc threshold.
+def test_sim_kpi_errors_status_reflects_error_count(sim_run) -> None:
+    """The Error KPI is pass with no errors and fail when errors are present."""
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
 
     html = sim_report_tabs('rid', sim_run)
-    # verdict-driven class present on the goal-completion card
-    assert 'kpi-card--' in html
+    kpi_band = html.split('<div class="kpi-band">', 1)[1].split('</div><div class="sim-overview-grid-2">', 1)[0]
+    errors_card = kpi_band.split('<div class="kpi-label">Errors</div>', 1)[0].rsplit('<div class="kpi-card ', 1)[1]
+    assert errors_card.startswith('kpi-card--pass">')
+
+    sim_run.results[0].metadata['error'] = 'judge request timed out'
+    html_with_error = sim_report_tabs('rid', sim_run)
+    error_kpi_band = html_with_error.split('<div class="kpi-band">', 1)[1].split('</div><div class="sim-overview-grid-2">', 1)[0]
+    error_card = error_kpi_band.split('<div class="kpi-label">Errors</div>', 1)[0].rsplit('<div class="kpi-card ', 1)[1]
+    assert error_card.startswith('kpi-card--fail">')
 
 
 def test_sim_transcripts_tab_has_count_pill(sim_run) -> None:

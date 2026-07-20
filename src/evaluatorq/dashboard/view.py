@@ -839,8 +839,8 @@ def _render_redteam_filter_rail(
         f'{slider_html}'
         f'<div class="filter-group" data-dim="category">{category_dd}</div>'
         + (f'<div class="filter-group" data-dim="agent">{agent_dd}</div>' if agent_dd else '')
-        + f'<div class="filter-group" data-dim="more">{more_dd}</div>'
-        f'<div class="filter-rail-footer">{esc(counter)}</div>'
+        + f'<div class="filter-rail-footer">{esc(counter)}</div>'
+        f'<div class="filter-group filter-group--more" data-dim="more">{more_dd}</div>'
     )
     return (
         f'<form id="filter-form" class="filter-form filter-form--redteam"'
@@ -871,8 +871,7 @@ def render_filter_form(
     Args:
         rid:        Report ID (used to construct the POST URL).
         surface:    Surface key (``'redteam'`` | ``'sim'``).
-        opts:       Option lists per dimension (from ``FilterDef.options`` or
-                    ``FilterDef.recompute_options``).
+        opts:       Option lists per dimension (from ``FilterDef.options``).
         selections: Currently active selections per dimension.
         shown:      Count of currently-shown results (sim rail footer counter).
         total:      Total unfiltered result count (sim rail footer counter).

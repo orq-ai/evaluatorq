@@ -579,7 +579,8 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
     padding: 0; margin: -1px; overflow: hidden;
     clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
 }
-.filter-chip:focus-within { outline: 2px solid var(--teal-600); outline-offset: 2px; }
+/* Keyboard focus ring only — mouse clicks must not leave a lingering outline. */
+.filter-chip:has(:focus-visible) { outline: 2px solid var(--teal-600); outline-offset: 2px; }
 .filter-chip-dot {
     width: 5px; height: 5px; border-radius: 50%;
     background: var(--border-default);
@@ -607,8 +608,18 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
     flex-shrink: 0;
 }
 
-/* "More filters" expander (redteam rail: technique/delivery/vulnerability) */
-.filter-dd-more .filter-dd-trigger { justify-content: space-between; }
+/* "More filters" expander (redteam rail: technique/delivery/vulnerability).
+   Styled as a subtle text toggle — not a boxed card — so it reads as a
+   section reveal, not another filter dropdown. */
+.filter-dd-more .filter-dd-trigger {
+    justify-content: flex-start; gap: 4px;
+    padding: 4px 2px;
+    background: none; border: none; border-radius: 0;
+    font-size: 11px; font-weight: 600;
+    letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--text-faint);
+}
+.filter-dd-more .filter-dd-trigger:hover { color: var(--text-body); }
 .filter-dd-more-body {
     display: flex; flex-direction: column; gap: 10px;
     margin-top: 10px;
@@ -640,7 +651,8 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .filter-dd[open] .filter-dd-chevron { transform: rotate(180deg); }
 .filter-dd-menu {
     position: absolute; z-index: 20;
-    top: calc(100% + 4px); left: 0; right: 0;
+    top: calc(100% + 4px); right: 0; left: auto;
+    min-width: 100%; width: max-content; max-width: 340px;
     max-height: 230px; overflow-y: auto;
     background: var(--surface-card);
     border: 1px solid var(--border-default);
@@ -659,12 +671,15 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
     accent-color: var(--green-600);
 }
 .filter-rail-footer {
+    margin-top: auto;
     padding-top: 10px;
     border-top: 1px solid var(--border-subtle);
     font-family: var(--font-mono);
     font-size: 10px;
     color: var(--text-faint);
 }
+/* "More filters" toggle rides at the very bottom, just under the counter. */
+.filter-group--more { margin-top: -6px; }
 
 .filter-sidebar,
 .rt-panel {
@@ -836,9 +851,10 @@ _SIM_REPORT_CSS = """
 }
 .report-aligned .es-body strong { color: var(--text-strong); }
 
-/* ---- 5-card KPI band (spec Overview.2) ---- */
+/* ---- KPI band (spec Overview.2). One equal column per card, whatever the
+   count (red team = 5, sim = 6), so neither leaves a blank slot. ---- */
 .report-aligned .kpi-band {
-    display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px;
+    display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 12px;
     margin: 16px 0;
 }
 .report-aligned .kpi-card {

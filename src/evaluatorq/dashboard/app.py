@@ -285,10 +285,11 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         for key, value in form_data.multi_items():
             selections.setdefault(key, []).append(str(value))
 
-        # Apply filters once; pass the already-filtered list to recompute_options
-        # so apply() runs exactly once per POST (Fix 4).
+        # Apply filters to get the shown rows, but keep the option lists fixed
+        # to the FULL dataset.  Recomputing options from the filtered rows made
+        # a just-deselected value disappear from its own multi-select.
         filtered = filter_def.apply(report_obj, selections)
-        new_opts = filter_def.recompute_options(filtered)
+        new_opts = filter_def.options(report_obj)
 
         # Render the tabbed body from the filtered results so the static tab
         # content (tables, charts) tracks the filter, not just the HTMX panels.

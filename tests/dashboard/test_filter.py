@@ -193,12 +193,11 @@ class TestRedteamFilterRoute:
 
         # The checkbox for ASI01 must be checked.
         assert 'value="ASI01" checked' in form_section
-        # After ASI01-only filter the LLM01 results are gone so the
-        # recomputed options drop LLM01 entirely from the form.
-        assert 'LLM01' not in form_section
+        # LLM01 stays available (unchecked) so it can be re-selected.
+        assert 'value="LLM01"' in form_section
 
-    def test_now_empty_dimension_option_drops_from_form(self, client: TestClient, roots: list[Path]) -> None:
-        """After filtering to ASI01 only, LLM01 category must disappear from the form."""
+    def test_deselected_dimension_option_stays_in_form(self, client: TestClient, roots: list[Path]) -> None:
+        """Filtering to ASI01 only must NOT drop LLM01 from the form options."""
         rid = report_id(_rt_path(roots))
         r = client.post(
             f'/r/{rid}/filter',
@@ -210,7 +209,8 @@ class TestRedteamFilterRoute:
         form_start = text.find('<form')
         form_end = text.find('</form>')
         form_section = text[form_start : form_end + 7] if form_start >= 0 else ''
-        assert 'LLM01' not in form_section
+        assert 'value="LLM01"' in form_section
+        assert 'value="ASI01" checked' in form_section
 
     def test_vulnerable_result_filter(self, client: TestClient, roots: list[Path]) -> None:
         """Posting result=Vulnerable must narrow to only vulnerable rows."""
@@ -256,28 +256,42 @@ class TestSimFilterRoute:
         assert 'id="filter-swap"' in r.text
 
     def test_persona_filter_reduces_results(self, client: TestClient, roots: list[Path]) -> None:
-        """Filtering to persona=alice only should exclude bob's result."""
+        """Filtering to alice excludes Bob's results but keeps the Config registry."""
         rid = report_id(_sim_path(roots))
         r = client.post(
             f'/r/{rid}/filter',
             data={'persona': 'alice', 'goal_outcome': 'All'},
         )
         assert r.status_code == 200
-        assert 'alice' in r.text.lower()
-        assert 'bob' not in r.text.lower()
+        text = r.text
+        # The four emitted panels are Overview, Breakdown, Transcripts, and
+        # Config. Scope assertions to their exact panel boundaries: Config
+        # deliberately retains every entity that can open a drawer.
+        tab_panels = text[text.index('<div class="tab-panels">') :]
+        panels = tab_panels.split('<section class="tab-panel">')
+        assert len(panels) == 5
+        breakdown, transcripts, config = panels[2:]
+        assert 'alice' in breakdown.lower()
+        assert 'bob' not in breakdown.lower()
+        assert 'alice' in transcripts.lower()
+        assert 'bob' not in transcripts.lower()
+        assert 'bob' in config.lower()
 
     def test_persona_filter_form_preserves_selection(self, client: TestClient, roots: list[Path]) -> None:
-        """Re-rendered form must reflect the alice-only persona selection."""
+        """Re-rendered form keeps alice checked and bob available to re-select."""
         rid = report_id(_sim_path(roots))
         r = client.post(
             f'/r/{rid}/filter',
             data={'persona': 'alice', 'goal_outcome': 'All'},
         )
         assert r.status_code == 200
-        # alice still appears in the recomputed form options.
-        assert 'alice' in r.text.lower()
-        # bob should NOT appear in recomputed options (no results remain for bob).
-        assert 'bob' not in r.text.lower()
+        text = r.text
+        form_start = text.find('<form')
+        form_end = text.find('</form>')
+        form_section = text[form_start : form_end + 7] if form_start >= 0 else ''
+        assert 'value="alice" checked' in form_section
+        # bob stays as an unchecked option — deselecting must not remove it.
+        assert 'value="bob"' in form_section
 
     def test_fragment_contains_filter_form(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
@@ -329,16 +343,17 @@ class TestFilterDefUnit:
         filtered = FILTERS['redteam'].apply(report, {})
         assert len(filtered) == len(report.results)
 
-    def test_redteam_recompute_options_drops_empty_categories(self) -> None:
+    def test_redteam_options_stay_full_after_filtering(self) -> None:
+        # Options come from the full report, never the filtered rows, so a
+        # deselected value never vanishes from its own multi-select.
         from evaluatorq.dashboard.filters import FILTERS
 
         report = _rt_report()
-        # recompute_options now takes an already-filtered list (Fix 4).
-        filtered = FILTERS['redteam'].apply(report, {'category': ['ASI01']})
-        new_opts = FILTERS['redteam'].recompute_options(filtered)
-        # After filtering to ASI01, LLM01 should not appear in recomputed options.
-        assert 'LLM01' not in new_opts['category']
-        assert 'ASI01' in new_opts['category']
+        full = FILTERS['redteam'].options(report)
+        assert {'ASI01', 'LLM01'} <= set(full['category'])
+        # Narrowing to ASI01 must not shrink the option list.
+        FILTERS['redteam'].apply(report, {'category': ['ASI01']})
+        assert FILTERS['redteam'].options(report)['category'] == full['category']
 
     def test_sim_options_keys(self) -> None:
         from evaluatorq.dashboard.filters import FILTERS
@@ -365,15 +380,15 @@ class TestFilterDefUnit:
         filtered = FILTERS['sim'].apply(run, {'goal_outcome': ['Achieved']})
         assert all(r.goal_achieved for r in filtered)
 
-    def test_sim_recompute_options_drops_empty_persona(self) -> None:
+    def test_sim_options_stay_full_after_filtering(self) -> None:
+        # Deselecting a persona must not drop it from the persona multi-select.
         from evaluatorq.dashboard.filters import FILTERS
 
         run = _sim_run()
-        # recompute_options now takes an already-filtered list (Fix 4).
-        filtered = FILTERS['sim'].apply(run, {'persona': ['alice']})
-        new_opts = FILTERS['sim'].recompute_options(filtered)
-        assert 'alice' in new_opts['persona']
-        assert 'bob' not in new_opts['persona']
+        full = FILTERS['sim'].options(run)
+        assert {'alice', 'bob'} <= set(full['persona'])
+        FILTERS['sim'].apply(run, {'persona': ['alice']})
+        assert FILTERS['sim'].options(run)['persona'] == full['persona']
 
 
 # ---------------------------------------------------------------------------
@@ -660,8 +675,8 @@ def test_rt_rail_hides_slider_when_max_turns_one():
     assert 'name="min_turns"' not in html  # slider hidden for single-turn-only runs
 
 
-def test_rt_recompute_options_drops_all_sentinel(rt_results):
-    from evaluatorq.dashboard.filters import _rt_recompute_options
+def test_rt_options_no_all_sentinel(rt_results):
+    from evaluatorq.dashboard.filters import _rt_options_from_results
 
-    opts = _rt_recompute_options(rt_results)
-    assert opts['result'] == ['Vulnerable', 'Resistant', 'Error']  # no 'All' after a filter POST
+    opts = _rt_options_from_results(rt_results)
+    assert opts['result'] == ['Vulnerable', 'Resistant', 'Error']  # no 'All' sentinel

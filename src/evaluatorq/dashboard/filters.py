@@ -4,11 +4,10 @@ Each ``FilterDef`` encapsulates all filter operations for a surface:
 
 - ``dimensions``          : ordered list of dimension keys
 - ``options(obj)``        : compute full option lists from the *full* object
+                            (always the complete set — never narrowed to the
+                            filtered rows, so a deselected value never vanishes
+                            from its own multi-select)
 - ``apply(obj, sel)``     : return the filtered result list
-- ``recompute_options(filtered)`` : recompute option lists from an
-                            *already-filtered* result list so empty options
-                            drop out.  The caller is responsible for running
-                            ``apply`` first and passing the result in.
 
 Selections are plain ``dict[str, list[str]]`` mapping dimension key to the
 list of selected values.  The ``result`` radio dimension uses a
@@ -45,13 +44,6 @@ class FilterDef:
 
     apply: Callable[[Any, dict[str, list[str]]], list[Any]]
     """Return the filtered result list given the raw object + selections."""
-
-    recompute_options: Callable[[list[Any]], dict[str, list[str]]]
-    """Return option lists recomputed from an *already-filtered* result list.
-
-    The caller must apply ``FilterDef.apply`` first and pass the resulting
-    list in.  This avoids running ``apply`` twice per POST.
-    """
 
 
 # ---------------------------------------------------------------------------
@@ -183,15 +175,6 @@ def _rt_apply(report: Any, selections: dict[str, list[str]]) -> list[Any]:
     return results
 
 
-def _rt_recompute_options(filtered: list[Any]) -> dict[str, list[str]]:
-    """Recompute option lists from an already-filtered result list.
-
-    The caller is responsible for calling ``_rt_apply`` first and passing
-    the result in, so that ``apply`` runs only once per POST.
-    """
-    return _rt_options_from_results(filtered)
-
-
 # ---------------------------------------------------------------------------
 # Simulation filter
 # ---------------------------------------------------------------------------
@@ -256,18 +239,6 @@ def _sim_apply(run: Any, selections: dict[str, list[str]]) -> list[Any]:
     return results
 
 
-def _sim_recompute_options(filtered: list[Any]) -> dict[str, list[str]]:
-    """Recompute option lists from an already-filtered result list.
-
-    The caller is responsible for calling ``_sim_apply`` first and passing
-    the result in, so that ``apply`` runs only once per POST.
-    """
-    opts = _sim_options_from_results(filtered)
-    # The goal_outcome multiselect always shows both values.
-    opts['goal_outcome'] = ['Achieved', 'Not achieved']
-    return opts
-
-
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -277,13 +248,11 @@ FILTERS: dict[str, FilterDef] = {
         dimensions=_REDTEAM_DIMS,
         options=_rt_full_options,
         apply=_rt_apply,
-        recompute_options=_rt_recompute_options,
     ),
     'sim': FilterDef(
         dimensions=_SIM_DIMS,
         options=_sim_full_options,
         apply=_sim_apply,
-        recompute_options=_sim_recompute_options,
     ),
 }
 
