@@ -867,3 +867,104 @@ class TestSimMetricFilters:
         )
         opts = _sim_full_options(run)
         assert opts['metrics'] == []
+
+
+# ---------------------------------------------------------------------------
+# Task 3 (metric filters plan): rail markup for rule/goal/turns/tokens/metrics.
+# ---------------------------------------------------------------------------
+
+
+def test_sim_rail_uses_raw_count_maxima():
+    from evaluatorq.dashboard.view import render_filter_form
+
+    html = render_filter_form(
+        'rid',
+        'sim',
+        {
+            'persona': [],
+            'scenario': [],
+            'terminated_by': [],
+            'goal_outcome': ['Achieved', 'Not achieved'],
+            'max_turns': ['8'],
+            'max_total_tokens': ['2500'],
+            'turn_metrics': ['hallucination_risk'],
+        },
+        {},
+    )
+    assert 'name="min_turns" min="1" max="8" step="1"' in html
+    assert 'name="min_total_tokens" min="0" max="2500" step="1"' in html
+    assert 'name="rule_broken" value="yes"' in html
+
+
+def test_sim_rail_hides_unavailable_metrics():
+    from evaluatorq.dashboard.view import render_filter_form
+
+    html = render_filter_form(
+        'rid',
+        'sim',
+        {
+            'persona': [],
+            'scenario': [],
+            'terminated_by': [],
+            'goal_outcome': ['Achieved', 'Not achieved'],
+            'max_turns': ['8'],
+            'max_total_tokens': ['2500'],
+            'metrics': ['hallucination_risk'],
+        },
+        {},
+    )
+    # Available metric renders its threshold control.
+    assert 'name="min_hallucination_risk"' in html
+    # Unavailable metrics are hidden entirely.
+    assert 'name="max_response_quality"' not in html
+    assert 'name="max_tone_appropriateness"' not in html
+    assert 'name="max_factual_accuracy"' not in html
+
+
+def test_sim_rail_omits_empty_more_expander():
+    from evaluatorq.dashboard.view import render_filter_form
+
+    html = render_filter_form(
+        'rid',
+        'sim',
+        {
+            'persona': [],
+            'scenario': [],
+            'terminated_by': [],
+            'goal_outcome': ['Achieved', 'Not achieved'],
+            'max_turns': ['8'],
+            'max_total_tokens': ['0'],
+            'metrics': [],
+        },
+        {},
+    )
+    assert 'id="filter-dd-more"' not in html
+
+
+def test_sim_rail_more_expander_holds_tokens_and_metrics():
+    from evaluatorq.dashboard.view import render_filter_form
+
+    html = render_filter_form(
+        'rid',
+        'sim',
+        {
+            'persona': [],
+            'scenario': [],
+            'terminated_by': [],
+            'goal_outcome': ['Achieved', 'Not achieved'],
+            'max_turns': ['8'],
+            'max_total_tokens': ['2500'],
+            'metrics': ['hallucination_risk', 'response_quality'],
+        },
+        {},
+    )
+    more_start = html.index('id="filter-dd-more"')
+    more_end = html.index('</details>', more_start)
+    more_section = html[more_start:more_end]
+    assert 'name="min_total_tokens"' in more_section
+    assert 'name="min_hallucination_risk"' in more_section
+    assert 'name="max_response_quality"' in more_section
+    # The rule chip / goal-score ceiling / min-turns controls stay outside.
+    assert 'name="rule_broken"' not in more_section
+    assert 'name="max_goal_score"' not in more_section
+    assert 'name="min_turns"' not in more_section

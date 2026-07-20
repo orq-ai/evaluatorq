@@ -1869,12 +1869,21 @@ _SIM_TRANSCRIPT_OVERRIDES_CSS = """
 /* Conversation summary header: persona + scenario recap and turn-count chip,
    shown above the criteria and transcript inside the drawer. */
 .sim-report .sim-conv-summary {
-    display: flex; align-items: flex-start; justify-content: space-between;
-    gap: 16px; margin-bottom: 20px;
+    display: flex; align-items: flex-start;
+    gap: 14px; margin-bottom: 20px;
     padding-bottom: 16px; border-bottom: 1px solid var(--border-subtle);
 }
+/* Teal index chip, top-left — the conversation's # from the row table, styled
+   so the drawer opens with a small anchor of identity (DESIGN.md: teal leads). */
+.sim-report .sim-conv-index {
+    flex-shrink: 0; font-family: var(--font-mono);
+    font-size: 13px; font-weight: 700; line-height: 1;
+    color: #fff; background: var(--teal-600);
+    padding: 6px 9px; border-radius: var(--radius-md);
+    font-variant-numeric: tabular-nums;
+}
 .sim-report .sim-conv-meta {
-    display: flex; flex-direction: column; gap: 8px; min-width: 0;
+    display: flex; flex-direction: column; gap: 8px; min-width: 0; flex: 1;
 }
 .sim-report .sim-conv-field {
     display: flex; flex-direction: column; gap: 2px; min-width: 0;
@@ -1892,6 +1901,10 @@ _SIM_TRANSCRIPT_OVERRIDES_CSS = """
     color: var(--text-muted); background: var(--surface-sunken);
     border: 1px solid var(--border-subtle);
 }
+
+/* Judge rationale folded into the criteria block: sits under the list, its own
+   margins reset so it reads as the verdict's explanation, not a stray callout. */
+.sim-report .sim-criteria .sim-judge { margin: 16px 0 0; }
 
 /* Criteria column (two-state per deviation #4) */
 .sim-report .sim-criteria-head {

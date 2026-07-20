@@ -668,6 +668,50 @@ def _dropdown(dim: str, label: str, dim_opts: list[str], sel: list[str]) -> str:
     )
 
 
+def _fmt_range_value(value: float, step: str) -> str:
+    """Format a range input's numeric attribute: integers for raw counts
+    (``step="1"``), compact decimals for score thresholds (``step="0.05"``)."""
+    if step == '1':
+        return str(int(value))
+    return f'{value:g}'
+
+
+def _range_control(
+    dim: str,
+    label: str,
+    *,
+    min_val: float,
+    max_val: float,
+    step: str,
+    sel: list[str],
+    floor: bool,
+) -> str:
+    """One min/max range control shared by raw-count and score thresholds.
+
+    ``floor`` selects both the unset ("no-op") end of the range — ``min_val``
+    for a floor (e.g. min turns), ``max_val`` for a ceiling (e.g. max goal
+    score) — and the readout glyph (``≥`` for floors, ``≤`` for ceilings).
+    An absent selection renders "all" rather than a numeric readout.
+    """
+    raw = sel[0] if sel else None
+    default = min_val if floor else max_val
+    try:
+        value = float(raw) if raw is not None else default
+    except (ValueError, TypeError):
+        value = default
+    readout = 'all' if raw is None else f'{"≥" if floor else "≤"} {_fmt_range_value(value, step)}'
+    return (
+        f'<div class="filter-group" data-dim="{esc(dim)}">'
+        f'<label class="filter-label">{esc(label)}</label>'
+        f'<div class="filter-slider-row">'
+        f'<input type="range" class="filter-slider" name="{esc(dim)}" min="{_fmt_range_value(min_val, step)}"'
+        f' max="{_fmt_range_value(max_val, step)}" step="{esc(step)}" value="{_fmt_range_value(value, step)}">'
+        f'<span class="filter-slider-readout">{esc(readout)}</span>'
+        f'</div>'
+        f'</div>'
+    )
+
+
 def _render_sim_filter_rail(
     rid: str,
     opts: dict[str, list[str]],
@@ -681,8 +725,15 @@ def _render_sim_filter_rail(
     Goal outcome / Terminated by render as chip toggles; Persona / Scenario
     render as ``<details>`` dropdowns with stable ids (``filter-dd-persona``,
     ``filter-dd-scenario``) so a later JS task can persist their open state
-    across the HTMX outerHTML swap.
+    across the HTMX outerHTML swap.  The rule-violation chip, goal-score
+    ceiling, and min-turns controls render directly in the rail; min total
+    tokens and every *available* per-turn quality/risk metric threshold are
+    tucked behind the ``filter-dd-more`` expander (omitted entirely when it
+    would otherwise be empty).
     """
+    from evaluatorq.dashboard.filters import _sim_metric_dim_key
+    from evaluatorq.simulation.metrics import TURN_METRICS
+
     goal_opts = [o for o in opts.get('goal_outcome', []) if o in _GOAL_OUTCOME_DOT_CLASS]
     goal_sel = set(selections.get('goal_outcome', []))
     goal_chips = ''.join(
@@ -698,6 +749,80 @@ def _render_sim_filter_rail(
     persona_dd = _dropdown('persona', 'Persona', opts.get('persona', []), selections.get('persona', []))
     scenario_dd = _dropdown('scenario', 'Scenario', opts.get('scenario', []), selections.get('scenario', []))
 
+    # Rule-violation chip: opt-in, so unchecked unless explicitly selected.
+    rule_sel = set(selections.get('rule_broken', []))
+    rule_chip = _chip('rule_broken', 'yes', checked=('yes' in rule_sel), dot_cls='chip-dot-red')
+
+    # Goal-score ceiling (ceiling control: unset default is 1.0, i.e. "all").
+    goal_score_ctrl = _range_control(
+        'max_goal_score',
+        'Max Goal Score',
+        min_val=0.0,
+        max_val=1.0,
+        step='0.05',
+        sel=selections.get('max_goal_score', []),
+        floor=False,
+    )
+
+    # Min turns (floor, raw run-length integer — never normalized).
+    max_turns = int(opts.get('max_turns', ['1'])[0] or 1)
+    min_turns_ctrl = _range_control(
+        'min_turns',
+        'Min. Turns',
+        min_val=1,
+        max_val=max_turns,
+        step='1',
+        sel=selections.get('min_turns', []),
+        floor=True,
+    )
+
+    # More expander: min total tokens (raw floor) + every available metric
+    # threshold. Skipped entirely (no empty expander) when there is nothing
+    # to show.
+    more_rows: list[str] = []
+    max_total_tokens = int(opts.get('max_total_tokens', ['0'])[0] or 0)
+    if max_total_tokens > 0:
+        more_rows.append(
+            _range_control(
+                'min_total_tokens',
+                'Min. Total Tokens',
+                min_val=0,
+                max_val=max_total_tokens,
+                step='1',
+                sel=selections.get('min_total_tokens', []),
+                floor=True,
+            )
+        )
+    available_metrics = set(opts.get('metrics', []))
+    for metric in TURN_METRICS:
+        if metric.key not in available_metrics:
+            continue
+        dim_key = _sim_metric_dim_key(metric.key, high_is_risky=metric.high_is_risky)
+        prefix = 'Min.' if metric.high_is_risky else 'Max.'
+        more_rows.append(
+            _range_control(
+                dim_key,
+                f'{prefix} {metric.label.title()}',
+                min_val=0.0,
+                max_val=1.0,
+                step='0.05',
+                sel=selections.get(dim_key, []),
+                floor=metric.high_is_risky,
+            )
+        )
+
+    more_dd = ''
+    if more_rows:
+        more_dd = (
+            f'<details id="filter-dd-more" class="filter-dd filter-dd-more">'
+            f'<summary class="filter-dd-trigger">'
+            f'<span class="filter-dd-name">More filters</span>'
+            f'{_FILTER_CHEVRON}'
+            f'</summary>'
+            f'<div class="filter-dd-more-body">{"".join(more_rows)}</div>'
+            f'</details>'
+        )
+
     if shown is not None and total is not None and shown < total:
         counter = f'{shown} of {total} shown'
     else:
@@ -705,6 +830,10 @@ def _render_sim_filter_rail(
 
     inner = (
         f'<div class="filter-rail-header">{_SLIDERS_ICON}<span class="filter-rail-title">Filters</span></div>'
+        f'<div class="filter-group" data-dim="rule_broken">'
+        f'<label class="filter-label">Rule Violations</label>'
+        f'<div class="filter-chip-row">{rule_chip}</div>'
+        f'</div>'
         f'<div class="filter-group" data-dim="goal_outcome">'
         f'<label class="filter-label">Goal Outcome</label>'
         f'<div class="filter-chip-row">{goal_chips}</div>'
@@ -713,9 +842,12 @@ def _render_sim_filter_rail(
         f'<label class="filter-label">Terminated By</label>'
         f'<div class="filter-chip-row">{term_chips}</div>'
         f'</div>'
+        f'{goal_score_ctrl}'
+        f'{min_turns_ctrl}'
         f'<div class="filter-group" data-dim="persona">{persona_dd}</div>'
         f'<div class="filter-group" data-dim="scenario">{scenario_dd}</div>'
         f'<div class="filter-rail-footer">{esc(counter)}</div>'
+        + (f'<div class="filter-group filter-group--more" data-dim="more">{more_dd}</div>' if more_dd else '')
     )
     return (
         f'<form id="filter-form" class="filter-form filter-form--sim"'
