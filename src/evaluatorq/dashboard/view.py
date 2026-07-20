@@ -626,6 +626,7 @@ def _chip(name: str, value: str, *, checked: bool, dot_cls: str) -> str:
         f'<label class="filter-chip{active_cls}">'
         f'<input type="checkbox" class="filter-chip-input" name="{esc(name)}" value="{esc(value)}"{checked_attr}>'
         f'<span class="filter-chip-dot {dot_cls}"></span>'
+        f'<span class="filter-chip-check {dot_cls}">✓</span>'
         f'<span class="filter-chip-label">{esc(value)}</span>'
         f'</label>'
     )

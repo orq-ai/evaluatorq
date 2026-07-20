@@ -567,11 +567,17 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
     font-size: 10.5px; font-weight: 500;
     cursor: pointer;
     user-select: none;
+    transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
 }
+/* Selected = teal-tinted chip (teal carries selection state; semantic hue lives
+   on the check mark only, never the chip fill/border — outcome polarity must
+   never rely on color alone, so the dot->check shape swap below is the real
+   accessible signal). */
 .filter-chip.is-active {
-    background: var(--surface-card);
-    border-color: var(--border-default);
+    background: color-mix(in srgb, var(--teal-600) 10%, transparent);
+    border-color: color-mix(in srgb, var(--teal-600) 55%, var(--border-default));
     color: var(--text-body);
+    font-weight: 600;
 }
 .filter-chip-input {
     /* visually-hidden — checked state drives .is-active via server re-render */
@@ -581,16 +587,32 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 }
 /* Keyboard focus ring only — mouse clicks must not leave a lingering outline. */
 .filter-chip:has(:focus-visible) { outline: 2px solid var(--teal-600); outline-offset: 2px; }
+/* Unselected: hollow ring dot — reads as "empty" without relying on color. */
 .filter-chip-dot {
     width: 5px; height: 5px; border-radius: 50%;
-    background: var(--border-default);
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--border-default);
     flex-shrink: 0;
 }
-.filter-chip.is-active .chip-dot-green { background: var(--green-600); }
-.filter-chip.is-active .chip-dot-red { background: var(--red-600); }
-.filter-chip.is-active .chip-dot-jade { background: var(--green-600); }
-.filter-chip.is-active .chip-dot-amber { background: var(--amber-600); }
-.filter-chip.is-active .chip-dot-gray { background: var(--text-faint); }
+/* Selected: dot swaps out for a checkmark — a shape change, not just a color
+   change, so on/off is legible without color (WCAG AA polarity requirement).
+   Semantic hue (chip-dot-*) is reused here so category meaning is preserved. */
+.filter-chip-check {
+    display: none;
+    width: 5px; height: 5px; line-height: 5px;
+    font-size: 8px; font-weight: 700;
+    flex-shrink: 0;
+}
+.filter-chip.is-active .filter-chip-dot { display: none; }
+.filter-chip.is-active .filter-chip-check { display: inline-block; }
+.filter-chip.is-active .filter-chip-check.chip-dot-green { color: var(--green-600); }
+.filter-chip.is-active .filter-chip-check.chip-dot-red { color: var(--red-600); }
+.filter-chip.is-active .filter-chip-check.chip-dot-jade { color: var(--green-600); }
+.filter-chip.is-active .filter-chip-check.chip-dot-amber { color: var(--amber-600); }
+.filter-chip.is-active .filter-chip-check.chip-dot-gray { color: var(--text-faint); }
+@media (prefers-reduced-motion: reduce) {
+    .filter-chip { transition: none; }
+}
 
 /* min-turns slider (redteam rail, multi-turn runs only) */
 .filter-slider-row {
@@ -1908,6 +1930,16 @@ _SIM_TRANSCRIPT_OVERRIDES_CSS = """
     display: flex; flex-direction: column; gap: 8px; min-width: 0; flex: 1;
 }
 .sim-report .sim-conv-field {
+    display: flex; align-items: flex-start; gap: 10px; min-width: 0;
+}
+/* Teal glyph tile anchoring each field (Option A). */
+.sim-report .sim-conv-ico {
+    flex-shrink: 0; width: 26px; height: 26px; border-radius: 8px;
+    display: grid; place-items: center;
+    background: var(--teal-50); color: var(--teal-600);
+}
+.sim-report .sim-conv-ico svg { width: 15px; height: 15px; }
+.sim-report .sim-conv-field-text {
     display: flex; flex-direction: column; gap: 2px; min-width: 0;
 }
 .sim-report .sim-conv-label {
