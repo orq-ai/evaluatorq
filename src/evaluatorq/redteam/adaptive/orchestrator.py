@@ -949,8 +949,17 @@ class MultiTurnOrchestrator:
                         )
                         logger.warning(f'Target agent timed out on turn {turn + 1}/{max_turns}')
 
-                        if consecutive_agent_errors >= 2:
-                            error = f'Target agent timed out {consecutive_agent_errors} consecutive turns'
+                        # Abort (and surface a run-level error) when the target is
+                        # persistently failing OR when this is the final turn — a
+                        # last-turn error has no future turn to redeem it, so the run
+                        # must report an error rather than a (mis)scored result. This is
+                        # the only path that sets run-level error for a single-turn attack.
+                        if consecutive_agent_errors >= 2 or turn == max_turns - 1:
+                            error = (
+                                f'Target agent timed out {consecutive_agent_errors} consecutive turns'
+                                if consecutive_agent_errors >= 2
+                                else f'Target agent timed out on the final turn ({turn + 1}/{max_turns})'
+                            )
                             error_type = 'target_error'
                             error_stage = 'target_call'
                             error_code = 'target.timeout'
@@ -995,11 +1004,18 @@ class MultiTurnOrchestrator:
                         )
                         logger.warning(f'Target agent error on turn {turn + 1}/{max_turns}: {error_msg}', exc_info=True)
 
-                        if consecutive_agent_errors >= 2:
-                            # Persistent failure — abort to avoid wasting turns
+                        # Abort (and surface a run-level error) on persistent failure OR
+                        # when this is the final turn — a last-turn error has no future
+                        # turn to redeem it, so the run must report an error rather than
+                        # a (mis)scored result. Only path that sets run-level error for a
+                        # single-turn attack.
+                        if consecutive_agent_errors >= 2 or turn == max_turns - 1:
                             error = (
                                 f'Target agent failed {consecutive_agent_errors} consecutive turns, '
                                 f'last code={mapped_code}, details={error_msg}'
+                                if consecutive_agent_errors >= 2
+                                else f'Target agent failed on the final turn ({turn + 1}/{max_turns}), '
+                                f'code={mapped_code}, details={error_msg}'
                             )
                             error_type = 'target_error'
                             error_stage = 'target_call'

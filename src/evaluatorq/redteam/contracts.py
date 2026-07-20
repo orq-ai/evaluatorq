@@ -906,6 +906,17 @@ class Turn(BaseModel):
     attacker: AgentResponse
     target: AgentResponse
 
+    @property
+    def errored(self) -> bool:
+        """True when the target side carries an :class:`AgentResponseError`.
+
+        Single source of truth for "this turn is an infra failure, not a real
+        reply" — used to skip such turns both when replaying the transcript to
+        the target (``turns_to_messages(skip_errors=True)``) and when building
+        the transcript for the evaluator.
+        """
+        return self.target.error is not None
+
     @model_validator(mode='before')
     @classmethod
     def _migrate_attacker_generated_prompt(cls, data: Any) -> Any:
@@ -940,7 +951,7 @@ def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[M
     """
     out: list[Message] = []
     for turn in turns:
-        if skip_errors and turn.target.error is not None:
+        if skip_errors and turn.errored:
             continue
         out.append(Message(role='user', content=turn.attacker.text))
         text_buffer: list[str] = []

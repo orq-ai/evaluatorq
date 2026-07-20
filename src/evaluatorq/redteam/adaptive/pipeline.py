@@ -666,8 +666,26 @@ def create_dynamic_evaluator(
 
         category = output.category or data.inputs.get('category', '')
         vulnerability = output.vulnerability or data.inputs.get('vulnerability', '')
-        input_messages = [{'role': 'user', 'content': t.attacker.text} for t in output.turns]
-        output_messages = [item for t in output.turns for item in t.target.output]
+
+        # Only score turns with a real target reply. Drop turns that errored (e.g. a 502
+        # from a guardrail/PII-detection timeout — Turn.errored, same predicate as
+        # turns_to_messages(skip_errors=True)) OR that returned no content (e.g. an
+        # empty-body 200 where a guardrail silently blocked). Feeding either to the judge
+        # scores an infra failure / non-response as RESISTANT (a timeout counted as a
+        # defense). When turns exist but none are scorable there is nothing trustworthy
+        # to judge, so report an error rather than a false success. (A zero-turn output
+        # is left to the judge — some datapoints are scored on category alone.)
+        # ponytail: "no content" == blank text; a tool-call-only reply would also be
+        # dropped — fine for text-graded red-team evals, revisit if tool-only turns score.
+        scorable_turns = [t for t in output.turns if not t.errored and t.target.text.strip()]
+        if output.turns and not scorable_turns:
+            codes = ', '.join(sorted({t.target.error.code for t in output.turns if t.target.error and t.target.error.code})) or 'unknown'
+            return EvaluationResult(
+                value='error',
+                explanation=f'Skipped: no scorable target turns (errored or empty; codes: {codes}) — nothing to evaluate',
+            )
+        input_messages = [{'role': 'user', 'content': t.attacker.text} for t in scorable_turns]
+        output_messages = [item for t in scorable_turns for item in t.target.output]
 
         # Prefer vulnerability-first path when a valid Vulnerability enum can be resolved
         resolved_vuln: Vulnerability | None = None

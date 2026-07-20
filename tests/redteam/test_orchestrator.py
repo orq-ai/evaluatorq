@@ -471,6 +471,36 @@ class TestTimeoutHandling:
         assert per_turn_tcs == [[], []]
 
     @pytest.mark.asyncio
+    async def test_final_turn_timeout_sets_run_level_error(self):
+        """A timeout on the FINAL turn has no future turn to redeem it, so it must
+        surface as a run-level error — not a silently (mis)scored result. This is the
+        only path that sets run-level error for a single-turn attack (max_turns=1)."""
+        mock_llm = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = 'Attack prompt'
+        mock_response.choices[0].finish_reason = 'stop'
+        mock_llm.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        mock_target = AsyncMock()
+        mock_target.respond = AsyncMock(side_effect=asyncio.TimeoutError)
+        mock_target.consume_last_token_usage = lambda: None
+
+        orchestrator = MultiTurnOrchestrator(llm_client=mock_llm, model='azure/gpt-5-mini')
+        result = await orchestrator.run_attack(
+            target=mock_target,
+            strategy=_make_strategy(),
+            objective='Test',
+            agent_context=AgentContext(key='test_agent'),
+            max_turns=1,
+        )
+
+        assert result.error_type == 'target_error'
+        assert result.error_code == 'target.timeout'
+        assert result.error_stage == 'target_call'
+        assert result.error_turn == 1
+
+    @pytest.mark.asyncio
     async def test_recoverable_error_turn_contributes_zero_tokens(self):
         """A recoverable target error (timeout) must not accumulate tokens nor flip the
         run to target_error. Guards the usage-arithmetic hoist (RES-877 follow-up): the
