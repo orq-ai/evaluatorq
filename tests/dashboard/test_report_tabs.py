@@ -447,6 +447,27 @@ def test_sim_config_compacts_entities_and_prerenders_modal_details() -> None:
     assert '50%' in scenario_row
 
 
+def test_sim_drawer_has_back_nav_close_controls(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run)
+    assert 'data-sim-entity-back' in html
+    assert 'data-sim-entity-prev' in html
+    assert 'data-sim-entity-next' in html
+    assert 'data-sim-entity-close' in html
+    assert 'aria-label="Back to cohort"' in html
+    assert 'data-entity-kind="conversation"' in html
+    assert 'data-drawer-url="/r/rid/sim/transcript?idx=0"' in html
+
+
+def test_sim_drawer_runtime_dispatches_conversations_without_anchor_handler() -> None:
+    source = (Path(__file__).parents[2] / 'src/evaluatorq/dashboard/static/dashboard.js').read_text()
+
+    assert 'function openConversation(trigger, pushCurrent)' in source
+    assert "trigger.getAttribute('data-drawer-url')" in source
+    assert "a[href^=\"#conv-\"]" not in source
+
+
 def test_sim_breakdown_entity_names_open_shared_modal(sim_run) -> None:
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
 

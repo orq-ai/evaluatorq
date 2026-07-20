@@ -379,6 +379,7 @@ def _sim_entity_modal(entity_context: dict[str, Any]) -> str:
         '<div class="sim-entity-modal-shell">'
         '<div class="sim-entity-modal-content" data-sim-entity-content></div>'
         '<div class="sim-entity-modal-actions">'
+        '<button type="button" class="sim-entity-back" data-sim-entity-back hidden aria-label="Back to cohort">&larr; Back</button>'
         '<button type="button" class="sim-entity-nav" data-sim-entity-prev aria-label="Previous entity (k)" title="Previous entity (k)">&larr;<kbd class="sim-entity-kbd">k</kbd></button>'
         '<button type="button" class="sim-entity-nav" data-sim-entity-next aria-label="Next entity (j)" title="Next entity (j)">&rarr;<kbd class="sim-entity-kbd">j</kbd></button>'
         '<button type="button" class="sim-entity-close" data-sim-entity-close>Close</button>'

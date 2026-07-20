@@ -111,59 +111,157 @@
     });
   });
 
-  // Agent-simulation entity details: compact persona/scenario rows and
-  // breakdown-table labels open one shared dialog. j/k cycle within the same
-  // entity kind; Escape is handled natively by <dialog>.
+  // Agent-simulation entity details: persona/scenario templates and lazy
+  // conversation transcripts share one dialog. j/k steps through the entity
+  // list that opened the drawer; Escape is handled natively by <dialog>.
   (function () {
-    var activeKind = null;
-    var activeId = null;
+    var activeState = null;
+    var drillStack = [];
 
     function currentDialog() {
       var dialog = document.querySelector('.sim-entity-dialog');
       return dialog && dialog.showModal ? dialog : null;
     }
 
-    function templatesFor(kind) {
-      return Array.prototype.slice.call(
-        document.querySelectorAll('[data-sim-entity-template][data-entity-kind="' + kind + '"]')
-      );
+    function contentNode() {
+      var dialog = currentDialog();
+      return dialog ? dialog.querySelector('[data-sim-entity-content]') : null;
     }
 
-    function render(template) {
+    function dialogIsOpen() {
+      var dialog = currentDialog();
+      return !!(dialog && dialog.open);
+    }
+
+    function openDialog() {
       var dialog = currentDialog();
       if (!dialog) return;
-      var content = dialog.querySelector('[data-sim-entity-content]');
-      if (!template || !content) return;
-      activeKind = template.getAttribute('data-entity-kind');
-      activeId = template.getAttribute('data-entity-id');
-      content.innerHTML = template.innerHTML;
       if (!dialog.open) dialog.showModal();
     }
 
-    function openEntity(kind, id) {
+    function formValues() {
+      var form = document.getElementById('filter-form');
+      return form ? new FormData(form) : {};
+    }
+
+    function isEditable(element) {
+      if (!element) return false;
+      var tag = element.tagName;
+      return element.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+    }
+
+    function matchingTriggers() {
+      if (!activeState || !activeState.origin) return [];
+      return Array.prototype.slice.call(
+        activeState.origin.querySelectorAll(
+          '[data-sim-entity-trigger][data-entity-kind="' + activeState.kind + '"]'
+        )
+      );
+    }
+
+    function updateActions() {
+      var dialog = currentDialog();
+      if (!dialog) return;
+      var back = dialog.querySelector('[data-sim-entity-back]');
+      var prev = dialog.querySelector('[data-sim-entity-prev]');
+      var next = dialog.querySelector('[data-sim-entity-next]');
+      var canStep = matchingTriggers().length > 1;
+      if (back) back.hidden = drillStack.length === 0;
+      if (prev) prev.disabled = !canStep;
+      if (next) next.disabled = !canStep;
+    }
+
+    function loadConversation() {
+      var content = contentNode();
+      if (!activeState || !activeState.url || !content || !window.htmx) return;
+      content.innerHTML = '<p class="sim-drawer-loading">Loading conversation…</p>';
+      window.htmx.ajax('GET', activeState.url, {
+        target: content,
+        swap: 'innerHTML',
+        values: formValues()
+      });
+    }
+
+    function openConversation(trigger, pushCurrent) {
+      var url = trigger.getAttribute('data-drawer-url');
+      var content = contentNode();
+      if (!url || !content || !window.htmx) return;
+      if (pushCurrent && activeState) drillStack.push(activeState);
+      activeState = { kind: 'conversation', url: url, origin: trigger.parentElement };
+      openDialog();
+      updateActions();
+      loadConversation();
+    }
+
+    function openTemplate(kind, id, pushCurrent, origin) {
       var template = document.querySelector(
         '[data-sim-entity-template][data-entity-kind="' + kind + '"][data-entity-id="' + id + '"]'
       );
-      render(template);
+      var content = contentNode();
+      if (!template || !content) return;
+      if (pushCurrent && activeState) drillStack.push(activeState);
+      activeState = { kind: kind, id: id, origin: origin || template.parentElement };
+      content.innerHTML = template.innerHTML;
+      openDialog();
+      updateActions();
     }
 
     function step(delta) {
-      if (!activeKind || !activeId) return;
-      var templates = templatesFor(activeKind);
-      if (!templates.length) return;
-      var current = templates.findIndex(function (template) {
-        return template.getAttribute('data-entity-id') === activeId;
+      if (!activeState) return;
+      var triggers = matchingTriggers();
+      if (!triggers.length) return;
+      var current = triggers.findIndex(function (trigger) {
+        return activeState.kind === 'conversation'
+          ? trigger.getAttribute('data-drawer-url') === activeState.url
+          : trigger.getAttribute('data-entity-id') === activeState.id;
       });
       if (current < 0) return;
-      var next = (current + delta + templates.length) % templates.length;
-      render(templates[next]);
+      var next = (current + delta + triggers.length) % triggers.length;
+      var trigger = triggers[next];
+      if (activeState.kind === 'conversation') {
+        openConversation(trigger, false);
+      } else {
+        openTemplate(activeState.kind, trigger.getAttribute('data-entity-id'), false, activeState.origin);
+      }
+    }
+
+    function restoreState(state) {
+      if (!state) return;
+      activeState = state;
+      if (state.kind === 'conversation') {
+        openDialog();
+        updateActions();
+        loadConversation();
+        return;
+      }
+      var template = document.querySelector(
+        '[data-sim-entity-template][data-entity-kind="' + state.kind + '"][data-entity-id="' + state.id + '"]'
+      );
+      var content = contentNode();
+      if (!template || !content) return;
+      content.innerHTML = template.innerHTML;
+      openDialog();
+      updateActions();
+    }
+
+    function activateTrigger(trigger) {
+      var kind = trigger.getAttribute('data-entity-kind');
+      var fromDrawer = !!trigger.closest('.sim-entity-dialog');
+      if (kind === 'conversation') {
+        if (!fromDrawer) drillStack = [];
+        openConversation(trigger, fromDrawer);
+        return;
+      }
+      drillStack = [];
+      openTemplate(kind, trigger.getAttribute('data-entity-id'), false, trigger.parentElement);
     }
 
     document.body.addEventListener('click', function (evt) {
+      if (evt.target.closest('[data-no-drawer]')) return;
       var trigger = evt.target.closest('[data-sim-entity-trigger]');
       if (!trigger) return;
       evt.preventDefault();
-      openEntity(trigger.getAttribute('data-entity-kind'), trigger.getAttribute('data-entity-id'));
+      activateTrigger(trigger);
     });
 
     document.body.addEventListener('click', function (evt) {
@@ -171,6 +269,8 @@
       if (!dialog || !dialog.open) return;
       if (evt.target === dialog || evt.target.closest('[data-sim-entity-close]')) {
         dialog.close();
+      } else if (evt.target.closest('[data-sim-entity-back]')) {
+        restoreState(drillStack.pop());
       } else if (evt.target.closest('[data-sim-entity-prev]')) {
         step(-1);
       } else if (evt.target.closest('[data-sim-entity-next]')) {
@@ -178,11 +278,14 @@
       }
     });
 
-    document.addEventListener('keydown', function (evt) {
-      var dialog = currentDialog();
-      if (!dialog || !dialog.open) return;
-      var tag = document.activeElement && document.activeElement.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    document.body.addEventListener('keydown', function (evt) {
+      var trigger = evt.target.closest('[data-sim-entity-trigger]');
+      if (trigger && (evt.key === 'Enter' || evt.key === ' ')) {
+        evt.preventDefault();
+        activateTrigger(trigger);
+        return;
+      }
+      if (!dialogIsOpen() || isEditable(document.activeElement)) return;
       if (evt.key === 'j' || evt.key === 'J') {
         evt.preventDefault();
         step(1);
@@ -289,26 +392,4 @@
   });
   // Honor a tab hash on initial load / refresh.
   if (location.hash) selectRadio(location.hash.slice(1));
-})();
-
-// Failures table -> transcript drill-down. The scenario cell is <a href="#conv-N">;
-// the target card lives in a different CSS-radio tab, so a raw anchor can't reach it.
-// Flip to that panel's tab, open the <details> (fires its hx toggle load), scroll to it.
-(function () {
-  document.body.addEventListener('click', function (evt) {
-    var link = evt.target.closest('a[href^="#conv-"]');
-    if (!link) return;
-    var card = document.getElementById(link.getAttribute('href').slice(1));
-    if (!card) return;
-    evt.preventDefault();
-    var panel = card.closest('.tab-panel');
-    if (panel) {
-      var idx = Array.prototype.indexOf.call(panel.parentNode.children, panel);
-      var tabs = panel.closest('.tabs');
-      var radio = tabs && tabs.querySelectorAll('.tab-radio')[idx];
-      if (radio) radio.checked = true;
-    }
-    card.open = true;
-    card.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  });
 })();
