@@ -169,8 +169,10 @@ unavailable for a given run:
 | `min_total_tokens` *(More)* | range | floor (`≥`) | raw `token_usage.total_tokens`, step `1`, max = the run's actual highest token count; hidden when the run recorded zero tokens |
 | per-turn metric thresholds *(More)* | range | floor for hallucination risk (`≥`), ceiling for response quality / tone appropriateness / factual accuracy (`≤`) | step `0.05`, range `0..1`; each control is rendered **only when that metric was actually scored somewhere in the run** — unavailable metrics are hidden, not shown disabled |
 
-Every range control renders "all" when unset (no threshold applied) and a
-`≤`/`≥ value` readout once a threshold is set. Metric thresholds compare
+Every range control renders its default bound numerically (`≤`/`≥ value`) —
+when unset it shows the no-op end of the range, so it always reads as a number,
+never "all". Min-turns additionally shows the run's max turns beside the
+readout. Metric thresholds compare
 against a result's **worst scored turn** (`max()` for hallucination risk,
 `min()` for the quality metrics); a result with **no scored turns for that
 metric stays visible** regardless of the threshold, so unscored results are

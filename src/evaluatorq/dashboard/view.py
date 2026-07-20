@@ -686,17 +686,15 @@ def _range_control(
     sel: list[str],
     floor: bool,
     show_max: bool = False,
-    bound_when_unset: bool = False,
 ) -> str:
     """One min/max range control shared by raw-count and score thresholds.
 
     ``floor`` selects both the unset ("no-op") end of the range — ``min_val``
     for a floor (e.g. min turns), ``max_val`` for a ceiling (e.g. max goal
     score) — and the readout glyph (``≥`` for floors, ``≤`` for ceilings).
-    An absent selection renders "all" rather than a numeric readout, unless
-    ``bound_when_unset`` is set (then the unset default renders numerically —
-    e.g. ``≤ 1`` for the goal-score ceiling). ``show_max`` appends the slider's
-    upper bound beside the readout (e.g. min-turns shows the run's max turns).
+    An absent selection renders the default bound numerically (never "all").
+    ``show_max`` appends the slider's upper bound beside the readout (e.g.
+    min-turns shows the run's max turns).
     """
     raw = sel[0] if sel else None
     default = min_val if floor else max_val
@@ -704,10 +702,7 @@ def _range_control(
         value = float(raw) if raw is not None else default
     except (ValueError, TypeError):
         value = default
-    if raw is None and not bound_when_unset:
-        readout = 'all'
-    else:
-        readout = f'{"≥" if floor else "≤"} {_fmt_range_value(value, step)}'
+    readout = f'{"≥" if floor else "≤"} {_fmt_range_value(value, step)}'
     max_span = (
         f'<span class="filter-slider-max">/ {_fmt_range_value(max_val, step)}</span>' if show_max else ''
     )
@@ -774,7 +769,6 @@ def _render_sim_filter_rail(
         step='0.05',
         sel=selections.get('max_goal_score', []),
         floor=False,
-        bound_when_unset=True,
     )
 
     # Min turns (floor, raw run-length integer — never normalized).

@@ -98,8 +98,8 @@ _SIM_COLUMNS: list[tuple[str, str, Any]] = [
 ]
 _SORT_KEYS: dict[str, Any] = {param: key for param, _, key in _SIM_COLUMNS}
 _DEFAULT_SORT = 'index'
-_PAGE_SIZE = 25
-_PAGE_SIZES = (5, 10, 25)  # selectable rows-per-page; last is the default
+_PAGE_SIZE = 5  # default rows-per-page
+_PAGE_SIZES = (5, 10, 25)  # selectable rows-per-page options
 
 
 def _coerce_page_size(raw: str | int | None) -> int:
