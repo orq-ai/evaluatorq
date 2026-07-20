@@ -1776,3 +1776,52 @@ def __getattr__(name: str):
             )
         return AttackEvaluationResult
     raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
+
+
+# ---------------------------------------------------------------------------
+# Run lifecycle manifest
+# ---------------------------------------------------------------------------
+# Shared by red teaming and agent simulation to track a run's stage + status on
+# disk while it executes (the report only lands on completion). Behaviour lives
+# in ``evaluatorq.common.run_manifest``; the data models live here per the
+# "all shared data models in contracts.py" convention.
+
+ManifestSurface: TypeAlias = Literal['sim', 'redteam']
+ManifestStatus: TypeAlias = Literal['running', 'completed', 'error']
+
+
+class StageRecord(BaseModel):
+    """One pipeline stage's own status + timing within a run."""
+
+    name: str
+    status: ManifestStatus = 'running'
+    started_at: datetime
+    ended_at: datetime | None = None
+
+    @property
+    def duration_seconds(self) -> float | None:
+        if self.ended_at is None:
+            return None
+        return (self.ended_at - self.started_at).total_seconds()
+
+
+class RunManifest(BaseModel):
+    """Lifecycle record for a single run. One file per run, keyed by run_id."""
+
+    run_id: str
+    surface: ManifestSurface
+    run_name: str
+    status: ManifestStatus = 'running'
+    stage: str | None = None  # name of the current / most-recent stage
+    stages: list[StageRecord] = Field(default_factory=list)
+    started_at: datetime
+    updated_at: datetime
+    ended_at: datetime | None = None  # set when the run reaches a terminal status
+    error: str | None = None
+    report_path: str | None = None
+
+    @property
+    def duration_seconds(self) -> float | None:
+        if self.ended_at is None:
+            return None
+        return (self.ended_at - self.started_at).total_seconds()

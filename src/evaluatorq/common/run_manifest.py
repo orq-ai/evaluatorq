@@ -18,55 +18,25 @@ Everything here is best-effort: a manifest write must never raise into — or sl
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
-from pydantic import BaseModel, Field
+
+from evaluatorq.redteam.contracts import (
+    ManifestStatus as Status,
+)
+from evaluatorq.redteam.contracts import (
+    ManifestSurface as Surface,
+)
+from evaluatorq.redteam.contracts import (
+    RunManifest,
+    StageRecord,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-Surface = Literal['sim', 'redteam']
-Status = Literal['running', 'completed', 'error']
-
 MANIFESTS_DIR_NAME = '.manifests'
-
-
-class StageRecord(BaseModel):
-    """One pipeline stage's own status + timing within a run."""
-
-    name: str
-    status: Status = 'running'
-    started_at: datetime
-    ended_at: datetime | None = None
-
-    @property
-    def duration_seconds(self) -> float | None:
-        if self.ended_at is None:
-            return None
-        return (self.ended_at - self.started_at).total_seconds()
-
-
-class RunManifest(BaseModel):
-    """Lifecycle record for a single run. One file per run, keyed by run_id."""
-
-    run_id: str
-    surface: Surface
-    run_name: str
-    status: Status = 'running'
-    stage: str | None = None  # name of the current / most-recent stage
-    stages: list[StageRecord] = Field(default_factory=list)
-    started_at: datetime
-    updated_at: datetime
-    ended_at: datetime | None = None  # set when the run reaches a terminal status
-    error: str | None = None
-    report_path: str | None = None
-
-    @property
-    def duration_seconds(self) -> float | None:
-        if self.ended_at is None:
-            return None
-        return (self.ended_at - self.started_at).total_seconds()
 
 
 def _manifests_dir(runs_dir: Path) -> Path:
@@ -126,6 +96,8 @@ class ManifestWriter:
         self.flush()
 
     def complete(self, report_path: str | Path | None = None) -> None:
+        if self.manifest.status != 'running':
+            return  # terminal transitions are idempotent — first one wins
         now = datetime.now(tz=timezone.utc)
         # Close any stage left open (e.g. a final stage with no on_stage_end).
         for rec in self.manifest.stages:
@@ -139,6 +111,8 @@ class ManifestWriter:
         self.flush()
 
     def fail(self, error: str, stage: Any = None) -> None:
+        if self.manifest.status != 'running':
+            return  # terminal transitions are idempotent — first one wins
         now = datetime.now(tz=timezone.utc)
         # Normalize an enum stage to its value so it matches the record keys
         # opened by start_stage (which uses ``getattr(stage, 'value', stage)``).
@@ -211,6 +185,24 @@ def format_active_lines(runs_dir: Path) -> list[str]:
             detail = f'error{where}: {m.error}' if m.error else f'error{where}'
         lines.append(f'  • {m.run_name} [{m.status}] — {detail}')
     return lines
+
+
+def echo_active_runs(runs_dir: Path) -> None:
+    """Print the 'Active runs' block (running/errored) for *runs_dir*, if any.
+
+    Shared by the ``redteam`` / ``sim`` ``runs`` CLI commands so the two never
+    drift. ``typer`` is imported lazily to keep this module — which the runners
+    import at runtime — free of the CLI-only dependency.
+    """
+    import typer
+
+    lines = format_active_lines(runs_dir)
+    if not lines:
+        return
+    typer.echo('Active runs:')
+    for line in lines:
+        typer.echo(line)
+    typer.echo('')
 
 
 class _ManifestHooks:

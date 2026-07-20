@@ -462,23 +462,9 @@ async def red_team(
             raise ValueError(msg)
         resolved_output_dir = user_output_dir
 
-    # Lifecycle manifest: track this run's stage/status on disk while it runs so a
-    # still-running or crashed run is visible (the report only lands on
-    # completion). Only when persisting (save != 'none'). Wrapping the hooks feeds
-    # each pipeline stage transition into the manifest.
+    # Manifest is created after argument validation (below), so a pure config
+    # error never leaves a stuck 'running' manifest behind.
     manifest_writer = None
-    if save != 'none':
-        import uuid
-
-        from evaluatorq.common.run_manifest import start_manifest, wrap_hooks
-
-        manifest_writer = start_manifest(
-            run_id=uuid.uuid4().hex,
-            surface='redteam',
-            run_name=name or 'red-team',
-            runs_dir=get_runs_dir(),
-        )
-        resolved_hooks = wrap_hooks(resolved_hooks, manifest_writer)
 
     if isinstance(target, list):
         raw_targets: list[str | AgentTarget] = list(target)
@@ -640,8 +626,29 @@ async def red_team(
                 ', '.join(unevaluable_codes),
             )
 
-    # Errors here mark the manifest 'error' before propagating, so a failed run
-    # doesn't read as 'running' forever. BaseException captures cancellation too.
+    # Lifecycle manifest: track this run's stage/status on disk while it runs so a
+    # still-running or crashed run is visible (the report only lands on
+    # completion). Created here — after argument validation — and only when
+    # persisting (save != 'none'). Wrapping the hooks feeds each pipeline stage
+    # transition into the manifest.
+    if save != 'none':
+        import uuid
+
+        from evaluatorq.common.run_manifest import start_manifest, wrap_hooks
+
+        manifest_writer = start_manifest(
+            run_id=uuid.uuid4().hex,
+            surface='redteam',
+            run_name=name or 'red-team',
+            runs_dir=get_runs_dir(),
+        )
+        resolved_hooks = wrap_hooks(resolved_hooks, manifest_writer)
+
+    # Everything from here through on_complete is guarded: any failure marks the
+    # manifest 'error' (BaseException also captures cancellation), so a run can
+    # never stay 'running' once it has finished. complete() is called only after
+    # on_complete returns — if that hook raises, the manifest reflects the error
+    # the caller sees, not a false 'completed'.
     try:
         if resolved_mode in (Pipeline.DYNAMIC, Pipeline.HYBRID):
             report = await _run_dynamic_or_hybrid(
@@ -695,104 +702,104 @@ async def red_team(
         else:
             msg = f'Invalid mode {mode!r}. Must be "dynamic", "static", or "hybrid".'
             raise ValueError(msg)
+
+        # Record categories dropped by the evaluability gate so the report is
+        # honest about reduced scope (rather than silently testing fewer).
+        if unevaluable_codes:
+            report.pipeline_warnings.insert(
+                0,
+                f'Skipped {len(unevaluable_codes)} requested categor'
+                f'{"y" if len(unevaluable_codes) == 1 else "ies"} with no automated '
+                f'evaluator ({", ".join(unevaluable_codes)}): not scoreable via '
+                'prompt-based red teaming (requires live-system testing).',
+            )
+
+        # Generate LLM-based recommendations for focus areas (opt-in)
+        if generate_recommendations:
+            try:
+                rec_client = llm_client or config.evaluator.client
+                if rec_client is None:
+                    rec_client = create_async_llm_client(role_config=config.evaluator.as_call_config())
+
+                report.focus_area_recommendations = await generate_focus_area_recommendations(
+                    report=report,
+                    llm_client=rec_client,
+                    model=evaluator_model,
+                    cfg=config,
+                )
+            except (TypeError, AttributeError, ImportError, NameError, KeyError):
+                raise
+            except Exception:
+                logger.warning('Failed to generate focus area recommendations', exc_info=True)
+                report.pipeline_warnings.append(
+                    'Failed to generate focus area recommendations. Check LLM credentials and model configuration.'
+                )
+
+        # Generate the LLM narrative executive summary (on by default; silent
+        # skip when no LLM credentials are configured).
+        if generate_executive_summary:
+            from evaluatorq.common.reports.executive_summary import (
+                generate_executive_summary as _gen_exec_summary,
+            )
+            from evaluatorq.redteam.reports.executive_summary import build_redteam_facts
+
+            try:
+                es_client = llm_client or config.evaluator.client
+                if es_client is None:
+                    es_client = create_async_llm_client(role_config=config.evaluator.as_call_config())
+                report.executive_summary = await _gen_exec_summary(
+                    build_redteam_facts(report),
+                    llm_client=es_client,
+                    model=evaluator_model,
+                    temperature=config.evaluator.temperature,
+                    extra_body=config.retry_extra_body(es_client),
+                    extra_kwargs=config.evaluator.extra_kwargs,
+                )
+            except (TypeError, AttributeError, ImportError, NameError, KeyError):
+                raise
+            except Exception:
+                logger.warning('Failed to generate executive summary', exc_info=True)
+                report.pipeline_warnings.append(
+                    'Failed to generate executive summary. Check LLM credentials and model configuration.'
+                )
+
+        # Persist report according to the save mode. 'detail' mode already had
+        # the inner pipeline write 01/02/03 to resolved_output_dir, so here we
+        # only handle 'final' (single summary file) and record the saved path.
+        auto_save_path: Path | None = None
+        if save == 'final':
+            if user_output_dir is not None:
+                _save_report(user_output_dir, '03_summary_report.json', report)
+                auto_save_path = user_output_dir / '03_summary_report.json'
+        elif save == 'detail':
+            if resolved_output_dir is not None:
+                auto_save_path = resolved_output_dir / '03_summary_report.json'
+
+        # Index in .evaluatorq/runs/ so the run appears in `evaluatorq redteam runs`.
+        if save != 'none':
+            run_path = _auto_save_run(report, name=name)
+            if auto_save_path is None:
+                auto_save_path = run_path
+            if run_path is None:
+                report.pipeline_warnings.append(
+                    'Failed to auto-save run report. The run will not appear in `evaluatorq redteam runs`.'
+                )
+
+        await await_maybe(
+            resolved_hooks.on_complete(
+                report,
+                output_dir=str(user_output_dir) if user_output_dir and save != 'none' else None,
+                auto_save_path=str(auto_save_path) if auto_save_path else None,
+            )
+        )
+
+        # Fully finished — including on_complete. Now mark the manifest completed.
+        if manifest_writer is not None:
+            manifest_writer.complete(report_path=auto_save_path)
     except BaseException as exc:
         if manifest_writer is not None:
             manifest_writer.fail(str(exc) or type(exc).__name__)
         raise
-
-    # Record categories dropped by the evaluability gate so the report is honest
-    # about reduced scope (rather than silently testing fewer categories).
-    if unevaluable_codes:
-        report.pipeline_warnings.insert(
-            0,
-            f'Skipped {len(unevaluable_codes)} requested categor'
-            f'{"y" if len(unevaluable_codes) == 1 else "ies"} with no automated '
-            f'evaluator ({", ".join(unevaluable_codes)}): not scoreable via '
-            'prompt-based red teaming (requires live-system testing).',
-        )
-
-    # Generate LLM-based recommendations for focus areas (opt-in)
-    if generate_recommendations:
-        try:
-            rec_client = llm_client or config.evaluator.client
-            if rec_client is None:
-                rec_client = create_async_llm_client(role_config=config.evaluator.as_call_config())
-
-            report.focus_area_recommendations = await generate_focus_area_recommendations(
-                report=report,
-                llm_client=rec_client,
-                model=evaluator_model,
-                cfg=config,
-            )
-        except (TypeError, AttributeError, ImportError, NameError, KeyError):
-            raise
-        except Exception:
-            logger.warning('Failed to generate focus area recommendations', exc_info=True)
-            report.pipeline_warnings.append(
-                'Failed to generate focus area recommendations. Check LLM credentials and model configuration.'
-            )
-
-    # Generate the LLM narrative executive summary (on by default; silent skip
-    # when no LLM credentials are configured).
-    if generate_executive_summary:
-        from evaluatorq.common.reports.executive_summary import (
-            generate_executive_summary as _gen_exec_summary,
-        )
-        from evaluatorq.redteam.reports.executive_summary import build_redteam_facts
-
-        try:
-            es_client = llm_client or config.evaluator.client
-            if es_client is None:
-                es_client = create_async_llm_client(role_config=config.evaluator.as_call_config())
-            report.executive_summary = await _gen_exec_summary(
-                build_redteam_facts(report),
-                llm_client=es_client,
-                model=evaluator_model,
-                temperature=config.evaluator.temperature,
-                extra_body=config.retry_extra_body(es_client),
-                extra_kwargs=config.evaluator.extra_kwargs,
-            )
-        except (TypeError, AttributeError, ImportError, NameError, KeyError):
-            raise
-        except Exception:
-            logger.warning('Failed to generate executive summary', exc_info=True)
-            report.pipeline_warnings.append(
-                'Failed to generate executive summary. Check LLM credentials and model configuration.'
-            )
-
-    # Persist report according to the save mode. 'detail' mode already had
-    # the inner pipeline write 01/02/03 to resolved_output_dir, so here we
-    # only handle 'final' (single summary file) and record the saved path.
-    auto_save_path: Path | None = None
-    if save == 'final':
-        if user_output_dir is not None:
-            _save_report(user_output_dir, '03_summary_report.json', report)
-            auto_save_path = user_output_dir / '03_summary_report.json'
-    elif save == 'detail':
-        if resolved_output_dir is not None:
-            auto_save_path = resolved_output_dir / '03_summary_report.json'
-
-    # Index in .evaluatorq/runs/ so the run appears in `evaluatorq redteam runs`.
-    if save != 'none':
-        run_path = _auto_save_run(report, name=name)
-        if auto_save_path is None:
-            auto_save_path = run_path
-        if run_path is None:
-            report.pipeline_warnings.append(
-                'Failed to auto-save run report. The run will not appear in `evaluatorq redteam runs`.'
-            )
-
-    # Run finished — mark the manifest completed with the saved report path.
-    if manifest_writer is not None:
-        manifest_writer.complete(report_path=auto_save_path)
-
-    await await_maybe(
-        resolved_hooks.on_complete(
-            report,
-            output_dir=str(user_output_dir) if user_output_dir and save != 'none' else None,
-            auto_save_path=str(auto_save_path) if auto_save_path else None,
-        )
-    )
 
     return report
 

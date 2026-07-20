@@ -953,113 +953,117 @@ async def _simulate_core(
         )
         resolved_hooks = wrap_hooks(resolved_hooks, manifest_writer)
 
-    # SIMULATE stage brackets the run: start fires after on_confirm passes and
-    # before on_run_start (which opens the live Progress region); end fires in the
-    # finally after on_run_complete (which closes it). Never emit between
-    # on_run_start and on_run_complete — that would tear the live render.
-    await await_maybe(resolved_hooks.on_stage_start(SimStage.SIMULATE, {}))
-    # Terminal hook always pairs with on_run_start; results is [] on early
-    # failure. on_run_complete is unguarded (a raising hook propagates, per the
-    # hook exception policy); runner/target cleanup lives inside
-    # _simulate_via_evaluatorq's own finally, so it runs regardless.
-    results: list[SimulationResult] = []
-    # Filled by evaluatorq() with the uploaded experiment's URL (if any) so we can
-    # persist it on the SimulationRun and surface it in the terminal / dashboard.
-    experiment_url_out: list[str] = []
-    await await_maybe(resolved_hooks.on_run_start(run_meta))
+    # Everything from the first hook call through save is guarded by the outer
+    # try/except: any failure — including a hook raising before/inside the inner
+    # try or in its finally — marks the manifest 'error', so a run can never stay
+    # 'running' once it has finished. Terminal transitions are idempotent, so the
+    # single completion / failure that lands first wins.
     try:
-        results = await _simulate_via_evaluatorq(
-            config=config,
-            caller=caller,
-            target=target_callable,
-            target_agent=target_agent,
-            sim_datapoints=sim_datapoints,
-            pipeline_span=pipeline_span,
-            hooks=resolved_hooks,
-            run_id=run_id,
-            experiment_url_out=experiment_url_out,
-        )
-        # Fire on_evaluator_complete here — AFTER results is assigned and
-        # OUTSIDE evaluatorq's per-scorer try/except — so an unguarded hook
-        # raise propagates (per the contract) while on_run_complete in the
-        # finally still receives the real results, not []. Scores were stamped
-        # onto each result's metadata by _stamp_evaluator_scores.
-        for r in results:
-            dp_id = r.metadata.get('datapoint_id', '')
-            evaluator_scores = r.metadata.get('evaluator_scores') or {}
-            for evaluator_name, score in evaluator_scores.items():
-                await await_maybe(resolved_hooks.on_evaluator_complete(dp_id, evaluator_name, score, r))
-    except SimulationDroppedError as dropped:
-        # exit_on_failure aborted the run, but the rows that succeeded are real
-        # results — hand them to on_run_complete (via the finally) instead of [].
-        results = dropped.partial_results
-        if manifest_writer is not None:
-            manifest_writer.fail(str(dropped), stage=SimStage.SIMULATE)
-        raise
-    except BaseException as exc:
-        # Any other failure (target crash, cancellation, unexpected error) marks
-        # the manifest errored before propagating — otherwise it would read as
-        # "running" forever. BaseException so KeyboardInterrupt/CancelledError
-        # are captured too; always re-raised.
-        if manifest_writer is not None:
-            manifest_writer.fail(str(exc) or type(exc).__name__, stage=SimStage.SIMULATE)
-        raise
-    finally:
-        await await_maybe(resolved_hooks.on_run_complete(results))
-        await await_maybe(resolved_hooks.on_stage_end(SimStage.SIMULATE, {'num_results': len(results)}))
-
-    # Always build the run on the success path (an aborted run re-raised
-    # above) so every caller — SDK and CLI alike — gets the full
-    # SimulationRun (target/agent metadata, run_id, experiment_url) without
-    # having to rebuild it from the bare results list.
-    # _resolve_target's kind hint resolves the target_kind the dashboard reads;
-    # hint is 'orq_agent' for AgentTarget / "agent:" strings, 'orq_deployment'
-    # for "deployment:" strings, and None for plain callables.
-    target_kind = target_kind_hint or 'callback'
-    agent_info = None
-    if target_kind == 'orq_agent':
-        agent_key = _agent_key_of(target_agent) or target_name.removeprefix('agent:')
-        if agent_key and agent_key != 'agent':
-            agent_info = await fetch_agent_info(agent_key)
-    run = build_simulation_run(
-        run_name=evaluation_name or 'sim',
-        mode='simulate' if caller == 'simulate' else 'run',
-        target_kind=target_kind,
-        target=target_name,
-        target_model=target_model if isinstance(target_model, str) else None,
-        max_turns=max_turns,
-        agent_info=agent_info,
-        evaluator_names=resolved_evaluator_names,
-        results=results,
-        run_id=run_id,
-        experiment_url=experiment_url_out[0] if experiment_url_out else None,
-    )
-
-    # Persist only when the caller opts in (save=True).
-    # TODO(RES-963): inline because on_run_complete carries no run metadata and
-    # hooks aren't yet composable; move to a save hook once that lands.
-    if save:
-        # A persistence failure (disk full, read-only .evaluatorq/, perms, or the
-        # collision-exhaustion RuntimeError) must NOT discard a completed, paid-for
-        # run. Log and still return the run — the saved file is a convenience.
-        saved_path = None
+        # SIMULATE stage brackets the run: start fires after on_confirm passes and
+        # before on_run_start (which opens the live Progress region); end fires in
+        # the finally after on_run_complete (which closes it). Never emit between
+        # on_run_start and on_run_complete — that would tear the live render.
+        await await_maybe(resolved_hooks.on_stage_start(SimStage.SIMULATE, {}))
+        # Terminal hook always pairs with on_run_start; results is [] on early
+        # failure. on_run_complete is unguarded (a raising hook propagates, per the
+        # hook exception policy); runner/target cleanup lives inside
+        # _simulate_via_evaluatorq's own finally, so it runs regardless.
+        results: list[SimulationResult] = []
+        # Filled by evaluatorq() with the uploaded experiment's URL (if any) so we
+        # can persist it on the SimulationRun and surface it in terminal/dashboard.
+        experiment_url_out: list[str] = []
+        await await_maybe(resolved_hooks.on_run_start(run_meta))
         try:
-            if run_output is not None:
-                write_report(run, Path(run_output))
-                saved_path = Path(run_output)
-            else:
-                saved_path = auto_save_run(run=run, run_name=run.run_name)
-            _log_saved_run(saved_path)
-        except Exception as exc:
-            # Broad by design: this guards a disk-write side-effect that must
-            # never discard already-completed work. Covers OSError, the
-            # collision RuntimeError, and pydantic serialization errors
-            # (PydanticSerializationError <: ValueError) from model_dump_json.
-            logger.exception(f'Failed to save simulation run (results still returned): {exc}')
-        # Run finished — mark the manifest completed (with the report path when
+            results = await _simulate_via_evaluatorq(
+                config=config,
+                caller=caller,
+                target=target_callable,
+                target_agent=target_agent,
+                sim_datapoints=sim_datapoints,
+                pipeline_span=pipeline_span,
+                hooks=resolved_hooks,
+                run_id=run_id,
+                experiment_url_out=experiment_url_out,
+            )
+            # Fire on_evaluator_complete here — AFTER results is assigned and
+            # OUTSIDE evaluatorq's per-scorer try/except — so an unguarded hook
+            # raise propagates (per the contract) while on_run_complete in the
+            # finally still receives the real results, not []. Scores were stamped
+            # onto each result's metadata by _stamp_evaluator_scores.
+            for r in results:
+                dp_id = r.metadata.get('datapoint_id', '')
+                evaluator_scores = r.metadata.get('evaluator_scores') or {}
+                for evaluator_name, score in evaluator_scores.items():
+                    await await_maybe(resolved_hooks.on_evaluator_complete(dp_id, evaluator_name, score, r))
+        except SimulationDroppedError as dropped:
+            # exit_on_failure aborted the run, but the rows that succeeded are real
+            # results — hand them to on_run_complete (via the finally) instead of [].
+            results = dropped.partial_results
+            raise
+        finally:
+            await await_maybe(resolved_hooks.on_run_complete(results))
+            await await_maybe(resolved_hooks.on_stage_end(SimStage.SIMULATE, {'num_results': len(results)}))
+
+        # Always build the run on the success path (an aborted run re-raised
+        # above) so every caller — SDK and CLI alike — gets the full
+        # SimulationRun (target/agent metadata, run_id, experiment_url) without
+        # having to rebuild it from the bare results list.
+        # _resolve_target's kind hint resolves the target_kind the dashboard reads;
+        # hint is 'orq_agent' for AgentTarget / "agent:" strings, 'orq_deployment'
+        # for "deployment:" strings, and None for plain callables.
+        target_kind = target_kind_hint or 'callback'
+        agent_info = None
+        if target_kind == 'orq_agent':
+            agent_key = _agent_key_of(target_agent) or target_name.removeprefix('agent:')
+            if agent_key and agent_key != 'agent':
+                agent_info = await fetch_agent_info(agent_key)
+        run = build_simulation_run(
+            run_name=evaluation_name or 'sim',
+            mode='simulate' if caller == 'simulate' else 'run',
+            target_kind=target_kind,
+            target=target_name,
+            target_model=target_model if isinstance(target_model, str) else None,
+            max_turns=max_turns,
+            agent_info=agent_info,
+            evaluator_names=resolved_evaluator_names,
+            results=results,
+            run_id=run_id,
+            experiment_url=experiment_url_out[0] if experiment_url_out else None,
+        )
+
+        # Persist only when the caller opts in (save=True).
+        # TODO(RES-963): inline because on_run_complete carries no run metadata and
+        # hooks aren't yet composable; move to a save hook once that lands.
+        saved_path = None
+        if save:
+            # A persistence failure (disk full, read-only .evaluatorq/, perms, or the
+            # collision-exhaustion RuntimeError) must NOT discard a completed, paid-for
+            # run. Log and still return the run — the saved file is a convenience.
+            try:
+                if run_output is not None:
+                    write_report(run, Path(run_output))
+                    saved_path = Path(run_output)
+                else:
+                    saved_path = auto_save_run(run=run, run_name=run.run_name)
+                _log_saved_run(saved_path)
+            except Exception as exc:
+                # Broad by design: this guards a disk-write side-effect that must
+                # never discard already-completed work. Covers OSError, the
+                # collision RuntimeError, and pydantic serialization errors
+                # (PydanticSerializationError <: ValueError) from model_dump_json.
+                logger.exception(f'Failed to save simulation run (results still returned): {exc}')
+
+        # Fully finished — mark the manifest completed (with the report path when
         # the save succeeded) even if the report write itself failed.
         if manifest_writer is not None:
             manifest_writer.complete(report_path=saved_path)
+    except BaseException as exc:
+        # Any failure marks the manifest errored before propagating — otherwise it
+        # would read as 'running' forever. BaseException so KeyboardInterrupt /
+        # CancelledError are captured too; always re-raised.
+        if manifest_writer is not None:
+            manifest_writer.fail(str(exc) or type(exc).__name__, stage=SimStage.SIMULATE)
+        raise
     return run
 
 

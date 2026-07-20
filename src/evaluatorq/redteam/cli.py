@@ -696,14 +696,9 @@ def runs(
     # Surface in-flight / errored runs from lifecycle manifests (human view only;
     # --json stays report-only for backward compatibility).
     if not json_output:
-        from evaluatorq.common.run_manifest import format_active_lines
+        from evaluatorq.common.run_manifest import echo_active_runs
 
-        active_lines = format_active_lines(runs_dir)
-        if active_lines:
-            typer.echo('Active runs:')
-            for line in active_lines:
-                typer.echo(line)
-            typer.echo('')
+        echo_active_runs(runs_dir)
 
     run_files = sorted(runs_dir.glob('*.json'), key=lambda p: p.stat().st_mtime, reverse=True)
     if not run_files:
