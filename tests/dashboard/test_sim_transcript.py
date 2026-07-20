@@ -592,6 +592,24 @@ class TestConversationRows:
         assert 'Goal missed' in html
         assert 'Error' in html
 
+    def test_trace_anchor_is_outside_keyboard_drawer_trigger(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from evaluatorq.dashboard.sim_views import render_sim_row_list
+
+        monkeypatch.setenv('ORQ_WORKSPACE_SLUG', 'workspace')
+        entry = _entry().model_copy(update={'thread_id': 'run:0'})
+        html = render_sim_row_list('rid', [entry])
+
+        trigger_start = html.index('<div class="sim-conv-row ')
+        trigger_end = html.index('</div>', trigger_start)
+        trace_start = html.index('<a class="btn-secondary trace-link"')
+        trigger = html[trigger_start:trigger_end]
+
+        assert 'role="button" tabindex="0"' in trigger
+        assert 'data-sim-entity-trigger' in trigger
+        assert 'trace-link' not in trigger
+        assert trace_start > trigger_end
+        assert 'data-no-drawer' in html[trace_start:]
+
     def test_row_list_error_takes_precedence_over_goal_achieved(self) -> None:
         """terminated_by == 'error' tints error, regardless of goal_achieved."""
         from evaluatorq.dashboard.sim_views import render_sim_row_list
@@ -694,7 +712,7 @@ class TestFilteredConversationDrawerIndex:
             TerminatedBy,
         )
 
-        def _result(persona: str, marker: str) -> SimulationResult:
+        def _result(persona: str, scenario: str, marker: str) -> SimulationResult:
             return SimulationResult(
                 messages=[
                     Message(role='user', content=f'hi from {marker}'),
@@ -708,13 +726,13 @@ class TestFilteredConversationDrawerIndex:
                 turn_count=1,
                 turn_metrics=[],
                 token_usage=TokenUsage(input_tokens=5, output_tokens=5, total_tokens=10),
-                metadata={'persona': persona, 'scenario': 's'},
+                metadata={'persona': persona, 'scenario': scenario},
             )
 
         results = [
-            _result('alice', 'ALICE-ONE'),
-            _result('alice', 'ALICE-TWO'),
-            _result('bob', 'BOB-ONE'),
+            _result('alice', 'account access', 'ALICE-ONE'),
+            _result('alice', 'account access', 'ALICE-TWO'),
+            _result('bob', 'billing', 'BOB-ONE'),
         ]
         run = SimulationRun(
             run_name='filtered-idx-test',
@@ -743,6 +761,31 @@ class TestFilteredConversationDrawerIndex:
         filtered_html = client.post(f'/r/{rid}/filter', data={'persona': 'bob'}).text
         drawer_url = f'/r/{rid}/sim/transcript?idx=2'
         assert drawer_url in filtered_html
+
+        # Config and its drawer-template registry stay full-run, even though
+        # Breakdown remains filtered. The configured but excluded Alice/account
+        # cohorts are still actionable and explicitly show an empty cohort.
+        import re
+
+        persona_match = re.search(
+            r'<button[^>]*class="sim-config-persona-row sim-entity-row"[^>]*'
+            r'data-entity-kind="persona" data-entity-id="([^"]+)"[^>]*>'
+            r'.*?<span class="sim-config-persona-name">alice</span>',
+            filtered_html,
+        )
+        scenario_match = re.search(
+            r'<button[^>]*class="sim-config-scenario-row sim-entity-row"[^>]*'
+            r'data-entity-kind="scenario" data-entity-id="([^"]+)"[^>]*>'
+            r'.*?<span class="sim-config-scenario-name">account access</span>',
+            filtered_html,
+        )
+        assert persona_match is not None and scenario_match is not None
+        for entity_id in (persona_match.group(1), scenario_match.group(1)):
+            template = re.search(rf'<template id="{re.escape(entity_id)}"[^>]*>(.*?)</template>', filtered_html)
+            assert template is not None
+            assert '<p class="sim-cohort-empty">No conversations.</p>' in template.group(1)
+        assert '<td data-label="Persona">alice</td>' not in filtered_html
+        assert '<td data-label="Scenario">account access</td>' not in filtered_html
 
         # The endpoint's full-run resolver maps Bob's stable idx directly to
         # Bob; no filter parameters are needed for identity resolution.

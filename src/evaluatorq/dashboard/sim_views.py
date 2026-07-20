@@ -121,17 +121,17 @@ def render_sim_row_list(rid: str, entries: list[SimulationEntry]) -> str:
             tint = 'sim-tint-missed'
             badge = status_badge('Goal missed', 'fail')
 
-        # Trace deep-link on the row, next to the outcome badge. stopPropagation
-        # keeps it from opening the conversation drawer.
+        # The trace deep-link is a sibling of the drawer trigger. An anchor
+        # inside an element with role=button is invalid interactive nesting and
+        # prevents reliable keyboard activation in assistive technology.
         trace_btn = trace_link_button(
             thread_trace_url(e.thread_id),
             'View Traces',
-            onclick='event.stopPropagation()',
             extra_attributes={'data-no-drawer': None},
         )
         right_cluster = (
             f'{tag(f"{e.turn_count} turns")}{tag(f"score {e.goal_completion_score:.2f}")}'
-            f'{tag(e.terminated_by)}{badge}{trace_btn}'
+            f'{tag(e.terminated_by)}{badge}'
         )
         row_attrs = (
             f'class="sim-conv-row {tint}" role="button" tabindex="0" '
@@ -139,12 +139,15 @@ def render_sim_row_list(rid: str, entries: list[SimulationEntry]) -> str:
             f'data-drawer-url="/r/{safe_rid}/sim/transcript?idx={idx}"'
         )
         rows_html.append(
+            f'<div class="sim-conv-row-shell">'
             f'<div {row_attrs}>'
             f'<span class="sim-conv-idx">#{idx + 1}</span>'
             f'<span class="sim-conv-persona">{persona}</span>'
             f'<span class="sim-conv-sep">&middot;</span>'
             f'<span class="sim-conv-scenario">{scenario}</span>'
             f'<span class="sim-conv-right">{right_cluster}</span>'
+            '</div>'
+            f'{trace_btn}'
             '</div>'
         )
 

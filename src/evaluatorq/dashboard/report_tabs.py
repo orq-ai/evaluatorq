@@ -116,6 +116,16 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
     for s in sections:
         by_kind.setdefault(s.kind, s)
 
+    # Filtering affects report metrics and Breakdown rows, but Config must
+    # remain a faithful registry of every configured persona and scenario.
+    # Build its drawer templates from the full run so a cohort that has no
+    # matching filtered conversations remains reachable and keeps its stable
+    # DOM ID. Only the cohort conversation lists below use filtered entries.
+    entity_sections = sections if results is None else build_report_sections(run.results)
+    entity_by_kind: dict[str, Any] = {}
+    for s in entity_sections:
+        entity_by_kind.setdefault(s.kind, s)
+
     def render(*kinds: str) -> str:
         return _render_sections(by_kind, _SECTION_RENDERERS, kinds)
 
@@ -123,7 +133,7 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
 
     entries = _stable_entries(run, rows)
 
-    entity_context = _sim_entity_context(by_kind, entries, rows, rid)
+    entity_context = _sim_entity_context(entity_by_kind, entries, rows, rid)
     _set_failure_full_run_indexes(by_kind.get('failures_first'), entries)
 
     # Folded 7→5 to curb tab sprawl: Evaluators + Judge & errors → Transcripts

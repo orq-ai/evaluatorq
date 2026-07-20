@@ -1099,12 +1099,15 @@ _SIM_REPORT_CSS = """
 _SIM_TRANSCRIPT_CSS = """
 /* ---- Conversation rows (spec §Transcripts, Task 11) ---- */
 .sim-report .sim-row-list { display: flex; flex-direction: column; gap: 10px; }
+.sim-report .sim-conv-row-shell { display: flex; align-items: center; gap: 8px; }
 .sim-report .sim-conv-row {
     border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden;
     background: var(--surface-app);
     display: flex; align-items: center; gap: 8px; padding: 12px 16px;
     cursor: pointer; transition: border-color 120ms ease, box-shadow 120ms ease;
+    flex: 1; min-width: 0;
 }
+.sim-report .sim-conv-row-shell > .trace-link { flex: 0 0 auto; white-space: nowrap; }
 .sim-report .sim-conv-row:hover { border-color: var(--teal-600); }
 .sim-report .sim-conv-row:focus-visible {
     outline: 2px solid var(--teal-600); outline-offset: 2px;
@@ -1676,6 +1679,7 @@ _SIM_REPORT_OVERRIDES_CSS = """
     display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px;
     border-top: 1px solid var(--border-subtle); background: var(--surface-sunken);
 }
+.sim-report .sim-entity-back,
 .sim-report .sim-entity-nav,
 .sim-report .sim-entity-close {
     border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--surface-app);
@@ -1692,6 +1696,7 @@ _SIM_REPORT_OVERRIDES_CSS = """
     border: 1px solid var(--border-subtle); background: var(--surface-sunken);
     color: var(--text-faint);
 }
+.sim-report .sim-entity-back:hover,
 .sim-report .sim-entity-nav:hover,
 .sim-report .sim-entity-close:hover { border-color: var(--orange-500); color: var(--orange-500); }
 @media (max-width: 480px) {
