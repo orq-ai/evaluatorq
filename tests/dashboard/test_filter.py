@@ -680,3 +680,190 @@ def test_rt_options_no_all_sentinel(rt_results):
 
     opts = _rt_options_from_results(rt_results)
     assert opts['result'] == ['Vulnerable', 'Resistant', 'Error']  # no 'All' sentinel
+
+
+# ---------------------------------------------------------------------------
+# Task 2 (metric filters plan): rule/goal/turns/tokens/metric threshold dims.
+# ---------------------------------------------------------------------------
+
+
+def _sim_metric_run():
+    """SimulationRun with three personas exercising rule/metric filter edges.
+
+    - alice:   rules_broken=['criteria_0'], low hallucination risk, high
+               response quality, turn_count=3, total_tokens=150.
+    - risky:   no rules broken, HIGH hallucination risk, LOW response
+               quality, turn_count=5, total_tokens=500.
+    - unscored: no rules broken, turn_metrics=[] (nothing scored), turn_count=1,
+               total_tokens=15.
+    """
+    from evaluatorq.contracts import TokenUsage
+    from evaluatorq.simulation.types import SimulationResult, SimulationRun, TerminatedBy, TurnMetrics
+
+    def _turn(**scores) -> TurnMetrics:
+        return TurnMetrics(
+            turn_number=1,
+            token_usage=TokenUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+            judge_reason='ok',
+            **scores,
+        )
+
+    results = [
+        SimulationResult(
+            messages=[],
+            terminated_by=TerminatedBy.judge,
+            reason='done',
+            goal_achieved=True,
+            goal_completion_score=0.9,
+            rules_broken=['criteria_0'],
+            turn_count=3,
+            turn_metrics=[
+                _turn(
+                    response_quality=0.8,
+                    hallucination_risk=0.2,
+                    tone_appropriateness=0.9,
+                    factual_accuracy=0.85,
+                )
+            ],
+            token_usage=TokenUsage(input_tokens=100, output_tokens=50, total_tokens=150),
+            metadata={'persona': 'alice', 'scenario': 'billing'},
+        ),
+        SimulationResult(
+            messages=[],
+            terminated_by=TerminatedBy.judge,
+            reason='done',
+            goal_achieved=False,
+            goal_completion_score=0.3,
+            rules_broken=[],
+            turn_count=5,
+            turn_metrics=[
+                _turn(
+                    response_quality=0.6,
+                    hallucination_risk=0.9,
+                    tone_appropriateness=0.5,
+                    factual_accuracy=0.4,
+                )
+            ],
+            token_usage=TokenUsage(input_tokens=300, output_tokens=200, total_tokens=500),
+            metadata={'persona': 'risky', 'scenario': 'billing'},
+        ),
+        SimulationResult(
+            messages=[],
+            terminated_by=TerminatedBy.judge,
+            reason='done',
+            goal_achieved=True,
+            goal_completion_score=1.0,
+            rules_broken=[],
+            turn_count=1,
+            turn_metrics=[],
+            token_usage=TokenUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+            metadata={'persona': 'unscored', 'scenario': 'billing'},
+        ),
+    ]
+    return SimulationRun(
+        run_name='test-sim-metric-run',
+        created_at=datetime.now(tz=timezone.utc),
+        mode='run',
+        target_kind='orq_agent',
+        evaluator_names=['goal_achieved'],
+        total_results=len(results),
+        scorer_averages={'goal_achieved': 0.67},
+        results=results,
+    )
+
+
+@pytest.fixture()
+def sim_run():
+    return _sim_metric_run()
+
+
+class TestSimMetricFilters:
+    def test_rule_broken_is_opt_in(self, sim_run) -> None:
+        from evaluatorq.dashboard.filters import _sim_apply
+
+        assert [r.rules_broken for r in _sim_apply(sim_run, {'rule_broken': ['yes']})] == [['criteria_0']]
+        assert len(_sim_apply(sim_run, {})) == len(sim_run.results)
+
+    def test_risk_uses_worst_turn_and_keeps_unscored(self, sim_run) -> None:
+        from evaluatorq.dashboard.filters import _sim_apply
+
+        filtered = _sim_apply(sim_run, {'min_hallucination_risk': ['0.70']})
+        assert {r.metadata['persona'] for r in filtered} == {'risky', 'unscored'}
+
+    def test_quality_ceiling_uses_worst_turn_and_keeps_unscored(self, sim_run) -> None:
+        from evaluatorq.dashboard.filters import _sim_apply
+
+        filtered = _sim_apply(sim_run, {'max_response_quality': ['0.70']})
+        assert {r.metadata['persona'] for r in filtered} == {'risky', 'unscored'}
+
+    def test_max_goal_score_is_ceiling(self, sim_run) -> None:
+        from evaluatorq.dashboard.filters import _sim_apply
+
+        filtered = _sim_apply(sim_run, {'max_goal_score': ['0.5']})
+        assert {r.metadata['persona'] for r in filtered} == {'risky'}
+
+    def test_min_turns_is_floor(self, sim_run) -> None:
+        from evaluatorq.dashboard.filters import _sim_apply
+
+        filtered = _sim_apply(sim_run, {'min_turns': ['3']})
+        assert {r.metadata['persona'] for r in filtered} == {'alice', 'risky'}
+
+    def test_min_total_tokens_is_floor(self, sim_run) -> None:
+        from evaluatorq.dashboard.filters import _sim_apply
+
+        filtered = _sim_apply(sim_run, {'min_total_tokens': ['100']})
+        assert {r.metadata['persona'] for r in filtered} == {'alice', 'risky'}
+
+    def test_empty_selections_returns_all(self, sim_run) -> None:
+        from evaluatorq.dashboard.filters import _sim_apply
+
+        assert len(_sim_apply(sim_run, {})) == len(sim_run.results)
+
+    def test_bad_threshold_input_is_noop(self, sim_run) -> None:
+        from evaluatorq.dashboard.filters import _sim_apply
+
+        filtered = _sim_apply(sim_run, {'max_goal_score': ['not-a-number']})
+        assert len(filtered) == len(sim_run.results)
+
+    def test_full_options_exposes_raw_maxima_and_available_metrics(self, sim_run) -> None:
+        from evaluatorq.dashboard.filters import _sim_full_options
+
+        opts = _sim_full_options(sim_run)
+        assert opts['max_turns'] == ['5']
+        assert opts['max_total_tokens'] == ['500']
+        assert set(opts['metrics']) == {
+            'response_quality',
+            'hallucination_risk',
+            'tone_appropriateness',
+            'factual_accuracy',
+        }
+
+    def test_full_options_hides_unavailable_metrics(self) -> None:
+        from evaluatorq.contracts import TokenUsage
+        from evaluatorq.dashboard.filters import _sim_full_options
+        from evaluatorq.simulation.types import SimulationResult, SimulationRun, TerminatedBy
+
+        result = SimulationResult(
+            messages=[],
+            terminated_by=TerminatedBy.judge,
+            reason='done',
+            goal_achieved=True,
+            goal_completion_score=1.0,
+            rules_broken=[],
+            turn_count=1,
+            turn_metrics=[],
+            token_usage=TokenUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+            metadata={'persona': 'solo', 'scenario': 'x'},
+        )
+        run = SimulationRun(
+            run_name='no-metrics-run',
+            created_at=datetime.now(tz=timezone.utc),
+            mode='run',
+            target_kind='orq_agent',
+            evaluator_names=[],
+            total_results=1,
+            scorer_averages={},
+            results=[result],
+        )
+        opts = _sim_full_options(run)
+        assert opts['metrics'] == []

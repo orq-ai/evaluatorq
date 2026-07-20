@@ -179,11 +179,27 @@ def _rt_apply(report: Any, selections: dict[str, list[str]]) -> list[Any]:
 # Simulation filter
 # ---------------------------------------------------------------------------
 
+def _sim_metric_dim_key(key: str, *, high_is_risky: bool) -> str:
+    """Threshold selection key for a turn metric: floor for risky, ceiling otherwise."""
+    return f'min_{key}' if high_is_risky else f'max_{key}'
+
+
+def _sim_metric_dims() -> list[str]:
+    from evaluatorq.simulation.metrics import TURN_METRICS
+
+    return [_sim_metric_dim_key(m.key, high_is_risky=m.high_is_risky) for m in TURN_METRICS]
+
+
 _SIM_DIMS = [
     'persona',
     'scenario',
     'terminated_by',
     'goal_outcome',
+    'rule_broken',
+    'max_goal_score',
+    'min_turns',
+    'min_total_tokens',
+    *_sim_metric_dims(),
 ]
 
 
@@ -191,15 +207,44 @@ def _meta(result: Any, key: str) -> str:
     return str(result.metadata.get(key, 'unknown'))
 
 
+def _clamp_score(raw: str) -> float | None:
+    """Parse *raw* as a float and clamp it to ``0..1``; ``None`` on bad input."""
+    try:
+        value = float(raw)
+    except (ValueError, TypeError):
+        return None
+    return max(0.0, min(1.0, value))
+
+
+def _parse_int(raw: str) -> int | None:
+    """Parse *raw* as an int; ``None`` on bad input."""
+    try:
+        return int(raw)
+    except (ValueError, TypeError):
+        return None
+
+
 def _sim_options_from_results(results: list[Any]) -> dict[str, list[str]]:
+    from evaluatorq.simulation.metrics import TURN_METRICS
+
     personas = sorted({_meta(r, 'persona') for r in results})
     scenarios = sorted({_meta(r, 'scenario') for r in results})
     terminated = sorted({r.terminated_by.value for r in results})
+    max_turns = max((r.turn_count for r in results), default=0)
+    max_total_tokens = max((r.token_usage.total_tokens for r in results), default=0)
+    available_metrics = [
+        m.key
+        for m in TURN_METRICS
+        if any(getattr(tm, m.key, None) is not None for r in results for tm in r.turn_metrics)
+    ]
     return {
         'persona': personas,
         'scenario': scenarios,
         'terminated_by': terminated,
         'goal_outcome': ['Achieved', 'Not achieved'],
+        'max_turns': [str(max_turns)],
+        'max_total_tokens': [str(max_total_tokens)],
+        'metrics': available_metrics,
     }
 
 
@@ -235,6 +280,53 @@ def _sim_apply(run: Any, selections: dict[str, list[str]]) -> list[Any]:
     if len(goal_sel) == 1:
         want = goal_sel[0] == 'Achieved'
         results = [r for r in results if bool(r.goal_achieved) == want]
+
+    # rule_broken (opt-in chip): only 'yes' narrows to results with any broken rule.
+    if 'yes' in selections.get('rule_broken', []):
+        results = [r for r in results if r.rules_broken]
+
+    # max_goal_score (ceiling on goal_completion_score)
+    gs_sel = selections.get('max_goal_score', [])
+    if gs_sel:
+        threshold = _clamp_score(gs_sel[0])
+        if threshold is not None:
+            results = [r for r in results if r.goal_completion_score <= threshold]
+
+    # min_turns (floor on turn_count, raw integer)
+    turns_sel = selections.get('min_turns', [])
+    if turns_sel:
+        min_turns = _parse_int(turns_sel[0])
+        if min_turns is not None:
+            results = [r for r in results if r.turn_count >= min_turns]
+
+    # min_total_tokens (floor on token_usage.total_tokens, raw integer)
+    tokens_sel = selections.get('min_total_tokens', [])
+    if tokens_sel:
+        min_tokens = _parse_int(tokens_sel[0])
+        if min_tokens is not None:
+            results = [r for r in results if r.token_usage.total_tokens >= min_tokens]
+
+    # per-turn quality/risk metric thresholds — worst turn per result, unscored
+    # results always stay visible.
+    from evaluatorq.simulation.metrics import TURN_METRICS
+
+    for metric in TURN_METRICS:
+        dim_key = _sim_metric_dim_key(metric.key, high_is_risky=metric.high_is_risky)
+        metric_sel = selections.get(dim_key, [])
+        if not metric_sel:
+            continue
+        threshold = _clamp_score(metric_sel[0])
+        if threshold is None:
+            continue
+
+        def _keeps(r: Any, metric: Any = metric, threshold: float = threshold) -> bool:
+            values = [v for tm in r.turn_metrics for v in [getattr(tm, metric.key, None)] if v is not None]
+            if not values:
+                return True
+            worst = max(values) if metric.high_is_risky else min(values)
+            return worst >= threshold if metric.high_is_risky else worst <= threshold
+
+        results = [r for r in results if _keeps(r)]
 
     return results
 
