@@ -462,6 +462,24 @@ async def red_team(
             raise ValueError(msg)
         resolved_output_dir = user_output_dir
 
+    # Lifecycle manifest: track this run's stage/status on disk while it runs so a
+    # still-running or crashed run is visible (the report only lands on
+    # completion). Only when persisting (save != 'none'). Wrapping the hooks feeds
+    # each pipeline stage transition into the manifest.
+    manifest_writer = None
+    if save != 'none':
+        import uuid
+
+        from evaluatorq.common.run_manifest import start_manifest, wrap_hooks
+
+        manifest_writer = start_manifest(
+            run_id=uuid.uuid4().hex,
+            surface='redteam',
+            run_name=name or 'red-team',
+            runs_dir=get_runs_dir(),
+        )
+        resolved_hooks = wrap_hooks(resolved_hooks, manifest_writer)
+
     if isinstance(target, list):
         raw_targets: list[str | AgentTarget] = list(target)
     elif isinstance(target, (str, AgentTarget)):
@@ -622,58 +640,65 @@ async def red_team(
                 ', '.join(unevaluable_codes),
             )
 
-    if resolved_mode in (Pipeline.DYNAMIC, Pipeline.HYBRID):
-        report = await _run_dynamic_or_hybrid(
-            targets=targets,
-            agent_targets=agent_targets,
-            mode=resolved_mode,
-            name=name,
-            categories=resolved_categories,
-            resolved_vulns=resolved_vulns,
-            max_turns=max_turns,
-            max_per_category=max_per_category,
-            attack_model=attack_model,
-            evaluator_model=evaluator_model,
-            parallelism=parallelism,
-            generate_strategies=generate_strategies,
-            generated_strategy_count=generated_strategy_count,
-            max_dynamic_datapoints=max_dynamic_datapoints,
-            max_static_datapoints=max_static_datapoints,
-            cleanup_memory=cleanup_memory,
-            llm_client=llm_client,
-            description=description,
-            dataset=dataset,
-            hooks=resolved_hooks,
-            output_dir=resolved_output_dir,
-            target_config=target_config,
-            attacker_instructions=attacker_instructions,
-            verbosity=verbosity,
-            pipeline_config=config,
-            resolved_strategy_names=resolved_strategy_names,
-            resolved_delivery_methods=resolved_delivery_methods,
-        )
-    elif resolved_mode == Pipeline.STATIC:
-        report = await _run_static(
-            targets=targets,
-            agent_targets=agent_targets,
-            name=name,
-            categories=resolved_categories,
-            evaluator_model=evaluator_model,
-            parallelism=parallelism,
-            max_static_datapoints=max_static_datapoints,
-            dataset=dataset,
-            description=description,
-            llm_client=llm_client,
-            hooks=resolved_hooks,
-            output_dir=resolved_output_dir,
-            target_config=target_config,
-            pipeline_config=config,
-            resolved_strategy_names=resolved_strategy_names,
-            resolved_delivery_methods=resolved_delivery_methods,
-        )
-    else:
-        msg = f'Invalid mode {mode!r}. Must be "dynamic", "static", or "hybrid".'
-        raise ValueError(msg)
+    # Errors here mark the manifest 'error' before propagating, so a failed run
+    # doesn't read as 'running' forever. BaseException captures cancellation too.
+    try:
+        if resolved_mode in (Pipeline.DYNAMIC, Pipeline.HYBRID):
+            report = await _run_dynamic_or_hybrid(
+                targets=targets,
+                agent_targets=agent_targets,
+                mode=resolved_mode,
+                name=name,
+                categories=resolved_categories,
+                resolved_vulns=resolved_vulns,
+                max_turns=max_turns,
+                max_per_category=max_per_category,
+                attack_model=attack_model,
+                evaluator_model=evaluator_model,
+                parallelism=parallelism,
+                generate_strategies=generate_strategies,
+                generated_strategy_count=generated_strategy_count,
+                max_dynamic_datapoints=max_dynamic_datapoints,
+                max_static_datapoints=max_static_datapoints,
+                cleanup_memory=cleanup_memory,
+                llm_client=llm_client,
+                description=description,
+                dataset=dataset,
+                hooks=resolved_hooks,
+                output_dir=resolved_output_dir,
+                target_config=target_config,
+                attacker_instructions=attacker_instructions,
+                verbosity=verbosity,
+                pipeline_config=config,
+                resolved_strategy_names=resolved_strategy_names,
+                resolved_delivery_methods=resolved_delivery_methods,
+            )
+        elif resolved_mode == Pipeline.STATIC:
+            report = await _run_static(
+                targets=targets,
+                agent_targets=agent_targets,
+                name=name,
+                categories=resolved_categories,
+                evaluator_model=evaluator_model,
+                parallelism=parallelism,
+                max_static_datapoints=max_static_datapoints,
+                dataset=dataset,
+                description=description,
+                llm_client=llm_client,
+                hooks=resolved_hooks,
+                output_dir=resolved_output_dir,
+                target_config=target_config,
+                pipeline_config=config,
+                resolved_strategy_names=resolved_strategy_names,
+                resolved_delivery_methods=resolved_delivery_methods,
+            )
+        else:
+            msg = f'Invalid mode {mode!r}. Must be "dynamic", "static", or "hybrid".'
+            raise ValueError(msg)
+    except BaseException as exc:
+        if manifest_writer is not None:
+            manifest_writer.fail(str(exc) or type(exc).__name__)
+        raise
 
     # Record categories dropped by the evaluability gate so the report is honest
     # about reduced scope (rather than silently testing fewer categories).
@@ -756,6 +781,10 @@ async def red_team(
             report.pipeline_warnings.append(
                 'Failed to auto-save run report. The run will not appear in `evaluatorq redteam runs`.'
             )
+
+    # Run finished — mark the manifest completed with the saved report path.
+    if manifest_writer is not None:
+        manifest_writer.complete(report_path=auto_save_path)
 
     await await_maybe(
         resolved_hooks.on_complete(

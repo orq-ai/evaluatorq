@@ -935,6 +935,24 @@ async def _simulate_core(
     if not await await_maybe(resolved_hooks.on_confirm(run_meta)):
         raise SimulationCancelledError('Simulation run declined by on_confirm hook')
 
+    # Lifecycle manifest: track this run's stage/status on disk while it runs, so
+    # a still-running or crashed run is visible (the report only lands on
+    # completion). Only when persisting — an unsaved SDK run leaves no trace by
+    # design. Wrapping the hooks feeds stage transitions into the manifest.
+    manifest_writer = None
+    if save:
+        from evaluatorq.common.run_manifest import start_manifest, wrap_hooks
+        from evaluatorq.simulation.utils.run_store import get_sim_runs_dir
+
+        manifest_runs_dir = Path(run_output).parent if run_output is not None else get_sim_runs_dir()
+        manifest_writer = start_manifest(
+            run_id=run_id,
+            surface='sim',
+            run_name=evaluation_name or 'sim',
+            runs_dir=manifest_runs_dir,
+        )
+        resolved_hooks = wrap_hooks(resolved_hooks, manifest_writer)
+
     # SIMULATE stage brackets the run: start fires after on_confirm passes and
     # before on_run_start (which opens the live Progress region); end fires in the
     # finally after on_run_complete (which closes it). Never emit between
@@ -975,6 +993,16 @@ async def _simulate_core(
         # exit_on_failure aborted the run, but the rows that succeeded are real
         # results — hand them to on_run_complete (via the finally) instead of [].
         results = dropped.partial_results
+        if manifest_writer is not None:
+            manifest_writer.fail(str(dropped), stage=SimStage.SIMULATE)
+        raise
+    except BaseException as exc:
+        # Any other failure (target crash, cancellation, unexpected error) marks
+        # the manifest errored before propagating — otherwise it would read as
+        # "running" forever. BaseException so KeyboardInterrupt/CancelledError
+        # are captured too; always re-raised.
+        if manifest_writer is not None:
+            manifest_writer.fail(str(exc) or type(exc).__name__, stage=SimStage.SIMULATE)
         raise
     finally:
         await await_maybe(resolved_hooks.on_run_complete(results))
@@ -1014,6 +1042,7 @@ async def _simulate_core(
         # A persistence failure (disk full, read-only .evaluatorq/, perms, or the
         # collision-exhaustion RuntimeError) must NOT discard a completed, paid-for
         # run. Log and still return the run — the saved file is a convenience.
+        saved_path = None
         try:
             if run_output is not None:
                 write_report(run, Path(run_output))
@@ -1027,6 +1056,10 @@ async def _simulate_core(
             # collision RuntimeError, and pydantic serialization errors
             # (PydanticSerializationError <: ValueError) from model_dump_json.
             logger.exception(f'Failed to save simulation run (results still returned): {exc}')
+        # Run finished — mark the manifest completed (with the report path when
+        # the save succeeded) even if the report write itself failed.
+        if manifest_writer is not None:
+            manifest_writer.complete(report_path=saved_path)
     return run
 
 

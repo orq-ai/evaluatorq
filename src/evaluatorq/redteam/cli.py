@@ -693,6 +693,18 @@ def runs(
         typer.echo(f'No runs found (directory {runs_dir} does not exist).')
         raise typer.Exit(code=0)
 
+    # Surface in-flight / errored runs from lifecycle manifests (human view only;
+    # --json stays report-only for backward compatibility).
+    if not json_output:
+        from evaluatorq.common.run_manifest import format_active_lines
+
+        active_lines = format_active_lines(runs_dir)
+        if active_lines:
+            typer.echo('Active runs:')
+            for line in active_lines:
+                typer.echo(line)
+            typer.echo('')
+
     run_files = sorted(runs_dir.glob('*.json'), key=lambda p: p.stat().st_mtime, reverse=True)
     if not run_files:
         if json_output:
