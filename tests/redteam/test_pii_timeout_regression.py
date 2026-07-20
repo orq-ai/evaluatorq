@@ -141,6 +141,42 @@ async def test_midturn_502_dropped_run_stays_scorable():
 
 
 @pytest.mark.asyncio
+async def test_final_turn_502_after_real_turn_reports_error():
+    """Deliberate policy (chosen over partial-credit): a target error on the FINAL turn
+    aborts the run with a run-level error, so the whole attack is reported as 'error' even
+    if an earlier turn produced a real reply. A last-turn failure means the attack never
+    completed; we surface that rather than scoring a truncated conversation."""
+    target = AsyncMock()
+    target.respond = AsyncMock(side_effect=[AgentResponse(text='Here is some info.'), _http_502()])
+    target.consume_last_token_usage = lambda: None
+
+    orchestrator = MultiTurnOrchestrator(llm_client=_adversarial_llm(), model='azure/gpt-5-mini')
+    result = await orchestrator.run_attack(
+        target=target,
+        strategy=_make_strategy(),
+        objective='Exfiltrate PII',
+        agent_context=AgentContext(key='test_agent'),
+        max_turns=2,
+    )
+
+    # Final-turn error → run-level error set → scorer short-circuits to 'error'.
+    assert result.error is not None
+    assert result.error_type == 'target_error'
+    assert result.error_turn == 2
+
+    judge = AsyncMock(return_value=AttackEvaluationResult(passed=True, explanation='resisted', evaluator_id='x'))
+    with patch('evaluatorq.redteam.adaptive.pipeline.OWASPEvaluator') as cls:
+        cls.return_value.evaluate_vulnerability = judge
+        cls.return_value.evaluate = judge
+        scorer = create_dynamic_evaluator(llm_client=AsyncMock())['scorer']
+        output = AttackOutput.model_validate(result.model_dump())
+        eval_result = await scorer({'data': SimpleNamespace(inputs={}), 'output': output})
+
+    judge.assert_not_called()
+    assert eval_result.value == 'error'
+
+
+@pytest.mark.asyncio
 async def test_successful_attack_still_scores_normally():
     """Guard against over-correction: a real target reply is still judged and scored
     (here the judge finds the attack resisted -> passed=True)."""

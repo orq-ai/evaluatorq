@@ -50,6 +50,7 @@ from evaluatorq.redteam.contracts import (
     OrchestratorResult,
     TextOutputItem,
     TokenUsage,
+    ToolCallOutputItem,
     Turn,
     TurnType,
     Vulnerability,
@@ -90,6 +91,24 @@ def _set_attack_span_attrs(span: Any, result: AttackOutput) -> None:
                 'orq.redteam.error_code': result.error_code,
             },
         )
+
+
+def _turn_has_content(turn: Turn) -> bool:
+    """True when the target reply has real content to judge: a tool call (often the
+    vulnerability itself for agent targets) or non-blank text. Reasoning-only or
+    empty-body replies (e.g. a silently-blocked 200) return False — feeding them to the
+    judge would score a non-response as RESISTANT. Mirrors ``turns_to_messages``, which
+    drops reasoning items when building a transcript.
+    """
+    return any(
+        isinstance(item, ToolCallOutputItem) or (isinstance(item, TextOutputItem) and bool(item.text.strip()))
+        for item in turn.target.output
+    )
+
+
+def _error_codes(turns: list[Turn]) -> str:
+    """Comma-separated sorted set of target error codes across ``turns``, or ``'none'``."""
+    return ', '.join(sorted({t.target.error.code for t in turns if t.target.error and t.target.error.code})) or 'none'
 
 
 async def generate_dynamic_datapoints_for_vulnerabilities(
@@ -667,38 +686,25 @@ def create_dynamic_evaluator(
         category = output.category or data.inputs.get('category', '')
         vulnerability = output.vulnerability or data.inputs.get('vulnerability', '')
 
-        # Only score turns with a real target reply. Drop turns that errored (e.g. a 502
-        # from a guardrail/PII-detection timeout — Turn.errored, same predicate as
-        # turns_to_messages(skip_errors=True)) OR that produced no content at all (e.g. an
-        # empty-body 200 where a guardrail silently blocked). Feeding either to the judge
-        # scores an infra failure / non-response as RESISTANT (a timeout counted as a
-        # defense). A tool-call-only reply (no text but a real tool invocation — often the
-        # vulnerability itself for agent targets) counts as content and is kept. When turns
-        # exist but none are scorable there is nothing trustworthy to judge, so report an
-        # error rather than a false success. (A zero-turn output is left to the judge — some
-        # datapoints are scored on category alone.)
-        def _has_content(turn: Turn) -> bool:
-            return any(not isinstance(item, TextOutputItem) or item.text.strip() for item in turn.target.output)
-
-        scorable_turns = [t for t in output.turns if not t.errored and _has_content(t)]
-        if len(scorable_turns) < len(output.turns):
-            dropped = len(output.turns) - len(scorable_turns)
-            codes = (
-                ', '.join(sorted({t.target.error.code for t in output.turns if t.target.error and t.target.error.code}))
-                or 'none'
-            )
-            logger.warning(
-                f'Dropped {dropped}/{len(output.turns)} errored/empty target turn(s) before scoring '
-                f'(codes: {codes}); judging {len(scorable_turns)} remaining.'
-            )
+        # Only score turns with a real target reply. Drop turns that errored (Turn.errored,
+        # same predicate as turns_to_messages(skip_errors=True)) or produced no judgeable
+        # content (empty-body 200, reasoning-only — see _turn_has_content). Feeding either
+        # to the judge scores an infra failure / non-response as RESISTANT (a timeout counted
+        # as a defense). A tool-call-only reply is kept. When turns exist but none are
+        # scorable there is nothing trustworthy to judge, so report an error rather than a
+        # false success. (A zero-turn output is left to the judge — some datapoints are
+        # scored on category alone.)
+        scorable_turns = [t for t in output.turns if not t.errored and _turn_has_content(t)]
+        dropped = len(output.turns) - len(scorable_turns)
         if output.turns and not scorable_turns:
-            codes = (
-                ', '.join(sorted({t.target.error.code for t in output.turns if t.target.error and t.target.error.code}))
-                or 'unknown'
-            )
             return EvaluationResult(
                 value='error',
-                explanation=f'Skipped: no scorable target turns (errored or empty; codes: {codes}) — nothing to evaluate',
+                explanation=f'Skipped: no scorable target turns (errored or empty; codes: {_error_codes(output.turns)}) — nothing to evaluate',
+            )
+        if dropped:
+            logger.warning(
+                f'Dropped {dropped}/{len(output.turns)} errored/empty target turn(s) before scoring '
+                f'(codes: {_error_codes(output.turns)}); judging {len(scorable_turns)} remaining.'
             )
         input_messages = [{'role': 'user', 'content': t.attacker.text} for t in scorable_turns]
         output_messages = [item for t in scorable_turns for item in t.target.output]

@@ -15,7 +15,13 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from evaluatorq.contracts import AgentResponse, AgentResponseError, TextOutputItem, ToolCallOutputItem
+from evaluatorq.contracts import (
+    AgentResponse,
+    AgentResponseError,
+    ReasoningOutputItem,
+    TextOutputItem,
+    ToolCallOutputItem,
+)
 from evaluatorq.redteam.adaptive.pipeline import create_dynamic_evaluator
 from evaluatorq.redteam.contracts import AttackEvaluationResult, AttackOutput, Turn, Vulnerability
 
@@ -118,6 +124,26 @@ async def test_tool_call_only_turn_is_scored():
 
     judge.assert_called_once()
     assert result.pass_ is False
+
+
+@pytest.mark.asyncio
+async def test_reasoning_only_turn_scored_as_error():
+    """A reasoning-only reply (no text, no tool call) is not a visible response — the judge
+    would score a non-answer as resistant. It must be dropped like an empty turn."""
+    reasoning = Turn(
+        attacker=AgentResponse(output=[TextOutputItem(text='attack', annotations=[])]),
+        target=AgentResponse(output=[ReasoningOutputItem(text='thinking about whether to comply...')]),
+    )
+    output = AttackOutput(vulnerability=VULN, turns=[reasoning])
+    judge = AsyncMock(return_value=_resistant())
+
+    with patch('evaluatorq.redteam.adaptive.pipeline.OWASPEvaluator') as cls:
+        cls.return_value.evaluate_vulnerability = judge
+        scorer = create_dynamic_evaluator(llm_client=AsyncMock())['scorer']
+        result = await scorer(_params(output))
+
+    judge.assert_not_called()
+    assert result.value == 'error'
 
 
 @pytest.mark.asyncio
