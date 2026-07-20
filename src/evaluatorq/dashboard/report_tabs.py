@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.trace_links import run_trace_url, trace_link_button
+from evaluatorq.simulation.metrics import TURN_METRICS
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -822,34 +823,22 @@ def _sim_failure_modes(rows: list[tuple[str, int]]) -> str:
     )
 
 
-_TURN_METRIC_LABELS: dict[str, str] = {
-    'response_quality': 'response quality',
-    'hallucination_risk': 'hallucination risk',
-    'tone_appropriateness': 'tone appropriateness',
-    'factual_accuracy': 'factual accuracy',
-}
-# Metrics where a rising value is bad (risk), vs. the default where rising is good (quality).
-_TURN_RISK_METRICS = frozenset({'hallucination_risk'})
-
-
 def _turn_delta_callout(series: dict[str, list[float | None]]) -> str:
     """Templated first-to-last-turn delta callout, no confidence pill (spec
     §Turn.1). A clause renders only for series with >= 2 non-None points;
     absent/short metrics are dropped. Returns '' when nothing qualifies."""
     clauses: list[str] = []
-    for name, values in series.items():
+    for metric in TURN_METRICS:
+        values = series.get(metric.key, [])
         points = [v for v in values if v is not None]
         if len(points) < 2:
             continue
         delta = points[-1] - points[0]
-        label = esc(_TURN_METRIC_LABELS.get(name, name.replace('_', ' ')))
+        label = esc(metric.label)
         if abs(delta) < 0.005:
             clauses.append(f'{label} held steady around <strong>{points[-1]:.2f}</strong>')
             continue
-        if name in _TURN_RISK_METRICS:
-            verb = 'rose' if delta > 0 else 'fell'
-        else:
-            verb = 'improved' if delta > 0 else 'declined'
+        verb = ('rose' if delta > 0 else 'fell') if metric.high_is_risky else ('improved' if delta > 0 else 'declined')
         clauses.append(f'{label} {verb} by <strong>{abs(delta):.2f}</strong> from turn 1 to the last turn')
     if not clauses:
         return ''
@@ -875,18 +864,19 @@ def _sim_turn_count_bar(turn_count_distribution: dict[int, int]) -> str:
 
 def _sim_avg_quality_tiles(avg_quality_metrics: dict[str, float]) -> str:
     """Average-quality metric cells — editorial 2-col grid with a per-metric
-    accent tick colored by a "goodness" score (lower-is-better metrics inverted
-    via the shared ``_score_is_lower_better`` used by the flat HTML export)."""
+    accent tick colored by a "goodness" score (risk metrics are inverted)."""
     from evaluatorq.dashboard.report_kit import _interp_color
-    from evaluatorq.simulation.reports.export_html import _score_is_lower_better
 
     if not avg_quality_metrics:
         return ''
     cells = []
-    for name, value in avg_quality_metrics.items():
-        score = (1.0 - value) if _score_is_lower_better(name) else value
+    for metric in TURN_METRICS:
+        value = avg_quality_metrics.get(metric.key)
+        if value is None:
+            continue
+        score = (1.0 - value) if metric.high_is_risky else value
         color = _interp_color(score)
-        label = esc(name.replace('_', ' '))
+        label = esc(metric.label)
         cells.append(
             f'<div class="sim-aq-cell"><div class="sim-aq-label">{label}</div>'
             f'<div class="sim-aq-value" style="--aq-accent:{color}">{value:.2f}</div></div>'
@@ -933,8 +923,7 @@ def _sim_turn_quality(by_kind: dict[str, Any]) -> str:
     if len(turns) >= 2:
         x_labels = [f'Turn {t}' for t in turns]
         pretty_series = {
-            (_TURN_METRIC_LABELS.get(name) or name.replace('_', ' ')).capitalize(): values
-            for name, values in series.items()
+            metric.label.capitalize(): series[metric.key] for metric in TURN_METRICS if metric.key in series
         }
         chart = line_chart(x_labels, pretty_series)
         if chart:

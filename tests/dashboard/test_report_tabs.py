@@ -16,6 +16,17 @@ from evaluatorq.dashboard.report_tabs import _tabs
 from tests.dashboard.test_downloads import _make_rt_report, _make_sim_run
 
 
+def test_turn_metric_descriptor_has_keys_and_directions() -> None:
+    from evaluatorq.simulation.metrics import TURN_METRICS
+
+    assert [(m.key, m.high_is_risky) for m in TURN_METRICS] == [
+        ('response_quality', False),
+        ('hallucination_risk', True),
+        ('tone_appropriateness', False),
+        ('factual_accuracy', False),
+    ]
+
+
 def _tab_labels(html: str) -> list[str]:
     import html as _html
     import re

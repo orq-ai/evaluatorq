@@ -29,6 +29,7 @@ from loguru import logger
 
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.contracts import ReportSection
+from evaluatorq.simulation.metrics import TURN_METRICS
 from evaluatorq.simulation.types import CriteriaRow, SimulationEntry, TranscriptMessage
 
 if TYPE_CHECKING:
@@ -337,14 +338,10 @@ def _build_turn_metrics_section(results: list[SimulationResult]) -> ReportSectio
     qualities: dict[str, list[float]] = defaultdict(list)
     for r in results:
         for tm in r.turn_metrics:
-            for field_name, value in (
-                ('response_quality', tm.response_quality),
-                ('hallucination_risk', tm.hallucination_risk),
-                ('tone_appropriateness', tm.tone_appropriateness),
-                ('factual_accuracy', tm.factual_accuracy),
-            ):
+            for metric in TURN_METRICS:
+                value = getattr(tm, metric.key)
                 if value is not None:
-                    qualities[field_name].append(float(value))
+                    qualities[metric.key].append(float(value))
     avg_qualities = {k: sum(v) / len(v) for k, v in qualities.items() if v}
 
     # Per-conversation turn counts, longest first, for the horizontal bar.
@@ -542,19 +539,21 @@ def _build_score_distribution_section(results: list[SimulationResult]) -> Report
 
 
 def _build_turn_quality_timeline_section(results: list[SimulationResult]) -> ReportSection:
-    metrics = ('response_quality', 'hallucination_risk', 'tone_appropriateness', 'factual_accuracy')
     by_turn: dict[int, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
     for r in results:
         for tm in r.turn_metrics:
-            for m in metrics:
-                val = getattr(tm, m, None)
+            for metric in TURN_METRICS:
+                val = getattr(tm, metric.key)
                 if val is not None:
-                    by_turn[tm.turn_number][m].append(val)
+                    by_turn[tm.turn_number][metric.key].append(val)
     turns = sorted(by_turn)
     # None (not 0.0) for turns with no measurement — e.g. factual_accuracy is
     # only scored when ground truth exists, so unmeasured turns must read as a
     # gap, not a zero score. Series with no data at all are dropped entirely.
-    series = {m: [(sum(vals) / len(vals)) if (vals := by_turn[t][m]) else None for t in turns] for m in metrics}
+    series = {
+        metric.key: [(sum(vals) / len(vals)) if (vals := by_turn[t][metric.key]) else None for t in turns]
+        for metric in TURN_METRICS
+    }
     series = {m: vals for m, vals in series.items() if any(v is not None for v in vals)}
     return ReportSection(
         kind='turn_quality_timeline',
