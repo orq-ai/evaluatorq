@@ -807,7 +807,7 @@ def _sim_overview(
     quality_tiles = _sim_avg_quality_tiles(metrics_data.get('avg_quality_metrics', {}))
     second_html = panel('Average quality metrics', quality_tiles) if quality_tiles else _sim_tokens_panel(tokens_data)
 
-    return f'{agent_card_html}{summary_html}{kpi_html}<div class="sim-overview-grid-2">{donut_html}{second_html}</div>'
+    return f'{summary_html}{agent_card_html}{kpi_html}<div class="sim-overview-grid-2">{donut_html}{second_html}</div>'
 
 
 # Scalar identity fields whose absence means the run's snapshot is incomplete
@@ -1061,12 +1061,12 @@ def _sim_kpi_band(summary_data: dict[str, Any], n_personas: int = 0, n_scenarios
     return kpi_cards([
         {'label': 'Personas', 'value': str(n_personas), 'status': 'neutral'},
         {'label': 'Scenarios', 'value': str(n_scenarios), 'status': 'neutral'},
+        {'label': 'Conversations', 'value': str(summary_data.get('total_conversations', 0)), 'status': 'neutral'},
         {
             'label': 'Avg score',
             'value': f'{summary_data.get("avg_goal_completion_score", 0.0):.2f}',
             'status': 'neutral',
         },
-        {'label': 'Conversations', 'value': str(summary_data.get('total_conversations', 0)), 'status': 'neutral'},
         {'label': 'Avg turns', 'value': f'{summary_data.get("avg_turn_count", 0.0):.1f}', 'status': 'neutral'},
         {'label': 'Errors', 'value': str(errors), 'status': 'fail' if errors else 'pass'},
     ])

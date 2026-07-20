@@ -215,6 +215,23 @@
   });
 })();
 
+// Filter dropdowns behave as an accordion: opening one closes the others.
+// `toggle` does not bubble, so listen in the capture phase. The "More filters"
+// expander (.filter-dd-more) is excluded — it wraps the nested dropdowns and
+// must stay open while one of its children is used.
+(function () {
+  document.addEventListener('toggle', function (evt) {
+    var d = evt.target;
+    if (!d.open || !d.matches || !d.matches('details.filter-dd')) return;
+    if (d.classList.contains('filter-dd-more')) return;
+    var scope = d.closest('#filter-form') || document;
+    scope.querySelectorAll('details.filter-dd[open]').forEach(function (o) {
+      if (o === d || o.classList.contains('filter-dd-more') || o.contains(d)) return;
+      o.open = false;
+    });
+  }, true);
+})();
+
 // Top failure modes panel — min-count slider filters bars client-side.
 (function () {
   document.body.addEventListener('input', function (evt) {
@@ -234,6 +251,44 @@
     var empty = panel.querySelector('[data-fm-empty]');
     if (empty) empty.hidden = visible > 0;
   });
+})();
+
+// Tab history: CSS-radio report tabs don't change the URL, so browser Back
+// would jump past every tab switch to the last full page load (the homepage).
+// Push a hash per user tab click and restore the matching radio on Back/Forward.
+(function () {
+  var restoring = false; // true while we set radios programmatically (no push)
+  function selectRadio(id) {
+    var radio = id && document.getElementById(id);
+    if (radio && radio.classList.contains('tab-radio') && !radio.checked) {
+      restoring = true;
+      radio.checked = true;
+      // Setting .checked in JS skips the 'change' event the Vega-resize handler
+      // listens for, so dispatch one so restored charts still size correctly.
+      radio.dispatchEvent(new Event('change', { bubbles: true }));
+      restoring = false;
+    }
+  }
+  // User clicks a tab -> push its id as a hash (a real history entry).
+  document.body.addEventListener('change', function (evt) {
+    var t = evt.target;
+    if (restoring || !t || !t.classList || !t.classList.contains('tab-radio') || !t.id) return;
+    if (('#' + t.id) === location.hash) return;
+    history.pushState(null, '', '#' + t.id);
+  });
+  // Back/Forward -> restore the hashed tab, or reset each group to its first tab.
+  window.addEventListener('popstate', function () {
+    var id = location.hash.slice(1);
+    if (id) {
+      selectRadio(id);
+    } else {
+      document.querySelectorAll('.tabs .tab-radio:first-of-type').forEach(function (r) {
+        selectRadio(r.id);
+      });
+    }
+  });
+  // Honor a tab hash on initial load / refresh.
+  if (location.hash) selectRadio(location.hash.slice(1));
 })();
 
 // Failures table -> transcript drill-down. The scenario cell is <a href="#conv-N">;
