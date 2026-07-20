@@ -65,6 +65,22 @@ def test_button_renders_extra_attributes() -> None:
     assert 'data-origin="conversation"' in html
 
 
+def test_button_escapes_malicious_extra_attribute_name_and_value() -> None:
+    malicious_name = 'data-origin" onmouseover="alert(1)'
+    malicious_value = '<img src=x onerror=alert(1)>'
+
+    html = trace_links.trace_link_button(
+        'https://x/y',
+        'View traces',
+        extra_attributes={malicious_name: malicious_value},
+    )
+
+    assert malicious_name not in html
+    assert malicious_value not in html
+    assert 'data-origin&quot; onmouseover=&quot;alert(1)' in html
+    assert '&lt;img src=x onerror=alert(1)&gt;' in html
+
+
 if __name__ == '__main__':
     import subprocess
     import sys

@@ -305,6 +305,17 @@ def test_dashboard_failures_use_four_columns_and_drawer_rows(sim_run) -> None:
     assert 'data-no-drawer' in failures
 
 
+def test_sim_dashboard_no_longer_emits_anchor_or_foldout_drilldown(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run)
+
+    assert 'href="#conv-' not in html
+    assert 'id="conv-' not in html
+    assert '<details class="sim-conv-card"' not in html
+    assert 'toggle once from:closest details' not in html
+
+
 def test_cohort_template_contains_stats_and_compact_conversation_triggers(sim_run) -> None:
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
 
@@ -313,6 +324,22 @@ def test_cohort_template_contains_stats_and_compact_conversation_triggers(sim_ru
     assert 'Goal rate' in template and 'Avg score' in template and 'Tokens' in template
     assert 'sim-cohort-conversations' in template
     assert 'data-entity-kind="conversation"' in template
+
+
+def test_filtered_cohort_template_shows_empty_message_when_no_conversations_match() -> None:
+    from evaluatorq.dashboard.report_tabs import _sim_persona_template
+
+    template = _sim_persona_template(
+        {'name': 'No-match persona'},
+        'persona-0',
+        0,
+        1,
+        conversations=[],
+        rid='rid',
+    )
+
+    assert 'data-sim-entity-template' in template
+    assert '<p class="sim-cohort-empty">No conversations.</p>' in template
 
 
 def test_duplicate_persona_names_keep_conversation_cohorts_separate() -> None:

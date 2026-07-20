@@ -575,6 +575,11 @@ class TestConversationRows:
         assert 'role="button" tabindex="0"' in html
         assert 'hx-trigger="toggle once' not in html
 
+    def test_dashboard_runtime_has_no_failure_anchor_handler(self) -> None:
+        source = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
+
+        assert 'a[href^="#conv-"]' not in source
+
     def test_row_list_summary_has_header_cluster(self, sim_entries) -> None:
         from evaluatorq.dashboard.sim_views import render_sim_row_list
 
