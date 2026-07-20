@@ -136,6 +136,21 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
     entity_context = _sim_entity_context(entity_by_kind, entries, rows, rid)
     _set_failure_full_run_indexes(by_kind.get('failures_first'), entries)
 
+    # When a filter matches no conversations, the data-driven tabs would
+    # collapse to blank/dropped. Keep them present with an explicit "no matches"
+    # note so the report structure stays stable (Config still shows the full-run
+    # registry; Overview handles its own empty state internally).
+    no_matches = results is not None and not rows
+    empty_note = '<p class="sim-empty-note">No conversations match the current filter.</p>'
+
+    breakdown_body = empty_note if no_matches else _sim_breakdown(by_kind, rid, entity_context)
+    transcripts_body = (
+        empty_note
+        if no_matches
+        else sim_interactive_panels(rid, entries) + render('evaluator_scores', 'judge_verdicts', 'errors')
+    )
+    turn_quality_body = empty_note if no_matches else _sim_turn_quality(by_kind)
+
     # Folded 7→5 to curb tab sprawl: Evaluators + Judge & errors → Transcripts
     # (all per-conversation verdicts); Tokens → Config. Turn quality is its own
     # tab (unfolded from Breakdown) and drops out when a run has no turn_metrics.
@@ -143,13 +158,13 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
         'simtab',
         [
             ('Overview', _sim_overview(rid, by_kind, rows, run)),
-            ('Breakdown', _sim_breakdown(by_kind, rid, entity_context)),
+            ('Breakdown', breakdown_body),
             (
                 'Transcripts',
-                sim_interactive_panels(rid, entries) + render('evaluator_scores', 'judge_verdicts', 'errors'),
+                transcripts_body,
                 f'Transcripts <span class="tab-count">{len(entries)}</span>',
             ),
-            ('Turn quality', _sim_turn_quality(by_kind)),
+            ('Turn quality', turn_quality_body),
             ('Config', _sim_config(by_kind, run, entity_context) + render('token_usage')),
         ],
     )

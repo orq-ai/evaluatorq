@@ -53,6 +53,26 @@ def read_json_cached(path: Path) -> dict[str, object]:
     return read_json(str(path.resolve()), mtime_ns)
 
 
+@functools.lru_cache(maxsize=32)
+def _validate_model(path_str: str, mtime_ns: int, validator: object) -> object:
+    """Cache a Pydantic-validated report model, mtime-keyed like ``read_json``.
+
+    Raw-JSON caching alone still re-runs the (expensive) Pydantic validation of
+    a whole run on every filter/sort/page request. Caching the validated object
+    skips that — the payoff on large sim runs. ``validator`` is the model's
+    ``model_validate`` classmethod (part of the key so two model types on the
+    same path don't collide). Callers MUST treat the returned object as
+    read-only; filtering builds new lists and never mutates it.
+    """
+    return validator(read_json(path_str, mtime_ns))  # type: ignore[operator]
+
+
+def load_model_cached(path: Path, validator: object) -> object:
+    """Return a cached, validated report model for *path* (see ``_validate_model``)."""
+    mtime_ns = path.stat().st_mtime_ns
+    return _validate_model(str(path.resolve()), mtime_ns, validator)
+
+
 def sniff_kind(data: dict[str, object]) -> str | None:
     """Surface from a single required-unique field. sim ('mode') checked first."""
     if 'mode' in data:

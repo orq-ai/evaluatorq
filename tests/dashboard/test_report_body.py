@@ -418,3 +418,26 @@ def test_sim_overview_empty_filter_keeps_outcomes_and_quality() -> None:
     assert 'Outcomes' in html
     assert 'Average quality metrics' in html
     assert 'No conversations match the current filter.' in html
+
+
+def test_sim_empty_filter_keeps_data_tabs() -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+    from evaluatorq.simulation.types import SimulationRun
+
+    results = _make_sim_results()
+    run = SimulationRun(
+        run_name='empty-filter-tabs',
+        created_at=datetime.now(tz=timezone.utc),
+        mode='simulate',
+        target_kind='callback',
+        evaluator_names=[],
+        total_results=len(results),
+        scorer_averages={},
+        results=results,
+    )
+    html = sim_report_tabs('run-1', run, results=[])
+    # Breakdown / Transcripts / Turn quality tabs stay present (not dropped)
+    # and carry the no-match note rather than collapsing.
+    for label in ('Breakdown', 'Transcripts', 'Turn quality'):
+        assert label in html
+    assert html.count('No conversations match the current filter.') >= 3
