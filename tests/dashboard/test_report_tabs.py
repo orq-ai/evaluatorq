@@ -23,6 +23,21 @@ def _tab_labels(html: str) -> list[str]:
     return [_html.unescape(m) for m in re.findall(r'class="tab-label" for="[^"]*">([^<]+)<', html)]
 
 
+def _headers(html: str) -> list[str]:
+    import re
+
+    header_row = html.split('</tr>', 1)[0]
+    return re.findall(r'<th>([^<]+)</th>', header_row)
+
+
+def _template(html: str, prefix: str) -> str:
+    import re
+
+    match = re.search(rf'<template id="{prefix}[^"]+"[^>]*>(.*?)</template>', html)
+    assert match is not None
+    return match.group(1)
+
+
 @pytest.fixture()
 def sim_run():
     return _make_sim_run(personas=['alice', 'bob'], goal_achieved_flags=[True, False])
@@ -275,6 +290,76 @@ def test_sim_failure_modes_all_singletons_no_hidden_rows() -> None:
     assert 'max="1"' in html
     bars_html = html.split('sim-fm-bars')[1].split('sim-fm-empty')[0]
     assert 'hidden' not in bars_html
+
+
+def test_dashboard_failures_use_four_columns_and_drawer_rows(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run)
+    failures = html.split('id="section-failures_first"', 1)[1].split('</section>', 1)[0]
+    assert ['Scenario', 'Persona', 'Why', 'Score'] == _headers(failures)
+    assert 'Criteria' not in failures
+    assert 'href="#conv-' not in failures
+    assert 'data-entity-kind="conversation"' in failures
+    assert 'data-drawer-url="/r/rid/sim/transcript?idx=1"' in failures
+    assert 'data-no-drawer' in failures
+
+
+def test_cohort_template_contains_stats_and_compact_conversation_triggers(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run)
+    template = _template(html, 'persona-')
+    assert 'Goal rate' in template and 'Avg score' in template and 'Tokens' in template
+    assert 'sim-cohort-conversations' in template
+    assert 'data-entity-kind="conversation"' in template
+
+
+def test_duplicate_persona_names_keep_conversation_cohorts_separate() -> None:
+    from evaluatorq.contracts import TokenUsage
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+    from evaluatorq.simulation.types import SimulationResult, SimulationRun, TerminatedBy
+
+    def result(*, patience: float, score: float) -> SimulationResult:
+        return SimulationResult(
+            messages=[],
+            terminated_by=TerminatedBy.judge,
+            reason='done',
+            goal_achieved=score == 1.0,
+            goal_completion_score=score,
+            rules_broken=[],
+            turn_count=1,
+            token_usage=TokenUsage(total_tokens=10),
+            turn_metrics=[],
+            metadata={
+                'persona': 'Customer',
+                'scenario': 'Billing',
+                'persona_traits': {'patience': patience},
+            },
+            criteria_results={},
+        )
+
+    run = SimulationRun(
+        run_name='duplicate-cohort-run',
+        created_at=datetime.now(tz=timezone.utc),
+        mode='run',
+        target_kind='orq_agent',
+        evaluator_names=[],
+        total_results=2,
+        scorer_averages={},
+        results=[result(patience=0.1, score=1.0), result(patience=0.9, score=0.0)],
+    )
+
+    html = sim_report_tabs('rid', run)
+    import re
+
+    templates = re.findall(r'<template id="persona-[^"]+"[^>]*>(.*?)</template>', html)
+    assert len(templates) == 2
+    conversation_urls = [re.findall(r'data-drawer-url="([^"]+)"', template) for template in templates]
+    assert conversation_urls == [
+        ['/r/rid/sim/transcript?idx=0'],
+        ['/r/rid/sim/transcript?idx=1'],
+    ]
 
 
 def test_sim_turn_quality_tab_present_when_data(sim_run_with_turn_metrics) -> None:

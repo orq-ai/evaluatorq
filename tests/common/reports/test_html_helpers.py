@@ -1,6 +1,8 @@
 # tests/common/reports/test_html_helpers.py
 from __future__ import annotations
 
+import pytest
+
 from evaluatorq.common.reports import html_helpers as h
 from evaluatorq.common.reports.html_helpers import render_heatmap, scale_color
 from evaluatorq.common.reports.palette import COLORS, ORQ_SCALE_GOOD_BAD
@@ -46,6 +48,16 @@ def test_scale_color_interpolates_between_stops():
 def test_render_histogram_empty_guards():
     assert h.render_histogram(values=[], bins=10, title='t') == ''
     assert h.render_histogram(values=[0.5], bins=0, title='t') == ''
+
+
+def test_html_table_accepts_optional_whole_row_attributes():
+    plain = h.html_table(['Name'], [['Alice']])
+    attributed = h.html_table(['Name'], [['Alice']], ['class="clickable" role="button"'])
+
+    assert '<tr><td data-label="Name">Alice</td></tr>' in plain
+    assert '<tr class="clickable" role="button"><td data-label="Name">Alice</td></tr>' in attributed
+    with pytest.raises(ValueError, match='row_attrs length must match rows'):
+        h.html_table(['Name'], [['Alice']], [])
 
 
 def test_render_line_chart_empty_guard():

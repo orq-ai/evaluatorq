@@ -281,16 +281,15 @@ def _render_failures_first_html(section: ReportSection) -> str:
     if not rows:
         return '<section class="report-card"><h2>Failures</h2><p>No failed conversations.</p></section>'
     trs = [
-        f'<tr><td><a href="#{r["anchor"]}">{_esc(r["scenario"])}</a></td>'
+        f'<tr><td>{_esc(r["scenario"])}</td>'
         f'<td>{_esc(r["persona"])}</td>'
         f'<td class="fail-why" title="{_esc(r.get("reason", ""))}">{_esc(_cap(r.get("reason", "")))}</td>'
-        f'<td>{_criteria_dots(r["criteria"])}</td>'
         f'<td>{r["score"]:.2f}</td></tr>'
         for r in rows
     ]
     table = (
         '<table><thead><tr><th>Scenario</th><th>Persona</th>'
-        '<th>Why</th><th>Criteria</th><th>Score</th></tr></thead>'
+        '<th>Why</th><th>Score</th></tr></thead>'
         f'<tbody>{"".join(trs)}</tbody></table>'
     )
     # Long failure lists get a scroll container with a sticky header so the

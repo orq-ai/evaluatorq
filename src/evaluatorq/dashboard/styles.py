@@ -1499,8 +1499,7 @@ _SIM_REPORT_OVERRIDES_CSS = """
     text-align: left; cursor: pointer;
 }
 .sim-report .sim-entity-row:hover .sim-config-persona-name,
-.sim-report .sim-entity-row:hover .sim-config-scenario-name,
-.sim-report .sim-entity-link:hover { color: var(--orange-500); }
+.sim-report .sim-entity-row:hover .sim-config-scenario-name { color: var(--orange-500); }
 .sim-report .sim-config-persona-style {
     font-family: var(--font-sans); font-size: 12px; color: var(--text-muted);
 }
@@ -1582,10 +1581,6 @@ _SIM_REPORT_OVERRIDES_CSS = """
 .sim-report .sim-scenario-rate--mid .sim-scenario-rate-dot { background: var(--amber-600); }
 .sim-report .sim-scenario-rate--low { background: var(--red-100); color: var(--red-600); }
 .sim-report .sim-scenario-rate--low .sim-scenario-rate-dot { background: var(--red-600); }
-.sim-report .sim-entity-link {
-    border: 0; padding: 0; background: transparent; color: var(--text-strong);
-    font: inherit; font-weight: 600; cursor: pointer; text-align: left;
-}
 .sim-report .sim-entity-dialog {
     width: min(720px, calc(100vw - 32px)); max-height: min(780px, calc(100vh - 32px));
     padding: 0; border: 1px solid var(--border-subtle); border-radius: 8px;

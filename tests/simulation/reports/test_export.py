@@ -129,6 +129,15 @@ def test_html_renders_new_charts(sample_results):
     assert 'status-badge--fail' in html
 
 
+def test_html_failures_table_has_no_criteria_or_transcript_anchor(sample_results):
+    html = export_html(sample_results, target='t')
+    failures = html.split('<h2>Failures</h2>', 1)[1].split('</table>', 1)[0]
+
+    assert 'Criteria' not in failures
+    assert 'href="#conv-' not in failures
+    assert 'class="fail-why"' in failures
+
+
 def test_html_persona_rows_show_success_rate_not_sparkline(sample_results):
     # Sparklines were dropped: a [rate, 1-rate] minibar in one colour misled
     # (100% could look weaker than 33%) and duplicated the Success % column.
