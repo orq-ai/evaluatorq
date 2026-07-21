@@ -16,7 +16,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from evaluatorq.contracts import AgentResponse, AgentResponseError, Message, TokenUsage
+from evaluatorq.contracts import (
+    AgentResponse,
+    AgentResponseError,
+    AgentTarget,
+    Message,
+    TokenUsage,
+)
 from evaluatorq.simulation.runner.simulation import SimulationRunner
 from evaluatorq.simulation.types import (
     CommunicationStyle,
@@ -83,12 +89,16 @@ def _make_mock_judge() -> MagicMock:
     return j
 
 
-class _FlakyTarget:
+class _FlakyTarget(AgentTarget):
     """Returns an error-marker AgentResponse for the first ``fail_times`` calls."""
 
     def __init__(self, fail_times: int) -> None:
+        super().__init__()
         self._fail = fail_times
         self.calls = 0
+
+    def new(self) -> _FlakyTarget:
+        return _FlakyTarget(self._fail)
 
     async def respond(self, messages: list[Message]) -> AgentResponse:
         self.calls += 1
@@ -154,11 +164,15 @@ def _make_continue_judge() -> MagicMock:
     return j
 
 
-class _HangSecond:
+class _HangSecond(AgentTarget):
     """Answers the first turn quickly, then hangs forever on the second."""
 
     def __init__(self) -> None:
+        super().__init__()
         self.calls = 0
+
+    def new(self) -> _HangSecond:
+        return _HangSecond()
 
     async def respond(self, messages: list[Message]) -> AgentResponse:
         self.calls += 1
@@ -185,3 +199,78 @@ async def test_outer_timeout_retains_partial_transcript() -> None:
     # cancellation instead of being discarded as an empty list.
     assert result.messages != []
     assert any(m.content == 'first answer' for m in result.messages)
+
+
+# ---------------------------------------------------------------------------
+# Callback target (``target=``) — wrapped internally via CallableTarget.
+# ---------------------------------------------------------------------------
+
+
+def _sync_callback(messages: list[Message]) -> str:
+    return 'sync ok'
+
+
+async def _async_callback(messages: list[Message]) -> str:
+    return 'async ok'
+
+
+class _RaisingCallback:
+    """Raises on every call so the retry helper exhausts and the run errors."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self, messages: list[Message]) -> str:
+        self.calls += 1
+        raise RuntimeError('callback exploded')
+
+
+async def test_sync_callback_target_succeeds() -> None:
+    runner = SimulationRunner(
+        target=_sync_callback,
+        max_target_retries=1,
+        target_agent_timeout_ms=5000,
+        max_turns=1,
+        user_simulator=_make_mock_user_simulator(),
+        judge=_make_mock_judge(),
+    )
+
+    result = await runner.run(datapoint=_make_datapoint())
+
+    assert result.terminated_by != TerminatedBy.error, result.reason
+    assert any(m.role == 'assistant' and m.content == 'sync ok' for m in result.messages)
+
+
+async def test_async_callback_target_succeeds() -> None:
+    runner = SimulationRunner(
+        target=_async_callback,
+        max_target_retries=1,
+        target_agent_timeout_ms=5000,
+        max_turns=1,
+        user_simulator=_make_mock_user_simulator(),
+        judge=_make_mock_judge(),
+    )
+
+    result = await runner.run(datapoint=_make_datapoint())
+
+    assert result.terminated_by != TerminatedBy.error, result.reason
+    assert any(m.role == 'assistant' and m.content == 'async ok' for m in result.messages)
+
+
+async def test_raising_callback_target_retried_then_terminates_with_error() -> None:
+    callback = _RaisingCallback()
+    runner = SimulationRunner(
+        target=callback,
+        max_target_retries=1,
+        target_agent_timeout_ms=5000,
+        max_turns=3,
+        user_simulator=_make_mock_user_simulator(),
+        judge=_make_mock_judge(),
+    )
+
+    result = await runner.run(datapoint=_make_datapoint())
+
+    assert callback.calls == 2  # 1 initial attempt + 1 retry
+    assert result.terminated_by == TerminatedBy.error
+    assert any(m.role == 'assistant' for m in result.messages)
+    assert result.metadata.get('error')

@@ -93,7 +93,7 @@ async def call_target_with_retry(
     *,
     target_agent_timeout_ms: float,
     max_target_retries: int,
-    map_error: Callable[[Exception], tuple[str, str]] = default_map_error,
+    map_error: Callable[[Exception], tuple[str, str] | None] = default_map_error,
     on_attempt: Callable[[int], AbstractAsyncContextManager[Any]] | None = None,
 ) -> TargetCallResult:
     """Call ``target.respond(messages)`` with bounded retry + per-call timeout.
