@@ -25,7 +25,6 @@ from .tracing import (
     flush_tracing,
     generate_run_id,
     init_tracing_if_needed,
-    shutdown_tracing,
 )
 from .types import (
     DataPoint,
@@ -399,11 +398,13 @@ async def evaluatorq(
         if _experiment_url_out is not None and experiment_url:
             _experiment_url_out.append(experiment_url)
 
-    # Shutdown tracing gracefully
+    # Flush buffered spans (never shut the provider down mid-process — the SDK
+    # TracerProvider atexit hook handles teardown at process exit). This is the
+    # same flush-only lifecycle as `tracing_session`; it is applied inline here
+    # rather than wrapping this long function body in the context manager. Safe
+    # when nested under a caller (e.g. red_team) that keeps tracing alive.
     if tracing_enabled:
         await flush_tracing()
-        await asyncio.sleep(2)  # Give additional time for network operations
-        await shutdown_tracing()
 
     # Check for pass failures and exit if any. In no-inference mode a row that has no
     # usable recorded response surfaces as a job error rather than an evaluator score,

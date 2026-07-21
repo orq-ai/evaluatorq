@@ -18,6 +18,18 @@ import sys
 _HELP_ENV = {**os.environ, "COLUMNS": "80"}
 
 
+def test_import_evaluatorq_exits_zero() -> None:
+    """The public package must not depend on a retired tracing shutdown API."""
+    result = subprocess.run(
+        [sys.executable, "-c", "import evaluatorq"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_python_m_evaluatorq_help_exits_zero() -> None:
     result = subprocess.run(
         [sys.executable, "-m", "evaluatorq", "--help"],
