@@ -9,7 +9,6 @@ Semantic convention:
     ``passed=False`` → the agent is VULNERABLE (attack succeeded)
 """
 
-import re
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias, TypedDict
 
@@ -21,6 +20,7 @@ from pydantic import (
     model_validator,
 )
 
+from evaluatorq.common.target_call import classify_error_type as classify_error_type
 from evaluatorq.contracts import StrEnum
 
 if TYPE_CHECKING:
@@ -387,6 +387,7 @@ from evaluatorq.contracts import (  # noqa: F401
     Message,
     OutputMessage,
     ReasoningOutputItem,
+    ResponseTrace,
     StrategyToolCall,
     TextOutputItem,
     ToolCallOutputItem,
@@ -848,39 +849,10 @@ class RunError(BaseModel):
     turn: int | None = None
 
 
-# Regex patterns matched (case-insensitively) against the error string to infer
-# a coarse error_type. Ordered most-specific first; the first match wins, so an
-# explicit HTTP status must precede the generic 'connection' fallback (otherwise
-# "Status 503 connection reset" would misclassify as network_error). HTTP codes
-# require three digits and 429 is digit-bounded so stray numbers (request ids,
-# byte counts) do not trigger false rate_limit/status matches.
-_ERROR_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r'content[_ ]filter|content management policy'), 'content_filter'),
-    (re.compile(r'rate limit|(?<!\d)429(?!\d)'), 'rate_limit'),
-    (re.compile(r'timed out|timeout'), 'timeout'),
-    (re.compile(r'status[ _]?5\d\d'), 'server_error'),
-    (re.compile(r'status[ _]?4\d\d'), 'client_error'),
-    (re.compile(r'connection'), 'network_error'),
-]
-
-
-def classify_error_type(error: str | None, *, existing_type: str | None = None) -> str | None:
-    """Infer a coarse ``error_type`` from a raw error string when not already set.
-
-    Returns ``existing_type`` unchanged when provided, ``None`` for an empty
-    error, the first matching pattern's type, or ``'unknown'`` when nothing
-    matches. Shared by the orchestrator (per-response :class:`AgentResponseError`)
-    and report converters (run-level rollup) so both classify identically.
-    """
-    if existing_type:
-        return existing_type
-    if not error:
-        return None
-    lower = error.lower()
-    for pattern, etype in _ERROR_PATTERNS:
-        if pattern.search(lower):
-            return etype
-    return 'unknown'
+# classify_error_type is defined in evaluatorq.common.target_call and
+# re-exported above so evaluatorq.redteam.contracts.classify_error_type
+# stays a valid dotted path (see docstring reference below and
+# reports/converters.py, which imports it from here).
 
 
 # ---------------------------------------------------------------------------
@@ -1314,6 +1286,7 @@ class JobOutputPayload(BaseModel):
     truncated_turns: list[int] = Field(default_factory=list)
     finish_reason: str | None = None
     thread_id: str | None = None
+    response_traces: list[ResponseTrace] = Field(default_factory=list)
 
     @property
     def response_text(self) -> str:
@@ -1371,6 +1344,20 @@ class RedTeamResult(BaseModel):
         default=None,
         description='Orq observability thread id ({run_id}:{agent_key}:{index}); None for older reports.',
     )
+    response_traces: list[ResponseTrace] = Field(
+        default_factory=list,
+        description='Per-turn Orq trace/span handles for each successful target-agent response in this '
+        'attack (excludes attacker/generator and judge calls), in turn order. Empty for non-Orq targets, '
+        'the static pipeline, and older reports.',
+    )
+
+    @property
+    def last_trace_id(self) -> str | None:
+        """Trace id of the last successful target response, for the table deep-link."""
+        for rt in reversed(self.response_traces):
+            if rt.trace_id:
+                return rt.trace_id
+        return None
 
     @property
     def error_info(self) -> 'RunError | None':
@@ -1573,6 +1560,12 @@ class RedTeamReport(BaseModel):
     token_usage_summary: TokenUsage | None = None
     duration_seconds: float | None = None
     pipeline_warnings: list[str] = Field(default_factory=list)
+    orq_base_url: str | None = Field(
+        default=None,
+        description='The Orq host that served this run (ORQ_BASE_URL or the prod default), recorded so '
+        'a saved run remembers which deployment (prod / staging / on-prem) it ran against. None when no '
+        'Orq agent/deployment target was used (OpenAI-model / custom targets) and for older reports.',
+    )
     experiment_url: str | None = None
     run_id: str | None = Field(
         default=None,

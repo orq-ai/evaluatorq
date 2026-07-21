@@ -280,7 +280,7 @@ class TestOrchestratorTranscript:
         assert errored[0].target.error is not None
         # "rate limit exceeded" classifies to rate_limit (not the generic target_error)
         assert errored[0].target.error.error_type == "rate_limit"
-        # _default_map_error (no backend) returns code "target_error"
+        # default_map_error (no backend) returns code "target_error"
         assert errored[0].target.error.code == "target_error"
 
     @pytest.mark.asyncio

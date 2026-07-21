@@ -10,6 +10,8 @@ from evaluatorq.common.thread_context import (
     build_thread_id,
     conversation_thread,
     current_thread_id,
+    evaluatorq_pipeline,
+    pipeline_metadata_param,
     thread_body_param,
 )
 
@@ -41,6 +43,14 @@ def test_bind_and_restore() -> None:
         assert current_thread_id() == 't1'
         assert thread_body_param() == {'thread': {'id': 't1'}}
     assert current_thread_id() is None  # restored on exit
+
+
+def test_pipeline_metadata_bind_and_restore() -> None:
+    assert pipeline_metadata_param() == {}  # unset
+    with evaluatorq_pipeline('red_teaming') as label:
+        assert label == 'red_teaming'
+        assert pipeline_metadata_param() == {'metadata': {'evaluatorq_pipeline': 'red_teaming'}}
+    assert pipeline_metadata_param() == {}  # restored on exit
 
 
 def test_generated_id_when_omitted() -> None:

@@ -16,11 +16,46 @@ from evaluatorq.dashboard.report_tabs import _tabs
 from tests.dashboard.test_downloads import _make_rt_report, _make_sim_run
 
 
+@pytest.fixture(autouse=True)
+def _clean_workspace_env(monkeypatch):
+    """Studio deep-links resolve host+workspace from the run's experiment_url,
+    then fall back to env. Clear env so the agent-card tests toggle on the
+    experiment_url / captured-key / explicit ORQ_WORKSPACE alone."""
+    for var in ('ORQ_WORKSPACE', 'ORQ_WORKSPACE_SLUG', 'ORQ_BASE_URL', 'ORQ_API_KEY'):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_turn_metric_descriptor_has_keys_and_directions() -> None:
+    from evaluatorq.simulation.metrics import TURN_METRICS
+
+    assert [(m.key, m.high_is_risky) for m in TURN_METRICS] == [
+        ('response_quality', False),
+        ('hallucination_risk', True),
+        ('tone_appropriateness', False),
+        ('factual_accuracy', False),
+    ]
+
+
 def _tab_labels(html: str) -> list[str]:
     import html as _html
     import re
 
     return [_html.unescape(m) for m in re.findall(r'class="tab-label" for="[^"]*">([^<]+)<', html)]
+
+
+def _headers(html: str) -> list[str]:
+    import re
+
+    header_row = html.split('</tr>', 1)[0]
+    return re.findall(r'<th>([^<]+)</th>', header_row)
+
+
+def _template(html: str, prefix: str) -> str:
+    import re
+
+    match = re.search(rf'<template id="{prefix}[^"]+"[^>]*>(.*?)</template>', html)
+    assert match is not None
+    return match.group(1)
 
 
 @pytest.fixture()
@@ -139,16 +174,18 @@ def test_tabs_three_tuple_renders_raw_label_html() -> None:
     assert '<span class="pill">5</span>' in html
 
 
-def test_sim_overview_has_exec_summary_and_five_kpis(sim_run) -> None:
+def test_sim_overview_has_exec_summary_and_six_kpis(sim_run) -> None:
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
 
     html = sim_report_tabs('rid', sim_run)
     assert 'class="report-aligned sim-report"' in html
     assert 'Executive summary' in html
-    # 5-card KPI band incl. Avg turns
-    assert 'Avg turns' in html
-    assert 'Goal completion' in html
-    assert 'goal met' in html
+    # Six KPI cards: the overview no longer has a Goal-completion card.
+    kpi_band = html.split('<div class="kpi-band">', 1)[1].split('</div><div class="sim-overview-grid-2">', 1)[0]
+    assert kpi_band.count('class="kpi-card ') == 6
+    for label in ('Personas', 'Scenarios', 'Conversations', 'Avg score', 'Avg turns', 'Errors'):
+        assert f'<div class="kpi-label">{label}</div>' in kpi_band
+    assert 'Goal completion' not in kpi_band
     # Persona/scenario configuration now lives in the Config tab.
     assert 'sim-overview-grid-2--top' not in html
 
@@ -178,13 +215,22 @@ def test_sim_overview_falls_back_to_computed_summary(sim_run) -> None:
     assert html.count('<div class="exec-summary">') == 1
 
 
-def test_sim_kpi_goal_status_uses_verdict(sim_run) -> None:
-    # Goal-completion KPI status must equal summary verdict (pass/warn/fail), not an ad-hoc threshold.
+def test_sim_kpi_errors_status_reflects_error_count(sim_run) -> None:
+    """The Error KPI is pass with no errors and fail when errors are present."""
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
 
     html = sim_report_tabs('rid', sim_run)
-    # verdict-driven class present on the goal-completion card
-    assert 'kpi-card--' in html
+    kpi_band = html.split('<div class="kpi-band">', 1)[1].split('</div><div class="sim-overview-grid-2">', 1)[0]
+    errors_card = kpi_band.split('<div class="kpi-label">Errors</div>', 1)[0].rsplit('<div class="kpi-card ', 1)[1]
+    assert errors_card.startswith('kpi-card--pass">')
+
+    sim_run.results[0].metadata['error'] = 'judge request timed out'
+    html_with_error = sim_report_tabs('rid', sim_run)
+    error_kpi_band = html_with_error.split('<div class="kpi-band">', 1)[1].split(
+        '</div><div class="sim-overview-grid-2">', 1
+    )[0]
+    error_card = error_kpi_band.split('<div class="kpi-label">Errors</div>', 1)[0].rsplit('<div class="kpi-card ', 1)[1]
+    assert error_card.startswith('kpi-card--fail">')
 
 
 def test_sim_transcripts_tab_has_count_pill(sim_run) -> None:
@@ -275,6 +321,103 @@ def test_sim_failure_modes_all_singletons_no_hidden_rows() -> None:
     assert 'max="1"' in html
     bars_html = html.split('sim-fm-bars')[1].split('sim-fm-empty')[0]
     assert 'hidden' not in bars_html
+
+
+def test_dashboard_failures_use_five_columns_and_drawer_rows(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run)
+    failures = html.split('id="section-failures_first"', 1)[1].split('</section>', 1)[0]
+    assert ['Scenario', 'Persona', 'Why', 'Criteria', 'Score'] == _headers(failures)
+    assert 'crit-' in failures  # criteria dots cell rendered (dots or empty-dash)
+    assert 'href="#conv-' not in failures
+    assert 'data-entity-kind="conversation"' in failures
+    assert 'data-drawer-url="/r/rid/sim/transcript?idx=1"' in failures
+    assert 'data-no-drawer' in failures
+
+
+def test_sim_dashboard_no_longer_emits_anchor_or_foldout_drilldown(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run)
+
+    assert 'href="#conv-' not in html
+    assert 'id="conv-' not in html
+    assert '<details class="sim-conv-card"' not in html
+    assert 'toggle once from:closest details' not in html
+
+
+def test_cohort_template_contains_stats_and_compact_conversation_triggers(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run)
+    template = _template(html, 'persona-')
+    assert 'Goal rate' in template and 'Avg score' in template and 'Tokens' in template
+    assert 'sim-cohort-conversations' in template
+    assert 'data-entity-kind="conversation"' in template
+
+
+def test_filtered_cohort_template_shows_empty_message_when_no_conversations_match() -> None:
+    from evaluatorq.dashboard.report_tabs import _sim_persona_template
+
+    template = _sim_persona_template(
+        {'name': 'No-match persona'},
+        'persona-0',
+        0,
+        1,
+        conversations=[],
+        rid='rid',
+    )
+
+    assert 'data-sim-entity-template' in template
+    assert '<p class="sim-cohort-empty">No conversations.</p>' in template
+
+
+def test_duplicate_persona_names_keep_conversation_cohorts_separate() -> None:
+    from evaluatorq.contracts import TokenUsage
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+    from evaluatorq.simulation.types import SimulationResult, SimulationRun, TerminatedBy
+
+    def result(*, patience: float, score: float) -> SimulationResult:
+        return SimulationResult(
+            messages=[],
+            terminated_by=TerminatedBy.judge,
+            reason='done',
+            goal_achieved=score == 1.0,
+            goal_completion_score=score,
+            rules_broken=[],
+            turn_count=1,
+            token_usage=TokenUsage(total_tokens=10),
+            turn_metrics=[],
+            metadata={
+                'persona': 'Customer',
+                'scenario': 'Billing',
+                'persona_traits': {'patience': patience},
+            },
+            criteria_results={},
+        )
+
+    run = SimulationRun(
+        run_name='duplicate-cohort-run',
+        created_at=datetime.now(tz=timezone.utc),
+        mode='run',
+        target_kind='orq_agent',
+        evaluator_names=[],
+        total_results=2,
+        scorer_averages={},
+        results=[result(patience=0.1, score=1.0), result(patience=0.9, score=0.0)],
+    )
+
+    html = sim_report_tabs('rid', run)
+    import re
+
+    templates = re.findall(r'<template id="persona-[^"]+"[^>]*>(.*?)</template>', html)
+    assert len(templates) == 2
+    conversation_urls = [re.findall(r'data-drawer-url="([^"]+)"', template) for template in templates]
+    assert conversation_urls == [
+        ['/r/rid/sim/transcript?idx=0'],
+        ['/r/rid/sim/transcript?idx=1'],
+    ]
 
 
 def test_sim_turn_quality_tab_present_when_data(sim_run_with_turn_metrics) -> None:
@@ -445,6 +588,39 @@ def test_sim_config_compacts_entities_and_prerenders_modal_details() -> None:
     assert 'Resolve the refund without unnecessary back and forth.' in scenario_row
     assert 'must-happen' in scenario_row and 'must-not' in scenario_row
     assert '50%' in scenario_row
+
+
+def test_sim_entity_dialog_is_a_right_side_drawer() -> None:
+    from evaluatorq.dashboard.styles import DASHBOARD_CSS
+
+    css = DASHBOARD_CSS
+    assert 'inset: 0 0 0 auto' in css
+    assert 'width: 50vw' in css
+    assert 'height: 100vh' in css
+    assert '.sim-entity-dialog::backdrop' in css
+    assert '@media (max-width: 480px)' in css
+
+
+def test_sim_drawer_has_back_nav_close_controls(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run)
+    assert 'data-sim-entity-back' in html
+    assert 'data-sim-entity-prev' in html
+    assert 'data-sim-entity-next' in html
+    assert 'data-sim-entity-close' in html
+    assert 'aria-label="Back to cohort"' in html
+    assert 'data-entity-kind="conversation"' in html
+    assert 'data-drawer-url="/r/rid/sim/transcript?idx=0"' in html
+
+
+def test_sim_drawer_runtime_dispatches_conversations_without_anchor_handler() -> None:
+    source = (Path(__file__).parents[2] / 'src/evaluatorq/dashboard/static/dashboard.js').read_text()
+    keyboard_handler = source.split("document.body.addEventListener('keydown'", 1)[1].split('});', 1)[0]
+
+    assert "trigger.getAttribute('data-drawer-url')" in source
+    assert 'a[href^="#conv-"]' not in source
+    assert "evt.target.closest('[data-no-drawer]')" in keyboard_handler
 
 
 def test_sim_breakdown_entity_names_open_shared_modal(sim_run) -> None:
@@ -690,11 +866,23 @@ def test_sim_overview_agent_card_full(sim_run, monkeypatch) -> None:
     html = sim_report_tabs('rid', run)
     assert 'class="rk-panel sim-agent-card"' in html
     assert 'support-orchestrator' in html
-    assert 'Router' in html
+    assert 'Router' not in html  # role/"Assistant" marker dropped — redundant next to the name
     assert 'Front-door agent that triages requests.' in html
     assert 'route_request' in html
+    assert 'billing-agent' in html  # sub-agents now render as a labelled section
+    assert 'Sub-agents' in html
     assert 'href="https://my.orq.ai/research/agents/01K8N..."' in html
     assert 'target="_blank"' in html
+
+
+def test_sim_overview_agent_card_has_decorative_bot_icon(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run.model_copy(update={'agent_info': _AGENT_INFO}))
+
+    assert 'class="sim-agent-identity"' in html
+    assert 'class="sim-agent-icon"' in html
+    assert 'aria-hidden="true"' in html
 
 
 def test_sim_overview_agent_card_absent_when_no_agent_info(sim_run) -> None:
@@ -794,6 +982,7 @@ async def test_resolve_agent_info_missing_core_augments_filling_only_gaps(sim_ru
     captured = dict(_AGENT_INFO, model='')  # model missing → incomplete
     captured['description'] = 'AS-RUN description'
     fetched = dict(_AGENT_INFO, model='openai/gpt-5', description='CURRENT description')
+
     async def _fetch(_key):
         return fetched
 
@@ -902,7 +1091,12 @@ def test_agent_key_recovered_from_run_name_when_target_missing(sim_run) -> None:
     import evaluatorq.dashboard.report_tabs as rt
 
     run = sim_run.model_copy(
-        update={'target_kind': 'orq_agent', 'target': None, 'agent_info': None, 'run_name': 'sim:refund-agent-fixed:tailscale-openai'}
+        update={
+            'target_kind': 'orq_agent',
+            'target': None,
+            'agent_info': None,
+            'run_name': 'sim:refund-agent-fixed:tailscale-openai',
+        }
     )
     assert rt._agent_key_for(run) == 'refund-agent-fixed'
 

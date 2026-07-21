@@ -315,8 +315,11 @@ class TestConfirmCallback:
         ):
             # Make _run_dynamic_or_hybrid call hooks.on_confirm and raise if False
             async def _fake_dynamic(**kwargs):
+                from evaluatorq.common.async_utils import await_maybe
+
                 hooks = kwargs.get('hooks')
-                if hooks is not None and not hooks.on_confirm({}):
+                # red_team wraps hooks in an async CompositePipelineHooks.
+                if hooks is not None and not await await_maybe(hooks.on_confirm({})):
                     raise RuntimeError('Execution cancelled by confirmation callback')
                 return _make_report()
 

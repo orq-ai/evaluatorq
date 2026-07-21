@@ -193,12 +193,11 @@ class TestRedteamFilterRoute:
 
         # The checkbox for ASI01 must be checked.
         assert 'value="ASI01" checked' in form_section
-        # After ASI01-only filter the LLM01 results are gone so the
-        # recomputed options drop LLM01 entirely from the form.
-        assert 'LLM01' not in form_section
+        # LLM01 stays available (unchecked) so it can be re-selected.
+        assert 'value="LLM01"' in form_section
 
-    def test_now_empty_dimension_option_drops_from_form(self, client: TestClient, roots: list[Path]) -> None:
-        """After filtering to ASI01 only, LLM01 category must disappear from the form."""
+    def test_deselected_dimension_option_stays_in_form(self, client: TestClient, roots: list[Path]) -> None:
+        """Filtering to ASI01 only must NOT drop LLM01 from the form options."""
         rid = report_id(_rt_path(roots))
         r = client.post(
             f'/r/{rid}/filter',
@@ -210,7 +209,8 @@ class TestRedteamFilterRoute:
         form_start = text.find('<form')
         form_end = text.find('</form>')
         form_section = text[form_start : form_end + 7] if form_start >= 0 else ''
-        assert 'LLM01' not in form_section
+        assert 'value="LLM01"' in form_section
+        assert 'value="ASI01" checked' in form_section
 
     def test_vulnerable_result_filter(self, client: TestClient, roots: list[Path]) -> None:
         """Posting result=Vulnerable must narrow to only vulnerable rows."""
@@ -256,28 +256,55 @@ class TestSimFilterRoute:
         assert 'id="filter-swap"' in r.text
 
     def test_persona_filter_reduces_results(self, client: TestClient, roots: list[Path]) -> None:
-        """Filtering to persona=alice only should exclude bob's result."""
+        """Filtering to alice excludes Bob's results but keeps the Config registry."""
         rid = report_id(_sim_path(roots))
         r = client.post(
             f'/r/{rid}/filter',
             data={'persona': 'alice', 'goal_outcome': 'All'},
         )
         assert r.status_code == 200
-        assert 'alice' in r.text.lower()
-        assert 'bob' not in r.text.lower()
+        text = r.text
+        # The four emitted panels are Overview, Breakdown, Transcripts, and
+        # Config. Scope assertions to their exact panel boundaries: Config
+        # deliberately retains every entity that can open a drawer.
+        tab_panels = text[text.index('<div class="tab-panels">') :]
+        panels = tab_panels.split('<section class="tab-panel">')
+        assert len(panels) == 5
+        breakdown, transcripts, config = panels[2:]
+        assert 'alice' in breakdown.lower()
+        assert 'bob' not in breakdown.lower()
+        assert 'alice' in transcripts.lower()
+        assert 'bob' not in transcripts.lower()
+        assert 'bob' in config.lower()
+
+    def test_metric_dim_round_trips_through_http(self, client: TestClient, roots: list[Path]) -> None:
+        """A new metric dimension (max_goal_score) narrows results end-to-end via
+        the real POST route — proving parse_selections → _SIM_DIMS → _sim_apply
+        are wired for the new dims, not just unit-tested in isolation."""
+        rid = report_id(_sim_path(roots))
+        # Fixture: 3 conversations with goal scores 1.0 / 0.0 / 1.0.
+        full = client.post(f'/r/{rid}/filter', data={})
+        assert 'Transcripts <span class="tab-count">3</span>' in full.text
+        # Ceiling of 0.5 keeps only the single 0.0-score conversation.
+        filtered = client.post(f'/r/{rid}/filter', data={'max_goal_score': '0.5'})
+        assert filtered.status_code == 200
+        assert 'Transcripts <span class="tab-count">1</span>' in filtered.text
 
     def test_persona_filter_form_preserves_selection(self, client: TestClient, roots: list[Path]) -> None:
-        """Re-rendered form must reflect the alice-only persona selection."""
+        """Re-rendered form keeps alice checked and bob available to re-select."""
         rid = report_id(_sim_path(roots))
         r = client.post(
             f'/r/{rid}/filter',
             data={'persona': 'alice', 'goal_outcome': 'All'},
         )
         assert r.status_code == 200
-        # alice still appears in the recomputed form options.
-        assert 'alice' in r.text.lower()
-        # bob should NOT appear in recomputed options (no results remain for bob).
-        assert 'bob' not in r.text.lower()
+        text = r.text
+        form_start = text.find('<form')
+        form_end = text.find('</form>')
+        form_section = text[form_start : form_end + 7] if form_start >= 0 else ''
+        assert 'value="alice" checked' in form_section
+        # bob stays as an unchecked option — deselecting must not remove it.
+        assert 'value="bob"' in form_section
 
     def test_fragment_contains_filter_form(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
@@ -329,16 +356,17 @@ class TestFilterDefUnit:
         filtered = FILTERS['redteam'].apply(report, {})
         assert len(filtered) == len(report.results)
 
-    def test_redteam_recompute_options_drops_empty_categories(self) -> None:
+    def test_redteam_options_stay_full_after_filtering(self) -> None:
+        # Options come from the full report, never the filtered rows, so a
+        # deselected value never vanishes from its own multi-select.
         from evaluatorq.dashboard.filters import FILTERS
 
         report = _rt_report()
-        # recompute_options now takes an already-filtered list (Fix 4).
-        filtered = FILTERS['redteam'].apply(report, {'category': ['ASI01']})
-        new_opts = FILTERS['redteam'].recompute_options(filtered)
-        # After filtering to ASI01, LLM01 should not appear in recomputed options.
-        assert 'LLM01' not in new_opts['category']
-        assert 'ASI01' in new_opts['category']
+        full = FILTERS['redteam'].options(report)
+        assert {'ASI01', 'LLM01'} <= set(full['category'])
+        # Narrowing to ASI01 must not shrink the option list.
+        FILTERS['redteam'].apply(report, {'category': ['ASI01']})
+        assert FILTERS['redteam'].options(report)['category'] == full['category']
 
     def test_sim_options_keys(self) -> None:
         from evaluatorq.dashboard.filters import FILTERS
@@ -365,15 +393,15 @@ class TestFilterDefUnit:
         filtered = FILTERS['sim'].apply(run, {'goal_outcome': ['Achieved']})
         assert all(r.goal_achieved for r in filtered)
 
-    def test_sim_recompute_options_drops_empty_persona(self) -> None:
+    def test_sim_options_stay_full_after_filtering(self) -> None:
+        # Deselecting a persona must not drop it from the persona multi-select.
         from evaluatorq.dashboard.filters import FILTERS
 
         run = _sim_run()
-        # recompute_options now takes an already-filtered list (Fix 4).
-        filtered = FILTERS['sim'].apply(run, {'persona': ['alice']})
-        new_opts = FILTERS['sim'].recompute_options(filtered)
-        assert 'alice' in new_opts['persona']
-        assert 'bob' not in new_opts['persona']
+        full = FILTERS['sim'].options(run)
+        assert {'alice', 'bob'} <= set(full['persona'])
+        FILTERS['sim'].apply(run, {'persona': ['alice']})
+        assert FILTERS['sim'].options(run)['persona'] == full['persona']
 
 
 # ---------------------------------------------------------------------------
@@ -616,7 +644,7 @@ def test_rt_min_turns_default_no_filter(rt_results):
     assert len(out) == len(rt_results)
 
 
-def test_rt_options_no_all_sentinel(rt_results):
+def test_rt_options_include_max_turns_without_all_sentinel(rt_results):
     from evaluatorq.dashboard.filters import _rt_options_from_results
 
     opts = _rt_options_from_results(rt_results)
@@ -641,6 +669,28 @@ def test_rt_rail_has_slider_and_more_expander():
     assert 'name="min_turns"' in html and 'type="range"' in html
     assert 'id="filter-dd-more"' in html
     assert 'id="filter-dd-technique"' in html  # inside the expander
+    # Shared range control: numeric readout (never "all") + the run's max shown.
+    assert '>all<' not in html
+    assert '<span class="filter-slider-max">/ 5</span>' in html
+
+
+def test_rt_rail_slider_engaged_only_when_off_default():
+    from evaluatorq.dashboard.view import _render_redteam_filter_rail
+
+    opts = {
+        'result': ['Vulnerable', 'Resistant', 'Error'],
+        'severity': ['critical'],
+        'category': ['ASI01'],
+        'agent': ['a'],
+        'technique': ['t'],
+        'delivery_method': ['email'],
+        'vulnerability': ['v1'],
+        'max_turns': ['5'],
+    }
+    off = _render_redteam_filter_rail('rid', opts, {'min_turns': ['1']}, shown=3, total=3)
+    assert 'filter-slider-readout is-engaged' not in off
+    on = _render_redteam_filter_rail('rid', opts, {'min_turns': ['3']}, shown=3, total=3)
+    assert 'filter-slider-readout is-engaged' in on
 
 
 def test_rt_rail_hides_slider_when_max_turns_one():
@@ -660,8 +710,407 @@ def test_rt_rail_hides_slider_when_max_turns_one():
     assert 'name="min_turns"' not in html  # slider hidden for single-turn-only runs
 
 
-def test_rt_recompute_options_drops_all_sentinel(rt_results):
-    from evaluatorq.dashboard.filters import _rt_recompute_options
+def test_rt_options_no_all_sentinel(rt_results):
+    from evaluatorq.dashboard.filters import _rt_options_from_results
 
-    opts = _rt_recompute_options(rt_results)
-    assert opts['result'] == ['Vulnerable', 'Resistant', 'Error']  # no 'All' after a filter POST
+    opts = _rt_options_from_results(rt_results)
+    assert opts['result'] == ['Vulnerable', 'Resistant', 'Error']  # no 'All' sentinel
+
+
+# ---------------------------------------------------------------------------
+# Task 2 (metric filters plan): rule/goal/turns/tokens/metric threshold dims.
+# ---------------------------------------------------------------------------
+
+
+def _sim_metric_run():
+    """SimulationRun with three personas exercising rule/metric filter edges.
+
+    - alice:   rules_broken=['criteria_0'], low hallucination risk, high
+               response quality, turn_count=3, total_tokens=150.
+    - risky:   no rules broken, HIGH hallucination risk, LOW response
+               quality, turn_count=5, total_tokens=500.
+    - unscored: no rules broken, turn_metrics=[] (nothing scored), turn_count=1,
+               total_tokens=15.
+    """
+    from evaluatorq.contracts import TokenUsage
+    from evaluatorq.simulation.types import SimulationResult, SimulationRun, TerminatedBy, TurnMetrics
+
+    def _turn(**scores) -> TurnMetrics:
+        return TurnMetrics(
+            turn_number=1,
+            token_usage=TokenUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+            judge_reason='ok',
+            **scores,
+        )
+
+    results = [
+        SimulationResult(
+            messages=[],
+            terminated_by=TerminatedBy.judge,
+            reason='done',
+            goal_achieved=True,
+            goal_completion_score=0.9,
+            rules_broken=['criteria_0'],
+            turn_count=3,
+            turn_metrics=[
+                _turn(
+                    response_quality=0.8,
+                    hallucination_risk=0.2,
+                    tone_appropriateness=0.9,
+                    factual_accuracy=0.85,
+                )
+            ],
+            token_usage=TokenUsage(input_tokens=100, output_tokens=50, total_tokens=150),
+            metadata={'persona': 'alice', 'scenario': 'billing'},
+        ),
+        SimulationResult(
+            messages=[],
+            terminated_by=TerminatedBy.judge,
+            reason='done',
+            goal_achieved=False,
+            goal_completion_score=0.3,
+            rules_broken=[],
+            turn_count=5,
+            turn_metrics=[
+                _turn(
+                    response_quality=0.6,
+                    hallucination_risk=0.9,
+                    tone_appropriateness=0.5,
+                    factual_accuracy=0.4,
+                )
+            ],
+            token_usage=TokenUsage(input_tokens=300, output_tokens=200, total_tokens=500),
+            metadata={'persona': 'risky', 'scenario': 'billing'},
+        ),
+        SimulationResult(
+            messages=[],
+            terminated_by=TerminatedBy.judge,
+            reason='done',
+            goal_achieved=True,
+            goal_completion_score=1.0,
+            rules_broken=[],
+            turn_count=1,
+            turn_metrics=[],
+            token_usage=TokenUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+            metadata={'persona': 'unscored', 'scenario': 'billing'},
+        ),
+    ]
+    return SimulationRun(
+        run_name='test-sim-metric-run',
+        created_at=datetime.now(tz=timezone.utc),
+        mode='run',
+        target_kind='orq_agent',
+        evaluator_names=['goal_achieved'],
+        total_results=len(results),
+        scorer_averages={'goal_achieved': 0.67},
+        results=results,
+    )
+
+
+@pytest.fixture()
+def sim_run():
+    return _sim_metric_run()
+
+
+class TestSimMetricFilters:
+    def test_rule_broken_is_opt_in(self, sim_run) -> None:
+        from evaluatorq.dashboard.filters import _sim_apply
+
+        assert [r.rules_broken for r in _sim_apply(sim_run, {'rule_broken': ['yes']})] == [['criteria_0']]
+        assert len(_sim_apply(sim_run, {})) == len(sim_run.results)
+
+    def test_risk_uses_worst_turn_and_keeps_unscored(self, sim_run) -> None:
+        from evaluatorq.dashboard.filters import _sim_apply
+
+        filtered = _sim_apply(sim_run, {'min_hallucination_risk': ['0.70']})
+        assert {r.metadata['persona'] for r in filtered} == {'risky', 'unscored'}
+
+    def test_quality_ceiling_uses_worst_turn_and_keeps_unscored(self, sim_run) -> None:
+        from evaluatorq.dashboard.filters import _sim_apply
+
+        filtered = _sim_apply(sim_run, {'max_response_quality': ['0.70']})
+        assert {r.metadata['persona'] for r in filtered} == {'risky', 'unscored'}
+
+    def test_max_goal_score_is_ceiling(self, sim_run) -> None:
+        from evaluatorq.dashboard.filters import _sim_apply
+
+        filtered = _sim_apply(sim_run, {'max_goal_score': ['0.5']})
+        assert {r.metadata['persona'] for r in filtered} == {'risky'}
+
+    def test_min_turns_is_floor(self, sim_run) -> None:
+        from evaluatorq.dashboard.filters import _sim_apply
+
+        filtered = _sim_apply(sim_run, {'min_turns': ['3']})
+        assert {r.metadata['persona'] for r in filtered} == {'alice', 'risky'}
+
+    def test_min_total_tokens_is_floor(self, sim_run) -> None:
+        from evaluatorq.dashboard.filters import _sim_apply
+
+        filtered = _sim_apply(sim_run, {'min_total_tokens': ['100']})
+        assert {r.metadata['persona'] for r in filtered} == {'alice', 'risky'}
+
+    def test_empty_selections_returns_all(self, sim_run) -> None:
+        from evaluatorq.dashboard.filters import _sim_apply
+
+        assert len(_sim_apply(sim_run, {})) == len(sim_run.results)
+
+    def test_bad_threshold_input_is_noop(self, sim_run) -> None:
+        from evaluatorq.dashboard.filters import _sim_apply
+
+        filtered = _sim_apply(sim_run, {'max_goal_score': ['not-a-number']})
+        assert len(filtered) == len(sim_run.results)
+
+    def test_non_positive_count_is_noop(self, sim_run) -> None:
+        from evaluatorq.dashboard.filters import _sim_apply
+
+        # Zero/negative count floors never narrow — treated as "no filter".
+        for bad in ('0', '-5'):
+            assert len(_sim_apply(sim_run, {'min_turns': [bad]})) == len(sim_run.results)
+            assert len(_sim_apply(sim_run, {'min_total_tokens': [bad]})) == len(sim_run.results)
+
+    def test_full_options_exposes_raw_maxima_and_available_metrics(self, sim_run) -> None:
+        from evaluatorq.dashboard.filters import _sim_full_options
+
+        opts = _sim_full_options(sim_run)
+        assert opts['max_turns'] == ['5']
+        assert opts['max_total_tokens'] == ['500']
+        assert set(opts['metrics']) == {
+            'response_quality',
+            'hallucination_risk',
+            'tone_appropriateness',
+            'factual_accuracy',
+        }
+
+    def test_full_options_hides_unavailable_metrics(self) -> None:
+        from evaluatorq.contracts import TokenUsage
+        from evaluatorq.dashboard.filters import _sim_full_options
+        from evaluatorq.simulation.types import SimulationResult, SimulationRun, TerminatedBy
+
+        result = SimulationResult(
+            messages=[],
+            terminated_by=TerminatedBy.judge,
+            reason='done',
+            goal_achieved=True,
+            goal_completion_score=1.0,
+            rules_broken=[],
+            turn_count=1,
+            turn_metrics=[],
+            token_usage=TokenUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+            metadata={'persona': 'solo', 'scenario': 'x'},
+        )
+        run = SimulationRun(
+            run_name='no-metrics-run',
+            created_at=datetime.now(tz=timezone.utc),
+            mode='run',
+            target_kind='orq_agent',
+            evaluator_names=[],
+            total_results=1,
+            scorer_averages={},
+            results=[result],
+        )
+        opts = _sim_full_options(run)
+        assert opts['metrics'] == []
+
+
+# ---------------------------------------------------------------------------
+# Filter chip on/off clarity: dot->check shape swap drives the accessible
+# selection signal (never color alone).
+# ---------------------------------------------------------------------------
+
+
+class TestFilterChipOnOffClarity:
+    def test_selected_chip_renders_check_span_and_is_active(self):
+        from evaluatorq.dashboard.view import _chip
+
+        html = _chip('goal_outcome', 'Achieved', checked=True, dot_cls='chip-dot-green')
+        assert 'is-active' in html
+        assert 'class="filter-chip-check chip-dot-green"' in html
+        assert 'checked' in html
+
+    def test_unselected_chip_has_no_is_active(self):
+        from evaluatorq.dashboard.view import _chip
+
+        html = _chip('goal_outcome', 'Not achieved', checked=False, dot_cls='chip-dot-red')
+        assert 'is-active' not in html
+        # The check span is still emitted (markup is static); visibility is
+        # driven purely by the .is-active CSS state, not by omitting markup.
+        assert 'class="filter-chip-check chip-dot-red"' in html
+        assert 'checked' not in html
+
+
+# ---------------------------------------------------------------------------
+# Task 3 (metric filters plan): rail markup for rule/goal/turns/tokens/metrics.
+# ---------------------------------------------------------------------------
+
+
+def test_sim_rail_uses_raw_count_maxima():
+    from evaluatorq.dashboard.view import render_filter_form
+
+    html = render_filter_form(
+        'rid',
+        'sim',
+        {
+            'persona': [],
+            'scenario': [],
+            'terminated_by': [],
+            'goal_outcome': ['Achieved', 'Not achieved'],
+            'max_turns': ['8'],
+            'max_total_tokens': ['2500'],
+            'turn_metrics': ['hallucination_risk'],
+        },
+        {},
+    )
+    assert 'name="min_turns" min="1" max="8" step="1"' in html
+    assert 'name="min_total_tokens" min="0" max="2500" step="1"' in html
+    assert 'name="rule_broken" value="yes"' in html
+
+
+def test_sim_rail_min_turns_shows_max_beside_slider():
+    from evaluatorq.dashboard.view import render_filter_form
+
+    html = render_filter_form(
+        'rid',
+        'sim',
+        {'persona': [], 'scenario': [], 'terminated_by': [], 'goal_outcome': [], 'max_turns': ['8']},
+        {},
+    )
+    assert '<span class="filter-slider-max">/ 8</span>' in html
+
+
+def test_sim_rail_goal_score_unset_shows_max_not_all():
+    from evaluatorq.dashboard.view import render_filter_form
+
+    html = render_filter_form(
+        'rid',
+        'sim',
+        {'persona': [], 'scenario': [], 'terminated_by': [], 'goal_outcome': []},
+        {},  # no max_goal_score selection
+    )
+    # Goal-score ceiling renders its bound (≤ 1) when unset, not "all".
+    # (No metrics supplied, so no other ceiling control renders a ≤ readout.)
+    assert '<span class="filter-slider-readout">≤ 1</span>' in html
+
+
+def test_sim_rail_hides_unavailable_metrics():
+    from evaluatorq.dashboard.view import render_filter_form
+
+    html = render_filter_form(
+        'rid',
+        'sim',
+        {
+            'persona': [],
+            'scenario': [],
+            'terminated_by': [],
+            'goal_outcome': ['Achieved', 'Not achieved'],
+            'max_turns': ['8'],
+            'max_total_tokens': ['2500'],
+            'metrics': ['hallucination_risk'],
+        },
+        {},
+    )
+    # Available metric renders its threshold control.
+    assert 'name="min_hallucination_risk"' in html
+    # Unavailable metrics are hidden entirely.
+    assert 'name="max_response_quality"' not in html
+    assert 'name="max_tone_appropriateness"' not in html
+    assert 'name="max_factual_accuracy"' not in html
+
+
+def test_sim_rail_omits_empty_more_expander():
+    from evaluatorq.dashboard.view import render_filter_form
+
+    html = render_filter_form(
+        'rid',
+        'sim',
+        {
+            'persona': [],
+            'scenario': [],
+            'terminated_by': [],
+            'goal_outcome': ['Achieved', 'Not achieved'],
+            'max_turns': ['8'],
+            'max_total_tokens': ['0'],
+            'metrics': [],
+        },
+        {},
+    )
+    assert 'id="filter-dd-more"' not in html
+
+
+def test_sim_rail_more_expander_holds_tokens_and_metrics():
+    from evaluatorq.dashboard.view import render_filter_form
+
+    html = render_filter_form(
+        'rid',
+        'sim',
+        {
+            'persona': [],
+            'scenario': [],
+            'terminated_by': [],
+            'goal_outcome': ['Achieved', 'Not achieved'],
+            'max_turns': ['8'],
+            'max_total_tokens': ['2500'],
+            'metrics': ['hallucination_risk', 'response_quality'],
+        },
+        {},
+    )
+    more_start = html.index('id="filter-dd-more"')
+    more_end = html.index('</details>', more_start)
+    more_section = html[more_start:more_end]
+    assert 'name="min_total_tokens"' in more_section
+    assert 'name="min_hallucination_risk"' in more_section
+    assert 'name="max_response_quality"' in more_section
+    # The rule chip / goal-score ceiling / min-turns controls stay outside.
+    assert 'name="rule_broken"' not in more_section
+    assert 'name="max_goal_score"' not in more_section
+    assert 'name="min_turns"' not in more_section
+
+
+# ---------------------------------------------------------------------------
+# Rail "engaged" affordances: sliders, dropdown status, More-filters badge.
+# ---------------------------------------------------------------------------
+
+
+def _sim_rail(opts, selections):
+    from evaluatorq.dashboard.view import render_filter_form
+
+    base = {'persona': [], 'scenario': [], 'terminated_by': [], 'goal_outcome': []}
+    base.update(opts)
+    return render_filter_form('rid', 'sim', base, selections)
+
+
+def test_slider_readout_engaged_only_when_off_default():
+    # min_turns default floor is 1 → not engaged; moved to 3 → engaged.
+    off = _sim_rail({'max_turns': ['8']}, {'min_turns': ['1']})
+    assert 'filter-slider-readout is-engaged' not in off
+    on = _sim_rail({'max_turns': ['8']}, {'min_turns': ['3']})
+    assert 'filter-slider-readout is-engaged' in on
+
+
+def test_sim_rail_hides_min_turns_when_single_turn_run():
+    # No-op control: every conversation has one turn (max_turns == 1) → hidden.
+    html = _sim_rail({'max_turns': ['1']}, {})
+    assert 'name="min_turns"' not in html
+    shown = _sim_rail({'max_turns': ['5']}, {})
+    assert 'name="min_turns"' in shown
+
+
+def test_dropdown_status_marks_partial():
+    # A narrowed persona selection reads as engaged (partial), not the "All"
+    # default. (Empty selection means "all" by filter convention, so is-none is
+    # a defensive style, not reachable through this render path.)
+    partial = _sim_rail({'persona': ['a', 'b', 'c']}, {'persona': ['a']})
+    assert 'filter-dd-status is-partial' in partial
+    assert 'filter-dd-value is-engaged' in partial
+    full = _sim_rail({'persona': ['a', 'b', 'c']}, {'persona': ['a', 'b', 'c']})
+    assert 'filter-dd-status is-all' in full
+    assert 'is-engaged' not in full
+
+
+def test_more_filters_badge_counts_active_controls():
+    opts = {'max_total_tokens': ['2500'], 'metrics': ['hallucination_risk']}
+    # min_total_tokens default floor is 0 → no badge.
+    inactive = _sim_rail(opts, {'min_total_tokens': ['0']})
+    assert 'filter-dd-more-badge' not in inactive
+    # Moved off default → badge shows 1.
+    active = _sim_rail(opts, {'min_total_tokens': ['500']})
+    assert '<span class="filter-dd-more-badge">1</span>' in active

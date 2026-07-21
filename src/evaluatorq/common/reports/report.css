@@ -279,12 +279,13 @@ tr:nth-child(even) { background: rgba(0,0,0,.015); }
 /* ---- KPI scorecard ---- */
 .kpi-band, .kpi-row {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 1rem;
     margin: 1rem 0 1.5rem;
 }
 .kpi-card {
-    flex: 1 1 140px;
+    flex: 1 1 0;
+    min-width: 0;
     padding: 1rem 1.25rem;
     border-radius: var(--radius);
     background: var(--surface);
@@ -509,6 +510,9 @@ td .sparkline rect, th .sparkline rect { shape-rendering: crispEdges; }
 .scroll-table table { margin: 0; }
 .scroll-table thead th { position: sticky; top: 0; z-index: 1; }
 
+/* Failures "Why" cell: single-line, ellipsis; full text in the title tooltip. */
+.fail-why { max-width: 22rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--gray-500); }
+
 /* ---- Misc ---- */
 .dir { color: var(--gray-500); font-size: .85em; }
 .legend { display: flex; flex-wrap: wrap; gap: .75rem; justify-content: center; font-size: .78rem; margin-top: .5rem; }
@@ -545,6 +549,9 @@ details pre { background: var(--gray-100); padding: 1rem; border-radius: 4px; ov
 @media (max-width: 640px) {
     .container { padding: 24px 16px 60px; }
     .intro-grid { grid-template-columns: 1fr; }
+    /* Re-enable wrapping (base rule is nowrap) so cards stack instead of being
+       crushed onto one non-wrapping row. */
+    .kpi-band, .kpi-row { flex-wrap: wrap; }
     .kpi-card { flex: 1 1 100%; }
     .report-card, .card { padding: 1rem; }
     table:not(.heatmap-table) thead { display: none; }

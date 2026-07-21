@@ -76,7 +76,7 @@ Target Python 3.10+. Use `from __future__ import annotations` at the top of file
 
 ### Data Models
 
-- All shared data models live in `redteam/contracts.py` (Pydantic BaseModel)
+- Cross-package/cross-surface shared data models live in top-level `contracts.py` (Pydantic BaseModel); red-team-specific data models live in `redteam/contracts.py`
 - Enums use `StrEnum` for JSON serialization compatibility
 - Semantic convention: `passed=True` = RESISTANT, `passed=False` = VULNERABLE
 

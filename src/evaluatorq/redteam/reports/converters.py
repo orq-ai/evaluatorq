@@ -8,6 +8,7 @@ from typing import Any, cast
 from loguru import logger as _converters_logger
 from pydantic import ValidationError
 
+from evaluatorq.common.target_call import classify_error_type
 from evaluatorq.redteam.contracts import (
     JURY_RAW_OUTPUT_KEY,
     OWASP_CATEGORY_NAMES,
@@ -40,7 +41,6 @@ from evaluatorq.redteam.contracts import (
     UnifiedEvaluationResult,
     Vulnerability,
     VulnerabilitySummary,
-    classify_error_type,
     infer_framework,
     normalize_category,
 )
@@ -53,8 +53,8 @@ from evaluatorq.redteam.vulnerability_registry import (
     resolve_category_safe,
 )
 
-# Error classification lives in evaluatorq.redteam.contracts so the orchestrator
-# can share it without importing the report layer. Alias kept for call sites here.
+# Error classification lives in the shared common layer, so red-team execution
+# and report conversion use exactly the same mapping. Alias kept for call sites here.
 _classify_error = classify_error_type
 
 
@@ -108,6 +108,9 @@ def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
             return d
         conversation: list[dict[str, Any]] = []
         final_response_text = ''
+        # Per-turn trace/span handles for each successful (non-errored) target turn,
+        # mirroring the simulation surface; the dashboard links to the last one.
+        response_traces: list[dict[str, Any]] = []
 
         # Validate each turn through the Turn model — the single migration authority
         # (its validator maps the pre-RES-883 ``generated_prompt`` to ``text``) — then
@@ -118,6 +121,8 @@ def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
             try:
                 turn = Turn.model_validate(t)
                 atk_text, tgt_text = turn.attacker.text, turn.target.text
+                if not turn.errored and (turn.target.trace_id or turn.target.span_id):
+                    response_traces.append({'trace_id': turn.target.trace_id, 'span_id': turn.target.span_id})
             except ValidationError:
                 atk_text = tgt_text = ''
             conversation.extend((
@@ -129,6 +134,8 @@ def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
         out['turns'] = len(turns_val)
         out.setdefault('conversation', conversation)
         out.setdefault('final_response', final_response_text)
+        if response_traces:
+            out.setdefault('response_traces', response_traces)
         return out
 
     def _normalize_output_dict(d: dict[str, Any]) -> dict[str, Any]:
@@ -526,6 +533,7 @@ def dynamic_evaluatorq_results_to_report(
                 error_code=error_code,
                 error_details=error_details,
                 thread_id=job_output.thread_id,
+                response_traces=job_output.response_traces,
             )
         )
 

@@ -197,6 +197,15 @@ class TestLandingScreen:
         assert 'API key' in r.text
         assert '<a class="nav-item active" href="/settings"' in r.text
 
+    def test_mask_key_shows_only_suffix(self) -> None:
+        from evaluatorq.dashboard.app import _mask_key
+
+        # Only the last 4 chars are revealed; the rest is starred out and capped.
+        assert _mask_key('sk-proj-abcdEF1234wxyz') == '****************wxyz'
+        assert 'abcdEF' not in _mask_key('sk-proj-abcdEF1234wxyz')
+        # Too-short keys reveal nothing but length.
+        assert _mask_key('abcd') == '****'
+
     def test_global_search(self, client: TestClient) -> None:
         # The topbar search box was removed, but the /search route still works.
         assert 'class="search-input"' not in client.get('/').text

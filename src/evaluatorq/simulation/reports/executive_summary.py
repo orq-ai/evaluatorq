@@ -7,7 +7,9 @@ broken rule) plus one concrete example, for the shared narrative generator.
 from __future__ import annotations
 
 from collections import Counter
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from loguru import logger
 
 from evaluatorq.common.reports.executive_summary import truncate_text
 
@@ -71,3 +73,42 @@ def build_sim_facts(results: list[SimulationResult]) -> str:
             lines.append(f'Example failure: {truncate_text(example.reason)}')
 
     return '\n'.join(lines)
+
+
+async def populate_run_executive_summary(
+    run: Any,
+    *,
+    enabled: bool,
+    model: str,
+    resolve_client: Any = None,
+) -> None:
+    """Populate ``run.executive_summary`` in place. Best-effort; never raises.
+
+    Shared by the SDK (``simulate`` / ``generate_and_simulate``) and the CLI so
+    a narrative is generated on every default-on path. Skips silently when
+    disabled, when the run has no results, or when no LLM credentials are
+    configured — a default-on run without creds still yields a valid report.
+
+    ``resolve_client`` overrides the credential resolver (the CLI passes its own
+    module-level ``resolve_llm_client`` so its test monkeypatch seam still works);
+    defaults to :func:`evaluatorq.common.llm_client.resolve_llm_client`.
+    """
+    if not enabled or not run.results:
+        return
+
+    from evaluatorq.common.llm_client import MissingLLMCredentialsError, resolve_llm_client
+    from evaluatorq.common.reports.executive_summary import generate_executive_summary
+
+    resolver = resolve_client or resolve_llm_client
+    try:
+        resolved = resolver()
+    except MissingLLMCredentialsError:
+        logger.warning('Skipping executive summary: no LLM credentials configured.')
+        return
+
+    run.executive_summary = await generate_executive_summary(
+        build_sim_facts(run.results),
+        llm_client=resolved.client,
+        model=model,
+        system_prompt=SIM_EXECUTIVE_SUMMARY_SYSTEM_PROMPT,
+    )

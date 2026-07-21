@@ -33,6 +33,19 @@ def test_run_url_contains_query(monkeypatch: pytest.MonkeyPatch) -> None:
     assert url == 'https://my.orq.ai/orq-research/traces?query=thread_id%3Acontains%3Arun1'
 
 
+def test_single_trace_url_is_query(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv('ORQ_WORKSPACE_SLUG', 'orq-research')
+    url = trace_links.single_trace_url('abc123')
+    assert url == 'https://my.orq.ai/orq-research/traces?query=trace_id%3Ais%3Aabc123'
+
+
+def test_single_trace_url_none_when_empty_or_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert trace_links.single_trace_url('abc123') is None  # no slug
+    monkeypatch.setenv('ORQ_WORKSPACE_SLUG', 'orq-research')
+    assert trace_links.single_trace_url(None) is None
+    assert trace_links.single_trace_url('') is None
+
+
 def test_ui_base_falls_back_to_orq_base(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('ORQ_BASE_URL', 'https://acme.orq.ai/')
     monkeypatch.setenv('ORQ_WORKSPACE', 'acme')
@@ -52,6 +65,33 @@ def test_button_renders_anchor(monkeypatch: pytest.MonkeyPatch) -> None:
     assert 'href="https://x/y?query=a%3Ab"' in html
     assert 'View traces' in html
     assert 'target="_blank"' in html
+
+
+def test_button_renders_extra_attributes() -> None:
+    html = trace_links.trace_link_button(
+        'https://x/y',
+        'View traces',
+        extra_attributes={'data-no-drawer': None, 'data-origin': 'conversation'},
+    )
+
+    assert 'data-no-drawer' in html
+    assert 'data-origin="conversation"' in html
+
+
+def test_button_escapes_malicious_extra_attribute_name_and_value() -> None:
+    malicious_name = 'data-origin" onmouseover="alert(1)'
+    malicious_value = '<img src=x onerror=alert(1)>'
+
+    html = trace_links.trace_link_button(
+        'https://x/y',
+        'View traces',
+        extra_attributes={malicious_name: malicious_value},
+    )
+
+    assert malicious_name not in html
+    assert malicious_value not in html
+    assert 'data-origin&quot; onmouseover=&quot;alert(1)' in html
+    assert '&lt;img src=x onerror=alert(1)&gt;' in html
 
 
 if __name__ == '__main__':

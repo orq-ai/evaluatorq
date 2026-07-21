@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -140,6 +141,8 @@ class CallableTarget(AgentTarget):
                 result = await fn(messages)
             else:
                 result = await asyncio.to_thread(fn, messages)
+                if inspect.isawaitable(result):
+                    result = await result
         except (asyncio.CancelledError, asyncio.TimeoutError):
             raise
         except Exception as exc:

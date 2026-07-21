@@ -434,7 +434,7 @@ class TestTimeoutHandling:
             max_turns=3,
         )
 
-        assert result.error_type == 'target_error'
+        assert result.error_type == 'timeout'
         assert result.error_code == 'target.timeout'
         assert result.error_stage == 'target_call'
         assert result.error_details is not None
@@ -535,7 +535,7 @@ class TestTimeoutHandling:
             max_turns=1,
         )
 
-        assert result.error_type == 'target_error'
+        assert result.error_type == 'timeout'
         assert result.error_code == 'target.timeout'
         assert result.error_stage == 'target_call'
         assert result.error_turn == 1

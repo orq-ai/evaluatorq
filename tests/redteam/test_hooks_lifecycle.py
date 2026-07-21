@@ -30,7 +30,6 @@ from evaluatorq.redteam.contracts import (
 )
 from evaluatorq.redteam.exceptions import CancelledError
 from evaluatorq.redteam.hooks import ConfirmPayload, PipelineHooks
-from evaluatorq.redteam.runner import RedTeamRunMetrics
 
 
 # ---------------------------------------------------------------------------
@@ -130,10 +129,6 @@ def _make_report(**kwargs: Any) -> RedTeamReport:
     return RedTeamReport(**defaults)
 
 
-def _run_result(report: RedTeamReport) -> tuple[RedTeamReport, RedTeamRunMetrics]:
-    return report, RedTeamRunMetrics(num_datapoints=0, num_categories=0, duration_seconds=0.0)
-
-
 def _make_agent_context() -> AgentContext:
     """Minimal AgentContext with no tools/memory so strategy count is low."""
     return AgentContext(key='test-agent', tools=[], memory_stores=[])
@@ -196,37 +191,48 @@ class TestStaticPipelineHooks:
         # real stage calls by executing a thin side-effect that fires the
         # hooks in the same order as the real implementation, but without
         # needing a real LLM or dataset.
-        async def _fake_run_static(**kwargs: Any) -> tuple[RedTeamReport, RedTeamRunMetrics]:
+        async def _fake_run_static(**kwargs: Any) -> RedTeamReport:
+            # red_team now passes an (async) CompositePipelineHooks down into the
+            # internal runners, so drive each hook via await_maybe just as the
+            # real _run_static does.
+            from evaluatorq.common.async_utils import await_maybe
+
             h = kwargs.get('hooks')
             if h is not None:
-                h.on_confirm({
-                    'num_datapoints': 2,
-                    'mode': 'static',
-                    'categories': ['ASI01'],
-                    'attack_model': '',
-                    'evaluator_model': 'gpt-4o-mini',
-                    'max_turns': 1,
-                    'parallelism': 1,
-                    'target': 'agent:gpt-4o-mini',
-                    'dataset_path': None,
-                    'vulnerabilities': [],
-                    'agent_context': None,
-                    'num_dynamic': None,
-                    'num_static': 2,
-                    'filtering_metadata': None,
-                })
-                h.on_stage_start(
-                    PipelineStage.ATTACK_EXECUTION, {'num_datapoints': 2, 'targets': ['agent:gpt-4o-mini']}
+                await await_maybe(
+                    h.on_confirm({
+                        'num_datapoints': 2,
+                        'mode': 'static',
+                        'categories': ['ASI01'],
+                        'attack_model': '',
+                        'evaluator_model': 'gpt-4o-mini',
+                        'max_turns': 1,
+                        'parallelism': 1,
+                        'target': 'agent:gpt-4o-mini',
+                        'dataset_path': None,
+                        'vulnerabilities': [],
+                        'agent_context': None,
+                        'num_dynamic': None,
+                        'num_static': 2,
+                        'filtering_metadata': None,
+                    })
                 )
-                h.on_stage_end(PipelineStage.ATTACK_EXECUTION, {'num_results': 0})
-                h.on_stage_start(PipelineStage.REPORT_GENERATION, {'num_results': 0})
-                h.on_stage_end(PipelineStage.REPORT_GENERATION, {'resistance_rate': 1.0, 'elapsed_s': 0.1})
-            return _run_result(mock_report)
+                await await_maybe(
+                    h.on_stage_start(
+                        PipelineStage.ATTACK_EXECUTION, {'num_datapoints': 2, 'targets': ['agent:gpt-4o-mini']}
+                    )
+                )
+                await await_maybe(h.on_stage_end(PipelineStage.ATTACK_EXECUTION, {'num_results': 0}))
+                await await_maybe(h.on_stage_start(PipelineStage.REPORT_GENERATION, {'num_results': 0}))
+                await await_maybe(
+                    h.on_stage_end(PipelineStage.REPORT_GENERATION, {'resistance_rate': 1.0, 'elapsed_s': 0.1})
+                )
+            return mock_report
 
         from evaluatorq.redteam.runner import red_team
 
         with patch('evaluatorq.redteam.runner._run_static', side_effect=_fake_run_static):
-            await red_team('agent:gpt-4o-mini', mode='static', dataset='local.json', hooks=spy)
+            await red_team('agent:gpt-4o-mini', mode='static', hooks=spy)
 
         starts = spy.stage_starts()
         ends = spy.stage_ends()
@@ -452,9 +458,9 @@ class TestStaticPipelineHooks:
         with patch(
             'evaluatorq.redteam.runner._run_static',
             new_callable=AsyncMock,
-            return_value=_run_result(mock_report),
+            return_value=mock_report,
         ):
-            result = await red_team('agent:gpt-4o-mini', mode='static', dataset='local.json', hooks=spy)
+            result = await red_team('agent:gpt-4o-mini', mode='static', hooks=spy)
 
         assert result is mock_report
         assert spy.received_complete_report is mock_report
@@ -470,13 +476,12 @@ class TestStaticPipelineHooks:
         with patch(
             'evaluatorq.redteam.runner._run_static',
             new_callable=AsyncMock,
-            return_value=_run_result(mock_report),
+            return_value=mock_report,
         ):
             spy = SpyHooks()
             result = await red_team(
                 'agent:gpt-4o-mini',
                 mode='static',
-                dataset='local.json',
                 hooks=spy,
             )
 
@@ -494,13 +499,12 @@ class TestStaticPipelineHooks:
         with patch(
             'evaluatorq.redteam.runner._run_static',
             new_callable=AsyncMock,
-            return_value=_run_result(mock_report),
+            return_value=mock_report,
         ):
             spy = SpyHooks()
             result = await red_team(
                 'agent:gpt-4o-mini',
                 mode='static',
-                dataset='local.json',
                 hooks=spy,
                 artifacts_dir=str(tmp_path),
             )
@@ -535,7 +539,7 @@ class TestDynamicPipelineHooksViaRunner:
         with patch(
             'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
             new_callable=AsyncMock,
-            return_value=_run_result(mock_report),
+            return_value=mock_report,
         ):
             result = await red_team('agent:gpt-4o-mini', mode='dynamic', hooks=spy)
 
@@ -553,7 +557,7 @@ class TestDynamicPipelineHooksViaRunner:
         with patch(
             'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
             new_callable=AsyncMock,
-            return_value=_run_result(mock_report),
+            return_value=mock_report,
         ):
             await red_team('agent:gpt-4o-mini', mode='dynamic', hooks=spy)
 
@@ -570,7 +574,7 @@ class TestDynamicPipelineHooksViaRunner:
         with patch(
             'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
             new_callable=AsyncMock,
-            return_value=_run_result(mock_report),
+            return_value=mock_report,
         ):
             await red_team('agent:gpt-4o-mini', mode='dynamic', hooks=spy)
 
@@ -663,6 +667,8 @@ class TestDynamicInternalStageOrdering:
                 'evaluatorq.redteam.reports.converters.static_results_to_report',
                 return_value=mock_report,
             ),
+            patch('evaluatorq.tracing.init_tracing_if_needed', new_callable=AsyncMock),
+            patch('evaluatorq.tracing.capture_parent_context', new_callable=AsyncMock, return_value=None),
             patch(
                 'evaluatorq.redteam.tracing.with_redteam_span',
                 return_value=MagicMock(
@@ -778,6 +784,8 @@ class TestDynamicInternalStageOrdering:
                 'evaluatorq.redteam.reports.converters.static_results_to_report',
                 return_value=mock_report,
             ),
+            patch('evaluatorq.tracing.init_tracing_if_needed', new_callable=AsyncMock),
+            patch('evaluatorq.tracing.capture_parent_context', new_callable=AsyncMock, return_value=None),
             patch(
                 'evaluatorq.redteam.tracing.with_redteam_span',
                 return_value=MagicMock(
@@ -887,6 +895,8 @@ class TestDynamicConfirmPayload:
                 'evaluatorq.redteam.reports.converters.static_results_to_report',
                 return_value=mock_report,
             ),
+            patch('evaluatorq.tracing.init_tracing_if_needed', new_callable=AsyncMock),
+            patch('evaluatorq.tracing.capture_parent_context', new_callable=AsyncMock, return_value=None),
             patch(
                 'evaluatorq.redteam.tracing.with_redteam_span',
                 return_value=MagicMock(
@@ -983,6 +993,8 @@ class TestDynamicConfirmPayload:
                 'evaluatorq.redteam.adaptive.pipeline.generate_dynamic_datapoints',
                 gen_mock,
             ),
+            patch('evaluatorq.tracing.init_tracing_if_needed', new_callable=AsyncMock),
+            patch('evaluatorq.tracing.capture_parent_context', new_callable=AsyncMock, return_value=None),
             patch(
                 'evaluatorq.redteam.tracing.with_redteam_span',
                 return_value=MagicMock(
@@ -1079,6 +1091,8 @@ class TestDynamicConfirmPayload:
                 'evaluatorq.redteam.reports.converters.merge_reports',
                 return_value=mock_report,
             ),
+            patch('evaluatorq.tracing.init_tracing_if_needed', new_callable=AsyncMock),
+            patch('evaluatorq.tracing.capture_parent_context', new_callable=AsyncMock, return_value=None),
             patch(
                 'evaluatorq.redteam.tracing.with_redteam_span',
                 return_value=MagicMock(

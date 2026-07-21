@@ -32,6 +32,18 @@ ORQ_DEFAULT_HOST = 'https://my.orq.ai'
 ORQ_ROUTER_SUFFIX = '/v3/router'
 
 
+def orq_base_url() -> str:
+    """The Orq host a run is talking to: ``ORQ_BASE_URL`` or the prod default.
+
+    Recorded on run/report records (sim, red team, evaluatorq) so a saved run
+    remembers which deployment — prod / staging / on-prem — actually served it.
+    Only meaningful when the run used an Orq agent/response; callers omit it
+    otherwise. See ``dashboard.orq_workspace.classify_host`` for prod/staging/
+    on-prem detection from this value.
+    """
+    return os.getenv('ORQ_BASE_URL', ORQ_DEFAULT_HOST).rstrip('/')
+
+
 class MissingLLMCredentialsError(ValueError):
     """No ``ORQ_API_KEY``/``OPENAI_API_KEY`` and no injected client.
 

@@ -116,13 +116,16 @@ def truncate(text: str, max_chars: int = 800) -> str:
     return text[:max_chars] + '\n\n[truncated — full text in report JSON]'
 
 
-def html_table(headers: list[str], rows: list[list[str]]) -> str:
+def html_table(headers: list[str], rows: list[list[str]], row_attrs: list[str] | None = None) -> str:
     """Render an HTML table. Cell strings may contain inline HTML (e.g. badges)."""
+    if row_attrs is not None and len(row_attrs) != len(rows):
+        raise ValueError('row_attrs length must match rows')
     parts = ['<table>', '<thead><tr>']
     parts.extend(f'<th>{esc(h)}</th>' for h in headers)
     parts.append('</tr></thead><tbody>')
-    for row in rows:
-        parts.append('<tr>')
+    for index, row in enumerate(rows):
+        attrs = f' {row_attrs[index]}' if row_attrs and row_attrs[index] else ''
+        parts.append(f'<tr{attrs}>')
         # data-label carries the column name so the mobile card layout
         # (td::before { content: attr(data-label) }) stays labeled.
         parts.extend(

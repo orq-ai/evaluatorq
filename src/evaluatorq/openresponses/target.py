@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 from typing_extensions import Self
 
 from evaluatorq.common.retry import with_retry
-from evaluatorq.common.thread_context import thread_body_param
+from evaluatorq.common.thread_context import pipeline_metadata_param, thread_body_param
 from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, LLMCallConfig, Message
 from evaluatorq.openresponses.client import build_simulation_client
 from evaluatorq.openresponses.tracing import (
@@ -136,10 +136,12 @@ class OrqResponsesTarget(AgentTarget):
                 kwargs['tools'] = self.tools
             if self.instructions is not None:
                 kwargs['instructions'] = self.instructions
-            # Group multi-turn calls in Orq observability under one thread.
-            thread = thread_body_param()
-            if thread:
-                kwargs['extra_body'] = {**kwargs.get('extra_body', {}), **thread}
+            # Group multi-turn calls in Orq observability under one thread, and
+            # tag the request with the evaluatorq pipeline so its trace is
+            # attributable to the run type. Both ride in the request body.
+            body_extra = {**thread_body_param(), **pipeline_metadata_param()}
+            if body_extra:
+                kwargs['extra_body'] = {**kwargs.get('extra_body', {}), **body_extra}
 
             async with with_llm_span(
                 model=self.config.model,
@@ -152,7 +154,9 @@ class OrqResponsesTarget(AgentTarget):
                 response = await (asyncio.wait_for(coro, timeout=timeout_s) if timeout_s else coro)
                 # The Orq router returns the trace id in the response body under
                 # ``telemetry.trace_id`` (absent for plain OpenAI responses).
-                trace_id = getattr(getattr(response, 'telemetry', None), 'trace_id', None)
+                telemetry = getattr(response, 'telemetry', None)
+                trace_id = getattr(telemetry, 'trace_id', None)
+                span_id = getattr(telemetry, 'span_id', None)
                 record_openresponses_response(span, response)
                 if span is not None and trace_id:
                     span.set_attribute('orq.trace_id', trace_id)
@@ -167,6 +171,8 @@ class OrqResponsesTarget(AgentTarget):
             updates: dict[str, Any] = {'model': agent_response.model or self.config.model}
             if trace_id:
                 updates['trace_id'] = trace_id
+            if span_id:
+                updates['span_id'] = span_id
             if agent_response.usage is not None:
                 updates['usage'] = agent_response.usage.model_copy(update={'calls': 1})
             return agent_response.model_copy(update=updates)

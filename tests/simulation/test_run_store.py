@@ -105,6 +105,24 @@ def test_build_simulation_run_aggregates_scorer_averages() -> None:
     assert run.total_results == 2
 
 
+def test_build_simulation_run_records_orq_host_for_orq_targets(monkeypatch) -> None:
+    monkeypatch.setenv("ORQ_BASE_URL", "https://staging.orq.ai")
+    for kind in ("orq_agent", "orq_deployment"):
+        run = build_simulation_run(
+            run_name="h", mode="run", target_kind=kind, evaluator_names=[], results=[]
+        )
+        assert run.orq_base_url == "https://staging.orq.ai"
+
+
+def test_build_simulation_run_omits_orq_host_for_non_orq_targets(monkeypatch) -> None:
+    monkeypatch.setenv("ORQ_BASE_URL", "https://staging.orq.ai")
+    for kind in ("openai_model", "callback", "vercel"):
+        run = build_simulation_run(
+            run_name="h", mode="run", target_kind=kind, evaluator_names=[], results=[]
+        )
+        assert run.orq_base_url is None  # no Orq agent used -> omitted
+
+
 def test_build_simulation_run_skips_non_numeric_scores() -> None:
     bad_scores: dict[str, Any] = {"goal_achieved": 1.0, "bad_scorer": "not_a_number"}
     results = [

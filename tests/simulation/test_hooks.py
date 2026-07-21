@@ -1316,3 +1316,40 @@ async def test_generate_fires_generate_stage_hooks(monkeypatch):
 
     assert result == ['dp']
     assert events == [('start', str(SimStage.GENERATE)), ('end', str(SimStage.GENERATE))]
+
+
+@pytest.mark.asyncio
+async def test_manifest_errors_when_on_run_start_raises(datapoint_factory):
+    """A hook raising before the inner run body still marks the saved manifest
+    'error' — the run can never stay 'running' once it has finished."""
+    from evaluatorq.common.run_manifest import list_manifests
+    from evaluatorq.simulation.api import simulate
+    from evaluatorq.simulation.utils.run_store import get_sim_runs_dir
+
+    class BadStart(DefaultHooks):
+        def on_confirm(self, meta):
+            return True
+
+        def on_run_start(self, meta):
+            raise RuntimeError('start boom')
+
+    async def _ok_target(messages):
+        return 'fine'
+
+    with pytest.raises(RuntimeError, match='start boom'):
+        await simulate(
+            target=_ok_target,
+            datapoints=[datapoint_factory('dp1')],
+            max_turns=1,
+            evaluator_names=['goal_achieved'],
+            user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+            judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+            hooks=BadStart(),
+            save=True,
+        )
+
+    manifests = list_manifests(get_sim_runs_dir())
+    assert len(manifests) == 1
+    assert manifests[0].status == 'error'
+    assert manifests[0].error == 'start boom'
+    assert manifests[0].ended_at is not None

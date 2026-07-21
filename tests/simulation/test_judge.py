@@ -60,6 +60,19 @@ class TestJudgeAgent:
         assert judgment.goal_achieved is False
         assert judgment.response_quality == 0.8
 
+    def test_continue_judgment_carries_partial_score(self, judge):
+        # A continue at the last turn IS the final score on max_turns runs, so it
+        # must reflect the judge's partial estimate, not a hardcoded 0.
+        tool_call = MagicMock()
+        tool_call.function.name = "continue_conversation"
+        tool_call.function.arguments = json.dumps(
+            {"reason": "Most of the goal done", "goal_completion_score": 0.75}
+        )
+
+        judgment = judge._parse_judgment(LLMResult(content="", tool_calls=[tool_call]))
+
+        assert judgment.goal_completion_score == 0.75
+
     def test_parse_finish_judgment(self, judge):
         tool_call = MagicMock()
         tool_call.function.name = "finish_conversation"

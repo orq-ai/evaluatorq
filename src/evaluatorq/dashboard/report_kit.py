@@ -44,7 +44,13 @@ def _confidence_pill(confidence: str | None) -> str:
     )
 
 
-def exec_summary(*, summary_data: dict[str, Any], heatmap_data: dict[str, Any], confidence: str | None) -> str:
+def exec_summary(
+    *,
+    summary_data: dict[str, Any],
+    heatmap_data: dict[str, Any],
+    confidence: str | None,
+    label: str = 'Executive summary',
+) -> str:
     """Executive-summary callout (spec §Overview.1)."""
     total = summary_data.get('total_conversations', 0)
     if not total:
@@ -67,7 +73,7 @@ def exec_summary(*, summary_data: dict[str, Any], heatmap_data: dict[str, Any], 
             f'<strong>{esc(worst["persona"])} &times; {esc(worst["scenario"])}</strong> ({pct(worst["success_rate"])}).'
         )
 
-    return callout(sentence, confidence=confidence)
+    return callout(sentence, label=label, confidence=confidence)
 
 
 def callout(body_html: str, *, label: str = 'Executive summary', confidence: str | None = None) -> str:

@@ -43,7 +43,7 @@ def _get_orq_server_url() -> str:
     return url.rstrip('/').removesuffix('/v3/router')
 
 
-from evaluatorq.common.thread_context import thread_body_param
+from evaluatorq.common.thread_context import pipeline_metadata_param, thread_body_param
 from evaluatorq.common.tracing import record_token_usage, set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentTarget, Message, content_to_text
 from evaluatorq.redteam.backends._errors import extract_provider_error_code, extract_status_code
@@ -251,8 +251,10 @@ class ORQAgentTarget(AgentTarget):
                     kwargs['memory'] = {'entity_id': self.memory_entity_id}
                 # Named thread for Orq observability (selectable on traces); the
                 # task_id already threads server-side state, thread groups the
-                # turns under one id in the Threads tab.
+                # turns under one id in the Threads tab. Metadata tags the trace
+                # with the evaluatorq pipeline that produced it.
                 kwargs.update(thread_body_param())
+                kwargs.update(pipeline_metadata_param())
 
                 response = await asyncio.to_thread(self.orq_client.agents.responses.create, **kwargs)
 
@@ -293,6 +295,7 @@ class ORQAgentTarget(AgentTarget):
                         task_id=self._task_id,
                         background=False,
                         **thread_body_param(),
+                        **pipeline_metadata_param(),
                     )
                     if response.task_id:
                         self._task_id = response.task_id
@@ -315,7 +318,9 @@ class ORQAgentTarget(AgentTarget):
 
                 # Agents endpoint returns the root trace id in the response body
                 # (telemetry.trace_id) rather than a header — links back to Orq.
-                trace_id = getattr(getattr(response, 'telemetry', None), 'trace_id', None)
+                telemetry = getattr(response, 'telemetry', None)
+                trace_id = getattr(telemetry, 'trace_id', None)
+                span_id = getattr(telemetry, 'span_id', None)
                 if trace_id:
                     set_span_attrs(span, {'orq.trace_id': str(trace_id)})
 
@@ -339,6 +344,7 @@ class ORQAgentTarget(AgentTarget):
                     model=str(response_model) if response_model else None,
                     response_id=getattr(response, 'task_id', None),
                     trace_id=str(trace_id) if trace_id else None,
+                    span_id=str(span_id) if span_id else None,
                     finish_reason=None,
                 )
 

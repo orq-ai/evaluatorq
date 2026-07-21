@@ -111,66 +111,237 @@
     });
   });
 
-  // Agent-simulation entity details: compact persona/scenario rows and
-  // breakdown-table labels open one shared dialog. j/k cycle within the same
-  // entity kind; Escape is handled natively by <dialog>.
+  // Live filter-slider readout: update the number next to a range slider while
+  // it is being dragged (`input`), before HTMX fires the `change` round-trip.
+  // Delegated on document so it survives the HTMX form swap.
+  document.addEventListener('input', function (evt) {
+    var slider = evt.target;
+    if (!slider || !slider.classList || !slider.classList.contains('filter-slider')) return;
+    var row = slider.closest('.filter-slider-row');
+    var readout = row && row.querySelector('.filter-slider-readout');
+    if (!readout) return;
+    var glyph = slider.getAttribute('data-glyph') || '';
+    readout.textContent = (glyph ? glyph + ' ' : '') + slider.value;
+    // Engaged = moved off the no-op default bound.
+    var def = slider.getAttribute('data-default');
+    var engaged = def !== null && parseFloat(slider.value) !== parseFloat(def);
+    readout.classList.toggle('is-engaged', engaged);
+  });
+
+  // Agent-simulation entity details: persona/scenario templates and lazy
+  // conversation transcripts share one dialog. j/k steps through the entity
+  // list that opened the drawer; Escape is handled natively by <dialog>.
   (function () {
-    var activeKind = null;
-    var activeId = null;
+    var activeState = null;
+    // Each drawer view (conversation / persona / scenario) is a real browser
+    // history entry, so Back/Forward walk the drill path. `drawerDepth` mirrors
+    // how many drawer entries sit above the page entry (0 = closed); it is read
+    // back from history.state on popstate so it survives Back/Forward. Pushes are
+    // suppressed while applying a popstate so we don't re-enter history.
+    var drawerDepth = 0;
+    var suppressPush = false;
 
     function currentDialog() {
       var dialog = document.querySelector('.sim-entity-dialog');
       return dialog && dialog.showModal ? dialog : null;
     }
 
-    function templatesFor(kind) {
-      return Array.prototype.slice.call(
-        document.querySelectorAll('[data-sim-entity-template][data-entity-kind="' + kind + '"]')
-      );
+    function contentNode() {
+      var dialog = currentDialog();
+      return dialog ? dialog.querySelector('[data-sim-entity-content]') : null;
     }
 
-    function render(template) {
+    function dialogIsOpen() {
+      var dialog = currentDialog();
+      return !!(dialog && dialog.open);
+    }
+
+    function openDialog() {
       var dialog = currentDialog();
       if (!dialog) return;
-      var content = dialog.querySelector('[data-sim-entity-content]');
-      if (!template || !content) return;
-      activeKind = template.getAttribute('data-entity-kind');
-      activeId = template.getAttribute('data-entity-id');
-      content.innerHTML = template.innerHTML;
+      // Native Escape closes <dialog> without going through dismiss(); unwind the
+      // drawer's history entries so Back/Forward stay consistent. Attach lazily
+      // (the dialog may be injected after this script runs) and only once.
+      if (!dialog.dataset.simCloseBound) {
+        dialog.dataset.simCloseBound = '1';
+        dialog.addEventListener('close', function () {
+          if (drawerDepth > 0 && !suppressPush) history.go(-drawerDepth);
+        });
+      }
+      dialog.classList.remove('sim-entity-dialog--closing');
       if (!dialog.open) dialog.showModal();
     }
 
-    function openEntity(kind, id) {
-      var template = document.querySelector(
-        '[data-sim-entity-template][data-entity-kind="' + kind + '"][data-entity-id="' + id + '"]'
+    function closeDrawer() {
+      var dialog = currentDialog();
+      if (!dialog || !dialog.open || dialog.classList.contains('sim-entity-dialog--closing')) return;
+      dialog.classList.add('sim-entity-dialog--closing');
+      var finished = false;
+      var fallback;
+      function finishClose() {
+        if (finished) return;
+        finished = true;
+        window.clearTimeout(fallback);
+        dialog.classList.remove('sim-entity-dialog--closing');
+        dialog.close();
+      }
+      dialog.addEventListener('animationend', finishClose, { once: true });
+      fallback = window.setTimeout(finishClose, 220);
+    }
+
+    function formValues() {
+      var form = document.getElementById('filter-form');
+      return form ? new FormData(form) : {};
+    }
+
+    function isEditable(element) {
+      if (!element) return false;
+      var tag = element.tagName;
+      return element.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+    }
+
+    function matchingTriggers() {
+      if (!activeState || !activeState.origin) return [];
+      return Array.prototype.slice.call(
+        activeState.origin.querySelectorAll(
+          '[data-sim-entity-trigger][data-entity-kind="' + activeState.kind + '"]'
+        )
       );
-      render(template);
+    }
+
+    function updateActions() {
+      var dialog = currentDialog();
+      if (!dialog) return;
+      var back = dialog.querySelector('[data-sim-entity-back]');
+      var prev = dialog.querySelector('[data-sim-entity-prev]');
+      var next = dialog.querySelector('[data-sim-entity-next]');
+      var canStep = matchingTriggers().length > 1;
+      if (back) back.hidden = drawerDepth <= 1;
+      if (prev) prev.disabled = !canStep;
+      if (next) next.disabled = !canStep;
+    }
+
+    function loadConversation() {
+      var content = contentNode();
+      if (!activeState || !activeState.url || !content || !window.htmx) return;
+      content.innerHTML = '<p class="sim-drawer-loading">Loading conversation…</p>';
+      window.htmx.ajax('GET', activeState.url, {
+        target: content,
+        swap: 'innerHTML',
+        values: formValues()
+      });
+    }
+
+    function triggerSerial(trigger, kind) {
+      return kind === 'conversation'
+        ? { kind: 'conversation', url: trigger.getAttribute('data-drawer-url') }
+        : { kind: kind, id: trigger.getAttribute('data-entity-id') };
+    }
+
+    // Re-find a view's originating trigger group on the page so j/k stepping
+    // still works after a Back/Forward that dropped the click-time origin.
+    function originForSerial(serial) {
+      var sel = serial.kind === 'conversation'
+        ? '[data-sim-entity-trigger][data-drawer-url="' + serial.url + '"]'
+        : '[data-sim-entity-trigger][data-entity-kind="' + serial.kind + '"][data-entity-id="' + serial.id + '"]';
+      var t = document.querySelector(sel);
+      return t ? t.parentElement : null;
+    }
+
+    // Render a drawer view from its serialized form. Does NOT touch history —
+    // callers decide whether the move is a push, replace, or popstate restore.
+    function applySerial(serial, origin) {
+      openDialog();
+      var content = contentNode();
+      if (!content) return;
+      activeState = { kind: serial.kind, origin: origin || originForSerial(serial) };
+      if (serial.kind === 'conversation') {
+        if (!serial.url || !window.htmx) return;
+        activeState.url = serial.url;
+        loadConversation();
+      } else {
+        var template = document.querySelector(
+          '[data-sim-entity-template][data-entity-kind="' + serial.kind + '"][data-entity-id="' + serial.id + '"]'
+        );
+        if (!template) return;
+        activeState.id = serial.id;
+        content.innerHTML = template.innerHTML;
+      }
+      updateActions();
+    }
+
+    // A clickthrough/drill: a new history entry above the current one.
+    function pushDrawer(serial, origin) {
+      drawerDepth += 1;
+      if (!suppressPush) history.pushState({ simDrawer: serial, drawerDepth: drawerDepth }, '');
+      applySerial(serial, origin);
+    }
+
+    // A lateral move (j/k within the same list): update the current entry in
+    // place so the history stack doesn't grow one item per arrow press.
+    function replaceDrawer(serial, origin) {
+      if (!suppressPush) history.replaceState({ simDrawer: serial, drawerDepth: drawerDepth }, '');
+      applySerial(serial, origin);
     }
 
     function step(delta) {
-      if (!activeKind || !activeId) return;
-      var templates = templatesFor(activeKind);
-      if (!templates.length) return;
-      var current = templates.findIndex(function (template) {
-        return template.getAttribute('data-entity-id') === activeId;
+      if (!activeState) return;
+      var triggers = matchingTriggers();
+      if (!triggers.length) return;
+      var current = triggers.findIndex(function (trigger) {
+        return activeState.kind === 'conversation'
+          ? trigger.getAttribute('data-drawer-url') === activeState.url
+          : trigger.getAttribute('data-entity-id') === activeState.id;
       });
       if (current < 0) return;
-      var next = (current + delta + templates.length) % templates.length;
-      render(templates[next]);
+      var next = (current + delta + triggers.length) % triggers.length;
+      var trigger = triggers[next];
+      replaceDrawer(triggerSerial(trigger, activeState.kind), activeState.origin);
     }
 
+    // Close by unwinding every drawer entry back to the page, so Forward doesn't
+    // silently reopen and the URL matches the visible state.
+    function dismiss() {
+      if (drawerDepth > 0) {
+        history.go(-drawerDepth);
+      } else {
+        closeDrawer();
+      }
+    }
+
+    function activateTrigger(trigger) {
+      var kind = trigger.getAttribute('data-entity-kind');
+      pushDrawer(triggerSerial(trigger, kind), trigger.parentElement);
+    }
+
+    window.addEventListener('popstate', function (evt) {
+      var serial = evt.state && evt.state.simDrawer;
+      if (serial) {
+        suppressPush = true;
+        drawerDepth = evt.state.drawerDepth || 1;
+        applySerial(serial, null);
+        suppressPush = false;
+      } else {
+        drawerDepth = 0;
+        if (dialogIsOpen()) closeDrawer();
+      }
+    });
+
     document.body.addEventListener('click', function (evt) {
+      if (evt.target.closest('[data-no-drawer]')) return;
       var trigger = evt.target.closest('[data-sim-entity-trigger]');
       if (!trigger) return;
       evt.preventDefault();
-      openEntity(trigger.getAttribute('data-entity-kind'), trigger.getAttribute('data-entity-id'));
+      activateTrigger(trigger);
     });
 
     document.body.addEventListener('click', function (evt) {
       var dialog = currentDialog();
       if (!dialog || !dialog.open) return;
       if (evt.target === dialog || evt.target.closest('[data-sim-entity-close]')) {
-        dialog.close();
+        dismiss();
+      } else if (evt.target.closest('[data-sim-entity-back]')) {
+        history.back();
       } else if (evt.target.closest('[data-sim-entity-prev]')) {
         step(-1);
       } else if (evt.target.closest('[data-sim-entity-next]')) {
@@ -178,11 +349,15 @@
       }
     });
 
-    document.addEventListener('keydown', function (evt) {
-      var dialog = currentDialog();
-      if (!dialog || !dialog.open) return;
-      var tag = document.activeElement && document.activeElement.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    document.body.addEventListener('keydown', function (evt) {
+      if (evt.target.closest('[data-no-drawer]')) return;
+      var trigger = evt.target.closest('[data-sim-entity-trigger]');
+      if (trigger && (evt.key === 'Enter' || evt.key === ' ')) {
+        evt.preventDefault();
+        activateTrigger(trigger);
+        return;
+      }
+      if (!dialogIsOpen() || isEditable(document.activeElement)) return;
       if (evt.key === 'j' || evt.key === 'J') {
         evt.preventDefault();
         step(1);
@@ -215,6 +390,23 @@
   });
 })();
 
+// Filter dropdowns behave as an accordion: opening one closes the others.
+// `toggle` does not bubble, so listen in the capture phase. The "More filters"
+// expander (.filter-dd-more) is excluded — it wraps the nested dropdowns and
+// must stay open while one of its children is used.
+(function () {
+  document.addEventListener('toggle', function (evt) {
+    var d = evt.target;
+    if (!d.open || !d.matches || !d.matches('details.filter-dd')) return;
+    if (d.classList.contains('filter-dd-more')) return;
+    var scope = d.closest('#filter-form') || document;
+    scope.querySelectorAll('details.filter-dd[open]').forEach(function (o) {
+      if (o === d || o.classList.contains('filter-dd-more') || o.contains(d)) return;
+      o.open = false;
+    });
+  }, true);
+})();
+
 // Top failure modes panel — min-count slider filters bars client-side.
 (function () {
   document.body.addEventListener('input', function (evt) {
@@ -236,24 +428,40 @@
   });
 })();
 
-// Failures table -> transcript drill-down. The scenario cell is <a href="#conv-N">;
-// the target card lives in a different CSS-radio tab, so a raw anchor can't reach it.
-// Flip to that panel's tab, open the <details> (fires its hx toggle load), scroll to it.
+// Tab history: CSS-radio report tabs don't change the URL, so browser Back
+// would jump past every tab switch to the last full page load (the homepage).
+// Push a hash per user tab click and restore the matching radio on Back/Forward.
 (function () {
-  document.body.addEventListener('click', function (evt) {
-    var link = evt.target.closest('a[href^="#conv-"]');
-    if (!link) return;
-    var card = document.getElementById(link.getAttribute('href').slice(1));
-    if (!card) return;
-    evt.preventDefault();
-    var panel = card.closest('.tab-panel');
-    if (panel) {
-      var idx = Array.prototype.indexOf.call(panel.parentNode.children, panel);
-      var tabs = panel.closest('.tabs');
-      var radio = tabs && tabs.querySelectorAll('.tab-radio')[idx];
-      if (radio) radio.checked = true;
+  var restoring = false; // true while we set radios programmatically (no push)
+  function selectRadio(id) {
+    var radio = id && document.getElementById(id);
+    if (radio && radio.classList.contains('tab-radio') && !radio.checked) {
+      restoring = true;
+      radio.checked = true;
+      // Setting .checked in JS skips the 'change' event the Vega-resize handler
+      // listens for, so dispatch one so restored charts still size correctly.
+      radio.dispatchEvent(new Event('change', { bubbles: true }));
+      restoring = false;
     }
-    card.open = true;
-    card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  // User clicks a tab -> push its id as a hash (a real history entry).
+  document.body.addEventListener('change', function (evt) {
+    var t = evt.target;
+    if (restoring || !t || !t.classList || !t.classList.contains('tab-radio') || !t.id) return;
+    if (('#' + t.id) === location.hash) return;
+    history.pushState(null, '', '#' + t.id);
   });
+  // Back/Forward -> restore the hashed tab, or reset each group to its first tab.
+  window.addEventListener('popstate', function () {
+    var id = location.hash.slice(1);
+    if (id) {
+      selectRadio(id);
+    } else {
+      document.querySelectorAll('.tabs .tab-radio:first-of-type').forEach(function (r) {
+        selectRadio(r.id);
+      });
+    }
+  });
+  // Honor a tab hash on initial load / refresh.
+  if (location.hash) selectRadio(location.hash.slice(1));
 })();

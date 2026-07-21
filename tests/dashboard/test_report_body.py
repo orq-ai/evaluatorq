@@ -373,7 +373,7 @@ def test_sim_dashboard_adapter_omits_experiment_url_when_unset() -> None:
     assert 'trace-link' not in adapter.body_from_results(run, results)
 
 
-def test_sim_tabbed_dashboard_preserves_only_full_run_narrative() -> None:
+def test_sim_tabbed_dashboard_always_shows_run_narrative() -> None:
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
     from evaluatorq.simulation.types import SimulationRun
 
@@ -392,5 +392,77 @@ def test_sim_tabbed_dashboard_preserves_only_full_run_narrative() -> None:
 
     summary = run.executive_summary
     assert summary is not None
+    # The executive summary is whole-run context and stays visible on both the
+    # full view and any filtered subset (even when the filter matches nothing).
     assert summary in sim_report_tabs('run-1', run)
-    assert summary not in sim_report_tabs('run-1', run, results=[])
+    assert summary in sim_report_tabs('run-1', run, results=[])
+
+
+def test_sim_overview_empty_filter_keeps_outcomes_and_quality() -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+    from evaluatorq.simulation.types import SimulationRun
+
+    results = _make_sim_results()
+    run = SimulationRun(
+        run_name='empty-filter',
+        created_at=datetime.now(tz=timezone.utc),
+        mode='simulate',
+        target_kind='callback',
+        evaluator_names=[],
+        total_results=len(results),
+        scorer_averages={},
+        results=results,
+    )
+    # A filter matching nothing must not collapse the Outcomes / quality blocks.
+    html = sim_report_tabs('run-1', run, results=[])
+    assert 'Outcomes' in html
+    assert 'Average quality metrics' in html
+    assert 'No conversations match the current filter.' in html
+
+
+def test_sim_empty_filter_keeps_data_tabs() -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+    from evaluatorq.simulation.types import SimulationRun
+
+    results = _make_sim_results()
+    run = SimulationRun(
+        run_name='empty-filter-tabs',
+        created_at=datetime.now(tz=timezone.utc),
+        mode='simulate',
+        target_kind='callback',
+        evaluator_names=[],
+        total_results=len(results),
+        scorer_averages={},
+        results=results,
+    )
+    html = sim_report_tabs('run-1', run, results=[])
+    # Breakdown / Transcripts / Turn quality tabs stay present (not dropped)
+    # and carry the no-match note rather than collapsing.
+    for label in ('Breakdown', 'Transcripts', 'Turn quality'):
+        assert label in html
+    assert html.count('No conversations match the current filter.') >= 3
+
+
+def test_sim_exec_summary_survives_empty_filter_without_saved_narrative() -> None:
+    # Regression (hate review, Realist): with NO saved narrative AND a filter
+    # matching zero rows, the exec summary used to vanish (computed sentence is
+    # built from the filtered subset → total 0 → ''). It must now render the
+    # whole-run computed summary, labeled as whole-run context.
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+    from evaluatorq.simulation.types import SimulationRun
+
+    results = _make_sim_results()
+    run = SimulationRun(
+        run_name='no-narrative',
+        created_at=datetime.now(tz=timezone.utc),
+        mode='simulate',
+        target_kind='callback',
+        evaluator_names=[],
+        total_results=len(results),
+        scorer_averages={},
+        results=results,
+        executive_summary=None,
+    )
+    html = sim_report_tabs('run-1', run, results=[])
+    assert 'exec-summary' in html  # the callout shell rendered, not dropped
+    assert 'Executive summary · whole run' in html  # labeled as whole-run scope

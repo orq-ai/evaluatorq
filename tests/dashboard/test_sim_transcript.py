@@ -271,6 +271,46 @@ class TestSimTranscriptRoute:
         assert 'sim-transcript-grid' in r.text
         assert 'sim-criteria' in r.text
 
+    def test_transcript_summary_shows_persona_scenario_and_turns(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        rid = report_id(_sim_path(roots))
+        r = client.get(f'/r/{rid}/sim/transcript?idx=0')
+        # Conversation summary header recaps persona + scenario and a turn chip.
+        assert 'sim-conv-summary' in r.text
+        assert 'sim-conv-turns-pill' in r.text
+        assert '3 turns' in r.text  # fixture idx0 has turn_count=3
+        assert 'sim-conv-index' in r.text  # teal #index badge, top-left
+
+    def test_transcript_persona_scenario_are_clickthrough(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        rid = report_id(_sim_path(roots))
+        r = client.get(f'/r/{rid}/sim/transcript?idx=0')
+        # Persona/scenario values are cohort-card triggers, ids matching the
+        # `persona-{i}` / `scenario-{i}` templates rendered on the report page.
+        assert 'data-sim-entity-trigger data-entity-kind="persona" data-entity-id="persona-0"' in r.text
+        assert 'data-sim-entity-trigger data-entity-kind="scenario" data-entity-id="scenario-0"' in r.text
+        assert 'sim-conv-value--link' in r.text
+
+    def test_transcript_judge_folded_into_criteria(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        rid = report_id(_sim_path(roots))
+        r = client.get(f'/r/{rid}/sim/transcript?idx=0')
+        # Judge rationale lives inside the criteria block, not a standalone callout.
+        assert 'sim-judge' in r.text
+        crit = r.text.index('sim-criteria')
+        assert crit < r.text.index('sim-judge') < r.text.index('sim-transcript-bubbles')
+
+    def test_transcript_criteria_precedes_conversation(
+        self, client: TestClient, roots: list[Path]
+    ) -> None:
+        rid = report_id(_sim_path(roots))
+        r = client.get(f'/r/{rid}/sim/transcript?idx=0')
+        # Criteria block must render before the chat bubbles inside the grid.
+        assert r.text.index('sim-criteria') < r.text.index('sim-transcript-bubbles')
+
     def test_transcript_contains_judge_reason(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
         r = client.get(f'/r/{rid}/sim/transcript?idx=0')
@@ -335,16 +375,16 @@ class TestSimRowListOnReportPage:
         assert r.status_code == 200
         assert 'sim-row-list' in r.text or 'sim-row-table' in r.text
 
-    def test_sim_report_page_cards_lazy_load_body(self, client: TestClient, roots: list[Path]) -> None:
+    def test_sim_report_page_has_clickable_conversation_rows(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
         r = client.get(f"/r/{rid}")
-        assert "sim-conv-card" in r.text
-        assert 'hx-trigger="toggle once from:closest details"' in r.text
+        assert "sim-conv-row" in r.text
+        assert 'data-entity-kind="conversation"' in r.text
 
-    def test_sim_report_page_has_hx_get_links(self, client: TestClient, roots: list[Path]) -> None:
+    def test_sim_report_page_has_transcript_drawer_urls(self, client: TestClient, roots: list[Path]) -> None:
         rid = report_id(_sim_path(roots))
         r = client.get(f'/r/{rid}')
-        # Each row must have an hx-get pointing to the transcript endpoint.
+        # Each row must carry a lazy drawer URL for the transcript endpoint.
         assert '/sim/transcript' in r.text
 
     def test_sim_report_page_shows_persona_names(self, client: TestClient, roots: list[Path]) -> None:
@@ -360,12 +400,7 @@ class TestSimRowListOnReportPage:
 
 
 class TestSimFilterAwareness:
-    """Verify that the sim transcript route applies filter params from the query-string.
-
-    The filter dimensions (persona, scenario, terminated_by, goal_outcome) are
-    carried by hx-include="#filter-form" so each transcript hx-get request
-    automatically includes the active filter selections.
-    """
+    """Verify row-list filtering while transcript lookup remains full-run indexed."""
 
     def test_transcript_with_persona_filter_returns_200(self, client: TestClient, roots: list[Path]) -> None:
         """Transcript route with a persona filter param must return 200."""
@@ -374,7 +409,7 @@ class TestSimFilterAwareness:
         assert r.status_code == 200
 
     def test_transcript_persona_filter_shows_matching_entry(self, client: TestClient, roots: list[Path]) -> None:
-        """When filtering to persona=alice, idx=0 in the filtered list maps to alice."""
+        """Full-run idx=0 remains Alice when an irrelevant filter is supplied."""
         rid = report_id(_sim_path(roots))
         r = client.get(f'/r/{rid}/sim/transcript?idx=0&persona=alice')
         assert r.status_code == 200
@@ -387,15 +422,14 @@ class TestSimFilterAwareness:
         rid = report_id(_sim_path(roots))
         r = client.get(f'/r/{rid}/sim/transcript?idx=0&persona=alice')
         assert r.status_code == 200
-        # With only alice in the filtered set, idx=0 is alice's entry — bob's
-        # (unique) refund content must not appear.
+        # Full-run idx=0 is Alice, so Bob's unique refund content cannot appear.
         assert "refund" not in r.text.lower()
 
     def test_transcript_out_of_range_after_filter_is_graceful(self, client: TestClient, roots: list[Path]) -> None:
-        """Filtering to a single persona leaves 1 entry; idx=1 must not 500."""
+        """An optional filter parameter does not make transcript lookup raise."""
         rid = report_id(_sim_path(roots))
         r = client.get(f'/r/{rid}/sim/transcript?idx=1&persona=alice')
-        # Out-of-range idx after filtering → graceful empty, not 500.
+        # Full-run lookup remains graceful regardless of the filter parameter.
         assert r.status_code in (200, 404)
         assert r.status_code != 500
 
@@ -404,7 +438,7 @@ class TestSimFilterAwareness:
         rid = report_id(_sim_path(roots))
         r = client.get(f'/r/{rid}/sim/row-list')
         assert r.status_code == 200
-        assert 'sim-row' in r.text or 'sim-conv-card' in r.text
+        assert 'sim-row' in r.text or 'sim-conv-row' in r.text
 
     def test_sim_row_list_with_filter_returns_fewer_rows(self, client: TestClient, roots: list[Path]) -> None:
         """Filtered row-list should contain fewer persona rows than unfiltered."""
@@ -412,8 +446,8 @@ class TestSimFilterAwareness:
         html_all = client.get(f'/r/{rid}/sim/row-list').text
         html_alice = client.get(f'/r/{rid}/sim/row-list?persona=alice').text
         # Count sim-row-item occurrences as proxy for number of rows.
-        all_count = html_all.count('sim-conv-card')
-        alice_count = html_alice.count('sim-conv-card')
+        all_count = html_all.count('sim-conv-row')
+        alice_count = html_alice.count('sim-conv-row')
         assert alice_count < all_count, (
             f'Expected fewer rows when filtering to persona=alice: unfiltered={all_count}, filtered={alice_count}'
         )
@@ -428,10 +462,9 @@ class TestSimFilterAwareness:
         hx-include/hx-trigger of its own — the /filter POST body swap is the
         single refresh path (spec §Transcripts double-fetch fix).
 
-        Note: per-card transcript bodies DO carry hx-include="#filter-form"
-        (see TestCardDrilldownCarriesActiveFilter) so the filter reaches the
-        drill-down request; this test only guards the outer wrapper div,
-        which must stay an inert container with no hx-trigger of its own.
+        Conversation drawer rows no longer issue their own HTMX requests; this
+        test only guards the outer wrapper div, which must stay an inert
+        container with no hx-trigger of its own.
         """
         rid = report_id(_sim_path(roots))
         r = client.get(f'/r/{rid}')
@@ -567,18 +600,25 @@ def sim_entry_xss_criterion():
     )
 
 
-class TestConversationCards:
-    """Task 11: collapsed tinted `<details>` conversation cards."""
+class TestConversationRows:
+    """Conversation list entries are lazy drawer triggers, not foldout cards."""
 
-    def test_row_list_renders_details_cards_with_tint(self, sim_entries) -> None:
+    def test_row_list_renders_clickable_conversation_rows(self, sim_entries) -> None:
         from evaluatorq.dashboard.sim_views import render_sim_row_list
 
-        html = render_sim_row_list("rid", sim_entries)
-        assert "<details" in html and "sim-conv-card" in html
-        assert "sim-tint-achieved" in html
-        assert "sim-tint-missed" in html
-        assert "sim-tint-error" in html
-        assert 'hx-trigger="toggle once from:closest details"' in html
+        html = render_sim_row_list('rid', sim_entries)
+        assert '<details' not in html
+        assert 'sim-conv-card' not in html
+        assert html.count('data-sim-entity-trigger') == len(sim_entries)
+        assert 'data-entity-kind="conversation"' in html
+        assert 'data-drawer-url="/r/rid/sim/transcript?idx=0"' in html
+        assert 'role="button" tabindex="0"' in html
+        assert 'hx-trigger="toggle once' not in html
+
+    def test_dashboard_runtime_has_no_failure_anchor_handler(self) -> None:
+        source = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
+
+        assert 'a[href^="#conv-"]' not in source
 
     def test_row_list_summary_has_header_cluster(self, sim_entries) -> None:
         from evaluatorq.dashboard.sim_views import render_sim_row_list
@@ -586,20 +626,104 @@ class TestConversationCards:
         html = render_sim_row_list('rid', sim_entries)
         assert '#1' in html
         assert 'alice' in html
-        assert '3 turns' in html
-        assert 'score 0.82' in html
+        assert '<td class="sim-conv-turns">3</td>' in html
+        assert '<td class="sim-conv-score">0.82</td>' in html
         assert 'Goal met' in html
         assert 'Goal missed' in html
         assert 'Error' in html
 
+    def test_trace_anchor_carries_no_drawer_optout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The trace link lives in a row cell (aligned columns), so it nests
+        inside the ``role=button`` row. ``data-no-drawer`` is what keeps a
+        trace-link click/keypress from also firing the drawer (dashboard.js
+        bails on the ``[data-no-drawer]`` ancestor for both events)."""
+        from evaluatorq.dashboard.sim_views import render_sim_row_list
+
+        monkeypatch.setenv('ORQ_WORKSPACE_SLUG', 'workspace')
+        entry = _entry().model_copy(update={'thread_id': 'run:0'})
+        html = render_sim_row_list('rid', [entry])
+
+        row_start = html.index('<tr class="sim-conv-row')
+        row_end = html.index('</tr>', row_start)
+        row = html[row_start:row_end]
+
+        assert 'role="button" tabindex="0"' in row
+        assert 'data-sim-entity-trigger' in row
+        # The trace anchor is inside the row but opts out of the drawer.
+        trace_start = row.index('<a class="btn-secondary trace-link"')
+        assert 'data-no-drawer' in row[trace_start:]
+
     def test_row_list_error_takes_precedence_over_goal_achieved(self) -> None:
-        """terminated_by == 'error' tints error, regardless of goal_achieved."""
+        """terminated_by == 'error' renders Error, regardless of goal_achieved."""
         from evaluatorq.dashboard.sim_views import render_sim_row_list
 
         entry = _entry(terminated_by='error', goal_achieved=True, error='boom')
         html = render_sim_row_list('rid', [entry])
-        assert 'sim-tint-error' in html
-        assert 'sim-tint-achieved' not in html
+        assert 'status-badge--warn">Error</span>' in html
+        assert 'Goal met' not in html
+
+    def test_row_list_sorts_by_column(self) -> None:
+        """Sorting reorders visible rows without renumbering their index links."""
+        from evaluatorq.dashboard.sim_views import render_sim_row_list
+
+        entries = [
+            _entry(index=0, persona='carol', turn_count=5),
+            _entry(index=1, persona='alice', turn_count=9),
+            _entry(index=2, persona='bob', turn_count=1),
+        ]
+        html = render_sim_row_list('rid', entries, sort='turn_count', direction='desc')
+        positions = [html.index(f'>{p}<') for p in ('alice', 'carol', 'bob')]  # 9, 5, 1
+        assert positions == sorted(positions)
+        assert 'aria-sort="descending"' in html
+        # Index links stay stable — sorting reorders display, not the run position.
+        assert 'transcript?idx=1' in html
+
+    def test_row_list_paginates(self) -> None:
+        """Only page_size rows render per page; the pager reflects the split."""
+        from evaluatorq.dashboard.sim_views import render_sim_row_list
+
+        entries = [_entry(index=i, persona=f'p{i}') for i in range(30)]
+        page1 = render_sim_row_list('rid', entries, page=1, page_size=25)
+        page2 = render_sim_row_list('rid', entries, page=2, page_size=25)
+        assert page1.count('<tr class="sim-conv-row') == 25
+        assert page2.count('<tr class="sim-conv-row') == 5
+        assert 'Page 1 of 2' in page1
+        # Out-of-range page clamps to the last page rather than rendering empty.
+        assert 'Page 2 of 2' in render_sim_row_list('rid', entries, page=99, page_size=25)
+
+    def test_pager_hidden_for_single_page(self) -> None:
+        from evaluatorq.dashboard.sim_views import render_sim_row_list
+
+        html = render_sim_row_list('rid', [_entry(index=0)])
+        assert 'sim-pager-btn' not in html
+        assert '1 conversations' in html
+        # Size selector shows even with a single page so you can shrink from 25.
+        assert 'sim-size' in html
+
+    def test_row_list_size_selector(self) -> None:
+        """Size selector offers 5/10/25; the active size is the disabled/current one
+        and other options re-fetch with that size and page reset to 1."""
+        from evaluatorq.dashboard.sim_views import render_sim_row_list
+
+        entries = [_entry(index=i, persona=f'p{i}') for i in range(30)]
+        html = render_sim_row_list('rid', entries, page=1, page_size=10)
+        assert html.count('<tr class="sim-conv-row') == 10
+        assert 'Page 1 of 3' in html
+        # Active option (10) is disabled + aria-current; others link with size=.
+        assert 'aria-current="true">10<' in html
+        assert 'size=5&' not in html  # size is the last query param, no trailing &
+        assert 'page=1&size=5"' in html
+        assert 'page=1&size=25"' in html
+
+    def test_page_size_coercion_rejects_bad_values(self) -> None:
+        from evaluatorq.dashboard.sim_views import _PAGE_SIZE, _coerce_page_size
+
+        assert _coerce_page_size('5') == 5
+        assert _coerce_page_size('10') == 10
+        assert _coerce_page_size('25') == 25
+        assert _coerce_page_size('7') == _PAGE_SIZE  # not an allowed option
+        assert _coerce_page_size(None) == _PAGE_SIZE
+        assert _coerce_page_size('abc') == _PAGE_SIZE
 
 
 class TestRowlistWrapperNoSelfRefetch:
@@ -633,8 +757,8 @@ class TestTranscriptFragmentRewrite:
         html = render_transcript_fragment(sim_entry_with_safety_criterion)
         assert "⛔" not in html  # three-state ⛔ icon gone
         assert "&#x26D4;" not in html
-        # type label preserved as words (mockup shows "MUST NOT HAPPEN") + rendered red
-        assert "must not happen" in html
+        # Polarity chip sits beside the result icon; must_not_happen reads red.
+        assert "Prohibited" in html
         assert "sim-ctype-unsafe" in html
         assert "sim-judge" in html  # judge callout present when reason set
 
@@ -645,12 +769,96 @@ class TestTranscriptFragmentRewrite:
         assert 'sim-criterion-pass' in html
         assert 'sim-criterion-fail' in html
 
+    def test_transcript_fragment_criteria_verdict(self, sim_entry_with_safety_criterion) -> None:
+        from evaluatorq.dashboard.sim_views import render_transcript_fragment
+
+        html = render_transcript_fragment(sim_entry_with_safety_criterion)
+        # goal_achieved defaults True, one of two criteria passed. Goal outcome and
+        # criteria tally are shown as separate spans (not "PASS · 1/2 met").
+        assert 'sim-criteria-verdict--pass' in html
+        assert 'Goal met' in html
+        assert '1/2 criteria met' in html
+
     def test_transcript_fragment_bubbles_present(self, sim_entry_with_transcript) -> None:
         from evaluatorq.dashboard.sim_views import render_transcript_fragment
 
         html = render_transcript_fragment(sim_entry_with_transcript)
         assert 'sim-msg-avatar' in html
         assert 'sim-transcript-grid' in html
+
+    def test_transcript_bubbles_use_a_standout_container(self) -> None:
+        from evaluatorq.dashboard.styles import DASHBOARD_CSS
+
+        assert (
+            '.sim-report .sim-transcript-bubbles {\n'
+            '    background: var(--surface-sunken); border: 1px solid var(--border-subtle);\n'
+            '    border-radius: var(--radius-lg); padding: 16px;\n'
+            '}'
+        ) in DASHBOARD_CSS
+        assert '.sim-report .sim-transcript-bubbles .sim-msg:last-child { margin-bottom: 0; }' in DASHBOARD_CSS
+
+    def test_conversation_list_is_a_neutral_standout_surface(self) -> None:
+        from evaluatorq.dashboard.sim_views import render_sim_row_list
+        from evaluatorq.dashboard.styles import DASHBOARD_CSS
+
+        html = render_sim_row_list('rid', [_entry(goal_achieved=False)])
+
+        assert 'sim-conv-table-shell' in html
+        assert 'sim-tint-missed' not in html
+        assert (
+            '.sim-report .sim-conv-table-shell {\n'
+            '    border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);\n'
+            '    overflow-x: auto; background: var(--surface-card);\n'
+            '}'
+        ) in DASHBOARD_CSS
+        assert (
+            '.sim-report .sim-conv-row {\n'
+            '    border: 0; background: transparent; transition: background 150ms ease;\n'
+            '}'
+        ) in DASHBOARD_CSS
+        assert (
+            '.sim-report table.sim-conv-table tbody tr.sim-conv-row:hover '
+            '{ background: var(--surface-sunken); }'
+        ) in DASHBOARD_CSS
+        assert 'sim-tint-missed' not in DASHBOARD_CSS
+
+    def test_drawer_stacks_criteria_above_conversation_and_swaps_message_sides(self) -> None:
+        """The wide drawer stacks criteria above the transcript, divided by a rule."""
+        from evaluatorq.dashboard.styles import DASHBOARD_CSS
+
+        assert '.sim-report .sim-entity-dialog' in DASHBOARD_CSS
+        assert 'width: 50vw;' in DASHBOARD_CSS
+        assert '.sim-report .sim-transcript-grid { display: flex; flex-direction: column; gap: 0; }' in DASHBOARD_CSS
+        # Hairline divider between stacked sections (criteria ↔ conversation).
+        assert '.sim-report .sim-transcript-grid > * + * {' in DASHBOARD_CSS
+        # User right / agent left. Must reset BOTH margins + flex-direction so the
+        # shared `.report-aligned` base rules (which also match the drawer) can't
+        # leave the opposite margin at `auto` and center the bubble.
+        # Margin shorthand carries the side-swap (auto) AND the vertical gap in the
+        # bottom slot — a `margin: 0 X 0 auto` form would zero out margin-bottom.
+        assert '.sim-report .sim-msg-user, .sim-report .sim-msg-system { margin: 0 0 16px auto; flex-direction: row-reverse; }' in DASHBOARD_CSS
+        assert '.sim-report .sim-msg-assistant, .sim-report .sim-msg-tool { margin: 0 auto 16px 0; flex-direction: row; }' in DASHBOARD_CSS
+
+    def test_backdrop_close_waits_for_drawer_exit_animation(self) -> None:
+        source = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
+        from evaluatorq.dashboard.styles import DASHBOARD_CSS
+
+        assert 'function closeDrawer()' in source
+        assert "dialog.addEventListener('animationend', finishClose, { once: true });" in source
+        assert 'sim-entity-dialog--closing' in source
+        assert '.sim-report .sim-entity-dialog--closing { animation: sim-drawer-out 160ms ease-in forwards; }' in DASHBOARD_CSS
+
+    def test_drawer_drill_pushes_browser_history(self) -> None:
+        """Each persona/scenario/conversation drill is a real history entry so the
+        browser Back/Forward buttons walk the drill path."""
+        source = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
+
+        assert "history.pushState({ simDrawer: serial, drawerDepth: drawerDepth }, '')" in source
+        assert "window.addEventListener('popstate'" in source
+        assert 'evt.state.simDrawer' in source
+        # Back button and native Escape unwind through history, not a private stack.
+        assert 'history.back()' in source
+        assert 'history.go(-drawerDepth)' in source
 
     def test_transcript_fragment_error_entry_shows_error_message(self) -> None:
         from evaluatorq.dashboard.sim_views import render_transcript_fragment
@@ -671,26 +879,14 @@ class TestTranscriptCriteriaXssEscaping:
 
 
 # ---------------------------------------------------------------------------
-# Regression: card drill-down must carry the active filter (task-11/12 fix).
-#
-# ``individual_entries()`` re-indexes 0..M-1 over whatever list it is given.
-# Each card's ``idx`` is a position within the list the row-list was rendered
-# from. If a filter is active, that list is the *filtered* list, so the
-# card's transcript hx-get MUST also send the filter — otherwise the
-# transcript route indexes the *full* (unfiltered) list and idx no longer
-# refers to the same conversation the card summarized.
+# Regression: conversation drawer URLs keep their full-run identity after a
+# filter response. ``sim_transcript`` deliberately resolves ``idx`` against
+# the full run, so the filtered row must retain that original index.
 # ---------------------------------------------------------------------------
 
 
-class TestCardDrilldownCarriesActiveFilter:
-    def test_card_body_hx_get_includes_filter_form(self, sim_entries) -> None:
-        """render_sim_row_list's card body must carry hx-include="#filter-form"."""
-        from evaluatorq.dashboard.sim_views import render_sim_row_list
-
-        html = render_sim_row_list('rid', sim_entries)
-        assert 'hx-include="#filter-form"' in html
-
-    def test_filtered_card_idx_resolves_to_same_persona_via_transcript_route(self, tmp_path: Path) -> None:
+class TestFilteredConversationDrawerIndex:
+    def test_filtered_row_idx_resolves_to_same_persona_via_transcript_route(self, tmp_path: Path) -> None:
         """End-to-end guard: with personas [alice, alice, bob] and a persona=bob
         filter active, bob's card carries his STABLE idx (2 — his position in
         the full run), not a re-numbered filtered idx. The transcript route
@@ -706,7 +902,7 @@ class TestCardDrilldownCarriesActiveFilter:
             TerminatedBy,
         )
 
-        def _result(persona: str, marker: str) -> SimulationResult:
+        def _result(persona: str, scenario: str, marker: str) -> SimulationResult:
             return SimulationResult(
                 messages=[
                     Message(role='user', content=f'hi from {marker}'),
@@ -720,13 +916,13 @@ class TestCardDrilldownCarriesActiveFilter:
                 turn_count=1,
                 turn_metrics=[],
                 token_usage=TokenUsage(input_tokens=5, output_tokens=5, total_tokens=10),
-                metadata={'persona': persona, 'scenario': 's'},
+                metadata={'persona': persona, 'scenario': scenario},
             )
 
         results = [
-            _result('alice', 'ALICE-ONE'),
-            _result('alice', 'ALICE-TWO'),
-            _result('bob', 'BOB-ONE'),
+            _result('alice', 'account access', 'ALICE-ONE'),
+            _result('alice', 'account access', 'ALICE-TWO'),
+            _result('bob', 'billing', 'BOB-ONE'),
         ]
         run = SimulationRun(
             run_name='filtered-idx-test',
@@ -747,39 +943,47 @@ class TestCardDrilldownCarriesActiveFilter:
         client = TestClient(app, raise_server_exceptions=True)
         rid = report_id(run_path)
 
-        # Fetch the row-list AS FILTERED to persona=bob — this is what the
-        # browser actually has in the DOM when the user has bob selected in
-        # the filter form (the row-list is re-rendered by the /filter POST
-        # body swap). Bob is the only visible entry, but his card must carry
+        # Filter the report to persona=bob — this is the full /filter response
+        # that replaces the report body in the browser. Bob is the only visible
+        # entry, but his drawer row must carry
         # his *stable* idx (2 — his position in the full [alice, alice, bob]
         # run), because filtering hides rows rather than renumbering them.
-        row_list_html = client.get(f'/r/{rid}/sim/row-list?persona=bob').text
-        assert 'BOB-ONE' not in row_list_html  # transcript body is lazy, not embedded
-        card_start = row_list_html.find('sim-conv-body')
-        assert card_start >= 0, 'no conversation card found in filtered row-list'
-        card_div_start = row_list_html.rfind('<div', 0, card_start)
-        card_div_end = row_list_html.find('></div>', card_div_start) + len('></div>')
-        card_div = row_list_html[card_div_start:card_div_end]
+        filtered_html = client.post(f'/r/{rid}/filter', data={'persona': 'bob'}).text
+        drawer_url = f'/r/{rid}/sim/transcript?idx=2'
+        assert drawer_url in filtered_html
 
-        hx_get_start = card_div.find('hx-get="') + len('hx-get="')
-        hx_get_end = card_div.find('"', hx_get_start)
-        hx_get_url = card_div[hx_get_start:hx_get_end]
-        assert 'idx=2' in hx_get_url  # bob's STABLE position in the full run
+        # Config and its drawer-template registry stay full-run, even though
+        # Breakdown remains filtered. The configured but excluded Alice/account
+        # cohorts are still actionable and explicitly show an empty cohort.
+        import re
 
-        # Simulate exactly what a real browser sends: the hx-get URL plus the
-        # active filter-form fields (the card carries hx-include="#filter-form").
-        # The transcript route now resolves idx against the FULL run, so the
-        # persona param is irrelevant to the lookup — bob's stable idx=2 lands
-        # on bob whether or not the filter tags along. Without the fix, the card
-        # carried the *filtered* idx=0 and the route re-filtered to resolve it —
-        # fragile, and outright broken when the filter yielded fewer rows.
-        request_url = hx_get_url + '&persona=bob'
+        persona_match = re.search(
+            r'<button[^>]*class="sim-config-persona-row sim-entity-row"[^>]*'
+            r'data-entity-kind="persona" data-entity-id="([^"]+)"[^>]*>'
+            r'.*?<span class="sim-config-persona-name">alice</span>',
+            filtered_html,
+        )
+        scenario_match = re.search(
+            r'<button[^>]*class="sim-config-scenario-row sim-entity-row"[^>]*'
+            r'data-entity-kind="scenario" data-entity-id="([^"]+)"[^>]*>'
+            r'.*?<span class="sim-config-scenario-name">account access</span>',
+            filtered_html,
+        )
+        assert persona_match is not None and scenario_match is not None
+        for entity_id in (persona_match.group(1), scenario_match.group(1)):
+            template = re.search(rf'<template id="{re.escape(entity_id)}"[^>]*>(.*?)</template>', filtered_html)
+            assert template is not None
+            assert '<p class="sim-cohort-empty">No conversations.</p>' in template.group(1)
+        assert '<td data-label="Persona">alice</td>' not in filtered_html
+        assert '<td data-label="Scenario">account access</td>' not in filtered_html
 
-        r = client.get(request_url)
+        # The endpoint's full-run resolver maps Bob's stable idx directly to
+        # Bob; no filter parameters are needed for identity resolution.
+        r = client.get(drawer_url)
         assert r.status_code == 200
         assert 'BOB-ONE' in r.text, (
-            f"Expected bob's conversation from the exact request a real "
-            f'browser would send for this card ({request_url!r}), got: '
+            f"Expected bob's conversation from the filtered drawer URL "
+            f'({drawer_url!r}), got: '
             f'{r.text!r}'
         )
         assert 'ALICE-ONE' not in r.text
