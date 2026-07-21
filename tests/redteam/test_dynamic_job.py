@@ -3,8 +3,8 @@
 Covers:
 1. Template single-turn path   — strategy with prompt_template sends filled template directly
 2. Dynamic multi-turn path     — strategy without prompt_template uses the orchestrator
-3. Programming error re-raise  — TypeError/AttributeError propagate, not caught
-4. Runtime errors              — network/API errors produce AttackOutput with error set
+3. Programming error re-raise  — errors outside target calls propagate
+4. Runtime errors              — target network/API errors produce AttackOutput with error set
 5. Memory entity ID generation — unique ID generated per job when has_memory is True
 """
 
@@ -668,40 +668,6 @@ class TestProgrammingErrorsPropagate:
     @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
     @patch(_PATCH_SET_SPAN_ATTRS)
     @patch(_PATCH_ATTACK_SPAN_ATTRS)
-    async def test_type_error_in_template_path_propagates(
-        self, _attrs, _set_attrs, _span
-    ):
-        """TypeError raised during target.respond in template path is re-raised."""
-        from evaluatorq.job_helper import JobError
-        from evaluatorq.redteam.adaptive.pipeline import create_dynamic_redteam_job
-
-        strategy = _make_strategy(
-            turn_type=TurnType.SINGLE,
-            prompt_template="Static attack for {agent_name}.",
-        )
-        target = _make_target()
-        target.respond = AsyncMock(side_effect=TypeError("type mismatch"))
-        factory = _make_target_factory(target)
-        agent_context = _make_agent_context()
-        datapoint = _make_datapoint(strategy=strategy)
-
-        job_fn = create_dynamic_redteam_job(
-            agent_key="test-agent",
-            agent_context=agent_context,
-            backend=factory,
-        )
-
-        with pytest.raises((TypeError, JobError)) as exc_info:
-            await job_fn(datapoint, 0)
-
-        exc = exc_info.value
-        if isinstance(exc, JobError):
-            assert isinstance(exc.original_error, TypeError)
-
-    @pytest.mark.asyncio
-    @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
-    @patch(_PATCH_SET_SPAN_ATTRS)
-    @patch(_PATCH_ATTACK_SPAN_ATTRS)
     async def test_key_error_from_orchestrator_propagates(
         self, _attrs, _set_attrs, _span
     ):
@@ -891,6 +857,41 @@ class TestRuntimeErrorsProduceErrorOutput:
 
         parsed = AttackOutput.model_validate(output)
         assert parsed.error is not None
+        assert parsed.error_type == "target_error"
+        assert parsed.error_stage == "target_call"
+        assert parsed.n_turns == 1
+
+    @pytest.mark.asyncio
+    @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
+    @patch(_PATCH_SET_SPAN_ATTRS)
+    @patch(_PATCH_ATTACK_SPAN_ATTRS)
+    async def test_type_error_in_template_path_retries_then_preserves_error_output(
+        self, _attrs, _set_attrs, _span
+    ):
+        """A target TypeError is retried and retained as an unscored target failure."""
+        from evaluatorq.redteam.adaptive.pipeline import create_dynamic_redteam_job
+
+        strategy = _make_strategy(
+            turn_type=TurnType.SINGLE,
+            prompt_template="Static attack for {agent_name}.",
+        )
+        target = _make_target()
+        target.respond = AsyncMock(side_effect=TypeError("target returned invalid response"))
+        factory = _make_target_factory(target)
+        job_fn = create_dynamic_redteam_job(
+            agent_key="test-agent",
+            agent_context=_make_agent_context(),
+            backend=factory,
+        )
+
+        with patch(
+            "evaluatorq.redteam.adaptive.orchestrator._get_active_progress",
+            return_value=None,
+        ):
+            output = await _call_dynamic_job(job_fn, _make_datapoint(strategy=strategy))
+
+        parsed = AttackOutput.model_validate(output)
+        assert target.respond.await_count == 3
         assert parsed.error_type == "target_error"
         assert parsed.error_stage == "target_call"
         assert parsed.n_turns == 1

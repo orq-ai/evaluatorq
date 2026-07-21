@@ -472,8 +472,6 @@ def create_dynamic_redteam_job(
                             'attempts': target_attempt + 1,
                         }
                     except Exception as e:
-                        if isinstance(e, (TypeError, AttributeError, ImportError, NameError)):
-                            raise
                         mapped_code, mapped_msg = resolved_backend.map_error(e)
                         response = f'[ERROR: {mapped_msg}]'
                         agent_resp = AgentResponse(

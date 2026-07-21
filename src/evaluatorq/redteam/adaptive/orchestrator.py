@@ -44,6 +44,7 @@ from evaluatorq.redteam.contracts import (
     classify_error_type,
     turns_to_messages,
 )
+from evaluatorq.redteam.exceptions import TargetResponseError
 from evaluatorq.redteam.tracing import with_llm_span, with_redteam_span
 from evaluatorq.redteam.utils import safe_substitute
 
@@ -54,18 +55,6 @@ if TYPE_CHECKING:
 def _default_map_error(exc: Exception) -> tuple[str, str]:
     """Fallback error mapping for the no-backend path; mirrors ``Backend.map_error``."""
     return 'target_error', f'{type(exc).__name__}: {exc}'
-
-
-class _TargetResponseError(Exception):
-    """Wrap a target-returned error marker so it follows the retry path."""
-
-    def __init__(self, response: AgentResponse) -> None:
-        self.response = response
-        response_error = response.error
-        if response_error is None:
-            raise ValueError('TargetResponseError requires an AgentResponse.error marker')
-        self.error = response_error
-        super().__init__(response_error.message)
 
 
 _ui_console = Console(stderr=True)
@@ -952,7 +941,7 @@ class MultiTurnOrchestrator:
                                 )
                                 tgt_result = _coerce_to_agent_response(raw_response)
                                 if tgt_result.error is not None:
-                                    raise _TargetResponseError(tgt_result)
+                                    raise TargetResponseError(tgt_result)
                                 agent_response = tgt_result.text
                                 resp_text = truncate_for_span(agent_response or '')
                                 set_span_attrs(
@@ -964,7 +953,7 @@ class MultiTurnOrchestrator:
                                 )
                                 turn_usage = tgt_result.usage
                             break
-                        except _TargetResponseError as e:
+                        except TargetResponseError as e:
                             tgt_result = e.response
                             agent_response = tgt_result.text
                             response_error = e.error
