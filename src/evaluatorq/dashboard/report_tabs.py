@@ -227,9 +227,7 @@ def _set_failure_full_run_indexes(section: Any, entries: list[Any]) -> None:
     if section is None:
         return
     failures = [
-        entry
-        for entry in entries
-        if not entry.goal_achieved and not entry.error and entry.terminated_by != 'error'
+        entry for entry in entries if not entry.goal_achieved and not entry.error and entry.terminated_by != 'error'
     ]
     for row, entry in zip(section.data.get('rows', []), failures, strict=True):
         row['index'] = entry.index + 1
@@ -514,7 +512,9 @@ def _sim_persona_template(
         item
         for item in [
             f'<span class="sim-entity-pill">{esc(str(style))}</span>' if style else '',
-            f'<span class="sim-entity-pill">{esc(str(conversation_count))} conversations</span>' if conversation_count else '',
+            f'<span class="sim-entity-pill">{esc(str(conversation_count))} conversations</span>'
+            if conversation_count
+            else '',
         ]
         if item
     )
@@ -792,9 +792,7 @@ def _sim_breakdown(
         rows = [(str(label), int(count)) for label, count in failure_mode_section.data.get('rows', [])]
         failure_html = _sim_failure_modes(rows)
 
-    failures_html = (
-        f'<div id="section-failures_first">{_sim_failures_table(by_kind.get("failures_first"), rid)}</div>'
-    )
+    failures_html = f'<div id="section-failures_first">{_sim_failures_table(by_kind.get("failures_first"), rid)}</div>'
 
     return f'{heatmap_html}{failures_html}{failure_html}{dist_html}{tables_html}'
 
@@ -998,8 +996,8 @@ def _sim_overview(
     # One executive-summary card, always whole-run. The saved narrative (richer
     # prose) wins; otherwise the computed stat sentence from the full run. Using
     # the unfiltered sections means it never collapses under a zero-match filter.
-    full_summary_data = (s.data if (s := full_by_kind.get('summary')) is not None else {})
-    full_heatmap_data = (s.data if (s := full_by_kind.get('persona_scenario_heatmap')) is not None else {})
+    full_summary_data = s.data if (s := full_by_kind.get('summary')) is not None else {}
+    full_heatmap_data = s.data if (s := full_by_kind.get('persona_scenario_heatmap')) is not None else {}
     es_label = 'Executive summary · whole run' if filtered else 'Executive summary'
     confidence = full_summary_data.get('confidence')
     if run.executive_summary:
@@ -1027,7 +1025,9 @@ def _sim_overview(
         # Average quality metrics (turn metrics); fall back to the token-usage
         # summary for runs that carry no per-turn quality data.
         quality_tiles = _sim_avg_quality_tiles(metrics_data.get('avg_quality_metrics', {}))
-        second_html = panel('Average quality metrics', quality_tiles) if quality_tiles else _sim_tokens_panel(tokens_data)
+        second_html = (
+            panel('Average quality metrics', quality_tiles) if quality_tiles else _sim_tokens_panel(tokens_data)
+        )
 
     return f'{summary_html}{agent_card_html}{kpi_html}<div class="sim-overview-grid-2">{donut_html}{second_html}</div>'
 

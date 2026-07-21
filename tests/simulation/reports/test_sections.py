@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+
 import pytest
 
 from evaluatorq.contracts import Message, TokenUsage
@@ -58,7 +60,7 @@ def _make_result(
     persona_traits: dict[str, object] | None = None,
     scenario_goal: str | None = None,
     scenario_context: str | None = None,
-    criteria_meta: list[dict[str, object]] | None = None,
+    criteria_meta: Sequence[Mapping[str, object]] | None = None,
     terminated_by: TerminatedBy = TerminatedBy.judge,
 ) -> SimulationResult:
     metadata: dict[str, object] = {

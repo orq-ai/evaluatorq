@@ -116,9 +116,7 @@ def truncate(text: str, max_chars: int = 800) -> str:
     return text[:max_chars] + '\n\n[truncated — full text in report JSON]'
 
 
-def html_table(
-    headers: list[str], rows: list[list[str]], row_attrs: list[str] | None = None
-) -> str:
+def html_table(headers: list[str], rows: list[list[str]], row_attrs: list[str] | None = None) -> str:
     """Render an HTML table. Cell strings may contain inline HTML (e.g. badges)."""
     if row_attrs is not None and len(row_attrs) != len(rows):
         raise ValueError('row_attrs length must match rows')

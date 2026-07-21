@@ -181,6 +181,7 @@ def _rt_apply(report: Any, selections: dict[str, list[str]]) -> list[Any]:
 # Simulation filter
 # ---------------------------------------------------------------------------
 
+
 def sim_metric_dim_key(key: str, *, high_is_risky: bool) -> str:
     """Threshold selection key for a turn metric: floor for risky, ceiling otherwise."""
     return f'min_{key}' if high_is_risky else f'max_{key}'

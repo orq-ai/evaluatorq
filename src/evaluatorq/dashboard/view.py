@@ -652,6 +652,7 @@ def settings_body(config: list[tuple[str, str | list[str]]], workspace_ctx: dict
     panel; when omitted the panel is skipped (keeps the signature back-compatible
     for callers/tests that only pass ``config``).
     """
+
     def val_html(v: str | list[str]) -> str:
         # A list renders one item per line; a scalar is a single line.
         items = v if isinstance(v, list) else [v]
@@ -823,9 +824,7 @@ def _range_control(
     readout_cls = 'filter-slider-readout is-engaged' if engaged else 'filter-slider-readout'
     glyph = '≥' if floor else '≤'
     readout = f'{glyph} {_fmt_range_value(value, step)}'
-    max_span = (
-        f'<span class="filter-slider-max">/ {_fmt_range_value(max_val, step)}</span>' if show_max else ''
-    )
+    max_span = f'<span class="filter-slider-max">/ {_fmt_range_value(max_val, step)}</span>' if show_max else ''
     # data-glyph / data-default let dashboard.js update the readout live on
     # `input` (while dragging), before the HTMX `change` round-trip.
     return (
