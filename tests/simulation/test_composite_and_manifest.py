@@ -217,7 +217,7 @@ def test_manifest_stage_hooks_bridge_start_and_end():
 
 def test_manifest_stage_hooks_other_methods_are_noops():
     w = _FakeWriter()
-    h = ManifestStageHooks(w)
+    h = ManifestStageHooks(w)  # pyright: ignore[reportArgumentType]
     assert asyncio.run(h.on_confirm(_meta())) is True
     assert asyncio.run(h.on_run_start(_meta())) is None
     assert asyncio.run(h.on_run_complete([])) is None
@@ -455,10 +455,12 @@ async def test_generate_fans_out_stage_events_to_multiple_user_hooks(monkeypatch
 
     class Recorder(DefaultHooks):
         async def on_stage_start(self, stage, meta) -> None:
-            calls.append(f'start:{stage.value}')
+            name = stage.value if isinstance(stage, SimStage) else stage
+            calls.append(f'start:{name}')
 
         async def on_stage_end(self, stage, meta) -> None:
-            calls.append(f'end:{stage.value}')
+            name = stage.value if isinstance(stage, SimStage) else stage
+            calls.append(f'end:{name}')
 
     async def _fake_generate(**_kwargs):
         return [], None, False

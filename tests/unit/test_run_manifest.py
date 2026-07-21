@@ -9,7 +9,7 @@ from evaluatorq.common.run_manifest import (
     list_manifests,
     start_manifest,
 )
-from evaluatorq.contracts import ManifestStatus, ManifestSurface
+from evaluatorq.contracts import ManifestStatus, ManifestSurface, RunSummary
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -201,7 +201,7 @@ def test_status_strenum_round_trips(tmp_path: Path) -> None:
 def test_summary_round_trips_through_manifest(tmp_path: Path) -> None:
     runs = tmp_path / 'runs'
     w = start_manifest(run_id='s1', surface='redteam', run_name='rt', runs_dir=runs)
-    summary = {
+    summary: RunSummary = {
         'pipeline': 'dynamic',
         'total_results': 12,
         'total_attacks': 12,
