@@ -177,3 +177,56 @@ class TestExportRoute:
     def test_export_missing_returns_404(self, client: TestClient) -> None:
         r = client.get('/r/nonexistentid123456/export')
         assert r.status_code == 404
+
+
+def test_in_flight_manifest_detail_renders_status(tmp_path: Path) -> None:
+    """An in-flight run (manifest only, no report) renders a minimal status page."""
+    from evaluatorq.common.run_manifest import start_manifest
+    from evaluatorq.dashboard.library import _manifest_card_id
+
+    rt = tmp_path / 'runs'
+    rt.mkdir()
+    w = start_manifest(run_id='live', surface='redteam', run_name='in-flight-run', runs_dir=rt)
+    w.start_stage('Executing Attacks')
+
+    client = TestClient(build_app(roots=[rt]), raise_server_exceptions=True)
+    resp = client.get(f'/r/{_manifest_card_id("live")}')
+    assert resp.status_code == 200
+    assert 'in-flight-run' in resp.text
+    assert 'Executing Attacks' in resp.text
+
+
+def test_error_manifest_detail_renders_error_message(tmp_path: Path) -> None:
+    """An errored run (manifest only, no report) renders its error message."""
+    from evaluatorq.common.run_manifest import start_manifest
+    from evaluatorq.dashboard.library import _manifest_card_id
+
+    rt = tmp_path / 'runs'
+    rt.mkdir()
+    w = start_manifest(run_id='boom', surface='redteam', run_name='crashed-run', runs_dir=rt)
+    w.start_stage('Executing Attacks')
+    w.fail('backend exploded spectacularly')
+
+    client = TestClient(build_app(roots=[rt]), raise_server_exceptions=True)
+    resp = client.get(f'/r/{_manifest_card_id("boom")}')
+    assert resp.status_code == 200
+    assert 'crashed-run' in resp.text
+    assert 'backend exploded spectacularly' in resp.text
+
+
+def test_cancelled_manifest_detail_renders_without_error_or_stage(tmp_path: Path) -> None:
+    """A cancelled run (no stage started, no error, no report) renders 'cancelled'
+    and does not 500 despite the missing stage/error."""
+    from evaluatorq.common.run_manifest import start_manifest
+    from evaluatorq.dashboard.library import _manifest_card_id
+
+    sim = tmp_path / 'sim-runs'
+    sim.mkdir()
+    # No stage started and no error — the previously fragile path.
+    start_manifest(run_id='nope', surface='sim', run_name='declined-run', runs_dir=sim).cancel()
+
+    client = TestClient(build_app(roots=[sim]), raise_server_exceptions=True)
+    resp = client.get(f'/r/{_manifest_card_id("nope")}')
+    assert resp.status_code == 200
+    assert 'declined-run' in resp.text
+    assert 'cancelled' in resp.text.lower()

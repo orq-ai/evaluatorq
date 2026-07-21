@@ -6,10 +6,12 @@ import json
 import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime  # noqa: TC003 — runtime-required by pydantic manifest models
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias
 
 from loguru import logger
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_serializer, model_validator
+from typing_extensions import TypedDict
 
 from evaluatorq.openresponses.convert_models import (
     InputFileContent,
@@ -1016,11 +1018,113 @@ class ReportSection:
     data: dict[str, Any] = field(default_factory=dict)
 
 
+# ---------------------------------------------------------------------------
+# Run lifecycle manifest
+# ---------------------------------------------------------------------------
+# Shared by red teaming and agent simulation to track a run's stage + status on
+# disk while it executes (the report only lands on completion). Behaviour lives
+# in ``evaluatorq.common.run_manifest``; the data models live here per the
+# "all shared cross-surface data models in contracts.py" convention.
+
+
+class ManifestSurface(StrEnum):
+    """Which runner produced a manifest."""
+
+    SIM = 'sim'
+    REDTEAM = 'redteam'
+
+
+class ManifestStatus(StrEnum):
+    """Terminal / in-flight status of a run or one of its stages."""
+
+    RUNNING = 'running'
+    COMPLETED = 'completed'
+    ERROR = 'error'
+    CANCELLED = 'cancelled'
+
+
+# Constant so writer sites and readers agree on the one summary key both surfaces
+# populate — a typo here can't silently read back as 0.
+RUN_SUMMARY_TOTAL_KEY = 'total_results'
+
+
+class RunSummary(TypedDict, total=False):
+    """Compact headline stats stashed on ``RunManifest.summary`` at completion.
+
+    All keys optional (``total=False``). ``total_results`` is the one key both
+    surfaces populate (the run-list row's case count); the remaining keys are
+    surface-specific extras the ``runs`` tables / dashboard cards read.
+    """
+
+    total_results: int
+    # Red-team extras
+    pipeline: str
+    total_attacks: int
+    vulnerability_rate: float
+    resistance_rate: float
+    tested_agents: list[str]
+    # Sim extras
+    mode: str
+    target_kind: str
+    scorer_averages: dict[str, float]
+
+
+class StageRecord(BaseModel):
+    """One pipeline stage's own status + timing within a run.
+
+    Note: a stage's ``status`` is only ever ``running`` / ``completed`` /
+    ``error`` — ``cancelled`` is a run-level terminal state and is never applied
+    to an individual stage.
+    """
+
+    name: str
+    target: str | None = None
+    status: ManifestStatus = ManifestStatus.RUNNING
+    started_at: datetime
+    ended_at: datetime | None = None
+
+    @property
+    def duration_seconds(self) -> float | None:
+        if self.ended_at is None:
+            return None
+        return (self.ended_at - self.started_at).total_seconds()
+
+
+class RunManifest(BaseModel):
+    """Lifecycle record for a single run. One file per run, keyed by run_id."""
+
+    run_id: str
+    surface: ManifestSurface
+    run_name: str
+    status: ManifestStatus = ManifestStatus.RUNNING
+    stage: str | None = None  # name of the current / most-recent stage
+    stages: list[StageRecord] = Field(default_factory=list)
+    started_at: datetime
+    updated_at: datetime
+    ended_at: datetime | None = None  # set when the run reaches a terminal status
+    error: str | None = None
+    report_path: str | None = None
+    summary: RunSummary | None = Field(
+        default=None,
+        description=(
+            'Compact headline stats captured at completion so a run-list row can be built '
+            'without reading the full report. Small scalars / short lists only — never full results.'
+        ),
+    )
+
+    @property
+    def duration_seconds(self) -> float | None:
+        if self.ended_at is None:
+            return None
+        return (self.ended_at - self.started_at).total_seconds()
+
+
 __all__ = [
     'DEFAULT_PIPELINE_MODEL',
     'DEFAULT_TARGET_MAX_TOKENS',
     'DEFAULT_TARGET_TIMEOUT_MS',
     'JURY_RAW_OUTPUT_KEY',
+    'RUN_SUMMARY_TOTAL_KEY',
     'AgentContext',
     'AgentResponse',
     'AgentResponseError',
@@ -1032,12 +1136,17 @@ __all__ = [
     'JuryVote',
     'KnowledgeBaseInfo',
     'LLMCallConfig',
+    'ManifestStatus',
+    'ManifestSurface',
     'MemoryStoreInfo',
     'Message',
     'OutputMessage',
     'ReasoningOutputItem',
     'ReportSection',
     'ReportSectionKind',
+    'RunManifest',
+    'RunSummary',
+    'StageRecord',
     'StrategyToolCall',
     'TextOutputItem',
     'TokenUsage',

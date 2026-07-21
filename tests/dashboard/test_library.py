@@ -88,3 +88,92 @@ def test_broken_report_surfaces_as_card_not_skipped(tmp_path):
     cards = scan([rt])
     assert len(cards) == 1
     assert cards[0].error is not None
+
+
+def _start_manifest(runs_dir: Path, run_id: str, surface: str, name: str):
+    from evaluatorq.common.run_manifest import start_manifest
+
+    return start_manifest(run_id=run_id, surface=surface, run_name=name, runs_dir=runs_dir)
+
+
+def test_scan_builds_card_from_manifest_without_reading_report(tmp_path):
+    # report_path points at a NON-EXISTENT file; the card must still build from
+    # the manifest's compact summary (proving no full-report read happens).
+    rt = tmp_path / 'runs'
+    rt.mkdir()
+    bogus = rt / 'nonexistent_20260101.json'  # deliberately not written
+    w = _start_manifest(rt, 'm1', 'redteam', 'from-manifest')
+    w.complete(report_path=bogus, summary={'total_results': 7})
+
+    cards = scan([rt])
+    assert len(cards) == 1
+    card = cards[0]
+    assert card.name == 'from-manifest'
+    assert card.surface == 'redteam'
+    assert card.status == 'completed'
+    assert card.headline == '7 attacks'
+    assert not bogus.exists()
+
+
+def test_scan_legacy_reports_only_lists_as_before(tmp_path):
+    # A runs dir with ONLY reports (no .manifests) must list exactly as today.
+    rt = tmp_path / 'runs'
+    rt.mkdir()
+    _write(rt / 'redteam_20260101_000000.json', _redteam_payload())
+    cards = scan([rt])
+    assert len(cards) == 1
+    assert cards[0].surface == 'redteam'
+    assert cards[0].status is None  # legacy cards carry no manifest status
+    assert cards[0].path is not None
+
+
+def test_scan_mixed_dir_dedups_by_report_path(tmp_path):
+    rt = tmp_path / 'runs'
+    rt.mkdir()
+    report = rt / 'covered_20260101_000000.json'
+    _write(report, _redteam_payload())
+    w = _start_manifest(rt, 'cov', 'redteam', 'covered')
+    w.complete(report_path=report, summary={'total_results': 3})
+    # A legacy report with no manifest alongside it.
+    _write(rt / 'legacy_20250101_000000.json', _redteam_payload())
+
+    cards = scan([rt])
+    # The covered report is not listed twice; total = manifest card + legacy card.
+    assert len(cards) == 2
+    names = sorted(c.name for c in cards)
+    assert names == ['covered', 'legacy_20250101_000000']
+    covered = next(c for c in cards if c.name == 'covered')
+    assert covered.status == 'completed'
+
+
+def test_scan_in_flight_manifest_appears_with_status_and_stage(tmp_path):
+    rt = tmp_path / 'runs'
+    rt.mkdir()
+    w = _start_manifest(rt, 'live', 'sim', 'in-flight')
+    w.start_stage('Simulating')
+
+    cards = scan([rt])
+    assert len(cards) == 1
+    card = cards[0]
+    assert card.path is None
+    assert card.status == 'running'
+    assert card.stage == 'Simulating'
+    # An in-flight card resolves to its manifest, not a report.
+    from evaluatorq.dashboard.library import resolve, resolve_manifest
+
+    assert resolve(card.id, [rt]) is None
+    manifest = resolve_manifest(card.id, [rt])
+    assert manifest is not None
+    assert manifest.run_name == 'in-flight'
+
+
+def test_scan_errored_manifest_without_report_is_listed(tmp_path):
+    rt = tmp_path / 'runs'
+    rt.mkdir()
+    w = _start_manifest(rt, 'boom', 'redteam', 'errored')
+    w.fail('kaboom')
+
+    cards = scan([rt])
+    assert len(cards) == 1
+    assert cards[0].status == 'error'
+    assert cards[0].path is None

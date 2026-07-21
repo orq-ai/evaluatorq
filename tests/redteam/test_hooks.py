@@ -534,6 +534,8 @@ class TestHooksIntegration:
         with patch('evaluatorq.redteam.runner._run_dynamic_or_hybrid') as mock_dynamic:
 
             async def _fake_dynamic(**kwargs):
+                from evaluatorq.common.async_utils import await_maybe
+
                 hooks = kwargs.get('hooks')
                 payload = {
                     'agent_context': None,
@@ -549,7 +551,9 @@ class TestHooksIntegration:
                     'dataset_path': None,
                     'vulnerabilities': None,
                 }
-                if hooks is not None and not hooks.on_confirm(payload):
+                # red_team wraps hooks in an async CompositePipelineHooks, so drive
+                # on_confirm via await_maybe just as the real runner does.
+                if hooks is not None and not await await_maybe(hooks.on_confirm(payload)):
                     raise RuntimeError('Execution cancelled by confirmation callback')
                 return MagicMock()
 
@@ -571,9 +575,11 @@ class TestHooksIntegration:
         with patch('evaluatorq.redteam.runner._run_dynamic_or_hybrid') as mock_dynamic:
 
             async def _fake_dynamic(**kwargs):
+                from evaluatorq.common.async_utils import await_maybe
+
                 hooks = kwargs.get('hooks')
                 if hooks is not None:
-                    hooks.on_stage_start('context_retrieval', {})
+                    await await_maybe(hooks.on_stage_start('context_retrieval', {}))
                 return MagicMock()
 
             mock_dynamic.side_effect = _fake_dynamic

@@ -83,8 +83,10 @@ def _status_badge(status: str) -> str:
     # error→failed red) so the run-list badges stay styled.
     label, cls = {
         'finished': ('Finished', 'passed'),
+        'completed': ('Finished', 'passed'),
         'error': ('Error', 'failed'),
         'running': ('Running', 'warning'),
+        'cancelled': ('Cancelled', 'cancelled'),
     }.get(status, (status.title(), status))
     return f'<span class="status-badge {esc(cls)}"><span class="dot"></span>{esc(label)}</span>'
 
@@ -258,6 +260,7 @@ _LIFECYCLE_PILL: dict[str, tuple[str, str]] = {
     'finished': ('Finished', 'pass'),
     'error': ('Error', 'fail'),
     'running': ('Running', 'warn'),
+    'cancelled': ('Cancelled', 'neutral'),
 }
 
 
@@ -572,6 +575,38 @@ def report_not_found(rid: str) -> str:
         '<section class="report-not-found">'
         '<h1>Report not found</h1>'
         f'<p>No report with id <code>{esc(rid)}</code> could be located.</p>'
+        '<p><a href="/">Back to reports</a></p>'
+        '</section>'
+    )
+
+
+def report_in_flight(manifest: Any) -> str:
+    """Render a minimal status page for an in-flight run (no report on disk yet).
+
+    Kept deliberately small: an in-flight run has no results to show, so this
+    surfaces the run's lifecycle status, current stage, and per-stage timing
+    from the manifest rather than a full transcript view.
+    """
+    status = manifest.status.value if hasattr(manifest.status, 'value') else str(manifest.status)
+    label = SURFACE_LABELS.get(manifest.surface.value, manifest.surface.value)
+    stage = manifest.stage or '—'
+    rows: list[str] = []
+    for rec in manifest.stages:
+        st = rec.status.value if hasattr(rec.status, 'value') else str(rec.status)
+        dur = f'{rec.duration_seconds:.1f}s' if rec.duration_seconds is not None else '…'
+        target = f' ({esc(rec.target)})' if rec.target else ''
+        rows.append(
+            f'<div class="config-row"><span class="config-key">{esc(rec.name)}{target}</span>'
+            f'<span class="config-val">{esc(st)} · {esc(dur)}</span></div>'
+        )
+    stages_html = ''.join(rows) or '<div class="config-row"><span class="config-val">No stages recorded.</span></div>'
+    err_html = f'<p class="report-broken-detail">{esc(manifest.error)}</p>' if manifest.error else ''
+    return (
+        '<section class="report-in-flight">'
+        f'<h1>{esc(manifest.run_name)}</h1>'
+        f'<p>{esc(label)} run — {_status_badge(status)} · current stage: <code>{esc(stage)}</code></p>'
+        f'{err_html}'
+        f'<div class="config-list">{stages_html}</div>'
         '<p><a href="/">Back to reports</a></p>'
         '</section>'
     )

@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, cast
 from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, job
-from evaluatorq.common.async_utils import await_maybe, warn_if_sync_hooks
+from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.run_store_dir import get_store_dir
@@ -63,7 +63,13 @@ from evaluatorq.redteam.contracts import (
     parse_target,
 )
 from evaluatorq.redteam.exceptions import CancelledError, CredentialError, RedTeamError
-from evaluatorq.redteam.hooks import ConfirmPayload, DefaultHooks, PipelineHooks
+from evaluatorq.redteam.hooks import (
+    CompositePipelineHooks,
+    ConfirmPayload,
+    DefaultHooks,
+    ManifestStageHooks,
+    PipelineHooks,
+)
 from evaluatorq.redteam.reports.recommendations import generate_focus_area_recommendations
 from evaluatorq.redteam.runtime.jobs import _build_messages, _sanitize_job_name, create_model_job
 from evaluatorq.redteam.tracing import with_redteam_span
@@ -323,7 +329,7 @@ async def red_team(
     name: str | None = None,
     description: str | None = None,
     dataset: Path | str | None = None,
-    hooks: PipelineHooks | None = None,
+    hooks: PipelineHooks | Sequence[PipelineHooks] | None = None,
     artifacts_dir: Path | str | None = None,
     target_config: TargetConfig | None = None,
     generate_recommendations: bool = False,
@@ -420,14 +426,10 @@ async def red_team(
             ``save='detail'`` is passed without ``artifacts_dir``.
         CancelledError: If hooks.on_confirm returns False.
     """
-    resolved_hooks: PipelineHooks = hooks or DefaultHooks()
-    # Public entry point: nudge sync hooks toward async once. The same resolved
-    # instance flows down into _run_dynamic_or_hybrid / _run_static, so the
-    # re-resolution there never sees a different object — warn only here.
-    warn_if_sync_hooks(
-        resolved_hooks,
-        ('on_stage_start', 'on_stage_end', 'on_confirm', 'on_complete'),
-    )
+    # Hook normalisation (single | sequence | None), structural validation, the
+    # per-child sync-hook warning, and composition all live in the shared
+    # compose_run_hooks helper, invoked in the manifest block below (after
+    # argument validation, so a pure config error leaves nothing stuck behind).
 
     if config is not None:
         if llm_config is not None:
@@ -461,6 +463,10 @@ async def red_team(
             msg = "save='detail' requires artifacts_dir to be set."
             raise ValueError(msg)
         resolved_output_dir = user_output_dir
+
+    # Manifest is created after argument validation (below), so a pure config
+    # error never leaves a stuck 'running' manifest behind.
+    manifest_writer = None
 
     if isinstance(target, list):
         raw_targets: list[str | AgentTarget] = list(target)
@@ -622,148 +628,217 @@ async def red_team(
                 ', '.join(unevaluable_codes),
             )
 
-    if resolved_mode in (Pipeline.DYNAMIC, Pipeline.HYBRID):
-        report = await _run_dynamic_or_hybrid(
-            targets=targets,
-            agent_targets=agent_targets,
-            mode=resolved_mode,
-            name=name,
-            categories=resolved_categories,
-            resolved_vulns=resolved_vulns,
-            max_turns=max_turns,
-            max_per_category=max_per_category,
-            attack_model=attack_model,
-            evaluator_model=evaluator_model,
-            parallelism=parallelism,
-            generate_strategies=generate_strategies,
-            generated_strategy_count=generated_strategy_count,
-            max_dynamic_datapoints=max_dynamic_datapoints,
-            max_static_datapoints=max_static_datapoints,
-            cleanup_memory=cleanup_memory,
-            llm_client=llm_client,
-            description=description,
-            dataset=dataset,
-            hooks=resolved_hooks,
-            output_dir=resolved_output_dir,
-            target_config=target_config,
-            attacker_instructions=attacker_instructions,
-            verbosity=verbosity,
-            pipeline_config=config,
-            resolved_strategy_names=resolved_strategy_names,
-            resolved_delivery_methods=resolved_delivery_methods,
-        )
-    elif resolved_mode == Pipeline.STATIC:
-        report = await _run_static(
-            targets=targets,
-            agent_targets=agent_targets,
-            name=name,
-            categories=resolved_categories,
-            evaluator_model=evaluator_model,
-            parallelism=parallelism,
-            max_static_datapoints=max_static_datapoints,
-            dataset=dataset,
-            description=description,
-            llm_client=llm_client,
-            hooks=resolved_hooks,
-            output_dir=resolved_output_dir,
-            target_config=target_config,
-            pipeline_config=config,
-            resolved_strategy_names=resolved_strategy_names,
-            resolved_delivery_methods=resolved_delivery_methods,
-        )
-    else:
-        msg = f'Invalid mode {mode!r}. Must be "dynamic", "static", or "hybrid".'
-        raise ValueError(msg)
+    # Lifecycle manifest: track this run's stage/status on disk while it runs so a
+    # still-running or crashed run is visible (the report only lands on
+    # completion). Minted here — after argument validation — and only when
+    # persisting (save != 'none'). compose_run_hooks normalises/validates/warns
+    # the user hooks, mints the manifest (validation first, so a bad hook type
+    # never leaves a stuck 'running' manifest), and registers the manifest's
+    # stage-recorder as the FIRST composed hook (Q3) so a stage's status is
+    # durable before any user hook runs — and can throw. The returned raw
+    # manifest_writer is retained for the terminal complete()/fail()/cancel()
+    # calls below: those never route through the composite, because a hook can't
+    # guarantee a terminal write on crash.
+    from evaluatorq.common.hook_compose import compose_run_hooks
 
-    # Record categories dropped by the evaluability gate so the report is honest
-    # about reduced scope (rather than silently testing fewer categories).
-    if unevaluable_codes:
-        report.pipeline_warnings.insert(
-            0,
-            f'Skipped {len(unevaluable_codes)} requested categor'
-            f'{"y" if len(unevaluable_codes) == 1 else "ies"} with no automated '
-            f'evaluator ({", ".join(unevaluable_codes)}): not scoreable via '
-            'prompt-based red teaming (requires live-system testing).',
+    def _make_manifest() -> Any:
+        import uuid
+
+        from evaluatorq.common.run_manifest import start_manifest
+
+        return start_manifest(
+            run_id=uuid.uuid4().hex,
+            surface='redteam',
+            run_name=name or 'red-team',
+            runs_dir=get_runs_dir(),
         )
 
-    # Generate LLM-based recommendations for focus areas (opt-in)
-    if generate_recommendations:
-        try:
-            rec_client = llm_client or config.evaluator.client
-            if rec_client is None:
-                rec_client = create_async_llm_client(role_config=config.evaluator.as_call_config())
-
-            report.focus_area_recommendations = await generate_focus_area_recommendations(
-                report=report,
-                llm_client=rec_client,
-                model=evaluator_model,
-                cfg=config,
-            )
-        except (TypeError, AttributeError, ImportError, NameError, KeyError):
-            raise
-        except Exception:
-            logger.warning('Failed to generate focus area recommendations', exc_info=True)
-            report.pipeline_warnings.append(
-                'Failed to generate focus area recommendations. Check LLM credentials and model configuration.'
-            )
-
-    # Generate the LLM narrative executive summary (on by default; silent skip
-    # when no LLM credentials are configured).
-    if generate_executive_summary:
-        from evaluatorq.common.reports.executive_summary import (
-            generate_executive_summary as _gen_exec_summary,
-        )
-        from evaluatorq.redteam.reports.executive_summary import build_redteam_facts
-
-        try:
-            es_client = llm_client or config.evaluator.client
-            if es_client is None:
-                es_client = create_async_llm_client(role_config=config.evaluator.as_call_config())
-            report.executive_summary = await _gen_exec_summary(
-                build_redteam_facts(report),
-                llm_client=es_client,
-                model=evaluator_model,
-                temperature=config.evaluator.temperature,
-                extra_body=config.retry_extra_body(es_client),
-                extra_kwargs=config.evaluator.extra_kwargs,
-            )
-        except (TypeError, AttributeError, ImportError, NameError, KeyError):
-            raise
-        except Exception:
-            logger.warning('Failed to generate executive summary', exc_info=True)
-            report.pipeline_warnings.append(
-                'Failed to generate executive summary. Check LLM credentials and model configuration.'
-            )
-
-    # Persist report according to the save mode. 'detail' mode already had
-    # the inner pipeline write 01/02/03 to resolved_output_dir, so here we
-    # only handle 'final' (single summary file) and record the saved path.
-    auto_save_path: Path | None = None
-    if save == 'final':
-        if user_output_dir is not None:
-            _save_report(user_output_dir, '03_summary_report.json', report)
-            auto_save_path = user_output_dir / '03_summary_report.json'
-    elif save == 'detail':
-        if resolved_output_dir is not None:
-            auto_save_path = resolved_output_dir / '03_summary_report.json'
-
-    # Index in .evaluatorq/runs/ so the run appears in `evaluatorq redteam runs`.
-    if save != 'none':
-        run_path = _auto_save_run(report, name=name)
-        if auto_save_path is None:
-            auto_save_path = run_path
-        if run_path is None:
-            report.pipeline_warnings.append(
-                'Failed to auto-save run report. The run will not appear in `evaluatorq redteam runs`.'
-            )
-
-    await await_maybe(
-        resolved_hooks.on_complete(
-            report,
-            output_dir=str(user_output_dir) if user_output_dir and save != 'none' else None,
-            auto_save_path=str(auto_save_path) if auto_save_path else None,
-        )
+    resolved_hooks_typed, manifest_writer = compose_run_hooks(
+        hooks,
+        method_names=('on_stage_start', 'on_stage_end', 'on_confirm', 'on_complete'),
+        composite_cls=CompositePipelineHooks,
+        default_hooks_factory=DefaultHooks,
+        manifest_factory=_make_manifest if save != 'none' else None,
+        manifest_hook_factory=ManifestStageHooks,
     )
+    resolved_hooks: PipelineHooks = resolved_hooks_typed
+
+    # Everything from here through on_complete is guarded: any failure marks the
+    # manifest 'error' (BaseException also captures cancellation), so a run can
+    # never stay 'running' once it has finished. complete() is called only after
+    # on_complete returns — if that hook raises, the manifest reflects the error
+    # the caller sees, not a false 'completed'.
+    try:
+        if resolved_mode in (Pipeline.DYNAMIC, Pipeline.HYBRID):
+            report = await _run_dynamic_or_hybrid(
+                targets=targets,
+                agent_targets=agent_targets,
+                mode=resolved_mode,
+                name=name,
+                categories=resolved_categories,
+                resolved_vulns=resolved_vulns,
+                max_turns=max_turns,
+                max_per_category=max_per_category,
+                attack_model=attack_model,
+                evaluator_model=evaluator_model,
+                parallelism=parallelism,
+                generate_strategies=generate_strategies,
+                generated_strategy_count=generated_strategy_count,
+                max_dynamic_datapoints=max_dynamic_datapoints,
+                max_static_datapoints=max_static_datapoints,
+                cleanup_memory=cleanup_memory,
+                llm_client=llm_client,
+                description=description,
+                dataset=dataset,
+                hooks=resolved_hooks,
+                output_dir=resolved_output_dir,
+                target_config=target_config,
+                attacker_instructions=attacker_instructions,
+                verbosity=verbosity,
+                pipeline_config=config,
+                resolved_strategy_names=resolved_strategy_names,
+                resolved_delivery_methods=resolved_delivery_methods,
+            )
+        elif resolved_mode == Pipeline.STATIC:
+            report = await _run_static(
+                targets=targets,
+                agent_targets=agent_targets,
+                name=name,
+                categories=resolved_categories,
+                evaluator_model=evaluator_model,
+                parallelism=parallelism,
+                max_static_datapoints=max_static_datapoints,
+                dataset=dataset,
+                description=description,
+                llm_client=llm_client,
+                hooks=resolved_hooks,
+                output_dir=resolved_output_dir,
+                target_config=target_config,
+                pipeline_config=config,
+                resolved_strategy_names=resolved_strategy_names,
+                resolved_delivery_methods=resolved_delivery_methods,
+            )
+        else:
+            msg = f'Invalid mode {mode!r}. Must be "dynamic", "static", or "hybrid".'
+            raise ValueError(msg)
+
+        # Record categories dropped by the evaluability gate so the report is
+        # honest about reduced scope (rather than silently testing fewer).
+        if unevaluable_codes:
+            report.pipeline_warnings.insert(
+                0,
+                f'Skipped {len(unevaluable_codes)} requested categor'
+                f'{"y" if len(unevaluable_codes) == 1 else "ies"} with no automated '
+                f'evaluator ({", ".join(unevaluable_codes)}): not scoreable via '
+                'prompt-based red teaming (requires live-system testing).',
+            )
+
+        # Generate LLM-based recommendations for focus areas (opt-in)
+        if generate_recommendations:
+            try:
+                rec_client = llm_client or config.evaluator.client
+                if rec_client is None:
+                    rec_client = create_async_llm_client(role_config=config.evaluator.as_call_config())
+
+                report.focus_area_recommendations = await generate_focus_area_recommendations(
+                    report=report,
+                    llm_client=rec_client,
+                    model=evaluator_model,
+                    cfg=config,
+                )
+            except (TypeError, AttributeError, ImportError, NameError, KeyError):
+                raise
+            except Exception:
+                logger.warning('Failed to generate focus area recommendations', exc_info=True)
+                report.pipeline_warnings.append(
+                    'Failed to generate focus area recommendations. Check LLM credentials and model configuration.'
+                )
+
+        # Generate the LLM narrative executive summary (on by default; silent
+        # skip when no LLM credentials are configured).
+        if generate_executive_summary:
+            from evaluatorq.common.reports.executive_summary import (
+                generate_executive_summary as _gen_exec_summary,
+            )
+            from evaluatorq.redteam.reports.executive_summary import build_redteam_facts
+
+            try:
+                es_client = llm_client or config.evaluator.client
+                if es_client is None:
+                    es_client = create_async_llm_client(role_config=config.evaluator.as_call_config())
+                report.executive_summary = await _gen_exec_summary(
+                    build_redteam_facts(report),
+                    llm_client=es_client,
+                    model=evaluator_model,
+                    temperature=config.evaluator.temperature,
+                    extra_body=config.retry_extra_body(es_client),
+                    extra_kwargs=config.evaluator.extra_kwargs,
+                )
+            except (TypeError, AttributeError, ImportError, NameError, KeyError):
+                raise
+            except Exception:
+                logger.warning('Failed to generate executive summary', exc_info=True)
+                report.pipeline_warnings.append(
+                    'Failed to generate executive summary. Check LLM credentials and model configuration.'
+                )
+
+        # Persist report according to the save mode. 'detail' mode already had
+        # the inner pipeline write 01/02/03 to resolved_output_dir, so here we
+        # only handle 'final' (single summary file) and record the saved path.
+        auto_save_path: Path | None = None
+        indexed_run_path: Path | None = None
+        if save == 'final':
+            if user_output_dir is not None:
+                _save_report(user_output_dir, '03_summary_report.json', report)
+                auto_save_path = user_output_dir / '03_summary_report.json'
+        elif save == 'detail':
+            if resolved_output_dir is not None:
+                auto_save_path = resolved_output_dir / '03_summary_report.json'
+
+        # Index in .evaluatorq/runs/ so the run appears in `evaluatorq redteam runs`.
+        if save != 'none':
+            indexed_run_path = _auto_save_run(report, name=name)
+            if auto_save_path is None:
+                auto_save_path = indexed_run_path
+            if indexed_run_path is None:
+                report.pipeline_warnings.append(
+                    'Failed to auto-save run report. The run will not appear in `evaluatorq redteam runs`.'
+                )
+
+        await await_maybe(
+            resolved_hooks.on_complete(
+                report,
+                output_dir=str(user_output_dir) if user_output_dir and save != 'none' else None,
+                auto_save_path=str(auto_save_path) if auto_save_path else None,
+            )
+        )
+
+        # Fully finished — including on_complete. Now mark the manifest completed,
+        # embedding a compact summary (the exact fields the `runs` table + dashboard
+        # card render) so a list row needs zero full-report reads.
+        if manifest_writer is not None:
+            manifest_writer.complete(
+                report_path=indexed_run_path,
+                summary={
+                    'pipeline': report.pipeline.value,
+                    'total_results': report.total_results,
+                    'total_attacks': report.summary.total_attacks,
+                    'vulnerability_rate': report.summary.vulnerability_rate,
+                    'resistance_rate': report.summary.resistance_rate,
+                    'tested_agents': list(report.tested_agents),
+                },
+            )
+    except CancelledError:
+        # The run was declined at the confirm gate (on_confirm returned False,
+        # surfaced as CancelledError). That is a distinct terminal status, not an
+        # error — finished stages stay truthful, nothing is relabeled (Dec1).
+        if manifest_writer is not None:
+            manifest_writer.cancel()
+        raise
+    except BaseException as exc:
+        if manifest_writer is not None:
+            manifest_writer.fail(str(exc) or type(exc).__name__)
+        raise
 
     return report
 
@@ -1124,6 +1199,9 @@ async def _prepare_target(
             hooks.on_stage_end(
                 PipelineStage.CONTEXT_RETRIEVAL,
                 {
+                    # Per-target stage: carry the target label so the manifest keys
+                    # this record to the same target as its on_stage_start (Dec2).
+                    'target': target_value,
                     'num_tools': len(agent_context.tools) if agent_context.tools else 0,
                     'num_memory_stores': len(agent_context.memory_stores) if agent_context.memory_stores else 0,
                     'num_knowledge_bases': len(agent_context.knowledge_bases) if agent_context.knowledge_bases else 0,
@@ -1254,6 +1332,8 @@ async def _prepare_target(
                 hooks.on_stage_end(
                     PipelineStage.DATAPOINT_GENERATION,
                     {
+                        # Per-target stage: match the on_stage_start target key (Dec2).
+                        'target': target,
                         'num_datapoints': len(all_datapoints),
                         'num_dynamic': len(dynamic_datapoints),
                         'num_static': len(static_datapoints),
@@ -1289,7 +1369,10 @@ async def _prepare_target(
 
         if shared_datapoints is None:
             await await_maybe(
-                hooks.on_stage_end(PipelineStage.DATAPOINT_GENERATION, {'num_datapoints': len(all_datapoints)})
+                hooks.on_stage_end(
+                    PipelineStage.DATAPOINT_GENERATION,
+                    {'target': target, 'num_datapoints': len(all_datapoints)},
+                )
             )
             _check_filter_results(all_datapoints, resolved_strategy_names, resolved_delivery_methods)
 
@@ -1428,9 +1511,16 @@ async def _run_dynamic_or_hybrid(
         # for each target carries the classifier output. Hook implementations
         # render the per-target capability table from that meta payload.
         all_agent_contexts: dict[str, AgentContext] = {}
-        await await_maybe(
-            resolved_hooks.on_stage_start(PipelineStage.CONTEXT_RETRIEVAL, {'targets': all_target_labels})
-        )
+        # Per-target CONTEXT_RETRIEVAL stages (FIX 2 / Dec2): the matching
+        # on_stage_end fires once per target below, each carrying that target's
+        # own context + capabilities, so open one stage PER target keyed by its
+        # label. A single aggregate start keyed target=None would never be closed
+        # by the per-target ends (target-key mismatch) — the manifest stage would
+        # stay open for the whole run and be force-closed only at run end (wrongly
+        # 'error' on a later failure). Per-target start/end keys are consistent
+        # and mirror the keying _prepare_target already uses for this stage.
+        for target_label in all_target_labels:
+            await await_maybe(resolved_hooks.on_stage_start(PipelineStage.CONTEXT_RETRIEVAL, {'target': target_label}))
         # Only build the ORQ SDK backend when there are string targets to resolve
         # context for. A pure bring-your-own AgentTarget run never touches it, so this
         # avoids importing/requiring orq-ai-sdk for those runs (mirrors the lazy factory
@@ -1879,7 +1969,13 @@ async def _run_dynamic_or_hybrid(
                     ):
                         at_dps = _cap_datapoints_balanced(at_dps, max_dynamic_datapoints)
                     await await_maybe(
-                        resolved_hooks.on_stage_end(PipelineStage.DATAPOINT_GENERATION, {'num_datapoints': len(at_dps)})
+                        resolved_hooks.on_stage_end(
+                            PipelineStage.DATAPOINT_GENERATION,
+                            # Per-target stage: match the on_stage_start target key
+                            # (Dec2 / FIX 2) so the manifest closes THIS target's
+                            # DATAPOINT_GENERATION record instead of leaving it open.
+                            {'target': at_label, 'num_datapoints': len(at_dps)},
+                        )
                     )
                     shared_at_dps = at_dps
                 else:
@@ -2341,7 +2437,10 @@ async def _run_dynamic_or_hybrid(
                             'Manual cleanup may be required.'
                         )
                     await await_maybe(
-                        resolved_hooks.on_stage_end(PipelineStage.CLEANUP, {'num_entities_cleaned': len(entity_ids)})
+                        resolved_hooks.on_stage_end(
+                            PipelineStage.CLEANUP,
+                            {'num_entities_cleaned': len(entity_ids), 'target': pt.target},
+                        )
                     )
 
         return merged
