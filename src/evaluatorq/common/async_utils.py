@@ -12,6 +12,8 @@ import warnings
 from collections.abc import Awaitable, Iterable, Sequence
 from typing import Any, TypeAlias, TypeVar
 
+from loguru import logger
+
 _T = TypeVar('_T')
 
 MaybeAsync: TypeAlias = _T | Awaitable[_T]
@@ -52,9 +54,44 @@ async def fan_out(children: Iterable[Any], method_name: str, *args: Any, **kwarg
         try:
             await await_maybe(getattr(child, method_name)(*args, **kwargs))
         except BaseException as exc:  # noqa: PERF203 — per-child capture is the point of fan-out
-            first_exc = first_exc or exc
+            if first_exc is None:
+                first_exc = exc
+            else:
+                # Only the FIRST exception is re-raised; log the rest so a later
+                # child's failure isn't lost silently (FIX 6).
+                logger.opt(exception=exc).warning(
+                    f'fan_out({method_name!r}): child {type(child).__name__} raised after an earlier '
+                    'exception; suppressed (the first exception is re-raised).'
+                )
     if first_exc is not None:
         raise first_exc
+
+
+async def combine_confirm(children: Iterable[Any], *args: Any, **kwargs: Any) -> bool:
+    """Fan an ``on_confirm`` gate out to every child and AND the verdicts.
+
+    Same run-all-then-reraise policy as :func:`fan_out`: call ``on_confirm`` on
+    every child, capture the FIRST exception and re-raise it after the loop
+    (logging any later exceptions so they aren't lost, FIX 6). The run proceeds
+    only if **every** child approves (``all(...)``); a single child behaves
+    identically to calling it directly (``all([x]) == bool(x)``).
+    """
+    results: list[bool] = []
+    first_exc: BaseException | None = None
+    for child in children:
+        try:
+            results.append(bool(await await_maybe(child.on_confirm(*args, **kwargs))))
+        except BaseException as exc:  # noqa: PERF203 — per-child capture is the point
+            if first_exc is None:
+                first_exc = exc
+            else:
+                logger.opt(exception=exc).warning(
+                    f'combine_confirm: child {type(child).__name__} raised after an earlier '
+                    'exception; suppressed (the first exception is re-raised).'
+                )
+    if first_exc is not None:
+        raise first_exc
+    return all(results)
 
 
 def normalize_to_list(value: Any) -> list[Any]:

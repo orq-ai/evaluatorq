@@ -123,3 +123,45 @@ async def test_sync_user_hook_warns_but_composite_does_not_misfire() -> None:
     assert any('SyncHook' in m for m in sync_warnings), sync_warnings
     # The async composite must never be reported as a sync-hook offender.
     assert not any('CompositePipelineHooks' in m for m in sync_warnings), sync_warnings
+
+
+@pytest.mark.asyncio
+async def test_context_retrieval_per_target_keying_closes_stages() -> None:
+    """FIX 2 / Dec2: the redteam manifest hook must open+close a CONTEXT_RETRIEVAL
+    stage per target using a consistent 'target' key, so each stage closes
+    mid-run (not force-closed at the terminal). Replays the exact meta the
+    runner now emits, and shows the old 'targets' (plural) start key would leave
+    the stage stuck open."""
+    import tempfile
+    from pathlib import Path
+
+    from evaluatorq.common.run_manifest import start_manifest
+    from evaluatorq.redteam.contracts import PipelineStage
+    from evaluatorq.redteam.hooks import ManifestStageHooks
+
+    with tempfile.TemporaryDirectory() as d:
+        runs = Path(d) / 'runs'
+        writer = start_manifest(run_id='rt', surface='redteam', run_name='x', runs_dir=runs)
+        hook = ManifestStageHooks(writer)
+        stage = PipelineStage.CONTEXT_RETRIEVAL
+
+        # Runner's emission: per-target start AND end, both carrying 'target'.
+        await hook.on_stage_start(stage, {'target': 'agent-a'})
+        await hook.on_stage_start(stage, {'target': 'agent-b'})
+        await hook.on_stage_end(stage, {'target': 'agent-a'})
+        await hook.on_stage_end(stage, {'target': 'agent-b'})
+
+        by_target = {s.target: s for s in writer.manifest.stages}
+        assert by_target['agent-a'].status == 'completed'
+        assert by_target['agent-a'].ended_at is not None
+        assert by_target['agent-b'].status == 'completed'
+        assert by_target['agent-b'].ended_at is not None
+
+        # Negative control: the OLD buggy aggregate start key ('targets', → target
+        # None) never matches a per-target end → the stage stays open (the exact
+        # regression FIX 2 removes).
+        writer2 = start_manifest(run_id='rt2', surface='redteam', run_name='x', runs_dir=runs)
+        hook2 = ManifestStageHooks(writer2)
+        await hook2.on_stage_start(stage, {'targets': ['agent-a']})  # buggy plural key
+        await hook2.on_stage_end(stage, {'target': 'agent-a'})
+        assert writer2.manifest.stages[0].ended_at is None  # never closed

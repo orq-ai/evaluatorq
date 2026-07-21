@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TypedDict, runtime_checkable
 
 from loguru import logger
 
-from evaluatorq.common.async_utils import await_maybe, fan_out
+from evaluatorq.common.async_utils import combine_confirm, fan_out
 from evaluatorq.redteam.contracts import AgentCapability, PipelineStage
 from evaluatorq.redteam.reports.display import print_report_summary
 
@@ -301,16 +301,7 @@ class CompositePipelineHooks:
         await fan_out(self._hooks, 'on_complete', report, output_dir=output_dir, auto_save_path=auto_save_path)
 
     async def on_confirm(self, payload: ConfirmPayload) -> bool:
-        results: list[bool] = []
-        first_exc: BaseException | None = None
-        for hook in self._hooks:
-            try:
-                results.append(bool(await await_maybe(hook.on_confirm(payload))))
-            except BaseException as exc:  # noqa: PERF203 — per-child capture is the point
-                first_exc = first_exc or exc
-        if first_exc is not None:
-            raise first_exc
-        return all(results)
+        return await combine_confirm(self._hooks, payload)
 
 
 # ---------------------------------------------------------------------------

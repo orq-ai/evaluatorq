@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TypedDict, runtime_checkable
 
 from loguru import logger
 
-from evaluatorq.common.async_utils import await_maybe, fan_out
+from evaluatorq.common.async_utils import combine_confirm, fan_out
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -460,16 +460,7 @@ class CompositeSimulationHooks:
         self._hooks: list[SimulationHooks] = list(children)
 
     async def on_confirm(self, meta: SimulationRunMeta) -> bool:
-        results: list[bool] = []
-        first_exc: BaseException | None = None
-        for h in self._hooks:
-            try:
-                results.append(bool(await await_maybe(h.on_confirm(meta))))
-            except BaseException as exc:  # noqa: PERF203 — per-child capture is the point
-                first_exc = first_exc or exc
-        if first_exc is not None:
-            raise first_exc
-        return all(results)
+        return await combine_confirm(self._hooks, meta)
 
     async def on_run_start(self, meta: SimulationRunMeta) -> None:
         await fan_out(self._hooks, 'on_run_start', meta)

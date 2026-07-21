@@ -443,3 +443,49 @@ async def test_multiple_user_hooks_fan_out(datapoint_factory):
     )
     assert len(results) == 1
     assert h1.completed == 1 and h2.completed == 1  # both children fanned out
+
+
+@pytest.mark.asyncio
+async def test_generate_phase_failure_marks_manifest_error_not_running(datapoint_factory, monkeypatch):
+    """FIX 1: a failure DURING the generate phase of generate_and_simulate must
+    finalize the manifest as 'error' — not leave it stuck 'running' forever
+    (the manifest is minted before generate, but _simulate_core, which owns the
+    terminal calls, is never reached when generation raises)."""
+    from evaluatorq.common.run_manifest import list_manifests
+    from evaluatorq.simulation import api
+    from evaluatorq.simulation.api import generate_and_simulate
+    from evaluatorq.simulation.utils.run_store import get_sim_runs_dir
+
+    async def _fake_personas_scenarios(**_kwargs):
+        return [], []
+
+    async def _boom_resolve(**_kwargs):
+        raise RuntimeError('datapoint generation exploded')
+
+    monkeypatch.setattr(api, '_generate_personas_scenarios', _fake_personas_scenarios)
+    monkeypatch.setattr(api, '_resolve_or_generate_datapoints', _boom_resolve)
+    monkeypatch.setattr(
+        'evaluatorq.openresponses.client.build_simulation_client',
+        lambda _client=None: (object(), False),
+    )
+
+    with pytest.raises(RuntimeError, match='datapoint generation exploded'):
+        await generate_and_simulate(
+            agent_description='a helpful assistant',
+            target=_ok_target,
+            max_turns=1,
+            evaluator_names=['goal_achieved'],
+            user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
+            judge=_StubJudge(terminate=True),  # pyright: ignore[reportArgumentType]
+            upload_results=False,
+            save=True,
+        )
+
+    manifests = list_manifests(get_sim_runs_dir())
+    assert len(manifests) == 1
+    m = manifests[0]
+    assert m.status == 'error'  # NOT stuck 'running'
+    assert m.ended_at is not None
+    # The GENERATE stage that was in-flight when it raised is truthfully 'error'.
+    gen = next(s for s in m.stages if s.name == 'generate')
+    assert gen.status == 'error'

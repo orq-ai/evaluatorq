@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, cast
 from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, job
-from evaluatorq.common.async_utils import await_maybe, normalize_to_list, warn_if_sync_hooks
+from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.run_store_dir import get_store_dir
@@ -426,18 +426,10 @@ async def red_team(
             ``save='detail'`` is passed without ``artifacts_dir``.
         CancelledError: If hooks.on_confirm returns False.
     """
-    # Public API accepts one hook or a sequence. Normalize to a list, then warn
-    # per-child BEFORE composing — the async composite would otherwise mask a
-    # sync child from warn_if_sync_hooks. The composed hooks (manifest first, then
-    # the user hooks or a DefaultHooks fallback) are built after argument
-    # validation, alongside the manifest, so a pure config error leaves nothing
-    # stuck behind. See the manifest block below.
-    user_hooks = normalize_to_list(hooks)
-    for user_hook in user_hooks:
-        warn_if_sync_hooks(
-            user_hook,
-            ('on_stage_start', 'on_stage_end', 'on_confirm', 'on_complete'),
-        )
+    # Hook normalisation (single | sequence | None), structural validation, the
+    # per-child sync-hook warning, and composition all live in the shared
+    # compose_run_hooks helper, invoked in the manifest block below (after
+    # argument validation, so a pure config error leaves nothing stuck behind).
 
     if config is not None:
         if llm_config is not None:
@@ -638,31 +630,38 @@ async def red_team(
 
     # Lifecycle manifest: track this run's stage/status on disk while it runs so a
     # still-running or crashed run is visible (the report only lands on
-    # completion). Created here — after argument validation — and only when
-    # persisting (save != 'none'). Wrapping the hooks feeds each pipeline stage
-    # transition into the manifest.
-    if save != 'none':
+    # completion). Minted here — after argument validation — and only when
+    # persisting (save != 'none'). compose_run_hooks normalises/validates/warns
+    # the user hooks, mints the manifest (validation first, so a bad hook type
+    # never leaves a stuck 'running' manifest), and registers the manifest's
+    # stage-recorder as the FIRST composed hook (Q3) so a stage's status is
+    # durable before any user hook runs — and can throw. The returned raw
+    # manifest_writer is retained for the terminal complete()/fail()/cancel()
+    # calls below: those never route through the composite, because a hook can't
+    # guarantee a terminal write on crash.
+    from evaluatorq.common.hook_compose import compose_run_hooks
+
+    def _make_manifest() -> Any:
         import uuid
 
         from evaluatorq.common.run_manifest import start_manifest
 
-        manifest_writer = start_manifest(
+        return start_manifest(
             run_id=uuid.uuid4().hex,
             surface='redteam',
             run_name=name or 'red-team',
             runs_dir=get_runs_dir(),
         )
-        # Register the manifest as the FIRST composed hook (Q3) so a stage's
-        # status is durable before any user hook runs — and can throw. The raw
-        # manifest_writer reference above is retained for the terminal
-        # complete()/fail()/cancel() calls below: those never route through the
-        # composite, because a hook can't guarantee a terminal write on crash.
-        manifest_hook = ManifestStageHooks(manifest_writer)
-        resolved_hooks: PipelineHooks = CompositePipelineHooks([manifest_hook, *(user_hooks or [DefaultHooks()])])
-    else:
-        # Not persisting → no manifest, but still compose so multi-hooks and the
-        # DefaultHooks fallback behave identically to the saving path.
-        resolved_hooks = CompositePipelineHooks(user_hooks or [DefaultHooks()])
+
+    resolved_hooks_typed, manifest_writer = compose_run_hooks(
+        hooks,
+        method_names=('on_stage_start', 'on_stage_end', 'on_confirm', 'on_complete'),
+        composite_cls=CompositePipelineHooks,
+        default_hooks_factory=DefaultHooks,
+        manifest_factory=_make_manifest if save != 'none' else None,
+        manifest_hook_factory=ManifestStageHooks,
+    )
+    resolved_hooks: PipelineHooks = resolved_hooks_typed
 
     # Everything from here through on_complete is guarded: any failure marks the
     # manifest 'error' (BaseException also captures cancellation), so a run can
@@ -1472,9 +1471,18 @@ async def _run_dynamic_or_hybrid(
         # for each target carries the classifier output. Hook implementations
         # render the per-target capability table from that meta payload.
         all_agent_contexts: dict[str, AgentContext] = {}
-        await await_maybe(
-            resolved_hooks.on_stage_start(PipelineStage.CONTEXT_RETRIEVAL, {'targets': all_target_labels})
-        )
+        # Per-target CONTEXT_RETRIEVAL stages (FIX 2 / Dec2): the matching
+        # on_stage_end fires once per target below, each carrying that target's
+        # own context + capabilities, so open one stage PER target keyed by its
+        # label. A single aggregate start keyed target=None would never be closed
+        # by the per-target ends (target-key mismatch) — the manifest stage would
+        # stay open for the whole run and be force-closed only at run end (wrongly
+        # 'error' on a later failure). Per-target start/end keys are consistent
+        # and mirror the keying _prepare_target already uses for this stage.
+        for target_label in all_target_labels:
+            await await_maybe(
+                resolved_hooks.on_stage_start(PipelineStage.CONTEXT_RETRIEVAL, {'target': target_label})
+            )
         # Only build the ORQ SDK backend when there are string targets to resolve
         # context for. A pure bring-your-own AgentTarget run never touches it, so this
         # avoids importing/requiring orq-ai-sdk for those runs (mirrors the lazy factory
@@ -1923,7 +1931,13 @@ async def _run_dynamic_or_hybrid(
                     ):
                         at_dps = _cap_datapoints_balanced(at_dps, max_dynamic_datapoints)
                     await await_maybe(
-                        resolved_hooks.on_stage_end(PipelineStage.DATAPOINT_GENERATION, {'num_datapoints': len(at_dps)})
+                        resolved_hooks.on_stage_end(
+                            PipelineStage.DATAPOINT_GENERATION,
+                            # Per-target stage: match the on_stage_start target key
+                            # (Dec2 / FIX 2) so the manifest closes THIS target's
+                            # DATAPOINT_GENERATION record instead of leaving it open.
+                            {'target': at_label, 'num_datapoints': len(at_dps)},
+                        )
                     )
                     shared_at_dps = at_dps
                 else:
