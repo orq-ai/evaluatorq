@@ -49,8 +49,11 @@ src/evaluatorq/
 ├── evaluatorq.py            # Core evaluation runner
 ├── evaluators.py            # Built-in evaluator definitions
 ├── types.py                 # Shared types (ScorerParameter, etc.)
+├── contracts.py             # Cross-subpackage shared data models (RunManifest, StageRecord, ManifestStatus, ManifestSurface, etc.)
 ├── deployment.py            # ORQ deployment integration
 ├── fetch_data.py            # Dataset fetching
+├── common/                  # Cross-surface shared utilities (redteam + simulation)
+│   └── run_manifest.py      # Run-lifecycle manifest behavior (create/update/finalize RunManifest)
 ├── integrations/            # Third-party integrations (LangChain, etc.)
 ├── tracing/                 # OpenTelemetry tracing
 ├── openresponses/           # OpenAI Responses API integration
@@ -71,7 +74,7 @@ src/evaluatorq/
 │   ├── launch.py            # CLI launch helper (uvicorn entry point)
 │   └── static/              # Vendored JS: htmx, vega trio, dashboard.js
 └── redteam/                 # Red teaming subpackage
-    ├── contracts.py         # All data models, enums, Pydantic schemas
+    ├── contracts.py         # Red-team-specific data models, enums, Pydantic schemas (shared cross-subpackage models live in top-level contracts.py)
     ├── vulnerability_registry.py  # Single source of truth for vulnerabilities
     ├── runner.py            # Unified red_team() entry point
     ├── cli.py               # Typer CLI for red teaming

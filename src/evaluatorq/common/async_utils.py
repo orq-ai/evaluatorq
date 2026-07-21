@@ -7,10 +7,13 @@ Hooks (and other injected callbacks) may be implemented as either ``def`` or
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import warnings
-from collections.abc import Awaitable
-from typing import TypeAlias, TypeVar
+from collections.abc import Awaitable, Iterable, Sequence
+from typing import Any, TypeAlias, TypeVar
+
+from loguru import logger
 
 _T = TypeVar('_T')
 
@@ -37,6 +40,84 @@ async def await_maybe(value: MaybeAsync[_T]) -> _T:
     # isawaitable is False here, so value is the bare _T; the checker cannot
     # narrow the union via isawaitable, hence the cast-free ignore.
     return value  # type: ignore[return-value]
+
+
+async def fan_out(children: Iterable[Any], method_name: str, *args: Any, **kwargs: Any) -> None:
+    """Call ``method_name`` on every child (via :func:`await_maybe`).
+
+    Runs ALL children, captures the FIRST exception, then re-raises it after the
+    loop — a uniform run-all-then-reraise policy for every void hook method. No
+    ``getattr(..., None)`` skip branch: children are full protocol
+    implementations, so a missing method is a real bug and should raise.
+    """
+    first_exc: BaseException | None = None
+    for child in children:
+        try:
+            await await_maybe(getattr(child, method_name)(*args, **kwargs))
+        except asyncio.CancelledError:  # noqa: PERF203 — per-child capture is the point of fan-out
+            # Cancellation must propagate immediately — never swallow it into the
+            # run-all-then-reraise loop (which would keep driving later children).
+            raise
+        except BaseException as exc:
+            if first_exc is None:
+                first_exc = exc
+            else:
+                # Only the FIRST exception is re-raised; log the rest so a later
+                # child's failure isn't lost silently (FIX 6).
+                logger.opt(exception=exc).warning(
+                    f'fan_out({method_name!r}): child {type(child).__name__} raised after an earlier '
+                    'exception; suppressed (the first exception is re-raised).'
+                )
+    if first_exc is not None:
+        raise first_exc
+
+
+async def combine_confirm(children: Iterable[Any], *args: Any, **kwargs: Any) -> bool:
+    """Fan an ``on_confirm`` gate out to every child and AND the verdicts.
+
+    Same run-all-then-reraise policy as :func:`fan_out`: call ``on_confirm`` on
+    every child, capture the FIRST exception and re-raise it after the loop
+    (logging any later exceptions so they aren't lost, FIX 6). The run proceeds
+    only if **every** child approves (``all(...)``); a single child behaves
+    identically to calling it directly (``all([x]) == bool(x)``).
+    """
+    results: list[bool] = []
+    first_exc: BaseException | None = None
+    for child in children:
+        try:
+            results.append(bool(await await_maybe(child.on_confirm(*args, **kwargs))))
+        except asyncio.CancelledError:  # noqa: PERF203 — per-child capture is the point
+            # Cancellation must propagate immediately — never swallow it into the
+            # run-all-then-reraise loop (which would keep polling later children).
+            raise
+        except BaseException as exc:
+            if first_exc is None:
+                first_exc = exc
+            else:
+                logger.opt(exception=exc).warning(
+                    f'combine_confirm: child {type(child).__name__} raised after an earlier '
+                    'exception; suppressed (the first exception is re-raised).'
+                )
+    if first_exc is not None:
+        raise first_exc
+    return all(results)
+
+
+def normalize_to_list(value: Any) -> list[Any]:
+    """Coerce a single item, a sequence, or ``None`` into a list.
+
+    ``None`` → ``[]``; a list/tuple → ``list(value)``; any other single object
+    (including ``str``/``bytes``, treated as scalar) → ``[value]``. Modeled on
+    the list-or-single idiom used for ``target`` in the redteam runner. Empty
+    inputs are returned empty — callers apply their own defaults.
+    """
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)):
+        return [value]
+    if isinstance(value, Sequence):
+        return list(value)
+    return [value]
 
 
 def warn_if_sync_hooks(hooks: object, method_names: tuple[str, ...]) -> None:

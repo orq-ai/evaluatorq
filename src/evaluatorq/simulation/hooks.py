@@ -25,10 +25,15 @@ from typing import TYPE_CHECKING, Any, Protocol, TypedDict, runtime_checkable
 
 from loguru import logger
 
+from evaluatorq.common.async_utils import combine_confirm, fan_out
+
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from rich.console import Console as RichConsole
 
     from evaluatorq.common.async_utils import MaybeAsync
+    from evaluatorq.common.run_manifest import ManifestWriter
     from evaluatorq.simulation.types import (
         SimulationDatapoint,
         SimulationResult,
@@ -435,3 +440,102 @@ class RichHooks:
             console=self._console,
         )
         self._console.print('[dim]Tip: explore results with "eq dashboard .evaluatorq/sim-runs"[/dim]')
+
+
+class CompositeSimulationHooks:
+    """Fan a single lifecycle event out to many ``SimulationHooks`` children.
+
+    Implements ``SimulationHooks`` structurally so it drops into any
+    ``hooks=`` slot. Every void method fans out via
+    :func:`evaluatorq.common.async_utils.fan_out` — run ALL children, capture
+    the first exception, re-raise it after the loop (uniform run-all-then-
+    reraise policy). ``on_confirm`` uses the same policy, then combines with
+    ``all(...)`` so the run proceeds only if every child approves.
+
+    Children are registered in order; the manifest hook is registered FIRST so
+    its stage bookkeeping is durable before any user hook can throw.
+    """
+
+    def __init__(self, children: Iterable[SimulationHooks]) -> None:
+        self._hooks: list[SimulationHooks] = list(children)
+
+    async def on_confirm(self, meta: SimulationRunMeta) -> bool:
+        return await combine_confirm(self._hooks, meta)
+
+    async def on_run_start(self, meta: SimulationRunMeta) -> None:
+        await fan_out(self._hooks, 'on_run_start', meta)
+
+    async def on_stage_start(self, stage: SimStage | str, meta: dict[str, Any]) -> None:
+        await fan_out(self._hooks, 'on_stage_start', stage, meta)
+
+    async def on_stage_end(self, stage: SimStage | str, meta: dict[str, Any]) -> None:
+        await fan_out(self._hooks, 'on_stage_end', stage, meta)
+
+    async def on_generate_inputs_ready(self, num_personas: int, num_scenarios: int) -> None:
+        await fan_out(self._hooks, 'on_generate_inputs_ready', num_personas, num_scenarios)
+
+    async def on_datapoint_start(self, datapoint: SimulationDatapoint) -> None:
+        await fan_out(self._hooks, 'on_datapoint_start', datapoint)
+
+    async def on_turn_complete(self, datapoint_id: str, metrics: TurnMetrics) -> None:
+        await fan_out(self._hooks, 'on_turn_complete', datapoint_id, metrics)
+
+    async def on_datapoint_complete(self, result: SimulationResult) -> None:
+        await fan_out(self._hooks, 'on_datapoint_complete', result)
+
+    async def on_evaluator_complete(self, datapoint_id: str, name: str, score: float, result: SimulationResult) -> None:
+        await fan_out(self._hooks, 'on_evaluator_complete', datapoint_id, name, score, result)
+
+    async def on_datapoint_error(self, datapoint: SimulationDatapoint, exception: BaseException) -> None:
+        await fan_out(self._hooks, 'on_datapoint_error', datapoint, exception)
+
+    async def on_run_complete(self, results: list[SimulationResult]) -> None:
+        await fan_out(self._hooks, 'on_run_complete', results)
+
+
+class ManifestStageHooks:
+    """Record pipeline stage transitions into a :class:`ManifestWriter`.
+
+    Implements ``SimulationHooks`` structurally as a no-op baseline, overriding
+    ONLY ``on_stage_start`` / ``on_stage_end`` to feed the shared writer. It is
+    NOT a ``DefaultHooks`` subclass — that would double every confirm/complete
+    log line. Stage-name normalisation (``enum → .value``) happens inside the
+    writer, so the raw ``stage`` is passed through. Sim is single-track, so the
+    ``target`` read from meta is always ``None``.
+    """
+
+    def __init__(self, writer: ManifestWriter) -> None:
+        self._writer = writer
+
+    async def on_stage_start(self, stage: SimStage | str, meta: dict[str, Any]) -> None:
+        self._writer.start_stage(stage, target=meta.get('target'))
+
+    async def on_stage_end(self, stage: SimStage | str, meta: dict[str, Any]) -> None:
+        self._writer.end_stage(stage, target=meta.get('target'), error=meta.get('error'))
+
+    async def on_confirm(self, meta: SimulationRunMeta) -> bool:
+        return True
+
+    async def on_run_start(self, meta: SimulationRunMeta) -> None:
+        return None
+
+    async def on_generate_inputs_ready(self, num_personas: int, num_scenarios: int) -> None:
+        return None
+
+    async def on_datapoint_start(self, datapoint: SimulationDatapoint) -> None:
+        return None
+
+    async def on_turn_complete(self, datapoint_id: str, metrics: TurnMetrics) -> None:
+        return None
+
+    async def on_datapoint_complete(self, result: SimulationResult) -> None:
+        return None
+
+    async def on_evaluator_complete(self, datapoint_id: str, name: str, score: float, result: SimulationResult) -> None:
+        return None
+
+    async def on_datapoint_error(self, datapoint: SimulationDatapoint, exception: BaseException) -> None:
+        return None
+
+    async def on_run_complete(self, results: list[SimulationResult]) -> None:
+        return None

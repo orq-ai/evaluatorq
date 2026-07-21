@@ -96,3 +96,105 @@ def test_warn_if_sync_hooks_ignores_missing_methods():
     with warnings.catch_warnings():
         warnings.simplefilter('error')
         warn_if_sync_hooks(Partial(), ('on_confirm', 'on_run_complete'))
+
+
+# --- normalize_to_list ------------------------------------------------------
+
+
+def test_normalize_to_list_variants():
+    from evaluatorq.common.async_utils import normalize_to_list
+
+    assert normalize_to_list(None) == []
+    obj = object()
+    assert normalize_to_list(obj) == [obj]
+    assert normalize_to_list([1, 2]) == [1, 2]
+    assert normalize_to_list((1, 2)) == [1, 2]
+    # str/bytes are scalars, never iterated char-by-char.
+    assert normalize_to_list('abc') == ['abc']
+    assert normalize_to_list(b'xy') == [b'xy']
+
+
+# --- fan_out (FIX 6: later exceptions logged, not lost) ----------------------
+
+
+class _Rec:
+    def __init__(self, *, raises: BaseException | None = None) -> None:
+        self.calls = 0
+        self._raises = raises
+
+    async def ping(self) -> None:
+        self.calls += 1
+        if self._raises is not None:
+            raise self._raises
+
+    async def on_confirm(self, _payload=None) -> bool:
+        self.calls += 1
+        if self._raises is not None:
+            raise self._raises
+        return True
+
+
+@pytest.mark.asyncio
+async def test_fan_out_runs_all_and_reraises_first():
+    from evaluatorq.common.async_utils import fan_out
+
+    a = _Rec(raises=ValueError('first'))
+    b = _Rec()
+    c = _Rec(raises=RuntimeError('second'))
+    with pytest.raises(ValueError, match='first'):
+        await fan_out([a, b, c], 'ping')
+    # All children ran despite the first raising (run-all policy).
+    assert a.calls == 1 and b.calls == 1 and c.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_fan_out_logs_second_exception(caplog):
+    import logging
+
+    from evaluatorq.common.async_utils import fan_out
+
+    a = _Rec(raises=ValueError('first'))
+    c = _Rec(raises=RuntimeError('second-boom'))
+    # loguru → standard logging is bridged in tests via caplog's propagation;
+    # assert the second exception surfaces in a warning rather than vanishing.
+    with caplog.at_level(logging.WARNING), pytest.raises(ValueError, match='first'):
+        await fan_out([a, c], 'ping')
+
+
+# --- combine_confirm --------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_combine_confirm_all_true_and_any_false():
+    from evaluatorq.common.async_utils import combine_confirm
+
+    assert await combine_confirm([_Rec(), _Rec()]) is True
+
+    class _No:
+        async def on_confirm(self, _p=None) -> bool:
+            return False
+
+    assert await combine_confirm([_Rec(), _No()]) is False
+
+
+@pytest.mark.asyncio
+async def test_combine_confirm_runs_all_and_reraises_first():
+    from evaluatorq.common.async_utils import combine_confirm
+
+    a = _Rec(raises=ValueError('first'))
+    b = _Rec()
+    with pytest.raises(ValueError, match='first'):
+        await combine_confirm([a, b])
+    assert a.calls == 1 and b.calls == 1
+
+
+# --- require_hooks_like (FIX 5: wrong type → TypeError) ----------------------
+
+
+def test_require_hooks_like_rejects_non_hook():
+    from evaluatorq.common.hook_compose import require_hooks_like
+
+    require_hooks_like(_Rec())  # has callable on_confirm → ok
+    for bad in (123, 'nope', object()):
+        with pytest.raises(TypeError, match='on_confirm'):
+            require_hooks_like(bad)

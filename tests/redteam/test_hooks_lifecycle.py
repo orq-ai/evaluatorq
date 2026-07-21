@@ -192,30 +192,41 @@ class TestStaticPipelineHooks:
         # hooks in the same order as the real implementation, but without
         # needing a real LLM or dataset.
         async def _fake_run_static(**kwargs: Any) -> RedTeamReport:
+            # red_team now passes an (async) CompositePipelineHooks down into the
+            # internal runners, so drive each hook via await_maybe just as the
+            # real _run_static does.
+            from evaluatorq.common.async_utils import await_maybe
+
             h = kwargs.get('hooks')
             if h is not None:
-                h.on_confirm({
-                    'num_datapoints': 2,
-                    'mode': 'static',
-                    'categories': ['ASI01'],
-                    'attack_model': '',
-                    'evaluator_model': 'gpt-4o-mini',
-                    'max_turns': 1,
-                    'parallelism': 1,
-                    'target': 'agent:gpt-4o-mini',
-                    'dataset_path': None,
-                    'vulnerabilities': [],
-                    'agent_context': None,
-                    'num_dynamic': None,
-                    'num_static': 2,
-                    'filtering_metadata': None,
-                })
-                h.on_stage_start(
-                    PipelineStage.ATTACK_EXECUTION, {'num_datapoints': 2, 'targets': ['agent:gpt-4o-mini']}
+                await await_maybe(
+                    h.on_confirm({
+                        'num_datapoints': 2,
+                        'mode': 'static',
+                        'categories': ['ASI01'],
+                        'attack_model': '',
+                        'evaluator_model': 'gpt-4o-mini',
+                        'max_turns': 1,
+                        'parallelism': 1,
+                        'target': 'agent:gpt-4o-mini',
+                        'dataset_path': None,
+                        'vulnerabilities': [],
+                        'agent_context': None,
+                        'num_dynamic': None,
+                        'num_static': 2,
+                        'filtering_metadata': None,
+                    })
                 )
-                h.on_stage_end(PipelineStage.ATTACK_EXECUTION, {'num_results': 0})
-                h.on_stage_start(PipelineStage.REPORT_GENERATION, {'num_results': 0})
-                h.on_stage_end(PipelineStage.REPORT_GENERATION, {'resistance_rate': 1.0, 'elapsed_s': 0.1})
+                await await_maybe(
+                    h.on_stage_start(
+                        PipelineStage.ATTACK_EXECUTION, {'num_datapoints': 2, 'targets': ['agent:gpt-4o-mini']}
+                    )
+                )
+                await await_maybe(h.on_stage_end(PipelineStage.ATTACK_EXECUTION, {'num_results': 0}))
+                await await_maybe(h.on_stage_start(PipelineStage.REPORT_GENERATION, {'num_results': 0}))
+                await await_maybe(
+                    h.on_stage_end(PipelineStage.REPORT_GENERATION, {'resistance_rate': 1.0, 'elapsed_s': 0.1})
+                )
             return mock_report
 
         from evaluatorq.redteam.runner import red_team

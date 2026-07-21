@@ -192,6 +192,18 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     def report_view(rid: str) -> NotStr | Response:
         path = library.resolve(rid, roots)
         if path is None:
+            # No report on disk — this may be an in-flight (running/error/
+            # cancelled) run tracked only by a manifest. Render its status/stage.
+            manifest = library.resolve_manifest(rid, roots)
+            if manifest is not None:
+                from evaluatorq.dashboard.view import report_in_flight
+
+                in_flight_html = page(
+                    manifest.run_name,
+                    report_in_flight(manifest),
+                    active_surface=manifest.surface.value,
+                )
+                return NotStr(in_flight_html)
             not_found_html = page('Not found', report_not_found(rid))
             return Response(not_found_html, status_code=404, media_type='text/html')
 
