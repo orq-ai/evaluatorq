@@ -24,6 +24,7 @@ from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.common.target_call import call_target_with_retry, default_map_error
+from evaluatorq.common.thread_context import evaluatorq_pipeline
 from evaluatorq.common.tracing import set_span_attrs
 from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities, classify_agent_capabilities
@@ -329,7 +330,7 @@ async def red_team(
     name: str | None = None,
     description: str | None = None,
     dataset: Path | str | None = None,
-    hooks: PipelineHooks | Sequence[PipelineHooks] | None = None,
+    hooks: PipelineHooks | None = None,
     artifacts_dir: Path | str | None = None,
     target_config: TargetConfig | None = None,
     generate_recommendations: bool = False,
@@ -669,61 +670,72 @@ async def red_team(
     # on_complete returns — if that hook raises, the manifest reflects the error
     # the caller sees, not a false 'completed'.
     try:
-        if resolved_mode in (Pipeline.DYNAMIC, Pipeline.HYBRID):
-            report = await _run_dynamic_or_hybrid(
-                targets=targets,
-                agent_targets=agent_targets,
-                mode=resolved_mode,
-                name=name,
-                categories=resolved_categories,
-                resolved_vulns=resolved_vulns,
-                max_turns=max_turns,
-                max_per_category=max_per_category,
-                attack_model=attack_model,
-                evaluator_model=evaluator_model,
-                parallelism=parallelism,
-                generate_strategies=generate_strategies,
-                generated_strategy_count=generated_strategy_count,
-                max_dynamic_datapoints=max_dynamic_datapoints,
-                max_static_datapoints=max_static_datapoints,
-                cleanup_memory=cleanup_memory,
-                llm_client=llm_client,
-                description=description,
-                dataset=dataset,
-                hooks=resolved_hooks,
-                output_dir=resolved_output_dir,
-                target_config=target_config,
-                attacker_instructions=attacker_instructions,
-                verbosity=verbosity,
-                pipeline_config=config,
-                resolved_strategy_names=resolved_strategy_names,
-                resolved_delivery_methods=resolved_delivery_methods,
-            )
-        elif resolved_mode == Pipeline.STATIC:
-            report = await _run_static(
-                targets=targets,
-                agent_targets=agent_targets,
-                name=name,
-                categories=resolved_categories,
-                evaluator_model=evaluator_model,
-                parallelism=parallelism,
-                max_static_datapoints=max_static_datapoints,
-                dataset=dataset,
-                description=description,
-                llm_client=llm_client,
-                hooks=resolved_hooks,
-                output_dir=resolved_output_dir,
-                target_config=target_config,
-                pipeline_config=config,
-                resolved_strategy_names=resolved_strategy_names,
-                resolved_delivery_methods=resolved_delivery_methods,
-            )
-        else:
-            msg = f'Invalid mode {mode!r}. Must be "dynamic", "static", or "hybrid".'
-            raise ValueError(msg)
+        # Tag every Orq request from this run with the red-teaming pipeline label so
+        # its traces are attributable to the surface that produced them.
+        with evaluatorq_pipeline('red_teaming'):
+            if resolved_mode in (Pipeline.DYNAMIC, Pipeline.HYBRID):
+                report = await _run_dynamic_or_hybrid(
+                    targets=targets,
+                    agent_targets=agent_targets,
+                    mode=resolved_mode,
+                    name=name,
+                    categories=resolved_categories,
+                    resolved_vulns=resolved_vulns,
+                    max_turns=max_turns,
+                    max_per_category=max_per_category,
+                    attack_model=attack_model,
+                    evaluator_model=evaluator_model,
+                    parallelism=parallelism,
+                    generate_strategies=generate_strategies,
+                    generated_strategy_count=generated_strategy_count,
+                    max_dynamic_datapoints=max_dynamic_datapoints,
+                    max_static_datapoints=max_static_datapoints,
+                    cleanup_memory=cleanup_memory,
+                    llm_client=llm_client,
+                    description=description,
+                    dataset=dataset,
+                    hooks=resolved_hooks,
+                    output_dir=resolved_output_dir,
+                    target_config=target_config,
+                    attacker_instructions=attacker_instructions,
+                    verbosity=verbosity,
+                    pipeline_config=config,
+                    resolved_strategy_names=resolved_strategy_names,
+                    resolved_delivery_methods=resolved_delivery_methods,
+                )
+            elif resolved_mode == Pipeline.STATIC:
+                report = await _run_static(
+                    targets=targets,
+                    agent_targets=agent_targets,
+                    name=name,
+                    categories=resolved_categories,
+                    evaluator_model=evaluator_model,
+                    parallelism=parallelism,
+                    max_static_datapoints=max_static_datapoints,
+                    dataset=dataset,
+                    description=description,
+                    llm_client=llm_client,
+                    hooks=resolved_hooks,
+                    output_dir=resolved_output_dir,
+                    target_config=target_config,
+                    pipeline_config=config,
+                    resolved_strategy_names=resolved_strategy_names,
+                    resolved_delivery_methods=resolved_delivery_methods,
+                )
+            else:
+                msg = f'Invalid mode {mode!r}. Must be "dynamic", "static", or "hybrid".'
+                raise ValueError(msg)
 
-        # Record categories dropped by the evaluability gate so the report is
-        # honest about reduced scope (rather than silently testing fewer).
+        # Record the Orq host when an Orq agent/deployment was targeted, so the saved
+        # report remembers which deployment (prod / staging / on-prem) served it.
+        # OpenAI-model and custom (DIRECT) targets don't hit Orq → left None (omitted).
+        if _report_targeted_orq(targets, agent_targets):
+            from evaluatorq.common.llm_client import orq_base_url
+
+            report.orq_base_url = orq_base_url()
+
+        # Record categories dropped by the evaluability gate so the report is honest
+        # about reduced scope (rather than silently testing fewer categories).
         if unevaluable_codes:
             report.pipeline_warnings.insert(
                 0,
@@ -754,8 +766,8 @@ async def red_team(
                     'Failed to generate focus area recommendations. Check LLM credentials and model configuration.'
                 )
 
-        # Generate the LLM narrative executive summary (on by default; silent
-        # skip when no LLM credentials are configured).
+        # Generate the LLM narrative executive summary (on by default; silent skip
+        # when no LLM credentials are configured).
         if generate_executive_summary:
             from evaluatorq.common.reports.executive_summary import (
                 generate_executive_summary as _gen_exec_summary,
@@ -786,7 +798,7 @@ async def red_team(
         # the inner pipeline write 01/02/03 to resolved_output_dir, so here we
         # only handle 'final' (single summary file) and record the saved path.
         auto_save_path: Path | None = None
-        indexed_run_path: Path | None = None
+        run_path: Path | None = None
         if save == 'final':
             if user_output_dir is not None:
                 _save_report(user_output_dir, '03_summary_report.json', report)
@@ -797,10 +809,10 @@ async def red_team(
 
         # Index in .evaluatorq/runs/ so the run appears in `evaluatorq redteam runs`.
         if save != 'none':
-            indexed_run_path = _auto_save_run(report, name=name)
+            run_path = _auto_save_run(report, name=name)
             if auto_save_path is None:
-                auto_save_path = indexed_run_path
-            if indexed_run_path is None:
+                auto_save_path = run_path
+            if run_path is None:
                 report.pipeline_warnings.append(
                     'Failed to auto-save run report. The run will not appear in `evaluatorq redteam runs`.'
                 )
@@ -818,7 +830,7 @@ async def red_team(
         # card render) so a list row needs zero full-report reads.
         if manifest_writer is not None:
             manifest_writer.complete(
-                report_path=indexed_run_path,
+                report_path=run_path,
                 summary={
                     'pipeline': report.pipeline.value,
                     'total_results': report.total_results,
@@ -846,6 +858,23 @@ async def red_team(
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+
+def _report_targeted_orq(targets: Any, agent_targets: Any) -> bool:
+    """Whether any resolved target is an Orq agent/deployment (i.e. hits Orq).
+
+    String ``agent:``/``deployment:`` targets and AgentTargets reporting an AGENT/
+    DEPLOYMENT kind count; OpenAI-model and custom DIRECT targets don't (we can't
+    prove a DIRECT target routes through Orq, so we conservatively omit it)."""
+    orq_kinds = {TargetKind.AGENT, TargetKind.DEPLOYMENT}
+    for t in targets or []:
+        if isinstance(t, str):
+            try:
+                if parse_target(t)[0] in orq_kinds:
+                    return True
+            except ValueError:
+                continue
+    return any(_safe_resolve_target_kind(at) in orq_kinds for at in agent_targets or [])
 
 
 def _safe_resolve_target_kind(at: Any) -> TargetKind:
@@ -1199,9 +1228,6 @@ async def _prepare_target(
             hooks.on_stage_end(
                 PipelineStage.CONTEXT_RETRIEVAL,
                 {
-                    # Per-target stage: carry the target label so the manifest keys
-                    # this record to the same target as its on_stage_start (Dec2).
-                    'target': target_value,
                     'num_tools': len(agent_context.tools) if agent_context.tools else 0,
                     'num_memory_stores': len(agent_context.memory_stores) if agent_context.memory_stores else 0,
                     'num_knowledge_bases': len(agent_context.knowledge_bases) if agent_context.knowledge_bases else 0,
@@ -1332,8 +1358,6 @@ async def _prepare_target(
                 hooks.on_stage_end(
                     PipelineStage.DATAPOINT_GENERATION,
                     {
-                        # Per-target stage: match the on_stage_start target key (Dec2).
-                        'target': target,
                         'num_datapoints': len(all_datapoints),
                         'num_dynamic': len(dynamic_datapoints),
                         'num_static': len(static_datapoints),
@@ -1369,10 +1393,7 @@ async def _prepare_target(
 
         if shared_datapoints is None:
             await await_maybe(
-                hooks.on_stage_end(
-                    PipelineStage.DATAPOINT_GENERATION,
-                    {'target': target, 'num_datapoints': len(all_datapoints)},
-                )
+                hooks.on_stage_end(PipelineStage.DATAPOINT_GENERATION, {'num_datapoints': len(all_datapoints)})
             )
             _check_filter_results(all_datapoints, resolved_strategy_names, resolved_delivery_methods)
 
@@ -1511,16 +1532,9 @@ async def _run_dynamic_or_hybrid(
         # for each target carries the classifier output. Hook implementations
         # render the per-target capability table from that meta payload.
         all_agent_contexts: dict[str, AgentContext] = {}
-        # Per-target CONTEXT_RETRIEVAL stages (FIX 2 / Dec2): the matching
-        # on_stage_end fires once per target below, each carrying that target's
-        # own context + capabilities, so open one stage PER target keyed by its
-        # label. A single aggregate start keyed target=None would never be closed
-        # by the per-target ends (target-key mismatch) — the manifest stage would
-        # stay open for the whole run and be force-closed only at run end (wrongly
-        # 'error' on a later failure). Per-target start/end keys are consistent
-        # and mirror the keying _prepare_target already uses for this stage.
-        for target_label in all_target_labels:
-            await await_maybe(resolved_hooks.on_stage_start(PipelineStage.CONTEXT_RETRIEVAL, {'target': target_label}))
+        await await_maybe(
+            resolved_hooks.on_stage_start(PipelineStage.CONTEXT_RETRIEVAL, {'targets': all_target_labels})
+        )
         # Only build the ORQ SDK backend when there are string targets to resolve
         # context for. A pure bring-your-own AgentTarget run never touches it, so this
         # avoids importing/requiring orq-ai-sdk for those runs (mirrors the lazy factory
@@ -1969,13 +1983,7 @@ async def _run_dynamic_or_hybrid(
                     ):
                         at_dps = _cap_datapoints_balanced(at_dps, max_dynamic_datapoints)
                     await await_maybe(
-                        resolved_hooks.on_stage_end(
-                            PipelineStage.DATAPOINT_GENERATION,
-                            # Per-target stage: match the on_stage_start target key
-                            # (Dec2 / FIX 2) so the manifest closes THIS target's
-                            # DATAPOINT_GENERATION record instead of leaving it open.
-                            {'target': at_label, 'num_datapoints': len(at_dps)},
-                        )
+                        resolved_hooks.on_stage_end(PipelineStage.DATAPOINT_GENERATION, {'num_datapoints': len(at_dps)})
                     )
                     shared_at_dps = at_dps
                 else:
@@ -2437,10 +2445,7 @@ async def _run_dynamic_or_hybrid(
                             'Manual cleanup may be required.'
                         )
                     await await_maybe(
-                        resolved_hooks.on_stage_end(
-                            PipelineStage.CLEANUP,
-                            {'num_entities_cleaned': len(entity_ids), 'target': pt.target},
-                        )
+                        resolved_hooks.on_stage_end(PipelineStage.CLEANUP, {'num_entities_cleaned': len(entity_ids)})
                     )
 
         return merged

@@ -24,7 +24,7 @@ from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import apply_or_all
-from evaluatorq.dashboard.trace_links import thread_trace_url, trace_link_button
+from evaluatorq.dashboard.trace_links import single_trace_url, thread_trace_url, trace_link_button
 from evaluatorq.dashboard.view import _sim_rowlist_wrapper, render_message_list
 
 if TYPE_CHECKING:
@@ -79,26 +79,169 @@ def _entries_from_run(run: Any) -> list[SimulationEntry]:
     return individual_entries(run.results)
 
 
+def _entity_dom_ids(run: Any, idx: int) -> tuple[str | None, str | None]:
+    """Resolve the persona/scenario cohort-card DOM ids for ``run.results[idx]``.
+
+    The cohort cards (report_tabs `_sim_entity_modal`) key their ``<template>``
+    ids as ``persona-{i}`` / ``scenario-{i}`` where ``i`` is the cohort's index
+    in first-seen order across the full run — the same order the overview
+    section builds. We recompute that ordering here so the conversation drawer's
+    persona/scenario values can trigger the matching card. Returns (None, None)
+    if idx is out of range or the cohort ids can't be resolved.
+    """
+    from evaluatorq.simulation.reports.sections import _persona_cohort_id, _scenario_cohort_id
+
+    results = run.results
+    if idx < 0 or idx >= len(results):
+        return None, None
+
+    def _dom_id(cohort_fn: Any, prefix: str) -> str | None:
+        order: dict[str, int] = {}
+        for r in results:
+            cid = cohort_fn(r)
+            if cid not in order:
+                order[cid] = len(order)
+        target = cohort_fn(results[idx])
+        return f'{prefix}-{order[target]}' if target in order else None
+
+    return _dom_id(_persona_cohort_id, 'persona'), _dom_id(_scenario_cohort_id, 'scenario')
+
+
 # ---------------------------------------------------------------------------
 # Row list (embedded in the sim report page, not a separate HTMX route)
 # ---------------------------------------------------------------------------
 
 
-def render_sim_row_list(rid: str, entries: list[SimulationEntry]) -> str:
-    """Render the conversation-cards panel for a sim report (spec §Transcripts).
+# Conversation table columns. Non-sortable action columns (Status, Traces) are
+# rendered separately below — this list is only the sortable ones, keyed by the
+# ``sort`` query param.
+#   (param, header label, sort-key callable)
+_SIM_COLUMNS: list[tuple[str, str, Any]] = [
+    ('index', '#', lambda e: e.index),
+    ('persona', 'Persona', lambda e: e.persona.lower()),
+    ('scenario', 'Scenario', lambda e: e.scenario.lower()),
+    ('turn_count', 'Turns', lambda e: e.turn_count),
+    ('goal_completion_score', 'Score', lambda e: e.goal_completion_score),
+    ('terminated_by', 'Terminated by', lambda e: e.terminated_by),
+]
+_SORT_KEYS: dict[str, Any] = {param: key for param, _, key in _SIM_COLUMNS}
+_DEFAULT_SORT = 'index'
+_PAGE_SIZE = 5  # default rows-per-page
+_PAGE_SIZES = (5, 10, 25)  # selectable rows-per-page options
 
-    One collapsed ``<details class="sim-conv-card">`` per entry. The
-    ``<summary>`` is the design header row (index, persona, scenario, and a
-    right-aligned cluster of turn-count/score/terminated-by tags plus an
-    outcome badge), tinted by outcome. The card body lazy-loads the full
-    transcript fragment exactly once, on first expand, via
-    ``hx-trigger="toggle once from:closest details"`` against the existing
-    transcript endpoint —
-    so large runs ship no transcript markup up front.
+
+def _coerce_page_size(raw: str | int | None) -> int:
+    """Clamp an incoming page-size to an allowed option; bad input → default."""
+    try:
+        n = int(raw)  # type: ignore[arg-type]
+    except (ValueError, TypeError):
+        return _PAGE_SIZE
+    return n if n in _PAGE_SIZES else _PAGE_SIZE
+
+
+def _hx_control(rid: str, sort: str, direction: str, page: int, size: int) -> str:
+    """Shared HTMX attributes for a header/pager/size control.
+
+    Each control re-fetches ``/sim/row-list`` with the new sort/page/size,
+    pulling the current filter state in via ``hx-include`` so sorting and
+    filtering compose, and swaps the whole ``#sim-row-list-{rid}`` wrapper.
+    """
+    safe_rid = esc(rid)
+    return (
+        f'hx-get="/r/{safe_rid}/sim/row-list?sort={esc(sort)}&dir={esc(direction)}&page={page}&size={size}" '
+        'hx-include="#filter-form" '
+        f'hx-target="#sim-row-list-{safe_rid}" hx-swap="outerHTML"'
+    )
+
+
+def _sim_header_row(rid: str, sort: str, direction: str, size: int) -> str:
+    """Build the sortable ``<thead>`` row. Clicking a header toggles direction."""
+    cells: list[str] = []
+    for param, label, _key in _SIM_COLUMNS:
+        active = param == sort
+        # Toggle direction on the active column; a fresh column starts ascending.
+        next_dir = 'desc' if (active and direction == 'asc') else 'asc'
+        aria = {'asc': 'ascending', 'desc': 'descending'}[direction] if active else 'none'
+        # Active column shows its direction (▲/▼); inactive sortable columns show
+        # a faint up-down glyph (⇅) so the "click to sort" affordance is always
+        # visible, not only after the first click.
+        if active:
+            caret = '&#x25B2;' if direction == 'asc' else '&#x25BC;'
+            caret_cls = 'sim-th-caret sim-th-caret-active'
+        else:
+            caret = '&#x21C5;'
+            caret_cls = 'sim-th-caret'
+        cells.append(
+            f'<th scope="col" aria-sort="{aria}">'
+            f'<button type="button" class="sim-th-sort" {_hx_control(rid, param, next_dir, 1, size)}>'
+            f'{esc(label)}<span class="{caret_cls}">{caret}</span>'
+            f'</button></th>'
+        )
+    # Non-sortable action columns.
+    cells.extend(('<th scope="col">Status</th>', '<th scope="col">Traces</th>'))
+    return f'<thead><tr>{"".join(cells)}</tr></thead>'
+
+
+def _sim_size_selector(rid: str, sort: str, direction: str, size: int) -> str:
+    """Rows-per-page selector (5/10/25). Changing size resets to page 1."""
+    opts = ''.join(
+        (
+            f'<button type="button" class="sim-size-btn" disabled aria-current="true">{n}</button>'
+            if n == size
+            else f'<button type="button" class="sim-size-btn" {_hx_control(rid, sort, direction, 1, n)}>{n}</button>'
+        )
+        for n in _PAGE_SIZES
+    )
+    return f'<div class="sim-size" role="group" aria-label="Rows per page"><span class="sim-size-label">Show</span>{opts}</div>'
+
+
+def _sim_pager(rid: str, sort: str, direction: str, page: int, pages: int, total: int, size: int) -> str:
+    """Render the pager nav + rows-per-page selector; buttons carry sort + filter state."""
+    selector = _sim_size_selector(rid, sort, direction, size)
+    # 3-column grid centres the pager group (col 2) while the selector stays
+    # pinned right (col 3); col 1 is an empty spacer that balances the selector.
+    if pages <= 1:
+        nav = f'<div class="sim-pager-nav"><span class="sim-pager-info">{total} conversations</span></div>'
+        return f'<nav class="sim-pager">{nav}{selector}</nav>'
+
+    def btn(label: str, target_page: int, *, disabled: bool) -> str:
+        if disabled:
+            return f'<button type="button" class="sim-pager-btn" disabled>{label}</button>'
+        return f'<button type="button" class="sim-pager-btn" {_hx_control(rid, sort, direction, target_page, size)}>{label}</button>'
+
+    nav = (
+        '<div class="sim-pager-nav">'
+        f'{btn("&#x2039; Prev", page - 1, disabled=page <= 1)}'
+        f'<span class="sim-pager-info">Page {page} of {pages} &middot; {total} conversations</span>'
+        f'{btn("Next &#x203A;", page + 1, disabled=page >= pages)}'
+        '</div>'
+    )
+    return f'<nav class="sim-pager">{nav}{selector}</nav>'
+
+
+def render_sim_row_list(
+    rid: str,
+    entries: list[SimulationEntry],
+    *,
+    sort: str = _DEFAULT_SORT,
+    direction: str = 'asc',
+    page: int = 1,
+    page_size: int = _PAGE_SIZE,
+) -> str:
+    """Render a sortable, paginated conversation table for a sim report.
+
+    Rows are lazy drawer-triggers: each ``<tr>`` carries a ``data-drawer-url``
+    for its transcript, which stays absent until the drawer opens. Sorting and
+    pagination are server-side — clicking a header or pager button re-fetches
+    ``/sim/row-list`` (see ``_hx_control``) with the current filter state.
 
     Args:
-        rid:     Report ID (URL-safe).
-        entries: Typed entry list from ``_entries_from_run`` / ``individual_entries``.
+        rid:       Report ID (URL-safe).
+        entries:   Typed entry list (already filtered) from ``individual_entries``.
+        sort:      Active sort column (``_SIM_COLUMNS`` param); invalid → ``index``.
+        direction: ``'asc'`` or ``'desc'``; anything else → ``'asc'``.
+        page:      1-based page number; clamped to ``[1, pages]``.
+        page_size: Rows per page.
 
     Returns:
         HTML fragment containing a ``<section class="sim-row-list">``.
@@ -107,60 +250,71 @@ def render_sim_row_list(rid: str, entries: list[SimulationEntry]) -> str:
         return '<section class="sim-row-list"><p class="sim-empty">No conversations found.</p></section>'
 
     from evaluatorq.common.reports import status_badge
-    from evaluatorq.dashboard.report_kit import tag
+
+    if sort not in _SORT_KEYS:
+        sort = _DEFAULT_SORT
+    if direction not in ('asc', 'desc'):
+        direction = 'asc'
+    if page_size not in _PAGE_SIZES:
+        page_size = _PAGE_SIZE
+
+    ordered = sorted(entries, key=_SORT_KEYS[sort], reverse=(direction == 'desc'))
+    total = len(ordered)
+    pages = max(1, -(-total // page_size))  # ceil division
+    page = max(1, min(page, pages))
+    start = (page - 1) * page_size
+    visible = ordered[start : start + page_size]
 
     safe_rid = esc(rid)
-    cards_html: list[str] = []
-    for e in entries:
+    rows_html: list[str] = []
+    for e in visible:
         idx = e.index
-        persona = esc(e.persona)
-        scenario = esc(e.scenario)
-
         is_error = e.terminated_by == 'error'
         if is_error:
-            tint = 'sim-tint-error'
             badge = status_badge('Error', 'warn')
+            row_status = 'error'
         elif e.goal_achieved:
-            tint = 'sim-tint-achieved'
             badge = status_badge('Goal met', 'pass')
+            row_status = 'pass'
         else:
-            tint = 'sim-tint-missed'
             badge = status_badge('Goal missed', 'fail')
+            row_status = 'fail'
 
-        # Trace deep-link on the summary line, next to the outcome badge.
-        # stopPropagation so clicking it opens the trace without toggling the row.
-        trace_btn = trace_link_button(thread_trace_url(e.thread_id), 'View Traces', onclick='event.stopPropagation()')
-        right_cluster = (
-            f'{tag(f"{e.turn_count} turns")}{tag(f"score {e.goal_completion_score:.2f}")}'
-            f'{tag(e.terminated_by)}{badge}{trace_btn}'
+        # Prefer a direct link to the last successful target-agent trace; fall back
+        # to the thread filter for older runs that only stored a thread id.
+        # ``data-no-drawer`` keeps a trace-link click from also opening the drawer
+        # (the whole row is the drawer trigger).
+        trace_url = single_trace_url(e.last_trace_id)
+        trace_btn = trace_link_button(
+            trace_url or thread_trace_url(e.thread_id),
+            'View Trace' if trace_url else 'View Traces',
+            extra_attributes={'data-no-drawer': None},
         )
-        summary = (
-            f'<summary class="sim-conv-summary {tint}">'
-            f'<span class="sim-conv-idx">#{idx + 1}</span>'
-            f'<span class="sim-conv-persona">{persona}</span>'
-            f'<span class="sim-conv-sep">&middot;</span>'
-            f'<span class="sim-conv-scenario">{scenario}</span>'
-            f'<span class="sim-conv-right">{right_cluster}</span>'
-            f'</summary>'
+        rows_html.append(
+            f'<tr class="sim-conv-row sim-conv-row--{row_status}" role="button" tabindex="0" '
+            'data-sim-entity-trigger data-entity-kind="conversation" '
+            f'data-drawer-url="/r/{safe_rid}/sim/transcript?idx={idx}">'
+            f'<td class="sim-conv-idx">#{idx + 1}</td>'
+            f'<td class="sim-conv-persona">{esc(e.persona)}</td>'
+            f'<td class="sim-conv-scenario">{esc(e.scenario)}</td>'
+            f'<td class="sim-conv-turns">{e.turn_count}</td>'
+            f'<td class="sim-conv-score">{e.goal_completion_score:.2f}</td>'
+            f'<td class="sim-conv-term">{esc(e.terminated_by)}</td>'
+            f'<td class="sim-conv-status">{badge}</td>'
+            f'<td class="sim-conv-trace">{trace_btn}</td>'
+            '</tr>'
         )
-        # Load on expand: the body is display:none while the <details> is
-        # collapsed, so the first click lands on the <summary> and never reaches
-        # this div — "click" would need a second click. Listen for the parent
-        # details' `toggle` event instead (it doesn't bubble, hence from:closest),
-        # firing once on the first open.
-        body = (
-            f'<div class="sim-conv-body"'
-            f' hx-get="/r/{safe_rid}/sim/transcript?idx={idx}"'
-            f' hx-trigger="toggle once from:closest details"'
-            f' hx-target="this"'
-            f' hx-swap="innerHTML"'
-            f' hx-include="#filter-form"></div>'
-        )
-        # id="conv-N" (N = 1-based) is the jump target for the Failures table's
-        # <a href="#conv-N"> links; dashboard.js flips to this tab and opens it.
-        cards_html.append(f'<details class="sim-conv-card" id="conv-{idx + 1}">{summary}{body}</details>')
 
-    return f'<section class="sim-row-list">{"".join(cards_html)}</section>'
+    header = _sim_header_row(rid, sort, direction, page_size)
+    pager = _sim_pager(rid, sort, direction, page, pages, total, page_size)
+    return (
+        f'<section class="sim-row-list">'
+        f'<div class="sim-conv-table-shell">'
+        f'<table class="sim-conv-table">{header}<tbody>{"".join(rows_html)}</tbody></table>'
+        f'</div>'
+        f'{pager}'
+        f'</section>'
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -169,40 +323,153 @@ def render_sim_row_list(rid: str, entries: list[SimulationEntry]) -> str:
 
 
 def _render_criteria_column(entry: SimulationEntry) -> str:
-    """Render the CRITERIA column: two-state icon + description + type label.
+    """Render the CRITERIA section: verdict header + polarity-explicit rows.
 
-    Deviation #4 (deliberate): the old three-state icon (✅ passed / ⛔ unsafe
-    failure / ❌ other failure) is replaced by a plain two-state pass/fail
-    icon. No information is lost — the safety distinction is preserved via
-    the ``must_not_happen`` type label, rendered in red.
+    Outcome polarity is sacred here (DESIGN.md): a green check on a
+    ``must_not_happen`` criterion reads backwards unless the requirement is
+    stated *next to* the check. So each row leads with the icon (result:
+    pass/fail) immediately followed by a ``Required`` / ``Prohibited`` chip
+    (the requirement that gives the check its meaning) — no far-right orphan
+    label to hunt for. A verdict line above the list answers the reader's
+    first question ("did it pass, how many met?") before they scan the rows.
     """
     criteria = entry.criteria or []
     items: list[str] = []
     for c in criteria:
         state_class = 'sim-criterion-pass' if c.passed else 'sim-criterion-fail'
         icon = '&#x2713;' if c.passed else '&#x2717;'  # ✓ / ✗
-        ctype = c.type or ''
-        type_class = 'sim-ctype sim-ctype-unsafe' if ctype == 'must_not_happen' else 'sim-ctype'
-        # Mockup shows the requirement as words ("MUST HAPPEN"), not the raw enum.
-        type_html = f'<span class="{type_class}">{esc(ctype.replace("_", " "))}</span>' if ctype else ''
+        prohibited = c.type == 'must_not_happen'
+        # The chip carries the requirement's polarity right beside the result
+        # icon; keep the unsafe hook so `must_not_happen` reads red.
+        chip_html = ''
+        if c.type:
+            chip_label = 'Prohibited' if prohibited else 'Required'
+            chip_class = 'sim-ctype sim-ctype-unsafe' if prohibited else 'sim-ctype'
+            chip_html = f'<span class="{chip_class}">{chip_label}</span>'
         desc = esc(c.description)
         items.append(
             f'<li class="sim-criterion {state_class}">'
             f'<span class="sim-criterion-icon">{icon}</span>'
+            f'{chip_html}'
             f'<span class="sim-criterion-desc">{desc}</span>'
-            f'{type_html}'
             f'</li>'
+        )
+
+    # Goal outcome and criteria-met count are two different facts: an agent can
+    # miss the goal while still satisfying every criterion (and vice versa), so
+    # "FAIL · 4/4 met" reads as a contradiction. Show them as separate spans —
+    # the coloured goal verdict, then a neutral criteria tally.
+    verdict_html = ''
+    if criteria:
+        met = sum(1 for c in criteria if c.passed)
+        passed = entry.goal_achieved
+        verdict_class = 'sim-criteria-verdict--pass' if passed else 'sim-criteria-verdict--fail'
+        verdict_word = 'Goal met' if passed else 'Goal missed'
+        verdict_html = (
+            f'<span class="sim-criteria-verdict {verdict_class}">{verdict_word}</span>'
+            f'<span class="sim-criteria-count">{met}/{len(criteria)} criteria met</span>'
+        )
+
+    # The judge rationale is folded into the criteria block (it explains the
+    # verdict above it), not a separate callout — one "outcome" section.
+    judge_reason = esc(entry.judge_reason or '')
+    judge_html = ''
+    if judge_reason:
+        judge_html = (
+            f'<div class="sim-judge">'
+            f'<span class="sim-judge-label">Judge</span>'
+            f'<p class="sim-judge-reason">{judge_reason}</p>'
+            f'</div>'
         )
 
     return (
         f'<div class="sim-criteria">'
-        f'<div class="sim-criteria-header">CRITERIA</div>'
+        f'<div class="sim-criteria-head">'
+        f'<span class="sim-criteria-header">CRITERIA</span>{verdict_html}'
+        f'</div>'
         f'<ul class="sim-criteria-list">{"".join(items)}</ul>'
+        f'{judge_html}'
         f'</div>'
     )
 
 
-def render_transcript_fragment(entry: SimulationEntry) -> str:
+# Icon-led rows (Option A): a quiet teal glyph tile anchors each field.
+_PERSONA_ICON = (
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-6 8-6s8 2 8 6"/></svg>'
+)
+_SCENARIO_ICON = (
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    '<path d="M4 5h16M4 12h16M4 19h10"/></svg>'
+)
+
+
+def _sim_conv_value(text: str, kind: str, entity_id: str | None) -> str:
+    """A persona/scenario value; a click-through to its cohort card when we know
+    the entity's DOM id, otherwise plain text.
+
+    The trigger reuses the same ``data-sim-entity-trigger`` contract the cohort
+    cards use, so clicking the value inside the conversation drawer opens the
+    persona/scenario card (with a Back button, via the shared drawer JS).
+    """
+    safe = esc(text)
+    if not entity_id:
+        return f'<span class="sim-conv-value">{safe}</span>'
+    return (
+        f'<button type="button" class="sim-conv-value sim-conv-value--link" '
+        f'data-sim-entity-trigger data-entity-kind="{esc(kind)}" data-entity-id="{esc(entity_id)}">'
+        f'{safe}</button>'
+    )
+
+
+def _render_conversation_summary(
+    entry: SimulationEntry,
+    persona_entity_id: str | None = None,
+    scenario_entity_id: str | None = None,
+) -> str:
+    """Persona + scenario recap and a turn-count chip for the drawer header.
+
+    The collapsed row shows only "#N · persona · scenario" truncated; here we
+    give the full text so the reader has the setup in view while reading the
+    transcript. When the persona/scenario resolve to a cohort card, the value is
+    a click-through trigger. All fields are user-supplied — esc() guards the
+    stored-XSS vector.
+    """
+    turns = entry.turn_count
+    turn_word = 'turn' if turns == 1 else 'turns'
+    persona_val = _sim_conv_value(entry.persona, 'persona', persona_entity_id)
+    scenario_val = _sim_conv_value(entry.scenario, 'scenario', scenario_entity_id)
+
+    def field(icon: str, label: str, value_html: str) -> str:
+        return (
+            f'<div class="sim-conv-field">'
+            f'<span class="sim-conv-ico">{icon}</span>'
+            f'<div class="sim-conv-field-text">'
+            f'<span class="sim-conv-label">{label}</span>{value_html}'
+            f'</div></div>'
+        )
+
+    return (
+        f'<div class="sim-conv-summary">'
+        f'<div class="sim-conv-head">'
+        f'<span class="sim-conv-index">#{entry.index}</span>'
+        f'<span class="sim-conv-turns-pill">{turns} {turn_word}</span>'
+        f'</div>'
+        f'<div class="sim-conv-meta">'
+        f'{field(_PERSONA_ICON, "Persona", persona_val)}'
+        f'{field(_SCENARIO_ICON, "Scenario", scenario_val)}'
+        f'</div>'
+        f'</div>'
+    )
+
+
+def render_transcript_fragment(
+    entry: SimulationEntry,
+    persona_entity_id: str | None = None,
+    scenario_entity_id: str | None = None,
+) -> str:
     """Render the drill-down transcript fragment for a single sim result entry.
 
     Design-aligned layout (spec §Transcripts): a Judge callout (sunken
@@ -226,26 +493,14 @@ def render_transcript_fragment(entry: SimulationEntry) -> str:
     Returns:
         An HTML fragment (no full-page shell).
     """
-    judge_reason = esc(entry.judge_reason or '')
     error = entry.error
 
-    # No title here: the collapsed conversation card already shows
-    # "#N · persona · scenario" directly above this fragment, so repeating it
-    # (the old sim-transcript-header) was a duplicate the mockup doesn't have.
     criteria_col = _render_criteria_column(entry)
+    summary_html = _render_conversation_summary(entry, persona_entity_id, scenario_entity_id)
 
     if error:
         error_html = f'<div class="sim-transcript-error"><strong>Error:</strong> {esc(str(error))}</div>'
-        return f'<div class="sim-transcript-detail">{error_html}{criteria_col}</div>'
-
-    judge_html = ''
-    if judge_reason:
-        judge_html = (
-            f'<div class="sim-judge">'
-            f'<span class="sim-judge-label">Judge</span>'
-            f'<p class="sim-judge-reason">{judge_reason}</p>'
-            f'</div>'
-        )
+        return f'<div class="sim-transcript-detail">{summary_html}{criteria_col}{error_html}</div>'
 
     # Transcript (parity: dashboard.py:384-390). Normalise content via
     # coerce_content_text (handles OpenAI content blocks) before handing off
@@ -262,9 +517,11 @@ def render_transcript_fragment(entry: SimulationEntry) -> str:
         f'{render_message_list(normalised_msgs, role_labels=_ROLE_LABELS, class_prefix="sim")}'
         f'</div>'
     )
-    grid_html = f'<div class="sim-transcript-grid">{bubbles_html}{criteria_col}</div>'
+    # Criteria above the conversation: the outcome verdict frames the
+    # transcript the reader is about to scroll through, not a footnote after it.
+    grid_html = f'<div class="sim-transcript-grid">{criteria_col}{bubbles_html}</div>'
 
-    return f'<div class="sim-transcript-detail">{judge_html}{grid_html}</div>'
+    return f'<div class="sim-transcript-detail">{summary_html}{grid_html}</div>'
 
 
 # ---------------------------------------------------------------------------
@@ -279,10 +536,8 @@ def register_sim_view_routes(app: Any, roots: list[Any] | None = None) -> None:
 
     Routes registered here:
 
-    - ``GET /r/{rid}/sim/transcript?idx=`` — transcript drill-down fragment.
-      Reads filter dimension query params (via ``hx-include="#filter-form"``)
-      and indexes into the FILTERED entry list so the transcript panel stays
-      consistent with the row-list.
+    - ``GET /r/{rid}/sim/transcript?idx=`` — transcript drill-down fragment,
+      resolved against the full run by the row's stable index.
 
     - ``GET /r/{rid}/sim/row-list`` — filtered row list fragment.  Used by the
       sim interactive panel container to refetch the conversation table when the
@@ -310,7 +565,15 @@ def register_sim_view_routes(app: Any, roots: list[Any] | None = None) -> None:
         kept = {id(r) for r in filtered_results}
         entries = [e for e, r in zip(individual_entries(run.results), run.results, strict=True) if id(r) in kept]
 
-        html = render_sim_row_list(rid, entries)
+        sort = req.query_params.get('sort', _DEFAULT_SORT)
+        direction = req.query_params.get('dir', 'asc')
+        try:
+            page = int(req.query_params.get('page', '1'))
+        except (ValueError, TypeError):
+            page = 1
+        page_size = _coerce_page_size(req.query_params.get('size'))
+
+        html = render_sim_row_list(rid, entries, sort=sort, direction=direction, page=page, page_size=page_size)
         # Return wrapped in the same container div that sim_interactive_panels
         # renders so the outerHTML swap replaces the correct element.
         return Response(_sim_rowlist_wrapper(rid, html), media_type='text/html')
@@ -319,12 +582,9 @@ def register_sim_view_routes(app: Any, roots: list[Any] | None = None) -> None:
     def sim_transcript(rid: str, req: Request) -> Response:
         """Return the transcript drill-down fragment for a sim result row.
 
-        Query param ``idx`` selects which entry in the filtered result list to
-        render (0-based).  Filter dimensions from the active filter form are
-        read from the query-string via ``hx-include="#filter-form"`` and
-        applied before indexing, so the transcript panel stays consistent with
-        the row-list.  Missing or out-of-range ``idx`` returns a graceful
-        empty message rather than a 500.
+        Query param ``idx`` selects the full run's 0-based result position.
+        Missing or out-of-range ``idx`` returns a graceful empty message rather
+        than a 500.
         """
         try:
             idx = int(req.query_params.get('idx', '0'))
@@ -355,5 +615,6 @@ def register_sim_view_routes(app: Any, roots: list[Any] | None = None) -> None:
                 media_type='text/html',
             )
 
-        fragment = render_transcript_fragment(entries[idx])
+        persona_id, scenario_id = _entity_dom_ids(run, idx)
+        fragment = render_transcript_fragment(entries[idx], persona_id, scenario_id)
         return Response(fragment, media_type='text/html')

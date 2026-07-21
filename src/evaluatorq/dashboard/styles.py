@@ -447,9 +447,11 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 
 /* ==== settings — read-only config ================================= */
 .config-list { display: flex; flex-direction: column; }
-.config-row { display: flex; justify-content: space-between; gap: 16px; padding: 8px 0; border-bottom: 1px solid var(--border, #eee); }
-.config-key { font-family: var(--font-sans); font-size: 13px; color: var(--text-muted); }
-.config-val { font-family: var(--font-mono); font-size: 12px; color: var(--text-strong); word-break: break-all; text-align: right; }
+.config-row { display: flex; align-items: baseline; gap: 24px; padding: 8px 0; border-bottom: 1px solid var(--border, #eee); }
+.config-key { flex: 0 0 160px; font-family: var(--font-sans); font-size: 13px; color: var(--text-muted); }
+/* Value column takes the remaining width; list items stack one per line. */
+.config-val { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-family: var(--font-mono); font-size: 12px; color: var(--text-strong); }
+.config-val-item { word-break: break-all; }
 .config-note { font-size: 13px; color: var(--text-muted); line-height: 1.5; }
 
 /* ==== run rows (recent + per-kind list) ============================= */
@@ -570,11 +572,17 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
     font-size: 10.5px; font-weight: 500;
     cursor: pointer;
     user-select: none;
+    transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
 }
+/* Selected = teal-tinted chip (teal carries selection state; semantic hue lives
+   on the check mark only, never the chip fill/border — outcome polarity must
+   never rely on color alone, so the dot->check shape swap below is the real
+   accessible signal). */
 .filter-chip.is-active {
-    background: var(--surface-card);
-    border-color: var(--border-default);
+    background: color-mix(in srgb, var(--teal-600) 10%, transparent);
+    border-color: color-mix(in srgb, var(--teal-600) 55%, var(--border-default));
     color: var(--text-body);
+    font-weight: 600;
 }
 .filter-chip-input {
     /* visually-hidden — checked state drives .is-active via server re-render */
@@ -582,17 +590,34 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
     padding: 0; margin: -1px; overflow: hidden;
     clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
 }
-.filter-chip:focus-within { outline: 2px solid var(--teal-600); outline-offset: 2px; }
+/* Keyboard focus ring only — mouse clicks must not leave a lingering outline. */
+.filter-chip:has(:focus-visible) { outline: 2px solid var(--teal-600); outline-offset: 2px; }
+/* Unselected: hollow ring dot — reads as "empty" without relying on color. */
 .filter-chip-dot {
     width: 5px; height: 5px; border-radius: 50%;
-    background: var(--border-default);
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--border-default);
     flex-shrink: 0;
 }
-.filter-chip.is-active .chip-dot-green { background: var(--green-600); }
-.filter-chip.is-active .chip-dot-red { background: var(--red-600); }
-.filter-chip.is-active .chip-dot-jade { background: var(--green-600); }
-.filter-chip.is-active .chip-dot-amber { background: var(--amber-600); }
-.filter-chip.is-active .chip-dot-gray { background: var(--text-faint); }
+/* Selected: dot swaps out for a checkmark — a shape change, not just a color
+   change, so on/off is legible without color (WCAG AA polarity requirement).
+   Semantic hue (chip-dot-*) is reused here so category meaning is preserved. */
+.filter-chip-check {
+    display: none;
+    width: 5px; height: 5px; line-height: 5px;
+    font-size: 8px; font-weight: 700;
+    flex-shrink: 0;
+}
+.filter-chip.is-active .filter-chip-dot { display: none; }
+.filter-chip.is-active .filter-chip-check { display: inline-block; }
+.filter-chip.is-active .filter-chip-check.chip-dot-green { color: var(--green-600); }
+.filter-chip.is-active .filter-chip-check.chip-dot-red { color: var(--red-600); }
+.filter-chip.is-active .filter-chip-check.chip-dot-jade { color: var(--green-600); }
+.filter-chip.is-active .filter-chip-check.chip-dot-amber { color: var(--amber-600); }
+.filter-chip.is-active .filter-chip-check.chip-dot-gray { color: var(--text-faint); }
+@media (prefers-reduced-motion: reduce) {
+    .filter-chip { transition: none; }
+}
 
 /* min-turns slider (redteam rail, multi-turn runs only) */
 .filter-slider-row {
@@ -609,9 +634,40 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
     min-width: 2.5em; text-align: right;
     flex-shrink: 0;
 }
+/* A slider moved off its no-op bound is actively filtering — promote the
+   readout (teal + bold) so it reads as engaged, matching the chip/dropdown
+   selection vocabulary. */
+.filter-slider-readout.is-engaged { color: var(--teal-600); font-weight: 700; }
+.filter-slider-max {
+    font-family: var(--font-mono);
+    font-size: 10.5px; font-weight: 500;
+    color: var(--text-faint);
+    flex-shrink: 0;
+}
 
-/* "More filters" expander (redteam rail: technique/delivery/vulnerability) */
-.filter-dd-more .filter-dd-trigger { justify-content: space-between; }
+/* "More filters" expander (redteam rail: technique/delivery/vulnerability).
+   Styled as a subtle text toggle — not a boxed card — so it reads as a
+   section reveal, not another filter dropdown. */
+.filter-dd-more .filter-dd-trigger {
+    justify-content: flex-start; gap: 4px;
+    padding: 4px 2px;
+    background: none; border: none; border-radius: 0;
+    font-size: 11px; font-weight: 600;
+    letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--text-faint);
+}
+.filter-dd-more .filter-dd-trigger:hover { color: var(--text-body); }
+/* Count of active filters hidden inside the collapsed expander (teal pill) so
+   engaged controls are never silent. */
+.filter-dd-more-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 15px; height: 15px; padding: 0 4px;
+    border-radius: 999px;
+    background: var(--teal-600); color: #fff;
+    font-size: 9.5px; font-weight: 700; line-height: 1;
+    letter-spacing: 0;
+    flex-shrink: 0;
+}
 .filter-dd-more-body {
     display: flex; flex-direction: column; gap: 10px;
     margin-top: 10px;
@@ -634,16 +690,24 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
     background: var(--border-default);
     flex-shrink: 0;
 }
+/* Status dots use only tokens that clear WCAG 1.4.11 (≥3:1 non-text) against
+   the white trigger; a narrowed filter (partial) reads orange = "engaged", an
+   exclude-all filter (none) reads red — never a decorative chart hue. */
 .filter-dd-status.is-all { background: var(--green-600); }
-.filter-dd-status.is-partial { background: var(--chart-3); }
-.filter-dd-status.is-none { background: var(--border-default); }
+.filter-dd-status.is-partial { background: var(--orange-600); }
+.filter-dd-status.is-none { background: var(--red-700); }
 .filter-dd-name { color: var(--text-faint); }
 .filter-dd-value { flex: 1 1 auto; color: var(--text-body); font-weight: 500; }
+/* Engaged states also promote the status text so the trigger differs at a
+   glance from the "All" default without parsing the 6px dot. */
+.filter-dd-value.is-engaged { color: var(--teal-600); font-weight: 700; }
+.filter-dd-value.is-none { color: var(--red-700); font-weight: 700; }
 .filter-dd-chevron { flex-shrink: 0; color: var(--text-faint); }
 .filter-dd[open] .filter-dd-chevron { transform: rotate(180deg); }
 .filter-dd-menu {
     position: absolute; z-index: 20;
-    top: calc(100% + 4px); left: 0; right: 0;
+    top: calc(100% + 4px); right: 0; left: auto;
+    min-width: 100%; width: max-content; max-width: 340px;
     max-height: 230px; overflow-y: auto;
     background: var(--surface-card);
     border: 1px solid var(--border-default);
@@ -662,12 +726,15 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
     accent-color: var(--green-600);
 }
 .filter-rail-footer {
+    margin-top: auto;
     padding-top: 10px;
     border-top: 1px solid var(--border-subtle);
     font-family: var(--font-mono);
     font-size: 10px;
     color: var(--text-faint);
 }
+/* "More filters" toggle rides at the very bottom, just under the counter. */
+.filter-group--more { margin-top: -6px; }
 
 .filter-sidebar,
 .rt-panel {
@@ -839,9 +906,10 @@ _SIM_REPORT_CSS = """
 }
 .report-aligned .es-body strong { color: var(--text-strong); }
 
-/* ---- 5-card KPI band (spec Overview.2) ---- */
+/* ---- KPI band (spec Overview.2). One equal column per card, whatever the
+   count (red team = 5, sim = 6), so neither leaves a blank slot. ---- */
 .report-aligned .kpi-band {
-    display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px;
+    display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 12px;
     margin: 16px 0;
 }
 .report-aligned .kpi-card {
@@ -1095,35 +1163,71 @@ _SIM_REPORT_CSS = """
 # ==== .sim-report — Transcripts redesign (Tasks 11+12) ===================
 # Appended as its own block (rather than edited into _SIM_REPORT_CSS above)
 # so a concurrently-landing `.sim-report` CSS addition on another branch
-# merges cleanly. Covers: collapsed tinted conversation cards (Task 11) +
+# merges cleanly. Covers: tinted conversation drawer rows (Task 11) +
 # judge callout / chat bubbles / two-state criteria (Task 12), both scoped
 # under `.sim-report` per docs/superpowers/specs/2026-07-10-agent-sim-report-
 # alignment-design.md §Transcripts.
 _SIM_TRANSCRIPT_CSS = """
-/* ---- Conversation cards (spec §Transcripts, Task 11) ---- */
-.sim-report .sim-row-list { display: flex; flex-direction: column; gap: 10px; }
-.sim-report .sim-conv-card {
+/* ---- Conversation table (sortable + paginated) ---- */
+.sim-report .sim-conv-table {
+    width: 100%; border-collapse: collapse; font-size: 13px;
     border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden;
-    background: var(--surface-app);
 }
-.sim-report .sim-conv-summary {
-    display: flex; align-items: center; gap: 8px; padding: 12px 16px;
-    cursor: pointer; list-style: none;
+.sim-report .sim-conv-table thead th {
+    text-align: left; padding: 0; background: var(--surface-sunken);
+    border-bottom: 1px solid var(--border-subtle); white-space: nowrap;
 }
-.sim-report .sim-conv-summary::-webkit-details-marker { display: none; }
-.sim-report .sim-conv-idx {
-    font-family: var(--font-mono); font-size: 12px; color: var(--text-faint);
+.sim-report .sim-th-sort {
+    display: inline-flex; align-items: center; gap: 4px; width: 100%;
+    padding: 10px 12px; background: none; border: 0; cursor: pointer;
+    font: inherit; font-weight: 600; color: var(--text-strong); text-align: left;
 }
-.sim-report .sim-conv-persona { font-size: 14px; font-weight: 600; color: var(--text-strong); }
-.sim-report .sim-conv-sep { color: var(--text-faint); }
-.sim-report .sim-conv-scenario { font-size: 13px; color: var(--text-body); }
-.sim-report .sim-conv-right {
-    display: flex; align-items: center; gap: 6px; margin-left: auto;
+.sim-report .sim-th-sort:hover { color: var(--teal-600); }
+/* Inactive sortable columns show a faint ⇅; it strengthens on hover so the
+   header reads as clickable. The active column's ▲/▼ is always full-strength. */
+.sim-report .sim-th-caret { font-size: 9px; color: var(--text-faint); }
+.sim-report .sim-th-sort:hover .sim-th-caret { color: var(--teal-600); }
+.sim-report .sim-th-caret-active { color: var(--teal-600); }
+.sim-report .sim-conv-table tbody td { padding: 10px 12px; }
+.sim-report .sim-conv-row {
+    border-top: 1px solid var(--border-subtle);
+    cursor: pointer;
 }
-.sim-report .sim-tint-achieved { background: var(--green-100); }
-.sim-report .sim-tint-missed { background: var(--red-100); }
-.sim-report .sim-tint-error { background: var(--amber-100); }
-.sim-report .sim-conv-body { padding: 16px; border-top: 1px solid var(--border-subtle); }
+.sim-report .sim-conv-row:focus-visible {
+    outline: 2px solid var(--teal-600); outline-offset: -2px;
+}
+.sim-report .sim-conv-idx { font-family: var(--font-mono); font-size: 12px; color: var(--text-faint); }
+.sim-report .sim-conv-persona { font-weight: 600; color: var(--text-strong); }
+.sim-report .sim-conv-scenario { color: var(--text-body); }
+.sim-report .sim-conv-turns, .sim-report .sim-conv-score { font-variant-numeric: tabular-nums; }
+.sim-report .sim-conv-trace .trace-link { white-space: nowrap; }
+
+/* ---- Pager ---- */
+.sim-report .sim-pager {
+    display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+    margin-top: 10px; font-size: 12px; color: var(--text-faint);
+}
+/* Pager group centred (col 2); size selector pinned right (col 3). */
+.sim-report .sim-pager-nav { grid-column: 2; display: flex; align-items: center; gap: 12px; }
+.sim-report .sim-size { grid-column: 3; justify-self: end; }
+.sim-report .sim-pager-btn {
+    padding: 5px 12px; border: 1px solid var(--border-subtle); border-radius: 6px;
+    background: var(--surface-app); color: var(--text-body); cursor: pointer; font: inherit;
+}
+.sim-report .sim-pager-btn:hover:not([disabled]) { border-color: var(--teal-600); color: var(--teal-600); }
+.sim-report .sim-pager-btn[disabled] { opacity: 0.4; cursor: default; }
+.sim-report .sim-size { display: flex; align-items: center; gap: 4px; }
+.sim-report .sim-size-label { margin-right: 2px; }
+.sim-report .sim-size-btn {
+    padding: 4px 9px; border: 1px solid var(--border-subtle); border-radius: 6px;
+    background: var(--surface-app); color: var(--text-body); cursor: pointer; font: inherit;
+}
+.sim-report .sim-size-btn:hover:not([disabled]) { border-color: var(--teal-600); color: var(--teal-600); }
+/* Active size is disabled (current selection), so give it the teal fill instead of the faded look. */
+.sim-report .sim-size-btn[aria-current="true"] {
+    opacity: 1; cursor: default; border-color: var(--teal-600);
+    background: var(--teal-600); color: var(--surface-app);
+}
 
 /* ---- Transcript fragment: judge callout / bubbles / criteria (Task 12) ---- */
 .sim-report .sim-judge {
@@ -1139,11 +1243,11 @@ _SIM_TRANSCRIPT_CSS = """
     background: var(--red-100); color: var(--red-600); border-radius: 4px;
     padding: 10px 14px; margin-bottom: 14px; font-size: 13px;
 }
-.sim-report .sim-transcript-grid {
-    display: grid; grid-template-columns: 1.6fr 1fr; gap: 20px;
-}
-@media (max-width: 760px) {
-    .sim-report .sim-transcript-grid { grid-template-columns: 1fr; }
+.sim-report .sim-transcript-grid { display: flex; flex-direction: column; gap: 0; }
+/* Hairline between the criteria block and the conversation below it, matching
+   the summary's bottom rule so the drawer reads as three stacked sections. */
+.sim-report .sim-transcript-grid > * + * {
+    margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--border-subtle);
 }
 
 /* Chat bubbles (render_message_list avatar + side extension). Shared with
@@ -1275,6 +1379,7 @@ _SIM_REPORT_OVERRIDES_CSS = """
 .sim-report .sim-overview-grid-2 > .rk-panel + .rk-panel { margin-top: 0; }
 .sim-report .sim-overview-grid-2 > .rk-panel > .rk-panel-body { flex: 1; }
 .sim-report .sim-overview-grid-2 .sim-aq-grid { height: 100%; grid-auto-rows: 1fr; }
+.sim-empty-note { color: var(--text-faint); font-size: 12px; padding: 12px 2px; margin: 0; }
 /* Personas + scenarios row: unlike the donut row above it, these list-cards have
    no reason to match heights — stretching the shorter one leaves a dead void.
    Let each hug its content. */
@@ -1502,8 +1607,7 @@ _SIM_REPORT_OVERRIDES_CSS = """
     text-align: left; cursor: pointer;
 }
 .sim-report .sim-entity-row:hover .sim-config-persona-name,
-.sim-report .sim-entity-row:hover .sim-config-scenario-name,
-.sim-report .sim-entity-link:hover { color: var(--orange-500); }
+.sim-report .sim-entity-row:hover .sim-config-scenario-name { color: var(--orange-500); }
 .sim-report .sim-config-persona-style {
     font-family: var(--font-sans); font-size: 12px; color: var(--text-muted);
 }
@@ -1585,18 +1689,65 @@ _SIM_REPORT_OVERRIDES_CSS = """
 .sim-report .sim-scenario-rate--mid .sim-scenario-rate-dot { background: var(--amber-600); }
 .sim-report .sim-scenario-rate--low { background: var(--red-100); color: var(--red-600); }
 .sim-report .sim-scenario-rate--low .sim-scenario-rate-dot { background: var(--red-600); }
-.sim-report .sim-entity-link {
-    border: 0; padding: 0; background: transparent; color: var(--text-strong);
-    font: inherit; font-weight: 600; cursor: pointer; text-align: left;
-}
 .sim-report .sim-entity-dialog {
-    width: min(720px, calc(100vw - 32px)); max-height: min(780px, calc(100vh - 32px));
-    padding: 0; border: 1px solid var(--border-subtle); border-radius: 8px;
+    inset: 0 0 0 auto; margin: 0; width: 50vw; height: 100vh; max-height: 100vh;
+    padding: 0; border: 0; border-left: 1px solid var(--border-subtle); border-radius: 12px 0 0 12px;
     background: var(--surface-app); color: var(--text-body); box-shadow: var(--shadow-lg);
 }
+.sim-report .sim-entity-dialog[open] { animation: sim-drawer-in 160ms ease-out; }
+@keyframes sim-drawer-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
+.sim-report .sim-entity-dialog--closing { animation: sim-drawer-out 160ms ease-in forwards; }
+@keyframes sim-drawer-out { from { transform: translateX(0); } to { transform: translateX(100%); } }
 .sim-report .sim-entity-dialog::backdrop { background: rgb(18 17 15 / 0.42); }
-.sim-report .sim-entity-modal-shell { display: flex; flex-direction: column; max-height: inherit; }
-.sim-report .sim-entity-modal-content { padding: 24px; overflow: auto; }
+.sim-report .sim-entity-modal-shell { display: flex; flex-direction: column; height: 100%; max-height: none; }
+.sim-report .sim-entity-modal-content { flex: 1; min-height: 0; padding: 24px; overflow: auto; }
+.sim-report .sim-entity-dialog .sim-transcript-grid > * { min-width: 0; }
+@media (max-width: 760px) {
+    .sim-report .sim-entity-dialog { width: 100vw; border-radius: 0; }
+}
+.sim-report .sim-drawer-row,
+.sim-report .sim-conv-row {
+    cursor: pointer; transition: background 120ms ease, border-color 120ms ease;
+    box-shadow: inset 3px 0 0 var(--border-subtle);
+}
+/* Outcome accent on the leading edge, so rows are scannable by result. */
+.sim-report .sim-conv-row--pass { box-shadow: inset 3px 0 0 var(--green-600); }
+.sim-report .sim-conv-row--fail { box-shadow: inset 3px 0 0 var(--red-600); }
+.sim-report .sim-conv-row--error { box-shadow: inset 3px 0 0 var(--orange-500); }
+.sim-report .sim-drawer-row:hover,
+.sim-report table.sim-conv-table tbody tr.sim-conv-row:hover { background: var(--surface-sunken); }
+.sim-report .sim-drawer-row:focus-visible,
+.sim-report .sim-conv-row:focus-visible {
+    outline: 2px solid var(--teal-600); outline-offset: 2px;
+}
+.sim-report .sim-cohort-stats {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;
+    margin: 12px 0 16px;
+}
+.sim-report .sim-cohort-stats span {
+    display: grid; gap: 2px; padding: 8px 10px; border-radius: 6px;
+    background: var(--surface-sunken); font-size: 12px; color: var(--text-body);
+}
+.sim-report .sim-cohort-stats b {
+    font-family: var(--font-mono); font-size: 10px; font-weight: 500;
+    text-transform: uppercase; color: var(--text-faint);
+}
+.sim-report .sim-cohort-conversations { margin-top: 18px; }
+.sim-report .sim-cohort-conversations h3 { margin-bottom: 8px; }
+.sim-report .sim-cohort-list { display: grid; gap: 6px; }
+.sim-report .sim-cohort-conversation {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%;
+    padding: 9px 10px; border: 1px solid var(--border-subtle); border-radius: 6px;
+    background: var(--surface-app); color: var(--text-body); font: inherit; text-align: left;
+    cursor: pointer; transition: background 120ms ease, border-color 120ms ease;
+}
+.sim-report .sim-cohort-conversation:hover {
+    background: var(--surface-sunken); border-color: var(--teal-600);
+}
+.sim-report .sim-cohort-conversation:focus-visible {
+    outline: 2px solid var(--teal-600); outline-offset: 2px;
+}
+.sim-report .sim-cohort-empty { margin: 8px 0 0; color: var(--text-muted); font-size: 13px; }
 .sim-report .sim-entity-kicker {
     font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .06em;
 }
@@ -1643,6 +1794,7 @@ _SIM_REPORT_OVERRIDES_CSS = """
     display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px;
     border-top: 1px solid var(--border-subtle); background: var(--surface-sunken);
 }
+.sim-report .sim-entity-back,
 .sim-report .sim-entity-nav,
 .sim-report .sim-entity-close {
     border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--surface-app);
@@ -1659,8 +1811,15 @@ _SIM_REPORT_OVERRIDES_CSS = """
     border: 1px solid var(--border-subtle); background: var(--surface-sunken);
     color: var(--text-faint);
 }
+.sim-report .sim-entity-back:hover,
 .sim-report .sim-entity-nav:hover,
 .sim-report .sim-entity-close:hover { border-color: var(--orange-500); color: var(--orange-500); }
+@media (max-width: 480px) {
+    .sim-report .sim-entity-dialog { width: 92vw; border-radius: 10px 0 0 10px; }
+    .sim-report .sim-entity-modal-content { padding: 16px; }
+    .sim-report .sim-entity-trait-row { grid-template-columns: 88px minmax(0, 1fr) 36px; gap: 8px; }
+    .sim-report .sim-entity-modal-actions { padding: 10px 12px; }
+}
 
 /* ---- Agent info card ---- */
 .sim-report .sim-agent-card { margin-bottom: 16px; }
@@ -1677,6 +1836,12 @@ _SIM_REPORT_OVERRIDES_CSS = """
 .sim-report .sim-agent-empty { margin: 0; font-size: 13px; color: var(--text-muted); }
 .sim-report .sim-agent-head {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.sim-report .sim-agent-identity {
+    display: inline-flex; align-items: center; gap: 8px; min-width: 0;
+}
+.sim-report .sim-agent-icon {
+    width: 18px; height: 18px; color: var(--teal-600); flex: 0 0 auto;
 }
 .sim-report .sim-agent-name {
     font-family: var(--font-sans); font-size: 18px; font-weight: 600; color: var(--text-strong);
@@ -1718,14 +1883,23 @@ _SIM_REPORT_OVERRIDES_CSS = """
 
 # ==== .sim-report — Transcript overrides layered on `.report-aligned` =====
 # Same equal-specificity/source-order rationale as _SIM_REPORT_OVERRIDES_CSS
-# above: the sim report gets its own conversation-card chrome and a distinct
+# above: the sim report gets its own conversation-row chrome and a distinct
 # chat-bubble skin (asymmetric tail, no in-bubble role label) instead of the
 # shared `.report-aligned .sim-msg/.rt-msg` bubbles used by the Red Team
 # report.
 _SIM_TRANSCRIPT_OVERRIDES_CSS = """
-.sim-report .sim-conv-card {
-    border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); overflow: hidden;
-    background: var(--surface-card);
+.sim-report .sim-conv-table-shell {
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);
+    overflow-x: auto; background: var(--surface-card);
+}
+.sim-report .sim-conv-table { border: 0; border-radius: 0; }
+.sim-report .sim-conv-row {
+    border: 0; background: transparent; transition: background 150ms ease;
+}
+.sim-report .sim-conv-row:hover { background: var(--surface-sunken); }
+.sim-report .sim-conv-row + .sim-conv-row { border-top: 1px solid var(--border-subtle); }
+@media (prefers-reduced-motion: reduce) {
+    .sim-report .sim-conv-row { transition: none; }
 }
 .sim-report .sim-conv-idx {
     font-family: var(--font-sans); font-size: 12px; color: var(--text-faint);
@@ -1742,12 +1916,20 @@ _SIM_TRANSCRIPT_OVERRIDES_CSS = """
     background: var(--red-100); color: var(--red-600); border-radius: var(--radius-md);
     padding: 10px 14px; margin-bottom: 14px; font-size: 13px;
 }
+.sim-report .sim-transcript-bubbles {
+    background: var(--surface-sunken); border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg); padding: 16px;
+}
+.sim-report .sim-transcript-bubbles .sim-msg:last-child { margin-bottom: 0; }
 
 /* Chat bubbles (render_message_list avatar + side extension) — sim-only skin,
    distinct from the shared `.report-aligned .sim-msg/.rt-msg` bubbles. */
 .sim-report .sim-msg { display: flex; gap: 10px; margin-bottom: 10px; max-width: 88%; }
-.sim-report .sim-msg-user, .sim-report .sim-msg-system { margin-right: auto; }
-.sim-report .sim-msg-assistant, .sim-report .sim-msg-tool { margin-left: auto; flex-direction: row-reverse; }
+/* Sim swaps sides vs the shared `.report-aligned` base (user right, agent left),
+   so it must reset BOTH margins + flex-direction — the element matches both the
+   base rule and this one (drawer lives inside `.report-aligned sim-report`). */
+.sim-report .sim-msg-user, .sim-report .sim-msg-system { margin: 0 0 16px auto; flex-direction: row-reverse; }
+.sim-report .sim-msg-assistant, .sim-report .sim-msg-tool { margin: 0 auto 16px 0; flex-direction: row; }
 .sim-report .sim-msg-avatar {
     flex-shrink: 0; width: 30px; height: 30px; border-radius: var(--radius-md);
     display: flex; align-items: center; justify-content: center;
@@ -1762,10 +1944,10 @@ _SIM_TRANSCRIPT_OVERRIDES_CSS = """
    avatar side). */
 .sim-report .sim-msg-bubble {
     background: var(--surface-card); border: 1px solid var(--border-subtle);
-    border-radius: 3px var(--radius-lg) var(--radius-lg) var(--radius-lg); padding: 9px 13px;
+    border-radius: var(--radius-lg) 3px var(--radius-lg) var(--radius-lg); padding: 9px 13px;
 }
 .sim-report .sim-msg-assistant .sim-msg-bubble, .sim-report .sim-msg-tool .sim-msg-bubble {
-    background: var(--teal-50); border-radius: var(--radius-lg) 3px var(--radius-lg) var(--radius-lg);
+    background: var(--teal-50); border-radius: 3px var(--radius-lg) var(--radius-lg) var(--radius-lg);
 }
 /* The avatar already carries USR/AGT; the mockup has no second in-bubble label. */
 .sim-report .sim-msg-role { display: none; }
@@ -1777,22 +1959,118 @@ _SIM_TRANSCRIPT_OVERRIDES_CSS = """
     background: transparent; border: none; border-radius: 0; padding: 0;
 }
 
+/* Conversation summary header: persona + scenario recap and turn-count chip,
+   shown above the criteria and transcript inside the drawer. */
+.sim-report .sim-conv-summary {
+    display: flex; flex-direction: column;
+    gap: 16px; margin-bottom: 20px;
+    padding-bottom: 16px; border-bottom: 1px solid var(--border-subtle);
+}
+/* Index row: the large # identity anchor left, turn count right. */
+.sim-report .sim-conv-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 14px;
+}
+/* Teal index chip — the conversation's # from the row table, sized up as the
+   drawer's identity anchor (DESIGN.md: teal leads). */
+.sim-report .sim-conv-index {
+    flex-shrink: 0; font-family: var(--font-mono);
+    font-size: 20px; font-weight: 700; line-height: 1;
+    color: #fff; background: var(--teal-600);
+    padding: 8px 12px; border-radius: var(--radius-md);
+    font-variant-numeric: tabular-nums;
+}
+.sim-report .sim-conv-meta {
+    display: flex; flex-direction: column; gap: 10px; min-width: 0;
+}
+.sim-report .sim-conv-field {
+    display: flex; align-items: flex-start; gap: 10px; min-width: 0;
+}
+/* Glyph tile anchoring each field (Option A). Orange punctuation accent —
+   DESIGN.md: teal carries (index chip + value links), orange punctuates. */
+.sim-report .sim-conv-ico {
+    flex-shrink: 0; width: 26px; height: 26px; border-radius: 8px;
+    display: grid; place-items: center;
+    background: var(--orange-50); color: var(--orange-700);
+}
+.sim-report .sim-conv-ico svg { width: 15px; height: 15px; }
+.sim-report .sim-conv-field-text {
+    display: flex; flex-direction: column; gap: 2px; min-width: 0;
+}
+.sim-report .sim-conv-label {
+    font-family: var(--font-sans); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-faint);
+}
+.sim-report .sim-conv-value {
+    font-size: 14px; color: var(--text-body); line-height: 1.4;
+}
+/* Click-through persona/scenario value: opens the cohort card. Reset button
+   chrome, keep it inline text with a teal underline affordance. */
+.sim-report button.sim-conv-value--link {
+    display: inline; margin: 0; padding: 0; border: none; background: none;
+    font: inherit; text-align: left; cursor: pointer;
+    color: var(--teal-600); text-decoration: underline;
+    text-decoration-color: var(--teal-100); text-underline-offset: 3px;
+    transition: text-decoration-color 150ms ease;
+}
+.sim-report button.sim-conv-value--link:hover {
+    text-decoration-color: var(--teal-600);
+}
+.sim-report button.sim-conv-value--link:focus-visible {
+    outline: 2px solid var(--teal-600); outline-offset: 2px; border-radius: 3px;
+}
+.sim-report .sim-conv-turns-pill {
+    flex-shrink: 0; font-family: var(--font-sans); font-size: 12px; font-weight: 600;
+    white-space: nowrap; padding: 3px 10px; border-radius: 999px;
+    color: var(--text-muted); background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+}
+
+/* Judge rationale folded into the criteria block: sits under the list, its own
+   margins reset so it reads as the verdict's explanation, not a stray callout. */
+.sim-report .sim-criteria .sim-judge { margin: 16px 0 0; }
+
 /* Criteria column (two-state per deviation #4) */
+.sim-report .sim-criteria-head {
+    display: flex; align-items: baseline; gap: 10px;
+    margin-bottom: 8px;
+}
 .sim-report .sim-criteria-header {
     font-family: var(--font-sans); font-size: 11px; font-weight: 600;
-    text-transform: uppercase; color: var(--text-faint); margin-bottom: 8px;
+    text-transform: uppercase; color: var(--text-faint); margin-bottom: 0;
+    margin-right: auto;
+}
+.sim-report .sim-criteria-verdict {
+    font-family: var(--font-sans); font-size: 12px; font-weight: 700;
+    letter-spacing: 0.02em; white-space: nowrap;
+}
+.sim-report .sim-criteria-verdict--pass { color: var(--green-600); }
+.sim-report .sim-criteria-verdict--fail { color: var(--red-600); }
+.sim-report .sim-criteria-count {
+    font-family: var(--font-sans); font-size: 12px; color: var(--text-faint); white-space: nowrap;
 }
 .sim-report .sim-criteria-list {
     list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px;
 }
 /* Scoped to the criteria list so it no longer collides with the Scenarios-panel
-   .sim-criterion rule above. Mockup uses a plain gapped column (no dividers). */
+   .sim-criterion rule above. Plain gapped column (no dividers). */
 .sim-report .sim-criteria-list .sim-criterion {
-    display: flex; align-items: flex-start; gap: 8px;
+    display: flex; align-items: center; gap: 8px;
+    /* Reset the row-divider + padding the legacy `.sim-criterion` rule adds; the
+       criteria list is a plain gapped column so only the section-level rules
+       (general info ↔ criteria ↔ conversation) draw dividers. */
+    padding: 0; border-top: none;
 }
+/* The requirement chip sits right after the result icon so the reader never has
+   to reconcile a green check against a far-right "must not happen" label. */
 .sim-report .sim-ctype {
-    font-family: var(--font-sans); font-size: 10px; text-transform: uppercase;
-    color: var(--text-faint); white-space: nowrap;
+    flex-shrink: 0; font-family: var(--font-sans); font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.03em; white-space: nowrap;
+    padding: 2px 7px; border-radius: 999px;
+    color: var(--text-faint); background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+}
+.sim-report .sim-ctype-unsafe {
+    color: var(--red-600); background: var(--red-100); border-color: transparent;
 }
 """
 

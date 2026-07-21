@@ -159,6 +159,7 @@ async def simulate(
     exit_on_failure: bool = True,
     save: bool = False,
     report: str | Path | None = None,
+    executive_summary: bool = True,
 ) -> list[SimulationResult]:
     """Run agent simulations through the evaluatorq() framework.
 
@@ -218,6 +219,11 @@ async def simulate(
         report: Optional path to write the full SimulationRun report JSON
             (results + scorer averages + metadata). When omitted and ``save``
             is ``True``, the run is auto-saved under ``.evaluatorq/sim-runs/``.
+        executive_summary: When ``True`` (the default), generate the LLM
+            narrative summary and store it on the returned run — and in any
+            saved file — so the dashboard shows saved prose instead of the
+            computed fallback sentence. Best-effort: no-op without LLM creds.
+            Set ``False`` to skip the extra LLM call.
     """
     run = await _simulate_run(
         evaluation_name=evaluation_name,
@@ -240,6 +246,7 @@ async def simulate(
         exit_on_failure=exit_on_failure,
         save=save,
         report=report,
+        executive_summary=executive_summary,
     )
     return run.results
 
@@ -266,6 +273,7 @@ async def _simulate_run(
     exit_on_failure: bool = True,
     save: bool = False,
     report: str | Path | None = None,
+    executive_summary: bool = False,
 ) -> SimulationRun:
     """Internal counterpart of :func:`simulate` that returns the full ``SimulationRun``.
 
@@ -329,6 +337,7 @@ async def _simulate_run(
                     exit_on_failure=exit_on_failure,
                     save=save,
                     run_output=report,
+                    executive_summary=executive_summary,
                     hooks=composed_hooks,
                 )
                 return await _simulate_core(
@@ -372,6 +381,7 @@ async def generate_and_simulate(
     emit_datapoints: EmitDatapoints | None = None,
     save: bool = False,
     report: str | Path | None = None,
+    executive_summary: bool = True,
 ) -> list[SimulationResult]:
     """Generate personas/scenarios, then run simulations via evaluatorq().
 
@@ -411,6 +421,10 @@ async def generate_and_simulate(
     ``report``: Optional path to write the full SimulationRun report JSON
     (results + scorer averages + metadata). When omitted and ``save`` is
     ``True``, the run is auto-saved under ``.evaluatorq/sim-runs/``.
+
+    ``executive_summary``: When ``True`` (the default), generate the LLM
+    narrative summary and store it on the returned run — and in any saved file.
+    Best-effort: no-op without LLM creds. Set ``False`` to skip the LLM call.
     """
     run = await _generate_and_simulate_run(
         evaluation_name=evaluation_name,
@@ -433,6 +447,7 @@ async def generate_and_simulate(
         emit_datapoints=emit_datapoints,
         save=save,
         report=report,
+        executive_summary=executive_summary,
     )
     return run.results
 
@@ -524,6 +539,7 @@ async def _generate_and_simulate_run(
     emit_datapoints: EmitDatapoints | None = None,
     save: bool = False,
     report: str | Path | None = None,
+    executive_summary: bool = False,
 ) -> SimulationRun:
     """Internal counterpart of :func:`generate_and_simulate` returning the full ``SimulationRun``.
 
@@ -624,6 +640,7 @@ async def _generate_and_simulate_run(
                         exit_on_failure=exit_on_failure,
                         save=save,
                         run_output=report,
+                        executive_summary=executive_summary,
                         hooks=composed_hooks,
                     )
                     return await _simulate_core(
@@ -1170,6 +1187,17 @@ async def _simulate_core(
             run_id=run_id,
             experiment_url=experiment_url_out[0] if experiment_url_out else None,
         )
+
+        # Generate the LLM narrative before persistence so a saved report carries
+        # it. This is best-effort: simulations remain useful without LLM creds or
+        # if summary generation itself fails.
+        if config.executive_summary:
+            from evaluatorq.simulation.reports.executive_summary import populate_run_executive_summary
+
+            try:
+                await populate_run_executive_summary(run, enabled=True, model=model)
+            except Exception:
+                logger.warning('Failed to generate executive summary (results still returned)', exc_info=True)
 
         # Persist only when the caller opts in (save=True).
         # TODO(RES-963): inline because on_run_complete carries no run metadata and

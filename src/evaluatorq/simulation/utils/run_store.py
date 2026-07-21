@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from evaluatorq.common.llm_client import orq_base_url as _orq_base_url
 from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.simulation.types import AgentInfoSnapshot, SimulationRun
 
@@ -131,6 +132,9 @@ def build_simulation_run(
     run_id: str | None = None,
     experiment_url: str | None = None,
 ) -> SimulationRun:
+    # Record the Orq host only for Orq-served targets; plain callables / OpenAI
+    # models don't touch Orq, so the field stays None (omitted) for them.
+    orq_base_url = _orq_base_url() if target_kind in ('orq_agent', 'orq_deployment') else None
     """Build the full ``SimulationRun`` report model from results.
 
     Aggregates per-scorer averages, guarding against non-numeric scores from a
@@ -159,6 +163,7 @@ def build_simulation_run(
         target_model=target_model,
         max_turns=max_turns,
         agent_info=agent_info,
+        orq_base_url=orq_base_url,
         run_id=run_id,
         experiment_url=experiment_url,
         evaluator_names=evaluator_names,

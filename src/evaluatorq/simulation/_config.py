@@ -75,3 +75,7 @@ class SimulationConfig(BaseModel):
     exit_on_failure: bool = True
     save: bool = False
     run_output: str | Path | None = None
+    executive_summary: bool = False
+    """Generate the LLM narrative summary in-core (before save). Off by default;
+    the public ``simulate``/``generate_and_simulate`` flip it on. The CLI keeps
+    it off here and generates its own after the run (avoids double generation)."""

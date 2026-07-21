@@ -1636,34 +1636,18 @@ def ui(
 def _maybe_generate_executive_summary(run: Any, *, enabled: bool, model: str) -> None:
     """Populate ``run.executive_summary`` in place. Best-effort; never raises.
 
-    Skips silently when disabled, when there are no results, or when no LLM
-    credentials are configured, so a default-on run without creds still
-    produces a report. Uses the module-level ``resolve_llm_client`` so tests can
-    monkeypatch it.
+    Thin sync wrapper over the shared async helper, passing the module-level
+    ``resolve_llm_client`` so tests that monkeypatch it here keep working.
     """
-    if not enabled or not run.results:
-        return
-
-    from evaluatorq.common.llm_client import MissingLLMCredentialsError
-    from evaluatorq.common.reports.executive_summary import generate_executive_summary
-    from evaluatorq.simulation.reports.executive_summary import (
-        SIM_EXECUTIVE_SUMMARY_SYSTEM_PROMPT,
-        build_sim_facts,
-    )
+    from evaluatorq.simulation.reports.executive_summary import populate_run_executive_summary
 
     try:
-        resolved = resolve_llm_client()
-    except MissingLLMCredentialsError:
-        logger.warning('Skipping executive summary: no LLM credentials configured.')
-        return
-
-    try:
-        run.executive_summary = asyncio.run(
-            generate_executive_summary(
-                build_sim_facts(run.results),
-                llm_client=resolved.client,
+        asyncio.run(
+            populate_run_executive_summary(
+                run,
+                enabled=enabled,
                 model=model,
-                system_prompt=SIM_EXECUTIVE_SUMMARY_SYSTEM_PROMPT,
+                resolve_client=resolve_llm_client,
             )
         )
     except Exception:

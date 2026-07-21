@@ -149,14 +149,34 @@ Both surfaces expose dimension filters in a sidebar:
 | `delivery_method` | delivery method identifiers |
 | `source` | dataset source identifiers |
 
-### Simulation filters (4 dimensions)
+### Simulation filters
 
-| Dimension | Values |
-|---|---|
-| `goal_outcome` | achieved / not achieved |
-| `persona` | persona names present in the run |
-| `scenario` | scenario names present in the run |
-| `evaluator` | evaluator names present in the run |
+The sim rail exposes chip toggles, `<details>` dropdowns, and range
+controls, rendered directly in the sidebar wherever they always apply and
+tucked behind a **More filters** expander (`filter-dd-more`, reusing the
+same open-state persistence as the red team rail) when they may be
+unavailable for a given run:
+
+| Control | Kind | Direction | Notes |
+|---|---|---|---|
+| `goal_outcome` | chip (2-value) | — | achieved / not achieved; zero or both selected means "all" |
+| `terminated_by` | chip | — | termination reasons present in the run |
+| `persona` | dropdown | — | persona names present in the run |
+| `scenario` | dropdown | — | scenario names present in the run |
+| `rule_broken` | chip (opt-in) | — | `yes` narrows to results with any broken rule; absent (default) shows all |
+| `max_goal_score` | range | ceiling (`≤`) | `goal_completion_score`, step `0.05`, range `0..1` |
+| `min_turns` | range | floor (`≥`) | raw `turn_count`, step `1`, max = the run's actual longest conversation (never normalized) |
+| `min_total_tokens` *(More)* | range | floor (`≥`) | raw `token_usage.total_tokens`, step `1`, max = the run's actual highest token count; hidden when the run recorded zero tokens |
+| per-turn metric thresholds *(More)* | range | floor for hallucination risk (`≥`), ceiling for response quality / tone appropriateness / factual accuracy (`≤`) | step `0.05`, range `0..1`; each control is rendered **only when that metric was actually scored somewhere in the run** — unavailable metrics are hidden, not shown disabled |
+
+Every range control renders its default bound numerically (`≤`/`≥ value`) —
+when unset it shows the no-op end of the range, so it always reads as a number,
+never "all". Min-turns additionally shows the run's max turns beside the
+readout. Metric thresholds compare
+against a result's **worst scored turn** (`max()` for hallucination risk,
+`min()` for the quality metrics); a result with **no scored turns for that
+metric stays visible** regardless of the threshold, so unscored results are
+never silently dropped from the filtered view.
 
 Filters are applied via HTMX (no page reload).  The report body, summary
 aggregates, and download links all update in-place to reflect the active

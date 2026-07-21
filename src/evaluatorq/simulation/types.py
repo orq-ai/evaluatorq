@@ -11,7 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
-from evaluatorq.contracts import Message, StrEnum, TokenUsage
+from evaluatorq.contracts import Message, ResponseTrace, StrEnum, TokenUsage
 
 DEFAULT_MODEL = 'openai/gpt-5.4-mini'
 
@@ -339,6 +339,20 @@ class SimulationResult(BaseModel):
         description='Orq observability thread id for this conversation (deterministic: f"{run_id}:{index}"). '
         'None for runs saved before thread grouping existed.',
     )
+    response_traces: list[ResponseTrace] = Field(
+        default_factory=list,
+        description='Per-turn Orq trace/span handles for each successful target-agent response '
+        '(excludes user-simulator and judge calls), in turn order. Empty for non-Orq targets and for '
+        'runs saved before this field existed.',
+    )
+
+    @property
+    def last_trace_id(self) -> str | None:
+        """Trace id of the last successful target response, for the table deep-link."""
+        for rt in reversed(self.response_traces):
+            if rt.trace_id:
+                return rt.trace_id
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +394,11 @@ class SimulationRun(BaseModel):
     # only; None for other target kinds, fetch failures, and pre-existing runs).
     # Deliberately excludes the system prompt / instructions.
     agent_info: AgentInfoSnapshot | None = None
+    orq_base_url: str | None = None
+    """The Orq host that served this run (``ORQ_BASE_URL`` or the prod default),
+    recorded so a saved run remembers which deployment — prod / staging / on-prem
+    — it ran against. None when no Orq agent/deployment was used (plain callable /
+    OpenAI-model targets) and for runs saved before this field existed."""
     evaluator_names: list[str]
     total_results: int
     scorer_averages: dict[str, float]
@@ -447,3 +466,4 @@ class SimulationEntry(BaseModel):
     evaluator_scores: dict[str, float]
     transcript: list[TranscriptMessage]
     thread_id: str | None = None
+    last_trace_id: str | None = None

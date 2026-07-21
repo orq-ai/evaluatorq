@@ -663,6 +663,23 @@ class AgentResponseError(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# ResponseTrace
+# ---------------------------------------------------------------------------
+
+
+class ResponseTrace(BaseModel):
+    """Orq observability handles for one target-agent response.
+
+    Persisted per successful response so a conversation/attack retains the exact
+    trace (and span) of every target turn; the dashboard links to the last one.
+    Either field may be None when the target isn't routed through Orq.
+    """
+
+    trace_id: str | None = None
+    span_id: str | None = None
+
+
+# ---------------------------------------------------------------------------
 # AgentResponse
 # ---------------------------------------------------------------------------
 
@@ -692,6 +709,10 @@ class AgentResponse(BaseModel):
     # response back to the trace in Orq observability. None when not routed
     # through Orq.
     trace_id: str | None = None
+    # Orq span id for this call (``response.telemetry.span_id`` when the router
+    # includes it). Pinpoints the exact span within the trace. None when not
+    # routed through Orq or the router omits it.
+    span_id: str | None = None
     finish_reason: str | None = None
     error: AgentResponseError | None = None
 
@@ -706,6 +727,7 @@ class AgentResponse(BaseModel):
             model: str | None = None,
             response_id: str | None = None,
             trace_id: str | None = None,
+            span_id: str | None = None,
             finish_reason: str | None = None,
             error: AgentResponseError | None = None,
         ) -> None: ...

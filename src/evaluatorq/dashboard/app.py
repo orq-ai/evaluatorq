@@ -94,20 +94,41 @@ def _paging(req: Request) -> tuple[int, int]:
     return page, per_page
 
 
-def _settings_config(roots: list[Path] | None) -> list[tuple[str, str]]:
+def _mask_key(value: str) -> str:
+    """Show only a key's last 4 characters so a user can validate *which* key is
+    loaded without exposing the secret. Hidden chars render as ``*`` (capped so a
+    long key doesn't blow out the row). Short keys reveal nothing but length."""
+    if len(value) <= 4:
+        return '*' * len(value)
+    stars = '*' * min(len(value) - 4, 16)
+    return f'{stars}{value[-4:]}'
+
+
+def _settings_config(roots: list[Path] | None) -> list[tuple[str, str | list[str]]]:
     """Build the read-only runtime config shown on the Settings page: the run
-    stores being scanned, the default sim model, and API-key presence (never
-    the values)."""
+    stores being scanned, the default sim model, and API-key presence with a
+    masked suffix (never the full value)."""
     import os
 
     from evaluatorq.dashboard.library import _default_roots
+    from evaluatorq.dashboard.orq_workspace import classify_host, resolve_base_url, resolve_slug
     from evaluatorq.simulation.types import DEFAULT_MODEL
 
     scan_roots = roots if roots is not None else _default_roots()
-    config: list[tuple[str, str]] = [('Run stores', ', '.join(str(p) for p in scan_roots) or '—')]
+    store_paths = [str(p) for p in scan_roots] or ['—']
+    config: list[tuple[str, str | list[str]]] = [('Run stores', store_paths)]
     config.append(('Default sim model', DEFAULT_MODEL))
     for label, var in (('ORQ API key', 'ORQ_API_KEY'), ('OpenAI API key', 'OPENAI_API_KEY')):
-        config.append((label, 'set' if os.environ.get(var) else 'not set'))
+        value = os.environ.get(var)
+        config.append((label, _mask_key(value) if value else 'not set'))
+    # Orq host/workspace are read-only here: deep-links derive them per-run from
+    # each run's experiment_url. These env values are only the fallback for runs
+    # with no experiment. See dashboard.orq_workspace.
+    host = resolve_base_url()
+    config.extend([
+        ('Orq host', f'{host} ({classify_host(host)})'),
+        ('Orq workspace', resolve_slug() or 'from experiment URL'),
+    ])
     return config
 
 
@@ -159,11 +180,13 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         return NotStr(page(label, body, active_surface=surface))
 
     # ------------------------------------------------------------------
-    # Route: GET /settings  — read-only runtime configuration
+    # Route: GET /settings  — read-only runtime config (host/workspace derive
+    # from each run's experiment_url, so there's nothing to edit here).
     # ------------------------------------------------------------------
     @app.get('/settings')
     def settings() -> NotStr:
-        return NotStr(page('Settings', settings_body(_settings_config(roots)), active_nav='settings'))
+        body = settings_body(_settings_config(roots))
+        return NotStr(page('Settings', body, active_nav='settings'))
 
     # ------------------------------------------------------------------
     # Route: GET /search?q=  — ⌘K global search fragment (HTMX)
@@ -297,10 +320,11 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         for key, value in form_data.multi_items():
             selections.setdefault(key, []).append(str(value))
 
-        # Apply filters once; pass the already-filtered list to recompute_options
-        # so apply() runs exactly once per POST (Fix 4).
+        # Apply filters to get the shown rows, but keep the option lists fixed
+        # to the FULL dataset.  Recomputing options from the filtered rows made
+        # a just-deselected value disappear from its own multi-select.
         filtered = filter_def.apply(report_obj, selections)
-        new_opts = filter_def.recompute_options(filtered)
+        new_opts = filter_def.options(report_obj)
 
         # Render the tabbed body from the filtered results so the static tab
         # content (tables, charts) tracks the filter, not just the HTMX panels.

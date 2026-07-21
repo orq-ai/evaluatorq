@@ -15,7 +15,7 @@ import pytest
 
 from evaluatorq.dashboard.redteam_transcripts import render_attack_fragment
 from evaluatorq.dashboard.report_tabs import _redteam_hero, _sim_hero
-from evaluatorq.dashboard.trace_links import run_trace_url, thread_trace_url, trace_link_button
+from evaluatorq.dashboard.trace_links import run_trace_url, single_trace_url, thread_trace_url, trace_link_button
 from evaluatorq.redteam.contracts import (
     AgentInfo,
     AttackInfo,
@@ -29,13 +29,16 @@ from evaluatorq.redteam.contracts import (
     TurnType,
     UnifiedEvaluationResult,
 )
+from evaluatorq.contracts import ResponseTrace
 from evaluatorq.redteam.reports.converters import compute_report_summary
 from evaluatorq.simulation.types import SimulationRun
 
 
 @pytest.fixture(autouse=True)
 def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for var in ('ORQ_UI_BASE_URL', 'ORQ_BASE_URL', 'ORQ_WORKSPACE_SLUG', 'ORQ_WORKSPACE'):
+    # Trace-link resolution is env-only now; clearing these toggles the button on
+    # the explicit ORQ_WORKSPACE(_SLUG) env alone.
+    for var in ('ORQ_UI_BASE_URL', 'ORQ_BASE_URL', 'ORQ_WORKSPACE_SLUG', 'ORQ_WORKSPACE', 'ORQ_API_KEY'):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -53,7 +56,7 @@ def _make_run(run_id: str | None) -> SimulationRun:
     )
 
 
-def _make_result(thread_id: str | None) -> RedTeamResult:
+def _make_result(thread_id: str | None, trace_id: str | None = None) -> RedTeamResult:
     return RedTeamResult(
         attack=AttackInfo(
             id='ASI01-test-001',
@@ -70,6 +73,7 @@ def _make_result(thread_id: str | None) -> RedTeamResult:
         vulnerable=False,
         evaluation=UnifiedEvaluationResult(passed=True, explanation='test'),
         thread_id=thread_id,
+        response_traces=[ResponseTrace(trace_id=trace_id)] if trace_id else [],
     )
 
 
@@ -137,8 +141,16 @@ class TestRedteamConversationTraceButton:
         assert 'View Traces' in html
         assert f'href="{thread_trace_url("run1:0")}"' in html
 
+    def test_direct_trace_link_preferred_over_thread(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv('ORQ_WORKSPACE_SLUG', 'orq-research')
+        html = render_attack_fragment(_make_result('run1:0', trace_id='trace-abc'))
+        assert 'View Trace' in html and 'View Traces' not in html
+        assert f'href="{single_trace_url("trace-abc")}"' in html
+        thread_url = thread_trace_url('run1:0')
+        assert thread_url and thread_url not in html
 
-def _make_entry(thread_id: str | None) -> Any:
+
+def _make_entry(thread_id: str | None, last_trace_id: str | None = None) -> Any:
     from evaluatorq.simulation.types import SimulationEntry
 
     return SimulationEntry(
@@ -159,6 +171,7 @@ def _make_entry(thread_id: str | None) -> Any:
         evaluator_scores={},
         transcript=[],
         thread_id=thread_id,
+        last_trace_id=last_trace_id,
     )
 
 
@@ -180,8 +193,22 @@ class TestSimRowTraceButton:
         assert 'class="btn-secondary trace-link"' in html
         assert 'View Traces' in html
         assert f'href="{thread_trace_url("run1:0")}"' in html
-        # stopPropagation so clicking the link doesn't toggle the <details> row.
-        assert 'event.stopPropagation()' in html
+        trace_start = html.index('<a class="btn-secondary trace-link"')
+        trace_end = html.index('</a>', trace_start) + len('</a>')
+        # Aligned columns put the trace anchor in a cell inside the row; its
+        # ``data-no-drawer`` marker is what stops a click from firing the drawer.
+        assert 'data-no-drawer' in html[trace_start:trace_end]
+        assert '<tr class="sim-conv-row ' in html
+
+    def test_direct_trace_link_preferred_over_thread(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from evaluatorq.dashboard.sim_views import render_sim_row_list
+
+        monkeypatch.setenv('ORQ_WORKSPACE_SLUG', 'orq-research')
+        html = render_sim_row_list('rid', [_make_entry('run1:0', last_trace_id='trace-xyz')])
+        assert 'View Trace' in html and 'View Traces' not in html
+        assert f'href="{single_trace_url("trace-xyz")}"' in html
+        thread_url = thread_trace_url('run1:0')
+        assert thread_url and thread_url not in html
 
 
 def test_button_helper_smoke() -> None:

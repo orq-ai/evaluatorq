@@ -4,11 +4,10 @@ Each ``FilterDef`` encapsulates all filter operations for a surface:
 
 - ``dimensions``          : ordered list of dimension keys
 - ``options(obj)``        : compute full option lists from the *full* object
+                            (always the complete set — never narrowed to the
+                            filtered rows, so a deselected value never vanishes
+                            from its own multi-select)
 - ``apply(obj, sel)``     : return the filtered result list
-- ``recompute_options(filtered)`` : recompute option lists from an
-                            *already-filtered* result list so empty options
-                            drop out.  The caller is responsible for running
-                            ``apply`` first and passing the result in.
 
 Selections are plain ``dict[str, list[str]]`` mapping dimension key to the
 list of selected values.  The ``result`` radio dimension uses a
@@ -23,6 +22,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+
+from evaluatorq.simulation.metrics import TURN_METRICS
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -45,13 +46,6 @@ class FilterDef:
 
     apply: Callable[[Any, dict[str, list[str]]], list[Any]]
     """Return the filtered result list given the raw object + selections."""
-
-    recompute_options: Callable[[list[Any]], dict[str, list[str]]]
-    """Return option lists recomputed from an *already-filtered* result list.
-
-    The caller must apply ``FilterDef.apply`` first and pass the resulting
-    list in.  This avoids running ``apply`` twice per POST.
-    """
 
 
 # ---------------------------------------------------------------------------
@@ -183,24 +177,30 @@ def _rt_apply(report: Any, selections: dict[str, list[str]]) -> list[Any]:
     return results
 
 
-def _rt_recompute_options(filtered: list[Any]) -> dict[str, list[str]]:
-    """Recompute option lists from an already-filtered result list.
-
-    The caller is responsible for calling ``_rt_apply`` first and passing
-    the result in, so that ``apply`` runs only once per POST.
-    """
-    return _rt_options_from_results(filtered)
-
-
 # ---------------------------------------------------------------------------
 # Simulation filter
 # ---------------------------------------------------------------------------
+
+
+def sim_metric_dim_key(key: str, *, high_is_risky: bool) -> str:
+    """Threshold selection key for a turn metric: floor for risky, ceiling otherwise."""
+    return f'min_{key}' if high_is_risky else f'max_{key}'
+
+
+def _sim_metric_dims() -> list[str]:
+    return [sim_metric_dim_key(m.key, high_is_risky=m.high_is_risky) for m in TURN_METRICS]
+
 
 _SIM_DIMS = [
     'persona',
     'scenario',
     'terminated_by',
     'goal_outcome',
+    'rule_broken',
+    'max_goal_score',
+    'min_turns',
+    'min_total_tokens',
+    *_sim_metric_dims(),
 ]
 
 
@@ -208,15 +208,54 @@ def _meta(result: Any, key: str) -> str:
     return str(result.metadata.get(key, 'unknown'))
 
 
-def _sim_options_from_results(results: list[Any]) -> dict[str, list[str]]:
-    personas = sorted({_meta(r, 'persona') for r in results})
-    scenarios = sorted({_meta(r, 'scenario') for r in results})
-    terminated = sorted({r.terminated_by.value for r in results})
+def _clamp_score(raw: str) -> float | None:
+    """Parse *raw* as a float and clamp it to ``0..1``; ``None`` on bad input."""
+    try:
+        value = float(raw)
+    except (ValueError, TypeError):
+        return None
+    return max(0.0, min(1.0, value))
+
+
+def _parse_positive_int(raw: str) -> int | None:
+    """Parse *raw* as a positive int; ``None`` on bad or non-positive input.
+
+    Count floors (min turns / min total tokens) only ever narrow at values > 0,
+    so a zero/negative/garbage value is treated as "no filter" rather than
+    applied verbatim."""
+    try:
+        value = int(raw)
+    except (ValueError, TypeError):
+        return None
+    return value if value > 0 else None
+
+
+def _sim_multiselect_options(results: list[Any]) -> dict[str, list[str]]:
+    """The three "all"-default multiselect option lists (persona / scenario /
+    terminated_by) plus the fixed goal-outcome pair. This is the only slice
+    ``_sim_apply`` needs, so it is kept separate from the heavier bound/metric
+    scan below — the apply path must not pay for the full option build."""
     return {
-        'persona': personas,
-        'scenario': scenarios,
-        'terminated_by': terminated,
+        'persona': sorted({_meta(r, 'persona') for r in results}),
+        'scenario': sorted({_meta(r, 'scenario') for r in results}),
+        'terminated_by': sorted({r.terminated_by.value for r in results}),
         'goal_outcome': ['Achieved', 'Not achieved'],
+    }
+
+
+def _sim_options_from_results(results: list[Any]) -> dict[str, list[str]]:
+    max_turns = max((r.turn_count for r in results), default=0)
+    max_total_tokens = max((r.token_usage.total_tokens for r in results), default=0)
+    available_metrics = [
+        m.key
+        for m in TURN_METRICS
+        if any(getattr(tm, m.key, None) is not None for r in results for tm in r.turn_metrics)
+    ]
+    return {
+        **_sim_multiselect_options(results),
+        'max_turns': [str(max_turns)],
+        'max_total_tokens': [str(max_total_tokens)],
+        'metrics': available_metrics,
     }
 
 
@@ -227,7 +266,9 @@ def _sim_full_options(run: Any) -> dict[str, list[str]]:
 def _sim_apply(run: Any, selections: dict[str, list[str]]) -> list[Any]:
     """Apply all sim filter dimensions."""
     results: list[Any] = list(run.results)
-    full_opts = _sim_full_options(run)
+    # Only the multiselect "all"-defaults are needed here; skip the heavier
+    # bound/metric-availability scan that the full option build does.
+    full_opts = _sim_multiselect_options(run.results)
 
     # persona (multiselect)
     all_personas = full_opts['persona']
@@ -253,19 +294,52 @@ def _sim_apply(run: Any, selections: dict[str, list[str]]) -> list[Any]:
         want = goal_sel[0] == 'Achieved'
         results = [r for r in results if bool(r.goal_achieved) == want]
 
+    # rule_broken (opt-in chip): only 'yes' narrows to results with any broken rule.
+    if 'yes' in selections.get('rule_broken', []):
+        results = [r for r in results if r.rules_broken]
+
+    # max_goal_score (ceiling on goal_completion_score)
+    gs_sel = selections.get('max_goal_score', [])
+    if gs_sel:
+        threshold = _clamp_score(gs_sel[0])
+        if threshold is not None:
+            results = [r for r in results if r.goal_completion_score <= threshold]
+
+    # min_turns (floor on turn_count, raw integer)
+    turns_sel = selections.get('min_turns', [])
+    if turns_sel:
+        min_turns = _parse_positive_int(turns_sel[0])
+        if min_turns is not None:
+            results = [r for r in results if r.turn_count >= min_turns]
+
+    # min_total_tokens (floor on token_usage.total_tokens, raw integer)
+    tokens_sel = selections.get('min_total_tokens', [])
+    if tokens_sel:
+        min_tokens = _parse_positive_int(tokens_sel[0])
+        if min_tokens is not None:
+            results = [r for r in results if r.token_usage.total_tokens >= min_tokens]
+
+    # per-turn quality/risk metric thresholds — worst turn per result, unscored
+    # results always stay visible.
+    for metric in TURN_METRICS:
+        dim_key = sim_metric_dim_key(metric.key, high_is_risky=metric.high_is_risky)
+        metric_sel = selections.get(dim_key, [])
+        if not metric_sel:
+            continue
+        threshold = _clamp_score(metric_sel[0])
+        if threshold is None:
+            continue
+
+        def _keeps(r: Any, metric: Any = metric, threshold: float = threshold) -> bool:
+            values = [v for tm in r.turn_metrics for v in [getattr(tm, metric.key, None)] if v is not None]
+            if not values:
+                return True
+            worst = max(values) if metric.high_is_risky else min(values)
+            return worst >= threshold if metric.high_is_risky else worst <= threshold
+
+        results = [r for r in results if _keeps(r)]
+
     return results
-
-
-def _sim_recompute_options(filtered: list[Any]) -> dict[str, list[str]]:
-    """Recompute option lists from an already-filtered result list.
-
-    The caller is responsible for calling ``_sim_apply`` first and passing
-    the result in, so that ``apply`` runs only once per POST.
-    """
-    opts = _sim_options_from_results(filtered)
-    # The goal_outcome multiselect always shows both values.
-    opts['goal_outcome'] = ['Achieved', 'Not achieved']
-    return opts
 
 
 # ---------------------------------------------------------------------------
@@ -277,13 +351,11 @@ FILTERS: dict[str, FilterDef] = {
         dimensions=_REDTEAM_DIMS,
         options=_rt_full_options,
         apply=_rt_apply,
-        recompute_options=_rt_recompute_options,
     ),
     'sim': FilterDef(
         dimensions=_SIM_DIMS,
         options=_sim_full_options,
         apply=_sim_apply,
-        recompute_options=_sim_recompute_options,
     ),
 }
 

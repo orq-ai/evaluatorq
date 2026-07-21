@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 from fasthtml.common import Script
 
 from evaluatorq.common.reports import esc
+from evaluatorq.simulation.metrics import TURN_METRICS
 
 if TYPE_CHECKING:
     from evaluatorq.dashboard.library import ReportCard
@@ -551,18 +552,23 @@ def report_actions(rid: str) -> str:
     return f'<a class="btn-secondary" href="/r/{esc(rid)}/export.html">{_DOWNLOAD_ICON} Export</a>'
 
 
-def settings_body(config: list[tuple[str, str]]) -> str:
-    """Render the Settings screen as a read-only configuration view.
+def settings_body(config: list[tuple[str, str | list[str]]]) -> str:
+    """Render the Settings screen: read-only runtime configuration (run stores,
+    default model, API-key presence, Orq host/workspace).
 
-    The v1 design's Settings page is a workspace-management surface (editable
-    workspace name, API keys, delete project) that doesn't map to a local
-    read-only run viewer. We instead reflect the actual runtime config the
-    dashboard is operating under, and note the design gap. Editable settings
-    would belong to the Orq platform UI, not this local dashboard (RES-1038).
+    There's nothing editable here anymore — deep-links derive host + workspace
+    per-run from each run's ``experiment_url``; the host/workspace rows are just
+    the env fallback for runs with no experiment.
     """
+
+    def val_html(v: str | list[str]) -> str:
+        # A list renders one item per line; a scalar is a single line.
+        items = v if isinstance(v, list) else [v]
+        return ''.join(f'<span class="config-val-item">{esc(item)}</span>' for item in items)
+
     rows = ''.join(
         f'<div class="config-row"><span class="config-key">{esc(k)}</span>'
-        f'<span class="config-val">{esc(v)}</span></div>'
+        f'<span class="config-val">{val_html(v)}</span></div>'
         for k, v in config
     )
     config_panel = _panel('Configuration', 'What this dashboard is reading', f'<div class="config-list">{rows}</div>')
@@ -661,6 +667,7 @@ def _chip(name: str, value: str, *, checked: bool, dot_cls: str) -> str:
         f'<label class="filter-chip{active_cls}">'
         f'<input type="checkbox" class="filter-chip-input" name="{esc(name)}" value="{esc(value)}"{checked_attr}>'
         f'<span class="filter-chip-dot {dot_cls}"></span>'
+        f'<span class="filter-chip-check {dot_cls}">✓</span>'
         f'<span class="filter-chip-label">{esc(value)}</span>'
         f'</label>'
     )
@@ -676,11 +683,11 @@ def _dropdown(dim: str, label: str, dim_opts: list[str], sel: list[str]) -> str:
     n_selected = len(selected_set)
     n_total = len(dim_opts)
     if n_selected == n_total:
-        status_cls, status_label = 'is-all', 'All'
+        status_cls, status_label, value_cls = 'is-all', 'All', 'filter-dd-value'
     elif n_selected == 0:
-        status_cls, status_label = 'is-none', 'None'
+        status_cls, status_label, value_cls = 'is-none', 'None', 'filter-dd-value is-none'
     else:
-        status_cls, status_label = 'is-partial', f'{n_selected} selected'
+        status_cls, status_label, value_cls = 'is-partial', f'{n_selected} selected', 'filter-dd-value is-engaged'
 
     rows = ''.join(
         f'<label class="filter-dd-row">'
@@ -695,11 +702,81 @@ def _dropdown(dim: str, label: str, dim_opts: list[str], sel: list[str]) -> str:
         f'<summary class="filter-dd-trigger">'
         f'<span class="filter-dd-status {status_cls}"></span>'
         f'<span class="filter-dd-name">{esc(label)}</span>'
-        f'<span class="filter-dd-value">{esc(status_label)}</span>'
+        f'<span class="{value_cls}">{esc(status_label)}</span>'
         f'{_FILTER_CHEVRON}'
         f'</summary>'
         f'<div class="filter-dd-menu">{rows}</div>'
         f'</details>'
+    )
+
+
+def _fmt_range_value(value: float, step: str) -> str:
+    """Format a range input's numeric attribute: integers for raw counts
+    (``step="1"``), compact decimals for score thresholds (``step="0.05"``)."""
+    if step == '1':
+        return str(int(value))
+    return f'{value:g}'
+
+
+def _range_engaged(sel: list[str], *, min_val: float, max_val: float, floor: bool) -> bool:
+    """True when a range control is actively constraining results, i.e. its
+    value differs from the no-op default bound (``min_val`` for floors,
+    ``max_val`` for ceilings). Absent/unparseable selections are not engaged."""
+    if not sel:
+        return False
+    try:
+        value = float(sel[0])
+    except (ValueError, TypeError):
+        return False
+    return value != (min_val if floor else max_val)
+
+
+def _range_control(
+    dim: str,
+    label: str,
+    *,
+    min_val: float,
+    max_val: float,
+    step: str,
+    sel: list[str],
+    floor: bool,
+    show_max: bool = False,
+) -> str:
+    """One min/max range control shared by raw-count and score thresholds.
+
+    ``floor`` selects both the unset ("no-op") end of the range — ``min_val``
+    for a floor (e.g. min turns), ``max_val`` for a ceiling (e.g. max goal
+    score) — and the readout glyph (``≥`` for floors, ``≤`` for ceilings).
+    An absent selection renders the default bound numerically (never "all").
+    ``show_max`` appends the slider's upper bound beside the readout (e.g.
+    min-turns shows the run's max turns). The readout gains ``is-engaged`` when
+    the slider is moved off its no-op bound, so an active filter reads at a
+    glance without comparing numbers.
+    """
+    raw = sel[0] if sel else None
+    default = min_val if floor else max_val
+    try:
+        value = float(raw) if raw is not None else default
+    except (ValueError, TypeError):
+        value = default
+    engaged = _range_engaged(sel, min_val=min_val, max_val=max_val, floor=floor)
+    readout_cls = 'filter-slider-readout is-engaged' if engaged else 'filter-slider-readout'
+    glyph = '≥' if floor else '≤'
+    readout = f'{glyph} {_fmt_range_value(value, step)}'
+    max_span = f'<span class="filter-slider-max">/ {_fmt_range_value(max_val, step)}</span>' if show_max else ''
+    # data-glyph / data-default let dashboard.js update the readout live on
+    # `input` (while dragging), before the HTMX `change` round-trip.
+    return (
+        f'<div class="filter-group" data-dim="{esc(dim)}">'
+        f'<label class="filter-label">{esc(label)}</label>'
+        f'<div class="filter-slider-row">'
+        f'<input type="range" class="filter-slider" name="{esc(dim)}" min="{_fmt_range_value(min_val, step)}"'
+        f' max="{_fmt_range_value(max_val, step)}" step="{esc(step)}" value="{_fmt_range_value(value, step)}"'
+        f' data-glyph="{glyph}" data-default="{_fmt_range_value(default, step)}">'
+        f'<span class="{readout_cls}">{esc(readout)}</span>'
+        f'{max_span}'
+        f'</div>'
+        f'</div>'
     )
 
 
@@ -716,8 +793,14 @@ def _render_sim_filter_rail(
     Goal outcome / Terminated by render as chip toggles; Persona / Scenario
     render as ``<details>`` dropdowns with stable ids (``filter-dd-persona``,
     ``filter-dd-scenario``) so a later JS task can persist their open state
-    across the HTMX outerHTML swap.
+    across the HTMX outerHTML swap.  The rule-violation chip, goal-score
+    ceiling, and min-turns controls render directly in the rail; min total
+    tokens and every *available* per-turn quality/risk metric threshold are
+    tucked behind the ``filter-dd-more`` expander (omitted entirely when it
+    would otherwise be empty).
     """
+    from evaluatorq.dashboard.filters import sim_metric_dim_key
+
     goal_opts = [o for o in opts.get('goal_outcome', []) if o in _GOAL_OUTCOME_DOT_CLASS]
     goal_sel = set(selections.get('goal_outcome', []))
     goal_chips = ''.join(
@@ -733,6 +816,95 @@ def _render_sim_filter_rail(
     persona_dd = _dropdown('persona', 'Persona', opts.get('persona', []), selections.get('persona', []))
     scenario_dd = _dropdown('scenario', 'Scenario', opts.get('scenario', []), selections.get('scenario', []))
 
+    # Rule-violation chip: opt-in, so unchecked unless explicitly selected.
+    rule_sel = set(selections.get('rule_broken', []))
+    rule_chip = _chip('rule_broken', 'yes', checked=('yes' in rule_sel), dot_cls='chip-dot-red')
+
+    # Goal-score ceiling (ceiling control: unset default is 1.0, i.e. "all").
+    goal_score_ctrl = _range_control(
+        'max_goal_score',
+        'Max Goal Score',
+        min_val=0.0,
+        max_val=1.0,
+        step='0.05',
+        sel=selections.get('max_goal_score', []),
+        floor=False,
+    )
+
+    # Min turns (floor, raw run-length integer — never normalized). Hidden as a
+    # no-op control when every conversation has a single turn (max == 1), matching
+    # the redteam rail.
+    max_turns = int(opts.get('max_turns', ['1'])[0] or 1)
+    min_turns_ctrl = ''
+    if max_turns > 1:
+        min_turns_ctrl = _range_control(
+            'min_turns',
+            'Min. Turns',
+            min_val=1,
+            max_val=max_turns,
+            step='1',
+            sel=selections.get('min_turns', []),
+            floor=True,
+            show_max=True,
+        )
+
+    # More expander: min total tokens (raw floor) + every available metric
+    # threshold. Skipped entirely (no empty expander) when there is nothing
+    # to show.
+    more_rows: list[str] = []
+    more_active = 0  # controls hidden inside the expander that are actively filtering
+    max_total_tokens = int(opts.get('max_total_tokens', ['0'])[0] or 0)
+    if max_total_tokens > 0:
+        tok_sel = selections.get('min_total_tokens', [])
+        more_active += _range_engaged(tok_sel, min_val=0, max_val=max_total_tokens, floor=True)
+        more_rows.append(
+            _range_control(
+                'min_total_tokens',
+                'Min. Total Tokens',
+                min_val=0,
+                max_val=max_total_tokens,
+                step='1',
+                sel=tok_sel,
+                floor=True,
+            )
+        )
+    available_metrics = set(opts.get('metrics', []))
+    for metric in TURN_METRICS:
+        if metric.key not in available_metrics:
+            continue
+        dim_key = sim_metric_dim_key(metric.key, high_is_risky=metric.high_is_risky)
+        prefix = 'Min.' if metric.high_is_risky else 'Max.'
+        metric_sel = selections.get(dim_key, [])
+        more_active += _range_engaged(metric_sel, min_val=0.0, max_val=1.0, floor=metric.high_is_risky)
+        more_rows.append(
+            _range_control(
+                dim_key,
+                f'{prefix} {metric.label.title()}',
+                min_val=0.0,
+                max_val=1.0,
+                step='0.05',
+                sel=metric_sel,
+                floor=metric.high_is_risky,
+            )
+        )
+
+    more_dd = ''
+    if more_rows:
+        # Surface any active filters hidden in the collapsed panel so they are
+        # never silently narrowing results (audit finding: the expander gave no
+        # trace of engaged controls when closed).
+        badge = f'<span class="filter-dd-more-badge">{more_active}</span>' if more_active else ''
+        more_dd = (
+            f'<details id="filter-dd-more" class="filter-dd filter-dd-more">'
+            f'<summary class="filter-dd-trigger">'
+            f'<span class="filter-dd-name">More filters</span>'
+            f'{badge}'
+            f'{_FILTER_CHEVRON}'
+            f'</summary>'
+            f'<div class="filter-dd-more-body">{"".join(more_rows)}</div>'
+            f'</details>'
+        )
+
     if shown is not None and total is not None and shown < total:
         counter = f'{shown} of {total} shown'
     else:
@@ -740,6 +912,10 @@ def _render_sim_filter_rail(
 
     inner = (
         f'<div class="filter-rail-header">{_SLIDERS_ICON}<span class="filter-rail-title">Filters</span></div>'
+        f'<div class="filter-group" data-dim="rule_broken">'
+        f'<label class="filter-label">Rule Violations</label>'
+        f'<div class="filter-chip-row">{rule_chip}</div>'
+        f'</div>'
         f'<div class="filter-group" data-dim="goal_outcome">'
         f'<label class="filter-label">Goal Outcome</label>'
         f'<div class="filter-chip-row">{goal_chips}</div>'
@@ -748,9 +924,12 @@ def _render_sim_filter_rail(
         f'<label class="filter-label">Terminated By</label>'
         f'<div class="filter-chip-row">{term_chips}</div>'
         f'</div>'
+        f'{goal_score_ctrl}'
+        f'{min_turns_ctrl}'
         f'<div class="filter-group" data-dim="persona">{persona_dd}</div>'
         f'<div class="filter-group" data-dim="scenario">{scenario_dd}</div>'
         f'<div class="filter-rail-footer">{esc(counter)}</div>'
+        + (f'<div class="filter-group filter-group--more" data-dim="more">{more_dd}</div>' if more_dd else '')
     )
     return (
         f'<form id="filter-form" class="filter-form filter-form--sim"'
@@ -815,21 +994,20 @@ def _render_redteam_filter_rail(
         for opt in severity_opts
     )
 
+    # Shared range control: numeric readout (never "all"), is-engaged highlight,
+    # and the run's max shown beside the slider — consistent with the sim rail.
     max_turns = int(opts.get('max_turns', ['1'])[0] or 1)
-    min_turns_sel = selections.get('min_turns', ['1'])
-    min_turns = int(min_turns_sel[0]) if min_turns_sel and min_turns_sel[0] else 1
     slider_html = ''
     if max_turns > 1:
-        readout = 'all' if min_turns <= 1 else f'≥ {min_turns}'
-        slider_html = (
-            '<div class="filter-group" data-dim="min_turns">'
-            '<label class="filter-label">Min. Turns</label>'
-            '<div class="filter-slider-row">'
-            f'<input type="range" class="filter-slider" name="min_turns" min="1" max="{max_turns}"'
-            f' value="{min_turns}">'
-            f'<span class="filter-slider-readout">{esc(readout)}</span>'
-            '</div>'
-            '</div>'
+        slider_html = _range_control(
+            'min_turns',
+            'Min. Turns',
+            min_val=1,
+            max_val=max_turns,
+            step='1',
+            sel=selections.get('min_turns', []),
+            floor=True,
+            show_max=True,
         )
 
     category_dd = _dropdown('category', 'Category', opts.get('category', []), selections.get('category', []))
@@ -874,8 +1052,8 @@ def _render_redteam_filter_rail(
         f'{slider_html}'
         f'<div class="filter-group" data-dim="category">{category_dd}</div>'
         + (f'<div class="filter-group" data-dim="agent">{agent_dd}</div>' if agent_dd else '')
-        + f'<div class="filter-group" data-dim="more">{more_dd}</div>'
-        f'<div class="filter-rail-footer">{esc(counter)}</div>'
+        + f'<div class="filter-rail-footer">{esc(counter)}</div>'
+        f'<div class="filter-group filter-group--more" data-dim="more">{more_dd}</div>'
     )
     return (
         f'<form id="filter-form" class="filter-form filter-form--redteam"'
@@ -906,8 +1084,7 @@ def render_filter_form(
     Args:
         rid:        Report ID (used to construct the POST URL).
         surface:    Surface key (``'redteam'`` | ``'sim'``).
-        opts:       Option lists per dimension (from ``FilterDef.options`` or
-                    ``FilterDef.recompute_options``).
+        opts:       Option lists per dimension (from ``FilterDef.options``).
         selections: Currently active selections per dimension.
         shown:      Count of currently-shown results (sim rail footer counter).
         total:      Total unfiltered result count (sim rail footer counter).
@@ -1131,28 +1308,31 @@ def _sim_rowlist_wrapper(rid: str, inner: str) -> str:
 
 
 def sim_interactive_panels(rid: str, entries: list[Any]) -> str:
-    """Render the interactive sim panels section (conversation list + transcript).
+    """Render the interactive sim panel section (conversation list).
 
-    Embeds the sim row list table with HTMX-wired transcript drill-down panel.
+    Embeds the sim row list with lazy drawer-trigger conversation rows.
     Parity: Streamlit ``_render_transcripts`` (dashboard.py:316-390).
 
     The row-list itself is a static container: it is refreshed wholesale by
     the ``POST /r/{rid}/filter`` response body swap (see
-    ``_sim_rowlist_wrapper``), not by its own ``hx-trigger``. Each conversation
-    card's lazy-loaded transcript body carries ``hx-include="#filter-form"``
-    (see ``render_sim_row_list``), so its ``hx-get`` request for the
-    transcript detail includes the active filter selections and stays
-    consistent with the filtered list the card was rendered from.
+    ``_sim_rowlist_wrapper``), not by its own ``hx-trigger``. Entries retain
+    their full-run indexes so each conversation drawer URL resolves directly
+    to its transcript regardless of the active filter.
 
     Args:
         rid:     Report ID (URL-safe).
-        entries: Individual-results entries from the section layer.
+        entries: Individual-result entries with stable full-run indexes.
 
     Returns:
         An HTML ``<section class="sim-interactive-panels">`` fragment.
     """
     from evaluatorq.dashboard.sim_views import render_sim_row_list
 
+    # ponytail: the initial render (and the /filter body-swap that reuses this)
+    # always starts at page 1 / default sort. Sort + page live on the
+    # /sim/row-list GET; carrying them through a filter change would mean
+    # threading them into the POST too — add that only if losing sort-on-filter
+    # actually annoys anyone.
     row_list = render_sim_row_list(rid, entries)
     return (
         f'<section class="sim-interactive-panels">'

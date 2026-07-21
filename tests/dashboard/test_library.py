@@ -79,6 +79,39 @@ def test_resolve_roundtrips_and_misses_to_none(tmp_path):
     assert resolve('deadbeef', [rt]) is None
 
 
+def test_load_model_cached_reuses_object_until_mtime_changes(tmp_path):
+    """A validated model is returned from cache (same object) on repeat loads,
+    and a file rewrite (new mtime) invalidates it — no stale data served."""
+    import os
+
+    from evaluatorq.dashboard.library import load_model_cached
+
+    calls = {'n': 0}
+
+    class _Model:
+        @classmethod
+        def model_validate(cls, data):
+            calls['n'] += 1
+            obj = _Model()
+            obj.data = data
+            return obj
+
+    p = tmp_path / 'm.json'
+    p.write_text('{"a": 1}')
+    first = load_model_cached(p, _Model.model_validate)
+    second = load_model_cached(p, _Model.model_validate)
+    assert first is second  # cache hit — no re-validation
+    assert calls['n'] == 1
+
+    # Rewrite with a bumped mtime → cache miss → fresh validation.
+    p.write_text('{"a": 2}')
+    os.utime(p, ns=(0, p.stat().st_mtime_ns + 1_000_000))
+    third = load_model_cached(p, _Model.model_validate)
+    assert third is not first
+    assert third.data == {'a': 2}
+    assert calls['n'] == 2
+
+
 def test_broken_report_surfaces_as_card_not_skipped(tmp_path):
     rt = tmp_path / 'runs'
     rt.mkdir()
