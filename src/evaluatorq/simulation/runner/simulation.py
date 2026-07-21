@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry, default_map_error
-from evaluatorq.common.thread_context import conversation_thread
+from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pipeline
 from evaluatorq.common.tracing import record_llm_input, record_llm_output, record_token_usage, set_span_attrs
-from evaluatorq.contracts import TokenUsage
+from evaluatorq.contracts import ResponseTrace, TokenUsage
 from evaluatorq.integrations.callable_integration import CallableTarget
 from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
 from evaluatorq.simulation.agents.user_simulator import (
@@ -361,13 +361,16 @@ class SimulationRunner:
         # Captured for the error path below (out of the `with` scope), so error
         # results still carry the thread id for the dashboard deep-link.
         bound_thread_id: str | None = None
+        # Collected by the turn loop so both return paths can persist the per-turn
+        # target trace/span handles (mirrors bound_thread_id).
+        response_traces: list[ResponseTrace] = []
 
         try:
             # One Orq thread per simulation groups all its turns (target + user
             # simulator + judge) under one id in Orq observability. ContextVar
             # scoping keeps concurrent datapoints isolated. A run-scoped thread_id
             # (f"{run_id}:{index}") is passed in when available; else one is minted.
-            with conversation_thread(thread_id) as thread_id:
+            with conversation_thread(thread_id) as thread_id, evaluatorq_pipeline('agent_simulation'):
                 bound_thread_id = thread_id
                 async with with_simulation_span(
                     'orq.simulation.run',
@@ -390,8 +393,10 @@ class SimulationRunner:
                             turn_metrics_list=turn_metrics_list,
                             run_span=run_span,
                             usage_holder=usage_holder,
+                            response_traces=response_traces,
                         )
                         result.thread_id = thread_id
+                        result.response_traces = response_traces
                         return result
                     except BaseException:
                         get_total_usage = usage_holder.get('get_total_usage')
@@ -442,6 +447,7 @@ class SimulationRunner:
             result.turn_metrics = turn_metrics_list
             result.token_usage = usage
             result.thread_id = bound_thread_id
+            result.response_traces = response_traces
             return result
 
     async def _run_inner(
@@ -456,6 +462,7 @@ class SimulationRunner:
         turn_metrics_list: list[TurnMetrics],
         run_span: Span | None,
         usage_holder: dict[str, Callable[[], TokenUsage]],
+        response_traces: list[ResponseTrace],
     ) -> SimulationResult:
         """Inner simulation body (runs inside the orq.simulation.run span)."""
         system_prompt = build_datapoint_system_prompt(persona, scenario)  # pyright: ignore[reportArgumentType]
@@ -605,6 +612,15 @@ class SimulationRunner:
                         run_span=run_span,
                         total_usage=_get_total_usage(),
                         target_model=target_model_holder['model'],
+                    )
+
+                # Record this successful target response's trace/span handles (in
+                # turn order); the last with a trace id is the conversation's final
+                # target-agent trace. Excludes user-simulator and judge calls,
+                # which don't set these here.
+                if call.response.trace_id or call.response.span_id:
+                    response_traces.append(
+                        ResponseTrace(trace_id=call.response.trace_id, span_id=call.response.span_id)
                     )
 
                 async with with_simulation_span('orq.simulation.judge_evaluation', None):

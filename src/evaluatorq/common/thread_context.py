@@ -28,6 +28,12 @@ if TYPE_CHECKING:
 
 _thread_id: ContextVar[str | None] = ContextVar('orq_thread_id', default=None)
 
+# The evaluatorq surface driving the current run ('agent_simulation' /
+# 'red_teaming'), sent as request metadata so Orq traces are attributable to the
+# pipeline that produced them. Carried via a ContextVar for the same reason as
+# the thread id: targets are stateless and shared across concurrent runs.
+_pipeline: ContextVar[str | None] = ContextVar('evaluatorq_pipeline', default=None)
+
 # Separator joining the run id and the per-conversation discriminators into a
 # thread id. Kept out of the OQL query grammar's way: the run id is uuid hex and
 # the parts are ints / sanitized keys, so ':' never appears inside a segment.
@@ -63,6 +69,32 @@ def thread_body_param() -> dict[str, dict[str, str]]:
     return {'thread': {'id': tid}} if tid else {}
 
 
+def pipeline_metadata_param() -> dict[str, dict[str, str]]:
+    """Return ``{'metadata': {'evaluatorq_pipeline': ...}}`` for the active run, or ``{}``.
+
+    Ready to splat into an Orq request (``metadata=`` kwarg on the agents SDK, or
+    merged into ``extra_body`` on the Responses client).
+    """
+    label = _pipeline.get()
+    return {'metadata': {'evaluatorq_pipeline': label}} if label else {}
+
+
+@contextmanager
+def evaluatorq_pipeline(label: str) -> Iterator[str]:
+    """Bind the pipeline label ('agent_simulation' / 'red_teaming') for a run.
+
+    Restores the previous value on exit so nested/sequential runs don't bleed.
+
+    Yields:
+        The bound pipeline label.
+    """
+    token = _pipeline.set(label)
+    try:
+        yield label
+    finally:
+        _pipeline.reset(token)
+
+
 @contextmanager
 def conversation_thread(thread_id: str | None = None) -> Iterator[str]:
     """Bind a thread id for the duration of one conversation.
@@ -81,4 +113,11 @@ def conversation_thread(thread_id: str | None = None) -> Iterator[str]:
         _thread_id.reset(token)
 
 
-__all__ = ['build_thread_id', 'conversation_thread', 'current_thread_id', 'thread_body_param']
+__all__ = [
+    'build_thread_id',
+    'conversation_thread',
+    'current_thread_id',
+    'evaluatorq_pipeline',
+    'pipeline_metadata_param',
+    'thread_body_param',
+]

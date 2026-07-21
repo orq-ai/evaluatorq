@@ -526,6 +526,41 @@ class TestCoerceJobOutputPayload:
         assert result.conversation[1].content == 'agent reply'
         assert result.final_response == 'agent reply'
 
+    def test_last_successful_target_trace_id_is_extracted(self):
+        # trace_id of the LAST non-errored target turn wins; an errored final turn
+        # (target carries an error) must not overwrite an earlier good trace.
+        raw = {
+            'turns': [
+                {
+                    'attacker': {'output': [{'type': 'output_text', 'text': 'a1'}]},
+                    'target': {'output': [{'type': 'output_text', 'text': 't1'}], 'trace_id': 'trace-1'},
+                },
+                {
+                    'attacker': {'output': [{'type': 'output_text', 'text': 'a2'}]},
+                    'target': {'output': [{'type': 'output_text', 'text': 't2'}], 'trace_id': 'trace-2'},
+                },
+                {
+                    'attacker': {'output': [{'type': 'output_text', 'text': 'a3'}]},
+                    'target': {'error': {'code': 'boom', 'message': 'target failed'}, 'trace_id': 'trace-3'},
+                },
+            ]
+        }
+        result = _coerce_job_output_payload(raw)
+        # errored final turn excluded; last good trace is trace-2
+        assert [t.trace_id for t in result.response_traces] == ['trace-1', 'trace-2']
+
+    def test_trace_id_none_when_no_turn_reports_one(self):
+        raw = {
+            'turns': [
+                {
+                    'attacker': {'output': [{'type': 'output_text', 'text': 'a'}]},
+                    'target': {'output': [{'type': 'output_text', 'text': 't'}]},
+                }
+            ]
+        }
+        result = _coerce_job_output_payload(raw)
+        assert result.response_traces == []
+
     def test_pre_res883_report_round_trips(self):
         # A report written before RES-883 carried the attacker prompt as
         # ``generated_prompt`` (not an AgentResponse output). The Turn migrator must

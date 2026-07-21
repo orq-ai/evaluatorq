@@ -1142,14 +1142,18 @@ def _sim_agent_card_with_source(
     display: dict[str, Any] | None,
     original: dict[str, Any] | None,
     source: str,
+    experiment_url: str | None = None,
 ) -> str:
     """Render an agent card once its captured/live provenance is known."""
     if source in ('captured', 'none'):
-        return _sim_agent_card(display)
+        return _sim_agent_card(display, experiment_url=experiment_url)
 
     if source == 'augmented':
         note = 'Missing fields loaded live from Orq — as-run values kept where captured.'
-        original_body = _sim_agent_card(original, bare=True) or '<p class="sim-agent-empty">Nothing captured.</p>'
+        original_body = (
+            _sim_agent_card(original, bare=True, experiment_url=experiment_url)
+            or '<p class="sim-agent-empty">Nothing captured.</p>'
+        )
         toggle = (
             '<details class="sim-agent-original"><summary>Show captured snapshot</summary>'
             f'<div class="sim-agent-original-body">{original_body}</div></details>'
@@ -1161,24 +1165,24 @@ def _sim_agent_card_with_source(
         note = 'Showing the target recorded in this run; live Orq details are unavailable.'
         toggle = ''
     footer = f'<div class="sim-agent-source">{note}</div>{toggle}'
-    return _sim_agent_card(display, footer_html=footer)
+    return _sim_agent_card(display, footer_html=footer, experiment_url=experiment_url)
 
 
 def _sim_agent_section(rid: str, run: SimulationRun) -> str:
     """Initial card HTML, with live enrichment deferred until after page load."""
     captured = run.agent_info if isinstance(run.agent_info, dict) and run.agent_info else None
     if run.target_kind != 'orq_agent':
-        return _sim_agent_card(captured)
+        return _sim_agent_card(captured, experiment_url=run.experiment_url)
 
     missing_core = captured is None or any(not captured.get(f) for f in _AGENT_CORE_FIELDS)
     agent_key = _agent_key_for(run)
     if not missing_core or not agent_key:
-        return _sim_agent_card(captured)
+        return _sim_agent_card(captured, experiment_url=run.experiment_url)
 
     stored = captured or _stored_agent_info(run)
     if not stored:
         return ''
-    initial_card = _sim_agent_card(stored)
+    initial_card = _sim_agent_card(stored, experiment_url=run.experiment_url)
     return (
         f'<div class="sim-agent-async" hx-get="/r/{esc(rid)}/sim/agent-card" '
         f'hx-trigger="load" hx-swap="outerHTML">{initial_card}</div>'
@@ -1188,10 +1192,16 @@ def _sim_agent_section(rid: str, run: SimulationRun) -> str:
 async def sim_agent_card_fragment(run: SimulationRun) -> str:
     """Async fragment for live agent details; the report itself stays local-only."""
     display, original, source = await _resolve_agent_info(run)
-    return _sim_agent_card_with_source(display, original, source)
+    return _sim_agent_card_with_source(display, original, source, experiment_url=run.experiment_url)
 
 
-def _sim_agent_card(agent_info: dict[str, Any] | None, *, bare: bool = False, footer_html: str = '') -> str:
+def _sim_agent_card(
+    agent_info: dict[str, Any] | None,
+    *,
+    bare: bool = False,
+    footer_html: str = '',
+    experiment_url: str | None = None,
+) -> str:
     """Agent-under-test card: name/role/model/description, sub-agent
     delegates, and tools/knowledge/memory chip groups (Task 2).
 
@@ -1202,59 +1212,61 @@ def _sim_agent_card(agent_info: dict[str, Any] | None, *, bare: bool = False, fo
         return ''
 
     key = agent_info.get('key') or ''
-    role = agent_info.get('role')
     model = agent_info.get('model')
     description = _agent_description_preview(agent_info.get('description'))
-    # Regenerate this process's Studio link from ORQ_WORKSPACE. This repairs
-    # older snapshots that captured a UUID-based URL without altering run JSON.
+    # Host + workspace come from the run's experiment_url when available (the web
+    # app resolves that for anyone with access); otherwise fall back to the
+    # captured snapshot's workspace/host, then env. Repairs older snapshots that
+    # captured a UUID-based URL without altering run JSON.
     from evaluatorq.dashboard.orq_links import orq_studio_url
     from evaluatorq.dashboard.view import _TARGET_ICONS
 
     url = orq_studio_url(
         target_kind='agent',
         entity_id=agent_info.get('id'),
+        experiment_url=experiment_url,
         workspace_id=agent_info.get('workspace_key'),
-        base_url=agent_info.get('base_url') or 'https://my.orq.ai',
+        base_url=agent_info.get('base_url') or None,
     )
     sub_agents = agent_info.get('sub_agents') or []
     tools = agent_info.get('tools') or []
     knowledge_bases = agent_info.get('knowledge_bases') or []
     memory_stores = agent_info.get('memory_stores') or []
-    agent_icon = _TARGET_ICONS['agent'].replace('<svg ', '<svg class="sim-agent-icon" aria-hidden="true" ', 1)
 
-    role_html = f'<span class="sim-agent-role">{esc(role)}</span>' if role else ''
+    agent_icon = _TARGET_ICONS['agent'].replace('<svg ', '<svg class="sim-agent-icon" aria-hidden="true" ', 1)
     open_html = (
         f'<a class="sim-agent-open" href="{esc(url)}" target="_blank" rel="noopener">Open in ORQ ↗</a>' if url else ''
     )
     model_html = f'<div class="sim-agent-model">{esc(model)}</div>' if model else ''
     desc_html = f'<p class="sim-agent-desc">{esc(description)}</p>' if description else ''
 
-    delegates_html = ''
-    if sub_agents:
-        chips = ''.join(f'<span class="sim-agent-chip">{esc(a)}</span>' for a in sub_agents)
-        delegates_html = f'<div class="sim-agent-delegates"><span>delegates to</span>{chips}</div>'
-
-    def _chip_group(label: str, items: list[str]) -> str:
+    def _section(label: str, items: list[str]) -> str:
         if not items:
             return ''
         chips = ''.join(f'<span class="sim-agent-chip">{esc(v)}</span>' for v in items)
-        return f'<div class="sim-agent-group"><span class="sim-agent-group-label">{esc(label)}</span>{chips}</div>'
+        return (
+            f'<div class="sim-agent-group"><span class="sim-agent-group-label">{esc(label)}</span>'
+            f'<div class="sim-agent-chips">{chips}</div></div>'
+        )
 
-    groups_html = (
-        f'{_chip_group("TOOLS", tools)}'
-        f'{_chip_group("KNOWLEDGE", knowledge_bases)}'
-        f'{_chip_group("MEMORY", memory_stores)}'
+    # The composition of the agent under test: what it delegates to, calls, and
+    # reads from. Only populated groups render — a bare agent shows none.
+    sections = (
+        _section('Sub-agents', sub_agents)
+        + _section('Tools', tools)
+        + _section('Knowledge', knowledge_bases)
+        + _section('Memory', memory_stores)
     )
-    groups_wrap = f'<div class="sim-agent-groups">{groups_html}</div>' if groups_html else ''
+    groups_wrap = f'<div class="sim-agent-groups">{sections}</div>' if sections else ''
 
     inner = (
         '<div class="sim-agent-head">'
         '<div class="sim-agent-identity">'
-        f'{agent_icon}<span class="sim-agent-name">{esc(key)}</span>{role_html}'
+        f'{agent_icon}<span class="sim-agent-name">{esc(key)}</span>'
         '</div>'
         f'{open_html}'
         '</div>'
-        f'{model_html}{desc_html}{delegates_html}{groups_wrap}{footer_html}'
+        f'{model_html}{desc_html}{groups_wrap}{footer_html}'
     )
     outer_class = 'sim-agent-card' if bare else 'rk-panel sim-agent-card'
     return f'<div class="{outer_class}">{inner}</div>'
@@ -1428,7 +1440,7 @@ def _sim_hero(run: SimulationRun) -> str:
     # KPI cards intentionally omitted: the same metrics render in the 5-card
     # band inside the Overview tab (_sim_kpi_band), so a hero band duplicated
     # them above the tabs. Hero is now just title + subtitle.
-    run_btn = trace_link_button(run_trace_url(run.run_id), 'View all run traces ↗')
+    run_btn = trace_link_button(run_trace_url(run.run_id, run.experiment_url), 'View all run traces ↗')
     actions = f'<div class="report-hero-actions">{run_btn}</div>' if run_btn else ''
     return (
         '<header class="report-hero">'
@@ -1792,7 +1804,9 @@ def _rt_agent_card_chip_row(label: str, items: list[str]) -> str:
     )
 
 
-def _rt_agent_card(agent_ctx: dict[str, Any] | None, key: str, stats: dict[str, Any]) -> str:
+def _rt_agent_card(
+    agent_ctx: dict[str, Any] | None, key: str, stats: dict[str, Any], experiment_url: str | None = None
+) -> str:
     """One agent card: ASR dial column + main column (name/critical chip,
     model, description, stat strip, TOOLS/KNOWLEDGE chip rows). Agents
     present in results but missing ``agent_context`` still render via
@@ -1814,6 +1828,7 @@ def _rt_agent_card(agent_ctx: dict[str, Any] | None, key: str, stats: dict[str, 
     studio_url = orq_studio_url(
         target_kind=ctx.get('target_kind'),
         entity_id=ctx.get('id'),
+        experiment_url=experiment_url,
         workspace_id=ctx.get('workspace_id'),
         base_url=_resolve_orq_base_url(None),
     )
@@ -1895,7 +1910,9 @@ def _rt_agents(by_kind: dict[str, Any], report: RedTeamReport, rid: str) -> str:
 
     multi_agent = len(report.tested_agents) > 1
     intro = _rt_agents_intro(multi_agent=multi_agent, n_agents=len(report.tested_agents))
-    cards = ''.join(_rt_agent_card(ctx_by_key.get(key), key, stats.get(key, {})) for key in ordered_keys)
+    cards = ''.join(
+        _rt_agent_card(ctx_by_key.get(key), key, stats.get(key, {}), report.experiment_url) for key in ordered_keys
+    )
 
     tail = ''
     if multi_agent:
@@ -2321,7 +2338,7 @@ def _redteam_hero(summary_section: Any, report: RedTeamReport) -> str:
         agent_stats = _rt_agent_stats(report)
         pills = ''.join(_rt_agent_pill(stats) for stats in agent_stats.values())
         agent_pills_html = f'<div class="rt-hero-agent-row">{pills}</div>'
-    run_btn = trace_link_button(run_trace_url(report.run_id), 'View all run traces ↗')
+    run_btn = trace_link_button(run_trace_url(report.run_id, report.experiment_url), 'View all run traces ↗')
     actions = f'<div class="report-hero-actions">{run_btn}</div>' if run_btn else ''
     return (
         '<header class="report-hero rt-hero">'

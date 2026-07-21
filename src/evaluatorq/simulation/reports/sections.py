@@ -449,6 +449,7 @@ def individual_entries(results: list[SimulationResult]) -> list[SimulationEntry]
                 evaluator_scores=_evaluator_scores(r),
                 transcript=[TranscriptMessage(role=m.role, content=coerce_content_text(m.content)) for m in r.messages],
                 thread_id=r.thread_id,
+                last_trace_id=r.last_trace_id,
             )
         )
     return entries

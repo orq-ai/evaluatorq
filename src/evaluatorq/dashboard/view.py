@@ -552,108 +552,13 @@ def report_actions(rid: str) -> str:
     return f'<a class="btn-secondary" href="/r/{esc(rid)}/export.html">{_DOWNLOAD_ICON} Export</a>'
 
 
-_WORKSPACE_SOURCE_LABEL = {
-    'env': 'ORQ_WORKSPACE env var',
-    'config': 'saved on this page',
-    'api-key': 'matched from your ORQ_API_KEY via the orq CLI',
-    'cli-active': "the orq CLI's active workspace",
-    'none': 'unresolved',
-}
+def settings_body(config: list[tuple[str, str | list[str]]]) -> str:
+    """Render the Settings screen: read-only runtime configuration (run stores,
+    default model, API-key presence, Orq host/workspace).
 
-
-def _workspace_panel(ctx: dict[str, Any]) -> str:
-    """Editable Orq-workspace panel: shows the resolved slug + source, the local
-    ``orq`` CLI status, and a form to set ``ORQ_WORKSPACE`` — with discovered
-    workspaces/projects offered as datalist options when the CLI is authed."""
-    resolved = ctx.get('resolved_slug')
-    source = ctx.get('source', 'none')
-    cli = ctx.get('cli', {}) or {}
-    workspaces = cli.get('workspaces', []) or []
-    projects = cli.get('projects', []) or []
-
-    # Resolved-value line.
-    if resolved:
-        current = (
-            f'<span class="ws-current-val">{esc(resolved)}</span>'
-            f'<span class="ws-current-src">via {esc(_WORKSPACE_SOURCE_LABEL.get(source, source))}</span>'
-        )
-    else:
-        current = '<span class="ws-current-val ws-current-unset">not set — trace links are hidden</span>'
-
-    # CLI status line.
-    if not cli.get('available'):
-        cli_status = '<span class="ws-cli-dot ws-cli-off"></span>orq CLI not found on PATH'
-    elif not cli.get('authenticated'):
-        cli_status = '<span class="ws-cli-dot ws-cli-warn"></span>orq CLI found, but not authenticated (<code>orq auth login</code>)'
-    else:
-        n = len(workspaces)
-        active = cli.get('active_key')
-        active_html = f' · active: <code>{esc(active)}</code>' if active else ''
-        cli_status = f'<span class="ws-cli-dot ws-cli-on"></span>orq CLI authenticated — {n} workspace(s){active_html}'
-
-    # Datalist of discovered workspace keys (native picker + free-text fallback).
-    options = ''.join(
-        f'<option value="{esc(w.get("key", ""))}">{esc(w.get("name", "") or w.get("key", ""))}</option>'
-        for w in workspaces
-        if w.get('key')
-    )
-    datalist = f'<datalist id="ws-options">{options}</datalist>' if options else ''
-    placeholder = 'e.g. my-workspace' if not workspaces else 'pick or type a workspace key'
-
-    save_form = (
-        '<form class="ws-form" method="post" action="/settings/workspace">'
-        f'<input class="ws-input" type="text" name="workspace" list="ws-options" '
-        f'value="{esc(ctx.get("saved") or "")}" placeholder="{esc(placeholder)}" '
-        'autocomplete="off" spellcheck="false">'
-        f'{datalist}'
-        '<button class="ws-btn ws-btn-primary" type="submit" name="action" value="save">Save</button>'
-        '</form>'
-    )
-    refresh_form = (
-        '<form class="ws-form-inline" method="post" action="/settings/workspace">'
-        '<button class="ws-btn" type="submit" name="action" value="refresh" '
-        'title="Re-scan the orq CLI after logging in">Re-scan CLI</button>'
-        '</form>'
-    )
-
-    # Discovered workspaces + projects (informational). Projects carry a
-    # workspace_id so they can be grouped, but a flat list is enough here.
-    def _chip_list(items: list[dict[str, Any]]) -> str:
-        chips = ''.join(
-            f'<span class="ws-chip"><span class="ws-chip-name">{esc(it.get("name") or it.get("key", ""))}</span>'
-            f'<span class="ws-chip-key">{esc(it.get("key", ""))}</span></span>'
-            for it in items
-            if it.get('key')
-        )
-        return chips or '<span class="ws-chip-empty">none discovered</span>'
-
-    discovered = ''
-    if cli.get('authenticated'):
-        discovered = (
-            '<div class="ws-discovered">'
-            f'<div class="ws-disc-group"><div class="ws-disc-label">Workspaces</div>'
-            f'<div class="ws-chips">{_chip_list(workspaces)}</div></div>'
-            f'<div class="ws-disc-group"><div class="ws-disc-label">Projects</div>'
-            f'<div class="ws-chips">{_chip_list(projects)}</div></div>'
-            '</div>'
-        )
-
-    inner = (
-        f'<div class="ws-current"><span class="ws-current-label">Resolved workspace</span>{current}</div>'
-        f'<div class="ws-cli-status">{cli_status}{refresh_form}</div>'
-        f'{save_form}'
-        f'{discovered}'
-    )
-    return _panel('Orq workspace', 'Used to build trace & experiment deep-links', inner)
-
-
-def settings_body(config: list[tuple[str, str | list[str]]], workspace_ctx: dict[str, Any] | None = None) -> str:
-    """Render the Settings screen: an editable Orq-workspace panel plus the
-    read-only runtime configuration (run stores, default model, API-key presence).
-
-    ``workspace_ctx`` (built by ``app._workspace_ctx``) drives the workspace
-    panel; when omitted the panel is skipped (keeps the signature back-compatible
-    for callers/tests that only pass ``config``).
+    There's nothing editable here anymore — deep-links derive host + workspace
+    per-run from each run's ``experiment_url``; the host/workspace rows are just
+    the env fallback for runs with no experiment.
     """
 
     def val_html(v: str | list[str]) -> str:
@@ -667,8 +572,7 @@ def settings_body(config: list[tuple[str, str | list[str]]], workspace_ctx: dict
         for k, v in config
     )
     config_panel = _panel('Configuration', 'What this dashboard is reading', f'<div class="config-list">{rows}</div>')
-    ws_panel = _workspace_panel(workspace_ctx) if workspace_ctx is not None else ''
-    return f'<section class="dash-wrap">{ws_panel}{config_panel}</section>'
+    return f'<section class="dash-wrap">{config_panel}</section>'
 
 
 def report_not_found(rid: str) -> str:

@@ -1690,7 +1690,7 @@ _SIM_REPORT_OVERRIDES_CSS = """
 .sim-report .sim-scenario-rate--low { background: var(--red-100); color: var(--red-600); }
 .sim-report .sim-scenario-rate--low .sim-scenario-rate-dot { background: var(--red-600); }
 .sim-report .sim-entity-dialog {
-    inset: 0 0 0 auto; margin: 0; width: 60vw; height: 100vh; max-height: 100vh;
+    inset: 0 0 0 auto; margin: 0; width: 50vw; height: 100vh; max-height: 100vh;
     padding: 0; border: 0; border-left: 1px solid var(--border-subtle); border-radius: 12px 0 0 12px;
     background: var(--surface-app); color: var(--text-body); box-shadow: var(--shadow-lg);
 }
@@ -1708,7 +1708,12 @@ _SIM_REPORT_OVERRIDES_CSS = """
 .sim-report .sim-drawer-row,
 .sim-report .sim-conv-row {
     cursor: pointer; transition: background 120ms ease, border-color 120ms ease;
+    box-shadow: inset 3px 0 0 var(--border-subtle);
 }
+/* Outcome accent on the leading edge, so rows are scannable by result. */
+.sim-report .sim-conv-row--pass { box-shadow: inset 3px 0 0 var(--green-600); }
+.sim-report .sim-conv-row--fail { box-shadow: inset 3px 0 0 var(--red-600); }
+.sim-report .sim-conv-row--error { box-shadow: inset 3px 0 0 var(--orange-500); }
 .sim-report .sim-drawer-row:hover,
 .sim-report table.sim-conv-table tbody tr.sim-conv-row:hover { background: var(--surface-sunken); }
 .sim-report .sim-drawer-row:focus-visible,

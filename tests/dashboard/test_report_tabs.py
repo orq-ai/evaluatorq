@@ -16,6 +16,15 @@ from evaluatorq.dashboard.report_tabs import _tabs
 from tests.dashboard.test_downloads import _make_rt_report, _make_sim_run
 
 
+@pytest.fixture(autouse=True)
+def _clean_workspace_env(monkeypatch):
+    """Studio deep-links resolve host+workspace from the run's experiment_url,
+    then fall back to env. Clear env so the agent-card tests toggle on the
+    experiment_url / captured-key / explicit ORQ_WORKSPACE alone."""
+    for var in ('ORQ_WORKSPACE', 'ORQ_WORKSPACE_SLUG', 'ORQ_BASE_URL', 'ORQ_API_KEY'):
+        monkeypatch.delenv(var, raising=False)
+
+
 def test_turn_metric_descriptor_has_keys_and_directions() -> None:
     from evaluatorq.simulation.metrics import TURN_METRICS
 
@@ -217,7 +226,9 @@ def test_sim_kpi_errors_status_reflects_error_count(sim_run) -> None:
 
     sim_run.results[0].metadata['error'] = 'judge request timed out'
     html_with_error = sim_report_tabs('rid', sim_run)
-    error_kpi_band = html_with_error.split('<div class="kpi-band">', 1)[1].split('</div><div class="sim-overview-grid-2">', 1)[0]
+    error_kpi_band = html_with_error.split('<div class="kpi-band">', 1)[1].split(
+        '</div><div class="sim-overview-grid-2">', 1
+    )[0]
     error_card = error_kpi_band.split('<div class="kpi-label">Errors</div>', 1)[0].rsplit('<div class="kpi-card ', 1)[1]
     assert error_card.startswith('kpi-card--fail">')
 
@@ -584,7 +595,7 @@ def test_sim_entity_dialog_is_a_right_side_drawer() -> None:
 
     css = DASHBOARD_CSS
     assert 'inset: 0 0 0 auto' in css
-    assert 'width: 60vw' in css
+    assert 'width: 50vw' in css
     assert 'height: 100vh' in css
     assert '.sim-entity-dialog::backdrop' in css
     assert '@media (max-width: 480px)' in css
@@ -608,7 +619,7 @@ def test_sim_drawer_runtime_dispatches_conversations_without_anchor_handler() ->
     keyboard_handler = source.split("document.body.addEventListener('keydown'", 1)[1].split('});', 1)[0]
 
     assert "trigger.getAttribute('data-drawer-url')" in source
-    assert "a[href^=\"#conv-\"]" not in source
+    assert 'a[href^="#conv-"]' not in source
     assert "evt.target.closest('[data-no-drawer]')" in keyboard_handler
 
 
@@ -855,9 +866,11 @@ def test_sim_overview_agent_card_full(sim_run, monkeypatch) -> None:
     html = sim_report_tabs('rid', run)
     assert 'class="rk-panel sim-agent-card"' in html
     assert 'support-orchestrator' in html
-    assert 'Router' in html
+    assert 'Router' not in html  # role/"Assistant" marker dropped — redundant next to the name
     assert 'Front-door agent that triages requests.' in html
     assert 'route_request' in html
+    assert 'billing-agent' in html  # sub-agents now render as a labelled section
+    assert 'Sub-agents' in html
     assert 'href="https://my.orq.ai/research/agents/01K8N..."' in html
     assert 'target="_blank"' in html
 
@@ -969,6 +982,7 @@ async def test_resolve_agent_info_missing_core_augments_filling_only_gaps(sim_ru
     captured = dict(_AGENT_INFO, model='')  # model missing → incomplete
     captured['description'] = 'AS-RUN description'
     fetched = dict(_AGENT_INFO, model='openai/gpt-5', description='CURRENT description')
+
     async def _fetch(_key):
         return fetched
 
@@ -1077,7 +1091,12 @@ def test_agent_key_recovered_from_run_name_when_target_missing(sim_run) -> None:
     import evaluatorq.dashboard.report_tabs as rt
 
     run = sim_run.model_copy(
-        update={'target_kind': 'orq_agent', 'target': None, 'agent_info': None, 'run_name': 'sim:refund-agent-fixed:tailscale-openai'}
+        update={
+            'target_kind': 'orq_agent',
+            'target': None,
+            'agent_info': None,
+            'run_name': 'sim:refund-agent-fixed:tailscale-openai',
+        }
     )
     assert rt._agent_key_for(run) == 'refund-agent-fixed'
 

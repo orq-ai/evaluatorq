@@ -24,7 +24,7 @@ from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import apply_or_all
-from evaluatorq.dashboard.trace_links import thread_trace_url, trace_link_button
+from evaluatorq.dashboard.trace_links import single_trace_url, thread_trace_url, trace_link_button
 from evaluatorq.dashboard.view import _sim_rowlist_wrapper, render_message_list
 
 if TYPE_CHECKING:
@@ -272,20 +272,26 @@ def render_sim_row_list(
         is_error = e.terminated_by == 'error'
         if is_error:
             badge = status_badge('Error', 'warn')
+            row_status = 'error'
         elif e.goal_achieved:
             badge = status_badge('Goal met', 'pass')
+            row_status = 'pass'
         else:
             badge = status_badge('Goal missed', 'fail')
+            row_status = 'fail'
 
+        # Prefer a direct link to the last successful target-agent trace; fall back
+        # to the thread filter for older runs that only stored a thread id.
         # ``data-no-drawer`` keeps a trace-link click from also opening the drawer
         # (the whole row is the drawer trigger).
+        trace_url = single_trace_url(e.last_trace_id)
         trace_btn = trace_link_button(
-            thread_trace_url(e.thread_id),
-            'View Traces',
+            trace_url or thread_trace_url(e.thread_id),
+            'View Trace' if trace_url else 'View Traces',
             extra_attributes={'data-no-drawer': None},
         )
         rows_html.append(
-            f'<tr class="sim-conv-row" role="button" tabindex="0" '
+            f'<tr class="sim-conv-row sim-conv-row--{row_status}" role="button" tabindex="0" '
             'data-sim-entity-trigger data-entity-kind="conversation" '
             f'data-drawer-url="/r/{safe_rid}/sim/transcript?idx={idx}">'
             f'<td class="sim-conv-idx">#{idx + 1}</td>'

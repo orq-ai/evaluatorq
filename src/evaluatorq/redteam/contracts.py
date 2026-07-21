@@ -387,6 +387,7 @@ from evaluatorq.contracts import (  # noqa: F401
     Message,
     OutputMessage,
     ReasoningOutputItem,
+    ResponseTrace,
     StrategyToolCall,
     TextOutputItem,
     ToolCallOutputItem,
@@ -1285,6 +1286,7 @@ class JobOutputPayload(BaseModel):
     truncated_turns: list[int] = Field(default_factory=list)
     finish_reason: str | None = None
     thread_id: str | None = None
+    response_traces: list[ResponseTrace] = Field(default_factory=list)
 
     @property
     def response_text(self) -> str:
@@ -1342,6 +1344,20 @@ class RedTeamResult(BaseModel):
         default=None,
         description='Orq observability thread id ({run_id}:{agent_key}:{index}); None for older reports.',
     )
+    response_traces: list[ResponseTrace] = Field(
+        default_factory=list,
+        description='Per-turn Orq trace/span handles for each successful target-agent response in this '
+        'attack (excludes attacker/generator and judge calls), in turn order. Empty for non-Orq targets, '
+        'the static pipeline, and older reports.',
+    )
+
+    @property
+    def last_trace_id(self) -> str | None:
+        """Trace id of the last successful target response, for the table deep-link."""
+        for rt in reversed(self.response_traces):
+            if rt.trace_id:
+                return rt.trace_id
+        return None
 
     @property
     def error_info(self) -> 'RunError | None':
@@ -1544,6 +1560,12 @@ class RedTeamReport(BaseModel):
     token_usage_summary: TokenUsage | None = None
     duration_seconds: float | None = None
     pipeline_warnings: list[str] = Field(default_factory=list)
+    orq_base_url: str | None = Field(
+        default=None,
+        description='The Orq host that served this run (ORQ_BASE_URL or the prod default), recorded so '
+        'a saved run remembers which deployment (prod / staging / on-prem) it ran against. None when no '
+        'Orq agent/deployment target was used (OpenAI-model / custom targets) and for older reports.',
+    )
     experiment_url: str | None = None
     run_id: str | None = Field(
         default=None,

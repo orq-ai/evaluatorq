@@ -643,7 +643,7 @@ class TestConversationRows:
         entry = _entry().model_copy(update={'thread_id': 'run:0'})
         html = render_sim_row_list('rid', [entry])
 
-        row_start = html.index('<tr class="sim-conv-row"')
+        row_start = html.index('<tr class="sim-conv-row')
         row_end = html.index('</tr>', row_start)
         row = html[row_start:row_end]
 
@@ -685,8 +685,8 @@ class TestConversationRows:
         entries = [_entry(index=i, persona=f'p{i}') for i in range(30)]
         page1 = render_sim_row_list('rid', entries, page=1, page_size=25)
         page2 = render_sim_row_list('rid', entries, page=2, page_size=25)
-        assert page1.count('sim-conv-row') == 25
-        assert page2.count('sim-conv-row') == 5
+        assert page1.count('<tr class="sim-conv-row') == 25
+        assert page2.count('<tr class="sim-conv-row') == 5
         assert 'Page 1 of 2' in page1
         # Out-of-range page clamps to the last page rather than rendering empty.
         assert 'Page 2 of 2' in render_sim_row_list('rid', entries, page=99, page_size=25)
@@ -707,7 +707,7 @@ class TestConversationRows:
 
         entries = [_entry(index=i, persona=f'p{i}') for i in range(30)]
         html = render_sim_row_list('rid', entries, page=1, page_size=10)
-        assert html.count('sim-conv-row') == 10
+        assert html.count('<tr class="sim-conv-row') == 10
         assert 'Page 1 of 3' in html
         # Active option (10) is disabled + aria-current; others link with size=.
         assert 'aria-current="true">10<' in html
@@ -827,7 +827,7 @@ class TestTranscriptFragmentRewrite:
         from evaluatorq.dashboard.styles import DASHBOARD_CSS
 
         assert '.sim-report .sim-entity-dialog' in DASHBOARD_CSS
-        assert 'width: 60vw;' in DASHBOARD_CSS
+        assert 'width: 50vw;' in DASHBOARD_CSS
         assert '.sim-report .sim-transcript-grid { display: flex; flex-direction: column; gap: 0; }' in DASHBOARD_CSS
         # Hairline divider between stacked sections (criteria ↔ conversation).
         assert '.sim-report .sim-transcript-grid > * + * {' in DASHBOARD_CSS

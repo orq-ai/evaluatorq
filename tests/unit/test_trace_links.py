@@ -33,6 +33,19 @@ def test_run_url_contains_query(monkeypatch: pytest.MonkeyPatch) -> None:
     assert url == 'https://my.orq.ai/orq-research/traces?query=thread_id%3Acontains%3Arun1'
 
 
+def test_single_trace_url_is_query(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv('ORQ_WORKSPACE_SLUG', 'orq-research')
+    url = trace_links.single_trace_url('abc123')
+    assert url == 'https://my.orq.ai/orq-research/traces?query=trace_id%3Ais%3Aabc123'
+
+
+def test_single_trace_url_none_when_empty_or_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert trace_links.single_trace_url('abc123') is None  # no slug
+    monkeypatch.setenv('ORQ_WORKSPACE_SLUG', 'orq-research')
+    assert trace_links.single_trace_url(None) is None
+    assert trace_links.single_trace_url('') is None
+
+
 def test_ui_base_falls_back_to_orq_base(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('ORQ_BASE_URL', 'https://acme.orq.ai/')
     monkeypatch.setenv('ORQ_WORKSPACE', 'acme')
