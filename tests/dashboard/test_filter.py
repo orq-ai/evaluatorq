@@ -644,7 +644,7 @@ def test_rt_min_turns_default_no_filter(rt_results):
     assert len(out) == len(rt_results)
 
 
-def test_rt_options_no_all_sentinel(rt_results):
+def test_rt_options_include_max_turns_without_all_sentinel(rt_results):
     from evaluatorq.dashboard.filters import _rt_options_from_results
 
     opts = _rt_options_from_results(rt_results)
