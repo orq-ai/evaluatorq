@@ -1201,9 +1201,6 @@ _SIM_TRANSCRIPT_CSS = """
 .sim-report .sim-conv-scenario { color: var(--text-body); }
 .sim-report .sim-conv-turns, .sim-report .sim-conv-score { font-variant-numeric: tabular-nums; }
 .sim-report .sim-conv-trace .trace-link { white-space: nowrap; }
-.sim-report .sim-tint-achieved { background: var(--green-100); }
-.sim-report .sim-tint-missed { background: var(--red-100); }
-.sim-report .sim-tint-error { background: var(--amber-100); }
 
 /* ---- Pager ---- */
 .sim-report .sim-pager {
@@ -1713,7 +1710,7 @@ _SIM_REPORT_OVERRIDES_CSS = """
     cursor: pointer; transition: background 120ms ease, border-color 120ms ease;
 }
 .sim-report .sim-drawer-row:hover,
-.sim-report .sim-conv-row:hover { background: var(--surface-sunken); }
+.sim-report table.sim-conv-table tbody tr.sim-conv-row:hover { background: var(--surface-sunken); }
 .sim-report .sim-drawer-row:focus-visible,
 .sim-report .sim-conv-row:focus-visible {
     outline: 2px solid var(--teal-600); outline-offset: 2px;
@@ -1886,13 +1883,19 @@ _SIM_REPORT_OVERRIDES_CSS = """
 # shared `.report-aligned .sim-msg/.rt-msg` bubbles used by the Red Team
 # report.
 _SIM_TRANSCRIPT_OVERRIDES_CSS = """
-.sim-report .sim-conv-row {
-    border: 0; border-radius: 0; overflow: visible; background: var(--surface-card);
+.sim-report .sim-conv-table-shell {
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);
+    overflow-x: auto; background: var(--surface-card);
 }
+.sim-report .sim-conv-table { border: 0; border-radius: 0; }
+.sim-report .sim-conv-row {
+    border: 0; background: transparent; transition: background 150ms ease;
+}
+.sim-report .sim-conv-row:hover { background: var(--surface-sunken); }
 .sim-report .sim-conv-row + .sim-conv-row { border-top: 1px solid var(--border-subtle); }
-.sim-report .sim-conv-row.sim-tint-achieved { background: var(--green-100); }
-.sim-report .sim-conv-row.sim-tint-missed { background: var(--red-100); }
-.sim-report .sim-conv-row.sim-tint-error { background: var(--amber-100); }
+@media (prefers-reduced-motion: reduce) {
+    .sim-report .sim-conv-row { transition: none; }
+}
 .sim-report .sim-conv-idx {
     font-family: var(--font-sans); font-size: 12px; color: var(--text-faint);
 }

@@ -643,7 +643,7 @@ class TestConversationRows:
         entry = _entry().model_copy(update={'thread_id': 'run:0'})
         html = render_sim_row_list('rid', [entry])
 
-        row_start = html.index('<tr class="sim-conv-row ')
+        row_start = html.index('<tr class="sim-conv-row"')
         row_end = html.index('</tr>', row_start)
         row = html[row_start:row_end]
 
@@ -654,13 +654,13 @@ class TestConversationRows:
         assert 'data-no-drawer' in row[trace_start:]
 
     def test_row_list_error_takes_precedence_over_goal_achieved(self) -> None:
-        """terminated_by == 'error' tints error, regardless of goal_achieved."""
+        """terminated_by == 'error' renders Error, regardless of goal_achieved."""
         from evaluatorq.dashboard.sim_views import render_sim_row_list
 
         entry = _entry(terminated_by='error', goal_achieved=True, error='boom')
         html = render_sim_row_list('rid', [entry])
-        assert 'sim-tint-error' in html
-        assert 'sim-tint-achieved' not in html
+        assert 'status-badge--warn">Error</span>' in html
+        assert 'Goal met' not in html
 
     def test_row_list_sorts_by_column(self) -> None:
         """Sorting reorders visible rows without renumbering their index links."""
@@ -797,17 +797,30 @@ class TestTranscriptFragmentRewrite:
         ) in DASHBOARD_CSS
         assert '.sim-report .sim-transcript-bubbles .sim-msg:last-child { margin-bottom: 0; }' in DASHBOARD_CSS
 
-    def test_conversation_rows_keep_tint_without_rounded_card_chrome(self) -> None:
+    def test_conversation_list_is_a_neutral_standout_surface(self) -> None:
+        from evaluatorq.dashboard.sim_views import render_sim_row_list
         from evaluatorq.dashboard.styles import DASHBOARD_CSS
 
+        html = render_sim_row_list('rid', [_entry(goal_achieved=False)])
+
+        assert 'sim-conv-table-shell' in html
+        assert 'sim-tint-missed' not in html
         assert (
-            '.sim-report .sim-conv-row {\n'
-            '    border: 0; border-radius: 0; overflow: visible; background: var(--surface-card);\n'
+            '.sim-report .sim-conv-table-shell {\n'
+            '    border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);\n'
+            '    overflow-x: auto; background: var(--surface-card);\n'
             '}'
         ) in DASHBOARD_CSS
-        assert '.sim-report .sim-conv-row.sim-tint-achieved { background: var(--green-100); }' in DASHBOARD_CSS
-        assert '.sim-report .sim-conv-row.sim-tint-missed { background: var(--red-100); }' in DASHBOARD_CSS
-        assert '.sim-report .sim-conv-row.sim-tint-error { background: var(--amber-100); }' in DASHBOARD_CSS
+        assert (
+            '.sim-report .sim-conv-row {\n'
+            '    border: 0; background: transparent; transition: background 150ms ease;\n'
+            '}'
+        ) in DASHBOARD_CSS
+        assert (
+            '.sim-report table.sim-conv-table tbody tr.sim-conv-row:hover '
+            '{ background: var(--surface-sunken); }'
+        ) in DASHBOARD_CSS
+        assert 'sim-tint-missed' not in DASHBOARD_CSS
 
     def test_drawer_stacks_criteria_above_conversation_and_swaps_message_sides(self) -> None:
         """The wide drawer stacks criteria above the transcript, divided by a rule."""

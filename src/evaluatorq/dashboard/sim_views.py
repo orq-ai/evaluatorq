@@ -271,13 +271,10 @@ def render_sim_row_list(
         idx = e.index
         is_error = e.terminated_by == 'error'
         if is_error:
-            tint = 'sim-tint-error'
             badge = status_badge('Error', 'warn')
         elif e.goal_achieved:
-            tint = 'sim-tint-achieved'
             badge = status_badge('Goal met', 'pass')
         else:
-            tint = 'sim-tint-missed'
             badge = status_badge('Goal missed', 'fail')
 
         # ``data-no-drawer`` keeps a trace-link click from also opening the drawer
@@ -288,7 +285,7 @@ def render_sim_row_list(
             extra_attributes={'data-no-drawer': None},
         )
         rows_html.append(
-            f'<tr class="sim-conv-row {tint}" role="button" tabindex="0" '
+            f'<tr class="sim-conv-row" role="button" tabindex="0" '
             'data-sim-entity-trigger data-entity-kind="conversation" '
             f'data-drawer-url="/r/{safe_rid}/sim/transcript?idx={idx}">'
             f'<td class="sim-conv-idx">#{idx + 1}</td>'
@@ -306,7 +303,9 @@ def render_sim_row_list(
     pager = _sim_pager(rid, sort, direction, page, pages, total, page_size)
     return (
         f'<section class="sim-row-list">'
+        f'<div class="sim-conv-table-shell">'
         f'<table class="sim-conv-table">{header}<tbody>{"".join(rows_html)}</tbody></table>'
+        f'</div>'
         f'{pager}'
         f'</section>'
     )
