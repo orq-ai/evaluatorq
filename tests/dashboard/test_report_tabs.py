@@ -862,6 +862,16 @@ def test_sim_overview_agent_card_full(sim_run, monkeypatch) -> None:
     assert 'target="_blank"' in html
 
 
+def test_sim_overview_agent_card_has_decorative_bot_icon(sim_run) -> None:
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+
+    html = sim_report_tabs('rid', sim_run.model_copy(update={'agent_info': _AGENT_INFO}))
+
+    assert 'class="sim-agent-identity"' in html
+    assert 'class="sim-agent-icon"' in html
+    assert 'aria-hidden="true"' in html
+
+
 def test_sim_overview_agent_card_absent_when_no_agent_info(sim_run) -> None:
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
 
