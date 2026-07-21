@@ -2308,6 +2308,10 @@ async def _run_dynamic_or_hybrid(
             description=description or f'{mode.capitalize()} red teaming ({len(all_target_labels)} targets)',
         )
 
+    # Static report conversion has no run_id parameter. Preserve the invocation's
+    # id even for static-only hybrid runs so its run-level trace deep link matches
+    # the thread IDs emitted by static jobs.
+    merged.run_id = run_id
     merged.duration_seconds = pipeline_duration
     merged.agent_contexts = {pt.target_value: pt.agent_context for pt in prepared_targets}
     # Canonical tested_agents: use the same keys as agent_contexts so

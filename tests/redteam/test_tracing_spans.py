@@ -596,6 +596,7 @@ async def test_hybrid_agent_target_static_leg_traces_attack_and_target_call(
     from evaluatorq.contracts import AgentResponse, AgentTarget, Message
     from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities
     from evaluatorq.redteam.runner import _run_dynamic_or_hybrid
+    from evaluatorq.types import DataPointResult, JobResult
 
     class Target(AgentTarget):
         async def respond(self, _messages: list[Message]) -> AgentResponse:
@@ -614,8 +615,13 @@ async def test_hybrid_agent_target_static_leg_traces_attack_and_target_call(
 
     async def fake_evaluatorq(_name: str, *, data: list[DataPoint], jobs: list[Any], **_kwargs: Any) -> list[Any]:
         static_row = next(dp for dp in data if dp.inputs['hybrid_source'] == 'static')
-        await jobs[0](static_row, 0)
-        return []
+        job_result = await jobs[0](static_row, 0)
+        return [
+            DataPointResult(
+                data_point=static_row,
+                job_results=[JobResult(job_name=job_result['name'], output=job_result['output'])],
+            )
+        ]
 
     monkeypatch.setattr('evaluatorq.evaluatorq', fake_evaluatorq)
     monkeypatch.setattr(
@@ -639,8 +645,9 @@ async def test_hybrid_agent_target_static_leg_traces_attack_and_target_call(
         'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.create_owasp_evaluator',
         MagicMock(return_value={}),
     )
+    monkeypatch.setattr('evaluatorq.redteam.runner._send_cleaned_results', AsyncMock())
 
-    await _run_dynamic_or_hybrid(
+    report, _metrics = await _run_dynamic_or_hybrid(
         targets=[],
         agent_targets=[Target()],
         mode=Pipeline.HYBRID,
@@ -658,9 +665,22 @@ async def test_hybrid_agent_target_static_leg_traces_attack_and_target_call(
         llm_client=MagicMock(),
         description=None,
         dataset='ignored.json',
+        run_id='hybrid-static-run',
     )
 
     _assert_static_target_spans(span_collector)
+    assert report.run_id == 'hybrid-static-run'
+    assert report.results[0].thread_id == 'hybrid-static-run:Target:0'
+
+    monkeypatch.setenv('ORQ_WORKSPACE_SLUG', 'orq-research')
+    from evaluatorq.dashboard.trace_links import run_trace_url, thread_trace_url
+
+    assert thread_trace_url(report.results[0].thread_id) == (
+        'https://my.orq.ai/orq-research/traces?query=thread_id%3Ais%3Ahybrid-static-run%3ATarget%3A0'
+    )
+    assert run_trace_url(report.run_id) == (
+        'https://my.orq.ai/orq-research/traces?query=thread_id%3Acontains%3Ahybrid-static-run'
+    )
 
 
 @pytest.mark.asyncio

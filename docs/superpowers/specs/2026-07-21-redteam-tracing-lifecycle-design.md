@@ -226,7 +226,9 @@ Recommendations folded in:
   return: `force_flush()` returns `False` on timeout — log a `loguru` warning on
   failure (a health signal, not a silent drop). Default `timeout_millis` ~5000.
 - **R2.** `_shutdown_tracing()` (renamed, see D2) must add `_initialization_attempted`
-  to its `global` statement AND set it `False`, or the reset is a silent no-op.
+  to its `global` statement AND keep it `True` after teardown. The OpenTelemetry
+  global provider cannot be replaced, so this explicit test-only cleanup is terminal
+  for the current interpreter.
 - **R3.** The tracing-session migration **deletes** `evaluatorq.py:204-215` (the inline
   `init_tracing_if_needed()` + `capture_parent_context()` + `TracingContext(...)`
   block) and replaces it with `async with tracing_session(...) as tracing_context:`.
