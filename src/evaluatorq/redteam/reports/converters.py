@@ -354,6 +354,7 @@ def static_sample_to_result(
         error_stage=getattr(row, 'error_stage', None),
         error_code=getattr(row, 'error_code', None),
         error_details=getattr(row, 'error_details', None),
+        thread_id=normalized_sample.get('thread_id'),
     )
 
 
@@ -628,6 +629,7 @@ def static_evaluatorq_results_to_reports(
                 'error_stage': output_dict.error_stage,
                 'error_code': output_dict.error_code,
                 'error_details': output_dict.error_details,
+                'thread_id': output_dict.thread_id,
                 # Target-generation usage → execution slot (kept apart from the judge).
                 'execution_token_usage': output_usage.model_dump(mode='json') if output_usage else None,
                 'evaluation_result': eval_result,

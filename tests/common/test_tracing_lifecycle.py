@@ -198,7 +198,7 @@ async def test_flush_tracing_uses_worker_thread_and_warns_on_timeout(
 
 
 @pytest.mark.asyncio
-async def test_shutdown_without_sdk_resets_attempt_and_allows_reinitialization(
+async def test_shutdown_without_sdk_disables_reinitialization_for_process_lifetime(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     enabled = Mock(return_value=False)
@@ -210,13 +210,13 @@ async def test_shutdown_without_sdk_resets_attempt_and_allows_reinitialization(
 
     await tracing_setup._shutdown_tracing()
 
-    assert tracing_setup._initialization_attempted is False
+    assert tracing_setup._initialization_attempted is True
     assert tracing_setup._tracer is None
     assert tracing_setup._is_initialized is False
 
-    await tracing_setup.init_tracing_if_needed()
+    assert await tracing_setup.init_tracing_if_needed() is False
 
-    enabled.assert_called_once_with()
+    enabled.assert_not_called()
 
 
 def test_shutdown_tracing_is_not_publicly_importable() -> None:

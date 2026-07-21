@@ -15,11 +15,11 @@ workspace even though span export returned HTTP 200.
    was dropped (`Shutdown called, ignoring Span`). The final design removes runtime
    provider shutdown entirely and uses a framework-owned flush-only session.
 
-2. **Permanently-dead tracing after any mid-process shutdown.** Previously, explicit
-   teardown did not reset `_initialization_attempted`, so a later
-   `init_tracing_if_needed()` early-returned and emitted zero spans. The private,
-   test-only `_shutdown_tracing()` now resets that state defensively; runtime paths do
-   not call it.
+2. **No safe provider replacement after explicit shutdown.** OpenTelemetry installs
+   one global provider per process. A replacement provider after shutdown cannot be
+   installed reliably, so private test-only `_shutdown_tracing()` is terminal for
+   that interpreter: it clears local references and prevents re-initialization.
+   Runtime paths do not call it.
 
 3. **Wrong pipeline-span scope.** Dynamic/hybrid opens `orq.redteam.pipeline` inside
    `_run_dynamic_or_hybrid()` and closes it **before** `red_team()` runs
@@ -99,10 +99,10 @@ Callers:
   `flush_tracing()` pair with `async with tracing_session(...)`. This is now a clean,
   regression-free migration (simulation already never shut down).
 
-`_shutdown_tracing()` is retained for the explicit-teardown/test path; the SDK atexit
-hook handles process-exit teardown. **Add `_initialization_attempted = False` to its reset block** so an
-explicit shutdown followed by a later run (e.g. a test that tears down then re-inits)
-can re-initialize. This is defensive: `tracing_session()` itself never calls shutdown.
+`_shutdown_tracing()` is retained for explicit, terminal test teardown; the SDK atexit
+hook handles process-exit teardown. It must keep `_initialization_attempted = True` so
+a later run does not claim it installed a replacement provider. Tests requiring a fresh
+provider must use a fresh interpreter. `tracing_session()` itself never calls shutdown.
 
 Concurrency note: the module globals are unlocked, but `tracing_session()` needs no lock —
 `init_tracing_if_needed()` is idempotent, and exit only flushes. asyncio is
@@ -207,8 +207,8 @@ orq.redteam.pipeline                      [red_team()]  ← new root for static
   entry does not re-shutdown. Two sequential `tracing_session()` blocks in one process
   both flush and both keep tracing live (guards the `_initialization_attempted`
   regression). Concurrent (`asyncio.gather`) entries: neither tears the provider down.
-- Unit: `_shutdown_tracing()` resets `_initialization_attempted` so a later
-  `init_tracing_if_needed()` re-initializes.
+- Unit: `_shutdown_tracing()` remains terminal: a later
+  `init_tracing_if_needed()` returns `False` without attempting a provider replacement.
 - Keep the existing tracing test suite green (count via
   `pytest tests -k tracing --co -q | tail -1`, not a hardcoded number).
 - Regression: an in-memory `SpanExporter` asserts that after `red_team()` the exported

@@ -8,13 +8,15 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq import DataPoint, Job, job
+from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.messages import coerce_content_text
-from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
+from evaluatorq.common.thread_context import build_static_thread_id, conversation_thread, thread_body_param
+from evaluatorq.common.tracing import record_llm_response, set_span_attrs, truncate_for_span
 from evaluatorq.redteam.adaptive.orchestrator import _get_active_progress
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import Message, TokenUsage
 from evaluatorq.redteam.exceptions import CredentialError
-from evaluatorq.redteam.tracing import with_redteam_span
+from evaluatorq.redteam.tracing import with_llm_span, with_redteam_span
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -45,6 +47,7 @@ def create_model_job(
     llm_client: AsyncOpenAI | None = None,
     system_prompt: str | None = None,
     max_tokens: int = 5000,
+    run_id: str | None = None,
 ) -> Job:
     """Create an evaluatorq job for a router model or ORQ deployment.
 
@@ -83,6 +86,7 @@ def create_model_job(
             messages = _build_messages(data)
             attack_attrs = _static_attack_attrs(data)
             target_input = _static_target_input(messages)
+            thread_id = build_static_thread_id(run_id, safe_key, _row)
             async with (
                 with_redteam_span('orq.redteam.attack', attack_attrs),
                 with_redteam_span(
@@ -94,13 +98,24 @@ def create_model_job(
                     },
                 ) as target_span,
             ):
-                completion = await deployment_client.deployments.invoke_async(
-                    key=deployment_key,
-                    messages=messages,  # pyright: ignore[reportArgumentType]
-                )
-                content = _extract_deployment_content(completion)
-                output = truncate_for_span(content)
-                set_span_attrs(target_span, {'output': output, 'orq.redteam.output': output})
+                with conversation_thread(thread_id):
+                    async with with_llm_span(
+                        model=f'deployment:{deployment_key}',
+                        operation='invoke',
+                        provider='orq',
+                        input_messages=messages,
+                        attributes={'orq.redteam.llm_purpose': 'target'},
+                    ) as llm_span:
+                        invoke_kwargs: dict[str, Any] = {
+                            'key': deployment_key,
+                            'messages': messages,
+                        }
+                        invoke_kwargs.update(thread_body_param())
+                        completion = await deployment_client.deployments.invoke_async(**invoke_kwargs)
+                        content = _extract_deployment_content(completion)
+                        record_llm_response(llm_span, completion, output_content=content)
+                        output = truncate_for_span(content)
+                        set_span_attrs(target_span, {'output': output, 'orq.redteam.output': output})
 
             # Advance the global progress bar for static attacks.
             active_progress = _get_active_progress()
@@ -110,6 +125,7 @@ def create_model_job(
             return {
                 'response': content,
                 'token_usage': TokenUsage.from_completion(completion),
+                'thread_id': thread_id,
             }
 
         return deployment_job
@@ -129,6 +145,7 @@ def create_model_job(
         client = llm_client or create_async_llm_client()
         attack_attrs = _static_attack_attrs(data)
         target_input = _static_target_input(messages)
+        thread_id = build_static_thread_id(run_id, safe_model, _row)
         async with (
             with_redteam_span('orq.redteam.attack', attack_attrs),
             with_redteam_span(
@@ -140,14 +157,25 @@ def create_model_job(
                 },
             ) as target_span,
         ):
-            response = await client.chat.completions.create(
-                model=model,
-                messages=messages,  # pyright: ignore[reportArgumentType]
-                max_tokens=max_tokens,
-            )
-            content = response.choices[0].message.content or ''
-            output = truncate_for_span(content)
-            set_span_attrs(target_span, {'output': output, 'orq.redteam.output': output})
+            with conversation_thread(thread_id):
+                async with with_llm_span(
+                    model=model,
+                    max_tokens=max_tokens,
+                    input_messages=messages,
+                    attributes={'orq.redteam.llm_purpose': 'target'},
+                ) as llm_span:
+                    kwargs: dict[str, Any] = {
+                        'model': model,
+                        'messages': messages,
+                        'max_tokens': max_tokens,
+                    }
+                    if client_routes_through_orq(client):
+                        kwargs['extra_body'] = thread_body_param()
+                    response = await client.chat.completions.create(**kwargs)  # pyright: ignore[reportArgumentType]
+                    content = response.choices[0].message.content or ''
+                    record_llm_response(llm_span, response, output_content=content)
+                    output = truncate_for_span(content)
+                    set_span_attrs(target_span, {'output': output, 'orq.redteam.output': output})
         if not content:
             sample_id = data.inputs.get('id', 'unknown')
             finish_reason = response.choices[0].finish_reason
@@ -164,6 +192,7 @@ def create_model_job(
             'response': content,
             'token_usage': TokenUsage.from_completion(response),
             'finish_reason': response.choices[0].finish_reason,
+            'thread_id': thread_id,
         }
 
     return router_job

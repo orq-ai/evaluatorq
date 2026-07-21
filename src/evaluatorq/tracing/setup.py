@@ -18,6 +18,9 @@ Set ORQ_DEBUG=1 to enable debug logging for tracing setup.
 Provider lifecycle and batching:
 - The ``TracerProvider`` lives for the process. Runs force-flush their buffered spans;
   the SDK atexit hook performs provider shutdown, so runtime code must not shut it down.
+- ``_shutdown_tracing()`` is a private, terminal test teardown: OpenTelemetry only
+  permits one global provider per process, so a test that calls it must not expect
+  tracing to initialize again in that interpreter.
 - Tune the long-lived batch processor with ``ORQ_OTEL_MAX_QUEUE_SIZE`` (default 4096),
   ``ORQ_OTEL_SCHEDULE_DELAY_MS`` (default 5000), and ``ORQ_OTEL_MAX_BATCH_SIZE``
   (default 512).
@@ -256,14 +259,17 @@ async def flush_tracing() -> None:
 
 async def _shutdown_tracing() -> None:
     """
-    Tear down the OpenTelemetry SDK and reset module state.
+    Tear down the OpenTelemetry SDK for terminal, explicit test cleanup.
 
     DO NOT call this during a run. Process-exit teardown is handled automatically
     by the SDK ``TracerProvider`` atexit hook (``shutdown_on_exit=True``). Calling
     it mid-run tears the global provider down and black-holes every span emitted
-    afterwards. Retained only for the explicit-teardown/test path; resets
-    ``_initialization_attempted`` so a subsequent ``init_tracing_if_needed()`` can
-    re-initialize.
+    afterwards. OpenTelemetry's global provider can only be installed once per
+    process, so this is deliberately terminal: it clears local references and
+    keeps initialization marked as attempted. Subsequent
+    ``init_tracing_if_needed()`` calls return ``False`` rather than claiming a
+    fresh provider was installed. Use it only in an isolated test process after
+    all tracing assertions have finished.
     """
     global _sdk, _tracer, _is_initialized, _initialization_attempted
 
@@ -278,7 +284,10 @@ async def _shutdown_tracing() -> None:
     _sdk = None
     _tracer = None
     _is_initialized = False
-    _initialization_attempted = False
+    # The OpenTelemetry global provider cannot be replaced after shutdown.
+    # Keep the initialization guard closed so no caller receives a tracer from
+    # the already-shutdown global provider and mistakes it for a fresh SDK.
+    _initialization_attempted = True
 
 
 def get_tracer() -> Tracer | None:
