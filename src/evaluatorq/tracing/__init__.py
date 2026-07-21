@@ -11,14 +11,18 @@ Tracing can be explicitly disabled by setting:
 Set ORQ_DEBUG=1 to enable debug logging for tracing setup.
 """
 
-from .context import TracingContext, capture_parent_context, generate_run_id
+from .context import (
+    TracingContext,
+    capture_parent_context,
+    generate_run_id,
+    tracing_session,
+)
 from .setup import (
     flush_tracing,
     get_tracer,
     init_tracing_if_needed,
     is_tracing_enabled,
     is_tracing_initialized,
-    shutdown_tracing,
 )
 from .spans import (
     set_evaluation_attributes,
@@ -40,7 +44,7 @@ __all__ = [
     'is_tracing_initialized',
     'set_evaluation_attributes',
     'set_job_name_attribute',
-    'shutdown_tracing',
+    'tracing_session',
     'with_evaluation_span',
     # Span functions
     'with_job_span',

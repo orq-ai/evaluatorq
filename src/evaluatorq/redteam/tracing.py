@@ -4,29 +4,20 @@ Domain-specific span builders (with_redteam_span, with_llm_span) live here.
 Generic recording utilities are imported from evaluatorq.common.tracing.
 
 Span hierarchy:
-- orq.redteam.pipeline (root or child of parent context)      [runner.py]
-  +-- orq.redteam.context_retrieval                            [runner.py]
-  +-- orq.redteam.datapoint_generation                         [runner.py]
-  |   +-- orq.redteam.capability_classification                [strategy_planner.py]
-  |   |   +-- chat (llm_purpose=classify_tools)                [capability_classifier.py]
-  |   |   +-- chat (llm_purpose=infer_resources)               [capability_classifier.py]
-  |   +-- orq.redteam.strategy_planning                        [strategy_planner.py]
-  |       +-- chat (llm_purpose=generate_strategies)           [objective_generator.py]
-  +-- orq.job (framework)                                      [processings.py]
-  |   +-- orq.redteam.attack                                   [pipeline.py]
-  |   |   +-- orq.redteam.target_call                          [pipeline.py]
-  |   |   |   +-- agent <key> (llm_purpose=target)             [orq.py]
-  |   |   |   +-- chat (llm_purpose=target)                    [openai.py]
-  |   |   +-- orq.redteam.attack_turn x N                      [orchestrator.py]
-  |   |       +-- orq.redteam.adversarial_generation           [orchestrator.py]
-  |   |       |   +-- chat (llm_purpose=adversarial)           [orchestrator.py]
-  |   |       +-- orq.redteam.target_call                      [orchestrator.py]
-  |   |           +-- agent <key> (llm_purpose=target)         [orq.py]
-  |   |           +-- chat (llm_purpose=target)                [openai.py]
-  |   +-- orq.evaluation (framework)                           [processings.py]
-  |       +-- orq.redteam.security_evaluation                  [pipeline.py]
-  |           +-- chat (llm_purpose=evaluation)                [evaluator.py]
-  +-- orq.redteam.memory_cleanup                               [runner.py]
+
+    dynamic/hybrid: pipeline → context/datapoint work → job → attack
+                    → target_call/attack_turn → evaluation
+                    → security_evaluation → recommendations/executive_summary
+    static:         pipeline → job → attack → target_call → evaluation
+                    → security_evaluation → recommendations/executive_summary
+
+Static is intentionally single-shot: it has no multi-turn ``attack_turn`` or
+adversarial-generation spans. Dynamic and hybrid runs add their context/datapoint
+work and may include target calls both before and during multi-turn attacks.
+
+The trees above are lossy: leaf LLM spans (capability_classification,
+strategy_planning, adversarial_generation) are elided, and ``memory_cleanup``
+is emitted as a direct child of ``pipeline`` after all attacks complete.
 """
 
 from __future__ import annotations

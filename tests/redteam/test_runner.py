@@ -9,18 +9,18 @@ import pytest
 from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam import get_category_info, list_categories, red_team
 from evaluatorq.redteam.contracts import AgentResponse, Pipeline, RedTeamReport, ReportSummary, parse_target
-from evaluatorq.redteam.runner import _deduplicate_target_labels
+from evaluatorq.redteam.runner import RedTeamRunMetrics, _deduplicate_target_labels
 from evaluatorq.redteam.vulnerability_registry import get_primary_category
 
 
-def _make_report(target: str = "agent:test", **kwargs) -> RedTeamReport:
+def _make_report(target: str = 'agent:test', **kwargs) -> RedTeamReport:
     """Create a minimal RedTeamReport for use in tests."""
     defaults = dict(
         created_at=datetime.now(tz=timezone.utc),
-        description=f"Report for {target}",
+        description=f'Report for {target}',
         pipeline=Pipeline.DYNAMIC,
         framework=None,
-        categories_tested=["ASI01"],
+        categories_tested=['ASI01'],
         tested_agents=[target],
         total_results=0,
         results=[],
@@ -28,6 +28,10 @@ def _make_report(target: str = "agent:test", **kwargs) -> RedTeamReport:
     )
     defaults.update(kwargs)
     return RedTeamReport(**defaults)  # pyright: ignore[reportArgumentType]
+
+
+def _run_result(report: RedTeamReport) -> tuple[RedTeamReport, RedTeamRunMetrics]:
+    return report, RedTeamRunMetrics(num_datapoints=0, num_categories=0, duration_seconds=0.0)
 
 
 class TestParseTarget:
@@ -63,6 +67,7 @@ class TestParseTarget:
 
 class _FakeTarget:
     """Minimal agent target stub for label dedup tests."""
+
     def __init__(self, name: str | None = None):
         self._name = name
 
@@ -80,41 +85,41 @@ class TestDeduplicateTargetLabels:
         assert label_map == {}
 
     def test_string_targets_only(self):
-        labels, label_map = _deduplicate_target_labels(["agent:a", "agent:b"], [])
-        assert labels == ["agent:a", "agent:b"]
+        labels, label_map = _deduplicate_target_labels(['agent:a', 'agent:b'], [])
+        assert labels == ['agent:a', 'agent:b']
         assert label_map == {}
 
     def test_agent_targets_with_unique_names(self):
-        t1 = _FakeTarget("bot-a")
-        t2 = _FakeTarget("bot-b")
+        t1 = _FakeTarget('bot-a')
+        t2 = _FakeTarget('bot-b')
         labels, label_map = _deduplicate_target_labels([], [t1, t2])
-        assert labels == ["bot-a", "bot-b"]
-        assert label_map[id(t1)] == "bot-a"
-        assert label_map[id(t2)] == "bot-b"
+        assert labels == ['bot-a', 'bot-b']
+        assert label_map[id(t1)] == 'bot-a'
+        assert label_map[id(t2)] == 'bot-b'
 
     def test_duplicate_agent_target_names_get_suffixed(self):
-        t1 = _FakeTarget("my-bot")
-        t2 = _FakeTarget("my-bot")
-        t3 = _FakeTarget("my-bot")
+        t1 = _FakeTarget('my-bot')
+        t2 = _FakeTarget('my-bot')
+        t3 = _FakeTarget('my-bot')
         labels, label_map = _deduplicate_target_labels([], [t1, t2, t3])
-        assert labels == ["my-bot", "my-bot-1", "my-bot-2"]
+        assert labels == ['my-bot', 'my-bot-1', 'my-bot-2']
 
     def test_agent_target_collides_with_string_target(self):
-        t1 = _FakeTarget("agent:foo")
-        labels, label_map = _deduplicate_target_labels(["agent:foo"], [t1])
-        assert labels == ["agent:foo", "agent:foo-1"]
-        assert label_map[id(t1)] == "agent:foo-1"
+        t1 = _FakeTarget('agent:foo')
+        labels, label_map = _deduplicate_target_labels(['agent:foo'], [t1])
+        assert labels == ['agent:foo', 'agent:foo-1']
+        assert label_map[id(t1)] == 'agent:foo-1'
 
     def test_fallback_to_class_name_when_no_name(self):
         t1 = _FakeTarget(None)
         labels, label_map = _deduplicate_target_labels([], [t1])
-        assert labels == ["_FakeTarget"]
+        assert labels == ['_FakeTarget']
 
     def test_mixed_string_and_agent_targets(self):
-        t1 = _FakeTarget("bot-a")
-        t2 = _FakeTarget("bot-a")
-        labels, _ = _deduplicate_target_labels(["agent:x", "bot-a"], [t1, t2])
-        assert labels == ["agent:x", "bot-a", "bot-a-1", "bot-a-2"]
+        t1 = _FakeTarget('bot-a')
+        t2 = _FakeTarget('bot-a')
+        labels, _ = _deduplicate_target_labels(['agent:x', 'bot-a'], [t1, t2])
+        assert labels == ['agent:x', 'bot-a', 'bot-a-1', 'bot-a-2']
 
 
 class TestListCategories:
@@ -176,9 +181,9 @@ class TestRedTeamValidation:
         with patch(
             'evaluatorq.redteam.runner._run_static',
             new_callable=AsyncMock,
-            return_value=mock_report,
+            return_value=_run_result(mock_report),
         ) as mock_static:
-            result = await red_team('agent:test', mode='static')
+            result = await red_team('agent:test', mode='static', dataset='local.json')
             assert result is mock_report
             mock_static.assert_awaited_once()
 
@@ -191,9 +196,9 @@ class TestRedTeamValidation:
         with patch(
             'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
             new_callable=AsyncMock,
-            return_value=mock_report,
+            return_value=_run_result(mock_report),
         ) as mock_hybrid:
-            result = await red_team('agent:test', mode='hybrid')
+            result = await red_team('agent:test', mode='hybrid', dataset='local.json')
             assert result is mock_report
             mock_hybrid.assert_awaited_once()
 
@@ -231,7 +236,9 @@ class TestStaticCoverageGuard:
             ),
             patch('evaluatorq.evaluatorq', return_value=[]) as mock_evaluatorq,
             patch('evaluatorq.redteam.runtime.jobs.create_model_job', return_value=MagicMock()),
-            patch('evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.create_owasp_evaluator', return_value=MagicMock()),
+            patch(
+                'evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.create_owasp_evaluator', return_value=MagicMock()
+            ),
             patch('evaluatorq.redteam.reports.converters.static_evaluatorq_results_to_reports', return_value={}),
         ):
             from evaluatorq.redteam.runner import _run_static
@@ -337,7 +344,7 @@ class TestConfirmCallback:
         with patch(
             'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
             new_callable=AsyncMock,
-            return_value=mock_report,
+            return_value=_run_result(mock_report),
         ) as mock_dynamic:
             result = await red_team(
                 'agent:test',
@@ -367,7 +374,7 @@ class TestRedTeamMultiTarget:
         with patch(
             'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
             new_callable=AsyncMock,
-            return_value=mock_report,
+            return_value=_run_result(mock_report),
         ) as mock_pipeline:
             result = await red_team(['agent:a', 'agent:b'])
             assert result is mock_report
@@ -383,7 +390,7 @@ class TestRedTeamMultiTarget:
         with patch(
             'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
             new_callable=AsyncMock,
-            return_value=mock_report,
+            return_value=_run_result(mock_report),
         ) as mock_pipeline:
             result = await red_team('agent:test')
             assert result is mock_report
@@ -408,7 +415,7 @@ class TestRedTeamWithAgentTarget:
         with patch(
             'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
             new_callable=AsyncMock,
-            return_value=mock_report,
+            return_value=_run_result(mock_report),
         ) as mock_dyn:
             result = await red_team(MockTarget())
             assert result is mock_report
@@ -429,7 +436,7 @@ class TestRedTeamWithAgentTarget:
         with patch(
             'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
             new_callable=AsyncMock,
-            return_value=mock_report,
+            return_value=_run_result(mock_report),
         ):
             result = await red_team([MockTarget(), 'agent:test'])
             assert result is mock_report
@@ -493,7 +500,7 @@ class TestEvaluabilityGate:
             patch(
                 'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
                 new_callable=AsyncMock,
-                return_value=mock_report,
+                return_value=_run_result(mock_report),
             ) as mock_dyn,
         ):
             result = await red_team(
@@ -505,9 +512,7 @@ class TestEvaluabilityGate:
         kwargs = mock_dyn.call_args.kwargs
         assert 'ASI03' not in kwargs['categories']
         assert 'ASI01' in kwargs['categories']
-        assert all(
-            get_primary_category(v) != 'ASI03' for v in (kwargs['resolved_vulns'] or [])
-        )
+        assert all(get_primary_category(v) != 'ASI03' for v in (kwargs['resolved_vulns'] or []))
         assert any('ASI03' in w for w in result.pipeline_warnings)
 
     @pytest.mark.asyncio
@@ -524,19 +529,18 @@ class TestEvaluabilityGate:
             patch(
                 'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
                 new_callable=AsyncMock,
-                return_value=mock_report,
+                return_value=_run_result(mock_report),
             ) as mock_dyn,
         ):
             await red_team(
                 'agent:test',
                 mode='hybrid',
                 vulnerabilities=['goal_hijacking', 'identity_privilege_abuse'],
+                dataset='local.json',
             )
 
         kwargs = mock_dyn.call_args.kwargs
-        assert all(
-            v.value != 'identity_privilege_abuse' for v in (kwargs['resolved_vulns'] or [])
-        )
+        assert all(v.value != 'identity_privilege_abuse' for v in (kwargs['resolved_vulns'] or []))
 
     @pytest.mark.asyncio
     async def test_all_unevaluable_raises(self):
@@ -560,7 +564,7 @@ class TestEvaluabilityGate:
         with patch(
             'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
             new_callable=AsyncMock,
-            return_value=mock_report,
+            return_value=_run_result(mock_report),
         ) as mock_dyn:
             result = await red_team('agent:test', mode='dynamic', categories=['ASI01', 'ASI02'])
 
@@ -582,7 +586,7 @@ class TestEvaluabilityGate:
         with patch(
             'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
             new_callable=AsyncMock,
-            return_value=mock_report,
+            return_value=_run_result(mock_report),
         ) as mock_dyn:
             result = await red_team('agent:test', mode='dynamic', categories=['LLM03'])
 
@@ -625,7 +629,7 @@ class TestHuggingFacePreflight:
 
         # Simulate an uninstalled package: import huggingface_hub -> ImportError
         monkeypatch.setitem(sys.modules, 'huggingface_hub', None)
-        with pytest.raises(ImportError, match=r"evaluatorq\[redteam\]"):
+        with pytest.raises(ImportError, match=r'evaluatorq\[redteam\]'):
             ensure_huggingface_available()
 
     @pytest.mark.asyncio
@@ -637,9 +641,9 @@ class TestHuggingFacePreflight:
         with patch(
             'evaluatorq.redteam.runner._run_static',
             new_callable=AsyncMock,
-            return_value=_make_report(),
+            return_value=_run_result(_make_report()),
         ) as mock_static:
-            with pytest.raises(ImportError, match=r"evaluatorq\[redteam\]"):
+            with pytest.raises(ImportError, match=r'evaluatorq\[redteam\]'):
                 await red_team('agent:test', mode='static', dataset=None)
         mock_static.assert_not_awaited()  # failed before dispatching the leg
 
@@ -653,7 +657,7 @@ class TestHuggingFacePreflight:
         with patch(
             'evaluatorq.redteam.runner._run_static',
             new_callable=AsyncMock,
-            return_value=_make_report(),
+            return_value=_run_result(_make_report()),
         ) as mock_static:
             await red_team('agent:test', mode='static', dataset='/tmp/local.json')
         mock_static.assert_awaited_once()
@@ -668,7 +672,7 @@ class TestHuggingFacePreflight:
         with patch(
             'evaluatorq.redteam.runner._run_dynamic_or_hybrid',
             new_callable=AsyncMock,
-            return_value=_make_report(),
+            return_value=_run_result(_make_report()),
         ) as mock_dyn:
             await red_team('agent:test', mode='dynamic', categories=['ASI01'])
         mock_dyn.assert_awaited_once()
