@@ -644,7 +644,7 @@ class AgentResponseError(BaseModel):
     error's *presence*, not its value, so the field is intentionally not an
     enum. The orchestrator sets ``"timeout"`` on the timeout path and otherwise
     classifies the failure via
-    :func:`evaluatorq.redteam.contracts.classify_error_type`, which yields one
+    :func:`evaluatorq.common.target_call.classify_error_type`, which yields one
     of ``content_filter``, ``rate_limit``, ``timeout``, ``network_error``,
     ``server_error``, ``client_error``, or ``target_error`` (fallback for an
     unmatched error). Other producers may set their own values.

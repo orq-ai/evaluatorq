@@ -17,12 +17,14 @@ import contextlib
 import inspect
 import time
 import traceback
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, Job, job
 from evaluatorq.common.jury import append_jury_summary
+from evaluatorq.common.target_call import call_target_with_retry
 from evaluatorq.common.thread_context import build_thread_id, conversation_thread
 from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentResponse, AgentResponseError, Message
@@ -33,7 +35,6 @@ from evaluatorq.redteam.adaptive.strategy_planner import (
     plan_strategies_for_categories,
     plan_strategies_for_vulnerabilities,
 )
-from evaluatorq.redteam.backends.base import Backend, _coerce_to_agent_response
 from evaluatorq.redteam.backends.registry import create_async_llm_client, resolve_backend
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
@@ -65,6 +66,7 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
     from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities
+    from evaluatorq.redteam.backends.base import Backend
     from evaluatorq.redteam.contracts import AgentContext
     from evaluatorq.types import ScorerParameter
 
@@ -407,103 +409,58 @@ def create_dynamic_redteam_job(
                 error_code = None
                 error_details = None
                 token_usage = None
-                agent_resp: AgentResponse = AgentResponse()
-                target_timeout_s = cfg.target_agent_timeout_ms / 1000.0
-                response = ''
-                max_target_attempts = max(1, cfg.max_target_retries + 1)
-                target_succeeded = False
-                target_error: str | None = None
-                target_error_code: str | None = None
-                target_error_details: dict[str, Any] | None = None
-                for target_attempt in range(max_target_attempts):
-                    try:
-                        async with with_redteam_span(
-                            'orq.redteam.target_call',
-                            {
-                                'orq.redteam.category': category,
-                                'orq.redteam.strategy_name': strategy.name,
-                                'orq.redteam.turn': 1,
-                                'orq.redteam.target_attempt': target_attempt + 1,
-                                'input': truncate_for_span(prompt),
-                                'orq.redteam.input': truncate_for_span(prompt),
-                            },
-                        ) as tgt_span:
-                            with conversation_thread(thread_id) as thread_id:
-                                raw = await asyncio.wait_for(
-                                    target.respond([Message(role='user', content=prompt)]),
-                                    timeout=target_timeout_s,
-                                )
-                            agent_resp = _coerce_to_agent_response(raw)
-                            response = agent_resp.text
-                            if agent_resp.error is None:
-                                token_usage = agent_resp.usage
-                                resp_text = truncate_for_span(response or '')
-                                set_span_attrs(
-                                    tgt_span,
-                                    {
-                                        'output': resp_text,
-                                        'orq.redteam.output': resp_text,
-                                    },
-                                )
-                                target_succeeded = True
-                                break
 
-                            response_error = agent_resp.error
-                            target_error = (
-                                f'Target agent returned error after {max_target_attempts} attempt(s), '
-                                f'code={response_error.code or "target_error"}, details={response_error.message}'
-                            )
-                            target_error_code = response_error.code or 'target_error'
-                            target_error_details = {
-                                'response_error_type': response_error.error_type,
-                                'raw_message': response_error.message,
-                                'attempts': target_attempt + 1,
-                            }
-                    except asyncio.TimeoutError:
-                        response = f'[ERROR: Target agent timed out after {target_timeout_s:.0f}s]'
-                        agent_resp = AgentResponse(
-                            output=[TextOutputItem(text=response, annotations=[])],
-                            error=AgentResponseError(message=response, error_type='timeout', code='target.timeout'),
-                        )
-                        target_error = f'Target agent timed out after {max_target_attempts} attempt(s)'
-                        target_error_code = 'target.timeout'
-                        target_error_details = {
-                            'timeout_ms': cfg.target_agent_timeout_ms,
-                            'attempts': target_attempt + 1,
-                        }
-                    except Exception as e:
-                        if isinstance(e, (TypeError, AttributeError, ImportError, NameError)):
-                            raise
-                        mapped_code, mapped_msg = resolved_backend.map_error(e)
-                        response = f'[ERROR: {mapped_msg}]'
-                        agent_resp = AgentResponse(
-                            output=[TextOutputItem(text=response, annotations=[])],
-                            error=AgentResponseError(
-                                message=response,
-                                error_type='target_error',
-                                code=mapped_code,
-                            ),
-                        )
-                        target_error = f'Target agent failed after {max_target_attempts} attempt(s): {mapped_msg}'
-                        target_error_code = mapped_code
-                        target_error_details = {
-                            'exception_type': type(e).__name__,
-                            'raw_message': str(e),
-                            'attempts': target_attempt + 1,
-                        }
+                @asynccontextmanager
+                async def _attempt_span(i: int):
+                    async with with_redteam_span(
+                        'orq.redteam.target_call',
+                        {
+                            'orq.redteam.category': category,
+                            'orq.redteam.strategy_name': strategy.name,
+                            'orq.redteam.turn': 1,
+                            'orq.redteam.target_attempt': i + 1,
+                            'input': truncate_for_span(prompt),
+                            'orq.redteam.input': truncate_for_span(prompt),
+                        },
+                    ) as span:
+                        yield span
 
-                    if target_attempt + 1 < max_target_attempts:
-                        logger.warning(
-                            f'Single-turn target call failed for {category}/{strategy.name}; '
-                            f'retrying same exchange ({target_attempt + 2}/{max_target_attempts})'
-                        )
+                def _record_attempt_response(span: Any, response: AgentResponse) -> None:
+                    response_text = truncate_for_span(response.text or '')
+                    set_span_attrs(
+                        span,
+                        {
+                            'output': response_text,
+                            'orq.redteam.output': response_text,
+                        },
+                    )
 
-                if not target_succeeded:
-                    error = target_error
-                    error_type = 'target_error'
+                with conversation_thread(thread_id) as thread_id:
+                    result = await call_target_with_retry(
+                        target,
+                        [Message(role='user', content=prompt)],
+                        target_agent_timeout_ms=cfg.target_agent_timeout_ms,
+                        max_target_retries=cfg.max_target_retries,
+                        map_error=resolved_backend.map_error,
+                        on_attempt=_attempt_span,
+                        on_attempt_response=_record_attempt_response,
+                    )
+
+                agent_resp = result.response
+                response = agent_resp.text
+                token_usage = agent_resp.usage if result.succeeded else None
+                if not result.succeeded:
+                    # The helper guarantees a non-None error on the failure path;
+                    # fall back defensively so a None can never crash attribute access.
+                    err = result.error or AgentResponseError(
+                        message='target call failed', error_type='target_error', code='target_error'
+                    )
+                    error = f'Target agent failed after {result.attempts} attempt(s): {err.message}'
+                    # error_stage = where (target_call); error_type = what (timeout/network_error/rate_limit/... classified by the helper)
+                    error_type = err.error_type
                     error_stage = 'target_call'
-                    error_code = target_error_code
-                    error_details = target_error_details
+                    error_code = err.code or 'target_error'
+                    error_details = result.error_details
                 result_dict = AttackOutput(
                     turns=[
                         Turn(

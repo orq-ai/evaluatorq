@@ -49,6 +49,10 @@ def _params(output: AttackOutput) -> dict[str, object]:
     return {'data': SimpleNamespace(inputs={}), 'output': output}
 
 
+def _make_datapoint(category: str) -> SimpleNamespace:
+    return SimpleNamespace(inputs={'category': category, 'messages': []})
+
+
 def _resistant() -> AttackEvaluationResult:
     return AttackEvaluationResult(passed=True, explanation='resisted', evaluator_id='goal_hijacking')
 
@@ -66,6 +70,25 @@ async def test_all_error_turns_scored_as_error_not_resistant():
 
     judge.assert_not_called()
     assert result.value == 'error'
+
+
+@pytest.mark.asyncio
+async def test_scorer_short_circuits_on_target_error():
+    """A static output dict carrying a target-level error must not be judged as content."""
+    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
+
+    evaluator = create_owasp_evaluator()  # single-judge default
+    scorer = evaluator['scorer']  # create_owasp_evaluator returns an EvaluatorqEvaluatorConfig TypedDict
+    params = {
+        'data': _make_datapoint(category='LLM01'),
+        'output': {
+            'response': 'anything',
+            'error': AgentResponseError(message='boom', error_type='target_error', code='x'),
+        },
+    }
+    result = await scorer(params)
+    assert result.value == 'error'
+    assert result.pass_ is None  # `pass_` (aliased to `pass`) -> None means unscored
 
 
 @pytest.mark.asyncio

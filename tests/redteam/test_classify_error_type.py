@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from evaluatorq.redteam.contracts import classify_error_type
+from evaluatorq.common.target_call import classify_error_type
 
 
 @pytest.mark.parametrize(

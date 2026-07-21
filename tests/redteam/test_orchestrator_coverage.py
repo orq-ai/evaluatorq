@@ -867,7 +867,7 @@ class TestRunAttack:
         )
 
         assert result.error_code == "target.timeout"
-        assert result.error_type == "target_error"
+        assert result.error_type == "timeout"
         assert result.n_turns == 1
 
     @pytest.mark.asyncio
@@ -875,7 +875,7 @@ class TestRunAttack:
     @patch(_PATCH_LLM_SPAN, side_effect=_noop_span_ctx)
     @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
     async def test_target_exception_retries_exhausted_abort(self, _rs, _ls, _rl):
-        """Exhausted same-exchange exception retries abort with target_error."""
+        """Exhausted same-exchange exception retries abort with a classified error_type."""
         orchestrator, mock_llm = _make_orchestrator()
         target = _make_target()
 
@@ -893,7 +893,9 @@ class TestRunAttack:
             max_turns=5,
         )
 
-        assert result.error_type == "target_error"
+        # "connection refused" classifies to network_error (outer error_type now carries
+        # the classified type, not the flat "target_error"); error_stage stays target_call.
+        assert result.error_type == "network_error"
         assert result.error_stage == "target_call"
         assert result.n_turns == 1
 

@@ -261,6 +261,12 @@ def create_owasp_evaluator(
             logger.warning(f'No evaluator found for category {category}')
             return _error_result(f'No evaluator found for category {category}')
 
+        if isinstance(output, dict):
+            target_error = output.get('error')
+            if target_error is not None:
+                msg = getattr(target_error, 'message', str(target_error))
+                return _error_result(f'Target agent error — not scored: {msg}')
+
         output_messages = _adapt_static_output(output)
 
         eval_replacements = build_eval_replacements(
