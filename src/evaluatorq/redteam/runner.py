@@ -23,7 +23,8 @@ from evaluatorq.common.async_utils import await_maybe, warn_if_sync_hooks
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.run_store_dir import get_store_dir
-from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
+from evaluatorq.common.thread_context import build_static_thread_id, conversation_thread
+from evaluatorq.common.tracing import AttrMap, set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities, classify_agent_capabilities
 from evaluatorq.redteam.adaptive.orchestrator import ProgressDisplay, _get_active_progress
@@ -707,6 +708,7 @@ async def red_team(
                     pipeline_config=config,
                     resolved_strategy_names=resolved_strategy_names,
                     resolved_delivery_methods=resolved_delivery_methods,
+                    run_id=tracing_context.run_id,
                 )
             else:
                 msg = f'Invalid mode {mode!r}. Must be "dynamic", "static", or "hybrid".'
@@ -904,7 +906,12 @@ def _static_attack_attrs(data: DataPoint) -> dict[str, str]:
     }
 
 
-def _create_static_job_for_agent_target(target_factory: Callable[[], Any], label: str) -> Any:
+def _create_static_job_for_agent_target(
+    target_factory: Callable[[], Any],
+    label: str,
+    *,
+    run_id: str | None = None,
+) -> Any:
     """Create an evaluatorq static job that drives an :class:`AgentTarget`.
 
     ``target_factory`` mints a fresh, isolated target per attack; the job closes
@@ -922,6 +929,7 @@ def _create_static_job_for_agent_target(target_factory: Callable[[], Any], label
         try:
             attack_attrs = _static_attack_attrs(data)
             target_input = truncate_for_span(prompt)
+            thread_id = build_static_thread_id(run_id, safe, _row)
             async with (
                 with_redteam_span('orq.redteam.attack', attack_attrs),
                 with_redteam_span(
@@ -933,19 +941,29 @@ def _create_static_job_for_agent_target(target_factory: Callable[[], Any], label
                     },
                 ) as target_span,
             ):
-                raw_response = await target.respond([Message(role='user', content=prompt)])
-                result = _coerce_to_agent_response(raw_response)
-                if result.error is not None:
-                    set_span_attrs(
-                        target_span,
+                with conversation_thread(thread_id):
+                    async with with_redteam_span(
+                        f'agent {label}',
                         {
-                            'orq.redteam.error_type': result.error.error_type,
-                            'orq.redteam.error_code': result.error.code,
+                            'orq.redteam.llm_purpose': 'target',
+                            'input': target_input,
+                            'orq.redteam.input': target_input,
                         },
-                    )
-                else:
-                    output = truncate_for_span(result.text)
-                    set_span_attrs(target_span, {'output': output, 'orq.redteam.output': output})
+                    ) as agent_span:
+                        raw_response = await target.respond([Message(role='user', content=prompt)])
+                        result = _coerce_to_agent_response(raw_response)
+                        if result.error is not None:
+                            error_attrs: AttrMap = {
+                                'orq.redteam.error_type': result.error.error_type,
+                                'orq.redteam.error_code': result.error.code,
+                            }
+                            set_span_attrs(target_span, error_attrs)
+                            set_span_attrs(agent_span, error_attrs)
+                        else:
+                            output = truncate_for_span(result.text)
+                            output_attrs: AttrMap = {'output': output, 'orq.redteam.output': output}
+                            set_span_attrs(target_span, output_attrs)
+                            set_span_attrs(agent_span, output_attrs)
 
             active_progress = _get_active_progress()
             if active_progress is not None:
@@ -957,6 +975,7 @@ def _create_static_job_for_agent_target(target_factory: Callable[[], Any], label
                 'token_usage': result.usage,
                 'finish_reason': result.finish_reason,
                 'model': result.model,
+                'thread_id': thread_id,
             }
         finally:
             target_close = getattr(target, 'close', None)
@@ -990,6 +1009,7 @@ def _create_job_for_target(
     llm_client: Any,
     system_prompt: str | None,
     pipeline_config: LLMConfig | None = None,
+    run_id: str | None = None,
 ) -> Any:
     """Create a model job for the given target string.
 
@@ -1009,13 +1029,13 @@ def _create_job_for_target(
     """
     cfg = pipeline_config or PIPELINE_CONFIG
     kind, value = parse_target(target)
-    common = dict(llm_client=llm_client, system_prompt=system_prompt)
+    common = dict(llm_client=llm_client, system_prompt=system_prompt, run_id=run_id)
     if kind == TargetKind.AGENT:
         tcfg = TargetConfig(system_prompt=system_prompt)
         backend = make_agent_backend(target_config=tcfg, pipeline_config=cfg)
         # Build a fresh owned target per row (composite prefixes -> model
         # "agent/<value>"); no long-lived parent target/client is left dangling.
-        return _create_static_job_for_agent_target(lambda: backend.create_target(value), label=value)
+        return _create_static_job_for_agent_target(lambda: backend.create_target(value), label=value, run_id=run_id)
     if kind == TargetKind.DEPLOYMENT:
         return create_model_job(deployment_key=value, **common)
     return create_model_job(model=value, **common)
@@ -1324,7 +1344,13 @@ async def _prepare_target(
 
         # Build the static job via shared helper
         sys_prompt = target_config.system_prompt if target_config else None
-        static_job = _create_job_for_target(target, resolved_llm_client, sys_prompt, pipeline_config=pipeline_config)
+        static_job = _create_job_for_target(
+            target,
+            resolved_llm_client,
+            sys_prompt,
+            pipeline_config=pipeline_config,
+            run_id=run_id,
+        )
 
         # Build the hybrid dispatcher job
         @job(f'redteam:hybrid:{safe_target}')
@@ -1932,6 +1958,7 @@ async def _run_dynamic_or_hybrid(
                     _row: int,
                     _backend: Any = at_backend,
                     _label: str = at_label,
+                    _safe: str = at_safe,
                 ) -> Any:
                     """Send a static datapoint to the AgentTarget via respond."""
                     messages = _build_messages(data)
@@ -1949,6 +1976,7 @@ async def _run_dynamic_or_hybrid(
                     target_instance = _backend.create_target(_label)
                     attack_attrs = _static_attack_attrs(data)
                     target_input = truncate_for_span(prompt)
+                    thread_id = build_static_thread_id(run_id, _safe, _row)
                     async with (
                         with_redteam_span('orq.redteam.attack', attack_attrs),
                         with_redteam_span(
@@ -1960,19 +1988,29 @@ async def _run_dynamic_or_hybrid(
                             },
                         ) as target_span,
                     ):
-                        raw = await target_instance.respond([Message(role='user', content=prompt)])
-                        result = _coerce_to_agent_response(raw)
-                        if result.error is not None:
-                            set_span_attrs(
-                                target_span,
+                        with conversation_thread(thread_id):
+                            async with with_redteam_span(
+                                f'agent {_label}',
                                 {
-                                    'orq.redteam.error_type': result.error.error_type,
-                                    'orq.redteam.error_code': result.error.code,
+                                    'orq.redteam.llm_purpose': 'target',
+                                    'input': target_input,
+                                    'orq.redteam.input': target_input,
                                 },
-                            )
-                        else:
-                            output = truncate_for_span(result.text)
-                            set_span_attrs(target_span, {'output': output, 'orq.redteam.output': output})
+                            ) as agent_span:
+                                raw = await target_instance.respond([Message(role='user', content=prompt)])
+                                result = _coerce_to_agent_response(raw)
+                                if result.error is not None:
+                                    error_attrs: AttrMap = {
+                                        'orq.redteam.error_type': result.error.error_type,
+                                        'orq.redteam.error_code': result.error.code,
+                                    }
+                                    set_span_attrs(target_span, error_attrs)
+                                    set_span_attrs(agent_span, error_attrs)
+                                else:
+                                    output = truncate_for_span(result.text)
+                                    output_attrs: AttrMap = {'output': output, 'orq.redteam.output': output}
+                                    set_span_attrs(target_span, output_attrs)
+                                    set_span_attrs(agent_span, output_attrs)
                     active_progress = _get_active_progress()
                     if active_progress is not None:
                         await active_progress.finish_attack(None)
@@ -1982,6 +2020,7 @@ async def _run_dynamic_or_hybrid(
                         'token_usage': result.usage,
                         'finish_reason': result.finish_reason,
                         'model': result.model,
+                        'thread_id': thread_id,
                     }
 
                 @job(f'redteam:hybrid:{at_safe}')
@@ -2417,6 +2456,7 @@ async def _run_static(
     pipeline_config: LLMConfig | None = None,
     resolved_strategy_names: set[str] | None = None,
     resolved_delivery_methods: set[DeliveryMethod | str] | None = None,
+    run_id: str | None = None,
 ) -> tuple[RedTeamReport, RedTeamRunMetrics]:
     """Run static red teaming for multiple targets in a single ``evaluatorq()`` call.
 
@@ -2492,10 +2532,11 @@ async def _run_static(
     # Build one job per target using the shared helper
     sys_prompt = target_config.system_prompt if target_config else None
     jobs: list[Any] = [
-        _create_job_for_target(t, llm_client, sys_prompt, pipeline_config=pipeline_config) for t in targets
+        _create_job_for_target(t, llm_client, sys_prompt, pipeline_config=pipeline_config, run_id=run_id) for t in targets
     ]
     jobs.extend(
-        _create_static_job_for_agent_target(at.new, agent_target_labels[id(at)]) for at in resolved_agent_targets
+        _create_static_job_for_agent_target(at.new, agent_target_labels[id(at)], run_id=run_id)
+        for at in resolved_agent_targets
     )
 
     from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
@@ -2657,6 +2698,7 @@ async def _run_static(
         )
 
     merged.duration_seconds = pipeline_duration
+    merged.run_id = run_id
     if agent_contexts:
         merged.agent_contexts = agent_contexts
     await await_maybe(

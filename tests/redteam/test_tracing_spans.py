@@ -117,6 +117,22 @@ def _assert_static_target_spans(exporter: _CollectingExporter) -> None:
     assert 'orq.redteam.llm_purpose' not in _attrs(target_call)
 
 
+def _assert_target_child_span(
+    exporter: _CollectingExporter,
+    *,
+    child_name: str,
+) -> None:
+    """Assert the static target call retains its own instrumented child."""
+    target_call = _find_span(exporter, 'orq.redteam.target_call')
+    child = _find_span(exporter, child_name)
+    assert target_call is not None
+    assert child is not None
+    assert target_call.context is not None
+    assert child.parent is not None
+    assert child.parent.span_id == target_call.context.span_id
+    assert _attrs(child)['orq.redteam.llm_purpose'] == 'target'
+
+
 @asynccontextmanager
 async def _noop_tracing_session(*args: Any, **kwargs: Any):  # noqa: RUF029
     yield TracingContext(run_id='test', run_name='test', enabled=False, parent_context=None, trace_type='redteam')
@@ -474,7 +490,7 @@ async def test_set_span_attrs_on_real_span(span_collector: _CollectingExporter):
 
 @pytest.mark.asyncio
 async def test_static_router_job_traces_attack_and_target_call(span_collector: _CollectingExporter) -> None:
-    """Router-backed static attacks expose their target exchange explicitly."""
+    """Router static calls keep a run/datapoint thread and LLM child span."""
     from evaluatorq import DataPoint
     from evaluatorq.redteam.runtime.jobs import create_model_job
 
@@ -484,9 +500,10 @@ async def test_static_router_job_traces_attack_and_target_call(span_collector: _
     response.choices[0].finish_reason = 'stop'
     response.usage = None
     client = AsyncMock()
+    client.base_url = 'https://my.orq.ai/v3/router'
     client.chat.completions.create = AsyncMock(return_value=response)
 
-    job_fn = create_model_job(model='test-model', llm_client=client)
+    job_fn = create_model_job(model='test-model', llm_client=client, run_id='static-run')
     await job_fn(
         DataPoint(
             inputs={
@@ -499,13 +516,17 @@ async def test_static_router_job_traces_attack_and_target_call(span_collector: _
     )
 
     _assert_static_target_spans(span_collector)
+    _assert_target_child_span(span_collector, child_name='chat test-model')
+    assert client.chat.completions.create.await_args.kwargs['extra_body'] == {
+        'thread': {'id': 'static-run:test-model:0'}
+    }
 
 
 @pytest.mark.asyncio
 async def test_static_deployment_job_traces_attack_and_target_call(
     span_collector: _CollectingExporter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Deployment-backed static attacks expose their target exchange explicitly."""
+    """Deployment static calls keep a run/datapoint thread and LLM child span."""
     from evaluatorq import DataPoint
     from evaluatorq.redteam.runtime.jobs import create_model_job
 
@@ -520,7 +541,7 @@ async def test_static_deployment_job_traces_attack_and_target_call(
     monkeypatch.setitem(sys.modules, 'orq_ai_sdk', module)
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
 
-    job_fn = create_model_job(deployment_key='test-deployment')
+    job_fn = create_model_job(deployment_key='test-deployment', run_id='static-run')
     await job_fn(
         DataPoint(
             inputs={
@@ -533,19 +554,23 @@ async def test_static_deployment_job_traces_attack_and_target_call(
     )
 
     _assert_static_target_spans(span_collector)
+    _assert_target_child_span(span_collector, child_name='invoke deployment:test-deployment')
+    assert deployments.invoke_async.await_args.kwargs['thread'] == {'id': 'static-run:test-deployment:0'}
 
 
 @pytest.mark.asyncio
 async def test_static_agent_target_job_traces_attack_and_target_call(span_collector: _CollectingExporter) -> None:
-    """Custom AgentTarget static attacks expose their target exchange explicitly."""
+    """AgentTarget static calls keep a run/datapoint thread and agent child span."""
     from evaluatorq import DataPoint
+    from evaluatorq.common.thread_context import current_thread_id
     from evaluatorq.redteam.runner import _create_static_job_for_agent_target
 
     class Target:
         async def respond(self, _messages: list[Any]) -> str:
+            assert current_thread_id() == 'static-run:custom-target:0'
             return 'mock target response'
 
-    job_fn = _create_static_job_for_agent_target(Target, 'custom-target')
+    job_fn = _create_static_job_for_agent_target(Target, 'custom-target', run_id='static-run')
     await job_fn(
         DataPoint(
             inputs={
@@ -558,6 +583,7 @@ async def test_static_agent_target_job_traces_attack_and_target_call(span_collec
     )
 
     _assert_static_target_spans(span_collector)
+    _assert_target_child_span(span_collector, child_name='agent custom-target')
 
 
 @pytest.mark.asyncio

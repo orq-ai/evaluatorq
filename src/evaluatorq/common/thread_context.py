@@ -55,6 +55,34 @@ def build_thread_id(run_id: str | None, *parts: object) -> str | None:
     return _THREAD_ID_SEP.join([run_id, *(str(p) for p in parts)])
 
 
+def build_static_thread_id(run_id: str | None, target_id: str, row: int) -> str:
+    """Build a deterministic thread id for one static red-team datapoint.
+
+    Normal runs use the caller's run id, matching dynamic red-team targets. The
+    fallback keeps direct job invocations correlated to a stable target/row
+    pair instead of minting a random context id.
+    """
+    stable_run_id = run_id or f'static-{target_id}'
+    thread_id = build_thread_id(stable_run_id, target_id, row)
+    if thread_id is None:  # Defensive: ``stable_run_id`` is always non-empty.
+        raise RuntimeError('Static thread id requires a non-empty stable run id')
+    return thread_id
+
+
+def build_static_thread_id(run_id: str | None, target_id: str, row: int) -> str:
+    """Build a deterministic thread id for one static red-team datapoint.
+
+    Normal runs use the caller's run id, matching dynamic red-team targets. The
+    fallback keeps direct job invocations (including isolated tests) correlated
+    to a stable target/row pair instead of minting a random context id.
+    """
+    stable_run_id = run_id or f'static-{target_id}'
+    thread_id = build_thread_id(stable_run_id, target_id, row)
+    if thread_id is None:  # Defensive: ``stable_run_id`` is always non-empty.
+        raise RuntimeError('Static thread id requires a non-empty stable run id')
+    return thread_id
+
+
 def current_thread_id() -> str | None:
     """Return the thread id for the active conversation, or None if unset."""
     return _thread_id.get()
@@ -114,6 +142,7 @@ def conversation_thread(thread_id: str | None = None) -> Iterator[str]:
 
 
 __all__ = [
+    'build_static_thread_id',
     'build_thread_id',
     'conversation_thread',
     'current_thread_id',
