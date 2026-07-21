@@ -9,6 +9,8 @@ import asyncio
 import contextvars
 import logging
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from inspect import signature
 from typing import TYPE_CHECKING, Any
 
@@ -24,6 +26,7 @@ from evaluatorq.common.content_filter import (
     regenerate_on_content_filter,
 )
 from evaluatorq.common.sanitize import xml_escape
+from evaluatorq.common.target_call import call_target_with_retry, default_map_error
 from evaluatorq.common.tracing import record_llm_response, set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentResponse, AgentResponseError, AgentTarget, Message, TextOutputItem
 from evaluatorq.redteam.adaptive.tool_chaining import (
@@ -31,7 +34,7 @@ from evaluatorq.redteam.adaptive.tool_chaining import (
     ToolChainingVerifier,
     format_plan_for_prompt,
 )
-from evaluatorq.redteam.backends.base import Backend, _coerce_to_agent_response
+from evaluatorq.redteam.backends.base import Backend
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
     PIPELINE_CONFIG,
@@ -41,20 +44,13 @@ from evaluatorq.redteam.contracts import (
     OrchestratorResult,
     TokenUsage,
     Turn,
-    classify_error_type,
     turns_to_messages,
 )
-from evaluatorq.redteam.exceptions import TargetResponseError
 from evaluatorq.redteam.tracing import with_llm_span, with_redteam_span
 from evaluatorq.redteam.utils import safe_substitute
 
 if TYPE_CHECKING:
     from openai.types.chat import ChatCompletionMessageParam
-
-
-def _default_map_error(exc: Exception) -> tuple[str, str]:
-    """Fallback error mapping for the no-backend path; mirrors ``Backend.map_error``."""
-    return 'target_error', f'{type(exc).__name__}: {exc}'
 
 
 _ui_console = Console(stderr=True)
@@ -905,138 +901,79 @@ class MultiTurnOrchestrator:
                             break
 
                     # Send attack to target agent. The transcript is derived from
-                    # the recorded turns BEFORE the try: it is a pure local op, so a
-                    # bug here must not be misattributed to the target by the except.
-                    target_timeout_s = self._cfg.target_agent_timeout_ms / 1000.0
-                    transcript = turns_to_messages(turns_record, skip_errors=True)
+                    # the recorded turns BEFORE the call: it is a pure local op, so a
+                    # bug here must not be misattributed to the target by the retry helper.
                     # A failed target exchange is retried with the exact same prompt and
                     # transcript. Advancing the adversarial conversation after dropping
                     # an error response would splice the evidence, so exhausted retries
                     # end the run as unscorable instead.
-                    turn_usage: TokenUsage | None = None
-                    agent_response = ''
-                    max_target_attempts = max(1, self._cfg.max_target_retries + 1)
-                    target_failed = False
-                    target_error: str | None = None
-                    target_error_type: str | None = None
-                    target_error_stage: str | None = None
-                    target_error_code: str | None = None
-                    target_error_details: dict[str, Any] | None = None
-                    target_finish_reason: str | None = None
-                    for target_attempt in range(max_target_attempts):
-                        try:
-                            async with with_redteam_span(
-                                'orq.redteam.target_call',
-                                {
-                                    'orq.redteam.turn': turn + 1,
-                                    'orq.redteam.strategy_name': strategy.name,
-                                    'orq.redteam.target_attempt': target_attempt + 1,
-                                    'input': truncate_for_span(attack_prompt),
-                                    'orq.redteam.input': truncate_for_span(attack_prompt),
-                                },
-                            ) as tgt_span:
-                                raw_response = await asyncio.wait_for(
-                                    target.respond([*transcript, Message(role='user', content=attack_prompt)]),
-                                    timeout=target_timeout_s,
-                                )
-                                tgt_result = _coerce_to_agent_response(raw_response)
-                                if tgt_result.error is not None:
-                                    raise TargetResponseError(tgt_result)
-                                agent_response = tgt_result.text
-                                resp_text = truncate_for_span(agent_response or '')
-                                set_span_attrs(
-                                    tgt_span,
-                                    {
-                                        'output': resp_text,
-                                        'orq.redteam.output': resp_text,
-                                    },
-                                )
-                                turn_usage = tgt_result.usage
-                            break
-                        except TargetResponseError as e:
-                            tgt_result = e.response
-                            agent_response = tgt_result.text
-                            response_error = e.error
-                            target_error = (
-                                f'Target agent returned error after {max_target_attempts} attempt(s) '
-                                f'on turn {turn + 1}/{max_turns}, '
-                                f'code={response_error.code or "target_error"}, details={response_error.message}'
-                            )
-                            target_error_type = 'target_error'
-                            target_error_stage = 'target_call'
-                            target_error_code = response_error.code or 'target_error'
-                            target_error_details = {
-                                'response_error_type': response_error.error_type,
-                                'raw_message': response_error.message,
-                                'attempts': target_attempt + 1,
-                            }
-                            target_finish_reason = 'target_error'
-                        except asyncio.TimeoutError:
-                            agent_response = f'[ERROR: Target agent timed out after {target_timeout_s:.0f}s]'
-                            tgt_result = AgentResponse(
-                                output=[TextOutputItem(text=agent_response, annotations=[])],
-                                error=AgentResponseError(
-                                    message=agent_response, error_type='timeout', code='target.timeout'
-                                ),
-                            )
-                            target_error = (
-                                f'Target agent timed out after {max_target_attempts} attempt(s) '
-                                f'on turn {turn + 1}/{max_turns}'
-                            )
-                            target_error_type = 'target_error'
-                            target_error_stage = 'target_call'
-                            target_error_code = 'target.timeout'
-                            target_error_details = {
-                                'timeout_ms': self._cfg.target_agent_timeout_ms,
-                                'attempts': target_attempt + 1,
-                            }
-                            target_finish_reason = 'target_timeout'
-                        except Exception as e:
-                            mapped_code, error_msg = (
-                                self._backend.map_error(e) if self._backend is not None else _default_map_error(e)
-                            )
-                            agent_response = f'[ERROR: {error_msg}]'
-                            classified = classify_error_type(error_msg)
-                            tgt_result = AgentResponse(
-                                output=[TextOutputItem(text=agent_response, annotations=[])],
-                                error=AgentResponseError(
-                                    message=agent_response,
-                                    error_type=classified if classified and classified != 'unknown' else 'target_error',
-                                    code=mapped_code,
-                                ),
-                            )
-                            target_error = (
-                                f'Target agent failed after {max_target_attempts} attempt(s) '
-                                f'on turn {turn + 1}/{max_turns}, code={mapped_code}, details={error_msg}'
-                            )
-                            target_error_type = 'target_error'
-                            target_error_stage = 'target_call'
-                            target_error_code = mapped_code
-                            target_error_details = {
-                                'exception_type': type(e).__name__,
-                                'raw_message': str(e),
-                                'attempts': target_attempt + 1,
-                            }
-                            target_finish_reason = 'target_error'
+                    transcript = turns_to_messages(turns_record, skip_errors=True)
+                    messages_to_send = [*transcript, Message(role='user', content=attack_prompt)]
 
-                        if target_attempt + 1 < max_target_attempts:
-                            logger.warning(
-                                f'Target agent {target_finish_reason} on turn {turn + 1}/{max_turns}; '
-                                f'retrying same exchange ({target_attempt + 2}/{max_target_attempts})'
-                            )
-                            continue
-                        target_failed = True
+                    @asynccontextmanager
+                    async def _attempt_span(
+                        attempt_index: int,
+                        _prompt: str = attack_prompt,
+                        _turn: int = turn,
+                        _strategy_name: str = strategy.name,
+                    ) -> AsyncIterator[Any]:
+                        async with with_redteam_span(
+                            'orq.redteam.target_call',
+                            {
+                                'orq.redteam.turn': _turn + 1,
+                                'orq.redteam.strategy_name': _strategy_name,
+                                'orq.redteam.target_attempt': attempt_index + 1,
+                                'input': truncate_for_span(_prompt),
+                                'orq.redteam.input': truncate_for_span(_prompt),
+                            },
+                        ) as span:
+                            yield span
 
-                    if target_failed:
-                        error = target_error
-                        error_type = target_error_type
-                        error_stage = target_error_stage
-                        error_code = target_error_code
-                        error_details = target_error_details
+                    result = await call_target_with_retry(
+                        target,
+                        messages_to_send,
+                        target_agent_timeout_ms=self._cfg.target_agent_timeout_ms,
+                        max_target_retries=self._cfg.max_target_retries,
+                        map_error=self._backend.map_error if self._backend is not None else default_map_error,
+                        on_attempt=_attempt_span,
+                    )
+
+                    tgt_result = result.response
+                    agent_response = tgt_result.text
+                    turn_usage: TokenUsage | None = tgt_result.usage if result.succeeded else None
+
+                    if result.succeeded:
+                        # The per-attempt span closes inside the helper, so record the
+                        # target output on the surrounding turn-level span instead.
+                        set_span_attrs(
+                            turn_span,
+                            {
+                                'output': truncate_for_span(agent_response or ''),
+                                'orq.redteam.output': truncate_for_span(agent_response or ''),
+                            },
+                        )
+
+                    if not result.succeeded:
+                        # The helper guarantees a non-None error on the failure path;
+                        # fall back defensively so a None can never crash attribute access.
+                        err = result.error or AgentResponseError(
+                            message='target call failed', error_type='target_error', code='target_error'
+                        )
+                        error = (
+                            f'Target agent failed after {result.attempts} attempt(s) '
+                            f'on turn {turn + 1}/{max_turns}, code={err.code or "target_error"}, details={err.message}'
+                        )
+                        # error_stage = where (target_call); error_type = what
+                        # (timeout/network_error/rate_limit/... classified by the helper).
+                        error_type = err.error_type
+                        error_stage = 'target_call'
+                        error_code = err.code or 'target_error'
+                        error_details = result.error_details
                         error_turn = turn + 1
                         turns_record.append(Turn(attacker=current_attacker, target=tgt_result))
                         if progress is not None and task_id is not None:
                             await progress.update_attack(task_id, completed=turn + 1)
+                        finish_reason = 'target_timeout' if err.error_type == 'timeout' else 'target_error'
                         set_span_attrs(
                             turn_span,
                             {
@@ -1044,7 +981,7 @@ class MultiTurnOrchestrator:
                                 if usage is not None
                                 else 0,
                                 'orq.redteam.error_type': error_type,
-                                'orq.redteam.finish_reason': target_finish_reason,
+                                'orq.redteam.finish_reason': finish_reason,
                             },
                         )
                         break
