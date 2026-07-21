@@ -277,6 +277,19 @@ class TestSimFilterRoute:
         assert 'bob' not in transcripts.lower()
         assert 'bob' in config.lower()
 
+    def test_metric_dim_round_trips_through_http(self, client: TestClient, roots: list[Path]) -> None:
+        """A new metric dimension (max_goal_score) narrows results end-to-end via
+        the real POST route — proving parse_selections → _SIM_DIMS → _sim_apply
+        are wired for the new dims, not just unit-tested in isolation."""
+        rid = report_id(_sim_path(roots))
+        # Fixture: 3 conversations with goal scores 1.0 / 0.0 / 1.0.
+        full = client.post(f'/r/{rid}/filter', data={})
+        assert 'Transcripts <span class="tab-count">3</span>' in full.text
+        # Ceiling of 0.5 keeps only the single 0.0-score conversation.
+        filtered = client.post(f'/r/{rid}/filter', data={'max_goal_score': '0.5'})
+        assert filtered.status_code == 200
+        assert 'Transcripts <span class="tab-count">1</span>' in filtered.text
+
     def test_persona_filter_form_preserves_selection(self, client: TestClient, roots: list[Path]) -> None:
         """Re-rendered form keeps alice checked and bob available to re-select."""
         rid = report_id(_sim_path(roots))
@@ -846,6 +859,14 @@ class TestSimMetricFilters:
 
         filtered = _sim_apply(sim_run, {'max_goal_score': ['not-a-number']})
         assert len(filtered) == len(sim_run.results)
+
+    def test_non_positive_count_is_noop(self, sim_run) -> None:
+        from evaluatorq.dashboard.filters import _sim_apply
+
+        # Zero/negative count floors never narrow — treated as "no filter".
+        for bad in ('0', '-5'):
+            assert len(_sim_apply(sim_run, {'min_turns': [bad]})) == len(sim_run.results)
+            assert len(_sim_apply(sim_run, {'min_total_tokens': [bad]})) == len(sim_run.results)
 
     def test_full_options_exposes_raw_maxima_and_available_metrics(self, sim_run) -> None:
         from evaluatorq.dashboard.filters import _sim_full_options

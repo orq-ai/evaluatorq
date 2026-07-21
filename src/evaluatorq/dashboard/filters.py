@@ -181,13 +181,13 @@ def _rt_apply(report: Any, selections: dict[str, list[str]]) -> list[Any]:
 # Simulation filter
 # ---------------------------------------------------------------------------
 
-def _sim_metric_dim_key(key: str, *, high_is_risky: bool) -> str:
+def sim_metric_dim_key(key: str, *, high_is_risky: bool) -> str:
     """Threshold selection key for a turn metric: floor for risky, ceiling otherwise."""
     return f'min_{key}' if high_is_risky else f'max_{key}'
 
 
 def _sim_metric_dims() -> list[str]:
-    return [_sim_metric_dim_key(m.key, high_is_risky=m.high_is_risky) for m in TURN_METRICS]
+    return [sim_metric_dim_key(m.key, high_is_risky=m.high_is_risky) for m in TURN_METRICS]
 
 
 _SIM_DIMS = [
@@ -216,12 +216,17 @@ def _clamp_score(raw: str) -> float | None:
     return max(0.0, min(1.0, value))
 
 
-def _parse_int(raw: str) -> int | None:
-    """Parse *raw* as an int; ``None`` on bad input."""
+def _parse_positive_int(raw: str) -> int | None:
+    """Parse *raw* as a positive int; ``None`` on bad or non-positive input.
+
+    Count floors (min turns / min total tokens) only ever narrow at values > 0,
+    so a zero/negative/garbage value is treated as "no filter" rather than
+    applied verbatim."""
     try:
-        return int(raw)
+        value = int(raw)
     except (ValueError, TypeError):
         return None
+    return value if value > 0 else None
 
 
 def _sim_multiselect_options(results: list[Any]) -> dict[str, list[str]]:
@@ -302,21 +307,21 @@ def _sim_apply(run: Any, selections: dict[str, list[str]]) -> list[Any]:
     # min_turns (floor on turn_count, raw integer)
     turns_sel = selections.get('min_turns', [])
     if turns_sel:
-        min_turns = _parse_int(turns_sel[0])
+        min_turns = _parse_positive_int(turns_sel[0])
         if min_turns is not None:
             results = [r for r in results if r.turn_count >= min_turns]
 
     # min_total_tokens (floor on token_usage.total_tokens, raw integer)
     tokens_sel = selections.get('min_total_tokens', [])
     if tokens_sel:
-        min_tokens = _parse_int(tokens_sel[0])
+        min_tokens = _parse_positive_int(tokens_sel[0])
         if min_tokens is not None:
             results = [r for r in results if r.token_usage.total_tokens >= min_tokens]
 
     # per-turn quality/risk metric thresholds — worst turn per result, unscored
     # results always stay visible.
     for metric in TURN_METRICS:
-        dim_key = _sim_metric_dim_key(metric.key, high_is_risky=metric.high_is_risky)
+        dim_key = sim_metric_dim_key(metric.key, high_is_risky=metric.high_is_risky)
         metric_sel = selections.get(dim_key, [])
         if not metric_sel:
             continue

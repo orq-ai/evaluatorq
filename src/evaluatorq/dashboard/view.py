@@ -821,16 +821,20 @@ def _range_control(
         value = default
     engaged = _range_engaged(sel, min_val=min_val, max_val=max_val, floor=floor)
     readout_cls = 'filter-slider-readout is-engaged' if engaged else 'filter-slider-readout'
-    readout = f'{"≥" if floor else "≤"} {_fmt_range_value(value, step)}'
+    glyph = '≥' if floor else '≤'
+    readout = f'{glyph} {_fmt_range_value(value, step)}'
     max_span = (
         f'<span class="filter-slider-max">/ {_fmt_range_value(max_val, step)}</span>' if show_max else ''
     )
+    # data-glyph / data-default let dashboard.js update the readout live on
+    # `input` (while dragging), before the HTMX `change` round-trip.
     return (
         f'<div class="filter-group" data-dim="{esc(dim)}">'
         f'<label class="filter-label">{esc(label)}</label>'
         f'<div class="filter-slider-row">'
         f'<input type="range" class="filter-slider" name="{esc(dim)}" min="{_fmt_range_value(min_val, step)}"'
-        f' max="{_fmt_range_value(max_val, step)}" step="{esc(step)}" value="{_fmt_range_value(value, step)}">'
+        f' max="{_fmt_range_value(max_val, step)}" step="{esc(step)}" value="{_fmt_range_value(value, step)}"'
+        f' data-glyph="{glyph}" data-default="{_fmt_range_value(default, step)}">'
         f'<span class="{readout_cls}">{esc(readout)}</span>'
         f'{max_span}'
         f'</div>'
@@ -857,7 +861,7 @@ def _render_sim_filter_rail(
     tucked behind the ``filter-dd-more`` expander (omitted entirely when it
     would otherwise be empty).
     """
-    from evaluatorq.dashboard.filters import _sim_metric_dim_key
+    from evaluatorq.dashboard.filters import sim_metric_dim_key
 
     goal_opts = [o for o in opts.get('goal_outcome', []) if o in _GOAL_OUTCOME_DOT_CLASS]
     goal_sel = set(selections.get('goal_outcome', []))
@@ -930,7 +934,7 @@ def _render_sim_filter_rail(
     for metric in TURN_METRICS:
         if metric.key not in available_metrics:
             continue
-        dim_key = _sim_metric_dim_key(metric.key, high_is_risky=metric.high_is_risky)
+        dim_key = sim_metric_dim_key(metric.key, high_is_risky=metric.high_is_risky)
         prefix = 'Min.' if metric.high_is_risky else 'Max.'
         metric_sel = selections.get(dim_key, [])
         more_active += _range_engaged(metric_sel, min_val=0.0, max_val=1.0, floor=metric.high_is_risky)

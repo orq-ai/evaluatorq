@@ -111,6 +111,23 @@
     });
   });
 
+  // Live filter-slider readout: update the number next to a range slider while
+  // it is being dragged (`input`), before HTMX fires the `change` round-trip.
+  // Delegated on document so it survives the HTMX form swap.
+  document.addEventListener('input', function (evt) {
+    var slider = evt.target;
+    if (!slider || !slider.classList || !slider.classList.contains('filter-slider')) return;
+    var row = slider.closest('.filter-slider-row');
+    var readout = row && row.querySelector('.filter-slider-readout');
+    if (!readout) return;
+    var glyph = slider.getAttribute('data-glyph') || '';
+    readout.textContent = (glyph ? glyph + ' ' : '') + slider.value;
+    // Engaged = moved off the no-op default bound.
+    var def = slider.getAttribute('data-default');
+    var engaged = def !== null && parseFloat(slider.value) !== parseFloat(def);
+    readout.classList.toggle('is-engaged', engaged);
+  });
+
   // Agent-simulation entity details: persona/scenario templates and lazy
   // conversation transcripts share one dialog. j/k steps through the entity
   // list that opened the drawer; Escape is handled natively by <dialog>.
