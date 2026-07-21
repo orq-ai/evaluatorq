@@ -4,6 +4,8 @@ Uses an in-memory span exporter to capture real spans and validate
 attribute names, values, and span hierarchy after the tracing refactor.
 """
 
+# ruff: noqa: S101
+
 from __future__ import annotations
 
 import json
@@ -11,7 +13,7 @@ import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import ModuleType
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -22,6 +24,9 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, Sp
 from evaluatorq.redteam.contracts import Pipeline, RedTeamReport, ReportSummary, SaveMode
 from evaluatorq.redteam.runner import RedTeamRunMetrics
 from evaluatorq.tracing import TracingContext
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
 class _CollectingExporter(SpanExporter):
@@ -38,9 +43,13 @@ class _CollectingExporter(SpanExporter):
         pass
 
 
-@pytest.fixture()
+@pytest.fixture
 def span_collector():
-    """Set up an in-memory OTel TracerProvider and return the exporter."""
+    """Set up an in-memory OTel TracerProvider.
+
+    Yields:
+        An exporter that collects finished spans.
+    """
     exporter = _CollectingExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
@@ -109,7 +118,7 @@ def _assert_static_target_spans(exporter: _CollectingExporter) -> None:
 
 
 @asynccontextmanager
-async def _noop_tracing_session(*args: Any, **kwargs: Any):
+async def _noop_tracing_session(*args: Any, **kwargs: Any):  # noqa: RUF029
     yield TracingContext(run_id='test', run_name='test', enabled=False, parent_context=None, trace_type='redteam')
 
 
@@ -149,7 +158,7 @@ async def test_red_team_owns_whole_pipeline_span(
     """The outer runner parents optional report spans for every pipeline mode."""
     active_span_ids: list[int] = []
 
-    async def _inner_runner(**kwargs: Any) -> tuple[RedTeamReport, RedTeamRunMetrics]:
+    async def _inner_runner(**kwargs: Any) -> tuple[RedTeamReport, RedTeamRunMetrics]:  # noqa: RUF029
         active_span_ids.append(trace.get_current_span().get_span_context().span_id)
         return _report(pipeline=pipeline), RedTeamRunMetrics(3, 1, 0.1)
 
@@ -381,8 +390,9 @@ async def test_redteam_span_kind_is_internal(span_collector: _CollectingExporter
 async def test_record_llm_response_on_real_span(span_collector: _CollectingExporter):
     """record_llm_response sets gen_ai.response.* attributes on real spans."""
     from types import SimpleNamespace
-    from evaluatorq.redteam.tracing import with_llm_span
+
     from evaluatorq.common.tracing import record_llm_response
+    from evaluatorq.redteam.tracing import with_llm_span
 
     mock_response = SimpleNamespace(
         id='resp-abc',
@@ -415,14 +425,16 @@ async def test_record_llm_response_on_real_span(span_collector: _CollectingExpor
 @pytest.mark.asyncio
 async def test_nested_redteam_and_llm_spans(span_collector: _CollectingExporter):
     """Verify parent-child hierarchy: redteam span > llm span."""
-    from evaluatorq.redteam.tracing import with_redteam_span, with_llm_span
+    from evaluatorq.redteam.tracing import with_llm_span, with_redteam_span
 
-    async with with_redteam_span('orq.redteam.attack') as outer:
-        async with with_llm_span(
+    async with (
+        with_redteam_span('orq.redteam.attack') as outer,
+        with_llm_span(
             model='gpt-5-mini',
             attributes={'orq.redteam.llm_purpose': 'adversarial'},
-        ) as inner:
-            pass
+        ) as inner,
+    ):
+        pass
 
     assert len(span_collector.spans) == 2
 
@@ -441,8 +453,8 @@ async def test_nested_redteam_and_llm_spans(span_collector: _CollectingExporter)
 @pytest.mark.asyncio
 async def test_set_span_attrs_on_real_span(span_collector: _CollectingExporter):
     """set_span_attrs works on real spans (not mocks)."""
-    from evaluatorq.redteam.tracing import with_redteam_span
     from evaluatorq.common.tracing import set_span_attrs
+    from evaluatorq.redteam.tracing import with_redteam_span
 
     async with with_redteam_span('orq.redteam.target_call') as span:
         set_span_attrs(
@@ -504,7 +516,7 @@ async def test_static_deployment_job_traces_attack_and_target_call(
     deployments = MagicMock()
     deployments.invoke_async = AsyncMock(return_value=completion)
     module = ModuleType('orq_ai_sdk')
-    setattr(module, 'Orq', MagicMock(return_value=MagicMock(deployments=deployments)))
+    module.Orq = MagicMock(return_value=MagicMock(deployments=deployments))
     monkeypatch.setitem(sys.modules, 'orq_ai_sdk', module)
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
 

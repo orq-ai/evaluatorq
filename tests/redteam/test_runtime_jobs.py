@@ -1,5 +1,7 @@
 """Unit tests for runtime/jobs.py."""
 
+# ruff: noqa: S101
+
 from __future__ import annotations
 
 from typing import Any
@@ -8,7 +10,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from evaluatorq.redteam.contracts import Message, TokenUsage
-
 
 # ===========================================================================
 # runtime/jobs.py — _sanitize_job_name

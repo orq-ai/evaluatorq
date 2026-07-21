@@ -23,7 +23,7 @@ async def _enter_and_exit_session() -> None:
 
 
 @asynccontextmanager
-async def _enabled_test_session(*_args: object, **_kwargs: object):
+async def _enabled_test_session(*_args: object, **_kwargs: object):  # noqa: RUF029
     yield TracingContext(
         run_id='session-run',
         run_name='session-run',
@@ -85,7 +85,7 @@ async def test_evaluatorq_passes_the_yielded_session_context_to_processing(
 ) -> None:
     seen_contexts: list[TracingContext] = []
 
-    async def capture_processing(*args: object) -> list[object]:
+    async def capture_processing(*args: object) -> list[object]:  # noqa: RUF029
         tracing_context = args[6]
         assert isinstance(tracing_context, TracingContext)
         seen_contexts.append(tracing_context)

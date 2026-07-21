@@ -14,6 +14,17 @@ When ORQ_API_KEY is provided:
 - Authorization header is automatically added with the API key
 
 Set ORQ_DEBUG=1 to enable debug logging for tracing setup.
+
+Provider lifecycle and batching:
+- The ``TracerProvider`` lives for the process. Runs force-flush their buffered spans;
+  the SDK atexit hook performs provider shutdown, so runtime code must not shut it down.
+- Tune the long-lived batch processor with ``ORQ_OTEL_MAX_QUEUE_SIZE`` (default 4096),
+  ``ORQ_OTEL_SCHEDULE_DELAY_MS`` (default 5000), and ``ORQ_OTEL_MAX_BATCH_SIZE``
+  (default 512).
+- ``ORQ_OTEL_FLUSH_TIMEOUT_MS`` controls per-run force-flush (default 5000). A timeout
+  logs a warning because some spans may not have been exported.
+- Exporter headers are bound at initialization: changing ``ORQ_API_KEY`` requires a
+  process restart. A hard ``SIGKILL`` can lose spans still buffered by the batch exporter.
 """
 
 from __future__ import annotations

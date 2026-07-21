@@ -63,12 +63,16 @@ async def tracing_session(run_name: str, *, trace_type: str = 'evaluatorq') -> A
     provider down while work is still in flight.
 
     Note this manages *lifecycle* only; it opens no spans — callers open their own
-    spans against ``ctx.parent_context``.
+    spans against ``ctx.parent_context``. The process-lifetime batch processor can be
+    tuned with ``ORQ_OTEL_MAX_QUEUE_SIZE``, ``ORQ_OTEL_SCHEDULE_DELAY_MS``, and
+    ``ORQ_OTEL_MAX_BATCH_SIZE``. On session exit, force-flush uses
+    ``ORQ_OTEL_FLUSH_TIMEOUT_MS`` and logs a warning if it times out, because spans may
+    remain unexported.
 
     Known limitations (long-lived processes): a rotated ``ORQ_API_KEY`` only takes effect
-    after a process restart (the exporter binds headers once at init and the provider is
-    never rotated), and spans still buffered at a hard ``SIGKILL`` are lost — inherent to
-    any batch exporter.
+    after a process restart (the exporter binds headers once at initialization and the
+    provider is never rotated), and spans still buffered at a hard ``SIGKILL`` are lost —
+    inherent to any batch exporter.
 
     Yields:
         The :class:`TracingContext` for the run.
