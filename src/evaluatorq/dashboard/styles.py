@@ -1832,6 +1832,12 @@ _SIM_REPORT_OVERRIDES_CSS = """
 .sim-report .sim-agent-head {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
 }
+.sim-report .sim-agent-identity {
+    display: inline-flex; align-items: center; gap: 8px; min-width: 0;
+}
+.sim-report .sim-agent-icon {
+    width: 18px; height: 18px; color: var(--teal-600); flex: 0 0 auto;
+}
 .sim-report .sim-agent-name {
     font-family: var(--font-sans); font-size: 18px; font-weight: 600; color: var(--text-strong);
 }

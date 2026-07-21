@@ -1208,6 +1208,7 @@ def _sim_agent_card(agent_info: dict[str, Any] | None, *, bare: bool = False, fo
     # Regenerate this process's Studio link from ORQ_WORKSPACE. This repairs
     # older snapshots that captured a UUID-based URL without altering run JSON.
     from evaluatorq.dashboard.orq_links import orq_studio_url
+    from evaluatorq.dashboard.view import _TARGET_ICONS
 
     url = orq_studio_url(
         target_kind='agent',
@@ -1219,6 +1220,7 @@ def _sim_agent_card(agent_info: dict[str, Any] | None, *, bare: bool = False, fo
     tools = agent_info.get('tools') or []
     knowledge_bases = agent_info.get('knowledge_bases') or []
     memory_stores = agent_info.get('memory_stores') or []
+    agent_icon = _TARGET_ICONS['agent'].replace('<svg ', '<svg class="sim-agent-icon" aria-hidden="true" ', 1)
 
     role_html = f'<span class="sim-agent-role">{esc(role)}</span>' if role else ''
     open_html = (
@@ -1247,7 +1249,9 @@ def _sim_agent_card(agent_info: dict[str, Any] | None, *, bare: bool = False, fo
 
     inner = (
         '<div class="sim-agent-head">'
-        f'<div><span class="sim-agent-name">{esc(key)}</span>{role_html}</div>'
+        '<div class="sim-agent-identity">'
+        f'{agent_icon}<span class="sim-agent-name">{esc(key)}</span>{role_html}'
+        '</div>'
         f'{open_html}'
         '</div>'
         f'{model_html}{desc_html}{delegates_html}{groups_wrap}{footer_html}'
