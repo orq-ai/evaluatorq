@@ -23,6 +23,7 @@ from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.run_store_dir import get_store_dir
+from evaluatorq.common.target_call import call_target_with_retry, default_map_error
 from evaluatorq.common.tracing import set_span_attrs
 from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities, classify_agent_capabilities
@@ -44,7 +45,6 @@ from evaluatorq.redteam.adaptive.strategy_registry import (
 from evaluatorq.redteam.backends.base import (
     Backend,
     BareTargetBackend,
-    _coerce_to_agent_response,
 )
 from evaluatorq.redteam.backends.registry import create_async_llm_client, make_agent_backend, resolve_backend
 from evaluatorq.redteam.contracts import (
@@ -916,7 +916,41 @@ def _extract_static_prompt(data: DataPoint) -> str:
     return '\n\n'.join(p for p in user_parts if p)
 
 
-def _create_static_job_for_agent_target(target_factory: Callable[[], Any], label: str) -> Any:
+async def _run_static_target_call(
+    target: Any,
+    prompt: str,
+    *,
+    target_agent_timeout_ms: int,
+    max_target_retries: int,
+    map_error: Callable[[Exception], tuple[str, str] | None] = default_map_error,
+) -> dict[str, Any]:
+    """Call a static target and return the scorer-facing output shape."""
+    call = await call_target_with_retry(
+        target,
+        [Message(role='user', content=prompt)],
+        target_agent_timeout_ms=target_agent_timeout_ms,
+        max_target_retries=max_target_retries,
+        map_error=map_error,
+    )
+    result = call.response
+
+    active_progress = _get_active_progress()
+    if active_progress is not None:
+        await active_progress.finish_attack(None)
+
+    return {
+        'response': result.text,
+        'error': call.error,
+        'tool_calls': result.tool_calls,
+        'token_usage': result.usage,
+        'finish_reason': result.finish_reason,
+        'model': result.model,
+    }
+
+
+def _create_static_job_for_agent_target(
+    target_factory: Callable[[], Any], label: str, cfg: LLMConfig | None = None
+) -> Any:
     """Create an evaluatorq static job that drives an :class:`AgentTarget`.
 
     ``target_factory`` mints a fresh, isolated target per attack; the job closes
@@ -926,26 +960,19 @@ def _create_static_job_for_agent_target(target_factory: Callable[[], Any], label
     target (and its unused HTTP client) is left dangling.
     """
     safe = _sanitize_job_name(label)
+    cfg = cfg or PIPELINE_CONFIG
 
     @job(f'redteam:static:{safe}')
     async def agent_target_job(data: DataPoint, _row: int) -> dict[str, Any]:
         prompt = _extract_static_prompt(data)
         target = target_factory()
         try:
-            raw_response = await target.respond([Message(role='user', content=prompt)])
-            result = _coerce_to_agent_response(raw_response)
-
-            active_progress = _get_active_progress()
-            if active_progress is not None:
-                await active_progress.finish_attack(None)
-
-            return {
-                'response': result.text,
-                'tool_calls': result.tool_calls,
-                'token_usage': result.usage,
-                'finish_reason': result.finish_reason,
-                'model': result.model,
-            }
+            return await _run_static_target_call(
+                target,
+                prompt,
+                target_agent_timeout_ms=cfg.target_agent_timeout_ms,
+                max_target_retries=cfg.max_target_retries,
+            )
         finally:
             target_close = getattr(target, 'close', None)
             if callable(target_close):
@@ -1003,7 +1030,7 @@ def _create_job_for_target(
         backend = make_agent_backend(target_config=tcfg, pipeline_config=cfg)
         # Build a fresh owned target per row (composite prefixes -> model
         # "agent/<value>"); no long-lived parent target/client is left dangling.
-        return _create_static_job_for_agent_target(lambda: backend.create_target(value), label=value)
+        return _create_static_job_for_agent_target(lambda: backend.create_target(value), label=value, cfg=cfg)
     if kind == TargetKind.DEPLOYMENT:
         return create_model_job(deployment_key=value, **common)
     return create_model_job(model=value, **common)
@@ -1990,18 +2017,14 @@ async def _run_dynamic_or_hybrid(
                                 f'produced an empty prompt ({len(messages)} messages, none with user content).'
                             )
                         target_instance = _backend.create_target(_label)
-                        raw = await target_instance.respond([Message(role='user', content=prompt)])
-                        result = _coerce_to_agent_response(raw)
-                        active_progress = _get_active_progress()
-                        if active_progress is not None:
-                            await active_progress.finish_attack(None)
-                        return {
-                            'response': result.text,
-                            'tool_calls': result.tool_calls,
-                            'token_usage': result.usage,
-                            'finish_reason': result.finish_reason,
-                            'model': result.model,
-                        }
+                        resolved_cfg = pipeline_config or PIPELINE_CONFIG
+                        return await _run_static_target_call(
+                            target_instance,
+                            prompt,
+                            target_agent_timeout_ms=resolved_cfg.target_agent_timeout_ms,
+                            max_target_retries=resolved_cfg.max_target_retries,
+                            map_error=_backend.map_error,
+                        )
 
                     @job(f'redteam:hybrid:{at_safe}')
                     async def at_target_job(
@@ -2526,7 +2549,8 @@ async def _run_static(
         _create_job_for_target(t, llm_client, sys_prompt, pipeline_config=pipeline_config) for t in targets
     ]
     jobs.extend(
-        _create_static_job_for_agent_target(at.new, agent_target_labels[id(at)]) for at in resolved_agent_targets
+        _create_static_job_for_agent_target(at.new, agent_target_labels[id(at)], cfg=pipeline_config)
+        for at in resolved_agent_targets
     )
 
     from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
