@@ -1520,9 +1520,7 @@ async def _run_dynamic_or_hybrid(
         # 'error' on a later failure). Per-target start/end keys are consistent
         # and mirror the keying _prepare_target already uses for this stage.
         for target_label in all_target_labels:
-            await await_maybe(
-                resolved_hooks.on_stage_start(PipelineStage.CONTEXT_RETRIEVAL, {'target': target_label})
-            )
+            await await_maybe(resolved_hooks.on_stage_start(PipelineStage.CONTEXT_RETRIEVAL, {'target': target_label}))
         # Only build the ORQ SDK backend when there are string targets to resolve
         # context for. A pure bring-your-own AgentTarget run never touches it, so this
         # avoids importing/requiring orq-ai-sdk for those runs (mirrors the lazy factory

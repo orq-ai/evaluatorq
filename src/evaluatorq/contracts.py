@@ -7,10 +7,11 @@ import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime  # noqa: TC003 — runtime-required by pydantic manifest models
-from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, TypedDict
+from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias
 
 from loguru import logger
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_serializer, model_validator
+from typing_extensions import TypedDict
 
 from evaluatorq.openresponses.convert_models import (
     InputFileContent,

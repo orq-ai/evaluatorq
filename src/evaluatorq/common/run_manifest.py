@@ -79,11 +79,7 @@ class ManifestWriter:
         from closing one of several concurrent per-target stages.
         """
         for rec in reversed(self.manifest.stages):
-            if (
-                rec.ended_at is None
-                and (name is None or rec.name == name)
-                and rec.target == target
-            ):
+            if rec.ended_at is None and (name is None or rec.name == name) and rec.target == target:
                 return rec
         return None
 

@@ -1555,10 +1555,7 @@ def runs(
         Console(file=buffer, width=width).print(table)
         typer.echo(buffer.getvalue(), nl=False)
     except ImportError:
-        header = (
-            f'{"Name":<20} {"Date":<20} {"Status":<10} {"Mode":<10} '
-            f'{"Target":<16} {"N":>4}  {"Scores":<30} File'
-        )
+        header = f'{"Name":<20} {"Date":<20} {"Status":<10} {"Mode":<10} {"Target":<16} {"N":>4}  {"Scores":<30} File'
         typer.echo(header)
         typer.echo('-' * len(header))
         for row in rows:
