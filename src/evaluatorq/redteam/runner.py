@@ -2536,7 +2536,8 @@ async def _run_static(
     # Build one job per target using the shared helper
     sys_prompt = target_config.system_prompt if target_config else None
     jobs: list[Any] = [
-        _create_job_for_target(t, llm_client, sys_prompt, pipeline_config=pipeline_config, run_id=run_id) for t in targets
+        _create_job_for_target(t, llm_client, sys_prompt, pipeline_config=pipeline_config, run_id=run_id)
+        for t in targets
     ]
     jobs.extend(
         _create_static_job_for_agent_target(at.new, agent_target_labels[id(at)], run_id=run_id)
