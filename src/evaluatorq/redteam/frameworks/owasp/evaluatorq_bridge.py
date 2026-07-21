@@ -259,8 +259,12 @@ def create_owasp_evaluator(
             {'orq.redteam.category': category, 'orq.redteam.model': evaluator_model},
         ) as evaluation_span:
 
+            def span_pass_state(value: object) -> bool | str:
+                """Encode an absent binary verdict with the shared trace sentinel."""
+                return value if isinstance(value, bool) else 'inconclusive'
+
             def error_result(explanation: str) -> EvaluationResult:
-                set_span_attrs(evaluation_span, {'orq.redteam.passed': None, 'output': explanation})
+                set_span_attrs(evaluation_span, {'orq.redteam.passed': 'inconclusive', 'output': explanation})
                 return _error_result(explanation)
 
             if not category:
@@ -297,10 +301,10 @@ def create_owasp_evaluator(
                 passed = outcome.payload.value if isinstance(outcome.payload.value, bool) else None
                 set_span_attrs(
                     evaluation_span,
-                    {'orq.redteam.passed': passed, 'output': outcome.payload.explanation},
+                    {'orq.redteam.passed': span_pass_state(passed), 'output': outcome.payload.explanation},
                 )
                 return EvaluationResult.model_validate({
-                    'value': outcome.payload.value,
+                    'value': outcome.payload.value if outcome.payload.value is not None else 'inconclusive',
                     'explanation': outcome.payload.explanation,
                     'pass': passed,
                     'token_usage': outcome.token_usage,
@@ -337,7 +341,7 @@ def create_owasp_evaluator(
             )
             passed = deliberation.verdict if isinstance(deliberation.verdict, bool) else None
             explanation = append_jury_summary(deliberation.explanation, deliberation.jury)
-            set_span_attrs(evaluation_span, {'orq.redteam.passed': passed, 'output': explanation})
+            set_span_attrs(evaluation_span, {'orq.redteam.passed': span_pass_state(passed), 'output': explanation})
             return EvaluationResult.model_validate({
                 'value': passed if passed is not None else 'inconclusive',
                 'explanation': explanation,
