@@ -8,10 +8,13 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq import DataPoint, Job, job
+from evaluatorq.common.messages import coerce_content_text
+from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
 from evaluatorq.redteam.adaptive.orchestrator import _get_active_progress
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import Message, TokenUsage
 from evaluatorq.redteam.exceptions import CredentialError
+from evaluatorq.redteam.tracing import with_redteam_span
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -20,6 +23,20 @@ if TYPE_CHECKING:
 def _sanitize_job_name(value: str) -> str:
     """Sanitize a value for use in job names (alphanumeric, dash, underscore)."""
     return ''.join(ch if ch.isalnum() or ch in {'-', '_'} else '-' for ch in value).strip('-') or 'unknown'
+
+
+def _static_attack_attrs(data: DataPoint) -> dict[str, str]:
+    """Return the common trace attributes for a static red-team datapoint."""
+    return {
+        'orq.redteam.category': data.inputs.get('category', ''),
+        'orq.redteam.vulnerability': data.inputs.get('vulnerability', data.inputs.get('category', '')),
+        'orq.redteam.strategy_name': data.inputs.get('strategy_name', ''),
+    }
+
+
+def _static_target_input(messages: list[dict[str, Any]]) -> str:
+    """Flatten the exact static request messages for bounded trace capture."""
+    return truncate_for_span('\n\n'.join(coerce_content_text(message.get('content')) for message in messages))
 
 
 def create_model_job(
@@ -64,10 +81,26 @@ def create_model_job(
         async def deployment_job(data: DataPoint, _row: int) -> dict[str, Any]:
             """Invoke the ORQ deployment and return the response with token usage."""
             messages = _build_messages(data)
-            completion = await deployment_client.deployments.invoke_async(
-                key=deployment_key,
-                messages=messages,  # pyright: ignore[reportArgumentType]
-            )
+            attack_attrs = _static_attack_attrs(data)
+            target_input = _static_target_input(messages)
+            async with (
+                with_redteam_span('orq.redteam.attack', attack_attrs),
+                with_redteam_span(
+                    'orq.redteam.target_call',
+                    {
+                        **attack_attrs,
+                        'input': target_input,
+                        'orq.redteam.input': target_input,
+                    },
+                ) as target_span,
+            ):
+                completion = await deployment_client.deployments.invoke_async(
+                    key=deployment_key,
+                    messages=messages,  # pyright: ignore[reportArgumentType]
+                )
+                content = _extract_deployment_content(completion)
+                output = truncate_for_span(content)
+                set_span_attrs(target_span, {'output': output, 'orq.redteam.output': output})
 
             # Advance the global progress bar for static attacks.
             active_progress = _get_active_progress()
@@ -75,7 +108,7 @@ def create_model_job(
                 await active_progress.finish_attack(None)
 
             return {
-                'response': _extract_deployment_content(completion),
+                'response': content,
                 'token_usage': TokenUsage.from_completion(completion),
             }
 
@@ -94,12 +127,27 @@ def create_model_job(
         if system_prompt:
             messages = [{'role': 'system', 'content': system_prompt}, *messages]
         client = llm_client or create_async_llm_client()
-        response = await client.chat.completions.create(
-            model=model,
-            messages=messages,  # pyright: ignore[reportArgumentType]
-            max_tokens=max_tokens,
-        )
-        content = response.choices[0].message.content or ''
+        attack_attrs = _static_attack_attrs(data)
+        target_input = _static_target_input(messages)
+        async with (
+            with_redteam_span('orq.redteam.attack', attack_attrs),
+            with_redteam_span(
+                'orq.redteam.target_call',
+                {
+                    **attack_attrs,
+                    'input': target_input,
+                    'orq.redteam.input': target_input,
+                },
+            ) as target_span,
+        ):
+            response = await client.chat.completions.create(
+                model=model,
+                messages=messages,  # pyright: ignore[reportArgumentType]
+                max_tokens=max_tokens,
+            )
+            content = response.choices[0].message.content or ''
+            output = truncate_for_span(content)
+            set_span_attrs(target_span, {'output': output, 'orq.redteam.output': output})
         if not content:
             sample_id = data.inputs.get('id', 'unknown')
             finish_reason = response.choices[0].finish_reason

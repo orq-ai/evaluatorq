@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from evaluatorq import DataPoint, EvaluationResult
 from evaluatorq.common.judge import JudgeError, build_eval_replacements, run_judge
 from evaluatorq.common.jury import Prediction, VerdictKind, _panel_composition_messages, append_jury_summary, run_jury
+from evaluatorq.common.tracing import set_span_attrs
 from evaluatorq.contracts import JURY_RAW_OUTPUT_KEY, OutputMessage, TextOutputItem, ToolCallOutputItem
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import (
@@ -28,6 +29,7 @@ from evaluatorq.redteam.contracts import (
 )
 from evaluatorq.redteam.exceptions import DatasetError
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category
+from evaluatorq.redteam.tracing import with_redteam_span
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -252,85 +254,101 @@ def create_owasp_evaluator(
         data = params['data']
         output = params['output']
         category = data.inputs.get('category', '')
-        if not category:
-            logger.error("Scorer received datapoint with missing 'category' field")
-            return _error_result("Missing 'category' in datapoint inputs — cannot score")
+        async with with_redteam_span(
+            'orq.redteam.security_evaluation',
+            {'orq.redteam.category': category, 'orq.redteam.model': evaluator_model},
+        ) as evaluation_span:
 
-        evaluator_entity = get_evaluator_for_category(category, evaluator_model)
-        if evaluator_entity is None:
-            logger.warning(f'No evaluator found for category {category}')
-            return _error_result(f'No evaluator found for category {category}')
+            def error_result(explanation: str) -> EvaluationResult:
+                set_span_attrs(evaluation_span, {'orq.redteam.passed': None, 'output': explanation})
+                return _error_result(explanation)
 
-        output_messages = _adapt_static_output(output)
+            if not category:
+                logger.error("Scorer received datapoint with missing 'category' field")
+                return error_result("Missing 'category' in datapoint inputs — cannot score")
 
-        eval_replacements = build_eval_replacements(
-            input_messages=data.inputs.get('messages', []),
-            output_messages=output_messages,
-        )
+            evaluator_entity = get_evaluator_for_category(category, evaluator_model)
+            if evaluator_entity is None:
+                logger.warning(f'No evaluator found for category {category}')
+                return error_result(f'No evaluator found for category {category}')
 
-        if len(panel) == 1 and repetitions == 1 and not replacements:
-            outcome = await run_judge(
-                client=client,
-                model=evaluator_model,
-                cfg=call_cfg,
-                prompt_template=evaluator_entity.prompt,
-                replacements=eval_replacements,
+            output_messages = _adapt_static_output(output)
+
+            eval_replacements = build_eval_replacements(
+                input_messages=data.inputs.get('messages', []),
+                output_messages=output_messages,
             )
 
-            # Static path swallows ALL errors into an inconclusive row (never re-raises).
-            if outcome.error_kind is JudgeError.TIMEOUT:
-                return _error_result(f'Evaluation timed out after {outcome.timeout_ms}ms')
-            if outcome.error_kind is not None or outcome.payload is None:
-                return _error_result(f'Evaluation error: {outcome.error_message}')
-
-            return EvaluationResult.model_validate({
-                'value': outcome.payload.value,
-                'explanation': outcome.payload.explanation,
-                'pass': outcome.payload.value if isinstance(outcome.payload.value, bool) else None,
-                'token_usage': outcome.token_usage,
-                'raw_output': {'raw_content': outcome.raw_content},
-            })
-
-        async def judge_fn(model: str) -> Prediction:
-            outcome = await run_judge(
-                client=client,
-                model=model,
-                cfg=call_cfg,
-                prompt_template=evaluator_entity.prompt,
-                replacements=eval_replacements,
-            )
-            if outcome.error_kind is not None or outcome.payload is None:
-                return Prediction(
-                    error=outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'error')
+            if len(panel) == 1 and repetitions == 1 and not replacements:
+                outcome = await run_judge(
+                    client=client,
+                    model=evaluator_model,
+                    cfg=call_cfg,
+                    prompt_template=evaluator_entity.prompt,
+                    replacements=eval_replacements,
                 )
-            return Prediction(
-                value=outcome.payload.value,
-                explanation=outcome.payload.explanation,
-                token_usage=outcome.token_usage,
-                abstained=outcome.payload.abstain,
-            )
 
-        deliberation = await run_jury(
-            judge_fn=judge_fn,
-            panel=panel,
-            repetitions=repetitions,
-            replacement_judges=replacements,
-            min_successful_judges=min_success,
-            verdict_kind=VerdictKind.CATEGORICAL,
-            tie_break=lambda _values: False,
-        )
-        passed = deliberation.verdict if isinstance(deliberation.verdict, bool) else None
-        return EvaluationResult.model_validate({
-            'value': passed if passed is not None else 'inconclusive',
-            'explanation': append_jury_summary(deliberation.explanation, deliberation.jury),
-            'pass': passed,
-            'token_usage': deliberation.token_usage,
-            'raw_output': {
-                'value': passed,
-                'explanation': deliberation.explanation,
-                JURY_RAW_OUTPUT_KEY: deliberation.jury.model_dump(mode='json'),
-            },
-        })
+                # Static path swallows ALL errors into an inconclusive row (never re-raises).
+                if outcome.error_kind is JudgeError.TIMEOUT:
+                    return error_result(f'Evaluation timed out after {outcome.timeout_ms}ms')
+                if outcome.error_kind is not None or outcome.payload is None:
+                    return error_result(f'Evaluation error: {outcome.error_message}')
+
+                passed = outcome.payload.value if isinstance(outcome.payload.value, bool) else None
+                set_span_attrs(
+                    evaluation_span,
+                    {'orq.redteam.passed': passed, 'output': outcome.payload.explanation},
+                )
+                return EvaluationResult.model_validate({
+                    'value': outcome.payload.value,
+                    'explanation': outcome.payload.explanation,
+                    'pass': passed,
+                    'token_usage': outcome.token_usage,
+                    'raw_output': {'raw_content': outcome.raw_content},
+                })
+
+            async def judge_fn(model: str) -> Prediction:
+                outcome = await run_judge(
+                    client=client,
+                    model=model,
+                    cfg=call_cfg,
+                    prompt_template=evaluator_entity.prompt,
+                    replacements=eval_replacements,
+                )
+                if outcome.error_kind is not None or outcome.payload is None:
+                    return Prediction(
+                        error=outcome.error_message or (outcome.error_kind.value if outcome.error_kind else 'error')
+                    )
+                return Prediction(
+                    value=outcome.payload.value,
+                    explanation=outcome.payload.explanation,
+                    token_usage=outcome.token_usage,
+                    abstained=outcome.payload.abstain,
+                )
+
+            deliberation = await run_jury(
+                judge_fn=judge_fn,
+                panel=panel,
+                repetitions=repetitions,
+                replacement_judges=replacements,
+                min_successful_judges=min_success,
+                verdict_kind=VerdictKind.CATEGORICAL,
+                tie_break=lambda _values: False,
+            )
+            passed = deliberation.verdict if isinstance(deliberation.verdict, bool) else None
+            explanation = append_jury_summary(deliberation.explanation, deliberation.jury)
+            set_span_attrs(evaluation_span, {'orq.redteam.passed': passed, 'output': explanation})
+            return EvaluationResult.model_validate({
+                'value': passed if passed is not None else 'inconclusive',
+                'explanation': explanation,
+                'pass': passed,
+                'token_usage': deliberation.token_usage,
+                'raw_output': {
+                    'value': passed,
+                    'explanation': deliberation.explanation,
+                    JURY_RAW_OUTPUT_KEY: deliberation.jury.model_dump(mode='json'),
+                },
+            })
 
     return {'name': 'owasp-agentic-security', 'scorer': scorer}
 
