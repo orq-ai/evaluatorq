@@ -11,6 +11,7 @@ Verifies:
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -134,3 +135,53 @@ async def test_target_exhausted_terminates_with_error_and_failed_turn() -> None:
     # The failed turn IS recorded: an assistant message is present.
     assert any(m.role == 'assistant' for m in result.messages)
     assert result.metadata.get('error')
+
+
+def _make_continue_judgment() -> MagicMock:
+    """Judge verdict that never terminates -- keeps the loop going to turn 2."""
+    j = _make_mock_judgment()
+    j.should_terminate = False
+    j.goal_achieved = False
+    j.goal_completion_score = 0.0
+    j.reason = 'continue'
+    return j
+
+
+def _make_continue_judge() -> MagicMock:
+    j = MagicMock()
+    j.evaluate = AsyncMock(return_value=_make_continue_judgment())
+    j.get_usage = MagicMock(return_value=TokenUsage())
+    return j
+
+
+class _HangSecond:
+    """Answers the first turn quickly, then hangs forever on the second."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def respond(self, messages: list[Message]) -> AgentResponse:
+        self.calls += 1
+        if self.calls == 1:
+            return AgentResponse(text='first answer')
+        await asyncio.sleep(100)
+        raise AssertionError('unreachable')  # pragma: no cover
+
+
+async def test_outer_timeout_retains_partial_transcript() -> None:
+    target = _HangSecond()
+    runner = SimulationRunner(
+        target_agent=target,
+        max_target_retries=0,
+        target_agent_timeout_ms=60000,
+        user_simulator=_make_mock_user_simulator(),
+        judge=_make_continue_judge(),
+    )
+
+    result = await runner._run_with_timeout(_make_datapoint(), max_turns=5, timeout_s=0.3)
+
+    assert result.terminated_by == TerminatedBy.timeout
+    # Partial transcript retained: the turn-1 assistant answer survived the outer
+    # cancellation instead of being discarded as an empty list.
+    assert result.messages != []
+    assert any(m.content == 'first answer' for m in result.messages)

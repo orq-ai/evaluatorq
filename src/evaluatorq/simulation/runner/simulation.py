@@ -326,6 +326,8 @@ class SimulationRunner:
         max_turns: int | None = None,
         first_message: str | None = None,
         thread_id: str | None = None,
+        messages: list[Message] | None = None,
+        turn_metrics_list: list[TurnMetrics] | None = None,
     ) -> SimulationResult:
         """Run a single simulation. Never throws -- returns error SimulationResult on failure.
 
@@ -349,8 +351,10 @@ class SimulationRunner:
         datapoint_id = datapoint.id if datapoint else ''
 
         effective_max_turns = max_turns or self._max_turns
-        messages: list[Message] = []
-        turn_metrics_list: list[TurnMetrics] = []
+        # Caller-owned sinks: when passed in (e.g. by _run_with_timeout) the turns
+        # completed before an outer cancellation survive in the caller's lists.
+        messages = messages if messages is not None else []
+        turn_metrics_list = turn_metrics_list if turn_metrics_list is not None else []
         # Holder so the outer except can read partial token usage from agents
         # created inside _run_inner (mirrors TS getTotalUsage closure).
         usage_holder: dict[str, Callable[[], TokenUsage]] = {}
@@ -855,31 +859,38 @@ class SimulationRunner:
         if timeout_s <= 0:
             return await self.run(datapoint=datapoint, max_turns=max_turns)
 
+        # Own the sinks so the turns completed before an outer timeout survive the
+        # cancellation of the inner coroutine (asyncio cannot roll back appends).
+        messages: list[Message] = []
+        turn_metrics_list: list[TurnMetrics] = []
         try:
             return await asyncio.wait_for(
-                self.run(datapoint=datapoint, max_turns=max_turns),
+                self.run(
+                    datapoint=datapoint,
+                    max_turns=max_turns,
+                    messages=messages,
+                    turn_metrics_list=turn_metrics_list,
+                ),
                 timeout=timeout_s,
             )
         except asyncio.TimeoutError:
             logger.warning(
-                'Simulation for datapoint %s timed out after %ss; returning timeout result',
+                'Simulation for datapoint %s timed out after %ss; returning partial result',
                 datapoint.id,
                 timeout_s,
             )
-            # The inner run() never throws (returns error result), so a
-            # TimeoutError means asyncio cancelled the task mid-flight.
-            # We cannot recover partial messages from the cancelled coroutine,
-            # so we return a timeout result. run() itself already populates
-            # messages on error paths, matching TS behaviour where possible.
+            # A TimeoutError means asyncio cancelled the inner coroutine mid-flight.
+            # The caller-owned sinks retain every turn that completed before the
+            # cancellation, so the partial transcript is preserved instead of lost.
             return SimulationResult(
-                messages=[],
+                messages=messages,
                 terminated_by=TerminatedBy.timeout,
                 reason=f'Simulation timed out after {timeout_s}s',
                 goal_achieved=False,
                 goal_completion_score=0,
                 rules_broken=[],
-                turn_count=0,
-                turn_metrics=[],
+                turn_count=sum(1 for m in messages if m.role == 'assistant'),
+                turn_metrics=turn_metrics_list,
                 token_usage=ZERO_USAGE.model_copy(),
                 metadata={
                     'persona': datapoint.persona.name,
