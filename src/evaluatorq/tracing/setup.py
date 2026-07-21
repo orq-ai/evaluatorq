@@ -18,8 +18,11 @@ Set ORQ_DEBUG=1 to enable debug logging for tracing setup.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import TYPE_CHECKING, Any
+
+from loguru import logger
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Tracer
@@ -29,6 +32,18 @@ _sdk: Any = None
 _tracer: Tracer | None = None
 _is_initialized = False
 _initialization_attempted = False
+
+
+def _env_int(name: str, default: int) -> int:
+    """Read a positive int from the environment, falling back to *default*."""
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
 
 
 def _is_tracing_explicitly_disabled() -> bool:
@@ -169,8 +184,19 @@ async def init_tracing_if_needed() -> bool:  # noqa: RUF029
             timeout=5,  # 5 second timeout for telemetry
         )
 
-        # Use BatchSpanProcessor to export spans asynchronously in batches
-        span_processor = BatchSpanProcessor(exporter)
+        # Use BatchSpanProcessor to export spans asynchronously in batches.
+        # Queue/scheduling are env-tunable: in a long-lived process (e.g. the
+        # dashboard) that runs many red-team/simulation runs without ever tearing
+        # the provider down, the default 2048-span queue can overflow and silently
+        # drop spans. Larger defaults + env overrides reduce that risk.
+        max_queue_size = _env_int('ORQ_OTEL_MAX_QUEUE_SIZE', 4096)
+        requested_batch_size = _env_int('ORQ_OTEL_MAX_BATCH_SIZE', 512)
+        span_processor = BatchSpanProcessor(
+            exporter,
+            max_queue_size=max_queue_size,
+            schedule_delay_millis=_env_int('ORQ_OTEL_SCHEDULE_DELAY_MS', 5000),
+            max_export_batch_size=min(requested_batch_size, max_queue_size),
+        )
 
         provider = TracerProvider(resource=resource)
         provider.add_span_processor(span_processor)
@@ -193,42 +219,55 @@ async def init_tracing_if_needed() -> bool:  # noqa: RUF029
         return False
 
 
-async def flush_tracing() -> None:  # noqa: RUF029
+async def flush_tracing() -> None:
     """
-    Force flush all pending spans.
-    Use this to ensure spans are exported before continuing.
+    Force flush all pending spans, blocking until export completes or times out.
+
+    ``force_flush`` is a synchronous, blocking SDK call, so it runs on a worker
+    thread to avoid stalling the event loop. A ``False`` return means the flush
+    timed out with spans still unexported — surfaced as a warning rather than
+    silently dropped.
     """
-    global _sdk
+    if _sdk is None:
+        return
+    provider = _sdk  # TracerProvider
+    timeout_ms = _env_int('ORQ_OTEL_FLUSH_TIMEOUT_MS', 5000)
+    try:
+        ok = await asyncio.to_thread(provider.force_flush, timeout_ms)
+        if ok is False:
+            logger.warning(
+                'OTEL span flush timed out after {}ms; some spans may not have been exported.',
+                timeout_ms,
+            )
+    except Exception as e:
+        logger.debug('Error flushing traces: {}', e)
+
+
+async def _shutdown_tracing() -> None:
+    """
+    Tear down the OpenTelemetry SDK and reset module state.
+
+    DO NOT call this during a run. Process-exit teardown is handled automatically
+    by the SDK ``TracerProvider`` atexit hook (``shutdown_on_exit=True``). Calling
+    it mid-run tears the global provider down and black-holes every span emitted
+    afterwards. Retained only for the explicit-teardown/test path; resets
+    ``_initialization_attempted`` so a subsequent ``init_tracing_if_needed()`` can
+    re-initialize.
+    """
+    global _sdk, _tracer, _is_initialized, _initialization_attempted
 
     if _sdk is not None:
         try:
-            provider = _sdk  # TracerProvider
-            _ = provider.force_flush()
-        except Exception as e:
-            if os.environ.get('ORQ_DEBUG'):
-                print(f'[evaluatorq] Error flushing traces: {e}')
-
-
-async def shutdown_tracing() -> None:
-    """
-    Gracefully shutdown the OpenTelemetry SDK.
-    Should be called before process exit to ensure spans are flushed.
-    """
-    global _sdk, _tracer, _is_initialized
-
-    if _sdk is not None:
-        try:
-            # Force flush before shutdown
             await flush_tracing()
             provider = _sdk  # TracerProvider
             provider.shutdown()
         except Exception as e:
-            if os.environ.get('ORQ_DEBUG'):
-                print(f'[evaluatorq] Error shutting down tracing: {e}')
+            logger.debug('Error shutting down tracing: {}', e)
 
-        _sdk = None
-        _tracer = None
-        _is_initialized = False
+    _sdk = None
+    _tracer = None
+    _is_initialized = False
+    _initialization_attempted = False
 
 
 def get_tracer() -> Tracer | None:
