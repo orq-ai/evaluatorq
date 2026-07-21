@@ -5,17 +5,32 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from evaluatorq.tracing import TracingContext, tracing_session
 from evaluatorq.tracing import setup as tracing_setup
-from evaluatorq.tracing import tracing_session
+
+evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
 
 
 async def _enter_and_exit_session() -> None:
     async with tracing_session('concurrent-run'):
         pass
+
+
+@asynccontextmanager
+async def _enabled_test_session(*_args: object, **_kwargs: object):
+    yield TracingContext(
+        run_id='session-run',
+        run_name='session-run',
+        enabled=True,
+        parent_context=None,
+        trace_type='evaluatorq',
+    )
 
 
 @pytest.mark.asyncio
@@ -47,6 +62,56 @@ async def test_concurrent_sessions_never_call_private_shutdown(
     await asyncio.gather(*[_enter_and_exit_session() for _ in range(2)])
 
     shutdown.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_enabled_sessions_initialize_and_flush_independently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    initialized = AsyncMock(return_value=True)
+    flushed = AsyncMock()
+    monkeypatch.setattr('evaluatorq.tracing.setup.init_tracing_if_needed', initialized)
+    monkeypatch.setattr('evaluatorq.tracing.setup.flush_tracing', flushed)
+
+    await asyncio.gather(*[_enter_and_exit_session() for _ in range(2)])
+
+    assert initialized.await_count == 2
+    assert flushed.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_evaluatorq_passes_the_yielded_session_context_to_processing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen_contexts: list[TracingContext] = []
+
+    async def capture_processing(*args: object) -> list[object]:
+        tracing_context = args[6]
+        assert isinstance(tracing_context, TracingContext)
+        seen_contexts.append(tracing_context)
+        return []
+
+    monkeypatch.setattr(evaluatorq_module, 'tracing_session', _enabled_test_session, raising=False)
+    monkeypatch.setattr(evaluatorq_module, 'process_data_point', capture_processing)
+
+    await evaluatorq_module.evaluatorq(
+        'session-run',
+        data=[{'inputs': {'value': 1}}],
+        jobs=[lambda _data, _row: None],
+        print_results=False,
+        _send_results=False,
+        _exit_on_failure=False,
+    )
+
+    assert seen_contexts == [
+        TracingContext(
+            run_id='session-run',
+            run_name='session-run',
+            enabled=True,
+            parent_context=None,
+            trace_type='evaluatorq',
+        )
+    ]
 
 
 @pytest.mark.parametrize('raw', [None, 'invalid', '0', '-1'])

@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import io
 import warnings
+from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
@@ -28,6 +29,12 @@ from evaluatorq.simulation.types import (
     TerminatedBy,
     TurnMetrics,
 )
+from evaluatorq.tracing import TracingContext
+
+
+@asynccontextmanager
+async def _noop_tracing_session(*_args: Any, **_kwargs: Any):
+    yield TracingContext(run_id='test', run_name='test', enabled=False, parent_context=None, trace_type='evaluatorq')
 
 
 @pytest.fixture
@@ -1274,8 +1281,6 @@ async def test_generate_fires_generate_stage_hooks(monkeypatch):
     `generate()` took no hooks param. This asserts the wiring — hooks fire
     around the (patched-out) generation calls, with no network.
     """
-    import contextlib
-
     from evaluatorq.simulation import api
 
     events: list[tuple[str, str]] = []
@@ -1294,12 +1299,9 @@ async def test_generate_fires_generate_stage_hooks(monkeypatch):
     async def _fake_resolve(**_kwargs):
         return ['dp']  # sentinel — generate() returns this list verbatim
 
-    @contextlib.asynccontextmanager
+    @asynccontextmanager
     async def _fake_span(*_args, **_kwargs):
         yield None
-
-    async def _noop():
-        return None
 
     monkeypatch.setattr(api, '_generate_personas_scenarios', _fake_personas_scenarios)
     monkeypatch.setattr(api, '_resolve_or_generate_datapoints', _fake_resolve)
@@ -1308,8 +1310,7 @@ async def test_generate_fires_generate_stage_hooks(monkeypatch):
         lambda _client: (object(), False),
     )
     monkeypatch.setattr('evaluatorq.simulation.tracing.with_simulation_span', _fake_span)
-    monkeypatch.setattr('evaluatorq.tracing.setup.init_tracing_if_needed', _noop)
-    monkeypatch.setattr('evaluatorq.tracing.setup.flush_tracing', _noop)
+    monkeypatch.setattr('evaluatorq.tracing.tracing_session', _noop_tracing_session)
 
     result = await api.generate(agent_description='x', hooks=StageRecorder())
 

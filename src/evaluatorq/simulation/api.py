@@ -209,48 +209,46 @@ async def _simulate_run(
     plumbing) don't have to rebuild it from the results list.
     """
     from evaluatorq.simulation.tracing import with_simulation_span
-    from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
+    from evaluatorq.tracing import tracing_session
 
-    await init_tracing_if_needed()
-
-    try:
-        async with with_simulation_span(
+    async with (
+        tracing_session(evaluation_name or 'simulation', trace_type='simulation'),
+        with_simulation_span(
             'orq.simulation.pipeline',
             {
                 'orq.simulation.evaluation_name': evaluation_name,
                 'orq.simulation.max_turns': max_turns,
                 'orq.simulation.parallelism': parallelism,
             },
-        ) as pipeline_span:
-            config = SimulationConfig(
-                evaluation_name=evaluation_name,
-                target=target,
-                personas=personas,
-                scenarios=scenarios,
-                datapoints=datapoints,
-                dataset_id=dataset_id,
-                max_turns=max_turns,
-                model=sim_model,
-                evaluator_names=evaluator_names,
-                parallelism=parallelism,
-                user_simulator=user_simulator,
-                judge=judge,
-                generation_client=generation_client,
-                upload_results=upload_results,
-                evaluation_description=evaluation_description,
-                orq_results_path=orq_results_path,
-                exit_on_failure=exit_on_failure,
-                save=save,
-                run_output=report,
-                hooks=hooks,
-            )
-            return await _simulate_core(
-                config=config,
-                caller='simulate',
-                pipeline_span=pipeline_span,
-            )
-    finally:
-        await flush_tracing()
+        ) as pipeline_span,
+    ):
+        config = SimulationConfig(
+            evaluation_name=evaluation_name,
+            target=target,
+            personas=personas,
+            scenarios=scenarios,
+            datapoints=datapoints,
+            dataset_id=dataset_id,
+            max_turns=max_turns,
+            model=sim_model,
+            evaluator_names=evaluator_names,
+            parallelism=parallelism,
+            user_simulator=user_simulator,
+            judge=judge,
+            generation_client=generation_client,
+            upload_results=upload_results,
+            evaluation_description=evaluation_description,
+            orq_results_path=orq_results_path,
+            exit_on_failure=exit_on_failure,
+            save=save,
+            run_output=report,
+            hooks=hooks,
+        )
+        return await _simulate_core(
+            config=config,
+            caller='simulate',
+            pipeline_span=pipeline_span,
+        )
 
 
 async def generate_and_simulate(
@@ -437,12 +435,11 @@ async def _generate_and_simulate_run(
     from evaluatorq.common.async_utils import await_maybe
     from evaluatorq.simulation.hooks import DefaultHooks, SimStage
     from evaluatorq.simulation.tracing import with_simulation_span
-    from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
+    from evaluatorq.tracing import tracing_session
 
-    await init_tracing_if_needed()
-
-    try:
-        async with with_simulation_span(
+    async with (
+        tracing_session(evaluation_name or 'simulation', trace_type='simulation'),
+        with_simulation_span(
             'orq.simulation.pipeline',
             {
                 'orq.simulation.evaluation_name': evaluation_name,
@@ -452,67 +449,66 @@ async def _generate_and_simulate_run(
                 'orq.simulation.max_turns': max_turns,
                 'orq.simulation.parallelism': parallelism,
             },
-        ) as pipeline_span:
-            resolved_agent_description = await _resolve_generation_agent_description(
-                agent_description=agent_description,
-                target=target,
-            )
-            gen_hooks = hooks or DefaultHooks()
-            datapoints: list[SimulationDatapoint] = []
-            gen_client: AsyncOpenAI | None = None
-            gen_owned = False
-            # One try/finally owns the client close so it fires even if the
-            # emit_datapoints callback raises between generation and simulate.
+        ) as pipeline_span,
+    ):
+        resolved_agent_description = await _resolve_generation_agent_description(
+            agent_description=agent_description,
+            target=target,
+        )
+        gen_hooks = hooks or DefaultHooks()
+        datapoints: list[SimulationDatapoint] = []
+        gen_client: AsyncOpenAI | None = None
+        gen_owned = False
+        # One try/finally owns the client close so it fires even if the
+        # emit_datapoints callback raises between generation and simulate.
+        try:
+            await await_maybe(gen_hooks.on_stage_start(SimStage.GENERATE, {}))
             try:
-                await await_maybe(gen_hooks.on_stage_start(SimStage.GENERATE, {}))
-                try:
-                    datapoints, gen_client, gen_owned = await _generate_datapoints_inner(
-                        caller='generate_and_simulate',
-                        agent_description=resolved_agent_description,
-                        num_personas=num_personas,
-                        num_scenarios=num_scenarios,
-                        model=sim_model,
-                        generation_client=generation_client,
-                        hooks=hooks,
-                    )
-                    if emit_datapoints is not None:
-                        emit_datapoints(datapoints)
-                finally:
-                    meta = {'num_datapoints': len(datapoints)} if datapoints else {}
-                    await await_maybe(gen_hooks.on_stage_end(SimStage.GENERATE, meta))
-
-                config = SimulationConfig(
-                    evaluation_name=evaluation_name,
-                    target=target,
-                    personas=None,
-                    scenarios=None,
-                    datapoints=datapoints,
-                    dataset_id=None,
-                    max_turns=max_turns,
+                datapoints, gen_client, gen_owned = await _generate_datapoints_inner(
+                    caller='generate_and_simulate',
+                    agent_description=resolved_agent_description,
+                    num_personas=num_personas,
+                    num_scenarios=num_scenarios,
                     model=sim_model,
-                    evaluator_names=evaluator_names,
-                    parallelism=parallelism,
-                    user_simulator=user_simulator,
-                    judge=judge,
-                    generation_client=gen_client,
-                    upload_results=upload_results,
-                    evaluation_description=evaluation_description,
-                    orq_results_path=orq_results_path,
-                    exit_on_failure=exit_on_failure,
-                    save=save,
-                    run_output=report,
+                    generation_client=generation_client,
                     hooks=hooks,
                 )
-                return await _simulate_core(
-                    config=config,
-                    caller='generate_and_simulate',
-                    pipeline_span=pipeline_span,
-                )
+                if emit_datapoints is not None:
+                    emit_datapoints(datapoints)
             finally:
-                if gen_owned and gen_client is not None:
-                    await gen_client.close()
-    finally:
-        await flush_tracing()
+                meta = {'num_datapoints': len(datapoints)} if datapoints else {}
+                await await_maybe(gen_hooks.on_stage_end(SimStage.GENERATE, meta))
+
+            config = SimulationConfig(
+                evaluation_name=evaluation_name,
+                target=target,
+                personas=None,
+                scenarios=None,
+                datapoints=datapoints,
+                dataset_id=None,
+                max_turns=max_turns,
+                model=sim_model,
+                evaluator_names=evaluator_names,
+                parallelism=parallelism,
+                user_simulator=user_simulator,
+                judge=judge,
+                generation_client=gen_client,
+                upload_results=upload_results,
+                evaluation_description=evaluation_description,
+                orq_results_path=orq_results_path,
+                exit_on_failure=exit_on_failure,
+                save=save,
+                run_output=report,
+                hooks=hooks,
+            )
+            return await _simulate_core(
+                config=config,
+                caller='generate_and_simulate',
+                pipeline_span=pipeline_span,
+            )
+        finally:
+            if gen_owned and gen_client is not None:
+                await gen_client.close()
 
 
 async def generate(
@@ -553,47 +549,45 @@ async def generate(
     from evaluatorq.common.async_utils import await_maybe
     from evaluatorq.simulation.hooks import DefaultHooks, SimStage
     from evaluatorq.simulation.tracing import with_simulation_span
-    from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
+    from evaluatorq.tracing import tracing_session
 
-    await init_tracing_if_needed()
-
-    try:
-        async with with_simulation_span(
+    async with (
+        tracing_session('simulation-generate', trace_type='simulation'),
+        with_simulation_span(
             'orq.simulation.generate',
             {
                 'orq.simulation.mode': 'generate',
                 'orq.simulation.num_personas': num_personas,
                 'orq.simulation.num_scenarios': num_scenarios,
             },
-        ):
-            # Bracket generation with the same GENERATE stage hooks the
-            # generate_and_simulate path uses, so the standalone command
-            # isn't silent. Empty on_stage_end meta: the CLI prints its own
-            # "✓ Generated N datapoint(s)" line, so the count isn't doubled.
-            gen_hooks = hooks or DefaultHooks()
-            await await_maybe(gen_hooks.on_stage_start(SimStage.GENERATE, {}))
-            try:
-                datapoints, gen_client, gen_owned = await _generate_datapoints_inner(
-                    caller='generate',
-                    agent_description=agent_description,
-                    num_personas=num_personas,
-                    num_scenarios=num_scenarios,
-                    model=sim_model,
-                    generation_client=generation_client,
-                    hooks=hooks,
-                    persona_seeds=persona_seeds,
-                    scenario_seeds=scenario_seeds,
-                )
-            finally:
-                await await_maybe(gen_hooks.on_stage_end(SimStage.GENERATE, {}))
-            # generate() has no further use for the client (unlike
-            # _generate_and_simulate_run, which keeps it open for the
-            # simulate stage), so close it here once generation is done.
-            if gen_owned:
-                await gen_client.close()
-            return datapoints
-    finally:
-        await flush_tracing()
+        ),
+    ):
+        # Bracket generation with the same GENERATE stage hooks the
+        # generate_and_simulate path uses, so the standalone command
+        # isn't silent. Empty on_stage_end meta: the CLI prints its own
+        # "✓ Generated N datapoint(s)" line, so the count isn't doubled.
+        gen_hooks = hooks or DefaultHooks()
+        await await_maybe(gen_hooks.on_stage_start(SimStage.GENERATE, {}))
+        try:
+            datapoints, gen_client, gen_owned = await _generate_datapoints_inner(
+                caller='generate',
+                agent_description=agent_description,
+                num_personas=num_personas,
+                num_scenarios=num_scenarios,
+                model=sim_model,
+                generation_client=generation_client,
+                hooks=hooks,
+                persona_seeds=persona_seeds,
+                scenario_seeds=scenario_seeds,
+            )
+        finally:
+            await await_maybe(gen_hooks.on_stage_end(SimStage.GENERATE, {}))
+        # generate() has no further use for the client (unlike
+        # _generate_and_simulate_run, which keeps it open for the
+        # simulate stage), so close it here once generation is done.
+        if gen_owned:
+            await gen_client.close()
+        return datapoints
 
 
 # ---------------------------------------------------------------------------
