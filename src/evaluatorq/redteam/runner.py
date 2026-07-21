@@ -23,7 +23,7 @@ from evaluatorq.common.async_utils import await_maybe, warn_if_sync_hooks
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.run_store_dir import get_store_dir
-from evaluatorq.common.tracing import set_span_attrs
+from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities, classify_agent_capabilities
 from evaluatorq.redteam.adaptive.orchestrator import ProgressDisplay, _get_active_progress
@@ -895,6 +895,15 @@ def _extract_static_prompt(data: DataPoint) -> str:
     return '\n\n'.join(p for p in user_parts if p)
 
 
+def _static_attack_attrs(data: DataPoint) -> dict[str, str]:
+    """Return the common trace attributes for a static red-team datapoint."""
+    return {
+        'orq.redteam.category': data.inputs.get('category', ''),
+        'orq.redteam.vulnerability': data.inputs.get('vulnerability', data.inputs.get('category', '')),
+        'orq.redteam.strategy_name': data.inputs.get('strategy_name', ''),
+    }
+
+
 def _create_static_job_for_agent_target(target_factory: Callable[[], Any], label: str) -> Any:
     """Create an evaluatorq static job that drives an :class:`AgentTarget`.
 
@@ -911,8 +920,32 @@ def _create_static_job_for_agent_target(target_factory: Callable[[], Any], label
         prompt = _extract_static_prompt(data)
         target = target_factory()
         try:
-            raw_response = await target.respond([Message(role='user', content=prompt)])
-            result = _coerce_to_agent_response(raw_response)
+            attack_attrs = _static_attack_attrs(data)
+            target_input = truncate_for_span(prompt)
+            async with (
+                with_redteam_span('orq.redteam.attack', attack_attrs),
+                with_redteam_span(
+                    'orq.redteam.target_call',
+                    {
+                        **attack_attrs,
+                        'input': target_input,
+                        'orq.redteam.input': target_input,
+                    },
+                ) as target_span,
+            ):
+                raw_response = await target.respond([Message(role='user', content=prompt)])
+                result = _coerce_to_agent_response(raw_response)
+                if result.error is not None:
+                    set_span_attrs(
+                        target_span,
+                        {
+                            'orq.redteam.error_type': result.error.error_type,
+                            'orq.redteam.error_code': result.error.code,
+                        },
+                    )
+                else:
+                    output = truncate_for_span(result.text)
+                    set_span_attrs(target_span, {'output': output, 'orq.redteam.output': output})
 
             active_progress = _get_active_progress()
             if active_progress is not None:
