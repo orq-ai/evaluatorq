@@ -9,7 +9,6 @@ Semantic convention:
     ``passed=False`` → the agent is VULNERABLE (attack succeeded)
 """
 
-import re
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias, TypedDict
 
@@ -21,6 +20,7 @@ from pydantic import (
     model_validator,
 )
 
+from evaluatorq.common.target_call import classify_error_type as classify_error_type
 from evaluatorq.contracts import StrEnum
 
 if TYPE_CHECKING:
@@ -667,6 +667,12 @@ class LLMConfig(BaseModel):
 
     # --- Target agent timeout -------------------------------------------------
     target_agent_timeout_ms: int = 240_000
+    # Retry a failed target transport call before abandoning its attacker turn.
+    # This is deliberately separate from ``retry_count``: the latter is forwarded
+    # to the ORQ router when supported, while this budget protects every target
+    # implementation at the orchestrator boundary.  A retry never consumes a
+    # new attacker turn or changes the conversation transcript.
+    max_target_retries: int = Field(default=2, ge=0, le=10)
 
     # --- Agent tool continuation cap ------------------------------------------
     max_tool_continuations: int = Field(
@@ -842,39 +848,10 @@ class RunError(BaseModel):
     turn: int | None = None
 
 
-# Regex patterns matched (case-insensitively) against the error string to infer
-# a coarse error_type. Ordered most-specific first; the first match wins, so an
-# explicit HTTP status must precede the generic 'connection' fallback (otherwise
-# "Status 503 connection reset" would misclassify as network_error). HTTP codes
-# require three digits and 429 is digit-bounded so stray numbers (request ids,
-# byte counts) do not trigger false rate_limit/status matches.
-_ERROR_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r'content[_ ]filter|content management policy'), 'content_filter'),
-    (re.compile(r'rate limit|(?<!\d)429(?!\d)'), 'rate_limit'),
-    (re.compile(r'timed out|timeout'), 'timeout'),
-    (re.compile(r'status[ _]?5\d\d'), 'server_error'),
-    (re.compile(r'status[ _]?4\d\d'), 'client_error'),
-    (re.compile(r'connection'), 'network_error'),
-]
-
-
-def classify_error_type(error: str | None, *, existing_type: str | None = None) -> str | None:
-    """Infer a coarse ``error_type`` from a raw error string when not already set.
-
-    Returns ``existing_type`` unchanged when provided, ``None`` for an empty
-    error, the first matching pattern's type, or ``'unknown'`` when nothing
-    matches. Shared by the orchestrator (per-response :class:`AgentResponseError`)
-    and report converters (run-level rollup) so both classify identically.
-    """
-    if existing_type:
-        return existing_type
-    if not error:
-        return None
-    lower = error.lower()
-    for pattern, etype in _ERROR_PATTERNS:
-        if pattern.search(lower):
-            return etype
-    return 'unknown'
+# classify_error_type is defined in evaluatorq.common.target_call and
+# re-exported above so evaluatorq.redteam.contracts.classify_error_type
+# stays a valid dotted path (see docstring reference below and
+# reports/converters.py, which imports it from here).
 
 
 # ---------------------------------------------------------------------------
@@ -905,6 +882,17 @@ class Turn(BaseModel):
 
     attacker: AgentResponse
     target: AgentResponse
+
+    @property
+    def errored(self) -> bool:
+        """True when the target side carries an :class:`AgentResponseError`.
+
+        Single source of truth for "this turn is an infra failure, not a real
+        reply" — used to skip such turns both when replaying the transcript to
+        the target (``turns_to_messages(skip_errors=True)``) and when building
+        the transcript for the evaluator.
+        """
+        return self.target.error is not None
 
     @model_validator(mode='before')
     @classmethod
@@ -940,7 +928,7 @@ def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[M
     """
     out: list[Message] = []
     for turn in turns:
-        if skip_errors and turn.target.error is not None:
+        if skip_errors and turn.errored:
             continue
         out.append(Message(role='user', content=turn.attacker.text))
         text_buffer: list[str] = []

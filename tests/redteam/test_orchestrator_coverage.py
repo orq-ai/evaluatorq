@@ -810,8 +810,8 @@ class TestRunAttack:
     @patch(_PATCH_RECORD_LLM)
     @patch(_PATCH_LLM_SPAN, side_effect=_noop_span_ctx)
     @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
-    async def test_target_timeout_single_recovers(self, _rs, _ls, _rl):
-        """A single target timeout does not abort — attack continues to completion."""
+    async def test_target_timeout_retries_same_exchange(self, _rs, _ls, _rl):
+        """A target timeout retries the same exchange without a synthetic turn."""
         orchestrator, mock_llm = _make_orchestrator()
         target = _make_target()
 
@@ -824,6 +824,7 @@ class TestRunAttack:
             asyncio.TimeoutError,
             AgentResponse(text="OK response"),
             AgentResponse(text="Another response"),
+            AgentResponse(text="Final response"),
         ]
 
         result = await orchestrator.run_attack(
@@ -836,18 +837,18 @@ class TestRunAttack:
 
         assert result.error is None
         assert result.n_turns == 3
-        # Turn 1 recorded an error message placeholder in the conversation
+        # The recovered first turn records the real reply, never an error placeholder.
         turn1_assistant = result.chat_completions[1]
         assert turn1_assistant.content is not None
         _turn1_text = content_to_text(turn1_assistant.content)
-        assert "ERROR" in _turn1_text or "timed out" in _turn1_text.lower()
+        assert _turn1_text == "OK response"
 
     @pytest.mark.asyncio
     @patch(_PATCH_RECORD_LLM)
     @patch(_PATCH_LLM_SPAN, side_effect=_noop_span_ctx)
     @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
-    async def test_target_timeout_consecutive_aborts(self, _rs, _ls, _rl):
-        """Two consecutive target timeouts abort the attack."""
+    async def test_target_timeout_retries_exhausted_abort(self, _rs, _ls, _rl):
+        """Exhausted same-exchange timeout retries abort the attack."""
         orchestrator, mock_llm = _make_orchestrator()
         target = _make_target()
 
@@ -855,10 +856,7 @@ class TestRunAttack:
             _make_completion("Attack turn 1"),
             _make_completion("Attack turn 2"),
         ]
-        target.respond.side_effect = [
-            asyncio.TimeoutError,
-            asyncio.TimeoutError,
-        ]
+        target.respond.side_effect = asyncio.TimeoutError
 
         result = await orchestrator.run_attack(
             target=target,
@@ -869,15 +867,15 @@ class TestRunAttack:
         )
 
         assert result.error_code == "target.timeout"
-        assert result.error_type == "target_error"
-        assert result.n_turns == 2
+        assert result.error_type == "timeout"
+        assert result.n_turns == 1
 
     @pytest.mark.asyncio
     @patch(_PATCH_RECORD_LLM)
     @patch(_PATCH_LLM_SPAN, side_effect=_noop_span_ctx)
     @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
-    async def test_target_exception_consecutive_aborts(self, _rs, _ls, _rl):
-        """Two consecutive target exceptions abort the attack with target_error."""
+    async def test_target_exception_retries_exhausted_abort(self, _rs, _ls, _rl):
+        """Exhausted same-exchange exception retries abort with a classified error_type."""
         orchestrator, mock_llm = _make_orchestrator()
         target = _make_target()
 
@@ -885,10 +883,7 @@ class TestRunAttack:
             _make_completion("Attack turn 1"),
             _make_completion("Attack turn 2"),
         ]
-        target.respond.side_effect = [
-            RuntimeError("connection refused"),
-            RuntimeError("connection refused"),
-        ]
+        target.respond.side_effect = RuntimeError("connection refused")
 
         result = await orchestrator.run_attack(
             target=target,
@@ -898,9 +893,11 @@ class TestRunAttack:
             max_turns=5,
         )
 
-        assert result.error_type == "target_error"
+        # "connection refused" classifies to network_error (outer error_type now carries
+        # the classified type, not the flat "target_error"); error_stage stays target_call.
+        assert result.error_type == "network_error"
         assert result.error_stage == "target_call"
-        assert result.n_turns == 2
+        assert result.n_turns == 1
 
     @pytest.mark.asyncio
     @patch(_PATCH_RECORD_LLM)

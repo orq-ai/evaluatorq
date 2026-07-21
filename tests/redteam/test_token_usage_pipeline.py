@@ -246,11 +246,10 @@ class TestPipelineTokenUsageAggregation:
 
     @pytest.mark.asyncio
     async def test_partial_run_after_target_failure_counts_consistent(self) -> None:
-        """When the target fails consecutively, partial counts must still balance.
+        """When target retries are exhausted, partial counts must still balance.
 
-        The orchestrator aborts after two consecutive target errors. Adversarial
-        calls = turns attempted; target calls = turns where the target actually
-        returned usage (zero here, since every call raises).
+        The orchestrator retries the same exchange three times, then aborts.
+        Target calls never return usage, so only the attacker generation is counted.
         """
         max_turns = 4
         create_mock = AsyncMock(side_effect=[_make_chat_completion() for _ in range(max_turns)])
@@ -278,16 +277,16 @@ class TestPipelineTokenUsageAggregation:
             max_turns=max_turns,
         )
 
-        # Aborted with a target error after 2 consecutive failures.
+        # Aborted with a target error after all same-exchange retries fail.
         assert result.error is not None
         assert result.error_type == 'target_error'
-        assert target.attempts == 2
+        assert target.attempts == 3
 
-        # Adversarial LLM was called once per attempted turn (2 turns before abort).
+        # The retry does not consume a new attacker turn.
         adv = result.token_usage_adversarial
         assert adv is not None
-        assert adv.calls == 2
-        assert adv.total_tokens == ADVERSARIAL_TOTAL * 2
+        assert adv.calls == 1
+        assert adv.total_tokens == ADVERSARIAL_TOTAL
 
         # Target never produced usage, so the target aggregate is absent.
         assert result.token_usage_target is None
@@ -510,7 +509,7 @@ class TestEvaluatorTokenUsageForwarded:
 
         from evaluatorq.redteam.adaptive import pipeline as pipeline_mod
         from evaluatorq.redteam.adaptive.pipeline import create_dynamic_evaluator
-        from evaluatorq.redteam.contracts import AttackEvaluationResult, AttackOutput
+        from evaluatorq.redteam.contracts import AttackEvaluationResult, AttackOutput, Turn
 
         usage = TokenUsage(prompt_tokens=4, completion_tokens=2, total_tokens=6, calls=1)
         fake_eval = MagicMock()
@@ -526,7 +525,11 @@ class TestEvaluatorTokenUsageForwarded:
         monkeypatch.setattr(pipeline_mod, 'OWASPEvaluator', lambda **_: fake_eval)
 
         scorer = create_dynamic_evaluator()['scorer']
-        output = AttackOutput(category='ASI01', vulnerability='goal_hijacking')
+        output = AttackOutput(
+            category='ASI01',
+            vulnerability='goal_hijacking',
+            turns=[Turn(attacker=AgentResponse(text='attack'), target=AgentResponse(text='refusal'))],
+        )
         data = SimpleNamespace(inputs={'category': 'ASI01', 'vulnerability': 'goal_hijacking'})
 
         result = await scorer({'data': data, 'output': output})
@@ -556,15 +559,8 @@ class TestEvaluatorTokenUsageForwarded:
         assert dumped['raw_output'] == {'raw_content': '{}'}
 
 
-class TestLateAdversarialFailureStillJudged:
-    """A turn>1 adversarial-generation failure must not bury the completed turns.
-
-    Regression (PR #163 review, item 2): turn 1 elicits a vulnerable target response,
-    then turn 2's attacker generation is content-filtered and exhausts retries, setting a
-    run-level error. The scorer must judge the completed turn(s) (conversation truncated)
-    instead of returning value='error' and silently losing the turn-1 finding. Turn-1
-    failures, where nothing was completed, are still skipped.
-    """
+class TestIncompleteAttacksNotJudged:
+    """A run-level failure preserves evidence for diagnosis but is never scored."""
 
     def _fake_evaluator(self, monkeypatch, *, passed: bool) -> AsyncMock:
         from evaluatorq.redteam.adaptive import pipeline as pipeline_mod
@@ -582,12 +578,12 @@ class TestLateAdversarialFailureStillJudged:
         return fake_eval.evaluate_vulnerability
 
     @pytest.mark.asyncio
-    async def test_completed_turns_judged_on_late_failure(self, monkeypatch) -> None:
+    async def test_completed_turns_not_judged_on_late_failure(self, monkeypatch) -> None:
         from types import SimpleNamespace
 
         from evaluatorq.contracts import AgentResponse
         from evaluatorq.redteam.adaptive.pipeline import create_dynamic_evaluator
-        from evaluatorq.redteam.contracts import AgentResponse, AttackOutput, Turn
+        from evaluatorq.redteam.contracts import AttackOutput, Turn
 
         evaluate = self._fake_evaluator(monkeypatch, passed=False)
 
@@ -611,9 +607,9 @@ class TestLateAdversarialFailureStillJudged:
         scorer = create_dynamic_evaluator()['scorer']
         result = await scorer({'data': data, 'output': output})
 
-        evaluate.assert_awaited_once()
-        assert result.value != 'error'
-        assert result.pass_ is False  # turn-1 vulnerability preserved, not lost
+        evaluate.assert_not_awaited()
+        assert result.value == 'error'
+        assert result.pass_ is None
 
     @pytest.mark.asyncio
     async def test_turn1_failure_still_skipped(self, monkeypatch) -> None:
@@ -652,7 +648,7 @@ class TestLateAdversarialFailureStillJudged:
 
         from evaluatorq.contracts import AgentResponse
         from evaluatorq.redteam.adaptive.pipeline import create_dynamic_evaluator
-        from evaluatorq.redteam.contracts import AgentResponse, AttackOutput, Turn
+        from evaluatorq.redteam.contracts import AttackOutput, Turn
 
         evaluate = self._fake_evaluator(monkeypatch, passed=False)
 
@@ -689,7 +685,7 @@ class TestLateAdversarialFailureStillJudged:
 
         from evaluatorq.contracts import AgentResponse
         from evaluatorq.redteam.adaptive.pipeline import create_dynamic_evaluator
-        from evaluatorq.redteam.contracts import AgentResponse, AttackOutput, Turn
+        from evaluatorq.redteam.contracts import AttackOutput, Turn
 
         evaluate = self._fake_evaluator(monkeypatch, passed=False)
 

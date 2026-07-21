@@ -17,15 +17,17 @@ import contextlib
 import inspect
 import time
 import traceback
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, Job, job
 from evaluatorq.common.jury import append_jury_summary
+from evaluatorq.common.target_call import call_target_with_retry
 from evaluatorq.common.thread_context import build_thread_id, conversation_thread
 from evaluatorq.common.tracing import set_span_attrs, truncate_for_span
-from evaluatorq.contracts import AgentResponse, Message
+from evaluatorq.contracts import AgentResponse, AgentResponseError, Message
 from evaluatorq.redteam.adaptive.attack_generator import generate_attack_prompt, generate_objective
 from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
 from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator, _get_active_progress
@@ -33,7 +35,6 @@ from evaluatorq.redteam.adaptive.strategy_planner import (
     plan_strategies_for_categories,
     plan_strategies_for_vulnerabilities,
 )
-from evaluatorq.redteam.backends.base import Backend, _coerce_to_agent_response
 from evaluatorq.redteam.backends.registry import create_async_llm_client, resolve_backend
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
@@ -49,7 +50,7 @@ from evaluatorq.redteam.contracts import (
     LLMConfig,
     OrchestratorResult,
     TextOutputItem,
-    TokenUsage,
+    ToolCallOutputItem,
     Turn,
     TurnType,
     Vulnerability,
@@ -65,6 +66,7 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
     from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities
+    from evaluatorq.redteam.backends.base import Backend
     from evaluatorq.redteam.contracts import AgentContext
     from evaluatorq.types import ScorerParameter
 
@@ -90,6 +92,24 @@ def _set_attack_span_attrs(span: Any, result: AttackOutput) -> None:
                 'orq.redteam.error_code': result.error_code,
             },
         )
+
+
+def _turn_has_content(turn: Turn) -> bool:
+    """True when the target reply has real content to judge: a tool call (often the
+    vulnerability itself for agent targets) or non-blank text. Reasoning-only or
+    empty-body replies (e.g. a silently-blocked 200) return False — feeding them to the
+    judge would score a non-response as RESISTANT. Mirrors ``turns_to_messages``, which
+    drops reasoning items when building a transcript.
+    """
+    return any(
+        isinstance(item, ToolCallOutputItem) or (isinstance(item, TextOutputItem) and bool(item.text.strip()))
+        for item in turn.target.output
+    )
+
+
+def _error_codes(turns: list[Turn]) -> str:
+    """Comma-separated sorted set of target error codes across ``turns``, or ``'none'``."""
+    return ', '.join(sorted({t.target.error.code for t in turns if t.target.error and t.target.error.code})) or 'none'
 
 
 async def generate_dynamic_datapoints_for_vulnerabilities(
@@ -389,61 +409,58 @@ def create_dynamic_redteam_job(
                 error_code = None
                 error_details = None
                 token_usage = None
-                agent_resp: AgentResponse = AgentResponse()
-                target_timeout_s = cfg.target_agent_timeout_ms / 1000.0
-                try:
+
+                @asynccontextmanager
+                async def _attempt_span(i: int):
                     async with with_redteam_span(
                         'orq.redteam.target_call',
                         {
                             'orq.redteam.category': category,
                             'orq.redteam.strategy_name': strategy.name,
                             'orq.redteam.turn': 1,
+                            'orq.redteam.target_attempt': i + 1,
                             'input': truncate_for_span(prompt),
                             'orq.redteam.input': truncate_for_span(prompt),
                         },
-                    ) as tgt_span:
-                        with conversation_thread(thread_id) as thread_id:
-                            raw = await asyncio.wait_for(
-                                target.respond([Message(role='user', content=prompt)]),
-                                timeout=target_timeout_s,
-                            )
-                        agent_resp = _coerce_to_agent_response(raw)
-                        response = agent_resp.text
-                        token_usage: TokenUsage | None = agent_resp.usage
-                        resp_text = truncate_for_span(response or '')
-                        set_span_attrs(
-                            tgt_span,
-                            {
-                                'output': resp_text,
-                                'orq.redteam.output': resp_text,
-                            },
-                        )
-                except asyncio.TimeoutError:
-                    logger.error(
-                        f'Single-turn attack timed out for {category}/{strategy.name} after {target_timeout_s:.0f}s'
+                    ) as span:
+                        yield span
+
+                def _record_attempt_response(span: Any, response: AgentResponse) -> None:
+                    response_text = truncate_for_span(response.text or '')
+                    set_span_attrs(
+                        span,
+                        {
+                            'output': response_text,
+                            'orq.redteam.output': response_text,
+                        },
                     )
-                    response = f'[ERROR: Target agent timed out after {target_timeout_s:.0f}s]'
-                    error = f'Target agent timed out after {target_timeout_s:.0f}s'
-                    error_type = 'target_error'
+
+                with conversation_thread(thread_id) as thread_id:
+                    result = await call_target_with_retry(
+                        target,
+                        [Message(role='user', content=prompt)],
+                        target_agent_timeout_ms=cfg.target_agent_timeout_ms,
+                        max_target_retries=cfg.max_target_retries,
+                        map_error=resolved_backend.map_error,
+                        on_attempt=_attempt_span,
+                        on_attempt_response=_record_attempt_response,
+                    )
+
+                agent_resp = result.response
+                response = agent_resp.text
+                token_usage = agent_resp.usage if result.succeeded else None
+                if not result.succeeded:
+                    # The helper guarantees a non-None error on the failure path;
+                    # fall back defensively so a None can never crash attribute access.
+                    err = result.error or AgentResponseError(
+                        message='target call failed', error_type='target_error', code='target_error'
+                    )
+                    error = f'Target agent failed after {result.attempts} attempt(s): {err.message}'
+                    # error_stage = where (target_call); error_type = what (timeout/network_error/rate_limit/... classified by the helper)
+                    error_type = err.error_type
                     error_stage = 'target_call'
-                    error_code = 'target.timeout'
-                    error_details = {
-                        'timeout_ms': cfg.target_agent_timeout_ms,
-                    }
-                except Exception as e:
-                    if isinstance(e, (TypeError, AttributeError, ImportError, NameError)):
-                        raise
-                    mapped_code, mapped_msg = resolved_backend.map_error(e)
-                    logger.error(f'Single-turn attack failed for {category}/{strategy.name}: {mapped_msg}')
-                    response = f'[ERROR: {mapped_msg}]'
-                    error = mapped_msg
-                    error_type = 'target_error'
-                    error_stage = 'target_call'
-                    error_code = mapped_code
-                    error_details = {
-                        'exception_type': type(e).__name__,
-                        'raw_message': str(e),
-                    }
+                    error_code = err.code or 'target_error'
+                    error_details = result.error_details
                 result_dict = AttackOutput(
                     turns=[
                         Turn(
@@ -466,6 +483,7 @@ def create_dynamic_redteam_job(
                     error_stage=error_stage,
                     error_code=error_code,
                     error_details=error_details,
+                    error_turn=1 if error is not None else None,
                     category=category,
                     vulnerability=vulnerability,
                 )
@@ -643,31 +661,39 @@ def create_dynamic_evaluator(
                 explanation=f'Unexpected job output type: {type(raw_output).__name__}',
             )
 
-        # Skip evaluation when the run errored — UNLESS the failure happened during
-        # adversarial generation on a late turn (turn > 1). In that case the earlier,
-        # fully-completed turns are intact real target responses and may already
-        # demonstrate the vulnerability, so judge them (conversation truncated) rather
-        # than discarding a real finding. Turn-1 failures and target-side errors have
-        # nothing trustworthy to evaluate and are still skipped.
+        # An error means the attempted conversation did not complete. Preserve the
+        # transcript for diagnosis, but do not score a partial exchange as either
+        # RESISTANT or VULNERABLE.
         if output.error:
-            late_adversarial_failure = (
-                output.error_stage == 'adversarial_generation' and (output.error_turn or 0) > 1 and bool(output.turns)
-            )
-            if not late_adversarial_failure:
-                return EvaluationResult(
-                    value='error',
-                    explanation=f'Skipped: target returned error — {output.error}',
-                )
-            logger.warning(
-                f'Adversarial generation failed at turn {output.error_turn} '
-                f'({output.error_code}); judging {len(output.turns)} completed turn(s) '
-                '(conversation truncated).'
+            return EvaluationResult(
+                value='error',
+                explanation=f'Skipped: incomplete attack run — {output.error}',
             )
 
         category = output.category or data.inputs.get('category', '')
         vulnerability = output.vulnerability or data.inputs.get('vulnerability', '')
-        input_messages = [{'role': 'user', 'content': t.attacker.text} for t in output.turns]
-        output_messages = [item for t in output.turns for item in t.target.output]
+
+        # A red-team score requires at least one complete, judgeable target response.
+        # ``inconclusive`` distinguishes a non-response with no explicit transport error
+        # from a failed run, while an errored turn remains an explicit run error even for
+        # historical outputs that predate the orchestrator's same-exchange retry policy.
+        if not output.turns:
+            return EvaluationResult(
+                value='inconclusive',
+                explanation='Skipped: target produced no responses, so there is no evidence to evaluate.',
+            )
+        scorable_turns = [t for t in output.turns if not t.errored and _turn_has_content(t)]
+        if len(scorable_turns) != len(output.turns):
+            value = 'error' if any(t.errored for t in output.turns) else 'inconclusive'
+            return EvaluationResult(
+                value=value,
+                explanation=(
+                    f'Skipped: incomplete target transcript (errored or empty; '
+                    f'codes: {_error_codes(output.turns)}) — nothing to evaluate'
+                ),
+            )
+        input_messages = [{'role': 'user', 'content': t.attacker.text} for t in scorable_turns]
+        output_messages = [item for t in scorable_turns for item in t.target.output]
 
         # Prefer vulnerability-first path when a valid Vulnerability enum can be resolved
         resolved_vuln: Vulnerability | None = None

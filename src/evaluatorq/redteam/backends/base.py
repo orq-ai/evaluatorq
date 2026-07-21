@@ -10,30 +10,16 @@ independently.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from evaluatorq.contracts import AgentResponse
+from evaluatorq.common.target_call import _coerce_to_agent_response as _coerce_to_agent_response
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from evaluatorq.contracts import AgentContext, AgentTarget
-
-
-def _coerce_to_agent_response(raw: Any) -> AgentResponse:
-    """Wrap a plain str return into AgentResponse for backward-compat with legacy targets.
-
-    Any target that still returns ``str`` from ``respond`` will be transparently
-    wrapped here at the orchestrator call site.
-    """
-    from evaluatorq.redteam.contracts import OutputMessage, TextOutputItem
-
-    if isinstance(raw, AgentResponse):
-        return raw
-    text_item: OutputMessage = TextOutputItem(text=str(raw) if raw is not None else '', annotations=[])
-    return AgentResponse(output=[text_item])
 
 
 def validate_agent_target(obj: object) -> None:
