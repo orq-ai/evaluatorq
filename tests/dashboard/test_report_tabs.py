@@ -607,7 +607,6 @@ def test_sim_drawer_runtime_dispatches_conversations_without_anchor_handler() ->
     source = (Path(__file__).parents[2] / 'src/evaluatorq/dashboard/static/dashboard.js').read_text()
     keyboard_handler = source.split("document.body.addEventListener('keydown'", 1)[1].split('});', 1)[0]
 
-    assert 'function openConversation(trigger, pushCurrent)' in source
     assert "trigger.getAttribute('data-drawer-url')" in source
     assert "a[href^=\"#conv-\"]" not in source
     assert "evt.target.closest('[data-no-drawer]')" in keyboard_handler

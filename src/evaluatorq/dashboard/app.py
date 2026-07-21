@@ -94,20 +94,32 @@ def _paging(req: Request) -> tuple[int, int]:
     return page, per_page
 
 
-def _settings_config(roots: list[Path] | None) -> list[tuple[str, str]]:
+def _mask_key(value: str) -> str:
+    """Show only a key's last 4 characters so a user can validate *which* key is
+    loaded without exposing the secret. Hidden chars render as ``*`` (capped so a
+    long key doesn't blow out the row). Short keys reveal nothing but length."""
+    if len(value) <= 4:
+        return '*' * len(value)
+    stars = '*' * min(len(value) - 4, 16)
+    return f'{stars}{value[-4:]}'
+
+
+def _settings_config(roots: list[Path] | None) -> list[tuple[str, str | list[str]]]:
     """Build the read-only runtime config shown on the Settings page: the run
-    stores being scanned, the default sim model, and API-key presence (never
-    the values)."""
+    stores being scanned, the default sim model, and API-key presence with a
+    masked suffix (never the full value)."""
     import os
 
     from evaluatorq.dashboard.library import _default_roots
     from evaluatorq.simulation.types import DEFAULT_MODEL
 
     scan_roots = roots if roots is not None else _default_roots()
-    config: list[tuple[str, str]] = [('Run stores', ', '.join(str(p) for p in scan_roots) or '—')]
+    store_paths = [str(p) for p in scan_roots] or ['—']
+    config: list[tuple[str, str | list[str]]] = [('Run stores', store_paths)]
     config.append(('Default sim model', DEFAULT_MODEL))
     for label, var in (('ORQ API key', 'ORQ_API_KEY'), ('OpenAI API key', 'OPENAI_API_KEY')):
-        config.append((label, 'set' if os.environ.get(var) else 'not set'))
+        value = os.environ.get(var)
+        config.append((label, _mask_key(value) if value else 'not set'))
     return config
 
 

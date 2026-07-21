@@ -116,7 +116,13 @@
   // list that opened the drawer; Escape is handled natively by <dialog>.
   (function () {
     var activeState = null;
-    var drillStack = [];
+    // Each drawer view (conversation / persona / scenario) is a real browser
+    // history entry, so Back/Forward walk the drill path. `drawerDepth` mirrors
+    // how many drawer entries sit above the page entry (0 = closed); it is read
+    // back from history.state on popstate so it survives Back/Forward. Pushes are
+    // suppressed while applying a popstate so we don't re-enter history.
+    var drawerDepth = 0;
+    var suppressPush = false;
 
     function currentDialog() {
       var dialog = document.querySelector('.sim-entity-dialog');
@@ -136,6 +142,15 @@
     function openDialog() {
       var dialog = currentDialog();
       if (!dialog) return;
+      // Native Escape closes <dialog> without going through dismiss(); unwind the
+      // drawer's history entries so Back/Forward stay consistent. Attach lazily
+      // (the dialog may be injected after this script runs) and only once.
+      if (!dialog.dataset.simCloseBound) {
+        dialog.dataset.simCloseBound = '1';
+        dialog.addEventListener('close', function () {
+          if (drawerDepth > 0 && !suppressPush) history.go(-drawerDepth);
+        });
+      }
       dialog.classList.remove('sim-entity-dialog--closing');
       if (!dialog.open) dialog.showModal();
     }
@@ -184,7 +199,7 @@
       var prev = dialog.querySelector('[data-sim-entity-prev]');
       var next = dialog.querySelector('[data-sim-entity-next]');
       var canStep = matchingTriggers().length > 1;
-      if (back) back.hidden = drillStack.length === 0;
+      if (back) back.hidden = drawerDepth <= 1;
       if (prev) prev.disabled = !canStep;
       if (next) next.disabled = !canStep;
     }
@@ -200,28 +215,56 @@
       });
     }
 
-    function openConversation(trigger, pushCurrent) {
-      var url = trigger.getAttribute('data-drawer-url');
-      var content = contentNode();
-      if (!url || !content || !window.htmx) return;
-      if (pushCurrent && activeState) drillStack.push(activeState);
-      activeState = { kind: 'conversation', url: url, origin: trigger.parentElement };
-      openDialog();
-      updateActions();
-      loadConversation();
+    function triggerSerial(trigger, kind) {
+      return kind === 'conversation'
+        ? { kind: 'conversation', url: trigger.getAttribute('data-drawer-url') }
+        : { kind: kind, id: trigger.getAttribute('data-entity-id') };
     }
 
-    function openTemplate(kind, id, pushCurrent, origin) {
-      var template = document.querySelector(
-        '[data-sim-entity-template][data-entity-kind="' + kind + '"][data-entity-id="' + id + '"]'
-      );
-      var content = contentNode();
-      if (!template || !content) return;
-      if (pushCurrent && activeState) drillStack.push(activeState);
-      activeState = { kind: kind, id: id, origin: origin || template.parentElement };
-      content.innerHTML = template.innerHTML;
+    // Re-find a view's originating trigger group on the page so j/k stepping
+    // still works after a Back/Forward that dropped the click-time origin.
+    function originForSerial(serial) {
+      var sel = serial.kind === 'conversation'
+        ? '[data-sim-entity-trigger][data-drawer-url="' + serial.url + '"]'
+        : '[data-sim-entity-trigger][data-entity-kind="' + serial.kind + '"][data-entity-id="' + serial.id + '"]';
+      var t = document.querySelector(sel);
+      return t ? t.parentElement : null;
+    }
+
+    // Render a drawer view from its serialized form. Does NOT touch history —
+    // callers decide whether the move is a push, replace, or popstate restore.
+    function applySerial(serial, origin) {
       openDialog();
+      var content = contentNode();
+      if (!content) return;
+      activeState = { kind: serial.kind, origin: origin || originForSerial(serial) };
+      if (serial.kind === 'conversation') {
+        if (!serial.url || !window.htmx) return;
+        activeState.url = serial.url;
+        loadConversation();
+      } else {
+        var template = document.querySelector(
+          '[data-sim-entity-template][data-entity-kind="' + serial.kind + '"][data-entity-id="' + serial.id + '"]'
+        );
+        if (!template) return;
+        activeState.id = serial.id;
+        content.innerHTML = template.innerHTML;
+      }
       updateActions();
+    }
+
+    // A clickthrough/drill: a new history entry above the current one.
+    function pushDrawer(serial, origin) {
+      drawerDepth += 1;
+      if (!suppressPush) history.pushState({ simDrawer: serial, drawerDepth: drawerDepth }, '');
+      applySerial(serial, origin);
+    }
+
+    // A lateral move (j/k within the same list): update the current entry in
+    // place so the history stack doesn't grow one item per arrow press.
+    function replaceDrawer(serial, origin) {
+      if (!suppressPush) history.replaceState({ simDrawer: serial, drawerDepth: drawerDepth }, '');
+      applySerial(serial, origin);
     }
 
     function step(delta) {
@@ -236,45 +279,36 @@
       if (current < 0) return;
       var next = (current + delta + triggers.length) % triggers.length;
       var trigger = triggers[next];
-      if (activeState.kind === 'conversation') {
-        openConversation(trigger, false);
-      } else {
-        openTemplate(activeState.kind, trigger.getAttribute('data-entity-id'), false, activeState.origin);
-      }
+      replaceDrawer(triggerSerial(trigger, activeState.kind), activeState.origin);
     }
 
-    function restoreState(state) {
-      if (!state) return;
-      activeState = state;
-      if (state.kind === 'conversation') {
-        openDialog();
-        updateActions();
-        loadConversation();
-        return;
+    // Close by unwinding every drawer entry back to the page, so Forward doesn't
+    // silently reopen and the URL matches the visible state.
+    function dismiss() {
+      if (drawerDepth > 0) {
+        history.go(-drawerDepth);
+      } else {
+        closeDrawer();
       }
-      var template = document.querySelector(
-        '[data-sim-entity-template][data-entity-kind="' + state.kind + '"][data-entity-id="' + state.id + '"]'
-      );
-      var content = contentNode();
-      if (!template || !content) return;
-      content.innerHTML = template.innerHTML;
-      openDialog();
-      updateActions();
     }
 
     function activateTrigger(trigger) {
       var kind = trigger.getAttribute('data-entity-kind');
-      var fromDrawer = !!trigger.closest('.sim-entity-dialog');
-      if (kind === 'conversation') {
-        if (!fromDrawer) drillStack = [];
-        openConversation(trigger, fromDrawer);
-        return;
-      }
-      // Drilling persona/scenario from inside the conversation drawer keeps the
-      // stack so Back returns to the conversation; from the page it starts fresh.
-      if (!fromDrawer) drillStack = [];
-      openTemplate(kind, trigger.getAttribute('data-entity-id'), fromDrawer, trigger.parentElement);
+      pushDrawer(triggerSerial(trigger, kind), trigger.parentElement);
     }
+
+    window.addEventListener('popstate', function (evt) {
+      var serial = evt.state && evt.state.simDrawer;
+      if (serial) {
+        suppressPush = true;
+        drawerDepth = evt.state.drawerDepth || 1;
+        applySerial(serial, null);
+        suppressPush = false;
+      } else {
+        drawerDepth = 0;
+        if (dialogIsOpen()) closeDrawer();
+      }
+    });
 
     document.body.addEventListener('click', function (evt) {
       if (evt.target.closest('[data-no-drawer]')) return;
@@ -288,9 +322,9 @@
       var dialog = currentDialog();
       if (!dialog || !dialog.open) return;
       if (evt.target === dialog || evt.target.closest('[data-sim-entity-close]')) {
-        closeDrawer();
+        dismiss();
       } else if (evt.target.closest('[data-sim-entity-back]')) {
-        restoreState(drillStack.pop());
+        history.back();
       } else if (evt.target.closest('[data-sim-entity-prev]')) {
         step(-1);
       } else if (evt.target.closest('[data-sim-entity-next]')) {

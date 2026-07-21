@@ -812,6 +812,18 @@ class TestTranscriptFragmentRewrite:
         assert 'sim-entity-dialog--closing' in source
         assert '.sim-report .sim-entity-dialog--closing { animation: sim-drawer-out 160ms ease-in forwards; }' in DASHBOARD_CSS
 
+    def test_drawer_drill_pushes_browser_history(self) -> None:
+        """Each persona/scenario/conversation drill is a real history entry so the
+        browser Back/Forward buttons walk the drill path."""
+        source = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
+
+        assert "history.pushState({ simDrawer: serial, drawerDepth: drawerDepth }, '')" in source
+        assert "window.addEventListener('popstate'" in source
+        assert 'evt.state.simDrawer' in source
+        # Back button and native Escape unwind through history, not a private stack.
+        assert 'history.back()' in source
+        assert 'history.go(-drawerDepth)' in source
+
     def test_transcript_fragment_error_entry_shows_error_message(self) -> None:
         from evaluatorq.dashboard.sim_views import render_transcript_fragment
 

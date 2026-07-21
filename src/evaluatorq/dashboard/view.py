@@ -548,7 +548,7 @@ def report_actions(rid: str) -> str:
     return f'<a class="btn-secondary" href="/r/{esc(rid)}/export.html">{_DOWNLOAD_ICON} Export</a>'
 
 
-def settings_body(config: list[tuple[str, str]]) -> str:
+def settings_body(config: list[tuple[str, str | list[str]]]) -> str:
     """Render the Settings screen as a read-only configuration view.
 
     The v1 design's Settings page is a workspace-management surface (editable
@@ -557,9 +557,14 @@ def settings_body(config: list[tuple[str, str]]) -> str:
     dashboard is operating under, and note the design gap. Editable settings
     would belong to the Orq platform UI, not this local dashboard (RES-1038).
     """
+    def val_html(v: str | list[str]) -> str:
+        # A list renders one item per line; a scalar is a single line.
+        items = v if isinstance(v, list) else [v]
+        return ''.join(f'<span class="config-val-item">{esc(item)}</span>' for item in items)
+
     rows = ''.join(
         f'<div class="config-row"><span class="config-key">{esc(k)}</span>'
-        f'<span class="config-val">{esc(v)}</span></div>'
+        f'<span class="config-val">{val_html(v)}</span></div>'
         for k, v in config
     )
     config_panel = _panel('Configuration', 'What this dashboard is reading', f'<div class="config-list">{rows}</div>')

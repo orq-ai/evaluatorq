@@ -388,6 +388,19 @@ def _render_criteria_column(entry: SimulationEntry) -> str:
     )
 
 
+# Icon-led rows (Option A): a quiet teal glyph tile anchors each field.
+_PERSONA_ICON = (
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-6 8-6s8 2 8 6"/></svg>'
+)
+_SCENARIO_ICON = (
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    '<path d="M4 5h16M4 12h16M4 19h10"/></svg>'
+)
+
+
 def _sim_conv_value(text: str, kind: str, entity_id: str | None) -> str:
     """A persona/scenario value; a click-through to its cohort card when we know
     the entity's DOM id, otherwise plain text.
@@ -423,16 +436,26 @@ def _render_conversation_summary(
     turn_word = 'turn' if turns == 1 else 'turns'
     persona_val = _sim_conv_value(entry.persona, 'persona', persona_entity_id)
     scenario_val = _sim_conv_value(entry.scenario, 'scenario', scenario_entity_id)
+
+    def field(icon: str, label: str, value_html: str) -> str:
+        return (
+            f'<div class="sim-conv-field">'
+            f'<span class="sim-conv-ico">{icon}</span>'
+            f'<div class="sim-conv-field-text">'
+            f'<span class="sim-conv-label">{label}</span>{value_html}'
+            f'</div></div>'
+        )
+
     return (
         f'<div class="sim-conv-summary">'
+        f'<div class="sim-conv-head">'
         f'<span class="sim-conv-index">#{entry.index}</span>'
-        f'<div class="sim-conv-meta">'
-        f'<div class="sim-conv-field"><span class="sim-conv-label">Persona</span>'
-        f'{persona_val}</div>'
-        f'<div class="sim-conv-field"><span class="sim-conv-label">Scenario</span>'
-        f'{scenario_val}</div>'
-        f'</div>'
         f'<span class="sim-conv-turns-pill">{turns} {turn_word}</span>'
+        f'</div>'
+        f'<div class="sim-conv-meta">'
+        f'{field(_PERSONA_ICON, "Persona", persona_val)}'
+        f'{field(_SCENARIO_ICON, "Scenario", scenario_val)}'
+        f'</div>'
         f'</div>'
     )
 

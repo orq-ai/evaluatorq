@@ -444,9 +444,11 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 
 /* ==== settings — read-only config ================================= */
 .config-list { display: flex; flex-direction: column; }
-.config-row { display: flex; justify-content: space-between; gap: 16px; padding: 8px 0; border-bottom: 1px solid var(--border, #eee); }
-.config-key { font-family: var(--font-sans); font-size: 13px; color: var(--text-muted); }
-.config-val { font-family: var(--font-mono); font-size: 12px; color: var(--text-strong); word-break: break-all; text-align: right; }
+.config-row { display: flex; align-items: baseline; gap: 24px; padding: 8px 0; border-bottom: 1px solid var(--border, #eee); }
+.config-key { flex: 0 0 160px; font-family: var(--font-sans); font-size: 13px; color: var(--text-muted); }
+/* Value column takes the remaining width; list items stack one per line. */
+.config-val { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-family: var(--font-mono); font-size: 12px; color: var(--text-strong); }
+.config-val-item { word-break: break-all; }
 .config-note { font-size: 13px; color: var(--text-muted); line-height: 1.5; }
 
 /* ==== run rows (recent + per-kind list) ============================= */
