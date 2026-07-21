@@ -934,7 +934,45 @@ class TestRuntimeErrorsProduceErrorOutput:
         parsed = AttackOutput.model_validate(output)
         assert parsed.error is not None
         assert parsed.error_code == "target.timeout"
-        assert parsed.error_type == "target_error"
+        assert parsed.error_type == "timeout"
+
+    @pytest.mark.asyncio
+    @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
+    @patch(_PATCH_SET_SPAN_ATTRS)
+    @patch(_PATCH_ATTACK_SPAN_ATTRS)
+    async def test_template_path_connection_error_classified_as_network_error(
+        self, _attrs, _set_attrs, _span
+    ):
+        """A ConnectionError from the target classifies as network_error, not the flat target_error."""
+        from evaluatorq.redteam.adaptive.pipeline import create_dynamic_redteam_job
+        from evaluatorq.redteam.contracts import AttackOutput
+
+        strategy = _make_strategy(
+            turn_type=TurnType.SINGLE,
+            prompt_template="Static attack for {agent_name}.",
+        )
+        target = _make_target()
+        target.respond = AsyncMock(side_effect=ConnectionError("connection refused"))
+        factory = _make_target_factory(target)
+        agent_context = _make_agent_context()
+        datapoint = _make_datapoint(strategy=strategy)
+
+        job_fn = create_dynamic_redteam_job(
+            agent_key="test-agent",
+            agent_context=agent_context,
+            backend=factory,
+        )
+
+        with patch(
+            "evaluatorq.redteam.adaptive.orchestrator._get_active_progress",
+            return_value=None,
+        ):
+            output = await _call_dynamic_job(job_fn, datapoint)
+
+        parsed = AttackOutput.model_validate(output)
+        assert parsed.error_stage == "target_call"
+        assert parsed.error_type == "network_error"
+        assert parsed.error_code
 
     @pytest.mark.asyncio
     @patch(_PATCH_REDTEAM_SPAN, side_effect=_noop_span_ctx)
