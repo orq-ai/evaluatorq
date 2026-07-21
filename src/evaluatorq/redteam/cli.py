@@ -693,53 +693,86 @@ def runs(
         typer.echo(f'No runs found (directory {runs_dir} does not exist).')
         raise typer.Exit(code=0)
 
-    # Surface in-flight / errored runs from lifecycle manifests (human view only;
-    # --json stays report-only for backward compatibility).
-    if not json_output:
-        from evaluatorq.common.run_manifest import echo_active_runs
+    from evaluatorq.common.run_manifest import list_run_records
+    from evaluatorq.dashboard.library import _manifest_card_id
 
-        echo_active_runs(runs_dir)
-
-    run_files = sorted(runs_dir.glob('*.json'), key=lambda p: p.stat().st_mtime, reverse=True)
-    if not run_files:
+    # Manifest-first: build rows from the tiny manifest sidecars (status + compact
+    # summary), falling back to a full-report read only for legacy runs with no
+    # manifest. A single table with a Status column shows running/error/cancelled/
+    # completed runs together (no separate 'Active runs' block, no double-listing).
+    records_src = list_run_records(runs_dir)[:limit]
+    if not records_src:
         if json_output:
             echo_json([])
             raise typer.Exit(code=0)
         typer.echo(f'No runs found in {runs_dir}.')
         raise typer.Exit(code=0)
 
-    run_files = run_files[:limit]
+    def _row(manifest: Any, report_path: Path | None) -> dict[str, Any] | None:
+        """Normalize a (manifest, report_path) record to the fields the table needs.
+
+        Manifest rows read the compact ``summary`` (no full-report read); legacy
+        rows (manifest is None) read the full report as before. Returns None when
+        a legacy report can't be parsed.
+        """
+        if manifest is not None:
+            summary = manifest.summary or {}
+            rid = report_id(report_path) if report_path is not None else _manifest_card_id(manifest.run_id)
+            return {
+                'report_id': rid,
+                'run_name': manifest.run_name,
+                'created_at': manifest.started_at.isoformat(),
+                'status': manifest.status.value,
+                'pipeline': summary.get('pipeline'),
+                'tested_agents': summary.get('tested_agents', []),
+                'total_attacks': summary.get('total_attacks', summary.get('total_results')),
+                'vulnerability_rate': summary.get('vulnerability_rate'),
+                'file': report_path.name if report_path is not None else None,
+            }
+        # Legacy report with no manifest — read the full report for its stats.
+        if report_path is None:
+            return None
+        try:
+            data = json.loads(report_path.read_text(encoding='utf-8'))
+        except (json.JSONDecodeError, OSError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        summary = data.get('summary', {})
+        if not isinstance(summary, dict):
+            return None  # malformed report shape — skip (matches legacy behavior)
+        return {
+            'report_id': report_id(report_path),
+            'run_name': data.get('run_name', report_path.stem),
+            'created_at': data.get('created_at'),
+            'status': 'completed',
+            'pipeline': data.get('pipeline'),
+            'tested_agents': data.get('tested_agents', []),
+            'total_attacks': summary.get('total_attacks', data.get('total_results')),
+            'vulnerability_rate': summary.get('vulnerability_rate'),
+            'file': report_path.name,
+        }
+
+    rows: list[dict[str, Any]] = []
+    skipped = 0
+    for manifest, report_path in records_src:
+        row = _row(manifest, report_path)
+        if row is None:
+            skipped += 1
+            continue
+        rows.append(row)
 
     if json_output:
-        records: list[dict[str, Any]] = []
-        skipped = 0
-        for f in run_files:
-            try:
-                data = json.loads(f.read_text(encoding='utf-8'))
-            except (json.JSONDecodeError, OSError):
-                skipped += 1
-                continue
-            if not isinstance(data, dict):
-                skipped += 1
-                continue
-            summary = data.get('summary', {})
-            if not isinstance(summary, dict):
-                skipped += 1
-                continue
-            records.append({
-                'report_id': report_id(f),
-                'run_name': data.get('run_name', f.stem),
-                'created_at': data.get('created_at'),
-                'pipeline': data.get('pipeline'),
-                'tested_agents': data.get('tested_agents', []),
-                'total_attacks': summary.get('total_attacks', data.get('total_results')),
-                'vulnerability_rate': summary.get('vulnerability_rate'),
-                'file': f.name,
-            })
-        echo_json(records)
+        echo_json(rows)
         if skipped:
             typer.echo(f'Warning: {skipped} file(s) could not be parsed and were skipped.', err=True)
         raise typer.Exit(code=0)
+
+    def _fmt_created(created: Any) -> str:
+        return created[:16].replace('T', ' ') if isinstance(created, str) and len(created) >= 16 else str(created or '')
+
+    def _fmt_asr(asr: Any) -> str:
+        return f'{asr:.0%}' if isinstance(asr, (int, float)) else '—'
 
     try:
         from rich import box
@@ -749,40 +782,24 @@ def runs(
         table = Table(title=f'Red Team Runs ({runs_dir})', show_header=True, box=box.ROUNDED)
         table.add_column('Name', style='cyan')
         table.add_column('Date', style='white')
+        table.add_column('Status', style='white')
         table.add_column('Mode', style='white')
         table.add_column('Targets', style='white')
         table.add_column('Attacks', style='white', justify='right')
         table.add_column('ASR', style='white', justify='right')
         table.add_column('File', style='dim')
 
-        skipped = 0
-        for f in run_files:
-            try:
-                data = json.loads(f.read_text(encoding='utf-8'))
-            except (json.JSONDecodeError, OSError):
-                skipped += 1
-                continue
-
-            run_name = data.get('run_name', f.stem)
-            created = data.get('created_at', '')
-            if isinstance(created, str) and len(created) >= 16:
-                created = created[:16].replace('T', ' ')
-            pipeline = data.get('pipeline', '?')
-            agents = data.get('tested_agents', [])
-            targets_str = ', '.join(agents) if agents else '?'
-            summary = data.get('summary', {})
-            total = summary.get('total_attacks', data.get('total_results', 0))
-            asr = summary.get('vulnerability_rate', 0.0)
-            asr_str = f'{asr:.0%}' if isinstance(asr, (int, float)) else '?'
-
+        for row in rows:
+            agents = row.get('tested_agents') or []
             table.add_row(
-                run_name,
-                str(created),
-                pipeline,
-                targets_str,
-                str(total),
-                asr_str,
-                f.name,
+                str(row['run_name']),
+                _fmt_created(row.get('created_at')),
+                str(row.get('status', '—')),
+                str(row.get('pipeline') or '—'),
+                ', '.join(agents) if agents else '—',
+                str(row.get('total_attacks') if row.get('total_attacks') is not None else '—'),
+                _fmt_asr(row.get('vulnerability_rate')),
+                str(row.get('file') or '—'),
             )
 
         console = Console()
@@ -792,30 +809,25 @@ def runs(
 
     except ImportError:
         # Fallback without rich
-        typer.echo(f'{"Name":<20} {"Date":<17} {"Mode":<8} {"Attacks":>7} {"ASR":>5}  File')
-        typer.echo('-' * 80)
-        skipped = 0
-        for f in run_files:
-            try:
-                data = json.loads(f.read_text(encoding='utf-8'))
-            except (json.JSONDecodeError, OSError):
-                skipped += 1
-                continue
-            run_name = data.get('run_name', f.stem)[:20]
-            created = data.get('created_at', '')
-            if isinstance(created, str) and len(created) >= 16:
-                created = created[:16].replace('T', ' ')
-            pipeline = data.get('pipeline', '?')
-            summary = data.get('summary', {})
-            total = summary.get('total_attacks', data.get('total_results', 0))
-            asr = summary.get('vulnerability_rate', 0.0)
-            asr_str = f'{asr:.0%}' if isinstance(asr, (int, float)) else '?'
-            typer.echo(f'{run_name:<20} {created!s:<17} {pipeline:<8} {total:>7} {asr_str:>5}  {f.name}')
+        typer.echo(f'{"Name":<20} {"Date":<17} {"Status":<10} {"Mode":<8} {"Attacks":>7} {"ASR":>5}  File')
+        typer.echo('-' * 88)
+        for row in rows:
+            name = str(row['run_name'])[:20]
+            status = str(row.get('status') or '—')
+            pipeline = str(row.get('pipeline') or '—')
+            total = row.get('total_attacks')
+            total_str = str(total) if total is not None else '—'
+            typer.echo(
+                f'{name:<20} {_fmt_created(row.get("created_at")):<17} '
+                f'{status:<10} {pipeline:<8} '
+                f'{total_str:>7} {_fmt_asr(row.get("vulnerability_rate")):>5}  '
+                f'{row.get("file") or "—"}'
+            )
         if skipped:
             typer.echo(
                 f'Warning: {skipped} file(s) could not be parsed and were skipped.',
                 err=True,
             )
 
-    if run_files:
+    if rows:
         typer.echo(f'open: {_dashboard_command(runs_dir)}')

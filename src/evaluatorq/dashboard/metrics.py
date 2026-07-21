@@ -145,10 +145,35 @@ def _sim_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
     )
 
 
+def _inflight_status(card: library.ReportCard) -> str:
+    """Map a manifest status to the run-list lifecycle status ('running'/'error')."""
+    return 'running' if card.status == 'running' else 'error'
+
+
+def _inflight_row(card: library.ReportCard) -> RunRow:
+    """Build a RunRow for an in-flight run (no report on disk yet) from its card."""
+    return RunRow(
+        id=card.id,
+        surface=card.surface,
+        name=card.name,
+        when=card.created_at.strftime('%Y-%m-%d %H:%M'),
+        headline=card.headline,
+        score=None,
+        status=_inflight_status(card),
+        error=card.status != 'running',
+    )
+
+
 def run_rows(roots: list[Path] | None = None) -> list[RunRow]:
-    """Return one RunRow per discovered report, newest-first."""
+    """Return one RunRow per discovered run, newest-first (manifest-first)."""
     rows: list[RunRow] = []
     for card in library.scan(roots):
+        # In-flight run (running/error/cancelled) — no report to read; render
+        # straight from the manifest-backed card.
+        if card.path is None:
+            if card.surface in ('redteam', 'sim'):
+                rows.append(_inflight_row(card))
+            continue
         try:
             data = library.read_json_cached(card.path)
         except (OSError, ValueError):
@@ -176,6 +201,9 @@ def landing(roots: list[Path] | None = None) -> Landing:
     resistant = 0
     vulnerable = 0
     for card in library.scan(roots):
+        # In-flight runs have no report on disk — nothing to roll up.
+        if card.path is None:
+            continue
         try:
             data = library.read_json_cached(card.path)
         except (OSError, ValueError):
@@ -378,7 +406,7 @@ def sim_overview(roots: list[Path] | None = None, *, page: int = 1, per_page: in
     total = 0
 
     for card in library.scan(roots):
-        if card.surface != 'sim':
+        if card.surface != 'sim' or card.path is None:
             continue
         try:
             data = library.read_json_cached(card.path)
@@ -530,7 +558,7 @@ def redteam_overview(roots: list[Path] | None = None, *, page: int = 1, per_page
     total_attacks = 0
 
     for card in library.scan(roots):
-        if card.surface != 'redteam':
+        if card.surface != 'redteam' or card.path is None:
             continue
         try:
             data = library.read_json_cached(card.path)

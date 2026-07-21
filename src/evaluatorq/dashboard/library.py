@@ -16,6 +16,8 @@ from loguru import logger
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from evaluatorq.contracts import RunManifest
+
 _ARTIFACT_PREFIXES = ('01_', '02_', '03_')
 
 
@@ -77,8 +79,14 @@ class ReportCard:
     name: str
     created_at: datetime
     headline: str
-    path: Path
+    # ``None`` for an in-flight (running/error/cancelled) run that has no report
+    # on disk yet — such a card renders from the manifest's status/stage alone.
+    path: Path | None
     error: str | None = None
+    # Lifecycle status/stage from the run manifest. ``None`` for legacy
+    # report-only cards (no manifest) so the view keeps its existing behavior.
+    status: str | None = None
+    stage: str | None = None
 
 
 def _default_roots() -> list[Path]:
@@ -122,9 +130,79 @@ def _card(path: Path) -> ReportCard | None:
     return ReportCard(report_id(path), surface, str(name), created_at, headline, path, error)
 
 
+def _manifest_card_id(run_id: str) -> str:
+    """Stable, URL-safe id for a manifest-backed card that has no report yet.
+
+    Namespaced (``manifest:``) so it never collides with a ``report_id`` (which
+    hashes a file path). Used only for in-flight cards; once a run completes and
+    gains a ``report_path`` the card switches to ``report_id(path)`` so its
+    identity matches the report and detail rendering is unchanged.
+    """
+    digest = hashlib.sha256(f'manifest:{run_id}'.encode()).digest()[:12]
+    return base64.urlsafe_b64encode(digest).decode().rstrip('=')
+
+
+def _card_from_manifest(m: RunManifest) -> ReportCard:
+    """Build a list-row card from a ``RunManifest`` without reading its report.
+
+    The headline for a completed run comes from the manifest's compact
+    ``summary`` (never the report). In-flight runs (running/error/cancelled) have
+    no summary, so the headline reflects their status/stage instead.
+    """
+    surface = m.surface.value
+    created_at = m.started_at
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    path = Path(m.report_path) if m.report_path else None
+    summary = m.summary or {}
+    status = m.status.value
+    if status == 'completed' and summary:
+        noun = 'attacks' if surface == 'redteam' else 'conversations'
+        headline = f'{summary.get("total_results", 0)} {noun}'
+    elif status == 'running':
+        headline = f'running · {m.stage}' if m.stage else 'running'
+    else:  # error / cancelled with no report
+        headline = status
+    rid = report_id(path) if path is not None else _manifest_card_id(m.run_id)
+    return ReportCard(
+        rid,
+        surface,
+        m.run_name,
+        created_at,
+        headline,
+        path,
+        error=None,
+        status=status,
+        stage=m.stage,
+    )
+
+
 def scan(roots: list[Path] | None = None) -> list[ReportCard]:
+    """Discover run cards, manifest-first with a legacy full-report fallback.
+
+    Each ``.manifests/*.json`` sidecar becomes a card built without reading the
+    full report (completed runs use their compact ``summary``; in-flight runs use
+    status/stage). Report files already covered by a manifest's ``report_path``
+    are de-duplicated out; the remaining (legacy, manifest-less) reports fall back
+    to the full-report ``_card`` path. A runs dir with only legacy reports lists
+    exactly as before.
+    """
+    from evaluatorq.common.run_manifest import list_manifests
+
     roots = roots or _default_roots()
-    cards = [c for p in _iter_report_files(roots) if (c := _card(p)) is not None]
+    cards: list[ReportCard] = []
+    covered: set[Path] = set()
+    for root in roots:
+        for m in list_manifests(root):
+            card = _card_from_manifest(m)
+            cards.append(card)
+            if card.path is not None:
+                covered.add(card.path.resolve())
+    for p in _iter_report_files(roots):
+        if p.resolve() in covered:
+            continue
+        if (c := _card(p)) is not None:
+            cards.append(c)
     return sorted(cards, key=lambda c: c.created_at, reverse=True)
 
 
@@ -134,4 +212,21 @@ def resolve(rid: str, roots: list[Path] | None = None) -> Path | None:
         if report_id(p) == rid:
             return p
     logger.debug('report id not found after rescan: {}', rid)
+    return None
+
+
+def resolve_manifest(rid: str, roots: list[Path] | None = None) -> RunManifest | None:
+    """Resolve an in-flight (report-less) card id back to its ``RunManifest``.
+
+    Only matches manifests with no ``report_path`` (running/error/cancelled) —
+    completed runs resolve to their report via :func:`resolve`. Returns the
+    ``RunManifest`` so the detail route can render a minimal status page.
+    """
+    from evaluatorq.common.run_manifest import list_manifests
+
+    roots = roots or _default_roots()
+    for root in roots:
+        for m in list_manifests(root):
+            if m.report_path is None and _manifest_card_id(m.run_id) == rid:
+                return m
     return None

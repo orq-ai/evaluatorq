@@ -812,9 +812,21 @@ async def red_team(
             )
         )
 
-        # Fully finished — including on_complete. Now mark the manifest completed.
+        # Fully finished — including on_complete. Now mark the manifest completed,
+        # embedding a compact summary (the exact fields the `runs` table + dashboard
+        # card render) so a list row needs zero full-report reads.
         if manifest_writer is not None:
-            manifest_writer.complete(report_path=auto_save_path)
+            manifest_writer.complete(
+                report_path=auto_save_path,
+                summary={
+                    'pipeline': report.pipeline.value,
+                    'total_results': report.total_results,
+                    'total_attacks': report.summary.total_attacks,
+                    'vulnerability_rate': report.summary.vulnerability_rate,
+                    'resistance_rate': report.summary.resistance_rate,
+                    'tested_agents': list(report.tested_agents),
+                },
+            )
     except CancelledError:
         # The run was declined at the confirm gate (on_confirm returned False,
         # surfaced as CancelledError). That is a distinct terminal status, not an

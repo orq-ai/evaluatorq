@@ -211,3 +211,52 @@ def test_cancelled_run_shown_in_active_lines(tmp_path: Path) -> None:
     assert 'cancelled-one' in names
     lines = format_active_lines(runs)
     assert any('cancelled-one' in ln and 'cancelled' in ln for ln in lines)
+
+
+def test_summary_round_trips_through_manifest(tmp_path: Path) -> None:
+    runs = tmp_path / 'runs'
+    w = start_manifest(run_id='s1', surface='redteam', run_name='rt', runs_dir=runs)
+    summary = {
+        'pipeline': 'dynamic',
+        'total_results': 12,
+        'total_attacks': 12,
+        'vulnerability_rate': 0.25,
+        'resistance_rate': 0.75,
+        'tested_agents': ['agent:x'],
+    }
+    w.complete(report_path=runs / 'rt_20250101.json', summary=summary)
+
+    m = list_manifests(runs)[0]
+    assert m.status == 'completed'
+    assert m.summary == summary
+
+
+def test_list_run_records_manifest_first_dedups_and_falls_back(tmp_path: Path) -> None:
+    from evaluatorq.common.run_manifest import list_run_records
+
+    runs = tmp_path / 'runs'
+    runs.mkdir()
+    # Completed run with a manifest pointing at a report on disk.
+    report = runs / 'done_20250101.json'
+    report.write_text('{"pipeline": "dynamic", "summary": {}}', encoding='utf-8')
+    start_manifest(run_id='done', surface='redteam', run_name='done', runs_dir=runs).complete(
+        report_path=report, summary={'total_results': 1}
+    )
+    # In-flight run — manifest only, no report.
+    start_manifest(run_id='live', surface='redteam', run_name='live', runs_dir=runs)
+    # Legacy report with no manifest at all.
+    legacy = runs / 'legacy_20240101.json'
+    legacy.write_text('{"pipeline": "static", "summary": {}}', encoding='utf-8')
+
+    records = list_run_records(runs)
+    # Three distinct runs, none listed twice.
+    assert len(records) == 3
+    # The completed run's report is covered by its manifest → not re-listed as legacy.
+    manifests = [m for m, _ in records if m is not None]
+    legacy_paths = [p for m, p in records if m is None]
+    assert {m.run_name for m in manifests} == {'done', 'live'}
+    assert legacy_paths == [legacy]
+    # The in-flight manifest carries no report path.
+    live = next(m for m, _ in records if m is not None and m.run_name == 'live')
+    assert live.report_path is None
+    assert live.status == 'running'

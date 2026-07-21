@@ -1427,69 +1427,94 @@ def runs(
         typer.echo(f'No sim-runs directory found at {runs_dir}')
         raise typer.Exit(0)
 
-    # Surface in-flight / errored runs from lifecycle manifests (human view only;
-    # --json stays report-only for backward compatibility).
-    if not json_output:
-        from evaluatorq.common.run_manifest import echo_active_runs
+    from evaluatorq.common.run_manifest import list_run_records
+    from evaluatorq.dashboard.library import _manifest_card_id
 
-        echo_active_runs(runs_dir)
+    # Manifest-first: build rows from the tiny manifest sidecars (status + compact
+    # summary), falling back to a full-report read only for legacy runs with no
+    # manifest. A single table with a Status column shows running/error/cancelled/
+    # completed runs together (no separate 'Active runs' block, no double-listing).
+    records_src = list_run_records(runs_dir)[:limit]
 
-    run_files = sorted(
-        runs_dir.glob('*.json'),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )[:limit]
-
-    if not run_files:
+    if not records_src:
         if json_output:
             echo_json([])
             raise typer.Exit(0)
         typer.echo(f'No runs found in {runs_dir}')
         raise typer.Exit(0)
 
+    def _record(manifest: Any, report_path: Path | None) -> dict[str, Any] | None:
+        """Normalize a (manifest, report_path) record to display/JSON fields.
+
+        Manifest rows read the compact ``summary`` (no full-report read); legacy
+        rows (manifest is None) read the full report. Returns None on a legacy
+        report that can't be parsed.
+        """
+        if manifest is not None:
+            summary = manifest.summary or {}
+            rid = report_id(report_path) if report_path is not None else _manifest_card_id(manifest.run_id)
+            return {
+                'report_id': rid,
+                'run_name': manifest.run_name,
+                'created_at': manifest.started_at.isoformat(),
+                'status': manifest.status.value,
+                'mode': summary.get('mode'),
+                'target_kind': summary.get('target_kind'),
+                'total_results': summary.get('total_results'),
+                'scorer_averages': summary.get('scorer_averages', {}),
+                'file': report_path.name if report_path is not None else None,
+            }
+        if report_path is None:
+            return None
+        try:
+            data = json.loads(report_path.read_text(encoding='utf-8'))
+        except (json.JSONDecodeError, OSError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        return {
+            'report_id': report_id(report_path),
+            'run_name': data.get('run_name'),
+            'created_at': data.get('created_at'),
+            'status': 'completed',
+            'mode': data.get('mode'),
+            'target_kind': data.get('target_kind'),
+            'total_results': data.get('total_results'),
+            'scorer_averages': data.get('scorer_averages', {}),
+            'file': report_path.name,
+        }
+
+    records: list[dict[str, Any]] = []
+    malformed = 0
+    for manifest, report_path in records_src:
+        rec = _record(manifest, report_path)
+        if rec is None:
+            malformed += 1
+            continue
+        records.append(rec)
+
     if json_output:
-        records: list[dict[str, Any]] = []
-        malformed_json = 0
-        for run_file in run_files:
-            try:
-                data = json.loads(run_file.read_text(encoding='utf-8'))
-            except (json.JSONDecodeError, OSError):
-                malformed_json += 1
-                continue
-            if not isinstance(data, dict):
-                malformed_json += 1
-                continue
-            records.append({
-                'report_id': report_id(run_file),
-                'run_name': data.get('run_name'),
-                'created_at': data.get('created_at'),
-                'mode': data.get('mode'),
-                'target_kind': data.get('target_kind'),
-                'total_results': data.get('total_results'),
-                'scorer_averages': data.get('scorer_averages', {}),
-                'file': run_file.name,
-            })
         echo_json(records)
-        if malformed_json:
-            typer.echo(f'Warning: {malformed_json} malformed file(s) skipped.', err=True)
+        if malformed:
+            typer.echo(f'Warning: {malformed} malformed file(s) skipped.', err=True)
         raise typer.Exit(0)
 
-    rows: list[dict[str, Any]] = []
-    malformed = 0
-    for run_file in run_files:
-        try:
-            data = json.loads(run_file.read_text(encoding='utf-8'))
-            rows.append({
-                'name': data.get('run_name', '—'),
-                'date': data.get('created_at', '—')[:19].replace('T', ' '),
-                'mode': data.get('mode', '—'),
-                'target': data.get('target_kind', '—'),
-                'n': str(data.get('total_results', '—')),
-                'scores': _format_scorer_averages(data.get('scorer_averages', {})),
-                'file': run_file.name,
-            })
-        except Exception:  # noqa: PERF203
-            malformed += 1
+    def _fmt_date(created: Any) -> str:
+        return created[:19].replace('T', ' ') if isinstance(created, str) else str(created or '—')
+
+    rows: list[dict[str, Any]] = [
+        {
+            'name': str(rec.get('run_name') or '—'),
+            'date': _fmt_date(rec.get('created_at')),
+            'status': str(rec.get('status') or '—'),
+            'mode': str(rec.get('mode') or '—'),
+            'target': str(rec.get('target_kind') or '—'),
+            'n': str(rec.get('total_results') if rec.get('total_results') is not None else '—'),
+            'scores': _format_scorer_averages(rec.get('scorer_averages') or {}),
+            'file': str(rec.get('file') or '—'),
+        }
+        for rec in records
+    ]
 
     try:
         import io
@@ -1498,7 +1523,7 @@ def runs(
         from rich.table import Table
 
         table = Table(title='Simulation Runs')
-        for col in ('Name', 'Date', 'Mode', 'Target', 'N', 'Scores'):
+        for col in ('Name', 'Date', 'Status', 'Mode', 'Target', 'N', 'Scores'):
             table.add_column(col)
         # File is the unique identifier you copy into `eq sim ui <name>` / the
         # dashboard, so it must never be ellipsised away on a narrow terminal —
@@ -1508,6 +1533,7 @@ def runs(
             table.add_row(
                 row['name'],
                 row['date'],
+                row['status'],
                 row['mode'],
                 row['target'],
                 row['n'],
@@ -1529,12 +1555,15 @@ def runs(
         Console(file=buffer, width=width).print(table)
         typer.echo(buffer.getvalue(), nl=False)
     except ImportError:
-        header = f'{"Name":<20} {"Date":<20} {"Mode":<10} {"Target":<16} {"N":>4}  {"Scores":<30} File'
+        header = (
+            f'{"Name":<20} {"Date":<20} {"Status":<10} {"Mode":<10} '
+            f'{"Target":<16} {"N":>4}  {"Scores":<30} File'
+        )
         typer.echo(header)
         typer.echo('-' * len(header))
         for row in rows:
             typer.echo(
-                f'{row["name"]:<20} {row["date"]:<20} {row["mode"]:<10} '
+                f'{row["name"]:<20} {row["date"]:<20} {row["status"]:<10} {row["mode"]:<10} '
                 f'{row["target"]:<16} {row["n"]:>4}  {row["scores"]:<30} {row["file"]}'
             )
 

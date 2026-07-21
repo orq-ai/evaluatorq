@@ -177,3 +177,20 @@ class TestExportRoute:
     def test_export_missing_returns_404(self, client: TestClient) -> None:
         r = client.get('/r/nonexistentid123456/export')
         assert r.status_code == 404
+
+
+def test_in_flight_manifest_detail_renders_status(tmp_path: Path) -> None:
+    """An in-flight run (manifest only, no report) renders a minimal status page."""
+    from evaluatorq.common.run_manifest import start_manifest
+    from evaluatorq.dashboard.library import _manifest_card_id
+
+    rt = tmp_path / 'runs'
+    rt.mkdir()
+    w = start_manifest(run_id='live', surface='redteam', run_name='in-flight-run', runs_dir=rt)
+    w.start_stage('Executing Attacks')
+
+    client = TestClient(build_app(roots=[rt]), raise_server_exceptions=True)
+    resp = client.get(f'/r/{_manifest_card_id("live")}')
+    assert resp.status_code == 200
+    assert 'in-flight-run' in resp.text
+    assert 'Executing Attacks' in resp.text

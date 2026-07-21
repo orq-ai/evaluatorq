@@ -1072,6 +1072,13 @@ class RunManifest(BaseModel):
     ended_at: datetime | None = None  # set when the run reaches a terminal status
     error: str | None = None
     report_path: str | None = None
+    summary: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            'Compact headline stats captured at completion so a run-list row can be built '
+            'without reading the full report. Small scalars / short lists only — never full results.'
+        ),
+    )
 
     @property
     def duration_seconds(self) -> float | None:

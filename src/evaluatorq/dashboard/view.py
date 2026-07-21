@@ -577,6 +577,38 @@ def report_not_found(rid: str) -> str:
     )
 
 
+def report_in_flight(manifest: Any) -> str:
+    """Render a minimal status page for an in-flight run (no report on disk yet).
+
+    Kept deliberately small: an in-flight run has no results to show, so this
+    surfaces the run's lifecycle status, current stage, and per-stage timing
+    from the manifest rather than a full transcript view.
+    """
+    status = manifest.status.value if hasattr(manifest.status, 'value') else str(manifest.status)
+    label = SURFACE_LABELS.get(manifest.surface.value, manifest.surface.value)
+    stage = manifest.stage or '—'
+    rows: list[str] = []
+    for rec in manifest.stages:
+        st = rec.status.value if hasattr(rec.status, 'value') else str(rec.status)
+        dur = f'{rec.duration_seconds:.1f}s' if rec.duration_seconds is not None else '…'
+        target = f' ({esc(rec.target)})' if rec.target else ''
+        rows.append(
+            f'<div class="config-row"><span class="config-key">{esc(rec.name)}{target}</span>'
+            f'<span class="config-val">{esc(st)} · {esc(dur)}</span></div>'
+        )
+    stages_html = ''.join(rows) or '<div class="config-row"><span class="config-val">No stages recorded.</span></div>'
+    err_html = f'<p class="report-broken-detail">{esc(manifest.error)}</p>' if manifest.error else ''
+    return (
+        '<section class="report-in-flight">'
+        f'<h1>{esc(manifest.run_name)}</h1>'
+        f'<p>{esc(label)} run — {_status_badge(status)} · current stage: <code>{esc(stage)}</code></p>'
+        f'{err_html}'
+        f'<div class="config-list">{stages_html}</div>'
+        '<p><a href="/">Back to reports</a></p>'
+        '</section>'
+    )
+
+
 def report_broken(rid: str, filename: str, detail: str) -> str:
     """Render an error page fragment for a report that sniffed OK but failed to load."""
     return (

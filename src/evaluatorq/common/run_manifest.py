@@ -17,8 +17,10 @@ Everything here is best-effort: a manifest write must never raise into — or sl
 
 from __future__ import annotations
 
+import operator
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
@@ -30,9 +32,6 @@ from evaluatorq.contracts import (
 from evaluatorq.contracts import (
     ManifestSurface as Surface,
 )
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 MANIFESTS_DIR_NAME = '.manifests'
 
@@ -108,7 +107,7 @@ class ManifestWriter:
         self._close(rec, ManifestStatus.ERROR if error else ManifestStatus.COMPLETED)
         self.flush()
 
-    def complete(self, report_path: str | Path | None = None) -> None:
+    def complete(self, report_path: str | Path | None = None, summary: dict[str, Any] | None = None) -> None:
         if self.manifest.status != ManifestStatus.RUNNING:
             return  # terminal transitions are idempotent — first one wins
         now = datetime.now(tz=timezone.utc)
@@ -121,6 +120,10 @@ class ManifestWriter:
         self.manifest.ended_at = now
         if report_path is not None:
             self.manifest.report_path = str(report_path)
+        # Compact headline stats so a run-list row can be built from the manifest
+        # alone — no full-report read needed for completed runs.
+        if summary is not None:
+            self.manifest.summary = summary
         self.flush()
 
     def cancel(self) -> None:
@@ -190,6 +193,44 @@ def list_manifests(runs_dir: Path) -> list[RunManifest]:
 def active_manifests(runs_dir: Path) -> list[RunManifest]:
     """Manifests for runs that are not completed (running, errored, cancelled)."""
     return [m for m in list_manifests(runs_dir) if m.status != ManifestStatus.COMPLETED]
+
+
+def list_run_records(runs_dir: Path) -> list[tuple[RunManifest | None, Path | None]]:
+    """Unified, manifest-first run listing for a runs dir, newest first.
+
+    Returns ``(manifest, report_path)`` pairs:
+
+    * A manifest-backed run yields ``(manifest, report_path_or_None)``. Completed
+      runs carry a ``report_path``; in-flight (running/error/cancelled) runs have
+      ``None`` — they render from the manifest's status/stage/summary alone.
+    * A LEGACY report with no manifest yields ``(None, report_path)`` — the
+      backwards-compatible path (read the full report for its stats).
+
+    Reports already covered by a manifest's ``report_path`` are de-duplicated out
+    of the legacy set, so a run is never listed twice. Sorted newest-first by
+    manifest ``started_at`` (manifest rows) or file mtime (legacy rows).
+    """
+    records: list[tuple[RunManifest | None, Path | None, float]] = []
+    covered: set[Path] = set()
+    for m in list_manifests(runs_dir):
+        report_path: Path | None = None
+        if m.report_path:
+            report_path = Path(m.report_path)
+            covered.add(report_path.resolve())
+        records.append((m, report_path, m.started_at.timestamp()))
+
+    if runs_dir.is_dir():
+        for p in runs_dir.glob('*.json'):
+            try:
+                if p.resolve() in covered:
+                    continue
+                mtime = p.stat().st_mtime
+            except OSError:
+                continue
+            records.append((None, p, mtime))
+
+    records.sort(key=operator.itemgetter(2), reverse=True)
+    return [(m, p) for m, p, _ in records]
 
 
 def format_active_lines(runs_dir: Path) -> list[str]:
