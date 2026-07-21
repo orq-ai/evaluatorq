@@ -214,6 +214,14 @@ async def _async_callback(messages: list[Message]) -> str:
     return 'async ok'
 
 
+async def _awaitable_callback_response() -> str:
+    return 'awaited ok'
+
+
+def _sync_callback_returning_awaitable(messages: list[Message]):
+    return _awaitable_callback_response()
+
+
 class _RaisingCallback:
     """Raises on every call so the retry helper exhausts and the run errors."""
 
@@ -255,6 +263,22 @@ async def test_async_callback_target_succeeds() -> None:
 
     assert result.terminated_by != TerminatedBy.error, result.reason
     assert any(m.role == 'assistant' and m.content == 'async ok' for m in result.messages)
+
+
+async def test_sync_callback_returning_awaitable_is_awaited() -> None:
+    runner = SimulationRunner(
+        target=_sync_callback_returning_awaitable,
+        max_target_retries=1,
+        target_agent_timeout_ms=5000,
+        max_turns=1,
+        user_simulator=_make_mock_user_simulator(),
+        judge=_make_mock_judge(),
+    )
+
+    result = await runner.run(datapoint=_make_datapoint())
+
+    assert result.terminated_by != TerminatedBy.error, result.reason
+    assert any(m.role == 'assistant' and m.content == 'awaited ok' for m in result.messages)
 
 
 async def test_raising_callback_target_retried_then_terminates_with_error() -> None:

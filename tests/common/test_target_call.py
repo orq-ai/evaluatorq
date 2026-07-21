@@ -6,15 +6,11 @@ from typing import Any
 import pytest
 
 from evaluatorq.common.target_call import (
-    TargetCallResult,
     call_target_with_retry,
     classify_error_type,
     default_map_error,
 )
 from evaluatorq.contracts import AgentResponse, AgentResponseError, Message
-
-pytestmark = pytest.mark.asyncio
-
 
 class _Target:
     """Minimal AgentTarget double: respond() returns queued items or raises them."""
@@ -41,6 +37,7 @@ def _err(msg: str) -> AgentResponse:
     )
 
 
+@pytest.mark.asyncio
 async def test_success_first_try():
     t = _Target([_ok('hi')])
     r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
@@ -51,6 +48,7 @@ async def test_success_first_try():
     assert t.calls == 1
 
 
+@pytest.mark.asyncio
 async def test_retry_then_succeed():
     t = _Target([_err('boom'), _ok('hi')])
     r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
@@ -59,6 +57,7 @@ async def test_retry_then_succeed():
     assert t.calls == 2
 
 
+@pytest.mark.asyncio
 async def test_error_marker_exhausted():
     t = _Target([_err('boom'), _err('boom'), _err('boom')])
     r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
@@ -68,6 +67,7 @@ async def test_error_marker_exhausted():
     assert t.calls == 3
 
 
+@pytest.mark.asyncio
 async def test_timeout_becomes_synthetic_error():
     async def _hang(_messages):
         await asyncio.sleep(10)
@@ -83,6 +83,7 @@ async def test_timeout_becomes_synthetic_error():
     assert r.error.code == 'target.timeout'
 
 
+@pytest.mark.asyncio
 async def test_generic_exception_mapped_and_classified():
     t = _Target([ConnectionError('connection reset')])
     r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=0)
@@ -95,6 +96,7 @@ async def test_generic_exception_mapped_and_classified():
     assert 'connection reset' in str(r.error_details['raw_message'])
 
 
+@pytest.mark.asyncio
 async def test_map_error_none_falls_back_to_default():
     t = _Target([RuntimeError('weird')])
     r = await call_target_with_retry(
@@ -106,6 +108,7 @@ async def test_map_error_none_falls_back_to_default():
     assert r.error.code == 'target_error'  # default_map_error code
 
 
+@pytest.mark.asyncio
 async def test_on_attempt_called_per_attempt():
     from contextlib import asynccontextmanager
 
@@ -123,6 +126,33 @@ async def test_on_attempt_called_per_attempt():
     assert seen == [0, 1]
 
 
+@pytest.mark.asyncio
+async def test_on_attempt_response_receives_each_target_response():
+    from contextlib import asynccontextmanager
+
+    seen: list[tuple[int, str]] = []
+
+    @asynccontextmanager
+    async def _span(i: int):
+        yield i
+
+    def _record_response(span: int, response: AgentResponse) -> None:
+        seen.append((span, response.text))
+
+    t = _Target([_err('retry me'), _ok('hi')])
+    await call_target_with_retry(
+        t,
+        [Message(role='user', content='q')],
+        target_agent_timeout_ms=1000,
+        max_target_retries=2,
+        on_attempt=_span,
+        on_attempt_response=_record_response,
+    )
+
+    assert seen == [(0, 'retry me'), (1, 'hi')]
+
+
+@pytest.mark.asyncio
 async def test_cancelled_error_propagates():
     class _Cancel:
         async def respond(self, messages):

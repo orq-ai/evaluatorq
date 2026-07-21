@@ -929,6 +929,16 @@ class MultiTurnOrchestrator:
                         ) as span:
                             yield span
 
+                    def _record_attempt_response(span: Any, response: AgentResponse) -> None:
+                        response_text = truncate_for_span(response.text or '')
+                        set_span_attrs(
+                            span,
+                            {
+                                'output': response_text,
+                                'orq.redteam.output': response_text,
+                            },
+                        )
+
                     result = await call_target_with_retry(
                         target,
                         messages_to_send,
@@ -936,6 +946,7 @@ class MultiTurnOrchestrator:
                         max_target_retries=self._cfg.max_target_retries,
                         map_error=self._backend.map_error if self._backend is not None else default_map_error,
                         on_attempt=_attempt_span,
+                        on_attempt_response=_record_attempt_response,
                     )
 
                     tgt_result = result.response

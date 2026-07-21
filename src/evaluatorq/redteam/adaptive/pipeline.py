@@ -425,6 +425,16 @@ def create_dynamic_redteam_job(
                     ) as span:
                         yield span
 
+                def _record_attempt_response(span: Any, response: AgentResponse) -> None:
+                    response_text = truncate_for_span(response.text or '')
+                    set_span_attrs(
+                        span,
+                        {
+                            'output': response_text,
+                            'orq.redteam.output': response_text,
+                        },
+                    )
+
                 with conversation_thread(thread_id) as thread_id:
                     result = await call_target_with_retry(
                         target,
@@ -433,6 +443,7 @@ def create_dynamic_redteam_job(
                         max_target_retries=cfg.max_target_retries,
                         map_error=resolved_backend.map_error,
                         on_attempt=_attempt_span,
+                        on_attempt_response=_record_attempt_response,
                     )
 
                 agent_resp = result.response

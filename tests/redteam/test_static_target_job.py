@@ -27,6 +27,11 @@ class _StubTarget:
         pass
 
 
+class _RaisingTarget:
+    async def respond(self, messages: list[Message]) -> AgentResponse:
+        raise RuntimeError('backend exploded')
+
+
 def _datapoint(text: str = 'hello there') -> DataPoint:
     return DataPoint(inputs={'messages': [{'role': 'user', 'content': text}]})
 
@@ -58,3 +63,18 @@ async def test_static_job_success_has_none_error() -> None:
 
     assert out['error'] is None
     assert out['response'] == 'hello'
+
+
+async def test_shared_static_target_call_uses_the_supplied_error_mapper() -> None:
+    from evaluatorq.redteam.runner import _run_static_target_call
+
+    out = await _run_static_target_call(
+        _RaisingTarget(),
+        'hello there',
+        max_target_retries=0,
+        target_agent_timeout_ms=1000,
+        map_error=lambda _: ('custom.error', 'mapped failure'),
+    )
+
+    assert out['error'] is not None
+    assert out['error'].code == 'custom.error'

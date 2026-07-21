@@ -8,6 +8,7 @@ from typing import Any, cast
 from loguru import logger as _converters_logger
 from pydantic import ValidationError
 
+from evaluatorq.common.target_call import classify_error_type
 from evaluatorq.redteam.contracts import (
     JURY_RAW_OUTPUT_KEY,
     OWASP_CATEGORY_NAMES,
@@ -40,7 +41,6 @@ from evaluatorq.redteam.contracts import (
     UnifiedEvaluationResult,
     Vulnerability,
     VulnerabilitySummary,
-    classify_error_type,
     infer_framework,
     normalize_category,
 )
@@ -53,8 +53,8 @@ from evaluatorq.redteam.vulnerability_registry import (
     resolve_category_safe,
 )
 
-# Error classification lives in evaluatorq.redteam.contracts so the orchestrator
-# can share it without importing the report layer. Alias kept for call sites here.
+# Error classification lives in the shared common layer, so red-team execution
+# and report conversion use exactly the same mapping. Alias kept for call sites here.
 _classify_error = classify_error_type
 
 

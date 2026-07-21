@@ -95,6 +95,7 @@ async def call_target_with_retry(
     max_target_retries: int,
     map_error: Callable[[Exception], tuple[str, str] | None] = default_map_error,
     on_attempt: Callable[[int], AbstractAsyncContextManager[Any]] | None = None,
+    on_attempt_response: Callable[[Any, AgentResponse], None] | None = None,
 ) -> TargetCallResult:
     """Call ``target.respond(messages)`` with bounded retry + per-call timeout.
 
@@ -102,7 +103,9 @@ async def call_target_with_retry(
     timeout, or a generic ``Exception``. ``asyncio.CancelledError`` is NOT
     caught (it is a ``BaseException``) so an outer-ceiling cancellation
     propagates cleanly. ``on_attempt(i)`` wraps each attempt in a
-    caller-supplied span (0-based index). Returns a uniform
+    caller-supplied span (0-based index). ``on_attempt_response`` receives the
+    caller-supplied context value and each returned response while that context
+    is still open, so callers can annotate per-attempt spans. Returns a uniform
     :class:`TargetCallResult`.
     """
     timeout_s = target_agent_timeout_ms / 1000.0
@@ -114,9 +117,11 @@ async def call_target_with_retry(
     for attempt in range(max_attempts):
         ctx = on_attempt(attempt) if on_attempt is not None else nullcontext()
         try:
-            async with ctx:
+            async with ctx as attempt_context:
                 raw = await asyncio.wait_for(target.respond(messages), timeout=timeout_s)
                 resp = _coerce_to_agent_response(raw)
+                if on_attempt_response is not None:
+                    on_attempt_response(attempt_context, resp)
             if resp.error is None:
                 return TargetCallResult(
                     response=resp, succeeded=True, attempts=attempt + 1, error=None, error_details=None

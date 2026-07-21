@@ -23,7 +23,7 @@ from evaluatorq.common.async_utils import await_maybe, warn_if_sync_hooks
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.run_store_dir import get_store_dir
-from evaluatorq.common.target_call import call_target_with_retry
+from evaluatorq.common.target_call import call_target_with_retry, default_map_error
 from evaluatorq.common.tracing import set_span_attrs
 from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities, classify_agent_capabilities
@@ -841,6 +841,38 @@ def _extract_static_prompt(data: DataPoint) -> str:
     return '\n\n'.join(p for p in user_parts if p)
 
 
+async def _run_static_target_call(
+    target: Any,
+    prompt: str,
+    *,
+    target_agent_timeout_ms: int,
+    max_target_retries: int,
+    map_error: Callable[[Exception], tuple[str, str] | None] = default_map_error,
+) -> dict[str, Any]:
+    """Call a static target and return the scorer-facing output shape."""
+    call = await call_target_with_retry(
+        target,
+        [Message(role='user', content=prompt)],
+        target_agent_timeout_ms=target_agent_timeout_ms,
+        max_target_retries=max_target_retries,
+        map_error=map_error,
+    )
+    result = call.response
+
+    active_progress = _get_active_progress()
+    if active_progress is not None:
+        await active_progress.finish_attack(None)
+
+    return {
+        'response': result.text,
+        'error': call.error,
+        'tool_calls': result.tool_calls,
+        'token_usage': result.usage,
+        'finish_reason': result.finish_reason,
+        'model': result.model,
+    }
+
+
 def _create_static_job_for_agent_target(
     target_factory: Callable[[], Any], label: str, cfg: LLMConfig | None = None
 ) -> Any:
@@ -860,26 +892,12 @@ def _create_static_job_for_agent_target(
         prompt = _extract_static_prompt(data)
         target = target_factory()
         try:
-            call = await call_target_with_retry(
+            return await _run_static_target_call(
                 target,
-                [Message(role='user', content=prompt)],
+                prompt,
                 target_agent_timeout_ms=cfg.target_agent_timeout_ms,
                 max_target_retries=cfg.max_target_retries,
             )
-            result = call.response
-
-            active_progress = _get_active_progress()
-            if active_progress is not None:
-                await active_progress.finish_attack(None)
-
-            return {
-                'response': result.text,
-                'error': call.error,
-                'tool_calls': result.tool_calls,
-                'token_usage': result.usage,
-                'finish_reason': result.finish_reason,
-                'model': result.model,
-            }
         finally:
             target_close = getattr(target, 'close', None)
             if callable(target_close):
@@ -1902,25 +1920,13 @@ async def _run_dynamic_or_hybrid(
                             )
                         target_instance = _backend.create_target(_label)
                         resolved_cfg = pipeline_config or PIPELINE_CONFIG
-                        call = await call_target_with_retry(
+                        return await _run_static_target_call(
                             target_instance,
-                            [Message(role='user', content=prompt)],
+                            prompt,
                             target_agent_timeout_ms=resolved_cfg.target_agent_timeout_ms,
                             max_target_retries=resolved_cfg.max_target_retries,
                             map_error=_backend.map_error,
                         )
-                        result = call.response
-                        active_progress = _get_active_progress()
-                        if active_progress is not None:
-                            await active_progress.finish_attack(None)
-                        return {
-                            'response': result.text,
-                            'error': call.error,
-                            'tool_calls': result.tool_calls,
-                            'token_usage': result.usage,
-                            'finish_reason': result.finish_reason,
-                            'model': result.model,
-                        }
 
                     @job(f'redteam:hybrid:{at_safe}')
                     async def at_target_job(

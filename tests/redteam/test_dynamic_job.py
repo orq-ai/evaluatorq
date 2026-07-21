@@ -923,13 +923,14 @@ class TestRuntimeErrorsProduceErrorOutput:
             backend=factory,
         )
 
-        # Patch wait_for to raise immediately so we don't actually wait
-        with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError()):
-            with patch(
-                "evaluatorq.redteam.adaptive.orchestrator._get_active_progress",
-                return_value=None,
-            ):
-                output = await _call_dynamic_job(job_fn, datapoint)
+        # The target raises immediately, so no timeout patch is needed. Replacing
+        # ``asyncio.wait_for`` synchronously would leave each retry coroutine
+        # unawaited before the helper can manage it.
+        with patch(
+            "evaluatorq.redteam.adaptive.orchestrator._get_active_progress",
+            return_value=None,
+        ):
+            output = await _call_dynamic_job(job_fn, datapoint)
 
         parsed = AttackOutput.model_validate(output)
         assert parsed.error is not None
