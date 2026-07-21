@@ -249,8 +249,8 @@ async def test_pipeline_span_nests_under_caller_parent_context(
 
     @asynccontextmanager
     async def _nested_tracing_session(*args: Any, **kwargs: Any):
-        async with with_redteam_span('caller.outer') as outer:
-            outer_span_id.append(outer.get_span_context().span_id)
+        async with with_redteam_span('caller.outer'):
+            outer_span_id.append(trace.get_current_span().get_span_context().span_id)
             parent = await capture_parent_context()
             yield TracingContext(
                 run_id='test', run_name='test', enabled=False, parent_context=parent, trace_type='redteam'
@@ -564,9 +564,9 @@ async def test_static_router_job_traces_attack_and_target_call(span_collector: _
 
     _assert_static_target_spans(span_collector)
     _assert_target_child_span(span_collector, child_name='chat test-model')
-    assert client.chat.completions.create.await_args.kwargs['extra_body'] == {
-        'thread': {'id': 'static-run:test-model:0'}
-    }
+    call = client.chat.completions.create.await_args
+    assert call is not None
+    assert call.kwargs['extra_body'] == {'thread': {'id': 'static-run:test-model:0'}}
 
 
 @pytest.mark.asyncio
@@ -598,7 +598,9 @@ async def test_static_router_job_omits_extra_body_for_non_orq_client(
         0,
     )
 
-    assert 'extra_body' not in client.chat.completions.create.await_args.kwargs
+    call = client.chat.completions.create.await_args
+    assert call is not None
+    assert 'extra_body' not in call.kwargs
 
 
 @pytest.mark.asyncio
@@ -616,7 +618,7 @@ async def test_static_deployment_job_traces_attack_and_target_call(
     deployments = MagicMock()
     deployments.invoke_async = AsyncMock(return_value=completion)
     module = ModuleType('orq_ai_sdk')
-    module.Orq = MagicMock(return_value=MagicMock(deployments=deployments))
+    module.Orq = MagicMock(return_value=MagicMock(deployments=deployments))  # pyright: ignore[reportAttributeAccessIssue]
     monkeypatch.setitem(sys.modules, 'orq_ai_sdk', module)
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
 
@@ -678,7 +680,7 @@ async def test_hybrid_agent_target_static_leg_traces_attack_and_target_call(
     from evaluatorq.types import DataPointResult, JobResult
 
     class Target(AgentTarget):
-        async def respond(self, _messages: list[Message]) -> AgentResponse:
+        async def respond(self, messages: list[Message]) -> AgentResponse:
             return AgentResponse(text='mock target response')
 
         def new(self) -> Target:
