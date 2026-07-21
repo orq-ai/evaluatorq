@@ -786,6 +786,29 @@ class TestTranscriptFragmentRewrite:
         assert 'sim-msg-avatar' in html
         assert 'sim-transcript-grid' in html
 
+    def test_transcript_bubbles_use_a_standout_container(self) -> None:
+        from evaluatorq.dashboard.styles import DASHBOARD_CSS
+
+        assert (
+            '.sim-report .sim-transcript-bubbles {\n'
+            '    background: var(--surface-sunken); border: 1px solid var(--border-subtle);\n'
+            '    border-radius: var(--radius-lg); padding: 16px;\n'
+            '}'
+        ) in DASHBOARD_CSS
+        assert '.sim-report .sim-transcript-bubbles .sim-msg:last-child { margin-bottom: 0; }' in DASHBOARD_CSS
+
+    def test_conversation_rows_keep_tint_without_rounded_card_chrome(self) -> None:
+        from evaluatorq.dashboard.styles import DASHBOARD_CSS
+
+        assert (
+            '.sim-report .sim-conv-row {\n'
+            '    border: 0; border-radius: 0; overflow: visible; background: var(--surface-card);\n'
+            '}'
+        ) in DASHBOARD_CSS
+        assert '.sim-report .sim-conv-row.sim-tint-achieved { background: var(--green-100); }' in DASHBOARD_CSS
+        assert '.sim-report .sim-conv-row.sim-tint-missed { background: var(--red-100); }' in DASHBOARD_CSS
+        assert '.sim-report .sim-conv-row.sim-tint-error { background: var(--amber-100); }' in DASHBOARD_CSS
+
     def test_drawer_stacks_criteria_above_conversation_and_swaps_message_sides(self) -> None:
         """The wide drawer stacks criteria above the transcript, divided by a rule."""
         from evaluatorq.dashboard.styles import DASHBOARD_CSS

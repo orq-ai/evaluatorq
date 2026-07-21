@@ -1884,9 +1884,12 @@ _SIM_REPORT_OVERRIDES_CSS = """
 # report.
 _SIM_TRANSCRIPT_OVERRIDES_CSS = """
 .sim-report .sim-conv-row {
-    border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); overflow: hidden;
-    background: var(--surface-card);
+    border: 0; border-radius: 0; overflow: visible; background: var(--surface-card);
 }
+.sim-report .sim-conv-row + .sim-conv-row { border-top: 1px solid var(--border-subtle); }
+.sim-report .sim-conv-row.sim-tint-achieved { background: var(--green-100); }
+.sim-report .sim-conv-row.sim-tint-missed { background: var(--red-100); }
+.sim-report .sim-conv-row.sim-tint-error { background: var(--amber-100); }
 .sim-report .sim-conv-idx {
     font-family: var(--font-sans); font-size: 12px; color: var(--text-faint);
 }
@@ -1902,6 +1905,11 @@ _SIM_TRANSCRIPT_OVERRIDES_CSS = """
     background: var(--red-100); color: var(--red-600); border-radius: var(--radius-md);
     padding: 10px 14px; margin-bottom: 14px; font-size: 13px;
 }
+.sim-report .sim-transcript-bubbles {
+    background: var(--surface-sunken); border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg); padding: 16px;
+}
+.sim-report .sim-transcript-bubbles .sim-msg:last-child { margin-bottom: 0; }
 
 /* Chat bubbles (render_message_list avatar + side extension) — sim-only skin,
    distinct from the shared `.report-aligned .sim-msg/.rt-msg` bubbles. */
