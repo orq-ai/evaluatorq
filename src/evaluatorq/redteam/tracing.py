@@ -14,6 +14,10 @@ Span hierarchy:
 Static is intentionally single-shot: it has no multi-turn ``attack_turn`` or
 adversarial-generation spans. Dynamic and hybrid runs add their context/datapoint
 work and may include target calls both before and during multi-turn attacks.
+
+The trees above are lossy: leaf LLM spans (capability_classification,
+strategy_planning, adversarial_generation) are elided, and ``memory_cleanup``
+is emitted as a direct child of ``pipeline`` after all attacks complete.
 """
 
 from __future__ import annotations

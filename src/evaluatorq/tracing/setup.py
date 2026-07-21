@@ -49,15 +49,23 @@ _initialization_attempted = False
 
 
 def _env_int(name: str, default: int) -> int:
-    """Read a positive int from the environment, falling back to *default*."""
+    """Read a positive int from the environment, falling back to *default*.
+
+    A set-but-invalid value (non-integer or non-positive) logs a WARNING so a
+    misconfigured tuning knob is actionable instead of silently ignored.
+    """
     raw = os.environ.get(name)
     if not raw:
         return default
     try:
         value = int(raw)
     except ValueError:
+        logger.warning('{} is not an integer ({!r}); using default {}.', name, raw, default)
         return default
-    return value if value > 0 else default
+    if value <= 0:
+        logger.warning('{} must be positive (got {}); using default {}.', name, value, default)
+        return default
+    return value
 
 
 def _is_tracing_explicitly_disabled() -> bool:
@@ -212,6 +220,8 @@ async def init_tracing_if_needed() -> bool:  # noqa: RUF029
             max_export_batch_size=min(requested_batch_size, max_queue_size),
         )
 
+        # Rely on the SDK default shutdown_on_exit=True for atexit teardown:
+        # runtime code only flushes, never shuts the provider down mid-run.
         provider = TracerProvider(resource=resource)
         provider.add_span_processor(span_processor)
         trace.set_tracer_provider(provider)
@@ -239,8 +249,9 @@ async def flush_tracing() -> None:
 
     ``force_flush`` is a synchronous, blocking SDK call, so it runs on a worker
     thread to avoid stalling the event loop. A ``False`` return means the flush
-    timed out with spans still unexported — surfaced as a warning rather than
-    silently dropped.
+    timed out with spans still unexported; a raised exception means the export
+    failed outright — both leave spans unexported and are surfaced as warnings
+    rather than silently dropped.
     """
     if _sdk is None:
         return
@@ -254,7 +265,7 @@ async def flush_tracing() -> None:
                 timeout_ms,
             )
     except Exception as e:
-        logger.debug('Error flushing traces: {}', e)
+        logger.warning('OTEL span flush failed ({}); some spans may not have been exported.', e)
 
 
 async def _shutdown_tracing() -> None:

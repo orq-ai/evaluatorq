@@ -276,6 +276,14 @@ def create_owasp_evaluator(
                 logger.warning(f'No evaluator found for category {category}')
                 return error_result(f'No evaluator found for category {category}')
 
+            # A target-level failure ([ERROR: ...] with AgentResponseError) is not
+            # content — short-circuit before the judge so a failure is never scored
+            # as RESISTANT.
+            target_error = output.get('error') if isinstance(output, dict) else None
+            if target_error is not None:
+                msg = getattr(target_error, 'message', str(target_error))
+                return error_result(f'Target agent error — not scored: {msg}')
+
             output_messages = _adapt_static_output(output)
 
             eval_replacements = build_eval_replacements(

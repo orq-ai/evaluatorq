@@ -1573,6 +1573,9 @@ async def _run_dynamic_or_hybrid(
     )
 
     resolved_name = name or 'red-team'
+    # One Orq observability run id shared across every target/attack so the
+    # dashboard deep-link spans the whole invocation. Callers (red_team) pass
+    # the tracing run_id; the fallback keeps direct callers self-consistent.
     run_id = run_id or uuid.uuid4().hex
 
     resolved_hooks: PipelineHooks = hooks or DefaultHooks()
@@ -2280,15 +2283,28 @@ async def _run_dynamic_or_hybrid(
         except (asyncio.CancelledError, KeyboardInterrupt):
             logger.warning(f'Multi-target {mode} run cancelled — attempting memory cleanup')
             if cleanup_memory:
+                # No merged report exists on cancellation, so surface cleanup
+                # failures via a consolidated warning instead of pipeline_warnings.
+                cleanup_errors: list[str] = []
                 for pt in prepared_targets:
                     entity_ids = pt.memory_entity_ids
                     if entity_ids:
-                        await cleanup_memory_entities(pt.agent_context, entity_ids, memory_cleanup=pt.backend)
+                        err = await cleanup_memory_entities(pt.agent_context, entity_ids, memory_cleanup=pt.backend)
+                        if err:
+                            cleanup_errors.append(err)
                 # Also clean up AgentTarget memory entities not yet in prepared_targets
                 prepared_mem_id_lists = {id(pt.memory_entity_ids) for pt in prepared_targets}
                 for at_ctx_c, at_mem_c, at_backend_c in all_at_cleanup_info:
                     if id(at_mem_c) not in prepared_mem_id_lists and at_mem_c:
-                        await cleanup_memory_entities(at_ctx_c, at_mem_c, memory_cleanup=at_backend_c)
+                        err = await cleanup_memory_entities(at_ctx_c, at_mem_c, memory_cleanup=at_backend_c)
+                        if err:
+                            cleanup_errors.append(err)
+                if cleanup_errors:
+                    logger.warning(
+                        'Memory cleanup incomplete on cancellation — attack data may persist, '
+                        'manual cleanup may be required: {}',
+                        '; '.join(cleanup_errors),
+                    )
             raise
 
     await await_maybe(resolved_hooks.on_stage_end(PipelineStage.ATTACK_EXECUTION, {'num_results': len(results)}))

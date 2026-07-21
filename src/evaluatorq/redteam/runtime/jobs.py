@@ -59,6 +59,9 @@ def create_model_job(
         model: Model name for direct LLM calls via the ORQ router or OpenAI.
         deployment_key: ORQ deployment key for deployment-based inference.
         max_tokens: Maximum tokens for direct model responses (default 5000).
+        run_id: Red-team run id used to build the static-trace thread id so
+            job spans correlate with the red-team pipeline; a per-target
+            fallback is used when omitted.
 
     Returns:
         An evaluatorq Job.

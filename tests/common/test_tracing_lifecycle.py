@@ -52,6 +52,24 @@ async def test_tracing_session_initializes_yields_context_and_flushes(
 
 
 @pytest.mark.asyncio
+async def test_tracing_session_flushes_even_when_body_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr('evaluatorq.tracing.setup.init_tracing_if_needed', AsyncMock(return_value=True))
+    flushed = AsyncMock()
+    monkeypatch.setattr('evaluatorq.tracing.setup.flush_tracing', flushed)
+
+    class BodyError(Exception):
+        pass
+
+    with pytest.raises(BodyError):
+        async with tracing_session('red-team'):
+            raise BodyError
+
+    flushed.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_concurrent_sessions_never_call_private_shutdown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -132,6 +150,16 @@ def test_env_int_returns_positive_parsed_value(monkeypatch: pytest.MonkeyPatch) 
     assert tracing_setup._env_int('X', 4096) == 8192
 
 
+@pytest.mark.parametrize('raw', ['invalid', '0', '-1'])
+def test_env_int_warns_on_set_but_invalid_value(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
+    warning = Mock()
+    monkeypatch.setenv('X', raw)
+    monkeypatch.setattr(tracing_setup.logger, 'warning', warning)
+
+    assert tracing_setup._env_int('X', 4096) == 4096
+    warning.assert_called_once()
+
+
 @pytest.mark.asyncio
 async def test_initialization_caps_export_batch_size_to_queue_size(
     monkeypatch: pytest.MonkeyPatch,
@@ -195,6 +223,51 @@ async def test_flush_tracing_uses_worker_thread_and_warns_on_timeout(
     warning.assert_called_once_with(
         'OTEL span flush timed out after {}ms; some spans may not have been exported.', 5000
     )
+
+
+@pytest.mark.asyncio
+async def test_flush_tracing_does_not_warn_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    warning = Mock()
+    monkeypatch.setattr(tracing_setup, '_sdk', Mock())
+    monkeypatch.setattr(tracing_setup.asyncio, 'to_thread', AsyncMock(return_value=True))
+    monkeypatch.setattr(tracing_setup.logger, 'warning', warning)
+
+    await tracing_setup.flush_tracing()
+
+    warning.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_flush_tracing_warns_when_force_flush_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    warning = Mock()
+    monkeypatch.setattr(tracing_setup, '_sdk', Mock())
+    monkeypatch.setattr(tracing_setup.asyncio, 'to_thread', AsyncMock(side_effect=RuntimeError('boom')))
+    monkeypatch.setattr(tracing_setup.logger, 'warning', warning)
+
+    await tracing_setup.flush_tracing()
+
+    warning.assert_called_once()
+    assert 'flush failed' in warning.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_with_active_sdk_flushes_and_shuts_provider_down(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = Mock()
+    flush = AsyncMock()
+    monkeypatch.setattr(tracing_setup, '_sdk', provider)
+    monkeypatch.setattr(tracing_setup, '_tracer', Mock())
+    monkeypatch.setattr(tracing_setup, '_is_initialized', True)
+    monkeypatch.setattr(tracing_setup, 'flush_tracing', flush)
+
+    await tracing_setup._shutdown_tracing()
+
+    flush.assert_awaited_once()
+    provider.shutdown.assert_called_once()
+    assert tracing_setup._sdk is None
+    assert tracing_setup._initialization_attempted is True
+    assert await tracing_setup.init_tracing_if_needed() is False
 
 
 @pytest.mark.asyncio
