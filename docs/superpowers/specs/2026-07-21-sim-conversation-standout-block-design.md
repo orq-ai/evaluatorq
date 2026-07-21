@@ -11,7 +11,8 @@ surfaces.
 Only `.sim-transcript-bubbles` changes. The conversation messages remain in
 their current order, alignment, role-specific tinting, and avatar treatment.
 The summary header, criteria block, judge rationale, table rows, and error
-state are unchanged.
+state are unchanged, except for the conversation-row selection treatment
+described below.
 
 ## Design
 
@@ -28,6 +29,13 @@ The surrounding criteria-to-conversation divider remains the structural break
 between outcome and evidence. Individual user and agent bubbles retain their
 current surface treatment, ensuring roles remain easy to scan inside the new
 transcript boundary.
+
+## Conversation-row selection
+
+When a conversation is selected, its outcome tint is sufficient feedback. Do
+not add a green border or rounded-card outline to that selected row. Retain the
+colour highlight and the existing keyboard-focus outline so the state remains
+visible and accessible without competing chrome.
 
 ## Implementation and verification
 
