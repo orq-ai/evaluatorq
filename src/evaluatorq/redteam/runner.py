@@ -1947,8 +1947,32 @@ async def _run_dynamic_or_hybrid(
                             f'produced an empty prompt ({len(messages)} messages, none with user content).'
                         )
                     target_instance = _backend.create_target(_label)
-                    raw = await target_instance.respond([Message(role='user', content=prompt)])
-                    result = _coerce_to_agent_response(raw)
+                    attack_attrs = _static_attack_attrs(data)
+                    target_input = truncate_for_span(prompt)
+                    async with (
+                        with_redteam_span('orq.redteam.attack', attack_attrs),
+                        with_redteam_span(
+                            'orq.redteam.target_call',
+                            {
+                                **attack_attrs,
+                                'input': target_input,
+                                'orq.redteam.input': target_input,
+                            },
+                        ) as target_span,
+                    ):
+                        raw = await target_instance.respond([Message(role='user', content=prompt)])
+                        result = _coerce_to_agent_response(raw)
+                        if result.error is not None:
+                            set_span_attrs(
+                                target_span,
+                                {
+                                    'orq.redteam.error_type': result.error.error_type,
+                                    'orq.redteam.error_code': result.error.code,
+                                },
+                            )
+                        else:
+                            output = truncate_for_span(result.text)
+                            set_span_attrs(target_span, {'output': output, 'orq.redteam.output': output})
                     active_progress = _get_active_progress()
                     if active_progress is not None:
                         await active_progress.finish_attack(None)
