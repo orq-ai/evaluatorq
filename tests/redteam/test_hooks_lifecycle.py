@@ -663,8 +663,6 @@ class TestDynamicInternalStageOrdering:
                 'evaluatorq.redteam.reports.converters.static_results_to_report',
                 return_value=mock_report,
             ),
-            patch('evaluatorq.tracing.init_tracing_if_needed', new_callable=AsyncMock),
-            patch('evaluatorq.tracing.capture_parent_context', new_callable=AsyncMock, return_value=None),
             patch(
                 'evaluatorq.redteam.tracing.with_redteam_span',
                 return_value=MagicMock(
@@ -780,8 +778,6 @@ class TestDynamicInternalStageOrdering:
                 'evaluatorq.redteam.reports.converters.static_results_to_report',
                 return_value=mock_report,
             ),
-            patch('evaluatorq.tracing.init_tracing_if_needed', new_callable=AsyncMock),
-            patch('evaluatorq.tracing.capture_parent_context', new_callable=AsyncMock, return_value=None),
             patch(
                 'evaluatorq.redteam.tracing.with_redteam_span',
                 return_value=MagicMock(
@@ -891,8 +887,6 @@ class TestDynamicConfirmPayload:
                 'evaluatorq.redteam.reports.converters.static_results_to_report',
                 return_value=mock_report,
             ),
-            patch('evaluatorq.tracing.init_tracing_if_needed', new_callable=AsyncMock),
-            patch('evaluatorq.tracing.capture_parent_context', new_callable=AsyncMock, return_value=None),
             patch(
                 'evaluatorq.redteam.tracing.with_redteam_span',
                 return_value=MagicMock(
@@ -989,8 +983,6 @@ class TestDynamicConfirmPayload:
                 'evaluatorq.redteam.adaptive.pipeline.generate_dynamic_datapoints',
                 gen_mock,
             ),
-            patch('evaluatorq.tracing.init_tracing_if_needed', new_callable=AsyncMock),
-            patch('evaluatorq.tracing.capture_parent_context', new_callable=AsyncMock, return_value=None),
             patch(
                 'evaluatorq.redteam.tracing.with_redteam_span',
                 return_value=MagicMock(
@@ -1087,8 +1079,6 @@ class TestDynamicConfirmPayload:
                 'evaluatorq.redteam.reports.converters.merge_reports',
                 return_value=mock_report,
             ),
-            patch('evaluatorq.tracing.init_tracing_if_needed', new_callable=AsyncMock),
-            patch('evaluatorq.tracing.capture_parent_context', new_callable=AsyncMock, return_value=None),
             patch(
                 'evaluatorq.redteam.tracing.with_redteam_span',
                 return_value=MagicMock(
