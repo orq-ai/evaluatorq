@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import logging
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from evaluatorq.common.async_utils import await_maybe
+from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry, default_map_error
 from evaluatorq.common.thread_context import conversation_thread
 from evaluatorq.common.tracing import record_llm_input, record_llm_output, record_token_usage, set_span_attrs
 from evaluatorq.contracts import TokenUsage
+from evaluatorq.integrations.callable_integration import CallableTarget
 from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
 from evaluatorq.simulation.agents.user_simulator import (
     UserSimulatorAgent,
@@ -41,6 +42,7 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
     from evaluatorq.contracts import AgentTarget
+    from evaluatorq.integrations.callable_integration.target import AgentCallable
     from evaluatorq.simulation.agents.base import BaseAgent
     from evaluatorq.simulation.hooks import SimulationHooks
 
@@ -243,6 +245,8 @@ class SimulationRunner:
         target: Callable[[list[Message]], str | Awaitable[str]] | None = None,
         model: str = DEFAULT_MODEL,
         max_turns: int = 10,
+        target_agent_timeout_ms: int = 240_000,
+        max_target_retries: int = 2,
         user_simulator: BaseAgent | None = None,
         judge: BaseAgent | None = None,
         hooks: SimulationHooks | None = None,
@@ -252,6 +256,8 @@ class SimulationRunner:
             raise ValueError('Must provide either target_agent or target')
         if max_turns < 1:
             raise ValueError(f'max_turns must be >= 1, got {max_turns}')
+        if max_target_retries < 0:
+            raise ValueError(f'max_target_retries must be >= 0, got {max_target_retries}')
         if not model.strip():
             raise ValueError('model must be a non-empty string')
 
@@ -266,6 +272,14 @@ class SimulationRunner:
 
         self._target_agent = target_agent
         self._target = target
+        # Route both target flavours through the shared retry helper by wrapping a
+        # plain callback in the existing CallableTarget adapter (str->AgentResponse
+        # coercion + sync/async dispatch handled there — no bespoke adapter).
+        self._effective_target: AgentTarget | None = target_agent or (
+            CallableTarget(cast('AgentCallable', target)) if target is not None else None
+        )
+        self._target_agent_timeout_ms = target_agent_timeout_ms
+        self._max_target_retries = max_target_retries
         self._model = model
         self._max_turns = max_turns
         self._shared_client: AsyncOpenAI | None = llm_client
@@ -551,9 +565,12 @@ class SimulationRunner:
                         target_span,
                         [{'role': m.role, 'content': m.content or ''} for m in messages],
                     )
-                    agent_response_text, agent_response_usage, agent_response_model = await self._get_target_response(
-                        messages
-                    )
+                    call = await self._get_target_response(messages)
+                    agent_response_text = call.response.text
+                    # Only trust usage on success; a synthetic error response
+                    # carries no real token accounting.
+                    agent_response_usage = call.response.usage if call.succeeded else None
+                    agent_response_model = call.response.model
                     if agent_response_usage is not None:
                         target_usage_acc['acc'] = target_usage_acc['acc'] + agent_response_usage
                         record_token_usage(
@@ -570,7 +587,21 @@ class SimulationRunner:
                     if agent_response_model is not None and target_model_holder['model'] is None:
                         target_model_holder['model'] = agent_response_model
                     record_llm_output(target_span, agent_response_text)
+                # The failed turn IS recorded (mirrors orchestrator.py's
+                # turns_record.append on exhaustion) before terminating.
                 messages.append(Message(role='assistant', content=agent_response_text))
+
+                if not call.succeeded:
+                    return self._target_failure_result(
+                        call,
+                        persona=persona,
+                        scenario=scenario,
+                        messages=messages,
+                        turn_metrics_list=turn_metrics_list,
+                        run_span=run_span,
+                        total_usage=_get_total_usage(),
+                        target_model=target_model_holder['model'],
+                    )
 
                 async with with_simulation_span('orq.simulation.judge_evaluation', None):
                     judgment = await judge.evaluate(messages)
@@ -730,24 +761,86 @@ class SimulationRunner:
     # Private helpers
     # ---------------------------------------------------------------------------
 
-    async def _get_target_response(self, messages: list[Message]) -> tuple[str, TokenUsage | None, str | None]:
-        """Return (text, usage, target_model).
+    def _target_failure_result(
+        self,
+        call: TargetCallResult,
+        *,
+        persona: Persona | None,
+        scenario: Scenario | None,
+        messages: list[Message],
+        turn_metrics_list: list[TurnMetrics],
+        run_span: Span | None,
+        total_usage: TokenUsage,
+        target_model: str | None,
+    ) -> SimulationResult:
+        """Terminate the run after the target exhausted its retries.
 
-        ``target_model`` is the model identifier reported by the target itself
-        (via ``AgentResponse.model``).  It is ``None`` for plain callbacks,
-        which may call any provider and have no way to report a model.
-        NEVER substitute ``self._model`` here — that is the user-simulator /
+        The failed turn is already appended to ``messages``; this builds the
+        terminal :class:`SimulationResult` (no judge call). Mirrors the judge /
+        max-turns termination branches: records final token usage + span attrs
+        and retains prior ``messages``/``turn_metrics``. A ``timeout`` error type
+        maps to :attr:`TerminatedBy.timeout`, everything else to
+        :attr:`TerminatedBy.error`.
+        """
+        err = call.error
+        error_message = err.message if err else 'target failed'
+        error_type = err.error_type if err else 'target_error'
+        terminated_by = TerminatedBy.timeout if error_type == 'timeout' else TerminatedBy.error
+        turn_count = sum(1 for m in messages if m.role == 'assistant')
+
+        record_token_usage(
+            run_span,
+            prompt_tokens=total_usage.prompt_tokens,
+            completion_tokens=total_usage.completion_tokens,
+            total_tokens=total_usage.total_tokens,
+            cached_tokens=total_usage.cached_tokens,
+            reasoning_tokens=total_usage.reasoning_tokens,
+        )
+        set_span_attrs(
+            run_span,
+            {
+                'orq.simulation.terminated_by': terminated_by.value,
+                'orq.simulation.goal_achieved': False,
+                'orq.simulation.turn_count': turn_count,
+            },
+        )
+
+        metadata = _build_simulation_metadata(persona, scenario, None, target_model)
+        metadata['error'] = error_message
+        metadata['error_type'] = error_type
+        return SimulationResult(
+            messages=messages,
+            terminated_by=terminated_by,
+            reason=error_message,
+            goal_achieved=False,
+            goal_completion_score=0,
+            rules_broken=[],
+            turn_count=turn_count,
+            turn_metrics=turn_metrics_list,
+            token_usage=total_usage,
+            metadata=metadata,
+        )
+
+    async def _get_target_response(self, messages: list[Message]) -> TargetCallResult:
+        """Call the target through the shared bounded-retry + timeout helper.
+
+        Both target flavours (rich ``target_agent`` and a plain callback wrapped
+        in ``CallableTarget``) route through the same helper. The returned
+        :class:`TargetCallResult` carries ``.response`` (always populated — real
+        or synthetic), ``.succeeded``, and ``.error``. ``response.model`` is the
+        model the target reports (``None`` for plain callbacks, which may call any
+        provider); NEVER substitute ``self._model`` — that is the user-simulator /
         judge model, not the evaluated target.
         """
-        if self._target_agent:
-            resp = await self._target_agent.respond(messages)
-            return resp.text, resp.usage, resp.model
-        if self._target:
-            result = self._target(messages)
-            if inspect.isawaitable(result):
-                return await result, None, None
-            return result, None, None
-        raise RuntimeError('No target agent configured')
+        if self._effective_target is None:
+            raise RuntimeError('No target agent configured')
+        return await call_target_with_retry(
+            self._effective_target,
+            messages,
+            target_agent_timeout_ms=self._target_agent_timeout_ms,
+            max_target_retries=self._max_target_retries,
+            map_error=default_map_error,
+        )
 
     @staticmethod
     def _build_criteria_results(scenario: Scenario, judgment: Judgment) -> dict[str, bool]:
