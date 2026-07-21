@@ -11,6 +11,7 @@ import re
 import uuid
 import warnings
 from collections import Counter, defaultdict
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,11 +20,12 @@ from typing import TYPE_CHECKING, Any, cast
 from loguru import logger
 
 from evaluatorq import DataPoint, EvaluationResult, job
-from evaluatorq.common.async_utils import await_maybe, warn_if_sync_hooks
+from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.run_store_dir import get_store_dir
-from evaluatorq.common.thread_context import build_static_thread_id, conversation_thread
+from evaluatorq.common.target_call import call_target_with_retry, default_map_error
+from evaluatorq.common.thread_context import build_static_thread_id, conversation_thread, evaluatorq_pipeline
 from evaluatorq.common.tracing import AttrMap, set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities, classify_agent_capabilities
@@ -64,7 +66,13 @@ from evaluatorq.redteam.contracts import (
     parse_target,
 )
 from evaluatorq.redteam.exceptions import CancelledError, CredentialError, RedTeamError
-from evaluatorq.redteam.hooks import ConfirmPayload, DefaultHooks, PipelineHooks
+from evaluatorq.redteam.hooks import (
+    CompositePipelineHooks,
+    ConfirmPayload,
+    DefaultHooks,
+    ManifestStageHooks,
+    PipelineHooks,
+)
 from evaluatorq.redteam.reports.recommendations import generate_focus_area_recommendations
 from evaluatorq.redteam.runtime.jobs import _build_messages, _sanitize_job_name, create_model_job
 from evaluatorq.redteam.tracing import with_redteam_span
@@ -307,6 +315,33 @@ class RedTeamRunMetrics:
     duration_seconds: float
 
 
+def _coerce_run_result(result: Any) -> tuple[RedTeamReport, RedTeamRunMetrics]:
+    """Accept the traced runner result and legacy test doubles.
+
+    Inner runners return ``(report, metrics)``; accepting a bare report keeps
+    existing hook integrations that substitute a runner during testing working.
+    """
+    if isinstance(result, tuple):
+        return cast('tuple[RedTeamReport, RedTeamRunMetrics]', result)
+    return cast('RedTeamReport', result), RedTeamRunMetrics(0, 0, 0.0)
+
+
+@asynccontextmanager
+async def _redteam_run_lifecycle(manifest_writer: Any):  # noqa: RUF029
+    """Keep the manifest terminal state truthful while tagging all child calls."""
+    with evaluatorq_pipeline('red_teaming'):
+        try:
+            yield
+        except CancelledError:
+            if manifest_writer is not None:
+                manifest_writer.cancel()
+            raise
+        except BaseException as exc:
+            if manifest_writer is not None:
+                manifest_writer.fail(str(exc) or type(exc).__name__)
+            raise
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -430,15 +465,6 @@ async def red_team(
             ``save='detail'`` is passed without ``artifacts_dir``.
         CancelledError: If hooks.on_confirm returns False.
     """
-    resolved_hooks: PipelineHooks = hooks or DefaultHooks()
-    # Public entry point: nudge sync hooks toward async once. The same resolved
-    # instance flows down into _run_dynamic_or_hybrid / _run_static, so the
-    # re-resolution there never sees a different object — warn only here.
-    warn_if_sync_hooks(
-        resolved_hooks,
-        ('on_stage_start', 'on_stage_end', 'on_confirm', 'on_complete'),
-    )
-
     if config is not None:
         if llm_config is not None:
             msg = "Pass only one of 'config' or 'llm_config'."
@@ -632,6 +658,33 @@ async def red_team(
                 ', '.join(unevaluable_codes),
             )
 
+    # Persist run state alongside the report.  Compose user hooks with the
+    # manifest hook only after argument validation, so bad input creates no
+    # misleading in-progress manifest.
+    from evaluatorq.common.hook_compose import compose_run_hooks
+    from evaluatorq.common.run_manifest import start_manifest
+
+    def _make_manifest() -> Any:
+        return start_manifest(
+            run_id=uuid.uuid4().hex,
+            surface='redteam',
+            run_name=name or 'red-team',
+            runs_dir=get_runs_dir(),
+        )
+
+    _resolved_hooks_typed, manifest_writer = compose_run_hooks(
+        hooks,
+        method_names=('on_stage_start', 'on_stage_end', 'on_confirm', 'on_complete'),
+        composite_cls=CompositePipelineHooks,
+        default_hooks_factory=DefaultHooks,
+        manifest_factory=_make_manifest if save != 'none' else None,
+        manifest_hook_factory=ManifestStageHooks,
+    )
+    # The composite records manifest stages for normal runner calls. Preserve the
+    # caller's hook object for the inner runners as well: integrations may call
+    # legacy synchronous hooks directly while substituting a runner.
+    resolved_hooks: PipelineHooks = cast('PipelineHooks', hooks or DefaultHooks())
+
     resolved_agent_targets = agent_targets or []
     all_target_labels, _ = _deduplicate_target_labels(targets, resolved_agent_targets)
     if targets:
@@ -653,14 +706,17 @@ async def red_team(
         'orq.redteam.parallelism': parallelism,
     }
 
-    async with tracing_session(name or 'red-team', trace_type='redteam') as tracing_context:  # noqa: SIM117
+    async with (  # noqa: SIM117
+        _redteam_run_lifecycle(manifest_writer),
+        tracing_session(name or 'red-team', trace_type='redteam') as tracing_context,
+    ):
         async with with_redteam_span(
             'orq.redteam.pipeline',
             pipeline_attributes,
             parent_context=tracing_context.parent_context,
         ) as pipeline_span:
             if resolved_mode in (Pipeline.DYNAMIC, Pipeline.HYBRID):
-                report, metrics = await _run_dynamic_or_hybrid(
+                run_result = await _run_dynamic_or_hybrid(
                     targets=targets,
                     agent_targets=agent_targets,
                     mode=resolved_mode,
@@ -690,8 +746,9 @@ async def red_team(
                     resolved_delivery_methods=resolved_delivery_methods,
                     run_id=tracing_context.run_id,
                 )
+                report, metrics = _coerce_run_result(run_result)
             elif resolved_mode == Pipeline.STATIC:
-                report, metrics = await _run_static(
+                run_result = await _run_static(
                     targets=targets,
                     agent_targets=agent_targets,
                     name=name,
@@ -710,6 +767,7 @@ async def red_team(
                     resolved_delivery_methods=resolved_delivery_methods,
                     run_id=tracing_context.run_id,
                 )
+                report, metrics = _coerce_run_result(run_result)
             else:
                 msg = f'Invalid mode {mode!r}. Must be "dynamic", "static", or "hybrid".'
                 raise ValueError(msg)
@@ -795,6 +853,7 @@ async def red_team(
             # the inner pipeline write 01/02/03 to resolved_output_dir, so here we
             # only handle 'final' (single summary file) and record the saved path.
             auto_save_path: Path | None = None
+            run_path: Path | None = None
             if save == 'final':
                 if user_output_dir is not None:
                     _save_report(user_output_dir, '03_summary_report.json', report)
@@ -820,6 +879,21 @@ async def red_team(
                     auto_save_path=str(auto_save_path) if auto_save_path else None,
                 )
             )
+
+            # Only mark completion after the user completion hook succeeds.  If
+            # it raises, the lifecycle context above records the surfaced error.
+            if manifest_writer is not None:
+                manifest_writer.complete(
+                    report_path=run_path,
+                    summary={
+                        'pipeline': report.pipeline.value,
+                        'total_results': report.total_results,
+                        'total_attacks': report.summary.total_attacks,
+                        'vulnerability_rate': report.summary.vulnerability_rate,
+                        'resistance_rate': report.summary.resistance_rate,
+                        'tested_agents': list(report.tested_agents),
+                    },
+                )
 
             return report
 
@@ -906,9 +980,42 @@ def _static_attack_attrs(data: DataPoint) -> dict[str, str]:
     }
 
 
+async def _run_static_target_call(
+    target: Any,
+    prompt: str,
+    *,
+    target_agent_timeout_ms: int,
+    max_target_retries: int,
+    map_error: Callable[[Exception], tuple[str, str] | None] = default_map_error,
+) -> dict[str, Any]:
+    """Call a static target with the shared retry/error mapping policy."""
+    call = await call_target_with_retry(
+        target,
+        [Message(role='user', content=prompt)],
+        target_agent_timeout_ms=target_agent_timeout_ms,
+        max_target_retries=max_target_retries,
+        map_error=map_error,
+    )
+    result = call.response
+
+    active_progress = _get_active_progress()
+    if active_progress is not None:
+        await active_progress.finish_attack(None)
+
+    return {
+        'response': result.text,
+        'error': call.error,
+        'tool_calls': result.tool_calls,
+        'token_usage': result.usage,
+        'finish_reason': result.finish_reason,
+        'model': result.model,
+    }
+
+
 def _create_static_job_for_agent_target(
     target_factory: Callable[[], Any],
     label: str,
+    cfg: LLMConfig | None = None,
     *,
     run_id: str | None = None,
 ) -> Any:
@@ -921,6 +1028,7 @@ def _create_static_job_for_agent_target(
     target (and its unused HTTP client) is left dangling.
     """
     safe = _sanitize_job_name(label)
+    cfg = cfg or PIPELINE_CONFIG
 
     @job(f'redteam:static:{safe}')
     async def agent_target_job(data: DataPoint, _row: int) -> dict[str, Any]:
@@ -950,33 +1058,27 @@ def _create_static_job_for_agent_target(
                             'orq.redteam.input': target_input,
                         },
                     ) as agent_span:
-                        raw_response = await target.respond([Message(role='user', content=prompt)])
-                        result = _coerce_to_agent_response(raw_response)
-                        if result.error is not None:
+                        output = await _run_static_target_call(
+                            target,
+                            prompt,
+                            target_agent_timeout_ms=cfg.target_agent_timeout_ms,
+                            max_target_retries=cfg.max_target_retries,
+                        )
+                        error = output['error']
+                        if error is not None:
                             error_attrs: AttrMap = {
-                                'orq.redteam.error_type': result.error.error_type,
-                                'orq.redteam.error_code': result.error.code,
+                                'orq.redteam.error_type': error.error_type,
+                                'orq.redteam.error_code': error.code,
                             }
                             set_span_attrs(target_span, error_attrs)
                             set_span_attrs(agent_span, error_attrs)
                         else:
-                            output = truncate_for_span(result.text)
-                            output_attrs: AttrMap = {'output': output, 'orq.redteam.output': output}
+                            response_text = truncate_for_span(output['response'])
+                            output_attrs: AttrMap = {'output': response_text, 'orq.redteam.output': response_text}
                             set_span_attrs(target_span, output_attrs)
                             set_span_attrs(agent_span, output_attrs)
 
-            active_progress = _get_active_progress()
-            if active_progress is not None:
-                await active_progress.finish_attack(None)
-
-            return {
-                'response': result.text,
-                'tool_calls': result.tool_calls,
-                'token_usage': result.usage,
-                'finish_reason': result.finish_reason,
-                'model': result.model,
-                'thread_id': thread_id,
-            }
+            return {**output, 'thread_id': thread_id}
         finally:
             target_close = getattr(target, 'close', None)
             if callable(target_close):
