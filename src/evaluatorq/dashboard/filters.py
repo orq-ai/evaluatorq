@@ -23,6 +23,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from evaluatorq.simulation.metrics import TURN_METRICS
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -185,8 +187,6 @@ def _sim_metric_dim_key(key: str, *, high_is_risky: bool) -> str:
 
 
 def _sim_metric_dims() -> list[str]:
-    from evaluatorq.simulation.metrics import TURN_METRICS
-
     return [_sim_metric_dim_key(m.key, high_is_risky=m.high_is_risky) for m in TURN_METRICS]
 
 
@@ -224,12 +224,20 @@ def _parse_int(raw: str) -> int | None:
         return None
 
 
-def _sim_options_from_results(results: list[Any]) -> dict[str, list[str]]:
-    from evaluatorq.simulation.metrics import TURN_METRICS
+def _sim_multiselect_options(results: list[Any]) -> dict[str, list[str]]:
+    """The three "all"-default multiselect option lists (persona / scenario /
+    terminated_by) plus the fixed goal-outcome pair. This is the only slice
+    ``_sim_apply`` needs, so it is kept separate from the heavier bound/metric
+    scan below — the apply path must not pay for the full option build."""
+    return {
+        'persona': sorted({_meta(r, 'persona') for r in results}),
+        'scenario': sorted({_meta(r, 'scenario') for r in results}),
+        'terminated_by': sorted({r.terminated_by.value for r in results}),
+        'goal_outcome': ['Achieved', 'Not achieved'],
+    }
 
-    personas = sorted({_meta(r, 'persona') for r in results})
-    scenarios = sorted({_meta(r, 'scenario') for r in results})
-    terminated = sorted({r.terminated_by.value for r in results})
+
+def _sim_options_from_results(results: list[Any]) -> dict[str, list[str]]:
     max_turns = max((r.turn_count for r in results), default=0)
     max_total_tokens = max((r.token_usage.total_tokens for r in results), default=0)
     available_metrics = [
@@ -238,10 +246,7 @@ def _sim_options_from_results(results: list[Any]) -> dict[str, list[str]]:
         if any(getattr(tm, m.key, None) is not None for r in results for tm in r.turn_metrics)
     ]
     return {
-        'persona': personas,
-        'scenario': scenarios,
-        'terminated_by': terminated,
-        'goal_outcome': ['Achieved', 'Not achieved'],
+        **_sim_multiselect_options(results),
         'max_turns': [str(max_turns)],
         'max_total_tokens': [str(max_total_tokens)],
         'metrics': available_metrics,
@@ -255,7 +260,9 @@ def _sim_full_options(run: Any) -> dict[str, list[str]]:
 def _sim_apply(run: Any, selections: dict[str, list[str]]) -> list[Any]:
     """Apply all sim filter dimensions."""
     results: list[Any] = list(run.results)
-    full_opts = _sim_full_options(run)
+    # Only the multiselect "all"-defaults are needed here; skip the heavier
+    # bound/metric-availability scan that the full option build does.
+    full_opts = _sim_multiselect_options(run.results)
 
     # persona (multiselect)
     all_personas = full_opts['persona']
@@ -308,8 +315,6 @@ def _sim_apply(run: Any, selections: dict[str, list[str]]) -> list[Any]:
 
     # per-turn quality/risk metric thresholds — worst turn per result, unscored
     # results always stay visible.
-    from evaluatorq.simulation.metrics import TURN_METRICS
-
     for metric in TURN_METRICS:
         dim_key = _sim_metric_dim_key(metric.key, high_is_risky=metric.high_is_risky)
         metric_sel = selections.get(dim_key, [])

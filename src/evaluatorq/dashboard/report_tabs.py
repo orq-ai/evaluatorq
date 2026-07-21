@@ -82,6 +82,10 @@ def _tabs(group: str, items: list[tuple[str, str] | tuple[str, str, str]]) -> st
 # Agent simulation
 # ---------------------------------------------------------------------------
 
+# Shown in place of any data-driven sim tab/block when the active filter matches
+# zero conversations, so the report keeps its structure instead of collapsing.
+_SIM_NO_MATCH_NOTE = '<p class="sim-empty-note">No conversations match the current filter.</p>'
+
 
 def _stable_entries(run: SimulationRun, rows: list[Any]) -> list[Any]:
     """Build entries for *rows* while retaining their full-run indexes."""
@@ -141,15 +145,14 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
     # note so the report structure stays stable (Config still shows the full-run
     # registry; Overview handles its own empty state internally).
     no_matches = results is not None and not rows
-    empty_note = '<p class="sim-empty-note">No conversations match the current filter.</p>'
 
-    breakdown_body = empty_note if no_matches else _sim_breakdown(by_kind, rid, entity_context)
+    breakdown_body = _SIM_NO_MATCH_NOTE if no_matches else _sim_breakdown(by_kind, rid, entity_context)
     transcripts_body = (
-        empty_note
+        _SIM_NO_MATCH_NOTE
         if no_matches
         else sim_interactive_panels(rid, entries) + render('evaluator_scores', 'judge_verdicts', 'errors')
     )
-    turn_quality_body = empty_note if no_matches else _sim_turn_quality(by_kind)
+    turn_quality_body = _SIM_NO_MATCH_NOTE if no_matches else _sim_turn_quality(by_kind)
 
     # Folded 7→5 to curb tab sprawl: Evaluators + Judge & errors → Transcripts
     # (all per-conversation verdicts); Tokens → Config. Turn quality is its own
@@ -157,7 +160,7 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
     tabs = _tabs(
         'simtab',
         [
-            ('Overview', _sim_overview(rid, by_kind, rows, run)),
+            ('Overview', _sim_overview(rid, by_kind, entity_by_kind, rows, run, filtered=results is not None)),
             ('Breakdown', breakdown_body),
             (
                 'Transcripts',
@@ -963,11 +966,22 @@ def _sim_turn_quality(by_kind: dict[str, Any]) -> str:
 def _sim_overview(
     rid: str,
     by_kind: dict[str, Any],
+    full_by_kind: dict[str, Any],
     rows: list[Any],
     run: SimulationRun,
+    *,
+    filtered: bool,
 ) -> str:
     """Overview tab body: agent info card, exec summary, KPI band, and a
-    two-column outcomes/quality grid. Persona and scenario input live in Config."""
+    two-column outcomes/quality grid. Persona and scenario input live in Config.
+
+    The executive summary is whole-run context, so it is built from
+    ``full_by_kind`` (the unfiltered sections) and always renders — a filter,
+    even one matching zero conversations, never makes it vanish. When a filter
+    is active its label is qualified with "· whole run" so the reader knows the
+    prose is not describing the narrowed subset below it. The KPI band, outcomes
+    donut, and quality tiles remain filtered-subset metrics.
+    """
     from evaluatorq.dashboard.report_kit import callout, exec_summary, panel
 
     agent_card_html = _sim_agent_section(rid, run)
@@ -981,19 +995,21 @@ def _sim_overview(
     tokens_data = tokens_section.data if tokens_section is not None else {}
     metrics_data = metrics_section.data if metrics_section is not None else {}
 
-    # One executive-summary card. When the run carries a saved narrative, show
-    # it (richer prose) in the shared callout shell; otherwise fall back to the
-    # computed stat sentence. Rendering both — as before — duplicated the card.
-    # summary_data['narrative'] is None on filtered subset views, so those keep
-    # the computed sentence describing the subset.
-    narrative = summary_data.get('narrative')
-    if narrative:
-        summary_html = callout(esc(str(narrative)), confidence=summary_data.get('confidence'))
+    # One executive-summary card, always whole-run. The saved narrative (richer
+    # prose) wins; otherwise the computed stat sentence from the full run. Using
+    # the unfiltered sections means it never collapses under a zero-match filter.
+    full_summary_data = (s.data if (s := full_by_kind.get('summary')) is not None else {})
+    full_heatmap_data = (s.data if (s := full_by_kind.get('persona_scenario_heatmap')) is not None else {})
+    es_label = 'Executive summary · whole run' if filtered else 'Executive summary'
+    confidence = full_summary_data.get('confidence')
+    if run.executive_summary:
+        summary_html = callout(esc(str(run.executive_summary)), label=es_label, confidence=confidence)
     else:
         summary_html = exec_summary(
-            summary_data=summary_data,
-            heatmap_data=heatmap_data,
-            confidence=summary_data.get('confidence'),
+            summary_data=full_summary_data,
+            heatmap_data=full_heatmap_data,
+            confidence=confidence,
+            label=es_label,
         )
     kpi_html = _sim_kpi_band(
         summary_data,
@@ -1004,9 +1020,8 @@ def _sim_overview(
     # both blocks would otherwise collapse to empty; render an explicit "no
     # matches" state instead so the Overview keeps its structure.
     if not rows:
-        empty = '<p class="sim-empty-note">No conversations match the current filter.</p>'
-        donut_html = f'<figure class="chart-card"><figcaption>Outcomes</figcaption>{empty}</figure>'
-        second_html = panel('Average quality metrics', empty)
+        donut_html = f'<figure class="chart-card"><figcaption>Outcomes</figcaption>{_SIM_NO_MATCH_NOTE}</figure>'
+        second_html = panel('Average quality metrics', _SIM_NO_MATCH_NOTE)
     else:
         donut_html = _sim_outcomes_donut(rows)
         # Average quality metrics (turn metrics); fall back to the token-usage

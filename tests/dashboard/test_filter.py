@@ -656,6 +656,28 @@ def test_rt_rail_has_slider_and_more_expander():
     assert 'name="min_turns"' in html and 'type="range"' in html
     assert 'id="filter-dd-more"' in html
     assert 'id="filter-dd-technique"' in html  # inside the expander
+    # Shared range control: numeric readout (never "all") + the run's max shown.
+    assert '>all<' not in html
+    assert '<span class="filter-slider-max">/ 5</span>' in html
+
+
+def test_rt_rail_slider_engaged_only_when_off_default():
+    from evaluatorq.dashboard.view import _render_redteam_filter_rail
+
+    opts = {
+        'result': ['Vulnerable', 'Resistant', 'Error'],
+        'severity': ['critical'],
+        'category': ['ASI01'],
+        'agent': ['a'],
+        'technique': ['t'],
+        'delivery_method': ['email'],
+        'vulnerability': ['v1'],
+        'max_turns': ['5'],
+    }
+    off = _render_redteam_filter_rail('rid', opts, {'min_turns': ['1']}, shown=3, total=3)
+    assert 'filter-slider-readout is-engaged' not in off
+    on = _render_redteam_filter_rail('rid', opts, {'min_turns': ['3']}, shown=3, total=3)
+    assert 'filter-slider-readout is-engaged' in on
 
 
 def test_rt_rail_hides_slider_when_max_turns_one():
@@ -1041,6 +1063,14 @@ def test_slider_readout_engaged_only_when_off_default():
     assert 'filter-slider-readout is-engaged' not in off
     on = _sim_rail({'max_turns': ['8']}, {'min_turns': ['3']})
     assert 'filter-slider-readout is-engaged' in on
+
+
+def test_sim_rail_hides_min_turns_when_single_turn_run():
+    # No-op control: every conversation has one turn (max_turns == 1) → hidden.
+    html = _sim_rail({'max_turns': ['1']}, {})
+    assert 'name="min_turns"' not in html
+    shown = _sim_rail({'max_turns': ['5']}, {})
+    assert 'name="min_turns"' in shown
 
 
 def test_dropdown_status_marks_partial():

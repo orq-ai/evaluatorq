@@ -441,3 +441,28 @@ def test_sim_empty_filter_keeps_data_tabs() -> None:
     for label in ('Breakdown', 'Transcripts', 'Turn quality'):
         assert label in html
     assert html.count('No conversations match the current filter.') >= 3
+
+
+def test_sim_exec_summary_survives_empty_filter_without_saved_narrative() -> None:
+    # Regression (hate review, Realist): with NO saved narrative AND a filter
+    # matching zero rows, the exec summary used to vanish (computed sentence is
+    # built from the filtered subset → total 0 → ''). It must now render the
+    # whole-run computed summary, labeled as whole-run context.
+    from evaluatorq.dashboard.report_tabs import sim_report_tabs
+    from evaluatorq.simulation.types import SimulationRun
+
+    results = _make_sim_results()
+    run = SimulationRun(
+        run_name='no-narrative',
+        created_at=datetime.now(tz=timezone.utc),
+        mode='simulate',
+        target_kind='callback',
+        evaluator_names=[],
+        total_results=len(results),
+        scorer_averages={},
+        results=results,
+        executive_summary=None,
+    )
+    html = sim_report_tabs('run-1', run, results=[])
+    assert 'exec-summary' in html  # the callout shell rendered, not dropped
+    assert 'Executive summary · whole run' in html  # labeled as whole-run scope
