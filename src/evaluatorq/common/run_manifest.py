@@ -3,7 +3,8 @@
 Reports only land on disk when a run *completes* — a run that is still running
 or that crashed leaves no artifact. The manifest fills that gap: a tiny record
 written when a run starts (``status='running'``), patched as stages advance, and
-finalised to ``'completed'`` or ``'error'``. It lives in a ``.manifests/``
+finalised to a terminal ``'completed'``, ``'error'``, or ``'cancelled'``. It
+lives in a ``.manifests/``
 sidecar inside the same runs dir the report is saved to, so it never pollutes
 the existing ``*.json`` report globs (which are non-recursive).
 
@@ -17,7 +18,9 @@ Everything here is best-effort: a manifest write must never raise into — or sl
 
 from __future__ import annotations
 
+import contextlib
 import operator
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -27,6 +30,7 @@ from loguru import logger
 from evaluatorq.contracts import (
     ManifestStatus,
     RunManifest,
+    RunSummary,
     StageRecord,
 )
 from evaluatorq.contracts import (
@@ -53,23 +57,32 @@ class ManifestWriter:
 
     def flush(self) -> None:
         self.manifest.updated_at = datetime.now(tz=timezone.utc)
+        # Write to a temp file in the same dir then atomically rename over the
+        # target, so a SIGKILL mid-write can never leave truncated JSON that the
+        # reader would silently drop (the whole point of the manifest is to
+        # surface crashed runs). Best-effort: on failure clean up the temp file.
+        tmp = self.path.with_name(f'{self.path.name}.{os.getpid()}.tmp')
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(self.manifest.model_dump_json(indent=2), encoding='utf-8')
+            tmp.write_text(self.manifest.model_dump_json(indent=2), encoding='utf-8')
+            os.replace(tmp, self.path)  # noqa: PTH105 — atomic rename is the whole point
         except OSError as exc:
             logger.debug(f'Failed to write run manifest {self.path}: {exc}')
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
 
     def _open_stage(self, name: str | None = None, target: str | None = None) -> StageRecord | None:
         """Most-recent still-open stage record matching *name* and *target*.
 
-        A ``None`` filter matches any value, so per-target concurrent stages
-        (Dec2) never close each other's records.
+        ``target`` is an exact part of the key: ``None`` matches only aggregate
+        stages whose target is also ``None``. This prevents targetless events
+        from closing one of several concurrent per-target stages.
         """
         for rec in reversed(self.manifest.stages):
             if (
                 rec.ended_at is None
                 and (name is None or rec.name == name)
-                and (target is None or rec.target == target)
+                and rec.target == target
             ):
                 return rec
         return None
@@ -107,7 +120,7 @@ class ManifestWriter:
         self._close(rec, ManifestStatus.ERROR if error else ManifestStatus.COMPLETED)
         self.flush()
 
-    def complete(self, report_path: str | Path | None = None, summary: dict[str, Any] | None = None) -> None:
+    def complete(self, report_path: str | Path | None = None, summary: RunSummary | None = None) -> None:
         if self.manifest.status != ManifestStatus.RUNNING:
             return  # terminal transitions are idempotent — first one wins
         now = datetime.now(tz=timezone.utc)
@@ -186,13 +199,10 @@ def list_manifests(runs_dir: Path) -> list[RunManifest]:
         try:
             out.append(RunManifest.model_validate_json(p.read_text(encoding='utf-8')))
         except (OSError, ValueError) as exc:  # noqa: PERF203 — tiny loop, best-effort read
-            logger.debug(f'Skipping unreadable manifest {p}: {exc}')
+            # A genuinely unreadable/corrupt manifest is a run we can no longer
+            # surface — make it visible (warning), not silent (debug).
+            logger.warning(f'Skipping unreadable manifest {p}: {exc}')
     return sorted(out, key=lambda m: m.started_at, reverse=True)
-
-
-def active_manifests(runs_dir: Path) -> list[RunManifest]:
-    """Manifests for runs that are not completed (running, errored, cancelled)."""
-    return [m for m in list_manifests(runs_dir) if m.status != ManifestStatus.COMPLETED]
 
 
 def list_run_records(runs_dir: Path) -> list[tuple[RunManifest | None, Path | None]]:
@@ -225,52 +235,12 @@ def list_run_records(runs_dir: Path) -> list[tuple[RunManifest | None, Path | No
                 if p.resolve() in covered:
                     continue
                 mtime = p.stat().st_mtime
-            except OSError:
+            except OSError as exc:
+                # A legacy report we can't stat/resolve is a run we're dropping —
+                # log it (warning) instead of swallowing it silently.
+                logger.warning(f'Skipping unreadable legacy report {p}: {exc}')
                 continue
             records.append((None, p, mtime))
 
     records.sort(key=operator.itemgetter(2), reverse=True)
     return [(m, p) for m, p, _ in records]
-
-
-def format_active_lines(runs_dir: Path) -> list[str]:
-    """Human-readable one-liners for non-completed runs, newest first.
-
-    Empty when nothing is active. Completed runs are omitted — their report file
-    already shows in the runs listing. Running, errored, and cancelled runs are
-    all surfaced.
-    """
-    now = datetime.now(tz=timezone.utc)
-    lines: list[str] = []
-    for m in active_manifests(runs_dir):
-        done = sum(1 for s in m.stages if s.status == ManifestStatus.COMPLETED)
-        if m.status == ManifestStatus.RUNNING:
-            elapsed = (now - m.started_at).total_seconds()
-            stage = m.stage or 'starting'
-            detail = f'stage {done + 1}: {stage} — {elapsed:.0f}s elapsed'
-        elif m.status == ManifestStatus.CANCELLED:
-            where = f' at {m.stage}' if m.stage else ''
-            detail = f'cancelled{where}'
-        else:  # error
-            where = f' at {m.stage}' if m.stage else ''
-            detail = f'error{where}: {m.error}' if m.error else f'error{where}'
-        lines.append(f'  • {m.run_name} [{m.status}] — {detail}')
-    return lines
-
-
-def echo_active_runs(runs_dir: Path) -> None:
-    """Print the 'Active runs' block (running/errored) for *runs_dir*, if any.
-
-    Shared by the ``redteam`` / ``sim`` ``runs`` CLI commands so the two never
-    drift. ``typer`` is imported lazily to keep this module — which the runners
-    import at runtime — free of the CLI-only dependency.
-    """
-    import typer
-
-    lines = format_active_lines(runs_dir)
-    if not lines:
-        return
-    typer.echo('Active runs:')
-    for line in lines:
-        typer.echo(line)
-    typer.echo('')

@@ -126,6 +126,45 @@ async def test_sync_user_hook_warns_but_composite_does_not_misfire() -> None:
 
 
 @pytest.mark.asyncio
+async def test_detail_save_manifest_uses_indexed_report_path(tmp_path, monkeypatch) -> None:
+    """The manifest and the report index share the runs directory canonical path."""
+    from evaluatorq.redteam.contracts import SaveMode
+
+    class QuietHooks(DefaultHooks):
+        async def on_complete(self, report: Any, **_kwargs: Any) -> None:
+            return None
+
+    report = _fake_report()
+    report.pipeline.value = 'dynamic'
+    report.total_results = 1
+    report.summary.total_attacks = 1
+    report.summary.vulnerability_rate = 0.0
+    report.summary.resistance_rate = 1.0
+    report.tested_agents = []
+    indexed_report = get_runs_dir() / 'redteam-index.json'
+
+    async def _fake_pipeline(**_kwargs: Any) -> MagicMock:
+        return report
+
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-key')
+    with (
+        patch('evaluatorq.redteam.runner._run_dynamic_or_hybrid', side_effect=_fake_pipeline),
+        patch('evaluatorq.redteam.runner._auto_save_run', return_value=indexed_report),
+    ):
+        await red_team(
+            'agent:test',
+            mode='dynamic',
+            save=SaveMode.DETAIL,
+            artifacts_dir=tmp_path / 'artifacts',
+            hooks=QuietHooks(),
+            generate_executive_summary=False,
+        )
+
+    [manifest] = list_manifests(get_runs_dir())
+    assert manifest.report_path == str(indexed_report)
+
+
+@pytest.mark.asyncio
 async def test_context_retrieval_per_target_keying_closes_stages() -> None:
     """FIX 2 / Dec2: the redteam manifest hook must open+close a CONTEXT_RETRIEVAL
     stage per target using a consistent 'target' key, so each stage closes

@@ -551,10 +551,6 @@ async def _generate_and_simulate_run(
                 'orq.simulation.parallelism': parallelism,
             },
         ) as pipeline_span:
-            resolved_agent_description = await _resolve_generation_agent_description(
-                agent_description=agent_description,
-                target=target,
-            )
             # Mint the run id + manifest at the outer entry, BEFORE the generate
             # phase, gated on save (D3: the GENERATE stage must reach the manifest
             # too). The SAME composed hooks thread through both the generate phase
@@ -576,6 +572,10 @@ async def _generate_and_simulate_run(
             # idempotent (guarded by status != RUNNING), so this composes safely
             # with _simulate_core's own finalization — whichever fires first wins.
             try:
+                resolved_agent_description = await _resolve_generation_agent_description(
+                    agent_description=agent_description,
+                    target=target,
+                )
                 datapoints: list[SimulationDatapoint] = []
                 gen_client: AsyncOpenAI | None = None
                 gen_owned = False
@@ -654,7 +654,7 @@ async def generate(
     num_personas: int = 5,
     num_scenarios: int = 5,
     sim_model: str = DEFAULT_MODEL,
-    hooks: SimulationHooks | None = None,
+    hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
     generation_client: AsyncOpenAI | None = None,
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
@@ -684,7 +684,7 @@ async def generate(
     ``sim_model`` drives persona/scenario/first-message generation.
     """
     from evaluatorq.common.async_utils import await_maybe
-    from evaluatorq.simulation.hooks import DefaultHooks, SimStage
+    from evaluatorq.simulation.hooks import SimStage
     from evaluatorq.simulation.tracing import with_simulation_span
     from evaluatorq.tracing.setup import flush_tracing, init_tracing_if_needed
 
@@ -703,7 +703,13 @@ async def generate(
             # generate_and_simulate path uses, so the standalone command
             # isn't silent. Empty on_stage_end meta: the CLI prints its own
             # "✓ Generated N datapoint(s)" line, so the count isn't doubled.
-            gen_hooks = hooks or DefaultHooks()
+            gen_hooks, _ = _compose_sim_hooks(
+                hooks,
+                save=False,
+                run_id='',
+                run_name='generate',
+                run_output=None,
+            )
             await await_maybe(gen_hooks.on_stage_start(SimStage.GENERATE, {}))
             try:
                 datapoints, gen_client, gen_owned = await _generate_datapoints_inner(
@@ -713,7 +719,7 @@ async def generate(
                     num_scenarios=num_scenarios,
                     model=sim_model,
                     generation_client=generation_client,
-                    hooks=hooks,
+                    hooks=gen_hooks,
                     persona_seeds=persona_seeds,
                     scenario_seeds=scenario_seeds,
                 )

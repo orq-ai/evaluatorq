@@ -446,6 +446,57 @@ async def test_multiple_user_hooks_fan_out(datapoint_factory):
 
 
 @pytest.mark.asyncio
+async def test_generate_fans_out_stage_events_to_multiple_user_hooks(monkeypatch):
+    """Standalone generate() supports the same public multi-hook contract."""
+    from evaluatorq.simulation import api
+    from evaluatorq.simulation.api import generate
+
+    calls: list[str] = []
+
+    class Recorder(DefaultHooks):
+        async def on_stage_start(self, stage, meta) -> None:
+            calls.append(f'start:{stage.value}')
+
+        async def on_stage_end(self, stage, meta) -> None:
+            calls.append(f'end:{stage.value}')
+
+    async def _fake_generate(**_kwargs):
+        return [], None, False
+
+    monkeypatch.setattr(api, '_generate_datapoints_inner', _fake_generate)
+
+    await generate(
+        agent_description='a helpful assistant',
+        num_personas=1,
+        num_scenarios=1,
+        hooks=[Recorder(), Recorder()],
+    )
+
+    assert calls == ['start:generate', 'start:generate', 'end:generate', 'end:generate']
+
+
+@pytest.mark.asyncio
+async def test_generate_and_simulate_tracks_description_resolution_failure(monkeypatch):
+    """The manifest exists before description resolution and records its failure."""
+    from evaluatorq.common.run_manifest import list_manifests
+    from evaluatorq.simulation import api
+    from evaluatorq.simulation.api import generate_and_simulate
+    from evaluatorq.simulation.utils.run_store import get_sim_runs_dir
+
+    async def _boom(**_kwargs):
+        raise RuntimeError('description lookup exploded')
+
+    monkeypatch.setattr(api, '_resolve_generation_agent_description', _boom)
+
+    with pytest.raises(RuntimeError, match='description lookup exploded'):
+        await generate_and_simulate(save=True)
+
+    [manifest] = list_manifests(get_sim_runs_dir())
+    assert manifest.status == 'error'
+    assert manifest.error == 'description lookup exploded'
+
+
+@pytest.mark.asyncio
 async def test_generate_phase_failure_marks_manifest_error_not_running(datapoint_factory, monkeypatch):
     """FIX 1: a failure DURING the generate phase of generate_and_simulate must
     finalize the manifest as 'error' — not leave it stuck 'running' forever

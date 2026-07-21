@@ -208,6 +208,8 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .status-badge.failed .dot { background: var(--red-600); }
 .status-badge.warning { background: var(--amber-100); color: var(--red-600); }
 .status-badge.warning .dot { background: var(--orange-500); }
+.status-badge.cancelled { background: var(--app-gray-100, #ececec); color: var(--text-muted, #8a8a8a); }
+.status-badge.cancelled .dot { background: var(--text-muted, #8a8a8a); }
 
 /* sim run-level table: two-line job cell + outline target pill */
 .sim-job { display: inline-flex; flex-direction: column; gap: 2px; text-decoration: none; }
@@ -302,6 +304,7 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .run-status.finished { background: var(--green-600); }
 .run-status.error { background: var(--red-600); }
 .run-status.running { background: var(--orange-500); }
+.run-status.cancelled { background: var(--text-muted, #8a8a8a); }
 
 /* Landing 'Recent runs' Type column: surface glyph + label (no colored bubble) */
 .type-cell { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; white-space: nowrap; }

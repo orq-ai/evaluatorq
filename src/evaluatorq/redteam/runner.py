@@ -786,6 +786,7 @@ async def red_team(
         # the inner pipeline write 01/02/03 to resolved_output_dir, so here we
         # only handle 'final' (single summary file) and record the saved path.
         auto_save_path: Path | None = None
+        indexed_run_path: Path | None = None
         if save == 'final':
             if user_output_dir is not None:
                 _save_report(user_output_dir, '03_summary_report.json', report)
@@ -796,10 +797,10 @@ async def red_team(
 
         # Index in .evaluatorq/runs/ so the run appears in `evaluatorq redteam runs`.
         if save != 'none':
-            run_path = _auto_save_run(report, name=name)
+            indexed_run_path = _auto_save_run(report, name=name)
             if auto_save_path is None:
-                auto_save_path = run_path
-            if run_path is None:
+                auto_save_path = indexed_run_path
+            if indexed_run_path is None:
                 report.pipeline_warnings.append(
                     'Failed to auto-save run report. The run will not appear in `evaluatorq redteam runs`.'
                 )
@@ -817,7 +818,7 @@ async def red_team(
         # card render) so a list row needs zero full-report reads.
         if manifest_writer is not None:
             manifest_writer.complete(
-                report_path=auto_save_path,
+                report_path=indexed_run_path,
                 summary={
                     'pipeline': report.pipeline.value,
                     'total_results': report.total_results,
@@ -2415,7 +2416,10 @@ async def _run_dynamic_or_hybrid(
                             'Manual cleanup may be required.'
                         )
                     await await_maybe(
-                        resolved_hooks.on_stage_end(PipelineStage.CLEANUP, {'num_entities_cleaned': len(entity_ids)})
+                        resolved_hooks.on_stage_end(
+                            PipelineStage.CLEANUP,
+                            {'num_entities_cleaned': len(entity_ids), 'target': pt.target},
+                        )
                     )
 
         return merged

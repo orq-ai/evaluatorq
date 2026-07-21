@@ -23,18 +23,17 @@ if TYPE_CHECKING:
     from evaluatorq.common.run_manifest import ManifestWriter
 
 
-def require_hooks_like(value: Any) -> None:
+def require_hooks_like(value: Any, method_names: tuple[str, ...] = ('on_confirm',)) -> None:
     """Raise ``TypeError`` unless *value* looks like a hooks object.
 
-    A hooks object exposes a callable ``on_confirm`` — the run gate present on
-    every surface Protocol. ``normalize_to_list`` stays permissive/generic; this
-    is the structural gate at the compose layer (spec §5), so a wrong type (e.g.
-    ``hooks=123`` or a stray string in a list) fails fast with a clear message
-    naming the bad value.
+    Every lifecycle method required by the surface must be callable. The
+    structural gate runs before manifest creation so a partial object fails fast
+    with ``TypeError`` rather than failing later during fan-out.
     """
-    if not callable(getattr(value, 'on_confirm', None)):
+    missing = [name for name in method_names if not callable(getattr(value, name, None))]
+    if missing:
         raise TypeError(
-            'hooks entries must be hooks objects (exposing a callable on_confirm); '
+            f'hooks entries must implement callable lifecycle methods {missing}; '
             f'got {value!r} of type {type(value).__name__}.'
         )
 
@@ -65,7 +64,7 @@ def compose_run_hooks(
     """
     user_hooks = normalize_to_list(hooks)
     for child in user_hooks:
-        require_hooks_like(child)
+        require_hooks_like(child, method_names)
         warn_if_sync_hooks(child, method_names)
     base: list[Any] = user_hooks or [default_hooks_factory()]
     writer = manifest_factory() if manifest_factory is not None else None

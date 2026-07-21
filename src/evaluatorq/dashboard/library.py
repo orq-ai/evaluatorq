@@ -216,10 +216,13 @@ def resolve(rid: str, roots: list[Path] | None = None) -> Path | None:
 
 
 def resolve_manifest(rid: str, roots: list[Path] | None = None) -> RunManifest | None:
-    """Resolve an in-flight (report-less) card id back to its ``RunManifest``.
+    """Resolve a report-less card id back to its ``RunManifest``.
 
-    Only matches manifests with no ``report_path`` (running/error/cancelled) —
-    completed runs resolve to their report via :func:`resolve`. Returns the
+    Matches any manifest with no ``report_path``. That is usually an in-flight
+    run (running/error/cancelled), but a *completed* run can also lack a
+    ``report_path`` when its report save failed — such a run has no openable
+    report, so it resolves here (not via :func:`resolve`) and the detail route
+    renders its status page (status 'completed', no transcript). Returns the
     ``RunManifest`` so the detail route can render a minimal status page.
     """
     from evaluatorq.common.run_manifest import list_manifests

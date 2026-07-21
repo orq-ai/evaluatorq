@@ -145,13 +145,18 @@ def _sim_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
     )
 
 
-def _inflight_status(card: library.ReportCard) -> str:
-    """Map a manifest status to the run-list lifecycle status ('running'/'error')."""
-    return 'running' if card.status == 'running' else 'error'
+def _card_status_row(card: library.ReportCard) -> RunRow:
+    """Build a RunRow straight from a manifest-backed card (no report read).
 
-
-def _inflight_row(card: library.ReportCard) -> RunRow:
-    """Build a RunRow for an in-flight run (no report on disk yet) from its card."""
+    Used for runs that have no openable report: in-flight runs (running/error/
+    cancelled) and a completed run whose report save failed. The lifecycle
+    status comes from the manifest status, NOT from ``path is None`` — only
+    ``cancelled`` and ``error`` are surfaced as non-completed, and only
+    ``error`` counts as an error (a cancelled run is a clean terminal state,
+    and a completed-but-unsaved run reads as finished).
+    """
+    status = card.status or 'error'
+    lifecycle = {'completed': 'finished'}.get(status, status)
     return RunRow(
         id=card.id,
         surface=card.surface,
@@ -159,8 +164,8 @@ def _inflight_row(card: library.ReportCard) -> RunRow:
         when=card.created_at.strftime('%Y-%m-%d %H:%M'),
         headline=card.headline,
         score=None,
-        status=_inflight_status(card),
-        error=card.status != 'running',
+        status=lifecycle,
+        error=status == 'error',
     )
 
 
@@ -168,11 +173,16 @@ def run_rows(roots: list[Path] | None = None) -> list[RunRow]:
     """Return one RunRow per discovered run, newest-first (manifest-first)."""
     rows: list[RunRow] = []
     for card in library.scan(roots):
-        # In-flight run (running/error/cancelled) — no report to read; render
-        # straight from the manifest-backed card.
-        if card.path is None:
-            if card.surface in ('redteam', 'sim'):
-                rows.append(_inflight_row(card))
+        if card.surface not in ('redteam', 'sim'):
+            continue
+        # Derive list state from the manifest status, not ``path is None``: a
+        # non-completed run (running/error/cancelled) — and a completed run whose
+        # report save failed (status 'completed', no path) — render straight from
+        # the card without a report read. ``path is None`` means only "no openable
+        # report", never "in-flight". Legacy cards (status=None, always with a
+        # path) fall through to the report-read path below.
+        if card.status in ('running', 'error', 'cancelled') or card.path is None:
+            rows.append(_card_status_row(card))
             continue
         try:
             data = library.read_json_cached(card.path)

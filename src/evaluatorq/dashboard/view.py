@@ -83,8 +83,10 @@ def _status_badge(status: str) -> str:
     # error→failed red) so the run-list badges stay styled.
     label, cls = {
         'finished': ('Finished', 'passed'),
+        'completed': ('Finished', 'passed'),
         'error': ('Error', 'failed'),
         'running': ('Running', 'warning'),
+        'cancelled': ('Cancelled', 'cancelled'),
     }.get(status, (status.title(), status))
     return f'<span class="status-badge {esc(cls)}"><span class="dot"></span>{esc(label)}</span>'
 
@@ -258,6 +260,7 @@ _LIFECYCLE_PILL: dict[str, tuple[str, str]] = {
     'finished': ('Finished', 'pass'),
     'error': ('Error', 'fail'),
     'running': ('Running', 'warn'),
+    'cancelled': ('Cancelled', 'neutral'),
 }
 
 

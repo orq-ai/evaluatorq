@@ -7,6 +7,7 @@ Hooks (and other injected callbacks) may be implemented as either ``def`` or
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import warnings
 from collections.abc import Awaitable, Iterable, Sequence
@@ -53,7 +54,11 @@ async def fan_out(children: Iterable[Any], method_name: str, *args: Any, **kwarg
     for child in children:
         try:
             await await_maybe(getattr(child, method_name)(*args, **kwargs))
-        except BaseException as exc:  # noqa: PERF203 — per-child capture is the point of fan-out
+        except asyncio.CancelledError:  # noqa: PERF203 — per-child capture is the point of fan-out
+            # Cancellation must propagate immediately — never swallow it into the
+            # run-all-then-reraise loop (which would keep driving later children).
+            raise
+        except BaseException as exc:
             if first_exc is None:
                 first_exc = exc
             else:
@@ -81,7 +86,11 @@ async def combine_confirm(children: Iterable[Any], *args: Any, **kwargs: Any) ->
     for child in children:
         try:
             results.append(bool(await await_maybe(child.on_confirm(*args, **kwargs))))
-        except BaseException as exc:  # noqa: PERF203 — per-child capture is the point
+        except asyncio.CancelledError:  # noqa: PERF203 — per-child capture is the point
+            # Cancellation must propagate immediately — never swallow it into the
+            # run-all-then-reraise loop (which would keep polling later children).
+            raise
+        except BaseException as exc:
             if first_exc is None:
                 first_exc = exc
             else:

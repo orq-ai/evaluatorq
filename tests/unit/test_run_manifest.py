@@ -6,8 +6,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from evaluatorq.common.run_manifest import (
-    active_manifests,
-    format_active_lines,
     list_manifests,
     start_manifest,
 )
@@ -87,24 +85,8 @@ def test_fail_marks_open_stage_errored(tmp_path: Path) -> None:
     assert m.stages[-1].ended_at is not None
 
 
-def test_active_excludes_completed(tmp_path: Path) -> None:
-    runs = tmp_path / 'runs'
-    start_manifest(run_id='run', surface='sim', run_name='running-one', runs_dir=runs)
-    start_manifest(run_id='err', surface='sim', run_name='errored-one', runs_dir=runs).fail('x')
-    start_manifest(run_id='done', surface='sim', run_name='done-one', runs_dir=runs).complete()
-
-    names = {m.run_name for m in active_manifests(runs)}
-    assert names == {'running-one', 'errored-one'}
-
-    lines = format_active_lines(runs)
-    assert len(lines) == 2
-    assert any('running-one' in ln and 'running' in ln for ln in lines)
-    assert any('errored-one' in ln and 'error' in ln for ln in lines)
-
-
 def test_list_empty_when_no_dir(tmp_path: Path) -> None:
     assert list_manifests(tmp_path / 'nope') == []
-    assert format_active_lines(tmp_path / 'nope') == []
 
 
 def test_end_stage_with_error_marks_stage_errored(tmp_path: Path) -> None:
@@ -188,6 +170,18 @@ def test_per_target_stages_do_not_close_each_other(tmp_path: Path) -> None:
     assert by_target['agent-b'].ended_at is None
 
 
+def test_targetless_end_does_not_close_targeted_stage(tmp_path: Path) -> None:
+    """A missing target is its own key, not a wildcard for concurrent stages."""
+    runs = tmp_path / 'runs'
+    w = start_manifest(run_id='r1', surface='redteam', run_name='rt', runs_dir=runs)
+    w.start_stage('cleanup', target='agent-a')
+    w.start_stage('cleanup', target='agent-b')
+
+    w.end_stage('cleanup')
+
+    assert all(stage.status == 'running' for stage in w.manifest.stages)
+
+
 def test_status_strenum_round_trips(tmp_path: Path) -> None:
     runs = tmp_path / 'runs'
     w = start_manifest(run_id='r1', surface=ManifestSurface.REDTEAM, run_name='rt', runs_dir=runs)
@@ -202,15 +196,6 @@ def test_status_strenum_round_trips(tmp_path: Path) -> None:
     assert m.status == ManifestStatus.RUNNING
     assert m.status == 'running'
     assert isinstance(m.status, ManifestStatus)
-
-
-def test_cancelled_run_shown_in_active_lines(tmp_path: Path) -> None:
-    runs = tmp_path / 'runs'
-    start_manifest(run_id='c', surface='sim', run_name='cancelled-one', runs_dir=runs).cancel()
-    names = {m.run_name for m in active_manifests(runs)}
-    assert 'cancelled-one' in names
-    lines = format_active_lines(runs)
-    assert any('cancelled-one' in ln and 'cancelled' in ln for ln in lines)
 
 
 def test_summary_round_trips_through_manifest(tmp_path: Path) -> None:
