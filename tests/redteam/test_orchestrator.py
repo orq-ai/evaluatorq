@@ -5,8 +5,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from evaluatorq.contracts import AgentResponse, Message
-from evaluatorq.redteam.contracts import AgentContext, AttackStrategy, AttackTechnique, DeliveryMethod, SendResult, TokenUsage, TurnType
+from evaluatorq.contracts import AgentResponse, AgentResponseError, Message
+from evaluatorq.redteam.contracts import (
+    AgentContext,
+    AttackStrategy,
+    AttackTechnique,
+    DeliveryMethod,
+    SendResult,
+    TokenUsage,
+    TurnType,
+)
 from evaluatorq.redteam.adaptive.orchestrator import (
     ADVERSARIAL_SYSTEM_PROMPT,
     MultiTurnOrchestrator,
@@ -121,9 +129,7 @@ class TestORQAgentTarget:
         first_response = MagicMock()
         first_response.output = []
         first_response.task_id = 'task_123'
-        first_response.pending_tool_calls = [
-            {'id': 'call_1', 'name': 'bad_tool', 'arguments': 'not-json'}
-        ]
+        first_response.pending_tool_calls = [{'id': 'call_1', 'name': 'bad_tool', 'arguments': 'not-json'}]
 
         final_response = MagicMock()
         final_response.output = []
@@ -326,9 +332,7 @@ class TestMultiTurnOrchestrator:
 
         target_usage = TokenUsage(prompt_tokens=12, completion_tokens=7, total_tokens=19, calls=1)
         mock_target = AsyncMock()
-        mock_target.respond = AsyncMock(
-            return_value=AgentResponse(text='ok', usage=target_usage)
-        )
+        mock_target.respond = AsyncMock(return_value=AgentResponse(text='ok', usage=target_usage))
 
         orchestrator = MultiTurnOrchestrator(llm_client=mock_llm, model='azure/gpt-5-mini')
         strategy = AttackStrategy(
@@ -437,8 +441,8 @@ class TestTimeoutHandling:
         assert 'timeout_ms' in result.error_details
 
     @pytest.mark.asyncio
-    async def test_single_target_timeout_continues_attack(self):
-        """A single target timeout does not abort — only consecutive timeouts do."""
+    async def test_single_target_timeout_retries_same_exchange(self):
+        """A target timeout is retried without advancing the attacker conversation."""
         mock_llm = AsyncMock()
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
@@ -447,10 +451,8 @@ class TestTimeoutHandling:
         mock_llm.chat.completions.create = AsyncMock(return_value=mock_response)
 
         mock_target = AsyncMock()
-        # First call times out, second succeeds
-        mock_target.respond = AsyncMock(
-            side_effect=[asyncio.TimeoutError, AgentResponse(text='Agent response')]
-        )
+        # First call times out, retry of the *same* prompt succeeds.
+        mock_target.respond = AsyncMock(side_effect=[asyncio.TimeoutError, AgentResponse(text='Agent response')])
         mock_target.consume_last_token_usage = lambda: None
 
         orchestrator = MultiTurnOrchestrator(llm_client=mock_llm, model='azure/gpt-5-mini')
@@ -460,22 +462,87 @@ class TestTimeoutHandling:
             strategy=_make_strategy(),
             objective='Test',
             agent_context=AgentContext(key='test_agent'),
-            max_turns=2,
+            max_turns=1,
         )
 
-        # Attack should complete without a fatal error
+        # The retry is transport recovery, not a new attacker turn.
         assert result.error_type is None
-        assert result.n_turns == 2
+        assert result.n_turns == 1
+        assert mock_llm.chat.completions.create.await_count == 1
+        assert mock_target.respond.await_count == 2
         per_turn_tcs = [t.target.tool_calls for t in result.turns]
         assert len(per_turn_tcs) == result.n_turns
-        assert per_turn_tcs == [[], []]
+        assert per_turn_tcs == [[]]
 
     @pytest.mark.asyncio
-    async def test_recoverable_error_turn_contributes_zero_tokens(self):
-        """A recoverable target error (timeout) must not accumulate tokens nor flip the
-        run to target_error. Guards the usage-arithmetic hoist (RES-877 follow-up): the
-        accumulation now lives after the target-blame try, so error paths leave
-        turn_usage=None and totals reflect only the success turn."""
+    async def test_target_error_response_retries_same_exchange(self):
+        """A target-returned error marker is retried like a raised target failure."""
+        mock_llm = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = 'Attack prompt'
+        mock_response.choices[0].finish_reason = 'stop'
+        mock_llm.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        mock_target = AsyncMock()
+        mock_target.respond = AsyncMock(
+            side_effect=[
+                AgentResponse(
+                    text='backend failed',
+                    error=AgentResponseError(
+                        message='backend failed', error_type='target_error', code='target.backend_error'
+                    ),
+                ),
+                AgentResponse(text='Agent response'),
+            ]
+        )
+        mock_target.consume_last_token_usage = lambda: None
+
+        orchestrator = MultiTurnOrchestrator(llm_client=mock_llm, model='azure/gpt-5-mini')
+        result = await orchestrator.run_attack(
+            target=mock_target,
+            strategy=_make_strategy(),
+            objective='Test',
+            agent_context=AgentContext(key='test_agent'),
+            max_turns=1,
+        )
+
+        assert result.error is None
+        assert result.n_turns == 1
+        assert result.turns[0].target.error is None
+        assert mock_target.respond.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_final_turn_timeout_sets_run_level_error(self):
+        """Exhausted target retries surface as a run-level error, never a scored result."""
+        mock_llm = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = 'Attack prompt'
+        mock_response.choices[0].finish_reason = 'stop'
+        mock_llm.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        mock_target = AsyncMock()
+        mock_target.respond = AsyncMock(side_effect=asyncio.TimeoutError)
+        mock_target.consume_last_token_usage = lambda: None
+
+        orchestrator = MultiTurnOrchestrator(llm_client=mock_llm, model='azure/gpt-5-mini')
+        result = await orchestrator.run_attack(
+            target=mock_target,
+            strategy=_make_strategy(),
+            objective='Test',
+            agent_context=AgentContext(key='test_agent'),
+            max_turns=1,
+        )
+
+        assert result.error_type == 'target_error'
+        assert result.error_code == 'target.timeout'
+        assert result.error_stage == 'target_call'
+        assert result.error_turn == 1
+
+    @pytest.mark.asyncio
+    async def test_target_retry_preserves_successful_response_usage(self):
+        """A failed retry attempt is not a turn and does not add target usage."""
         mock_llm = AsyncMock()
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
@@ -485,7 +552,7 @@ class TestTimeoutHandling:
 
         success_usage = TokenUsage(prompt_tokens=12, completion_tokens=7, total_tokens=19, calls=1)
         mock_target = AsyncMock()
-        # Turn 1: timeout (no usage). Turn 2: success with explicit usage.
+        # First attempt: timeout (no usage). Retry: success with explicit usage.
         mock_target.respond = AsyncMock(
             side_effect=[
                 asyncio.TimeoutError,
@@ -500,14 +567,14 @@ class TestTimeoutHandling:
             strategy=_make_strategy(),
             objective='Test',
             agent_context=AgentContext(key='test_agent'),
-            max_turns=2,
+            max_turns=1,
         )
 
-        # Recoverable single error must not surface as a run-level target_error
+        # A recovered same-exchange retry remains a complete, scorable run.
         assert result.error_type is None
-        assert result.n_turns == 2
+        assert result.n_turns == 1
 
-        # Totals reflect ONLY the success turn — the error turn contributed zero
+        # Totals reflect only the successful target response.
         assert result.token_usage_target is not None
         assert result.token_usage_target.prompt_tokens == 12
         assert result.token_usage_target.completion_tokens == 7
@@ -610,10 +677,14 @@ class TestOrchestratorSanitization:
         # Find any user message across all LLM calls that contains target_response
         all_messages = [m for call in captured_messages for m in call]
         analysis_msg = next(
-            (m for m in all_messages if isinstance(m, dict) and m.get('role') == 'user' and 'target_response' in str(m.get('content', ''))),
+            (
+                m
+                for m in all_messages
+                if isinstance(m, dict) and m.get('role') == 'user' and 'target_response' in str(m.get('content', ''))
+            ),
             None,
         )
-        assert analysis_msg is not None, "Analysis prompt with target_response not found in adversarial messages"
+        assert analysis_msg is not None, 'Analysis prompt with target_response not found in adversarial messages'
         content = str(analysis_msg['content'])
 
         # xml_escape should have escaped ALL angle brackets

@@ -667,6 +667,12 @@ class LLMConfig(BaseModel):
 
     # --- Target agent timeout -------------------------------------------------
     target_agent_timeout_ms: int = 240_000
+    # Retry a failed target transport call before abandoning its attacker turn.
+    # This is deliberately separate from ``retry_count``: the latter is forwarded
+    # to the ORQ router when supported, while this budget protects every target
+    # implementation at the orchestrator boundary.  A retry never consumes a
+    # new attacker turn or changes the conversation transcript.
+    max_target_retries: int = Field(default=2, ge=0, le=10)
 
     # --- Agent tool continuation cap ------------------------------------------
     max_tool_continuations: int = Field(
@@ -906,6 +912,17 @@ class Turn(BaseModel):
     attacker: AgentResponse
     target: AgentResponse
 
+    @property
+    def errored(self) -> bool:
+        """True when the target side carries an :class:`AgentResponseError`.
+
+        Single source of truth for "this turn is an infra failure, not a real
+        reply" — used to skip such turns both when replaying the transcript to
+        the target (``turns_to_messages(skip_errors=True)``) and when building
+        the transcript for the evaluator.
+        """
+        return self.target.error is not None
+
     @model_validator(mode='before')
     @classmethod
     def _migrate_attacker_generated_prompt(cls, data: Any) -> Any:
@@ -940,7 +957,7 @@ def turns_to_messages(turns: list[Turn], *, skip_errors: bool = False) -> list[M
     """
     out: list[Message] = []
     for turn in turns:
-        if skip_errors and turn.target.error is not None:
+        if skip_errors and turn.errored:
             continue
         out.append(Message(role='user', content=turn.attacker.text))
         text_buffer: list[str] = []
