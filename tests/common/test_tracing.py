@@ -400,6 +400,47 @@ def test_set_span_attrs_noop_on_none_span() -> None:
 
 
 # ---------------------------------------------------------------------------
+# set_evaluation_attributes — evaluator-span emission is opt-in
+# ---------------------------------------------------------------------------
+
+
+def test_set_evaluation_attributes_legacy_only_without_type() -> None:
+    from unittest.mock import MagicMock
+    from evaluatorq.tracing.spans import set_evaluation_attributes
+
+    span = MagicMock()
+    set_evaluation_attributes(span, 1.0, explanation='why', pass_=True, evaluator_name='goal_achieved')
+    keys = {c.args[0] for c in span.set_attribute.call_args_list}
+    # Legacy attributes present; new evaluator-span attributes withheld (no evaluator_type).
+    assert {'orq.score', 'orq.explanation', 'orq.pass'} <= keys
+    assert not any(k.startswith('gen_ai.evaluation') or k == 'orq.span_type' for k in keys)
+
+
+def test_set_evaluation_attributes_emits_evaluator_span_when_typed() -> None:
+    from unittest.mock import MagicMock
+    from evaluatorq.tracing.spans import set_evaluation_attributes
+
+    span = MagicMock()
+    set_evaluation_attributes(
+        span,
+        1.0,
+        explanation='why',
+        pass_=True,
+        evaluator_name='goal_achieved',
+        evaluator_type='code_eval',
+    )
+    attrs = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
+    assert attrs['orq.span_type'] == 'span.evaluator'
+    assert attrs['gen_ai.evaluation.name'] == 'goal_achieved'
+    assert attrs['gen_ai.evaluation.score.value'] == 1.0
+    assert attrs['gen_ai.evaluation.score.label'] == 'true'
+    assert attrs['gen_ai.evaluation.explanation'] == 'why'
+    assert attrs['orq.evaluator.key'] == 'goal_achieved'
+    assert attrs['orq.evaluator.type'] == 'code_eval'
+    assert attrs['orq.evaluator.passed'] is True
+
+
+# ---------------------------------------------------------------------------
 # record_llm_input / record_llm_output
 # ---------------------------------------------------------------------------
 

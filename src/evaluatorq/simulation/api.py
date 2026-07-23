@@ -204,14 +204,14 @@ async def simulate(
             (``upload_results=True``). Leave ``None`` for local-only runs.
         orq_results_path: Optional Orq folder path (e.g. ``"MyProject/MyFolder"``).
         exit_on_failure: When ``True`` (the default), exit non-zero if any
-            datapoint or evaluator produced a failure — this is the "CI
-            gating for free" benefit of routing through ``evaluatorq()``.
-            Two paths: score-based failures (``pass_=False`` on a scorer
-            result) call ``sys.exit(1)`` via evaluatorq's own gate; dropped
-            jobs (job raised, no result cached) raise ``SimulationDroppedError``
-            from ``simulate()`` itself. Both exit non-zero when uncaught. Pass
-            ``False`` for interactive / exploratory runs where failures
-            should surface as warnings + error metadata instead.
+            datapoint was *dropped* — a job raised with no result cached —
+            by raising ``SimulationDroppedError`` from ``simulate()`` itself
+            (the "CI gating for free" benefit). Scorer verdicts (``pass_``,
+            e.g. goal not achieved) are reporting only and never exit the
+            process: an underperforming but otherwise healthy run still
+            returns its results. Pass ``False`` for interactive / exploratory
+            runs where even dropped rows should surface as warnings + error
+            metadata instead.
         save: When ``True``, persist the completed run to the local run store
             (``.evaluatorq/sim-runs/`` unless ``report`` is set). Unlike the CLI
             (which auto-saves to ``.evaluatorq/sim-runs/`` by default), the SDK
@@ -1583,9 +1583,39 @@ def _adapt_simulation_scorer(
             logger.exception('scorer %r raised on DataPoint id=%s', name, id(data))
             sim_result.metadata.setdefault('scorer_errors', {})[name] = repr(e)
             raise
-        return EvaluationResult(value=value)
+        # Carry the judge's reasoning through as explanation + pass_ so it lands on
+        # the evaluator trace span and the uploaded experiment. `value` is left
+        # untouched — experiment averages depend on the exact numeric score.
+        explanation, pass_ = _sim_evaluation_details(name, sim_result)
+        return EvaluationResult.model_validate({'value': value, 'explanation': explanation, 'pass': pass_})
 
-    return {'name': name, 'scorer': scorer}
+    # evaluator_type marks these as code scorers so the tracing layer emits the
+    # gen_ai.evaluation.* evaluator-span attributes (opt-in; see set_evaluation_attributes).
+    return {'name': name, 'scorer': scorer, 'evaluator_type': 'code_eval'}
+
+
+def _sim_evaluation_details(name: str, result: SimulationResult) -> tuple[str | None, bool | None]:
+    """Derive (explanation, pass_) for a built-in sim evaluator from the judge's reasoning.
+
+    Only the default evaluators (``goal_achieved`` / ``criteria_met``) carry a
+    reasoning surface today; others return ``(None, None)`` so their span/experiment
+    detail is unchanged.
+    """
+    if name == 'goal_achieved':
+        return (result.reason or None), result.goal_achieved
+    if name == 'criteria_met':
+        meta = result.metadata.get('criteria_meta') or []
+        if isinstance(meta, list) and meta:
+            lines = [f'{"PASS" if c.get("passed") else "FAIL"}: {c.get("description", c.get("id", "?"))}' for c in meta]
+            all_met = all(c.get('passed') for c in meta)
+            return '\n'.join(lines), all_met
+        # Fallback to the lossy criteria_results dict when criteria_meta is absent.
+        criteria_results = result.criteria_results or {}
+        if criteria_results:
+            lines = [f'{"PASS" if ok else "FAIL"}: {desc}' for desc, ok in criteria_results.items()]
+            return '\n'.join(lines), all(criteria_results.values())
+        return 'No criteria defined for this scenario.', True
+    return None, None
 
 
 async def _simulate_via_evaluatorq(
@@ -1670,7 +1700,12 @@ async def _simulate_via_evaluatorq(
             # two concurrent rich.Live regions flicker against each other.
             print_results=False,
             _send_results=upload_results,
-            _exit_on_failure=exit_on_failure,
+            # Never let evaluatorq's score-based gate (check_pass_failures →
+            # sys.exit) fire for simulation. Now that scorers report pass_ (a
+            # judge verdict — e.g. goal not achieved), an underperforming but
+            # otherwise healthy run must NOT exit the process. exit_on_failure
+            # for sim means dropped rows only (SimulationDroppedError below).
+            _exit_on_failure=False,
             _base_url=upload_base_url,
             _experiment_url_out=experiment_url_out,
         )

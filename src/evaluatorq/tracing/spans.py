@@ -133,7 +133,10 @@ async def with_evaluation_span(  # noqa: RUF029
         from opentelemetry.trace import SpanKind, Status, StatusCode
 
         with tracer.start_as_current_span(
-            'orq.evaluation',
+            # Include the evaluator name so concurrent evaluator spans are
+            # distinguishable in the trace tree / UI (mirrors `chat {model}`)
+            # rather than N identical `orq.evaluation` rows.
+            f'orq.evaluation {options.evaluator_name}',
             kind=SpanKind.INTERNAL,
             attributes={
                 'orq.run_id': options.run_id,
@@ -159,6 +162,8 @@ def set_evaluation_attributes(
     *,
     explanation: str | None = None,
     pass_: bool | None = None,
+    evaluator_name: str | None = None,
+    evaluator_type: str | None = None,
 ) -> None:
     """
     Set evaluation result attributes on a span.
@@ -168,6 +173,12 @@ def set_evaluation_attributes(
         score: The evaluation score
         explanation: Optional explanation of the score
         pass_: Optional pass/fail status
+        evaluator_name: Name of the evaluator (used for the gen_ai.evaluation.* block)
+        evaluator_type: Opt-in evaluator kind (e.g. "code_eval"). When provided,
+            the flat gen_ai.evaluation.* / orq.evaluator.* attributes the Orq trace
+            UI classifies + renders evaluator spans from are additionally emitted.
+            When ``None`` (the default), only the legacy orq.score/explanation/pass
+            attributes are written, so red-team spans are unchanged.
     """
     if span is None:
         return
@@ -184,6 +195,26 @@ def set_evaluation_attributes(
         span.set_attribute('orq.explanation', explanation)
     if pass_ is not None:
         span.set_attribute('orq.pass', pass_)
+
+    # Additive evaluator-span emission — opt-in via evaluator_type. The Orq trace
+    # UI (ClickHouse/Go ingestion) classifies + shows evaluator detail only from
+    # these FLAT attributes; nested JSON is dropped. orq.workspace_id is injected
+    # server-side, so it is intentionally not set here.
+    if evaluator_type is None:
+        return
+    span.set_attribute('orq.span_type', 'span.evaluator')
+    span.set_attribute('orq.evaluator.type', evaluator_type)
+    if evaluator_name is not None:
+        span.set_attribute('gen_ai.evaluation.name', evaluator_name)
+        span.set_attribute('orq.evaluator.key', evaluator_name)
+    # bool is an int subclass — fine to cast either to a numeric score.
+    if isinstance(score, (int, float, bool)):
+        span.set_attribute('gen_ai.evaluation.score.value', float(score))
+    if explanation is not None:
+        span.set_attribute('gen_ai.evaluation.explanation', explanation)
+    if pass_ is not None:
+        span.set_attribute('gen_ai.evaluation.score.label', str(pass_).lower())
+        span.set_attribute('orq.evaluator.passed', pass_)
 
 
 def set_job_name_attribute(span: Span | None, job_name: str) -> None:
