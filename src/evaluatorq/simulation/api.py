@@ -1606,7 +1606,16 @@ def _sim_evaluation_details(name: str, result: SimulationResult) -> tuple[str | 
     if name == 'criteria_met':
         meta = result.metadata.get('criteria_meta') or []
         if isinstance(meta, list) and meta:
-            lines = [f'{"PASS" if c.get("passed") else "FAIL"}: {c.get("description", c.get("id", "?"))}' for c in meta]
+            # Tag each line with the criterion polarity. Without it, a passed
+            # 'must_not_happen' rule renders as e.g. "PASS: Agent blames the
+            # customer", which reads as if the agent passed *by* misbehaving.
+            # "[prohibited]" makes clear PASS means the behavior was avoided.
+            def _line(c: dict[str, object]) -> str:
+                verdict = 'PASS' if c.get('passed') else 'FAIL'
+                polarity = 'prohibited' if c.get('type') == 'must_not_happen' else 'required'
+                return f'{verdict} [{polarity}]: {c.get("description", c.get("id", "?"))}'
+
+            lines = [_line(c) for c in meta]
             all_met = all(c.get('passed') for c in meta)
             return '\n'.join(lines), all_met
         # Fallback to the lossy criteria_results dict when criteria_meta is absent.

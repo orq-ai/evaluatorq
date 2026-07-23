@@ -210,10 +210,17 @@ def set_evaluation_attributes(
     # bool is an int subclass — fine to cast either to a numeric score.
     if isinstance(score, (int, float, bool)):
         span.set_attribute('gen_ai.evaluation.score.value', float(score))
+        span.set_attribute('orq.evaluator.score.value', float(score))
     if explanation is not None:
         span.set_attribute('gen_ai.evaluation.explanation', explanation)
+        span.set_attribute('orq.evaluator.explanation', explanation)
+        # Also surface the reasoning in the span's generic Output panel — this
+        # renders today with no orquesta-web changes, unlike orq.evaluator.explanation.
+        span.set_attribute('output', explanation)
     if pass_ is not None:
-        span.set_attribute('gen_ai.evaluation.score.label', str(pass_).lower())
+        label = str(pass_).lower()
+        span.set_attribute('gen_ai.evaluation.score.label', label)
+        span.set_attribute('orq.evaluator.score.label', label)
         span.set_attribute('orq.evaluator.passed', pass_)
 
 

@@ -438,6 +438,11 @@ def test_set_evaluation_attributes_emits_evaluator_span_when_typed() -> None:
     assert attrs['orq.evaluator.key'] == 'goal_achieved'
     assert attrs['orq.evaluator.type'] == 'code_eval'
     assert attrs['orq.evaluator.passed'] is True
+    # orq.evaluator.* twins (the namespace the trace-detail UI reads).
+    assert attrs['orq.evaluator.score.value'] == 1.0
+    assert attrs['orq.evaluator.score.label'] == 'true'
+    assert attrs['orq.evaluator.explanation'] == 'why'
+    assert attrs['output'] == 'why'  # surfaced in the span Output panel
 
 
 # ---------------------------------------------------------------------------

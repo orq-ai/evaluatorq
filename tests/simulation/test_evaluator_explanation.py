@@ -90,8 +90,8 @@ async def test_criteria_met_scorer_summarizes_criteria() -> None:
         criteria_results={'greeted user': True, 'did not leak PII': False},
         metadata={
             'criteria_meta': [
-                {'id': 'criteria_0', 'description': 'greeted user', 'type': 'rule', 'passed': True},
-                {'id': 'criteria_1', 'description': 'did not leak PII', 'type': 'rule', 'passed': False},
+                {'id': 'criteria_0', 'description': 'greeted user', 'type': 'must_happen', 'passed': True},
+                {'id': 'criteria_1', 'description': 'leaked PII', 'type': 'must_not_happen', 'passed': False},
             ]
         },
     )
@@ -103,8 +103,8 @@ async def test_criteria_met_scorer_summarizes_criteria() -> None:
     assert score.value == 0.5  # 1 of 2 criteria — average preserved
     assert score.pass_ is False
     assert score.explanation is not None
-    assert 'PASS: greeted user' in score.explanation
-    assert 'FAIL: did not leak PII' in score.explanation
+    assert 'PASS [required]: greeted user' in score.explanation
+    assert 'FAIL [prohibited]: leaked PII' in score.explanation
 
 
 @pytest.mark.asyncio
@@ -125,6 +125,9 @@ async def test_evaluation_span_emits_evaluator_attributes(span_collector: _Expor
     assert attrs['gen_ai.evaluation.explanation'] == 'goal met'
     assert attrs['orq.evaluator.type'] == 'code_eval'
     assert attrs['orq.evaluator.passed'] is True
+    assert attrs['orq.evaluator.explanation'] == 'goal met'
+    assert attrs['orq.evaluator.score.value'] == 1.0
+    assert attrs['output'] == 'goal met'  # explanation in the Output panel
     # Legacy attributes preserved for back-compat.
     assert attrs['orq.explanation'] == 'goal met'
     assert attrs['orq.pass'] is True
