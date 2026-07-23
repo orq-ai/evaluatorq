@@ -29,7 +29,7 @@ from evaluatorq.redteam.contracts import (
 )
 from evaluatorq.redteam.exceptions import DatasetError
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category
-from evaluatorq.redteam.tracing import with_redteam_span
+from evaluatorq.redteam.tracing import annotate_current_span
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -254,8 +254,7 @@ def create_owasp_evaluator(
         data = params['data']
         output = params['output']
         category = data.inputs.get('category', '')
-        async with with_redteam_span(
-            'orq.redteam.security_evaluation',
+        async with annotate_current_span(
             {'orq.redteam.category': category, 'orq.redteam.model': evaluator_model},
         ) as evaluation_span:
 

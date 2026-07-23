@@ -55,7 +55,7 @@ from evaluatorq.redteam.contracts import (
     TurnType,
     Vulnerability,
 )
-from evaluatorq.redteam.tracing import with_redteam_span
+from evaluatorq.redteam.tracing import annotate_current_span, with_redteam_span
 from evaluatorq.redteam.vulnerability_registry import (
     get_primary_category,
     resolve_category_safe,
@@ -703,8 +703,7 @@ def create_dynamic_evaluator(
             except ValueError:
                 resolved_vuln = resolve_category_safe(vulnerability)
 
-        async with with_redteam_span(
-            'orq.redteam.security_evaluation',
+        async with annotate_current_span(
             {
                 'orq.redteam.category': category,
                 'orq.redteam.vulnerability': vulnerability,

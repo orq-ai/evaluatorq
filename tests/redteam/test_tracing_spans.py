@@ -799,82 +799,7 @@ async def test_static_agent_target_job_traces_response_error_attributes(
 
 @pytest.mark.asyncio
 async def test_static_owasp_scorer_traces_security_evaluation(span_collector: _CollectingExporter) -> None:
-    """Static OWASP scoring records its category and judge outcome."""
-    from evaluatorq import DataPoint
-    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
-
-    response = MagicMock()
-    response.choices = [MagicMock()]
-    response.choices[0].message.content = json.dumps({'value': True, 'explanation': 'Resistant'})
-    response.usage = None
-    client = AsyncMock()
-    client.chat.completions.create = AsyncMock(return_value=response)
-
-    evaluator = create_owasp_evaluator(evaluator_model='test-model', llm_client=client)
-    await evaluator['scorer']({
-        'data': DataPoint(inputs={'category': 'ASI01', 'messages': []}),
-        'output': {'response': 'mock target response'},
-    })
-
-    evaluation = _find_span(span_collector, 'orq.redteam.security_evaluation')
-    assert evaluation is not None
-    assert _attrs(evaluation)['orq.redteam.category'] == 'ASI01'
-    assert _attrs(evaluation)['orq.redteam.model'] == 'test-model'
-    assert _attrs(evaluation)['orq.redteam.passed'] is True
-    assert _attrs(evaluation)['output'] == 'Resistant'
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('value', [None, 'abstain', 0.5])
-async def test_static_owasp_scorer_marks_non_boolean_verdicts_inconclusive(
-    span_collector: _CollectingExporter, value: str | float | None
-) -> None:
-    """Static scorer spans preserve a supported pass-state for non-boolean verdicts."""
-    from evaluatorq import DataPoint
-    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
-
-    response = MagicMock()
-    response.choices = [MagicMock()]
-    response.choices[0].message.content = json.dumps({'value': value, 'explanation': 'No binary verdict'})
-    response.usage = None
-    client = AsyncMock()
-    client.chat.completions.create = AsyncMock(return_value=response)
-
-    evaluator = create_owasp_evaluator(evaluator_model='test-model', llm_client=client)
-    result = await evaluator['scorer']({
-        'data': DataPoint(inputs={'category': 'ASI01', 'messages': []}),
-        'output': {'response': 'mock target response'},
-    })
-
-    evaluation = _find_span(span_collector, 'orq.redteam.security_evaluation')
-    assert evaluation is not None
-    assert result.pass_ is None
-    assert _attrs(evaluation)['orq.redteam.passed'] == 'inconclusive'
-
-
-@pytest.mark.asyncio
-async def test_static_owasp_scorer_marks_error_results_inconclusive(span_collector: _CollectingExporter) -> None:
-    """Static scorer spans retain a concrete pass-state when scoring cannot start."""
-    from evaluatorq import DataPoint
-    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
-
-    evaluator = create_owasp_evaluator(evaluator_model='test-model', llm_client=AsyncMock())
-    result = await evaluator['scorer']({
-        'data': DataPoint(inputs={'messages': []}),
-        'output': {'response': 'mock target response'},
-    })
-
-    evaluation = _find_span(span_collector, 'orq.redteam.security_evaluation')
-    assert evaluation is not None
-    assert result.pass_ is None
-    assert _attrs(evaluation)['orq.redteam.passed'] == 'inconclusive'
-
-
-@pytest.mark.asyncio
-async def test_static_owasp_security_evaluation_nests_under_framework_evaluation(
-    span_collector: _CollectingExporter,
-) -> None:
-    """Static OWASP scoring remains a child of evaluatorq's framework evaluation span."""
+    """Static OWASP scoring records its category and judge outcome on the evaluator span."""
     from evaluatorq import DataPoint
     from evaluatorq.processings import process_evaluator
     from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
@@ -893,17 +818,100 @@ async def test_static_owasp_security_evaluation_nests_under_framework_evaluation
         {'response': 'mock target response'},
     )
 
+    # The security_evaluation wrapper span was collapsed — the scorer now annotates
+    # the parent orq.evaluation evaluator span directly.
+    evaluation = _find_span(span_collector, 'orq.evaluation')
+    assert evaluation is not None
+    assert _attrs(evaluation)['orq.redteam.category'] == 'ASI01'
+    assert _attrs(evaluation)['orq.redteam.model'] == 'test-model'
+    assert _attrs(evaluation)['orq.redteam.passed'] is True
+    assert _attrs(evaluation)['output'] == 'Resistant'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('value', [None, 'abstain', 0.5])
+async def test_static_owasp_scorer_marks_non_boolean_verdicts_inconclusive(
+    span_collector: _CollectingExporter, value: str | float | None
+) -> None:
+    """Static scorer spans preserve a supported pass-state for non-boolean verdicts."""
+    from evaluatorq import DataPoint
+    from evaluatorq.processings import process_evaluator
+    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
+
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.content = json.dumps({'value': value, 'explanation': 'No binary verdict'})
+    response.usage = None
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(return_value=response)
+
+    evaluator = create_owasp_evaluator(evaluator_model='test-model', llm_client=client)
+    result = await process_evaluator(
+        evaluator,
+        DataPoint(inputs={'category': 'ASI01', 'messages': []}),
+        {'response': 'mock target response'},
+    )
+
+    evaluation = _find_span(span_collector, 'orq.evaluation')
+    assert evaluation is not None
+    assert result.score.pass_ is None
+    assert _attrs(evaluation)['orq.redteam.passed'] == 'inconclusive'
+
+
+@pytest.mark.asyncio
+async def test_static_owasp_scorer_marks_error_results_inconclusive(span_collector: _CollectingExporter) -> None:
+    """Static scorer spans retain a concrete pass-state when scoring cannot start."""
+    from evaluatorq import DataPoint
+    from evaluatorq.processings import process_evaluator
+    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
+
+    evaluator = create_owasp_evaluator(evaluator_model='test-model', llm_client=AsyncMock())
+    result = await process_evaluator(
+        evaluator,
+        DataPoint(inputs={'messages': []}),
+        {'response': 'mock target response'},
+    )
+
+    evaluation = _find_span(span_collector, 'orq.evaluation')
+    assert evaluation is not None
+    assert result.score.pass_ is None
+    assert _attrs(evaluation)['orq.redteam.passed'] == 'inconclusive'
+
+
+@pytest.mark.asyncio
+async def test_static_owasp_scoring_annotates_framework_evaluation_span(
+    span_collector: _CollectingExporter,
+) -> None:
+    """Scorer attrs + evaluator classification land on the single orq.evaluation span."""
+    from evaluatorq import DataPoint
+    from evaluatorq.processings import process_evaluator
+    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
+
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.content = json.dumps({'value': True, 'explanation': 'Resistant'})
+    response.usage = None
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(return_value=response)
+
+    evaluator = create_owasp_evaluator(evaluator_model='test-model', llm_client=client)
+    await process_evaluator(
+        evaluator,
+        DataPoint(inputs={'category': 'ASI01', 'messages': []}),
+        {'response': 'mock target response'},
+    )
+
+    # The redundant orq.redteam.security_evaluation layer was removed; everything
+    # now rides on the framework evaluator span.
+    assert _find_span(span_collector, 'orq.redteam.security_evaluation') is None
     framework_evaluation = _find_span(span_collector, 'orq.evaluation')
-    security_evaluation = _find_span(span_collector, 'orq.redteam.security_evaluation')
     assert framework_evaluation is not None
-    assert security_evaluation is not None
-    assert framework_evaluation.context is not None
-    assert security_evaluation.parent is not None
-    assert security_evaluation.parent.span_id == framework_evaluation.context.span_id
-    # Red-team OWASP scorers now set evaluator_type='llm_eval', so the framework
-    # evaluation span carries the flat gen_ai.evaluation.* / orq.evaluator.*
-    # attributes the Orq trace UI classifies evaluator spans from.
     fe_attrs = _attrs(framework_evaluation)
+    # Red-team scorer metadata.
+    assert fe_attrs['orq.redteam.category'] == 'ASI01'
+    assert fe_attrs['orq.redteam.model'] == 'test-model'
+    # evaluator_type='llm_eval' → flat gen_ai.evaluation.* / orq.evaluator.* attrs
+    # the Orq trace UI classifies evaluator spans from.
     assert fe_attrs['orq.span_type'] == 'span.evaluator'
     assert fe_attrs['orq.evaluator.type'] == 'llm_eval'
     assert fe_attrs['gen_ai.evaluation.name'] == 'owasp-agentic-security'

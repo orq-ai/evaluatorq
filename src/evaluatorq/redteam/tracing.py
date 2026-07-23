@@ -1,15 +1,20 @@
 """Red teaming span utilities for OpenTelemetry instrumentation.
 
-Domain-specific span builders (with_redteam_span, with_llm_span) live here.
-Generic recording utilities are imported from evaluatorq.common.tracing.
+Domain-specific span builders (with_redteam_span, with_llm_span,
+annotate_current_span) live here. Generic recording utilities are imported from
+evaluatorq.common.tracing.
 
 Span hierarchy:
 
     dynamic/hybrid: pipeline → context/datapoint work → job → attack
                     → target_call/attack_turn → evaluation
-                    → security_evaluation → recommendations/executive_summary
+                    → recommendations/executive_summary
     static:         pipeline → job → attack → target_call → evaluation
-                    → security_evaluation → recommendations/executive_summary
+                    → recommendations/executive_summary
+
+The evaluation span is the evaluatorq framework's ``orq.evaluation`` evaluator
+span; the OWASP scorer annotates it in place (via ``annotate_current_span``)
+rather than nesting a separate ``security_evaluation`` child under it.
 
 Static is intentionally single-shot: it has no multi-turn ``attack_turn`` or
 adversarial-generation spans. Dynamic and hybrid runs add their context/datapoint
@@ -25,6 +30,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
+from evaluatorq.common.tracing import set_span_attrs
 from evaluatorq.common.tracing import with_llm_span as _common_with_llm_span
 from evaluatorq.tracing.setup import get_tracer
 
@@ -75,6 +81,31 @@ async def with_redteam_span(  # noqa: RUF029
             span.set_status(Status(StatusCode.ERROR, str(e)))
             span.record_exception(e)
             raise
+
+
+@asynccontextmanager
+async def annotate_current_span(  # noqa: RUF029
+    attributes: dict[str, Any] | None = None,
+) -> AsyncGenerator[Span | None, None]:
+    """Tag the *current* span (no new child) and yield it.
+
+    Used by evaluator scorers: the evaluatorq framework already runs them inside
+    the ``orq.evaluation`` evaluator span (via ``start_as_current_span``), which
+    carries the verdict/score/explanation. Annotating that span directly avoids a
+    redundant ``orq.redteam.security_evaluation`` layer between it and the judge
+    ``chat`` span.
+
+    Yields:
+        The current span when tracing is enabled, None otherwise.
+    """
+    try:
+        from opentelemetry.trace import get_current_span
+    except ImportError:
+        yield None
+        return
+    span = get_current_span()
+    set_span_attrs(span, attributes or {})
+    yield span
 
 
 @asynccontextmanager
