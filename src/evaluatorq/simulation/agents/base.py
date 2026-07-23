@@ -15,7 +15,12 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from openai import BadRequestError
 
-from evaluatorq.common.llm_call import execute_chat_completion
+from evaluatorq.common.llm_call import (
+    execute_chat_completion,
+    is_responses_reasoning_rejection,
+    remember_responses_reasoning_rejection,
+    strip_known_rejected_responses_reasoning,
+)
 from evaluatorq.common.retry import with_retry
 from evaluatorq.common.thread_context import thread_body_param
 from evaluatorq.common.tracing import get_trace_context_headers, record_llm_input, record_llm_response
@@ -384,6 +389,10 @@ class BaseAgent(ABC):
                 thread = thread_body_param()
                 if thread:
                     call_kwargs['extra_body'] = {**call_kwargs.get('extra_body', {}), **thread}
+                # Drop reasoning up front if this model already rejected it once, so
+                # a non-reasoning model (e.g. gpt-4o-mini) 400s + retries once per
+                # process instead of on every judge / user-simulator call.
+                strip_known_rejected_responses_reasoning(self.config.model, call_kwargs)
                 try:
                     response = await asyncio.wait_for(
                         self._client.responses.create(**call_kwargs),
@@ -393,9 +402,9 @@ class BaseAgent(ABC):
                     # "where possible": drop reasoning and retry if the endpoint
                     # rejects it, rather than failing the call. Gate on the error
                     # body so an unrelated 400 isn't masked by a stripped retry.
-                    err_body = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
-                    if 'reasoning' not in call_kwargs or 'reasoning' not in err_body:
+                    if not is_responses_reasoning_rejection(call_kwargs, exc):
                         raise
+                    remember_responses_reasoning_rejection(self.config.model, call_kwargs)
                     logger.warning(
                         '%s._call_responses: model %s rejected reasoning; dropping it and retrying once',
                         self.name,

@@ -39,10 +39,16 @@ logger = logging.getLogger(__name__)
 # ponytail: process-lifetime set, fine for a CLI run; not persisted across processes.
 _REASONING_EFFORT_REJECTORS: set[tuple[str, bool]] = set()
 
+# Same idea for the Responses API, where the reasoning param is the nested
+# `reasoning={'effort': ...}` block rather than the flat `reasoning_effort`.
+# Kept as a separate memo so the two param shapes never cross-strip.
+_RESPONSES_REASONING_REJECTORS: set[tuple[str, bool]] = set()
+
 
 def reset_reasoning_rejectors() -> None:
-    """Clear the process-lifetime rejection memo; exists for test isolation."""
+    """Clear the process-lifetime rejection memos; exists for test isolation."""
     _REASONING_EFFORT_REJECTORS.clear()
+    _RESPONSES_REASONING_REJECTORS.clear()
 
 
 def _reasoning_key(model: str, params: dict[str, Any]) -> tuple[str, bool]:
@@ -60,6 +66,28 @@ def _is_reasoning_effort_rejection(params: dict[str, Any], exc: BadRequestError)
     """True if `exc` is the reasoning_effort-unsupported 400 for this call."""
     err_body = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
     return 'reasoning_effort' in params and 'reasoning' in err_body
+
+
+def strip_known_rejected_responses_reasoning(model: str, params: dict[str, Any]) -> None:
+    """Drop the Responses `reasoning` block up front if this model already rejected it.
+
+    Mirrors ``_strip_known_rejected_reasoning`` for the Responses API so a
+    non-reasoning model (e.g. gpt-4o-mini) pays the 400 + retry once per process
+    instead of on every judge / user-simulator call.
+    """
+    if _reasoning_key(model, params) in _RESPONSES_REASONING_REJECTORS:
+        params.pop('reasoning', None)
+
+
+def is_responses_reasoning_rejection(params: dict[str, Any], exc: BadRequestError) -> bool:
+    """True if ``exc`` is the reasoning-unsupported 400 for this Responses call."""
+    err_body = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
+    return 'reasoning' in params and 'reasoning' in err_body
+
+
+def remember_responses_reasoning_rejection(model: str, params: dict[str, Any]) -> None:
+    """Memoize that ``model`` (with this tool shape) rejects the Responses reasoning block."""
+    _RESPONSES_REASONING_REJECTORS.add(_reasoning_key(model, params))
 
 
 async def execute_chat_completion(
