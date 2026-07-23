@@ -14,6 +14,7 @@ from typing import Any, TypeVar, cast
 from openai import APIStatusError, AsyncOpenAI, LengthFinishReasonError
 from pydantic import BaseModel
 
+from evaluatorq.common.llm_call import apply_pipeline_metadata
 from evaluatorq.common.retry import with_retry
 from evaluatorq.common.tracing import get_trace_context_headers, record_llm_input, record_llm_response
 from evaluatorq.simulation.tracing import with_llm_span
@@ -57,6 +58,7 @@ async def generate_structured(
         )
         trace_headers = await get_trace_context_headers()
         extra: dict[str, Any] = {'extra_headers': trace_headers} if trace_headers else {}
+        apply_pipeline_metadata(client, extra)
 
         # 1. Try structured output via parse()
         try:

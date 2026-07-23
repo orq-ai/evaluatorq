@@ -92,7 +92,7 @@ def remember_responses_reasoning_rejection(model: str, params: dict[str, Any]) -
     _RESPONSES_REASONING_REJECTORS.add(_reasoning_key(model, params))
 
 
-def _apply_pipeline_metadata(client: AsyncOpenAI, params: dict[str, Any]) -> None:
+def apply_pipeline_metadata(client: AsyncOpenAI, params: dict[str, Any]) -> None:
     """Tag the invocation with the active run surface via the ``metadata`` property.
 
     So the call's Orq trace is filterable to a red-team / agent-simulation run.
@@ -142,7 +142,7 @@ async def execute_chat_completion(
         params.update(extra_kwargs)
 
     _strip_known_rejected_reasoning(model, params)
-    _apply_pipeline_metadata(client, params)
+    apply_pipeline_metadata(client, params)
 
     record_llm_input(span, messages)
 
@@ -201,7 +201,7 @@ async def execute_chat_parse(
         params.update(extra_kwargs)
 
     _strip_known_rejected_reasoning(model, params)
-    _apply_pipeline_metadata(client, params)
+    apply_pipeline_metadata(client, params)
 
     record_llm_input(span, messages)
 
