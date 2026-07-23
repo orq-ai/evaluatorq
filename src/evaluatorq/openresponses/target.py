@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 from typing_extensions import Self
 
 from evaluatorq.common.retry import with_retry
-from evaluatorq.common.thread_context import pipeline_metadata_param, thread_body_param
+from evaluatorq.common.thread_context import pipeline_metadata, thread_body_param
 from evaluatorq.common.tracing import get_trace_context_headers
 from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, LLMCallConfig, Message
 from evaluatorq.openresponses.client import build_simulation_client
@@ -137,12 +137,16 @@ class OrqResponsesTarget(AgentTarget):
                 kwargs['tools'] = self.tools
             if self.instructions is not None:
                 kwargs['instructions'] = self.instructions
-            # Group multi-turn calls in Orq observability under one thread, and
-            # tag the request with the evaluatorq pipeline so its trace is
-            # attributable to the run type. Both ride in the request body.
-            body_extra = {**thread_body_param(), **pipeline_metadata_param()}
-            if body_extra:
-                kwargs['extra_body'] = {**kwargs.get('extra_body', {}), **body_extra}
+            # Tag the invocation with the evaluatorq pipeline via the documented
+            # `metadata` request property so its Orq trace is filterable by run type.
+            pipeline_md = pipeline_metadata()
+            if pipeline_md:
+                kwargs['metadata'] = {**kwargs.get('metadata', {}), **pipeline_md}
+            # Group multi-turn calls under one Orq thread (router-only extension, so
+            # it rides in extra_body rather than a native Responses parameter).
+            thread = thread_body_param()
+            if thread:
+                kwargs['extra_body'] = {**kwargs.get('extra_body', {}), **thread}
 
             async with with_llm_span(
                 model=self.config.model,

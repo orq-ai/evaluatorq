@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Any
 
 from openai import BadRequestError
 
+from evaluatorq.common.llm_client import client_routes_through_orq
+from evaluatorq.common.thread_context import pipeline_metadata
 from evaluatorq.common.tracing import (
     get_trace_context_headers,
     record_llm_input,
@@ -90,6 +92,20 @@ def remember_responses_reasoning_rejection(model: str, params: dict[str, Any]) -
     _RESPONSES_REASONING_REJECTORS.add(_reasoning_key(model, params))
 
 
+def _apply_pipeline_metadata(client: AsyncOpenAI, params: dict[str, Any]) -> None:
+    """Tag the invocation with the active run surface via the ``metadata`` property.
+
+    So the call's Orq trace is filterable to a red-team / agent-simulation run.
+    No-op off-Orq (a plain OpenAI endpoint rejects unknown fields) or when no run
+    is bound. Caller-supplied metadata (via ``extra_kwargs``) wins on key conflict.
+    """
+    if not client_routes_through_orq(client):
+        return
+    md = pipeline_metadata()
+    if md:
+        params['metadata'] = {**md, **(params.get('metadata') or {})}
+
+
 async def execute_chat_completion(
     *,
     client: AsyncOpenAI,
@@ -126,6 +142,7 @@ async def execute_chat_completion(
         params.update(extra_kwargs)
 
     _strip_known_rejected_reasoning(model, params)
+    _apply_pipeline_metadata(client, params)
 
     record_llm_input(span, messages)
 
@@ -184,6 +201,7 @@ async def execute_chat_parse(
         params.update(extra_kwargs)
 
     _strip_known_rejected_reasoning(model, params)
+    _apply_pipeline_metadata(client, params)
 
     record_llm_input(span, messages)
 

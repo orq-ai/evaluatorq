@@ -699,6 +699,9 @@ class LLMConfig(BaseModel):
 
         if not client_routes_through_orq(client):
             return {}
+        # Tag every pipeline-internal call (attack/objective generation, evaluator,
+        # orchestrator, capability classifier) with the active surface so its Orq
+        # trace spans are filterable as red teaming. No-op when no pipeline is bound.
         return {
             'retry': {'count': self.retry_count, 'on_codes': self.retry_on_codes},
             **pipeline_metadata_param(),
