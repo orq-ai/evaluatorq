@@ -120,3 +120,27 @@ class TestNew:
         client.responses.create = AsyncMock(return_value=_make_response())
         target = OrqResponsesTarget(LLMCallConfig(model="gpt-4o"), client=client)
         assert target.new()._client is client
+
+
+class TestTraceContextPropagation:
+    """The target must inject W3C traceparent into the Orq router request so the
+    server-side agent trace nests under the client pipeline trace instead of
+    starting a loose root trace (RES: split simulation traces)."""
+
+    @pytest.mark.asyncio
+    async def test_respond_injects_traceparent_header(self):
+        import opentelemetry.trace as ot
+        from opentelemetry.sdk.trace import TracerProvider
+
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(LLMCallConfig(model="gpt-4o"), client=client)
+
+        # An active span is required for a non-empty traceparent to be emitted.
+        provider = TracerProvider()
+        tracer = provider.get_tracer("test")
+        with tracer.start_as_current_span("parent"):
+            await target.respond([Message(role="user", content="hi")])
+
+        headers = client.responses.create.await_args_list[-1].kwargs.get("extra_headers", {})
+        assert "traceparent" in headers, "target call must propagate W3C trace context"

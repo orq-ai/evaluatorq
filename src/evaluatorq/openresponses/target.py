@@ -10,6 +10,7 @@ from typing_extensions import Self
 
 from evaluatorq.common.retry import with_retry
 from evaluatorq.common.thread_context import pipeline_metadata_param, thread_body_param
+from evaluatorq.common.tracing import get_trace_context_headers
 from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, LLMCallConfig, Message
 from evaluatorq.openresponses.client import build_simulation_client
 from evaluatorq.openresponses.tracing import (
@@ -149,6 +150,14 @@ class OrqResponsesTarget(AgentTarget):
                 purpose='target',
                 max_tokens=self.config.max_tokens,
             ) as span:
+                # Propagate W3C trace context so the Orq router nests the
+                # server-side agent trace under this target-call span (same
+                # trace as the pipeline) instead of starting a loose root
+                # trace. Captured inside the span so `traceparent` points at
+                # it. Mirrors the user-simulator / judge / first-message calls.
+                trace_headers = await get_trace_context_headers()
+                if trace_headers:
+                    kwargs['extra_headers'] = {**kwargs.get('extra_headers', {}), **trace_headers}
                 record_openresponses_request(span, kwargs)
                 coro = self._client.responses.create(**kwargs)
                 response = await (asyncio.wait_for(coro, timeout=timeout_s) if timeout_s else coro)
