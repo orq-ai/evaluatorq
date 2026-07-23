@@ -445,6 +445,21 @@ def test_set_evaluation_attributes_emits_evaluator_span_when_typed() -> None:
     assert attrs['output'] == 'why'  # surfaced in the span Output panel
 
 
+def test_set_evaluation_attributes_caps_long_explanation() -> None:
+    """Explanations over 512 chars must be capped on the span — Orq's ingestion
+    drops (not truncates) dynamic string attributes longer than that."""
+    from unittest.mock import MagicMock
+    from evaluatorq.tracing.spans import set_evaluation_attributes
+
+    long = 'x' * 600
+    span = MagicMock()
+    set_evaluation_attributes(span, 0.5, explanation=long, evaluator_name='e', evaluator_type='code_eval')
+    attrs = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
+    for key in ('orq.explanation', 'gen_ai.evaluation.explanation', 'orq.evaluator.explanation', 'output'):
+        assert len(attrs[key]) <= 512, key
+        assert attrs[key].endswith('…')
+
+
 # ---------------------------------------------------------------------------
 # record_llm_input / record_llm_output
 # ---------------------------------------------------------------------------

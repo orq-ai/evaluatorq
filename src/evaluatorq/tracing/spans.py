@@ -24,6 +24,11 @@ if TYPE_CHECKING:
 
     from opentelemetry.trace import Span
 
+# Orq's trace ingestion drops (not truncates) any dynamic string span attribute
+# longer than this (genai_traces.go: dynamicAttributeMaxStringLength). Keep the
+# span copy of evaluator explanations at or under it so they always render.
+_SPAN_TEXT_MAX_CHARS = 512
+
 
 @dataclass
 class JobSpanOptions:
@@ -182,6 +187,15 @@ def set_evaluation_attributes(
     """
     if span is None:
         return
+
+    # The Orq trace ingestion (genai_traces.go extractTypedAttributes) DROPS any
+    # dynamic string attribute whose value exceeds 512 chars — it doesn't
+    # truncate, it skips the whole attribute. So cap the span copy of the
+    # explanation here or a long one silently vanishes from the trace UI. The
+    # full, untruncated text still reaches the uploaded experiment via the
+    # EvaluationResult (this only touches the span mirror).
+    if explanation is not None and len(explanation) > _SPAN_TEXT_MAX_CHARS:
+        explanation = explanation[: _SPAN_TEXT_MAX_CHARS - 1] + '…'
 
     span.set_attribute(
         'orq.score',
