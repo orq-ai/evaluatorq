@@ -9,15 +9,17 @@ pipeline, or off an Orq-routed client, no metadata is sent.
 
 from __future__ import annotations
 
-# ruff: noqa: S101
+# ruff: noqa: S101, SLF001
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import BaseModel
 
 from evaluatorq.common.thread_context import evaluatorq_pipeline
+from evaluatorq.contracts import LLMCallConfig
+from evaluatorq.simulation.agents.base import BaseAgent
 from evaluatorq.simulation.generators.first_message_generator import FirstMessageGenerator
-from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario
+from evaluatorq.simulation.types import CommunicationStyle, Message, Persona, Scenario
 from evaluatorq.simulation.utils.structured_output import generate_structured
 
 _ORQ_ROUTER_BASE_URL = 'https://my.orq.ai/v3/router'
@@ -156,3 +158,51 @@ class TestFirstMessageGeneratorPipelineMetadata:
 
         _, kwargs = client.chat.completions.create.call_args
         assert 'metadata' not in kwargs
+
+
+class _ConcreteAgent(BaseAgent):
+    """Minimal BaseAgent subclass forced onto the responses API path."""
+
+    @property
+    def name(self) -> str:
+        return 'TestAgent'
+
+    @property
+    def system_prompt(self) -> str:
+        return 'You are a test agent.'
+
+
+def _responses_client() -> MagicMock:
+    client = MagicMock()
+    client.base_url = _ORQ_ROUTER_BASE_URL
+
+    mock_response = MagicMock()
+    mock_response.output = []
+    mock_response.usage = None
+    client.responses = MagicMock()
+    client.responses.create = AsyncMock(return_value=mock_response)
+    return client
+
+
+@pytest.mark.asyncio
+class TestCallResponsesPipelineMetadata:
+    async def test_sends_pipeline_metadata_when_bound(self) -> None:
+        client = _responses_client()
+        config = LLMCallConfig(model='gpt-4o', api='responses', client=client)
+        agent = _ConcreteAgent(config)
+
+        with evaluatorq_pipeline('agent_simulation'):
+            await agent._call_llm([Message(role='user', content='hi')])
+
+        _, kwargs = client.responses.create.call_args
+        assert kwargs['extra_body']['metadata'] == {'evaluatorq_pipeline': 'agent_simulation'}
+
+    async def test_no_metadata_without_bound_pipeline(self) -> None:
+        client = _responses_client()
+        config = LLMCallConfig(model='gpt-4o', api='responses', client=client)
+        agent = _ConcreteAgent(config)
+
+        await agent._call_llm([Message(role='user', content='hi')])
+
+        _, kwargs = client.responses.create.call_args
+        assert 'metadata' not in kwargs.get('extra_body', {})
