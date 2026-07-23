@@ -692,10 +692,17 @@ class LLMConfig(BaseModel):
         tracing/result-upload.
         """
         from evaluatorq.common.llm_client import client_routes_through_orq
+        from evaluatorq.common.thread_context import pipeline_metadata_param
 
         if not client_routes_through_orq(client):
             return {}
-        return {'retry': {'count': self.retry_count, 'on_codes': self.retry_on_codes}}
+        # Tag every pipeline-internal call (attack/objective generation, evaluator,
+        # orchestrator, capability classifier) with the active surface so its Orq
+        # trace spans are filterable as red teaming. No-op when no pipeline is bound.
+        return {
+            'retry': {'count': self.retry_count, 'on_codes': self.retry_on_codes},
+            **pipeline_metadata_param(),
+        }
 
 
 # Module-level default used by internal pipeline components.
