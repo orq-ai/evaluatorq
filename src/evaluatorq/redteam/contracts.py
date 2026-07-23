@@ -694,7 +694,7 @@ class LLMConfig(BaseModel):
 
         Run-attribution ``metadata`` is NOT merged here: calls that route through
         execute_chat_completion/parse get it natively
-        (llm_call._apply_pipeline_metadata); the few raw chat.completions.create
+        (llm_call.apply_pipeline_metadata); the few raw chat.completions.create
         callers merge pipeline_metadata_param() into their own extra_body.
         """
         from evaluatorq.common.llm_client import client_routes_through_orq

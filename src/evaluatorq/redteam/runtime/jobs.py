@@ -171,7 +171,7 @@ def create_model_job(
                     extra_kwargs: dict[str, Any] = {}
                     if client_routes_through_orq(client):
                         # Run metadata is applied natively by execute_chat_completion
-                        # (llm_call._apply_pipeline_metadata); only thread grouping here.
+                        # (llm_call.apply_pipeline_metadata); only thread grouping here.
                         extra_kwargs['extra_body'] = thread_body_param()
                     # ponytail: fixed 300s ceiling (was unbounded); thread a cfg
                     # target timeout through create_model_job if per-run tuning is needed.
