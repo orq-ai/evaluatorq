@@ -25,7 +25,12 @@ from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.common.target_call import call_target_with_retry, default_map_error
-from evaluatorq.common.thread_context import build_static_thread_id, conversation_thread, evaluatorq_pipeline
+from evaluatorq.common.thread_context import (
+    build_static_thread_id,
+    conversation_thread,
+    evaluatorq_pipeline,
+    pipeline_metadata_param,
+)
 from evaluatorq.common.tracing import AttrMap, set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities, classify_agent_capabilities
@@ -711,7 +716,7 @@ async def red_team(
         tracing_session(name or 'red-team', trace_type='redteam') as tracing_context,
     ):
         async with with_redteam_span(
-            'orq.redteam.pipeline',
+            'Orq Red Team',
             pipeline_attributes,
             parent_context=tracing_context.parent_context,
         ) as pipeline_span:
@@ -838,7 +843,7 @@ async def red_team(
                             llm_client=es_client,
                             model=evaluator_model,
                             temperature=config.evaluator.temperature,
-                            extra_body=config.retry_extra_body(es_client),
+                            extra_body={**config.retry_extra_body(es_client), **pipeline_metadata_param()},
                             extra_kwargs=config.evaluator.extra_kwargs,
                         )
                 except (TypeError, AttributeError, ImportError, NameError, KeyError):

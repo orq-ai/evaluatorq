@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from evaluatorq.common.thread_context import pipeline_metadata_param
 from evaluatorq.contracts import StrEnum
 from evaluatorq.redteam.contracts import PIPELINE_CONFIG, LLMConfig, TokenUsage
 from evaluatorq.redteam.utils import safe_substitute
@@ -157,7 +158,7 @@ class ToolChainingPlanner:
                 response_format=_DecompositionSchema,
                 temperature=cfg.attacker.temperature,
                 max_completion_tokens=cfg.attacker.max_tokens,
-                extra_body=cfg.retry_extra_body(self._client),
+                extra_body={**cfg.retry_extra_body(self._client), **pipeline_metadata_param()},
                 **cfg.attacker.extra_kwargs,
             ),
             timeout=cfg.attacker.timeout_ms / 1000.0,

@@ -683,29 +683,25 @@ class LLMConfig(BaseModel):
     )
 
     def retry_extra_body(self, client: 'AsyncOpenAI | None') -> dict[str, Any]:
-        """Orq-router ``extra_body``: retry config + run metadata, gated on the client.
+        """ORQ retry config dict for ``extra_body``, gated on the actual client.
 
-        Both ``retry`` and ``metadata`` are Orq-specific and rejected by a plain
-        OpenAI endpoint, so they are emitted only when ``client`` actually routes
-        through the Orq router (``…/v3/router``). Gating on the client's
-        ``base_url`` rather than on ``ORQ_API_KEY`` avoids sending them to an
-        injected OpenAI client just because ``ORQ_API_KEY`` is in the environment
-        for tracing/result-upload. ``metadata.evaluatorq_pipeline`` tags every
-        adaptive LLM call as part of the active red-team run (empty when no run
-        context is bound).
+        The ``retry`` parameter is ORQ-specific and rejected by a plain OpenAI
+        endpoint, so it is emitted only when ``client`` actually routes through
+        the Orq router (``…/v3/router``). Gating on the client's ``base_url``
+        rather than on ``ORQ_API_KEY`` avoids sending ``retry`` to an injected
+        OpenAI client just because ``ORQ_API_KEY`` is in the environment for
+        tracing/result-upload.
+
+        Run-attribution ``metadata`` is NOT merged here: calls that route through
+        execute_chat_completion/parse get it natively
+        (llm_call._apply_pipeline_metadata); the few raw chat.completions.create
+        callers merge pipeline_metadata_param() into their own extra_body.
         """
         from evaluatorq.common.llm_client import client_routes_through_orq
-        from evaluatorq.common.thread_context import pipeline_metadata_param
 
         if not client_routes_through_orq(client):
             return {}
-        # Tag every pipeline-internal call (attack/objective generation, evaluator,
-        # orchestrator, capability classifier) with the active surface so its Orq
-        # trace spans are filterable as red teaming. No-op when no pipeline is bound.
-        return {
-            'retry': {'count': self.retry_count, 'on_codes': self.retry_on_codes},
-            **pipeline_metadata_param(),
-        }
+        return {'retry': {'count': self.retry_count, 'on_codes': self.retry_on_codes}}
 
 
 # Module-level default used by internal pipeline components.
