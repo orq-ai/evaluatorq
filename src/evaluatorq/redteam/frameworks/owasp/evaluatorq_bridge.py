@@ -29,7 +29,7 @@ from evaluatorq.redteam.contracts import (
 )
 from evaluatorq.redteam.exceptions import DatasetError
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category
-from evaluatorq.redteam.tracing import annotate_current_span
+from evaluatorq.redteam.tracing import annotate_current_span, set_jury_span_attrs
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -349,6 +349,7 @@ def create_owasp_evaluator(
             passed = deliberation.verdict if isinstance(deliberation.verdict, bool) else None
             explanation = append_jury_summary(deliberation.explanation, deliberation.jury)
             set_span_attrs(evaluation_span, {'orq.redteam.passed': span_pass_state(passed), 'output': explanation})
+            set_jury_span_attrs(evaluation_span, deliberation.jury)
             return EvaluationResult.model_validate({
                 'value': passed if passed is not None else 'inconclusive',
                 'explanation': explanation,

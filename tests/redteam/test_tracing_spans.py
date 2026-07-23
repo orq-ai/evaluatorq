@@ -915,3 +915,39 @@ async def test_static_owasp_scoring_annotates_framework_evaluation_span(
     assert fe_attrs['orq.span_type'] == 'span.evaluator'
     assert fe_attrs['orq.evaluator.type'] == 'llm_eval'
     assert fe_attrs['gen_ai.evaluation.name'] == 'owasp-agentic-security'
+
+
+def test_set_jury_span_attrs_emits_flat_and_metadata() -> None:
+    """Jury reliability lands as flat orq.redteam.jury.* attrs + a JSON metadata field."""
+    from evaluatorq.contracts import JuryResult, JuryVote
+    from evaluatorq.redteam.tracing import set_jury_span_attrs
+
+    jury = JuryResult(
+        judges_configured=2,
+        judges_succeeded=2,
+        judges_failed=0,
+        raw_agreement=1.0,
+        votes=[
+            JuryVote(model='a', success=True, value=True),
+            JuryVote(model='b', success=True, value=True),
+        ],
+    )
+    recorded: dict[str, Any] = {}
+    span = MagicMock()
+    span.set_attribute.side_effect = lambda k, v: recorded.__setitem__(k, v)
+
+    set_jury_span_attrs(span, jury)
+
+    assert recorded['orq.redteam.jury.raw_agreement'] == 1.0
+    assert recorded['orq.redteam.jury.judges_succeeded'] == 2
+    assert recorded['orq.redteam.jury.tie'] is False
+    assert json.loads(recorded['metadata'])['jury']['judges_configured'] == 2
+
+
+def test_set_jury_span_attrs_noop_without_jury() -> None:
+    """No jury → no attributes written."""
+    from evaluatorq.redteam.tracing import set_jury_span_attrs
+
+    span = MagicMock()
+    set_jury_span_attrs(span, None)
+    span.set_attribute.assert_not_called()

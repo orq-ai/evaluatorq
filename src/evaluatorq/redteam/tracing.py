@@ -27,6 +27,7 @@ is emitted as a direct child of ``pipeline`` after all attacks complete.
 
 from __future__ import annotations
 
+import json
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
@@ -38,6 +39,44 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
     from opentelemetry.trace import Span
+
+    from evaluatorq.contracts import JuryResult
+
+
+def set_jury_span_attrs(span: Span | None, jury: JuryResult | None) -> None:
+    """Record panel-of-judges reliability on the evaluator span.
+
+    Emits the flat ``orq.redteam.jury.*`` attributes (dotted keys the Orq trace
+    UI nests back into an object) *and* a JSON ``metadata`` attribute so the
+    breakdown surfaces as a visible field on the span rather than only living in
+    the raw attribute list. No-op when no jury ran.
+    """
+    if span is None or jury is None:
+        return
+    set_span_attrs(
+        span,
+        {
+            'orq.redteam.jury.judges_configured': jury.judges_configured,
+            'orq.redteam.jury.judges_succeeded': jury.judges_succeeded,
+            'orq.redteam.jury.judges_failed': jury.judges_failed,
+            'orq.redteam.jury.replacements_used': jury.replacements_used,
+            'orq.redteam.jury.raw_agreement': jury.raw_agreement,
+            'orq.redteam.jury.tie': jury.tie,
+            'orq.redteam.jury.inconclusive': jury.inconclusive,
+            # Visible metadata field (JSON — OTel attrs can't hold nested objects).
+            'metadata': json.dumps({
+                'jury': {
+                    'judges_configured': jury.judges_configured,
+                    'judges_succeeded': jury.judges_succeeded,
+                    'judges_failed': jury.judges_failed,
+                    'replacements_used': jury.replacements_used,
+                    'raw_agreement': jury.raw_agreement,
+                    'tie': jury.tie,
+                    'inconclusive': jury.inconclusive,
+                }
+            }),
+        },
+    )
 
 
 @asynccontextmanager
