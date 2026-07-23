@@ -11,7 +11,12 @@ from evaluatorq import DataPoint, Job, job
 from evaluatorq.common.llm_call import execute_chat_completion
 from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.messages import coerce_content_text
-from evaluatorq.common.thread_context import build_static_thread_id, conversation_thread, thread_body_param
+from evaluatorq.common.thread_context import (
+    build_static_thread_id,
+    conversation_thread,
+    pipeline_metadata_param,
+    thread_body_param,
+)
 from evaluatorq.common.tracing import record_llm_response, set_span_attrs, truncate_for_span
 from evaluatorq.redteam.adaptive.orchestrator import _get_active_progress
 from evaluatorq.redteam.backends.registry import create_async_llm_client
@@ -170,7 +175,7 @@ def create_model_job(
                 ) as llm_span:
                     extra_kwargs: dict[str, Any] = {}
                     if client_routes_through_orq(client):
-                        extra_kwargs['extra_body'] = thread_body_param()
+                        extra_kwargs['extra_body'] = {**thread_body_param(), **pipeline_metadata_param()}
                     # ponytail: fixed 300s ceiling (was unbounded); thread a cfg
                     # target timeout through create_model_job if per-run tuning is needed.
                     response, _ = await execute_chat_completion(

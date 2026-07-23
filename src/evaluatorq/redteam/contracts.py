@@ -12,8 +12,6 @@ Semantic convention:
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
-from typing_extensions import NotRequired, TypedDict
-
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -21,6 +19,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from typing_extensions import NotRequired, TypedDict
 
 from evaluatorq.common.target_call import classify_error_type as classify_error_type
 from evaluatorq.contracts import StrEnum
@@ -684,20 +683,26 @@ class LLMConfig(BaseModel):
     )
 
     def retry_extra_body(self, client: 'AsyncOpenAI | None') -> dict[str, Any]:
-        """ORQ retry config dict for ``extra_body``, gated on the actual client.
+        """Orq-router ``extra_body``: retry config + run metadata, gated on the client.
 
-        The ``retry`` parameter is ORQ-specific and rejected by a plain OpenAI
-        endpoint, so it is emitted only when ``client`` actually routes through
-        the Orq router (``…/v3/router``). Gating on the client's ``base_url``
-        rather than on ``ORQ_API_KEY`` avoids sending ``retry`` to an injected
-        OpenAI client just because ``ORQ_API_KEY`` is in the environment for
-        tracing/result-upload.
+        Both ``retry`` and ``metadata`` are Orq-specific and rejected by a plain
+        OpenAI endpoint, so they are emitted only when ``client`` actually routes
+        through the Orq router (``…/v3/router``). Gating on the client's
+        ``base_url`` rather than on ``ORQ_API_KEY`` avoids sending them to an
+        injected OpenAI client just because ``ORQ_API_KEY`` is in the environment
+        for tracing/result-upload. ``metadata.evaluatorq_pipeline`` tags every
+        adaptive LLM call as part of the active red-team run (empty when no run
+        context is bound).
         """
         from evaluatorq.common.llm_client import client_routes_through_orq
+        from evaluatorq.common.thread_context import pipeline_metadata_param
 
         if not client_routes_through_orq(client):
             return {}
-        return {'retry': {'count': self.retry_count, 'on_codes': self.retry_on_codes}}
+        return {
+            'retry': {'count': self.retry_count, 'on_codes': self.retry_on_codes},
+            **pipeline_metadata_param(),
+        }
 
 
 # Module-level default used by internal pipeline components.
