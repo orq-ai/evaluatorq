@@ -2256,7 +2256,9 @@ async def _run_dynamic_or_hybrid(
                 return await dynamic_evaluator['scorer'](dynamic_params)
             return await static_evaluator['scorer'](params)
 
-        evaluators: list[Any] = [{'name': 'hybrid-owasp-security', 'scorer': hybrid_scorer}]
+        evaluators: list[Any] = [
+            {'name': 'hybrid-owasp-security', 'scorer': hybrid_scorer, 'evaluator_type': 'llm_eval'}
+        ]
     else:
         evaluator = create_dynamic_evaluator(
             evaluator_model=evaluator_model,

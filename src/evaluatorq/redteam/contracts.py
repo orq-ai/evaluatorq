@@ -10,7 +10,9 @@ Semantic convention:
 """
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias
+
+from typing_extensions import NotRequired, TypedDict
 
 from pydantic import (
     BaseModel,
@@ -1756,6 +1758,9 @@ class EvaluatorqEvaluatorConfig(TypedDict):
 
     name: str
     scorer: Any
+    # Opt-in evaluator kind ('llm_eval' for the OWASP judge). When set, the tracing
+    # layer emits gen_ai.evaluation.* evaluator-span attributes (see set_evaluation_attributes).
+    evaluator_type: NotRequired[str]
 
 
 class ReportSnapshot(BaseModel):

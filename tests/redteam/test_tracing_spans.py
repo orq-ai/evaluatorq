@@ -900,10 +900,10 @@ async def test_static_owasp_security_evaluation_nests_under_framework_evaluation
     assert framework_evaluation.context is not None
     assert security_evaluation.parent is not None
     assert security_evaluation.parent.span_id == framework_evaluation.context.span_id
-    # The new gen_ai.evaluation.* evaluator-span attributes are opt-in (sim code
-    # scorers only). Red-team evaluators don't set evaluator_type, so the span
-    # keeps its legacy shape — regression guard for the shared tracing path.
+    # Red-team OWASP scorers now set evaluator_type='llm_eval', so the framework
+    # evaluation span carries the flat gen_ai.evaluation.* / orq.evaluator.*
+    # attributes the Orq trace UI classifies evaluator spans from.
     fe_attrs = _attrs(framework_evaluation)
-    assert 'orq.span_type' not in fe_attrs
-    assert 'gen_ai.evaluation.name' not in fe_attrs
-    assert 'orq.evaluator.type' not in fe_attrs
+    assert fe_attrs['orq.span_type'] == 'span.evaluator'
+    assert fe_attrs['orq.evaluator.type'] == 'llm_eval'
+    assert fe_attrs['gen_ai.evaluation.name'] == 'owasp-agentic-security'

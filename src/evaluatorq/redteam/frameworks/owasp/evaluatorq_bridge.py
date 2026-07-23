@@ -362,7 +362,9 @@ def create_owasp_evaluator(
                 },
             })
 
-    return {'name': 'owasp-agentic-security', 'scorer': scorer}
+    # evaluator_type marks these LLM-judge scorers so the tracing layer emits the
+    # gen_ai.evaluation.* evaluator-span attributes (opt-in; see set_evaluation_attributes).
+    return {'name': 'owasp-agentic-security', 'scorer': scorer, 'evaluator_type': 'llm_eval'}
 
 
 _HF_MISSING_MSG = (

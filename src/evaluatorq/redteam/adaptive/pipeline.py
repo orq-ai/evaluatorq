@@ -763,7 +763,9 @@ def create_dynamic_evaluator(
             'raw_output': scored_raw_output,
         })
 
-    return {'name': 'owasp-dynamic-security', 'scorer': scorer}
+    # evaluator_type marks these LLM-judge scorers so the tracing layer emits the
+    # gen_ai.evaluation.* evaluator-span attributes (opt-in; see set_evaluation_attributes).
+    return {'name': 'owasp-dynamic-security', 'scorer': scorer, 'evaluator_type': 'llm_eval'}
 
 
 async def cleanup_memory_entities(
