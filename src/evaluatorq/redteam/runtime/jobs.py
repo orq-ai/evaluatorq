@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq import DataPoint, Job, job
+from evaluatorq.common.llm_call import execute_chat_completion
 from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.thread_context import build_static_thread_id, conversation_thread, thread_body_param
@@ -167,16 +168,21 @@ def create_model_job(
                     input_messages=messages,
                     attributes={'orq.redteam.llm_purpose': 'target'},
                 ) as llm_span:
-                    kwargs: dict[str, Any] = {
-                        'model': model,
-                        'messages': messages,
-                        'max_tokens': max_tokens,
-                    }
+                    extra_kwargs: dict[str, Any] = {}
                     if client_routes_through_orq(client):
-                        kwargs['extra_body'] = thread_body_param()
-                    response = await client.chat.completions.create(**kwargs)  # pyright: ignore[reportArgumentType]
+                        extra_kwargs['extra_body'] = thread_body_param()
+                    # ponytail: fixed 300s ceiling (was unbounded); thread a cfg
+                    # target timeout through create_model_job if per-run tuning is needed.
+                    response, _ = await execute_chat_completion(
+                        client=client,
+                        model=model,
+                        messages=messages,
+                        span=llm_span,
+                        timeout_s=300.0,
+                        max_tokens=max_tokens,
+                        extra_kwargs=extra_kwargs or None,
+                    )
                     content = response.choices[0].message.content or ''
-                    record_llm_response(llm_span, response, output_content=content)
                     output = truncate_for_span(content)
                     set_span_attrs(target_span, {'output': output, 'orq.redteam.output': output})
         if not content:

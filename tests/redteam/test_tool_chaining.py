@@ -336,7 +336,7 @@ def _noop_span_ctx(*a: Any, **k: Any):
 
 class TestRunAttackTokenFolding:
     @pytest.mark.asyncio
-    @patch("evaluatorq.redteam.adaptive.orchestrator.record_llm_response")
+    @patch("evaluatorq.common.llm_call.record_llm_response")
     @patch("evaluatorq.redteam.adaptive.orchestrator.with_llm_span", side_effect=_noop_span_ctx)
     @patch("evaluatorq.redteam.adaptive.orchestrator.with_redteam_span", side_effect=_noop_span_ctx)
     async def test_planner_call_counted_in_adversarial_usage(self, _rs: Any, _ls: Any, _rl: Any) -> None:

@@ -30,7 +30,7 @@ class _OrqHTTPError(Exception):
 
 _PATCH_REDTEAM_SPAN = "evaluatorq.redteam.adaptive.orchestrator.with_redteam_span"
 _PATCH_LLM_SPAN = "evaluatorq.redteam.adaptive.orchestrator.with_llm_span"
-_PATCH_RECORD_LLM = "evaluatorq.redteam.adaptive.orchestrator.record_llm_response"
+_PATCH_RECORD_LLM = "evaluatorq.common.llm_call.record_llm_response"
 
 
 @asynccontextmanager
