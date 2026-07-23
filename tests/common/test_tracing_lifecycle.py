@@ -17,6 +17,14 @@ from evaluatorq.tracing import setup as tracing_setup
 evaluatorq_module = importlib.import_module('evaluatorq.evaluatorq')
 
 
+@pytest.fixture(autouse=True)
+def _allow_tracing_init(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These lifecycle tests drive the real init/enable gate (with the SDK fully
+    mocked), so opt out of the suite-wide ORQ_DISABLE_TRACING guard set in the
+    root conftest."""
+    monkeypatch.delenv('ORQ_DISABLE_TRACING', raising=False)
+
+
 async def _enter_and_exit_session() -> None:
     async with tracing_session('concurrent-run'):
         pass
