@@ -233,6 +233,47 @@ async def test_red_team_owns_whole_pipeline_span(
 
 
 @pytest.mark.asyncio
+async def test_root_span_carries_evaluatorq_run_id(
+    span_collector: _CollectingExporter,
+) -> None:
+    """The 'Orq Red Team' root span carries orq.evaluatorq_run_id."""
+
+    async def _inner_runner(**kwargs: Any) -> tuple[RedTeamReport, RedTeamRunMetrics]:  # noqa: RUF029
+        return _report(pipeline=Pipeline.STATIC), RedTeamRunMetrics(3, 1, 0.1)
+
+    with (
+        patch('evaluatorq.redteam.runner.tracing_session', _noop_tracing_session),
+        patch('evaluatorq.redteam.runner._run_static', side_effect=_inner_runner),
+        patch(
+            'evaluatorq.redteam.runner.generate_focus_area_recommendations',
+            new_callable=AsyncMock,
+            return_value=MagicMock(),
+        ),
+        patch(
+            'evaluatorq.common.reports.executive_summary.generate_executive_summary',
+            new_callable=AsyncMock,
+            return_value=MagicMock(),
+        ),
+    ):
+        from evaluatorq.redteam.runner import red_team
+
+        await red_team(
+            'agent:test',
+            mode='static',
+            llm_client=MagicMock(),
+            dataset='local.json',
+            generate_recommendations=True,
+            generate_executive_summary=True,
+            save=SaveMode.NONE,
+        )
+
+    pipeline_span = _find_span(span_collector, 'Orq Red Team')
+    assert pipeline_span is not None
+    attrs = _attrs(pipeline_span)
+    assert attrs.get('orq.evaluatorq_run_id')  # non-empty run id present
+
+
+@pytest.mark.asyncio
 async def test_pipeline_span_nests_under_caller_parent_context(
     span_collector: _CollectingExporter,
 ) -> None:
