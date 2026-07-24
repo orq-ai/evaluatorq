@@ -206,11 +206,11 @@ async def test_red_team_owns_whole_pipeline_span(
 
     names = {span.name for span in span_collector.spans}
     assert names == {
-        'orq.redteam.pipeline',
+        'Orq Red Team',
         'orq.redteam.recommendations',
         'orq.redteam.executive_summary',
     }
-    pipeline_span = _find_span(span_collector, 'orq.redteam.pipeline')
+    pipeline_span = _find_span(span_collector, 'Orq Red Team')
     assert pipeline_span is not None
     observed_pipeline = _span_by_context(span_collector, _span_id(pipeline_span))
     assert observed_pipeline is not None
@@ -273,7 +273,7 @@ async def test_pipeline_span_nests_under_caller_parent_context(
             save=SaveMode.NONE,
         )
 
-    pipeline_span = _find_span(span_collector, 'orq.redteam.pipeline')
+    pipeline_span = _find_span(span_collector, 'Orq Red Team')
     assert pipeline_span is not None
     assert pipeline_span.parent is not None
     assert pipeline_span.parent.span_id == outer_span_id[0]

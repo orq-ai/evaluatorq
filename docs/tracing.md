@@ -125,7 +125,7 @@ Span attributes on `orq.evaluation`:
 ### Red teaming spans
 
 ```
-orq.redteam.pipeline             # root — one per red_team() call
+Orq Red Team                    # root — one per red_team() call
   ├── orq.redteam.context_retrieval
   ├── orq.redteam.datapoint_generation
   │     ├── orq.redteam.capability_classification

@@ -97,7 +97,12 @@ async def populate_run_executive_summary(
         return
 
     from evaluatorq.common.llm_client import MissingLLMCredentialsError, resolve_llm_client
-    from evaluatorq.common.reports.executive_summary import generate_executive_summary
+    from evaluatorq.common.reports.executive_summary import (
+        EXECUTIVE_SUMMARY_MAX_TOKENS,
+        EXECUTIVE_SUMMARY_TEMPERATURE,
+        generate_executive_summary,
+    )
+    from evaluatorq.simulation.tracing import with_llm_span
 
     resolver = resolve_client or resolve_llm_client
     try:
@@ -106,9 +111,19 @@ async def populate_run_executive_summary(
         logger.warning('Skipping executive summary: no LLM credentials configured.')
         return
 
-    run.executive_summary = await generate_executive_summary(
-        build_sim_facts(run.results),
-        llm_client=resolved.client,
+    # Span reports the same constants generate_executive_summary sends — single
+    # source of truth, so the trace can never drift from the real request. The
+    # call below doesn't override temperature, so the default IS the real value.
+    async with with_llm_span(
         model=model,
-        system_prompt=SIM_EXECUTIVE_SUMMARY_SYSTEM_PROMPT,
-    )
+        operation='chat',
+        temperature=EXECUTIVE_SUMMARY_TEMPERATURE,
+        max_tokens=EXECUTIVE_SUMMARY_MAX_TOKENS,
+        purpose='executive_summary',
+    ):
+        run.executive_summary = await generate_executive_summary(
+            build_sim_facts(run.results),
+            llm_client=resolved.client,
+            model=model,
+            system_prompt=SIM_EXECUTIVE_SUMMARY_SYSTEM_PROMPT,
+        )

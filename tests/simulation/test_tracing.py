@@ -1240,3 +1240,69 @@ async def test_helpers_noop_when_tracing_disabled():
         # propagator may still inject something even without a tracer; just
         # assert it returns a dict
         assert isinstance(headers, dict)
+
+
+# ---------------------------------------------------------------------------
+# executive-summary LLM span
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_executive_summary_emits_llm_span(span_collector: _CollectingExporter):
+    """populate_run_executive_summary wraps its LLM call in a GenAI span."""
+    from types import SimpleNamespace
+
+    from evaluatorq.simulation.reports.executive_summary import populate_run_executive_summary
+
+    async def _create(**_kwargs: Any) -> Any:
+        msg = SimpleNamespace(content='One paragraph summary.')
+        usage = SimpleNamespace(prompt_tokens=12, completion_tokens=7, total_tokens=19)
+        return SimpleNamespace(choices=[SimpleNamespace(message=msg)], usage=usage)
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=_create)))
+    run = SimpleNamespace(
+        executive_summary=None,
+        results=[SimpleNamespace(goal_achieved=True, rules_broken=[], reason='')],
+    )
+
+    await populate_run_executive_summary(
+        run,
+        enabled=True,
+        model='openai/gpt-4o',
+        resolve_client=lambda: SimpleNamespace(client=client),
+    )
+
+    assert run.executive_summary == 'One paragraph summary.'
+    span = _find(span_collector, 'chat openai/gpt-4o')
+    a = _attrs(span)
+    assert a['orq.llm.purpose'] == 'executive_summary'
+    assert a['orq.simulation.llm_purpose'] == 'executive_summary'
+    assert a['gen_ai.request.model'] == 'openai/gpt-4o'
+    # Span reports the exact request params generate_executive_summary sends.
+    from evaluatorq.common.reports.executive_summary import (
+        EXECUTIVE_SUMMARY_MAX_TOKENS,
+        EXECUTIVE_SUMMARY_TEMPERATURE,
+    )
+
+    assert a['gen_ai.request.temperature'] == EXECUTIVE_SUMMARY_TEMPERATURE
+    assert a['gen_ai.request.max_tokens'] == EXECUTIVE_SUMMARY_MAX_TOKENS
+    # Token usage from the response lands on the span.
+    assert a['gen_ai.usage.input_tokens'] == 12
+    assert a['gen_ai.usage.output_tokens'] == 7
+    from opentelemetry.trace import StatusCode
+
+    assert span.status.status_code == StatusCode.OK
+
+
+@pytest.mark.asyncio
+async def test_executive_summary_no_span_when_disabled(span_collector: _CollectingExporter):
+    """enabled=False short-circuits before opening any span."""
+    from types import SimpleNamespace
+
+    from evaluatorq.simulation.reports.executive_summary import populate_run_executive_summary
+
+    run = SimpleNamespace(executive_summary=None, results=[])
+    await populate_run_executive_summary(run, enabled=False, model='openai/gpt-4o')
+
+    assert run.executive_summary is None
+    assert not [s for s in span_collector.spans if s.name == 'chat openai/gpt-4o']
