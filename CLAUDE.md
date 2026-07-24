@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code when working in `packages/evaluatorq-py`.
 
+## Parallel sessions
+
+Parallel agent sessions typically run in their own git worktree, so uncommitted
+changes you did not make may appear in the working tree from concurrent work.
+**Never `git stash` or `git reset`** to clean the tree — you would destroy another
+session's work. When committing, stage only the exact files your task changed.
+
 ## Quick Reference
 
 ```bash
