@@ -105,11 +105,14 @@ def run_metadata_kwarg(client: AsyncOpenAI | None) -> dict[str, dict[str, str]]:
     return {'metadata': md} if md else {}
 
 
-def _apply_pipeline_metadata(client: AsyncOpenAI, params: dict[str, Any]) -> None:
+def apply_pipeline_metadata(client: AsyncOpenAI, params: dict[str, Any]) -> None:
     """Tag the invocation with the active run surface + run id via ``metadata``.
 
-    No-op off-Orq or when no run is bound. Caller-supplied metadata (via
-    ``extra_kwargs``) wins on key conflict.
+    Mutates ``params`` in place, adding a guarded ``metadata`` entry. No-op off-Orq
+    or when no run is bound. Caller-supplied metadata (via ``extra_kwargs``) wins on
+    key conflict. Public: direct ``create()`` sites that build their own kwargs dict
+    (structured output, first-message generation) call this instead of routing
+    through :func:`execute_chat_completion`.
     """
     md = run_metadata_kwarg(client).get('metadata')
     if md:
@@ -152,7 +155,7 @@ async def execute_chat_completion(
         params.update(extra_kwargs)
 
     _strip_known_rejected_reasoning(model, params)
-    _apply_pipeline_metadata(client, params)
+    apply_pipeline_metadata(client, params)
 
     record_llm_input(span, messages)
 
@@ -211,7 +214,7 @@ async def execute_chat_parse(
         params.update(extra_kwargs)
 
     _strip_known_rejected_reasoning(model, params)
-    _apply_pipeline_metadata(client, params)
+    apply_pipeline_metadata(client, params)
 
     record_llm_input(span, messages)
 
