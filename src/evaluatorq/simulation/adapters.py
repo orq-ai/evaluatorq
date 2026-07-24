@@ -28,7 +28,7 @@ def from_orq_deployment(
         from evaluatorq.common.thread_context import current_thread_id, pipeline_metadata
         from evaluatorq.deployment import ThreadConfig, deployment
 
-        metadata: dict[str, object] | None = pipeline_metadata() or None
+        metadata: dict[str, object] | None = dict(pipeline_metadata()) or None
         tid = current_thread_id()
         thread: ThreadConfig | None = {'id': tid} if tid else None
 

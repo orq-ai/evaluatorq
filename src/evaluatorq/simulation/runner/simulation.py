@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
     from opentelemetry.trace import Span
 
-    from evaluatorq.contracts import AgentTarget
+    from evaluatorq.contracts import AgentResponse, AgentTarget
     from evaluatorq.integrations.callable_integration.target import AgentCallable
     from evaluatorq.simulation.agents.base import BaseAgent
     from evaluatorq.simulation.hooks import SimulationHooks
@@ -242,7 +242,7 @@ class SimulationRunner:
         self,
         *,
         target_agent: AgentTarget | None = None,
-        target: Callable[[list[Message]], str | Awaitable[str]] | None = None,
+        target: Callable[[list[Message]], str | Awaitable[str] | Awaitable[AgentResponse]] | None = None,
         model: str = DEFAULT_MODEL,
         max_turns: int = 10,
         target_agent_timeout_ms: int = 240_000,

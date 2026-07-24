@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
     from evaluatorq.common.run_manifest import ManifestWriter
-    from evaluatorq.contracts import AgentTarget
+    from evaluatorq.contracts import AgentResponse, AgentTarget
     from evaluatorq.simulation.agents.base import BaseAgent
     from evaluatorq.simulation.evaluators.scorers import SimulationScorer
     from evaluatorq.simulation.generators import FirstMessageGenerator
@@ -1256,7 +1256,9 @@ async def _simulate_core(
 
 def _resolve_target(
     target: str | Callable[..., Any] | AgentTarget | None,
-) -> tuple[Callable[[list[Message]], str | Awaitable[str]] | None, AgentTarget | None, str | None]:
+) -> tuple[
+    Callable[[list[Message]], str | Awaitable[str] | Awaitable[AgentResponse]] | None, AgentTarget | None, str | None
+]:
     """Resolve the simulation target into ``(callback, agent, kind_hint)`` for the runner.
 
     Accepts:
@@ -1451,7 +1453,7 @@ def _build_simulation_job_and_cache(
     *,
     job_name: str,
     sim_dp_by_id: dict[int, SimulationDatapoint],
-    target: Callable[[list[Message]], str | Awaitable[str]] | None,
+    target: Callable[[list[Message]], str | Awaitable[str] | Awaitable[AgentResponse]] | None,
     target_agent: AgentTarget | None,
     model: str,
     max_turns: int,
@@ -1631,7 +1633,7 @@ async def _simulate_via_evaluatorq(
     *,
     config: SimulationConfig,
     caller: str,
-    target: Callable[[list[Message]], str | Awaitable[str]] | None,
+    target: Callable[[list[Message]], str | Awaitable[str] | Awaitable[AgentResponse]] | None,
     target_agent: AgentTarget | None,
     sim_datapoints: list[SimulationDatapoint],
     pipeline_span: Span | None,
