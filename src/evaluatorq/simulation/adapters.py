@@ -9,7 +9,7 @@ from __future__ import annotations
 import inspect
 from typing import TYPE_CHECKING, Any
 
-from evaluatorq.contracts import content_to_text
+from evaluatorq.contracts import AgentResponse, content_to_text
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -19,18 +19,26 @@ if TYPE_CHECKING:
 
 def from_orq_deployment(
     agent_key: str,
-) -> Callable[[list[Message]], Awaitable[str]]:
+) -> Callable[[list[Message]], Awaitable[AgentResponse]]:
     """Create a simulation ``target`` callable from an Orq deployment key."""
     if not agent_key.strip():
         raise ValueError('agent_key must be a non-empty string')
 
-    async def callback(messages: list[Message]) -> str:
-        from evaluatorq.deployment import invoke
+    async def callback(messages: list[Message]) -> AgentResponse:
+        from evaluatorq.common.thread_context import current_thread_id, pipeline_metadata
+        from evaluatorq.deployment import ThreadConfig, deployment
 
-        return await invoke(
+        metadata: dict[str, object] | None = pipeline_metadata() or None
+        tid = current_thread_id()
+        thread: ThreadConfig | None = {'id': tid} if tid else None
+
+        resp = await deployment(
             agent_key,
             messages=[{'role': m.role, 'content': content_to_text(m.content)} for m in messages],
+            metadata=metadata,
+            thread=thread,
         )
+        return AgentResponse(text=resp.content, usage=resp.usage)
 
     # Carry the key so the run-metadata label can render "deployment:<key>",
     # symmetric to how an AgentTarget exposes `agent_key`.
