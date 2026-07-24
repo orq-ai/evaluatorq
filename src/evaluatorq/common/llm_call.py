@@ -92,16 +92,26 @@ def remember_responses_reasoning_rejection(model: str, params: dict[str, Any]) -
     _RESPONSES_REASONING_REJECTORS.add(_reasoning_key(model, params))
 
 
-def apply_pipeline_metadata(client: AsyncOpenAI, params: dict[str, Any]) -> None:
-    """Tag the invocation with the active run surface via the ``metadata`` property.
+def run_metadata_kwarg(client: AsyncOpenAI | None) -> dict[str, dict[str, str]]:
+    """Guarded ``{'metadata': {...}}`` for splatting into a ``create()`` call.
 
-    So the call's Orq trace is filterable to a red-team / agent-simulation run.
-    No-op off-Orq (a plain OpenAI endpoint rejects unknown fields) or when no run
-    is bound. Caller-supplied metadata (via ``extra_kwargs``) wins on key conflict.
+    Returns ``{}`` off-Orq (a plain OpenAI endpoint rejects unknown fields) or when
+    no run is bound. Single source of truth for tagging direct ``create()`` sites
+    that don't go through :func:`execute_chat_completion`.
     """
     if not client_routes_through_orq(client):
-        return
+        return {}
     md = pipeline_metadata()
+    return {'metadata': md} if md else {}
+
+
+def _apply_pipeline_metadata(client: AsyncOpenAI, params: dict[str, Any]) -> None:
+    """Tag the invocation with the active run surface + run id via ``metadata``.
+
+    No-op off-Orq or when no run is bound. Caller-supplied metadata (via
+    ``extra_kwargs``) wins on key conflict.
+    """
+    md = run_metadata_kwarg(client).get('metadata')
     if md:
         params['metadata'] = {**md, **(params.get('metadata') or {})}
 
@@ -142,7 +152,7 @@ async def execute_chat_completion(
         params.update(extra_kwargs)
 
     _strip_known_rejected_reasoning(model, params)
-    apply_pipeline_metadata(client, params)
+    _apply_pipeline_metadata(client, params)
 
     record_llm_input(span, messages)
 
@@ -201,7 +211,7 @@ async def execute_chat_parse(
         params.update(extra_kwargs)
 
     _strip_known_rejected_reasoning(model, params)
-    apply_pipeline_metadata(client, params)
+    _apply_pipeline_metadata(client, params)
 
     record_llm_input(span, messages)
 
