@@ -16,6 +16,8 @@ from typing import Any, Protocol
 
 from loguru import logger
 
+from evaluatorq.common.llm_call import apply_pipeline_metadata
+
 
 class _ChatCompletions(Protocol):
     async def create(self, *args: Any, **kwargs: Any) -> Any: ...
@@ -120,6 +122,7 @@ async def generate_executive_summary(
             'extra_body': extra_body or {},
             **(extra_kwargs or {}),
         }
+        apply_pipeline_metadata(llm_client, merged_kwargs)
         response = await llm_client.chat.completions.create(  # pyright: ignore[reportCallIssue, reportArgumentType]
             model=model,
             messages=[  # pyright: ignore[reportArgumentType]
