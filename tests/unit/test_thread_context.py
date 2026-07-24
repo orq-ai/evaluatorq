@@ -11,6 +11,8 @@ from evaluatorq.common.thread_context import (
     conversation_thread,
     current_thread_id,
     evaluatorq_pipeline,
+    evaluatorq_run_id,
+    pipeline_metadata,
     pipeline_metadata_param,
     thread_body_param,
 )
@@ -71,6 +73,52 @@ def test_concurrent_tasks_are_isolated() -> None:
 
     seen = asyncio.run(main())
     assert seen == {f't{i}': f't{i}' for i in range(5)}
+
+
+def test_run_id_absent_when_unset() -> None:
+    assert 'evaluatorq_run_id' not in pipeline_metadata()
+    assert pipeline_metadata_param() == {} or 'evaluatorq_run_id' not in pipeline_metadata_param().get('metadata', {})
+
+
+def test_run_id_present_in_both_metadata_forms() -> None:
+    with evaluatorq_run_id('r1'):
+        assert pipeline_metadata()['evaluatorq_run_id'] == 'r1'
+        assert pipeline_metadata_param()['metadata']['evaluatorq_run_id'] == 'r1'
+    # restored after scope
+    assert 'evaluatorq_run_id' not in pipeline_metadata()
+
+
+def test_run_id_and_pipeline_label_travel_together() -> None:
+    with evaluatorq_pipeline('agent_simulation'), evaluatorq_run_id('r2'):
+        md = pipeline_metadata()
+        assert md['evaluatorq_pipeline'] == 'agent_simulation'
+        assert md['evaluatorq_run_id'] == 'r2'
+        assert pipeline_metadata_param()['metadata'] == md
+
+
+def test_run_id_resets_on_exception() -> None:
+    try:
+        with evaluatorq_run_id('r3'):
+            raise RuntimeError('boom')
+    except RuntimeError:
+        pass
+    assert 'evaluatorq_run_id' not in pipeline_metadata()
+
+
+def test_run_id_concurrent_tasks_are_isolated() -> None:
+    async def _run() -> set[str]:
+        seen: set[str] = set()
+
+        async def worker(rid: str) -> None:
+            with evaluatorq_run_id(rid):
+                await asyncio.sleep(0)
+                seen.add(pipeline_metadata()['evaluatorq_run_id'])
+
+        await asyncio.gather(worker('a'), worker('b'), worker('c'))
+        return seen
+
+    assert asyncio.run(_run()) == {'a', 'b', 'c'}
+    assert 'evaluatorq_run_id' not in pipeline_metadata()
 
 
 if __name__ == '__main__':
