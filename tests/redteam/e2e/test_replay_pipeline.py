@@ -323,3 +323,45 @@ async def test_hybrid_replay_against_a_bare_agent_target_keeps_the_static_leg(
 
     assert (replayed.summary.datapoint_breakdown or {}).get('static') == source_static
     assert _attack_ids(replayed) == _attack_ids(original)
+
+
+@pytest.mark.asyncio
+async def test_mixed_hybrid_run_counts_the_static_leg_once(
+    mock_llm_client: DeterministicAsyncOpenAI,
+    mock_backend_bundle: MockBackend,
+    static_dataset_path: Path,
+) -> None:
+    """Regression: a non-replay hybrid mixing a string target with an AgentTarget.
+
+    The AgentTarget branch used to append the whole static dataset on top of
+    shared datapoints that already carried the tagged static rows, doubling that
+    leg. The inflated list never reaches execution (the run uses the first
+    prepared target's datapoints), so it is pinned here at the per-target
+    breakdown, which is computed from each target's own list.
+    """
+    from .conftest import MockAgentTarget
+
+    client = cast(AsyncOpenAI, cast(object, mock_llm_client))
+    seen: list[list[str]] = []
+    real_breakdown = runner_mod._datapoint_breakdown
+
+    def _spy(datapoints):
+        seen.append([dp.inputs.get('id', '') for dp in datapoints])
+        return real_breakdown(datapoints)
+
+    with _patches(mock_backend_bundle), patch.object(runner_mod, '_datapoint_breakdown', _spy):
+        await red_team(
+            ['agent:e2e-test-agent', MockAgentTarget('direct-agent')],
+            mode='hybrid',
+            categories=['ASI01'],
+            generate_strategies=False,
+            parallelism=2,
+            llm_client=client,
+            dataset=str(static_dataset_path),
+            name='mixed-hybrid',
+        )
+
+    assert seen, 'per-target breakdown should have been computed'
+    for ids in seen:
+        assert len(ids) == len(set(ids)), f'datapoints duplicated for a target: {ids}'
+    assert len({len(ids) for ids in seen}) == 1, f'targets disagree on datapoint count: {[len(i) for i in seen]}'

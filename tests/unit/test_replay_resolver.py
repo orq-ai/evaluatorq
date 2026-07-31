@@ -130,3 +130,14 @@ def test_stale_manifest_does_not_mask_a_name_match(tmp_path: Path) -> None:
     survivor = _write_run(runs, 'abcdefaa1111')
 
     assert resolve_run_path('abcdefaa1111', runs, surface='red team') == survivor
+
+
+def test_ambiguous_run_name_takes_the_newest_and_says_so(tmp_path: Path, caplog) -> None:
+    """Names repeat by design, so ambiguity resolves rather than raising — loudly."""
+    runs = tmp_path / 'runs'
+    _write_run(runs, 'nightly_20260101_000000', mtime=1_000_000)
+    newest = _write_run(runs, 'nightly_20260202_000000', mtime=2_000_000)
+
+    with caplog.at_level('INFO'):
+        assert resolve_run_path('nightly', runs, surface='red team') == newest
+    assert any('matches 2 runs' in r.message for r in caplog.records)

@@ -12,9 +12,12 @@ Resolution order for a reference, first match wins:
 2. An existing file path (absolute or relative to the cwd).
 3. ``<runs_dir>/<reference>`` and ``<runs_dir>/<reference>.json``.
 4. A manifest ``run_id`` (exact, or an unambiguous prefix of at least 8 chars)
-   whose manifest records a ``report_path``.
+   whose manifest records a ``report_path``. An ambiguous id prefix is an error:
+   ids are opaque, so there is no sensible way to pick one.
 5. A report whose filename stem equals the reference, or whose stem starts with
    ``<reference>_`` (the ``<run-name>_<timestamp>`` convention) — newest wins.
+   Names are *expected* to repeat across runs, so ambiguity here resolves to the
+   most recent (logged) rather than raising.
 
 Anything else raises :class:`ReplayError` naming the runs dir and the most
 recent runs, so a typo is one line away from being fixed.
@@ -26,6 +29,8 @@ import json
 import operator
 from pathlib import Path
 from typing import Any
+
+from loguru import logger
 
 MIN_RUN_ID_PREFIX = 8
 """Shortest run-id prefix accepted for resolution (uuid4 hex is 32 chars)."""
@@ -71,11 +76,19 @@ def _resolve_via_manifest(reference: str, runs_dir: Path) -> Path | None:
 
 
 def _resolve_via_name(reference: str, runs_dir: Path) -> Path | None:
-    """Match *reference* against report filename stems, newest first."""
-    for p in _reports_newest_first(runs_dir):
-        if p.stem == reference or p.stem.startswith(f'{reference}_'):
-            return p
-    return None
+    """Match *reference* against report filename stems, newest first.
+
+    Newest-wins rather than raising on ambiguity (unlike run ids): a run *name*
+    is expected to repeat — ``--from-run nightly`` picking the latest nightly is
+    the point. When it is ambiguous the chosen file is logged, so the pick is
+    never silent even though it is not an error.
+    """
+    matches = [p for p in _reports_newest_first(runs_dir) if p.stem == reference or p.stem.startswith(f'{reference}_')]
+    if not matches:
+        return None
+    if len(matches) > 1:
+        logger.info(f'Run name {reference!r} matches {len(matches)} runs; using the most recent: {matches[0].name}')
+    return matches[0]
 
 
 def _not_found(reference: str, runs_dir: Path, surface: str) -> ReplayError:
