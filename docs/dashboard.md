@@ -101,6 +101,7 @@ directories:
 |---|---|
 | `.evaluatorq/runs/*.json` | `red_team()` / `eq redteam run` |
 | `.evaluatorq/sim-runs/*.json` | `eq sim run` (auto-saves unless `--no-save`); `simulate()` only when called with `save=True` |
+| `.evaluatorq/pairwise-runs/*.json` | `PairwiseRun.save()` (see [Pairwise Judging](pairwise-judging.md#saving-a-run-and-viewing-it-in-the-dashboard)) |
 
 Each report gets a stable URL for the lifetime of its file, so links you share
 keep working.
@@ -111,6 +112,7 @@ keep working.
 |---|---|---|
 | Red team | `"pipeline"` key present | `redteam/reports/export_html.py` |
 | Simulation | `"mode"` key present (`mode` wins over `pipeline`) | `simulation/reports/export_html.py` |
+| Pairwise | `"judging"` key present | `pairwise_reports/export_html.py` |
 
 Files that cannot be parsed (invalid JSON) are silently skipped.  Files that
 parse but fail model validation appear in the index as **broken cards** with an
@@ -208,6 +210,25 @@ conversation entry from the run to see the full multi-turn exchange between the
 simulated user and the target agent.
 
 ![The dashboard conversation transcript viewer, message by message.](assets/dashboard-transcript.png){ .dashboard-shot }
+
+### Pairwise comparison view
+
+Pairwise runs render three sections: the consensus win rate for each side, a
+per-judge table (win rates, tie rate, position bias), and the comparison list.
+
+![A pairwise run: consensus win rates per side, the per-judge table, and the comparison list.](assets/dashboard-pairwise.png){ .dashboard-shot }
+
+Each comparison row expands to the two responses side by side with every
+judge's vote and rationale.  Rows where the judges split, or where the panel
+could not decide, are marked; those are the ones worth opening.
+
+![Two expanded comparisons: a split panel and one the panel could not decide.](assets/dashboard-pairwise-comparison.png){ .dashboard-shot }
+
+The judge table flags a judge whose position bias reaches 0.15.  A judge that
+contradicts itself across the two orderings has no real preference, so its
+votes are noise.  A run saved with `swap=False` shows that column as `n/a`
+rather than `0.00`, since nothing was flippable and there was no measurement to
+make.
 
 ### Additional red team charts
 
