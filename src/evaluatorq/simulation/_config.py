@@ -56,6 +56,7 @@ class SimulationConfig(BaseModel):
     scenarios: list[Scenario] | None = None
     datapoints: list[SimulationDatapoint] | None = None
     dataset_id: str | None = None
+    previous_run: str | None = None
 
     # --- Run behaviour -----------------------------------------------------
     max_turns: int = 10

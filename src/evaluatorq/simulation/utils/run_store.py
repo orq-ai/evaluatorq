@@ -131,6 +131,7 @@ def build_simulation_run(
     agent_info: AgentInfoSnapshot | None = None,
     run_id: str | None = None,
     experiment_url: str | None = None,
+    datapoints: list[Any] | None = None,
 ) -> SimulationRun:
     # Record the Orq host only for Orq-served targets; plain callables / OpenAI
     # models don't touch Orq, so the field stays None (omitted) for them.
@@ -170,6 +171,7 @@ def build_simulation_run(
         total_results=len(results),
         scorer_averages=scorer_averages,
         results=results,
+        datapoints=list(datapoints) if datapoints else None,
     )
 
 

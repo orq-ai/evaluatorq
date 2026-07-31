@@ -145,6 +145,7 @@ async def simulate(
     scenarios: list[Scenario] | None = None,
     datapoints: list[SimulationDatapoint] | None = None,
     dataset_id: str | None = None,
+    previous_run: str | None = None,
     max_turns: int = 10,
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
@@ -194,6 +195,14 @@ async def simulate(
             ``datapoints``, ``personas``, ``scenarios``. Each dataset row's
             ``inputs`` must already match one of the simulation input shapes
             (``datapoint`` / ``persona`` + ``scenario`` / etc.).
+        previous_run: Replay a saved run instead of building new cases. Accepts
+            a run's file name, its run id (full or an unambiguous 8+ character
+            prefix), a path to a saved run JSON, or ``"latest"``, resolved
+            against ``.evaluatorq/sim-runs/``. The stored personas, scenarios,
+            and first messages are re-used verbatim — no generation, no dataset
+            fetch — so only the target and evaluators change between runs.
+            Mutually exclusive with ``datapoints``, ``dataset_id``, and
+            ``personas``/``scenarios``.
         upload_results: When ``True`` (the default) and ``ORQ_API_KEY`` is set,
             results are uploaded to the Orq platform as an experiment. Pass
             ``False`` to suppress the upload (e.g. for local-only runs).
@@ -232,6 +241,7 @@ async def simulate(
         scenarios=scenarios,
         datapoints=datapoints,
         dataset_id=dataset_id,
+        previous_run=previous_run,
         max_turns=max_turns,
         sim_model=sim_model,
         evaluator_names=evaluator_names,
@@ -259,6 +269,7 @@ async def _simulate_run(
     scenarios: list[Scenario] | None = None,
     datapoints: list[SimulationDatapoint] | None = None,
     dataset_id: str | None = None,
+    previous_run: str | None = None,
     max_turns: int = 10,
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
@@ -324,6 +335,7 @@ async def _simulate_run(
                     scenarios=scenarios,
                     datapoints=datapoints,
                     dataset_id=dataset_id,
+                    previous_run=previous_run,
                     max_turns=max_turns,
                     model=sim_model,
                     evaluator_names=evaluator_names,
@@ -507,6 +519,7 @@ async def _generate_datapoints_inner(
             personas=gen_personas,
             scenarios=gen_scenarios,
             dataset_id=None,
+            previous_run=None,
             model=model,
             generation_client=gen_client,
         )
@@ -1047,6 +1060,7 @@ async def _simulate_core(
         personas=config.personas,
         scenarios=config.scenarios,
         dataset_id=config.dataset_id,
+        previous_run=config.previous_run,
         model=model,
         generation_client=config.generation_client,
     )
@@ -1186,6 +1200,8 @@ async def _simulate_core(
             results=results,
             run_id=run_id,
             experiment_url=experiment_url_out[0] if experiment_url_out else None,
+            # Persist the cases themselves so this run can be replayed later.
+            datapoints=sim_datapoints,
         )
 
         # Generate the LLM narrative before persistence so a saved report carries
@@ -1338,24 +1354,35 @@ async def _resolve_or_generate_datapoints(
     personas: list[Persona] | None,
     scenarios: list[Scenario] | None,
     dataset_id: str | None,
+    previous_run: str | None,
     model: str,
     generation_client: AsyncOpenAI | None,
 ) -> list[SimulationDatapoint]:
     """Return ready-to-run Datapoints.
 
-    Resolution precedence: ``dataset_id`` -> ``datapoints`` -> persona x scenario
-    cartesian product (with first-message generation). The three sources are
-    mutually exclusive. ``caller`` names the public entry point so any
-    API-key error message points the user at the right function.
+    Resolution precedence: ``previous_run`` -> ``dataset_id`` -> ``datapoints``
+    -> persona x scenario cartesian product (with first-message generation). The
+    four sources are mutually exclusive. ``caller`` names the public entry point
+    so any API-key error message points the user at the right function.
     """
     sources = [
+        ('previous_run', previous_run is not None),
         ('dataset_id', dataset_id is not None),
         ('datapoints', datapoints is not None),
         ('personas/scenarios', personas is not None or scenarios is not None),
     ]
     chosen = [name for name, present in sources if present]
     if len(chosen) > 1:
-        raise ValueError(f'Pass exactly one of dataset_id, datapoints, or personas+scenarios; got: {", ".join(chosen)}')
+        raise ValueError(
+            f'Pass exactly one of previous_run, dataset_id, datapoints, or personas+scenarios; got: {", ".join(chosen)}'
+        )
+
+    if previous_run is not None:
+        from evaluatorq.simulation.replay import load_simulation_replay
+
+        replayed = load_simulation_replay(previous_run)
+        logger.info(f'Replaying {len(replayed)} datapoints from previous run {previous_run!r}.')
+        return replayed
 
     if dataset_id is not None:
         api_key = _require_orq_api_key(caller)
@@ -1367,7 +1394,9 @@ async def _resolve_or_generate_datapoints(
         return datapoints
 
     if personas is None or scenarios is None:
-        raise ValueError("Either provide 'dataset_id', 'datapoints', or both 'personas' and 'scenarios'")
+        raise ValueError(
+            "Either provide 'previous_run', 'dataset_id', 'datapoints', or both 'personas' and 'scenarios'"
+        )
     if not personas or not scenarios:
         raise ValueError("'personas' and 'scenarios' arrays must both be non-empty")
 

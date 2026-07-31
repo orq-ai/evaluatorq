@@ -403,6 +403,11 @@ class SimulationRun(BaseModel):
     total_results: int
     scorer_averages: dict[str, float]
     results: list[SimulationResult]
+    datapoints: list[SimulationDatapoint] | None = None
+    """The exact cases this run simulated, stored so the run can be replayed
+    verbatim (``previous_run=`` / ``--from-run``). Results alone don't carry
+    enough — they keep persona/scenario *names*, not the objects. None for runs
+    saved before this field existed, which therefore cannot be replayed."""
     executive_summary: str | None = None
     run_id: str | None = None
     """Client-minted run-grouping id (uuid hex, not an Orq-side run id) shared by every
