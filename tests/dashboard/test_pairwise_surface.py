@@ -186,6 +186,17 @@ def test_consensus_reports_the_decided_count_not_the_total(run: PairwiseRun) -> 
     assert consensus.data['decided'] == 2
 
 
+def test_decided_count_is_exact_when_the_rates_do_not_divide_evenly() -> None:
+    """Counted from the entries, so thirds cannot round the caption off by one."""
+    r = new_run(run_name='thirds', judges=JUDGES)
+    r.add(_comparison(['A', 'A', 'A'], 'A'), question='q1', response_a='a', response_b='b')
+    r.add(_comparison(['A', 'B', 'tie'], 'tie'), question='q2', response_a='a', response_b='b')
+    r.add(_comparison([None, None, None], 'inconclusive'), question='q3', response_a='a', response_b='b')
+    consensus = build_report_sections(r)[0]
+    assert consensus.data['comparisons'] == 3
+    assert consensus.data['decided'] == 1
+
+
 def test_split_and_inconclusive_comparisons_are_marked(run: PairwiseRun) -> None:
     rows = build_report_sections(run)[2].data['rows']
     assert [r['split'] for r in rows] == [False, True, False, True]

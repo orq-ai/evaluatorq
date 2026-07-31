@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from evaluatorq.contracts import ReportSection
 
 if TYPE_CHECKING:
+    from evaluatorq.pairwise import PairwiseVote
     from evaluatorq.pairwise_run import PairwiseEntry, PairwiseRun
 
 # A judge that contradicts itself across orderings has no real preference, so
@@ -55,7 +56,12 @@ def _build_consensus_section(run: PairwiseRun) -> ReportSection:
     # Win rates are computed over decided comparisons only, so a mostly
     # inconclusive run can still post a strong-looking rate. Carry the decided
     # count through so the renderer can say so out loud.
-    decided = round(total * (1.0 - report.tie_rate - report.inconclusive_rate))
+    #
+    # Counted from the entries rather than reconstructed from the rates:
+    # ``PairwiseReport`` exposes no decided count, and inverting tie_rate +
+    # inconclusive_rate would make the caption depend on that float arithmetic
+    # round-tripping. Counting is exact by construction.
+    decided = sum(1 for e in run.entries if e.comparison.winner in ('A', 'B'))
     return ReportSection(
         kind='pairwise_consensus',
         title='Consensus',
@@ -102,6 +108,32 @@ def _build_judges_section(run: PairwiseRun) -> ReportSection:
     )
 
 
+def _vote_cell(vote: PairwiseVote | None, model: str, run: PairwiseRun) -> dict[str, Any]:
+    """One judge's cell for a comparison row.
+
+    ``vote`` is None when this judge cast nothing for this comparison, which is
+    distinct from casting an abstention; both render as "abstained" but only the
+    latter carries an explanation.
+    """
+    if vote is None:
+        return {
+            'model': model,
+            'vote': None,
+            'label': 'abstained',
+            'flipped': False,
+            'explanation': '',
+            'present': False,
+        }
+    return {
+        'model': model,
+        'vote': vote.vote,
+        'label': vote_label(vote.vote, run),
+        'flipped': bool(vote.flipped),
+        'explanation': vote.explanation,
+        'present': True,
+    }
+
+
 def _build_comparisons_section(run: PairwiseRun) -> ReportSection:
     # Fixed judge column order across every row, so a split panel reads as a
     # ragged column while scanning rather than something you have to diff.
@@ -122,17 +154,7 @@ def _build_comparisons_section(run: PairwiseRun) -> ReportSection:
             'winner': entry.comparison.winner,
             'winner_label': winner_label(entry.comparison.winner, run),
             'split': _is_split(entry),
-            'votes': [
-                {
-                    'model': model,
-                    'vote': (v.vote if (v := votes.get(model)) else None),
-                    'label': vote_label(votes[model].vote, run) if model in votes else 'abstained',
-                    'flipped': bool(votes[model].flipped) if model in votes else False,
-                    'explanation': votes[model].explanation if model in votes else '',
-                    'present': model in votes,
-                }
-                for model in order
-            ],
+            'votes': [_vote_cell(votes.get(model), model, run) for model in order],
         })
 
     return ReportSection(
