@@ -70,7 +70,7 @@ def test_register_makes_custom_known_and_resolvable_as_string() -> None:
     assert reg.is_known_delivery_method('honeypot')
     # Registered customs stay strings (open set): no enum member exists for them.
     assert reg.resolve_delivery_method('honeypot') == 'honeypot'
-    assert 'honeypot' in {str(m) for m in reg.list_available_delivery_methods()}
+    assert 'honeypot' in {reg.delivery_method_str(m) for m in reg.list_available_delivery_methods()}
 
 
 def test_register_existing_enum_value_is_noop() -> None:
@@ -85,7 +85,7 @@ def test_register_empty_raises() -> None:
 
 def test_list_available_includes_enum_and_customs() -> None:
     reg.register_delivery_method('honeypot')
-    values = {str(m) for m in reg.list_available_delivery_methods()}
+    values = {reg.delivery_method_str(m) for m in reg.list_available_delivery_methods()}
     assert 'crescendo' in values  # enum
     assert 'honeypot' in values  # custom
     assert len(reg.list_available_delivery_methods()) == len(DeliveryMethod) + 1
@@ -140,3 +140,51 @@ def test_contract_boundary_coerces_registered_custom_to_string() -> None:
     # it validates as "known" (no warning) while remaining open-set.
     assert dp.delivery_method == 'honeypot'
     assert reg.is_known_delivery_method(dp.delivery_method)
+
+
+# ---------------------------------------------------------------------------
+# delivery_method_str: version-independent value stringification
+# ---------------------------------------------------------------------------
+
+
+def test_delivery_method_str_returns_value_for_member() -> None:
+    # str(member) is the repr on the 3.10 StrEnum polyfill; delivery_method_str
+    # must always return the value so display/keying is version-independent.
+    assert reg.delivery_method_str(DeliveryMethod.DAN) == 'DAN'
+    assert reg.delivery_method_str(DeliveryMethod.CRESCENDO) == 'crescendo'
+
+
+def test_delivery_method_str_passes_strings_through() -> None:
+    assert reg.delivery_method_str('my-custom') == 'my-custom'
+
+
+# ---------------------------------------------------------------------------
+# _check_filter_results diagnostics use canonical values (regression: the seam
+# removal must not report a matched method as unmatched, nor leak enum reprs)
+# ---------------------------------------------------------------------------
+
+
+def test_check_filter_results_matched_enum_method_no_unmatched_warning(caplog) -> None:
+    import logging
+
+    from evaluatorq.redteam.runner import _check_filter_results
+    from evaluatorq.types import DataPoint
+
+    # A datapoint whose static delivery_method matches the requested member.
+    dp = DataPoint(inputs={'delivery_method': 'DAN', 'category': 'ASI01'})
+    with caplog.at_level(logging.WARNING):
+        _check_filter_results([dp], None, {DeliveryMethod.DAN}, names_apply=False)
+    assert 'Unmatched delivery method' not in caplog.text
+
+
+def test_check_filter_results_empty_run_error_reports_values_not_reprs() -> None:
+    from evaluatorq.redteam.exceptions import RedTeamError
+    from evaluatorq.redteam.runner import _check_filter_results
+
+    with pytest.raises(RedTeamError) as exc:
+        _check_filter_results([], None, {DeliveryMethod.DAN, 'custom'}, names_apply=False)
+    text = str(exc.value)
+    assert 'DAN' in text
+    assert 'custom' in text
+    # never the enum repr, which the 3.10 polyfill would produce via str()
+    assert 'DeliveryMethod.DAN' not in text

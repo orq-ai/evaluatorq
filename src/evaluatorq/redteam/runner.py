@@ -65,7 +65,7 @@ from evaluatorq.redteam.contracts import (
     normalize_category,
     parse_target,
 )
-from evaluatorq.redteam.delivery_method_registry import resolve_delivery_methods
+from evaluatorq.redteam.delivery_method_registry import delivery_method_str, resolve_delivery_methods
 from evaluatorq.redteam.exceptions import CancelledError, CredentialError, RedTeamError
 from evaluatorq.redteam.hooks import (
     CompositePipelineHooks,
@@ -1202,9 +1202,10 @@ def _check_filter_results(
         if unmatched:
             logger.warning(f'Unmatched strategy name(s): {unmatched} — no datapoints matched.')
     if delivery_methods is not None:
-        # DeliveryMethod is a StrEnum, so str(m) is its value — clean for both
-        # the set difference against the string matched set and the display.
-        unmatched_methods = sorted({str(m) for m in delivery_methods} - matched_methods)
+        # Compare on canonical value strings: matched_methods holds raw dataset
+        # strings, and a DeliveryMethod member does NOT stringify to its value on
+        # the 3.10 StrEnum polyfill — delivery_method_str is version-independent.
+        unmatched_methods = sorted({delivery_method_str(m) for m in delivery_methods} - matched_methods)
         if unmatched_methods:
             msg = f'Unmatched delivery method(s): {unmatched_methods} — no datapoints use them.'
             # When some methods DID match, name what's actually present so a
@@ -1217,7 +1218,7 @@ def _check_filter_results(
 
     if not datapoints:
         names_repr = sorted(strategy_names) if strategy_names else None
-        methods_repr = sorted(str(m) for m in delivery_methods) if delivery_methods else None
+        methods_repr = sorted(delivery_method_str(m) for m in delivery_methods) if delivery_methods else None
         msg = (
             'Filter selection produced zero datapoints — nothing to run. '
             f'(strategies={names_repr}, delivery_methods={methods_repr})'

@@ -418,6 +418,7 @@ def run(
     resolved_delivery_methods: list[DeliveryMethod | str] | None = None
     if delivery_tokens:
         from evaluatorq.redteam.delivery_method_registry import (
+            delivery_method_str,
             is_known_delivery_method,
             list_available_delivery_methods,
             resolve_delivery_methods,
@@ -425,7 +426,9 @@ def run(
 
         unknown = [d for d in delivery_tokens if not is_known_delivery_method(d)]
         if unknown:
-            known_repr = sorted(str(m) for m in list_available_delivery_methods())
+            # delivery_method_str, not str(): a member's str() is its repr on the
+            # 3.10 StrEnum polyfill, which would print unusable 'DeliveryMethod.X'.
+            known_repr = sorted(delivery_method_str(m) for m in list_available_delivery_methods())
             typer.echo(
                 f'Warning: delivery method(s) {unknown} are not known delivery methods {known_repr}; '
                 'filtering by them literally (they will only match a dataset row spelled exactly the same).',

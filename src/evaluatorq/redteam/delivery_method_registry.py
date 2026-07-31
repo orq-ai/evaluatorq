@@ -25,6 +25,12 @@ mode, each chosen for its own contract.
 
 No fuzzy normalization: a value equals a known method exactly, or it is unknown
 (RES-295 non-goal, unchanged).
+
+Registry lifecycle: registrations are **process-global and idempotent** — a
+custom method registered by one call is known to every later call in the same
+process, by design (that is what a registry is for). It is never persisted to
+disk, so a fresh process starts with only the enum. Tests that register a custom
+method should reset ``_CUSTOM_DELIVERY_METHODS`` between cases to stay isolated.
 """
 
 from __future__ import annotations
@@ -33,12 +39,25 @@ from evaluatorq.redteam.contracts import DeliveryMethod
 
 __all__ = [
     'DELIVERY_METHOD_CATEGORY',
+    'delivery_method_str',
     'is_known_delivery_method',
     'list_available_delivery_methods',
     'register_delivery_method',
     'resolve_delivery_method',
     'resolve_delivery_methods',
 ]
+
+
+def delivery_method_str(value: DeliveryMethod | str) -> str:
+    """Canonical string for a delivery method — the value, version-independently.
+
+    ``str(DeliveryMethod.DAN)`` returns ``'DAN'`` on native 3.11+ ``StrEnum`` but
+    the ``'DeliveryMethod.DAN'`` repr on the 3.10 ``StrEnum`` polyfill (which has
+    no ``__str__`` override). So never call ``str()`` on a member for display or
+    string-keying — use this. Filtering is unaffected (a member compares/hashes
+    equal to its value on every version); only string rendering diverges.
+    """
+    return value.value if isinstance(value, DeliveryMethod) else value
 
 
 # Technique family for each canonical method (the groupings the enum documents).
@@ -121,7 +140,7 @@ def resolve_delivery_methods(values: list[DeliveryMethod | str]) -> list[Deliver
     result: list[DeliveryMethod | str] = []
     for value in values:
         resolved = resolve_delivery_method(value)
-        key = str(resolved)
+        key = delivery_method_str(resolved)
         if key not in seen:
             seen.add(key)
             result.append(resolved)
