@@ -161,6 +161,52 @@ async def test_fetch_raises_when_no_runs(patch_client):
 
 
 @pytest.mark.asyncio
+async def test_fetch_retries_until_export_url_ready(patch_client, monkeypatch):
+    """Right after a run finishes the export endpoint answers without a signed
+    URL for a few seconds; the fetcher must poll instead of failing."""
+    import evaluatorq.fetch_data as fetch_data_mod
+
+    monkeypatch.setattr(fetch_data_mod, "_EXPORT_URL_RETRY_SECONDS", 0.0)
+    rows = [{"inputs": "{}", "task_output": "ok"}]
+    export_calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/export"):
+            export_calls["n"] += 1
+            if export_calls["n"] < 3:
+                return httpx.Response(200, json={})  # not ready yet
+            return httpx.Response(302, headers={"location": SIGNED_URL})
+        if str(request.url) == SIGNED_URL:
+            return httpx.Response(200, text=_jsonl(rows))
+        return httpx.Response(404, text=f"unexpected {request.url}")
+
+    patch_client(httpx.MockTransport(handler))
+
+    datapoints = await fetch_experiment_datapoints("key", SHEET, "run1")
+
+    assert export_calls["n"] == 3
+    assert len(datapoints) == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_raises_when_export_url_never_ready(patch_client, monkeypatch):
+    import evaluatorq.fetch_data as fetch_data_mod
+
+    monkeypatch.setattr(fetch_data_mod, "_EXPORT_URL_RETRY_SECONDS", 0.0)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/export"):
+            return httpx.Response(200, json={})
+        return httpx.Response(404, text=f"unexpected {request.url}")
+
+    patch_client(httpx.MockTransport(handler))
+
+    with pytest.raises(ValueError, match="did not return a download URL"):
+        await fetch_experiment_datapoints("key", SHEET, "run1")
+
+
+@pytest.mark.asyncio
 async def test_fetch_raises_when_export_empty(patch_client):
     manifests = [{"_id": "run1", "created": "2026-01-01T00:00:00Z"}]
     patch_client(_mock_transport(manifests, []))

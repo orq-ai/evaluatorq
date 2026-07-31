@@ -1,5 +1,6 @@
 """Fetch data from Orq platform."""
 
+import asyncio
 import contextlib
 import json
 import os
@@ -155,6 +156,12 @@ async def fetch_dataset_as_datapoints(
     return all_datapoints
 
 
+# The export URL is not ready the instant a run finishes: the platform returns a
+# success response without a signed URL for a few seconds before the 302 appears.
+_EXPORT_URL_ATTEMPTS = 5
+_EXPORT_URL_RETRY_SECONDS = 2.0
+
+
 def _resolve_orq_base_url(base_url: str | None) -> str:
     return (base_url or os.getenv('ORQ_BASE_URL', ORQ_DEFAULT_HOST)).rstrip('/')
 
@@ -265,24 +272,37 @@ async def fetch_experiment_datapoints(
                 experiment_id,
             )
 
-        export_resp = await client.post(
-            f'{base}/v2/spreadsheets/{experiment_id}/manifests/{resolved_run_id}/export',
-            headers=headers,
-            json={'format': 'jsonl'},
-        )
         export_url: str | None = None
-        if export_resp.is_redirect:
-            export_url = export_resp.headers.get('location')
-        elif export_resp.is_success:
-            with contextlib.suppress(json.JSONDecodeError):
-                body = export_resp.json()
-                if isinstance(body, dict):
-                    export_url = body.get('url') or body.get('redirectUrl') or body.get('signedUrl')
-        else:
-            _raise_for_experiment(export_resp, experiment_id, 'export run')
+        for attempt in range(1, _EXPORT_URL_ATTEMPTS + 1):
+            if attempt > 1:
+                await asyncio.sleep(_EXPORT_URL_RETRY_SECONDS)
+            export_resp = await client.post(
+                f'{base}/v2/spreadsheets/{experiment_id}/manifests/{resolved_run_id}/export',
+                headers=headers,
+                json={'format': 'jsonl'},
+            )
+            if export_resp.is_redirect:
+                export_url = export_resp.headers.get('location')
+            elif export_resp.is_success:
+                with contextlib.suppress(json.JSONDecodeError):
+                    body = export_resp.json()
+                    if isinstance(body, dict):
+                        export_url = body.get('url') or body.get('redirectUrl') or body.get('signedUrl')
+            else:
+                _raise_for_experiment(export_resp, experiment_id, 'export run')
+            if export_url:
+                break
+            logger.debug(
+                'Export of run {} (experiment {}) has no download URL yet (attempt {}/{}).',
+                resolved_run_id,
+                experiment_id,
+                attempt,
+                _EXPORT_URL_ATTEMPTS,
+            )
         if not export_url:
             raise ValueError(
-                f"Export of run '{resolved_run_id}' (experiment '{experiment_id}') did not return a download URL."
+                f"Export of run '{resolved_run_id}' (experiment '{experiment_id}') did not return "
+                f'a download URL after {_EXPORT_URL_ATTEMPTS} attempts.'
             )
 
         # The signed URL carries its own auth; sending the Orq bearer token would be
