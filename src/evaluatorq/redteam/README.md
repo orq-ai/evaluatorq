@@ -90,7 +90,7 @@ a fixed set of attacks for reproducible regression (`static` mode);
 | Local dataset file (`dataset="<path>"`, JSON/JSONL) | ✅ | — |
 | Orq dataset (`dataset="orq:<dataset_id>"`) | ✅ | — |
 | Agent capability context (tools, memory, knowledge bases, system prompt) | — | ✅ |
-| Previous run (`previous_run="<id>"` / `--from-run`) | ✅ | — |
+| Previous run (`previous_run="<id>"` / `--from-run`) | ✅ | ⚠️ manual (re-select a `generated_*` strategy by name via `--strategy`) |
 
 Legend: ✅ built-in · ⚠️ possible but manual · ❌ not supported yet.
 
@@ -111,12 +111,14 @@ eq redteam run --target agent:my-agent-v2 --from-run latest
 report = await red_team(target='agent:my-agent-v2', previous_run='latest')
 ```
 
-`--from-run` accepts `latest`, a run file name, a run id (or an unambiguous 8+
-character prefix), or a path to a saved run JSON — the same handles
-`eq redteam runs` prints. The stored attacks are replayed verbatim: no strategy
-planning, no attack generation, no dataset load, and the original pipeline mode
-is restored. That makes version-to-version regression on an identical case bank
-a single command; only the target and the model configuration change.
+`--from-run` accepts `latest`, the run name or file name `eq redteam runs`
+prints, a run id (or an unambiguous 8+ character prefix), or a path to a saved
+run JSON. The stored attacks are replayed verbatim: no strategy planning, no
+attack generation, no dataset load. The original pipeline mode, turn budget, and
+attacker instructions are restored too, since the datapoints alone don't pin
+those down — pass `--max-turns` / `attacker_instructions=` explicitly to
+override. That makes version-to-version regression on an identical case bank a
+single command; the target and the model configuration are what you vary.
 
 Because it fixes the data, `previous_run` cannot be combined with `mode`,
 `dataset`, `categories`, `vulnerabilities`, `strategies`, `delivery_methods`, or

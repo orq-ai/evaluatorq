@@ -119,3 +119,14 @@ def test_load_run_payload_rejects_malformed_json(tmp_path: Path) -> None:
 
     with pytest.raises(ReplayError, match='not valid JSON'):
         load_run_payload('broken', runs, surface='red team')
+
+
+def test_stale_manifest_does_not_mask_a_name_match(tmp_path: Path) -> None:
+    """A manifest pointing at a deleted report must not suppress the fallback."""
+    runs = tmp_path / 'runs'
+    gone = _write_run(runs, 'abcdefaa1111_gone')
+    start_manifest(run_id='abcdefaa1111', surface='redteam', run_name='gone', runs_dir=runs).complete(report_path=gone)
+    gone.unlink()
+    survivor = _write_run(runs, 'abcdefaa1111')
+
+    assert resolve_run_path('abcdefaa1111', runs, surface='red team') == survivor

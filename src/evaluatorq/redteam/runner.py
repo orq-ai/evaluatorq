@@ -74,6 +74,7 @@ from evaluatorq.redteam.hooks import (
     PipelineHooks,
 )
 from evaluatorq.redteam.replay import DATAPOINTS_KEY as REPLAY_DATAPOINTS_KEY
+from evaluatorq.redteam.replay import RUN_CONFIG_KEY as REPLAY_RUN_CONFIG_KEY
 from evaluatorq.redteam.replay import RedTeamReplay, load_redteam_replay
 from evaluatorq.redteam.reports.recommendations import generate_focus_area_recommendations
 from evaluatorq.redteam.runtime.jobs import _build_messages, _sanitize_job_name, create_model_job
@@ -124,6 +125,12 @@ def _save_report(output_dir: Path | None, filename: str, report: RedTeamReport) 
     logger.debug(f'Saved {filename} to {output_dir}')
 
 
+DEFAULT_MAX_TURNS = 5
+"""Turn budget when the caller names none. ``max_turns`` defaults to ``None``
+rather than to this value so a replay can tell "unset" from "explicitly 5" and
+restore the replayed run's budget only in the former case."""
+
+
 def get_runs_dir() -> Path:
     """Return the red team runs directory (``<store>/runs``)."""
     return get_store_dir('runs')
@@ -133,13 +140,15 @@ def _auto_save_run(
     report: RedTeamReport,
     name: str | None = None,
     datapoints: list[dict[str, Any]] | None = None,
+    run_config: dict[str, Any] | None = None,
 ) -> Path | None:
     """Persist a report to ``.evaluatorq/runs/`` for later listing via ``runs`` CLI.
 
-    ``datapoints`` are the raw ``DataPoint.inputs`` the run executed. They are
-    stored alongside the report (not part of the report model) so the run can
-    later be replayed verbatim via ``previous_run=`` — see
-    :mod:`evaluatorq.redteam.replay`.
+    ``datapoints`` are the raw ``DataPoint.inputs`` the run executed, and
+    ``run_config`` the execution knobs they don't encode (turn budget, attacker
+    steering). Both are stored alongside the report (not part of the report
+    model) so the run can later be replayed verbatim via ``previous_run=`` —
+    see :mod:`evaluatorq.redteam.replay`.
     """
     try:
         runs_dir = get_runs_dir()
@@ -153,6 +162,7 @@ def _auto_save_run(
         data['saved_at'] = datetime.now(tz=timezone.utc).isoformat()
         if datapoints:
             data[REPLAY_DATAPOINTS_KEY] = datapoints
+            data[REPLAY_RUN_CONFIG_KEY] = run_config or {}
         path.write_text(json.dumps(data, indent=2, default=str), encoding='utf-8')
         logger.debug(f'Auto-saved run to {path}')
         return path
@@ -373,7 +383,7 @@ async def red_team(
     vulnerabilities: list[str] | None = None,
     strategies: list[str] | None = None,
     delivery_methods: list[DeliveryMethod | str] | None = None,
-    max_turns: int = 5,
+    max_turns: int | None = None,
     max_per_category: int | None = None,
     parallelism: int = 10,
     generate_strategies: bool = True,
@@ -427,7 +437,9 @@ async def red_team(
             disables the filter. When a supplied filter leaves zero datapoints to
             run, ``red_team`` raises :class:`RedTeamError` rather than silently
             running nothing.
-        max_turns: Maximum conversation turns for multi-turn attacks.
+        max_turns: Maximum conversation turns for multi-turn attacks. Defaults
+            to 5, or — when replaying via ``previous_run`` — to the turn budget
+            the replayed run used. An explicit value always wins.
         max_per_category: Cap strategies per category (None = no cap).
         llm_config: Role-based LLM configuration. Use ``LLMConfig(attacker=LLMCallConfig(...),
             evaluator=LLMCallConfig(...))`` to control model, temperature, and other
@@ -545,9 +557,18 @@ async def red_team(
             raise ValueError(msg)
         replay = load_redteam_replay(previous_run, get_runs_dir())
         mode = replay.pipeline
+        # Restore the knobs the datapoints don't encode. An explicit argument
+        # still wins — replaying at a different turn budget is a legitimate ask,
+        # silently changing it behind the user's back is not.
+        if max_turns is None:
+            max_turns = replay.max_turns
+        if attacker_instructions is None:
+            attacker_instructions = replay.attacker_instructions
         logger.info(
             f'Replaying {len(replay.datapoints)} datapoints from {replay.path.name} ({replay.pipeline.value} pipeline).'
         )
+
+    resolved_max_turns = max_turns if max_turns is not None else DEFAULT_MAX_TURNS
 
     user_output_dir = Path(artifacts_dir) if artifacts_dir is not None else None
     # Inner pipelines (_run_dynamic, _run_static) only write 01/02/03 to their
@@ -770,7 +791,7 @@ async def red_team(
         'orq.redteam.targets': ', '.join(all_target_labels),
         'orq.redteam.mode': resolved_mode,
         'orq.redteam.backend': backend_label,
-        'orq.redteam.max_turns': max_turns,
+        'orq.redteam.max_turns': resolved_max_turns,
         'orq.redteam.parallelism': parallelism,
     }
 
@@ -791,7 +812,7 @@ async def red_team(
                     name=name,
                     categories=resolved_categories,
                     resolved_vulns=resolved_vulns,
-                    max_turns=max_turns,
+                    max_turns=resolved_max_turns,
                     max_per_category=max_per_category,
                     attack_model=attack_model,
                     evaluator_model=evaluator_model,
@@ -814,6 +835,7 @@ async def red_team(
                     resolved_delivery_methods=resolved_delivery_methods,
                     run_id=tracing_context.run_id,
                     replay_datapoints=replay.datapoints if replay is not None else None,
+                    replay_of=replay.path.name if replay is not None else None,
                 )
                 report, metrics = _coerce_run_result(run_result)
             elif resolved_mode == Pipeline.STATIC:
@@ -836,6 +858,7 @@ async def red_team(
                     resolved_delivery_methods=resolved_delivery_methods,
                     run_id=tracing_context.run_id,
                     prefetched_data=replay.datapoints if replay is not None else None,
+                    replay_of=replay.path.name if replay is not None else None,
                 )
                 report, metrics = _coerce_run_result(run_result)
             else:
@@ -934,7 +957,15 @@ async def red_team(
 
             # Index in .evaluatorq/runs/ so the run appears in `evaluatorq redteam runs`.
             if save != 'none':
-                run_path = _auto_save_run(report, name=name, datapoints=metrics.datapoint_inputs)
+                run_path = _auto_save_run(
+                    report,
+                    name=name,
+                    datapoints=metrics.datapoint_inputs,
+                    run_config={
+                        'max_turns': resolved_max_turns,
+                        'attacker_instructions': attacker_instructions,
+                    },
+                )
                 if auto_save_path is None:
                     auto_save_path = run_path
                 if run_path is None:
@@ -1618,6 +1649,7 @@ async def _run_dynamic_or_hybrid(
     resolved_delivery_methods: set[DeliveryMethod | str] | None = None,
     run_id: str | None = None,
     replay_datapoints: list[DataPoint] | None = None,
+    replay_of: str | None = None,
 ) -> tuple[RedTeamReport, RedTeamRunMetrics]:
     """Run dynamic or hybrid red teaming for multiple targets in a single evaluatorq call.
 
@@ -1637,8 +1669,9 @@ async def _run_dynamic_or_hybrid(
         replay_datapoints: Pre-built datapoints from a prior run. When supplied,
             every target reuses them: capability classification, strategy
             planning, attack generation, and the static dataset load are all
-            skipped, and the confirm prompt describes the replay instead of an
-            estimate.
+            skipped.
+        replay_of: Name of the run being replayed, surfaced in the confirm
+            prompt so a replay is not mistaken for a fresh run.
     """
     from evaluatorq import evaluatorq
     from evaluatorq.redteam.reports.converters import (
@@ -1958,6 +1991,7 @@ async def _run_dynamic_or_hybrid(
         'target': ', '.join(all_target_labels),
         'dataset_path': str(dataset) if dataset else None,
         'vulnerabilities': [v.value for v in resolved_vulns] if resolved_vulns else None,
+        'replay_of': replay_of,
     }
 
     if not await await_maybe(resolved_hooks.on_confirm(confirm_payload)):
@@ -2680,6 +2714,7 @@ async def _run_static(
     resolved_delivery_methods: set[DeliveryMethod | str] | None = None,
     run_id: str | None = None,
     prefetched_data: list[DataPoint] | None = None,
+    replay_of: str | None = None,
 ) -> tuple[RedTeamReport, RedTeamRunMetrics]:
     """Run static red teaming for multiple targets in a single ``evaluatorq()`` call.
 
@@ -2689,7 +2724,8 @@ async def _run_static(
     then merged into one unified ``RedTeamReport``.
 
     ``prefetched_data`` replaces the dataset load with a caller-supplied
-    datapoint list (the replay path).
+    datapoint list (the replay path), and ``replay_of`` names the run it came
+    from for the confirm prompt.
     """
     from evaluatorq import evaluatorq
     from evaluatorq.redteam.reports.converters import (
@@ -2817,6 +2853,7 @@ async def _run_static(
         'target': ', '.join(all_target_labels),
         'dataset_path': str(dataset) if dataset else None,
         'vulnerabilities': vulnerabilities,
+        'replay_of': replay_of,
     }
     if not await await_maybe(resolved_hooks.on_confirm(confirm_payload)):
         msg = 'Execution cancelled by confirmation callback'

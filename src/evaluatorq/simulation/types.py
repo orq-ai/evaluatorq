@@ -15,6 +15,11 @@ from evaluatorq.contracts import Message, ResponseTrace, StrEnum, TokenUsage
 
 DEFAULT_MODEL = 'openai/gpt-5.4-mini'
 
+DEFAULT_MAX_TURNS = 10
+"""Turn cap when the caller names none. The public ``max_turns`` defaults to
+``None`` rather than to this value so a replay can tell "unset" from
+"explicitly 10" and restore the replayed run's cap only in the former case."""
+
 
 class AgentInfoSnapshot(TypedDict, total=False):
     """Best-effort snapshot of an ORQ agent's configuration, as fetched by

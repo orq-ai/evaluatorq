@@ -85,7 +85,7 @@ def test_run_without_stored_datapoints_cannot_be_replayed(tmp_path: Path) -> Non
     runs = tmp_path / 'runs'
     _save_run(runs, 'legacy_20260101_000000', {'pipeline': 'dynamic', 'results': []})
 
-    with pytest.raises(ReplayError, match='stores no datapoints'):
+    with pytest.raises(ReplayError, match='records no red team datapoints'):
         load_redteam_replay('latest', runs)
 
 
@@ -153,3 +153,65 @@ async def test_previous_run_reports_an_unresolvable_reference(tmp_path: Path, mo
 
     with pytest.raises(ReplayError, match='Could not resolve previous red team run'):
         await red_team(target='agent:demo', previous_run='nope')
+
+
+def test_run_config_is_persisted_and_restored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """max_turns / attacker_instructions aren't in the datapoints, so they're stored."""
+    from evaluatorq.redteam import runner as runner_mod
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path / '.evaluatorq'))
+
+    path = runner_mod._auto_save_run(
+        _minimal_report(),
+        name='rt',
+        datapoints=[DYNAMIC_INPUTS],
+        run_config={'max_turns': 9, 'attacker_instructions': 'financial agent'},
+    )
+    assert path is not None
+
+    replay = load_redteam_replay('latest', runner_mod.get_runs_dir())
+    assert replay.max_turns == 9
+    assert replay.attacker_instructions == 'financial agent'
+
+
+def test_run_config_absent_leaves_the_defaults_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runs = tmp_path / 'runs'
+    _save_run(runs, 'rt_20260101_000000', {'pipeline': 'dynamic', 'datapoints': [DYNAMIC_INPUTS]})
+
+    replay = load_redteam_replay('latest', runs)
+    assert replay.max_turns is None
+    assert replay.attacker_instructions is None
+
+
+def test_a_simulation_run_is_rejected_with_a_pointer_to_the_right_command(tmp_path: Path) -> None:
+    runs = tmp_path / 'runs'
+    _save_run(
+        runs,
+        'sim_20260101_000000',
+        {
+            'run_name': 'sim',
+            'mode': 'simulate',
+            'datapoints': [{'id': 'dp', 'persona': {'name': 'p'}, 'scenario': {'name': 's', 'goal': 'g'}}],
+        },
+    )
+
+    with pytest.raises(ReplayError, match='eq sim simulate --from-run'):
+        load_redteam_replay('latest', runs)
+
+
+def test_datapoint_without_strategy_or_messages_is_rejected(tmp_path: Path) -> None:
+    """A row that can't drive an attack fails up front, not per-row mid-run."""
+    runs = tmp_path / 'runs'
+    _save_run(runs, 'rt_20260101_000000', {'pipeline': 'dynamic', 'datapoints': [{'id': 'x', 'category': 'ASI01'}]})
+
+    with pytest.raises(ReplayError, match="neither a 'strategy'"):
+        load_redteam_replay('latest', runs)
+
+
+def test_detail_summary_report_is_rejected_without_blaming_the_version(tmp_path: Path) -> None:
+    """`--save detail` writes 03_summary_report.json, which never carries datapoints."""
+    runs = tmp_path / 'artifacts'
+    _save_run(runs, '03_summary_report', {'pipeline': 'dynamic', 'results': []})
+
+    with pytest.raises(ReplayError, match='--save detail summary report'):
+        load_redteam_replay(str(runs / '03_summary_report.json'), tmp_path / 'runs')

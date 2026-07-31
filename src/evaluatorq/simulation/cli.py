@@ -527,9 +527,13 @@ def simulate(
         ),
     ] = DEFAULT_MODEL,
     max_turns: Annotated[
-        int,
-        typer.Option('--max-turns', min=1, help='Maximum conversation turns.'),
-    ] = 10,
+        int | None,
+        typer.Option(
+            '--max-turns',
+            min=1,
+            help="Maximum conversation turns. Defaults to 10, or to the replayed run's cap with --from-run.",
+        ),
+    ] = None,
     parallelism: Annotated[
         int,
         typer.Option('--parallelism', min=1, help='Concurrent simulations.'),
@@ -708,7 +712,7 @@ async def _simulate_impl(
     previous_run: str | None = None,
     target: Any,
     sim_model: str,
-    max_turns: int,
+    max_turns: int | None,
     parallelism: int,
     evaluator_names: list[str] | None,
     evaluation_name: str,

@@ -62,7 +62,7 @@ def test_from_run_resolves_a_saved_run_by_name(tmp_path: Path, monkeypatch) -> N
     runs_dir = get_runs_dir()
     runs_dir.mkdir(parents=True, exist_ok=True)
     (runs_dir / 'nightly_20260101_000000.json').write_text(
-        json.dumps({'run_name': 'nightly', 'pipeline': 'dynamic', 'datapoints': [{'id': 'a', 'category': 'ASI01'}]}),
+        json.dumps({'run_name': 'nightly', 'pipeline': 'dynamic', 'datapoints': [{'id': 'a', 'category': 'ASI01', 'strategy': {'name': 's'}}]}),
         encoding='utf-8',
     )
 

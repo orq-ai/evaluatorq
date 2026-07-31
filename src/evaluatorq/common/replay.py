@@ -117,9 +117,12 @@ def resolve_run_path(reference: str, runs_dir: Path, *, surface: str) -> Path:
         if candidate.is_file():
             return candidate
 
-    resolved = _resolve_via_manifest(ref, runs_dir) or _resolve_via_name(ref, runs_dir)
-    if resolved is not None and resolved.is_file():
-        return resolved
+    # A manifest can outlive the report it points at (deleted, moved). Check the
+    # file exists before accepting it, or a stale manifest would mask a perfectly
+    # good name match and report the run as unresolvable.
+    for resolved in (_resolve_via_manifest(ref, runs_dir), _resolve_via_name(ref, runs_dir)):
+        if resolved is not None and resolved.is_file():
+            return resolved
 
     raise _not_found(ref, runs_dir, surface)
 

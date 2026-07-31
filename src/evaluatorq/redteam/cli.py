@@ -261,9 +261,14 @@ def run(
         ),
     ] = None,
     max_turns: Annotated[
-        int,
-        typer.Option(help='Maximum conversation turns for multi-turn attacks.'),
-    ] = 5,
+        int | None,
+        typer.Option(
+            help=(
+                'Maximum conversation turns for multi-turn attacks. '
+                "Defaults to 5, or to the replayed run's turn budget with --from-run."
+            )
+        ),
+    ] = None,
     max_per_category: Annotated[
         int | None,
         typer.Option(help='Cap strategies per category.'),

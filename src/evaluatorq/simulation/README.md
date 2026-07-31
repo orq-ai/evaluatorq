@@ -107,7 +107,7 @@ personas/scenarios (extends the dataset).
 | Inline `personas` + `scenarios` | ✅ | — (they *are* the new cases) |
 | JSONL datapoints (`--datapoints` / `load_datapoints_from_jsonl()`) | ✅ | ⚠️ manual (hand-pick seeds) |
 | Orq dataset (`dataset_id=`) | ✅ | ⚠️ manual |
-| Previous run (`previous_run="<id>"` / `--from-run`) | ✅ | ⚠️ manual |
+| Previous run (`previous_run="<id>"` / `--from-run`, or export to JSONL via `eq sim generate --datapoints`) | ✅ | ⚠️ manual |
 | Orq experiment | ❌ no importer | ⚠️ manual (read run rows → seed phrases) |
 | Production traces | ❌ no importer | ⚠️ manual (read traces → seed phrases) |
 
@@ -129,13 +129,14 @@ eq sim simulate --from-run latest --target agent:my-agent-v2
 results = await simulate(target='agent:my-agent-v2', previous_run='latest')
 ```
 
-`--from-run` accepts `latest`, a run file name, a run id (or an unambiguous 8+
-character prefix), or a path to a saved run JSON, resolved against
-`.evaluatorq/sim-runs/`. The stored personas, scenarios, and first messages are
-re-used exactly — no persona/scenario generation, no first-message generation,
-no dataset fetch — so the only thing that changes between runs is the target and
-the evaluators. Runs saved before this shipped carry no datapoints and are
-rejected with an explanatory error.
+`--from-run` accepts `latest`, the run name or file name `eq sim runs` prints, a
+run id (or an unambiguous 8+ character prefix), or a path to a saved run JSON,
+resolved against `.evaluatorq/sim-runs/`. The stored personas, scenarios, and
+first messages are re-used exactly — no persona/scenario generation, no
+first-message generation, no dataset fetch — and the run's turn cap is restored
+unless you pass `--max-turns`. What you vary between runs is the target and the
+evaluators. Runs saved before this shipped carry no datapoints and are rejected
+with an explanatory error.
 
 No built-in trace-to-persona extractor yet: turning raw traces (or previous
 runs) into seed phrases for `generate_personas()` / `generate_scenarios()` is a

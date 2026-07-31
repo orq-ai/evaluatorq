@@ -16,6 +16,7 @@ from evaluatorq.simulation.types import (
     Persona,
     Scenario,
     SimulationDatapoint,
+    StartingEmotion,
 )
 from evaluatorq.simulation.utils.run_store import auto_save_run, build_simulation_run, get_sim_runs_dir
 
@@ -37,7 +38,7 @@ def _datapoint(name: str = 'dp-1') -> SimulationDatapoint:
         name='Refund chase',
         goal='Get the refund released today',
         context='Third contact about the same order.',
-        starting_emotion='frustrated',
+        starting_emotion=StartingEmotion.frustrated,
         criteria=[Criterion(description='Agent states a refund date', type='must_happen')],
     )
     return SimulationDatapoint(
@@ -64,8 +65,8 @@ def test_saved_run_carries_its_datapoints(tmp_path: Path) -> None:
     stored = json.loads(path.read_text(encoding='utf-8'))
     assert stored['datapoints'][0]['id'] == 'dp-1'
 
-    [replayed] = load_simulation_replay('latest', get_sim_runs_dir())
-    assert replayed == dp
+    replayed = load_simulation_replay('latest', get_sim_runs_dir())
+    assert replayed.datapoints == [dp]
 
 
 def test_replay_resolves_by_run_name(tmp_path: Path) -> None:
@@ -80,7 +81,7 @@ def test_replay_resolves_by_run_name(tmp_path: Path) -> None:
     auto_save_run(run=run, run_name='nightly')
 
     replayed = load_simulation_replay('nightly', get_sim_runs_dir())
-    assert [dp.id for dp in replayed] == ['dp-a', 'dp-b']
+    assert [dp.id for dp in replayed.datapoints] == ['dp-a', 'dp-b']
 
 
 def test_run_saved_without_datapoints_cannot_be_replayed(tmp_path: Path) -> None:
@@ -93,7 +94,7 @@ def test_run_saved_without_datapoints_cannot_be_replayed(tmp_path: Path) -> None
     )
     auto_save_run(run=run, run_name='legacy')
 
-    with pytest.raises(ReplayError, match='stores no datapoints'):
+    with pytest.raises(ReplayError, match='records no simulation datapoints'):
         load_simulation_replay('latest', get_sim_runs_dir())
 
 
