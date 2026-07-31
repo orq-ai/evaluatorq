@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
@@ -17,7 +18,16 @@ runner = CliRunner()
 
 
 def _output(result) -> str:
-    return result.output + (result.stderr or '')
+    """Combined stdout+stderr, unwrapped.
+
+    Typer renders usage errors through rich, which hard-wraps them into a box
+    at the terminal width — so a substring assertion passes on a wide dev
+    terminal and fails on a narrow CI one. Strip ANSI and the box borders, then
+    collapse whitespace, so assertions are about the message not the viewport.
+    """
+    raw = result.output + (result.stderr or '')
+    plain = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', raw)
+    return re.sub(r'\s+', ' ', re.sub(r'[│╭╮╰╯─╷╵]', ' ', plain))
 
 
 def test_from_run_is_forwarded_as_previous_run(monkeypatch) -> None:
