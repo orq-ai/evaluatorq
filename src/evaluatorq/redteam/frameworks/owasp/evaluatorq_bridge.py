@@ -529,7 +529,9 @@ def _load_from_file(
     if delivery_methods:
         selected = set(delivery_methods)
         samples = [s for s in samples if s.input.delivery_method in selected]
-        logger.info(f'Filtered to delivery methods: {sorted(delivery_method_str(m) for m in selected)} ({len(samples)} samples)')
+        logger.info(
+            f'Filtered to delivery methods: {sorted(delivery_method_str(m) for m in selected)} ({len(samples)} samples)'
+        )
 
     num_samples = _normalize_num_samples(num_samples)
     if num_samples is not None:
@@ -566,7 +568,9 @@ def _apply_filters(
     if delivery_methods:
         selected = set(delivery_methods)
         datapoints = [dp for dp in datapoints if dp.inputs.get('delivery_method') in selected]
-        logger.info(f'Filtered to delivery methods: {sorted(delivery_method_str(m) for m in selected)} ({len(datapoints)} samples)')
+        logger.info(
+            f'Filtered to delivery methods: {sorted(delivery_method_str(m) for m in selected)} ({len(datapoints)} samples)'
+        )
 
     num_samples = _normalize_num_samples(num_samples)
     if num_samples is not None:
