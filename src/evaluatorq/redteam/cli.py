@@ -410,21 +410,28 @@ def run(
                 f"Valid names: {sorted(known)} (or a 'generated_*' name from a prior run)."
             )
 
-    # Convert known delivery methods to the enum (parsed as plain strings to
-    # support comma-separated input, which typer's enum binding cannot do).
-    # Unknown values are an open set — kept as raw strings (so a dataset's custom
+    # Resolve delivery methods against the registry (enum plus registered), parsed
+    # as plain strings to support comma-separated input which typer's enum
+    # binding cannot do. Known values coerce to the DeliveryMethod object;
+    # unknown ones are an open set — kept as raw strings (so a dataset's custom
     # delivery method is still filterable) with a warning, not a hard error.
     resolved_delivery_methods: list[DeliveryMethod | str] | None = None
     if delivery_tokens:
-        valid = {m.value for m in DeliveryMethod}
-        unknown = [d for d in delivery_tokens if d not in valid]
+        from evaluatorq.redteam.delivery_method_registry import (
+            is_known_delivery_method,
+            list_available_delivery_methods,
+            resolve_delivery_methods,
+        )
+
+        unknown = [d for d in delivery_tokens if not is_known_delivery_method(d)]
         if unknown:
+            known_repr = sorted(str(m) for m in list_available_delivery_methods())
             typer.echo(
-                f'Warning: delivery method(s) {unknown} are not in DeliveryMethod {sorted(valid)}; '
+                f'Warning: delivery method(s) {unknown} are not known delivery methods {known_repr}; '
                 'filtering by them literally (they will only match a dataset row spelled exactly the same).',
                 err=True,
             )
-        resolved_delivery_methods = [DeliveryMethod(d) if d in valid else d for d in delivery_tokens]
+        resolved_delivery_methods = resolve_delivery_methods(list(delivery_tokens))
 
     target_config = TargetConfig(system_prompt=system_prompt) if system_prompt else None
     targets: list[str] | str = target if len(target) > 1 else target[0]

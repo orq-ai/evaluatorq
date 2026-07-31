@@ -65,6 +65,7 @@ from evaluatorq.redteam.contracts import (
     normalize_category,
     parse_target,
 )
+from evaluatorq.redteam.delivery_method_registry import resolve_delivery_methods
 from evaluatorq.redteam.exceptions import CancelledError, CredentialError, RedTeamError
 from evaluatorq.redteam.hooks import (
     CompositePipelineHooks,
@@ -568,8 +569,13 @@ async def red_team(
     # rejected at the CLI boundary; here we pass through verbatim and detect
     # empty/unmatched intersections post-filter from the actually-matched set.
     resolved_strategy_names: set[str] | None = set(strategies) if strategies is not None else None
+    # Resolve through the registry so known values (enum plus registered) become
+    # canonical DeliveryMethod objects and unknown ones stay raw strings. The
+    # objects then flow through the planner, loader filter, and reporting as-is —
+    # no enum→string→enum conversion (DeliveryMethod is a StrEnum, so a set of
+    # them matches the dataset's string delivery_method directly).
     resolved_delivery_methods: set[DeliveryMethod | str] | None = (
-        set(delivery_methods) if delivery_methods is not None else None
+        set(resolve_delivery_methods(list(delivery_methods))) if delivery_methods is not None else None
     )
 
     resolved_vulns: list[Vulnerability] | None
@@ -1148,20 +1154,6 @@ def _create_job_for_target(
 # ---------------------------------------------------------------------------
 
 
-def _delivery_method_values(delivery_methods: set[DeliveryMethod | str] | None) -> list[str] | None:
-    """Convert a delivery-method selection to plain strings for the dataset loader.
-
-    The selection is an open set: known methods are :class:`DeliveryMethod` enum
-    members, unknown ones are raw strings. Both become their string value for the
-    loader (which filters by exact string match). Static rows are filtered inside
-    ``load_owasp_agentic_dataset`` before its ``num_samples`` cap. ``None`` stays
-    ``None`` so the loader leaves the filter disabled.
-    """
-    if delivery_methods is None:
-        return None
-    return [m.value if isinstance(m, DeliveryMethod) else m for m in delivery_methods]
-
-
 def _check_filter_results(
     datapoints: list[DataPoint],
     strategy_names: set[str] | None,
@@ -1210,7 +1202,9 @@ def _check_filter_results(
         if unmatched:
             logger.warning(f'Unmatched strategy name(s): {unmatched} — no datapoints matched.')
     if delivery_methods is not None:
-        unmatched_methods = sorted(set(_delivery_method_values(delivery_methods) or []) - matched_methods)
+        # DeliveryMethod is a StrEnum, so str(m) is its value — clean for both
+        # the set difference against the string matched set and the display.
+        unmatched_methods = sorted({str(m) for m in delivery_methods} - matched_methods)
         if unmatched_methods:
             msg = f'Unmatched delivery method(s): {unmatched_methods} — no datapoints use them.'
             # When some methods DID match, name what's actually present so a
@@ -1223,7 +1217,7 @@ def _check_filter_results(
 
     if not datapoints:
         names_repr = sorted(strategy_names) if strategy_names else None
-        methods_repr = sorted(_delivery_method_values(delivery_methods) or []) if delivery_methods else None
+        methods_repr = sorted(str(m) for m in delivery_methods) if delivery_methods else None
         msg = (
             'Filter selection produced zero datapoints — nothing to run. '
             f'(strategies={names_repr}, delivery_methods={methods_repr})'
@@ -1420,7 +1414,7 @@ async def _prepare_target(
                     dataset=dataset,
                     num_samples=max_static_datapoints,
                     categories=categories,
-                    delivery_methods=_delivery_method_values(resolved_delivery_methods),
+                    delivery_methods=resolved_delivery_methods,
                 )
 
             # Tag with hybrid_source only (no target_tag — datapoints are shared)
@@ -1846,7 +1840,7 @@ async def _run_dynamic_or_hybrid(
             dataset=dataset,
             num_samples=max_static_datapoints,
             categories=categories,
-            delivery_methods=_delivery_method_values(resolved_delivery_methods),
+            delivery_methods=resolved_delivery_methods,
         )
         est_static = len(static_data)
 
@@ -2609,7 +2603,7 @@ async def _run_static(
         dataset=dataset,
         num_samples=max_static_datapoints,
         categories=categories,
-        delivery_methods=_delivery_method_values(resolved_delivery_methods),
+        delivery_methods=resolved_delivery_methods,
     )
 
     # Filter out datapoints whose category has no registered evaluator

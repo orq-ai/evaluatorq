@@ -20,6 +20,7 @@ from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
     PIPELINE_CONFIG,
+    DeliveryMethod,
     EvaluatorConfig,
     EvaluatorqEvaluatorConfig,
     LLMCallConfig,
@@ -32,7 +33,7 @@ from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_cat
 from evaluatorq.redteam.tracing import with_redteam_span
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Collection
 
     from openai import AsyncOpenAI
 
@@ -118,7 +119,7 @@ def load_owasp_agentic_dataset(
     dataset: str | Path | None = None,
     num_samples: int | None = None,
     categories: list[str] | None = None,
-    delivery_methods: list[str] | None = None,
+    delivery_methods: Collection[DeliveryMethod | str] | None = None,
 ) -> list[DataPoint]:
     """Load red team dataset from various sources.
 
@@ -406,7 +407,7 @@ def _fetch_from_huggingface(
     filename: str = DEFAULT_HF_FILENAME,
     num_samples: int | None = None,
     categories: list[str] | None = None,
-    delivery_methods: list[str] | None = None,
+    delivery_methods: Collection[DeliveryMethod | str] | None = None,
 ) -> list[DataPoint]:
     """Fetch red team samples from a HuggingFace dataset repository."""
     try:
@@ -502,7 +503,7 @@ def _load_from_file(
     path: str | Path,
     num_samples: int | None = None,
     categories: list[str] | None = None,
-    delivery_methods: list[str] | None = None,
+    delivery_methods: Collection[DeliveryMethod | str] | None = None,
 ) -> list[DataPoint]:
     """Load OWASP dataset from a local JSON file in ``{"samples": [...]}`` format."""
     path = Path(path)
@@ -527,7 +528,7 @@ def _load_from_file(
     if delivery_methods:
         selected = set(delivery_methods)
         samples = [s for s in samples if s.input.delivery_method in selected]
-        logger.info(f'Filtered to delivery methods: {sorted(selected)} ({len(samples)} samples)')
+        logger.info(f'Filtered to delivery methods: {sorted(str(m) for m in selected)} ({len(samples)} samples)')
 
     num_samples = _normalize_num_samples(num_samples)
     if num_samples is not None:
@@ -550,7 +551,7 @@ def _apply_filters(
     datapoints: list[DataPoint],
     num_samples: int | None = None,
     categories: list[str] | None = None,
-    delivery_methods: list[str] | None = None,
+    delivery_methods: Collection[DeliveryMethod | str] | None = None,
 ) -> list[DataPoint]:
     """Apply category, delivery-method, and sample-count filters to datapoints.
 
@@ -564,7 +565,7 @@ def _apply_filters(
     if delivery_methods:
         selected = set(delivery_methods)
         datapoints = [dp for dp in datapoints if dp.inputs.get('delivery_method') in selected]
-        logger.info(f'Filtered to delivery methods: {sorted(selected)} ({len(datapoints)} samples)')
+        logger.info(f'Filtered to delivery methods: {sorted(str(m) for m in selected)} ({len(datapoints)} samples)')
 
     num_samples = _normalize_num_samples(num_samples)
     if num_samples is not None:

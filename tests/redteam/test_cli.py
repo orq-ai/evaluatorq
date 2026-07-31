@@ -366,7 +366,7 @@ class TestDeliveryMethodFlag:
         )
         assert result.exit_code == 0, result.output
         assert mock_rt.call_args.kwargs["delivery_methods"] == ["not-a-real-method"]
-        assert "not in DeliveryMethod" in result.output
+        assert "not known delivery methods" in result.output
 
     def test_delivery_method_defaults_to_none_when_omitted(self):
         result, mock_rt = _run_with_mocked_red_team(
