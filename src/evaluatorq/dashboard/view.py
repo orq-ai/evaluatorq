@@ -1101,7 +1101,9 @@ def render_filter_form(
     from evaluatorq.dashboard.filters import FILTERS
 
     filter_def = FILTERS.get(surface)
-    if filter_def is None:
+    if filter_def is None or not filter_def.dimensions:
+        # A surface with no dimensions (pairwise) would otherwise render an
+        # empty rail titled "Filters" with nothing under it.
         return ''
 
     parts: list[str] = []

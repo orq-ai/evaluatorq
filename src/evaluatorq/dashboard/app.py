@@ -255,7 +255,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
             body_html = adapter.body(report_obj)
 
         opts = filter_def.options(report_obj)
-        total_results = len(report_obj.results)
+        total_results = len(filter_def.results(report_obj))
         form_html = render_filter_form(rid, surface or '', opts, {}, shown=total_results, total=total_results)
         body_with_filters = report_view_with_filters(rid, surface or '', body_html, form_html)
 
@@ -338,7 +338,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
             body_html = adapter.body_from_results(report_obj, filtered)
 
         form_html = render_filter_form(
-            rid, surface or '', new_opts, selections, shown=len(filtered), total=len(report_obj.results)
+            rid, surface or '', new_opts, selections, shown=len(filtered), total=len(filter_def.results(report_obj))
         )
         fragment_html = filter_fragment(rid, surface or '', body_html, form_html)
 

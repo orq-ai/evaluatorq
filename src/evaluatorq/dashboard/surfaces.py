@@ -164,9 +164,58 @@ def _sim_adapter() -> SurfaceAdapter:
     )
 
 
+def _pairwise_adapter() -> SurfaceAdapter:
+
+    from evaluatorq.pairwise_reports.export_html import export_html, render_report_body
+    from evaluatorq.pairwise_run import PairwiseEntry, PairwiseRun
+
+    def _pw_rows(run: PairwiseRun, filtered: list[PairwiseEntry]) -> list[dict[str, Any]]:
+        """One row per comparison: the question, the consensus winner under its
+        label, and each judge's vote as its own column (also label-resolved).
+        This is the shape a spreadsheet reading of a run wants."""
+        from evaluatorq.pairwise_reports.sections import vote_label, winner_label
+
+        rows: list[dict[str, Any]] = []
+        for index, entry in enumerate(filtered, start=1):
+            row: dict[str, Any] = {
+                '#': index,
+                'Question': entry.question,
+                'Winner': winner_label(entry.comparison.winner, run),
+            }
+            for vote in entry.comparison.votes:
+                row[vote.model] = vote_label(vote.vote, run)
+            rows.append(row)
+        return rows
+
+    def _pw_load(p: _Path) -> PairwiseRun:
+        from evaluatorq.dashboard.library import load_model_cached
+
+        return load_model_cached(p, PairwiseRun.model_validate)  # type: ignore[return-value]
+
+    def _with_entries(run: PairwiseRun, filtered: list[PairwiseEntry]) -> PairwiseRun:
+        """A copy carrying only *filtered* entries, with the rollup recomputed.
+
+        The stored report describes the full run, so it would misreport a
+        filtered view; dropping it makes ``rollup()`` recompute from what is
+        actually shown.
+        """
+        return run.model_copy(update={'entries': list(filtered), 'report': None})
+
+    return SurfaceAdapter(
+        load=_pw_load,
+        body=render_report_body,
+        export=export_html,
+        name=lambda run: run.run_name,
+        created_at=lambda run: run.created_at,
+        body_from_results=lambda run, filtered: render_report_body(_with_entries(run, filtered)),
+        rows=_pw_rows,
+    )
+
+
 ADAPTERS: dict[str, SurfaceAdapter] = {
     'redteam': _redteam_adapter(),
     'sim': _sim_adapter(),
+    'pairwise': _pairwise_adapter(),
 }
 
 # Human-readable labels for each surface key.  Single source of truth used by
@@ -174,4 +223,5 @@ ADAPTERS: dict[str, SurfaceAdapter] = {
 SURFACE_LABELS: dict[str, str] = {
     'redteam': 'Red Team',
     'sim': 'Simulation',
+    'pairwise': 'Pairwise',
 }

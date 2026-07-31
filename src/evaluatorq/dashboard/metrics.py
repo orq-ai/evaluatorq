@@ -61,6 +61,7 @@ class Landing:
     total_cost: float = 0.0  # summed cost_usd across both stores
     cost_by_kind: list[tuple[str, float]] = field(default_factory=list)  # non-zero only
     recent: list[RunRow] = field(default_factory=list)
+    pairwise_runs: int = 0
 
 
 def _as_float(v: object, default: float = 0.0) -> float:
@@ -145,6 +146,28 @@ def _sim_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
     )
 
 
+def _pairwise_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
+    """Score a pairwise run by mean inter-judge agreement.
+
+    The win rates say which side led, not whether the run was any good, and
+    neither side is "the score". Agreement is the run-quality number: a panel
+    that mostly agreed produced a verdict worth reading.
+    """
+    report = data.get('report')
+    report = report if isinstance(report, dict) else {}
+    agreement = report.get('mean_agreement')
+    return RunRow(
+        id=card.id,
+        surface='pairwise',
+        name=card.name,
+        when=card.created_at.strftime('%Y-%m-%d %H:%M'),
+        headline=card.headline,
+        score=_as_float(agreement) if agreement is not None else None,
+        status=_lifecycle_status(broken=bool(card.error)),
+        error=bool(card.error),
+    )
+
+
 def _card_status_row(card: library.ReportCard) -> RunRow:
     """Build a RunRow straight from a manifest-backed card (no report read).
 
@@ -173,7 +196,7 @@ def run_rows(roots: list[Path] | None = None) -> list[RunRow]:
     """Return one RunRow per discovered run, newest-first (manifest-first)."""
     rows: list[RunRow] = []
     for card in library.scan(roots):
-        if card.surface not in ('redteam', 'sim'):
+        if card.surface not in ('redteam', 'sim', 'pairwise'):
             continue
         # Derive list state from the manifest status, not ``path is None``: a
         # non-completed run (running/error/cancelled) — and a completed run whose
@@ -192,6 +215,8 @@ def run_rows(roots: list[Path] | None = None) -> list[RunRow]:
             rows.append(_redteam_row(card, data))
         elif card.surface == 'sim':
             rows.append(_sim_row(card, data))
+        elif card.surface == 'pairwise':
+            rows.append(_pairwise_row(card, data))
     return rows
 
 
@@ -200,6 +225,7 @@ def landing(roots: list[Path] | None = None) -> Landing:
     rows = run_rows(roots)
     redteam = [r for r in rows if r.surface == 'redteam']
     sim = [r for r in rows if r.surface == 'sim']
+    pairwise = [r for r in rows if r.surface == 'pairwise']
 
     # Roll up severity counts + token usage + resistant/vulnerable from raw JSON.
     severity_counts: dict[str, int] = {}
@@ -208,6 +234,8 @@ def landing(roots: list[Path] | None = None) -> Landing:
     sim_tokens = 0
     rt_cost = 0.0
     sim_cost = 0.0
+    pw_tokens = 0
+    pw_cost = 0.0
     resistant = 0
     vulnerable = 0
     for card in library.scan(roots):
@@ -239,11 +267,19 @@ def landing(roots: list[Path] | None = None) -> Landing:
             sim_tokens += tok
             total_tokens += tok
             sim_cost += sum(_cost_usd(res.get('token_usage')) for res in _results(data))
+        elif card.surface == 'pairwise':
+            usages = [_comparison_usage(entry) for entry in _entries(data)]
+            tok = sum(_tokens_total(u) for u in usages)
+            pw_tokens += tok
+            total_tokens += tok
+            pw_cost += sum(_cost_usd(u) for u in usages)
 
     severity = [(sev, severity_counts[sev]) for sev in SEVERITY_ORDER if severity_counts.get(sev)]
-    by_kind = [('Red team', len(redteam)), ('Agent sim', len(sim))]
-    tokens_by_kind = [(k, n) for k, n in (('Red team', rt_tokens), ('Agent sim', sim_tokens)) if n]
-    cost_by_kind = [(k, c) for k, c in (('Red team', rt_cost), ('Agent sim', sim_cost)) if c > 0]
+    by_kind = [('Red team', len(redteam)), ('Agent sim', len(sim)), ('Pairwise', len(pairwise))]
+    tokens_by_kind = [
+        (k, n) for k, n in (('Red team', rt_tokens), ('Agent sim', sim_tokens), ('Pairwise', pw_tokens)) if n
+    ]
+    cost_by_kind = [(k, c) for k, c in (('Red team', rt_cost), ('Agent sim', sim_cost), ('Pairwise', pw_cost)) if c > 0]
 
     # Attack-weighted resistance, so the headline stat agrees with the donut.
     # The per-run mean is misleading: runs with zero evaluated attacks default
@@ -262,10 +298,21 @@ def landing(roots: list[Path] | None = None) -> Landing:
         tokens_by_kind=tokens_by_kind,
         resistant=max(resistant, 0),
         vulnerable=max(vulnerable, 0),
-        total_cost=rt_cost + sim_cost,
+        total_cost=rt_cost + sim_cost + pw_cost,
         cost_by_kind=cost_by_kind,
         recent=rows[:5],
+        pairwise_runs=len(pairwise),
     )
+
+
+def _entries(data: dict[str, object]) -> list[dict[str, object]]:
+    entries = data.get('entries')
+    return [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
+
+
+def _comparison_usage(entry: dict[str, object]) -> object:
+    comparison = entry.get('comparison')
+    return comparison.get('token_usage') if isinstance(comparison, dict) else None
 
 
 def _results(data: dict[str, object]) -> list[dict[str, object]]:

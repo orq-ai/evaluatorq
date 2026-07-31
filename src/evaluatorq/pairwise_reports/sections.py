@@ -1,0 +1,156 @@
+"""Section builders for pairwise run reports.
+
+Renderer-agnostic: these produce :class:`~evaluatorq.contracts.ReportSection`
+objects holding plain data, which ``export_html`` dispatches on. Same split as
+``simulation.reports.sections`` / ``redteam.reports.sections``.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from evaluatorq.contracts import ReportSection
+
+if TYPE_CHECKING:
+    from evaluatorq.pairwise_run import PairwiseEntry, PairwiseRun
+
+# A judge that contradicts itself across orderings has no real preference, so
+# its votes are noise rather than signal. Flag at the point where that starts
+# to matter for reading the consensus.
+POSITION_BIAS_WARN = 0.15
+
+
+def vote_label(vote: str | None, run: PairwiseRun) -> str:
+    """Render a raw vote value using the run's side labels."""
+    if vote == 'A':
+        return run.label_a
+    if vote == 'B':
+        return run.label_b
+    if vote == 'tie':
+        return 'tie'
+    return 'abstained'
+
+
+def winner_label(winner: str, run: PairwiseRun) -> str:
+    if winner == 'inconclusive':
+        return 'inconclusive'
+    return vote_label(winner, run)
+
+
+def _is_split(entry: PairwiseEntry) -> bool:
+    """True when the panel did not speak with one voice on this comparison.
+
+    Either the judges landed on more than one decisive value, or the panel was
+    too degraded to decide at all. These are the rows worth opening.
+    """
+    if entry.comparison.winner == 'inconclusive':
+        return True
+    decisive = {v.vote for v in entry.comparison.votes if v.vote is not None}
+    return len(decisive) > 1
+
+
+def _build_consensus_section(run: PairwiseRun) -> ReportSection:
+    report = run.rollup()
+    total = report.comparisons
+    # Win rates are computed over decided comparisons only, so a mostly
+    # inconclusive run can still post a strong-looking rate. Carry the decided
+    # count through so the renderer can say so out loud.
+    decided = round(total * (1.0 - report.tie_rate - report.inconclusive_rate))
+    return ReportSection(
+        kind='pairwise_consensus',
+        title='Consensus',
+        data={
+            'label_a': run.label_a,
+            'label_b': run.label_b,
+            'a_win_rate': report.a_win_rate,
+            'b_win_rate': report.b_win_rate,
+            'tie_rate': report.tie_rate,
+            'inconclusive_rate': report.inconclusive_rate,
+            'mean_agreement': report.mean_agreement,
+            'comparisons': total,
+            'decided': decided,
+        },
+    )
+
+
+def _build_judges_section(run: PairwiseRun) -> ReportSection:
+    report = run.rollup()
+    replacements = {v.model for e in run.entries for v in e.comparison.votes if v.replacement}
+    rows: list[dict[str, Any]] = [
+        {
+            'model': stat.model,
+            'a_rate': stat.a_rate,
+            'b_rate': stat.b_rate,
+            'tie_rate': stat.tie_rate,
+            # Meaningless without a second ordering to disagree with: it is 0.0
+            # because nothing was flippable, not because the judge was steady.
+            'position_bias': stat.position_bias if run.swap else None,
+            'biased': run.swap and stat.position_bias >= POSITION_BIAS_WARN,
+            'replacement': stat.model in replacements,
+        }
+        for stat in report.per_judge
+    ]
+    return ReportSection(
+        kind='pairwise_judges',
+        title='Judges',
+        data={
+            'label_a': run.label_a,
+            'label_b': run.label_b,
+            'swap': run.swap,
+            'rows': rows,
+        },
+    )
+
+
+def _build_comparisons_section(run: PairwiseRun) -> ReportSection:
+    # Fixed judge column order across every row, so a split panel reads as a
+    # ragged column while scanning rather than something you have to diff.
+    order: list[str] = list(run.judges)
+    for entry in run.entries:
+        for vote in entry.comparison.votes:
+            if vote.model not in order:
+                order.append(vote.model)
+
+    rows: list[dict[str, Any]] = []
+    for index, entry in enumerate(run.entries, start=1):
+        votes = {v.model: v for v in entry.comparison.votes}
+        rows.append({
+            'index': index,
+            'question': entry.question,
+            'response_a': entry.response_a,
+            'response_b': entry.response_b,
+            'winner': entry.comparison.winner,
+            'winner_label': winner_label(entry.comparison.winner, run),
+            'split': _is_split(entry),
+            'votes': [
+                {
+                    'model': model,
+                    'vote': (v.vote if (v := votes.get(model)) else None),
+                    'label': vote_label(votes[model].vote, run) if model in votes else 'abstained',
+                    'flipped': bool(votes[model].flipped) if model in votes else False,
+                    'explanation': votes[model].explanation if model in votes else '',
+                    'present': model in votes,
+                }
+                for model in order
+            ],
+        })
+
+    return ReportSection(
+        kind='pairwise_comparisons',
+        title='Comparisons',
+        data={
+            'label_a': run.label_a,
+            'label_b': run.label_b,
+            'judges': order,
+            'rows': rows,
+        },
+    )
+
+
+def build_report_sections(run: PairwiseRun) -> list[ReportSection]:
+    """Build every section of a pairwise run report, in display order."""
+    return [
+        _build_consensus_section(run),
+        _build_judges_section(run),
+        _build_comparisons_section(run),
+    ]
