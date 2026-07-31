@@ -1,4 +1,4 @@
-"""Side-by-side comparison of two simulation runs (RES-1085).
+"""Side-by-side comparison of two simulation runs.
 
 The single-run sim views live in ``sim_views.py``; this module adds a compare
 surface on top of the same ``sim`` adapter/library. Nothing here touches the sim
@@ -13,7 +13,7 @@ Routes (registered by ``register_sim_compare_routes``):
     GET /compare/sim/transcript?a={ridA}&b={ridB}&ia={idxA}&ib={idxB}
         Side-by-side transcript fragment for one matched conversation pair.
 
-Conversations are matched by ``(persona, scenario)`` (the ticket's chosen key):
+Conversations are matched by ``(persona, scenario)``:
 runs that share a dataset line up; anything unmatched is listed separately (with a
 low-overlap warning) so a mismatched dataset is visible rather than silently dropped.
 
@@ -38,7 +38,7 @@ from evaluatorq.common.reports.palette import COLORS
 from evaluatorq.common.reports.vega import render_svg, vl_bar_h, vl_grouped_bar
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.sim_views import _entries_from_run, render_transcript_fragment
-from evaluatorq.dashboard.view import _panel
+from evaluatorq.dashboard.view import _panel, report_back_link
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -435,7 +435,9 @@ def render_compare_transcript(entry_a: SimulationEntry, entry_b: SimulationEntry
 
 
 def _hero(run_a: SimulationRun, run_b: SimulationRun, matching: Matching) -> str:
-    """Editorial header + a match summary line (with a low-overlap warning)."""
+    """Report hero (shared .report-hero classes) + a match summary line
+    (with a low-overlap warning). The back link lives in the topbar via
+    ``page(back_html=...)``, matching the single-run report pages."""
     date_a = run_a.created_at.strftime('%Y-%m-%d %H:%M')
     date_b = run_b.created_at.strftime('%Y-%m-%d %H:%M')
     n_matched, n_a, n_b = len(matching.matched), len(matching.a_only), len(matching.b_only)
@@ -448,12 +450,11 @@ def _hero(run_a: SimulationRun, run_b: SimulationRun, matching: Matching) -> str
         else ''
     )
     return (
-        '<div class="report-head"><a class="report-back" href="/?surface=sim">&larr; Agent sim runs</a></div>'
-        '<section class="cmp-hero">'
-        '<div class="cmp-kicker">Agent sim // run comparison</div>'
-        f'<h1 class="cmp-title">{esc(run_a.run_name)} <span class="cmp-vs">vs</span> {esc(run_b.run_name)}</h1>'
-        f'<p class="cmp-sub">A: {esc(run_a.run_name)} · {date_a} &nbsp;&nbsp; B: {esc(run_b.run_name)} · {date_b}</p>'
-        f'</section><p class="cmp-note">{summary}.{warn}</p>'
+        '<header class="report-hero">'
+        '<p class="report-hero-kicker">Agent Simulation · Run comparison</p>'
+        f'<h2 class="report-hero-title">{esc(run_a.run_name)} <span class="cmp-vs">vs</span> {esc(run_b.run_name)}</h2>'
+        f'<p class="report-hero-sub">A: {esc(run_a.run_name)} · {date_a} &nbsp;&nbsp; B: {esc(run_b.run_name)} · {date_b}</p>'
+        f'</header><p class="cmp-note">{summary}.{warn}</p>'
     )
 
 
@@ -526,8 +527,15 @@ def _resolve_run(rid: str, roots: list[Path] | None) -> tuple[str, Any | None]:
 
 
 def _error_page(message: str, status: int) -> Response:
-    body = f'<section class="cmp-hero"><h1 class="cmp-title">Run comparison</h1><p class="sim-empty">{esc(message)}</p></section>'
-    return Response(page('Compare', body, active_surface='sim'), status_code=status, media_type='text/html')
+    body = (
+        '<header class="report-hero"><h2 class="report-hero-title">Run comparison</h2></header>'
+        f'<p class="sim-empty">{esc(message)}</p>'
+    )
+    return Response(
+        page('Compare', body, active_surface='sim', back_html=report_back_link('sim')),
+        status_code=status,
+        media_type='text/html',
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -557,7 +565,9 @@ def register_sim_compare_routes(app: Any, roots: list[Path] | None = None) -> No
             return _error_page(f'Run {which} was not found or is not a simulation run.', 404)
 
         body = render_compare_page(rid_a, rid_b, run_a, run_b)
-        return Response(page('Compare', body, active_surface='sim'), media_type='text/html')
+        return Response(
+            page('Compare', body, active_surface='sim', back_html=report_back_link('sim')), media_type='text/html'
+        )
 
     @app.get('/compare/sim/transcript')
     def compare_sim_transcript(req: Request) -> Response:

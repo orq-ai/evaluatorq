@@ -1,4 +1,4 @@
-"""Side-by-side comparison of two sim runs (RES-1085).
+"""Side-by-side comparison of two sim runs.
 
 Covers the KPI delta math, (persona, scenario) matching incl. unmatched
 handling, the compare page + transcript routes, the graceful-error paths, and

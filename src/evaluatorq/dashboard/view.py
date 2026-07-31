@@ -438,9 +438,8 @@ def _sim_compare_bar(choices: list[tuple[str, str]]) -> str:
         )
 
     return (
-        '<form class="cmp-bar" action="/compare/sim" method="get"'
-        ' style="display:flex;gap:8px;align-items:center;margin:12px 0;flex-wrap:wrap">'
-        '<span class="cmp-bar-label" style="font-weight:600">Compare runs</span>'
+        '<form class="cmp-bar" action="/compare/sim" method="get">'
+        '<span class="cmp-bar-label">Compare runs</span>'
         f'<select name="a" aria-label="Run A">{_opts(0)}</select>'
         '<span class="cmp-bar-vs">vs</span>'
         f'<select name="b" aria-label="Run B">{_opts(1)}</select>'
@@ -454,7 +453,7 @@ def sim_overview_body(data: SimOverview, compare_choices: list[tuple[str, str]] 
     plus an item-level 'Recent simulations' table (RES-1022).
 
     ``compare_choices`` is the (rid, name) list of all sim runs used to populate
-    the side-by-side compare picker (RES-1085); ``None`` hides the picker.
+    the side-by-side compare picker; ``None`` hides the picker.
     """
     from evaluatorq.common.reports.html_helpers import kpi_cards, pct
 
