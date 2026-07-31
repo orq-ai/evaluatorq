@@ -69,6 +69,10 @@ if TYPE_CHECKING:
         SimulationCancelledError,
         SimulationError,
     )
+    from evaluatorq.simulation.experiments import (
+        datapoints_from_experiment,
+        extend_from_experiment,
+    )
     from evaluatorq.simulation.generators import (
         DatapointGenerator,
         FirstMessageGenerator,
@@ -182,6 +186,8 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
     'RichHooks': ('evaluatorq.simulation.hooks', 'RichHooks'),
     'SimulationRunMeta': ('evaluatorq.simulation.hooks', 'SimulationRunMeta'),
     'SimulationError': ('evaluatorq.simulation.exceptions', 'SimulationError'),
+    'datapoints_from_experiment': ('evaluatorq.simulation.experiments', 'datapoints_from_experiment'),
+    'extend_from_experiment': ('evaluatorq.simulation.experiments', 'extend_from_experiment'),
     'SimulationCancelledError': (
         'evaluatorq.simulation.exceptions',
         'SimulationCancelledError',
@@ -340,8 +346,11 @@ __all__ = [
     'apply_random_perturbation',
     'auto_save_run',
     'build_simulation_run',
+    # Experiments as input
+    'datapoints_from_experiment',
     'export_datapoints_to_jsonl',
     'export_results_to_jsonl',
+    'extend_from_experiment',
     # Adapters
     'from_chat_completions',
     'from_orq_deployment',

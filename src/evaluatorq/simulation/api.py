@@ -145,6 +145,8 @@ async def simulate(
     scenarios: list[Scenario] | None = None,
     datapoints: list[SimulationDatapoint] | None = None,
     dataset_id: str | None = None,
+    experiment_id: str | None = None,
+    experiment_run_id: str | None = None,
     max_turns: int = 10,
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
@@ -194,6 +196,15 @@ async def simulate(
             ``datapoints``, ``personas``, ``scenarios``. Each dataset row's
             ``inputs`` must already match one of the simulation input shapes
             (``datapoint`` / ``persona`` + ``scenario`` / etc.).
+        experiment_id: When set, fetch simulation datapoints from the named Orq
+            experiment's rows instead of taking them inline (direct mode of
+            "experiments as input"). Same mutual exclusivity and row-shape
+            rules as ``dataset_id``; rows uploaded by a previous simulation
+            run round-trip as-is. Requires ``ORQ_API_KEY``. To generate *new*
+            datapoints seeded by an experiment instead, see
+            :func:`evaluatorq.simulation.extend_from_experiment`.
+        experiment_run_id: A specific run (manifest) of ``experiment_id`` to
+            load. Latest run when omitted. Only valid with ``experiment_id``.
         upload_results: When ``True`` (the default) and ``ORQ_API_KEY`` is set,
             results are uploaded to the Orq platform as an experiment. Pass
             ``False`` to suppress the upload (e.g. for local-only runs).
@@ -232,6 +243,8 @@ async def simulate(
         scenarios=scenarios,
         datapoints=datapoints,
         dataset_id=dataset_id,
+        experiment_id=experiment_id,
+        experiment_run_id=experiment_run_id,
         max_turns=max_turns,
         sim_model=sim_model,
         evaluator_names=evaluator_names,
@@ -259,6 +272,8 @@ async def _simulate_run(
     scenarios: list[Scenario] | None = None,
     datapoints: list[SimulationDatapoint] | None = None,
     dataset_id: str | None = None,
+    experiment_id: str | None = None,
+    experiment_run_id: str | None = None,
     max_turns: int = 10,
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
@@ -324,6 +339,8 @@ async def _simulate_run(
                     scenarios=scenarios,
                     datapoints=datapoints,
                     dataset_id=dataset_id,
+                    experiment_id=experiment_id,
+                    experiment_run_id=experiment_run_id,
                     max_turns=max_turns,
                     model=sim_model,
                     evaluator_names=evaluator_names,
@@ -507,6 +524,8 @@ async def _generate_datapoints_inner(
             personas=gen_personas,
             scenarios=gen_scenarios,
             dataset_id=None,
+            experiment_id=None,
+            experiment_run_id=None,
             model=model,
             generation_client=gen_client,
         )
@@ -1047,6 +1066,8 @@ async def _simulate_core(
         personas=config.personas,
         scenarios=config.scenarios,
         dataset_id=config.dataset_id,
+        experiment_id=config.experiment_id,
+        experiment_run_id=config.experiment_run_id,
         model=model,
         generation_client=config.generation_client,
     )
@@ -1338,28 +1359,41 @@ async def _resolve_or_generate_datapoints(
     personas: list[Persona] | None,
     scenarios: list[Scenario] | None,
     dataset_id: str | None,
+    experiment_id: str | None,
+    experiment_run_id: str | None,
     model: str,
     generation_client: AsyncOpenAI | None,
 ) -> list[SimulationDatapoint]:
     """Return ready-to-run Datapoints.
 
-    Resolution precedence: ``dataset_id`` -> ``datapoints`` -> persona x scenario
-    cartesian product (with first-message generation). The three sources are
-    mutually exclusive. ``caller`` names the public entry point so any
-    API-key error message points the user at the right function.
+    Resolution precedence: ``dataset_id`` -> ``experiment_id`` -> ``datapoints``
+    -> persona x scenario cartesian product (with first-message generation).
+    The four sources are mutually exclusive. ``caller`` names the public entry
+    point so any API-key error message points the user at the right function.
     """
     sources = [
         ('dataset_id', dataset_id is not None),
+        ('experiment_id', experiment_id is not None),
         ('datapoints', datapoints is not None),
         ('personas/scenarios', personas is not None or scenarios is not None),
     ]
     chosen = [name for name, present in sources if present]
     if len(chosen) > 1:
-        raise ValueError(f'Pass exactly one of dataset_id, datapoints, or personas+scenarios; got: {", ".join(chosen)}')
+        raise ValueError(
+            f'Pass exactly one of dataset_id, experiment_id, datapoints, or personas+scenarios; got: {", ".join(chosen)}'
+        )
+    if experiment_run_id is not None and experiment_id is None:
+        raise ValueError("'experiment_run_id' requires 'experiment_id'")
 
     if dataset_id is not None:
         api_key = _require_orq_api_key(caller)
         return await _fetch_simulation_datapoints_from_orq(api_key, dataset_id)
+
+    if experiment_id is not None:
+        from evaluatorq.simulation.experiments import datapoints_from_experiment
+
+        api_key = _require_orq_api_key(caller)
+        return await datapoints_from_experiment(experiment_id, run_id=experiment_run_id, api_key=api_key)
 
     if datapoints is not None:
         if not datapoints:
@@ -1367,7 +1401,9 @@ async def _resolve_or_generate_datapoints(
         return datapoints
 
     if personas is None or scenarios is None:
-        raise ValueError("Either provide 'dataset_id', 'datapoints', or both 'personas' and 'scenarios'")
+        raise ValueError(
+            "Either provide 'dataset_id', 'experiment_id', 'datapoints', or both 'personas' and 'scenarios'"
+        )
     if not personas or not scenarios:
         raise ValueError("'personas' and 'scenarios' arrays must both be non-empty")
 
