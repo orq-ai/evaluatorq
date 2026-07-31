@@ -254,7 +254,12 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         # Tabbed body for the known surfaces (Streamlit-aligned); the interactive
         # panels live inside their tabs, so they are no longer appended separately.
         if surface == 'sim':
-            body_html = report_tabs.sim_report_tabs(rid, report_obj)
+            from evaluatorq.dashboard.view import sim_run_compare_control
+
+            # Same choice list as the overview picker (sim only, no error runs,
+            # capped); the control itself drops the current run from the options.
+            choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'sim' and not c.error][:100]
+            body_html = report_tabs.sim_report_tabs(rid, report_obj, compare_html=sim_run_compare_control(rid, choices))
         elif surface == 'redteam':
             body_html = report_tabs.redteam_report_tabs(rid, report_obj)
         else:

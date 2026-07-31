@@ -2285,7 +2285,11 @@ _RT_REPORT_CSS = """
 # theme tokens. Kept with the other dashboard CSS blocks rather than inlined
 # per-request in sim_compare.py.
 _SIM_COMPARE_CSS = """
-/* Compare picker bar on the sim run overview */
+/* Hero action row: trace-link button + the on-report compare control */
+.report-hero-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
+.report-hero-actions .cmp-bar { margin: 0; }
+
+/* Compare picker bar on the sim run overview and in the report hero */
 .cmp-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 2px 0 14px; }
 .cmp-bar-label { font-family: var(--font-mono); font-size: 11px; font-weight: 600;
   text-transform: uppercase; letter-spacing: .08em; color: var(--text-faint); }

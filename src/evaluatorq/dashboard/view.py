@@ -448,6 +448,23 @@ def _sim_compare_bar(choices: list[tuple[str, str]]) -> str:
     )
 
 
+def sim_run_compare_control(rid: str, choices: list[tuple[str, str]]) -> str:
+    """Render the on-report compare control: this run is A, pick B from the
+    other sim runs. Empty when there is no other run to compare against."""
+    others = [(r, name) for r, name in choices if r != rid]
+    if not others:
+        return ''
+    opts = ''.join(f'<option value="{esc(r)}">{esc(name)}</option>' for r, name in others)
+    return (
+        '<form class="cmp-bar" action="/compare/sim" method="get">'
+        f'<input type="hidden" name="a" value="{esc(rid)}">'
+        '<span class="cmp-bar-label">Compare with</span>'
+        f'<select name="b" aria-label="Run B">{opts}</select>'
+        '<button type="submit" class="btn-secondary">Compare</button>'
+        '</form>'
+    )
+
+
 def sim_overview_body(data: SimOverview, compare_choices: list[tuple[str, str]] | None = None) -> str:
     """Render the Agent Sim surface as the design's rich overview: 4 KPI cards
     plus an item-level 'Recent simulations' table (RES-1022).

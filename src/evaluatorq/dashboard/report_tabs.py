@@ -98,7 +98,7 @@ def _stable_entries(run: SimulationRun, rows: list[Any]) -> list[Any]:
     ]
 
 
-def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = None) -> str:
+def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = None, compare_html: str = '') -> str:
     """Render the Agent Sim report body as Streamlit-aligned tabs.
 
     Tabs: Overview · Breakdown · Transcripts · Turn quality · Config — each
@@ -106,7 +106,8 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
     quality drops when a run carries no ``turn_metrics``). Config folds job-level
     metadata (run configuration, personas, scenarios) plus the kept token_usage
     table. Pass ``results`` to render a filtered subset (the filter round-trip);
-    it defaults to the run's full result list.
+    it defaults to the run's full result list. ``compare_html`` is an optional
+    pre-rendered compare-with-another-run control shown in the hero actions.
     """
     from evaluatorq.dashboard.view import sim_interactive_panels
     from evaluatorq.simulation.reports.export_html import _SECTION_RENDERERS
@@ -133,7 +134,7 @@ def sim_report_tabs(rid: str, run: SimulationRun, results: list[Any] | None = No
     def render(*kinds: str) -> str:
         return _render_sections(by_kind, _SECTION_RENDERERS, kinds)
 
-    hero = _sim_hero(run)
+    hero = _sim_hero(run, compare_html)
 
     entries = _stable_entries(run, rows)
 
@@ -1436,12 +1437,13 @@ def _sim_outcomes_donut(rows: list[Any]) -> str:
     return f'<figure class="chart-card"><figcaption>Outcomes</figcaption>{inner}</figure>'
 
 
-def _sim_hero(run: SimulationRun) -> str:
+def _sim_hero(run: SimulationRun, compare_html: str = '') -> str:
     # KPI cards intentionally omitted: the same metrics render in the 5-card
     # band inside the Overview tab (_sim_kpi_band), so a hero band duplicated
     # them above the tabs. Hero is now just title + subtitle.
     run_btn = trace_link_button(run_trace_url(run.run_id, run.experiment_url), 'View all run traces ↗')
-    actions = f'<div class="report-hero-actions">{run_btn}</div>' if run_btn else ''
+    inner = run_btn + compare_html
+    actions = f'<div class="report-hero-actions">{inner}</div>' if inner else ''
     return (
         '<header class="report-hero">'
         '<p class="report-hero-kicker">Agent Simulation</p>'

@@ -273,3 +273,14 @@ def test_compare_bar_on_sim_overview(roots: list[Path]):
     html = resp.text
     assert 'action="/compare/sim"' in html
     assert 'name="a"' in html and 'name="b"' in html
+
+
+def test_compare_control_on_sim_report(roots: list[Path]):
+    """The run report hero carries a compare control: this run pinned as A
+    (hidden input), the other run selectable as B — never itself."""
+    client = TestClient(build_app(roots))
+    rid_a, rid_b = _rids(roots)
+    html = client.get(f'/r/{rid_a}').text
+    assert f'name="a" value="{rid_a}"' in html
+    assert f'<option value="{rid_b}"' in html
+    assert f'<option value="{rid_a}"' not in html
