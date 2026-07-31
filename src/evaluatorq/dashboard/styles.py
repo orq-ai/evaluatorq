@@ -2289,14 +2289,19 @@ _SIM_COMPARE_CSS = """
 .report-hero-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
 .report-hero-actions .cmp-bar { margin: 0; }
 
-/* Compare picker bar on the sim run overview and in the report hero */
+/* Compare picker bar on the sim run overview and in the report hero. Controls
+   mirror the filter-rail trigger look (12.5px sans, card surface, default
+   hairline, md radius) so the bar reads as part of the same control family. */
 .cmp-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 2px 0 14px; }
 .cmp-bar-label { font-family: var(--font-mono); font-size: 11px; font-weight: 600;
   text-transform: uppercase; letter-spacing: .08em; color: var(--text-faint); }
-.cmp-bar select { height: 32px; padding: 0 8px; max-width: 320px;
+.cmp-bar select { height: 32px; padding: 0 9px; max-width: 320px;
   border: 1px solid var(--border-default); border-radius: var(--radius-md);
   background: var(--surface-card); color: var(--text-body);
-  font-family: var(--font-sans); font-size: 13px; }
+  font-family: var(--font-sans); font-size: 12.5px; font-weight: 500; cursor: pointer; }
+.cmp-bar select:hover { background: var(--app-gray-50); }
+.cmp-bar select:focus-visible { outline: none; box-shadow: var(--ring); }
+.cmp-bar .btn-secondary { font-size: 12.5px; }
 .cmp-bar-vs { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
 
 .report-hero-title .cmp-vs { color: var(--orange-500); }
