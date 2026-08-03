@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
-from evaluatorq.dashboard import metrics
+from evaluatorq.dashboard import metrics, view
 from evaluatorq.dashboard.app import build_app
 
 
@@ -242,3 +242,50 @@ class TestReportHeader:
         assert 'Red team runs' in r.text
         # Topbar Export action points at the standalone HTML export.
         assert f'/r/{rid}/export.html' in r.text
+
+
+class TestAvgCost:
+    def test_costed_runs_counted(self, roots: list[Path]) -> None:
+        data = metrics.landing(roots)
+        # Only the redteam fixture records cost_usd; the sim results carry tokens only.
+        assert data.costed_runs == 1
+        assert data.total_cost == pytest.approx(0.0048)
+
+    def test_avg_cost_averages_over_costed_runs_only(self) -> None:
+        data = metrics.Landing(
+            total_runs=3,
+            redteam_runs=2,
+            sim_runs=1,
+            resistance_rate=None,
+            total_tokens=0,
+            by_kind=[('Red team', 2), ('Agent sim', 1)],
+            severity=[],
+            tokens_by_kind=[],
+            resistant=0,
+            vulnerable=0,
+            total_cost=0.30,
+            costed_runs=1,
+            cost_by_kind=[('Agent sim', 0.30)],
+        )
+        html = view.landing_body(data)
+        # $0.30 / 1 costed run, NOT $0.30 / 3 total runs ($0.1000).
+        assert '$0.3000' in html
+        assert '$0.1000' not in html
+
+    def test_avg_cost_na_when_nothing_records_cost(self) -> None:
+        data = metrics.Landing(
+            total_runs=2,
+            redteam_runs=2,
+            sim_runs=0,
+            resistance_rate=None,
+            total_tokens=0,
+            by_kind=[('Red team', 2)],
+            severity=[],
+            tokens_by_kind=[],
+            resistant=0,
+            vulnerable=0,
+            total_cost=0.0,
+            costed_runs=0,
+            cost_by_kind=[],
+        )
+        assert 'n/a' in view.landing_body(data)

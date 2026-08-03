@@ -204,11 +204,13 @@ def landing_body(data: Landing) -> str:
         )
 
     total_tokens = sum(n for _, n in data.tokens_by_kind)
-    avg_cost = data.total_cost / data.total_runs if data.total_runs else 0.0
+    # Average over runs that record a cost — dividing by all runs makes one
+    # costed run among many uncosted ones read as "everything is nearly free".
+    avg_cost = data.total_cost / data.costed_runs if data.costed_runs else None
     band = (
         '<div class="stat-band">'
         + _stat_tile('Jobs run', str(data.total_runs))
-        + _stat_tile('Avg cost / job', _fmt_cost(avg_cost))
+        + _stat_tile('Avg cost / job', _fmt_cost(avg_cost) if avg_cost is not None else 'n/a')
         + _stat_tile('Total spend', _fmt_cost(data.total_cost))
         + _stat_tile('Total tokens', _fmt_compact(total_tokens))
         + '</div>'

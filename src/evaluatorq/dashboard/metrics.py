@@ -59,6 +59,7 @@ class Landing:
     resistant: int  # attacks resisted (for the donut)
     vulnerable: int  # attacks that succeeded (for the donut)
     total_cost: float = 0.0  # summed cost_usd across both stores
+    costed_runs: int = 0  # runs that actually record a cost — avg cost divides by this
     cost_by_kind: list[tuple[str, float]] = field(default_factory=list)  # non-zero only
     recent: list[RunRow] = field(default_factory=list)
 
@@ -208,6 +209,7 @@ def landing(roots: list[Path] | None = None) -> Landing:
     sim_tokens = 0
     rt_cost = 0.0
     sim_cost = 0.0
+    costed_runs = 0
     resistant = 0
     vulnerable = 0
     for card in library.scan(roots):
@@ -226,7 +228,10 @@ def landing(roots: list[Path] | None = None) -> Landing:
                 tok = _tokens_total(summary.get('token_usage_total'))
                 rt_tokens += tok
                 total_tokens += tok
-                rt_cost += _cost_usd(summary.get('token_usage_total'))
+                run_cost = _cost_usd(summary.get('token_usage_total'))
+                rt_cost += run_cost
+                if run_cost > 0:
+                    costed_runs += 1
                 by_sev = summary.get('by_severity')
                 if isinstance(by_sev, dict):
                     for sev, entry in by_sev.items():
@@ -238,7 +243,10 @@ def landing(roots: list[Path] | None = None) -> Landing:
             tok = sum(_as_int(_result_tokens(res)) for res in _results(data))
             sim_tokens += tok
             total_tokens += tok
-            sim_cost += sum(_cost_usd(res.get('token_usage')) for res in _results(data))
+            run_cost = sum(_cost_usd(res.get('token_usage')) for res in _results(data))
+            sim_cost += run_cost
+            if run_cost > 0:
+                costed_runs += 1
 
     severity = [(sev, severity_counts[sev]) for sev in SEVERITY_ORDER if severity_counts.get(sev)]
     by_kind = [('Red team', len(redteam)), ('Agent sim', len(sim))]
@@ -263,6 +271,7 @@ def landing(roots: list[Path] | None = None) -> Landing:
         resistant=max(resistant, 0),
         vulnerable=max(vulnerable, 0),
         total_cost=rt_cost + sim_cost,
+        costed_runs=costed_runs,
         cost_by_kind=cost_by_kind,
         recent=rows[:5],
     )
