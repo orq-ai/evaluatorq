@@ -99,6 +99,10 @@ def _build_judges_section(run: PairwiseRun) -> ReportSection:
             'tie_rate': stat.tie_rate,
             'position_bias': stat.position_bias if (run.swap and measured[stat.model]) else None,
             'biased': run.swap and measured[stat.model] and stat.position_bias >= POSITION_BIAS_WARN,
+            # Carried so the renderer can tell the two unmeasurable cases apart:
+            # the run never swapped, or it swapped but this judge never landed
+            # both orderings of any pair.
+            'measured': measured[stat.model],
             'replacement': stat.model in replacements,
         }
         for stat in report.per_judge

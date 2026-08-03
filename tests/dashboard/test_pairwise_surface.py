@@ -440,3 +440,52 @@ def test_no_filter_rail_is_rendered_for_pairwise(client: tuple[TestClient, str])
     # the rail's markup and its POST wiring rather than the bare class name.
     assert 'class="filter-rail"' not in r.text
     assert 'hx-post' not in r.text
+
+
+def test_csv_export_neutralises_formula_injection(tmp_path: Path) -> None:
+    """A question starting with '=' must not execute when the CSV opens in Excel."""
+    r = new_run(run_name='injection', judges=JUDGES)
+    r.add(_comparison(['A', 'A', 'A'], 'A'), question='=cmd|/c calc', response_a='a', response_b='b')
+    runs_dir = tmp_path / 'pairwise-runs'
+    runs_dir.mkdir()
+    path = r.save(runs_dir / 'run.json')
+    c = TestClient(build_app(roots=[runs_dir]), raise_server_exceptions=True)
+
+    body = c.get(f'/r/{report_id(path)}/export.csv').text
+    assert "'=cmd|/c calc" in body
+    assert ',=cmd' not in body
+
+
+def test_csv_export_leaves_the_na_placeholder_alone() -> None:
+    """'-' and signed numbers are not formulas; quoting them would corrupt exports."""
+    from evaluatorq.dashboard.app import _csv_safe
+
+    assert _csv_safe('-') == '-'
+    assert _csv_safe('-1.5') == '-1.5'
+    assert _csv_safe('+7') == '+7'
+    assert _csv_safe('normal text') == 'normal text'
+    assert _csv_safe(3) == 3
+    assert _csv_safe('@SUM(A1)') == "'@SUM(A1)"
+
+
+def test_unmeasurable_bias_tooltip_names_the_right_cause() -> None:
+    """swap on but no completed pair reads differently from swap off."""
+    never_completed = PairwiseComparison(
+        winner='inconclusive',
+        votes=[
+            PairwiseVote(model=m, vote=None, flipped=False, completed=False, replacement=False, explanation='')
+            for m in JUDGES
+        ],
+    )
+
+    swapped = new_run(run_name='swapped', judges=JUDGES, swap=True)
+    swapped.add(never_completed, question='q', response_a='a', response_b='b')
+    html = render_report_body(swapped)
+    assert 'never completed both orderings' in html
+    assert 'single ordering' not in html
+
+    unswapped = new_run(run_name='unswapped', judges=JUDGES, swap=False)
+    unswapped.add(_comparison(['A', 'A', 'A'], 'A'), question='q', response_a='a', response_b='b')
+    html = render_report_body(unswapped)
+    assert 'single ordering' in html
+    assert 'never completed both orderings' not in html

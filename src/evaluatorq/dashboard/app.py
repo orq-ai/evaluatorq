@@ -104,6 +104,33 @@ def _mask_key(value: str) -> str:
     return f'{stars}{value[-4:]}'
 
 
+_CSV_FORMULA_LEAD = ('=', '+', '-', '@', '\t', '\r')
+
+
+def _csv_safe(value: object) -> object:
+    """Neutralise spreadsheet formula injection in a CSV cell.
+
+    Excel and Sheets evaluate a cell whose text begins with ``= + - @`` (or a
+    tab / carriage return), so free text reaching an export can execute on the
+    machine that opens the file. The pairwise export is the first here to carry
+    free text — questions and judge model names are model-generated, and this
+    tool renders adversarial red-team output — so a leading quote makes such a
+    cell literal text.
+
+    Values that only look like formulas are left alone: a number keeps its sign,
+    and a bare ``-`` is the n/a placeholder the red-team export already writes.
+    """
+    if not isinstance(value, str) or not value.startswith(_CSV_FORMULA_LEAD):
+        return value
+    if value == '-':
+        return value
+    try:
+        _ = float(value)
+    except ValueError:
+        return f"'{value}"
+    return value
+
+
 def _settings_config(roots: list[Path] | None) -> list[tuple[str, str | list[str]]]:
     """Build the read-only runtime config shown on the Settings page: the run
     stores being scanned, the default sim model, and API-key presence with a
@@ -481,10 +508,11 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
                 headers={'Content-Disposition': f'attachment; filename="{rid}.csv"'},
             )
 
+        # Headers as well as cells: a judge's model name becomes a column name.
         buf = io.StringIO()
-        writer = csv.DictWriter(buf, fieldnames=list(row_dicts[0].keys()))
+        writer = csv.DictWriter(buf, fieldnames=[str(_csv_safe(k)) for k in row_dicts[0]])
         writer.writeheader()
-        writer.writerows(row_dicts)
+        writer.writerows({str(_csv_safe(k)): _csv_safe(v) for k, v in row.items()} for row in row_dicts)
 
         return Response(
             buf.getvalue(),

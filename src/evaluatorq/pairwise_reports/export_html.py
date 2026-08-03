@@ -92,10 +92,18 @@ def _render_consensus_html(section: ReportSection) -> str:
     )
 
 
-def _bias_cell(row: dict[str, Any]) -> str:
+def _bias_cell(row: dict[str, Any], *, swap: bool) -> str:
     bias = row.get('position_bias')
     if bias is None:
-        return '<span class="pw-muted" title="Run used a single ordering, so no flip was possible">n/a</span>'
+        # Two distinct reasons the figure is unavailable, and saying the wrong
+        # one is misleading: a judge with systematic ordering failures would
+        # otherwise read as if the run never swapped at all.
+        reason = (
+            'This judge never completed both orderings of a pair, so no flip could be observed'
+            if swap
+            else 'Run used a single ordering, so no flip was possible'
+        )
+        return f'<span class="pw-muted" title="{_esc(reason)}">n/a</span>'
     width = max(0.0, min(1.0, bias)) * 100
     warn = ' pw-bias__fill--warn' if row.get('biased') else ''
     marker = ' ⚠' if row.get('biased') else ''
@@ -115,7 +123,7 @@ def _render_judges_html(section: ReportSection) -> str:
             _rate(r.get('a_rate')),
             _rate(r.get('b_rate')),
             _rate(r.get('tie_rate')),
-            _bias_cell(r),
+            _bias_cell(r, swap=bool(d.get('swap', True))),
         ]
         for r in d.get('rows', [])
     ]
