@@ -74,13 +74,13 @@ def _main(
 
 @app.command(epilog=_ROOT_EPILOG)
 def dashboard(
-    path: Annotated[
-        Path | None,
+    paths: Annotated[
+        list[Path] | None,
         typer.Argument(
             help=(
-                'Optional path to scan. '
+                'Optional paths to scan (repeatable). '
                 'Omit to show all runs from both redteam and sim stores. '
-                'A directory is scanned for reports; '
+                'Directories are scanned for reports; '
                 "a file opens the dashboard scoped to that file's parent directory "
                 'and prints the direct report URL so you can navigate straight to it.'
             )
@@ -100,7 +100,8 @@ def dashboard(
     With no PATH both the redteam run store (.evaluatorq/runs/) and the
     simulation run store (.evaluatorq/sim-runs/) are scanned.
 
-    With a directory PATH only that directory is scanned.
+    With one or more directory PATHs those directories are scanned together —
+    e.g. sim runs from one repo next to red team runs from another.
 
     With a file PATH the file's parent directory is scanned so the report
     resolves.  The direct URL for that report is printed so you can open it
@@ -110,27 +111,30 @@ def dashboard(
     from evaluatorq.dashboard.library import report_id
 
     roots: list[Path] | None
-    direct_rid: str | None = None
+    direct_rids: list[str] = []
 
-    if path is None:
+    if not paths:
         roots = None  # library.py picks the defaults
-    elif path.is_dir():
-        # Include direct stores and the conventional repository-local
-        # `.evaluatorq/` stores. Non-existent subdirs are skipped by the scanner.
-        roots = [
-            path,
-            path / 'runs',
-            path / 'sim-runs',
-            path / '.evaluatorq' / 'runs',
-            path / '.evaluatorq' / 'sim-runs',
-        ]
     else:
-        # Scan the parent so the report resolves, but surface the direct link.
-        roots = [path.parent]
-        direct_rid = report_id(path)
+        roots = []
+        for path in paths:
+            if path.is_dir():
+                # Include direct stores and the conventional repository-local
+                # `.evaluatorq/` stores. Non-existent subdirs are skipped by the scanner.
+                roots += [
+                    path,
+                    path / 'runs',
+                    path / 'sim-runs',
+                    path / '.evaluatorq' / 'runs',
+                    path / '.evaluatorq' / 'sim-runs',
+                ]
+            else:
+                # Scan the parent so the report resolves, but surface the direct link.
+                roots.append(path.parent)
+                direct_rids.append(report_id(path))
 
-    if direct_rid is not None:
-        typer.echo(f'Direct report URL: http://{host}:{port}/r/{direct_rid}')
+    for rid in direct_rids:
+        typer.echo(f'Direct report URL: http://{host}:{port}/r/{rid}')
 
     serve(roots, host=host, port=port)
 
