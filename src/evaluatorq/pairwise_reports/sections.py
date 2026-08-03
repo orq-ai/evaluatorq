@@ -79,6 +79,19 @@ def _build_consensus_section(run: PairwiseRun) -> ReportSection:
     )
 
 
+def observed_swap(run: PairwiseRun) -> bool:
+    """Whether the data shows both orderings actually landed for some judge.
+
+    ``run.swap`` is recorded intent and can disagree with what ran. The data
+    settles it: ``pairwise.py`` sets ``completed=False`` on every vote when
+    swapping is off, so a single completed vote anywhere proves swapping
+    happened. The implication only runs one way — a swapped run whose every
+    pair failed one ordering also shows nothing — which is why this reads as
+    "observed" rather than as a correction of the flag.
+    """
+    return any(v.completed for e in run.entries for v in e.comparison.votes)
+
+
 def _build_judges_section(run: PairwiseRun) -> ReportSection:
     report = run.rollup()
     replacements = {v.model for e in run.entries for v in e.comparison.votes if v.replacement}
@@ -97,9 +110,13 @@ def _build_judges_section(run: PairwiseRun) -> ReportSection:
             'a_rate': stat.a_rate,
             'b_rate': stat.b_rate,
             'tie_rate': stat.tie_rate,
-            'position_bias': stat.position_bias if (run.swap and measured[stat.model]) else None,
-            'biased': run.swap and measured[stat.model] and stat.position_bias >= POSITION_BIAS_WARN,
-            # Carried so the renderer can tell the two unmeasurable cases apart:
+            # Gated on the data alone. ``run.swap`` is redundant here — a run
+            # with swapping off leaves every vote incomplete, so ``measured`` is
+            # already False — and consulting it would let a mis-set flag decide
+            # what the votes have already settled.
+            'position_bias': stat.position_bias if measured[stat.model] else None,
+            'biased': measured[stat.model] and stat.position_bias >= POSITION_BIAS_WARN,
+            # Carried so the renderer can tell the unmeasurable cases apart:
             # the run never swapped, or it swapped but this judge never landed
             # both orderings of any pair.
             'measured': measured[stat.model],
@@ -114,6 +131,7 @@ def _build_judges_section(run: PairwiseRun) -> ReportSection:
             'label_a': run.label_a,
             'label_b': run.label_b,
             'swap': run.swap,
+            'observed_swap': any(measured.values()),
             'rows': rows,
         },
     )

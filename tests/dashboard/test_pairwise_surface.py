@@ -23,12 +23,19 @@ from evaluatorq.pairwise_run import PairwiseRun, new_run
 JUDGES = ['judge-one', 'judge-two', 'judge-three']
 
 
-def _vote(model: str, value: str | None, *, flipped: bool = False, replacement: bool = False) -> PairwiseVote:
+def _vote(
+    model: str,
+    value: str | None,
+    *,
+    flipped: bool = False,
+    replacement: bool = False,
+    completed: bool = True,
+) -> PairwiseVote:
     return PairwiseVote(
         model=model,
         vote=value,
         flipped=flipped,
-        completed=True,
+        completed=completed,
         replacement=replacement,
         explanation=f'{model} says {value}',
     )
@@ -272,7 +279,9 @@ def test_judge_columns_keep_a_fixed_order_across_rows(run: PairwiseRun) -> None:
 
 def test_position_bias_is_unavailable_when_the_run_did_not_swap() -> None:
     r = new_run(run_name='single ordering', judges=JUDGES, swap=False)
-    r.add(_comparison(['A', 'A', 'A'], 'A'), question='q', response_a='a', response_b='b')
+    # completed=False throughout: pairwise.py cannot mark a pair complete when
+    # only one ordering ran, so a swap=False run never carries a completed vote.
+    r.add(_comparison(['A', 'A', 'A'], 'A', completed=False), question='q', response_a='a', response_b='b')
     rows = build_report_sections(r)[1].data['rows']
     # None, not 0.0: nothing was flippable, so there is no measurement to show.
     assert all(row['position_bias'] is None for row in rows)
@@ -361,7 +370,7 @@ def test_abstention_renders_distinctly_from_a_decided_vote(run: PairwiseRun) -> 
 
 def test_single_ordering_run_says_bias_was_not_measured() -> None:
     r = new_run(run_name='single ordering', judges=JUDGES, swap=False)
-    r.add(_comparison(['A', 'A', 'A'], 'A'), question='q', response_a='a', response_b='b')
+    r.add(_comparison(['A', 'A', 'A'], 'A', completed=False), question='q', response_a='a', response_b='b')
     body = render_report_body(r)
     assert 'n/a' in body
     assert 'position bias was not measured' in body
@@ -468,24 +477,168 @@ def test_csv_export_leaves_the_na_placeholder_alone() -> None:
     assert _csv_safe('@SUM(A1)') == "'@SUM(A1)"
 
 
-def test_unmeasurable_bias_tooltip_names_the_right_cause() -> None:
-    """swap on but no completed pair reads differently from swap off."""
-    never_completed = PairwiseComparison(
+# ---------------------------------------------------------------------------
+# Swap is derived from the votes, not trusted from the flag
+# ---------------------------------------------------------------------------
+
+
+def _incomplete(models: list[str]) -> PairwiseComparison:
+    """A comparison where no judge completed both orderings."""
+    return PairwiseComparison(
         winner='inconclusive',
         votes=[
             PairwiseVote(model=m, vote=None, flipped=False, completed=False, replacement=False, explanation='')
-            for m in JUDGES
+            for m in models
         ],
     )
 
-    swapped = new_run(run_name='swapped', judges=JUDGES, swap=True)
-    swapped.add(never_completed, question='q', response_a='a', response_b='b')
-    html = render_report_body(swapped)
-    assert 'never completed both orderings' in html
-    assert 'single ordering' not in html
 
-    unswapped = new_run(run_name='unswapped', judges=JUDGES, swap=False)
-    unswapped.add(_comparison(['A', 'A', 'A'], 'A'), question='q', response_a='a', response_b='b')
-    html = render_report_body(unswapped)
-    assert 'single ordering' in html
-    assert 'never completed both orderings' not in html
+def test_swap_flag_is_qualified_when_never_observed() -> None:
+    """A run saved with the default swap=True but executed single-ordering."""
+    from evaluatorq.pairwise_reports.sections import observed_swap
+
+    r = new_run(run_name='mislabelled', judges=JUDGES, swap=True)
+    r.add(_incomplete(JUDGES), question='q', response_a='a', response_b='b')
+
+    assert observed_swap(r) is False
+    html = render_report_body(r)
+    # Header must not claim a plain "on" the votes never bore out.
+    assert 'never observed' in html
+    # And the judges table must blame the run, not each judge in turn.
+    assert 'No pair completed both orderings' in html
+    assert 'This judge never completed' not in html
+
+
+def test_swap_observed_renders_plain_on() -> None:
+    from evaluatorq.pairwise_reports.sections import observed_swap
+
+    r = new_run(run_name='swapped', judges=JUDGES, swap=True)
+    r.add(_comparison(['A', 'A', 'A'], 'A'), question='q', response_a='a', response_b='b')
+
+    assert observed_swap(r) is True
+    html = render_report_body(r)
+    assert 'never observed' not in html
+
+
+def test_single_judge_unmeasured_blames_the_judge_not_the_run() -> None:
+    """One judge completed a pair, another did not: that is a per-judge fact."""
+    mixed = PairwiseComparison(
+        winner='A',
+        votes=[
+            PairwiseVote(
+                model='judge-one', vote='A', flipped=False, completed=True, replacement=False, explanation='x'
+            ),
+            PairwiseVote(
+                model='judge-two', vote='A', flipped=False, completed=False, replacement=False, explanation='y'
+            ),
+        ],
+    )
+    r = new_run(run_name='mixed', judges=['judge-one', 'judge-two'], swap=True)
+    r.add(mixed, question='q', response_a='a', response_b='b')
+
+    html = render_report_body(r)
+    assert 'This judge never completed' in html
+    assert 'No pair completed both orderings' not in html
+
+
+def test_bias_is_gated_on_the_votes_not_the_flag() -> None:
+    """swap=False leaves every vote incomplete, so bias is n/a either way."""
+    from evaluatorq.pairwise_reports.sections import build_report_sections
+
+    r = new_run(run_name='single-ordering', judges=JUDGES, swap=False)
+    r.add(_incomplete(JUDGES), question='q', response_a='a', response_b='b')
+
+    judges = next(s for s in build_report_sections(r) if s.kind == 'pairwise_judges')
+    assert judges.data['observed_swap'] is False
+    assert all(row['position_bias'] is None for row in judges.data['rows'])
+    assert all(row['biased'] is False for row in judges.data['rows'])
+    assert 'single ordering' in render_report_body(r)
+
+
+# ---------------------------------------------------------------------------
+# Landing: score metric, column labelling, stable colours
+# ---------------------------------------------------------------------------
+
+
+def test_pairwise_score_is_the_decided_share(saved: tuple[Path, Path]) -> None:
+    """Not mean_agreement: that is quantized by panel size against a fixed 0.8."""
+    from evaluatorq.dashboard import metrics
+
+    runs_dir, _ = saved
+    (row,) = metrics.run_rows([runs_dir])
+    assert row.surface == 'pairwise'
+    # Fixture: 4 comparisons, 1 inconclusive.
+    assert row.score == pytest.approx(0.75)
+
+
+def test_score_column_names_its_metric_per_surface(client: tuple[TestClient, str]) -> None:
+    from evaluatorq.dashboard.view import _score_title
+
+    c, _ = client
+    assert 'Decided rate' in _score_title('pairwise')
+    assert 'Resistance rate' in _score_title('redteam')
+    assert _score_title('unknown') == ''
+    assert 'Decided rate' in c.get('/?surface=pairwise').text
+
+
+def test_kind_colours_are_stable_when_kinds_are_absent() -> None:
+    """by_kind drops zeros, so positional colours would shift per workspace."""
+    from evaluatorq.dashboard.view import _kind_colors
+
+    both = _kind_colors([('Red team', 1), ('Pairwise', 1)])
+    alone = _kind_colors([('Pairwise', 1)])
+    assert alone == [both[1]]
+    assert both[0] != both[1]
+
+
+# ---------------------------------------------------------------------------
+# Smaller findings
+# ---------------------------------------------------------------------------
+
+
+def test_csv_header_escaping_covers_a_hostile_judge_name(tmp_path: Path) -> None:
+    """Judge names become column headers, so they need the same guard as cells."""
+    evil = '=evil'
+    r = new_run(run_name='hostile-judge', judges=[evil])
+    r.add(
+        PairwiseComparison(
+            winner='A',
+            votes=[
+                PairwiseVote(model=evil, vote='A', flipped=False, completed=True, replacement=False, explanation='x')
+            ],
+        ),
+        question='q',
+        response_a='a',
+        response_b='b',
+    )
+    runs_dir = tmp_path / 'pairwise-runs'
+    runs_dir.mkdir()
+    path = r.save(runs_dir / 'run.json')
+    c = TestClient(build_app(roots=[runs_dir]), raise_server_exceptions=True)
+
+    header = c.get(f'/r/{report_id(path)}/export.csv').text.splitlines()[0]
+    assert "'=evil" in header
+    assert ',=evil' not in header
+
+
+def test_filtered_view_rolls_up_once(saved: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    """The header and two section builders each call rollup()."""
+    import evaluatorq.pairwise as pw_mod
+    from evaluatorq.dashboard.surfaces import ADAPTERS
+
+    _, path = saved
+    run = ADAPTERS['pairwise'].load(path)
+
+    calls = 0
+    real = pw_mod.build_report
+
+    def counting(comparisons: list[PairwiseComparison]) -> object:
+        nonlocal calls
+        calls += 1
+        return real(comparisons)
+
+    monkeypatch.setattr(pw_mod, 'build_report', counting)
+    body = ADAPTERS['pairwise'].body_from_results(run, list(run.entries[:2]))
+
+    assert calls == 1, f'rolled up {calls} times'
+    assert body

@@ -74,6 +74,21 @@ def _fmt_score(score: float | None) -> str:
     return '—' if score is None else f'{score:.2f}'
 
 
+# The Score column holds a different metric per surface and reads against one
+# unlabelled >= 0.8 threshold, so a mixed list gives no way to tell what any
+# number means. The tooltip names the metric without widening the column.
+_SCORE_TITLES: dict[str, str] = {
+    'redteam': 'Resistance rate: attacks the target withstood',
+    'sim': 'Mean scorer average across this run',
+    'pairwise': 'Decided rate: comparisons the judge panel could call',
+}
+
+
+def _score_title(surface: str) -> str:
+    title = _SCORE_TITLES.get(surface)
+    return f' title="{esc(title)}"' if title else ''
+
+
 def _kind_badge(surface: str) -> str:
     label = SURFACE_LABELS.get(surface, surface)
     return f'<span class="kind-badge {esc(surface)}">{esc(label)}</span>'
@@ -104,7 +119,7 @@ def _run_row(row: RunRow, *, show_badge: bool = True) -> str:
         f'<span class="run-name-line"><span class="run-name">{esc(row.name)}</span>{badge}{err}</span>'
         f'<span class="run-meta">{esc(row.headline)} · {esc(row.when)}</span>'
         f'</span>'
-        f'<span class="run-score {_score_cls(row.score)}">{_fmt_score(row.score)}</span>'
+        f'<span class="run-score {_score_cls(row.score)}"{_score_title(row.surface)}>{_fmt_score(row.score)}</span>'
         f'{_status_badge(row.status)}'
         f'</a>'
     )
@@ -152,7 +167,7 @@ def _recent_runs_table(rows: list[RunRow]) -> str:
             f'<span class="rr-job">{esc(r.name)}{err}</span>'
             f'<span class="rr-meta">{esc(r.headline)}</span>'
             f'<span class="rr-meta">{esc(r.when)}</span>'
-            f'<span class="run-score {_score_cls(r.score)}">{_fmt_score(r.score)}</span>'
+            f'<span class="run-score {_score_cls(r.score)}"{_score_title(r.surface)}>{_fmt_score(r.score)}</span>'
             f'{status_badge(label, status)}'
             f'</a>'
         )
@@ -194,6 +209,24 @@ def _bars(rows: list[tuple[str, float]], colors: list[str], *, total_label: str 
     return ''.join(parts)
 
 
+_KIND_COLORS = {
+    'Red team': 'var(--chart-1)',
+    'Agent sim': 'var(--chart-2)',
+    'Pairwise': 'var(--chart-3)',
+}
+
+
+def _kind_colors(rows: list[tuple[str, float]] | list[tuple[str, int]]) -> list[str]:
+    """Colours keyed by kind name rather than by position.
+
+    These lists omit kinds with nothing to show, so position is not stable: a
+    workspace with only sim runs would otherwise paint sim in red team's colour,
+    and the same kind would change colour as soon as a red team run appeared.
+    Keying by name pins a kind to one colour everywhere.
+    """
+    return [_KIND_COLORS.get(name, 'var(--chart-4)') for name, _ in rows]
+
+
 def landing_body(data: Landing) -> str:
     """Render the combined Dashboard landing as an HTML fragment."""
     if data.total_runs == 0:
@@ -214,29 +247,26 @@ def landing_body(data: Landing) -> str:
         + '</div>'
     )
 
-    # One colour per surface kind; _bars cycles, so a third kind would
-    # otherwise repeat the first one's colour.
-    teal_jade = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)']
     severity_colors = ['var(--red-600)', 'var(--orange-500)', 'var(--amber-600)', 'var(--green-600)']
 
     # Derived from the kinds actually present, so the subtitle cannot claim a
     # surface the panel is not showing (or omit one it is).
     by_kind_sub = ' · '.join(k.lower() for k, _ in data.by_kind) or 'no runs yet'
-    by_kind_panel = _panel('Runs by type', by_kind_sub, _bars(data.by_kind, teal_jade))
+    by_kind_panel = _panel('Runs by type', by_kind_sub, _bars(data.by_kind, _kind_colors(data.by_kind)))
 
     sev_rows = [(s.title(), n) for s, n in data.severity]
     sev_inner = _bars(sev_rows, severity_colors) if sev_rows else '<p class="rt-panel-loading">No findings.</p>'
     severity_panel = _panel('Findings by severity', 'Vulnerabilities found', sev_inner)
     # Spend by job type — real dollars (cost_usd recorded upstream).
     spend_inner = (
-        _bars(data.cost_by_kind, teal_jade, fmt='${:.4f}')
+        _bars(data.cost_by_kind, _kind_colors(data.cost_by_kind), fmt='${:.4f}')
         if data.cost_by_kind
         else '<p class="rt-panel-loading">No cost recorded.</p>'
     )
     spend_panel = _panel('Spend by job type', 'Real cost across runs', spend_inner)
 
     tok_inner = (
-        _bars(data.tokens_by_kind, teal_jade, fmt='{:,}')
+        _bars(data.tokens_by_kind, _kind_colors(data.tokens_by_kind), fmt='{:,}')
         if data.tokens_by_kind
         else '<p class="rt-panel-loading">No token usage recorded.</p>'
     )

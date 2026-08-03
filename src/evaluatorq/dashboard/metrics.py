@@ -147,22 +147,29 @@ def _sim_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
 
 
 def _pairwise_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
-    """Score a pairwise run by mean inter-judge agreement.
+    """Score a pairwise run by the share of comparisons the panel decided.
 
     The win rates say which side led, not whether the run was any good, and
-    neither side is "the score". Agreement is the run-quality number: a panel
-    that mostly agreed produced a verdict worth reading.
+    neither side is "the score". ``mean_agreement`` reads like the natural
+    quality number but does not survive the shared ``>= 0.8`` threshold this
+    column is rendered against: it is a modal vote share, so with three judges
+    it can only be 0.67 or 1.0 and the threshold silently means "unanimous",
+    while with five judges 0.8 means "four of five". It is also undefined for a
+    single-judge run. The decided share is continuous, independent of panel
+    size, defined everywhere, and is the health signal the docs already pair
+    with the win rates.
     """
     report = data.get('report')
     report = report if isinstance(report, dict) else {}
-    agreement = report.get('mean_agreement')
+    inconclusive = report.get('inconclusive_rate')
+    decided = 1.0 - _as_float(inconclusive) if inconclusive is not None else None
     return RunRow(
         id=card.id,
         surface='pairwise',
         name=card.name,
         when=card.created_at.strftime('%Y-%m-%d %H:%M'),
         headline=card.headline,
-        score=_as_float(agreement) if agreement is not None else None,
+        score=decided,
         status=_lifecycle_status(broken=bool(card.error)),
         error=bool(card.error),
     )

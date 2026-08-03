@@ -165,7 +165,7 @@ def _sim_adapter() -> SurfaceAdapter:
 
 
 def _pairwise_adapter() -> SurfaceAdapter:
-
+    """Adapter for saved pairwise runs (``<store>/pairwise-runs``)."""
     from evaluatorq.pairwise_reports.export_html import export_html, render_report_body
     from evaluatorq.pairwise_run import PairwiseEntry, PairwiseRun
 
@@ -206,10 +206,14 @@ def _pairwise_adapter() -> SurfaceAdapter:
         """A copy carrying only *filtered* entries, with the rollup recomputed.
 
         The stored report describes the full run, so it would misreport a
-        filtered view; dropping it makes ``rollup()`` recompute from what is
-        actually shown.
+        filtered view. Recomputed once here rather than nulled: ``rollup()`` is
+        called by the header and by two section builders, so leaving the field
+        empty rolls the same entries up three times per render.
         """
-        return run.model_copy(update={'entries': list(filtered), 'report': None})
+        from evaluatorq.pairwise import build_report
+
+        rolled = build_report([e.comparison for e in filtered])
+        return run.model_copy(update={'entries': list(filtered), 'report': rolled})
 
     return SurfaceAdapter(
         load=_pw_load,

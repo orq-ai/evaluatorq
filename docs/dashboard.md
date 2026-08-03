@@ -226,9 +226,24 @@ could not decide, are marked; those are the ones worth opening.
 
 The judge table flags a judge whose position bias reaches 0.15.  A judge that
 contradicts itself across the two orderings has no real preference, so its
-votes are noise.  A run saved with `swap=False` shows that column as `n/a`
-rather than `0.00`, since nothing was flippable and there was no measurement to
-make.
+votes are noise.  The column reads `n/a` rather than `0.00` wherever nothing
+was flippable, since there was no measurement to make.
+
+Whether swapping happened is read from the votes rather than from the saved
+`swap` flag.  A vote is only marked complete when both orderings landed, so the
+data settles it and a run saved with the default `swap=True` but executed
+single-ordering is labelled `on (never observed)` instead of a bare `on`.  The
+distinction carries into the `n/a` tooltips: when no judge in the run completed
+a pair that is a run-level fact, and the table says so rather than blaming each
+judge in turn.
+
+In the run lists, a pairwise run scores as its **decided rate** — the share of
+comparisons the panel could call, or `1 - inconclusive_rate`.  Mean inter-judge
+agreement reads like the more natural choice but is a modal vote share, so it
+is quantized by panel size: against the shared `≥ 0.80` threshold it silently
+means "unanimous" for three judges and "four of five" for five, and it is
+undefined for a single-judge run.  Every surface's Score column names its own
+metric on hover.
 
 ### Additional red team charts
 

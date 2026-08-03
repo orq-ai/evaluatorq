@@ -32,6 +32,7 @@ from evaluatorq.common.reports import (
 )
 from evaluatorq.common.reports.palette import COLORS
 from evaluatorq.pairwise_reports.sections import build_report_sections
+from evaluatorq.pairwise_reports.sections import observed_swap as _observed_swap
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import ReportSection
@@ -92,16 +93,16 @@ def _render_consensus_html(section: ReportSection) -> str:
     )
 
 
-def _bias_cell(row: dict[str, Any], *, swap: bool) -> str:
+def _bias_cell(row: dict[str, Any], *, observed_swap: bool) -> str:
     bias = row.get('position_bias')
     if bias is None:
-        # Two distinct reasons the figure is unavailable, and saying the wrong
-        # one is misleading: a judge with systematic ordering failures would
-        # otherwise read as if the run never swapped at all.
+        # Blaming the wrong party is the failure to avoid here. When no judge in
+        # the run completed a pair, that is a run-level fact and saying "this
+        # judge" would pin a run's shape on each judge in turn.
         reason = (
             'This judge never completed both orderings of a pair, so no flip could be observed'
-            if swap
-            else 'Run used a single ordering, so no flip was possible'
+            if observed_swap
+            else 'No pair completed both orderings, so no flip was observable in this run'
         )
         return f'<span class="pw-muted" title="{_esc(reason)}">n/a</span>'
     width = max(0.0, min(1.0, bias)) * 100
@@ -116,6 +117,7 @@ def _bias_cell(row: dict[str, Any], *, swap: bool) -> str:
 
 def _render_judges_html(section: ReportSection) -> str:
     d = section.data
+    observed = bool(d.get('observed_swap'))
     headers = ['Judge', f'{d["label_a"]} rate', f'{d["label_b"]} rate', 'Tie rate', 'Position bias']
     rows = [
         [
@@ -123,17 +125,24 @@ def _render_judges_html(section: ReportSection) -> str:
             _rate(r.get('a_rate')),
             _rate(r.get('b_rate')),
             _rate(r.get('tie_rate')),
-            _bias_cell(r, swap=bool(d.get('swap', True))),
+            _bias_cell(r, observed_swap=observed),
         ]
         for r in d.get('rows', [])
     ]
     if not rows:
         return ''
-    note = (
-        ''
-        if d.get('swap')
-        else '<p class="pw-caption">This run used a single ordering, so position bias was not measured.</p>'
-    )
+    # The caption keys off what ran, not what was configured: a run saved with
+    # the default swap=True but executed single-ordering would otherwise show a
+    # clean table with nothing saying the column is empty for a reason.
+    if observed:
+        note = ''
+    elif d.get('swap'):
+        note = (
+            '<p class="pw-caption">No pair completed both orderings, so position bias could not be '
+            'measured for this run despite swapping being enabled.</p>'
+        )
+    else:
+        note = '<p class="pw-caption">This run used a single ordering, so position bias was not measured.</p>'
     return f'<section id="{section.kind}"><h2>{_esc(section.title)}</h2>{_html_table(headers, rows)}{note}</section>'
 
 
@@ -250,12 +259,26 @@ _PAIRWISE_CSS = """
 """
 
 
+def _swap_summary(run: PairwiseRun) -> str:
+    """Report swapping as configured, qualified by whether it was ever observed.
+
+    A bare "on" taken from the flag is the claim a reader relies on when
+    deciding whether the position-bias column means anything, so it says so when
+    the votes never bore it out.
+    """
+    if not run.swap:
+        return 'off'
+    if _observed_swap(run):
+        return 'on'
+    return 'on <span class="pw-muted">(never observed)</span>'
+
+
 def _header_html(run: PairwiseRun) -> str:
     report = run.rollup()
     meta = (
         f'<p><strong>Comparing:</strong> {_esc(run.label_a)} vs {_esc(run.label_b)} &nbsp;|&nbsp; '
         f'<strong>Judges:</strong> {len(run.judges) or len(report.per_judge)} &nbsp;|&nbsp; '
-        f'<strong>Swap:</strong> {"on" if run.swap else "off"} &nbsp;|&nbsp; '
+        f'<strong>Swap:</strong> {_swap_summary(run)} &nbsp;|&nbsp; '
         f'<strong>Date:</strong> {_format_date(run.created_at)}</p>'
     )
     criteria = f'<p class="pw-caption"><strong>Criteria:</strong> {_esc(run.criteria)}</p>' if run.criteria else ''
