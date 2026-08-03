@@ -214,10 +214,15 @@ def landing_body(data: Landing) -> str:
         + '</div>'
     )
 
-    teal_jade = ['var(--chart-1)', 'var(--chart-2)']
+    # One colour per surface kind; _bars cycles, so a third kind would
+    # otherwise repeat the first one's colour.
+    teal_jade = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)']
     severity_colors = ['var(--red-600)', 'var(--orange-500)', 'var(--amber-600)', 'var(--green-600)']
 
-    by_kind_panel = _panel('Runs by type', 'Red team · agent sim', _bars(data.by_kind, teal_jade))
+    # Derived from the kinds actually present, so the subtitle cannot claim a
+    # surface the panel is not showing (or omit one it is).
+    by_kind_sub = ' · '.join(k.lower() for k, _ in data.by_kind) or 'no runs yet'
+    by_kind_panel = _panel('Runs by type', by_kind_sub, _bars(data.by_kind, teal_jade))
 
     sev_rows = [(s.title(), n) for s, n in data.severity]
     sev_inner = _bars(sev_rows, severity_colors) if sev_rows else '<p class="rt-panel-loading">No findings.</p>'
@@ -542,8 +547,8 @@ _DOWNLOAD_ICON = (
 
 def report_back_link(surface: str) -> str:
     """Render the 'back to run list' link shown above a report (matches v1)."""
-    target = f'/?surface={esc(surface)}' if surface in ('redteam', 'sim') else '/'
-    label = {'redteam': 'Red team runs', 'sim': 'Agent sim runs'}.get(surface, 'All runs')
+    target = f'/?surface={esc(surface)}' if surface in ('redteam', 'sim', 'pairwise') else '/'
+    label = {'redteam': 'Red team runs', 'sim': 'Agent sim runs', 'pairwise': 'Pairwise runs'}.get(surface, 'All runs')
     return f'<a class="report-back" href="{target}">{_ARROW_LEFT} {esc(label)}</a>'
 
 

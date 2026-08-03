@@ -172,18 +172,28 @@ def _pairwise_adapter() -> SurfaceAdapter:
     def _pw_rows(run: PairwiseRun, filtered: list[PairwiseEntry]) -> list[dict[str, Any]]:
         """One row per comparison: the question, the consensus winner under its
         label, and each judge's vote as its own column (also label-resolved).
-        This is the shape a spreadsheet reading of a run wants."""
-        from evaluatorq.pairwise_reports.sections import vote_label, winner_label
+        This is the shape a spreadsheet reading of a run wants.
 
+        Every row carries the same keys. The CSV export takes its
+        ``DictWriter`` fieldnames from the first row, so a judge that appears
+        only on a later comparison (a replacement promoted mid-run) would
+        otherwise raise ``ValueError`` and 500 the export. Judges absent from a
+        comparison get an empty cell.
+        """
+        from evaluatorq.pairwise_reports.sections import judge_order, vote_label, winner_label
+
+        order = judge_order(run)
         rows: list[dict[str, Any]] = []
         for index, entry in enumerate(filtered, start=1):
+            votes = {v.model: v for v in entry.comparison.votes}
             row: dict[str, Any] = {
                 '#': index,
                 'Question': entry.question,
                 'Winner': winner_label(entry.comparison.winner, run),
             }
-            for vote in entry.comparison.votes:
-                row[vote.model] = vote_label(vote.vote, run)
+            for model in order:
+                vote = votes.get(model)
+                row[model] = vote_label(vote.vote, run) if vote is not None else ''
             rows.append(row)
         return rows
 

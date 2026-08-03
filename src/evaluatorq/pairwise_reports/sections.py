@@ -82,16 +82,23 @@ def _build_consensus_section(run: PairwiseRun) -> ReportSection:
 def _build_judges_section(run: PairwiseRun) -> ReportSection:
     report = run.rollup()
     replacements = {v.model for e in run.entries for v in e.comparison.votes if v.replacement}
+    # Whether this judge ever had a pair where a flip was actually possible.
+    # ``position_bias`` divides flips by completed pairs and falls back to 0.0
+    # when that denominator is empty, so a judge whose every pair failed one
+    # ordering would otherwise read as perfectly steady. ``swap`` being on is
+    # not enough: the orderings still have to have both landed.
+    measured = {
+        stat.model: any(v.completed for e in run.entries for v in e.comparison.votes if v.model == stat.model)
+        for stat in report.per_judge
+    }
     rows: list[dict[str, Any]] = [
         {
             'model': stat.model,
             'a_rate': stat.a_rate,
             'b_rate': stat.b_rate,
             'tie_rate': stat.tie_rate,
-            # Meaningless without a second ordering to disagree with: it is 0.0
-            # because nothing was flippable, not because the judge was steady.
-            'position_bias': stat.position_bias if run.swap else None,
-            'biased': run.swap and stat.position_bias >= POSITION_BIAS_WARN,
+            'position_bias': stat.position_bias if (run.swap and measured[stat.model]) else None,
+            'biased': run.swap and measured[stat.model] and stat.position_bias >= POSITION_BIAS_WARN,
             'replacement': stat.model in replacements,
         }
         for stat in report.per_judge
@@ -134,15 +141,24 @@ def _vote_cell(vote: PairwiseVote | None, model: str, run: PairwiseRun) -> dict[
     }
 
 
-def _build_comparisons_section(run: PairwiseRun) -> ReportSection:
-    # Fixed judge column order across every row, so a split panel reads as a
-    # ragged column while scanning rather than something you have to diff.
+def judge_order(run: PairwiseRun) -> list[str]:
+    """Every judge that voted anywhere in the run, configured panel first.
+
+    A fixed column order across all rows is what makes a split panel read as a
+    ragged column while scanning. It has to be the union, not the first
+    comparison's votes: a replacement judge is promoted per pair, so it can
+    appear only partway through a run.
+    """
     order: list[str] = list(run.judges)
     for entry in run.entries:
         for vote in entry.comparison.votes:
             if vote.model not in order:
                 order.append(vote.model)
+    return order
 
+
+def _build_comparisons_section(run: PairwiseRun) -> ReportSection:
+    order = judge_order(run)
     rows: list[dict[str, Any]] = []
     for index, entry in enumerate(run.entries, start=1):
         votes = {v.model: v for v in entry.comparison.votes}

@@ -54,7 +54,9 @@ def run() -> PairwiseRun:
     r.add(_comparison(['A', 'A', 'A'], 'A'), question='q1', response_a='a1', response_b='b1')
     r.add(_comparison(['A', 'B', 'tie'], 'tie'), question='q2', response_a='a2', response_b='b2')
     r.add(_comparison(['B', 'B', 'B'], 'B'), question='q3', response_a='a3', response_b='b3')
-    r.add(_comparison([None, None, None], 'inconclusive', flipped=True), question='q4', response_a='a4', response_b='b4')
+    r.add(
+        _comparison([None, None, None], 'inconclusive', flipped=True), question='q4', response_a='a4', response_b='b4'
+    )
     return r
 
 
@@ -107,6 +109,24 @@ def test_rollup_recomputes_when_no_report_is_stored(run: PairwiseRun) -> None:
 # ---------------------------------------------------------------------------
 # Scanner
 # ---------------------------------------------------------------------------
+
+
+def test_default_save_path_does_not_overwrite_a_same_second_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stamp only resolves to the second, so two same-named runs collide."""
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    first = new_run(run_name='same name')
+    first.add(_comparison(['A', 'A', 'A'], 'A'), question='q1', response_a='a', response_b='b')
+    second = new_run(run_name='same name')
+    second.add(_comparison(['B', 'B', 'B'], 'B'), question='q2', response_a='a', response_b='b')
+    second.created_at = first.created_at
+
+    p1 = first.save()
+    p2 = second.save()
+    assert p1 != p2
+    assert PairwiseRun.load(p1).entries[0].question == 'q1'
+    assert PairwiseRun.load(p2).entries[0].question == 'q2'
 
 
 def test_sniff_identifies_a_pairwise_file() -> None:
@@ -163,6 +183,47 @@ def test_adapter_rows_resolve_every_vote_to_a_label(run: PairwiseRun) -> None:
     assert rows[3]['judge-one'] == 'abstained'
 
 
+def test_adapter_rows_keep_identical_keys_when_a_judge_joins_late() -> None:
+    """The CSV export takes its fieldnames from the first row, so a replacement
+    judge promoted on a later comparison must not widen that row's key set."""
+    r = new_run(run_name='late judge', judges=['j1'])
+    r.add(
+        PairwiseComparison(winner='A', votes=[_vote('j1', 'A')]),
+        question='q1',
+        response_a='a',
+        response_b='b',
+    )
+    r.add(
+        PairwiseComparison(winner='A', votes=[_vote('j1', 'A'), _vote('stand-in', 'A', replacement=True)]),
+        question='q2',
+        response_a='a',
+        response_b='b',
+    )
+    adapter = ADAPTERS['pairwise']
+    assert adapter.rows is not None
+    rows = adapter.rows(r, r.entries)
+    assert [sorted(x) for x in rows] == [sorted(rows[0])] * 2
+    assert rows[0]['stand-in'] == ''
+
+
+def test_csv_export_survives_a_judge_promoted_mid_run(tmp_path: Path) -> None:
+    r = new_run(run_name='late judge', judges=['j1'])
+    r.add(PairwiseComparison(winner='A', votes=[_vote('j1', 'A')]), question='q1', response_a='a', response_b='b')
+    r.add(
+        PairwiseComparison(winner='A', votes=[_vote('j1', 'A'), _vote('stand-in', 'A', replacement=True)]),
+        question='q2',
+        response_a='a',
+        response_b='b',
+    )
+    runs_dir = tmp_path / 'pairwise-runs'
+    runs_dir.mkdir()
+    path = r.save(runs_dir / 'run.json')
+    c = TestClient(build_app(roots=[runs_dir]), raise_server_exceptions=True)
+    resp = c.get(f'/r/{report_id(path)}/export.csv')
+    assert resp.status_code == 200
+    assert 'stand-in' in resp.text
+
+
 def test_adapter_body_from_results_rescopes_the_rollup(run: PairwiseRun) -> None:
     """A filtered body must not report the full run's numbers."""
     adapter = ADAPTERS['pairwise']
@@ -216,6 +277,28 @@ def test_position_bias_is_unavailable_when_the_run_did_not_swap() -> None:
     # None, not 0.0: nothing was flippable, so there is no measurement to show.
     assert all(row['position_bias'] is None for row in rows)
     assert all(row['biased'] is False for row in rows)
+
+
+def test_position_bias_is_unavailable_when_no_pair_was_ever_flippable() -> None:
+    """swap=True is not enough: both orderings still have to have landed.
+
+    position_bias divides flips by completed pairs and falls back to 0.0 on an
+    empty denominator, which would read as a perfectly steady judge.
+    """
+    r = new_run(run_name='swap on, nothing completed', judges=['j1'], swap=True)
+    r.add(
+        PairwiseComparison(
+            winner='A',
+            votes=[PairwiseVote(model='j1', vote='A', completed=False, explanation='')],
+        ),
+        question='q',
+        response_a='a',
+        response_b='b',
+    )
+    row = build_report_sections(r)[1].data['rows'][0]
+    assert row['position_bias'] is None
+    assert row['biased'] is False
+    assert 'n/a' in render_report_body(r)
 
 
 def test_position_bias_is_flagged_above_the_threshold() -> None:
@@ -329,6 +412,24 @@ def test_export_routes_all_succeed(client: tuple[TestClient, str]) -> None:
         resp = c.get(f'/r/{rid}/{suffix}')
         assert resp.status_code == 200, suffix
         assert resp.text
+
+
+def test_back_link_returns_to_the_pairwise_run_list(client: tuple[TestClient, str]) -> None:
+    c, rid = client
+    r = c.get(f'/r/{rid}')
+    assert 'href="/?surface=pairwise"' in r.text
+    assert 'Pairwise runs' in r.text
+
+
+def test_landing_omits_a_kind_with_no_runs(saved: tuple[Path, Path]) -> None:
+    """by_kind drops zeros, matching tokens_by_kind / cost_by_kind."""
+    from evaluatorq.dashboard import metrics
+
+    runs_dir, _ = saved
+    landing = metrics.landing([runs_dir])
+    # Only pairwise runs exist in this root, so it is the only bar.
+    assert landing.by_kind == [('Pairwise', 1)]
+    assert landing.pairwise_runs == 1
 
 
 def test_no_filter_rail_is_rendered_for_pairwise(client: tuple[TestClient, str]) -> None:

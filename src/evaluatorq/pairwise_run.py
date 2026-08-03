@@ -107,15 +107,35 @@ class PairwiseRun(BaseModel):
         the stored report always matches the entries it was built from.
         """
         self.report = build_report(self.comparisons())
-        if path is None:
-            runs_dir = get_pairwise_runs_dir()
-            runs_dir.mkdir(parents=True, exist_ok=True)
-            stamp = self.created_at.strftime('%Y%m%d_%H%M%S')
-            path = runs_dir / f'{stamp}_{_slug(self.run_name)}.json'
-        target = Path(path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(self.model_dump_json(indent=2), encoding='utf-8')
-        return target
+        payload = self.model_dump_json(indent=2)
+        if path is not None:
+            target = Path(path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            _ = target.write_text(payload, encoding='utf-8')
+            return target
+
+        runs_dir = get_pairwise_runs_dir()
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        base = f'{self.created_at.strftime("%Y%m%d_%H%M%S")}_{_slug(self.run_name)}'
+        # Exclusive-create, matching the sim run store: the stamp only resolves
+        # to the second, so two runs of the same name in the same second would
+        # otherwise silently overwrite each other. 'x' also avoids the TOCTOU
+        # race an exists() check would leave open.
+        target = runs_dir / f'{base}.json'
+        for counter in range(1000):
+            try:
+                with target.open('x', encoding='utf-8') as fh:
+                    _ = fh.write(payload)
+            except FileExistsError:  # noqa: PERF203 — exclusive-create retry is the point
+                target = runs_dir / f'{base}_{counter + 1:03d}.json'
+            except OSError:
+                # 'x' created the file before the write failed (e.g. disk full);
+                # don't leave an empty orphan behind.
+                target.unlink(missing_ok=True)
+                raise
+            else:
+                return target
+        raise RuntimeError(f'could not find a free filename for {base} after 1000 attempts')
 
     @classmethod
     def load(cls, path: Path | str) -> PairwiseRun:

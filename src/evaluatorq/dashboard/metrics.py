@@ -275,7 +275,11 @@ def landing(roots: list[Path] | None = None) -> Landing:
             pw_cost += sum(_cost_usd(u) for u in usages)
 
     severity = [(sev, severity_counts[sev]) for sev in SEVERITY_ORDER if severity_counts.get(sev)]
-    by_kind = [('Red team', len(redteam)), ('Agent sim', len(sim)), ('Pairwise', len(pairwise))]
+    # Zero-count kinds are dropped, matching tokens_by_kind / cost_by_kind: a
+    # workspace with no pairwise runs should not carry an empty 'Pairwise' bar.
+    by_kind = [
+        (k, n) for k, n in (('Red team', len(redteam)), ('Agent sim', len(sim)), ('Pairwise', len(pairwise))) if n
+    ]
     tokens_by_kind = [
         (k, n) for k, n in (('Red team', rt_tokens), ('Agent sim', sim_tokens), ('Pairwise', pw_tokens)) if n
     ]
