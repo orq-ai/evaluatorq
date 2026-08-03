@@ -382,8 +382,7 @@ def vl_grouped_bar(
         for i in range(len(categories))
         if i < len(vals)
     ]
-    return {
-        'data': {'values': rows},
+    bar_layer: dict[str, Any] = {
         'mark': {'type': 'bar', 'tooltip': True},
         'encoding': {
             'y': {'field': 'cat', 'type': 'nominal', 'sort': None, 'title': None},
@@ -391,6 +390,22 @@ def vl_grouped_bar(
             'yOffset': {'field': 'series', 'type': 'nominal'},
             'color': {'field': 'series', 'type': 'nominal', 'legend': {'title': None}},
         },
+    }
+    # A zero-value bar has zero width and renders as nothing, which is
+    # indistinguishable from "not measured" — label those bars with a literal 0.
+    zero_label_layer: dict[str, Any] = {
+        'transform': [{'filter': 'datum.value === 0'}],
+        'mark': {'type': 'text', 'align': 'left', 'dx': 3, 'fontSize': 9, 'color': COLORS['ink_700']},
+        'encoding': {
+            'y': {'field': 'cat', 'type': 'nominal', 'sort': None, 'title': None},
+            'x': {'field': 'value', 'type': 'quantitative', 'title': x_title},
+            'yOffset': {'field': 'series', 'type': 'nominal'},
+            'text': {'value': '0'},
+        },
+    }
+    return {
+        'data': {'values': rows},
+        'layer': [bar_layer, zero_label_layer],
         'width': 420,
         'height': {'step': 16},
     }
