@@ -172,3 +172,47 @@ def test_classify_error_type_moved():
     assert classify_error_type('rate limit exceeded') == 'rate_limit'
     assert classify_error_type(None) is None
     assert classify_error_type('nonsense') == 'unknown'
+
+
+class _ClientError(Exception):
+    """Stub of an SDK client error carrying an HTTP status_code (e.g. openai.APIStatusError)."""
+
+    def __init__(self, status_code: int) -> None:
+        super().__init__(f'client error {status_code}')
+        self.status_code = status_code
+
+
+@pytest.mark.asyncio
+async def test_client_error_is_not_retried():
+    t = _Target([_ClientError(400), _ok('unreachable')])
+    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    assert r.succeeded is False
+    assert r.attempts == 1
+    assert t.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_permission_error_is_not_retried():
+    t = _Target([_ClientError(403), _ok('unreachable')])
+    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    assert r.succeeded is False
+    assert r.attempts == 1
+    assert t.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_429_still_retried():
+    t = _Target([_ClientError(429), _ok('hi')])
+    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    assert r.succeeded is True
+    assert r.attempts == 2
+    assert t.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_server_error_500_still_retried():
+    t = _Target([_ClientError(500), _ClientError(500), _ClientError(500)])
+    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    assert r.succeeded is False
+    assert r.attempts == 3
+    assert t.calls == 3

@@ -114,6 +114,7 @@ async def call_target_with_retry(
     last_error: AgentResponseError | None = None
     last_details: dict[str, object] | None = None
 
+    attempt = 0  # max_attempts >= 1, but the type checker can't prove the loop runs
     for attempt in range(max_attempts):
         ctx = on_attempt(attempt) if on_attempt is not None else nullcontext()
         try:
@@ -150,10 +151,17 @@ async def call_target_with_retry(
             )
             last_error = last_response.error
             last_details = {'exception_type': type(exc).__name__, 'raw_message': str(exc), 'attempts': attempt + 1}
+            # Client errors (bad request, auth, permission scope) are
+            # deterministic — retrying replays the same rejection. 408/429 stay
+            # retryable (timeout / rate limit).
+            status = getattr(exc, 'status_code', None)
+            if isinstance(status, int) and 400 <= status < 500 and status not in (408, 429):
+                logger.warning(f'Target call failed with non-retryable client error ({status}); not retrying')
+                break
 
         if attempt + 1 < max_attempts:
             logger.warning(f'Target call failed (attempt {attempt + 1}/{max_attempts}); retrying same exchange')
 
     return TargetCallResult(
-        response=last_response, succeeded=False, attempts=max_attempts, error=last_error, error_details=last_details
+        response=last_response, succeeded=False, attempts=attempt + 1, error=last_error, error_details=last_details
     )
