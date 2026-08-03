@@ -145,6 +145,7 @@ async def simulate(
     scenarios: list[Scenario] | None = None,
     datapoints: list[SimulationDatapoint] | None = None,
     dataset_id: str | None = None,
+    memory_entity_id: str | None = None,
     max_turns: int = 10,
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
@@ -194,6 +195,11 @@ async def simulate(
             ``datapoints``, ``personas``, ``scenarios``. Each dataset row's
             ``inputs`` must already match one of the simulation input shapes
             (``datapoint`` / ``persona`` + ``scenario`` / etc.).
+        memory_entity_id: Memory ``entity_id`` sent with every call to an
+            ``agent:<key>`` target. The Responses router requires one when the
+            target agent has a memory store attached; without it every
+            conversation fails with a 400. One id is shared across the run's
+            conversations. Only valid for string ``agent:<key>`` targets.
         upload_results: When ``True`` (the default) and ``ORQ_API_KEY`` is set,
             results are uploaded to the Orq platform as an experiment. Pass
             ``False`` to suppress the upload (e.g. for local-only runs).
@@ -232,6 +238,7 @@ async def simulate(
         scenarios=scenarios,
         datapoints=datapoints,
         dataset_id=dataset_id,
+        memory_entity_id=memory_entity_id,
         max_turns=max_turns,
         sim_model=sim_model,
         evaluator_names=evaluator_names,
@@ -259,6 +266,7 @@ async def _simulate_run(
     scenarios: list[Scenario] | None = None,
     datapoints: list[SimulationDatapoint] | None = None,
     dataset_id: str | None = None,
+    memory_entity_id: str | None = None,
     max_turns: int = 10,
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
@@ -324,6 +332,7 @@ async def _simulate_run(
                     scenarios=scenarios,
                     datapoints=datapoints,
                     dataset_id=dataset_id,
+                    memory_entity_id=memory_entity_id,
                     max_turns=max_turns,
                     model=sim_model,
                     evaluator_names=evaluator_names,
@@ -1033,7 +1042,9 @@ async def _simulate_core(
     save = config.save
     run_output = config.run_output
 
-    target_callable, target_agent, target_kind_hint = _resolve_target(config.target)
+    target_callable, target_agent, target_kind_hint = _resolve_target(
+        config.target, memory_entity_id=config.memory_entity_id
+    )
 
     # ``run_id`` is minted at the outer entry (_simulate_run /
     # _generate_and_simulate_run) so the same id brackets the manifest and this
@@ -1256,6 +1267,8 @@ async def _simulate_core(
 
 def _resolve_target(
     target: str | Callable[..., Any] | AgentTarget | None,
+    *,
+    memory_entity_id: str | None = None,
 ) -> tuple[Callable[[list[Message]], str | Awaitable[str]] | None, AgentTarget | None, str | None]:
     """Resolve the simulation target into ``(callback, agent, kind_hint)`` for the runner.
 
@@ -1281,6 +1294,12 @@ def _resolve_target(
 
     resolved = target
 
+    if memory_entity_id is not None and not isinstance(resolved, str):
+        raise ValueError(
+            "memory_entity_id is only supported with string 'agent:<key>' targets; "
+            'for an AgentTarget instance, set memory_entity_id on the instance directly.'
+        )
+
     if isinstance(resolved, str):
         from evaluatorq.redteam.contracts import TargetKind, parse_target
 
@@ -1298,8 +1317,13 @@ def _resolve_target(
                 target_config=TargetConfig(system_prompt=None),
                 pipeline_config=LLMConfig(),
             )
-            return None, backend.create_target(value), 'orq_agent'
+            agent_target = backend.create_target(value)
+            if memory_entity_id is not None:
+                agent_target.memory_entity_id = memory_entity_id
+            return None, agent_target, 'orq_agent'
         if kind is TargetKind.DEPLOYMENT:
+            if memory_entity_id is not None:
+                raise ValueError("memory_entity_id is only supported with 'agent:<key>' targets.")
             return from_orq_deployment(value), None, 'orq_deployment'
         raise ValueError(
             f'Unsupported target kind {kind.value!r} for simulation; '

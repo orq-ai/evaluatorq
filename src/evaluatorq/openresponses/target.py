@@ -140,6 +140,10 @@ class OrqResponsesTarget(AgentTarget):
             # tag the request with the evaluatorq pipeline so its trace is
             # attributable to the run type. Both ride in the request body.
             body_extra = {**thread_body_param(), **pipeline_metadata_param()}
+            # The Responses router requires memory.entity_id for agents with a
+            # memory store attached (400 without it). Same shape ORQAgentTarget sends.
+            if self.memory_entity_id:
+                body_extra['memory'] = {'entity_id': self.memory_entity_id}
             if body_extra:
                 kwargs['extra_body'] = {**kwargs.get('extra_body', {}), **body_extra}
 

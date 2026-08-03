@@ -118,6 +118,7 @@ def _resolve_target(
     target: str | None,
     vercel_url: str | None,
     openai_model: str | None,
+    memory_entity_id: str | None = None,
 ) -> Any:
     """Resolve exactly one target flag to an AgentTarget.
 
@@ -134,14 +135,21 @@ def _resolve_target(
         raise typer.BadParameter('Provide exactly one of: --target, --vercel-url, --openai-model')
     if len(active) > 1:
         raise typer.BadParameter(f'Only one target flag allowed; got: {", ".join(active)}')
+    if memory_entity_id is not None and target is None:
+        raise typer.BadParameter('--memory-entity requires --target agent:<key>.')
 
     if target is not None:
         from evaluatorq.redteam.contracts import TargetKind
 
         kind, value = _parse_target_spec(target)
         if kind == TargetKind.AGENT:
-            return _make_sim_agent_backend().create_target(value)
+            agent_target = _make_sim_agent_backend().create_target(value)
+            if memory_entity_id is not None:
+                agent_target.memory_entity_id = memory_entity_id
+            return agent_target
         if kind == TargetKind.DEPLOYMENT:
+            if memory_entity_id is not None:
+                raise typer.BadParameter('--memory-entity requires --target agent:<key>.')
             _require_orq_api_key('--target deployment:<key>')
             from evaluatorq.simulation.adapters import from_orq_deployment
 
@@ -461,6 +469,17 @@ def simulate(
             help=('Target to simulate: agent:<key> or deployment:<key>. Bare values default to agent:<key>.'),
         ),
     ] = None,
+    memory_entity: Annotated[
+        str | None,
+        typer.Option(
+            '--memory-entity',
+            help=(
+                'Memory entity_id sent with every agent:<key> target call. Required when '
+                'the target agent has a memory store attached (the router 400s without it). '
+                'One id is shared across the run.'
+            ),
+        ),
+    ] = None,
     vercel_url: Annotated[
         str | None,
         typer.Option('--vercel-url', help='Vercel AI SDK endpoint URL.'),
@@ -619,6 +638,7 @@ def simulate(
             target=target,
             vercel_url=vercel_url,
             openai_model=openai_model,
+            memory_entity_id=memory_entity,
         )
         evaluator_names = _resolve_evaluators(evaluator)
         run = asyncio.run(

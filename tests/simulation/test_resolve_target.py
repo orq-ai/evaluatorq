@@ -74,3 +74,35 @@ def test_empty_string_raises() -> None:
 def test_non_callable_target_raises() -> None:
     with pytest.raises(TypeError, match="Unsupported target type"):
         _resolve_target(123)  # pyright: ignore[reportArgumentType]
+
+
+def test_agent_target_gets_memory_entity_id() -> None:
+    _, agent, kind = _resolve_target("agent:support-bot", memory_entity_id="sim-e1")
+    assert kind == "orq_agent"
+    assert agent is not None
+    assert agent.memory_entity_id == "sim-e1"
+
+
+def test_agent_target_memory_entity_id_defaults_to_none() -> None:
+    _, agent, _ = _resolve_target("agent:support-bot")
+    assert agent is not None
+    assert agent.memory_entity_id is None
+
+
+def test_memory_entity_id_rejected_for_deployment_target() -> None:
+    with pytest.raises(ValueError, match="memory_entity_id"):
+        _resolve_target("deployment:my-deploy", memory_entity_id="sim-e1")
+
+
+def test_memory_entity_id_rejected_for_instance_target() -> None:
+    from evaluatorq.contracts import AgentResponse, AgentTarget, Message
+
+    class _StubTarget(AgentTarget):
+        async def respond(self, messages: list[Message]) -> AgentResponse:
+            return AgentResponse(text="hi")
+
+        def new(self) -> "_StubTarget":
+            return _StubTarget()
+
+    with pytest.raises(ValueError, match="memory_entity_id"):
+        _resolve_target(_StubTarget(), memory_entity_id="sim-e1")

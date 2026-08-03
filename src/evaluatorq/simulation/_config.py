@@ -56,6 +56,9 @@ class SimulationConfig(BaseModel):
     scenarios: list[Scenario] | None = None
     datapoints: list[SimulationDatapoint] | None = None
     dataset_id: str | None = None
+    memory_entity_id: str | None = None
+    """Memory ``entity_id`` sent with every ``agent:<key>`` target call — the
+    Responses router requires one when the target agent has a memory store."""
 
     # --- Run behaviour -----------------------------------------------------
     max_turns: int = 10
