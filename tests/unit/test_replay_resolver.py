@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from evaluatorq.common.replay import ReplayError, load_run_payload, resolve_run_path
+from evaluatorq.common.replay import REPLAY_VERSION, ReplayError, load_run_payload, resolve_run_path
 from evaluatorq.common.run_manifest import start_manifest
 
 if TYPE_CHECKING:
@@ -141,3 +141,32 @@ def test_ambiguous_run_name_takes_the_newest_and_says_so(tmp_path: Path, caplog)
     with caplog.at_level('INFO'):
         assert resolve_run_path('nightly', runs, surface='red team') == newest
     assert any('matches 2 runs' in r.message for r in caplog.records)
+
+
+def test_a_newer_replay_format_is_rejected_with_an_upgrade_hint(tmp_path: Path) -> None:
+    """The version marker exists so the *next* format change reports itself
+    instead of failing structurally somewhere downstream."""
+    runs = tmp_path / 'runs'
+    _write_run(runs, 'future', payload={'run_name': 'future', 'replay_version': REPLAY_VERSION + 1})
+
+    with pytest.raises(ReplayError, match='newer version of evaluatorq'):
+        load_run_payload('future', runs, surface='red team')
+
+
+def test_the_current_replay_format_is_accepted(tmp_path: Path) -> None:
+    runs = tmp_path / 'runs'
+    _write_run(runs, 'current', payload={'run_name': 'current', 'replay_version': REPLAY_VERSION})
+
+    payload, _ = load_run_payload('current', runs, surface='red team')
+
+    assert payload['run_name'] == 'current'
+
+
+def test_an_unversioned_run_is_read_as_the_original_format(tmp_path: Path) -> None:
+    """Runs saved before versioning carry no marker and are still replayable."""
+    runs = tmp_path / 'runs'
+    _write_run(runs, 'legacy', payload={'run_name': 'legacy'})
+
+    payload, _ = load_run_payload('legacy', runs, surface='red team')
+
+    assert 'replay_version' not in payload

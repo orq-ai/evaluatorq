@@ -136,7 +136,8 @@ first messages are re-used exactly — no persona/scenario generation, no
 first-message generation, no dataset fetch — and the run's turn cap is restored
 unless you pass `--max-turns`. What you vary between runs is the target and the
 evaluators. Runs saved before this shipped carry no datapoints and are rejected
-with an explanatory error.
+with an explanatory error, as are runs stamped with a replay format newer than
+the installed version understands.
 
 No built-in trace-to-persona extractor yet: turning raw traces (or previous
 runs) into seed phrases for `generate_personas()` / `generate_scenarios()` is a

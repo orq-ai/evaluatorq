@@ -246,3 +246,38 @@ async def test_pipeline_span_carries_a_replayed_turn_cap(tmp_path: Path, pipelin
         await simulate(evaluation_name='x', target=lambda _m: 'hi', previous_run='latest')
 
     assert _pipeline_attrs(pipeline_spans)['orq.simulation.max_turns'] == 7
+
+
+def test_a_saved_run_stamps_the_replay_format_version() -> None:
+    """The marker is only meaningful next to stored cases, so it rides with them."""
+    from evaluatorq.common.replay import REPLAY_VERSION
+    from evaluatorq.simulation.utils.run_store import build_simulation_run
+
+    with_cases = build_simulation_run(
+        run_name='sim',
+        mode='simulate',
+        target_kind='orq_agent',
+        evaluator_names=[],
+        results=[],
+        datapoints=[_datapoint()],
+    )
+    without_cases = build_simulation_run(
+        run_name='sim',
+        mode='simulate',
+        target_kind='orq_agent',
+        evaluator_names=[],
+        results=[],
+    )
+
+    assert with_cases.replay_version == REPLAY_VERSION
+    assert without_cases.replay_version is None
+
+
+def test_replay_error_is_importable_from_the_simulation_surface() -> None:
+    """SDK callers passing previous_run= need to catch it without reaching into
+    evaluatorq.common."""
+    import evaluatorq.simulation as sim
+    from evaluatorq.common.replay import ReplayError as internal
+
+    assert sim.ReplayError is internal
+    assert 'ReplayError' in sim.__all__

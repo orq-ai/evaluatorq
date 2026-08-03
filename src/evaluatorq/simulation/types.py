@@ -413,6 +413,10 @@ class SimulationRun(BaseModel):
     verbatim (``previous_run=`` / ``--from-run``). Results alone don't carry
     enough — they keep persona/scenario *names*, not the objects. None for runs
     saved before this field existed, which therefore cannot be replayed."""
+    replay_version: int | None = None
+    """Format version of the replay payload above, stamped when ``datapoints`` is
+    written so a future format change reports itself instead of failing
+    structurally. None for runs saved before versioning, which read as v1."""
     executive_summary: str | None = None
     run_id: str | None = None
     """Client-minted run-grouping id (uuid hex, not an Orq-side run id) shared by every

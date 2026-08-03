@@ -256,3 +256,28 @@ def test_untagged_datapoints_leave_the_stored_label_alone(tmp_path: Path) -> Non
     _save_run(runs, 'rt_20260101_000000', {'pipeline': 'static', 'datapoints': [STATIC_INPUTS]})
 
     assert load_redteam_replay('latest', runs).pipeline == Pipeline.STATIC
+
+
+def test_a_saved_run_stamps_the_replay_format_version(tmp_path, monkeypatch) -> None:
+    """The marker rides with the stored cases: a run with nothing replayable in
+    it should not claim a replay format."""
+    import evaluatorq.redteam.runner as runner_mod
+    from evaluatorq.common.replay import REPLAY_VERSION
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path / '.evaluatorq'))
+    report = _minimal_report()
+
+    with_cases = runner_mod._auto_save_run(report, 'stamped', [{'id': 'a', 'strategy': {}}], {})
+    without_cases = runner_mod._auto_save_run(report, 'bare', [], None)
+
+    assert with_cases is not None and without_cases is not None
+    assert json.loads(with_cases.read_text())['replay_version'] == REPLAY_VERSION
+    assert 'replay_version' not in json.loads(without_cases.read_text())
+
+
+def test_replay_error_is_importable_from_the_redteam_surface() -> None:
+    import evaluatorq.redteam as rt
+    from evaluatorq.common.replay import ReplayError as internal
+
+    assert rt.ReplayError is internal
+    assert 'ReplayError' in rt.__all__

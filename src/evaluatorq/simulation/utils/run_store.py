@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from evaluatorq.common.llm_client import orq_base_url as _orq_base_url
+from evaluatorq.common.replay import REPLAY_VERSION
 from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.simulation.types import AgentInfoSnapshot, SimulationRun
 
@@ -172,6 +173,7 @@ def build_simulation_run(
         scorer_averages=scorer_averages,
         results=results,
         datapoints=list(datapoints) if datapoints else None,
+        replay_version=REPLAY_VERSION if datapoints else None,
     )
 
 

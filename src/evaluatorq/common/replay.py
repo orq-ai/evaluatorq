@@ -38,8 +38,37 @@ MIN_RUN_ID_PREFIX = 8
 _SUGGEST_LIMIT = 5
 
 
+REPLAY_VERSION_KEY = 'replay_version'
+"""Key under which a saved run stamps the format its replay payload is written in."""
+
+REPLAY_VERSION = 1
+"""Format version this build writes and is able to read.
+
+Without a marker, recognising an unreplayable run means sniffing for an absent
+``datapoints`` key — a trick that only works for the one transition from
+pre-replay runs. Stamping the version means the *next* format change can say
+"saved by a newer version of evaluatorq" instead of failing structurally
+somewhere downstream. Runs with no marker are pre-versioning and are read as
+version 1, which is what they are.
+"""
+
+
 class ReplayError(RuntimeError):
     """A previous-run reference could not be resolved or replayed."""
+
+
+def check_replay_version(payload: dict[str, Any], path: Path, *, surface: str) -> None:
+    """Reject a run whose replay payload is newer than this build understands.
+
+    Raises:
+        ReplayError: The run declares a format version above :data:`REPLAY_VERSION`.
+    """
+    stored = payload.get(REPLAY_VERSION_KEY)
+    if isinstance(stored, int) and stored > REPLAY_VERSION:
+        raise ReplayError(
+            f'{path.name} was saved by a newer version of evaluatorq (replay format v{stored}; '
+            f'this build reads v{REPLAY_VERSION}). Upgrade evaluatorq to replay this {surface} run.'
+        )
 
 
 def _reports_newest_first(runs_dir: Path) -> list[Path]:
@@ -151,4 +180,5 @@ def load_run_payload(reference: str, runs_dir: Path, *, surface: str) -> tuple[d
         raise ReplayError(f'Previous {surface} run {path} is not valid JSON: {exc}') from exc
     if not isinstance(payload, dict):
         raise ReplayError(f'Previous {surface} run {path} does not contain a run object.')
+    check_replay_version(payload, path, surface=surface)
     return payload, path

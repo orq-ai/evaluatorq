@@ -23,6 +23,7 @@ from evaluatorq import DataPoint, EvaluationResult, job
 from evaluatorq.common.async_utils import await_maybe
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.messages import coerce_content_text
+from evaluatorq.common.replay import REPLAY_VERSION, REPLAY_VERSION_KEY
 from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.common.target_call import call_target_with_retry, default_map_error
 from evaluatorq.common.thread_context import build_static_thread_id, conversation_thread, evaluatorq_pipeline
@@ -163,6 +164,7 @@ def _auto_save_run(
         if datapoints:
             data[REPLAY_DATAPOINTS_KEY] = datapoints
             data[REPLAY_RUN_CONFIG_KEY] = run_config or {}
+            data[REPLAY_VERSION_KEY] = REPLAY_VERSION
         path.write_text(json.dumps(data, indent=2, default=str), encoding='utf-8')
         logger.debug(f'Auto-saved run to {path}')
         return path
