@@ -115,6 +115,11 @@ def _redteam_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
     evaluated = _as_int(summary.get('evaluated_attacks')) if summary else 0
     errors = _as_int(summary.get('total_errors')) if summary else 0
     total = _as_int(summary.get('total_attacks')) if summary else 0
+    # A run that evaluated nothing has no resistance to report — the schema
+    # default (1.0) would read as a perfect score. Only when the report says
+    # zero explicitly; legacy reports without the field keep their rate.
+    if summary.get('evaluated_attacks') is not None and evaluated == 0:
+        resistance = None
     return RunRow(
         id=card.id,
         surface='redteam',

@@ -313,3 +313,26 @@ class TestBarsRounding:
         html = view._bars([('A', 5), ('B', 0)], ['c1', 'c2'])
         assert '· 0%' in html
         assert 'width:0%' in html
+
+
+class TestZeroAttackScore:
+    def test_zero_evaluated_attacks_has_no_score(self, tmp_path: Path) -> None:
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        (rt / 'empty_20260731_130000.json').write_text(
+            json.dumps(
+                _redteam_payload(
+                    'empty run',
+                    created='2026-07-31T13:00:00Z',
+                    resistance=1.0,
+                    vulns=0,
+                    evaluated=0,
+                    tokens=0,
+                    severity={},
+                )
+            )
+        )
+        rows = metrics.run_rows([rt])
+        assert len(rows) == 1
+        # 0 attacks evaluated: 1.00 would read as a perfect score.
+        assert rows[0].score is None
