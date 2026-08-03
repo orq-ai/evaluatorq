@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -146,3 +147,102 @@ async def test_previous_run_is_mutually_exclusive(tmp_path: Path) -> None:
             model='openai/gpt-5.4-mini',
             generation_client=None,
         )
+
+
+def test_a_red_team_run_is_rejected_with_a_pointer_to_the_right_command(tmp_path: Path) -> None:
+    """Both surfaces store a top-level `datapoints`, so the discriminator is `pipeline`."""
+    runs = tmp_path / 'runs'
+    runs.mkdir(parents=True)
+    (runs / 'rt_20260101_000000.json').write_text(
+        json.dumps({
+            'run_name': 'rt',
+            'pipeline': 'dynamic',
+            # A red team run saved by this same version: non-empty datapoints, so
+            # the guard cannot be gated on the list being empty.
+            'datapoints': [{'id': 'a', 'category': 'ASI01', 'strategy': {'name': 's'}}],
+        }),
+        encoding='utf-8',
+    )
+
+    with pytest.raises(ReplayError, match='eq redteam run --from-run'):
+        load_simulation_replay('latest', runs)
+
+
+def test_max_turns_is_restored_from_the_replayed_run(tmp_path: Path) -> None:
+    run = build_simulation_run(
+        run_name='sim',
+        mode='simulate',
+        target_kind='callback',
+        evaluator_names=[],
+        results=[],
+        max_turns=7,
+        datapoints=[_datapoint()],
+    )
+    auto_save_run(run=run, run_name='sim')
+
+    assert load_simulation_replay('latest', get_sim_runs_dir()).max_turns == 7
+
+
+@pytest.fixture
+def pipeline_spans():
+    """Collect simulation spans in memory."""
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
+
+    class _Collect(SpanExporter):
+        def __init__(self) -> None:
+            self.spans: list[object] = []
+
+        def export(self, spans):  # noqa: ANN001, ANN202
+            self.spans.extend(spans)
+            return SpanExportResult.SUCCESS
+
+    exporter = _Collect()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    with patch('evaluatorq.simulation.tracing.get_tracer', return_value=provider.get_tracer('test')):
+        yield exporter
+    provider.shutdown()
+
+
+def _pipeline_attrs(exporter) -> dict[str, object]:
+    for span in exporter.spans:
+        if span.name == 'orq.simulation.pipeline':
+            return dict(span.attributes or {})
+    raise AssertionError('no orq.simulation.pipeline span was recorded')
+
+
+@pytest.mark.asyncio
+async def test_pipeline_span_carries_the_default_turn_cap(pipeline_spans) -> None:
+    """max_turns is None until resolved, and set_span_attrs drops None — so the
+    attribute has to be stamped after resolution or it vanishes from traces."""
+    from evaluatorq.simulation.api import simulate
+
+    with (
+        patch('evaluatorq.simulation.api._resolve_or_generate_datapoints', new=AsyncMock(return_value=[])),
+        patch('evaluatorq.simulation.api._simulate_via_evaluatorq', new=AsyncMock(return_value=[])),
+    ):
+        await simulate(evaluation_name='x', target=lambda _m: 'hi', datapoints=[])
+
+    assert _pipeline_attrs(pipeline_spans)['orq.simulation.max_turns'] == 10
+
+
+@pytest.mark.asyncio
+async def test_pipeline_span_carries_a_replayed_turn_cap(tmp_path: Path, pipeline_spans) -> None:
+    from evaluatorq.simulation.api import simulate
+
+    run = build_simulation_run(
+        run_name='sim',
+        mode='simulate',
+        target_kind='callback',
+        evaluator_names=[],
+        results=[],
+        max_turns=7,
+        datapoints=[_datapoint()],
+    )
+    auto_save_run(run=run, run_name='sim')
+
+    with patch('evaluatorq.simulation.api._simulate_via_evaluatorq', new=AsyncMock(return_value=[])):
+        await simulate(evaluation_name='x', target=lambda _m: 'hi', previous_run='latest')
+
+    assert _pipeline_attrs(pipeline_spans)['orq.simulation.max_turns'] == 7

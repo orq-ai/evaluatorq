@@ -215,3 +215,44 @@ def test_detail_summary_report_is_rejected_without_blaming_the_version(tmp_path:
 
     with pytest.raises(ReplayError, match='--save detail summary report'):
         load_redteam_replay(str(runs / '03_summary_report.json'), tmp_path / 'runs')
+
+
+def test_static_tags_win_over_an_under_reported_pipeline_label(tmp_path: Path) -> None:
+    """merge_reports collapses a hybrid label when the static leg yields no rows.
+
+    The datapoints still carry their tags, so replaying must not route
+    messages-only rows into the dynamic attack job.
+    """
+    runs = tmp_path / 'runs'
+    _save_run(
+        runs,
+        'rt_20260101_000000',
+        {
+            'pipeline': 'dynamic',  # under-reported by merge_reports
+            'datapoints': [
+                {**DYNAMIC_INPUTS, 'hybrid_source': 'dynamic'},
+                {**STATIC_INPUTS, 'hybrid_source': 'static'},
+            ],
+        },
+    )
+
+    assert load_redteam_replay('latest', runs).pipeline == Pipeline.HYBRID
+
+
+def test_a_more_specific_stored_label_is_not_downgraded(tmp_path: Path) -> None:
+    runs = tmp_path / 'runs'
+    _save_run(
+        runs,
+        'rt_20260101_000000',
+        {'pipeline': 'static', 'datapoints': [{**STATIC_INPUTS, 'hybrid_source': 'static'}]},
+    )
+
+    assert load_redteam_replay('latest', runs).pipeline == Pipeline.STATIC
+
+
+def test_untagged_datapoints_leave_the_stored_label_alone(tmp_path: Path) -> None:
+    """A static-mode run tags nothing, so its label must survive."""
+    runs = tmp_path / 'runs'
+    _save_run(runs, 'rt_20260101_000000', {'pipeline': 'static', 'datapoints': [STATIC_INPUTS]})
+
+    assert load_redteam_replay('latest', runs).pipeline == Pipeline.STATIC

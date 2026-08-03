@@ -79,14 +79,31 @@ def _validate_datapoint(inputs: dict[str, Any], index: int, run_name: str) -> No
 
 
 def _infer_pipeline(datapoints: list[DataPoint], stored: Any) -> Pipeline:
-    """Trust the stored pipeline; fall back to the datapoints' hybrid tags."""
+    """Resolve the pipeline to replay under, preferring the datapoints' own tags.
+
+    The stored label can under-report: ``merge_reports`` derives a report's
+    pipeline from the sub-reports that actually produced rows, so a hybrid run
+    whose static leg yields no results is saved as ``'dynamic'`` even though its
+    datapoints still carry ``hybrid_source='static'``. Replaying that as dynamic
+    would route ``messages``-only rows into the attack-generation job. Where the
+    tags contradict the label, the tags win — they describe the cases in hand.
+
+    Untagged datapoints (pure dynamic, or a static-mode run, neither of which
+    tags anything) carry no signal, so the stored label stands.
+    """
     try:
-        return Pipeline(stored)
+        stored_pipeline: Pipeline | None = Pipeline(stored)
     except ValueError:
-        sources = {dp.inputs.get('hybrid_source') for dp in datapoints}
-        if sources == {'static'}:
-            return Pipeline.STATIC
-        return Pipeline.HYBRID if 'static' in sources else Pipeline.DYNAMIC
+        stored_pipeline = None
+
+    sources = {dp.inputs.get('hybrid_source') for dp in datapoints}
+    if 'static' in sources:
+        tagged = Pipeline.HYBRID if sources - {'static'} else Pipeline.STATIC
+        # Only DYNAMIC actually contradicts a static-tagged row; a stored
+        # 'hybrid'/'static' is at least as specific, so leave it alone.
+        return tagged if stored_pipeline in (None, Pipeline.DYNAMIC) else stored_pipeline
+
+    return stored_pipeline if stored_pipeline is not None else Pipeline.DYNAMIC
 
 
 def load_redteam_replay(reference: str, runs_dir: Path) -> RedTeamReplay:

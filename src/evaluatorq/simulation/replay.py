@@ -47,13 +47,18 @@ def load_simulation_replay(reference: str, runs_dir: Path | None = None) -> Simu
     resolved_dir = runs_dir if runs_dir is not None else get_sim_runs_dir()
     payload, path = load_run_payload(reference, resolved_dir, surface=SURFACE)
 
+    # Check the discriminator first, unconditionally: a red team run saved by
+    # this same version carries a non-empty top-level ``datapoints`` too, so
+    # gating this on an empty list would let it through to fail as a pydantic
+    # dump instead of the redirect. ``pipeline`` is red-team-only.
+    if payload.get('pipeline') is not None:
+        raise ReplayError(
+            f'{path.name} is a red team run, not a simulation run. '
+            f'Replay it with: eq redteam run --from-run {path.name} --target <target>'
+        )
+
     raw = payload.get('datapoints')
     if not isinstance(raw, list) or not raw:
-        if payload.get('pipeline') is not None:
-            raise ReplayError(
-                f'{path.name} is a red team run, not a simulation run. '
-                f'Replay it with: eq redteam run --from-run {path.name} --target <target>'
-            )
         raise ReplayError(
             f'{path.name} records no simulation datapoints, so it cannot be replayed. Replay needs the '
             'cases themselves, which only runs saved after replay support existed carry. Re-run the '

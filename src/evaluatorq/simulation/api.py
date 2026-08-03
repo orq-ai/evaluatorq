@@ -308,7 +308,10 @@ async def _simulate_run(
             'orq.simulation.pipeline',
             {
                 'orq.simulation.evaluation_name': evaluation_name,
-                'orq.simulation.max_turns': max_turns,
+                # max_turns is None until _simulate_core resolves it (an explicit
+                # value, else a replayed run's cap, else the default), and
+                # set_span_attrs drops None — so the resolved value is stamped
+                # there rather than guessed here.
                 'orq.simulation.parallelism': parallelism,
             },
         ) as pipeline_span:
@@ -580,7 +583,10 @@ async def _generate_and_simulate_run(
                 'orq.simulation.mode': 'generate_and_simulate',
                 'orq.simulation.num_personas': num_personas,
                 'orq.simulation.num_scenarios': num_scenarios,
-                'orq.simulation.max_turns': max_turns,
+                # max_turns is None until _simulate_core resolves it (an explicit
+                # value, else a replayed run's cap, else the default), and
+                # set_span_attrs drops None — so the resolved value is stamped
+                # there rather than guessed here.
                 'orq.simulation.parallelism': parallelism,
             },
         ) as pipeline_span:
@@ -1083,7 +1089,7 @@ async def _simulate_core(
 
     set_span_attrs(
         pipeline_span,
-        {'orq.simulation.datapoints_count': len(sim_datapoints)},
+        {'orq.simulation.datapoints_count': len(sim_datapoints), 'orq.simulation.max_turns': max_turns},
     )
 
     resolved_hooks = config.hooks or DefaultHooks()
