@@ -289,3 +289,27 @@ class TestAvgCost:
             cost_by_kind=[],
         )
         assert 'n/a' in view.landing_body(data)
+
+
+class TestBarsRounding:
+    def test_tiny_share_shows_less_than_one_percent(self) -> None:
+        html = view._bars([('Red team', 328), ('Agent sim', 1)], ['c1', 'c2'])
+        assert '&lt;1%' in html
+        assert '· 0%' not in html
+        # the tiny row still gets a visible sliver of bar
+        assert 'width:1%' in html
+
+    def test_dominant_share_shows_more_than_99_percent(self) -> None:
+        html = view._bars([('Red team', 328), ('Agent sim', 1)], ['c1', 'c2'])
+        assert '&gt;99%' in html
+        assert '· 100%' not in html
+
+    def test_exact_shares_unchanged(self) -> None:
+        html = view._bars([('A', 3), ('B', 1)], ['c1', 'c2'])
+        assert '· 75%' in html
+        assert '· 25%' in html
+
+    def test_zero_value_row_stays_zero(self) -> None:
+        html = view._bars([('A', 5), ('B', 0)], ['c1', 'c2'])
+        assert '· 0%' in html
+        assert 'width:0%' in html

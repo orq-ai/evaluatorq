@@ -180,12 +180,22 @@ def _bars(rows: list[tuple[str, float]], colors: list[str], *, total_label: str 
     parts: list[str] = ['<div class="bars">']
     for i, (name, val) in enumerate(rows):
         pct = round(val / total * 100)
+        # Rounding must not erase a real value ("1 run · 0%") or overstate a
+        # partial one ("328 of 329 · 100%"); clamp the label and keep a visible
+        # sliver of bar for any nonzero row.
+        if val and pct == 0:
+            pct_label = '<1%'
+        elif val < total and pct == 100:
+            pct_label = '>99%'
+        else:
+            pct_label = f'{pct}%'
+        width = max(pct, 1) if val else 0
         color = colors[i % len(colors)]
         parts.append(
             f'<div class="bar-row"><div class="bar-head">'
             f'<span class="bar-name">{esc(name)}</span>'
-            f'<span class="bar-val">{esc(fmt.format(val))} <span class="bar-pct">· {pct}%</span></span>'
-            f'</div><div class="bar-track"><div class="bar-fill" style="width:{pct}%;background:{color}"></div></div></div>'
+            f'<span class="bar-val">{esc(fmt.format(val))} <span class="bar-pct">· {esc(pct_label)}</span></span>'
+            f'</div><div class="bar-track"><div class="bar-fill" style="width:{width}%;background:{color}"></div></div></div>'
         )
     parts.append(
         f'<div class="bars-total"><span class="t-label">{esc(total_label)}</span>'
