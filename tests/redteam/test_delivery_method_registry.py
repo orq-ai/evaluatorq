@@ -188,3 +188,10 @@ def test_check_filter_results_empty_run_error_reports_values_not_reprs() -> None
     assert 'custom' in text
     # never the enum repr, which the 3.10 polyfill would produce via str()
     assert 'DeliveryMethod.DAN' not in text
+
+
+def test_every_enum_member_has_a_category() -> None:
+    """Completeness: DELIVERY_METHOD_CATEGORY must map every DeliveryMethod
+    member, so a newly added method can never ship without a technique family."""
+    missing = [m for m in DeliveryMethod if m not in reg.DELIVERY_METHOD_CATEGORY]
+    assert not missing, f'delivery methods missing from DELIVERY_METHOD_CATEGORY: {missing}'

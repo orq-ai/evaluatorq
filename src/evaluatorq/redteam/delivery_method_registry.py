@@ -64,8 +64,8 @@ def delivery_method_str(value: DeliveryMethod | str) -> str:
 # The one piece of real structure delivery methods carry; kept so ``register``
 # has somewhere to place a custom method and the registry mirrors the
 # vulnerability registry's structured defs rather than being a bare set.
-# ponytail: category is the only metadata a consumer needs today; add richer
-# per-method defs here if one ever does.
+# Category is the only metadata a consumer needs today; add richer per-method
+# defs here if one ever does.
 DELIVERY_METHOD_CATEGORY: dict[DeliveryMethod, str] = {
     DeliveryMethod.DAN: 'persona',
     DeliveryMethod.ROLE_PLAY: 'persona',

@@ -44,6 +44,7 @@ from evaluatorq.redteam.contracts import (
     infer_framework,
     normalize_category,
 )
+from evaluatorq.redteam.delivery_method_registry import delivery_method_str
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_metadata_for_category
 from evaluatorq.redteam.runtime.jobs import _normalize_usage as _normalize_token_usage
 from evaluatorq.redteam.vulnerability_registry import (
@@ -904,7 +905,10 @@ def compute_report_summary(results: list[RedTeamResult]) -> ReportSummary:
     dm_eval_totals: dict[str, int] = {}
     dm_vulns: dict[str, int] = {}
     for r in results:
-        for dm in r.attack.delivery_methods:
+        for raw_dm in r.attack.delivery_methods:
+            # String-key so a DeliveryMethod member never leaks its 3.10 repr
+            # (DeliveryMethod.X) into report keys — see delivery_method_str.
+            dm = delivery_method_str(raw_dm)
             dm_totals[dm] = dm_totals.get(dm, 0) + 1
             if _is_evaluated(r):
                 dm_eval_totals[dm] = dm_eval_totals.get(dm, 0) + 1

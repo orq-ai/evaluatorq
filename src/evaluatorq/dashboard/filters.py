@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from evaluatorq.redteam.delivery_method_registry import delivery_method_str
 from evaluatorq.simulation.metrics import TURN_METRICS
 
 if TYPE_CHECKING:
@@ -84,7 +85,7 @@ def _rt_options_from_results(results: list[Any]) -> dict[str, list[str]]:
     all_categories = sorted({r.attack.category for r in results})
     all_severities = [s for s in SEVERITY_ORDER if any(r.attack.severity.value == s for r in results)]
     all_techniques = sorted({r.attack.attack_technique.value for r in results})
-    all_delivery = sorted({getattr(dm, 'value', dm) for r in results for dm in (r.attack.delivery_methods or [])})
+    all_delivery = sorted({delivery_method_str(dm) for r in results for dm in (r.attack.delivery_methods or [])})
     all_vulnerabilities = sorted({r.attack.vulnerability for r in results if r.attack.vulnerability})
     all_agents = sorted({r.agent.key or r.agent.display_name or 'unknown' for r in results})
 
@@ -157,7 +158,7 @@ def _rt_apply(report: Any, selections: dict[str, list[str]]) -> list[Any]:
             results = [
                 r
                 for r in results
-                if any(getattr(dm, 'value', dm) in sel_delivery for dm in (r.attack.delivery_methods or []))
+                if any(delivery_method_str(dm) in sel_delivery for dm in (r.attack.delivery_methods or []))
             ]
 
     # vulnerability (multiselect) — only when options exist

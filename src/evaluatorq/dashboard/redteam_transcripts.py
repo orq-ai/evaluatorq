@@ -25,6 +25,7 @@ from evaluatorq.dashboard.redteam_charts import (
 from evaluatorq.dashboard.report_kit import tag
 from evaluatorq.dashboard.trace_links import single_trace_url, thread_trace_url, trace_link_button
 from evaluatorq.dashboard.view import render_message_list
+from evaluatorq.redteam.delivery_method_registry import delivery_method_str
 from evaluatorq.redteam.reports.converters import _is_evaluated, _is_vulnerable
 
 if TYPE_CHECKING:
@@ -53,7 +54,7 @@ def render_attack_fragment(r: RedTeamResult) -> str:
     """
     atk = r.attack
 
-    tags: list[str] = [tag(getattr(dm, 'value', str(dm))) for dm in atk.delivery_methods or []]
+    tags: list[str] = [tag(delivery_method_str(dm)) for dm in atk.delivery_methods or []]
     if atk.turn_type:
         tags.append(tag(f'{atk.turn_type.value}-turn'))
     if atk.category:

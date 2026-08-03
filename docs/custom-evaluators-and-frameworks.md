@@ -230,6 +230,31 @@ Strategies can declare capability requirements to skip attacks that don't apply 
 
 Available capability tags: `code_execution`, `shell_access`, `file_system`, `web_request`, `database`, `email`, `messaging`, `memory_read`, `memory_write`, `knowledge_retrieval`, `user_data`.
 
+### Custom delivery methods
+
+`delivery_method` is an **open set**. The canonical methods live in the `DeliveryMethod`
+enum (each mapped to a technique family in `DELIVERY_METHOD_CATEGORY`), and
+`delivery_method_registry.py` mirrors the vulnerability registry so you can add your own
+without touching the enum:
+
+```python
+from evaluatorq.redteam.delivery_method_registry import (
+    register_delivery_method,
+    is_known_delivery_method,
+)
+
+# Register a custom method so it validates and filters as known.
+register_delivery_method('emoji-smuggling', category='obfuscation')
+
+is_known_delivery_method('emoji-smuggling')  # True
+```
+
+Unlike vulnerabilities (reject-unknown, since an unknown vuln has no strategies or
+evaluator), delivery methods are **coerce-known + passthrough-unknown**: an unregistered
+value is a harmless filter label that either matches a dataset row spelled the same or
+does not. Registering is only needed when you want `is_known_delivery_method` /
+`--delivery-method` to treat your value as canonical rather than passthrough.
+
 ## Adding a new framework
 
 Frameworks are a reporting/compliance layer on top of vulnerabilities. Adding a framework means:
