@@ -26,6 +26,7 @@ from evaluatorq.redteam.contracts import (
     RedTeamResult,
     ReportSummary,
 )
+from evaluatorq.redteam.delivery_method_registry import delivery_method_str
 from evaluatorq.redteam.reports.converters import compute_report_summary
 from evaluatorq.redteam.reports.export_md import export_markdown
 from evaluatorq.redteam.reports.guidance import REMEDIATION_GUIDANCE
@@ -365,7 +366,7 @@ def _render_sidebar_filters(results: list[RedTeamResult]) -> list[RedTeamResult]
     all_categories = sorted({r.attack.category for r in results})
     all_severities = [s for s in SEVERITY_ORDER if any(r.attack.severity.value == s for r in results)]
     all_techniques = sorted({r.attack.attack_technique.value for r in results})
-    all_delivery = sorted({getattr(dm, 'value', dm) for r in results for dm in (r.attack.delivery_methods or [])})
+    all_delivery = sorted({delivery_method_str(dm) for r in results for dm in (r.attack.delivery_methods or [])})
     all_vulnerabilities = sorted({r.attack.vulnerability for r in results if r.attack.vulnerability})
     all_agents = sorted({r.agent.key or r.agent.display_name or 'unknown' for r in results})
 
@@ -474,7 +475,7 @@ def _render_sidebar_filters(results: list[RedTeamResult]) -> list[RedTeamResult]
         filtered = [
             r
             for r in filtered
-            if any(getattr(dm, 'value', dm) in sel_delivery for dm in (r.attack.delivery_methods or []))
+            if any(delivery_method_str(dm) in sel_delivery for dm in (r.attack.delivery_methods or []))
         ]
 
     if all_vulnerabilities and set(sel_vulnerabilities) != set(all_vulnerabilities):
@@ -1970,7 +1971,7 @@ def _render_result_detail(result: RedTeamResult) -> None:
     mc5.markdown(f'**Turn Type:** {atk.turn_type.value}')
 
     if atk.delivery_methods:
-        st.markdown(f'**Delivery Methods:** {", ".join(getattr(dm, "value", dm) for dm in atk.delivery_methods)}')
+        st.markdown(f'**Delivery Methods:** {", ".join(delivery_method_str(dm) for dm in atk.delivery_methods)}')
 
     # Execution details
     if result.execution:
