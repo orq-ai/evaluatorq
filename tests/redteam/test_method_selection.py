@@ -423,6 +423,36 @@ class TestBridgeDeliveryFilter:
         kept = _apply_filters(dps, delivery_methods=['crescendo'])
         assert [dp.inputs['delivery_method'] for dp in kept] == ['crescendo']
 
+    # Selections are passed positionally-by-keyword rather than via **kwargs
+    # unpacking: a `**{name: value}` call erases every other parameter's type
+    # for basedpyright, which CI runs over tests as well as src.
+    @pytest.mark.parametrize(
+        ('categories', 'delivery_methods'),
+        [([], None), (None, [])],
+        ids=['categories', 'delivery_methods'],
+    )
+    def test_empty_selection_matches_nothing_not_everything(
+        self, categories: list[str] | None, delivery_methods: list[str] | None
+    ) -> None:
+        """An empty list means "match nothing", never "match everything".
+
+        The loader used to test truthiness, so an empty selection skipped the
+        filter and the full sweep ran — while the planner tested `is None` and
+        dropped every strategy for the same input. The loader now agrees with
+        the planner, and the caller gets zero datapoints (which the runner turns
+        into a RedTeamError) instead of a silent full-cost run.
+        """
+        from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import _apply_filters
+
+        dps = [self._dp('base64'), self._dp('crescendo')]
+        assert _apply_filters(dps, categories=categories, delivery_methods=delivery_methods) == []
+
+    def test_none_selection_still_disables_the_filter(self) -> None:
+        from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import _apply_filters
+
+        dps = [self._dp('base64'), self._dp('crescendo')]
+        assert _apply_filters(dps, categories=None, delivery_methods=None) == dps
+
     def test_delivery_filter_runs_before_num_samples_cap(self) -> None:
         # Regression: the cap must apply to the FILTERED set, not slice first.
         # crescendo row is last; cap=2 would slice it off if filtering ran after.

@@ -178,6 +178,48 @@ async def test_static_unknown_delivery_method_passes_through_and_hard_fails(
     assert "direct-request" in message  # what the dataset actually carries
 
 
+# `strategies` is deliberately absent: strategy-name selection does not apply to
+# static rows (they carry no strategy name), so static warns and ignores it —
+# empty or not. The planner-side behaviour is covered in test_method_selection.py.
+# Selections are passed as explicit keywords rather than `**{name: value}`:
+# dict unpacking erases every other red_team() parameter's type for
+# basedpyright, which CI runs over tests as well as src.
+@pytest.mark.parametrize(
+    ("categories", "vulnerabilities", "delivery_methods"),
+    [([], None, None), (None, [], None), (None, None, [])],
+    ids=["categories", "vulnerabilities", "delivery_methods"],
+)
+@pytest.mark.asyncio
+async def test_static_empty_filter_hard_fails_instead_of_running_everything(
+    categories: list[str] | None,
+    vulnerabilities: list[str] | None,
+    delivery_methods: list[str] | None,
+    mock_llm_client: DeterministicAsyncOpenAI,
+    mock_backend_bundle: MockBackend,
+    static_dataset_path: Path,
+) -> None:
+    """An empty selection must never be read as "no filter" on any of the four filters.
+
+    Before this, the static loader tested truthiness, so `categories=[]` or
+    `delivery_methods=[]` skipped filtering and ran the whole dataset at full
+    cost, exit 0, no warning — the exact opposite of what the caller asked for,
+    and the opposite of what the planner did with the same input.
+    """
+    from evaluatorq.redteam.exceptions import RedTeamError
+
+    with _static_patches(mock_backend_bundle), pytest.raises(RedTeamError, match="zero datapoints"):
+        await red_team(
+            "agent:e2e-static-model",
+            mode="static",
+            parallelism=2,
+            dataset=str(static_dataset_path),
+            llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
+            categories=categories,
+            vulnerabilities=vulnerabilities,
+            delivery_methods=delivery_methods,
+        )
+
+
 @pytest.mark.asyncio
 async def test_static_datapoint_capping(
     mock_llm_client: DeterministicAsyncOpenAI,
