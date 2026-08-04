@@ -220,7 +220,7 @@ def test_skills_tolerates_bad_shapes(raw, expected):
 def test_key_is_not_coerced():
     """Identity is strict: a bad key must fail, not resolve to something plausible."""
     with pytest.raises(ValidationError):
-        AgentContext(key=_Unset())  # type: ignore[arg-type]
+        AgentContext(key=_Unset())  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
 
 
 def test_resolve_context_degrades_on_validation_error(monkeypatch):

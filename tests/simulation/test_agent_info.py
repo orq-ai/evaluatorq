@@ -148,16 +148,19 @@ async def test_fetch_agent_info_sanitizes_unset_optional_fields(monkeypatch: pyt
 
     assert snapshot is not None
     json.dumps(snapshot)
-    assert snapshot['version'] is None
-    assert snapshot['skills'] == []
-    assert snapshot['agent_type'] is None
-    assert snapshot['engine'] is None
-    assert snapshot['workspace_id'] is None
-    assert snapshot['id'] is None
-    assert snapshot['tools'] == []
-    assert snapshot['knowledge_bases'] == []
-    assert snapshot['memory_stores'] == []
-    assert snapshot['sub_agents'] == []
+    # Read through a plain dict: every AgentInfoSnapshot key is optional
+    # (`total=False`), so subscripting the TypedDict directly is a type error.
+    flat: dict[str, Any] = dict(snapshot)
+    assert flat['version'] is None
+    assert flat['skills'] == []
+    assert flat['agent_type'] is None
+    assert flat['engine'] is None
+    assert flat['workspace_id'] is None
+    assert flat['id'] is None
+    assert flat['tools'] == []
+    assert flat['knowledge_bases'] == []
+    assert flat['memory_stores'] == []
+    assert flat['sub_agents'] == []
 
 
 # ---------------------------------------------------------------------------
