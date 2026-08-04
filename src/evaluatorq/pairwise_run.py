@@ -145,10 +145,21 @@ class PairwiseRun(BaseModel):
 
 def _slug(text: str) -> str:
     cleaned = ''.join(c if c.isalnum() else '-' for c in text.lower())
-    # Clamped to match the sim run store: a run name long enough to push the
-    # filename past the filesystem's limit would otherwise fail the save with
-    # ENAMETOOLONG, losing a run that was already paid for.
-    return '-'.join(part for part in cleaned.split('-') if part)[:64].rstrip('-') or 'run'
+    joined = '-'.join(part for part in cleaned.split('-') if part)
+    # Clamped because save() runs after the judging is already paid for, so a
+    # name long enough to push the filename past the filesystem's limit would
+    # lose a completed run to ENAMETOOLONG.
+    #
+    # On bytes rather than characters, which is what the limit is actually
+    # counted in. The sim run store clamps 64 characters, but it first forces
+    # ASCII, so there the two are the same number; ``isalnum()`` is
+    # Unicode-aware and keeps non-Latin names readable, where 64 characters can
+    # be up to 256 bytes. Decoding with ``ignore`` drops a character the cut
+    # landed mid-way through.
+    clamped = joined.encode()[:64].decode(errors='ignore')
+    # The cut can land on a joining hyphen, which would leave a trailing dash
+    # against the '.json' suffix.
+    return clamped.rstrip('-') or 'run'
 
 
 def new_run(

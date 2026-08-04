@@ -652,7 +652,9 @@ def test_long_run_name_stays_within_the_filename_limit(
     with ENAMETOOLONG would lose a completed run.
     """
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
-    r = new_run(run_name='a very long name ' * 40, judges=JUDGES)
+    # 'ab ' repeats so the 64-byte cut lands exactly on a joining hyphen, which
+    # is the case the trailing-dash strip exists for.
+    r = new_run(run_name='ab ' * 40, judges=JUDGES)
     r.add(
         PairwiseComparison(winner='A', votes=[_vote(m, 'A') for m in JUDGES]),
         question='q',
@@ -663,6 +665,28 @@ def test_long_run_name_stays_within_the_filename_limit(
     assert len(path.name.encode()) <= 255
     assert not path.stem.endswith('-')
     assert PairwiseRun.load(path).run_name == r.run_name
+
+
+def test_a_multibyte_run_name_is_clamped_on_bytes_not_characters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The filesystem limit counts bytes, and isalnum() admits multibyte text.
+
+    A 64-*character* clamp lets four-byte alphanumerics reach 256 bytes, which
+    is the ENAMETOOLONG this guard exists to prevent.
+    """
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    r = new_run(run_name='𠮷' * 80, judges=JUDGES)
+    r.add(
+        PairwiseComparison(winner='A', votes=[_vote(m, 'A') for m in JUDGES]),
+        question='q',
+        response_a='a',
+        response_b='b',
+    )
+    path = r.save()
+    assert len(path.name.encode()) <= 255
+    # Cut on a character boundary, not mid-codepoint.
+    assert '�' not in path.stem
 
 
 def test_a_long_question_is_readable_and_written_once() -> None:
@@ -681,4 +705,7 @@ def test_a_long_question_is_readable_and_written_once() -> None:
     )
     html = render_report_body(run)
     assert html.count(question) == 1
-    assert 'text-overflow:ellipsis' not in html
+    # Pins the rule on this class rather than searching the whole stylesheet for
+    # an ellipsis, which would break on any unrelated rule that legitimately
+    # clips and would pass if the clip moved to another class name.
+    assert '.pw-cmp__q{flex:1;min-width:0;overflow-wrap:anywhere}' in html

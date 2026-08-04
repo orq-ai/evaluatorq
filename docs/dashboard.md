@@ -265,7 +265,7 @@ Every report page includes a download sidebar with export links:
 | Format | Red team | Simulation | Pairwise |
 |---|---|---|---|
 | HTML (standalone, self-contained) | yes | yes | yes |
-| Markdown | yes | — | — |
+| Markdown | yes | yes | — |
 | CSV (filtered result rows) | yes | — | yes |
 | JSON (filtered result rows) | yes | yes | yes |
 

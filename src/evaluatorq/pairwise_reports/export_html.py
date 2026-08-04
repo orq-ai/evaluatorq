@@ -244,7 +244,9 @@ _PAIRWISE_CSS = """
 .pw-chip--flip{outline:1px dashed rgba(217,83,79,.6)}
 .pw-split{margin-left:8px;color:#d9534f}
 .pw-cmp{border:1px solid rgba(127,127,127,.25);border-radius:6px;margin:6px 0;padding:6px 10px}
-.pw-cmp summary{display:flex;align-items:center;gap:10px;cursor:pointer}
+/* Top-aligned rather than centred: now that the question wraps, a long one
+   would otherwise leave the badge and chips floating in a tall row's middle. */
+.pw-cmp summary{display:flex;align-items:flex-start;gap:10px;cursor:pointer}
 .pw-cmp__idx{opacity:.6;width:28px;font-variant-numeric:tabular-nums}
 /* Wraps rather than clipping to one line: the question is the only thing
    identifying a row, and an ellipsis made a long one readable nowhere. */

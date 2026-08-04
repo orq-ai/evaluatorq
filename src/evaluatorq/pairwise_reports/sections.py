@@ -22,7 +22,9 @@ POSITION_BIAS_WARN = 0.15
 
 # Above this share of undecidable comparisons the win rates are being computed
 # over a thin slice of the run, so the card says so rather than reading as a
-# neutral fact.
+# neutral fact. Compared with ``>``, unlike POSITION_BIAS_WARN above: each keeps
+# the operator it shipped with, and exactly 10% inconclusive is not yet worth a
+# warning where a bias of exactly 0.15 is.
 INCONCLUSIVE_WARN = 0.1
 
 
