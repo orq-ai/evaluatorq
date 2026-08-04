@@ -122,14 +122,25 @@ def register_delivery_method(value: str, *, category: str = 'custom') -> str:
     CLI's unknown-method warning; filtering already worked without it.
 
     A value equal to an existing :class:`DeliveryMethod` member is a no-op (the
-    enum is already canonical); a member *name* is rejected, since registering
-    ``'ROLE_PLAY'`` would shadow ``'role-play'`` with a spelling no dataset row
-    carries. Registration is process-local and not persisted, so it must happen
-    in the same process that later runs the CLI. Returns the registered value.
+    enum is already canonical); a member *name* that is not also a value is
+    rejected, since registering ``'ROLE_PLAY'`` would shadow ``'role-play'``
+    with a spelling no dataset row carries. Registration is process-local and
+    not persisted, so it must happen in the same process that later runs the
+    CLI. Returns the registered value, or raises ``ValueError`` on an empty
+    value or a member name.
     """
     if not value:
         msg = 'Cannot register an empty delivery method.'
         raise ValueError(msg)
+    # Value lookup FIRST: DeliveryMethod.DAN is spelled 'DAN' on both sides, so
+    # a name check that ran first would reject the canonical value as if it were
+    # a name and suggest the identical string back.
+    try:
+        DeliveryMethod(value)
+    except ValueError:
+        pass
+    else:
+        return value  # already canonical — no-op
     member_by_name = DeliveryMethod.__members__.get(value)
     if member_by_name is not None:
         msg = (
@@ -137,10 +148,7 @@ def register_delivery_method(value: str, *, category: str = 'custom') -> str:
             f'Use {delivery_method_str(member_by_name)!r} (already known — no registration needed).'
         )
         raise ValueError(msg)
-    try:
-        DeliveryMethod(value)
-    except ValueError:
-        _CUSTOM_DELIVERY_METHODS[value] = category
+    _CUSTOM_DELIVERY_METHODS[value] = category
     return value
 
 

@@ -75,6 +75,18 @@ def test_register_existing_enum_value_is_noop() -> None:
     assert 'crescendo' not in reg._CUSTOM_DELIVERY_METHODS  # enum is already canonical
 
 
+@pytest.mark.parametrize('member', list(DeliveryMethod), ids=lambda m: m.name)
+def test_register_any_enum_value_is_noop(member: DeliveryMethod) -> None:
+    """Every member's value must register as a no-op, not just the name != value ones.
+
+    DeliveryMethod.DAN is spelled 'DAN' as both name and value, so a name check
+    ordered before the value lookup rejects the canonical value and suggests the
+    identical string back. Only a sweep over all members catches that.
+    """
+    assert reg.register_delivery_method(reg.delivery_method_str(member)) == reg.delivery_method_str(member)
+    assert reg.delivery_method_str(member) not in reg._CUSTOM_DELIVERY_METHODS
+
+
 def test_register_enum_member_name_is_rejected() -> None:
     """Registering the member NAME instead of its value must not create a shadow.
 

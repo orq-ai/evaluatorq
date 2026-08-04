@@ -366,7 +366,7 @@ def _render_sidebar_filters(results: list[RedTeamResult]) -> list[RedTeamResult]
     all_categories = sorted({r.attack.category for r in results})
     all_severities = [s for s in SEVERITY_ORDER if any(r.attack.severity.value == s for r in results)]
     all_techniques = sorted({r.attack.attack_technique.value for r in results})
-    all_delivery = sorted({getattr(dm, 'value', dm) for r in results for dm in (r.attack.delivery_methods or [])})
+    all_delivery = sorted({delivery_method_str(dm) for r in results for dm in (r.attack.delivery_methods or [])})
     all_vulnerabilities = sorted({r.attack.vulnerability for r in results if r.attack.vulnerability})
     all_agents = sorted({r.agent.key or r.agent.display_name or 'unknown' for r in results})
 
@@ -475,7 +475,7 @@ def _render_sidebar_filters(results: list[RedTeamResult]) -> list[RedTeamResult]
         filtered = [
             r
             for r in filtered
-            if any(getattr(dm, 'value', dm) in sel_delivery for dm in (r.attack.delivery_methods or []))
+            if any(delivery_method_str(dm) in sel_delivery for dm in (r.attack.delivery_methods or []))
         ]
 
     if all_vulnerabilities and set(sel_vulnerabilities) != set(all_vulnerabilities):
