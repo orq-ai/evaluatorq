@@ -1012,8 +1012,12 @@ ReportSectionKind = Literal[
     'source_distribution',
     'severity_definitions',
     'methodology',
+    # Pairwise-specific
+    'pairwise_consensus',
+    'pairwise_judges',
+    'pairwise_comparisons',
 ]
-"""Closed set of known report section kinds across simulation and red-team."""
+"""Closed set of known report section kinds across simulation, red-team and pairwise."""
 
 
 @dataclass(frozen=True)

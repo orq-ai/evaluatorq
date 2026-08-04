@@ -106,6 +106,12 @@ _NAV: list[tuple[str, str, str, str]] = [
         '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>',
     ),
     (
+        'pairwise',
+        'Pairwise',
+        '/?surface=pairwise',
+        '<path d="M4 6h6v12H4z"/><path d="M14 6h6v12h-6z"/><path d="M12 4v16"/>',
+    ),
+    (
         'settings',
         'Settings',
         '/settings',
@@ -150,7 +156,7 @@ def _sidebar_html(active_nav: str) -> str:
 def _resolve_nav(active_surface: str | None, active_nav: str | None) -> str:
     if active_nav:
         return active_nav
-    if active_surface in ('redteam', 'sim'):
+    if active_surface in ('redteam', 'sim', 'pairwise'):
         return active_surface
     return 'dashboard'
 
