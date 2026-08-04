@@ -13,12 +13,9 @@ from evaluatorq.redteam import delivery_method_registry as reg
 from evaluatorq.redteam.contracts import DeliveryMethod, RedTeamInput, Severity, TurnType, VulnerabilityDomain
 
 
-@pytest.fixture(autouse=True)
-def _clean_custom_registry():
-    """Each test starts and ends with an empty custom registry (module global)."""
-    reg._CUSTOM_DELIVERY_METHODS.clear()
-    yield
-    reg._CUSTOM_DELIVERY_METHODS.clear()
+# Isolation comes from the autouse _clean_custom_delivery_registry fixture in
+# tests/redteam/conftest.py — it covers every red-team test, not just this module,
+# since registration is process-global.
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +75,18 @@ def test_register_existing_enum_value_is_noop() -> None:
     assert 'crescendo' not in reg._CUSTOM_DELIVERY_METHODS  # enum is already canonical
 
 
+def test_register_enum_member_name_is_rejected() -> None:
+    """Registering the member NAME instead of its value must not create a shadow.
+
+    'ROLE_PLAY' is not a DeliveryMethod value ('role-play' is), so registering it
+    would land in the custom set: reported known, CLI warning suppressed, and
+    filtering against a spelling no dataset row carries.
+    """
+    with pytest.raises(ValueError, match='role-play'):
+        reg.register_delivery_method('ROLE_PLAY')
+    assert 'ROLE_PLAY' not in reg._CUSTOM_DELIVERY_METHODS
+
+
 def test_register_empty_raises() -> None:
     with pytest.raises(ValueError, match='empty'):
         reg.register_delivery_method('')
@@ -99,9 +108,13 @@ def test_list_available_includes_enum_and_customs() -> None:
 def test_delivery_method_set_membership_matches_string() -> None:
     # The loader filters `dp.delivery_method in selected`. This is why passing
     # DeliveryMethod objects works against the dataset's string values.
-    selected: set[DeliveryMethod | str] = {DeliveryMethod.DAN, 'custom'}
-    assert 'DAN' in selected
-    assert DeliveryMethod.DAN in selected
+    # CRESCENDO deliberately: its name ('CRESCENDO') differs from its value
+    # ('crescendo'), so this fails if membership ever keyed on the name. A member
+    # like DAN, where name == value, cannot tell the two apart.
+    selected: set[DeliveryMethod | str] = {DeliveryMethod.CRESCENDO, 'custom'}
+    assert 'crescendo' in selected
+    assert DeliveryMethod.CRESCENDO in selected
+    assert 'CRESCENDO' not in selected  # the member name is not the match key
     assert 'custom' in selected
 
 
@@ -171,9 +184,11 @@ def test_check_filter_results_matched_enum_method_no_unmatched_warning(caplog) -
     from evaluatorq.types import DataPoint
 
     # A datapoint whose static delivery_method matches the requested member.
-    dp = DataPoint(inputs={'delivery_method': 'DAN', 'category': 'ASI01'})
+    # CRESCENDO (name != value) so a name/value confusion in the comparison shows
+    # up here as a spurious "unmatched" warning.
+    dp = DataPoint(inputs={'delivery_method': 'crescendo', 'category': 'ASI01'})
     with caplog.at_level(logging.WARNING):
-        _check_filter_results([dp], None, {DeliveryMethod.DAN}, names_apply=False)
+        _check_filter_results([dp], None, {DeliveryMethod.CRESCENDO}, names_apply=False)
     assert 'Unmatched delivery method' not in caplog.text
 
 
@@ -182,12 +197,12 @@ def test_check_filter_results_empty_run_error_reports_values_not_reprs() -> None
     from evaluatorq.redteam.runner import _check_filter_results
 
     with pytest.raises(RedTeamError) as exc:
-        _check_filter_results([], None, {DeliveryMethod.DAN, 'custom'}, names_apply=False)
+        _check_filter_results([], None, {DeliveryMethod.CRESCENDO, 'custom'}, names_apply=False)
     text = str(exc.value)
-    assert 'DAN' in text
+    assert 'crescendo' in text
     assert 'custom' in text
     # never the enum repr, which the 3.10 polyfill would produce via str()
-    assert 'DeliveryMethod.DAN' not in text
+    assert 'DeliveryMethod.CRESCENDO' not in text
 
 
 def test_every_enum_member_has_a_category() -> None:

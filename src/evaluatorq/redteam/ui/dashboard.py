@@ -26,6 +26,7 @@ from evaluatorq.redteam.contracts import (
     RedTeamResult,
     ReportSummary,
 )
+from evaluatorq.redteam.delivery_method_registry import delivery_method_str
 from evaluatorq.redteam.reports.converters import compute_report_summary
 from evaluatorq.redteam.reports.export_md import export_markdown
 from evaluatorq.redteam.reports.guidance import REMEDIATION_GUIDANCE
@@ -1970,7 +1971,7 @@ def _render_result_detail(result: RedTeamResult) -> None:
     mc5.markdown(f'**Turn Type:** {atk.turn_type.value}')
 
     if atk.delivery_methods:
-        st.markdown(f'**Delivery Methods:** {", ".join(getattr(dm, "value", dm) for dm in atk.delivery_methods)}')
+        st.markdown(f'**Delivery Methods:** {", ".join(delivery_method_str(dm) for dm in atk.delivery_methods)}')
 
     # Execution details
     if result.execution:

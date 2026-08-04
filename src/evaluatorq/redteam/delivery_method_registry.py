@@ -33,8 +33,10 @@ registered by one call is known to every later call in the same process, by
 design (that is what a registry is for). Re-registering the same value is
 last-write-wins on its category. Registrations are never persisted to disk, so a
 fresh process starts with only the enum: a value registered in one script is
-*not* known to a separate ``eq redteam`` invocation. Tests that register a custom
-method should reset ``_CUSTOM_DELIVERY_METHODS`` between cases to stay isolated.
+*not* known to a separate ``eq redteam`` invocation. Because the set is global,
+tests that register a custom method must call
+:func:`clear_custom_delivery_methods` between cases to stay isolated — the
+``tests/redteam`` conftest does this automatically.
 """
 
 from __future__ import annotations
@@ -49,6 +51,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     'DELIVERY_METHOD_CATEGORY',
+    'clear_custom_delivery_methods',
     'delivery_method_str',
     'is_known_delivery_method',
     'list_available_delivery_methods',
@@ -119,12 +122,20 @@ def register_delivery_method(value: str, *, category: str = 'custom') -> str:
     CLI's unknown-method warning; filtering already worked without it.
 
     A value equal to an existing :class:`DeliveryMethod` member is a no-op (the
-    enum is already canonical). Registration is process-local and not persisted,
-    so it must happen in the same process that later runs the CLI. Returns the
-    registered value.
+    enum is already canonical); a member *name* is rejected, since registering
+    ``'ROLE_PLAY'`` would shadow ``'role-play'`` with a spelling no dataset row
+    carries. Registration is process-local and not persisted, so it must happen
+    in the same process that later runs the CLI. Returns the registered value.
     """
     if not value:
         msg = 'Cannot register an empty delivery method.'
+        raise ValueError(msg)
+    member_by_name = DeliveryMethod.__members__.get(value)
+    if member_by_name is not None:
+        msg = (
+            f'{value!r} is the name of an existing DeliveryMethod, not a delivery-method value. '
+            f'Use {delivery_method_str(member_by_name)!r} (already known — no registration needed).'
+        )
         raise ValueError(msg)
     try:
         DeliveryMethod(value)
@@ -172,6 +183,16 @@ def resolve_delivery_methods(values: list[DeliveryMethod | str]) -> list[Deliver
             seen.add(key)
             result.append(resolved)
     return result
+
+
+def clear_custom_delivery_methods() -> None:
+    """Drop every registered custom method, leaving only the enum.
+
+    Public because the registry is process-global: test suites (and anything
+    else that registers) need a supported way to restore the baseline instead of
+    reaching into module internals.
+    """
+    _CUSTOM_DELIVERY_METHODS.clear()
 
 
 def list_available_delivery_methods() -> list[DeliveryMethod | str]:
