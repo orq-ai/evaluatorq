@@ -9,6 +9,7 @@ independently.
 
 from __future__ import annotations
 
+import uuid
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
@@ -145,7 +146,13 @@ class HybridAgentBackend(Backend):
         """Delegate to exec backend with ``agent/`` prefix for OrqResponses routing."""
         # Strip any existing prefix first so an already-prefixed key does not become
         # ``agent/agent/<key>``.
-        return self._exec.create_target(f'agent/{agent_key.removeprefix("agent/")}')
+        target = self._exec.create_target(f'agent/{agent_key.removeprefix("agent/")}')
+        # Hosted agents with memory tools reject calls that carry no memory scope.
+        # Mint one per target, matching ORQAgentTarget, so parallel jobs stay
+        # isolated and cleanup_memory has an id to delete.
+        if getattr(target, 'memory_entity_id', 'unset') is None:
+            target.memory_entity_id = f'red-team-{uuid.uuid4().hex[:12]}'
+        return target
 
     async def resolve_context(self, agent_key: str) -> AgentContext:
         """Delegate context resolution to the ORQ SDK backend (has its own cache)."""
