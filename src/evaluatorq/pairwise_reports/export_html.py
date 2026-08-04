@@ -31,7 +31,7 @@ from evaluatorq.common.reports import (
     status_badge as _status_badge,
 )
 from evaluatorq.common.reports.palette import COLORS
-from evaluatorq.pairwise_reports.sections import build_report_sections
+from evaluatorq.pairwise_reports.sections import INCONCLUSIVE_WARN, build_report_sections
 from evaluatorq.pairwise_reports.sections import observed_swap as _observed_swap
 
 if TYPE_CHECKING:
@@ -83,7 +83,7 @@ def _render_consensus_html(section: ReportSection) -> str:
         {
             'label': 'Inconclusive',
             'value': _rate(d.get('inconclusive_rate')),
-            'status': 'warn' if (d.get('inconclusive_rate') or 0) > 0.1 else 'neutral',
+            'status': 'warn' if (d.get('inconclusive_rate') or 0) > INCONCLUSIVE_WARN else 'neutral',
         },
         {'label': 'Mean agreement', 'value': _num(d.get('mean_agreement')), 'status': 'neutral'},
     ])
@@ -161,6 +161,10 @@ def _vote_chip(vote: dict[str, Any]) -> str:
 
 def _detail_html(row: dict[str, Any], labels: tuple[str, str]) -> str:
     label_a, label_b = labels
+    # Repeated from the summary line, which clips to one row: a long question is
+    # otherwise readable nowhere in the UI, and this is where someone weighs the
+    # two responses against what was actually asked.
+    question = f'<p class="pw-cmp__full-q">{_esc(row["question"])}</p>'
     responses = (
         '<div class="pw-responses">'
         f'<div class="pw-response"><h4>{_esc(label_a)}</h4><pre>{_esc(row["response_a"])}</pre></div>'
@@ -168,7 +172,7 @@ def _detail_html(row: dict[str, Any], labels: tuple[str, str]) -> str:
         '</div>'
     )
     votes = ''.join(_vote_row(v) for v in row.get('votes', []))
-    return f'{responses}<ul class="pw-votes">{votes}</ul>'
+    return f'{question}{responses}<ul class="pw-votes">{votes}</ul>'
 
 
 _FLIP_TAG = '<span class="pw-tag pw-tag--flip">flipped</span>'
@@ -248,6 +252,7 @@ _PAIRWISE_CSS = """
 .pw-cmp__idx{opacity:.6;width:28px;font-variant-numeric:tabular-nums}
 .pw-cmp__q{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pw-cmp__chips{white-space:nowrap}
+.pw-cmp__full-q{margin:10px 0 0;font-weight:600}
 .pw-responses{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0}
 .pw-response pre{white-space:pre-wrap;word-break:break-word;background:rgba(127,127,127,.08);
  padding:8px;border-radius:4px;margin:4px 0 0}

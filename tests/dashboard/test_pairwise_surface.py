@@ -438,7 +438,6 @@ def test_landing_omits_a_kind_with_no_runs(saved: tuple[Path, Path]) -> None:
     landing = metrics.landing([runs_dir])
     # Only pairwise runs exist in this root, so it is the only bar.
     assert landing.by_kind == [('Pairwise', 1)]
-    assert landing.pairwise_runs == 1
 
 
 def test_no_filter_rail_is_rendered_for_pairwise(client: tuple[TestClient, str]) -> None:
@@ -642,3 +641,41 @@ def test_filtered_view_rolls_up_once(saved: tuple[Path, Path], monkeypatch: pyte
 
     assert calls == 1, f'rolled up {calls} times'
     assert body
+
+
+def test_long_run_name_stays_within_the_filename_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A long name must not push the filename past the filesystem's limit.
+
+    ``save()`` runs after the judging is already paid for, so a name that fails
+    with ENAMETOOLONG would lose a completed run.
+    """
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    r = new_run(run_name='a very long name ' * 40, judges=JUDGES)
+    r.add(
+        PairwiseComparison(winner='A', votes=[_vote(m, 'A') for m in JUDGES]),
+        question='q',
+        response_a='a',
+        response_b='b',
+    )
+    path = r.save()
+    assert len(path.name.encode()) <= 255
+    assert not path.stem.endswith('-')
+    assert PairwiseRun.load(path).run_name == r.run_name
+
+
+def test_expanded_comparison_shows_the_full_question() -> None:
+    """The summary line clips to one row, so the detail panel carries the text."""
+    run = new_run(run_name='r', label_a='v1', label_b='v2', judges=JUDGES)
+    question = 'Why ' + 'very ' * 60 + 'long?'
+    run.add(
+        PairwiseComparison(winner='A', votes=[_vote(m, 'A') for m in JUDGES]),
+        question=question,
+        response_a='a',
+        response_b='b',
+    )
+    html = render_report_body(run)
+    assert 'pw-cmp__full-q' in html
+    # Present in the expanded body, not only in the clipped summary line.
+    assert html.count(question) == 2

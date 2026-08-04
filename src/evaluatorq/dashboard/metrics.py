@@ -61,7 +61,6 @@ class Landing:
     total_cost: float = 0.0  # summed cost_usd across both stores
     cost_by_kind: list[tuple[str, float]] = field(default_factory=list)  # non-zero only
     recent: list[RunRow] = field(default_factory=list)
-    pairwise_runs: int = 0
 
 
 def _as_float(v: object, default: float = 0.0) -> float:
@@ -312,7 +311,6 @@ def landing(roots: list[Path] | None = None) -> Landing:
         total_cost=rt_cost + sim_cost + pw_cost,
         cost_by_kind=cost_by_kind,
         recent=rows[:5],
-        pairwise_runs=len(pairwise),
     )
 
 

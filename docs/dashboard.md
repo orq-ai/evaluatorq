@@ -262,12 +262,16 @@ live that the static exported report does not carry:
 
 Every report page includes a download sidebar with export links:
 
-| Format | Red team | Simulation |
-|---|---|---|
-| HTML (standalone, self-contained) | yes | yes |
-| Markdown | yes | — |
-| CSV (filtered result rows) | yes | — |
-| JSON (filtered result rows) | yes | yes |
+| Format | Red team | Simulation | Pairwise |
+|---|---|---|---|
+| HTML (standalone, self-contained) | yes | yes | yes |
+| Markdown | yes | — | — |
+| CSV (filtered result rows) | yes | — | yes |
+| JSON (filtered result rows) | yes | yes | yes |
+
+The pairwise CSV writes one row per comparison: the question, the consensus
+winner, and each judge's vote as its own column, all resolved to the run's side
+labels rather than the bare `A` / `B` slot letters.
 
 Download links respect the currently active filter state — the CSV/JSON exports
 contain only the rows visible in the filtered report body.

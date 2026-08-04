@@ -145,7 +145,10 @@ class PairwiseRun(BaseModel):
 
 def _slug(text: str) -> str:
     cleaned = ''.join(c if c.isalnum() else '-' for c in text.lower())
-    return '-'.join(part for part in cleaned.split('-') if part) or 'run'
+    # Clamped to match the sim run store: a run name long enough to push the
+    # filename past the filesystem's limit would otherwise fail the save with
+    # ENAMETOOLONG, losing a run that was already paid for.
+    return '-'.join(part for part in cleaned.split('-') if part)[:64].rstrip('-') or 'run'
 
 
 def new_run(

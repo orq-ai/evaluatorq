@@ -20,6 +20,11 @@ if TYPE_CHECKING:
 # to matter for reading the consensus.
 POSITION_BIAS_WARN = 0.15
 
+# Above this share of undecidable comparisons the win rates are being computed
+# over a thin slice of the run, so the card says so rather than reading as a
+# neutral fact.
+INCONCLUSIVE_WARN = 0.1
+
 
 def vote_label(vote: str | None, run: PairwiseRun) -> str:
     """Render a raw vote value using the run's side labels."""
