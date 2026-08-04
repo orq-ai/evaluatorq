@@ -665,8 +665,12 @@ def test_long_run_name_stays_within_the_filename_limit(
     assert PairwiseRun.load(path).run_name == r.run_name
 
 
-def test_expanded_comparison_shows_the_full_question() -> None:
-    """The summary line clips to one row, so the detail panel carries the text."""
+def test_a_long_question_is_readable_and_written_once() -> None:
+    """The summary line wraps instead of clipping, so no second copy is needed.
+
+    Repeating it in the detail panel put two identical lines a row apart for the
+    common case of a short question, which reads as a rendering bug.
+    """
     run = new_run(run_name='r', label_a='v1', label_b='v2', judges=JUDGES)
     question = 'Why ' + 'very ' * 60 + 'long?'
     run.add(
@@ -676,6 +680,5 @@ def test_expanded_comparison_shows_the_full_question() -> None:
         response_b='b',
     )
     html = render_report_body(run)
-    assert 'pw-cmp__full-q' in html
-    # Present in the expanded body, not only in the clipped summary line.
-    assert html.count(question) == 2
+    assert html.count(question) == 1
+    assert 'text-overflow:ellipsis' not in html
