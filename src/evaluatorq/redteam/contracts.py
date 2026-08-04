@@ -482,11 +482,12 @@ class RedTeamInput(BaseModel):
     def _coerce_delivery_method(cls, value: Any) -> Any:
         """Normalize the delivery method once, at the contract boundary.
 
-        Routes through the delivery-method registry: a known value (enum member
-        or a registered custom) resolves to its canonical ``DeliveryMethod``
-        object; unknown or empty values pass through as a raw string — the field
-        is an open set, so a dataset may carry a delivery method the enum doesn't
-        list. No fuzzy normalization: a value equals a known method or it does not.
+        Routes through the delivery-method registry: an enum member resolves to
+        its canonical ``DeliveryMethod`` object. Everything else — including a
+        registered custom, which is *known* but has no member to resolve to —
+        passes through as a raw string; the field is an open set, so a dataset
+        may carry a delivery method the enum doesn't list. No fuzzy
+        normalization: a value equals a known method or it does not.
 
         Lazy import to avoid a cycle (the registry imports from this module).
         """

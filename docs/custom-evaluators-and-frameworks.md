@@ -243,7 +243,7 @@ from evaluatorq.redteam.delivery_method_registry import (
     is_known_delivery_method,
 )
 
-# Register a custom method so it validates and filters as known.
+# Register a custom method so it validates as known.
 register_delivery_method('emoji-smuggling', category='obfuscation')
 
 is_known_delivery_method('emoji-smuggling')  # True
@@ -252,8 +252,16 @@ is_known_delivery_method('emoji-smuggling')  # True
 Unlike vulnerabilities (reject-unknown, since an unknown vuln has no strategies or
 evaluator), delivery methods are **coerce-known + passthrough-unknown**: an unregistered
 value is a harmless filter label that either matches a dataset row spelled the same or
-does not. Registering is only needed when you want `is_known_delivery_method` /
-`--delivery-method` to treat your value as canonical rather than passthrough.
+does not. Filtering therefore works without registering anything — registering only
+suppresses the "unknown delivery method" warning that `--delivery-method` and the
+`RedTeamInput` boundary emit. A registered value stays a plain string; only enum members
+resolve to a `DeliveryMethod` object.
+
+The registry is **in-memory and process-local** — it is not persisted and there is no
+plugin/entry-point loading. Registering in a standalone script does not make the value
+known to a separate `eq redteam run` process; to get the CLI benefit, register in the
+same process that invokes the CLI (or accept the warning, since filtering works either
+way).
 
 ## Adding a new framework
 
