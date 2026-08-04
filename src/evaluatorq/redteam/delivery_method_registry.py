@@ -44,6 +44,8 @@ from __future__ import annotations
 import types
 from typing import TYPE_CHECKING
 
+from loguru import logger
+
 from evaluatorq.redteam.contracts import DeliveryMethod
 
 if TYPE_CHECKING:
@@ -77,8 +79,10 @@ def delivery_method_str(value: DeliveryMethod | str) -> str:
 # The one piece of real structure delivery methods carry; kept so ``register``
 # has somewhere to place a custom method and the registry mirrors the
 # vulnerability registry's structured defs rather than being a bare set.
-# Category is the only metadata a consumer needs today; add richer per-method
-# defs here if one ever does.
+# The category value itself has no runtime consumer today (the import-time
+# completeness check below inspects keys only) — it is structural/placeholder
+# metadata kept so the shape matches the vulnerability registry and a future
+# consumer has somewhere to read from. Add richer per-method defs here if one does.
 DELIVERY_METHOD_CATEGORY: Mapping[DeliveryMethod, str] = {
     DeliveryMethod.DAN: 'persona',
     DeliveryMethod.ROLE_PLAY: 'persona',
@@ -122,12 +126,12 @@ def register_delivery_method(value: str, *, category: str = 'custom') -> str:
     CLI's unknown-method warning; filtering already worked without it.
 
     A value equal to an existing :class:`DeliveryMethod` member is a no-op (the
-    enum is already canonical); a member *name* that is not also a value is
-    rejected, since registering ``'ROLE_PLAY'`` would shadow ``'role-play'``
-    with a spelling no dataset row carries. Registration is process-local and
-    not persisted, so it must happen in the same process that later runs the
-    CLI. Returns the registered value, or raises ``ValueError`` on an empty
-    value or a member name.
+    enum is already canonical) — it warns and discards the passed ``category``
+    rather than storing it. A member *name* that is not also a value is rejected,
+    since registering ``'ROLE_PLAY'`` would shadow ``'role-play'`` with a spelling
+    no dataset row carries. Registration is process-local and not persisted, so it
+    must happen in the same process that later runs the CLI. Returns the registered
+    value, or raises ``ValueError`` on an empty value or a member name.
     """
     if not value:
         msg = 'Cannot register an empty delivery method.'
@@ -140,7 +144,13 @@ def register_delivery_method(value: str, *, category: str = 'custom') -> str:
     except ValueError:
         pass
     else:
-        return value  # already canonical — no-op
+        # Already canonical: no-op. Warn (not silent) and drop the category —
+        # there is no custom entry to attach it to.
+        logger.warning(
+            f'{value!r} is already a canonical delivery method; register_delivery_method is a no-op '
+            f'(category {category!r} discarded).'
+        )
+        return value
     member_by_name = DeliveryMethod.__members__.get(value)
     if member_by_name is not None:
         msg = (

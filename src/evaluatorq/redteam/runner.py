@@ -662,6 +662,10 @@ async def red_team(
     resolved_delivery_methods: set[DeliveryMethod | str] | None = (
         set(resolve_delivery_methods(list(delivery_methods))) if delivery_methods is not None else None
     )
+    # An unknown/misspelled delivery method stays a raw string here and silently
+    # narrows the run. The CLI already warns up front via typer.echo; programmatic
+    # callers get a loguru warning from _check_filter_results (post-filter, against
+    # the actual dataset), plus a hard RedTeamError if the selection is fully empty.
 
     resolved_vulns: list[Vulnerability] | None
     if replay is not None:

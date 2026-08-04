@@ -253,8 +253,10 @@ Unlike vulnerabilities (reject-unknown, since an unknown vuln has no strategies 
 evaluator), delivery methods are **coerce-known + passthrough-unknown**: an unregistered
 value is a harmless filter label that either matches a dataset row spelled the same or
 does not. Filtering therefore works without registering anything — registering only
-suppresses the "unknown delivery method" warning that `--delivery-method` and the
-`RedTeamInput` boundary emit. A registered value stays a plain string; only enum members
+suppresses the "unknown delivery method" warnings: the `--delivery-method` CLI flag warns up
+front via `typer.echo`, and a programmatic `red_team()` run surfaces an unmatched method through
+the pipeline's post-filter check as a `loguru` warning (the `RedTeamInput` validator itself resolves
+silently). A registered value stays a plain string; only enum members
 resolve to a `DeliveryMethod` object.
 
 The registry is **in-memory and process-local** — it is not persisted and there is no

@@ -368,6 +368,17 @@ class TestDeliveryMethodFlag:
         assert mock_rt.call_args.kwargs["delivery_methods"] == ["not-a-real-method"]
         assert "not known delivery methods" in result.output
 
+    def test_registered_custom_delivery_method_no_warning(self):
+        from evaluatorq.redteam.delivery_method_registry import register_delivery_method
+
+        register_delivery_method('emoji-smuggling', category='obfuscation')
+        result, mock_rt = _run_with_mocked_red_team(
+            ["run", "--target", "agent:test-agent", "-d", "emoji-smuggling", "--yes"]
+        )
+        assert result.exit_code == 0, result.output
+        assert mock_rt.call_args.kwargs["delivery_methods"] == ["emoji-smuggling"]
+        assert "not known delivery methods" not in result.output
+
     def test_delivery_method_defaults_to_none_when_omitted(self):
         result, mock_rt = _run_with_mocked_red_team(
             ["run", "--target", "agent:test-agent", "--yes"]

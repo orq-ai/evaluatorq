@@ -70,9 +70,17 @@ def test_register_makes_custom_known_and_resolvable_as_string() -> None:
     assert 'honeypot' in {reg.delivery_method_str(m) for m in reg.list_available_delivery_methods()}
 
 
-def test_register_existing_enum_value_is_noop() -> None:
-    reg.register_delivery_method('crescendo')
-    assert 'crescendo' not in reg._CUSTOM_DELIVERY_METHODS  # enum is already canonical
+def test_register_existing_enum_value_is_noop(caplog) -> None:
+    import logging
+
+    before = len(reg.list_available_delivery_methods())
+    with caplog.at_level(logging.WARNING):
+        reg.register_delivery_method('crescendo', category='ignored')
+    assert len(reg.list_available_delivery_methods()) == before
+    assert reg.resolve_delivery_method('crescendo') is DeliveryMethod.CRESCENDO
+    # The no-op is observable, not silent: it warns and names the discarded category.
+    assert 'no-op' in caplog.text
+    assert 'ignored' in caplog.text
 
 
 @pytest.mark.parametrize('member', list(DeliveryMethod), ids=lambda m: m.name)
@@ -96,7 +104,7 @@ def test_register_enum_member_name_is_rejected() -> None:
     """
     with pytest.raises(ValueError, match='role-play'):
         reg.register_delivery_method('ROLE_PLAY')
-    assert 'ROLE_PLAY' not in reg._CUSTOM_DELIVERY_METHODS
+    assert not reg.is_known_delivery_method('ROLE_PLAY')
 
 
 def test_register_empty_raises() -> None:
@@ -202,6 +210,20 @@ def test_check_filter_results_matched_enum_method_no_unmatched_warning(caplog) -
     with caplog.at_level(logging.WARNING):
         _check_filter_results([dp], None, {DeliveryMethod.CRESCENDO}, names_apply=False)
     assert 'Unmatched delivery method' not in caplog.text
+
+
+def test_check_filter_results_mixed_match_reports_only_unmatched(caplog) -> None:
+    import logging
+
+    from evaluatorq.redteam.runner import _check_filter_results
+    from evaluatorq.types import DataPoint
+
+    dp = DataPoint(inputs={'delivery_method': 'crescendo', 'category': 'ASI01'})
+    with caplog.at_level(logging.WARNING):
+        _check_filter_results([dp], None, {DeliveryMethod.CRESCENDO, 'base64'}, names_apply=False)
+    assert 'base64' in caplog.text
+    assert 'Present' in caplog.text
+    assert "Unmatched delivery method(s): ['base64']" in caplog.text
 
 
 def test_check_filter_results_empty_run_error_reports_values_not_reprs() -> None:
