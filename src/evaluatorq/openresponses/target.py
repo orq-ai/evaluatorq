@@ -140,6 +140,10 @@ class OrqResponsesTarget(AgentTarget):
             # tag the request with the evaluatorq pipeline so its trace is
             # attributable to the run type. Both ride in the request body.
             body_extra = {**thread_body_param(), **pipeline_metadata_param()}
+            # Agents with memory tools reject the call outright without a memory
+            # scope ("memory_entity_id_required"), so forward ours when set.
+            if self.memory_entity_id:
+                body_extra['memory'] = {'entity_id': self.memory_entity_id}
             if body_extra:
                 kwargs['extra_body'] = {**kwargs.get('extra_body', {}), **body_extra}
 

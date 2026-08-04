@@ -229,7 +229,7 @@ class OpenAIAgentTarget(AgentTarget):
             key=key,
             display_name=key,
             description='OpenAI Agents SDK target',
-            system_prompt=system_prompt,
+            system_prompt=system_prompt or '',
             tools=tools,
             model=model,
         )

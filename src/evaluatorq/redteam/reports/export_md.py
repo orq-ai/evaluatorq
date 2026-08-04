@@ -155,18 +155,24 @@ def _render_agent_context_section(section: ReportSection) -> str:
     for agent in agents:
         display_name = agent.get('display_name') or agent.get('key', 'unknown')
         model = agent.get('model', '')
+        version = agent.get('version') or ''
         description = agent.get('description', '')
         tools: list[str] = agent.get('tools', [])
+        skills: list[str] = agent.get('skills') or []
         memory_stores: list[str] = agent.get('memory_stores', [])
         knowledge_bases: list[str] = agent.get('knowledge_bases', [])
 
         lines.extend((f'### {display_name}', ''))
         if model:
             lines.append(f'**Model:** {model}  ')
+        if version:
+            lines.append(f'**Version:** {version}  ')
         if description:
             lines.append(f'**Description:** {description}  ')
         if tools:
             lines.append(f'**Tools:** {", ".join(tools)}  ')
+        if skills:
+            lines.append(f'**Skills:** {", ".join(skills)}  ')
         if memory_stores:
             lines.append(f'**Memory:** {", ".join(memory_stores)}  ')
         if knowledge_bases:

@@ -96,7 +96,7 @@ class OpenResponsesBackend(Backend):
             key=agent_key,
             display_name=agent_key,
             description='OpenResponses agent target',
-            system_prompt=self._instructions,
+            system_prompt=self._instructions or '',
             model=agent_key,
         )
         self._ctx_cache[agent_key] = ctx

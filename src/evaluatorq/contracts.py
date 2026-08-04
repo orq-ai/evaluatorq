@@ -7,7 +7,7 @@ import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime  # noqa: TC003 — runtime-required by pydantic manifest models
-from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, TypeAlias
 
 from loguru import logger
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_serializer, model_validator
@@ -862,11 +862,60 @@ class KnowledgeBaseInfo(BaseModel):
     description: str | None = Field(default=None, description='Knowledge base description')
 
 
+def _coerce_text(value: Any) -> str | None:
+    """Normalize one provider-supplied text field to ``str | None``.
+
+    ``str`` passes through untouched. ``bool``/``int`` are stringified — a
+    wrong-typed but real value is worth more than a dropped one. Everything
+    else is treated as absent, which covers ``None`` and the SDK placeholder
+    objects (orq-ai-sdk parks ``Unset()`` in unset optional fields, so a
+    ``getattr(obj, name, None)`` default never fires and the sentinel reaches
+    us instead of ``None``).
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (bool, int)):
+        return str(value)
+    return None
+
+
 class AgentContext(BaseModel):
     """Extended agent information for context-aware attacks.
 
     Describes the target agent's configuration and capabilities.
+
+    Text fields carry one of three gates, applied by ``_normalize_text_fields``:
+
+    * ``key`` — strict. Never coerced: it identifies *which* agent is under
+      attack, so a bad value must fail loudly rather than resolve to something
+      plausible.
+    * ``system_prompt`` / ``instructions`` — always a ``str``, empty when not
+      supplied. These two are *mutually exclusive*: agents carry
+      ``instructions``, deployments carry ``system_prompt``, and a given target
+      fills one and leaves the other empty. Neither is ever ``None``, so
+      consumers can read them without a ``None`` guard; the empty one simply
+      falls through an ``instructions or system_prompt`` chain. Both empty is
+      also valid — a bring-your-own target we cannot introspect.
+    * everything else — ``str | None``. Genuinely absent for some target kinds:
+      a direct/OpenAI target has no orq ``id`` or ``workspace_id``, a
+      bring-your-own ``AgentTarget`` has no ``display_name``/``description``/
+      ``model`` we can introspect.
     """
+
+    _REQUIRED_TEXT_FIELDS: ClassVar[tuple[str, ...]] = ('system_prompt', 'instructions')
+    _LITERAL_FIELDS: ClassVar[dict[str, frozenset[str]]] = {
+        'target_kind': frozenset({'agent', 'deployment', 'direct', 'openai'}),
+        'agent_type': frozenset({'internal', 'a2a'}),
+        'engine': frozenset({'text', 'jinja', 'mustache'}),
+    }
+    _OPTIONAL_TEXT_FIELDS: ClassVar[tuple[str, ...]] = (
+        'id',
+        'workspace_id',
+        'display_name',
+        'description',
+        'model',
+        'version',
+    )
 
     key: str = Field(description='Agent identifier key')
     id: str | None = Field(default=None, description='Entity UUID (orq agent/deployment id), for deep-linking')
@@ -877,12 +926,40 @@ class AgentContext(BaseModel):
     )
     display_name: str | None = Field(default=None, description='Agent display name')
     description: str | None = Field(default=None, description='Agent description')
-    system_prompt: str | None = Field(default=None, description='Agent system prompt (used by deployments)')
-    instructions: str | None = Field(default=None, description='Agent behavioral instructions')
+    system_prompt: str = Field(
+        default='',
+        description="Deployment system prompt; empty when not supplied. Exclusive with 'instructions'.",
+    )
+    instructions: str = Field(
+        default='',
+        description="Agent behavioral instructions; empty when not supplied. Exclusive with 'system_prompt'.",
+    )
     tools: list[ToolInfo] = Field(default_factory=list, description='Available tools')
     memory_stores: list[MemoryStoreInfo] = Field(default_factory=list, description='Memory stores')
     knowledge_bases: list[KnowledgeBaseInfo] = Field(default_factory=list, description='Knowledge bases')
     model: str | None = Field(default=None, description='Primary model')
+    version: str | None = Field(
+        default=None,
+        description=(
+            'Target configuration version at scan time, for reproducibility: results only '
+            'describe the config that was attacked. None when the provider does not expose one.'
+        ),
+    )
+    skills: list[str] = Field(
+        default_factory=list,
+        description='Skill keys attached to the agent — a capability surface alongside tools',
+    )
+    agent_type: Literal['internal', 'a2a'] | None = Field(
+        default=None,
+        description=(
+            "Provider-declared agent type: 'a2a' agents delegate to other agents. Distinct from "
+            "'target_kind', which records how *we* reach the target. None when not exposed."
+        ),
+    )
+    engine: Literal['text', 'jinja', 'mustache'] | None = Field(
+        default=None,
+        description='Prompt template engine; a templated agent has a different injection surface than plain text',
+    )
     is_multi_agent: bool = Field(
         default=False,
         description=(
@@ -893,6 +970,42 @@ class AgentContext(BaseModel):
             'Defaults to False (conservative: do not run multi-agent attacks unless confirmed).'
         ),
     )
+
+    @model_validator(mode='before')
+    @classmethod
+    def _normalize_text_fields(cls, data: Any) -> Any:
+        """Coerce provider-supplied text fields before validation.
+
+        Context retrieval is enrichment — it feeds tool and memory-store names
+        into attack-strategy prompts — so a metadata field of the wrong type
+        must not be able to fail the whole run. ``key`` is deliberately left
+        out: it is identity, not metadata.
+
+        The required-text fields are normalized independently, never against
+        each other: ``system_prompt`` and ``instructions`` are mutually
+        exclusive, so a target supplying one and omitting the other is the
+        normal case and must not be treated as missing data.
+        """
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        for name in cls._OPTIONAL_TEXT_FIELDS:
+            if name in data:
+                data[name] = _coerce_text(data[name])
+        for name in cls._REQUIRED_TEXT_FIELDS:
+            if name in data:
+                data[name] = _coerce_text(data[name]) or ''
+        for name, allowed in cls._LITERAL_FIELDS.items():
+            if name in data:
+                value = data[name]
+                # Unknown members are dropped rather than raised on: providers add
+                # enum values faster than we can follow, and an unrecognized one is
+                # not worth failing an entire scan over.
+                data[name] = value if isinstance(value, str) and value in allowed else None
+        if 'skills' in data:
+            value = data['skills']
+            data['skills'] = [s for s in value if isinstance(s, str)] if isinstance(value, list) else []
+        return data
 
     @property
     def has_tools(self) -> bool:
