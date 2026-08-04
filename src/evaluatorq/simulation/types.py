@@ -34,9 +34,13 @@ class AgentInfoSnapshot(TypedDict, total=False):
     description: str | None
     model: str | None
     tools: list[str]
+    skills: list[str]
     knowledge_bases: list[str]
     memory_stores: list[str]
     sub_agents: list[str]
+    version: str | None
+    agent_type: str | None
+    engine: str | None
     workspace_id: str | None
     workspace_key: str | None
     base_url: str

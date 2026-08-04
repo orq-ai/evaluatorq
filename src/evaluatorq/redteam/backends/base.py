@@ -13,13 +13,15 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 from loguru import logger
+from pydantic import ValidationError
 
 from evaluatorq.common.target_call import _coerce_to_agent_response as _coerce_to_agent_response
+from evaluatorq.contracts import AgentContext
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from evaluatorq.contracts import AgentContext, AgentTarget
+    from evaluatorq.contracts import AgentTarget
 
 
 def validate_agent_target(obj: object) -> None:
@@ -75,7 +77,21 @@ class Backend(ABC):
         if agent_key in self._ctx_cache:
             return self._ctx_cache[agent_key]
         probe = self.create_target(agent_key)
-        ctx = await probe.get_agent_context()
+        try:
+            ctx = await probe.get_agent_context()
+        except ValidationError as e:
+            # Context is enrichment (tool / memory-store / KB names for attack
+            # prompts), not a prerequisite for attacking. Degrade to a minimal
+            # context so provider metadata we cannot model never kills a run.
+            #
+            # Only ValidationError is caught, deliberately: an unreachable agent
+            # (bad ORQ_API_KEY, wrong ORQ_BASE_URL, 404 on the key) must still
+            # fail loudly — silently red-teaming nothing is worse than crashing.
+            logger.warning(
+                f'Could not model agent context for {agent_key}: {e} — '
+                'continuing with minimal context; attack strategies will use limited context'
+            )
+            ctx = AgentContext(key=agent_key)
         self._ctx_cache[agent_key] = ctx
         return ctx
 

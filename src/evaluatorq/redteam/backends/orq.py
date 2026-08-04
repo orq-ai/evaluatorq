@@ -394,15 +394,18 @@ class ORQAgentTarget(AgentTarget):
         )
 
         settings = getattr(agent_data, 'settings', None)
-        raw_tools = list(settings.tools) if settings and getattr(settings, 'tools', None) else []
+        raw_tools_value = getattr(settings, 'tools', None) if settings is not None else None
+        raw_tools = raw_tools_value if isinstance(raw_tools_value, list) else []
 
         raw_kb_ids: list[str] = []
-        if hasattr(agent_data, 'knowledge_bases') and agent_data.knowledge_bases:
-            raw_kb_ids = [getattr(kb, 'knowledge_id', None) or str(kb) for kb in agent_data.knowledge_bases]
+        raw_kbs = getattr(agent_data, 'knowledge_bases', None)
+        if isinstance(raw_kbs, list):
+            raw_kb_ids = [getattr(kb, 'knowledge_id', None) or str(kb) for kb in raw_kbs]
 
         raw_ms_ids: list[str] = []
-        if hasattr(agent_data, 'memory_stores') and agent_data.memory_stores:
-            raw_ms_ids = [ms if isinstance(ms, str) else getattr(ms, 'key', str(ms)) for ms in agent_data.memory_stores]
+        raw_memory_stores = getattr(agent_data, 'memory_stores', None)
+        if isinstance(raw_memory_stores, list):
+            raw_ms_ids = [ms if isinstance(ms, str) else getattr(ms, 'key', str(ms)) for ms in raw_memory_stores]
 
         enrichment_tasks: list[Any] = [self._enrich_knowledge_base(kb_id) for kb_id in raw_kb_ids]
         enrichment_tasks.extend(self._enrich_memory_store(ms_id) for ms_id in raw_ms_ids)
@@ -416,19 +419,36 @@ class ORQAgentTarget(AgentTarget):
         model_raw = getattr(agent_data, 'model', None)
         model_id = getattr(model_raw, 'id', None) if model_raw is not None else None
 
+        # orq-ai-sdk 4.12.x exposes `version`; 4.4.x exposed `version_hash`. Select by
+        # type, not truthiness: an unset SDK field holds a truthy `Unset()` sentinel, so
+        # an `or` chain would latch onto it and never reach the fallback.
+        version = getattr(agent_data, 'version', None)
+        if not isinstance(version, str):
+            version = getattr(agent_data, 'version_hash', None)
+
+        system_prompt: Any = getattr(agent_data, 'system_prompt', None)
+        instructions: Any = getattr(agent_data, 'instructions', None)
+        skills: Any = getattr(agent_data, 'skills', None)
         self._cached_context = AgentContext(
             key=self.agent_key,
             id=getattr(agent_data, 'id', None),
+            # Dropped from the agent-retrieve model in orq-ai-sdk 4.12.x — None here is
+            # expected upstream drift, not a local bug.
             workspace_id=getattr(agent_data, 'workspace_id', None),
             target_kind='agent',
             display_name=getattr(agent_data, 'display_name', None),
             description=getattr(agent_data, 'description', None),
-            system_prompt=getattr(agent_data, 'system_prompt', None),
-            instructions=getattr(agent_data, 'instructions', None),
+            system_prompt=system_prompt,
+            instructions=instructions,
             tools=tools,
             memory_stores=memory_stores,
             knowledge_bases=knowledge_bases,
             model=model_id,
+            version=version,
+            skills=skills,
+            # The SDK calls it `type`; `target_kind` already owns that name here.
+            agent_type=getattr(agent_data, 'type', None),
+            engine=getattr(agent_data, 'engine', None),
         )
         return self._cached_context
 

@@ -12,6 +12,7 @@ from evaluatorq.contracts import (
     TextOutputItem,
     ToolCallOutputItem,
 )
+from evaluatorq.dashboard.library import load_model_cached
 from evaluatorq.redteam.contracts import (
     AgentContext,
     AttackInfo,
@@ -28,7 +29,7 @@ from evaluatorq.redteam.contracts import (
     normalize_framework,
 )
 
-FIXTURES_DIR = Path(__file__).parent / "fixtures"
+FIXTURES_DIR = Path(__file__).parent / 'fixtures'
 
 
 # ---------------------------------------------------------------------------
@@ -38,7 +39,7 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 def _load_fixture(name: str) -> dict[str, Any]:
     path = FIXTURES_DIR / name
-    assert path.exists(), f"Fixture not found: {path}"
+    assert path.exists(), f'Fixture not found: {path}'
     return json.loads(path.read_text())
 
 
@@ -49,36 +50,36 @@ def _load_fixture(name: str) -> dict[str, Any]:
 
 class TestNormalizeCategory:
     def test_strips_owasp_prefix(self) -> None:
-        assert normalize_category("OWASP-ASI01") == "ASI01"
+        assert normalize_category('OWASP-ASI01') == 'ASI01'
 
     def test_no_prefix_unchanged(self) -> None:
-        assert normalize_category("ASI01") == "ASI01"
+        assert normalize_category('ASI01') == 'ASI01'
 
     def test_llm_prefix(self) -> None:
-        assert normalize_category("OWASP-LLM01") == "LLM01"
+        assert normalize_category('OWASP-LLM01') == 'LLM01'
 
 
 class TestInferFramework:
     def test_asi_category(self) -> None:
-        assert infer_framework("ASI01") == "OWASP-ASI"
+        assert infer_framework('ASI01') == 'OWASP-ASI'
 
     def test_llm_category(self) -> None:
-        assert infer_framework("LLM07") == "OWASP-LLM"
+        assert infer_framework('LLM07') == 'OWASP-LLM'
 
     def test_owasp_prefixed(self) -> None:
-        assert infer_framework("OWASP-ASI05") == "OWASP-ASI"
+        assert infer_framework('OWASP-ASI05') == 'OWASP-ASI'
 
     def test_unknown(self) -> None:
-        assert infer_framework("CUSTOM01") == "unknown"
+        assert infer_framework('CUSTOM01') == 'unknown'
 
 
 class TestNormalizeFramework:
     def test_agentic_alias(self) -> None:
-        result = normalize_framework("OWASP-AGENTIC")
+        result = normalize_framework('OWASP-AGENTIC')
         assert result == Framework.OWASP_ASI
 
     def test_direct_value(self) -> None:
-        result = normalize_framework("OWASP-LLM")
+        result = normalize_framework('OWASP-LLM')
         assert result == Framework.OWASP_LLM
 
 
@@ -90,30 +91,39 @@ class TestNormalizeFramework:
 class TestDynamicFixture:
     @pytest.fixture()
     def dynamic_report_data(self) -> dict[str, Any]:
-        return _load_fixture("dynamic_report.json")
+        return _load_fixture('dynamic_report.json')
 
     def test_parses_as_report(self, dynamic_report_data: dict[str, Any]) -> None:
         report = RedTeamReport.model_validate(dynamic_report_data)
-        assert report.pipeline == "dynamic"
-        assert report.version == "2.0.0"
-        assert len(report.results) == dynamic_report_data["total_results"]
+        assert report.pipeline == 'dynamic'
+        assert report.version == '2.0.0'
+        assert len(report.results) == dynamic_report_data['total_results']
 
     def test_agent_context_present(self, dynamic_report_data: dict[str, Any]) -> None:
         report = RedTeamReport.model_validate(dynamic_report_data)
         assert report.agent_contexts
-        ctx = report.agent_contexts["domain-search-assistant"]
+        ctx = report.agent_contexts['domain-search-assistant']
         assert isinstance(ctx, AgentContext)
-        assert ctx.key == "domain-search-assistant"
+        assert ctx.key == 'domain-search-assistant'
         assert ctx.has_tools
         assert ctx.has_memory
+
+    def test_legacy_fixture_uses_defaults_for_new_agent_context_fields(self) -> None:
+        report = load_model_cached(FIXTURES_DIR / 'dynamic_report.json', RedTeamReport.model_validate)
+        ctx = report.agent_contexts['domain-search-assistant']
+
+        assert ctx.version is None
+        assert ctx.skills == []
+        assert ctx.agent_type is None
+        assert ctx.engine is None
 
     def test_result_attack_info(self, dynamic_report_data: dict[str, Any]) -> None:
         report = RedTeamReport.model_validate(dynamic_report_data)
         for result in report.results:
             assert isinstance(result, RedTeamResult)
             assert isinstance(result.attack, AttackInfo)
-            assert result.attack.category in ("ASI01", "ASI05", "ASI06", "LLM01", "LLM02")
-            assert result.attack.framework in ("OWASP-ASI", "OWASP-LLM")
+            assert result.attack.category in ('ASI01', 'ASI05', 'ASI06', 'LLM01', 'LLM02')
+            assert result.attack.framework in ('OWASP-ASI', 'OWASP-LLM')
 
     def test_evaluation_semantics(self, dynamic_report_data: dict[str, Any]) -> None:
         """passed=True means RESISTANT, passed=False means VULNERABLE."""
@@ -128,8 +138,8 @@ class TestDynamicFixture:
         report = RedTeamReport.model_validate(dynamic_report_data)
         has_vuln = any(r.vulnerable for r in report.results)
         has_resistant = any(not r.vulnerable for r in report.results)
-        assert has_vuln, "Fixture should have at least one vulnerable result"
-        assert has_resistant, "Fixture should have at least one resistant result"
+        assert has_vuln, 'Fixture should have at least one vulnerable result'
+        assert has_resistant, 'Fixture should have at least one resistant result'
 
     def test_round_trip_serialization(self, dynamic_report_data: dict[str, Any]) -> None:
         report = RedTeamReport.model_validate(dynamic_report_data)
@@ -150,11 +160,11 @@ class TestDynamicFixture:
 class TestHybridFixture:
     @pytest.fixture()
     def hybrid_report_data(self) -> dict[str, Any]:
-        return _load_fixture("hybrid_report.json")
+        return _load_fixture('hybrid_report.json')
 
     def test_parses_as_report(self, hybrid_report_data: dict[str, Any]) -> None:
         report = RedTeamReport.model_validate(hybrid_report_data)
-        assert report.pipeline == "hybrid"
+        assert report.pipeline == 'hybrid'
         assert len(report.results) > 0
 
     def test_mixed_execution_details(self, hybrid_report_data: dict[str, Any]) -> None:
@@ -183,13 +193,13 @@ class TestTokenUsage:
         assert usage.calls == 0
 
     def test_from_dict(self) -> None:
-        usage = TokenUsage.model_validate({"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150})
+        usage = TokenUsage.model_validate({'prompt_tokens': 100, 'completion_tokens': 50, 'total_tokens': 150})
         assert usage.prompt_tokens == 100
 
 
 class TestAgentContext:
     def test_properties(self) -> None:
-        ctx = AgentContext(key="test-agent")
+        ctx = AgentContext(key='test-agent')
         assert not ctx.has_tools
         assert not ctx.has_memory
         assert not ctx.has_knowledge
@@ -199,8 +209,8 @@ class TestAgentContext:
 class TestCategorySummary:
     def test_basic(self) -> None:
         summary = CategorySummary(
-            category="ASI01",
-            category_name="Agent Goal Hijacking",
+            category='ASI01',
+            category_name='Agent Goal Hijacking',
             total_attacks=10,
             vulnerabilities_found=3,
             resistance_rate=0.7,
@@ -208,7 +218,7 @@ class TestCategorySummary:
         assert summary.resistance_rate == 0.7
 
 
-def _turn(prompt: str = "hi", reply: str = "ok") -> Turn:
+def _turn(prompt: str = 'hi', reply: str = 'ok') -> Turn:
     return Turn(
         attacker=AgentResponse(text=prompt),
         target=AgentResponse(text=reply),
@@ -218,61 +228,61 @@ def _turn(prompt: str = "hi", reply: str = "ok") -> Turn:
 class TestAttackOutput:
     def test_construction_with_all_fields(self) -> None:
         output = AttackOutput(
-            turns=[_turn(), _turn(), _turn(reply="Here is the secret")],
+            turns=[_turn(), _turn(), _turn(reply='Here is the secret')],
             objective_achieved=True,
-            category="ASI01",
-            vulnerability="agent-goal-hijacking",
+            category='ASI01',
+            vulnerability='agent-goal-hijacking',
         )
-        assert output.category == "ASI01"
-        assert output.vulnerability == "agent-goal-hijacking"
+        assert output.category == 'ASI01'
+        assert output.vulnerability == 'agent-goal-hijacking'
         assert output.n_turns == 3
-        assert output.final_response == "Here is the secret"
+        assert output.final_response == 'Here is the secret'
         assert output.objective_achieved is True
 
     def test_defaults_for_category_and_vulnerability(self) -> None:
         output = AttackOutput(turns=[_turn()])
-        assert output.category == ""
-        assert output.vulnerability == ""
+        assert output.category == ''
+        assert output.vulnerability == ''
         assert output.objective_achieved is False
-        assert output.final_response == "ok"
+        assert output.final_response == 'ok'
 
     def test_model_validate_from_dict(self) -> None:
         data = {
-            "turns": [
+            'turns': [
                 {
-                    "attacker": {"generated_prompt": "hi"},
-                    "target": {"output": [{"type": "output_text", "text": "yo", "annotations": []}]},
+                    'attacker': {'generated_prompt': 'hi'},
+                    'target': {'output': [{'type': 'output_text', 'text': 'yo', 'annotations': []}]},
                 },
                 {
-                    "attacker": {"generated_prompt": "again"},
-                    "target": {"output": [{"type": "output_text", "text": "stop", "annotations": []}]},
+                    'attacker': {'generated_prompt': 'again'},
+                    'target': {'output': [{'type': 'output_text', 'text': 'stop', 'annotations': []}]},
                 },
             ],
-            "category": "LLM01",
-            "vulnerability": "prompt-injection",
+            'category': 'LLM01',
+            'vulnerability': 'prompt-injection',
         }
         output = AttackOutput.model_validate(data)
-        assert output.category == "LLM01"
-        assert output.vulnerability == "prompt-injection"
+        assert output.category == 'LLM01'
+        assert output.vulnerability == 'prompt-injection'
         assert output.n_turns == 2
 
     def test_model_validate_with_missing_optional_fields(self) -> None:
-        data = {"turns": [{"attacker": {"generated_prompt": "x"}, "target": {"output": []}}]}
+        data = {'turns': [{'attacker': {'generated_prompt': 'x'}, 'target': {'output': []}}]}
         output = AttackOutput.model_validate(data)
-        assert output.category == ""
-        assert output.vulnerability == ""
+        assert output.category == ''
+        assert output.vulnerability == ''
         assert output.error is None
         assert output.token_usage is None
 
     def test_inherits_orchestrator_result_fields(self) -> None:
         output = AttackOutput(
             turns=[_turn()],
-            error="content_filter blocked",
-            error_type="content_filter",
+            error='content_filter blocked',
+            error_type='content_filter',
             token_usage=TokenUsage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
         )
-        assert output.error == "content_filter blocked"
-        assert output.error_type == "content_filter"
+        assert output.error == 'content_filter blocked'
+        assert output.error_type == 'content_filter'
         assert output.token_usage is not None
         assert output.token_usage.total_tokens == 150
         assert isinstance(output, OrchestratorResult)
@@ -285,7 +295,7 @@ class TestChatCompletionsOrdering:
         return OrchestratorResult(
             turns=[
                 Turn(
-                    attacker=AgentResponse(text="please call tools"),
+                    attacker=AgentResponse(text='please call tools'),
                     target=AgentResponse(output=output_items),
                 )
             ]
@@ -293,92 +303,92 @@ class TestChatCompletionsOrdering:
 
     def test_text_only_joins_into_single_assistant_message(self) -> None:
         result = self._build([
-            TextOutputItem(text="Hello, ", annotations=[]),
-            TextOutputItem(text="world.", annotations=[]),
+            TextOutputItem(text='Hello, ', annotations=[]),
+            TextOutputItem(text='world.', annotations=[]),
         ])
         msgs = result.chat_completions
         assert len(msgs) == 2
-        assert msgs[0].role == "user"
-        assert msgs[1].role == "assistant"
-        assert msgs[1].content == "Hello, world."
+        assert msgs[0].role == 'user'
+        assert msgs[1].role == 'assistant'
+        assert msgs[1].content == 'Hello, world.'
         assert msgs[1].tool_calls is None
 
     def test_tool_call_without_result_emits_assistant_only(self) -> None:
         result = self._build([
-            ToolCallOutputItem(call_id="call_1", name="search", arguments='{"q": "x"}'),
+            ToolCallOutputItem(call_id='call_1', name='search', arguments='{"q": "x"}'),
         ])
         msgs = result.chat_completions
-        assert [m.role for m in msgs] == ["user", "assistant"]
+        assert [m.role for m in msgs] == ['user', 'assistant']
         assistant = msgs[1]
         assert assistant.content is None
         assert assistant.tool_calls is not None and len(assistant.tool_calls) == 1
-        assert assistant.tool_calls[0].id == "call_1"
-        assert assistant.tool_calls[0].function.name == "search"
+        assert assistant.tool_calls[0].id == 'call_1'
+        assert assistant.tool_calls[0].function.name == 'search'
         assert assistant.tool_calls[0].function.arguments == '{"q": "x"}'
 
     def test_tool_call_with_result_emits_assistant_then_tool(self) -> None:
         result = self._build([
-            ToolCallOutputItem(call_id="call_2", name="lookup", arguments="{}", result="found it"),
+            ToolCallOutputItem(call_id='call_2', name='lookup', arguments='{}', result='found it'),
         ])
         msgs = result.chat_completions
-        assert [m.role for m in msgs] == ["user", "assistant", "tool"]
+        assert [m.role for m in msgs] == ['user', 'assistant', 'tool']
         tool_msg = msgs[2]
-        assert tool_msg.tool_call_id == "call_2"
-        assert tool_msg.name == "lookup"
-        assert tool_msg.content == "found it"
+        assert tool_msg.tool_call_id == 'call_2'
+        assert tool_msg.name == 'lookup'
+        assert tool_msg.content == 'found it'
 
     def test_interleaved_text_and_tool_calls_preserve_order(self) -> None:
         result = self._build([
-            TextOutputItem(text="Thinking...", annotations=[]),
-            ToolCallOutputItem(call_id="c1", name="search", arguments="{}", result="r1"),
-            TextOutputItem(text="Now another:", annotations=[]),
-            ToolCallOutputItem(call_id="c2", name="fetch", arguments="{}"),
-            TextOutputItem(text="Done.", annotations=[]),
+            TextOutputItem(text='Thinking...', annotations=[]),
+            ToolCallOutputItem(call_id='c1', name='search', arguments='{}', result='r1'),
+            TextOutputItem(text='Now another:', annotations=[]),
+            ToolCallOutputItem(call_id='c2', name='fetch', arguments='{}'),
+            TextOutputItem(text='Done.', annotations=[]),
         ])
         msgs = result.chat_completions
         assert [m.role for m in msgs] == [
-            "user",        # attacker prompt
-            "assistant",   # "Thinking..."
-            "assistant",   # tool_call c1
-            "tool",        # result for c1
-            "assistant",   # "Now another:"
-            "assistant",   # tool_call c2 (no result)
-            "assistant",   # "Done."
+            'user',  # attacker prompt
+            'assistant',  # "Thinking..."
+            'assistant',  # tool_call c1
+            'tool',  # result for c1
+            'assistant',  # "Now another:"
+            'assistant',  # tool_call c2 (no result)
+            'assistant',  # "Done."
         ]
-        assert msgs[1].content == "Thinking..."
+        assert msgs[1].content == 'Thinking...'
         assert msgs[1].tool_calls is None
         assert msgs[2].content is None
         assert msgs[2].tool_calls is not None
-        assert msgs[2].tool_calls[0].id == "c1"
-        assert msgs[3].tool_call_id == "c1"
-        assert msgs[3].content == "r1"
-        assert msgs[4].content == "Now another:"
+        assert msgs[2].tool_calls[0].id == 'c1'
+        assert msgs[3].tool_call_id == 'c1'
+        assert msgs[3].content == 'r1'
+        assert msgs[4].content == 'Now another:'
         assert msgs[5].tool_calls is not None
-        assert msgs[5].tool_calls[0].id == "c2"
-        assert msgs[6].content == "Done."
+        assert msgs[5].tool_calls[0].id == 'c2'
+        assert msgs[6].content == 'Done.'
 
     def test_reasoning_items_are_dropped(self) -> None:
         result = self._build([
-            ReasoningOutputItem(text="internal thought"),
-            TextOutputItem(text="visible answer", annotations=[]),
-            ReasoningOutputItem(text="another thought"),
+            ReasoningOutputItem(text='internal thought'),
+            TextOutputItem(text='visible answer', annotations=[]),
+            ReasoningOutputItem(text='another thought'),
         ])
         msgs = result.chat_completions
-        assert [m.role for m in msgs] == ["user", "assistant"]
-        assert msgs[1].content == "visible answer"
+        assert [m.role for m in msgs] == ['user', 'assistant']
+        assert msgs[1].content == 'visible answer'
 
     def test_empty_output_falls_back_to_target_text(self) -> None:
         result = OrchestratorResult(
             turns=[
                 Turn(
-                    attacker=AgentResponse(text="ping"),
+                    attacker=AgentResponse(text='ping'),
                     target=AgentResponse(output=[]),
                 )
             ]
         )
         msgs = result.chat_completions
-        assert [m.role for m in msgs] == ["user", "assistant"]
-        assert msgs[1].content == ""
+        assert [m.role for m in msgs] == ['user', 'assistant']
+        assert msgs[1].content == ''
 
 
 # ===========================================================================
@@ -389,18 +399,21 @@ class TestChatCompletionsOrdering:
 def test_redteam_result_has_no_tool_calls_per_turn_field():
     """tool_calls_per_turn is dead schema — removed in favor of per-Turn access."""
     from evaluatorq.redteam.contracts import RedTeamResult
+
     assert 'tool_calls_per_turn' not in RedTeamResult.model_fields
 
 
 def test_job_output_payload_has_no_tool_calls_per_turn_field():
     """tool_calls_per_turn dropped from JobOutputPayload; legacy JSONs absorbed via extra='allow'."""
     from evaluatorq.redteam.contracts import JobOutputPayload
+
     assert 'tool_calls_per_turn' not in JobOutputPayload.model_fields
 
 
 def test_job_output_payload_tolerates_legacy_tool_calls_per_turn_key():
     """Existing run JSONs with the legacy key must still deserialize cleanly."""
     from evaluatorq.redteam.contracts import JobOutputPayload
+
     payload = JobOutputPayload.model_validate({
         'conversation': [],
         'final_response': 'ok',
