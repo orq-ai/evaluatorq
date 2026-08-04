@@ -20,6 +20,23 @@ def _isolate_run_stores(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _disable_real_span_export(monkeypatch):
+    """Keep the suite from installing a live OTLP exporter.
+
+    ``init_tracing_if_needed()`` installs a real BatchSpanProcessor whenever
+    ORQ_API_KEY is set, and it latches for the process — so on a developer
+    machine with a real key the first test that reaches it wins, and every span
+    the rest of the suite produces is queued for export to my.orq.ai and flushed
+    at interpreter shutdown (a 401, or worse, a successful upload of test spans).
+    Which test gets there first depends on file order, which is why this shows
+    up in some batches and not others. Tests that exercise setup itself opt back
+    in by deleting this var.
+    """
+    monkeypatch.setenv("ORQ_DISABLE_TRACING", "1")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _clear_span_max_text_chars_cache():
     """Clear lru_cache between tests so EVALUATORQ_SPAN_MAX_TEXT_CHARS env changes propagate."""
     from evaluatorq.common.tracing import _default_span_max_text_chars

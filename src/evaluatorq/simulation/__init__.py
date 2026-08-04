@@ -45,6 +45,7 @@ from evaluatorq.simulation.types import DEFAULT_MODEL
 logger = logging.getLogger(__name__)  # noqa: RUF067
 
 if TYPE_CHECKING:
+    from evaluatorq.common.replay import ReplayError
     from evaluatorq.contracts import AgentTarget, LLMCallConfig, TokenUsage
     from evaluatorq.integrations.callable_integration import CallableTarget
     from evaluatorq.integrations.langgraph_integration import LangGraphTarget
@@ -182,6 +183,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
     'RichHooks': ('evaluatorq.simulation.hooks', 'RichHooks'),
     'SimulationRunMeta': ('evaluatorq.simulation.hooks', 'SimulationRunMeta'),
     'SimulationError': ('evaluatorq.simulation.exceptions', 'SimulationError'),
+    'ReplayError': ('evaluatorq.common.replay', 'ReplayError'),
     'SimulationCancelledError': (
         'evaluatorq.simulation.exceptions',
         'SimulationCancelledError',
@@ -313,6 +315,7 @@ __all__ = [
     'PersonaGenerator',
     # Quality
     'PerturbationType',
+    'ReplayError',
     'RichHooks',
     'Scenario',
     'ScenarioGenerator',
