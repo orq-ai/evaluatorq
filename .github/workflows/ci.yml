@@ -56,3 +56,46 @@ jobs:
 
       - name: Test (unit only)
         run: uv run pytest -m 'not integration'
+
+  resolve-sdk-matrix:
+    name: Resolve SDK matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      versions: ${{ steps.resolve.outputs.versions }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve SDK versions
+        id: resolve
+        run: |
+          versions="$(python scripts/sdk_matrix.py)"
+          echo "versions=${versions}" >> "$GITHUB_OUTPUT"
+
+  sdk-compat:
+    name: SDK compatibility
+    needs: resolve-sdk-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk: ${{ fromJson(needs.resolve-sdk-matrix.outputs.versions) }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --all-extras --all-groups
+
+      - name: Install SDK version
+        run: uv pip install "orq-ai-sdk==${{ matrix.sdk }}"
+
+      - name: Test SDK compatibility
+        run: uv run --no-sync pytest tests/redteam/test_orq_backend_context.py tests/redteam/test_contracts.py
