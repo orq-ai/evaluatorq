@@ -421,10 +421,17 @@ class ORQAgentTarget(AgentTarget):
 
         # orq-ai-sdk 4.12.x exposes `version`; 4.4.x exposed `version_hash`. Select by
         # type, not truthiness: an unset SDK field holds a truthy `Unset()` sentinel, so
-        # an `or` chain would latch onto it and never reach the fallback.
-        version = getattr(agent_data, 'version', None)
-        if not isinstance(version, str):
-            version = getattr(agent_data, 'version_hash', None)
+        # an `or` chain would latch onto it and never reach the fallback. Empty counts as
+        # absent — live 4.4.x agents carry `version_hash=''`, and reporting that as a
+        # version would disagree with the same agent read through a newer SDK.
+        version = next(
+            (
+                candidate
+                for candidate in (getattr(agent_data, 'version', None), getattr(agent_data, 'version_hash', None))
+                if isinstance(candidate, str) and candidate
+            ),
+            None,
+        )
 
         system_prompt: Any = getattr(agent_data, 'system_prompt', None)
         instructions: Any = getattr(agent_data, 'instructions', None)

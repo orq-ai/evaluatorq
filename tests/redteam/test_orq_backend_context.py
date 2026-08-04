@@ -175,6 +175,13 @@ def test_unset_version_with_no_fallback_is_none():
     assert _ctx(version=_Unset()).version is None
 
 
+def test_empty_version_counts_as_absent():
+    """Live 4.4.x agents carry ``version_hash=''``. Reporting that as a version
+    would disagree with the same agent read through a newer SDK."""
+    assert _ctx(version='', version_hash='').version is None
+    assert _ctx(version='', version_hash='ab12cd').version == 'ab12cd'
+
+
 def test_new_capability_fields_are_populated():
     ctx = _ctx(skills=['refund', 'lookup'], type='a2a', engine='jinja')
 

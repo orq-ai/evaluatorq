@@ -95,10 +95,16 @@ async def fetch_agent_info(agent_key: str) -> AgentInfoSnapshot | None:
         # None. This snapshot is a plain TypedDict with no validator between it and
         # `model_dump_json()`, so a placeholder reaching it would break the save.
         # orq-ai-sdk 4.12.x renamed `version_hash` to `version`; pick by type, since
-        # the placeholder would satisfy an `or` chain.
-        version = getattr(agent_data, 'version', None)
-        if not isinstance(version, str):
-            version = getattr(agent_data, 'version_hash', None)
+        # the placeholder would satisfy an `or` chain. Empty counts as absent — live
+        # 4.4.x agents carry `version_hash=''`.
+        version = next(
+            (
+                candidate
+                for candidate in (getattr(agent_data, 'version', None), getattr(agent_data, 'version_hash', None))
+                if isinstance(candidate, str) and candidate
+            ),
+            None,
+        )
         raw_skills = getattr(agent_data, 'skills', None)
         skills = [s for s in raw_skills if isinstance(s, str)] if isinstance(raw_skills, list) else []
 
