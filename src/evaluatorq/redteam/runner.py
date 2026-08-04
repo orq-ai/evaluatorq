@@ -445,7 +445,9 @@ async def red_team(
             — never "match everything". Since an empty selection leaves zero
             datapoints, ``red_team`` raises :class:`RedTeamError` rather than
             silently running nothing (or, worse, running the full sweep the
-            caller meant to filter down).
+            caller meant to filter down). This is reachable from the SDK only:
+            the CLI maps blank/empty input back to ``None`` (``_split_csv``), so
+            no ``eq redteam run`` invocation can express "match nothing".
         max_turns: Maximum conversation turns for multi-turn attacks. Defaults
             to 5, or — when replaying via ``previous_run`` — to the turn budget
             the replayed run used. An explicit value always wins.
@@ -673,6 +675,18 @@ async def red_team(
     # callers get a loguru warning from _check_filter_results (post-filter, against
     # the actual dataset), plus a hard RedTeamError if the selection is fully empty.
 
+    # Snapshot the caller's raw category/vulnerability selection for the empty-run
+    # guard, before the resolution chain below defaults an unfiltered run to the
+    # full category sweep. Reading it off resolved_categories instead would make
+    # every default run look like a filter that selected all 36 categories, and a
+    # run that came back empty for an unrelated reason would be blamed on a filter
+    # the caller never set.
+    filter_selection: tuple[str, list[str]] | None = None
+    if vulnerabilities is not None:
+        filter_selection = ('vulnerabilities', sorted(vulnerabilities))
+    elif categories is not None:
+        filter_selection = ('categories', sorted(categories))
+
     resolved_vulns: list[Vulnerability] | None
     if replay is not None:
         # A replay's scope is whatever it recorded. Resolving vulnerabilities
@@ -825,6 +839,7 @@ async def red_team(
             if resolved_mode in (Pipeline.DYNAMIC, Pipeline.HYBRID):
                 run_result = await _run_dynamic_or_hybrid(
                     targets=targets,
+                    filter_selection=filter_selection,
                     agent_targets=agent_targets,
                     mode=resolved_mode,
                     name=name,
@@ -859,6 +874,7 @@ async def red_team(
             elif resolved_mode == Pipeline.STATIC:
                 run_result = await _run_static(
                     targets=targets,
+                    filter_selection=filter_selection,
                     agent_targets=agent_targets,
                     name=name,
                     categories=resolved_categories,
@@ -1267,20 +1283,6 @@ def _create_job_for_target(
 # ---------------------------------------------------------------------------
 
 
-def _category_selection(
-    categories: list[str] | None,
-    vulnerabilities: list[Vulnerability] | None,
-) -> list[str] | None:
-    """Render the explicit category/vulnerability selection, or None if unset.
-
-    Distinguishes "not set" from "set to nothing": an empty selection returns
-    ``[]``, which the empty-run guard treats as a filter that was applied.
-    """
-    if categories is None and vulnerabilities is None:
-        return None
-    return sorted([*(categories or []), *(v.value for v in vulnerabilities or [])])
-
-
 def _check_filter_results(
     datapoints: list[DataPoint],
     strategy_names: set[str] | None,
@@ -1288,7 +1290,7 @@ def _check_filter_results(
     *,
     names_apply: bool = True,
     present_methods: list[str] | None = None,
-    category_selection: list[str] | None = None,
+    filter_selection: tuple[str, list[str]] | None = None,
 ) -> None:
     """Surface strategy/delivery-method filter mismatches; fail on an empty run.
 
@@ -1309,11 +1311,16 @@ def _check_filter_results(
     (``you asked for 'crescendo', the dataset uses 'Crescendo attack'``) rather
     than a bare "zero datapoints".
 
-    ``category_selection`` carries the explicit category/vulnerability selection
-    (``None`` when unset, ``[]`` when set to nothing) so a category filter that
-    empties the run hits the same guard as a delivery filter instead of exiting 0.
+    ``filter_selection`` carries the caller's *raw* category-or-vulnerability
+    selection as ``(argument_name, values)`` — ``None`` when they set neither,
+    ``('categories', [])`` when they set one to nothing — so a category filter
+    that empties the run hits the same guard as a delivery filter instead of
+    exiting 0. It must come from the raw arguments rather than the resolved
+    ones: an unfiltered run defaults those to the full category sweep, which
+    would make every no-filter run look like a filter that selected everything
+    and blame it for an empty run the caller never narrowed.
     """
-    if strategy_names is None and delivery_methods is None and category_selection is None:
+    if strategy_names is None and delivery_methods is None and filter_selection is None:
         return
 
     matched_names: set[str] = set()
@@ -1356,9 +1363,13 @@ def _check_filter_results(
         methods_repr = (
             sorted(delivery_method_str(m) for m in delivery_methods) if delivery_methods is not None else None
         )
+        # Report the selection under the argument name the caller actually used —
+        # merging category codes and vulnerability IDs into one `categories=` list
+        # would hand back a vocabulary they never typed.
+        selection_repr = f'{filter_selection[0]}={filter_selection[1]}, ' if filter_selection is not None else ''
         msg = (
             'Filter selection produced zero datapoints — nothing to run. '
-            f'(categories={category_selection}, strategies={names_repr}, delivery_methods={methods_repr})'
+            f'({selection_repr}strategies={names_repr}, delivery_methods={methods_repr})'
         )
         if present_methods:
             msg += f' Delivery methods present in the dataset: {present_methods}.'
@@ -1368,6 +1379,7 @@ def _check_filter_results(
 async def _prepare_target(
     *,
     target: str,
+    filter_selection: tuple[str, list[str]] | None = None,
     mode: Pipeline,
     categories: list[str] | None,
     resolved_vulns: list[Vulnerability] | None,
@@ -1578,7 +1590,7 @@ async def _prepare_target(
                 all_datapoints,
                 resolved_strategy_names,
                 resolved_delivery_methods,
-                category_selection=_category_selection(categories, resolved_vulns),
+                filter_selection=filter_selection,
             )
 
         # Build the static job via shared helper
@@ -1620,7 +1632,7 @@ async def _prepare_target(
                 all_datapoints,
                 resolved_strategy_names,
                 resolved_delivery_methods,
-                category_selection=_category_selection(categories, resolved_vulns),
+                filter_selection=filter_selection,
             )
 
         # Build the dynamic dispatcher job
@@ -1662,6 +1674,7 @@ async def _prepare_target(
 async def _run_dynamic_or_hybrid(
     *,
     targets: list[str],
+    filter_selection: tuple[str, list[str]] | None = None,
     agent_targets: list[AgentTarget] | None = None,
     mode: Pipeline,
     name: str | None = None,
@@ -2044,6 +2057,7 @@ async def _run_dynamic_or_hybrid(
     # Step 3: Prepare the first target fully — generates shared datapoints.
     common_prepare_kwargs: dict[str, Any] = dict(
         mode=mode,
+        filter_selection=filter_selection,
         categories=categories,
         resolved_vulns=resolved_vulns,
         max_turns=max_turns,
@@ -2335,7 +2349,7 @@ async def _run_dynamic_or_hybrid(
                     at_all_dps,
                     resolved_strategy_names,
                     resolved_delivery_methods,
-                    category_selection=_category_selection(categories, resolved_vulns),
+                    filter_selection=filter_selection,
                 )
 
             prepared_targets.append(
@@ -2745,6 +2759,7 @@ async def _run_dynamic_or_hybrid(
 async def _run_static(
     *,
     targets: list[str],
+    filter_selection: tuple[str, list[str]] | None = None,
     agent_targets: list[AgentTarget] | None = None,
     name: str | None = None,
     categories: list[str] | None,
@@ -2839,7 +2854,11 @@ async def _run_static(
         if resolved_delivery_methods is not None and not data:
             from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import load_owasp_agentic_dataset
 
-            present_rows = load_owasp_agentic_dataset(dataset=dataset, categories=categories)
+            # categories=None, not the resolved selection: this reload exists to report
+            # what the dataset carries, and `categories=[]` now filters to nothing — so
+            # reusing it would empty the diagnostic and hand back the bare "zero
+            # datapoints" error this hint was added to avoid.
+            present_rows = load_owasp_agentic_dataset(dataset=dataset, categories=None)
             present_methods = sorted({m for dp in present_rows if (m := dp.inputs.get('delivery_method'))})
         _check_filter_results(
             data,
@@ -2847,7 +2866,7 @@ async def _run_static(
             resolved_delivery_methods,
             names_apply=False,
             present_methods=present_methods,
-            category_selection=_category_selection(categories, None),
+            filter_selection=filter_selection,
         )
         _save_stage(output_dir, '01_datapoints.json', json.dumps([dp.inputs for dp in data], indent=2, default=str))
 

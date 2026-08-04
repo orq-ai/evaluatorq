@@ -204,6 +204,10 @@ async def test_static_empty_filter_hard_fails_instead_of_running_everything(
     `delivery_methods=[]` skipped filtering and ran the whole dataset at full
     cost, exit 0, no warning — the exact opposite of what the caller asked for,
     and the opposite of what the planner did with the same input.
+
+    The `vulnerabilities=[]` case reaches static via `red_team` collapsing it to
+    `resolved_categories=[]` — `_run_static` has no `vulnerabilities` parameter —
+    so it pins that collapse rather than static-side vulnerability handling.
     """
     from evaluatorq.redteam.exceptions import RedTeamError
 
@@ -238,3 +242,37 @@ async def test_static_datapoint_capping(
         )
 
     assert report.total_results == 1
+
+
+@pytest.mark.asyncio
+async def test_unfiltered_empty_run_does_not_blame_a_filter(
+    mock_llm_client: DeterministicAsyncOpenAI,
+    mock_backend_bundle: MockBackend,
+    static_dataset_path: Path,
+) -> None:
+    """An unfiltered run that yields zero datapoints must not accuse a filter.
+
+    Regression: the empty-run guard took its category selection from
+    `resolved_categories`, which `red_team` has already defaulted to the full
+    category sweep when the caller filtered nothing. That made the selection
+    non-None on *every* default run, defeating the guard's early return — so an
+    empty run caused by something else entirely (modelled here by a loader that
+    returns no rows) died with "Filter selection produced zero datapoints"
+    listing all 36 category codes the caller never asked for.
+    """
+    with (
+        _static_patches(mock_backend_bundle),
+        patch(
+            "evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.load_owasp_agentic_dataset",
+            return_value=[],
+        ),
+    ):
+        report = await red_team(
+            "agent:e2e-static-model",
+            mode="static",
+            parallelism=2,
+            dataset=str(static_dataset_path),
+            llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
+        )
+
+    assert report.total_results == 0

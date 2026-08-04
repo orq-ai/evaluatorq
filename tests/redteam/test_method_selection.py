@@ -513,3 +513,17 @@ class TestBridgeDeliveryFilter:
         assert load_owasp_agentic_dataset(dataset=_FIXTURE, delivery_methods=['base64']) == []
         # No filter → all rows load.
         assert len(load_owasp_agentic_dataset(dataset=_FIXTURE)) == 3
+
+
+class TestEmptyRunGuardScope:
+    """The empty-run guard must fire only for filters the caller actually set."""
+
+    def test_empty_selection_still_raises_and_names_the_argument(self) -> None:
+        from evaluatorq.redteam.exceptions import RedTeamError
+        from evaluatorq.redteam.runner import _check_filter_results
+
+        with pytest.raises(RedTeamError, match='zero datapoints') as exc:
+            _check_filter_results([], None, None, filter_selection=('vulnerabilities', []))
+        # Reported under the caller's own argument name, not a merged `categories=`.
+        assert 'vulnerabilities=[]' in str(exc.value)
+        assert 'categories=' not in str(exc.value)
