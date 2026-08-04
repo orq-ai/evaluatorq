@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from evaluatorq.dashboard.metrics import Landing, RedTeamOverview, RunRow, SimOverview
 
 # Surface key → display label, used for run-list titles + kind badges.
-SURFACE_LABELS: dict[str, str] = {'redteam': 'Red Team', 'sim': 'Agent Sim'}
+SURFACE_LABELS: dict[str, str] = {'redteam': 'Red Team', 'sim': 'Agent Sim', 'pairwise': 'Pairwise'}
 
 # Allow-listed run-overview page sizes (first entry is the default). Shared with
 # app.py so the query parser and the size picker agree.

@@ -175,10 +175,11 @@ def page(
     Args:
         title: ``<title>`` text and the topbar heading.
         body_html: Pre-rendered HTML fragment for the ``<main>`` body.
-        active_surface: Surface key (``'redteam'`` | ``'sim'``) for the report
-            view, used to highlight the matching nav item.
+        active_surface: Surface key (``'redteam'`` | ``'sim'`` | ``'pairwise'``)
+            for the report view, used to highlight the matching nav item.
         active_nav: Explicit nav key (``'dashboard'`` | ``'redteam'`` | ``'sim'``
-            | ``'settings'``) overriding the surface-derived default.
+            | ``'pairwise'`` | ``'settings'``) overriding the surface-derived
+            default.
         actions_html: Optional pre-rendered HTML for the topbar action area
             (e.g. export buttons on a report view).
 
