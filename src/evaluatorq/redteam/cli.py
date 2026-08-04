@@ -37,6 +37,8 @@ _RUN_EPILOG = examples(
     'eq redteam run -t agent:my-agent --mode hybrid',
     '# scope to one OWASP category, machine-readable later via `eq redteam runs --json`',
     'eq redteam run -t agent:my-agent -c ASI01',
+    '# replay the last run against a new agent version (same attacks, new target)',
+    'eq redteam run -t agent:my-agent-v2 --from-run latest',
 )
 
 
@@ -259,9 +261,14 @@ def run(
         ),
     ] = None,
     max_turns: Annotated[
-        int,
-        typer.Option(help='Maximum conversation turns for multi-turn attacks.'),
-    ] = 5,
+        int | None,
+        typer.Option(
+            help=(
+                'Maximum conversation turns for multi-turn attacks. '
+                "Defaults to 5, or to the replayed run's turn budget with --from-run."
+            )
+        ),
+    ] = None,
     max_per_category: Annotated[
         int | None,
         typer.Option(help='Cap strategies per category.'),
@@ -311,6 +318,19 @@ def run(
     dataset: Annotated[
         str | None,
         typer.Option(help='Dataset source: local path, "hf:org/repo", or "hf:org/repo/file.json".'),
+    ] = None,
+    from_run: Annotated[
+        str | None,
+        typer.Option(
+            '--from-run',
+            help=(
+                'Replay a previous run instead of generating data: pass its file name, '
+                'run id, path, or "latest". Re-runs the exact same attacks, so only the '
+                'target and models may differ. Cannot be combined with --mode, --dataset, '
+                '--category, --vulnerability, --strategy, --delivery-method, or the '
+                '--max-*-datapoints caps.'
+            ),
+        ),
     ] = None,
     artifacts_dir: Annotated[
         Path | None,
@@ -374,6 +394,7 @@ def run(
         verbose = -1
     _configure_logging(verbose)
 
+    from evaluatorq.common.replay import ReplayError
     from evaluatorq.redteam import red_team
     from evaluatorq.redteam.contracts import EvaluatorConfig, LLMCallConfig, LLMConfig, TargetConfig
     from evaluatorq.redteam.exceptions import CancelledError, RedTeamError
@@ -455,6 +476,7 @@ def run(
                 max_static_datapoints=max_static_datapoints,
                 cleanup_memory=not no_cleanup_memory,
                 dataset=dataset,
+                previous_run=from_run,
                 hooks=RichHooks(skip_confirm=should_skip_confirm(yes)),
                 artifacts_dir=artifacts_dir,
                 save=save,
@@ -470,7 +492,7 @@ def run(
     except KeyboardInterrupt:
         typer.echo('\nInterrupted.')
         raise typer.Exit(code=130)
-    except RedTeamError as e:
+    except (RedTeamError, ReplayError) as e:
         typer.echo(f'Error: {e}', err=True)
         raise typer.Exit(code=1)
     except ValueError as e:
