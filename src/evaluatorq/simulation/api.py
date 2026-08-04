@@ -148,8 +148,9 @@ def _sim_run_scope(run_id: str, span: Any | None):
     nested calls and copied into child tasks). Wraps the shared
     :func:`evaluatorq_run_id` CM rather than reimplementing it.
     """
-    if span is not None and run_id:
-        span.set_attribute('orq.evaluatorq_run_id', run_id)
+    from evaluatorq.common.tracing import set_span_attrs
+
+    set_span_attrs(span, {'orq.evaluatorq_run_id': run_id or None})
     with evaluatorq_run_id(run_id):
         yield
 

@@ -96,10 +96,19 @@ def run_metadata_kwarg(client: AsyncOpenAI | None) -> dict[str, dict[str, str]]:
     """Guarded ``{'metadata': {...}}`` for splatting into a ``create()`` call.
 
     Returns ``{}`` off-Orq (a plain OpenAI endpoint rejects unknown fields) or when
-    no run is bound. Single source of truth for tagging direct ``create()`` sites
-    that don't go through :func:`execute_chat_completion`.
+    no run is bound. Underlying data source for :func:`apply_pipeline_metadata`,
+    which is what direct ``create()`` sites actually call.
     """
     if not client_routes_through_orq(client):
+        # Debug-only: legitimate off-Orq usage hits this on every call. But a run
+        # bound here means the caller expected Orq-side run correlation and won't
+        # get it (usually a client built against the wrong base_url), which is
+        # otherwise invisible — leave a breadcrumb to grep for.
+        if pipeline_metadata():
+            logger.debug(
+                'Skipping run metadata: client does not route through Orq (base_url=%r)',
+                getattr(client, 'base_url', None),
+            )
         return {}
     md = pipeline_metadata()
     return {'metadata': md} if md else {}

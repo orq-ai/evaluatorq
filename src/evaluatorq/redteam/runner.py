@@ -30,7 +30,6 @@ from evaluatorq.common.thread_context import (
     conversation_thread,
     evaluatorq_pipeline,
     evaluatorq_run_id,
-    pipeline_metadata_param,
 )
 from evaluatorq.common.tracing import AttrMap, set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentTarget, Message
@@ -847,7 +846,11 @@ async def red_team(
                                 llm_client=es_client,
                                 model=evaluator_model,
                                 temperature=config.evaluator.temperature,
-                                extra_body={**config.retry_extra_body(es_client), **pipeline_metadata_param()},
+                                # No pipeline metadata here: generate_executive_summary tags the
+                                # call itself (guarded on the client routing through Orq). Passing
+                                # it via extra_body too would win the SDK's merge and silently
+                                # discard that tag — extra_body takes precedence over named kwargs.
+                                extra_body=config.retry_extra_body(es_client),
                                 extra_kwargs=config.evaluator.extra_kwargs,
                             )
                     except (TypeError, AttributeError, ImportError, NameError, KeyError):

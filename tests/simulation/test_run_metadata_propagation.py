@@ -32,7 +32,7 @@ class _FakeCompletions:
 class _FakeClient:
     def __init__(self, sink: dict[str, Any], build_parsed) -> None:
         self.chat = SimpleNamespace(completions=_FakeCompletions(sink, build_parsed))
-        self.base_url = 'https://my.orq.ai/v2/router'
+        self.base_url = 'https://my.orq.ai/v3/router'
 
     async def close(self) -> None:  # pragma: no cover - generator doesn't own us
         pass
