@@ -631,12 +631,13 @@ def simulate(
         ),
     ] = True,
 ) -> None:
-    """Run simulations from a pre-built datapoints file, an Orq dataset, or a previous run.
+    """Run simulations from a pre-built datapoints file, an Orq dataset, experiment, or previous run.
 
     Inputs (provide exactly one):
 
     - --input PATH       datapoints JSONL file.
     - --dataset-id ID    Orq dataset.
+    - --experiment-id ID Orq experiment; optionally select a run with --experiment-run-id.
     - --from-run REF     replay a saved run's exact cases ("latest", file name, or run id).
 
     Targets (provide exactly one):
