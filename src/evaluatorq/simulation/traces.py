@@ -57,12 +57,12 @@ class TraceConversation(BaseModel):
     @property
     def first_user_message(self) -> str | None:
         return next(
-            (m["content"] for m in self.messages if m["role"] == "user" and m["content"].strip()),
+            (m['content'] for m in self.messages if m['role'] == 'user' and m['content'].strip()),
             None,
         )
 
     def transcript(self, max_chars: int = _MAX_TRANSCRIPT_CHARS) -> str:
-        text = "\n".join(f"{m['role']}: {m['content']}" for m in self.messages)
+        text = '\n'.join(f'{m["role"]}: {m["content"]}' for m in self.messages)
         return text[:max_chars]
 
 
@@ -72,10 +72,10 @@ class TraceConversation(BaseModel):
 
 
 def _resolve_orq_credentials(api_key: str | None, base_url: str | None) -> tuple[str, str]:
-    key = api_key or os.environ.get("ORQ_API_KEY")
+    key = api_key or os.environ.get('ORQ_API_KEY')
     if not key:
-        raise ValueError("Missing Orq API key: set ORQ_API_KEY or pass api_key=.")
-    host = (base_url or os.environ.get("ORQ_BASE_URL") or "https://my.orq.ai").rstrip("/")
+        raise ValueError('Missing Orq API key: set ORQ_API_KEY or pass api_key=.')
+    host = (base_url or os.environ.get('ORQ_BASE_URL') or 'https://my.orq.ai').rstrip('/')
     return key, host
 
 
@@ -93,33 +93,33 @@ def _content_to_text(content: Any) -> str:
             if isinstance(part, str):
                 parts.append(part)
             elif isinstance(part, dict):
-                if part.get("type") not in (None, "text"):
+                if part.get('type') not in (None, 'text'):
                     continue
-                text = part.get("text") or part.get("content")
+                text = part.get('text') or part.get('content')
                 if isinstance(text, str):
                     parts.append(text)
-        return "\n".join(parts)
+        return '\n'.join(parts)
     if content is None:
-        return ""
+        return ''
     return str(content)
 
 
 def _normalize_message(raw: Any) -> dict[str, str] | None:
     if not isinstance(raw, dict):
         return None
-    role = raw.get("role")
+    role = raw.get('role')
     if not isinstance(role, str):
         return None
     # Classic messages carry `content`; OTel gen_ai messages carry `parts`.
-    content = _content_to_text(raw.get("content"))
+    content = _content_to_text(raw.get('content'))
     if not content:
-        content = _content_to_text(raw.get("parts"))
+        content = _content_to_text(raw.get('parts'))
     if not content:
         return None
-    return {"role": role, "content": content}
+    return {'role': role, 'content': content}
 
 
-def _messages_from_value(value: Any, *, default_role: str = "user") -> list[dict[str, str]]:
+def _messages_from_value(value: Any, *, default_role: str = 'user') -> list[dict[str, str]]:
     """Extract chat messages from a span ``input``/``output``-shaped value.
 
     ``default_role`` is the role assigned to bare-string values, which carry no
@@ -127,20 +127,20 @@ def _messages_from_value(value: Any, *, default_role: str = "user") -> list[dict
     but a plain-string ``output`` is the assistant's reply.
     """
     if isinstance(value, dict):
-        for key in ("messages", "input", "choices"):
+        for key in ('messages', 'input', 'choices'):
             inner = value.get(key)
             if isinstance(inner, list):
-                if key == "choices":
-                    inner = [c.get("message") for c in inner if isinstance(c, dict)]
+                if key == 'choices':
+                    inner = [c.get('message') for c in inner if isinstance(c, dict)]
                 return [m for m in (_normalize_message(i) for i in inner) if m]
         single = _normalize_message(value)
         if single:
             return [single]
         # gen_ai.input.prompt / gen_ai.output.completion (Completion models).
-        for key in ("prompt", "completion"):
+        for key in ('prompt', 'completion'):
             text = value.get(key)
             if isinstance(text, str) and text.strip():
-                return [{"role": default_role, "content": text}]
+                return [{'role': default_role, 'content': text}]
         return []
     if isinstance(value, list):
         return [m for m in (_normalize_message(i) for i in value) if m]
@@ -148,7 +148,7 @@ def _messages_from_value(value: Any, *, default_role: str = "user") -> list[dict
         decoded = _decode_json_string(value)
         if decoded is not None:
             return _messages_from_value(decoded, default_role=default_role)
-        return [{"role": default_role, "content": value}]
+        return [{'role': default_role, 'content': value}]
     return []
 
 
@@ -177,10 +177,10 @@ def _span_io(span: dict[str, Any], field: str) -> Any:
     value = span.get(field)
     if value is not None:
         return value
-    attributes = span.get("attributes")
+    attributes = span.get('attributes')
     if not isinstance(attributes, dict):
         return None
-    gen_ai = attributes.get("gen_ai")
+    gen_ai = attributes.get('gen_ai')
     if not isinstance(gen_ai, dict):
         return None
     return gen_ai.get(field)
@@ -194,11 +194,11 @@ def _conversation_from_spans(trace_id: str, spans: list[dict[str, Any]]) -> Trac
     """
     ordered = sorted(
         spans,
-        key=lambda s: (bool(s.get("parent_id")), s.get("type") != "Trace"),
+        key=lambda s: (bool(s.get('parent_id')), s.get('type') != 'Trace'),
     )
     for span in ordered:
-        messages = _messages_from_value(_span_io(span, "input"), default_role="user")
-        output_messages = _messages_from_value(_span_io(span, "output"), default_role="assistant")
+        messages = _messages_from_value(_span_io(span, 'input'), default_role='user')
+        output_messages = _messages_from_value(_span_io(span, 'output'), default_role='assistant')
         for msg in output_messages:
             if msg not in messages:
                 messages.append(msg)
@@ -212,7 +212,7 @@ async def fetch_trace_conversations(
     limit: int = 20,
     start_date_ms: int | None = None,
     end_date_ms: int | None = None,
-    search: str = "",
+    search: str = '',
     filters: list[dict[str, Any]] | None = None,
     api_key: str | None = None,
     base_url: str | None = None,
@@ -226,7 +226,7 @@ async def fetch_trace_conversations(
     skipped.
     """
     key, host = _resolve_orq_credentials(api_key, base_url)
-    headers = {"Authorization": f"Bearer {key}"}
+    headers = {'Authorization': f'Bearer {key}'}
     owned = http_client is None
     client = http_client or httpx.AsyncClient(timeout=60.0)
     try:
@@ -235,29 +235,29 @@ async def fetch_trace_conversations(
         while len(rows) < limit and page <= _MAX_PAGES:
             try:
                 response = await client.post(
-                    f"{host}/v2/traces/v3oql",
+                    f'{host}/v2/traces/v3oql',
                     headers=headers,
                     json={
-                        "filters": {"operator": "and", "filters": filters or [], "search": search},
-                        "limit": min(limit - len(rows), _API_PAGE_LIMIT),
-                        "page": page,
-                        "fields": [],
-                        **({"start_date": start_date_ms} if start_date_ms is not None else {}),
-                        **({"end_date": end_date_ms} if end_date_ms is not None else {}),
+                        'filters': {'operator': 'and', 'filters': filters or [], 'search': search},
+                        'limit': min(limit - len(rows), _API_PAGE_LIMIT),
+                        'page': page,
+                        'fields': [],
+                        **({'start_date': start_date_ms} if start_date_ms is not None else {}),
+                        **({'end_date': end_date_ms} if end_date_ms is not None else {}),
                     },
                 )
                 response.raise_for_status()
             except httpx.HTTPError as exc:
-                raise RuntimeError(f"Failed to list Orq traces: {exc}") from exc
+                raise RuntimeError(f'Failed to list Orq traces: {exc}') from exc
             payload = response.json()
-            data = payload.get("data", [])
-            rows.extend(r for r in data if isinstance(r, dict) and r.get("trace_id"))
-            if not data or not payload.get("has_more"):
+            data = payload.get('data', [])
+            rows.extend(r for r in data if isinstance(r, dict) and r.get('trace_id'))
+            if not data or not payload.get('has_more'):
                 break
             page += 1
         if len(rows) < limit and page > _MAX_PAGES:
             logger.warning(
-                "Stopped paginating traces after %d page(s) with %d/%d row(s) collected",
+                'Stopped paginating traces after %d page(s) with %d/%d row(s) collected',
                 _MAX_PAGES,
                 len(rows),
                 limit,
@@ -268,29 +268,23 @@ async def fetch_trace_conversations(
         async def fetch_one(trace_id: str) -> TraceConversation | None:
             async with semaphore:
                 try:
-                    resp = await client.get(
-                        f"{host}/v2/traces/{trace_id}/v3spans", headers=headers
-                    )
+                    resp = await client.get(f'{host}/v2/traces/{trace_id}/v3spans', headers=headers)
                     resp.raise_for_status()
                 except httpx.HTTPError as exc:
-                    logger.warning("Failed to fetch spans for trace %s: %s", trace_id, exc)
+                    logger.warning('Failed to fetch spans for trace %s: %s', trace_id, exc)
                     return None
                 spans = resp.json()
                 if not isinstance(spans, list):
                     return None
                 return _conversation_from_spans(trace_id, spans)
 
-        conversations = await asyncio.gather(
-            *(fetch_one(str(row["trace_id"])) for row in rows[:limit])
-        )
+        conversations = await asyncio.gather(*(fetch_one(str(row['trace_id'])) for row in rows[:limit]))
     finally:
         if owned:
             await client.aclose()
 
     usable = [c for c in conversations if c is not None and c.first_user_message]
-    logger.info(
-        "Fetched %d trace(s), %d with a usable conversation", len(rows[:limit]), len(usable)
-    )
+    logger.info('Fetched %d trace(s), %d with a usable conversation', len(rows[:limit]), len(usable))
     return usable
 
 
@@ -352,13 +346,13 @@ async def datapoints_from_traces(
             if not first_message:
                 continue
             messages: list[dict[str, Any]] = [
-                {"role": "system", "content": _INFER_SYSTEM_PROMPT},
+                {'role': 'system', 'content': _INFER_SYSTEM_PROMPT},
                 {
-                    "role": "user",
-                    "content": (
-                        f"Conversation transcript:\n"
-                        f"{delimit(conversation.transcript(), tag='transcript')}\n\n"
-                        "Infer the persona and scenario. Return JSON with keys "
+                    'role': 'user',
+                    'content': (
+                        f'Conversation transcript:\n'
+                        f'{delimit(conversation.transcript(), tag="transcript")}\n\n'
+                        'Infer the persona and scenario. Return JSON with keys '
                         "'persona' and 'scenario'."
                     ),
                 },
@@ -371,24 +365,24 @@ async def datapoints_from_traces(
                     response_format=_InferredPersonaScenario,
                     temperature=_TEMPERATURE_ANALYSIS,
                     max_tokens=2000,
-                    label="datapoints_from_traces",
+                    label='datapoints_from_traces',
                 )
             except Exception as exc:
                 logger.warning(
-                    "Persona/scenario inference failed for trace %s: %s",
+                    'Persona/scenario inference failed for trace %s: %s',
                     conversation.trace_id,
                     exc,
                 )
                 continue
             if parsed is None:
                 logger.warning(
-                    "Persona/scenario inference returned no parseable output for trace %s",
+                    'Persona/scenario inference returned no parseable output for trace %s',
                     conversation.trace_id,
                 )
                 continue
-            datapoint = generate_datapoint(
-                parsed.persona, parsed.scenario, first_message
-            ).model_copy(update={"id": f"trace-{conversation.trace_id}"})
+            datapoint = generate_datapoint(parsed.persona, parsed.scenario, first_message).model_copy(
+                update={'id': f'trace-{conversation.trace_id}'}
+            )
             datapoints.append(datapoint)
         return datapoints
     finally:
@@ -437,23 +431,22 @@ async def extend_from_traces(
     from evaluatorq.simulation.generators.datapoint_generator import DatapointGenerator
 
     if not conversations:
-        raise ValueError("extend_from_traces requires at least one trace conversation")
+        raise ValueError('extend_from_traces requires at least one trace conversation')
     if num_datapoints < 1:
-        raise ValueError("num_datapoints must be >= 1")
+        raise ValueError('num_datapoints must be >= 1')
 
     llm_client, owned = build_simulation_client(client, extra_api_key=api_key)
     try:
-        transcripts = "\n\n".join(
-            delimit(c.transcript(), tag="transcript")
-            for c in conversations[:_MAX_PROFILE_CONVERSATIONS]
+        transcripts = '\n\n'.join(
+            delimit(c.transcript(), tag='transcript') for c in conversations[:_MAX_PROFILE_CONVERSATIONS]
         )
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": _PROFILE_SYSTEM_PROMPT},
+            {'role': 'system', 'content': _PROFILE_SYSTEM_PROMPT},
             {
-                "role": "user",
-                "content": (
-                    f"Production transcripts ({min(len(conversations), _MAX_PROFILE_CONVERSATIONS)} "
-                    f"conversations):\n{transcripts}\n\nWrite the traffic distribution profile."
+                'role': 'user',
+                'content': (
+                    f'Production transcripts ({min(len(conversations), _MAX_PROFILE_CONVERSATIONS)} '
+                    f'conversations):\n{transcripts}\n\nWrite the traffic distribution profile.'
                 ),
             },
         ]
@@ -464,10 +457,10 @@ async def extend_from_traces(
             response_format=_TrafficProfile,
             temperature=_TEMPERATURE_ANALYSIS,
             max_tokens=2000,
-            label="extend_from_traces.profile",
+            label='extend_from_traces.profile',
         )
         if parsed is None:
-            raise RuntimeError("Traffic profile generation returned no parseable output")
+            raise RuntimeError('Traffic profile generation returned no parseable output')
         profile = parsed.profile
     finally:
         if owned:
@@ -479,12 +472,11 @@ async def extend_from_traces(
     generator = DatapointGenerator(model=model)
     try:
         datapoints = await generator.generate_from_description(
-            agent_description=agent_description
-            or "The agent described by this production traffic profile.",
+            agent_description=agent_description or 'The agent described by this production traffic profile.',
             context=(
-                "Match the following production traffic distribution — generated "
-                f"personas and scenarios must mirror its topic mix, tones, and "
-                f"technical levels:\n{profile}"
+                'Match the following production traffic distribution — generated '
+                f'personas and scenarios must mirror its topic mix, tones, and '
+                f'technical levels:\n{profile}'
             ),
             num_personas=num_personas,
             num_scenarios=num_scenarios,

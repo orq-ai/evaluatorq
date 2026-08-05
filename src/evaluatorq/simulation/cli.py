@@ -1222,72 +1222,72 @@ def generate(
 # ---------------------------------------------------------------------------
 
 
-@app.command("from-traces", no_args_is_help=True)
+@app.command('from-traces', no_args_is_help=True)
 def from_traces(
     output: Annotated[
         Path,
-        typer.Option("--output", "-o", help="Path to write the generated datapoints JSONL."),
+        typer.Option('--output', '-o', help='Path to write the generated datapoints JSONL.'),
     ],
     limit: Annotated[
         int,
-        typer.Option("--limit", min=1, help="Maximum number of traces to fetch."),
+        typer.Option('--limit', min=1, help='Maximum number of traces to fetch.'),
     ] = 20,
     lookback_hours: Annotated[
         float | None,
         typer.Option(
-            "--lookback-hours",
+            '--lookback-hours',
             min=0.0,
-            help="Only fetch traces from the last N hours. Default: no time filter.",
+            help='Only fetch traces from the last N hours. Default: no time filter.',
         ),
     ] = None,
     search: Annotated[
         str,
-        typer.Option("--search", help="Free-text search applied to the trace list."),
-    ] = "",
+        typer.Option('--search', help='Free-text search applied to the trace list.'),
+    ] = '',
     extend: Annotated[
         int,
         typer.Option(
-            "--extend",
+            '--extend',
             min=0,
             help=(
-                "Also generate N distribution-matched datapoints on top of the "
-                "direct per-trace ones (extra LLM calls). 0 disables extension."
+                'Also generate N distribution-matched datapoints on top of the '
+                'direct per-trace ones (extra LLM calls). 0 disables extension.'
             ),
         ),
     ] = 0,
     agent_description: Annotated[
         str | None,
         typer.Option(
-            "--agent-description",
+            '--agent-description',
             help=(
-                "Agent description used by --extend generation. Optional; "
-                "inferred from the traffic profile when omitted."
+                'Agent description used by --extend generation. Optional; '
+                'inferred from the traffic profile when omitted.'
             ),
         ),
     ] = None,
     sim_model: Annotated[
         str,
         typer.Option(
-            "--sim-model",
+            '--sim-model',
             help=(
-                "Model for persona/scenario inference and extension generation. "
-                "Provider resolved from env: ORQ_API_KEY -> Orq router, else "
-                "OPENAI_API_KEY (+ OPENAI_BASE_URL)."
+                'Model for persona/scenario inference and extension generation. '
+                'Provider resolved from env: ORQ_API_KEY -> Orq router, else '
+                'OPENAI_API_KEY (+ OPENAI_BASE_URL).'
             ),
         ),
     ] = DEFAULT_MODEL,
     verbose: Annotated[
         int,
         typer.Option(
-            "--verbose",
-            "-v",
+            '--verbose',
+            '-v',
             count=True,
-            help="Increase verbosity (-v info logs, -vv debug logs).",
+            help='Increase verbosity (-v info logs, -vv debug logs).',
         ),
     ] = 0,
     quiet: Annotated[  # noqa: FBT002
         bool,
-        typer.Option("--quiet", "-q", help="Suppress non-error output."),
+        typer.Option('--quiet', '-q', help='Suppress non-error output.'),
     ] = False,
 ) -> None:
     """Build simulation datapoints from Orq production traces.
@@ -1322,8 +1322,7 @@ def from_traces(
         )
         if not conversations:
             raise RuntimeError(
-                "No traces with a usable conversation found. Widen --lookback-hours, "
-                "raise --limit, or drop --search."
+                'No traces with a usable conversation found. Widen --lookback-hours, raise --limit, or drop --search.'
             )
         datapoints = await datapoints_from_traces(conversations, model=sim_model)
         if extend > 0:
@@ -1338,10 +1337,10 @@ def from_traces(
     try:
         num_traces, datapoints = asyncio.run(_impl())
     except KeyboardInterrupt:
-        typer.echo("^C aborted.", err=True)
+        typer.echo('^C aborted.', err=True)
         raise typer.Exit(130) from None
     except asyncio.CancelledError:
-        typer.echo("^C aborted.", err=True)
+        typer.echo('^C aborted.', err=True)
         raise typer.Exit(130) from None
     except typer.BadParameter:
         raise
@@ -1351,12 +1350,12 @@ def from_traces(
         _handle_cli_error(exc)
 
     if not datapoints:
-        typer.echo("Error: no datapoints could be built from the fetched traces.", err=True)
+        typer.echo('Error: no datapoints could be built from the fetched traces.', err=True)
         raise typer.Exit(1)
 
     _write_datapoints(datapoints, output)
     typer.echo(
-        f"Built {len(datapoints)} datapoint(s) from {num_traces} trace(s) -> {output}",
+        f'Built {len(datapoints)} datapoint(s) from {num_traces} trace(s) -> {output}',
         err=True,
     )
 
