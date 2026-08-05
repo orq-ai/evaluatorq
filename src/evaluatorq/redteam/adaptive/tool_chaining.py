@@ -149,16 +149,15 @@ class ToolChainingPlanner:
         cfg = self._cfg
         response = await asyncio.wait_for(
             self._client.chat.completions.parse(
-                model=self._model,
-                messages=[
-                    {'role': 'system', 'content': _PLANNER_SYSTEM_PROMPT},
-                    {'role': 'user', 'content': user_msg},
-                ],
-                response_format=_DecompositionSchema,
-                temperature=cfg.attacker.temperature,
-                max_completion_tokens=cfg.attacker.max_tokens,
-                extra_body=cfg.retry_extra_body(self._client),
-                **cfg.attacker.extra_kwargs,
+                **cfg.attacker.completion_params(
+                    model=self._model,
+                    messages=[
+                        {'role': 'system', 'content': _PLANNER_SYSTEM_PROMPT},
+                        {'role': 'user', 'content': user_msg},
+                    ],
+                    response_format=_DecompositionSchema,
+                    extra_body=cfg.retry_extra_body(self._client),
+                )
             ),
             timeout=cfg.attacker.timeout_ms / 1000.0,
         )

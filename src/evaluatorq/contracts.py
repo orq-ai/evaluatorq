@@ -140,6 +140,24 @@ class LLMCallConfig(BaseModel):
     extra_kwargs: dict[str, Any] = Field(default_factory=dict)
     client: _Client = None
 
+    def completion_params(self, **params: Any) -> dict[str, Any]:
+        """Merged kwargs for a chat-completions call: sampling fields first,
+        then call-site params, then ``extra_kwargs`` last so user keys override.
+
+        Never splat ``extra_kwargs`` next to explicit ``temperature=`` /
+        ``max_completion_tokens=`` keywords: a user routing those keys through
+        ``extra_kwargs`` (the documented pre-refactor way to tune them) turns
+        every call into ``TypeError: got multiple values for keyword argument``.
+        The override order also doubles as the escape hatch for reasoning-class
+        models that reject a lowered temperature: ``extra_kwargs={'temperature': 1}``.
+        """
+        return {
+            'temperature': self.temperature,
+            'max_completion_tokens': self.max_tokens,
+            **params,
+            **self.extra_kwargs,
+        }
+
 
 # ---------------------------------------------------------------------------
 # Output message item types — re-exported from openresponses
