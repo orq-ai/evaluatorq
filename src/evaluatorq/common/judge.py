@@ -105,14 +105,14 @@ def _format_output_message(item: OutputMessage) -> dict[str, Any] | None:
     return None
 
 
-def build_eval_replacements(
+def _build_namespace(
     *,
     input_messages: list[dict[str, Any]] | list[Message],
     output_messages: Sequence[OutputMessage],
     expected_output: str | None = None,
     system_instructions: str | None = None,
-) -> dict[str, Any]:
-    """Build the replacements dict for an Orq-format evaluator prompt."""
+    error: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     in_msgs = [
         m if isinstance(m, dict) else {'role': str(m.role), 'content': coerce_content_text(m.content)}
         for m in input_messages
@@ -125,7 +125,6 @@ def build_eval_replacements(
     ]
     out_transcript = [r for r in (_format_output_message(i) for i in output_messages) if r is not None]
     reference = expected_output or ''
-
     nested = {
         'input': {
             'all_messages': in_msgs,
@@ -136,6 +135,7 @@ def build_eval_replacements(
             'response': response,
             'tools_called': tools_called,
             'messages': out_transcript,
+            'error': error or '',
         },
         'log': {
             'input': in_msgs[-1].get('content', '') if in_msgs else '',
@@ -146,12 +146,56 @@ def build_eval_replacements(
         },
     }
     flat = {
-        'input.all_messages': json.dumps(in_msgs, indent=2),
+        'input.all_messages': json.dumps(in_msgs, indent=2, default=str),
         'output.tools_called': json.dumps(tools_called, indent=2, default=str),
         'output.messages': json.dumps(out_transcript, indent=2, default=str),
-        'log.messages': json.dumps(in_msgs, indent=2),
+        'log.messages': json.dumps(in_msgs, indent=2, default=str),
     }
+    return nested, flat
+
+
+# Use EXPLICIT signatures on the public wrappers (not **kwargs) so basedpyright
+# checks call sites and the `error` kwarg actually reaches _build_namespace.
+def build_eval_replacements(
+    *,
+    input_messages: list[dict[str, Any]] | list[Message],
+    output_messages: Sequence[OutputMessage],
+    expected_output: str | None = None,
+    system_instructions: str | None = None,
+    error: str | None = None,
+) -> dict[str, Any]:
+    """Build the replacements dict for an Orq-format evaluator prompt."""
+    nested, flat = _build_namespace(
+        input_messages=input_messages,
+        output_messages=output_messages,
+        expected_output=expected_output,
+        system_instructions=system_instructions,
+        error=error,
+    )
     return {**flat, **nested}
+
+
+def build_side_replacements(
+    prefix: str,
+    *,
+    input_messages: list[dict[str, Any]] | list[Message],
+    output_messages: Sequence[OutputMessage],
+    expected_output: str | None = None,
+    system_instructions: str | None = None,
+    error: str | None = None,
+) -> dict[str, Any]:
+    """Same namespace as build_eval_replacements, every key prefixed with `<prefix>.`."""
+    nested, flat = _build_namespace(
+        input_messages=input_messages,
+        output_messages=output_messages,
+        expected_output=expected_output,
+        system_instructions=system_instructions,
+        error=error,
+    )
+    result: dict[str, Any] = {prefix: nested}
+    for k, v in flat.items():
+        result[f'{prefix}.{k}'] = v
+    return result
 
 
 def _strip_code_fences(text: str) -> str:
