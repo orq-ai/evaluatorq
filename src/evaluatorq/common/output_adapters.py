@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from evaluatorq.types import Output
 
 
-def output_to_text(output: Output) -> str:
+def output_to_text(output: Any) -> str:
     """Best-effort plain-text view of any Output. Total / fail-soft."""
     if output is None:
         return ''

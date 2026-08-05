@@ -1,9 +1,10 @@
 import json
+from typing import Any
 
 from evaluatorq.common.judge import build_eval_replacements, build_side_replacements
 
 
-def _fixture():
+def _fixture() -> dict[str, Any]:
     in_msgs = [{'role': 'user', 'content': 'hi'}]
     return dict(input_messages=in_msgs, output_messages=[], expected_output='ref', system_instructions=None)
 
