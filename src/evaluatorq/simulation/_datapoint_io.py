@@ -53,11 +53,11 @@ def _extract_single_datapoint(data: DataPoint) -> SimulationDatapoint:
     """
     inputs = data.inputs
     if 'datapoint' in inputs:
-        dp = inputs['datapoint']
+        dp = _as_obj(inputs['datapoint'])
         _validate_shape(dp, 'datapoint', ['persona', 'scenario', 'first_message'])
         return SimulationDatapoint.model_validate(dp)
     if 'datapoints' in inputs:
-        dps = inputs['datapoints']
+        dps = _as_obj(inputs['datapoints'])
         if not isinstance(dps, list):
             raise ValueError("Expected 'datapoints' to be an array")
         if len(dps) != 1:
@@ -65,8 +65,9 @@ def _extract_single_datapoint(data: DataPoint) -> SimulationDatapoint:
                 'wrap_simulation_agent DataPoint must encode exactly one datapoint. '
                 'For batch simulations use simulate() directly.'
             )
-        _validate_shape(dps[0], 'datapoints[]', ['persona', 'scenario', 'first_message'])
-        return SimulationDatapoint.model_validate(dps[0])
+        first = _as_obj(dps[0])
+        _validate_shape(first, 'datapoints[]', ['persona', 'scenario', 'first_message'])
+        return SimulationDatapoint.model_validate(first)
     if 'persona' in inputs and 'scenario' in inputs:
         persona_raw = _as_obj(inputs['persona'])
         scenario_raw = _as_obj(inputs['scenario'])

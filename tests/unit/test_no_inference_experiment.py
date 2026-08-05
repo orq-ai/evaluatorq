@@ -190,6 +190,35 @@ async def test_fetch_retries_until_export_url_ready(patch_client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_fetch_consumes_inline_export_body_without_retry(patch_client):
+    """A cache-miss export is built inline and returned as the POST body itself
+    (Content-Disposition: attachment) — consume it directly, no retry, no download."""
+    rows = [{"inputs": '{"name": "Ada"}', "task_output": "Hello, Ada!"}]
+    export_calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/export"):
+            export_calls["n"] += 1
+            return httpx.Response(
+                200,
+                text=_jsonl(rows),
+                headers={
+                    "Content-Type": "application/x-ndjson",
+                    "Content-Disposition": 'attachment; filename="run.jsonl"',
+                },
+            )
+        return httpx.Response(404, text=f"unexpected {request.url}")
+
+    patch_client(httpx.MockTransport(handler))
+
+    datapoints = await fetch_experiment_datapoints("key", SHEET, "run1")
+
+    assert export_calls["n"] == 1
+    assert len(datapoints) == 1
+    assert datapoints[0].inputs["name"] == "Ada"
+
+
+@pytest.mark.asyncio
 async def test_fetch_raises_when_export_url_never_ready(patch_client, monkeypatch):
     import evaluatorq.fetch_data as fetch_data_mod
 
