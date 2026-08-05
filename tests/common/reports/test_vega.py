@@ -213,8 +213,21 @@ def test_grouped_bar_renders_multi_series():
         series=[('agent-a', [0.2, 0.5]), ('agent-b', [0.4, 0.1])],
         x_title='ASR',
     )
-    assert spec['encoding'].get('yOffset', {}).get('field') == 'series'
+    bar_layer = spec['layer'][0]
+    assert bar_layer['encoding'].get('yOffset', {}).get('field') == 'series'
     assert '<svg' in render_svg(spec)
+
+
+def test_grouped_bar_labels_zero_values():
+    """Zero-width bars are invisible; a literal 0 label must mark them so
+    'scored zero' stays distinguishable from 'not measured'."""
+    spec = vl_grouped_bar(
+        categories=['c1', 'c2'],
+        series=[('agent-a', [0.0, 0.5]), ('agent-b', [0.0, 0.1])],
+        x_title='ASR',
+    )
+    svg = render_svg(spec)
+    assert svg.count('>0<') == 2
 
 
 def test_grouped_bar_empty():

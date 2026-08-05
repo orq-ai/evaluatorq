@@ -488,10 +488,10 @@ def _load_from_file(
         raise DatasetError(msg) from e
     samples = dataset.samples
 
-    if categories:
+    if categories is not None:
         samples = _filter_by_categories(samples, categories, category_of=lambda s: s.input.category)
 
-    if delivery_methods:
+    if delivery_methods is not None:
         selected = set(delivery_methods)
         samples = [s for s in samples if s.input.delivery_method in selected]
         logger.info(
@@ -527,10 +527,10 @@ def _apply_filters(
     cap limits the already-filtered set rather than slicing first and filtering the
     remainder (which would yield fewer than ``num_samples`` rows).
     """
-    if categories:
+    if categories is not None:
         datapoints = _filter_by_categories(datapoints, categories, category_of=lambda dp: dp.inputs.get('category', ''))
 
-    if delivery_methods:
+    if delivery_methods is not None:
         selected = set(delivery_methods)
         datapoints = [dp for dp in datapoints if dp.inputs.get('delivery_method') in selected]
         logger.info(

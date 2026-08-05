@@ -701,12 +701,23 @@ class LLMConfig(BaseModel):
         rather than on ``ORQ_API_KEY`` avoids sending ``retry`` to an injected
         OpenAI client just because ``ORQ_API_KEY`` is in the environment for
         tracing/result-upload.
+
+        This dict fully owns the ``metadata`` key on the request: a caller that
+        passes ``extra_body=cfg.retry_extra_body(...)`` and also wants its own
+        ``metadata`` must merge the two dicts itself.
         """
         from evaluatorq.common.llm_client import client_routes_through_orq
+        from evaluatorq.common.thread_context import pipeline_metadata_param
 
         if not client_routes_through_orq(client):
             return {}
-        return {'retry': {'count': self.retry_count, 'on_codes': self.retry_on_codes}}
+        # Tag every pipeline-internal call (attack/objective generation, evaluator,
+        # orchestrator, capability classifier) with the active surface so its Orq
+        # trace spans are filterable as red teaming. No-op when no pipeline is bound.
+        return {
+            'retry': {'count': self.retry_count, 'on_codes': self.retry_on_codes},
+            **pipeline_metadata_param(),
+        }
 
 
 # Module-level default used by internal pipeline components.
@@ -1583,6 +1594,17 @@ class RedTeamReport(BaseModel):
         description='Client-minted run-grouping id (uuid hex, not an Orq-side run/experiment id) '
         'shared by every attack\'s thread_id; powers the dashboard "View all run traces" '
         'deep-link. None for older reports.',
+    )
+    uploaded_count: int | None = Field(
+        default=None,
+        description='Cleaned result rows sent to the Orq platform. None when the upload was skipped '
+        '(no API key) or the report predates this field; 0 when every row was stripped in cleaning.',
+    )
+    rows_created: int | None = Field(
+        default=None,
+        description='Rows the Orq platform actually registered; a value below uploaded_count explains a smaller '
+        'Explorer sample count. None when the upload failed or was skipped (uploaded_count then records the '
+        'attempt) or the report predates this field — None with a set uploaded_count means "not confirmed".',
     )
 
     @field_validator('pipeline', mode='before')

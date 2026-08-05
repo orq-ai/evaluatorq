@@ -214,11 +214,34 @@ def append_jury_summary(explanation: str | None, jury: JuryResult | None) -> str
     return f'{base} {summary}' if base else summary
 
 
+def as_semaphore(max_concurrency: int | asyncio.Semaphore | None) -> asyncio.Semaphore | None:
+    """Normalize a concurrency limit to a semaphore (or None for unbounded).
+
+    An existing semaphore passes through unchanged so several jury runs can
+    share one budget — ``run_pairwise`` relies on this to bound its two
+    concurrent orderings with a single limit.
+    """
+    if max_concurrency is None:
+        return None
+    if isinstance(max_concurrency, asyncio.Semaphore):
+        return max_concurrency
+    if max_concurrency < 1:
+        raise ValueError(f'max_concurrency ({max_concurrency}) must be >= 1.')
+    return asyncio.Semaphore(max_concurrency)
+
+
 async def _call_prediction(
-    judge_fn: Callable[[str], Awaitable[Prediction]], model: str, *, propagate_errors: bool = False
+    judge_fn: Callable[[str], Awaitable[Prediction]],
+    model: str,
+    *,
+    propagate_errors: bool = False,
+    semaphore: asyncio.Semaphore | None = None,
 ) -> Prediction:
     try:
-        return await judge_fn(model)
+        if semaphore is None:
+            return await judge_fn(model)
+        async with semaphore:
+            return await judge_fn(model)
     except Exception as exc:
         # When the caller has no redundancy to fall back on (a lone judge, no
         # replacements), let the error abort the run instead of silently
@@ -239,9 +262,11 @@ async def _judge_vote(
     replacement: bool,
     numeric_how: NumericAggName,
     propagate_errors: bool = False,
+    semaphore: asyncio.Semaphore | None = None,
 ) -> tuple[JuryVote, list[TokenUsage]]:
     predictions = await asyncio.gather(*[
-        _call_prediction(judge_fn, model, propagate_errors=propagate_errors) for _ in range(max(1, repetitions))
+        _call_prediction(judge_fn, model, propagate_errors=propagate_errors, semaphore=semaphore)
+        for _ in range(max(1, repetitions))
     ])
     usages = [p.token_usage for p in predictions if p.token_usage is not None]
     decisive = [p for p in predictions if p.decisive]
@@ -330,6 +355,7 @@ async def run_jury(
     aggregator: AggregatorSpec | None = None,
     tie_break_label: str | None = None,
     propagate_errors: bool = False,
+    max_concurrency: int | asyncio.Semaphore | None = None,
 ) -> JuryDeliberation:
     """Run a generic panel of judges and aggregate their verdicts.
 
@@ -344,6 +370,11 @@ async def run_jury(
     as a failed vote. Callers set this when the panel has no redundancy (a lone
     judge with no replacements) so an outage aborts loudly rather than producing
     inconclusive verdicts on every datapoint.
+
+    ``max_concurrency`` caps how many ``judge_fn`` calls run at once across the
+    whole panel (judges x repetitions, replacements included). Pass an int for
+    a run-local cap, or an existing ``asyncio.Semaphore`` to share one budget
+    across several jury runs. ``None`` (default) keeps the fan-out unbounded.
     """
     if aggregator is None:
         aggregator = 'mean_std' if verdict_kind is VerdictKind.NUMERIC else 'mode'
@@ -354,6 +385,7 @@ async def run_jury(
         numeric_how = cast('NumericAggName', aggregator)
     agg_fn: Aggregator = aggregator if callable(aggregator) else _AGGREGATORS[aggregator]
 
+    semaphore = as_semaphore(max_concurrency)
     resolved_panel = resolve_panel(panel)
     # Dedup the replacement pool against the panel AND within itself; a repeated
     # stand-in (e.g. ['mistral-large', 'mistral-large']) would otherwise cast two
@@ -375,6 +407,7 @@ async def run_jury(
             replacement=False,
             numeric_how=numeric_how,
             propagate_errors=propagate_errors,
+            semaphore=semaphore,
         )
         for model in resolved_panel
     ])
@@ -397,6 +430,7 @@ async def run_jury(
                 tie_break=tie_break,
                 replacement=True,
                 numeric_how=numeric_how,
+                semaphore=semaphore,
             )
             for model in stand_ins
         ])

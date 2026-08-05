@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import typing
 from typing import Any, Literal, cast
 
@@ -567,6 +568,7 @@ class PairwiseComparator:
         structured_output: bool,
         extra_kwargs: dict[str, Any] | None,
         client: Any,
+        max_concurrency: int | None = None,
     ) -> None:
         self._panel = panel
         self._criteria = criteria
@@ -581,10 +583,33 @@ class PairwiseComparator:
         self._structured_output = structured_output
         self._extra_kwargs = extra_kwargs
         self._client = client
+        if max_concurrency is not None and max_concurrency < 1:
+            raise ValueError(f'max_concurrency ({max_concurrency}) must be >= 1.')
+        self._max_concurrency = max_concurrency
+        self._semaphore: asyncio.Semaphore | None = None
+        self._semaphore_loop: asyncio.AbstractEventLoop | None = None
         self._verdict_model = _build_verdict_model(
             verdict_kind='categorical', labels=PAIRWISE_LABELS, score_range=(0.0, 1.0)
         )
         self._template = template if template is not None else _pairwise_template(criteria)
+
+    def _current_semaphore(self) -> asyncio.Semaphore | None:
+        """The shared concurrency budget, bound to the running event loop.
+
+        One semaphore is shared by every compare() call on the same loop, so
+        ``max_concurrency`` bounds TOTAL in-flight judge calls across pairs. A
+        semaphore binds to the loop that first blocks on it, so when the caller
+        switches loops (e.g. one ``asyncio.run`` per pair) a fresh one is minted
+        instead of every judge call failing with 'bound to a different event
+        loop' and silently degrading verdicts to inconclusive.
+        """
+        if self._max_concurrency is None:
+            return None
+        loop = asyncio.get_running_loop()
+        if self._semaphore is None or self._semaphore_loop is not loop:
+            self._semaphore = asyncio.Semaphore(self._max_concurrency)
+            self._semaphore_loop = loop
+        return self._semaphore
 
     async def compare(
         self, *, question: str, response_a: PairwiseSideInput, response_b: PairwiseSideInput
@@ -621,6 +646,7 @@ class PairwiseComparator:
             replacement_judges=self._replacement_judges,
             min_successful_judges=self._min_successful_judges,
             propagate_errors=(len(self._panel) == 1 and not self._replacement_judges),
+            max_concurrency=self._current_semaphore(),
         )
 
 
@@ -641,6 +667,7 @@ def llm_jury_pairwise(
     structured_output: bool = True,
     extra_kwargs: dict[str, Any] | None = None,
     client: Any = None,
+    max_concurrency: int | None = None,
 ) -> PairwiseComparator:
     """Build a pairwise (A-vs-B) LLM jury that reuses the shared panel machinery.
 
@@ -652,6 +679,11 @@ def llm_jury_pairwise(
     leave it ``None`` to use the default. Returns a :class:`PairwiseComparator`;
     call ``compare`` per A/B pair, and roll many comparisons up with
     :func:`evaluatorq.pairwise.build_report`.
+
+    ``max_concurrency`` caps TOTAL in-flight judge LLM calls across all
+    concurrently running ``compare`` calls on the returned comparator (each
+    pair fans out judges x orderings x repetitions). ``None`` (default) keeps
+    the fan-out unbounded.
     """
     if repetitions < 1:
         raise ValueError(f'repetitions ({repetitions}) must be >= 1.')
@@ -677,4 +709,5 @@ def llm_jury_pairwise(
         structured_output=structured_output,
         extra_kwargs=extra_kwargs,
         client=client,
+        max_concurrency=max_concurrency,
     )
