@@ -141,11 +141,16 @@ class OrqResponsesTarget(AgentTarget):
             pipeline_md = pipeline_metadata()
             if pipeline_md:
                 kwargs['metadata'] = {**kwargs.get('metadata', {}), **pipeline_md}
-            # Group multi-turn calls under one Orq thread (router-only extension, so
-            # it rides in extra_body rather than a native Responses parameter).
-            thread = thread_body_param()
-            if thread:
-                kwargs['extra_body'] = {**kwargs.get('extra_body', {}), **thread}
+            # Group multi-turn calls under one Orq thread and, for memory-tool
+            # agents, forward the memory scope — both are router-only extensions,
+            # so they ride in extra_body rather than native Responses parameters.
+            # (Agents with memory tools reject the call without a memory scope:
+            # "memory_entity_id_required".)
+            body_extra = dict(thread_body_param())
+            if self.memory_entity_id:
+                body_extra['memory'] = {'entity_id': self.memory_entity_id}
+            if body_extra:
+                kwargs['extra_body'] = {**kwargs.get('extra_body', {}), **body_extra}
 
             async with with_llm_span(
                 model=self.config.model,

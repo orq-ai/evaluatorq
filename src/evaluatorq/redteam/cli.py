@@ -37,6 +37,8 @@ _RUN_EPILOG = examples(
     'eq redteam run -t agent:my-agent --mode hybrid',
     '# scope to one OWASP category, machine-readable later via `eq redteam runs --json`',
     'eq redteam run -t agent:my-agent -c ASI01',
+    '# replay the last run against a new agent version (same attacks, new target)',
+    'eq redteam run -t agent:my-agent-v2 --from-run latest',
 )
 
 
@@ -259,9 +261,14 @@ def run(
         ),
     ] = None,
     max_turns: Annotated[
-        int,
-        typer.Option(help='Maximum conversation turns for multi-turn attacks.'),
-    ] = 5,
+        int | None,
+        typer.Option(
+            help=(
+                'Maximum conversation turns for multi-turn attacks. '
+                "Defaults to 5, or to the replayed run's turn budget with --from-run."
+            )
+        ),
+    ] = None,
     max_per_category: Annotated[
         int | None,
         typer.Option(help='Cap strategies per category.'),
@@ -311,6 +318,19 @@ def run(
     dataset: Annotated[
         str | None,
         typer.Option(help='Dataset source: local path, "hf:org/repo", or "hf:org/repo/file.json".'),
+    ] = None,
+    from_run: Annotated[
+        str | None,
+        typer.Option(
+            '--from-run',
+            help=(
+                'Replay a previous run instead of generating data: pass its file name, '
+                'run id, path, or "latest". Re-runs the exact same attacks, so only the '
+                'target and models may differ. Cannot be combined with --mode, --dataset, '
+                '--category, --vulnerability, --strategy, --delivery-method, or the '
+                '--max-*-datapoints caps.'
+            ),
+        ),
     ] = None,
     artifacts_dir: Annotated[
         Path | None,
@@ -374,6 +394,7 @@ def run(
         verbose = -1
     _configure_logging(verbose)
 
+    from evaluatorq.common.replay import ReplayError
     from evaluatorq.redteam import red_team
     from evaluatorq.redteam.contracts import EvaluatorConfig, LLMCallConfig, LLMConfig, TargetConfig
     from evaluatorq.redteam.exceptions import CancelledError, RedTeamError
@@ -410,21 +431,31 @@ def run(
                 f"Valid names: {sorted(known)} (or a 'generated_*' name from a prior run)."
             )
 
-    # Convert known delivery methods to the enum (parsed as plain strings to
-    # support comma-separated input, which typer's enum binding cannot do).
-    # Unknown values are an open set — kept as raw strings (so a dataset's custom
+    # Resolve delivery methods against the registry (enum plus registered), parsed
+    # as plain strings to support comma-separated input which typer's enum
+    # binding cannot do. Known values coerce to the DeliveryMethod object;
+    # unknown ones are an open set — kept as raw strings (so a dataset's custom
     # delivery method is still filterable) with a warning, not a hard error.
     resolved_delivery_methods: list[DeliveryMethod | str] | None = None
     if delivery_tokens:
-        valid = {m.value for m in DeliveryMethod}
-        unknown = [d for d in delivery_tokens if d not in valid]
+        from evaluatorq.redteam.delivery_method_registry import (
+            delivery_method_str,
+            is_known_delivery_method,
+            list_available_delivery_methods,
+            resolve_delivery_methods,
+        )
+
+        unknown = [d for d in delivery_tokens if not is_known_delivery_method(d)]
         if unknown:
+            # delivery_method_str, not str(): a member's str() is its repr on the
+            # 3.10 StrEnum polyfill, which would print unusable 'DeliveryMethod.X'.
+            known_repr = sorted(delivery_method_str(m) for m in list_available_delivery_methods())
             typer.echo(
-                f'Warning: delivery method(s) {unknown} are not in DeliveryMethod {sorted(valid)}; '
+                f'Warning: delivery method(s) {unknown} are not known delivery methods {known_repr}; '
                 'filtering by them literally (they will only match a dataset row spelled exactly the same).',
                 err=True,
             )
-        resolved_delivery_methods = [DeliveryMethod(d) if d in valid else d for d in delivery_tokens]
+        resolved_delivery_methods = resolve_delivery_methods(list(delivery_tokens))
 
     target_config = TargetConfig(system_prompt=system_prompt) if system_prompt else None
     targets: list[str] | str = target if len(target) > 1 else target[0]
@@ -455,6 +486,7 @@ def run(
                 max_static_datapoints=max_static_datapoints,
                 cleanup_memory=not no_cleanup_memory,
                 dataset=dataset,
+                previous_run=from_run,
                 hooks=RichHooks(skip_confirm=should_skip_confirm(yes)),
                 artifacts_dir=artifacts_dir,
                 save=save,
@@ -470,7 +502,7 @@ def run(
     except KeyboardInterrupt:
         typer.echo('\nInterrupted.')
         raise typer.Exit(code=130)
-    except RedTeamError as e:
+    except (RedTeamError, ReplayError) as e:
         typer.echo(f'Error: {e}', err=True)
         raise typer.Exit(code=1)
     except ValueError as e:

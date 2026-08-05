@@ -730,8 +730,10 @@ def _render_agent_context_html(section: ReportSection) -> str:
     for agent in agents:
         display_name = _esc(agent.get('display_name') or agent.get('key', 'unknown'))
         model = _esc(agent.get('model', ''))
+        version = _esc(agent.get('version') or '')
         description = _esc(agent.get('description', ''))
         tools: list[str] = agent.get('tools', [])
+        skills: list[str] = agent.get('skills') or []
         memory_stores: list[str] = agent.get('memory_stores', [])
         knowledge_bases: list[str] = agent.get('knowledge_bases', [])
 
@@ -740,7 +742,13 @@ def _render_agent_context_html(section: ReportSection) -> str:
             f'<h3>{display_name}</h3>',
         ]
         if model:
-            card_lines.append(f'<p class="meta"><strong>Model:</strong> {model}</p>')
+            meta = f'<strong>Model:</strong> {model}'
+            # Version rides the model line rather than claiming a row of its own.
+            if version:
+                meta += f' &middot; <strong>Version:</strong> {version}'
+            card_lines.append(f'<p class="meta">{meta}</p>')
+        elif version:
+            card_lines.append(f'<p class="meta"><strong>Version:</strong> {version}</p>')
         if description:
             card_lines.append(f'<p>{description}</p>')
 
@@ -754,6 +762,14 @@ def _render_agent_context_html(section: ReportSection) -> str:
                 for t in tools
             )
             chip_groups.append(f'<p><strong>Tools:</strong> {tool_chips}</p>')
+        if skills:
+            skill_chips = ''.join(
+                f'<span style="display:inline-block;background:var(--clay-tint);border:1px solid var(--clay);'
+                f'border-radius:12px;padding:.15rem .6rem;font-size:.8em;margin:.15rem .15rem .15rem 0">'
+                f'{_esc(s)}</span>'
+                for s in skills
+            )
+            chip_groups.append(f'<p><strong>Skills:</strong> {skill_chips}</p>')
         if memory_stores:
             mem_chips = ''.join(
                 f'<span style="display:inline-block;background:var(--olive-tint);border:1px solid var(--olive);'

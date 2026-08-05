@@ -20,6 +20,7 @@ from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
     PIPELINE_CONFIG,
+    DeliveryMethod,
     EvaluatorConfig,
     EvaluatorqEvaluatorConfig,
     LLMCallConfig,
@@ -27,12 +28,13 @@ from evaluatorq.redteam.contracts import (
     StaticDataset,
     normalize_category,
 )
+from evaluatorq.redteam.delivery_method_registry import delivery_method_str
 from evaluatorq.redteam.exceptions import DatasetError
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category
 from evaluatorq.redteam.tracing import with_redteam_span
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Collection
 
     from openai import AsyncOpenAI
 
@@ -118,7 +120,7 @@ def load_owasp_agentic_dataset(
     dataset: str | Path | None = None,
     num_samples: int | None = None,
     categories: list[str] | None = None,
-    delivery_methods: list[str] | None = None,
+    delivery_methods: Collection[DeliveryMethod | str] | None = None,
 ) -> list[DataPoint]:
     """Load red team dataset from various sources.
 
@@ -406,7 +408,7 @@ def _fetch_from_huggingface(
     filename: str = DEFAULT_HF_FILENAME,
     num_samples: int | None = None,
     categories: list[str] | None = None,
-    delivery_methods: list[str] | None = None,
+    delivery_methods: Collection[DeliveryMethod | str] | None = None,
 ) -> list[DataPoint]:
     """Fetch red team samples from a HuggingFace dataset repository."""
     try:
@@ -502,7 +504,7 @@ def _load_from_file(
     path: str | Path,
     num_samples: int | None = None,
     categories: list[str] | None = None,
-    delivery_methods: list[str] | None = None,
+    delivery_methods: Collection[DeliveryMethod | str] | None = None,
 ) -> list[DataPoint]:
     """Load OWASP dataset from a local JSON file in ``{"samples": [...]}`` format."""
     path = Path(path)
@@ -521,13 +523,15 @@ def _load_from_file(
         raise DatasetError(msg) from e
     samples = dataset.samples
 
-    if categories:
+    if categories is not None:
         samples = _filter_by_categories(samples, categories, category_of=lambda s: s.input.category)
 
-    if delivery_methods:
+    if delivery_methods is not None:
         selected = set(delivery_methods)
         samples = [s for s in samples if s.input.delivery_method in selected]
-        logger.info(f'Filtered to delivery methods: {sorted(selected)} ({len(samples)} samples)')
+        logger.info(
+            f'Filtered to delivery methods: {sorted(delivery_method_str(m) for m in selected)} ({len(samples)} samples)'
+        )
 
     num_samples = _normalize_num_samples(num_samples)
     if num_samples is not None:
@@ -550,7 +554,7 @@ def _apply_filters(
     datapoints: list[DataPoint],
     num_samples: int | None = None,
     categories: list[str] | None = None,
-    delivery_methods: list[str] | None = None,
+    delivery_methods: Collection[DeliveryMethod | str] | None = None,
 ) -> list[DataPoint]:
     """Apply category, delivery-method, and sample-count filters to datapoints.
 
@@ -558,13 +562,15 @@ def _apply_filters(
     cap limits the already-filtered set rather than slicing first and filtering the
     remainder (which would yield fewer than ``num_samples`` rows).
     """
-    if categories:
+    if categories is not None:
         datapoints = _filter_by_categories(datapoints, categories, category_of=lambda dp: dp.inputs.get('category', ''))
 
-    if delivery_methods:
+    if delivery_methods is not None:
         selected = set(delivery_methods)
         datapoints = [dp for dp in datapoints if dp.inputs.get('delivery_method') in selected]
-        logger.info(f'Filtered to delivery methods: {sorted(selected)} ({len(datapoints)} samples)')
+        logger.info(
+            f'Filtered to delivery methods: {sorted(delivery_method_str(m) for m in selected)} ({len(datapoints)} samples)'
+        )
 
     num_samples = _normalize_num_samples(num_samples)
     if num_samples is not None:

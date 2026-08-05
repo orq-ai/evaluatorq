@@ -15,6 +15,11 @@ from evaluatorq.contracts import Message, ResponseTrace, StrEnum, TokenUsage
 
 DEFAULT_MODEL = 'openai/gpt-5.4-mini'
 
+DEFAULT_MAX_TURNS = 10
+"""Turn cap when the caller names none. The public ``max_turns`` defaults to
+``None`` rather than to this value so a replay can tell "unset" from
+"explicitly 10" and restore the replayed run's cap only in the former case."""
+
 
 class AgentInfoSnapshot(TypedDict, total=False):
     """Best-effort snapshot of an ORQ agent's configuration, as fetched by
@@ -29,9 +34,13 @@ class AgentInfoSnapshot(TypedDict, total=False):
     description: str | None
     model: str | None
     tools: list[str]
+    skills: list[str]
     knowledge_bases: list[str]
     memory_stores: list[str]
     sub_agents: list[str]
+    version: str | None
+    agent_type: str | None
+    engine: str | None
     workspace_id: str | None
     workspace_key: str | None
     base_url: str
@@ -403,6 +412,15 @@ class SimulationRun(BaseModel):
     total_results: int
     scorer_averages: dict[str, float]
     results: list[SimulationResult]
+    datapoints: list[SimulationDatapoint] | None = None
+    """The exact cases this run simulated, stored so the run can be replayed
+    verbatim (``previous_run=`` / ``--from-run``). Results alone don't carry
+    enough — they keep persona/scenario *names*, not the objects. None for runs
+    saved before this field existed, which therefore cannot be replayed."""
+    replay_version: int | None = None
+    """Format version of the replay payload above, stamped when ``datapoints`` is
+    written so a future format change reports itself instead of failing
+    structurally. None for runs saved before versioning, which read as v1."""
     executive_summary: str | None = None
     run_id: str | None = None
     """Client-minted run-grouping id (uuid hex, not an Orq-side run id) shared by every

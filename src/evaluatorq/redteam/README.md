@@ -90,16 +90,42 @@ a fixed set of attacks for reproducible regression (`static` mode);
 | Local dataset file (`dataset="<path>"`, JSON/JSONL) | ✅ | — |
 | Orq dataset (`dataset="orq:<dataset_id>"`) | ✅ | — |
 | Agent capability context (tools, memory, knowledge bases, system prompt) | — | ✅ |
-| Previous runs (`generated_*` strategies / captured datapoints) | ⚠️ manual | ⚠️ manual |
+| Previous run (`previous_run="<id>"` / `--from-run`) | ✅ | ⚠️ manual (re-select a `generated_*` strategy by name via `--strategy`) |
 
 Legend: ✅ built-in · ⚠️ possible but manual · ❌ not supported yet.
 
 Static sources feed `mode="static"`/`"hybrid"` via the `dataset=` parameter
 (`--dataset` on the CLI). Dynamic generation is driven by the target's own
-capability context — no dataset needed. To replay a prior run, capture its
-datapoints to a dataset (e.g. an Orq dataset) and pass it back via `dataset=`;
-a `generated_*` strategy from a prior run can be re-selected by name via
-`--strategies`. There is no one-command "re-run that exact run" yet.
+capability context — no dataset needed.
+
+### Replaying a previous run
+
+Every saved run records the exact datapoints it executed, so it can be re-run
+as-is:
+
+```bash
+eq redteam run --target agent:my-agent-v2 --from-run latest
+```
+
+```python
+report = await red_team(target='agent:my-agent-v2', previous_run='latest')
+```
+
+`--from-run` accepts `latest`, the run name or file name `eq redteam runs`
+prints, a run id (or an unambiguous 8+ character prefix), or a path to a saved
+run JSON. The stored attacks are replayed verbatim: no strategy planning, no
+attack generation, no dataset load. The original pipeline mode, turn budget, and
+attacker instructions are restored too, since the datapoints alone don't pin
+those down — pass `--max-turns` / `attacker_instructions=` explicitly to
+override. That makes version-to-version regression on an identical case bank a
+single command; the target and the model configuration are what you vary.
+
+Because it fixes the data, `previous_run` cannot be combined with `mode`,
+`dataset`, `categories`, `vulnerabilities`, `strategies`, `delivery_methods`, or
+the `max_*_datapoints` caps — passing one raises rather than silently ignoring
+it. Runs saved before this shipped carry no datapoints and are rejected with an
+explanatory error, as are runs stamped with a replay format newer than the
+installed version understands.
 
 ## `red_team()` parameters
 

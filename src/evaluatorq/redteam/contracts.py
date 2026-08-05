@@ -122,8 +122,15 @@ class DeliveryMethod(StrEnum):
 
 
 def is_known_delivery_method(value: str) -> bool:
-    """Check whether *value* is a known :class:`DeliveryMethod` member."""
-    return value in DeliveryMethod.__members__.values()
+    """Check whether *value* is a known delivery method (enum plus registered).
+
+    Delegates to the delivery-method registry so registered custom methods count
+    as known. Lazy import: the registry imports :class:`DeliveryMethod` from this
+    module, so importing it at module top level would be a cycle.
+    """
+    from evaluatorq.redteam.delivery_method_registry import is_known_delivery_method as _is_known
+
+    return _is_known(value)
 
 
 class Severity(StrEnum):
@@ -473,17 +480,21 @@ class RedTeamInput(BaseModel):
     @field_validator('delivery_method', mode='before')
     @classmethod
     def _coerce_delivery_method(cls, value: Any) -> Any:
-        """Coerce a known delivery method to the DeliveryMethod enum (exact match).
+        """Normalize the delivery method once, at the contract boundary.
 
-        Unknown or empty values pass through as a raw string — the field is an
-        open set, so a dataset may carry a delivery method the enum doesn't list.
-        No fuzzy normalization: a value either equals a DeliveryMethod or it does not.
+        Routes through the delivery-method registry: an enum member resolves to
+        its canonical ``DeliveryMethod`` object. Everything else — including a
+        registered custom, which is *known* but has no member to resolve to —
+        passes through as a raw string; the field is an open set, so a dataset
+        may carry a delivery method the enum doesn't list. No fuzzy
+        normalization: a value equals a known method or it does not.
+
+        Lazy import to avoid a cycle (the registry imports from this module).
         """
         if isinstance(value, str) and value:
-            try:
-                return DeliveryMethod(value)
-            except ValueError:
-                return value
+            from evaluatorq.redteam.delivery_method_registry import resolve_delivery_method
+
+            return resolve_delivery_method(value)
         return value
 
     @model_validator(mode='after')
