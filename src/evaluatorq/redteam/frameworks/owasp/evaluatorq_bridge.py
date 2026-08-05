@@ -14,8 +14,12 @@ from pydantic import ValidationError
 from evaluatorq import DataPoint, EvaluationResult
 from evaluatorq.common.judge import JudgeError, build_eval_replacements, run_judge
 from evaluatorq.common.jury import Prediction, VerdictKind, _panel_composition_messages, append_jury_summary, run_jury
+from evaluatorq.common.output_adapters import (  # noqa: F401  (back-compat re-export)
+    _adapt_static_output,
+    _adapt_tool_call,
+)
 from evaluatorq.common.tracing import set_span_attrs
-from evaluatorq.contracts import JURY_RAW_OUTPUT_KEY, OutputMessage, TextOutputItem, ToolCallOutputItem
+from evaluatorq.contracts import JURY_RAW_OUTPUT_KEY
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
@@ -42,45 +46,6 @@ if TYPE_CHECKING:
 
 DEFAULT_HF_REPO = 'orq/redteam-vulnerabilities'
 DEFAULT_HF_FILENAME = 'redteam_dataset.v2.json'
-
-
-def _adapt_tool_call(tc: Any) -> ToolCallOutputItem:
-    """Coerce a static-output tool-call entry into a ToolCallOutputItem."""
-    if isinstance(tc, ToolCallOutputItem):
-        return tc
-    if isinstance(tc, dict):
-        fn = tc.get('function', tc)
-        raw_args = fn.get('arguments', '{}')
-        arguments = raw_args if isinstance(raw_args, str) else json.dumps(raw_args or {})
-        tid = str(tc.get('id', '') or '')
-        return ToolCallOutputItem(
-            id=tid, call_id=tid, name=str(fn.get('name', '')), arguments=arguments, result=tc.get('result')
-        )
-    # object with attributes (orchestrator item / test double)
-    args_dict = getattr(tc, 'arguments_dict', None)
-    if args_dict is not None:
-        arguments = json.dumps(args_dict)
-    else:
-        raw = getattr(tc, 'arguments', '{}')
-        arguments = raw if isinstance(raw, str) else json.dumps(raw or {})
-    tid = str(getattr(tc, 'id', '') or '')
-    return ToolCallOutputItem(
-        id=tid, call_id=tid, name=str(getattr(tc, 'name', '')), arguments=arguments, result=getattr(tc, 'result', None)
-    )
-
-
-def _adapt_static_output(output: Any) -> list[OutputMessage]:
-    """Adapt a static datapoint output ({response, tool_calls} dict, or a bare string)
-    into structured OutputMessage records."""
-    items: list[OutputMessage] = []
-    if isinstance(output, dict):
-        text = output.get('response', '')
-        if text:
-            items.append(TextOutputItem(text=str(text), annotations=[]))
-        items.extend(_adapt_tool_call(tc) for tc in output.get('tool_calls') or [])
-    elif output:
-        items.append(TextOutputItem(text=str(output), annotations=[]))
-    return items
 
 
 def _filter_by_categories(
