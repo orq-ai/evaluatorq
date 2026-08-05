@@ -10,7 +10,7 @@ from typing_extensions import Self
 
 from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.retry import with_retry
-from evaluatorq.common.thread_context import pipeline_metadata, thread_body_param
+from evaluatorq.common.thread_context import pipeline_metadata_param, thread_body_param
 from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, LLMCallConfig, Message
 from evaluatorq.openresponses.client import build_simulation_client
 from evaluatorq.openresponses.tracing import (
@@ -137,17 +137,14 @@ class OrqResponsesTarget(AgentTarget):
                 kwargs['tools'] = self.tools
             if self.instructions is not None:
                 kwargs['instructions'] = self.instructions
-            # All three extensions are Orq-router-only, so apply them only when
-            # the client actually routes through Orq — matching the gate on the
-            # other invocation paths. `metadata` (pipeline label) is a documented
-            # request property; `thread` (multi-turn grouping) and `memory` (scope
-            # for memory-tool agents, else "memory_entity_id_required") ride in
-            # extra_body. Caller-supplied metadata wins on key conflict.
+            # These extensions are Orq-router-only, so apply them only when the
+            # client actually routes through Orq — matching the gate on the other
+            # invocation paths. All ride in the request body (extra_body): the
+            # pipeline label as `metadata` (tags the trace by run type), `thread`
+            # (multi-turn grouping), and `memory` (scope for memory-tool agents,
+            # else "memory_entity_id_required").
             if client_routes_through_orq(self._client):
-                pipeline_md = pipeline_metadata()
-                if pipeline_md:
-                    kwargs['metadata'] = {**pipeline_md, **kwargs.get('metadata', {})}
-                body_extra = dict(thread_body_param())
+                body_extra = {**thread_body_param(), **pipeline_metadata_param()}
                 if self.memory_entity_id:
                     body_extra['memory'] = {'entity_id': self.memory_entity_id}
                 if body_extra:
