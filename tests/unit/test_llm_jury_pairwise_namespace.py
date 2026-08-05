@@ -20,6 +20,12 @@ def test_side_namespace_output_only():
     assert render_template('{{response_b.input.all_messages}}', reps) == '[]'
 
 
+def test_side_namespace_bundle_none_data_matches_bare_output():
+    side = {'data': None, 'output': AgentResponse(text='x')}
+    reps = _side_to_namespace('response_a', side)
+    assert render_template('{{response_a.input.all_messages}}', reps) == '[]'
+
+
 def test_side_namespace_bare_string_output():
     reps = _side_to_namespace('response_b', 'plain answer')
     assert render_template('{{response_b.output.response}}', reps) == 'plain answer'

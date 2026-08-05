@@ -531,7 +531,7 @@ def _side_to_namespace(prefix: str, side: PairwiseSideInput) -> dict[str, Any]:
         inputs = data.inputs if data is not None else {}
         expected = output_to_text(data.expected_output) if data is not None else ''
         output = bundle['output']
-        input_messages = inputs_to_messages(inputs)
+        input_messages = inputs_to_messages(inputs) if data is not None else []
     else:
         input_messages = []
         expected = ''
