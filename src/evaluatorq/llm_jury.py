@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import json
 import typing
 from typing import Any, Literal
 
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from evaluatorq.common.judge import JudgeOutcome, run_judge
+from evaluatorq.common.judge import JudgeOutcome, build_eval_replacements, run_judge
 from evaluatorq.common.jury import (
     AggregatorSpec,
     JuryDeliberation,
@@ -19,7 +18,8 @@ from evaluatorq.common.jury import (
     validate_aggregator,
 )
 from evaluatorq.common.llm_client import resolve_llm_client
-from evaluatorq.contracts import LLMCallConfig
+from evaluatorq.common.output_adapters import inputs_to_messages, output_to_messages, output_to_text
+from evaluatorq.contracts import AgentResponse, LLMCallConfig
 from evaluatorq.pairwise import PairwiseComparison, run_pairwise
 from evaluatorq.types import DataPoint, EvaluationResult, Evaluator, Output, ScorerParameter
 
@@ -64,28 +64,17 @@ def _build_verdict_model(
 
 
 def _build_replacements(data: DataPoint, output: Output, criteria: str) -> dict[str, Any]:
-    """Build the template variable substitution dict for an LLM jury prompt.
-
-    Handles three common ``inputs`` shapes:
-    - ``{"messages": [...]}`` — serialised as a JSON message list.
-    - ``{"input": ...}`` — single string input.
-    - anything else — JSON-dumped as-is.
-    """
-    inputs = data.inputs
-    if isinstance(inputs, dict) and 'messages' in inputs:
-        input_str = json.dumps(inputs['messages'], indent=2, default=str)
-    elif isinstance(inputs, dict) and 'input' in inputs:
-        input_str = str(inputs['input'])
-    else:
-        input_str = json.dumps(inputs, indent=2, default=str)
-
-    out_str = output if isinstance(output, str) else json.dumps(output, default=str)
-    return {
-        'input': input_str,
-        'output': out_str,
-        'expected_output': '' if data.expected_output is None else str(data.expected_output),
-        'criteria': criteria,
-    }
+    """Build the red-team-format template substitution dict for the pointwise jury."""
+    err = output.error.message if isinstance(output, AgentResponse) and output.error else None
+    reps = build_eval_replacements(
+        input_messages=inputs_to_messages(data.inputs),
+        output_messages=output_to_messages(output),
+        expected_output=output_to_text(data.expected_output),
+        system_instructions=None,
+        error=err,
+    )
+    reps['criteria'] = criteria
+    return reps
 
 
 def _default_system_prompt(verdict_kind: str, labels: list[str] | None, score_range: tuple[float, float]) -> str:
@@ -116,13 +105,14 @@ def _default_template(criteria: str) -> str:
     """Return a default Mustache-style evaluation prompt template.
 
     Placeholder tokens use the ``{{name}}`` convention expected by the
-    template engine (double-braces).
+    template engine (double-braces), drawn from the red-team template
+    namespace (see :func:`evaluatorq.common.judge.build_eval_replacements`).
     """
     return (
-        f'# Criterion\n{criteria}\n\n'
-        '# Input\n{{input}}\n\n'
-        '# Output\n{{output}}\n\n'
-        '# Expected output\n{{expected_output}}\n'
+        '# Criteria\n{{criteria}}\n\n'
+        '# Input\n{{input.all_messages}}\n\n'
+        '# Output\n{{output.response}}\n\n'
+        '# Expected output\n{{input.expected_output}}\n'
     )
 
 
