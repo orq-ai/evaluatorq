@@ -1,5 +1,5 @@
 from evaluatorq.common.template_engine import render_template
-from evaluatorq.contracts import AgentResponse
+from evaluatorq.contracts import AgentResponse, AgentResponseError
 from evaluatorq.llm_jury import _side_to_namespace
 from evaluatorq.types import DataPoint
 
@@ -23,3 +23,11 @@ def test_side_namespace_output_only():
 def test_side_namespace_bare_string_output():
     reps = _side_to_namespace('response_b', 'plain answer')
     assert render_template('{{response_b.output.response}}', reps) == 'plain answer'
+
+
+def test_pairwise_side_surfaces_output_error():
+    # AgentResponseError.error_type is required (no default) in the real API, unlike
+    # the brief's fixture which only set `message` — adapted to include error_type.
+    ar = AgentResponse(output=[], error=AgentResponseError(message='timeout', error_type='timeout'))
+    reps = _side_to_namespace('response_a', ar)
+    assert render_template('{{response_a.output.error}}', reps) == 'timeout'

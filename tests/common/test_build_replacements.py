@@ -33,3 +33,8 @@ def test_flat_keys_tolerate_non_serializable():
     # must not raise; json.dumps with default=str
     json.loads(r['input.all_messages']) if False else None  # smoke: key exists and is a str
     assert isinstance(r['input.all_messages'], str)
+
+
+def test_output_error_empty_by_default():
+    r = build_eval_replacements(input_messages=[], output_messages=[], expected_output=None, system_instructions=None)
+    assert r['output']['error'] == ''

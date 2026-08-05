@@ -1,5 +1,5 @@
 from evaluatorq.common.output_adapters import inputs_to_messages, output_to_messages, output_to_text
-from evaluatorq.contracts import AgentResponse, TextOutputItem
+from evaluatorq.contracts import AgentResponse, ReasoningOutputItem, TextOutputItem
 
 
 def test_output_to_text_agentresponse_returns_text():
@@ -54,3 +54,21 @@ def test_output_to_messages_str_wraps_textitem():
 
 def test_output_to_messages_none_empty():
     assert output_to_messages(None) == []
+
+
+def test_output_to_messages_malformed_response_dict_degrades():
+    # `output` is a non-iterable int → the from_openresponses item loop raises
+    # (TypeError) → output_to_messages catches and degrades to text. A dict that
+    # merely lacks fields does NOT raise (from_openresponses returns empty), so it
+    # would yield [] — pick an input that genuinely hits the except branch.
+    out = output_to_messages({'object': 'response', 'output': 123})
+    assert len(out) >= 1  # degraded to a text item, no raise
+
+
+def test_output_to_messages_reasoning_item_passes_through_without_raise():
+    # A reasoning item in AgentResponse.output must not crash the adapter; it is
+    # simply carried in output_messages and dropped by _format_output_message /
+    # the response-text join downstream (it is neither text nor tool call).
+    ar = AgentResponse(output=[ReasoningOutputItem(text='thinking...')])
+    out = output_to_messages(ar)
+    assert isinstance(out, list)  # no raise; degrades cleanly
