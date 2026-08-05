@@ -455,9 +455,58 @@ def _fmt_compact(n: int) -> str:
     return str(n)
 
 
-def sim_overview_body(data: SimOverview) -> str:
+def _sim_compare_bar(choices: list[tuple[str, str]]) -> str:
+    """Render the two-run compare picker (Run A / Run B → /compare/sim).
+
+    Plain GET form, no JS. Needs at least two sim runs to be useful; with fewer
+    it renders nothing so the overview stays clean.
+    """
+    if len(choices) < 2:
+        return ''
+
+    def _opts(selected_idx: int) -> str:
+        # Default each select to a different run so the first Compare click is a
+        # real A-vs-B comparison, not run-vs-itself (all-zero deltas).
+        return ''.join(
+            f'<option value="{esc(rid)}"{" selected" if i == selected_idx else ""}>{esc(name)}</option>'
+            for i, (rid, name) in enumerate(choices)
+        )
+
+    return (
+        '<form class="cmp-bar" action="/compare/sim" method="get">'
+        '<span class="cmp-bar-label">Compare runs</span>'
+        f'<select name="a" aria-label="Run A">{_opts(0)}</select>'
+        '<span class="cmp-bar-vs">vs</span>'
+        f'<select name="b" aria-label="Run B">{_opts(1)}</select>'
+        '<button type="submit" class="btn-secondary">Compare</button>'
+        '</form>'
+    )
+
+
+def sim_run_compare_control(rid: str, choices: list[tuple[str, str]]) -> str:
+    """Render the on-report compare control: this run is A, pick B from the
+    other sim runs. Empty when there is no other run to compare against."""
+    others = [(r, name) for r, name in choices if r != rid]
+    if not others:
+        return ''
+    opts = ''.join(f'<option value="{esc(r)}">{esc(name)}</option>' for r, name in others)
+    return (
+        '<form class="cmp-bar" action="/compare/sim" method="get">'
+        f'<input type="hidden" name="a" value="{esc(rid)}">'
+        '<span class="cmp-bar-label">Compare with</span>'
+        f'<select name="b" aria-label="Run B">{opts}</select>'
+        '<button type="submit" class="btn-secondary">Compare</button>'
+        '</form>'
+    )
+
+
+def sim_overview_body(data: SimOverview, compare_choices: list[tuple[str, str]] | None = None) -> str:
     """Render the Agent Sim surface as the design's rich overview: 4 KPI cards
-    plus an item-level 'Recent simulations' table (RES-1022)."""
+    plus an item-level 'Recent simulations' table (RES-1022).
+
+    ``compare_choices`` is the (rid, name) list of all sim runs used to populate
+    the side-by-side compare picker; ``None`` hides the picker.
+    """
     from evaluatorq.common.reports.html_helpers import kpi_cards, pct
 
     if data.simulations_run == 0:
@@ -489,7 +538,8 @@ def sim_overview_body(data: SimOverview) -> str:
         'Latest agent simulation runs',
         _run_grid(data.recent) + _run_pager('sim', data.page, data.total_runs, data.per_page),
     )
-    return f'<section class="dash-wrap">{band}{panel}</section>'
+    compare_bar = _sim_compare_bar(compare_choices or [])
+    return f'<section class="dash-wrap">{band}{compare_bar}{panel}</section>'
 
 
 def search_results(cards: list[ReportCard], query: str) -> str:
