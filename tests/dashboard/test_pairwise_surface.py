@@ -415,6 +415,37 @@ def test_run_list_route_renders(client: tuple[TestClient, str]) -> None:
     assert 'v2 vs v3' in r.text
 
 
+def test_run_list_route_is_titled_pairwise(client: tuple[TestClient, str]) -> None:
+    # Regression: view.SURFACE_LABELS lacked a 'pairwise' entry, so the page
+    # fell back to the generic 'Reports' title.
+    c, _ = client
+    r = c.get('/?surface=pairwise')
+    assert '<h1 class="app-title">Pairwise</h1>' in r.text
+    assert '<title>Pairwise' in r.text
+
+
+def test_empty_pairwise_list_names_the_surface(tmp_path: Path) -> None:
+    c = TestClient(build_app(roots=[tmp_path]), raise_server_exceptions=True)
+    r = c.get('/?surface=pairwise')
+    assert r.status_code == 200
+    assert 'Run a pairwise job to generate one.' in r.text
+
+
+def test_pairwise_type_cell_has_a_glyph(client: tuple[TestClient, str]) -> None:
+    # Regression: _SURFACE_ICONS lacked a 'pairwise' entry, so the landing
+    # "Recent runs" Type cell rendered the label with no icon.
+    c, _ = client
+    r = c.get('/')
+    assert '<span class="type-cell pairwise"><svg' in r.text
+    assert 'Pairwise' in r.text
+
+
+def test_empty_landing_names_pairwise(tmp_path: Path) -> None:
+    c = TestClient(build_app(roots=[tmp_path]), raise_server_exceptions=True)
+    r = c.get('/')
+    assert 'Run a red team, simulation, or pairwise job to generate reports.' in r.text
+
+
 def test_export_routes_all_succeed(client: tuple[TestClient, str]) -> None:
     c, rid = client
     for suffix in ('export.html', 'export.json', 'export.csv'):
