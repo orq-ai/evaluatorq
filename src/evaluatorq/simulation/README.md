@@ -11,7 +11,7 @@ for real users?"*.
 
 ## What it does
 
-1. Builds **datapoints** from personas × scenarios (or takes them inline / from an Orq dataset).
+1. Builds **datapoints** from personas × scenarios (or takes them inline, from an Orq dataset, or from Orq production traces).
 2. For each datapoint, runs a turn-by-turn conversation between the user-simulator and your agent.
 3. The judge scores each run: goal achieved, criteria met, rules broken, termination reason.
 4. Returns `SimulationResult` objects and (by default) uploads an Experiment to Orq.
@@ -132,7 +132,7 @@ personas/scenarios (extends the dataset).
 | Orq dataset (`dataset_id=`) | ✅ | ⚠️ manual |
 | Previous run (`previous_run="<id>"` / `--from-run`, or export to JSONL via `eq sim generate --datapoints`) | ✅ | ⚠️ manual |
 | Orq experiment (`experiment_id=`) | ✅ | ✅ `extend_from_experiment()` |
-| Production traces | ❌ no importer | ⚠️ manual (read traces → seed phrases) |
+| Production traces (`datapoints_from_traces` / `eq sim from-traces`) | ✅ | ✅ `extend_from_traces()` |
 
 Legend: ✅ built-in · ⚠️ possible but manual · ❌ not supported yet.
 
@@ -162,10 +162,35 @@ evaluators. Runs saved before this shipped carry no datapoints and are rejected
 with an explanatory error, as are runs stamped with a replay format newer than
 the installed version understands.
 
-No built-in trace-to-persona extractor yet: turning raw traces (or previous
-runs) into seed phrases for `generate_personas()` / `generate_scenarios()` is a
-manual step. See the [guide](../../../docs/guides/agent-simulation.md) for the
-replay + trace-grounding walkthroughs.
+## Traces as input
+
+Production traces from Orq's observability product can seed simulations
+(requires `ORQ_API_KEY`). Two modes:
+
+- **Direct** — one datapoint per fetched trace: an LLM infers the persona and
+  scenario from the transcript; the first message is the real user's opening
+  message, verbatim.
+- **Extension** — an LLM distills the fetched traffic into a distribution
+  profile (topic mix, tones, technical levels), then generates *new*
+  distribution-matched datapoints through the standard generators.
+
+```python
+from evaluatorq.simulation import (
+    datapoints_from_traces, extend_from_traces, fetch_trace_conversations, simulate,
+)
+
+conversations = await fetch_trace_conversations(limit=20)
+datapoints = await datapoints_from_traces(conversations)          # direct
+datapoints += await extend_from_traces(conversations, num_datapoints=10)  # extension
+results = await simulate(evaluation_name="from-traces", datapoints=datapoints, target=...)
+```
+
+On the CLI:
+
+```bash
+eq sim from-traces --limit 20 --lookback-hours 24 --extend 10 --output dp.jsonl
+eq sim simulate --input dp.jsonl --target agent:my-agent
+```
 
 ## Tracing & PII
 

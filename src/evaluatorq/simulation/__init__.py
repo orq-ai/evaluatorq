@@ -94,6 +94,12 @@ if TYPE_CHECKING:
         apply_random_perturbation,
     )
     from evaluatorq.simulation.runner.simulation import SimulationRunner
+    from evaluatorq.simulation.traces import (
+        TraceConversation,
+        datapoints_from_traces,
+        extend_from_traces,
+        fetch_trace_conversations,
+    )
     from evaluatorq.simulation.types import (
         CommunicationStyle,
         ConversationStrategy,
@@ -251,6 +257,16 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {  # noqa: RUF067
         'evaluatorq.simulation.utils.prompt_builders',
         'generate_datapoint',
     ),
+    'TraceConversation': ('evaluatorq.simulation.traces', 'TraceConversation'),
+    'fetch_trace_conversations': (
+        'evaluatorq.simulation.traces',
+        'fetch_trace_conversations',
+    ),
+    'datapoints_from_traces': (
+        'evaluatorq.simulation.traces',
+        'datapoints_from_traces',
+    ),
+    'extend_from_traces': ('evaluatorq.simulation.traces', 'extend_from_traces'),
     'wrap_simulation_agent': (
         'evaluatorq.simulation.wrap_agent',
         'wrap_simulation_agent',
@@ -341,6 +357,8 @@ __all__ = [
     'StartingEmotion',
     'TerminatedBy',
     'TokenUsage',
+    # Traces input
+    'TraceConversation',
     'TurnMetrics',
     'UserSimulatorAgent',
     'VercelAISdkTarget',
@@ -351,9 +369,13 @@ __all__ = [
     'build_simulation_run',
     # Experiments as input
     'datapoints_from_experiment',
+    # Traces as input
+    'datapoints_from_traces',
     'export_datapoints_to_jsonl',
     'export_results_to_jsonl',
     'extend_from_experiment',
+    'extend_from_traces',
+    'fetch_trace_conversations',
     # Adapters
     'from_chat_completions',
     'from_orq_deployment',

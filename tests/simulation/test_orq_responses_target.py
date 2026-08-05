@@ -370,6 +370,56 @@ class TestOrqResponsesTargetNew:
 
 
 # ---------------------------------------------------------------------------
+# memory entity forwarding (regression: the target stored memory_entity_id but
+# never sent it, so memory-backed agents 400ed on every conversation)
+# ---------------------------------------------------------------------------
+
+
+class TestOrqResponsesTargetMemory:
+    @pytest.mark.asyncio
+    async def test_memory_entity_id_lands_in_extra_body(self):
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="agent/support"), memory_entity_id="ent-42", client=client
+        )
+
+        await target.respond(_make_messages())
+
+        extra_body = client.responses.create.call_args.kwargs["extra_body"]
+        assert extra_body["memory"] == {"entity_id": "ent-42"}
+
+    @pytest.mark.asyncio
+    async def test_memory_coexists_with_thread_and_pipeline_metadata(self):
+        from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pipeline
+
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="agent/support"), memory_entity_id="ent-42", client=client
+        )
+
+        with evaluatorq_pipeline("agent_simulation"), conversation_thread("thread-xyz"):
+            await target.respond(_make_messages())
+
+        extra_body = client.responses.create.call_args.kwargs["extra_body"]
+        assert extra_body["memory"] == {"entity_id": "ent-42"}
+        assert extra_body["thread"] == {"id": "thread-xyz"}
+        assert extra_body["metadata"] == {"evaluatorq_pipeline": "agent_simulation"}
+
+    @pytest.mark.asyncio
+    async def test_no_memory_key_sent_when_unset(self):
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(LLMCallConfig(model="agent/support"), client=client)
+
+        await target.respond(_make_messages())
+
+        # no memory id and no active thread/pipeline context -> no extra_body at all
+        assert "extra_body" not in client.responses.create.call_args.kwargs
+
+
+# ---------------------------------------------------------------------------
 # instructions / tools forwarding
 # ---------------------------------------------------------------------------
 

@@ -431,15 +431,23 @@ async def red_team(
             boundary; names that match no datapoint emit a warning. Does not
             apply to static (dataset) datapoints, which carry no strategy name —
             a warning is emitted if combined with ``static`` mode. ``None``
-            disables the filter.
+            disables the filter; an empty list selects nothing (see below).
         delivery_methods: Restrict the run to attacks whose delivery method
             overlaps the supplied selection. Applies to dynamic strategies
             (``AttackStrategy.delivery_methods``) and to static datapoints
             (``inputs['delivery_method']``). Combines with ``strategies`` using
             AND semantics. Methods matching no datapoint emit a warning. ``None``
-            disables the filter. When a supplied filter leaves zero datapoints to
-            run, ``red_team`` raises :class:`RedTeamError` rather than silently
-            running nothing.
+            disables the filter; an empty list selects nothing.
+
+            Filter semantics are uniform across ``categories``,
+            ``vulnerabilities``, ``strategies`` and ``delivery_methods``:
+            ``None`` means "no filter", and an empty list means "match nothing"
+            — never "match everything". Since an empty selection leaves zero
+            datapoints, ``red_team`` raises :class:`RedTeamError` rather than
+            silently running nothing (or, worse, running the full sweep the
+            caller meant to filter down). This is reachable from the SDK only:
+            the CLI maps blank/empty input back to ``None`` (``_split_csv``), so
+            no ``eq redteam run`` invocation can express "match nothing".
         max_turns: Maximum conversation turns for multi-turn attacks. Defaults
             to 5, or — when replaying via ``previous_run`` — to the turn budget
             the replayed run used. An explicit value always wins.
@@ -542,8 +550,8 @@ async def red_team(
             for label, supplied in (
                 ('mode', Pipeline(mode) != Pipeline.DYNAMIC),
                 ('dataset', dataset is not None),
-                ('categories', bool(categories)),
-                ('vulnerabilities', bool(vulnerabilities)),
+                ('categories', categories is not None),
+                ('vulnerabilities', vulnerabilities is not None),
                 ('strategies', strategies is not None),
                 ('delivery_methods', delivery_methods is not None),
                 ('max_per_category', max_per_category is not None),
@@ -667,6 +675,18 @@ async def red_team(
     # callers get a loguru warning from _check_filter_results (post-filter, against
     # the actual dataset), plus a hard RedTeamError if the selection is fully empty.
 
+    # Snapshot the caller's raw category/vulnerability selection for the empty-run
+    # guard, before the resolution chain below defaults an unfiltered run to the
+    # full category sweep. Reading it off resolved_categories instead would make
+    # every default run look like a filter that selected all 36 categories, and a
+    # run that came back empty for an unrelated reason would be blamed on a filter
+    # the caller never set.
+    filter_selection: tuple[str, list[str]] | None = None
+    if vulnerabilities is not None:
+        filter_selection = ('vulnerabilities', sorted(vulnerabilities))
+    elif categories is not None:
+        filter_selection = ('categories', sorted(categories))
+
     resolved_vulns: list[Vulnerability] | None
     if replay is not None:
         # A replay's scope is whatever it recorded. Resolving vulnerabilities
@@ -674,10 +694,10 @@ async def red_team(
         # the stored datapoints have already made.
         resolved_categories = replay.categories
         resolved_vulns = None
-    elif vulnerabilities:
+    elif vulnerabilities is not None:
         resolved_vulns = resolve_vulnerabilities(vulnerabilities)
         resolved_categories = [get_primary_category(v) for v in resolved_vulns]
-    elif categories:
+    elif categories is not None:
         # Surface unrecognized codes instead of silently swallowing the ValueError and
         # proceeding with resolved_vulns=None — that skips the evaluability gate and runs
         # a meaningless attack with no scoring.
@@ -819,6 +839,7 @@ async def red_team(
             if resolved_mode in (Pipeline.DYNAMIC, Pipeline.HYBRID):
                 run_result = await _run_dynamic_or_hybrid(
                     targets=targets,
+                    filter_selection=filter_selection,
                     agent_targets=agent_targets,
                     mode=resolved_mode,
                     name=name,
@@ -853,6 +874,7 @@ async def red_team(
             elif resolved_mode == Pipeline.STATIC:
                 run_result = await _run_static(
                     targets=targets,
+                    filter_selection=filter_selection,
                     agent_targets=agent_targets,
                     name=name,
                     categories=resolved_categories,
@@ -1268,6 +1290,7 @@ def _check_filter_results(
     *,
     names_apply: bool = True,
     present_methods: list[str] | None = None,
+    filter_selection: tuple[str, list[str]] | None = None,
 ) -> None:
     """Surface strategy/delivery-method filter mismatches; fail on an empty run.
 
@@ -1287,8 +1310,17 @@ def _check_filter_results(
     filter, they are surfaced in the error so the user sees a spelling mismatch
     (``you asked for 'crescendo', the dataset uses 'Crescendo attack'``) rather
     than a bare "zero datapoints".
+
+    ``filter_selection`` carries the caller's *raw* category-or-vulnerability
+    selection as ``(argument_name, values)`` — ``None`` when they set neither,
+    ``('categories', [])`` when they set one to nothing — so a category filter
+    that empties the run hits the same guard as a delivery filter instead of
+    exiting 0. It must come from the raw arguments rather than the resolved
+    ones: an unfiltered run defaults those to the full category sweep, which
+    would make every no-filter run look like a filter that selected everything
+    and blame it for an empty run the caller never narrowed.
     """
-    if strategy_names is None and delivery_methods is None:
+    if strategy_names is None and delivery_methods is None and filter_selection is None:
         return
 
     matched_names: set[str] = set()
@@ -1324,11 +1356,20 @@ def _check_filter_results(
             logger.warning(msg)
 
     if not datapoints:
-        names_repr = sorted(strategy_names) if strategy_names else None
-        methods_repr = sorted(delivery_method_str(m) for m in delivery_methods) if delivery_methods else None
+        # `is not None`, not truthiness: an empty selection is exactly the case
+        # that needs naming, and rendering it as None would hide the filter that
+        # emptied the run behind "no filter was set".
+        names_repr = sorted(strategy_names) if strategy_names is not None else None
+        methods_repr = (
+            sorted(delivery_method_str(m) for m in delivery_methods) if delivery_methods is not None else None
+        )
+        # Report the selection under the argument name the caller actually used —
+        # merging category codes and vulnerability IDs into one `categories=` list
+        # would hand back a vocabulary they never typed.
+        selection_repr = f'{filter_selection[0]}={filter_selection[1]}, ' if filter_selection is not None else ''
         msg = (
             'Filter selection produced zero datapoints — nothing to run. '
-            f'(strategies={names_repr}, delivery_methods={methods_repr})'
+            f'({selection_repr}strategies={names_repr}, delivery_methods={methods_repr})'
         )
         if present_methods:
             msg += f' Delivery methods present in the dataset: {present_methods}.'
@@ -1338,6 +1379,7 @@ def _check_filter_results(
 async def _prepare_target(
     *,
     target: str,
+    filter_selection: tuple[str, list[str]] | None = None,
     mode: Pipeline,
     categories: list[str] | None,
     resolved_vulns: list[Vulnerability] | None,
@@ -1544,7 +1586,12 @@ async def _prepare_target(
                     },
                 )
             )
-            _check_filter_results(all_datapoints, resolved_strategy_names, resolved_delivery_methods)
+            _check_filter_results(
+                all_datapoints,
+                resolved_strategy_names,
+                resolved_delivery_methods,
+                filter_selection=filter_selection,
+            )
 
         # Build the static job via shared helper
         sys_prompt = target_config.system_prompt if target_config else None
@@ -1581,7 +1628,12 @@ async def _prepare_target(
             await await_maybe(
                 hooks.on_stage_end(PipelineStage.DATAPOINT_GENERATION, {'num_datapoints': len(all_datapoints)})
             )
-            _check_filter_results(all_datapoints, resolved_strategy_names, resolved_delivery_methods)
+            _check_filter_results(
+                all_datapoints,
+                resolved_strategy_names,
+                resolved_delivery_methods,
+                filter_selection=filter_selection,
+            )
 
         # Build the dynamic dispatcher job
         @job(f'redteam:dynamic:{safe_target}')
@@ -1622,6 +1674,7 @@ async def _prepare_target(
 async def _run_dynamic_or_hybrid(
     *,
     targets: list[str],
+    filter_selection: tuple[str, list[str]] | None = None,
     agent_targets: list[AgentTarget] | None = None,
     mode: Pipeline,
     name: str | None = None,
@@ -1691,7 +1744,9 @@ async def _run_dynamic_or_hybrid(
     resolved_hooks: PipelineHooks = hooks or DefaultHooks()
     pipeline_start = datetime.now(tz=timezone.utc).astimezone()
 
-    resolved_categories = categories or list_available_categories()
+    # `is None`, not truthiness: an empty list is a real selection that matches
+    # nothing, and `or` would silently widen it back to the full category sweep.
+    resolved_categories = list_available_categories() if categories is None else categories
 
     resolved_agent_targets = agent_targets or []
     all_target_labels, agent_target_labels = _deduplicate_target_labels(targets, resolved_agent_targets)
@@ -2002,6 +2057,7 @@ async def _run_dynamic_or_hybrid(
     # Step 3: Prepare the first target fully — generates shared datapoints.
     common_prepare_kwargs: dict[str, Any] = dict(
         mode=mode,
+        filter_selection=filter_selection,
         categories=categories,
         resolved_vulns=resolved_vulns,
         max_turns=max_turns,
@@ -2289,7 +2345,12 @@ async def _run_dynamic_or_hybrid(
                     return result.get('output', result) if isinstance(result, dict) else result
 
             if at_is_generating:
-                _check_filter_results(at_all_dps, resolved_strategy_names, resolved_delivery_methods)
+                _check_filter_results(
+                    at_all_dps,
+                    resolved_strategy_names,
+                    resolved_delivery_methods,
+                    filter_selection=filter_selection,
+                )
 
             prepared_targets.append(
                 PreparedTarget(
@@ -2698,6 +2759,7 @@ async def _run_dynamic_or_hybrid(
 async def _run_static(
     *,
     targets: list[str],
+    filter_selection: tuple[str, list[str]] | None = None,
     agent_targets: list[AgentTarget] | None = None,
     name: str | None = None,
     categories: list[str] | None,
@@ -2792,9 +2854,20 @@ async def _run_static(
         if resolved_delivery_methods is not None and not data:
             from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import load_owasp_agentic_dataset
 
-            present_rows = load_owasp_agentic_dataset(dataset=dataset, categories=categories)
+            # categories=None, not the resolved selection: this reload exists to report
+            # what the dataset carries, and `categories=[]` now filters to nothing — so
+            # reusing it would empty the diagnostic and hand back the bare "zero
+            # datapoints" error this hint was added to avoid.
+            present_rows = load_owasp_agentic_dataset(dataset=dataset, categories=None)
             present_methods = sorted({m for dp in present_rows if (m := dp.inputs.get('delivery_method'))})
-        _check_filter_results(data, None, resolved_delivery_methods, names_apply=False, present_methods=present_methods)
+        _check_filter_results(
+            data,
+            None,
+            resolved_delivery_methods,
+            names_apply=False,
+            present_methods=present_methods,
+            filter_selection=filter_selection,
+        )
         _save_stage(output_dir, '01_datapoints.json', json.dumps([dp.inputs for dp in data], indent=2, default=str))
 
     # Build one job per target using the shared helper
