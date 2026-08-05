@@ -151,7 +151,7 @@ def _sim_run_scope(run_id: str, span: Any | None):
     """
     from evaluatorq.common.tracing import set_span_attrs
 
-    set_span_attrs(span, {'orq.evaluatorq_run_id': run_id or None})
+    set_span_attrs(span, {'orq.evaluatorq_run_id': run_id})
     with evaluatorq_run_id(run_id):
         yield
 

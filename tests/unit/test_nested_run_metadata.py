@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from evaluatorq import evaluatorq
-from evaluatorq.common.llm_call import run_metadata_kwarg
+from evaluatorq.common.llm_call import _run_metadata_kwarg
 from evaluatorq.common.thread_context import (
     evaluatorq_pipeline,
     evaluatorq_run_id,
@@ -48,7 +48,7 @@ async def test_llm_call_inside_nested_evaluatorq_carries_outer_run_id() -> None:
     seen_metadata: list[dict[str, dict[str, str]]] = []
 
     async def job(_data: DataPoint, _row: int):
-        seen_metadata.append(run_metadata_kwarg(client))
+        seen_metadata.append(_run_metadata_kwarg(client))
         return {'name': 'noop', 'output': 'ok'}
 
     with evaluatorq_pipeline('red_teaming'), evaluatorq_run_id('outer-run'):
@@ -77,7 +77,7 @@ async def test_nested_evaluatorq_run_id_survives_parallel_datapoints() -> None:
     seen_metadata: list[dict[str, dict[str, str]]] = []
 
     async def job(_data: DataPoint, _row: int):
-        seen_metadata.append(run_metadata_kwarg(client))
+        seen_metadata.append(_run_metadata_kwarg(client))
         return {'name': 'noop', 'output': 'ok'}
 
     with evaluatorq_pipeline('agent_simulation'), evaluatorq_run_id('outer-run-2'):

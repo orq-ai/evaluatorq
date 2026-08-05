@@ -105,6 +105,32 @@ def test_run_id_resets_on_exception() -> None:
     assert 'evaluatorq_run_id' not in pipeline_metadata()
 
 
+def test_run_id_binds_and_resets_via_the_async_protocol() -> None:
+    # The red-team runner binds inside an ``async with (...)`` group, so the
+    # __aenter__/__aexit__ pair — not the sync one — is what production uses.
+    async def _run() -> None:
+        async with evaluatorq_run_id('r-async') as bound:
+            assert bound == 'r-async'
+            assert pipeline_metadata()['evaluatorq_run_id'] == 'r-async'
+        assert 'evaluatorq_run_id' not in pipeline_metadata()
+
+    asyncio.run(_run())
+
+
+def test_run_id_resets_on_exception_through_the_async_protocol() -> None:
+    # A run that raises must not leak its id into whatever runs next in the
+    # same context — the sync path has this guarantee, the async one needs it too.
+    async def _run() -> None:
+        try:
+            async with evaluatorq_run_id('r-async-boom'):
+                raise RuntimeError('boom')
+        except RuntimeError:
+            pass
+        assert 'evaluatorq_run_id' not in pipeline_metadata()
+
+    asyncio.run(_run())
+
+
 def test_run_id_concurrent_tasks_are_isolated() -> None:
     async def _run() -> set[str]:
         seen: set[str] = set()

@@ -189,6 +189,8 @@ git commit -m "feat(tracing): carry run_id on the pipeline-metadata ContextVar r
 
 ### Task 2: One guarded `run_metadata_kwarg` helper
 
+> **Correction, post-implementation:** the helper shipped as `_run_metadata_kwarg` (private). Every call site uses the public `apply_pipeline_metadata`, which is its only caller — a second public entry point with a different shape had no consumers. Names below reflect the plan as written.
+
 **Files:**
 - Modify: `src/evaluatorq/common/llm_call.py`
 - Test: `tests/unit/test_run_metadata_kwarg.py` (create)
@@ -530,7 +532,7 @@ to:
             if resolved_mode in (Pipeline.DYNAMIC, Pipeline.HYBRID):
 ```
 
-(`evaluatorq_run_id` is a sync CM; combining it in the `async with` tuple is valid — `async with` accepts sync context managers.) The existing `if resolved_mode ...` block and everything below it keeps its current indentation — it was already one level under `as pipeline_span:`.
+(**Correction, post-implementation:** this step originally claimed `async with` accepts sync context managers. It does not — every item in an `async with` group must implement `__aenter__`/`__aexit__`, and a plain `@contextmanager` raises `TypeError` there. `evaluatorq_run_id` therefore returns `_RunIdScope`, which implements both protocols, so it can be bound in the runner's existing `async with (...)` tuple without indenting the pipeline body.) The existing `if resolved_mode ...` block and everything below it keeps its current indentation — it was already one level under `as pipeline_span:`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 

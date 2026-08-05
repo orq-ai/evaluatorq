@@ -92,12 +92,12 @@ def remember_responses_reasoning_rejection(model: str, params: dict[str, Any]) -
     _RESPONSES_REASONING_REJECTORS.add(_reasoning_key(model, params))
 
 
-def run_metadata_kwarg(client: AsyncOpenAI | None) -> dict[str, dict[str, str]]:
+def _run_metadata_kwarg(client: AsyncOpenAI | None) -> dict[str, dict[str, str]]:
     """Guarded ``{'metadata': {...}}`` for splatting into a ``create()`` call.
 
     Returns ``{}`` off-Orq (a plain OpenAI endpoint rejects unknown fields) or when
-    no run is bound. Underlying data source for :func:`apply_pipeline_metadata`,
-    which is what direct ``create()`` sites actually call.
+    no run is bound. Private: :func:`apply_pipeline_metadata` is the only caller and
+    the only form call sites should use.
     """
     if not client_routes_through_orq(client):
         # Debug-only: legitimate off-Orq usage hits this on every call. But a run
@@ -123,7 +123,7 @@ def apply_pipeline_metadata(client: AsyncOpenAI, params: dict[str, Any]) -> None
     (structured output, first-message generation) call this instead of routing
     through :func:`execute_chat_completion`.
     """
-    md = run_metadata_kwarg(client).get('metadata')
+    md = _run_metadata_kwarg(client).get('metadata')
     if md:
         params['metadata'] = {**md, **(params.get('metadata') or {})}
 

@@ -262,13 +262,21 @@ separate red-team traffic from simulation traffic regardless of run.
 Both red-team and simulation route their datapoints through a nested `evaluatorq()`
 call. The run id isn't threaded through function arguments — it's bound to a
 `contextvars.ContextVar` (`src/evaluatorq/common/thread_context.py`) at the run's
-entrypoint and read back by `evaluatorq.common.llm_call.apply_pipeline_metadata` (via
-`run_metadata_kwarg`) on every `chat.completions.create` / `.parse` call. Because a
-`ContextVar` set in an ancestor scope is visible to nested calls (and copied into
-child `asyncio` tasks), every LLM call issued from inside the nested `evaluatorq()`
-run automatically carries the SAME `evaluatorq_run_id` as the outer red-team/sim run
-— no explicit plumbing required, and no way for a nested call to accidentally end up
-unlabeled or mislabeled.
+entrypoint and read back at the call site. Because a `ContextVar` set in an ancestor
+scope is visible to nested calls (and copied into child `asyncio` tasks), every LLM
+call issued from inside the nested `evaluatorq()` run automatically carries the SAME
+`evaluatorq_run_id` as the outer red-team/sim run — no explicit plumbing required.
+
+Call sites read it back one of two ways, and the difference matters when you are
+tracking down a missing tag:
+
+- **Chat Completions** (`create` / `.parse`) go through
+  `evaluatorq.common.llm_call.apply_pipeline_metadata`, which is **guarded** — see
+  [When tagging is skipped](#when-tagging-is-skipped).
+- **Responses API** paths (`openresponses/target.py`, the Responses branch of
+  `simulation/agents/base.py`, the ORQ agent backend) merge
+  `pipeline_metadata_param()` into `extra_body` **unguarded**, alongside the `thread`
+  param. These always tag, because they only ever address the Orq router.
 
 Each simulation entrypoint mints its own run id: two separate calls to `simulate()`,
 `generate_and_simulate()`, `generate()`, `generate_personas()`, or
@@ -277,13 +285,18 @@ Each simulation entrypoint mints its own run id: two separate calls to `simulate
 
 ### When tagging is skipped
 
-Tagging is **skipped** when the client does not route through Orq — a plain OpenAI
-endpoint (or any non-Orq base URL) rejects an unknown `metadata` field, so
-`apply_pipeline_metadata` no-ops rather than risk a 400 on every call. If you point
+Chat Completions tagging is **skipped** when the client does not route through Orq:
+`apply_pipeline_metadata` no-ops on any non-Orq base URL. If you point
 `generation_client` / `llm_client` at `api.openai.com` (or another non-Orq endpoint)
-directly, you will see **no** run correlation on those calls — this is by design, not
-a bug. If your `evaluatorq_run_id` is missing from Orq traces, check first whether the
-client that issued the call is actually routed through Orq.
+directly, you will see **no** run correlation on those calls. If your
+`evaluatorq_run_id` is missing from Orq traces, check first whether the client that
+issued the call is actually routed through Orq.
+
+Note the guard is conservative rather than strictly required. `metadata` is a
+first-class field on OpenAI's own `chat.completions.create`, so sending it off-Orq
+would not 400 — unlike the router-only `thread` body param, which genuinely would.
+The guard covers both under one rule; loosening it for `metadata` alone would extend
+correlation to non-Orq targets whose traces still reach Orq via OTel.
 
 ### Using it
 
