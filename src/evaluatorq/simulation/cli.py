@@ -1297,7 +1297,7 @@ def from_traces(
     are inferred from the transcript, the first message is the real user's
     opening message verbatim. Pass ``--extend N`` to additionally generate N
     new datapoints matching the traffic distribution of the fetched traces.
-    Feed the output file to ``sim simulate --datapoints`` to run.
+    Feed the output file to ``sim simulate --input`` to run.
     """
     if quiet:
         verbose = -1
