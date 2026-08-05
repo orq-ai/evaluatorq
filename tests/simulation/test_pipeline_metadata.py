@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import BaseModel
 
-from evaluatorq.common.thread_context import evaluatorq_pipeline
+from evaluatorq.common.thread_context import evaluatorq_pipeline, evaluatorq_run_id
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.agents.base import BaseAgent
 from evaluatorq.simulation.generators.first_message_generator import FirstMessageGenerator
@@ -79,7 +79,7 @@ def _first_message_client(message_content: str) -> MagicMock:
 class TestGenerateStructuredPipelineMetadata:
     async def test_sends_pipeline_metadata_when_bound_and_orq_routed(self) -> None:
         client = _orq_routed_client()
-        with evaluatorq_pipeline('agent_simulation'):
+        with evaluatorq_pipeline('agent_simulation'), evaluatorq_run_id('generation-run'):
             await generate_structured(
                 client,
                 model='local-model',
@@ -91,7 +91,10 @@ class TestGenerateStructuredPipelineMetadata:
             )
 
         _, kwargs = client.chat.completions.parse.call_args
-        assert kwargs.get('metadata') == {'evaluatorq_pipeline': 'agent_simulation'}
+        assert kwargs.get('metadata') == {
+            'evaluatorq_pipeline': 'agent_simulation',
+            'evaluatorq_run_id': 'generation-run',
+        }
 
     async def test_no_metadata_without_bound_pipeline(self) -> None:
         client = _orq_routed_client()
@@ -110,7 +113,7 @@ class TestGenerateStructuredPipelineMetadata:
 
     async def test_sends_metadata_when_not_orq_routed(self) -> None:
         client = _plain_client()
-        with evaluatorq_pipeline('agent_simulation'):
+        with evaluatorq_pipeline('agent_simulation'), evaluatorq_run_id('generation-run'):
             await generate_structured(
                 client,
                 model='local-model',
@@ -122,7 +125,10 @@ class TestGenerateStructuredPipelineMetadata:
             )
 
         _, kwargs = client.chat.completions.parse.call_args
-        assert kwargs['metadata'] == {'evaluatorq_pipeline': 'agent_simulation'}
+        assert kwargs['metadata'] == {
+            'evaluatorq_pipeline': 'agent_simulation',
+            'evaluatorq_run_id': 'generation-run',
+        }
 
 
 @pytest.mark.asyncio
@@ -132,11 +138,14 @@ class TestFirstMessageGeneratorPipelineMetadata:
         client.base_url = _ORQ_ROUTER_BASE_URL
         gen = FirstMessageGenerator(model='gpt-4o', client=client)
 
-        with evaluatorq_pipeline('agent_simulation'):
+        with evaluatorq_pipeline('agent_simulation'), evaluatorq_run_id('generation-run'):
             await gen.generate(_persona(), _scenario())
 
         _, kwargs = client.chat.completions.create.call_args
-        assert kwargs.get('metadata') == {'evaluatorq_pipeline': 'agent_simulation'}
+        assert kwargs.get('metadata') == {
+            'evaluatorq_pipeline': 'agent_simulation',
+            'evaluatorq_run_id': 'generation-run',
+        }
 
     async def test_no_metadata_without_bound_pipeline(self) -> None:
         client = _first_message_client('hi there')
@@ -153,11 +162,14 @@ class TestFirstMessageGeneratorPipelineMetadata:
         client.base_url = 'https://api.openai.com/v1'
         gen = FirstMessageGenerator(model='gpt-4o', client=client)
 
-        with evaluatorq_pipeline('agent_simulation'):
+        with evaluatorq_pipeline('agent_simulation'), evaluatorq_run_id('generation-run'):
             await gen.generate(_persona(), _scenario())
 
         _, kwargs = client.chat.completions.create.call_args
-        assert kwargs['metadata'] == {'evaluatorq_pipeline': 'agent_simulation'}
+        assert kwargs['metadata'] == {
+            'evaluatorq_pipeline': 'agent_simulation',
+            'evaluatorq_run_id': 'generation-run',
+        }
 
 
 class _ConcreteAgent(BaseAgent):

@@ -15,9 +15,12 @@ majority of LLM calls in a real run.
 from __future__ import annotations
 
 # ruff: noqa: S101
+from typing import Any
+
 import pytest
 
 from evaluatorq import evaluatorq
+from evaluatorq.common.reports.executive_summary import generate_executive_summary
 from evaluatorq.common.thread_context import (
     evaluatorq_pipeline,
     evaluatorq_run_id,
@@ -26,16 +29,46 @@ from evaluatorq.common.thread_context import (
 from evaluatorq.types import DataPoint
 
 
+class _Message:
+    def __init__(self) -> None:
+        self.content = 'summary text'
+
+
+class _Choice:
+    def __init__(self) -> None:
+        self.message = _Message()
+
+
+class _Response:
+    def __init__(self) -> None:
+        self.choices = [_Choice()]
+
+
+class _Completions:
+    def __init__(self, requests: list[dict[str, Any]]) -> None:
+        self._requests = requests
+
+    async def create(self, **kwargs: Any) -> _Response:
+        self._requests.append(kwargs)
+        return _Response()
+
+
+class _Client:
+    def __init__(self, requests: list[dict[str, Any]]) -> None:
+        self.chat = type('_Chat', (), {'completions': _Completions(requests)})()
+
+
 @pytest.mark.asyncio
 async def test_llm_call_inside_nested_evaluatorq_carries_outer_run_id() -> None:
     """An LLM call issued from a job running inside a nested ``evaluatorq()``
     call must carry the run id bound by the OUTER (red-team/sim) scope, purely
     via ContextVar propagation across the ``asyncio.create_task`` boundary.
     """
-    seen_metadata: list[dict[str, str]] = []
+    requests: list[dict[str, Any]] = []
+    client = _Client(requests)
 
     async def job(_data: DataPoint, _row: int):
-        seen_metadata.append(pipeline_metadata())
+        await generate_executive_summary('facts', llm_client=client, model='gpt-4o')
         return {'name': 'noop', 'output': 'ok'}
 
     with evaluatorq_pipeline('red_teaming'), evaluatorq_run_id('outer-run'):
@@ -49,8 +82,8 @@ async def test_llm_call_inside_nested_evaluatorq_carries_outer_run_id() -> None:
             _exit_on_failure=False,
         )
 
-    assert len(seen_metadata) == 1
-    assert seen_metadata[0] == {'evaluatorq_pipeline': 'red_teaming', 'evaluatorq_run_id': 'outer-run'}
+    assert len(requests) == 1
+    assert requests[0]['metadata'] == {'evaluatorq_pipeline': 'red_teaming', 'evaluatorq_run_id': 'outer-run'}
 
 
 @pytest.mark.asyncio
@@ -58,10 +91,11 @@ async def test_nested_evaluatorq_run_id_survives_parallel_datapoints() -> None:
     """Sanity check with multiple concurrent datapoints (parallelism > 1):
     every job's task must independently see the outer-bound run id.
     """
-    seen_metadata: list[dict[str, str]] = []
+    requests: list[dict[str, Any]] = []
+    client = _Client(requests)
 
     async def job(_data: DataPoint, _row: int):
-        seen_metadata.append(pipeline_metadata())
+        await generate_executive_summary('facts', llm_client=client, model='gpt-4o')
         return {'name': 'noop', 'output': 'ok'}
 
     with evaluatorq_pipeline('agent_simulation'), evaluatorq_run_id('outer-run-2'):
@@ -76,9 +110,9 @@ async def test_nested_evaluatorq_run_id_survives_parallel_datapoints() -> None:
             _exit_on_failure=False,
         )
 
-    assert len(seen_metadata) == 5
-    for md in seen_metadata:
-        assert md == {'evaluatorq_pipeline': 'agent_simulation', 'evaluatorq_run_id': 'outer-run-2'}
+    assert len(requests) == 5
+    for request in requests:
+        assert request['metadata'] == {'evaluatorq_pipeline': 'agent_simulation', 'evaluatorq_run_id': 'outer-run-2'}
 
 
 def test_nesting_semantics_inner_binding_shadows_and_restores_outer() -> None:

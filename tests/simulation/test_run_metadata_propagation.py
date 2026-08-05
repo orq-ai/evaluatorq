@@ -24,6 +24,7 @@ from opentelemetry.sdk.trace.export import (
     SpanExportResult,
 )
 
+from evaluatorq.common.thread_context import evaluatorq_pipeline, evaluatorq_run_id
 from evaluatorq.simulation.api import generate_personas, generate_scenarios
 
 
@@ -113,16 +114,33 @@ async def test_generate_personas_inherits_an_outer_run_id() -> None:
     This is why dropping the mint is safe: the sim paths that matter bind a run
     id upstream, and the ContextVar rail carries it down here.
     """
-    from evaluatorq.common.thread_context import evaluatorq_run_id
-
     sink: dict[str, Any] = {}
-    with evaluatorq_run_id('outer-run'):
+    with evaluatorq_pipeline('agent_simulation'), evaluatorq_run_id('outer-run'):
         await generate_personas(
             ['angry customer'],
             generation_client=_FakeClient(sink, _one_persona),  # type: ignore[arg-type]
         )
 
-    assert sink['metadata']['evaluatorq_run_id'] == 'outer-run'
+    assert sink['metadata'] == {
+        'evaluatorq_pipeline': 'agent_simulation',
+        'evaluatorq_run_id': 'outer-run',
+    }
+
+
+@pytest.mark.asyncio
+async def test_generate_scenarios_inherits_an_outer_run_id() -> None:
+    """The span-less scenario helper preserves, rather than replaces, an outer id."""
+    sink: dict[str, Any] = {}
+    with evaluatorq_pipeline('agent_simulation'), evaluatorq_run_id('outer-run'):
+        await generate_scenarios(
+            ['disputes a refund denial'],
+            generation_client=_FakeClient(sink, _one_scenario),  # type: ignore[arg-type]
+        )
+
+    assert sink['metadata'] == {
+        'evaluatorq_pipeline': 'agent_simulation',
+        'evaluatorq_run_id': 'outer-run',
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +220,36 @@ async def test_simulate_stamps_run_id_on_root_span(
 
 
 @pytest.mark.asyncio
+async def test_generate_and_simulate_stamps_run_id_on_root_span(
+    span_collector: _CollectingExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The combined root owns one visible run id before generation begins."""
+    from evaluatorq.simulation import api
+    from evaluatorq.simulation.api import generate_and_simulate
+
+    async def _fake_generate(**_kwargs: Any) -> tuple[list[Any], None, bool]:  # noqa: RUF029
+        return [], None, False
+
+    monkeypatch.setattr(api, '_generate_datapoints_inner', _fake_generate)
+    monkeypatch.setattr(api, '_simulate_core', AsyncMock(return_value=MagicMock(results=[])))
+
+    results = await generate_and_simulate(
+        agent_description='a helpful assistant',
+        target=lambda _messages: 'ok',
+        num_personas=1,
+        num_scenarios=1,
+        upload_results=False,
+        executive_summary=False,
+    )
+
+    assert results == []
+    span = _find(span_collector, 'orq.simulation.pipeline')
+    run_id = _attrs(span).get('orq.evaluatorq_run_id')
+    assert run_id, f'expected a non-empty run id on the root span, got {run_id!r}'
+
+
+@pytest.mark.asyncio
 async def test_generate_stamps_run_id_on_root_span(
     span_collector: _CollectingExporter,
     monkeypatch: pytest.MonkeyPatch,
@@ -250,3 +298,28 @@ async def test_two_generate_calls_get_distinct_run_ids(
     assert len(ids) == 2
     assert all(ids)
     assert ids[0] != ids[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('helper', 'seeds', 'build_parsed', 'span_name'),
+    [
+        (generate_personas, ['angry customer'], _one_persona, 'orq.simulation.persona_generation'),
+        (generate_scenarios, ['refund dispute'], _one_scenario, 'orq.simulation.scenario_generation'),
+    ],
+)
+async def test_seeded_generation_emits_its_generation_span(
+    span_collector: _CollectingExporter,
+    helper: Any,
+    seeds: list[str],
+    build_parsed: Any,
+    span_name: str,
+) -> None:
+    """Both public seeded helpers retain their dedicated generation span."""
+    await helper(
+        seeds,
+        agent_description='support bot',
+        generation_client=_FakeClient({}, build_parsed),  # type: ignore[arg-type]
+    )
+
+    assert _find(span_collector, span_name).name == span_name
