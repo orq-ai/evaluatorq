@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
@@ -278,6 +279,10 @@ class SimulationRunner:
         self._effective_target: AgentTarget | None = target_agent or (
             CallableTarget(cast('AgentCallable', target)) if target is not None else None
         )
+        # Per-conversation clones minted by run() (see _new_conversation_target),
+        # retained so close() can release any resources they own (e.g. an
+        # OrqResponsesTarget clone builds its own HTTP client).
+        self._spawned_targets: list[AgentTarget] = []
         self._target_agent_timeout_ms = target_agent_timeout_ms
         self._max_target_retries = max_target_retries
         self._model = model
@@ -366,6 +371,13 @@ class SimulationRunner:
         response_traces: list[ResponseTrace] = []
 
         try:
+            # Each conversation runs against its own target clone: targets may
+            # hold per-conversation state (ORQAgentTarget threads server-side
+            # turns via _task_id; memory-backed targets own an entity id), and
+            # sharing one instance across parallel conversations races that
+            # state. new() preserves a seeded memory_entity_id and re-mints
+            # unseeded ones, so isolation never drops a --memory-entity seed.
+            conversation_target = self._new_conversation_target()
             # One Orq thread per simulation groups all its turns (target + user
             # simulator + judge) under one id in Orq observability. ContextVar
             # scoping keeps concurrent datapoints isolated. A run-scoped thread_id
@@ -394,6 +406,7 @@ class SimulationRunner:
                             run_span=run_span,
                             usage_holder=usage_holder,
                             response_traces=response_traces,
+                            conversation_target=conversation_target,
                         )
                         result.thread_id = thread_id
                         result.response_traces = response_traces
@@ -463,6 +476,7 @@ class SimulationRunner:
         run_span: Span | None,
         usage_holder: dict[str, Callable[[], TokenUsage]],
         response_traces: list[ResponseTrace],
+        conversation_target: AgentTarget | None = None,
     ) -> SimulationResult:
         """Inner simulation body (runs inside the orq.simulation.run span)."""
         system_prompt = build_datapoint_system_prompt(persona, scenario)  # pyright: ignore[reportArgumentType]
@@ -576,7 +590,7 @@ class SimulationRunner:
                         target_span,
                         [{'role': m.role, 'content': m.content or ''} for m in messages],
                     )
-                    call = await self._get_target_response(messages)
+                    call = await self._get_target_response(messages, target=conversation_target)
                     agent_response_text = call.response.text
                     # Only trust usage on success; a synthetic error response
                     # carries no real token accounting.
@@ -772,7 +786,21 @@ class SimulationRunner:
         return final_results
 
     async def close(self) -> None:
-        """Close and cleanup shared HTTP client."""
+        """Close the shared HTTP client and any per-conversation target clones."""
+        # Clones may own resources (an OrqResponsesTarget clone builds its own
+        # HTTP client when the parent's was self-owned); close them best-effort
+        # so one failing clone never masks the rest or the caller's exception.
+        spawned, self._spawned_targets = self._spawned_targets, []
+        for clone in spawned:
+            closer = getattr(clone, 'close', None)
+            if closer is None:
+                continue
+            try:
+                maybe_coro = closer()
+                if inspect.isawaitable(maybe_coro):
+                    await maybe_coro
+            except Exception as exc:
+                logger.warning('Failed to close per-conversation target clone: %s', exc)
         if self._shared_client is not None and self._client_owned:
             await self._shared_client.close()
             self._shared_client = None
@@ -841,21 +869,40 @@ class SimulationRunner:
             metadata=metadata,
         )
 
-    async def _get_target_response(self, messages: list[Message]) -> TargetCallResult:
+    def _new_conversation_target(self) -> AgentTarget | None:
+        """Mint a fresh target clone for one conversation.
+
+        Stateful targets (e.g. ``ORQAgentTarget`` threading server-side turns
+        via ``_task_id``) race when one instance serves parallel conversations,
+        so every ``run()`` gets its own ``new()`` clone. Clones are retained on
+        the runner so :meth:`close` can release resources they own.
+        """
+        if self._effective_target is None:
+            return None
+        clone = self._effective_target.new()
+        self._spawned_targets.append(clone)
+        return clone
+
+    async def _get_target_response(
+        self, messages: list[Message], *, target: AgentTarget | None = None
+    ) -> TargetCallResult:
         """Call the target through the shared bounded-retry + timeout helper.
 
-        Both target flavours (rich ``target_agent`` and a plain callback wrapped
-        in ``CallableTarget``) route through the same helper. The returned
+        ``target`` is the per-conversation clone minted by ``run()``; the shared
+        ``_effective_target`` is only a fallback for direct callers of this
+        helper. Both target flavours (rich ``target_agent`` and a plain callback
+        wrapped in ``CallableTarget``) route through the same helper. The returned
         :class:`TargetCallResult` carries ``.response`` (always populated — real
         or synthetic), ``.succeeded``, and ``.error``. ``response.model`` is the
         model the target reports (``None`` for plain callbacks, which may call any
         provider); NEVER substitute ``self._model`` — that is the user-simulator /
         judge model, not the evaluated target.
         """
-        if self._effective_target is None:
+        effective = target if target is not None else self._effective_target
+        if effective is None:
             raise RuntimeError('No target agent configured')
         return await call_target_with_retry(
-            self._effective_target,
+            effective,
             messages,
             target_agent_timeout_ms=self._target_agent_timeout_ms,
             max_target_retries=self._max_target_retries,
