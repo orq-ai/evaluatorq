@@ -184,10 +184,11 @@ orq.simulation.generate          # root — one per standalone generate() call
   └── chat/responses {model}     # persona/scenario/first-message generation calls
 ```
 
-`generate_personas()` and `generate_scenarios()` don't open a root span (no ambient
-pipeline/generate span to stamp), but their LLM calls still carry `evaluatorq_run_id`
-request metadata via the same `contextvars` rail described in
-[Run correlation](#run-correlation).
+`generate_personas()` and `generate_scenarios()` don't open a synthetic root span
+when invoked standalone. They do create `orq.simulation.persona_generation` /
+`orq.simulation.scenario_generation` spans around their LLM calls. Those generation
+spans carry the active run metadata when called inside an outer simulation or
+red-team scope; standalone helpers intentionally have no synthetic run id to stamp.
 
 Span attributes on `orq.simulation.pipeline` / `orq.simulation.generate`:
 
@@ -243,19 +244,24 @@ above, tagged via `orq.llm.purpose`.
 ## Run correlation
 
 Every LLM invocation issued during a `red_team()` or simulation run (`simulate()`,
-`generate_and_simulate()`, `generate()`, `generate_personas()`, `generate_scenarios()`)
-is tagged so an operator can filter Orq's trace UI down to exactly the model calls
-belonging to one run:
+`generate_and_simulate()`, or `generate()`) is tagged so an operator can filter
+Orq's trace UI down to exactly the model calls belonging to one run. The same
+metadata is inherited by `generate_personas()` and `generate_scenarios()` when
+they are called inside an outer simulation or red-team scope; standalone calls
+have no synthetic root run id.
 
 | Surface | Key | Where |
 |---|---|---|
-| Request `metadata` on every LLM invocation | `evaluatorq_run_id` | red-team + simulation runs |
+| Request `metadata` on every LLM invocation | `evaluatorq_run_id` | red-team + simulation runs, including inherited nested work |
 | Root span attribute | `orq.evaluatorq_run_id` | `Orq Red Team` root span; `orq.simulation.pipeline` / `orq.simulation.generate` root spans |
 
 A companion key rides the same rail: `evaluatorq_pipeline`, whose value is
 `"red_teaming"` or `"agent_simulation"`. It identifies which surface issued the call
 and is sent as request metadata alongside `evaluatorq_run_id` — filter on it to
-separate red-team traffic from simulation traffic regardless of run.
+separate red-team traffic from simulation traffic regardless of run. Both
+`evaluatorq_run_id` and `evaluatorq_pipeline` are native request `metadata` fields
+on Chat Completions and Responses calls. They are sent to direct
+OpenAI-compatible endpoints as well as through the Orq router.
 
 ### How it reaches every call
 
@@ -270,33 +276,20 @@ call issued from inside the nested `evaluatorq()` run automatically carries the 
 Call sites read it back one of two ways, and the difference matters when you are
 tracking down a missing tag:
 
-- **Chat Completions** (`create` / `.parse`) go through
-  `evaluatorq.common.llm_call.apply_pipeline_metadata`, which is **guarded** — see
-  [When tagging is skipped](#when-tagging-is-skipped).
-- **Responses API** paths (`openresponses/target.py`, the Responses branch of
-  `simulation/agents/base.py`, the ORQ agent backend) merge
-  `pipeline_metadata_param()` into `extra_body` **unguarded**, alongside the `thread`
-  param. These always tag, because they only ever address the Orq router.
+- **Chat Completions** (`create` / `.parse`) and **Responses** calls read the same
+  context and send it as native request `metadata`.
+- The router-specific `thread` body parameter is separate and remains endpoint-
+  gated: it is included only when the client routes through Orq and a conversation
+  thread is active. It is never required for run correlation.
 
-Each simulation entrypoint mints its own run id: two separate calls to `simulate()`,
-`generate_and_simulate()`, `generate()`, `generate_personas()`, or
-`generate_scenarios()` are two separate runs, each with a distinct
-`evaluatorq_run_id`, even if called back-to-back in the same process.
-
-### When tagging is skipped
-
-Chat Completions tagging is **skipped** when the client does not route through Orq:
-`apply_pipeline_metadata` no-ops on any non-Orq base URL. If you point
-`generation_client` / `llm_client` at `api.openai.com` (or another non-Orq endpoint)
-directly, you will see **no** run correlation on those calls. If your
-`evaluatorq_run_id` is missing from Orq traces, check first whether the client that
-issued the call is actually routed through Orq.
-
-Note the guard is conservative rather than strictly required. `metadata` is a
-first-class field on OpenAI's own `chat.completions.create`, so sending it off-Orq
-would not 400 — unlike the router-only `thread` body param, which genuinely would.
-The guard covers both under one rule; loosening it for `metadata` alone would extend
-correlation to non-Orq targets whose traces still reach Orq via OTel.
+Separate root invocations receive separate ids: two calls to `simulate()`,
+`generate_and_simulate()`, or `generate()` each get a distinct
+`evaluatorq_run_id`, even if called back-to-back in the same process. Nested
+`evaluatorq()` work within one red-team or simulation root receives that root's id,
+and nested generation helpers inherit it. Standalone `generate_personas()` and
+`generate_scenarios()` do not mint ids of their own. The evaluatorq-core
+`orq.run_id` attributes continue to describe evaluatorq evaluation runs and are
+unchanged by this correlation mechanism.
 
 ### Using it
 
@@ -304,7 +297,7 @@ In Orq's trace UI, filter spans/traces on the `evaluatorq_run_id` request-metada
 value (copy it from the `orq.evaluatorq_run_id` attribute on the run's root span, or
 from your own logs/hooks that captured the run id) to see every model call — target,
 judge, user-simulator, attacker, evaluator, generation — that belongs to one
-`red_team()` or `simulate()`/`generate_and_simulate()` invocation, including calls
+`red_team()` or `simulate()`/`generate_and_simulate()`/`generate()` invocation, including calls
 made through the nested `evaluatorq()` run. Add `evaluatorq_pipeline` to the filter to
 scope further to just red-team or just simulation traffic.
 
