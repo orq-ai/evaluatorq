@@ -101,6 +101,7 @@ directories:
 |---|---|
 | `.evaluatorq/runs/*.json` | `red_team()` / `eq redteam run` |
 | `.evaluatorq/sim-runs/*.json` | `eq sim run` (auto-saves unless `--no-save`); `simulate()` only when called with `save=True` |
+| `.evaluatorq/pairwise-runs/*.json` | `PairwiseRun.save()` (see [Pairwise Judging](pairwise-judging.md#saving-a-run-and-viewing-it-in-the-dashboard)) |
 
 Each report gets a stable URL for the lifetime of its file, so links you share
 keep working.
@@ -111,6 +112,7 @@ keep working.
 |---|---|---|
 | Red team | `"pipeline"` key present | `redteam/reports/export_html.py` |
 | Simulation | `"mode"` key present (`mode` wins over `pipeline`) | `simulation/reports/export_html.py` |
+| Pairwise | `"judging"` key present | `pairwise_reports/export_html.py` |
 
 Files that cannot be parsed (invalid JSON) are silently skipped.  Files that
 parse but fail model validation appear in the index as **broken cards** with an
@@ -209,6 +211,40 @@ simulated user and the target agent.
 
 ![The dashboard conversation transcript viewer, message by message.](assets/dashboard-transcript.png){ .dashboard-shot }
 
+### Pairwise comparison view
+
+Pairwise runs render three sections: the consensus win rate for each side, a
+per-judge table (win rates, tie rate, position bias), and the comparison list.
+
+![A pairwise run: consensus win rates per side, the per-judge table, and the comparison list.](assets/dashboard-pairwise.png){ .dashboard-shot }
+
+Each comparison row expands to the two responses side by side with every
+judge's vote and rationale.  Rows where the judges split, or where the panel
+could not decide, are marked; those are the ones worth opening.
+
+![Two expanded comparisons: a split panel and one the panel could not decide.](assets/dashboard-pairwise-comparison.png){ .dashboard-shot }
+
+The judge table flags a judge whose position bias reaches 0.15.  A judge that
+contradicts itself across the two orderings has no real preference, so its
+votes are noise.  The column reads `n/a` rather than `0.00` wherever nothing
+was flippable, since there was no measurement to make.
+
+Whether swapping happened is read from the votes rather than from the saved
+`swap` flag.  A vote is only marked complete when both orderings landed, so the
+data settles it and a run saved with the default `swap=True` but executed
+single-ordering is labelled `on (never observed)` instead of a bare `on`.  The
+distinction carries into the `n/a` tooltips: when no judge in the run completed
+a pair that is a run-level fact, and the table says so rather than blaming each
+judge in turn.
+
+In the run lists, a pairwise run scores as its **decided rate** — the share of
+comparisons the panel could call, or `1 - inconclusive_rate`.  Mean inter-judge
+agreement reads like the more natural choice but is a modal vote share, so it
+is quantized by panel size: against the shared `≥ 0.80` threshold it silently
+means "unanimous" for three judges and "four of five" for five, and it is
+undefined for a single-judge run.  Every surface's Score column names its own
+metric on hover.
+
 ### Additional red team charts
 
 Beyond the four panels above, the red team surface recomputes several charts
@@ -226,12 +262,16 @@ live that the static exported report does not carry:
 
 Every report page includes a download sidebar with export links:
 
-| Format | Red team | Simulation |
-|---|---|---|
-| HTML (standalone, self-contained) | yes | yes |
-| Markdown | yes | — |
-| CSV (filtered result rows) | yes | — |
-| JSON (filtered result rows) | yes | yes |
+| Format | Red team | Simulation | Pairwise |
+|---|---|---|---|
+| HTML (standalone, self-contained) | yes | yes | yes |
+| Markdown | yes | yes | — |
+| CSV (filtered result rows) | yes | — | yes |
+| JSON (filtered result rows) | yes | yes | yes |
+
+The pairwise CSV writes one row per comparison: the question, the consensus
+winner, and each judge's vote as its own column, all resolved to the run's side
+labels rather than the bare `A` / `B` slot letters.
 
 Download links respect the currently active filter state — the CSV/JSON exports
 contain only the rows visible in the filtered report body.

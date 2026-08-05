@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.thread_context import build_thread_id
 from evaluatorq.simulation._config import SimulationConfig
-from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MODEL
+from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MAX_TURNS, DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run, build_simulation_run, fetch_agent_info, write_report
 
 if TYPE_CHECKING:
@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from evaluatorq.simulation.evaluators.scorers import SimulationScorer
     from evaluatorq.simulation.generators import FirstMessageGenerator
     from evaluatorq.simulation.hooks import SimulationHooks
+    from evaluatorq.simulation.replay import SimulationReplay
     from evaluatorq.simulation.types import (
         Message,
         Persona,
@@ -145,7 +146,8 @@ async def simulate(
     scenarios: list[Scenario] | None = None,
     datapoints: list[SimulationDatapoint] | None = None,
     dataset_id: str | None = None,
-    max_turns: int = 10,
+    previous_run: str | None = None,
+    max_turns: int | None = None,
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
     parallelism: int = 5,
@@ -194,6 +196,17 @@ async def simulate(
             ``datapoints``, ``personas``, ``scenarios``. Each dataset row's
             ``inputs`` must already match one of the simulation input shapes
             (``datapoint`` / ``persona`` + ``scenario`` / etc.).
+        max_turns: Cap on conversation turns. Defaults to 10, or — when
+            replaying via ``previous_run`` — to the cap the replayed run used.
+            An explicit value always wins.
+        previous_run: Replay a saved run instead of building new cases. Accepts
+            a run's file name, its run id (full or an unambiguous 8+ character
+            prefix), a path to a saved run JSON, or ``"latest"``, resolved
+            against ``.evaluatorq/sim-runs/``. The stored personas, scenarios,
+            and first messages are re-used verbatim — no generation, no dataset
+            fetch — so only the target and evaluators change between runs.
+            Mutually exclusive with ``datapoints``, ``dataset_id``, and
+            ``personas``/``scenarios``.
         upload_results: When ``True`` (the default) and ``ORQ_API_KEY`` is set,
             results are uploaded to the Orq platform as an experiment. Pass
             ``False`` to suppress the upload (e.g. for local-only runs).
@@ -232,6 +245,7 @@ async def simulate(
         scenarios=scenarios,
         datapoints=datapoints,
         dataset_id=dataset_id,
+        previous_run=previous_run,
         max_turns=max_turns,
         sim_model=sim_model,
         evaluator_names=evaluator_names,
@@ -259,7 +273,8 @@ async def _simulate_run(
     scenarios: list[Scenario] | None = None,
     datapoints: list[SimulationDatapoint] | None = None,
     dataset_id: str | None = None,
-    max_turns: int = 10,
+    previous_run: str | None = None,
+    max_turns: int | None = None,
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
     parallelism: int = 5,
@@ -293,7 +308,10 @@ async def _simulate_run(
             'orq.simulation.pipeline',
             {
                 'orq.simulation.evaluation_name': evaluation_name,
-                'orq.simulation.max_turns': max_turns,
+                # max_turns is None until _simulate_core resolves it (an explicit
+                # value, else a replayed run's cap, else the default), and
+                # set_span_attrs drops None — so the resolved value is stamped
+                # there rather than guessed here.
                 'orq.simulation.parallelism': parallelism,
             },
         ) as pipeline_span:
@@ -324,6 +342,7 @@ async def _simulate_run(
                     scenarios=scenarios,
                     datapoints=datapoints,
                     dataset_id=dataset_id,
+                    previous_run=previous_run,
                     max_turns=max_turns,
                     model=sim_model,
                     evaluator_names=evaluator_names,
@@ -366,7 +385,7 @@ async def generate_and_simulate(
     target: str | Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = None,
     num_personas: int = 5,
     num_scenarios: int = 5,
-    max_turns: int = 10,
+    max_turns: int | None = None,
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
     parallelism: int = 5,
@@ -507,6 +526,7 @@ async def _generate_datapoints_inner(
             personas=gen_personas,
             scenarios=gen_scenarios,
             dataset_id=None,
+            previous_run=None,
             model=model,
             generation_client=gen_client,
         )
@@ -524,7 +544,7 @@ async def _generate_and_simulate_run(
     target: str | Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = None,
     num_personas: int = 5,
     num_scenarios: int = 5,
-    max_turns: int = 10,
+    max_turns: int | None = None,
     sim_model: str = DEFAULT_MODEL,
     evaluator_names: list[str] | None = None,
     parallelism: int = 5,
@@ -563,7 +583,10 @@ async def _generate_and_simulate_run(
                 'orq.simulation.mode': 'generate_and_simulate',
                 'orq.simulation.num_personas': num_personas,
                 'orq.simulation.num_scenarios': num_scenarios,
-                'orq.simulation.max_turns': max_turns,
+                # max_turns is None until _simulate_core resolves it (an explicit
+                # value, else a replayed run's cap, else the default), and
+                # set_span_attrs drops None — so the resolved value is stamped
+                # there rather than guessed here.
                 'orq.simulation.parallelism': parallelism,
             },
         ) as pipeline_span:
@@ -1025,9 +1048,9 @@ async def _simulate_core(
     from evaluatorq.common.tracing import set_span_attrs
     from evaluatorq.simulation.exceptions import SimulationCancelledError
     from evaluatorq.simulation.hooks import DefaultHooks, SimStage, SimulationRunMeta
+    from evaluatorq.simulation.replay import load_simulation_replay
 
     evaluation_name = config.evaluation_name
-    max_turns = config.max_turns
     model = config.model
     parallelism = config.parallelism
     save = config.save
@@ -1041,19 +1064,32 @@ async def _simulate_core(
     # f"{run_id}:{index}"; persisted on SimulationRun / SimulationResult so the
     # dashboard can deep-link to the run's traces in Orq observability.
 
+    replayed = load_simulation_replay(config.previous_run) if config.previous_run is not None else None
     sim_datapoints = await _resolve_or_generate_datapoints(
         caller=caller,
         datapoints=config.datapoints,
         personas=config.personas,
         scenarios=config.scenarios,
         dataset_id=config.dataset_id,
+        previous_run=config.previous_run,
         model=model,
         generation_client=config.generation_client,
+        replayed=replayed,
     )
+    # An explicit max_turns wins; otherwise a replay restores the cap its cases
+    # ran under, and only then do we fall back to the default. Rebind config so
+    # every downstream reader (run meta, the runner, the saved run) agrees.
+    max_turns = (
+        config.max_turns
+        if config.max_turns is not None
+        else ((replayed.max_turns if replayed is not None else None) or DEFAULT_MAX_TURNS)
+    )
+    if config.max_turns != max_turns:
+        config = config.model_copy(update={'max_turns': max_turns})
 
     set_span_attrs(
         pipeline_span,
-        {'orq.simulation.datapoints_count': len(sim_datapoints)},
+        {'orq.simulation.datapoints_count': len(sim_datapoints), 'orq.simulation.max_turns': max_turns},
     )
 
     resolved_hooks = config.hooks or DefaultHooks()
@@ -1186,6 +1222,8 @@ async def _simulate_core(
             results=results,
             run_id=run_id,
             experiment_url=experiment_url_out[0] if experiment_url_out else None,
+            # Persist the cases themselves so this run can be replayed later.
+            datapoints=sim_datapoints,
         )
 
         # Generate the LLM narrative before persistence so a saved report carries
@@ -1338,24 +1376,38 @@ async def _resolve_or_generate_datapoints(
     personas: list[Persona] | None,
     scenarios: list[Scenario] | None,
     dataset_id: str | None,
+    previous_run: str | None,
     model: str,
     generation_client: AsyncOpenAI | None,
+    replayed: SimulationReplay | None = None,
 ) -> list[SimulationDatapoint]:
     """Return ready-to-run Datapoints.
 
-    Resolution precedence: ``dataset_id`` -> ``datapoints`` -> persona x scenario
-    cartesian product (with first-message generation). The three sources are
-    mutually exclusive. ``caller`` names the public entry point so any
-    API-key error message points the user at the right function.
+    Resolution precedence: ``previous_run`` -> ``dataset_id`` -> ``datapoints``
+    -> persona x scenario cartesian product (with first-message generation). The
+    four sources are mutually exclusive. ``caller`` names the public entry point
+    so any API-key error message points the user at the right function.
     """
     sources = [
+        ('previous_run', previous_run is not None),
         ('dataset_id', dataset_id is not None),
         ('datapoints', datapoints is not None),
         ('personas/scenarios', personas is not None or scenarios is not None),
     ]
     chosen = [name for name, present in sources if present]
     if len(chosen) > 1:
-        raise ValueError(f'Pass exactly one of dataset_id, datapoints, or personas+scenarios; got: {", ".join(chosen)}')
+        raise ValueError(
+            f'Pass exactly one of previous_run, dataset_id, datapoints, or personas+scenarios; got: {", ".join(chosen)}'
+        )
+
+    if previous_run is not None:
+        # The caller loads the replay (it also needs the run's turn cap) and
+        # passes it in, so the file is read once per run.
+        from evaluatorq.simulation.replay import load_simulation_replay
+
+        resolved = replayed if replayed is not None else load_simulation_replay(previous_run)
+        logger.info(f'Replaying {len(resolved.datapoints)} datapoints from previous run {previous_run!r}.')
+        return resolved.datapoints
 
     if dataset_id is not None:
         api_key = _require_orq_api_key(caller)
@@ -1367,7 +1419,9 @@ async def _resolve_or_generate_datapoints(
         return datapoints
 
     if personas is None or scenarios is None:
-        raise ValueError("Either provide 'dataset_id', 'datapoints', or both 'personas' and 'scenarios'")
+        raise ValueError(
+            "Either provide 'previous_run', 'dataset_id', 'datapoints', or both 'personas' and 'scenarios'"
+        )
     if not personas or not scenarios:
         raise ValueError("'personas' and 'scenarios' arrays must both be non-empty")
 
@@ -1613,8 +1667,10 @@ async def _simulate_via_evaluatorq(
     from evaluatorq.types import DataPoint
 
     evaluation_name = config.evaluation_name
-    max_turns = config.max_turns
     model = config.model
+    # _simulate_core resolves max_turns before calling here; the fallback only
+    # covers a direct call that skipped it.
+    max_turns = config.max_turns if config.max_turns is not None else DEFAULT_MAX_TURNS
     parallelism = config.parallelism
     user_simulator = config.user_simulator
     judge = config.judge

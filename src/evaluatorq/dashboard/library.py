@@ -86,6 +86,8 @@ def sniff_kind(data: dict[str, object]) -> str | None:
         return 'sim'
     if 'pipeline' in data:
         return 'redteam'
+    if 'judging' in data:
+        return 'pairwise'
     return None
 
 
@@ -115,10 +117,11 @@ class ReportCard:
 
 
 def _default_roots() -> list[Path]:
+    from evaluatorq.pairwise_run import get_pairwise_runs_dir
     from evaluatorq.redteam.runner import get_runs_dir
     from evaluatorq.simulation.utils.run_store import get_sim_runs_dir
 
-    return [get_runs_dir(), get_sim_runs_dir()]
+    return [get_runs_dir(), get_sim_runs_dir(), get_pairwise_runs_dir()]
 
 
 def _iter_report_files(roots: list[Path]) -> Iterator[Path]:
@@ -149,9 +152,16 @@ def _card(path: Path) -> ReportCard | None:
         error = 'missing required field: summary'
     elif surface == 'sim' and 'scorer_averages' not in data:
         error = 'missing required field: scorer_averages'
-    headline = (
-        '' if error else f'{data.get("total_results", 0)} {"attacks" if surface == "redteam" else "conversations"}'
-    )
+    elif surface == 'pairwise' and 'entries' not in data:
+        error = 'missing required field: entries'
+    if error:
+        headline = ''
+    elif surface == 'pairwise':
+        entries = data.get('entries')
+        count = len(entries) if isinstance(entries, list) else 0
+        headline = f'{count} comparisons'
+    else:
+        headline = f'{data.get("total_results", 0)} {"attacks" if surface == "redteam" else "conversations"}'
     return ReportCard(report_id(path), surface, str(name), created_at, headline, path, error)
 
 

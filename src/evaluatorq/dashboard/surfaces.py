@@ -164,9 +164,72 @@ def _sim_adapter() -> SurfaceAdapter:
     )
 
 
+def _pairwise_adapter() -> SurfaceAdapter:
+    """Adapter for saved pairwise runs (``<store>/pairwise-runs``)."""
+    from evaluatorq.pairwise_reports.export_html import export_html, render_report_body
+    from evaluatorq.pairwise_run import PairwiseEntry, PairwiseRun
+
+    def _pw_rows(run: PairwiseRun, filtered: list[PairwiseEntry]) -> list[dict[str, Any]]:
+        """One row per comparison: the question, the consensus winner under its
+        label, and each judge's vote as its own column (also label-resolved).
+        This is the shape a spreadsheet reading of a run wants.
+
+        Every row carries the same keys. The CSV export takes its
+        ``DictWriter`` fieldnames from the first row, so a judge that appears
+        only on a later comparison (a replacement promoted mid-run) would
+        otherwise raise ``ValueError`` and 500 the export. Judges absent from a
+        comparison get an empty cell.
+        """
+        from evaluatorq.pairwise_reports.sections import judge_order, vote_label, winner_label
+
+        order = judge_order(run)
+        rows: list[dict[str, Any]] = []
+        for index, entry in enumerate(filtered, start=1):
+            votes = {v.model: v for v in entry.comparison.votes}
+            row: dict[str, Any] = {
+                '#': index,
+                'Question': entry.question,
+                'Winner': winner_label(entry.comparison.winner, run),
+            }
+            for model in order:
+                vote = votes.get(model)
+                row[model] = vote_label(vote.vote, run) if vote is not None else ''
+            rows.append(row)
+        return rows
+
+    def _pw_load(p: _Path) -> PairwiseRun:
+        from evaluatorq.dashboard.library import load_model_cached
+
+        return load_model_cached(p, PairwiseRun.model_validate)  # type: ignore[return-value]
+
+    def _with_entries(run: PairwiseRun, filtered: list[PairwiseEntry]) -> PairwiseRun:
+        """A copy carrying only *filtered* entries, with the rollup recomputed.
+
+        The stored report describes the full run, so it would misreport a
+        filtered view. Recomputed once here rather than nulled: ``rollup()`` is
+        called by the header and by two section builders, so leaving the field
+        empty rolls the same entries up three times per render.
+        """
+        from evaluatorq.pairwise import build_report
+
+        rolled = build_report([e.comparison for e in filtered])
+        return run.model_copy(update={'entries': list(filtered), 'report': rolled})
+
+    return SurfaceAdapter(
+        load=_pw_load,
+        body=render_report_body,
+        export=export_html,
+        name=lambda run: run.run_name,
+        created_at=lambda run: run.created_at,
+        body_from_results=lambda run, filtered: render_report_body(_with_entries(run, filtered)),
+        rows=_pw_rows,
+    )
+
+
 ADAPTERS: dict[str, SurfaceAdapter] = {
     'redteam': _redteam_adapter(),
     'sim': _sim_adapter(),
+    'pairwise': _pairwise_adapter(),
 }
 
 # Human-readable labels for each surface key.  Single source of truth used by
@@ -174,4 +237,5 @@ ADAPTERS: dict[str, SurfaceAdapter] = {
 SURFACE_LABELS: dict[str, str] = {
     'redteam': 'Red Team',
     'sim': 'Simulation',
+    'pairwise': 'Pairwise',
 }

@@ -21,7 +21,9 @@ from pathlib import Path
 from typing import Any
 
 from evaluatorq.common.llm_client import orq_base_url as _orq_base_url
+from evaluatorq.common.replay import REPLAY_VERSION
 from evaluatorq.common.run_store_dir import get_store_dir
+from evaluatorq.contracts import _coerce_text
 from evaluatorq.simulation.types import AgentInfoSnapshot, SimulationRun
 
 logger = logging.getLogger(__name__)
@@ -46,48 +48,90 @@ async def fetch_agent_info(agent_key: str) -> AgentInfoSnapshot | None:
         orq_client = setup_orq_client(api_key)
         agent_data = await asyncio.to_thread(orq_client.agents.retrieve, agent_key=agent_key)
 
-        agent_id = getattr(agent_data, '_id', None) or getattr(agent_data, 'id', None)
+        agent_id = _coerce_text(getattr(agent_data, '_id', None))
+        if agent_id is None:
+            agent_id = _coerce_text(getattr(agent_data, 'id', None))
         model = getattr(agent_data, 'model', None)
-        model_id = getattr(model, 'id', None) if model is not None else None
+        model_id = _coerce_text(getattr(model, 'id', None)) if model is not None else None
 
         # Entries with no resolvable name are dropped rather than persisted as
         # None (the card would render them as literal "None" chips).
         settings = getattr(agent_data, 'settings', None)
         raw_tools = getattr(settings, 'tools', None) if settings is not None else None
-        tools = [n for t in raw_tools or [] if (n := getattr(t, 'display_name', None) or getattr(t, 'key', None))]
+        tools = []
+        if isinstance(raw_tools, list):
+            for tool in raw_tools:
+                name = _coerce_text(getattr(tool, 'display_name', None)) or _coerce_text(getattr(tool, 'key', None))
+                if name is not None:
+                    tools.append(name)
 
-        raw_kbs = getattr(agent_data, 'knowledge_bases', None) or []
-        knowledge_bases = [
-            n for kb in raw_kbs if (n := kb if isinstance(kb, str) else getattr(kb, 'knowledge_id', None))
-        ]
+        raw_kbs = getattr(agent_data, 'knowledge_bases', None)
+        knowledge_bases = []
+        if isinstance(raw_kbs, list):
+            for kb in raw_kbs:
+                name = _coerce_text(kb if isinstance(kb, str) else getattr(kb, 'knowledge_id', None))
+                if name is not None:
+                    knowledge_bases.append(name)
 
-        raw_stores = getattr(agent_data, 'memory_stores', None) or []
-        memory_stores = [n for ms in raw_stores if (n := ms if isinstance(ms, str) else getattr(ms, 'key', None))]
+        raw_stores = getattr(agent_data, 'memory_stores', None)
+        memory_stores = []
+        if isinstance(raw_stores, list):
+            for store in raw_stores:
+                name = _coerce_text(store if isinstance(store, str) else getattr(store, 'key', None))
+                if name is not None:
+                    memory_stores.append(name)
 
-        raw_sub_agents = getattr(agent_data, 'team_of_agents', None) or []
-        sub_agents = [
-            n for a in raw_sub_agents if (n := a.get('key') if isinstance(a, dict) else getattr(a, 'key', None))
-        ]
+        raw_sub_agents = getattr(agent_data, 'team_of_agents', None)
+        sub_agents = []
+        if isinstance(raw_sub_agents, list):
+            for sub_agent in raw_sub_agents:
+                name = _coerce_text(
+                    sub_agent.get('key') if isinstance(sub_agent, dict) else getattr(sub_agent, 'key', None)
+                )
+                if name is not None:
+                    sub_agents.append(name)
+
+        # Unset optional SDK fields hold a truthy `Unset()` placeholder rather than
+        # None. This snapshot is a plain TypedDict with no validator between it and
+        # `model_dump_json()`, so a placeholder reaching it would break the save.
+        # orq-ai-sdk 4.12.x renamed `version_hash` to `version`; pick by type, since
+        # the placeholder would satisfy an `or` chain. Empty counts as absent — live
+        # 4.4.x agents carry `version_hash=''`.
+        version = next(
+            (
+                candidate
+                for candidate in (getattr(agent_data, 'version', None), getattr(agent_data, 'version_hash', None))
+                if isinstance(candidate, str) and candidate
+            ),
+            None,
+        )
+        raw_skills = getattr(agent_data, 'skills', None)
+        skills = [s for s in raw_skills if isinstance(s, str)] if isinstance(raw_skills, list) else []
 
         from evaluatorq.dashboard.orq_links import orq_studio_url, studio_workspace_key
 
-        workspace_id = getattr(agent_data, 'workspace_id', None)
-        # Entity APIs expose workspace_id (a UUID). Studio links instead use
-        # the configured ORQ_WORKSPACE key, captured here for future reports.
-        workspace_key = studio_workspace_key(getattr(agent_data, 'workspace_key', None))
+        workspace_id = _coerce_text(getattr(agent_data, 'workspace_id', None))
+        # Entity APIs expose workspace_id (a UUID), which Studio routes reject; links
+        # use the configured ORQ_WORKSPACE key instead. The agent payload has never
+        # carried a workspace_key on any SDK version — do not re-add a fallback arg.
+        workspace_key = studio_workspace_key()
         base_url = os.getenv('ORQ_BASE_URL', 'https://my.orq.ai').rstrip('/')
         url = orq_studio_url(target_kind='agent', entity_id=agent_id, workspace_id=workspace_key, base_url=base_url)
 
         return {
             'key': agent_key,
             'id': agent_id,
-            'role': getattr(agent_data, 'role', None),
-            'description': getattr(agent_data, 'description', None),
+            'role': _coerce_text(getattr(agent_data, 'role', None)),
+            'description': _coerce_text(getattr(agent_data, 'description', None)),
             'model': model_id,
+            'version': _coerce_text(version),
             'tools': tools,
+            'skills': skills,
             'knowledge_bases': knowledge_bases,
             'memory_stores': memory_stores,
             'sub_agents': sub_agents,
+            'agent_type': _coerce_text(getattr(agent_data, 'type', None)),
+            'engine': _coerce_text(getattr(agent_data, 'engine', None)),
             'workspace_id': workspace_id,
             'workspace_key': workspace_key,
             'base_url': base_url,
@@ -131,6 +175,7 @@ def build_simulation_run(
     agent_info: AgentInfoSnapshot | None = None,
     run_id: str | None = None,
     experiment_url: str | None = None,
+    datapoints: list[Any] | None = None,
 ) -> SimulationRun:
     # Record the Orq host only for Orq-served targets; plain callables / OpenAI
     # models don't touch Orq, so the field stays None (omitted) for them.
@@ -170,6 +215,8 @@ def build_simulation_run(
         total_results=len(results),
         scorer_averages=scorer_averages,
         results=results,
+        datapoints=list(datapoints) if datapoints else None,
+        replay_version=REPLAY_VERSION if datapoints else None,
     )
 
 

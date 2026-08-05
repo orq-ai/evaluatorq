@@ -147,6 +147,49 @@ for judge in report.per_judge:
     decisive vote, since one lone voter always "agrees" with itself and would
     otherwise flatter a degraded panel.
 
+## Saving a run and viewing it in the dashboard
+
+`build_report()` gives you the numbers in memory. To keep a run and read it in
+the dashboard, collect the comparisons into a `PairwiseRun` and save it:
+
+```python
+from evaluatorq.pairwise_run import new_run
+
+run = new_run(
+    run_name="prompt-v2 vs prompt-v3",
+    label_a="prompt-v2",
+    label_b="prompt-v3",
+    judges=["anthropic/claude-sonnet-4-6", "google/gemini-2.5-pro"],
+    criteria="The answer is accurate, complete, and directly addresses the question.",
+)
+
+for question, response_a, response_b in my_pairs:
+    comparison = await comparator.compare(
+        question=question, response_a=response_a, response_b=response_b
+    )
+    run.add(comparison, question=question, response_a=response_a, response_b=response_b)
+
+run.save()  # -> .evaluatorq/pairwise-runs/<timestamp>_prompt-v2-vs-prompt-v3.json
+```
+
+`save()` rolls the comparisons up with `build_report()` and stores the result on
+the run, so the dashboard never recomputes it. Pass a path to choose the file
+yourself; the default lands in the pairwise run store, where `eq dashboard`
+discovers it.
+
+`label_a` and `label_b` name the two systems being compared. They default to
+`"A"` and `"B"`, but nothing in the judging data records what was in each slot,
+so a reader of the dashboard cannot tell what "A won" means. Set them.
+
+A run also records `swap`. Position bias is only meaningful when both orderings
+ran, so a run saved with `swap=False` shows that column as unavailable rather
+than as a flattering `0.00`.
+
+The dashboard renders the run as three sections: the consensus win rates for
+each side, a per-judge table (win rates, tie rate, position bias), and the
+comparison list, where each row expands to show the two responses side by side
+with every judge's vote and rationale.
+
 ## The lower-level core
 
 `run_pairwise()` is the ordering-independent engine underneath the comparator.

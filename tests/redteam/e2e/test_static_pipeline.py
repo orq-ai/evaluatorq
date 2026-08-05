@@ -150,6 +150,35 @@ async def test_static_delivery_method_empty_match_hard_fails(
 
 
 @pytest.mark.asyncio
+async def test_static_unknown_delivery_method_passes_through_and_hard_fails(
+    mock_llm_client: DeterministicAsyncOpenAI,
+    mock_backend_bundle: MockBackend,
+    static_dataset_path: Path,
+) -> None:
+    """An unknown (unregistered) delivery method filters literally rather than being dropped.
+
+    Distinct from the enum case above: an unknown value never becomes a DeliveryMethod,
+    so it travels the raw-string branch through resolve -> loader filter -> error message.
+    If passthrough ever regressed to dropping unknowns, the filter would silently disable
+    itself and run the whole dataset instead of raising.
+    """
+    from evaluatorq.redteam.exceptions import RedTeamError
+
+    with _static_patches(mock_backend_bundle), pytest.raises(RedTeamError) as exc:
+        await red_team(
+            "agent:e2e-static-model",
+            mode="static",
+            delivery_methods=["bespoke-technique"],  # not an enum member, not registered
+            parallelism=2,
+            dataset=str(static_dataset_path),
+            llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
+        )
+    message = str(exc.value)
+    assert "bespoke-technique" in message  # the requested value survived as-is
+    assert "direct-request" in message  # what the dataset actually carries
+
+
+@pytest.mark.asyncio
 async def test_static_datapoint_capping(
     mock_llm_client: DeterministicAsyncOpenAI,
     mock_backend_bundle: MockBackend,
