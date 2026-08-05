@@ -501,9 +501,6 @@ tr:nth-child(even) { background: rgba(0,0,0,.015); }
 .rec-fixes { margin: .3rem 0 .2rem 1.2rem; padding: 0; }
 .rec-fixes li { margin: .3rem 0; }
 
-/* ---- Failure reason column ---- */
-.failure-reason { font-size: .85rem; color: var(--gray-500); max-width: 320px; }
-
 /* ---- Criterion tags ---- */
 .crit-tag { display: block; font-size: .78rem; padding: .4rem .6rem; border-radius: 6px; margin: .3rem 0; }
 .crit-tag--must    { background: #e6f3ee; color: #0f6b48; }
