@@ -431,6 +431,16 @@ def test_empty_pairwise_list_names_the_surface(tmp_path: Path) -> None:
     assert 'Run a pairwise job to generate one.' in r.text
 
 
+def test_pairwise_type_cell_has_a_glyph() -> None:
+    # Regression: _SURFACE_ICONS lacked a 'pairwise' entry, so the landing
+    # "Recent runs" Type cell rendered the label with no icon.
+    from evaluatorq.dashboard.view import _type_cell
+
+    cell = _type_cell('pairwise')
+    assert '<svg' in cell
+    assert 'Pairwise' in cell
+
+
 def test_export_routes_all_succeed(client: tuple[TestClient, str]) -> None:
     c, rid = client
     for suffix in ('export.html', 'export.json', 'export.csv'):

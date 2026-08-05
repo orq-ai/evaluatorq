@@ -125,7 +125,7 @@ def _run_row(row: RunRow, *, show_badge: bool = True) -> str:
     )
 
 
-# Surface → inline glyph (lucide: shield-alert / messages-square) for the Type column.
+# Surface → inline glyph (lucide: shield-alert / messages-square / columns-2) for the Type column.
 _SURFACE_ICONS: dict[str, str] = {
     'redteam': (
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
@@ -137,6 +137,11 @@ _SURFACE_ICONS: dict[str, str] = {
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
         'stroke-linecap="round" stroke-linejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 '
         '2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>'
+    ),
+    'pairwise': (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h6v12H4z"/>'
+        '<path d="M14 6h6v12h-6z"/><path d="M12 4v16"/></svg>'
     ),
 }
 
@@ -546,7 +551,7 @@ def redteam_overview_body(data: RedTeamOverview) -> str:
 
 
 def runs_screen_body(rows: list[RunRow], surface: str) -> str:
-    """Render a per-kind run-list screen (Red Team / Agent Sim)."""
+    """Render a per-kind run-list screen (Red Team / Agent Sim / Pairwise)."""
     label = SURFACE_LABELS.get(surface, 'Reports')
     if not rows:
         return (
