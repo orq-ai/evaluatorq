@@ -150,6 +150,33 @@ async def test_run_pairwise_unbounded_exceeds_cap() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_pairwise_cap_covers_pair_level_replacements() -> None:
+    """The stand-in pass (_both over replacements) draws from the same budget."""
+    tracker = InFlightTracker()
+
+    async def judge_fn(first: str, second: str, model: str) -> Prediction:
+        await tracker.track()
+        if model == 'primary':
+            return Prediction(error='boom')
+        return Prediction(value='A' if first == 'GOOD' else 'B', explanation='x')
+
+    result = await run_pairwise(
+        judge_fn=judge_fn,
+        panel=['primary'],
+        response_a='GOOD',
+        response_b='BAD',
+        swap=True,
+        repetitions=3,
+        replacement_judges=['stand-in'],
+        max_concurrency=2,
+    )
+    # primary: 2 orderings x 3 reps = 6 calls, then stand-in: 6 more.
+    assert tracker.total == 12
+    assert tracker.peak <= 2
+    assert result.winner == 'A'
+
+
+@pytest.mark.asyncio
 async def test_run_pairwise_default_verdict_unchanged_with_cap() -> None:
     """The cap only schedules calls; the reconciled verdict is identical."""
     result = await run_pairwise(
