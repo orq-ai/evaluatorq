@@ -15,6 +15,7 @@ from evaluatorq.common.jury import (
     TieBreak,
     VerdictKind,
     append_jury_summary,
+    as_semaphore,
     run_jury,
     validate_aggregator,
 )
@@ -531,6 +532,7 @@ class PairwiseComparator:
         structured_output: bool,
         extra_kwargs: dict[str, Any] | None,
         client: Any,
+        max_concurrency: int | None = None,
     ) -> None:
         self._panel = panel
         self._system_prompt = system_prompt
@@ -544,6 +546,10 @@ class PairwiseComparator:
         self._structured_output = structured_output
         self._extra_kwargs = extra_kwargs
         self._client = client
+        # One semaphore for the comparator's lifetime: concurrent compare()
+        # calls draw from the same budget, so max_concurrency bounds TOTAL
+        # in-flight judge calls across pairs, not per pair.
+        self._semaphore = as_semaphore(max_concurrency)
         self._verdict_model = _build_verdict_model(
             verdict_kind='categorical', labels=PAIRWISE_LABELS, score_range=(0.0, 1.0)
         )
@@ -579,6 +585,7 @@ class PairwiseComparator:
             replacement_judges=self._replacement_judges,
             min_successful_judges=self._min_successful_judges,
             propagate_errors=(len(self._panel) == 1 and not self._replacement_judges),
+            max_concurrency=self._semaphore,
         )
 
 
@@ -598,6 +605,7 @@ def llm_jury_pairwise(
     structured_output: bool = True,
     extra_kwargs: dict[str, Any] | None = None,
     client: Any = None,
+    max_concurrency: int | None = None,
 ) -> PairwiseComparator:
     """Build a pairwise (A-vs-B) LLM jury that reuses the shared panel machinery.
 
@@ -606,6 +614,11 @@ def llm_jury_pairwise(
     (see ADR-24). Panel/orchestration params mirror :func:`llm_jury`. Returns a
     :class:`PairwiseComparator`; call ``compare`` per A/B pair, and roll many
     comparisons up with :func:`evaluatorq.pairwise.build_report`.
+
+    ``max_concurrency`` caps TOTAL in-flight judge LLM calls across all
+    concurrently running ``compare`` calls on the returned comparator (each
+    pair fans out judges x orderings x repetitions). ``None`` (default) keeps
+    the fan-out unbounded.
     """
     if repetitions < 1:
         raise ValueError(f'repetitions ({repetitions}) must be >= 1.')
@@ -629,4 +642,5 @@ def llm_jury_pairwise(
         structured_output=structured_output,
         extra_kwargs=extra_kwargs,
         client=client,
+        max_concurrency=max_concurrency,
     )
