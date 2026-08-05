@@ -33,6 +33,12 @@ _CURLY = re.compile(r'{{(.*?)}}')
 _BRACKET_INDEX = re.compile(r'\[(-?\d+)\]')
 _NOT_FOUND = object()
 
+# Bare reserved keys resolve to intact literal: the namespace dicts must remain
+# present for dotted/indexed subpaths, but a bare {{input}} must not dump them.
+# This is an intentional divergence from the upstream Orq engine (this file is a
+# fork; see module docstring). Pinned by the parity suite below.
+_RESERVED_BARE_KEYS = frozenset({'input', 'output', 'log', 'response_a', 'response_b'})
+
 
 def is_valid_template_path(path: str) -> bool:
     """Return True if ``path`` is safe to resolve (whitelist match)."""
@@ -88,6 +94,8 @@ def render_template(template: str, replacements: dict[str, Any]) -> str:
             return match.group(0)
         if not is_valid_template_path(key):
             logger.warning('Rejected template path: {!r}', key)
+            return match.group(0)
+        if key in _RESERVED_BARE_KEYS:
             return match.group(0)
         if key in replacements:
             return _format(replacements[key])
