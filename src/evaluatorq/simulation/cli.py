@@ -1253,6 +1253,151 @@ def generate(
         )
 
 
+# ---------------------------------------------------------------------------
+# from-traces  (datapoints from Orq production traces)
+# ---------------------------------------------------------------------------
+
+
+@app.command('from-traces', no_args_is_help=True)
+def from_traces(
+    output: Annotated[
+        Path,
+        typer.Option('--output', '-o', help='Path to write the generated datapoints JSONL.'),
+    ],
+    limit: Annotated[
+        int,
+        typer.Option('--limit', min=1, help='Maximum number of traces to fetch.'),
+    ] = 20,
+    lookback_hours: Annotated[
+        float | None,
+        typer.Option(
+            '--lookback-hours',
+            min=0.0,
+            help='Only fetch traces from the last N hours. Default: no time filter.',
+        ),
+    ] = None,
+    search: Annotated[
+        str,
+        typer.Option('--search', help='Free-text search applied to the trace list.'),
+    ] = '',
+    extend: Annotated[
+        int,
+        typer.Option(
+            '--extend',
+            min=0,
+            help=(
+                'Also generate N distribution-matched datapoints on top of the '
+                'direct per-trace ones (extra LLM calls). 0 disables extension.'
+            ),
+        ),
+    ] = 0,
+    agent_description: Annotated[
+        str | None,
+        typer.Option(
+            '--agent-description',
+            help=(
+                'Agent description used by --extend generation. Optional; '
+                'inferred from the traffic profile when omitted.'
+            ),
+        ),
+    ] = None,
+    sim_model: Annotated[
+        str,
+        typer.Option(
+            '--sim-model',
+            help=(
+                'Model for persona/scenario inference and extension generation. '
+                'Provider resolved from env: ORQ_API_KEY -> Orq router, else '
+                'OPENAI_API_KEY (+ OPENAI_BASE_URL).'
+            ),
+        ),
+    ] = DEFAULT_MODEL,
+    verbose: Annotated[
+        int,
+        typer.Option(
+            '--verbose',
+            '-v',
+            count=True,
+            help='Increase verbosity (-v info logs, -vv debug logs).',
+        ),
+    ] = 0,
+    quiet: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option('--quiet', '-q', help='Suppress non-error output.'),
+    ] = False,
+) -> None:
+    """Build simulation datapoints from Orq production traces.
+
+    Fetches recent traces from the Orq traces API (requires ``ORQ_API_KEY``)
+    and builds one datapoint per trace conversation: the persona and scenario
+    are inferred from the transcript, the first message is the real user's
+    opening message verbatim. Pass ``--extend N`` to additionally generate N
+    new datapoints matching the traffic distribution of the fetched traces.
+    Feed the output file to ``sim simulate --input`` to run.
+    """
+    if quiet:
+        verbose = -1
+    _configure_logging(verbose)
+
+    from evaluatorq.simulation.traces import (
+        datapoints_from_traces,
+        extend_from_traces,
+        fetch_trace_conversations,
+    )
+
+    async def _impl() -> tuple[int, int, list[Any]]:
+        start_date_ms: int | None = None
+        if lookback_hours is not None:
+            import time
+
+            start_date_ms = int((time.time() - lookback_hours * 3600) * 1000)
+        conversations = await fetch_trace_conversations(
+            limit=limit,
+            start_date_ms=start_date_ms,
+            search=search,
+        )
+        if not conversations:
+            raise RuntimeError(
+                'No traces with a usable conversation found. Widen --lookback-hours, raise --limit, or drop --search.'
+            )
+        datapoints = await datapoints_from_traces(conversations, model=sim_model)
+        num_direct = len(datapoints)
+        if extend > 0:
+            datapoints += await extend_from_traces(
+                conversations,
+                num_datapoints=extend,
+                agent_description=agent_description,
+                model=sim_model,
+            )
+        return len(conversations), num_direct, datapoints
+
+    try:
+        num_traces, num_direct, datapoints = asyncio.run(_impl())
+    except KeyboardInterrupt:
+        typer.echo('^C aborted.', err=True)
+        raise typer.Exit(130) from None
+    except asyncio.CancelledError:
+        typer.echo('^C aborted.', err=True)
+        raise typer.Exit(130) from None
+    except typer.BadParameter:
+        raise
+    except _clean_cli_error_types() as exc:
+        # ValueError covers missing ORQ_API_KEY; RuntimeError covers "no usable
+        # traces" and profile-generation failures — surface as one line.
+        _handle_cli_error(exc)
+
+    if not datapoints:
+        typer.echo('Error: no datapoints could be built from the fetched traces.', err=True)
+        raise typer.Exit(1)
+
+    _write_datapoints(datapoints, output)
+    num_extension = len(datapoints) - num_direct
+    summary = f'Built {num_direct} datapoint(s) from {num_traces} trace(s)'
+    if num_extension:
+        summary += f' + {num_extension} distribution-matched datapoint(s) (--extend)'
+    typer.echo(f'{summary} -> {output}', err=True)
+
+
 async def _generate_impl(
     *,
     agent_description: str,
