@@ -242,6 +242,12 @@ def _wrapped(status_code: int) -> RuntimeError:
     return wrapper
 
 
+class _BoolStatusError(Exception):
+    """Pathological shape: a truthy non-status value on the status attribute."""
+
+    status_code = True
+
+
 def test_extract_status_code_shapes():
     assert extract_status_code(_ClientError(400)) == 400
     assert extract_status_code(_HttpxStyleError(403)) == 403
@@ -249,9 +255,7 @@ def test_extract_status_code_shapes():
     assert extract_status_code(_wrapped(400)) == 400
     assert extract_status_code(RuntimeError('no status anywhere')) is None
     # bool is an int subclass but never a status
-    boolish = RuntimeError('x')
-    boolish.status_code = True  # type: ignore[attr-defined]
-    assert extract_status_code(boolish) is None
+    assert extract_status_code(_BoolStatusError()) is None
 
 
 @pytest.mark.asyncio
