@@ -107,14 +107,37 @@ personas/scenarios (extends the dataset).
 | Inline `personas` + `scenarios` | ✅ | — (they *are* the new cases) |
 | JSONL datapoints (`--datapoints` / `load_datapoints_from_jsonl()`) | ✅ | ⚠️ manual (hand-pick seeds) |
 | Orq dataset (`dataset_id=`) | ✅ | ⚠️ manual |
-| Previous runs (persisted to JSONL via `eq sim generate --datapoints`) | ✅ | ⚠️ manual |
+| Previous run (`previous_run="<id>"` / `--from-run`, or export to JSONL via `eq sim generate --datapoints`) | ✅ | ⚠️ manual |
 | Orq experiment | ❌ no importer | ⚠️ manual (read run rows → seed phrases) |
 | Production traces | ❌ no importer | ⚠️ manual (read traces → seed phrases) |
 
 Legend: ✅ built-in · ⚠️ possible but manual · ❌ not supported yet.
 
-`dataset_id`, `datapoints`, and `personas` + `scenarios` are mutually
-exclusive — pass exactly one source per run.
+`previous_run`, `dataset_id`, `datapoints`, and `personas` + `scenarios` are
+mutually exclusive — pass exactly one source per run.
+
+### Replaying a previous run
+
+Saved runs record the cases they simulated, so a run can be repeated against a
+new agent version without regenerating anything:
+
+```bash
+eq sim simulate --from-run latest --target agent:my-agent-v2
+```
+
+```python
+results = await simulate(target='agent:my-agent-v2', previous_run='latest')
+```
+
+`--from-run` accepts `latest`, the run name or file name `eq sim runs` prints, a
+run id (or an unambiguous 8+ character prefix), or a path to a saved run JSON,
+resolved against `.evaluatorq/sim-runs/`. The stored personas, scenarios, and
+first messages are re-used exactly — no persona/scenario generation, no
+first-message generation, no dataset fetch — and the run's turn cap is restored
+unless you pass `--max-turns`. What you vary between runs is the target and the
+evaluators. Runs saved before this shipped carry no datapoints and are rejected
+with an explanatory error, as are runs stamped with a replay format newer than
+the installed version understands.
 
 No built-in trace-to-persona extractor yet: turning raw traces (or previous
 runs) into seed phrases for `generate_personas()` / `generate_scenarios()` is a

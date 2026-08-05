@@ -128,6 +128,10 @@ class ConfirmPayload(TypedDict, total=False):
     vulnerabilities: list[str] | None
     """Vulnerability labels loaded from dataset (static mode)."""
 
+    replay_of: str | None
+    """Name of the run being replayed (``previous_run=``). None for a fresh run.
+    When set, no datapoints were generated — they come from that run verbatim."""
+
 
 # ---------------------------------------------------------------------------
 # PipelineHooks Protocol
@@ -459,6 +463,12 @@ class RichHooks:
 
         table.add_row('Target', str(target))
         table.add_row('Mode', str(mode))
+
+        # A replay runs stored cases verbatim — say so up front, or the plan is
+        # indistinguishable from a fresh run that generated its own datapoints.
+        replay_of = payload.get('replay_of')
+        if replay_of:
+            table.add_row('Replay Of', str(replay_of))
 
         # Compute target count from agent_contexts or comma-separated target string
         agent_contexts_raw = payload.get('agent_contexts') or {}

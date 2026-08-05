@@ -192,6 +192,9 @@ async def test_initialization_caps_export_batch_size_to_queue_size(
     monkeypatch.setattr(tracing_setup, '_tracer', None)
     monkeypatch.setattr(tracing_setup, '_is_initialized', False)
     monkeypatch.setattr(tracing_setup, '_initialization_attempted', False)
+    # Opt out of the suite-wide export guard: this test drives real setup with
+    # the exporter and provider faked out above.
+    monkeypatch.delenv('ORQ_DISABLE_TRACING', raising=False)
     monkeypatch.setenv('OTEL_EXPORTER_OTLP_ENDPOINT', 'https://example.test')
     monkeypatch.setenv('ORQ_OTEL_MAX_QUEUE_SIZE', '100')
     monkeypatch.setenv('ORQ_OTEL_MAX_BATCH_SIZE', '200')
@@ -295,3 +298,20 @@ async def test_shutdown_without_sdk_disables_reinitialization_for_process_lifeti
 def test_shutdown_tracing_is_not_publicly_importable() -> None:
     with pytest.raises(ImportError):
         exec('from evaluatorq.tracing import _shutdown_tracing')
+
+
+@pytest.mark.asyncio
+async def test_the_suite_never_installs_a_live_span_exporter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The autouse guard in the root conftest must hold even with a real key in
+    the environment. Without it, the first test to reach setup installs a
+    process-wide OTLP exporter and every later span is queued for upload to
+    my.orq.ai, flushed at interpreter shutdown.
+    """
+    monkeypatch.setenv('ORQ_API_KEY', 'looks-real-enough')
+    monkeypatch.setattr(tracing_setup, '_initialization_attempted', False)
+    monkeypatch.setattr(tracing_setup, '_is_initialized', False)
+
+    assert await tracing_setup.init_tracing_if_needed() is False
+    assert tracing_setup._sdk is None

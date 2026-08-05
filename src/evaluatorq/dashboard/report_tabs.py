@@ -1819,8 +1819,10 @@ def _rt_agent_card(
     ctx = agent_ctx or {}
     display_name = ctx.get('display_name') or stats.get('display_name') or key
     model = ctx.get('model') or stats.get('model') or ''
+    version = ctx.get('version') or ''
     description = ctx.get('description') or ''
     tools = ctx.get('tools') or []
+    skills = ctx.get('skills') or []
     knowledge_bases = ctx.get('knowledge_bases') or []
 
     # Optional Studio deep-link — only for orq agent/deployment targets that
@@ -1848,7 +1850,9 @@ def _rt_agent_card(
     dial_html = dial(pct(asr), asr, radius=24, stroke=6, color=dial_color, sub='ASR')
 
     critical_chip = f'<span class="rt-agent-card-critical">{critical} critical</span>' if critical else ''
-    model_html = f'<div class="rt-agent-card-model">{esc(model)}</div>' if model else ''
+    # Version rides the model line: it answers "what exactly did we attack".
+    model_line = ' · '.join(p for p in (esc(model), f'v{esc(version)}' if version else '') if p)
+    model_html = f'<div class="rt-agent-card-model">{model_line}</div>' if model_line else ''
     description_html = f'<div class="rt-agent-card-desc">{esc(description)}</div>' if description else ''
 
     critical_style = 'color:var(--red-600)' if critical else ''
@@ -1866,7 +1870,11 @@ def _rt_agent_card(
         '</div>'
     )
 
-    chips_html = _rt_agent_card_chip_row('TOOLS', tools) + _rt_agent_card_chip_row('KNOWLEDGE', knowledge_bases)
+    chips_html = (
+        _rt_agent_card_chip_row('TOOLS', tools)
+        + _rt_agent_card_chip_row('SKILLS', skills)
+        + _rt_agent_card_chip_row('KNOWLEDGE', knowledge_bases)
+    )
 
     return (
         '<div class="rk-panel rt-agent-card">'

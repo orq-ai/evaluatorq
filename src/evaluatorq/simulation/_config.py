@@ -59,9 +59,12 @@ class SimulationConfig(BaseModel):
     memory_entity_id: str | None = None
     """Memory ``entity_id`` sent with every ``agent:<key>`` target call — the
     Responses router requires one when the target agent has a memory store."""
+    previous_run: str | None = None
 
     # --- Run behaviour -----------------------------------------------------
-    max_turns: int = 10
+    max_turns: int | None = None
+    """None means "unset": resolved in ``_simulate_core`` to a replayed run's
+    cap when replaying, else to ``DEFAULT_MAX_TURNS``."""
     model: str = DEFAULT_MODEL
     evaluator_names: list[str] | None = None
     parallelism: int = 5
