@@ -58,7 +58,7 @@ async def generate_structured(
         )
         trace_headers = await get_trace_context_headers()
         extra: dict[str, Any] = {'extra_headers': trace_headers} if trace_headers else {}
-        apply_pipeline_metadata(client, extra)
+        apply_pipeline_metadata(extra)
 
         # 1. Try structured output via parse()
         try:

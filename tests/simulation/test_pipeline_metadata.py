@@ -2,9 +2,9 @@
 
 Covers the gap where persona/scenario/first-message generation LLM calls
 bypassed ``apply_pipeline_metadata`` (see ``evaluatorq.common.llm_call``):
-under a bound ``evaluatorq_pipeline`` and an Orq-routed client, the call
-kwargs must carry ``metadata={'evaluatorq_pipeline': ...}``; without a bound
-pipeline, or off an Orq-routed client, no metadata is sent.
+under a bound ``evaluatorq_pipeline``, the call kwargs must carry
+``metadata={'evaluatorq_pipeline': ...}``; without a bound pipeline, no metadata
+is sent.
 """
 
 from __future__ import annotations
@@ -108,7 +108,7 @@ class TestGenerateStructuredPipelineMetadata:
         _, kwargs = client.chat.completions.parse.call_args
         assert 'metadata' not in kwargs
 
-    async def test_no_metadata_when_not_orq_routed(self) -> None:
+    async def test_sends_metadata_when_not_orq_routed(self) -> None:
         client = _plain_client()
         with evaluatorq_pipeline('agent_simulation'):
             await generate_structured(
@@ -122,7 +122,7 @@ class TestGenerateStructuredPipelineMetadata:
             )
 
         _, kwargs = client.chat.completions.parse.call_args
-        assert 'metadata' not in kwargs
+        assert kwargs['metadata'] == {'evaluatorq_pipeline': 'agent_simulation'}
 
 
 @pytest.mark.asyncio
@@ -148,7 +148,7 @@ class TestFirstMessageGeneratorPipelineMetadata:
         _, kwargs = client.chat.completions.create.call_args
         assert 'metadata' not in kwargs
 
-    async def test_no_metadata_when_not_orq_routed(self) -> None:
+    async def test_sends_metadata_when_not_orq_routed(self) -> None:
         client = _first_message_client('hi there')
         client.base_url = 'https://api.openai.com/v1'
         gen = FirstMessageGenerator(model='gpt-4o', client=client)
@@ -157,7 +157,7 @@ class TestFirstMessageGeneratorPipelineMetadata:
             await gen.generate(_persona(), _scenario())
 
         _, kwargs = client.chat.completions.create.call_args
-        assert 'metadata' not in kwargs
+        assert kwargs['metadata'] == {'evaluatorq_pipeline': 'agent_simulation'}
 
 
 class _ConcreteAgent(BaseAgent):

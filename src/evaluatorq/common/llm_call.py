@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Any
 
 from openai import BadRequestError
 
-from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.thread_context import pipeline_metadata
 from evaluatorq.common.tracing import (
     get_trace_context_headers,
@@ -92,38 +91,23 @@ def remember_responses_reasoning_rejection(model: str, params: dict[str, Any]) -
     _RESPONSES_REASONING_REJECTORS.add(_reasoning_key(model, params))
 
 
-def _run_metadata_kwarg(client: AsyncOpenAI | None) -> dict[str, dict[str, str]]:
-    """Guarded ``{'metadata': {...}}`` for splatting into a ``create()`` call.
-
-    Returns ``{}`` off-Orq (a plain OpenAI endpoint rejects unknown fields) or when
-    no run is bound. Private: :func:`apply_pipeline_metadata` is the only caller and
-    the only form call sites should use.
-    """
-    if not client_routes_through_orq(client):
-        # Debug-only: legitimate off-Orq usage hits this on every call. But a run
-        # bound here means the caller expected Orq-side run correlation and won't
-        # get it (usually a client built against the wrong base_url), which is
-        # otherwise invisible — leave a breadcrumb to grep for.
-        if pipeline_metadata():
-            logger.debug(
-                'Skipping run metadata: client does not route through Orq (base_url=%r)',
-                getattr(client, 'base_url', None),
-            )
-        return {}
-    md = pipeline_metadata()
-    return {'metadata': md} if md else {}
-
-
-def apply_pipeline_metadata(client: AsyncOpenAI, params: dict[str, Any]) -> None:
+def apply_pipeline_metadata(params: dict[str, Any]) -> None:
     """Tag the invocation with the active run surface + run id via ``metadata``.
 
-    Mutates ``params`` in place, adding a guarded ``metadata`` entry. No-op off-Orq
-    or when no run is bound. Caller-supplied metadata (via ``extra_kwargs``) wins on
-    key conflict. Public: direct ``create()`` sites that build their own kwargs dict
-    (structured output, first-message generation) call this instead of routing
-    through :func:`execute_chat_completion`.
+    Mutates ``params`` in place; no-op when no run is bound. Caller-supplied
+    metadata (via ``extra_kwargs``) wins on key conflict. Public: direct
+    ``create()`` sites that build their own kwargs dict (structured output,
+    first-message generation) call this instead of routing through
+    :func:`execute_chat_completion`.
+
+    Sent regardless of endpoint. ``metadata`` is a first-class field on OpenAI's
+    own Chat Completions / Responses APIs, so it is safe off-Orq — unlike the
+    router-only ``thread`` body param, which callers still gate on
+    ``client_routes_through_orq``. Only set when non-empty: an explicit
+    ``metadata=None`` would serialize as ``"metadata": null`` rather than being
+    stripped from the body.
     """
-    md = _run_metadata_kwarg(client).get('metadata')
+    md = pipeline_metadata()
     if md:
         params['metadata'] = {**md, **(params.get('metadata') or {})}
 
@@ -164,7 +148,7 @@ async def execute_chat_completion(
         params.update(extra_kwargs)
 
     _strip_known_rejected_reasoning(model, params)
-    apply_pipeline_metadata(client, params)
+    apply_pipeline_metadata(params)
 
     record_llm_input(span, messages)
 
@@ -223,7 +207,7 @@ async def execute_chat_parse(
         params.update(extra_kwargs)
 
     _strip_known_rejected_reasoning(model, params)
-    apply_pipeline_metadata(client, params)
+    apply_pipeline_metadata(params)
 
     record_llm_input(span, messages)
 

@@ -133,7 +133,7 @@ Keep it natural - this is how they would actually open a conversation."""
                 )
                 trace_headers = await get_trace_context_headers()
                 extra: dict[str, Any] = {'extra_headers': trace_headers} if trace_headers else {}
-                apply_pipeline_metadata(self._client, extra)
+                apply_pipeline_metadata(extra)
                 for attempt in range(2):
                     response = await with_retry(
                         lambda: self._client.chat.completions.create(  # pyright: ignore[reportUnknownLambdaType]

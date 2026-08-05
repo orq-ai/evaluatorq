@@ -105,10 +105,10 @@ class OpenAIModelTarget(AgentTarget):
             ],
         )
         # Tag the target invocation so its Orq trace is attributable to the run:
-        # the pipeline surface + run id via the documented `metadata` property
-        # (through the shared guarded helper, so this site can't drift from the
-        # rest), and the run thread via the router-only `thread` extra_body field.
-        # `thread` is guarded separately — a plain OpenAI endpoint rejects it.
+        # the pipeline surface + run id via the standard `metadata` property (sent
+        # on every endpoint — this is the direct-OpenAI backend, and its traces
+        # still reach Orq via OTel), and the run thread via the `thread` extra_body
+        # field, which IS router-only and so stays guarded.
         from evaluatorq.common.llm_client import client_routes_through_orq
         from evaluatorq.common.thread_context import thread_body_param
 
@@ -117,7 +117,7 @@ class OpenAIModelTarget(AgentTarget):
             'messages': completion_messages,
             'max_tokens': self.max_tokens,
         }
-        apply_pipeline_metadata(self.client, create_kwargs)
+        apply_pipeline_metadata(create_kwargs)
         if client_routes_through_orq(self.client):
             thread = thread_body_param()
             if thread:

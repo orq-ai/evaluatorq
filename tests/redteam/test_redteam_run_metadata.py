@@ -5,9 +5,7 @@ Covers the two distinct mechanisms red-team backends use to merge
 ``evaluatorq.common.thread_context`` / ``evaluatorq.common.llm_call``):
 
 - ``OpenAIModelTarget.respond`` (``redteam/backends/openai.py``) merges
-  ``pipeline_metadata()`` as a native ``metadata=`` kwarg, guarded on
-  ``client_routes_through_orq`` (an off-Orq OpenAI endpoint 400s on an unknown
-  field).
+  ``pipeline_metadata()`` as a native ``metadata=`` kwarg on every endpoint.
 - ``ORQAgentTarget.respond`` (``redteam/backends/orq.py``) merges
   ``pipeline_metadata_param()`` (an ``{'metadata': {...}}``-shaped dict) directly
   into the ORQ SDK call kwargs at both call sites (the initial turn and the
@@ -62,9 +60,8 @@ class TestOpenAIModelTargetRunMetadata:
             'evaluatorq_run_id': 'rt-run-1',
         }
 
-    async def test_no_metadata_key_when_client_not_orq_routed(self) -> None:
-        """A plain (non-Orq) endpoint 400s on an unknown `metadata` field, so the
-        guard must produce no `metadata` key at all — not an empty one."""
+    async def test_sends_metadata_when_client_not_orq_routed(self) -> None:
+        """Native OpenAI metadata is endpoint-neutral."""
         client = MagicMock()
         client.base_url = 'https://api.openai.com/v1'
         client.chat.completions.create = AsyncMock(return_value=_openai_response())
@@ -74,7 +71,10 @@ class TestOpenAIModelTargetRunMetadata:
             await target.respond([Message(role='user', content='hello')])
 
         _, kwargs = client.chat.completions.create.call_args
-        assert 'metadata' not in kwargs
+        assert kwargs['metadata'] == {
+            'evaluatorq_pipeline': 'red_teaming',
+            'evaluatorq_run_id': 'rt-run-1',
+        }
 
     async def test_no_metadata_without_bound_run_id(self) -> None:
         client = MagicMock()
