@@ -52,3 +52,19 @@ async def test_executive_summary_call_carries_run_id(monkeypatch) -> None:
         )
     assert sink['kwargs']['metadata']['evaluatorq_run_id'] == 'rid-123'
     assert sink['kwargs']['metadata']['evaluatorq_pipeline'] == 'red_teaming'
+
+
+@pytest.mark.asyncio
+async def test_executive_summary_call_omits_metadata_when_not_orq_routed(monkeypatch) -> None:
+    """A run/pipeline is bound, but the client does not route through Orq (a
+    plain OpenAI endpoint 400s on an unknown ``metadata`` field) — the call
+    must send NO ``metadata`` key at all."""
+    monkeypatch.setattr(llm_call, 'client_routes_through_orq', lambda _c: False)
+    sink: dict[str, Any] = {}
+    with evaluatorq_pipeline('red_teaming'), evaluatorq_run_id('rid-123'):
+        await generate_executive_summary(
+            facts='some facts',
+            llm_client=_Client(sink),
+            model='gpt-4o',
+        )
+    assert 'metadata' not in sink['kwargs']
