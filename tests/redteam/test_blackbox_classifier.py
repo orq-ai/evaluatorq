@@ -30,24 +30,47 @@ from evaluatorq.redteam.contracts import AgentCapability
 
 
 class _ScriptedTarget(AgentTarget):
-    """AgentTarget stub: replies with a canned string per turn, or raises."""
+    """AgentTarget stub: replies with a canned string per turn, or raises.
 
-    def __init__(self, replies: list[str] | None = None, *, raise_always: bool = False) -> None:
+    Calls and the reply cursor are shared across ``new()`` clones so scripts
+    stay indexed by global turn order — the classifier runs the memory recall
+    on a fresh clone, and per-instance state would silently shift the script.
+    ``call_instances`` records which instance served each turn so isolation
+    tests can assert the recall used a different instance.
+    """
+
+    def __init__(
+        self,
+        replies: list[str] | None = None,
+        *,
+        raise_always: bool = False,
+        _shared: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__()
         self._replies = replies or []
         self._raise_always = raise_always
-        self.calls: list[list[Message]] = []
+        self._shared: dict[str, Any] = _shared if _shared is not None else {'calls': [], 'instances': []}
+
+    @property
+    def calls(self) -> list[list[Message]]:
+        return self._shared['calls']
+
+    @property
+    def call_instances(self) -> list[AgentTarget]:
+        return self._shared['instances']
 
     async def respond(self, messages: list[Message]) -> AgentResponse:
-        self.calls.append(list(messages))
+        self._shared['calls'].append(list(messages))
+        self._shared['instances'].append(self)
         if self._raise_always:
             raise RuntimeError('target is down')
-        idx = len(self.calls) - 1
+        idx = len(self._shared['calls']) - 1
         text = self._replies[idx] if idx < len(self._replies) else 'ok'
         return AgentResponse(text=text)
 
     def new(self) -> AgentTarget:
-        return _ScriptedTarget(self._replies, raise_always=self._raise_always)
+        # type(self) so failing-subclass fakes keep failing on their clones.
+        return type(self)(self._replies, raise_always=self._raise_always, _shared=self._shared)
 
 
 def _judge(**flags: bool) -> MagicMock:
@@ -270,9 +293,10 @@ async def test_one_flaky_probe_does_not_abort_classification() -> None:
 
     result = await classify_agent_capabilities_blackbox(target, client, model='m')
 
-    # The failing turn is memory turn 1; memory turn 2 still answers, so the
-    # memory group is probed and every group has coverage → no gap.
-    assert result.classification_failed is False
+    # The failing turn is the memory WRITE: without it the recall tests
+    # nothing, so memory is a coverage gap and the flag goes optimistic —
+    # but classification still completes and the other groups still report.
+    assert result.classification_failed is True
     assert result.all_capabilities() == {'knowledge_retrieval'}
     # The judge was still called despite the one failure.
     client.chat.completions.parse.assert_called_once()
@@ -423,3 +447,123 @@ async def test_memory_recall_probe_is_sent_in_fresh_conversation() -> None:
     # The judge transcript marks the context break for the recall turn.
     prompt = client.chat.completions.parse.call_args.kwargs['messages'][0]['content']
     assert '[new conversation, no prior context]' in prompt
+
+
+# ---------------------------------------------------------------------------
+# Memory pair coverage + recall isolation (review follow-ups)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_write_ok_recall_fail_is_a_coverage_gap() -> None:
+    """The dangerous ordering: write succeeds, the isolated recall raises.
+
+    The judge would see a write turn with no recall and return a confident
+    memory=False, silently dropping memory attack strategies — the group must
+    read as unprobed instead (classification_failed=True, planner optimistic).
+    """
+
+    class _RecallFails(_ScriptedTarget):
+        async def respond(self, messages: list[Message]) -> AgentResponse:
+            recall_text = PROBES['memory'][1]
+            if recall_text in (messages[-1].content or ''):
+                self._shared['calls'].append(list(messages))
+                self._shared['instances'].append(self)
+                raise RuntimeError('recall blew up')
+            return await super().respond(messages)
+
+    target = _RecallFails(_BLAND_REPLIES)
+    client = _judge(knowledge_retrieval=True)
+
+    result = await classify_agent_capabilities_blackbox(target, client, model='m')
+
+    assert result.classification_failed is True
+    # Classification still completed for the groups that answered.
+    assert result.all_capabilities() == {'knowledge_retrieval'}
+
+
+@pytest.mark.asyncio
+async def test_failed_write_skips_recall_and_flags_gap() -> None:
+    """A recall without a successful write tests nothing — it is not sent."""
+
+    class _WriteFails(_ScriptedTarget):
+        async def respond(self, messages: list[Message]) -> AgentResponse:
+            write_text = PROBES['memory'][0]
+            if write_text in (messages[-1].content or ''):
+                self._shared['calls'].append(list(messages))
+                self._shared['instances'].append(self)
+                raise RuntimeError('write blew up')
+            return await super().respond(messages)
+
+    target = _WriteFails(_BLAND_REPLIES)
+    result = await classify_agent_capabilities_blackbox(target, _judge(), model='m')
+
+    recall_text = PROBES['memory'][1]
+    assert not any(recall_text in (c[-1].content or '') for c in target.calls)
+    assert result.classification_failed is True
+
+
+@pytest.mark.asyncio
+async def test_recall_runs_on_a_fresh_target_instance() -> None:
+    """The recall must hit a ``new()`` clone: targets like ORQAgentTarget hold
+    server-side conversation state on the instance, so a same-instance recall
+    still sees the write conversation and every agent reads memory-capable."""
+    target = _ScriptedTarget(_BLAND_REPLIES)
+
+    await classify_agent_capabilities_blackbox(target, _judge(), model='m')
+
+    recall_text = PROBES['memory'][1]
+    recall_idx = next(i for i, c in enumerate(target.calls) if recall_text in (c[-1].content or ''))
+    recall_instance = target.call_instances[recall_idx]
+    assert recall_instance is not target
+    # Every other probe ran on the original instance.
+    others = {inst for i, inst in enumerate(target.call_instances) if i != recall_idx}
+    assert others == {target}
+
+
+@pytest.mark.asyncio
+async def test_recall_clone_keeps_the_parent_memory_scope() -> None:
+    """new() may re-mint the entity id; a write stored under entity A can never
+    be recalled under entity B, so the clone must inherit the parent's id."""
+    target = _ScriptedTarget(_BLAND_REPLIES)
+    target.memory_entity_id = 'entity-A'
+
+    await classify_agent_capabilities_blackbox(target, _judge(), model='m')
+
+    recall_text = PROBES['memory'][1]
+    recall_idx = next(i for i, c in enumerate(target.calls) if recall_text in (c[-1].content or ''))
+    recall_instance = target.call_instances[recall_idx]
+    assert recall_instance is not target
+    assert recall_instance.memory_entity_id == 'entity-A'
+
+
+@pytest.mark.asyncio
+async def test_budget_exhaustion_skips_recall_and_flags_gap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With the cap forced below the probe count, the recall never runs: the
+    turn count must respect the cap AND memory must read as a coverage gap."""
+    import evaluatorq.redteam.adaptive.blackbox_classifier as mod
+
+    monkeypatch.setattr(mod, 'MAX_PROBE_TURNS', 3)
+    target = _ScriptedTarget(['ok'] * 100)
+
+    result = await classify_agent_capabilities_blackbox(target, _judge(), model='m')
+
+    assert len(target.calls) <= 3
+    recall_text = PROBES['memory'][1]
+    assert not any(recall_text in (c[-1].content or '') for c in target.calls)
+    assert result.classification_failed is True
+
+
+@pytest.mark.asyncio
+async def test_target_status_error_propagates() -> None:
+    """APIStatusError from the target re-raises like APIConnectionError."""
+    import httpx
+    from openai import APIStatusError
+
+    class _StatusError(_ScriptedTarget):
+        async def respond(self, messages: list[Message]) -> AgentResponse:
+            request = httpx.Request('POST', 'http://test')
+            raise APIStatusError('boom', response=httpx.Response(500, request=request), body=None)
+
+    with pytest.raises(APIStatusError):
+        await classify_agent_capabilities_blackbox(_StatusError(), _judge(), model='m')

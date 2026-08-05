@@ -6,24 +6,36 @@ The white-box classifier (:mod:`capability_classifier`) needs an
 deployments, agents configured outside ORQ — it is blind and the strategy
 planner falls back to optimistic inclusion.
 
-This module infers the same :class:`AgentCapabilities` from *behaviour*
-alone: it sends a small set of targeted probes through the agent's own
+This module infers the same :class:`AgentCapabilities` from the agent's
+replies alone: it sends a small set of targeted probes through the agent's own
 ``respond()`` interface (so it works with any backend), then a single LLM
 judge call reads the transcript and decides which capabilities the agent
-demonstrated. No internal config is required.
+demonstrated. No internal config is required. The memory probe is behavioural
+(write, then recall in an isolated conversation on a fresh target instance);
+the remaining probes lean on self-report nudged toward verifiable evidence, so
+a model doing mental math or reading its system prompt can still register a
+false positive, and a guarded agent that never narrates its tooling can read
+as bare.
 
-``classification_failed`` semantics mirror the white-box classifier exactly
-(see :meth:`AgentCapabilities.classification_failed` and
-``capability_classifier._classify_tools``): the flag is ``True`` ONLY when the
-probe/judge mechanism itself errored (every probe raised, or the judge call
-failed), so the strategy planner treats it as a coverage gap and includes
-strategies optimistically. An agent that simply has no capabilities returns
-empty ``capabilities`` with ``classification_failed=False``.
+``classification_failed`` is ``True`` when the probe/judge mechanism errored
+(every probe raised, or the judge call failed) OR when a capability group has
+a coverage gap (zero answered probes, or an incomplete memory
+write-then-recall pair) — the planner then includes strategies optimistically.
+An agent that was fully probed and simply has no capabilities returns empty
+``capabilities`` with ``classification_failed=False``.
+
+Discovery scope: only the probed groups (memory, knowledge retrieval, code
+execution, web request, file system, multi-agent) can ever be reported.
+``SHELL_ACCESS``, ``DATABASE``, ``EMAIL``, ``MESSAGING``, ``PAYMENT``, and
+``USER_DATA`` are never probed, so their absence from a result is not
+evidence of absence — treat a negative result as coarse triage, not as an
+authoritative "agent cannot do this".
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+import inspect
+from typing import TYPE_CHECKING
 
 from loguru import logger
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI
@@ -222,12 +234,12 @@ async def _run_probes(agent_target: AgentTarget) -> tuple[list[Message], set[str
     turns = 0
     answered_by_group: dict[str, int] = {group: 0 for group in PROBES}
 
-    async def _send(probe: str, group: str, convo: list[Message]) -> bool:
+    async def _send(probe: str, group: str, convo: list[Message], *, target: AgentTarget | None = None) -> bool:
         nonlocal turns
         turns += 1
         convo.append(Message(role='user', content=probe))
         try:
-            response = await agent_target.respond(convo)
+            response = await (target if target is not None else agent_target).respond(convo)
         except (APIConnectionError, APIStatusError):
             raise
         except Exception as e:  # one flaky turn must not abort classification
@@ -246,8 +258,9 @@ async def _run_probes(agent_target: AgentTarget) -> tuple[list[Message], set[str
     # Isolated recall means only a persistent (server-side) memory can answer;
     # running it last also gives eventually-consistent stores time to index.
     memory_write_probe, memory_recall_probe = PROBES['memory']
+    write_ok = False
     if turns < MAX_PROBE_TURNS:
-        await _send(memory_write_probe, 'memory', transcript)
+        write_ok = await _send(memory_write_probe, 'memory', transcript)
     for group, probes in PROBES.items():
         if group == 'memory':
             continue
@@ -256,16 +269,46 @@ async def _run_probes(agent_target: AgentTarget) -> tuple[list[Message], set[str
                 logger.debug('Blackbox probe budget ({}) reached; stopping', MAX_PROBE_TURNS)
                 break
             await _send(probe, group, transcript)
-    if turns < MAX_PROBE_TURNS:
-        recall_convo: list[Message] = []
-        if await _send(memory_recall_probe, 'memory', recall_convo):
-            # Mark the context break so the judge knows the agent could not
-            # have seen the code in this conversation.
-            recall_convo[0] = Message(
-                role='user', content=f'[new conversation, no prior context] {memory_recall_probe}'
-            )
-            transcript.extend(recall_convo)
+    recall_ok = False
+    # A recall without a successful write tests nothing, so it is skipped.
+    if write_ok and turns < MAX_PROBE_TURNS:
+        # The recall runs on a FRESH TARGET INSTANCE, not just a fresh message
+        # list: targets like ORQAgentTarget thread server-side conversation
+        # state via a per-instance task id and forward only the last turn, so a
+        # same-instance "recall" still sees the write conversation and every
+        # such agent reads as memory-capable. The clone keeps the parent's
+        # memory scope — new() may re-mint the entity id, and a write stored
+        # under entity A can never be recalled under entity B.
+        recall_target = agent_target.new()
+        parent_entity = getattr(agent_target, 'memory_entity_id', None)
+        if parent_entity is not None:
+            recall_target.memory_entity_id = parent_entity
+        try:
+            recall_convo: list[Message] = []
+            if await _send(memory_recall_probe, 'memory', recall_convo, target=recall_target):
+                recall_ok = True
+                # Mark the context break so the judge knows the agent could not
+                # have seen the code in this conversation.
+                recall_convo[0] = Message(
+                    role='user', content=f'[new conversation, no prior context] {memory_recall_probe}'
+                )
+                transcript.extend(recall_convo)
+        finally:
+            closer = getattr(recall_target, 'close', None)
+            if callable(closer):
+                try:
+                    maybe_coro = closer()
+                    if inspect.isawaitable(maybe_coro):
+                        await maybe_coro
+                except Exception as close_err:  # cleanup must not mask the probe result
+                    logger.debug('Failed to close recall probe target: {}', close_err)
     unprobed_groups = {group for group, n in answered_by_group.items() if n == 0}
+    if not (write_ok and recall_ok):
+        # Memory is only tested by the write -> isolated-recall PAIR. A missing
+        # half (probe error or turn budget) leaves the judge with an incomplete
+        # experiment that reads as a confident "no memory", silently dropping
+        # memory attack strategies — mark the group as a coverage gap instead.
+        unprobed_groups.add('memory')
     return transcript, unprobed_groups
 
 
@@ -286,7 +329,6 @@ async def _judge_transcript(
     transcript: list[Message],
     llm_client: AsyncOpenAI,
     model: str,
-    llm_kwargs: dict[str, Any] | None,
     cfg: LLMConfig,
 ) -> BlackboxCapabilityInference:
     """Single LLM judge call classifying the probe transcript into capabilities."""
@@ -335,9 +377,8 @@ async def classify_agent_capabilities_blackbox(
     agent_target: AgentTarget,
     llm_client: AsyncOpenAI,
     model: str = DEFAULT_PIPELINE_MODEL,
-    llm_kwargs: dict[str, Any] | None = None,
     pipeline_config: LLMConfig | None = None,
-) -> AgentCapabilities:
+) -> BlackboxAgentCapabilities:
     """Classify an agent's capabilities from conversational probes alone.
 
     Sends one probe group per capability area (memory, knowledge, code
@@ -351,7 +392,6 @@ async def classify_agent_capabilities_blackbox(
             ``AgentTarget.respond``).
         llm_client: OpenAI-compatible async client for the judge call.
         model: Model for the judge call.
-        llm_kwargs: Reserved for parity with the white-box signature.
         pipeline_config: Optional ``LLMConfig``; defaults to ``PIPELINE_CONFIG``.
 
     Returns:
@@ -372,7 +412,7 @@ async def classify_agent_capabilities_blackbox(
         return BlackboxAgentCapabilities(capabilities={}, classification_failed=True)
 
     try:
-        inference = await _judge_transcript(transcript, llm_client, model, llm_kwargs, cfg)
+        inference = await _judge_transcript(transcript, llm_client, model, cfg)
     except (APIConnectionError, APIStatusError):
         raise
     except Exception as e:  # degrade to a coverage-gap signal, mirror white-box
