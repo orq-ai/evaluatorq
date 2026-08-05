@@ -9,6 +9,7 @@ from loguru import logger as _converters_logger
 from pydantic import ValidationError
 
 from evaluatorq.common.target_call import classify_error_type
+from evaluatorq.contracts import AgentResponse
 from evaluatorq.redteam.contracts import (
     JURY_RAW_OUTPUT_KEY,
     OWASP_CATEGORY_NAMES,
@@ -210,6 +211,8 @@ def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
 
 def _coerce_job_output_text(raw_output: Any) -> str:
     """Extract best-effort response text from evaluatorq output."""
+    if isinstance(raw_output, AgentResponse):
+        return raw_output.text
     payload = _coerce_job_output_payload(raw_output)
     if payload.final_response is not None:
         return payload.final_response
