@@ -242,6 +242,18 @@ def _wrapped(status_code: int) -> RuntimeError:
     return wrapper
 
 
+def _implicitly_wrapped(status_code: int) -> RuntimeError:
+    """A wrapper raised inside an except block WITHOUT ``from``: the original
+    lands under __context__, not __cause__ (implicit exception chaining)."""
+    try:
+        raise _ClientError(status_code)
+    except _ClientError:
+        try:
+            raise RuntimeError('target adapter failed')  # noqa: TRY301
+        except RuntimeError as wrapper:
+            return wrapper
+
+
 class _BoolStatusError(Exception):
     """Pathological shape: a truthy non-status value on the status attribute."""
 
@@ -253,6 +265,7 @@ def test_extract_status_code_shapes():
     assert extract_status_code(_HttpxStyleError(403)) == 403
     assert extract_status_code(_AiohttpStyleError(429)) == 429
     assert extract_status_code(_wrapped(400)) == 400
+    assert extract_status_code(_implicitly_wrapped(400)) == 400
     assert extract_status_code(RuntimeError('no status anywhere')) is None
     # bool is an int subclass but never a status
     assert extract_status_code(_BoolStatusError()) is None
@@ -285,3 +298,14 @@ async def test_aiohttp_style_429_still_retried():
     assert r.succeeded is True
     assert r.attempts == 2
     assert t.calls == 2
+
+@pytest.mark.asyncio
+async def test_implicitly_chained_client_error_is_not_retried():
+    # A wrapper raised without `from` hides the 4xx under __context__; the
+    # extractor must still find it so the call fails fast instead of burning
+    # all retries.
+    t = _Target([_implicitly_wrapped(400), _ok('unreachable')])
+    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    assert r.succeeded is False
+    assert r.attempts == 1
+    assert t.calls == 1

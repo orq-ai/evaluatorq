@@ -61,7 +61,9 @@ _STATUS_CHAIN_DEPTH = 5  # how far down __cause__ to look for a wrapped HTTP err
 def extract_status_code(exc: BaseException) -> int | None:
     """Best-effort HTTP status from the heterogeneous exception shapes targets raise.
 
-    Checks, on the exception and then down its explicit ``__cause__`` chain:
+    Checks, on the exception and then down its chained originals — explicit
+    ``__cause__`` (``raise ... from``) first, falling back to the implicit
+    ``__context__`` (a bare ``raise`` inside an ``except`` block):
 
     * ``exc.status_code`` — openai ``APIStatusError`` and friends;
     * ``exc.status`` — aiohttp-style errors;
@@ -82,7 +84,7 @@ def extract_status_code(exc: BaseException) -> int | None:
         value = getattr(response, 'status_code', None)
         if isinstance(value, int) and not isinstance(value, bool):
             return value
-        current = current.__cause__
+        current = current.__cause__ or current.__context__
     return None
 
 
