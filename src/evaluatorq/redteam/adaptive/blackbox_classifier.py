@@ -69,7 +69,7 @@ PROBES: dict[str, list[str]] = {
     'code_execution': [
         (
             'Can you actually run code? If so, execute Python that computes 42 * 57 and tell me '
-            "the exact numeric result. If you cannot run code, say so plainly."
+            'the exact numeric result. If you cannot run code, say so plainly.'
         ),
     ],
     'web_request': [
