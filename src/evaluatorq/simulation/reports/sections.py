@@ -15,6 +15,7 @@ Section kinds:
     - ``token_usage``           prompt/completion/total + per-conversation summary
     - ``individual_results``    one entry per ``SimulationResult`` (transcript)
     - ``errors``                count by error type for error-terminated runs
+    - ``recommendations``       LLM remediation suggestions (opt-in, when provided)
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ from evaluatorq.simulation.metrics import TURN_METRICS
 from evaluatorq.simulation.types import CriteriaRow, SimulationEntry, TranscriptMessage
 
 if TYPE_CHECKING:
-    from evaluatorq.simulation.types import SimulationResult
+    from evaluatorq.simulation.types import SimulationRecommendation, SimulationResult
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +250,7 @@ def _build_failures_first_section(results: list[SimulationResult]) -> ReportSect
             ],
             'has_safety': any(c['safety'] for c in rows_c),
             'terminated_by': r.terminated_by.value,
-            'reason': r.reason,
+            'reason': r.reason or '',
             'score': r.goal_completion_score,
             'anchor': f'conv-{idx + 1}',
         })
@@ -563,6 +564,42 @@ def _build_turn_quality_timeline_section(results: list[SimulationResult]) -> Rep
     )
 
 
+def _pretty_trigger(trigger: str) -> str:
+    """Humanize a 'kind: detail' trigger label for report display."""
+    kind, _, detail = trigger.partition(':')
+    label = {
+        'rule_broken': 'Rule broken',
+        'criterion_failed': 'Criterion failed',
+        'low_factual_accuracy': 'Low factual accuracy',
+        'high_hallucination_risk': 'High hallucination risk',
+        'poor_tone': 'Poor tone',
+    }.get(kind.strip(), kind.strip().replace('_', ' ').capitalize())
+    detail = detail.strip()
+    return f'{label}: {detail}' if detail else label
+
+
+def _build_recommendations_section(
+    recommendations: list[SimulationRecommendation],
+) -> ReportSection:
+    rows = [
+        {
+            'index': rec.result_index + 1,
+            'datapoint_id': rec.datapoint_id,
+            'persona': rec.persona,
+            'scenario': rec.scenario,
+            'triggers': [_pretty_trigger(t) for t in rec.triggers],
+            'suggestions': list(rec.suggestions),
+            'anchor': f'conv-{rec.result_index + 1}',
+        }
+        for rec in recommendations
+    ]
+    return ReportSection(
+        kind='recommendations',
+        title='Remediation Suggestions',
+        data={'rows': rows},
+    )
+
+
 def _build_failure_mode_section(results: list[SimulationResult]) -> ReportSection:
     counts: Counter[str] = Counter()
     for r in results:
@@ -585,9 +622,16 @@ def _build_failure_mode_section(results: list[SimulationResult]) -> ReportSectio
 
 
 def build_report_sections(
-    results: list[SimulationResult], *, executive_summary: str | None = None
+    results: list[SimulationResult],
+    *,
+    executive_summary: str | None = None,
+    recommendations: list[SimulationRecommendation] | None = None,
 ) -> list[ReportSection]:
-    """Produce the ordered list of report sections from simulation results."""
+    """Produce the ordered list of report sections from simulation results.
+
+    ``recommendations`` are pre-generated (LLM calls happen at run time, not
+    render time); when absent or empty the section is omitted entirely.
+    """
     sections: list[ReportSection] = []
     # Order tells the story worst-first: verdict -> what failed -> how it failed
     # -> where (heatmaps) -> distributions/trends -> breakdowns -> diagnostics.
@@ -597,6 +641,10 @@ def build_report_sections(
         _build_overview_section(results),
         _build_failures_first_section(results),
         _build_failure_mode_section(results),
+    ))
+    if recommendations:
+        sections.append(_build_recommendations_section(recommendations))
+    sections.extend((
         _build_persona_scenario_heatmap_section(results),
         _build_score_distribution_section(results),
         _build_turn_quality_timeline_section(results),

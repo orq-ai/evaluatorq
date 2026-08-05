@@ -164,6 +164,7 @@ async def simulate(
     scenarios: list[Scenario] | None = None,
     datapoints: list[SimulationDatapoint] | None = None,
     dataset_id: str | None = None,
+    memory_entity_id: str | None = None,
     previous_run: str | None = None,
     max_turns: int | None = None,
     sim_model: str = DEFAULT_MODEL,
@@ -214,6 +215,13 @@ async def simulate(
             ``datapoints``, ``personas``, ``scenarios``. Each dataset row's
             ``inputs`` must already match one of the simulation input shapes
             (``datapoint`` / ``persona`` + ``scenario`` / etc.).
+        memory_entity_id: Memory ``entity_id`` sent with every call to an
+            ``agent:<key>`` (or bare ``<key>``) target. The Responses router
+            requires a memory scope when the target agent has a memory store
+            attached; pass this to run against a specific (e.g. seeded) entity.
+            When omitted, a fresh per-target id is minted so memory-backed
+            agents still work out of the box. One explicit id is shared across
+            the run's conversations. Only valid for string agent targets.
         max_turns: Cap on conversation turns. Defaults to 10, or — when
             replaying via ``previous_run`` — to the cap the replayed run used.
             An explicit value always wins.
@@ -263,6 +271,7 @@ async def simulate(
         scenarios=scenarios,
         datapoints=datapoints,
         dataset_id=dataset_id,
+        memory_entity_id=memory_entity_id,
         previous_run=previous_run,
         max_turns=max_turns,
         sim_model=sim_model,
@@ -291,6 +300,7 @@ async def _simulate_run(
     scenarios: list[Scenario] | None = None,
     datapoints: list[SimulationDatapoint] | None = None,
     dataset_id: str | None = None,
+    memory_entity_id: str | None = None,
     previous_run: str | None = None,
     max_turns: int | None = None,
     sim_model: str = DEFAULT_MODEL,
@@ -361,6 +371,7 @@ async def _simulate_run(
                         scenarios=scenarios,
                         datapoints=datapoints,
                         dataset_id=dataset_id,
+                        memory_entity_id=memory_entity_id,
                         previous_run=previous_run,
                         max_turns=max_turns,
                         model=sim_model,
@@ -402,6 +413,7 @@ async def generate_and_simulate(
     evaluation_name: str = '',
     agent_description: str | None = None,
     target: str | Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = None,
+    memory_entity_id: str | None = None,
     num_personas: int = 5,
     num_scenarios: int = 5,
     max_turns: int | None = None,
@@ -426,6 +438,10 @@ async def generate_and_simulate(
     Accepts the same ``target`` shapes as :func:`simulate` — a plain callable,
     an ``AgentTarget`` instance, or a string (``"agent:<key>"`` / bare ``"<key>"``
     for a hosted Orq agent, ``"deployment:<key>"`` for the Orq deployment bridge).
+    ``memory_entity_id`` mirrors :func:`simulate` too: it is sent as the memory
+    scope with every call to a string agent target (``agent:<key>`` or bare
+    ``<key>``), for agents with a memory store attached. When omitted, a fresh
+    per-target id is minted so memory-backed agents still work out of the box.
     Persona/scenario/first-message generation resolves its provider via
     the shared factory: an injected ``generation_client`` → ``ORQ_API_KEY``
     (Orq router) → ``OPENAI_API_KEY`` (with optional ``OPENAI_BASE_URL`` for an
@@ -468,6 +484,7 @@ async def generate_and_simulate(
         evaluation_name=evaluation_name,
         agent_description=agent_description,
         target=target,
+        memory_entity_id=memory_entity_id,
         num_personas=num_personas,
         num_scenarios=num_scenarios,
         max_turns=max_turns,
@@ -561,6 +578,7 @@ async def _generate_and_simulate_run(
     evaluation_name: str = '',
     agent_description: str | None = None,
     target: str | Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = None,
+    memory_entity_id: str | None = None,
     num_personas: int = 5,
     num_scenarios: int = 5,
     max_turns: int | None = None,
@@ -670,6 +688,7 @@ async def _generate_and_simulate_run(
                             scenarios=None,
                             datapoints=datapoints,
                             dataset_id=None,
+                            memory_entity_id=memory_entity_id,
                             max_turns=max_turns,
                             model=sim_model,
                             evaluator_names=evaluator_names,
@@ -1082,7 +1101,9 @@ async def _simulate_core(
     save = config.save
     run_output = config.run_output
 
-    target_callable, target_agent, target_kind_hint = _resolve_target(config.target)
+    target_callable, target_agent, target_kind_hint = _resolve_target(
+        config.target, memory_entity_id=config.memory_entity_id
+    )
 
     # ``run_id`` is minted at the outer entry (_simulate_run /
     # _generate_and_simulate_run) so the same id brackets the manifest and this
@@ -1320,6 +1341,8 @@ async def _simulate_core(
 
 def _resolve_target(
     target: str | Callable[..., Any] | AgentTarget | None,
+    *,
+    memory_entity_id: str | None = None,
 ) -> tuple[
     Callable[[list[Message]], str | Awaitable[str] | Awaitable[AgentResponse]] | None, AgentTarget | None, str | None
 ]:
@@ -1347,6 +1370,16 @@ def _resolve_target(
 
     resolved = target
 
+    if memory_entity_id is not None and not memory_entity_id.strip():
+        # A blank id would be silently dropped downstream (falsy check in the
+        # target) and reproduce the exact 400 this parameter exists to prevent.
+        raise ValueError('memory_entity_id cannot be blank; pass a real entity id or omit it.')
+    if memory_entity_id is not None and not isinstance(resolved, str):
+        raise ValueError(
+            "memory_entity_id is only supported with string 'agent:<key>' (or bare '<key>') targets; "
+            'for an AgentTarget instance, set memory_entity_id on the instance directly.'
+        )
+
     if isinstance(resolved, str):
         from evaluatorq.redteam.contracts import TargetKind, parse_target
 
@@ -1364,8 +1397,13 @@ def _resolve_target(
                 target_config=TargetConfig(system_prompt=None),
                 pipeline_config=LLMConfig(),
             )
-            return None, backend.create_target(value), 'orq_agent'
+            agent_target = backend.create_target(value)
+            if memory_entity_id is not None:
+                agent_target.memory_entity_id = memory_entity_id
+            return None, agent_target, 'orq_agent'
         if kind is TargetKind.DEPLOYMENT:
+            if memory_entity_id is not None:
+                raise ValueError("memory_entity_id is only supported with 'agent:<key>' (or bare '<key>') targets.")
             return from_orq_deployment(value), None, 'orq_deployment'
         raise ValueError(
             f'Unsupported target kind {kind.value!r} for simulation; '

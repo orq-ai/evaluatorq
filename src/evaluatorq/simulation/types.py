@@ -380,6 +380,30 @@ class SimulationDatapoint(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# SimulationRecommendation
+# ---------------------------------------------------------------------------
+
+
+class SimulationRecommendation(BaseModel):
+    """LLM-generated remediation suggestion for one failed simulation result.
+
+    ``result_index`` is the position in ``SimulationRun.results`` /
+    the exporter's results list; ``datapoint_id`` is carried from result
+    metadata when available.
+    """
+
+    result_index: int
+    datapoint_id: str | None = None
+    persona: str
+    scenario: str
+    triggers: list[str]
+    """What flagged this result, one ``<kind>: <evidence>`` entry each — e.g.
+    ``rule_broken: quoted internal ticket ID`` or ``low_factual_accuracy:
+    factual_accuracy averaged 0.30 across 4 turns``."""
+    suggestions: list[str]
+
+
+# ---------------------------------------------------------------------------
 # SimulationRun  (run-store record)
 # ---------------------------------------------------------------------------
 
@@ -430,6 +454,9 @@ class SimulationRun(BaseModel):
     """Absolute URL of the Orq experiment this run was uploaded to, captured from the
     results upload. Powers the terminal 'View on Orq' line and the dashboard's
     'Open experiment' button. None when upload was skipped/failed or for older runs."""
+    recommendations: list[SimulationRecommendation] | None = None
+    """LLM-generated remediation suggestions for remediable failures
+    (see ``reports.recommendations``). None when never generated."""
 
 
 # ---------------------------------------------------------------------------

@@ -57,7 +57,7 @@ from evaluatorq.simulation.reports.token_usage import build_token_usage_rows
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import ReportSection
-    from evaluatorq.simulation.types import SimulationResult
+    from evaluatorq.simulation.types import SimulationRecommendation, SimulationResult
 
 # Heatmap colour direction:
 # ``ORQ_SCALE_GOOD_BAD`` is green at 0.0 -> red at 1.0 (i.e. good == low).
@@ -193,18 +193,22 @@ def _render_overview_html(section: ReportSection) -> str:
     def _persona_item(p: dict[str, Any]) -> str:
         traits = p.get('traits')
         background = p.get('background')
-        parts = [f'<li>{_esc(p["name"])} <span class="intro-count">· {p["conversations"]} conv.</span>']
+        parts = [
+            (
+                f'<li><h4 class="intro-name">{_esc(p["name"])} '
+                f'<span class="intro-count">· {p["conversations"]} conv.</span></h4>'
+            )
+        ]
         if isinstance(traits, dict):
-            trait_parts = [
-                f'patience {traits.get("patience", "?")}',
-                f'assertiveness {traits.get("assertiveness", "?")}',
-                f'politeness {traits.get("politeness", "?")}',
-                f'technical {traits.get("technical_level", "?")}',
+            trait_rows = [
+                ['Patience', str(traits.get('patience', '?'))],
+                ['Assertiveness', str(traits.get('assertiveness', '?'))],
+                ['Politeness', str(traits.get('politeness', '?'))],
+                ['Technical level', str(traits.get('technical_level', '?'))],
             ]
             if traits.get('communication_style'):
-                trait_parts.append(_esc(str(traits['communication_style'])))
-            trait_line = ' · '.join(trait_parts)
-            parts.append(f'<div class="intro-meta">{trait_line}</div>')
+                trait_rows.append(['Style', _esc(str(traits['communication_style']))])
+            parts.append(f'<div class="intro-traits">{_html_table(["Trait", "Value"], trait_rows)}</div>')
         if background:
             parts.append(f'<div class="intro-meta">{_esc(str(background))}</div>')
         parts.append('</li>')
@@ -220,13 +224,13 @@ def _render_overview_html(section: ReportSection) -> str:
             f'{"✗ must not" if c["type"] == "must_not_happen" else "✓ must"}: {_esc(c["description"])}</span>'
             for c in s.get('criteria', [])
         )
-        parts = [f'<li>{_esc(s["name"])}']
+        parts = [f'<li><h4 class="intro-name">{_esc(s["name"])}</h4>']
         if goal:
             parts.append(f'<div class="intro-meta"><strong>Goal:</strong> {_esc(str(goal))}</div>')
         if context:
             parts.append(f'<div class="intro-meta"><strong>Context:</strong> {_esc(str(context))}</div>')
         if tags:
-            parts.append(f'<div>{tags}</div>')
+            parts.append(f'<div class="intro-criteria">{tags}</div>')
         parts.append('</li>')
         return ''.join(parts)
 
@@ -310,6 +314,9 @@ def _render_persona_scenario_heatmap_html(section: ReportSection) -> str:
     personas, scenarios = d['personas'], d['scenarios']
     if not personas or not scenarios:
         return ''
+    # A 1x1 grid is one colored cell restating the headline success rate.
+    if len(personas) < 2 and len(scenarios) < 2:
+        return ''
     lookup = {(c['persona'], c['scenario']): c for c in d['cells']}
     # cells[row=scenario][col=persona] = success-rate (good=high -> green-high scale)
     cells = [[lookup.get((p, s), {}).get('success_rate', -1.0) for p in personas] for s in scenarios]
@@ -325,7 +332,19 @@ def _render_persona_scenario_heatmap_html(section: ReportSection) -> str:
 
 
 def _render_score_distribution_html(section: ReportSection) -> str:
-    hist = _render_histogram(values=section.data.get('scores', []), bins=10, title=section.title)
+    scores = section.data.get('scores', [])
+    # A histogram of one or two values renders as a single squished bar that
+    # reads as broken — state the scores directly instead.
+    if len(scores) < 3:
+        if len(scores) < 2:
+            return ''
+        listed = ', '.join(f'{v:.2f}' for v in scores)
+        return (
+            f'<section class="report-card"><h2>{_esc(section.title)}</h2>'
+            f'<p>Only {len(scores)} conversation(s) — goal score(s): <strong>{listed}</strong>. '
+            'A distribution needs more runs.</p></section>'
+        )
+    hist = _render_histogram(values=scores, bins=10, title=section.title)
     return f'<section class="report-card">{hist}</section>' if hist else ''
 
 
@@ -337,6 +356,10 @@ def _render_turn_quality_timeline_html(section: ReportSection) -> str:
     series = [(_pretty_evaluator(name), vals) for name, vals in d['series'].items() if any(v is not None for v in vals)]
     if not series:
         return ''
+    # A timeline needs at least two turns; the per-turn averages already appear
+    # in Turn Metrics, so a single-point line chart adds nothing but confusion.
+    if len(turns) < 2:
+        return ''
     chart = _render_line_chart(x_labels=[str(t) for t in turns], series=series, title=section.title)
     return f'<section class="report-card">{chart}</section>'
 
@@ -345,6 +368,9 @@ def _render_persona_breakdown_html(section: ReportSection) -> str:
     rows = section.data.get('rows', [])
     if not rows:
         return f'<section class="report-card"><h2>{_esc(section.title)}</h2><p>No persona data.</p></section>'
+    # A single conversation has no cohorts to break down.
+    if sum(r.get('conversations', 0) for r in rows) < 2:
+        return ''
     table_rows = [
         [
             _esc(r['persona']),
@@ -367,6 +393,9 @@ def _render_scenario_breakdown_html(section: ReportSection) -> str:
     rows = section.data.get('rows', [])
     if not rows:
         return f'<section class="report-card"><h2>{_esc(section.title)}</h2><p>No scenario data.</p></section>'
+    # A single conversation has no cohorts to break down.
+    if sum(r.get('conversations', 0) for r in rows) < 2:
+        return ''
     table_rows = [
         [
             _esc(r['scenario']),
@@ -410,7 +439,9 @@ def _render_turn_metrics_html(section: ReportSection) -> str:
     # One bar per conversation reads well for small runs, but grows unbounded
     # and duplicates the distribution table at scale — so past a threshold show
     # the compact turn-count distribution instead.
-    if per_conv and len(per_conv) <= _MAX_PER_CONV_BARS:
+    # A one-conversation bar chart is a single full-width bar — skip it; the
+    # turn count is already in the conversation header.
+    if len(per_conv) >= 2 and len(per_conv) <= _MAX_PER_CONV_BARS:
         parts.extend((
             _svg_bar(
                 rows=[(c['label'], float(c['turns'])) for c in per_conv],
@@ -448,7 +479,8 @@ def _render_turn_metrics_html(section: ReportSection) -> str:
 
 def _render_failure_mode_html(section: ReportSection) -> str:
     rows = section.data.get('rows', [])
-    if not rows:
+    # One failure mode = one full-width bar restating the Failures table — skip.
+    if len(rows) < 2:
         return ''
     bar = _svg_bar(
         rows=[(label, float(count)) for label, count in rows],
@@ -522,7 +554,7 @@ def _render_individual_results_html(section: ReportSection) -> str:
         title = (
             f'#{entry["index"] + 1}: {_esc(entry["persona"])} / '
             f'{_esc(entry["scenario"])} {badge}'
-            f' ({entry["turn_count"]} turns, '
+            f' ({entry["turn_count"]} turn{"s" if entry["turn_count"] != 1 else ""}, '
             f'score {entry["goal_completion_score"]:.2f})'
         )
 
@@ -569,10 +601,37 @@ def _render_individual_results_html(section: ReportSection) -> str:
     return ''.join(parts)
 
 
+def _render_recommendations_html(section: ReportSection) -> str:
+    rows = section.data.get('rows', [])
+    if not rows:
+        return ''
+    parts = [
+        f'<section class="report-card"><h2>{_esc(section.title)}</h2>',
+        (
+            '<p>LLM-generated fixes for conversations the judge flagged with a '
+            'concrete, remediable issue. Benign failures (e.g. plain max-turns) '
+            'are not analyzed.</p>'
+        ),
+    ]
+    for r in rows:
+        datapoint = f' · datapoint <code>{_esc(str(r["datapoint_id"]))}</code>' if r.get('datapoint_id') else ''
+        flagged = ''.join(_status_badge(t, 'fail') for t in r.get('triggers', []))
+        fixes = ''.join(f'<li>{_esc(s)}</li>' for s in r.get('suggestions', []))
+        parts.append(
+            f'<div class="recommendation-entry"><h3><a href="#{r["anchor"]}">#{r["index"]}</a> '
+            f'{_esc(r["persona"])} / {_esc(r["scenario"])}{datapoint}</h3>'
+            f'<p class="rec-flagged"><strong>Triggered by:</strong> {flagged}</p>'
+            f'<ol class="rec-fixes">{fixes}</ol></div>'
+        )
+    parts.append('</section>')
+    return ''.join(parts)
+
+
 _SECTION_RENDERERS = {
     'summary': _render_summary_html,
     'overview': _render_overview_html,
     'failures_first': _render_failures_first_html,
+    'recommendations': _render_recommendations_html,
     'persona_scenario_heatmap': _render_persona_scenario_heatmap_html,
     'score_distribution': _render_score_distribution_html,
     'turn_quality_timeline': _render_turn_quality_timeline_html,
@@ -600,6 +659,7 @@ def render_report_body(
     run_date: datetime | None = None,
     executive_summary: str | None = None,
     experiment_url: str | None = None,
+    recommendations: list[SimulationRecommendation] | None = None,
 ) -> str:
     """Render simulation results as an HTML body fragment (no ``<html>`` or ``<head>`` wrapper).
 
@@ -616,11 +676,14 @@ def render_report_body(
         experiment_url: Optional absolute URL to the uploaded Orq experiment
             run; when set, renders an "Open experiment in Orq" button in the
             hero header.
+        recommendations: Pre-generated remediation suggestions
+            (``SimulationRun.recommendations``); rendered as their own
+            section when non-empty.
 
     Returns:
         An HTML fragment string (no ``<!DOCTYPE>``, ``<html>``, or ``<head>``).
     """
-    sections = build_report_sections(results, executive_summary=executive_summary)
+    sections = build_report_sections(results, executive_summary=executive_summary, recommendations=recommendations)
     summary_data = next((s.data for s in sections if s.kind == 'summary'), {})
 
     sd = summary_data
@@ -678,6 +741,7 @@ def export_html(
     run_date: datetime | None = None,
     executive_summary: str | None = None,
     experiment_url: str | None = None,
+    recommendations: list[SimulationRecommendation] | None = None,
 ) -> str:
     """Render a list of simulation results as a self-contained HTML document."""
     head = (
@@ -692,6 +756,7 @@ def export_html(
         run_date=run_date,
         executive_summary=executive_summary,
         experiment_url=experiment_url,
+        recommendations=recommendations,
     )
     return (
         '<!DOCTYPE html>\n'

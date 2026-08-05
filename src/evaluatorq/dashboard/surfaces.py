@@ -138,6 +138,7 @@ def _sim_adapter() -> SurfaceAdapter:
             run_date=run.created_at,
             executive_summary=run.executive_summary,
             experiment_url=run.experiment_url,
+            recommendations=run.recommendations,
         ),
         export=lambda run: export_html(
             run.results,
@@ -145,9 +146,12 @@ def _sim_adapter() -> SurfaceAdapter:
             run_date=run.created_at,
             executive_summary=run.executive_summary,
             experiment_url=run.experiment_url,
+            recommendations=run.recommendations,
         ),
         name=lambda run: run.run_name,
         created_at=lambda run: run.created_at,
+        # body_from_results deliberately omits recommendations: they index into
+        # the full result list, so a filtered subset would misattribute them.
         body_from_results=lambda run, filtered: render_report_body(
             filtered,
             target=run.target_kind,
@@ -159,6 +163,7 @@ def _sim_adapter() -> SurfaceAdapter:
             target=run.target_kind,
             run_date=run.created_at,
             executive_summary=run.executive_summary,
+            recommendations=run.recommendations,
         ),
         rows=_sim_rows,
     )

@@ -20,6 +20,7 @@ from evaluatorq.common.jury import (
     _agreement_rate,
     _plurality_vote,
     _sum_usage,
+    as_semaphore,
     resolve_panel,
     run_jury,
 )
@@ -222,6 +223,7 @@ async def run_pairwise(
     replacement_judges: Sequence[str] | None = None,
     min_successful_judges: int = 1,
     propagate_errors: bool = False,
+    max_concurrency: int | asyncio.Semaphore | None = None,
 ) -> PairwiseComparison:
     """Run a panel over one A-vs-B comparison and reconcile it into a verdict.
 
@@ -236,7 +238,15 @@ async def run_pairwise(
     stands in for. The winner is the plurality of the reconciled votes, or
     ``'inconclusive'`` when fewer than ``min_successful_judges`` cast a decisive
     reconciled vote.
+
+    ``max_concurrency`` caps how many judge calls run at once across the whole
+    comparison (judges x orderings x repetitions, replacements included). Pass
+    an existing ``asyncio.Semaphore`` to share one budget across several
+    comparisons. ``None`` (default) keeps the fan-out unbounded.
     """
+    # Normalized once so both orderings (and the replacement pass) draw from
+    # the same budget rather than each minting their own.
+    semaphore = as_semaphore(max_concurrency)
     resolved_panel = resolve_panel(panel)
 
     async def _ordering(models: Sequence[str], *, swapped: bool) -> tuple[dict[str, JuryVote], TokenUsage | None]:
@@ -255,6 +265,7 @@ async def run_pairwise(
             replacement_judges=None,
             min_successful_judges=1,
             propagate_errors=propagate_errors,
+            max_concurrency=semaphore,
         )
         return {v.model: v for v in deliberation.jury.votes}, deliberation.token_usage
 

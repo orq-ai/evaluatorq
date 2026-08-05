@@ -2280,6 +2280,60 @@ _RT_REPORT_CSS = """
 .rt-report .severity-low      { color: var(--sev-low); }
 """
 
+# Side-by-side sim run comparison page. The hero reuses the shared .report-hero
+# classes; this block only carries compare-specific rules, on the editorial
+# theme tokens. Kept with the other dashboard CSS blocks rather than inlined
+# per-request in sim_compare.py.
+_SIM_COMPARE_CSS = """
+/* Hero action row: trace-link button + the on-report compare control */
+.report-hero-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
+.report-hero-actions .cmp-bar { margin: 0; }
+
+/* Compare picker bar on the sim run overview and in the report hero. Controls
+   mirror the filter-rail trigger look (12.5px sans, card surface, default
+   hairline, md radius) so the bar reads as part of the same control family. */
+.cmp-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 2px 0 14px; }
+.cmp-bar-label { font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .08em; color: var(--text-faint); }
+.cmp-bar select { height: 32px; padding: 0 9px; max-width: 320px;
+  border: 1px solid var(--border-default); border-radius: var(--radius-md);
+  background: var(--surface-card); color: var(--text-body);
+  font-family: var(--font-sans); font-size: 12.5px; font-weight: 500; cursor: pointer; }
+.cmp-bar select:hover { background: var(--app-gray-50); }
+.cmp-bar select:focus-visible { outline: none; box-shadow: var(--ring); }
+.cmp-bar .btn-secondary { font-size: 12.5px; }
+.cmp-bar-vs { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
+
+.report-hero-title .cmp-vs { color: var(--orange-500); }
+.cmp-note { font-size: 12px; color: var(--text-muted); margin: 0 0 12px; }
+.cmp-warn { color: var(--orange-700); font-weight: 600; }
+.cmp-body { display: flex; flex-direction: column; gap: 24px; }
+.cmp-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(480px, 1fr)); gap: 24px; }
+.cmp-charts .panel { margin: 0; }
+/* Vega SVGs carry a viewBox, so max-width:100% + height:auto scales them DOWN to
+   fit their column and keeps aspect ratio — never upscaling past native size
+   (which made full-width charts oversized). Centered for the odd/full-width one. */
+.cmp-body svg.marks { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+/* The full-width charts (direct children of cmp-body, not in the 2-up grid) fill
+   their panel instead of sitting capped-and-centered with whitespace either side. */
+.cmp-body > .panel svg.marks { width: 100%; }
+.cmp-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.cmp-table th { font-family: var(--font-mono); font-size: 10px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .08em; color: var(--text-faint);
+  text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border-subtle); }
+.cmp-table td { padding: 7px 10px; border-bottom: 1px solid var(--border-subtle); color: var(--text-body); }
+.cmp-diff-row:hover { background: var(--app-gray-50); }
+.cmp-delta { font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
+.cmp-up { color: var(--green-600); } .cmp-down { color: var(--red-700); } .cmp-flat { color: var(--text-faint); }
+.cmp-flip { color: var(--red-700); font-weight: 600; font-size: 11px; margin-left: 6px; font-family: var(--font-mono); }
+.cmp-unmatched { margin-top: 12px; font-size: 12px; color: var(--text-muted); }
+.cmp-unmatched ul { margin: 4px 0 0; padding-left: 18px; }
+.cmp-transcript-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px; }
+.cmp-side-title { font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); margin: 0 0 8px; }
+"""
+
+
 DASHBOARD_CSS = (
     _DASHBOARD_CSS_HEAD
     + _TAB_RULES
@@ -2290,4 +2344,5 @@ DASHBOARD_CSS = (
     + _SIM_REPORT_OVERRIDES_CSS
     + _SIM_TRANSCRIPT_OVERRIDES_CSS
     + _RT_REPORT_CSS
+    + _SIM_COMPARE_CSS
 )
