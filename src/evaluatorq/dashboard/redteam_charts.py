@@ -33,6 +33,7 @@ from evaluatorq.common.reports import (
 )
 from evaluatorq.common.reports.vega import vl_bar_h, vl_heatmap, vl_stacked_bar
 from evaluatorq.redteam.contracts import OWASP_CATEGORY_NAMES, RedTeamReport, RedTeamResult
+from evaluatorq.redteam.delivery_method_registry import delivery_method_str
 from evaluatorq.redteam.reports.converters import _is_evaluated, _is_vulnerable
 
 # ---------------------------------------------------------------------------
@@ -94,7 +95,7 @@ def _dim_value(r: RedTeamResult, dim: str) -> str:
     if dim == 'delivery_method':
         if r.attack.delivery_methods:
             dm = r.attack.delivery_methods[0]
-            return getattr(dm, 'value', str(dm))
+            return delivery_method_str(dm)
         return 'unknown'
     if dim == 'turn_type':
         return r.attack.turn_type.value if r.attack.turn_type else 'unknown'

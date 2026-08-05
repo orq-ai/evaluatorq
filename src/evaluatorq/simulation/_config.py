@@ -58,9 +58,12 @@ class SimulationConfig(BaseModel):
     dataset_id: str | None = None
     experiment_id: str | None = None
     experiment_run_id: str | None = None
+    previous_run: str | None = None
 
     # --- Run behaviour -----------------------------------------------------
-    max_turns: int = 10
+    max_turns: int | None = None
+    """None means "unset": resolved in ``_simulate_core`` to a replayed run's
+    cap when replaying, else to ``DEFAULT_MAX_TURNS``."""
     model: str = DEFAULT_MODEL
     evaluator_names: list[str] | None = None
     parallelism: int = 5

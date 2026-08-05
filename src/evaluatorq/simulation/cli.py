@@ -407,6 +407,8 @@ _SIMULATE_EPILOG = _examples(
     'eq sim simulate --dataset-id ds_abc --target agent:my-agent',
     "# replay a previous orq experiment run's datapoints",
     'eq sim simulate --experiment-id ex_abc --target agent:my-agent',
+    '# replay the last saved run against a new agent version',
+    'eq sim simulate --from-run latest --target agent:my-agent-v2',
 )
 
 _RUN_EPILOG = _examples(
@@ -447,7 +449,7 @@ def simulate(
         typer.Option(
             '--input',
             '-i',
-            help='Path to datapoints JSONL file (or use --dataset-id).',
+            help='Path to datapoints JSONL file (or use --dataset-id / --from-run).',
         ),
     ] = None,
     dataset_id: Annotated[
@@ -469,6 +471,17 @@ def simulate(
         typer.Option(
             '--experiment-run-id',
             help='Specific run of --experiment-id to load. Latest run when omitted.',
+        ),
+    ] = None,
+    from_run: Annotated[
+        str | None,
+        typer.Option(
+            '--from-run',
+            help=(
+                'Replay a previous run from .evaluatorq/sim-runs/: pass its file name, '
+                'run id, path, or "latest". Re-runs the exact same personas, scenarios, '
+                'and first messages, so only the target and evaluators may differ.'
+            ),
         ),
     ] = None,
     target: Annotated[
@@ -531,9 +544,13 @@ def simulate(
         ),
     ] = DEFAULT_MODEL,
     max_turns: Annotated[
-        int,
-        typer.Option('--max-turns', min=1, help='Maximum conversation turns.'),
-    ] = 10,
+        int | None,
+        typer.Option(
+            '--max-turns',
+            min=1,
+            help="Maximum conversation turns. Defaults to 10, or to the replayed run's cap with --from-run.",
+        ),
+    ] = None,
     parallelism: Annotated[
         int,
         typer.Option('--parallelism', min=1, help='Concurrent simulations.'),
@@ -591,7 +608,13 @@ def simulate(
         ),
     ] = True,
 ) -> None:
-    """Run simulations from a pre-built datapoints file.
+    """Run simulations from a pre-built datapoints file, an Orq dataset, or a previous run.
+
+    Inputs (provide exactly one):
+
+    - --input PATH       datapoints JSONL file.
+    - --dataset-id ID    Orq dataset.
+    - --from-run REF     replay a saved run's exact cases ("latest", file name, or run id).
 
     Targets (provide exactly one):
 
@@ -624,8 +647,19 @@ def simulate(
     _configure_logging(verbose, console=log_console)
     _echo_using(sim_model)
 
-    if sum(source is not None for source in (datapoints, dataset_id, experiment_id)) != 1:
-        raise typer.BadParameter('Provide exactly one of --input, --dataset-id, or --experiment-id.')
+    sources = [
+        name
+        for name, given in (
+            ('--input', datapoints),
+            ('--dataset-id', dataset_id),
+            ('--experiment-id', experiment_id),
+            ('--from-run', from_run),
+        )
+        if given is not None
+    ]
+    if len(sources) != 1:
+        got = f' (got: {", ".join(sources)})' if sources else ''
+        raise typer.BadParameter(f'Provide exactly one of --input, --dataset-id, --experiment-id, or --from-run{got}.')
     if experiment_run_id is not None and experiment_id is None:
         raise typer.BadParameter('--experiment-run-id requires --experiment-id.')
     if datapoints is not None and not datapoints.exists():
@@ -648,6 +682,7 @@ def simulate(
                 dataset_id=dataset_id,
                 experiment_id=experiment_id,
                 experiment_run_id=experiment_run_id,
+                previous_run=from_run,
                 target=resolved_target,
                 sim_model=sim_model,
                 max_turns=max_turns,
@@ -704,9 +739,10 @@ async def _simulate_impl(
     dataset_id: str | None = None,
     experiment_id: str | None = None,
     experiment_run_id: str | None = None,
+    previous_run: str | None = None,
     target: Any,
     sim_model: str,
-    max_turns: int,
+    max_turns: int | None,
     parallelism: int,
     evaluator_names: list[str] | None,
     evaluation_name: str,
@@ -716,9 +752,9 @@ async def _simulate_impl(
     from evaluatorq.simulation.utils.dataset_export import load_datapoints_from_jsonl
 
     loaded = None
-    if dataset_id is None and experiment_id is None:
+    if dataset_id is None and experiment_id is None and previous_run is None:
         if datapoints_path is None:  # the command guarantees exactly one source
-            raise ValueError('Either datapoints_path, dataset_id, or experiment_id is required')
+            raise ValueError('One of datapoints_path, dataset_id, experiment_id, or previous_run is required')
         loaded = load_datapoints_from_jsonl(str(datapoints_path))
         if not loaded:
             raise ValueError(f'No datapoints loaded from {datapoints_path}')
@@ -728,6 +764,7 @@ async def _simulate_impl(
         dataset_id=dataset_id,
         experiment_id=experiment_id,
         experiment_run_id=experiment_run_id,
+        previous_run=previous_run,
         target=target,
         sim_model=sim_model,
         max_turns=max_turns,

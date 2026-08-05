@@ -638,18 +638,32 @@ def _build_agent_context_section(report: RedTeamReport) -> ReportSection | None:
                 'tools': [t.name for t in ctx.tools],
                 'memory_stores': [ms.key or ms.id for ms in ctx.memory_stores],
                 'knowledge_bases': [kb.name or kb.key or kb.id for kb in ctx.knowledge_bases],
+                # Config identity at scan time: results only describe what was attacked.
+                'version': ctx.version,
+                'skills': list(ctx.skills),
+                # Carried for downstream consumers; not rendered yet.
+                'agent_type': ctx.agent_type,
+                'engine': ctx.engine,
             })
     elif report.tested_agents:
-        # Minimal stubs — no detailed AgentContext available
+        # Minimal stubs — no detailed AgentContext available. Same key set as the
+        # branch above, so renderers can read every field without existence checks.
         agents.extend(
             {
                 'key': agent_key,
+                'id': None,
+                'workspace_id': None,
+                'target_kind': None,
                 'display_name': agent_key,
                 'model': '',
                 'description': '',
                 'tools': [],
                 'memory_stores': [],
                 'knowledge_bases': [],
+                'version': None,
+                'skills': [],
+                'agent_type': None,
+                'engine': None,
             }
             for agent_key in sorted(set(report.tested_agents))
         )

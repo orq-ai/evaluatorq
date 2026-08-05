@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from evaluatorq.redteam.delivery_method_registry import delivery_method_str
 from evaluatorq.simulation.metrics import TURN_METRICS
 
 if TYPE_CHECKING:
@@ -46,6 +47,15 @@ class FilterDef:
 
     apply: Callable[[Any, dict[str, list[str]]], list[Any]]
     """Return the filtered result list given the raw object + selections."""
+
+    results: Callable[[Any], list[Any]] = lambda obj: list(obj.results)
+    """Return the full, unfiltered result list.
+
+    Defaults to ``obj.results``, which both red team and simulation expose. A
+    surface whose runs hold their items under a different name (pairwise keeps
+    ``entries``) overrides this so the shared no-selection path does not have to
+    know the attribute name.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +94,7 @@ def _rt_options_from_results(results: list[Any]) -> dict[str, list[str]]:
     all_categories = sorted({r.attack.category for r in results})
     all_severities = [s for s in SEVERITY_ORDER if any(r.attack.severity.value == s for r in results)]
     all_techniques = sorted({r.attack.attack_technique.value for r in results})
-    all_delivery = sorted({getattr(dm, 'value', dm) for r in results for dm in (r.attack.delivery_methods or [])})
+    all_delivery = sorted({delivery_method_str(dm) for r in results for dm in (r.attack.delivery_methods or [])})
     all_vulnerabilities = sorted({r.attack.vulnerability for r in results if r.attack.vulnerability})
     all_agents = sorted({r.agent.key or r.agent.display_name or 'unknown' for r in results})
 
@@ -157,7 +167,7 @@ def _rt_apply(report: Any, selections: dict[str, list[str]]) -> list[Any]:
             results = [
                 r
                 for r in results
-                if any(getattr(dm, 'value', dm) in sel_delivery for dm in (r.attack.delivery_methods or []))
+                if any(delivery_method_str(dm) in sel_delivery for dm in (r.attack.delivery_methods or []))
             ]
 
     # vulnerability (multiselect) — only when options exist
@@ -357,6 +367,16 @@ FILTERS: dict[str, FilterDef] = {
         options=_sim_full_options,
         apply=_sim_apply,
     ),
+    # Pairwise ships no filter dimensions: a run has no natural facet beyond the
+    # consensus winner, so the rail would be a single control. Registered anyway
+    # because the report route requires a FilterDef, and so the export paths get
+    # the entry list through the same accessor as the other surfaces.
+    'pairwise': FilterDef(
+        dimensions=[],
+        options=lambda _run: {},
+        apply=lambda run, _selections: list(run.entries),
+        results=lambda run: list(run.entries),
+    ),
 }
 
 
@@ -382,6 +402,8 @@ def apply_or_all(report_obj: Any, surface: str, selections: dict[str, list[str]]
         Filtered (or full) result list.
     """
     filter_def = FILTERS.get(surface)
-    if filter_def is None or not selections:
+    if filter_def is None:
         return list(report_obj.results)
+    if not selections:
+        return filter_def.results(report_obj)
     return filter_def.apply(report_obj, selections)
