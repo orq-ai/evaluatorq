@@ -475,3 +475,102 @@ async def test_extend_from_traces(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_extend_from_traces_requires_conversations() -> None:
     with pytest.raises(ValueError, match="at least one"):
         await extend_from_traces([], num_datapoints=5, client=MagicMock())
+
+
+def test_normalize_message_role_case_insensitive() -> None:
+    """Producer payloads with 'User'/'ASSISTANT' roles still yield a usable conversation."""
+    messages = _messages_from_value({"messages": [{"role": "User", "content": "hi"}]})
+    assert messages == [{"role": "user", "content": "hi"}]
+    conversation = TraceConversation(trace_id="t", messages=messages)
+    assert conversation.first_user_message == "hi"
+
+
+@pytest.mark.asyncio
+async def test_fetch_survives_malformed_span_body() -> None:
+    """A 200-OK-but-invalid-JSON span body drops that trace, not the batch."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v2/traces/v3oql":
+            data = [{"trace_id": "bad"}, {"trace_id": "good"}]
+            return httpx.Response(200, json={"object": "list", "data": data, "has_more": False})
+        if request.url.path == "/v2/traces/bad/v3spans":
+            return httpx.Response(200, text="<html>not json</html>")
+        if request.url.path == "/v2/traces/good/v3spans":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "parent_id": None,
+                        "type": "Trace",
+                        "input": {"messages": [{"role": "user", "content": "hello"}]},
+                        "output": {"role": "assistant", "content": "hi"},
+                    }
+                ],
+            )
+        return httpx.Response(404, json={"message": "not found"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        conversations = await fetch_trace_conversations(limit=10, api_key="test-key", http_client=client)
+
+    assert [c.trace_id for c in conversations] == ["good"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_skips_non_list_spans_payload() -> None:
+    """An error-envelope spans payload ({"message": ...}) drops the trace, not the batch."""
+    spans_by_trace: dict[str, Any] = {
+        "wrapped": {"message": "internal"},
+        "good": [
+            {
+                "parent_id": None,
+                "type": "Trace",
+                "input": {"messages": [{"role": "user", "content": "hello"}]},
+                "output": {"role": "assistant", "content": "hi"},
+            }
+        ],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v2/traces/v3oql":
+            data = [{"trace_id": tid} for tid in spans_by_trace]
+            return httpx.Response(200, json={"object": "list", "data": data, "has_more": False})
+        for tid, spans in spans_by_trace.items():
+            if request.url.path == f"/v2/traces/{tid}/v3spans":
+                return httpx.Response(200, json=spans)
+        return httpx.Response(404, json={"message": "not found"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        conversations = await fetch_trace_conversations(limit=10, api_key="test-key", http_client=client)
+
+    assert [c.trace_id for c in conversations] == ["good"]
+
+
+@pytest.mark.asyncio
+async def test_datapoints_from_traces_inference_is_bounded_concurrent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Inference fans out concurrently (not sequentially) but never beyond the cap,
+    and the output preserves input order."""
+    import asyncio
+
+    from evaluatorq.simulation import traces as traces_mod
+
+    parsed = traces_mod._InferredPersonaScenario(persona=_make_persona(), scenario=_make_scenario())
+    state = {"active": 0, "peak": 0}
+
+    async def tracked_generate_structured(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+        state["active"] += 1
+        state["peak"] = max(state["peak"], state["active"])
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        state["active"] -= 1
+        return parsed, ""
+
+    monkeypatch.setattr(traces_mod, "generate_structured", tracked_generate_structured)
+
+    conversations = [_make_conversation(f"t{i}") for i in range(12)]
+    datapoints = await datapoints_from_traces(conversations, client=MagicMock())
+
+    assert [dp.id for dp in datapoints] == [f"trace-t{i}" for i in range(12)]
+    assert state["peak"] > 1  # actually concurrent, not sequential
+    assert state["peak"] <= traces_mod._INFER_CONCURRENCY

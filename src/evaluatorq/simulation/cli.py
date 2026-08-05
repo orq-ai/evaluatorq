@@ -1309,7 +1309,7 @@ def from_traces(
         fetch_trace_conversations,
     )
 
-    async def _impl() -> tuple[int, list[Any]]:
+    async def _impl() -> tuple[int, int, list[Any]]:
         start_date_ms: int | None = None
         if lookback_hours is not None:
             import time
@@ -1325,6 +1325,7 @@ def from_traces(
                 'No traces with a usable conversation found. Widen --lookback-hours, raise --limit, or drop --search.'
             )
         datapoints = await datapoints_from_traces(conversations, model=sim_model)
+        num_direct = len(datapoints)
         if extend > 0:
             datapoints += await extend_from_traces(
                 conversations,
@@ -1332,10 +1333,10 @@ def from_traces(
                 agent_description=agent_description,
                 model=sim_model,
             )
-        return len(conversations), datapoints
+        return len(conversations), num_direct, datapoints
 
     try:
-        num_traces, datapoints = asyncio.run(_impl())
+        num_traces, num_direct, datapoints = asyncio.run(_impl())
     except KeyboardInterrupt:
         typer.echo('^C aborted.', err=True)
         raise typer.Exit(130) from None
@@ -1354,10 +1355,11 @@ def from_traces(
         raise typer.Exit(1)
 
     _write_datapoints(datapoints, output)
-    typer.echo(
-        f'Built {len(datapoints)} datapoint(s) from {num_traces} trace(s) -> {output}',
-        err=True,
-    )
+    num_extension = len(datapoints) - num_direct
+    summary = f'Built {num_direct} datapoint(s) from {num_traces} trace(s)'
+    if num_extension:
+        summary += f' + {num_extension} distribution-matched datapoint(s) (--extend)'
+    typer.echo(f'{summary} -> {output}', err=True)
 
 
 async def _generate_impl(

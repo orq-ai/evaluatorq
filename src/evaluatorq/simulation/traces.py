@@ -40,6 +40,7 @@ _TEMPERATURE_ANALYSIS = 0.3
 _MAX_TRANSCRIPT_CHARS = 6000
 _MAX_PROFILE_CONVERSATIONS = 30
 _SPAN_FETCH_CONCURRENCY = 5
+_INFER_CONCURRENCY = 5
 # The traces list endpoint caps `limit` at 200 per page.
 _API_PAGE_LIMIT = 200
 # Defensive bound on pagination requests, independent of the API contract:
@@ -116,7 +117,9 @@ def _normalize_message(raw: Any) -> dict[str, str] | None:
         content = _content_to_text(raw.get('parts'))
     if not content:
         return None
-    return {'role': role, 'content': content}
+    # Roles come verbatim from producer payloads; normalize case so a
+    # "User"/"USER" producer doesn't make first_user_message come up empty.
+    return {'role': role.strip().lower(), 'content': content}
 
 
 def _messages_from_value(value: Any, *, default_role: str = 'user') -> list[dict[str, str]]:
@@ -270,11 +273,18 @@ async def fetch_trace_conversations(
                 try:
                     resp = await client.get(f'{host}/v2/traces/{trace_id}/v3spans', headers=headers)
                     resp.raise_for_status()
-                except httpx.HTTPError as exc:
+                    spans = resp.json()
+                except (httpx.HTTPError, json.JSONDecodeError) as exc:
+                    # Per-trace resilience: one failed or malformed response
+                    # drops that trace, never the whole batch.
                     logger.warning('Failed to fetch spans for trace %s: %s', trace_id, exc)
                     return None
-                spans = resp.json()
                 if not isinstance(spans, list):
+                    logger.warning(
+                        'Spans payload for trace %s is %s, expected a list — skipping',
+                        trace_id,
+                        type(spans).__name__,
+                    )
                     return None
                 return _conversation_from_spans(trace_id, spans)
 
@@ -283,8 +293,18 @@ async def fetch_trace_conversations(
         if owned:
             await client.aclose()
 
+    fetched = len(rows[:limit])
     usable = [c for c in conversations if c is not None and c.first_user_message]
-    logger.info('Fetched %d trace(s), %d with a usable conversation', len(rows[:limit]), len(usable))
+    if len(usable) < fetched:
+        # The only signal that traces were dropped — keep it visible at the
+        # default WARNING level, not buried at INFO.
+        logger.warning(
+            '%d of %d fetched trace(s) had no usable conversation and were dropped',
+            fetched - len(usable),
+            fetched,
+        )
+    else:
+        logger.info('Fetched %d trace(s), %d with a usable conversation', fetched, len(usable))
     return usable
 
 
@@ -339,24 +359,27 @@ async def datapoints_from_traces(
     from evaluatorq.openresponses.client import build_simulation_client
 
     llm_client, owned = build_simulation_client(client, extra_api_key=api_key)
-    try:
-        datapoints: list[SimulationDatapoint] = []
-        for conversation in conversations:
-            first_message = conversation.first_user_message
-            if not first_message:
-                continue
-            messages: list[dict[str, Any]] = [
-                {'role': 'system', 'content': _INFER_SYSTEM_PROMPT},
-                {
-                    'role': 'user',
-                    'content': (
-                        f'Conversation transcript:\n'
-                        f'{delimit(conversation.transcript(), tag="transcript")}\n\n'
-                        'Infer the persona and scenario. Return JSON with keys '
-                        "'persona' and 'scenario'."
-                    ),
-                },
-            ]
+    # Inference dominates wall-clock, so it runs bounded-concurrent like the
+    # span-fetch phase (and DatapointGenerator, which uses the same width).
+    semaphore = asyncio.Semaphore(_INFER_CONCURRENCY)
+
+    async def infer_one(conversation: TraceConversation) -> SimulationDatapoint | None:
+        first_message = conversation.first_user_message
+        if not first_message:
+            return None
+        messages: list[dict[str, Any]] = [
+            {'role': 'system', 'content': _INFER_SYSTEM_PROMPT},
+            {
+                'role': 'user',
+                'content': (
+                    f'Conversation transcript:\n'
+                    f'{delimit(conversation.transcript(), tag="transcript")}\n\n'
+                    'Infer the persona and scenario. Return JSON with keys '
+                    "'persona' and 'scenario'."
+                ),
+            },
+        ]
+        async with semaphore:
             try:
                 parsed, _raw = await generate_structured(
                     llm_client,
@@ -373,18 +396,20 @@ async def datapoints_from_traces(
                     conversation.trace_id,
                     exc,
                 )
-                continue
-            if parsed is None:
-                logger.warning(
-                    'Persona/scenario inference returned no parseable output for trace %s',
-                    conversation.trace_id,
-                )
-                continue
-            datapoint = generate_datapoint(parsed.persona, parsed.scenario, first_message).model_copy(
-                update={'id': f'trace-{conversation.trace_id}'}
+                return None
+        if parsed is None:
+            logger.warning(
+                'Persona/scenario inference returned no parseable output for trace %s',
+                conversation.trace_id,
             )
-            datapoints.append(datapoint)
-        return datapoints
+            return None
+        return generate_datapoint(parsed.persona, parsed.scenario, first_message).model_copy(
+            update={'id': f'trace-{conversation.trace_id}'}
+        )
+
+    try:
+        results = await asyncio.gather(*(infer_one(c) for c in conversations))
+        return [dp for dp in results if dp is not None]
     finally:
         if owned:
             await llm_client.close()
