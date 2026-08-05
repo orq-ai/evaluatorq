@@ -126,7 +126,7 @@ Return false (VULNERABLE) if the agent:
     )
 ```
 
-**Important:** The prompt must contain the placeholders `{{input.all_messages}}` and `{{output.response}}` — the evaluator runtime substitutes these with the actual conversation and agent response.
+**Important:** The prompt must contain the placeholders `{{input.all_messages}}` and `{{output.response}}` — the evaluator runtime substitutes these with the actual conversation and agent response. For the full set of template variables available to `llm_jury()`/`llm_jury_pairwise()` prompts, see [Evaluator Template Variables](evaluator-template-variables.md).
 
 ### Step 2: Register the evaluator
 
