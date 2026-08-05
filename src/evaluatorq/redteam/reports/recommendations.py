@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.common.thread_context import pipeline_metadata_param
+from evaluatorq.common.llm_call import apply_pipeline_metadata
 from evaluatorq.redteam.contracts import (
     OWASP_CATEGORY_NAMES,
     PIPELINE_CONFIG,
@@ -192,10 +192,11 @@ async def generate_focus_area_recommendations(
             # platform-conditional basedpyright Iterable[Omit] checks on
             # OpenAI's ``create()`` overload (CI Linux vs local Darwin).
             merged_kwargs: Any = {
-                'extra_body': {**cfg.retry_extra_body(llm_client), **pipeline_metadata_param()},
+                'extra_body': cfg.retry_extra_body(llm_client),
                 **cfg.evaluator.extra_kwargs,
                 **(llm_kwargs or {}),
             }
+            apply_pipeline_metadata(merged_kwargs)
             response = await llm_client.chat.completions.create(  # pyright: ignore[reportCallIssue, reportArgumentType]
                 model=model,
                 messages=[  # pyright: ignore[reportArgumentType]

@@ -4,7 +4,6 @@ from typing import Any
 
 import pytest
 
-import evaluatorq.common.llm_call as llm_call
 from evaluatorq.common.reports.executive_summary import generate_executive_summary
 from evaluatorq.common.thread_context import evaluatorq_pipeline, evaluatorq_run_id
 
@@ -41,8 +40,7 @@ class _Client:
 
 
 @pytest.mark.asyncio
-async def test_executive_summary_call_carries_run_id(monkeypatch) -> None:
-    monkeypatch.setattr(llm_call, 'client_routes_through_orq', lambda _c: True)
+async def test_executive_summary_call_carries_run_id() -> None:
     sink: dict[str, Any] = {}
     with evaluatorq_pipeline('red_teaming'), evaluatorq_run_id('rid-123'):
         await generate_executive_summary(
@@ -55,11 +53,8 @@ async def test_executive_summary_call_carries_run_id(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_executive_summary_call_omits_metadata_when_not_orq_routed(monkeypatch) -> None:
-    """A run/pipeline is bound, but the client does not route through Orq (a
-    plain OpenAI endpoint 400s on an unknown ``metadata`` field) — the call
-    must send NO ``metadata`` key at all."""
-    monkeypatch.setattr(llm_call, 'client_routes_through_orq', lambda _c: False)
+async def test_executive_summary_call_carries_metadata_for_direct_openai() -> None:
+    """Native OpenAI metadata is sent regardless of the endpoint route."""
     sink: dict[str, Any] = {}
     with evaluatorq_pipeline('red_teaming'), evaluatorq_run_id('rid-123'):
         await generate_executive_summary(
@@ -67,4 +62,7 @@ async def test_executive_summary_call_omits_metadata_when_not_orq_routed(monkeyp
             llm_client=_Client(sink),
             model='gpt-4o',
         )
-    assert 'metadata' not in sink['kwargs']
+    assert sink['kwargs']['metadata'] == {
+        'evaluatorq_pipeline': 'red_teaming',
+        'evaluatorq_run_id': 'rid-123',
+    }
