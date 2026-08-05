@@ -248,9 +248,9 @@ def _maybe_generate_recommendations(results: list[Any], model: str) -> list[Any]
     try:
         recs = asyncio.run(_gen())
     except Exception as exc:
-        typer.echo(f"Warning: remediation suggestion generation failed ({exc}); continuing without.", err=True)
+        typer.echo(f'Warning: remediation suggestion generation failed ({exc}); continuing without.', err=True)
         return None
-    typer.echo(f"Generated remediation suggestions for {len(recs)} conversation(s).", err=True)
+    typer.echo(f'Generated remediation suggestions for {len(recs)} conversation(s).', err=True)
     return recs or None
 
 
@@ -580,11 +580,11 @@ def simulate(
     recommendations: Annotated[  # noqa: FBT002
         bool,
         typer.Option(
-            "--recommendations",
+            '--recommendations',
             help=(
-                "Generate LLM remediation suggestions for failures with a "
-                "concrete cause (broken rules/criteria, poor quality metrics). "
-                "Extra LLM cost; uses --sim-model."
+                'Generate LLM remediation suggestions for failures with a '
+                'concrete cause (broken rules/criteria, poor quality metrics). '
+                'Extra LLM cost; uses --sim-model.'
             ),
         ),
     ] = False,
@@ -1310,9 +1310,9 @@ def _load_results_for_export(input_path: Path) -> tuple[list[Any], list[Any]]:
     from evaluatorq.simulation.types import SimulationResult, SimulationRun
     from evaluatorq.simulation.utils.dataset_export import parse_jsonl
 
-    content = input_path.read_text(encoding="utf-8")
+    content = input_path.read_text(encoding='utf-8')
     stripped = content.lstrip()
-    if stripped.startswith("{"):
+    if stripped.startswith('{'):
         try:
             run = SimulationRun.model_validate_json(content)
         except Exception:
@@ -1340,28 +1340,28 @@ def export(
     fmt: Annotated[
         str,
         typer.Option(
-            "--format",
-            help="Export format: openresponses (payload JSON), md (Markdown report), html (HTML report).",
+            '--format',
+            help='Export format: openresponses (payload JSON), md (Markdown report), html (HTML report).',
         ),
-    ] = "openresponses",
+    ] = 'openresponses',
     recommendations: Annotated[  # noqa: FBT002
         bool,
         typer.Option(
-            "--recommendations",
+            '--recommendations',
             help=(
-                "For md/html: generate LLM remediation suggestions at export time when the "
-                "input has none stored. Extra LLM cost; uses --sim-model."
+                'For md/html: generate LLM remediation suggestions at export time when the '
+                'input has none stored. Extra LLM cost; uses --sim-model.'
             ),
         ),
     ] = False,
     sim_model: Annotated[
         str,
-        typer.Option("--sim-model", help="Model for --recommendations generation."),
+        typer.Option('--sim-model', help='Model for --recommendations generation.'),
     ] = DEFAULT_MODEL,
     target: Annotated[
         str,
-        typer.Option("--target-label", help="Target name shown in md/html report headers."),
-    ] = "agent",
+        typer.Option('--target-label', help='Target name shown in md/html report headers.'),
+    ] = 'agent',
 ) -> None:
     """Export simulation results: OpenResponses payload JSON, or an HTML/Markdown report.
 
@@ -1379,25 +1379,25 @@ def export(
     except Exception as exc:
         raise typer.BadParameter(f'Failed to read {input_path}: {exc}') from exc
 
-    if fmt == "openresponses":
+    if fmt == 'openresponses':
         from evaluatorq.simulation.convert import to_open_responses
 
         payloads = [to_open_responses(result) for result in results]
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(
-            json.dumps([p if isinstance(p, dict) else p.model_dump(mode="json") for p in payloads], indent=2),
-            encoding="utf-8",
+            json.dumps([p if isinstance(p, dict) else p.model_dump(mode='json') for p in payloads], indent=2),
+            encoding='utf-8',
         )
-        typer.echo(f"Exported {len(payloads)} result(s) to {output}")
+        typer.echo(f'Exported {len(payloads)} result(s) to {output}')
         return
 
     recs = stored_recs or None
     if recommendations and not recs:
         recs = _maybe_generate_recommendations(results, sim_model)
     elif recs:
-        typer.echo(f"Using {len(recs)} stored remediation suggestion(s) from the input run.", err=True)
+        typer.echo(f'Using {len(recs)} stored remediation suggestion(s) from the input run.', err=True)
 
-    if fmt == "md":
+    if fmt == 'md':
         from evaluatorq.simulation.reports import export_markdown
 
         rendered = export_markdown(results, target=target, recommendations=recs)

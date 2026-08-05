@@ -84,9 +84,7 @@ def find_triggers(result: SimulationResult) -> list[tuple[str, str]]:
         avg = _avg_metric(result, field_name)
         if avg is not None and is_bad(avg):
             plural = 's' if result.turn_count != 1 else ''
-            triggers.append(
-                (trigger, f'{field_name} averaged {avg:.2f} across {result.turn_count} turn{plural}')
-            )
+            triggers.append((trigger, f'{field_name} averaged {avg:.2f} across {result.turn_count} turn{plural}'))
     return triggers
 
 
@@ -145,15 +143,9 @@ async def generate_recommendations(
         One ``SimulationRecommendation`` per analyzed result whose call
         succeeded; per-result LLM failures are logged and skipped.
     """
-    triggered = [
-        (idx, result, triggers)
-        for idx, result in enumerate(results)
-        if (triggers := find_triggers(result))
-    ]
+    triggered = [(idx, result, triggers) for idx, result in enumerate(results) if (triggers := find_triggers(result))]
     if len(triggered) > max_results:
-        logger.warning(
-            f'{len(triggered)} results have remediable failures; analyzing only the first {max_results}'
-        )
+        logger.warning(f'{len(triggered)} results have remediable failures; analyzing only the first {max_results}')
         triggered = triggered[:max_results]
 
     recommendations: list[SimulationRecommendation] = []
@@ -179,14 +171,16 @@ async def generate_recommendations(
                 continue
 
             datapoint_id = result.metadata.get('datapoint_id')
-            recommendations.append(SimulationRecommendation(
-                result_index=idx,
-                datapoint_id=str(datapoint_id) if datapoint_id else None,
-                persona=_persona_name(result),
-                scenario=_scenario_name(result),
-                triggers=[f'{trigger}: {evidence}' for trigger, evidence in triggers],
-                suggestions=suggestions,
-            ))
+            recommendations.append(
+                SimulationRecommendation(
+                    result_index=idx,
+                    datapoint_id=str(datapoint_id) if datapoint_id else None,
+                    persona=_persona_name(result),
+                    scenario=_scenario_name(result),
+                    triggers=[f'{trigger}: {evidence}' for trigger, evidence in triggers],
+                    suggestions=suggestions,
+                )
+            )
         except Exception:
             logger.warning(f'Failed to generate recommendations for result #{idx + 1}', exc_info=True)
             continue

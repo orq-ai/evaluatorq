@@ -683,9 +683,7 @@ def render_report_body(
     Returns:
         An HTML fragment string (no ``<!DOCTYPE>``, ``<html>``, or ``<head>``).
     """
-    sections = build_report_sections(
-        results, executive_summary=executive_summary, recommendations=recommendations
-    )
+    sections = build_report_sections(results, executive_summary=executive_summary, recommendations=recommendations)
     summary_data = next((s.data for s in sections if s.kind == 'summary'), {})
 
     sd = summary_data

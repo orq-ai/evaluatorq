@@ -491,9 +491,7 @@ def export_markdown(
             (``SimulationRun.recommendations``); rendered as their own
             section when non-empty.
     """
-    sections = build_report_sections(
-        results, executive_summary=executive_summary, recommendations=recommendations
-    )
+    sections = build_report_sections(results, executive_summary=executive_summary, recommendations=recommendations)
     summary_data = next(
         (s.data for s in sections if s.kind == 'summary'),
         {},
