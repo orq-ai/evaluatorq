@@ -123,9 +123,12 @@ class ORQAgentTarget(AgentTarget):
         if not provided, one is generated. The pipeline reads this attribute
         after construction to track entities for cleanup.
         """
-        if memory_entity_id is None:
-            memory_entity_id = f'red-team-{uuid.uuid4().hex[:12]}'
+        # Track whether the id was explicitly seeded (constructor or later
+        # assignment) vs auto-minted: a seeded id must survive ``new()`` while
+        # minted ones stay per-clone for parallel-job isolation.
         super().__init__(memory_entity_id=memory_entity_id)
+        if self.memory_entity_id is None:
+            self._memory_entity_id = f'red-team-{uuid.uuid4().hex[:12]}'
         timeout_ms = timeout_ms or PIPELINE_CONFIG.target_agent_timeout_ms
         self.agent_key = agent_key
         self.orq_client = orq_client
@@ -133,6 +136,19 @@ class ORQAgentTarget(AgentTarget):
         self._timeout_ms = timeout_ms
         self._task_id: str | None = None
         self._cached_context: AgentContext | None = None
+
+    @property
+    def memory_entity_id(self) -> str | None:
+        return self._memory_entity_id
+
+    @memory_entity_id.setter
+    def memory_entity_id(self, value: str | None) -> None:
+        # Assignment is how callers seed an explicit entity id (the sim layer's
+        # --memory-entity path); mark it so ``new()`` preserves it. The
+        # constructor's auto-mint writes ``_memory_entity_id`` directly and
+        # stays unseeded.
+        self._memory_entity_id = value
+        self._memory_entity_seeded = value is not None
 
     async def respond(self, messages: list[Message]) -> AgentResponse:
         """Send the last user message to the ORQ agents endpoint, threaded via ``task_id``.
@@ -364,13 +380,16 @@ class ORQAgentTarget(AgentTarget):
     def new(self) -> ORQAgentTarget:
         """Return a fresh target instance with isolated state.
 
-        Each call gets its own ``memory_entity_id`` (auto-generated in
-        ``__init__``) and own ``_task_id`` so parallel jobs never share
-        server-side memory or conversation state.
+        An explicitly seeded ``memory_entity_id`` (constructor arg or later
+        assignment) is preserved so clones keep pointing at the seeded entity;
+        an auto-minted id is NOT carried over, so unseeded parallel jobs get
+        their own ``memory_entity_id`` (minted in ``__init__``) and never share
+        server-side memory. ``_task_id`` starts fresh either way.
         """
         return ORQAgentTarget(
             agent_key=self.agent_key,
             orq_client=self.orq_client,
+            memory_entity_id=self.memory_entity_id if self._memory_entity_seeded else None,
             model=self.model,
             timeout_ms=self._timeout_ms,
         )

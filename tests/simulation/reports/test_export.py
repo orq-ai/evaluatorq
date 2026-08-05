@@ -122,8 +122,12 @@ def test_html_renders_without_vl_convert(sample_results, monkeypatch):
 def test_html_renders_new_charts(sample_results):
     html = export_html(sample_results, target='t')
     assert '<svg' in html  # criteria + persona/scenario heatmaps rendered as SVG via Vega-Lite
+    # Two conversations: the distribution section states the scores directly
+    # instead of drawing a two-value histogram.
     assert 'Goal Score Distribution' in html
-    assert 'Turn Quality Timeline' in html
+    assert 'goal score(s)' in html
+    # Single-turn runs: a one-point timeline reads as broken, so it is omitted.
+    assert 'Turn Quality Timeline' not in html
     assert 'Failures' in html
     # achieved/failed rendered as semantic badges, not plain text
     assert 'status-badge--fail' in html
@@ -138,6 +142,28 @@ def test_html_failures_table_has_criteria_dots_but_no_transcript_anchor(sample_r
     assert 'crit-dot' in failures
     assert 'href="#conv-' not in failures
     assert 'class="fail-why"' in failures
+
+
+def test_html_charts_render_with_enough_data():
+    """With 3+ conversations and 2+ turns the real charts come back."""
+    results = [
+        _make_result(
+            goal_achieved=(i != 1),
+            score=[0.9, 0.2, 0.7][i],
+            persona=f'P{i}',
+            scenario=f'S{i}',
+            turn_count=2,
+            turn_metrics=[
+                TurnMetrics(turn_number=1, token_usage=TokenUsage(), judge_reason='ok', response_quality=0.8),
+                TurnMetrics(turn_number=2, token_usage=TokenUsage(), judge_reason='ok', response_quality=0.6),
+            ],
+        )
+        for i in range(3)
+    ]
+    html = export_html(results, target='t')
+    assert 'Turn Quality Timeline' in html
+    assert 'Goal Score Distribution' in html
+    assert 'goal score(s)' not in html  # real histogram, not the fallback note
 
 
 def test_html_persona_rows_show_success_rate_not_sparkline(sample_results):
@@ -479,7 +505,10 @@ def test_overview_renders_zero_trait_and_fallback_without_metadata():
     })
     html = export_html([with_zero], target='Agent')
     md = export_markdown([with_zero], target='Agent')
-    assert 'patience 0.0' in html and 'patience 0.0' in md
+    # HTML now renders traits as a table; 0.0 must survive the truthiness guard.
+    assert '>Patience</td>' in html or '>Patience<' in html
+    assert '0.0' in html
+    assert 'patience 0.0' in md
 
     # older result: no traits/goal -> name-only, no empty "Goal:" label, no stray separators
     legacy = _result({'persona': 'Old', 'scenario': 'Leg'})
