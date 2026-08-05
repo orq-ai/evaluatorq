@@ -83,11 +83,23 @@ def thread_body_param() -> dict[str, dict[str, str]]:
     return {'thread': {'id': tid}} if tid else {}
 
 
+def pipeline_metadata() -> dict[str, str]:
+    """Return ``{'evaluatorq_pipeline': ...}`` for the active run, or ``{}``.
+
+    The value for the documented ``metadata`` request property — pass it straight
+    to the native ``metadata=`` kwarg on ``chat.completions.create`` /
+    ``responses.create`` so the invocation's Orq trace is filterable by run type.
+    """
+    label = _pipeline.get()
+    return {'evaluatorq_pipeline': label} if label else {}
+
+
 def pipeline_metadata_param() -> dict[str, dict[str, str]]:
     """Return ``{'metadata': {'evaluatorq_pipeline': ...}}`` for the active run, or ``{}``.
 
-    Ready to splat into an Orq request (``metadata=`` kwarg on the agents SDK, or
-    merged into ``extra_body`` on the Responses client).
+    ``extra_body``-ready form of :func:`pipeline_metadata` for call sites that
+    already build an ``extra_body`` dict (the SDK merges it into the request body,
+    yielding the same top-level ``metadata`` property).
     """
     label = _pipeline.get()
     return {'metadata': {'evaluatorq_pipeline': label}} if label else {}
@@ -133,6 +145,7 @@ __all__ = [
     'conversation_thread',
     'current_thread_id',
     'evaluatorq_pipeline',
+    'pipeline_metadata',
     'pipeline_metadata_param',
     'thread_body_param',
 ]

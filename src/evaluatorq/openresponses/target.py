@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from typing_extensions import Self
 
+from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.retry import with_retry
 from evaluatorq.common.thread_context import pipeline_metadata_param, thread_body_param
 from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, LLMCallConfig, Message
@@ -136,16 +137,18 @@ class OrqResponsesTarget(AgentTarget):
                 kwargs['tools'] = self.tools
             if self.instructions is not None:
                 kwargs['instructions'] = self.instructions
-            # Group multi-turn calls in Orq observability under one thread, and
-            # tag the request with the evaluatorq pipeline so its trace is
-            # attributable to the run type. Both ride in the request body.
-            body_extra = {**thread_body_param(), **pipeline_metadata_param()}
-            # Agents with memory tools reject the call outright without a memory
-            # scope ("memory_entity_id_required"), so forward ours when set.
-            if self.memory_entity_id:
-                body_extra['memory'] = {'entity_id': self.memory_entity_id}
-            if body_extra:
-                kwargs['extra_body'] = {**kwargs.get('extra_body', {}), **body_extra}
+            # These extensions are Orq-router-only, so apply them only when the
+            # client actually routes through Orq — matching the gate on the other
+            # invocation paths. All ride in the request body (extra_body): the
+            # pipeline label as `metadata` (tags the trace by run type), `thread`
+            # (multi-turn grouping), and `memory` (scope for memory-tool agents,
+            # else "memory_entity_id_required").
+            if client_routes_through_orq(self._client):
+                body_extra = {**thread_body_param(), **pipeline_metadata_param()}
+                if self.memory_entity_id:
+                    body_extra['memory'] = {'entity_id': self.memory_entity_id}
+                if body_extra:
+                    kwargs['extra_body'] = {**kwargs.get('extra_body', {}), **body_extra}
 
             async with with_llm_span(
                 model=self.config.model,

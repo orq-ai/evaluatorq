@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
+from evaluatorq.common.llm_client import client_routes_through_orq
+from evaluatorq.common.thread_context import pipeline_metadata, thread_body_param
 from evaluatorq.common.tracing import record_llm_response
 from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.backends._errors import extract_provider_error_code, extract_status_code
@@ -103,17 +105,30 @@ class OpenAIModelTarget(AgentTarget):
                 *[m.to_chat_completion() for m in user_visible],
             ],
         )
+        # Tag the target invocation so its Orq trace is attributable to the run:
+        # the pipeline surface via the documented `metadata` property, and the run
+        # thread via the router-only `thread` extra_body field. Only when routing
+        # through Orq — a plain OpenAI endpoint has no such trace and rejects `thread`.
+        create_kwargs: dict[str, Any] = {
+            'model': self.model,
+            'messages': completion_messages,
+            'max_tokens': self.max_tokens,
+        }
+        if client_routes_through_orq(self.client):
+            pipeline_md = pipeline_metadata()
+            if pipeline_md:
+                create_kwargs['metadata'] = pipeline_md
+            thread = thread_body_param()
+            if thread:
+                create_kwargs['extra_body'] = thread
+
         async with with_llm_span(
             model=self.model,
             input_messages=completion_messages,
             attributes={'orq.redteam.llm_purpose': 'target'},
         ) as span:
             response = await asyncio.wait_for(
-                self.client.chat.completions.create(
-                    model=self.model,
-                    messages=completion_messages,
-                    max_tokens=self.max_tokens,
-                ),
+                self.client.chat.completions.create(**create_kwargs),
                 timeout=self.timeout_ms / 1000.0,
             )
             msg = response.choices[0].message
