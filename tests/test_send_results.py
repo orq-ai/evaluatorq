@@ -20,7 +20,7 @@ from evaluatorq.types import (
 )
 
 
-@pytest.fixture()
+@pytest.fixture
 def build_results():
     """Factory fixture that creates a single DataPointResult with given score and error."""
 
@@ -564,3 +564,133 @@ class TestSendResultsBaseUrl:
             end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
         )
         assert captured["url"] == "https://my.staging.orq.ai/v2/spreadsheets/evaluations/receive"
+
+
+class TestUploadDiagnostics:
+    """RES-823: the full OrqResponse is returned and upload gaps warn loudly."""
+
+    @staticmethod
+    def _fake_post(rows_created: int, url: str | None = "https://my.orq.ai/e/abc"):
+        async def fake_post(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> httpx.Response:
+            request = httpx.Request("POST", "https://my.orq.ai/v2/spreadsheets/evaluations/receive")
+            body = {
+                "sheet_id": "s1",
+                "manifest_id": "m1",
+                "experiment_name": "eval",
+                "rows_created": rows_created,
+            }
+            if url is not None:
+                body["experiment_url"] = url
+            return httpx.Response(200, request=request, json=body)
+
+        return fake_post
+
+    @staticmethod
+    def _capture_loguru() -> tuple[list[str], int]:
+        from loguru import logger as _logger
+
+        lines: list[str] = []
+        handler_id = _logger.add(
+            lambda message: lines.append(str(message)), level="WARNING", format="{message}"
+        )
+        return lines, handler_id
+
+    @pytest.mark.asyncio
+    async def test_success_returns_full_orq_response(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        build_results: Callable[..., list[DataPointResult]],
+    ):
+        monkeypatch.setattr(httpx.AsyncClient, "post", self._fake_post(rows_created=1))
+        response = await send_results_to_orq(
+            api_key="key",
+            evaluation_name="eval",
+            evaluation_description=None,
+            dataset_id=None,
+            results=build_results(0.5),
+            start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+        )
+        assert response is not None
+        assert response.rows_created == 1
+        assert response.experiment_url == "https://my.orq.ai/e/abc"
+        assert response.experiment_name == "eval"
+        assert response.sheet_id == "s1"
+
+    @pytest.mark.asyncio
+    async def test_gap_between_uploaded_and_rows_created_warns_once(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        build_results: Callable[..., list[DataPointResult]],
+    ):
+        from loguru import logger as _logger
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", self._fake_post(rows_created=0))
+        lines, handler_id = self._capture_loguru()
+        try:
+            await send_results_to_orq(
+                api_key="key",
+                evaluation_name="eval",
+                evaluation_description=None,
+                dataset_id=None,
+                results=build_results(0.5),  # 1 uploaded, 0 registered
+                start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+            )
+        finally:
+            _logger.remove(handler_id)
+        gap_warnings = [ln for ln in lines if "registered 0 of 1 uploaded" in ln]
+        assert len(gap_warnings) == 1
+        assert "https://my.orq.ai/e/abc" in gap_warnings[0]
+
+    @pytest.mark.asyncio
+    async def test_no_warning_when_all_rows_created(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        build_results: Callable[..., list[DataPointResult]],
+    ):
+        from loguru import logger as _logger
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", self._fake_post(rows_created=1))
+        lines, handler_id = self._capture_loguru()
+        try:
+            await send_results_to_orq(
+                api_key="key",
+                evaluation_name="eval",
+                evaluation_description=None,
+                dataset_id=None,
+                results=build_results(0.5),
+                start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+            )
+        finally:
+            _logger.remove(handler_id)
+        assert not [ln for ln in lines if "registered" in ln]
+
+    @pytest.mark.asyncio
+    async def test_gap_warning_without_url_uses_placeholder(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        build_results: Callable[..., list[DataPointResult]],
+    ):
+        from loguru import logger as _logger
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", self._fake_post(rows_created=0, url=None))
+        lines, handler_id = self._capture_loguru()
+        try:
+            response = await send_results_to_orq(
+                api_key="key",
+                evaluation_name="eval",
+                evaluation_description=None,
+                dataset_id=None,
+                results=build_results(0.5),
+                start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+            )
+        finally:
+            _logger.remove(handler_id)
+        assert response is not None
+        assert response.experiment_url is None
+        gap_warnings = [ln for ln in lines if "registered 0 of 1 uploaded" in ln]
+        assert len(gap_warnings) == 1
+        assert "<no url returned>" in gap_warnings[0]

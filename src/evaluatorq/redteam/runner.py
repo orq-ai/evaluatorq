@@ -190,8 +190,10 @@ async def _send_cleaned_results(
     empty job results so the experiment shows one clean row per datapoint
     without duplication.
 
-    If *report* is provided, ``report.experiment_url`` is set to the URL
-    returned by the platform on a successful upload.
+    If *report* is provided, the upload diagnostics are persisted on it:
+    ``experiment_url``, ``uploaded_count`` (cleaned rows sent), and
+    ``rows_created`` (rows the platform actually registered) — so a local
+    JSON is enough to diagnose an Explorer sample-count mismatch.
 
     ``inference_client`` is the client used for inference; its Orq host is
     resolved once and forwarded so results upload to the same server inference
@@ -217,15 +219,32 @@ async def _send_cleaned_results(
         cleaned.append(clean)
 
     if not cleaned:
-        logger.debug('No cleaned results to send to Orq platform')
+        if report is not None:
+            report.uploaded_count = 0
+        if results:
+            # The worst-case "0 samples in Explorer" mismatch: rows existed
+            # locally but every job output was None, so nothing is uploaded
+            # and no experiment will exist. Surface it loudly, not at DEBUG.
+            logger.warning(
+                f'All {len(results)} result row(s) had no real output — nothing uploaded '
+                f'to Orq; the experiment will not exist in the Explorer.'
+            )
+        else:
+            logger.debug('No cleaned results to send to Orq platform')
         return
 
-    logger.debug(f'Sending {len(cleaned)} cleaned results to Orq platform (stripped from {len(results)} raw)')
+    logger.info(
+        f'Uploading {len(cleaned)} cleaned result(s) to Orq platform ({len(results)} raw report rows)'
+    )
+    if report is not None:
+        # Recorded before the attempt so even an exception path leaves the
+        # attempt count in the persisted JSON.
+        report.uploaded_count = len(cleaned)
     # Resolve the upload host before the try, so a resolution failure surfaces on
     # its own rather than being caught below and mislabelled as an upload failure.
     upload_base_url = resolve_results_base_url(inference_client)
     try:
-        experiment_url = await send_results_to_orq(
+        response = await send_results_to_orq(
             api_key=api_key,
             evaluation_name=name,
             evaluation_description=description,
@@ -235,8 +254,17 @@ async def _send_cleaned_results(
             end_time=datetime.now(tz=timezone.utc),
             base_url=upload_base_url,
         )
-        if report is not None and experiment_url:
-            report.experiment_url = experiment_url
+        if response is None:
+            return
+        # send_results_to_orq already warns when rows_created < uploaded.
+        logger.info(
+            f'Orq registered {response.rows_created}/{len(cleaned)} uploaded row(s)'
+            + (f' — {response.experiment_url}' if response.experiment_url else '')
+        )
+        if report is not None:
+            report.rows_created = response.rows_created
+            if response.experiment_url:
+                report.experiment_url = response.experiment_url
     except Exception as e:
         logger.error(f'Failed to upload {len(cleaned)} results to Orq platform: {e}. Results have been saved locally.')
 

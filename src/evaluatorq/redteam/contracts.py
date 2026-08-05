@@ -1584,6 +1584,13 @@ class RedTeamReport(BaseModel):
         'shared by every attack\'s thread_id; powers the dashboard "View all run traces" '
         'deep-link. None for older reports.',
     )
+    uploaded_count: int | None = Field(
+        default=None, description='Cleaned result rows sent to the Orq platform'
+    )
+    rows_created: int | None = Field(
+        default=None,
+        description='Rows the Orq platform actually registered; a value below uploaded_count explains a smaller Explorer sample count',
+    )
 
     @field_validator('pipeline', mode='before')
     @classmethod

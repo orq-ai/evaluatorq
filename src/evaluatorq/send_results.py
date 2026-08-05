@@ -53,7 +53,7 @@ async def send_results_to_orq(
     path: str | None = None,
     base_url: str | None = None,
     raise_on_error: bool = False,
-) -> str | None:
+) -> OrqResponse | None:
     """
     Send evaluation results to Orq platform.
 
@@ -74,8 +74,10 @@ async def send_results_to_orq(
         raise_on_error: Raise upload errors instead of treating upload as best-effort.
 
     Returns:
-        The experiment URL from the Orq platform on success, or ``None`` if the
-        upload failed or the platform did not return a URL.
+        The full ``OrqResponse`` (``experiment_url``, ``rows_created``,
+        ``experiment_name``, ``sheet_id``, ...) on success, or ``None`` if the
+        upload failed. Callers that only need the URL read
+        ``response.experiment_url``.
     """
     try:
         # Calculate duration in milliseconds
@@ -152,10 +154,21 @@ async def send_results_to_orq(
                 orq_result.experiment_name,
                 orq_result.rows_created,
             )
+            if orq_result.rows_created < len(results):
+                # The "missing samples" footgun: the platform registered fewer
+                # rows than we uploaded. One loud line with both numbers + URL.
+                logger.warning(
+                    "Orq registered {} of {} uploaded rows for experiment {!r} — "
+                    "some results will be missing from the Explorer. URL: {}",
+                    orq_result.rows_created,
+                    len(results),
+                    orq_result.experiment_name,
+                    orq_result.experiment_url or "<no url returned>",
+                )
             if orq_result.experiment_url:
                 logger.info('View your evaluation at: {}', orq_result.experiment_url)
 
-            return orq_result.experiment_url
+            return orq_result
 
     except SendResultsError:
         raise

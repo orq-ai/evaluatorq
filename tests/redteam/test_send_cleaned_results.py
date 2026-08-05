@@ -12,10 +12,21 @@ import pytest
 
 from evaluatorq.redteam.contracts import Pipeline, RedTeamReport, ReportSummary
 from evaluatorq.redteam.runner import _send_cleaned_results
+from evaluatorq.send_results import OrqResponse
 from evaluatorq.types import DataPoint, DataPointResult, JobResult
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
+
+
+def _make_response(rows_created: int = 1, url: str | None = "https://orq.example/experiments/abc") -> OrqResponse:
+    return OrqResponse(
+        sheet_id="sheet-1",
+        manifest_id="manifest-1",
+        experiment_name="n",
+        rows_created=rows_created,
+        experiment_url=url,
+    )
 
 
 def _make_report() -> RedTeamReport:
@@ -49,7 +60,7 @@ async def test_sets_experiment_url_on_success() -> None:
         patch(
             "evaluatorq.redteam.runner.send_results_to_orq",
             new_callable=AsyncMock,
-            return_value="https://orq.example/experiments/abc",
+            return_value=_make_response(),
         ),
     ):
         await _send_cleaned_results(
@@ -162,3 +173,213 @@ async def test_base_url_falls_back_to_env_without_client() -> None:
         )
     assert spy.await_args is not None
     assert spy.await_args.kwargs["base_url"] == "https://my.staging.orq.ai"
+
+
+@pytest.mark.asyncio
+async def test_persists_upload_diagnostics_on_report() -> None:
+    """uploaded_count + rows_created land on the report alongside the URL, so a
+    local JSON is enough to diagnose an Explorer sample-count mismatch."""
+    report = _make_report()
+    with (
+        patch.dict(os.environ, {"ORQ_API_KEY": "test"}),
+        patch(
+            "evaluatorq.redteam.runner.send_results_to_orq",
+            new_callable=AsyncMock,
+            return_value=_make_response(rows_created=1),
+        ),
+    ):
+        await _send_cleaned_results(
+            results=[_make_result()],
+            name="n",
+            description="d",
+            start_time=datetime.now(tz=timezone.utc),
+            report=report,
+        )
+    assert report.uploaded_count == 1
+    assert report.rows_created == 1
+    assert report.experiment_url == "https://orq.example/experiments/abc"
+
+
+@pytest.mark.asyncio
+async def test_diagnostics_none_when_upload_returns_none() -> None:
+    """A failed upload leaves rows_created unset but records the attempt count."""
+    report = _make_report()
+    with (
+        patch.dict(os.environ, {"ORQ_API_KEY": "test"}),
+        patch(
+            "evaluatorq.redteam.runner.send_results_to_orq",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        await _send_cleaned_results(
+            results=[_make_result()],
+            name="n",
+            description="d",
+            start_time=datetime.now(tz=timezone.utc),
+            report=report,
+        )
+    assert report.uploaded_count == 1
+    assert report.rows_created is None
+    assert report.experiment_url is None
+
+
+@pytest.mark.asyncio
+async def test_url_persisted_even_when_rows_created_gap() -> None:
+    """A rows_created < uploaded gap still persists all three diagnostics."""
+    report = _make_report()
+    results = [_make_result(), _make_result()]
+    with (
+        patch.dict(os.environ, {"ORQ_API_KEY": "test"}),
+        patch(
+            "evaluatorq.redteam.runner.send_results_to_orq",
+            new_callable=AsyncMock,
+            return_value=_make_response(rows_created=1),
+        ),
+    ):
+        await _send_cleaned_results(
+            results=results,
+            name="n",
+            description="d",
+            start_time=datetime.now(tz=timezone.utc),
+            report=report,
+        )
+    assert report.uploaded_count == 2
+    assert report.rows_created == 1
+    assert report.experiment_url == "https://orq.example/experiments/abc"
+
+
+@pytest.mark.asyncio
+async def test_report_json_roundtrips_diagnostics() -> None:
+    """The new optional fields serialize into the run JSON and old JSONs
+    without them still validate."""
+    report = _make_report()
+    report.uploaded_count = 17
+    report.rows_created = 8
+    data = report.model_dump(mode="json")
+    assert data["uploaded_count"] == 17
+    assert data["rows_created"] == 8
+    # backward compat: a legacy payload without the new keys still validates
+    data.pop("uploaded_count")
+    data.pop("rows_created")
+    legacy = RedTeamReport.model_validate(data)
+    assert legacy.uploaded_count is None
+    assert legacy.rows_created is None
+
+
+@pytest.mark.asyncio
+async def test_all_rows_stripped_warns_and_records_zero_uploaded() -> None:
+    """Raw rows that all strip to nothing must warn loudly (not DEBUG) and
+    persist uploaded_count=0 — the worst-case '0 samples in Explorer' path."""
+    from loguru import logger as _logger
+
+    report = _make_report()
+    stripped = DataPointResult(
+        data_point=DataPoint(inputs={"x": 1}),
+        job_results=[JobResult(job_name="j", output=None)],  # pyright: ignore[reportArgumentType]
+    )
+    lines: list[str] = []
+    handler_id = _logger.add(lambda m: lines.append(str(m)), level="WARNING", format="{message}")
+    try:
+        with (
+            patch.dict(os.environ, {"ORQ_API_KEY": "test"}),
+            patch(
+                "evaluatorq.redteam.runner.send_results_to_orq",
+                new_callable=AsyncMock,
+            ) as mock_send,
+        ):
+            await _send_cleaned_results(
+                results=[stripped],
+                name="n",
+                description="d",
+                start_time=datetime.now(tz=timezone.utc),
+                report=report,
+            )
+    finally:
+        _logger.remove(handler_id)
+    mock_send.assert_not_awaited()
+    assert report.uploaded_count == 0
+    assert report.rows_created is None
+    warnings = [ln for ln in lines if "nothing uploaded" in ln]
+    assert len(warnings) == 1
+    assert "1 result row" in warnings[0]
+
+
+@pytest.mark.asyncio
+async def test_empty_results_stays_quiet() -> None:
+    """No raw rows at all is not a mismatch — no warning, uploaded_count=0."""
+    from loguru import logger as _logger
+
+    report = _make_report()
+    lines: list[str] = []
+    handler_id = _logger.add(lambda m: lines.append(str(m)), level="WARNING", format="{message}")
+    try:
+        with patch.dict(os.environ, {"ORQ_API_KEY": "test"}):
+            await _send_cleaned_results(
+                results=[],
+                name="n",
+                description="d",
+                start_time=datetime.now(tz=timezone.utc),
+                report=report,
+            )
+    finally:
+        _logger.remove(handler_id)
+    assert report.uploaded_count == 0
+    assert not lines
+
+
+@pytest.mark.asyncio
+async def test_uploaded_count_recorded_when_upload_raises() -> None:
+    """The attempt count survives an upload exception in the persisted report."""
+    report = _make_report()
+    with (
+        patch.dict(os.environ, {"ORQ_API_KEY": "test"}),
+        patch(
+            "evaluatorq.redteam.runner.send_results_to_orq",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("boom"),
+        ),
+    ):
+        await _send_cleaned_results(
+            results=[_make_result()],
+            name="n",
+            description="d",
+            start_time=datetime.now(tz=timezone.utc),
+            report=report,
+        )
+    assert report.uploaded_count == 1
+    assert report.rows_created is None
+
+
+@pytest.mark.asyncio
+async def test_auto_saved_run_json_contains_diagnostics(tmp_path) -> None:
+    """The runs-index JSON written by _auto_save_run carries the diagnostics
+    after _send_cleaned_results mutates the report (guards the mutate-before-
+    save ordering the pipelines rely on)."""
+    import json as _json
+
+    from evaluatorq.redteam import runner as runner_mod
+
+    report = _make_report()
+    with (
+        patch.dict(os.environ, {"ORQ_API_KEY": "test"}),
+        patch(
+            "evaluatorq.redteam.runner.send_results_to_orq",
+            new_callable=AsyncMock,
+            return_value=_make_response(rows_created=1),
+        ),
+    ):
+        await _send_cleaned_results(
+            results=[_make_result()],
+            name="n",
+            description="d",
+            start_time=datetime.now(tz=timezone.utc),
+            report=report,
+        )
+    with patch.object(runner_mod, "get_runs_dir", return_value=tmp_path):
+        path = runner_mod._auto_save_run(report, name="diag-test")
+    assert path is not None
+    data = _json.loads(path.read_text())
+    assert data["uploaded_count"] == 1
+    assert data["rows_created"] == 1
+    assert data["experiment_url"] == "https://orq.example/experiments/abc"
