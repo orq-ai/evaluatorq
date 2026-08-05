@@ -1509,7 +1509,7 @@ async def _fetch_simulation_datapoints_from_orq(api_key: str, dataset_id: str) -
     async for batch in fetch_dataset_batches(orq_client, dataset_id):
         for eq_dp in batch.datapoints:
             try:
-                out.append(_extract_single_datapoint(eq_dp))
+                out.append(_extract_single_datapoint(eq_dp, source='row'))
             except (ValueError, ValidationError) as e:
                 raise ValueError(f'dataset {dataset_id!r} row {row}: {e}') from e
             row += 1

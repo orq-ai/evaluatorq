@@ -63,7 +63,7 @@ async def datapoints_from_experiment(
 
     out: list[SimulationDatapoint] = []
     try:
-        out.extend(_extract_single_datapoint(row) for row in rows)
+        out.extend(_extract_single_datapoint(row, source='row') for row in rows)
     except (ValueError, ValidationError) as e:
         # extend consumes the generator row by row, so len(out) == failing row index
         raise ValueError(f'experiment {experiment_id!r} row {len(out)}: {e}') from e
@@ -118,8 +118,15 @@ async def extend_from_experiment(
 
 
 def _describe_agent(seeds: list[SimulationDatapoint]) -> str:
-    """Fallback agent description built from the seed scenarios' goals."""
+    """Fallback agent description built from the seed scenarios' goals.
+
+    Seeds are guaranteed non-empty but individual goals are not, so when every
+    goal is blank fall back to a generic description instead of handing the
+    generator a truncated 'goals such as: ' prompt.
+    """
     goals = list(dict.fromkeys(dp.scenario.goal for dp in seeds if dp.scenario.goal))
+    if not goals:
+        return 'A general-purpose assistant agent; extend the seed personas and scenarios below.'
     return 'An agent whose users pursue goals such as: ' + '; '.join(goals[:10])
 
 

@@ -287,7 +287,13 @@ async def fetch_experiment_datapoints(
             if export_resp.is_redirect:
                 export_url = export_resp.headers.get('location')
             elif export_resp.is_success:
-                if 'attachment' in export_resp.headers.get('content-disposition', ''):
+                disposition = export_resp.headers.get('content-disposition', '').lower()
+                content_type = export_resp.headers.get('content-type', '').lower()
+                # The attachment disposition is the documented contract; the
+                # content-type fallback keeps an inline JSONL body from being
+                # mistaken for a not-ready response (and its data discarded)
+                # if the server ever drops or re-cases the disposition header.
+                if 'attachment' in disposition or 'ndjson' in content_type or 'jsonl' in content_type:
                     export_text = export_resp.text
                 else:
                     with contextlib.suppress(json.JSONDecodeError):

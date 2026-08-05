@@ -109,6 +109,17 @@ async def test_direct_zero_rows(monkeypatch: pytest.MonkeyPatch) -> None:
         await datapoints_from_experiment('ex_1', api_key='key')
 
 
+@pytest.mark.asyncio
+async def test_direct_multi_element_row_error_does_not_blame_wrap_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A row carrying two datapoints must fail with a message about the row,
+    # not the unrelated wrap_simulation_agent contract the extractor also serves.
+    dp = _sim_datapoint().model_dump(mode='json')
+    _patch_fetch(monkeypatch, [DataPoint(inputs={'datapoints': [dp, dp]})])
+    with pytest.raises(ValueError, match="'ex_1' row 0.*row must encode exactly one datapoint, got 2") as exc:
+        await datapoints_from_experiment('ex_1', api_key='key')
+    assert 'wrap_simulation_agent' not in str(exc.value)
+
+
 # ---------------------------------------------------------------------------
 # simulate() wiring
 # ---------------------------------------------------------------------------
@@ -205,6 +216,16 @@ async def test_extend_seeds_generators(monkeypatch: pytest.MonkeyPatch) -> None:
     assert 'Alice' in context and 'Bob' in context
     assert context.count('Refund:') == 1  # deduped scenario
     assert 'NEW personas' in context
+
+
+def test_describe_agent_falls_back_when_all_goals_blank() -> None:
+    from evaluatorq.simulation.experiments import _describe_agent
+
+    dp = _sim_datapoint()
+    dp = dp.model_copy(update={'scenario': dp.scenario.model_copy(update={'goal': ''})})
+    description = _describe_agent([dp])
+    assert description  # not the bare truncated 'goals such as: ' prefix
+    assert not description.rstrip().endswith(':')
 
 
 def test_seed_context_dedupes() -> None:
