@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import uuid
 from contextlib import contextmanager
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -133,21 +133,43 @@ def evaluatorq_pipeline(label: str) -> Iterator[str]:
         _pipeline.reset(token)
 
 
-@contextmanager
-def evaluatorq_run_id(run_id: str) -> Iterator[str]:
+class _RunIdScope:
+    """Binds the run id, restoring the previous value on exit.
+
+    Usable as either a sync or an async context manager. The async form exists
+    so a caller can bind inside an existing ``async with (...)`` group — the
+    red-team pipeline does this to avoid indenting its whole body under a
+    second ``with``, which would otherwise turn every future merge of that
+    function into a reindent conflict.
+    """
+
+    def __init__(self, run_id: str) -> None:
+        self._run_id = run_id
+        self._token: Token[str | None] | None = None
+
+    def __enter__(self) -> str:
+        self._token = _run_id.set(self._run_id)
+        return self._run_id
+
+    def __exit__(self, *_exc_info: object) -> None:
+        if self._token is not None:
+            _run_id.reset(self._token)
+            self._token = None
+
+    async def __aenter__(self) -> str:
+        return self.__enter__()
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        self.__exit__(*exc_info)
+
+
+def evaluatorq_run_id(run_id: str) -> _RunIdScope:
     """Bind the run id for a red-team / agent-simulation run.
 
     Restores the previous value on exit so nested/sequential runs don't bleed
-    (mirrors :func:`evaluatorq_pipeline`).
-
-    Yields:
-        The bound run id.
+    (mirrors :func:`evaluatorq_pipeline`). Works as ``with`` or ``async with``.
     """
-    token = _run_id.set(run_id)
-    try:
-        yield run_id
-    finally:
-        _run_id.reset(token)
+    return _RunIdScope(run_id)
 
 
 @contextmanager

@@ -714,200 +714,200 @@ async def red_team(
     async with (  # noqa: SIM117
         _redteam_run_lifecycle(manifest_writer),
         tracing_session(name or 'red-team', trace_type='redteam') as tracing_context,
+        evaluatorq_run_id(tracing_context.run_id),
     ):
         async with with_redteam_span(
             'Orq Red Team',
             pipeline_attributes,
             parent_context=tracing_context.parent_context,
         ) as pipeline_span:
-            with evaluatorq_run_id(tracing_context.run_id):
-                if tracing_context.run_id:
-                    set_span_attrs(pipeline_span, {'orq.evaluatorq_run_id': tracing_context.run_id})
-                if resolved_mode in (Pipeline.DYNAMIC, Pipeline.HYBRID):
-                    run_result = await _run_dynamic_or_hybrid(
-                        targets=targets,
-                        agent_targets=agent_targets,
-                        mode=resolved_mode,
-                        name=name,
-                        categories=resolved_categories,
-                        resolved_vulns=resolved_vulns,
-                        max_turns=max_turns,
-                        max_per_category=max_per_category,
-                        attack_model=attack_model,
-                        evaluator_model=evaluator_model,
-                        parallelism=parallelism,
-                        generate_strategies=generate_strategies,
-                        generated_strategy_count=generated_strategy_count,
-                        max_dynamic_datapoints=max_dynamic_datapoints,
-                        max_static_datapoints=max_static_datapoints,
-                        cleanup_memory=cleanup_memory,
-                        llm_client=llm_client,
-                        description=description,
-                        dataset=dataset,
-                        hooks=resolved_hooks,
-                        output_dir=resolved_output_dir,
-                        target_config=target_config,
-                        attacker_instructions=attacker_instructions,
-                        verbosity=verbosity,
-                        pipeline_config=config,
-                        resolved_strategy_names=resolved_strategy_names,
-                        resolved_delivery_methods=resolved_delivery_methods,
-                        run_id=tracing_context.run_id,
-                    )
-                    report, metrics = _coerce_run_result(run_result)
-                elif resolved_mode == Pipeline.STATIC:
-                    run_result = await _run_static(
-                        targets=targets,
-                        agent_targets=agent_targets,
-                        name=name,
-                        categories=resolved_categories,
-                        evaluator_model=evaluator_model,
-                        parallelism=parallelism,
-                        max_static_datapoints=max_static_datapoints,
-                        dataset=dataset,
-                        description=description,
-                        llm_client=llm_client,
-                        hooks=resolved_hooks,
-                        output_dir=resolved_output_dir,
-                        target_config=target_config,
-                        pipeline_config=config,
-                        resolved_strategy_names=resolved_strategy_names,
-                        resolved_delivery_methods=resolved_delivery_methods,
-                        run_id=tracing_context.run_id,
-                    )
-                    report, metrics = _coerce_run_result(run_result)
-                else:
-                    msg = f'Invalid mode {mode!r}. Must be "dynamic", "static", or "hybrid".'
-                    raise ValueError(msg)
+            if tracing_context.run_id:
+                set_span_attrs(pipeline_span, {'orq.evaluatorq_run_id': tracing_context.run_id})
+            if resolved_mode in (Pipeline.DYNAMIC, Pipeline.HYBRID):
+                run_result = await _run_dynamic_or_hybrid(
+                    targets=targets,
+                    agent_targets=agent_targets,
+                    mode=resolved_mode,
+                    name=name,
+                    categories=resolved_categories,
+                    resolved_vulns=resolved_vulns,
+                    max_turns=max_turns,
+                    max_per_category=max_per_category,
+                    attack_model=attack_model,
+                    evaluator_model=evaluator_model,
+                    parallelism=parallelism,
+                    generate_strategies=generate_strategies,
+                    generated_strategy_count=generated_strategy_count,
+                    max_dynamic_datapoints=max_dynamic_datapoints,
+                    max_static_datapoints=max_static_datapoints,
+                    cleanup_memory=cleanup_memory,
+                    llm_client=llm_client,
+                    description=description,
+                    dataset=dataset,
+                    hooks=resolved_hooks,
+                    output_dir=resolved_output_dir,
+                    target_config=target_config,
+                    attacker_instructions=attacker_instructions,
+                    verbosity=verbosity,
+                    pipeline_config=config,
+                    resolved_strategy_names=resolved_strategy_names,
+                    resolved_delivery_methods=resolved_delivery_methods,
+                    run_id=tracing_context.run_id,
+                )
+                report, metrics = _coerce_run_result(run_result)
+            elif resolved_mode == Pipeline.STATIC:
+                run_result = await _run_static(
+                    targets=targets,
+                    agent_targets=agent_targets,
+                    name=name,
+                    categories=resolved_categories,
+                    evaluator_model=evaluator_model,
+                    parallelism=parallelism,
+                    max_static_datapoints=max_static_datapoints,
+                    dataset=dataset,
+                    description=description,
+                    llm_client=llm_client,
+                    hooks=resolved_hooks,
+                    output_dir=resolved_output_dir,
+                    target_config=target_config,
+                    pipeline_config=config,
+                    resolved_strategy_names=resolved_strategy_names,
+                    resolved_delivery_methods=resolved_delivery_methods,
+                    run_id=tracing_context.run_id,
+                )
+                report, metrics = _coerce_run_result(run_result)
+            else:
+                msg = f'Invalid mode {mode!r}. Must be "dynamic", "static", or "hybrid".'
+                raise ValueError(msg)
 
-                set_span_attrs(
-                    pipeline_span,
-                    {
-                        'orq.redteam.num_datapoints': metrics.num_datapoints,
-                        'orq.redteam.num_categories': metrics.num_categories,
-                        'orq.redteam.duration_seconds': metrics.duration_seconds,
+            set_span_attrs(
+                pipeline_span,
+                {
+                    'orq.redteam.num_datapoints': metrics.num_datapoints,
+                    'orq.redteam.num_categories': metrics.num_categories,
+                    'orq.redteam.duration_seconds': metrics.duration_seconds,
+                },
+            )
+
+            # Record categories dropped by the evaluability gate so the report is honest
+            # about reduced scope (rather than silently testing fewer categories).
+            if unevaluable_codes:
+                report.pipeline_warnings.insert(
+                    0,
+                    f'Skipped {len(unevaluable_codes)} requested categor'
+                    f'{"y" if len(unevaluable_codes) == 1 else "ies"} with no automated '
+                    f'evaluator ({", ".join(unevaluable_codes)}): not scoreable via '
+                    'prompt-based red teaming (requires live-system testing).',
+                )
+
+            # Generate LLM-based recommendations for focus areas (opt-in)
+            if generate_recommendations:
+                try:
+                    rec_client = llm_client or config.evaluator.client
+                    if rec_client is None:
+                        rec_client = create_async_llm_client(role_config=config.evaluator.as_call_config())
+
+                    async with with_redteam_span(
+                        'orq.redteam.recommendations',
+                        {'orq.redteam.model': evaluator_model},
+                    ):
+                        report.focus_area_recommendations = await generate_focus_area_recommendations(
+                            report=report,
+                            llm_client=rec_client,
+                            model=evaluator_model,
+                            cfg=config,
+                        )
+                except (TypeError, AttributeError, ImportError, NameError, KeyError):
+                    raise
+                except Exception:
+                    logger.warning('Failed to generate focus area recommendations', exc_info=True)
+                    report.pipeline_warnings.append(
+                        'Failed to generate focus area recommendations. Check LLM credentials and model configuration.'
+                    )
+
+            # Generate the LLM narrative executive summary (on by default; silent skip
+            # when no LLM credentials are configured).
+            if generate_executive_summary:
+                from evaluatorq.common.reports.executive_summary import (
+                    generate_executive_summary as _gen_exec_summary,
+                )
+                from evaluatorq.redteam.reports.executive_summary import build_redteam_facts
+
+                try:
+                    es_client = llm_client or config.evaluator.client
+                    if es_client is None:
+                        es_client = create_async_llm_client(role_config=config.evaluator.as_call_config())
+                    async with with_redteam_span(
+                        'orq.redteam.executive_summary',
+                        {'orq.redteam.model': evaluator_model},
+                    ):
+                        report.executive_summary = await _gen_exec_summary(
+                            build_redteam_facts(report),
+                            llm_client=es_client,
+                            model=evaluator_model,
+                            temperature=config.evaluator.temperature,
+                            # No pipeline metadata here: generate_executive_summary tags the
+                            # call itself (guarded on the client routing through Orq). Passing
+                            # it via extra_body too would win the SDK's merge and silently
+                            # discard that tag — extra_body takes precedence over named kwargs.
+                            extra_body=config.retry_extra_body(es_client),
+                            extra_kwargs=config.evaluator.extra_kwargs,
+                        )
+                except (TypeError, AttributeError, ImportError, NameError, KeyError):
+                    raise
+                except Exception:
+                    logger.warning('Failed to generate executive summary', exc_info=True)
+                    report.pipeline_warnings.append(
+                        'Failed to generate executive summary. Check LLM credentials and model configuration.'
+                    )
+
+            # Persist report according to the save mode. 'detail' mode already had
+            # the inner pipeline write 01/02/03 to resolved_output_dir, so here we
+            # only handle 'final' (single summary file) and record the saved path.
+            auto_save_path: Path | None = None
+            run_path: Path | None = None
+            if save == 'final':
+                if user_output_dir is not None:
+                    _save_report(user_output_dir, '03_summary_report.json', report)
+                    auto_save_path = user_output_dir / '03_summary_report.json'
+            elif save == 'detail':
+                if resolved_output_dir is not None:
+                    auto_save_path = resolved_output_dir / '03_summary_report.json'
+
+            # Index in .evaluatorq/runs/ so the run appears in `evaluatorq redteam runs`.
+            if save != 'none':
+                run_path = _auto_save_run(report, name=name)
+                if auto_save_path is None:
+                    auto_save_path = run_path
+                if run_path is None:
+                    report.pipeline_warnings.append(
+                        'Failed to auto-save run report. The run will not appear in `evaluatorq redteam runs`.'
+                    )
+
+            await await_maybe(
+                resolved_hooks.on_complete(
+                    report,
+                    output_dir=str(user_output_dir) if user_output_dir and save != 'none' else None,
+                    auto_save_path=str(auto_save_path) if auto_save_path else None,
+                )
+            )
+
+            # Only mark completion after the user completion hook succeeds.  If
+            # it raises, the lifecycle context above records the surfaced error.
+            if manifest_writer is not None:
+                manifest_writer.complete(
+                    report_path=run_path,
+                    summary={
+                        'pipeline': report.pipeline.value,
+                        'total_results': report.total_results,
+                        'total_attacks': report.summary.total_attacks,
+                        'vulnerability_rate': report.summary.vulnerability_rate,
+                        'resistance_rate': report.summary.resistance_rate,
+                        'tested_agents': list(report.tested_agents),
                     },
                 )
 
-                # Record categories dropped by the evaluability gate so the report is honest
-                # about reduced scope (rather than silently testing fewer categories).
-                if unevaluable_codes:
-                    report.pipeline_warnings.insert(
-                        0,
-                        f'Skipped {len(unevaluable_codes)} requested categor'
-                        f'{"y" if len(unevaluable_codes) == 1 else "ies"} with no automated '
-                        f'evaluator ({", ".join(unevaluable_codes)}): not scoreable via '
-                        'prompt-based red teaming (requires live-system testing).',
-                    )
-
-                # Generate LLM-based recommendations for focus areas (opt-in)
-                if generate_recommendations:
-                    try:
-                        rec_client = llm_client or config.evaluator.client
-                        if rec_client is None:
-                            rec_client = create_async_llm_client(role_config=config.evaluator.as_call_config())
-
-                        async with with_redteam_span(
-                            'orq.redteam.recommendations',
-                            {'orq.redteam.model': evaluator_model},
-                        ):
-                            report.focus_area_recommendations = await generate_focus_area_recommendations(
-                                report=report,
-                                llm_client=rec_client,
-                                model=evaluator_model,
-                                cfg=config,
-                            )
-                    except (TypeError, AttributeError, ImportError, NameError, KeyError):
-                        raise
-                    except Exception:
-                        logger.warning('Failed to generate focus area recommendations', exc_info=True)
-                        report.pipeline_warnings.append(
-                            'Failed to generate focus area recommendations. Check LLM credentials and model configuration.'
-                        )
-
-                # Generate the LLM narrative executive summary (on by default; silent skip
-                # when no LLM credentials are configured).
-                if generate_executive_summary:
-                    from evaluatorq.common.reports.executive_summary import (
-                        generate_executive_summary as _gen_exec_summary,
-                    )
-                    from evaluatorq.redteam.reports.executive_summary import build_redteam_facts
-
-                    try:
-                        es_client = llm_client or config.evaluator.client
-                        if es_client is None:
-                            es_client = create_async_llm_client(role_config=config.evaluator.as_call_config())
-                        async with with_redteam_span(
-                            'orq.redteam.executive_summary',
-                            {'orq.redteam.model': evaluator_model},
-                        ):
-                            report.executive_summary = await _gen_exec_summary(
-                                build_redteam_facts(report),
-                                llm_client=es_client,
-                                model=evaluator_model,
-                                temperature=config.evaluator.temperature,
-                                # No pipeline metadata here: generate_executive_summary tags the
-                                # call itself (guarded on the client routing through Orq). Passing
-                                # it via extra_body too would win the SDK's merge and silently
-                                # discard that tag — extra_body takes precedence over named kwargs.
-                                extra_body=config.retry_extra_body(es_client),
-                                extra_kwargs=config.evaluator.extra_kwargs,
-                            )
-                    except (TypeError, AttributeError, ImportError, NameError, KeyError):
-                        raise
-                    except Exception:
-                        logger.warning('Failed to generate executive summary', exc_info=True)
-                        report.pipeline_warnings.append(
-                            'Failed to generate executive summary. Check LLM credentials and model configuration.'
-                        )
-
-                # Persist report according to the save mode. 'detail' mode already had
-                # the inner pipeline write 01/02/03 to resolved_output_dir, so here we
-                # only handle 'final' (single summary file) and record the saved path.
-                auto_save_path: Path | None = None
-                run_path: Path | None = None
-                if save == 'final':
-                    if user_output_dir is not None:
-                        _save_report(user_output_dir, '03_summary_report.json', report)
-                        auto_save_path = user_output_dir / '03_summary_report.json'
-                elif save == 'detail':
-                    if resolved_output_dir is not None:
-                        auto_save_path = resolved_output_dir / '03_summary_report.json'
-
-                # Index in .evaluatorq/runs/ so the run appears in `evaluatorq redteam runs`.
-                if save != 'none':
-                    run_path = _auto_save_run(report, name=name)
-                    if auto_save_path is None:
-                        auto_save_path = run_path
-                    if run_path is None:
-                        report.pipeline_warnings.append(
-                            'Failed to auto-save run report. The run will not appear in `evaluatorq redteam runs`.'
-                        )
-
-                await await_maybe(
-                    resolved_hooks.on_complete(
-                        report,
-                        output_dir=str(user_output_dir) if user_output_dir and save != 'none' else None,
-                        auto_save_path=str(auto_save_path) if auto_save_path else None,
-                    )
-                )
-
-                # Only mark completion after the user completion hook succeeds.  If
-                # it raises, the lifecycle context above records the surfaced error.
-                if manifest_writer is not None:
-                    manifest_writer.complete(
-                        report_path=run_path,
-                        summary={
-                            'pipeline': report.pipeline.value,
-                            'total_results': report.total_results,
-                            'total_attacks': report.summary.total_attacks,
-                            'vulnerability_rate': report.summary.vulnerability_rate,
-                            'resistance_rate': report.summary.resistance_rate,
-                            'tested_agents': list(report.tested_agents),
-                        },
-                    )
-
-                return report
+            return report
 
 
 # ---------------------------------------------------------------------------
