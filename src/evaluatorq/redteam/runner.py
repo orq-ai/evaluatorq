@@ -233,9 +233,7 @@ async def _send_cleaned_results(
             logger.debug('No cleaned results to send to Orq platform')
         return
 
-    logger.info(
-        f'Uploading {len(cleaned)} cleaned result(s) to Orq platform ({len(results)} raw report rows)'
-    )
+    logger.info(f'Uploading {len(cleaned)} cleaned result(s) to Orq platform ({len(results)} raw report rows)')
     if report is not None:
         # Recorded before the attempt so even an exception path leaves the
         # attempt count in the persisted JSON.

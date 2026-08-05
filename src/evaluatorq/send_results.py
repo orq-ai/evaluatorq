@@ -158,12 +158,12 @@ async def send_results_to_orq(
                 # The "missing samples" footgun: the platform registered fewer
                 # rows than we uploaded. One loud line with both numbers + URL.
                 logger.warning(
-                    "Orq registered {} of {} uploaded rows for experiment {!r} — "
-                    "some results will be missing from the Explorer. URL: {}",
+                    'Orq registered {} of {} uploaded rows for experiment {!r} — '
+                    'some results will be missing from the Explorer. URL: {}',
                     orq_result.rows_created,
                     len(results),
                     orq_result.experiment_name,
-                    orq_result.experiment_url or "<no url returned>",
+                    orq_result.experiment_url or '<no url returned>',
                 )
             if orq_result.experiment_url:
                 logger.info('View your evaluation at: {}', orq_result.experiment_url)
