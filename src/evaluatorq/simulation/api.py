@@ -15,12 +15,11 @@ import logging
 import os
 import sys
 import uuid
-from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.llm_client import resolve_results_base_url
-from evaluatorq.common.thread_context import build_thread_id, evaluatorq_run_id
+from evaluatorq.common.thread_context import _evaluatorq_run_scope, build_thread_id
 from evaluatorq.simulation._config import SimulationConfig
 from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MAX_TURNS, DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run, build_simulation_run, fetch_agent_info, write_report
@@ -137,23 +136,6 @@ def _compose_sim_hooks(
         manifest_hook_factory=ManifestStageHooks,
     )
     return composed, manifest_writer
-
-
-@contextmanager
-def _sim_run_scope(run_id: str, span: Any | None):
-    """Bind ``run_id`` for the run and stamp it on the run's root span.
-
-    The span attribute is a one-shot stamp; the ContextVar bind is what reaches
-    every LLM call — generation-phase calls here plus everything inside the
-    nested ``evaluatorq()`` (a ContextVar set in an ancestor scope is visible to
-    nested calls and copied into child tasks). Wraps the shared
-    :func:`evaluatorq_run_id` CM rather than reimplementing it.
-    """
-    from evaluatorq.common.tracing import set_span_attrs
-
-    set_span_attrs(span, {'orq.evaluatorq_run_id': run_id})
-    with evaluatorq_run_id(run_id):
-        yield
 
 
 async def simulate(
@@ -331,6 +313,13 @@ async def _simulate_run(
 
     await init_tracing_if_needed()
 
+    # Mint the run id + manifest at the outer entry so the same id flows to the
+    # manifest and to _simulate_core's experiment linking, and so the manifest
+    # brackets the whole run (bare simulate has only the SIMULATE stage — no
+    # GENERATE phase). Minted before the span opens so it can be stamped as a
+    # span attribute rather than set after the fact.
+    run_id = uuid.uuid4().hex
+
     try:
         async with with_simulation_span(
             'orq.simulation.pipeline',
@@ -343,14 +332,11 @@ async def _simulate_run(
                 'orq.simulation.parallelism': parallelism,
             },
         ) as pipeline_span:
-            # Mint the run id + manifest at the outer entry so the same id flows
-            # to the manifest and to _simulate_core's experiment linking, and so
-            # the manifest brackets the whole run (bare simulate has only the
-            # SIMULATE stage — no GENERATE phase). Compose once; the manifest hook
-            # is registered first, and the raw writer is retained for terminal
-            # complete/cancel/fail calls.
-            run_id = uuid.uuid4().hex
-            with _sim_run_scope(run_id, pipeline_span):
+            # Compose once; the manifest hook is registered first, and the raw
+            # writer is retained for terminal complete/cancel/fail calls. The
+            # run-id bind is what reaches every LLM call — a ContextVar set here
+            # is visible to the nested evaluatorq() and copied into child tasks.
+            with _evaluatorq_run_scope(run_id, pipeline_span):
                 composed_hooks, manifest_writer = _compose_sim_hooks(
                     hooks,
                     save=save,
@@ -612,6 +598,13 @@ async def _generate_and_simulate_run(
 
     await init_tracing_if_needed()
 
+    # Mint the run id + manifest at the outer entry, BEFORE the generate phase,
+    # gated on save (D3: the GENERATE stage must reach the manifest too). The SAME
+    # composed hooks thread through both the generate phase and _simulate_core, so
+    # both stages are recorded. Minted before the span opens so it can be stamped
+    # as a span attribute rather than set after the fact.
+    run_id = uuid.uuid4().hex
+
     try:
         async with with_simulation_span(
             'orq.simulation.pipeline',
@@ -627,13 +620,8 @@ async def _generate_and_simulate_run(
                 'orq.simulation.parallelism': parallelism,
             },
         ) as pipeline_span:
-            # Mint the run id + manifest at the outer entry, BEFORE the generate
-            # phase, gated on save (D3: the GENERATE stage must reach the manifest
-            # too). The SAME composed hooks thread through both the generate phase
-            # and _simulate_core, so both stages are recorded; the raw writer is
-            # retained for terminal complete/cancel/fail calls.
-            run_id = uuid.uuid4().hex
-            with _sim_run_scope(run_id, pipeline_span):
+            # The raw writer is retained for terminal complete/cancel/fail calls.
+            with _evaluatorq_run_scope(run_id, pipeline_span):
                 composed_hooks, manifest_writer = _compose_sim_hooks(
                     hooks,
                     save=save,
@@ -769,6 +757,9 @@ async def generate(
 
     await init_tracing_if_needed()
 
+    # Minted before the span opens so it can be stamped as a span attribute.
+    run_id = uuid.uuid4().hex
+
     try:
         async with with_simulation_span(
             'orq.simulation.generate',
@@ -778,8 +769,7 @@ async def generate(
                 'orq.simulation.num_scenarios': num_scenarios,
             },
         ) as pipeline_span:
-            run_id = uuid.uuid4().hex
-            with _sim_run_scope(run_id, pipeline_span):
+            with _evaluatorq_run_scope(run_id, pipeline_span):
                 # Bracket generation with the same GENERATE stage hooks the
                 # generate_and_simulate path uses, so the standalone command
                 # isn't silent. Empty on_stage_end meta: the CLI prints its own
@@ -843,28 +833,30 @@ async def generate_personas(
     if not seeds:
         raise ValueError('generate_personas requires at least one seed')
     description = agent_description or 'a general-purpose conversational assistant'
-    run_id = uuid.uuid4().hex
-    with _sim_run_scope(run_id, None):
-        gen = PersonaGenerator(model=sim_model, client=generation_client)
-        try:
-            batches = await asyncio.gather(*[
-                gen.generate(
-                    agent_description=description,
-                    context=context,
-                    num_personas=1,
-                    edge_case_percentage=0.0,
-                    seed=seed,
-                )
-                for seed in seeds
-            ])
-        finally:
-            await gen.close()
-        personas: list[Persona] = []
-        for seed, batch in zip(seeds, batches, strict=True):
-            if not batch:
-                raise SimulationError(f'persona generation returned nothing for seed: {seed!r}')
-            personas.append(batch[0])
-        return personas
+    # No run id is bound here: this entrypoint owns no root span, so an id would
+    # be undiscoverable. The calls are still traced — PersonaGenerator.generate
+    # opens `orq.simulation.persona_generation` with a child LLM span, and on the
+    # sim paths those already nest under the run's root span.
+    gen = PersonaGenerator(model=sim_model, client=generation_client)
+    try:
+        batches = await asyncio.gather(*[
+            gen.generate(
+                agent_description=description,
+                context=context,
+                num_personas=1,
+                edge_case_percentage=0.0,
+                seed=seed,
+            )
+            for seed in seeds
+        ])
+    finally:
+        await gen.close()
+    personas: list[Persona] = []
+    for seed, batch in zip(seeds, batches, strict=True):
+        if not batch:
+            raise SimulationError(f'persona generation returned nothing for seed: {seed!r}')
+        personas.append(batch[0])
+    return personas
 
 
 async def generate_persona(
@@ -908,28 +900,27 @@ async def generate_scenarios(
     if not seeds:
         raise ValueError('generate_scenarios requires at least one seed')
     description = agent_description or 'a general-purpose conversational assistant'
-    run_id = uuid.uuid4().hex
-    with _sim_run_scope(run_id, None):
-        gen = ScenarioGenerator(model=sim_model, client=generation_client)
-        try:
-            batches = await asyncio.gather(*[
-                gen.generate(
-                    agent_description=description,
-                    context=context,
-                    num_scenarios=1,
-                    edge_case_percentage=0.0,
-                    seed=seed,
-                )
-                for seed in seeds
-            ])
-        finally:
-            await gen.close()
-        scenarios: list[Scenario] = []
-        for seed, batch in zip(seeds, batches, strict=True):
-            if not batch:
-                raise SimulationError(f'scenario generation returned nothing for seed: {seed!r}')
-            scenarios.append(batch[0])
-        return scenarios
+    # No run id bound here — see the note in generate_personas.
+    gen = ScenarioGenerator(model=sim_model, client=generation_client)
+    try:
+        batches = await asyncio.gather(*[
+            gen.generate(
+                agent_description=description,
+                context=context,
+                num_scenarios=1,
+                edge_case_percentage=0.0,
+                seed=seed,
+            )
+            for seed in seeds
+        ])
+    finally:
+        await gen.close()
+    scenarios: list[Scenario] = []
+    for seed, batch in zip(seeds, batches, strict=True):
+        if not batch:
+            raise SimulationError(f'scenario generation returned nothing for seed: {seed!r}')
+        scenarios.append(batch[0])
+    return scenarios
 
 
 async def generate_scenario(

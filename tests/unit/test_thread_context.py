@@ -5,8 +5,12 @@ concurrent conversations (asyncio tasks) don't leak thread ids into each other.
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
+
+import pytest
 
 from evaluatorq.common.thread_context import (
+    _evaluatorq_run_scope,
     build_thread_id,
     conversation_thread,
     current_thread_id,
@@ -105,30 +109,28 @@ def test_run_id_resets_on_exception() -> None:
     assert 'evaluatorq_run_id' not in pipeline_metadata()
 
 
-def test_run_id_binds_and_resets_via_the_async_protocol() -> None:
-    # The red-team runner binds inside an ``async with (...)`` group, so the
-    # __aenter__/__aexit__ pair — not the sync one — is what production uses.
-    async def _run() -> None:
-        async with evaluatorq_run_id('r-async') as bound:
-            assert bound == 'r-async'
-            assert pipeline_metadata()['evaluatorq_run_id'] == 'r-async'
-        assert 'evaluatorq_run_id' not in pipeline_metadata()
+def test_shared_run_scope_stamps_and_restores() -> None:
+    attrs: dict[str, object] = {}
+    span = SimpleNamespace(set_attribute=lambda key, value: attrs.__setitem__(key, value))
 
-    asyncio.run(_run())
+    with _evaluatorq_run_scope('outer', span):
+        assert pipeline_metadata()['evaluatorq_run_id'] == 'outer'
+
+    assert attrs == {'orq.evaluatorq_run_id': 'outer'}
+    assert 'evaluatorq_run_id' not in pipeline_metadata()
 
 
-def test_run_id_resets_on_exception_through_the_async_protocol() -> None:
-    # A run that raises must not leak its id into whatever runs next in the
-    # same context — the sync path has this guarantee, the async one needs it too.
-    async def _run() -> None:
-        try:
-            async with evaluatorq_run_id('r-async-boom'):
-                raise RuntimeError('boom')
-        except RuntimeError:
-            pass
-        assert 'evaluatorq_run_id' not in pipeline_metadata()
+def test_shared_run_scope_without_span_still_binds() -> None:
+    with _evaluatorq_run_scope('run-without-span', None):
+        assert pipeline_metadata()['evaluatorq_run_id'] == 'run-without-span'
 
-    asyncio.run(_run())
+
+def test_shared_run_scope_restores_after_exception() -> None:
+    with pytest.raises(RuntimeError, match='boom'):
+        with _evaluatorq_run_scope('temporary', None):
+            raise RuntimeError('boom')
+
+    assert 'evaluatorq_run_id' not in pipeline_metadata()
 
 
 def test_run_id_concurrent_tasks_are_isolated() -> None:

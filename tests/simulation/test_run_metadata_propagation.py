@@ -1,8 +1,13 @@
 """Simulation entrypoints bind a run id onto the invocation-metadata rail.
 
-Every sim entrypoint mints its own ``run_id`` and binds it via
-``_sim_run_scope``, so the LLM calls it issues carry ``evaluatorq_run_id`` in
-the request ``metadata`` (the key Orq's trace UI filters on).
+The three entrypoints that own a root span (``simulate``, ``generate_and_simulate``,
+``generate``) mint a ``run_id``, stamp it on that span as ``orq.evaluatorq_run_id``,
+and bind it so every LLM call they issue carries ``evaluatorq_run_id`` in the
+request ``metadata`` (the key Orq's trace UI filters on).
+
+``generate_personas`` / ``generate_scenarios`` deliberately do NOT: they own no
+root span, so an id bound there would be undiscoverable. Their calls are still
+traced via ``orq.simulation.persona_generation`` and its child LLM span.
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ from opentelemetry.sdk.trace.export import (
     SpanExportResult,
 )
 
-from evaluatorq.simulation.api import _sim_run_scope, generate_personas, generate_scenarios
+from evaluatorq.simulation.api import generate_personas, generate_scenarios
 
 
 class _FakeCompletions:
@@ -43,12 +48,6 @@ class _FakeClient:
 
     async def close(self) -> None:  # pragma: no cover - generator doesn't own us
         pass
-
-
-@pytest.fixture
-def force_orq_routing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Tagging is gated on the client routing through Orq; force it for the fake."""
-    monkeypatch.setattr('evaluatorq.common.llm_call.client_routes_through_orq', lambda _client: True)
 
 
 def _one_persona(response_format: type) -> Any:
@@ -80,8 +79,8 @@ def _one_scenario(response_format: type) -> Any:
 
 
 @pytest.mark.asyncio
-async def test_generate_personas_binds_a_run_id(force_orq_routing: None) -> None:
-    """generate_personas mints its own run_id; the parse call carries it."""
+async def test_generate_personas_binds_no_run_id() -> None:
+    """No root span, so no run id — an id here would be undiscoverable."""
     sink: dict[str, Any] = {}
     personas = await generate_personas(
         ['angry customer'],
@@ -90,12 +89,12 @@ async def test_generate_personas_binds_a_run_id(force_orq_routing: None) -> None
     )
 
     assert len(personas) == 1
-    assert sink['metadata']['evaluatorq_run_id']
+    assert 'evaluatorq_run_id' not in (sink.get('metadata') or {})
 
 
 @pytest.mark.asyncio
-async def test_generate_scenarios_binds_a_run_id(force_orq_routing: None) -> None:
-    """generate_scenarios mints its own run_id; the parse call carries it."""
+async def test_generate_scenarios_binds_no_run_id() -> None:
+    """Mirror of the personas case — see the module docstring."""
     sink: dict[str, Any] = {}
     scenarios = await generate_scenarios(
         ['disputes a refund denial'],
@@ -104,46 +103,31 @@ async def test_generate_scenarios_binds_a_run_id(force_orq_routing: None) -> Non
     )
 
     assert len(scenarios) == 1
-    assert sink['metadata']['evaluatorq_run_id']
+    assert 'evaluatorq_run_id' not in (sink.get('metadata') or {})
 
 
 @pytest.mark.asyncio
-async def test_each_entrypoint_call_gets_a_distinct_run_id(force_orq_routing: None) -> None:
-    """Two separate calls are two separate runs — the ids must not match."""
-    first: dict[str, Any] = {}
-    second: dict[str, Any] = {}
-    await generate_personas(['a'], generation_client=_FakeClient(first, _one_persona))  # type: ignore[arg-type]
-    await generate_personas(['b'], generation_client=_FakeClient(second, _one_persona))  # type: ignore[arg-type]
+async def test_generate_personas_inherits_an_outer_run_id() -> None:
+    """Called from inside a run, the outer id still reaches the call.
 
-    assert first['metadata']['evaluatorq_run_id'] != second['metadata']['evaluatorq_run_id']
+    This is why dropping the mint is safe: the sim paths that matter bind a run
+    id upstream, and the ContextVar rail carries it down here.
+    """
+    from evaluatorq.common.thread_context import evaluatorq_run_id
 
+    sink: dict[str, Any] = {}
+    with evaluatorq_run_id('outer-run'):
+        await generate_personas(
+            ['angry customer'],
+            generation_client=_FakeClient(sink, _one_persona),  # type: ignore[arg-type]
+        )
 
-def test_sim_run_scope_stamps_the_root_span() -> None:
-    """The scope stamps the span attribute and binds the ContextVar."""
-    from evaluatorq.common.thread_context import pipeline_metadata
-
-    attrs: dict[str, Any] = {}
-    span = SimpleNamespace(set_attribute=lambda k, v: attrs.__setitem__(k, v))
-
-    with _sim_run_scope('r1', span):
-        assert pipeline_metadata()['evaluatorq_run_id'] == 'r1'
-    assert attrs == {'orq.evaluatorq_run_id': 'r1'}
-    assert 'evaluatorq_run_id' not in pipeline_metadata()
-
-
-def test_sim_run_scope_without_a_span_still_binds() -> None:
-    """Span-less entrypoints (generate_personas/_scenarios) still bind the run id."""
-    from evaluatorq.common.thread_context import pipeline_metadata
-
-    with _sim_run_scope('r2', None):
-        assert pipeline_metadata()['evaluatorq_run_id'] == 'r2'
+    assert sink['metadata']['evaluatorq_run_id'] == 'outer-run'
 
 
 # ---------------------------------------------------------------------------
-# Gap 1: prove a REAL root span (not a hand-built SimpleNamespace) actually
-# receives the ``orq.evaluatorq_run_id`` stamp when driving the real
-# entrypoints. `_sim_run_scope` alone is tested above, but nothing upstream
-# proves `simulate()`/`generate()` hand it a live span.
+# Prove a REAL root span (not a hand-built SimpleNamespace) actually receives
+# the ``orq.evaluatorq_run_id`` stamp when driving the real entrypoints.
 # ---------------------------------------------------------------------------
 
 
@@ -223,8 +207,8 @@ async def test_generate_stamps_run_id_on_root_span(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Drive the real ``generate()`` end to end (inner generation mocked out)
-    and confirm the ``orq.simulation.generate`` root span — wholly untested
-    before this — comes back carrying a non-empty ``orq.evaluatorq_run_id``."""
+    and confirm the ``orq.simulation.generate`` root span comes back carrying a
+    non-empty ``orq.evaluatorq_run_id``."""
     from evaluatorq.simulation import api
     from evaluatorq.simulation.api import generate
 
@@ -243,3 +227,26 @@ async def test_generate_stamps_run_id_on_root_span(
     span = _find(span_collector, 'orq.simulation.generate')
     run_id = _attrs(span).get('orq.evaluatorq_run_id')
     assert run_id, f'expected a non-empty run id on the root span, got {run_id!r}'
+
+
+@pytest.mark.asyncio
+async def test_two_generate_calls_get_distinct_run_ids(
+    span_collector: _CollectingExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Separate spans, separate ids — two calls are two runs."""
+    from evaluatorq.simulation import api
+    from evaluatorq.simulation.api import generate
+
+    async def _fake_generate(**_kwargs: Any) -> tuple[list[Any], None, bool]:
+        return [], None, False
+
+    monkeypatch.setattr(api, '_generate_datapoints_inner', _fake_generate)
+
+    await generate(agent_description='a', num_personas=1, num_scenarios=1)
+    await generate(agent_description='b', num_personas=1, num_scenarios=1)
+
+    ids = [_attrs(s).get('orq.evaluatorq_run_id') for s in span_collector.spans if s.name == 'orq.simulation.generate']
+    assert len(ids) == 2
+    assert all(ids)
+    assert ids[0] != ids[1]

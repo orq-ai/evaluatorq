@@ -27,10 +27,10 @@ from evaluatorq.common.replay import REPLAY_VERSION, REPLAY_VERSION_KEY
 from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.common.target_call import call_target_with_retry, default_map_error
 from evaluatorq.common.thread_context import (
+    _evaluatorq_run_scope,
     build_static_thread_id,
     conversation_thread,
     evaluatorq_pipeline,
-    evaluatorq_run_id,
 )
 from evaluatorq.common.tracing import AttrMap, set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentTarget, Message
@@ -363,7 +363,7 @@ def _coerce_run_result(result: Any) -> tuple[RedTeamReport, RedTeamRunMetrics]:
 
 @asynccontextmanager
 async def _redteam_run_lifecycle(manifest_writer: Any):  # noqa: RUF029
-    """Keep the manifest terminal state truthful while tagging all child calls."""
+    """Keep the manifest terminal state truthful for the red-team pipeline."""
     with evaluatorq_pipeline('red_teaming'):
         try:
             yield
@@ -375,6 +375,18 @@ async def _redteam_run_lifecycle(manifest_writer: Any):  # noqa: RUF029
             if manifest_writer is not None:
                 manifest_writer.fail(str(exc) or type(exc).__name__)
             raise
+
+
+@asynccontextmanager
+async def _redteam_root_scope(run_id: str, attributes: AttrMap, parent_context: Any):
+    """Open the root span and bind its run id for the red-team body.
+
+    Yields:
+        The root pipeline span.
+    """
+    async with with_redteam_span('Orq Red Team', attributes, parent_context=parent_context) as pipeline_span:
+        with _evaluatorq_run_scope(run_id, pipeline_span):
+            yield pipeline_span
 
 
 # ---------------------------------------------------------------------------
@@ -833,17 +845,14 @@ async def red_team(
     }
 
     async with (  # noqa: SIM117
-        _redteam_run_lifecycle(manifest_writer),
         tracing_session(name or 'red-team', trace_type='redteam') as tracing_context,
-        evaluatorq_run_id(tracing_context.run_id),
+        _redteam_run_lifecycle(manifest_writer),
     ):
-        async with with_redteam_span(
-            'Orq Red Team',
+        async with _redteam_root_scope(
+            tracing_context.run_id,
             pipeline_attributes,
-            parent_context=tracing_context.parent_context,
+            tracing_context.parent_context,
         ) as pipeline_span:
-            if tracing_context.run_id:
-                set_span_attrs(pipeline_span, {'orq.evaluatorq_run_id': tracing_context.run_id})
             if resolved_mode in (Pipeline.DYNAMIC, Pipeline.HYBRID):
                 run_result = await _run_dynamic_or_hybrid(
                     targets=targets,

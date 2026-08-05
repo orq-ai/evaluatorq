@@ -20,11 +20,13 @@ from __future__ import annotations
 
 import uuid
 from contextlib import contextmanager
-from contextvars import ContextVar, Token
+from contextvars import ContextVar
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+    from opentelemetry.trace import Span
 
 _thread_id: ContextVar[str | None] = ContextVar('orq_thread_id', default=None)
 
@@ -133,43 +135,35 @@ def evaluatorq_pipeline(label: str) -> Iterator[str]:
         _pipeline.reset(token)
 
 
-class _RunIdScope:
-    """Binds the run id, restoring the previous value on exit.
-
-    Usable as either a sync or an async context manager. The async form exists
-    so a caller can bind inside an existing ``async with (...)`` group — the
-    red-team pipeline does this to avoid indenting its whole body under a
-    second ``with``, which would otherwise turn every future merge of that
-    function into a reindent conflict.
-    """
-
-    def __init__(self, run_id: str) -> None:
-        self._run_id = run_id
-        self._token: Token[str | None] | None = None
-
-    def __enter__(self) -> str:
-        self._token = _run_id.set(self._run_id)
-        return self._run_id
-
-    def __exit__(self, *_exc_info: object) -> None:
-        if self._token is not None:
-            _run_id.reset(self._token)
-            self._token = None
-
-    async def __aenter__(self) -> str:
-        return self.__enter__()
-
-    async def __aexit__(self, *exc_info: object) -> None:
-        self.__exit__(*exc_info)
-
-
-def evaluatorq_run_id(run_id: str) -> _RunIdScope:
+@contextmanager
+def evaluatorq_run_id(run_id: str) -> Iterator[str]:
     """Bind the run id for a red-team / agent-simulation run.
 
     Restores the previous value on exit so nested/sequential runs don't bleed
-    (mirrors :func:`evaluatorq_pipeline`). Works as ``with`` or ``async with``.
+    (mirrors :func:`evaluatorq_pipeline`).
+
+    Yields:
+        The bound run id.
     """
-    return _RunIdScope(run_id)
+    token = _run_id.set(run_id)
+    try:
+        yield run_id
+    finally:
+        _run_id.reset(token)
+
+
+@contextmanager
+def _evaluatorq_run_scope(run_id: str, span: Span | None = None) -> Iterator[str]:
+    """Stamp a root span and bind its run id for nested work.
+
+    Yields:
+        The bound run id.
+    """
+    from evaluatorq.common.tracing import set_span_attrs
+
+    set_span_attrs(span, {'orq.evaluatorq_run_id': run_id})
+    with evaluatorq_run_id(run_id):
+        yield run_id
 
 
 @contextmanager
