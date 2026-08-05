@@ -221,10 +221,24 @@ def scan(roots: list[Path] | None = None) -> list[ReportCard]:
     are de-duplicated out; the remaining (legacy, manifest-less) reports fall back
     to the full-report ``_card`` path. A runs dir with only legacy reports lists
     exactly as before.
+
+    Roots are resolved and de-duplicated (order-preserving) before scanning:
+    with multiple CLI paths the same directory can arrive twice — a repeated
+    argument, relative + absolute forms of one repo, or an argument that sits
+    inside another's expansion — and a duplicated root would double-count every
+    report in the landing rollups (jobs, spend, costed runs).
     """
     from evaluatorq.common.run_manifest import list_manifests
 
     roots = roots or _default_roots()
+    seen_roots: set[Path] = set()
+    deduped_roots: list[Path] = []
+    for root in roots:
+        resolved = root.resolve()
+        if resolved not in seen_roots:
+            seen_roots.add(resolved)
+            deduped_roots.append(root)
+    roots = deduped_roots
     cards: list[ReportCard] = []
     covered: set[Path] = set()
     for root in roots:

@@ -128,10 +128,14 @@ def dashboard(
                     path / '.evaluatorq' / 'runs',
                     path / '.evaluatorq' / 'sim-runs',
                 ]
-            else:
+            elif path.is_file():
                 # Scan the parent so the report resolves, but surface the direct link.
                 roots.append(path.parent)
                 direct_rids.append(report_id(path))
+            else:
+                # A typo'd path would otherwise become a parent root and print a
+                # confident Direct-report URL for a file that does not exist.
+                raise typer.BadParameter(f'Path does not exist: {path}')
 
     for rid in direct_rids:
         typer.echo(f'Direct report URL: http://{host}:{port}/r/{rid}')
