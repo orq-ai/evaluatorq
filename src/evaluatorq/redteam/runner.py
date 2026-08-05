@@ -233,6 +233,13 @@ async def _send_cleaned_results(
             logger.debug('No cleaned results to send to Orq platform')
         return
 
+    if len(cleaned) < len(results):
+        # A partial cleaning drop is a legitimate Explorer-mismatch cause
+        # upstream of the platform gap — surface it at WARNING, not INFO.
+        logger.warning(
+            f'{len(results) - len(cleaned)} of {len(results)} result row(s) had no real '
+            f'output and were dropped before upload; {len(cleaned)} will be uploaded.'
+        )
     logger.info(f'Uploading {len(cleaned)} cleaned result(s) to Orq platform ({len(results)} raw report rows)')
     if report is not None:
         # Recorded before the attempt so even an exception path leaves the
@@ -253,6 +260,14 @@ async def _send_cleaned_results(
             base_url=upload_base_url,
         )
         if response is None:
+            # send_results_to_orq swallows its own errors (raise_on_error=False)
+            # and returns None; without this line the most common failure — the
+            # platform rejecting the upload — would exit the runner wordless.
+            logger.warning(
+                f'Upload of {len(cleaned)} result(s) to Orq was not confirmed '
+                f'(see the send_results error above); rows_created stays unset. '
+                f'Results have been saved locally.'
+            )
             return
         # send_results_to_orq already warns when rows_created < uploaded.
         logger.info(
@@ -263,8 +278,11 @@ async def _send_cleaned_results(
             report.rows_created = response.rows_created
             if response.experiment_url:
                 report.experiment_url = response.experiment_url
-    except Exception as e:
-        logger.error(f'Failed to upload {len(cleaned)} results to Orq platform: {e}. Results have been saved locally.')
+    except Exception:
+        # With raise_on_error=False the upload call swallows its own errors, so
+        # anything landing here is a bug in the diagnostics block above — keep
+        # the traceback instead of mislabelling it as an upload failure.
+        logger.exception(f'Error while recording upload diagnostics for {len(cleaned)} uploaded result(s)')
 
 
 def _datapoint_breakdown(datapoints: list[Any]) -> dict[str, int]:

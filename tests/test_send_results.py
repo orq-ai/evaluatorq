@@ -668,6 +668,35 @@ class TestUploadDiagnostics:
         assert not [ln for ln in lines if "registered" in ln]
 
     @pytest.mark.asyncio
+    async def test_partial_gap_warning_carries_both_counts(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        build_results: Callable[..., list[DataPointResult]],
+    ):
+        """A 3-of-5 partial registration warns with the exact numbers."""
+        from loguru import logger as _logger
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", self._fake_post(rows_created=3))
+        five_results = [r for _ in range(5) for r in build_results(0.5)]
+        lines, handler_id = self._capture_loguru()
+        try:
+            response = await send_results_to_orq(
+                api_key="key",
+                evaluation_name="eval",
+                evaluation_description=None,
+                dataset_id=None,
+                results=five_results,
+                start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+            )
+        finally:
+            _logger.remove(handler_id)
+        assert response is not None
+        assert response.rows_created == 3
+        gap_warnings = [ln for ln in lines if "registered 3 of 5 uploaded" in ln]
+        assert len(gap_warnings) == 1
+
+    @pytest.mark.asyncio
     async def test_gap_warning_without_url_uses_placeholder(
         self,
         monkeypatch: pytest.MonkeyPatch,

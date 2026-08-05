@@ -383,3 +383,103 @@ async def test_auto_saved_run_json_contains_diagnostics(tmp_path) -> None:
     assert data["uploaded_count"] == 1
     assert data["rows_created"] == 1
     assert data["experiment_url"] == "https://orq.example/experiments/abc"
+
+
+def _make_empty_result() -> DataPointResult:
+    """A row whose only job output is None — stripped during cleaning."""
+    return DataPointResult(
+        data_point=DataPoint(inputs={"x": 2}),
+        job_results=[JobResult(job_name="j", output=None)],  # pyright: ignore[reportArgumentType]
+    )
+
+
+def _capture_loguru() -> tuple[list[str], int]:
+    from loguru import logger as _logger
+
+    lines: list[str] = []
+    handler_id = _logger.add(lambda m: lines.append(str(m)), level="DEBUG")
+    return lines, handler_id
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_upload_warns_instead_of_silent_return() -> None:
+    """send_results_to_orq returning None (it swallowed an upload error) must
+    leave a WARNING, not exit wordless after the 'Uploading N...' line."""
+    from loguru import logger as _logger
+
+    report = _make_report()
+    lines, handler_id = _capture_loguru()
+    try:
+        with (
+            patch.dict(os.environ, {"ORQ_API_KEY": "test"}),
+            patch(
+                "evaluatorq.redteam.runner.send_results_to_orq",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
+            await _send_cleaned_results(
+                results=[_make_result()],
+                name="n",
+                description="d",
+                start_time=datetime.now(tz=timezone.utc),
+                report=report,
+            )
+    finally:
+        _logger.remove(handler_id)
+    warnings = [ln for ln in lines if "was not confirmed" in ln]
+    assert len(warnings) == 1
+    assert report.uploaded_count == 1
+    assert report.rows_created is None
+
+
+@pytest.mark.asyncio
+async def test_partial_cleaning_drop_warns() -> None:
+    """A partial drop (some rows stripped, some uploaded) warns with both counts."""
+    from loguru import logger as _logger
+
+    lines, handler_id = _capture_loguru()
+    try:
+        with (
+            patch.dict(os.environ, {"ORQ_API_KEY": "test"}),
+            patch(
+                "evaluatorq.redteam.runner.send_results_to_orq",
+                new_callable=AsyncMock,
+                return_value=_make_response(rows_created=1),
+            ),
+        ):
+            await _send_cleaned_results(
+                results=[_make_result(), _make_empty_result(), _make_empty_result()],
+                name="n",
+                description="d",
+                start_time=datetime.now(tz=timezone.utc),
+            )
+    finally:
+        _logger.remove(handler_id)
+    drop_warnings = [ln for ln in lines if "2 of 3 result row(s) had no real" in ln]
+    assert len(drop_warnings) == 1
+
+
+@pytest.mark.asyncio
+async def test_no_cleaning_drop_warning_when_all_rows_survive() -> None:
+    from loguru import logger as _logger
+
+    lines, handler_id = _capture_loguru()
+    try:
+        with (
+            patch.dict(os.environ, {"ORQ_API_KEY": "test"}),
+            patch(
+                "evaluatorq.redteam.runner.send_results_to_orq",
+                new_callable=AsyncMock,
+                return_value=_make_response(rows_created=1),
+            ),
+        ):
+            await _send_cleaned_results(
+                results=[_make_result()],
+                name="n",
+                description="d",
+                start_time=datetime.now(tz=timezone.utc),
+            )
+    finally:
+        _logger.remove(handler_id)
+    assert not [ln for ln in lines if "had no real output and were dropped" in ln]
