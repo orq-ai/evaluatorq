@@ -116,3 +116,38 @@ async def test_dynamic_memory_cleanup(
         )
 
     assert len(mock_backend_bundle.cleaned_entity_ids) > 0, 'Expected memory cleanup to be called'
+
+
+# Covers the re-widening fix in `_run_dynamic_or_hybrid` — the expensive path, where
+# reading `categories=[]` as "no filter" meant a full category sweep against a live
+# attacker model. The static equivalent lives in test_static_pipeline.py.
+@pytest.mark.parametrize(
+    ('categories', 'vulnerabilities'),
+    [([], None), (None, [])],
+    ids=['categories', 'vulnerabilities'],
+)
+@pytest.mark.asyncio
+async def test_dynamic_empty_filter_hard_fails_instead_of_sweeping_everything(
+    categories: list[str] | None,
+    vulnerabilities: list[str] | None,
+    mock_llm_client: DeterministicAsyncOpenAI,
+    mock_backend_bundle: MockBackend,
+) -> None:
+    """An empty selection must not re-widen to every category on the dynamic path."""
+    from evaluatorq.redteam.exceptions import RedTeamError
+
+    with _dynamic_patches(mock_backend_bundle), pytest.raises(RedTeamError, match='zero datapoints') as exc:
+        await red_team(
+            'agent:e2e-test-agent',
+            mode='dynamic',
+            categories=categories,
+            vulnerabilities=vulnerabilities,
+            generate_strategies=False,
+            parallelism=2,
+            llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
+        )
+
+    # The error names the argument the caller actually passed, not a merged
+    # `categories=` list carrying vocabulary they never typed.
+    expected = 'categories=[]' if categories is not None else 'vulnerabilities=[]'
+    assert expected in str(exc.value)
