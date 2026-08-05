@@ -1,5 +1,6 @@
 """EvaluatorQ Python - An evaluation framework for LLM applications."""
 
+from .contracts import AgentResponse
 from .deployment import (
     DeploymentResponse,
     MessageDict,
@@ -46,6 +47,7 @@ from .types import (
 )
 
 __all__ = [
+    'AgentResponse',
     # Types
     'DataPoint',
     'DataPointDict',
