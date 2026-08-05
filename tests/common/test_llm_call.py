@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -298,3 +299,65 @@ async def test_propagates_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
             span=None,
             timeout_s=5.0,
         )
+
+
+def _orq_client() -> MagicMock:
+    client = MagicMock()
+    client.base_url = 'https://my.orq.ai/v3/router'
+    client.chat.completions.create = AsyncMock(return_value=_fake_response())
+    return client
+
+
+async def _run(client: MagicMock, extra_kwargs: dict[str, Any] | None = None) -> dict[str, Any]:
+    await execute_chat_completion(
+        client=client,
+        model='m',
+        messages=[{'role': 'user', 'content': 'x'}],
+        span=None,
+        timeout_s=5.0,
+        extra_kwargs=extra_kwargs,
+    )
+    return client.chat.completions.create.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_pipeline_metadata_tags_when_client_routes_through_orq(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    from evaluatorq.common.thread_context import evaluatorq_pipeline
+
+    client = _orq_client()
+    with evaluatorq_pipeline('red_teaming'):
+        kwargs = await _run(client)
+    assert kwargs['metadata'] == {'evaluatorq_pipeline': 'red_teaming'}
+
+
+@pytest.mark.asyncio
+async def test_pipeline_metadata_absent_for_direct_openai_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    from evaluatorq.common.thread_context import evaluatorq_pipeline
+
+    client = MagicMock()
+    client.base_url = 'https://api.openai.com/v1'
+    client.chat.completions.create = AsyncMock(return_value=_fake_response())
+    with evaluatorq_pipeline('red_teaming'):
+        kwargs = await _run(client)
+    assert 'metadata' not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_pipeline_metadata_absent_when_no_pipeline_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    kwargs = await _run(_orq_client())
+    assert 'metadata' not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_caller_metadata_wins_over_pipeline_label(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.common.llm_call.get_trace_context_headers', AsyncMock(return_value={}))
+    from evaluatorq.common.thread_context import evaluatorq_pipeline
+
+    client = _orq_client()
+    with evaluatorq_pipeline('red_teaming'):
+        kwargs = await _run(client, extra_kwargs={'metadata': {'evaluatorq_pipeline': 'caller', 'k': 'v'}})
+    # caller-supplied value wins on key conflict; both keys present
+    assert kwargs['metadata'] == {'evaluatorq_pipeline': 'caller', 'k': 'v'}

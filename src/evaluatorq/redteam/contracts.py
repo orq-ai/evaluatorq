@@ -701,6 +701,10 @@ class LLMConfig(BaseModel):
         rather than on ``ORQ_API_KEY`` avoids sending ``retry`` to an injected
         OpenAI client just because ``ORQ_API_KEY`` is in the environment for
         tracing/result-upload.
+
+        This dict fully owns the ``metadata`` key on the request: a caller that
+        passes ``extra_body=cfg.retry_extra_body(...)`` and also wants its own
+        ``metadata`` must merge the two dicts itself.
         """
         from evaluatorq.common.llm_client import client_routes_through_orq
         from evaluatorq.common.thread_context import pipeline_metadata_param

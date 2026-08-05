@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
+from evaluatorq.common.llm_client import client_routes_through_orq
+from evaluatorq.common.thread_context import pipeline_metadata, thread_body_param
 from evaluatorq.common.tracing import record_llm_response
 from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.backends._errors import extract_provider_error_code, extract_status_code
@@ -107,9 +109,6 @@ class OpenAIModelTarget(AgentTarget):
         # the pipeline surface via the documented `metadata` property, and the run
         # thread via the router-only `thread` extra_body field. Only when routing
         # through Orq — a plain OpenAI endpoint has no such trace and rejects `thread`.
-        from evaluatorq.common.llm_client import client_routes_through_orq
-        from evaluatorq.common.thread_context import pipeline_metadata, thread_body_param
-
         create_kwargs: dict[str, Any] = {
             'model': self.model,
             'messages': completion_messages,
