@@ -13,6 +13,7 @@ Semantic convention throughout this package:
 
 from __future__ import annotations
 
+from evaluatorq.common.replay import ReplayError
 from evaluatorq.contracts import AgentTarget
 from evaluatorq.openresponses import (
     append_assistant_turn,
@@ -176,6 +177,7 @@ __all__ = [
     # Core public types
     'RedTeamReport',
     'RedTeamResult',
+    'ReplayError',
     'ReportSnapshot',
     'ReportSummary',
     'RichHooks',

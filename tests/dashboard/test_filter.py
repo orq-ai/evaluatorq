@@ -341,6 +341,25 @@ class TestFilterDefUnit:
         assert 'vulnerability' in opts
         assert 'agent' in opts
 
+    def test_redteam_delivery_method_options_use_values_not_enum_reprs(self) -> None:
+        """Options must carry 'direct-request', never 'DeliveryMethod.DIRECT_REQUEST'.
+
+        The fixture's attacks hold DeliveryMethod members, and str(member) renders the
+        repr on the 3.10 StrEnum polyfill — so this pins delivery_method_str as the
+        rendering path for the filter rail and chart labels.
+        """
+        from evaluatorq.dashboard.filters import FILTERS
+
+        report = _rt_report()
+        assert FILTERS['redteam'].options(report)['delivery_method'] == ['direct-request']
+
+    def test_redteam_apply_delivery_method_filter(self) -> None:
+        from evaluatorq.dashboard.filters import FILTERS
+
+        report = _rt_report()
+        assert len(FILTERS['redteam'].apply(report, {'delivery_method': ['direct-request']})) == 4
+        assert FILTERS['redteam'].apply(report, {'delivery_method': ['base64']}) == []
+
     def test_redteam_apply_category_filter(self) -> None:
         from evaluatorq.dashboard.filters import FILTERS
 

@@ -230,6 +230,41 @@ Strategies can declare capability requirements to skip attacks that don't apply 
 
 Available capability tags: `code_execution`, `shell_access`, `file_system`, `web_request`, `database`, `email`, `messaging`, `memory_read`, `memory_write`, `knowledge_retrieval`, `user_data`.
 
+### Custom delivery methods
+
+`delivery_method` is an **open set**. The canonical methods live in the `DeliveryMethod`
+enum (each mapped to a technique family in `DELIVERY_METHOD_CATEGORY`), and
+`delivery_method_registry.py` mirrors the vulnerability registry so you can add your own
+without touching the enum:
+
+```python
+from evaluatorq.redteam.delivery_method_registry import (
+    register_delivery_method,
+    is_known_delivery_method,
+)
+
+# Register a custom method so it validates as known.
+register_delivery_method('emoji-smuggling', category='obfuscation')
+
+is_known_delivery_method('emoji-smuggling')  # True
+```
+
+Unlike vulnerabilities (reject-unknown, since an unknown vuln has no strategies or
+evaluator), delivery methods are **coerce-known + passthrough-unknown**: an unregistered
+value is a harmless filter label that either matches a dataset row spelled the same or
+does not. Filtering therefore works without registering anything — registering only
+suppresses the "unknown delivery method" warnings: the `--delivery-method` CLI flag warns up
+front via `typer.echo`, and a programmatic `red_team()` run surfaces an unmatched method through
+the pipeline's post-filter check as a `loguru` warning (the `RedTeamInput` validator itself resolves
+silently). A registered value stays a plain string; only enum members
+resolve to a `DeliveryMethod` object.
+
+The registry is **in-memory and process-local** — it is not persisted and there is no
+plugin/entry-point loading. Registering in a standalone script does not make the value
+known to a separate `eq redteam run` process; to get the CLI benefit, register in the
+same process that invokes the CLI (or accept the warning, since filtering works either
+way).
+
 ## Adding a new framework
 
 Frameworks are a reporting/compliance layer on top of vulnerabilities. Adding a framework means:

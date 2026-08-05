@@ -12,26 +12,28 @@ def _reset_reasoning_rejectors():
 
 
 @pytest.fixture(autouse=True)
-def _disable_live_tracing_export(monkeypatch):
-    """Never export OTel spans to the live Orq backend from the test suite.
-
-    A developer with ORQ_API_KEY in their env auto-enables tracing, so every
-    test that runs a mini pipeline (simulate/red_team) would flush a real trace
-    to Orq — dozens of loose per-test `orq.simulation.pipeline` traces polluting
-    the workspace, plus network I/O in unit tests. The tracing tests build their
-    own in-memory TracerProvider and patch `get_tracer`, so they bypass this gate
-    and are unaffected.
-    """
-    monkeypatch.setenv("ORQ_DISABLE_TRACING", "1")
-    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
-    yield
-
-
-@pytest.fixture(autouse=True)
 def _isolate_run_stores(tmp_path, monkeypatch):
     """Point the redteam/sim run stores at a tmp dir so tests never write
     runs into the repo's real ``.evaluatorq/`` store."""
     monkeypatch.setenv("EVALUATORQ_DIR", str(tmp_path / ".evaluatorq"))
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _disable_real_span_export(monkeypatch):
+    """Keep the suite from installing a live OTLP exporter.
+
+    ``init_tracing_if_needed()`` installs a real BatchSpanProcessor whenever
+    ORQ_API_KEY is set, and it latches for the process — so on a developer
+    machine with a real key the first test that reaches it wins, and every span
+    the rest of the suite produces is queued for export to my.orq.ai and flushed
+    at interpreter shutdown (a 401, or worse, a successful upload of test spans).
+    Which test gets there first depends on file order, which is why this shows
+    up in some batches and not others. Tests that exercise setup itself opt back
+    in by deleting this var.
+    """
+    monkeypatch.setenv("ORQ_DISABLE_TRACING", "1")
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
     yield
 
 

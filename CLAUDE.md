@@ -83,6 +83,7 @@ src/evaluatorq/
 └── redteam/                 # Red teaming subpackage
     ├── contracts.py         # Red-team-specific data models, enums, Pydantic schemas (shared cross-subpackage models live in top-level contracts.py)
     ├── vulnerability_registry.py  # Single source of truth for vulnerabilities
+    ├── delivery_method_registry.py # Canonical + custom delivery methods (register/resolve/is_known)
     ├── runner.py            # Unified red_team() entry point
     ├── cli.py               # Typer CLI for red teaming
     ├── hooks.py             # Pipeline lifecycle hooks (DefaultHooks, RichHooks)

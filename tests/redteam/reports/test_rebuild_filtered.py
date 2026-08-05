@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from evaluatorq.contracts import AgentContext
 from evaluatorq.redteam.contracts import (
     AgentInfo,
     AttackInfo,
@@ -19,7 +20,7 @@ from evaluatorq.redteam.contracts import (
     UnifiedEvaluationResult,
 )
 from evaluatorq.redteam.reports.converters import compute_report_summary, rebuild_filtered_report
-from evaluatorq.redteam.reports.sections import build_report_sections
+from evaluatorq.redteam.reports.sections import _build_agent_context_section, build_report_sections
 
 
 def _make_result(
@@ -134,3 +135,20 @@ def test_multi_target_structure_preserved_after_rebuild() -> None:
     kinds = {s.kind for s in build_report_sections(rebuilt)}
     assert 'agent_comparison' in kinds
     assert 'agent_disagreements' in kinds
+
+
+def test_agent_context_section_has_the_same_keys_for_rich_and_minimal_reports() -> None:
+    results = [_make_result(agent_key='agent-a')]
+    rich_report = _make_report(results, tested_agents=[]).model_copy(
+        update={'agent_contexts': {'agent-a': AgentContext(key='agent-a')}}
+    )
+    minimal_report = _make_report(results, tested_agents=['agent-a'])
+
+    rich_section = _build_agent_context_section(rich_report)
+    minimal_section = _build_agent_context_section(minimal_report)
+
+    assert rich_section is not None
+    assert minimal_section is not None
+    rich_keys = set(rich_section.data['agents'][0].keys())
+    minimal_keys = set(minimal_section.data['agents'][0].keys())
+    assert rich_keys == minimal_keys
