@@ -12,6 +12,7 @@ traced via ``orq.simulation.persona_generation`` and its child LLM span.
 
 from __future__ import annotations
 
+# ruff: noqa: S101
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
