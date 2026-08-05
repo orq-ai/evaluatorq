@@ -43,7 +43,7 @@ from evaluatorq.simulation.reports.token_usage import build_token_usage_rows
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import ReportSection
-    from evaluatorq.simulation.types import SimulationResult
+    from evaluatorq.simulation.types import SimulationRecommendation, SimulationResult
 
 # ---------------------------------------------------------------------------
 # Section renderers
@@ -428,10 +428,25 @@ def _render_overview_section(section: ReportSection) -> str:
     return '\n'.join(lines)
 
 
+def _render_recommendations_section(section: ReportSection) -> str:
+    rows = section.data.get('rows', [])
+    if not rows:
+        return f'## {section.title}\n\nNo remediation suggestions.'
+    lines = [f'## {section.title}', '']
+    for r in rows:
+        datapoint = f' (datapoint `{r["datapoint_id"]}`)' if r.get('datapoint_id') else ''
+        lines.extend((f'### [#{r["index"]}](#{r["anchor"]}) {r["persona"]} / {r["scenario"]}{datapoint}', ''))
+        lines.extend(f'- **Flagged:** {t}' for t in r.get('triggers', []))
+        lines.extend(f'- **Fix:** {s}' for s in r.get('suggestions', []))
+        lines.append('')
+    return '\n'.join(lines).rstrip()
+
+
 _SECTION_RENDERERS = {
     'summary': _render_summary_section,
     'overview': _render_overview_section,
     'failures_first': _render_failures_first_section,
+    'recommendations': _render_recommendations_section,
     'persona_scenario_heatmap': _render_persona_scenario_heatmap_section,
     'score_distribution': _render_score_distribution_section,
     'turn_quality_timeline': _render_turn_quality_timeline_section,
@@ -463,6 +478,7 @@ def export_markdown(
     target: str = 'agent',
     run_date: datetime | None = None,
     executive_summary: str | None = None,
+    recommendations: list[SimulationRecommendation] | None = None,
 ) -> str:
     """Render a list of simulation results as a Markdown report.
 
@@ -471,8 +487,13 @@ def export_markdown(
         target: Human-readable target name for the document header.
         run_date: Timestamp shown in the header (defaults to now in UTC).
         executive_summary: Optional LLM-generated narrative to surface in the summary section.
+        recommendations: Pre-generated remediation suggestions
+            (``SimulationRun.recommendations``); rendered as their own
+            section when non-empty.
     """
-    sections = build_report_sections(results, executive_summary=executive_summary)
+    sections = build_report_sections(
+        results, executive_summary=executive_summary, recommendations=recommendations
+    )
     summary_data = next(
         (s.data for s in sections if s.kind == 'summary'),
         {},

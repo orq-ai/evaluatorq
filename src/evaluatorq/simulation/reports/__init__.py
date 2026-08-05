@@ -12,10 +12,12 @@ degrades gracefully to a tables-only layout.
 
 from evaluatorq.simulation.reports.export_html import export_html
 from evaluatorq.simulation.reports.export_md import export_markdown
+from evaluatorq.simulation.reports.recommendations import generate_recommendations
 from evaluatorq.simulation.reports.sections import build_report_sections
 
 __all__ = [
     'build_report_sections',
     'export_html',
     'export_markdown',
+    'generate_recommendations',
 ]
