@@ -9,6 +9,7 @@ from evaluatorq.common.target_call import (
     call_target_with_retry,
     classify_error_type,
     default_map_error,
+    extract_status_code,
 )
 from evaluatorq.contracts import AgentResponse, AgentResponseError, Message
 
@@ -216,3 +217,67 @@ async def test_server_error_500_still_retried():
     assert r.succeeded is False
     assert r.attempts == 3
     assert t.calls == 3
+
+
+class _HttpxStyleError(Exception):
+    """Stub of httpx.HTTPStatusError: status only under .response.status_code."""
+
+    def __init__(self, status_code: int) -> None:
+        super().__init__(f'http status error {status_code}')
+        self.response = type('Resp', (), {'status_code': status_code})()
+
+
+class _AiohttpStyleError(Exception):
+    """Stub of an aiohttp-style error carrying .status."""
+
+    def __init__(self, status: int) -> None:
+        super().__init__(f'aiohttp error {status}')
+        self.status = status
+
+
+def _wrapped(status_code: int) -> RuntimeError:
+    """A wrapper exception hiding the client error under __cause__."""
+    wrapper = RuntimeError('target adapter failed')
+    wrapper.__cause__ = _ClientError(status_code)
+    return wrapper
+
+
+def test_extract_status_code_shapes():
+    assert extract_status_code(_ClientError(400)) == 400
+    assert extract_status_code(_HttpxStyleError(403)) == 403
+    assert extract_status_code(_AiohttpStyleError(429)) == 429
+    assert extract_status_code(_wrapped(400)) == 400
+    assert extract_status_code(RuntimeError('no status anywhere')) is None
+    # bool is an int subclass but never a status
+    boolish = RuntimeError('x')
+    boolish.status_code = True  # type: ignore[attr-defined]
+    assert extract_status_code(boolish) is None
+
+
+@pytest.mark.asyncio
+async def test_httpx_style_client_error_is_not_retried():
+    # Vercel targets raise httpx.HTTPStatusError: status lives on .response.
+    t = _Target([_HttpxStyleError(400), _ok('unreachable')])
+    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    assert r.succeeded is False
+    assert r.attempts == 1
+    assert t.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_wrapped_client_error_is_not_retried():
+    # Adapters may wrap the SDK error; the status hides under __cause__.
+    t = _Target([_wrapped(403), _ok('unreachable')])
+    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    assert r.succeeded is False
+    assert r.attempts == 1
+    assert t.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_aiohttp_style_429_still_retried():
+    t = _Target([_AiohttpStyleError(429), _ok('hi')])
+    r = await call_target_with_retry(t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=2)
+    assert r.succeeded is True
+    assert r.attempts == 2
+    assert t.calls == 2

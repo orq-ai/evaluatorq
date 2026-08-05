@@ -55,6 +55,37 @@ def default_map_error(exc: Exception) -> tuple[str, str]:
     return 'target_error', f'{type(exc).__name__}: {exc}'
 
 
+_STATUS_CHAIN_DEPTH = 5  # how far down __cause__ to look for a wrapped HTTP error
+
+
+def extract_status_code(exc: BaseException) -> int | None:
+    """Best-effort HTTP status from the heterogeneous exception shapes targets raise.
+
+    Checks, on the exception and then down its explicit ``__cause__`` chain:
+
+    * ``exc.status_code`` — openai ``APIStatusError`` and friends;
+    * ``exc.status`` — aiohttp-style errors;
+    * ``exc.response.status_code`` — ``httpx.HTTPStatusError`` (Vercel targets).
+
+    Returns ``None`` when no integer status is found. ``bool`` is excluded
+    (it is an ``int`` subclass but never a status).
+    """
+    current: BaseException | None = exc
+    for _ in range(_STATUS_CHAIN_DEPTH):
+        if current is None:
+            return None
+        for attr in ('status_code', 'status'):
+            value = getattr(current, attr, None)
+            if isinstance(value, int) and not isinstance(value, bool):
+                return value
+        response = getattr(current, 'response', None)
+        value = getattr(response, 'status_code', None)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        current = current.__cause__
+    return None
+
+
 def _coerce_to_agent_response(raw: Any) -> AgentResponse:
     """Wrap a plain ``str`` return into ``AgentResponse`` for legacy targets."""
     if isinstance(raw, AgentResponse):
@@ -151,11 +182,12 @@ async def call_target_with_retry(
             )
             last_error = last_response.error
             last_details = {'exception_type': type(exc).__name__, 'raw_message': str(exc), 'attempts': attempt + 1}
-            # Client errors (bad request, auth, permission scope) are
-            # deterministic — retrying replays the same rejection. 408/429 stay
-            # retryable (timeout / rate limit).
-            status = getattr(exc, 'status_code', None)
-            if isinstance(status, int) and 400 <= status < 500 and status not in (408, 429):
+            # 4xx client errors are non-retryable by default — bad request,
+            # auth, permission scope, conflict etc. are deterministic, so a
+            # retry replays the same rejection. The only exceptions are 408
+            # (timeout) and 429 (rate limit), which stay retryable.
+            status = extract_status_code(exc)
+            if status is not None and 400 <= status < 500 and status not in (408, 429):
                 logger.warning(f'Target call failed with non-retryable client error ({status}); not retrying')
                 break
 

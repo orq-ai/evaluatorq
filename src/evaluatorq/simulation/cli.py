@@ -135,8 +135,12 @@ def _resolve_target(
         raise typer.BadParameter('Provide exactly one of: --target, --vercel-url, --openai-model')
     if len(active) > 1:
         raise typer.BadParameter(f'Only one target flag allowed; got: {", ".join(active)}')
+    if memory_entity_id is not None and not memory_entity_id.strip():
+        # A blank id would be silently dropped downstream (falsy check in the
+        # target) and reproduce the exact 400 the flag exists to prevent.
+        raise typer.BadParameter('--memory-entity cannot be blank.')
     if memory_entity_id is not None and target is None:
-        raise typer.BadParameter('--memory-entity requires --target agent:<key>.')
+        raise typer.BadParameter('--memory-entity requires --target agent:<key> (or a bare <key>).')
 
     if target is not None:
         from evaluatorq.redteam.contracts import TargetKind
@@ -149,7 +153,7 @@ def _resolve_target(
             return agent_target
         if kind == TargetKind.DEPLOYMENT:
             if memory_entity_id is not None:
-                raise typer.BadParameter('--memory-entity requires --target agent:<key>.')
+                raise typer.BadParameter('--memory-entity requires --target agent:<key> (or a bare <key>).')
             _require_orq_api_key('--target deployment:<key>')
             from evaluatorq.simulation.adapters import from_orq_deployment
 
@@ -487,9 +491,9 @@ def simulate(
         typer.Option(
             '--memory-entity',
             help=(
-                'Memory entity_id sent with every agent:<key> target call. Required when '
-                'the target agent has a memory store attached (the router 400s without it). '
-                'One id is shared across the run.'
+                'Memory entity_id sent with every agent:<key> (or bare <key>) target call, '
+                'for agents with a memory store attached. Omit to mint a fresh id per run; '
+                'pass one to reuse a specific (e.g. seeded) entity, shared across the run.'
             ),
         ),
     ] = None,
@@ -781,6 +785,17 @@ def run(
             help=('Target to simulate: agent:<key> or deployment:<key>. Bare values default to agent:<key>.'),
         ),
     ] = None,
+    memory_entity: Annotated[
+        str | None,
+        typer.Option(
+            '--memory-entity',
+            help=(
+                'Memory entity_id sent with every agent:<key> (or bare <key>) target call, '
+                'for agents with a memory store attached. Omit to mint a fresh id per run; '
+                'pass one to reuse a specific (e.g. seeded) entity, shared across the run.'
+            ),
+        ),
+    ] = None,
     vercel_url: Annotated[
         str | None,
         typer.Option('--vercel-url', help='Vercel AI SDK endpoint URL.'),
@@ -955,6 +970,7 @@ def run(
             target=target,
             vercel_url=vercel_url,
             openai_model=openai_model,
+            memory_entity_id=memory_entity,
         )
         evaluator_names = _resolve_evaluators(evaluator)
         run = asyncio.run(
