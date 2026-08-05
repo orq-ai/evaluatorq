@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import typing
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from evaluatorq.common.judge import JudgeOutcome, build_eval_replacements, run_judge
+from evaluatorq.common.judge import JudgeOutcome, build_eval_replacements, build_side_replacements, run_judge
 from evaluatorq.common.jury import (
     AggregatorSpec,
     JuryDeliberation,
@@ -497,8 +497,53 @@ def _pairwise_template(criteria: str) -> str:
     return (
         f'# Criteria\n{criteria}\n\n'
         '# Question\n{{question}}\n\n'
-        '# Response A\n{{response_a}}\n\n'
-        '# Response B\n{{response_b}}\n'
+        '# Response A\n{{response_a.output.response}}\n\n'
+        '# Response B\n{{response_b.output.response}}\n'
+    )
+
+
+# A pairwise side is either a bare Output (AgentResponse/str/dict answer), or a
+# bundle `{'data': DataPoint | None, 'output': Output}` carrying the originating
+# input/expected-output alongside the answer.
+PairwiseSideInput = ScorerParameter | Output
+
+
+def _side_to_namespace(prefix: str, side: PairwiseSideInput) -> dict[str, Any]:
+    """Build the `<prefix>.*` template namespace for one pairwise side.
+
+    A bundle (`{'data': DataPoint | None, 'output': Output}`) contributes both
+    input and output; a bare `Output` contributes output only, with an empty
+    input. The bundle discriminator is deliberately narrow — `data` must be
+    `None` or a genuine `DataPoint` — so a bare dict-shaped `Output` that
+    happens to carry `'data'`/`'output'` keys is never misread as a bundle
+    (which would otherwise raise `AttributeError` on `data.inputs`).
+    """
+    is_bundle = (
+        isinstance(side, dict)
+        and 'output' in side
+        and 'data' in side
+        and (side['data'] is None or isinstance(side['data'], DataPoint))
+    )
+    output: Output
+    if is_bundle:
+        bundle = cast('dict[str, Any]', side)
+        data: DataPoint | None = bundle['data']
+        inputs = data.inputs if data is not None else {}
+        expected = output_to_text(data.expected_output) if data is not None else ''
+        output = bundle['output']
+        input_messages = inputs_to_messages(inputs)
+    else:
+        input_messages = []
+        expected = ''
+        output = cast('Output', side)
+    err = output.error.message if isinstance(output, AgentResponse) and output.error else None
+    return build_side_replacements(
+        prefix,
+        input_messages=input_messages,
+        output_messages=output_to_messages(output),
+        expected_output=expected,
+        system_instructions=None,
+        error=err,
     )
 
 
@@ -510,6 +555,7 @@ class PairwiseComparator:
         *,
         panel: list[str],
         criteria: str,
+        template: str | None = None,
         system_prompt: str,
         swap: bool,
         repetitions: int,
@@ -523,6 +569,7 @@ class PairwiseComparator:
         client: Any,
     ) -> None:
         self._panel = panel
+        self._criteria = criteria
         self._system_prompt = system_prompt
         self._swap = swap
         self._repetitions = repetitions
@@ -537,19 +584,24 @@ class PairwiseComparator:
         self._verdict_model = _build_verdict_model(
             verdict_kind='categorical', labels=PAIRWISE_LABELS, score_range=(0.0, 1.0)
         )
-        self._template = _pairwise_template(criteria)
+        self._template = template if template is not None else _pairwise_template(criteria)
 
-    async def compare(self, *, question: str, response_a: str, response_b: str) -> PairwiseComparison:
+    async def compare(
+        self, *, question: str, response_a: PairwiseSideInput, response_b: PairwiseSideInput
+    ) -> PairwiseComparison:
         """Run the panel over one A-vs-B comparison and return the reconciled verdict."""
         if self._client is None:
             self._client = resolve_llm_client(config_client=None).client
 
-        async def judge_fn(first: str, second: str, model: str) -> Prediction:
+        async def judge_fn(first: PairwiseSideInput, second: PairwiseSideInput, model: str) -> Prediction:
+            replacements: dict[str, Any] = {'question': question, 'criteria': self._criteria}
+            replacements.update(_side_to_namespace('response_a', first))
+            replacements.update(_side_to_namespace('response_b', second))
             return await _run_single_judge(
                 client=self._client,
                 model=model,
                 template=self._template,
-                replacements={'question': question, 'response_a': first, 'response_b': second},
+                replacements=replacements,
                 system_prompt=self._system_prompt,
                 verdict_model=self._verdict_model,
                 structured_output=self._structured_output,
@@ -577,6 +629,7 @@ def llm_jury_pairwise(
     judges: list[str] | None = None,
     model: str | None = None,
     criteria: str | None = None,
+    prompt: str | None = None,
     system_prompt: str | None = None,
     swap: bool = True,
     repetitions: int = 1,
@@ -593,21 +646,26 @@ def llm_jury_pairwise(
 
     Judges compare two responses and pick a winner ('A'/'B'/'tie'). With ``swap``
     on (default) each judge is run in both orderings to correct for position bias
-    (see ADR-24). Panel/orchestration params mirror :func:`llm_jury`. Returns a
-    :class:`PairwiseComparator`; call ``compare`` per A/B pair, and roll many
-    comparisons up with :func:`evaluatorq.pairwise.build_report`.
+    (see ADR-24). Panel/orchestration params mirror :func:`llm_jury`. ``prompt``
+    overrides the built-in Mustache-style template (which exposes the
+    ``response_a.*``/``response_b.*`` namespace via :func:`_side_to_namespace`);
+    leave it ``None`` to use the default. Returns a :class:`PairwiseComparator`;
+    call ``compare`` per A/B pair, and roll many comparisons up with
+    :func:`evaluatorq.pairwise.build_report`.
     """
     if repetitions < 1:
         raise ValueError(f'repetitions ({repetitions}) must be >= 1.')
     _panel, deduped = _resolve_and_validate_panel(
         judges=judges, model=model, min_successful_judges=min_successful_judges
     )
+    resolved_criteria = criteria or DEFAULT_PAIRWISE_CRITERIA
     return PairwiseComparator(
         # Pass the deduped panel so the comparator's no-redundancy check
         # (`len(panel) == 1`) matches the panel run_jury actually runs, keeping
         # propagate_errors in step with llm_jury (judges=['m','m'] -> one judge).
         panel=deduped,
-        criteria=criteria or DEFAULT_PAIRWISE_CRITERIA,
+        criteria=resolved_criteria,
+        template=prompt,  # None -> built-in default via _pairwise_template
         system_prompt=system_prompt if system_prompt is not None else _pairwise_system_prompt(),
         swap=swap,
         repetitions=repetitions,
