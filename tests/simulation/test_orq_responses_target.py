@@ -24,8 +24,14 @@ from evaluatorq.openresponses.target import OrqResponsesTarget
 
 
 def _make_client() -> MagicMock:
-    """Return a mock AsyncOpenAI client with a stub responses.create."""
+    """Return a mock AsyncOpenAI client with a stub responses.create.
+
+    ``base_url`` points at the Orq router so router-only request extras
+    (``thread``/``memory``/pipeline ``metadata``) are emitted — gated on
+    :func:`client_routes_through_orq`.
+    """
     client = MagicMock()
+    client.base_url = "https://my.orq.ai/v3/router"
     client.responses = MagicMock()
     client.responses.create = AsyncMock()
     return client
