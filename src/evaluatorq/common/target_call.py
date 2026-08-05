@@ -55,6 +55,39 @@ def default_map_error(exc: Exception) -> tuple[str, str]:
     return 'target_error', f'{type(exc).__name__}: {exc}'
 
 
+_STATUS_CHAIN_DEPTH = 5  # how far down __cause__ to look for a wrapped HTTP error
+
+
+def extract_status_code(exc: BaseException) -> int | None:
+    """Best-effort HTTP status from the heterogeneous exception shapes targets raise.
+
+    Checks, on the exception and then down its chained originals — explicit
+    ``__cause__`` (``raise ... from``) first, falling back to the implicit
+    ``__context__`` (a bare ``raise`` inside an ``except`` block):
+
+    * ``exc.status_code`` — openai ``APIStatusError`` and friends;
+    * ``exc.status`` — aiohttp-style errors;
+    * ``exc.response.status_code`` — ``httpx.HTTPStatusError`` (Vercel targets).
+
+    Returns ``None`` when no integer status is found. ``bool`` is excluded
+    (it is an ``int`` subclass but never a status).
+    """
+    current: BaseException | None = exc
+    for _ in range(_STATUS_CHAIN_DEPTH):
+        if current is None:
+            return None
+        for attr in ('status_code', 'status'):
+            value = getattr(current, attr, None)
+            if isinstance(value, int) and not isinstance(value, bool):
+                return value
+        response = getattr(current, 'response', None)
+        value = getattr(response, 'status_code', None)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        current = current.__cause__ or current.__context__
+    return None
+
+
 def _coerce_to_agent_response(raw: Any) -> AgentResponse:
     """Wrap a plain ``str`` return into ``AgentResponse`` for legacy targets."""
     if isinstance(raw, AgentResponse):
@@ -114,6 +147,7 @@ async def call_target_with_retry(
     last_error: AgentResponseError | None = None
     last_details: dict[str, object] | None = None
 
+    attempt = 0  # max_attempts >= 1, but the type checker can't prove the loop runs
     for attempt in range(max_attempts):
         ctx = on_attempt(attempt) if on_attempt is not None else nullcontext()
         try:
@@ -150,10 +184,18 @@ async def call_target_with_retry(
             )
             last_error = last_response.error
             last_details = {'exception_type': type(exc).__name__, 'raw_message': str(exc), 'attempts': attempt + 1}
+            # 4xx client errors are non-retryable by default — bad request,
+            # auth, permission scope, conflict etc. are deterministic, so a
+            # retry replays the same rejection. The only exceptions are 408
+            # (timeout) and 429 (rate limit), which stay retryable.
+            status = extract_status_code(exc)
+            if status is not None and 400 <= status < 500 and status not in (408, 429):
+                logger.warning(f'Target call failed with non-retryable client error ({status}); not retrying')
+                break
 
         if attempt + 1 < max_attempts:
             logger.warning(f'Target call failed (attempt {attempt + 1}/{max_attempts}); retrying same exchange')
 
     return TargetCallResult(
-        response=last_response, succeeded=False, attempts=max_attempts, error=last_error, error_details=last_details
+        response=last_response, succeeded=False, attempts=attempt + 1, error=last_error, error_details=last_details
     )
