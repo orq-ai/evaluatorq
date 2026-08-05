@@ -311,6 +311,7 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .type-cell svg { width: 15px; height: 15px; flex: 0 0 auto; }
 .type-cell.redteam svg { color: var(--red-600); }
 .type-cell.sim svg { color: var(--teal-600); }
+.type-cell.pairwise svg { color: var(--orange-500); }
 
 /* Landing 'Recent runs' — airy aligned columns, no table chrome */
 .recent-runs { display: flex; flex-direction: column; }

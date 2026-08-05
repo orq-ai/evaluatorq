@@ -1,6 +1,6 @@
 """Surface adapter registry for the evaluatorq dashboard.
 
-Each surface (redteam, sim) gets a ``SurfaceAdapter`` dataclass that holds
+Each surface (redteam, sim, pairwise) gets a ``SurfaceAdapter`` dataclass that holds
 callables for loading, rendering body HTML, exporting full HTML, extracting a
 display name, and extracting a ``datetime`` from a parsed report object.
 

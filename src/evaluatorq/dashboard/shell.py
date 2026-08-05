@@ -22,7 +22,7 @@ from pathlib import Path
 from evaluatorq.common.reports import esc, load_css
 from evaluatorq.dashboard.styles import DASHBOARD_CSS
 from evaluatorq.dashboard.theme import EDITORIAL_CSS
-from evaluatorq.dashboard.view import head_assets
+from evaluatorq.dashboard.view import PAIRWISE_ICON_PATH, SURFACE_LABELS, head_assets
 
 # Sidebar collapse: runs at body-top so the class lands on <html> before the
 # sidebar paints (no flash). State persists in localStorage across the full-page
@@ -95,21 +95,21 @@ _NAV: list[tuple[str, str, str, str]] = [
     ),
     (
         'redteam',
-        'Red Team',
+        SURFACE_LABELS['redteam'],
         '/?surface=redteam',
         '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
     ),
     (
         'sim',
-        'Agent Sim',
+        SURFACE_LABELS['sim'],
         '/?surface=sim',
         '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>',
     ),
     (
         'pairwise',
-        'Pairwise',
+        SURFACE_LABELS['pairwise'],
         '/?surface=pairwise',
-        '<path d="M4 6h6v12H4z"/><path d="M14 6h6v12h-6z"/><path d="M12 4v16"/>',
+        PAIRWISE_ICON_PATH,
     ),
     (
         'settings',

@@ -60,7 +60,7 @@ def head_assets() -> tuple[Script, ...]:
 
 
 # ---------------------------------------------------------------------------
-# Combined landing + run lists (the Dashboard / Red Team / Agent Sim screens)
+# Combined landing + run lists (the Dashboard / Red Team / Agent Sim / Pairwise screens)
 # ---------------------------------------------------------------------------
 
 
@@ -126,6 +126,7 @@ def _run_row(row: RunRow, *, show_badge: bool = True) -> str:
 
 
 # Surface → inline glyph (lucide: shield-alert / messages-square / columns-2) for the Type column.
+PAIRWISE_ICON_PATH = '<path d="M4 6h6v12H4z"/><path d="M14 6h6v12h-6z"/><path d="M12 4v16"/>'
 _SURFACE_ICONS: dict[str, str] = {
     'redteam': (
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
@@ -140,8 +141,7 @@ _SURFACE_ICONS: dict[str, str] = {
     ),
     'pairwise': (
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
-        'stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h6v12H4z"/>'
-        '<path d="M14 6h6v12h-6z"/><path d="M12 4v16"/></svg>'
+        f'stroke-linecap="round" stroke-linejoin="round">{PAIRWISE_ICON_PATH}</svg>'
     ),
 }
 
@@ -237,7 +237,7 @@ def landing_body(data: Landing) -> str:
     if data.total_runs == 0:
         return (
             '<section class="dash-wrap"><div class="runs-empty">'
-            'No reports found. Run a red team or simulation job to generate reports.'
+            'No reports found. Run a red team, simulation, or pairwise job to generate reports.'
             '</div></section>'
         )
 
