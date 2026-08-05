@@ -191,3 +191,25 @@ async def test_comparator_budget_shared_across_concurrent_pairs(monkeypatch: pyt
 def test_llm_jury_pairwise_rejects_non_positive_cap() -> None:
     with pytest.raises(ValueError, match='max_concurrency'):
         llm_jury_pairwise(judges=['j1'], client=object(), max_concurrency=0)
+
+
+def test_comparator_survives_one_asyncio_run_per_pair(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A capped comparator works across separate event loops (one asyncio.run
+    per pair). A semaphore binds to the loop that first blocks on it; without
+    per-loop recreation every judge call in the second loop errors and the
+    verdict silently degrades to inconclusive."""
+
+    async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
+        await asyncio.sleep(0.001)  # force the semaphore to actually block
+        value = 'A' if kwargs['replacements']['response_a'] == 'GOOD' else 'B'
+        return JudgeOutcome(payload=EvaluatorResponsePayload(value=value, explanation='x'))
+
+    monkeypatch.setattr(llm_jury_module, 'run_judge', fake_run_judge)
+
+    # max_concurrency=1 with 2 judges x 2 orderings guarantees contention.
+    comparator = llm_jury_pairwise(judges=['j1', 'j2'], client=object(), max_concurrency=1)
+    first = asyncio.run(comparator.compare(question='q', response_a='GOOD', response_b='BAD'))
+    second = asyncio.run(comparator.compare(question='q', response_a='GOOD', response_b='BAD'))
+
+    assert first.winner == 'A'
+    assert second.winner == 'A'

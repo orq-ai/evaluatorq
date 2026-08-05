@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import typing
 from typing import Any, Literal
@@ -15,7 +16,6 @@ from evaluatorq.common.jury import (
     TieBreak,
     VerdictKind,
     append_jury_summary,
-    as_semaphore,
     run_jury,
     validate_aggregator,
 )
@@ -546,14 +546,33 @@ class PairwiseComparator:
         self._structured_output = structured_output
         self._extra_kwargs = extra_kwargs
         self._client = client
-        # One semaphore for the comparator's lifetime: concurrent compare()
-        # calls draw from the same budget, so max_concurrency bounds TOTAL
-        # in-flight judge calls across pairs, not per pair.
-        self._semaphore = as_semaphore(max_concurrency)
+        if max_concurrency is not None and max_concurrency < 1:
+            raise ValueError(f'max_concurrency ({max_concurrency}) must be >= 1.')
+        self._max_concurrency = max_concurrency
+        self._semaphore: asyncio.Semaphore | None = None
+        self._semaphore_loop: asyncio.AbstractEventLoop | None = None
         self._verdict_model = _build_verdict_model(
             verdict_kind='categorical', labels=PAIRWISE_LABELS, score_range=(0.0, 1.0)
         )
         self._template = _pairwise_template(criteria)
+
+    def _current_semaphore(self) -> asyncio.Semaphore | None:
+        """The shared concurrency budget, bound to the running event loop.
+
+        One semaphore is shared by every compare() call on the same loop, so
+        ``max_concurrency`` bounds TOTAL in-flight judge calls across pairs. A
+        semaphore binds to the loop that first blocks on it, so when the caller
+        switches loops (e.g. one ``asyncio.run`` per pair) a fresh one is minted
+        instead of every judge call failing with 'bound to a different event
+        loop' and silently degrading verdicts to inconclusive.
+        """
+        if self._max_concurrency is None:
+            return None
+        loop = asyncio.get_running_loop()
+        if self._semaphore is None or self._semaphore_loop is not loop:
+            self._semaphore = asyncio.Semaphore(self._max_concurrency)
+            self._semaphore_loop = loop
+        return self._semaphore
 
     async def compare(self, *, question: str, response_a: str, response_b: str) -> PairwiseComparison:
         """Run the panel over one A-vs-B comparison and return the reconciled verdict."""
@@ -585,7 +604,7 @@ class PairwiseComparator:
             replacement_judges=self._replacement_judges,
             min_successful_judges=self._min_successful_judges,
             propagate_errors=(len(self._panel) == 1 and not self._replacement_judges),
-            max_concurrency=self._semaphore,
+            max_concurrency=self._current_semaphore(),
         )
 
 
