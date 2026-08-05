@@ -322,15 +322,24 @@ class TestOrqResponsesTargetNew:
         target = _make_target(client=client, instructions="Be concise.")
         assert target.new().instructions == "Be concise."
 
-    def test_new_mints_fresh_memory_entity_id_when_set(self):
-        import uuid
-
+    def test_new_preserves_constructor_seeded_memory_entity_id(self):
+        """A constructor-passed id is a seed and survives clones (the sim
+        --memory-entity path); only auto-minted ids re-mint per clone."""
         client = _make_client()
         target = OrqResponsesTarget(
             LLMCallConfig(model="gpt-4o"),
             memory_entity_id="original-uuid-abc",
             client=client,
         )
+
+        assert target.new().memory_entity_id == "original-uuid-abc"
+
+    def test_new_re_mints_auto_minted_memory_entity_id(self):
+        import uuid
+
+        client = _make_client()
+        target = OrqResponsesTarget(LLMCallConfig(model="gpt-4o"), client=client)
+        target.mint_memory_entity_id("minted-abc")
 
         fresh = target.new()
 

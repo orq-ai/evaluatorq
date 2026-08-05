@@ -151,7 +151,10 @@ class HybridAgentBackend(Backend):
         # Mint one per target, matching ORQAgentTarget, so parallel jobs stay
         # isolated and cleanup_memory has an id to delete.
         if getattr(target, 'memory_entity_id', 'unset') is None:
-            target.memory_entity_id = f'red-team-{uuid.uuid4().hex[:12]}'
+            # Auto-mint, not a user seed: plain assignment would mark the id
+            # seeded (clone-preserving), but a minted id must keep re-minting
+            # per clone or parallel jobs share one memory scope.
+            target.mint_memory_entity_id(f'red-team-{uuid.uuid4().hex[:12]}')
         return target
 
     async def resolve_context(self, agent_key: str) -> AgentContext:

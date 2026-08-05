@@ -201,9 +201,10 @@ async def simulate(
             ``agent:<key>`` (or bare ``<key>``) target. The Responses router
             requires a memory scope when the target agent has a memory store
             attached; pass this to run against a specific (e.g. seeded) entity.
-            When omitted, a fresh per-target id is minted so memory-backed
-            agents still work out of the box. One explicit id is shared across
-            the run's conversations. Only valid for string agent targets.
+            When omitted, a fresh id is minted per conversation so memory-backed
+            agents work out of the box and parallel conversations never share
+            memory. One explicit id is shared across the run's conversations.
+            Only valid for string agent targets.
         max_turns: Cap on conversation turns. Defaults to 10, or — when
             replaying via ``previous_run`` — to the cap the replayed run used.
             An explicit value always wins.

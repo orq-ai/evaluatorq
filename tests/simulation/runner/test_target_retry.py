@@ -90,20 +90,28 @@ def _make_mock_judge() -> MagicMock:
 
 
 class _FlakyTarget(AgentTarget):
-    """Returns an error-marker AgentResponse for the first ``fail_times`` calls."""
+    """Returns an error-marker AgentResponse for the first ``fail_times`` calls.
 
-    def __init__(self, fail_times: int) -> None:
+    The fail budget and call counter live in a shared dict so the
+    per-conversation clone the runner mints (``new()``) keeps counting against
+    the same state — these tests assert retry behavior, not clone isolation.
+    """
+
+    def __init__(self, fail_times: int, *, _state: dict[str, int] | None = None) -> None:
         super().__init__()
-        self._fail = fail_times
-        self.calls = 0
+        self._state = _state if _state is not None else {'fail': fail_times, 'calls': 0}
+
+    @property
+    def calls(self) -> int:
+        return self._state['calls']
 
     def new(self) -> _FlakyTarget:
-        return _FlakyTarget(self._fail)
+        return _FlakyTarget(0, _state=self._state)
 
     async def respond(self, messages: list[Message]) -> AgentResponse:
-        self.calls += 1
-        if self._fail > 0:
-            self._fail -= 1
+        self._state['calls'] += 1
+        if self._state['fail'] > 0:
+            self._state['fail'] -= 1
             return AgentResponse(
                 text='[ERROR]',
                 error=AgentResponseError(message='boom', error_type='target_error'),
