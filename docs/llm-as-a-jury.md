@@ -109,10 +109,42 @@ of `labels`; omit it and the verdict is still recorded but `passed` is `None`.
 | `judges` | — | Judge model IDs. Two or more makes it a jury. Mutually exclusive with `model`. |
 | `model` | — | Single-judge shorthand for `judges=[model]`. |
 | `repetitions` | `1` | How many times each judge is asked. The judge takes its own majority before the panel votes, which smooths per-call noise. |
+| `assignment` | `"all"` | How judges are allocated across datapoints. `"all"` runs every judge on every datapoint. `"cyclic"` runs exactly one judge per datapoint, rotating through the panel (see below). |
 | `replacement_judges` | `None` | Stand-in models called only when a configured judge fails mechanically. |
 | `min_successful_judges` | `1` | Minimum decisive judges required, otherwise the verdict is **inconclusive**. Must not exceed the panel size. |
 | `threshold` | `0.5` | Numeric mode: `passed` when `score >= threshold`. |
 | `structured_output` | `True` | Use the provider's structured-output API; falls back to a schema-injected `json_object` call for models that reject it. |
+
+### Cyclic assignment (CyclicJudge)
+
+`assignment="cyclic"` implements CyclicJudge
+([arXiv:2603.01865](https://arxiv.org/abs/2603.01865)): round-robin judge
+assignment. Datapoint 0 goes to judge 0, datapoint 1 to judge 1, and so on,
+wrapping around the panel. Every judge covers an equal share of the run, so
+systematic judge bias cancels in expectation across the dataset while each
+datapoint costs exactly one judge call. The paper shows this beats both
+all-judges and random-single-judge at any fixed budget.
+
+```python
+jury = llm_jury(
+    name="quality",
+    criteria="Is the answer helpful and correct?",
+    judges=["openai/gpt-5.4-mini", "openai/gpt-5.4-nano", "deepseek/deepseek-v4-flash"],
+    assignment="cyclic",
+)
+```
+
+Use it when you care about the run-level score (a benchmark mean, a pass
+rate), not when every individual verdict must be trustworthy on its own: each
+per-item verdict is a single judge's opinion. Two practical notes:
+
+- Shuffle your dataset first if its order is meaningful, so the rotation
+  cannot line up with a latent grouping (for example a dataset sorted by
+  category).
+- `min_successful_judges` must stay `1`, and a mechanically failed item comes
+  back inconclusive unless `replacement_judges` provides a stand-in.
+
+For per-item confidence keep `assignment="all"`.
 
 ## How the verdict is decided
 
