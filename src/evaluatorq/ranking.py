@@ -48,7 +48,7 @@ if TYPE_CHECKING:
 # matters for its L-BFGS implementation).
 _LR = 0.1
 _LR_DECAY_STEPS = 200  # lr_t = _LR / (1 + step/_LR_DECAY_STEPS): kills Adam's oscillation floor
-_MAX_ITER = 2000
+_MAX_ITER = 20000  # fits are milliseconds; strongly separated data needs the decay tail to play out
 # Converged when the iterate stops moving (max-abs parameter change after the
 # identifiability projections). A gradient criterion is wrong here: the ridge
 # leaves a constant radial gradient along the scale direction that the
@@ -107,8 +107,9 @@ class BTFit(BaseModel):
 
     skills: dict[str, float] = Field(description='Latent skill per item, centred at mean 0')
     sigmas: dict[str, float] = Field(
-        description='Per-judge discriminator; smaller = sharper/more reliable. Geometric mean fixed at 1. '
-        'Empty when fitted without judge_sigma.'
+        description='Per-judge discriminator; smaller = sharper/more reliable. Only RATIOS between judges '
+        'in the same fit are meaningful (the log-normal prior anchors the scale loosely); do not compare '
+        'absolute values across fits. Empty when fitted without judge_sigma.'
     )
     ranking: list[str] = Field(description='Item IDs, best first')
     converged: bool = Field(description='True when the iterate stopped moving before the iteration cap')
@@ -233,21 +234,16 @@ def fit_bt(
                 v_hat = v_t[k] / (1 - _ADAM_B2**step)
                 tau[k] += lr * m_hat / (math.sqrt(v_hat) + _ADAM_EPS)
 
-        # Identifiability projections: skills mean-zero; geometric mean of
-        # sigma fixed at 1 (only relative sigmas are meaningful, paper 3.3).
+        # Identifiability: skills are mean-centred (additive, Adam-neutral).
+        # The sigma scale is anchored SOFTLY by the log-normal prior instead of
+        # a hard geometric-mean projection: the projection's compensating skill
+        # rescale is a multiplicative ratchet that bypasses Adam - on unanimous
+        # panels every tau drifts down together each step, the rescale inflates
+        # skills without bound, and Adam's normalised steps cap the ridge's
+        # corrective pull at the learning rate. The prior has no such loophole.
         s_mean = sum(s.values()) / len(s)
         for i in items:
             s[i] -= s_mean
-        if use_sigma:
-            t_mean = sum(tau.values()) / len(tau)
-            if t_mean:
-                for k in judges:
-                    tau[k] -= t_mean
-                # Rescaling sigma rescales the skill space; undo it so the
-                # constraint does not fight the gradient direction.
-                scale = math.exp(-t_mean)
-                for i in items:
-                    s[i] *= scale
 
         delta = max(abs(s[i] - prev_s[i]) for i in items)
         if use_sigma:
