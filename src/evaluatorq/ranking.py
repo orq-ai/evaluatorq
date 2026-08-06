@@ -263,6 +263,12 @@ def cycle_rate(comparisons: Sequence[JudgedComparison], judge: str) -> float | N
     ``1 - cycle_rate``. Needs at least 3 items with pairwise coverage; returns
     ``None`` when no complete triplet exists (e.g. the two-item A/B setting).
     Ties (``p == 0.5``) break no cycles and are treated as no-preference edges.
+
+    One deliberate deviation from the paper's Eq. 9: the denominator here is
+    the number of ASSESSABLE triplets (all three edges present and untied),
+    not all C(n, 3) triplets. On fully covered tie-free data the two agree;
+    on sparse or tie-heavy data the paper's form understates inconsistency by
+    counting unassessable triplets as consistent.
     """
     prefers: dict[tuple[str, str], bool] = {}
     for c in comparisons:

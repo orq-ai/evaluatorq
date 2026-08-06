@@ -121,3 +121,25 @@ def test_tie_between_weighted_sides_is_inconclusive() -> None:
     rows = [_comparison([_vote('a', 'A'), _vote('b', 'B')]) for _ in range(6)]
     block = bt_sigma_aggregation(rows)
     assert set(block.winners) == {'inconclusive'}
+
+
+def test_run_rollup_and_save_thread_aggregation(tmp_path) -> None:
+    from evaluatorq.pairwise_run import PairwiseRun, new_run
+
+    run = new_run(run_name='bt-sigma-check')
+    for row in _heterogeneous_run():
+        run.add(row, question='q', response_a='a', response_b='b')
+
+    # A plurality-saved report is not silently reused for a bt-sigma request.
+    path = run.save(tmp_path / 'run.json')
+    assert path.exists()
+    assert run.report is not None
+    assert run.report.bt_sigma is None
+    weighted = run.rollup(aggregation='bt-sigma')
+    assert weighted.bt_sigma is not None
+
+    # Saving with bt-sigma persists the block, and rollup then reuses it.
+    run.save(tmp_path / 'run2.json', aggregation='bt-sigma')
+    assert run.report is not None
+    assert run.report.bt_sigma is not None
+    assert run.rollup(aggregation='bt-sigma') is run.report

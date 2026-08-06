@@ -96,17 +96,26 @@ class PairwiseRun(BaseModel):
         """The comparisons alone, in entry order."""
         return [e.comparison for e in self.entries]
 
-    def rollup(self) -> PairwiseReport:
-        """Roll the entries up, preferring the stored report when present."""
-        return self.report if self.report is not None else build_report(self.comparisons())
+    def rollup(self, *, aggregation: str = 'plurality') -> PairwiseReport:
+        """Roll the entries up, preferring the stored report when present.
 
-    def save(self, path: Path | str | None = None) -> Path:
+        A stored report is only reused when it satisfies the requested
+        aggregation, so asking for ``'bt-sigma'`` on a run saved with plurality
+        recomputes instead of silently returning a report without the block.
+        """
+        if self.report is not None and (aggregation == 'plurality' or self.report.bt_sigma is not None):
+            return self.report
+        return build_report(self.comparisons(), aggregation=aggregation)
+
+    def save(self, path: Path | str | None = None, *, aggregation: str = 'plurality') -> Path:
         """Compute the rollup and write the run to JSON.
 
         The rollup is computed here rather than on every dashboard render, so
-        the stored report always matches the entries it was built from.
+        the stored report always matches the entries it was built from. Pass
+        ``aggregation='bt-sigma'`` to persist the reliability-weighted block
+        alongside the plurality headline.
         """
-        self.report = build_report(self.comparisons())
+        self.report = build_report(self.comparisons(), aggregation=aggregation)
         payload = self.model_dump_json(indent=2)
         if path is not None:
             target = Path(path)
