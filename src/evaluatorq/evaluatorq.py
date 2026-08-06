@@ -369,7 +369,7 @@ async def evaluatorq(
 
         # Upload results to Orq platform if API key is available
         if orq_api_key and _send_results:
-            experiment_url = await send_results_to_orq(
+            upload_response = await send_results_to_orq(
                 orq_api_key,
                 name,
                 description,
@@ -382,8 +382,8 @@ async def evaluatorq(
             )
             # Hand the created experiment's URL back to callers that opted in with a
             # sink list (e.g. simulation persists it on the SimulationRun report).
-            if _experiment_url_out is not None and experiment_url:
-                _experiment_url_out.append(experiment_url)
+            if _experiment_url_out is not None and upload_response is not None and upload_response.experiment_url:
+                _experiment_url_out.append(upload_response.experiment_url)
 
         # Check for pass failures and exit if any. In no-inference mode a row that has no
         # usable recorded response surfaces as a job error rather than an evaluator score,

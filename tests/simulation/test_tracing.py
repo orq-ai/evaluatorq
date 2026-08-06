@@ -1017,7 +1017,9 @@ async def test_target_agent_usage_aggregated_into_run_result(
             return AgentResponse(text=f'reply #{self.call_count}', usage=self._usage)
 
         def new(self) -> '_FakeAgentTarget':
-            return _FakeAgentTarget(self._usage)
+            # Shared on purpose: this test asserts usage aggregation on one
+            # instance, not clone isolation (covered in test_target_isolation).
+            return self
 
     target_usage = TokenUsage(
         input_tokens=9,

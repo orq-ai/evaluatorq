@@ -2010,3 +2010,167 @@ def test_run_yes_exits_clean(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     assert 'Using for generations: OpenAI-compatible · openai/gpt-5.4-mini' in result.stderr
+
+
+def test_export_md_includes_stored_recommendations(tmp_path):
+    """eq sim export --format md renders a run JSON's stored suggestions."""
+    import json as _json
+
+    from evaluatorq.simulation.types import (
+        SimulationRecommendation,
+        SimulationResult,
+        SimulationRun,
+        TerminatedBy,
+    )
+    from evaluatorq.contracts import Message, TokenUsage
+
+    result = SimulationResult(
+        messages=[Message(role="user", content="hi"), Message(role="assistant", content="yo")],
+        terminated_by=TerminatedBy.judge,
+        reason="done",
+        goal_achieved=False,
+        goal_completion_score=0.1,
+        rules_broken=[],
+        turn_count=1,
+        turn_metrics=[],
+        token_usage=TokenUsage(total_tokens=10),
+        metadata={"persona": "P", "scenario": "S"},
+    )
+    from datetime import datetime, timezone
+
+    run = SimulationRun(
+        run_name="t",
+        created_at=datetime.now(tz=timezone.utc),
+        mode="run",
+        target_kind="orq_agent",
+        evaluator_names=[],
+        total_results=1,
+        scorer_averages={},
+        results=[result],
+        recommendations=[
+            SimulationRecommendation(
+                result_index=0,
+                datapoint_id="dp-1",
+                persona="P",
+                scenario="S",
+                triggers=["criterion_failed: says hello politely"],
+                suggestions=["Add a greeting instruction to the system prompt."],
+            )
+        ],
+    )
+    src = tmp_path / "run.json"
+    src.write_text(run.model_dump_json())
+    out = tmp_path / "report.md"
+
+    runner = CliRunner()
+    res = runner.invoke(app, ["export", "-i", str(src), "-o", str(out), "--format", "md"])
+    assert res.exit_code == 0, res.output
+    md = out.read_text()
+    assert "Remediation Suggestions" in md
+    assert "Add a greeting instruction to the system prompt." in md
+    assert "Criterion failed: says hello politely" in md
+
+
+def test_export_html_format(tmp_path):
+    """eq sim export --format html writes a self-contained HTML report."""
+    results = tmp_path / "results.jsonl"
+    from evaluatorq.simulation.types import SimulationResult, TerminatedBy
+    from evaluatorq.contracts import Message, TokenUsage
+
+    r = SimulationResult(
+        messages=[Message(role="user", content="hi")],
+        terminated_by=TerminatedBy.judge,
+        reason="done",
+        goal_achieved=True,
+        goal_completion_score=1.0,
+        rules_broken=[],
+        turn_count=1,
+        turn_metrics=[],
+        token_usage=TokenUsage(total_tokens=10),
+        metadata={"persona": "P", "scenario": "S"},
+    )
+    results.write_text(r.model_dump_json() + "\n")
+    out = tmp_path / "report.html"
+
+    runner = CliRunner()
+    res = runner.invoke(app, ["export", "-i", str(results), "-o", str(out), "--format", "html"])
+    assert res.exit_code == 0, res.output
+    assert "<!DOCTYPE html>" in out.read_text()
+
+
+def test_export_rejects_unknown_format(tmp_path):
+    src = tmp_path / "x.jsonl"
+    src.write_text("")
+    runner = CliRunner()
+    res = runner.invoke(app, ["export", "-i", str(src), "-o", str(tmp_path / "y"), "--format", "pdf"])
+    assert res.exit_code != 0
+
+
+def test_run_recommendations_flag_attaches_to_saved_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """eq sim run --recommendations generates suggestions and stores them on the run report."""
+    monkeypatch.chdir(tmp_path)
+    report = tmp_path / "report.json"
+    fake_recs = [
+        {
+            "result_index": 0,
+            "datapoint_id": "dp-1",
+            "persona": "P",
+            "scenario": "S",
+            "triggers": ["Criterion failed: x"],
+            "suggestions": ["Fix x."],
+        }
+    ]
+
+    with (
+        patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
+        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
+        patch("evaluatorq.simulation.cli._maybe_generate_recommendations") as mock_recs,
+    ):
+        mock_target.return_value = MagicMock()
+        mock_impl.return_value = _stub_run([_make_result()], mode="run")
+        from evaluatorq.simulation.types import SimulationRecommendation
+
+        mock_recs.return_value = [SimulationRecommendation.model_validate(r) for r in fake_recs]
+
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--agent-description", "bot",
+                "--openai-model", "gpt-4o",
+                "--report", str(report),
+                "--recommendations",
+                "--no-save",
+            ],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_recs.assert_called_once()
+    saved = json.loads(report.read_text())
+    assert saved["recommendations"][0]["suggestions"] == ["Fix x."]
+
+
+def test_run_without_recommendations_flag_skips_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with (
+        patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
+        patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
+        patch("evaluatorq.simulation.cli._maybe_generate_recommendations") as mock_recs,
+    ):
+        mock_target.return_value = MagicMock()
+        mock_impl.return_value = _stub_run([_make_result()], mode="run")
+
+        result = runner.invoke(
+            app,
+            ["run", "--agent-description", "bot", "--openai-model", "gpt-4o", "--no-save"],
+            env={"OPENAI_API_KEY": "test-key"},
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_recs.assert_not_called()

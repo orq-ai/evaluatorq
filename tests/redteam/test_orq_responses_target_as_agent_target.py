@@ -120,3 +120,58 @@ class TestNew:
         client.responses.create = AsyncMock(return_value=_make_response())
         target = OrqResponsesTarget(LLMCallConfig(model="gpt-4o"), client=client)
         assert target.new()._client is client
+
+    def test_new_preserves_constructor_seeded_memory_entity(self):
+        """A seeded id must survive cloning (the sim --memory-entity path);
+        mirrors ORQAgentTarget.new() semantics."""
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o"), client=_make_client(), memory_entity_id="seeded-entity"
+        )
+        assert target.new().memory_entity_id == "seeded-entity"
+
+    def test_new_preserves_assignment_seeded_memory_entity(self):
+        target = _make_target()
+        target.memory_entity_id = "seeded-entity"
+        assert target.new().memory_entity_id == "seeded-entity"
+
+    def test_seeded_id_survives_grandchild_clones(self):
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o"), client=_make_client(), memory_entity_id="seeded-entity"
+        )
+        assert target.new().new().memory_entity_id == "seeded-entity"
+
+    def test_unseeding_via_assignment_reverts_to_none_clones(self):
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o"), client=_make_client(), memory_entity_id="seeded-entity"
+        )
+        target.memory_entity_id = None
+        assert target.new().memory_entity_id is None
+
+
+class TestHybridBackendMintStaysUnseeded:
+    """The HybridAgentBackend auto-mint is not a user seed: clones must
+    re-mint it (parallel-job isolation), while a later explicit assignment
+    seeds and survives clones."""
+
+    def _hybrid_target(self, monkeypatch):
+        from evaluatorq.redteam.backends.registry import make_agent_backend
+        from evaluatorq.redteam.contracts import LLMConfig, TargetConfig
+
+        monkeypatch.setenv("ORQ_API_KEY", "test-key")
+        backend = make_agent_backend(
+            target_config=TargetConfig(system_prompt=None), pipeline_config=LLMConfig()
+        )
+        return backend.create_target("my-agent")
+
+    def test_auto_minted_id_re_mints_per_clone(self, monkeypatch):
+        target = self._hybrid_target(monkeypatch)
+        assert target.memory_entity_id is not None
+        assert target.memory_entity_id.startswith("red-team-")
+        clone = target.new()
+        assert clone.memory_entity_id is not None
+        assert clone.memory_entity_id != target.memory_entity_id
+
+    def test_explicit_seed_after_create_survives_clone(self, monkeypatch):
+        target = self._hybrid_target(monkeypatch)
+        target.memory_entity_id = "seeded-entity"
+        assert target.new().memory_entity_id == "seeded-entity"

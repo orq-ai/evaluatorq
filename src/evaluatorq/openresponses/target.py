@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from typing_extensions import Self
 
+from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.retry import with_retry
 from evaluatorq.common.thread_context import pipeline_metadata_param, thread_body_param
 from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, LLMCallConfig, Message
@@ -64,6 +65,19 @@ class OrqResponsesTarget(AgentTarget):
         else:
             self._client, self._client_owned = build_simulation_client(config.client, require_orq=require_orq)
 
+    @property
+    def memory_entity_id(self) -> str | None:
+        return self._memory_entity_id
+
+    @memory_entity_id.setter
+    def memory_entity_id(self, value: str | None) -> None:
+        # Assignment is how callers seed an explicit entity id (the sim layer's
+        # --memory-entity path); mark it so ``new()`` preserves it across
+        # clones. ``new()``'s re-mint writes ``_memory_entity_id`` directly and
+        # stays unseeded. Mirrors ``ORQAgentTarget``'s seeded-vs-minted split.
+        self._memory_entity_id = value
+        self._memory_entity_seeded = value is not None
+
     async def respond(self, messages: list[Message]) -> AgentResponse:
         """Stateless: send the full message list, return the response."""
         return await self._call_responses_api(
@@ -78,20 +92,26 @@ class OrqResponsesTarget(AgentTarget):
         do so. Self-owned clients are not propagated — the new instance builds
         its own from env vars, keeping connection lifetimes independent.
 
-        Per the ``AgentTarget`` contract each ``new()`` produces an independent
-        memory scope; we mint a fresh ``memory_entity_id`` if one was set.
+        An explicitly seeded ``memory_entity_id`` (constructor arg or later
+        assignment) is preserved so clones keep pointing at the seeded entity;
+        an unseeded one is re-minted per clone, keeping parallel jobs in
+        independent memory scopes. Mirrors ``ORQAgentTarget.new()``.
         """
-        fresh_memory_id = str(uuid.uuid4()) if self.memory_entity_id is not None else None
-        return OrqResponsesTarget(
+        clone = OrqResponsesTarget(
             self.config,
             instructions=self.instructions,
             tools=self.tools,
-            memory_entity_id=fresh_memory_id,
+            memory_entity_id=self.memory_entity_id if self._memory_entity_seeded else None,
             client=self._client if not self._client_owned else None,
             retry_attempts=self.retry_attempts,
             retry_statuses=self.retry_statuses,
             require_orq=self.require_orq,
         )
+        if not self._memory_entity_seeded and self.memory_entity_id is not None:
+            # Re-mint bypassing the seeding setter so grandchild clones keep
+            # re-minting instead of inheriting this one as if it were seeded.
+            clone._memory_entity_id = str(uuid.uuid4())
+        return clone
 
     async def get_agent_context(self) -> AgentContext:
         """Describe this target — the configured model is the agent key."""
@@ -136,16 +156,18 @@ class OrqResponsesTarget(AgentTarget):
                 kwargs['tools'] = self.tools
             if self.instructions is not None:
                 kwargs['instructions'] = self.instructions
-            # Group multi-turn calls in Orq observability under one thread, and
-            # tag the request with the evaluatorq pipeline so its trace is
-            # attributable to the run type. Both ride in the request body.
-            body_extra = {**thread_body_param(), **pipeline_metadata_param()}
-            # Agents with memory tools reject the call outright without a memory
-            # scope ("memory_entity_id_required"), so forward ours when set.
-            if self.memory_entity_id:
-                body_extra['memory'] = {'entity_id': self.memory_entity_id}
-            if body_extra:
-                kwargs['extra_body'] = {**kwargs.get('extra_body', {}), **body_extra}
+            # These extensions are Orq-router-only, so apply them only when the
+            # client actually routes through Orq — matching the gate on the other
+            # invocation paths. All ride in the request body (extra_body): the
+            # pipeline label as `metadata` (tags the trace by run type), `thread`
+            # (multi-turn grouping), and `memory` (scope for memory-tool agents,
+            # else "memory_entity_id_required").
+            if client_routes_through_orq(self._client):
+                body_extra = {**thread_body_param(), **pipeline_metadata_param()}
+                if self.memory_entity_id:
+                    body_extra['memory'] = {'entity_id': self.memory_entity_id}
+                if body_extra:
+                    kwargs['extra_body'] = {**kwargs.get('extra_body', {}), **body_extra}
 
             async with with_llm_span(
                 model=self.config.model,

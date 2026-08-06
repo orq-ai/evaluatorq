@@ -1047,6 +1047,21 @@ class AgentTarget(ABC):
 
     def __init__(self, memory_entity_id: str | None = None) -> None:
         self.memory_entity_id = memory_entity_id
+        # Seeded (constructor arg / plain assignment) vs auto-minted: subclasses
+        # whose ``new()`` distinguishes the two (ORQAgentTarget,
+        # OrqResponsesTarget) preserve seeded ids across clones and re-mint
+        # minted ones. ``mint_memory_entity_id`` is the non-seeding write path.
+        self._memory_entity_seeded = memory_entity_id is not None
+
+    def mint_memory_entity_id(self, value: str) -> None:
+        """Install an auto-minted memory entity id without marking it seeded.
+
+        Plain assignment to ``memory_entity_id`` counts as an explicit seed
+        (clone-preserving); backends minting a fallback scope use this instead
+        so every clone keeps re-minting its own isolated entity.
+        """
+        self.memory_entity_id = value
+        self._memory_entity_seeded = False
 
     @abstractmethod
     async def respond(self, messages: list[Message]) -> AgentResponse:
@@ -1109,6 +1124,7 @@ ReportSectionKind = Literal[
     'turn_metrics',
     'evaluator_scores',
     'errors',
+    'recommendations',
     # Red-team-specific
     'focus_areas',
     'vulnerability_breakdown',
