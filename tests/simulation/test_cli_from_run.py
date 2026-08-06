@@ -62,14 +62,14 @@ def test_input_and_from_run_are_mutually_exclusive(tmp_path: Path) -> None:
     )
 
     assert result.exit_code != 0
-    assert 'exactly one of --input, --dataset-id, or --from-run' in _output(result)
+    assert 'exactly one of --input, --dataset-id, --experiment-id, or --from-run' in _output(result)
 
 
 def test_no_input_source_is_rejected() -> None:
     result = runner.invoke(app, ['simulate', '--target', 'agent:demo', '--yes'])
 
     assert result.exit_code != 0
-    assert 'exactly one of --input, --dataset-id, or --from-run' in _output(result)
+    assert 'exactly one of --input, --dataset-id, --experiment-id, or --from-run' in _output(result)
 
 
 def test_unresolvable_from_run_exits_cleanly(tmp_path: Path, monkeypatch) -> None:
