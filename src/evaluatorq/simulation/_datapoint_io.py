@@ -44,29 +44,35 @@ def _validate_shape(value: Any, label: str, required_keys: list[str]) -> None:
             raise ValueError(f"Invalid '{label}': missing required field '{key}'")
 
 
-def _extract_single_datapoint(data: DataPoint) -> SimulationDatapoint:
+def _extract_single_datapoint(
+    data: DataPoint, *, source: str = 'wrap_simulation_agent DataPoint'
+) -> SimulationDatapoint:
     """Extract exactly one simulation SimulationDatapoint from an evaluatorq DataPoint.
 
     Accepts the four input shapes (``datapoint``, ``datapoints`` of length one,
     ``persona`` + ``scenario``, ``personas`` + ``scenarios`` each of length
     one) and normalises to a single ``SimulationDatapoint``.
+
+    ``source`` names the caller's row/object in multi-element error messages,
+    so an experiment or dataset row failure does not blame the unrelated
+    ``wrap_simulation_agent`` contract.
     """
     inputs = data.inputs
     if 'datapoint' in inputs:
-        dp = inputs['datapoint']
+        dp = _as_obj(inputs['datapoint'])
         _validate_shape(dp, 'datapoint', ['persona', 'scenario', 'first_message'])
         return SimulationDatapoint.model_validate(dp)
     if 'datapoints' in inputs:
-        dps = inputs['datapoints']
+        dps = _as_obj(inputs['datapoints'])
         if not isinstance(dps, list):
             raise ValueError("Expected 'datapoints' to be an array")
         if len(dps) != 1:
             raise ValueError(
-                'wrap_simulation_agent DataPoint must encode exactly one datapoint. '
-                'For batch simulations use simulate() directly.'
+                f'{source} must encode exactly one datapoint, got {len(dps)}. Use one row per conversation.'
             )
-        _validate_shape(dps[0], 'datapoints[]', ['persona', 'scenario', 'first_message'])
-        return SimulationDatapoint.model_validate(dps[0])
+        first = _as_obj(dps[0])
+        _validate_shape(first, 'datapoints[]', ['persona', 'scenario', 'first_message'])
+        return SimulationDatapoint.model_validate(first)
     if 'persona' in inputs and 'scenario' in inputs:
         persona_raw = _as_obj(inputs['persona'])
         scenario_raw = _as_obj(inputs['scenario'])
@@ -86,8 +92,9 @@ def _extract_single_datapoint(data: DataPoint) -> SimulationDatapoint:
             raise ValueError("Expected 'personas' and 'scenarios' to be arrays")
         if len(inputs['personas']) != 1 or len(inputs['scenarios']) != 1:
             raise ValueError(
-                'wrap_simulation_agent DataPoint must encode exactly one '
-                'persona-scenario pair. For batch simulations use simulate() directly.'
+                f'{source} must encode exactly one persona-scenario pair, '
+                f'got {len(inputs["personas"])} persona(s) x {len(inputs["scenarios"])} scenario(s). '
+                'Use one row per conversation.'
             )
         _validate_shape(inputs['personas'][0], 'personas[]', ['name'])
         _validate_shape(inputs['scenarios'][0], 'scenarios[]', ['name', 'goal'])

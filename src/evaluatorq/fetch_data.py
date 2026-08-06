@@ -1,5 +1,6 @@
 """Fetch data from Orq platform."""
 
+import asyncio
 import contextlib
 import json
 import os
@@ -155,6 +156,14 @@ async def fetch_dataset_as_datapoints(
     return all_datapoints
 
 
+# The export POST either 302-redirects to a cached signed URL or builds the export
+# inline and returns it as the response body (Content-Disposition: attachment).
+# Repeating the POST is safe: the server serves the cache or rebuilds inline — it
+# never enqueues a job per call (orquesta-web sheets.manager.ts exportManifest).
+_EXPORT_URL_ATTEMPTS = 5
+_EXPORT_URL_RETRY_SECONDS = 2.0
+
+
 def _resolve_orq_base_url(base_url: str | None) -> str:
     return (base_url or os.getenv('ORQ_BASE_URL', ORQ_DEFAULT_HOST)).rstrip('/')
 
@@ -265,37 +274,62 @@ async def fetch_experiment_datapoints(
                 experiment_id,
             )
 
-        export_resp = await client.post(
-            f'{base}/v2/spreadsheets/{experiment_id}/manifests/{resolved_run_id}/export',
-            headers=headers,
-            json={'format': 'jsonl'},
-        )
         export_url: str | None = None
-        if export_resp.is_redirect:
-            export_url = export_resp.headers.get('location')
-        elif export_resp.is_success:
-            with contextlib.suppress(json.JSONDecodeError):
-                body = export_resp.json()
-                if isinstance(body, dict):
-                    export_url = body.get('url') or body.get('redirectUrl') or body.get('signedUrl')
-        else:
-            _raise_for_experiment(export_resp, experiment_id, 'export run')
-        if not export_url:
-            raise ValueError(
-                f"Export of run '{resolved_run_id}' (experiment '{experiment_id}') did not return a download URL."
+        export_text: str | None = None
+        for attempt in range(1, _EXPORT_URL_ATTEMPTS + 1):
+            if attempt > 1:
+                await asyncio.sleep(_EXPORT_URL_RETRY_SECONDS)
+            export_resp = await client.post(
+                f'{base}/v2/spreadsheets/{experiment_id}/manifests/{resolved_run_id}/export',
+                headers=headers,
+                json={'format': 'jsonl'},
             )
+            if export_resp.is_redirect:
+                export_url = export_resp.headers.get('location')
+            elif export_resp.is_success:
+                disposition = export_resp.headers.get('content-disposition', '').lower()
+                content_type = export_resp.headers.get('content-type', '').lower()
+                # The attachment disposition is the documented contract; the
+                # content-type fallback keeps an inline JSONL body from being
+                # mistaken for a not-ready response (and its data discarded)
+                # if the server ever drops or re-cases the disposition header.
+                if 'attachment' in disposition or 'ndjson' in content_type or 'jsonl' in content_type:
+                    export_text = export_resp.text
+                else:
+                    with contextlib.suppress(json.JSONDecodeError):
+                        body = export_resp.json()
+                        if isinstance(body, dict):
+                            export_url = body.get('url') or body.get('redirectUrl') or body.get('signedUrl')
+            else:
+                _raise_for_experiment(export_resp, experiment_id, 'export run')
+            if export_url or export_text is not None:
+                break
+            logger.debug(
+                'Export of run {} (experiment {}) has no download URL yet (attempt {}/{}).',
+                resolved_run_id,
+                experiment_id,
+                attempt,
+                _EXPORT_URL_ATTEMPTS,
+            )
+        if export_text is None:
+            if not export_url:
+                raise ValueError(
+                    f"Export of run '{resolved_run_id}' (experiment '{experiment_id}') did not return "
+                    f'a download URL after {_EXPORT_URL_ATTEMPTS} attempts.'
+                )
 
-        # The signed URL carries its own auth; sending the Orq bearer token would be
-        # rejected by the storage host, so download it without our headers.
-        download_resp = await client.get(export_url, follow_redirects=True)
-        if not download_resp.is_success:
-            raise ValueError(
-                f"Could not download the export for run '{resolved_run_id}' "
-                f"(experiment '{experiment_id}'): "
-                f'{download_resp.status_code} {download_resp.reason_phrase}'
-            )
+            # The signed URL carries its own auth; sending the Orq bearer token would be
+            # rejected by the storage host, so download it without our headers.
+            download_resp = await client.get(export_url, follow_redirects=True)
+            if not download_resp.is_success:
+                raise ValueError(
+                    f"Could not download the export for run '{resolved_run_id}' "
+                    f"(experiment '{experiment_id}'): "
+                    f'{download_resp.status_code} {download_resp.reason_phrase}'
+                )
+            export_text = download_resp.text
         rows = []
-        for lineno, line in enumerate(download_resp.text.splitlines(), start=1):
+        for lineno, line in enumerate(export_text.splitlines(), start=1):
             if not line.strip():
                 continue
             try:
