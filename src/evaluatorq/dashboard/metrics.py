@@ -255,8 +255,18 @@ def landing(roots: list[Path] | None = None) -> Landing:
         if card.surface == 'redteam':
             summary = data.get('summary')
             if isinstance(summary, dict):
-                resistant += _as_int(summary.get('evaluated_attacks')) - _as_int(summary.get('vulnerabilities_found'))
-                vulnerable += _as_int(summary.get('vulnerabilities_found'))
+                if 'evaluated_attacks' in summary:
+                    resistant += _as_int(summary.get('evaluated_attacks')) - _as_int(
+                        summary.get('vulnerabilities_found')
+                    )
+                    vulnerable += _as_int(summary.get('vulnerabilities_found'))
+                else:
+                    # Legacy summary predating evaluated_attacks: derive the real
+                    # counts from the results list instead of silently adding zero
+                    # to the donut while the run's own row still shows a rate.
+                    ev, vu = _redteam_result_counts(data)
+                    resistant += ev - vu
+                    vulnerable += vu
                 tok = _tokens_total(summary.get('token_usage_total'))
                 rt_tokens += tok
                 total_tokens += tok
@@ -312,6 +322,27 @@ def landing(roots: list[Path] | None = None) -> Landing:
         cost_by_kind=cost_by_kind,
         recent=rows[:5],
     )
+
+
+def _redteam_result_counts(data: dict[str, object]) -> tuple[int, int]:
+    """``(evaluated, vulnerable)`` derived by walking the ``results`` list.
+
+    Fallback for legacy red-team reports whose summary predates
+    ``evaluated_attacks`` / ``vulnerabilities_found``. Uses the same per-result
+    classification as the red-team overview loop: an errored result was never
+    evaluated, everything else splits on the ``vulnerable`` flag. A legacy
+    report with no results contributes ``(0, 0)`` — there is genuinely nothing
+    to weight in an attack-weighted aggregate.
+    """
+    evaluated = 0
+    vulnerable = 0
+    for res in _results(data):
+        if res.get('error'):
+            continue
+        evaluated += 1
+        if res.get('vulnerable'):
+            vulnerable += 1
+    return evaluated, vulnerable
 
 
 def _entries(data: dict[str, object]) -> list[dict[str, object]]:

@@ -52,6 +52,30 @@ def _redteam_payload(
     }
 
 
+def _legacy_redteam_payload(name: str, *, created: str, resistance: float, results: list[dict]) -> dict:
+    """A red-team report predating summary.evaluated_attacks / vulnerabilities_found.
+
+    Only resistance_rate is stored; the real counts live in the results list.
+    """
+    return {
+        'pipeline': {'mode': 'adaptive'},
+        'created_at': created,
+        'run_name': name,
+        'total_results': len(results),
+        'results': results,
+        'summary': {'resistance_rate': resistance},
+    }
+
+
+def _legacy_result(*, vulnerable: bool, error: str | None = None) -> dict:
+    return {
+        'attack': {'severity': 'low', 'strategy_name': 'roleplay'},
+        'agent': {'display_name': 'Refund agent', 'model': 'gpt-5.4'},
+        'vulnerable': vulnerable,
+        'error': error,
+    }
+
+
 def _sim_payload(name: str, *, created: str, averages: dict[str, float], n: int, tok_each: int) -> dict:
     return {
         'mode': 'run',
@@ -126,6 +150,47 @@ class TestMetrics:
         assert dict(data.tokens_by_kind)['Red team'] == 412000
         assert dict(data.tokens_by_kind)['Agent sim'] == 40 * 1550
         assert len(data.recent) == 2
+
+    def test_landing_includes_legacy_redteam_counts(self, roots: list[Path], tmp_path: Path) -> None:
+        # A legacy report (no evaluated_attacks in summary) must contribute its
+        # real counts, derived from results, to the landing aggregate (RES-1202).
+        rt = roots[0]
+        (rt / 'legacy_20260101_000000.json').write_text(
+            json.dumps(
+                _legacy_redteam_payload(
+                    'Legacy probe',
+                    created='2026-01-01T00:00:00',
+                    resistance=2 / 3,
+                    results=[
+                        _legacy_result(vulnerable=False),
+                        _legacy_result(vulnerable=False),
+                        _legacy_result(vulnerable=True),
+                        # Errored result was never evaluated; must not be counted.
+                        _legacy_result(vulnerable=False, error='timeout'),
+                    ],
+                )
+            )
+        )
+        data = metrics.landing(roots)
+        # Modern report: resistant 110, vulnerable 18. Legacy adds 2 and 1.
+        assert data.resistant == 112
+        assert data.vulnerable == 19
+        assert data.resistance_rate == pytest.approx(112 / 131)
+
+    def test_landing_legacy_without_results_is_not_counted(self, tmp_path: Path) -> None:
+        # A rate without an attack count has no weight in the attack-weighted
+        # aggregate: it stays out, and the aggregate stays consistent (None
+        # rather than a fabricated number).
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        (rt / 'legacy_20260101_000000.json').write_text(
+            json.dumps(_legacy_redteam_payload('Rate only', created='2026-01-01T00:00:00', resistance=0.5, results=[]))
+        )
+        data = metrics.landing([rt])
+        assert data.redteam_runs == 1  # the run itself is still listed
+        assert data.resistant == 0
+        assert data.vulnerable == 0
+        assert data.resistance_rate is None
 
     def test_landing_empty(self, tmp_path: Path) -> None:
         empty = [tmp_path / 'runs', tmp_path / 'sim-runs']
