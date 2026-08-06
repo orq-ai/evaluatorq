@@ -53,9 +53,12 @@ _MAX_ITER = 2000
 # identifiability projections). A gradient criterion is wrong here: the ridge
 # leaves a constant radial gradient along the scale direction that the
 # projection undoes every step, so the raw gradient never reaches zero even at
-# the constrained optimum. 1e-5 is far below anything that moves a ranking or
-# a vote weight; tighter tolerances just fight Adam's decay tail for nothing.
-_TOL = 1e-5
+# the constrained optimum. 1e-4 is far below anything that moves a ranking or
+# a vote weight (skills live on a ~+-10 scale, sigmas are reported to 3
+# decimals); tighter tolerances just fight Adam's decay tail, which unanimous
+# panels ride to the iteration cap at ~3e-5 steps. Steps this small only occur
+# near stationarity, and the exact-saddle case has its own gradient floor.
+_TOL = 1e-4
 _ADAM_B1 = 0.9
 _ADAM_B2 = 0.999
 _ADAM_EPS = 1e-8
