@@ -9,6 +9,7 @@ consistency-gated vote (RES-760, ADR-24).
 from __future__ import annotations
 
 import asyncio
+import math
 from collections import Counter
 from typing import TYPE_CHECKING
 
@@ -106,6 +107,11 @@ class JudgeStats(BaseModel):
         description='Flips over completed pairs (both orderings decisive); 0.0 when no pair was flippable'
     )
     tie_rate: float = Field(description='Ties over total comparisons the judge saw')
+    sigma: float | None = Field(
+        default=None,
+        description='BT-sigma discriminator (smaller = more reliable); set only when the report was built '
+        "with aggregation='bt-sigma'",
+    )
 
 
 class PairwiseReport(BaseModel):
@@ -126,14 +132,117 @@ class PairwiseReport(BaseModel):
         description='Mean inter-judge agreement (modal vote share) across comparisons; None if none were decisive'
     )
     per_judge: list[JudgeStats] = Field(default_factory=list, description='Per-judge behaviour breakdown')
+    bt_sigma: BTSigmaAggregation | None = Field(
+        default=None,
+        description="Reliability-weighted rollup; set only when the report was built with aggregation='bt-sigma'",
+    )
 
 
 def _rate(count: int, total: int) -> float | None:
     return count / total if total else None
 
 
-def build_report(comparisons: Sequence[PairwiseComparison]) -> PairwiseReport:
-    """Roll a set of pairwise comparisons up into headline and per-judge metrics."""
+class BTSigmaAggregation(BaseModel):
+    """Reliability-weighted rollup of a pairwise run (BT-sigma, arXiv:2602.16610).
+
+    Fitted unsupervised on the run's own reconciled votes: hard BT-sigma jointly
+    infers the A-vs-B skill gap and a discriminator per judge, then re-derives
+    each comparison's winner as a reliability-weighted vote (weight ``1/sigma``)
+    instead of uniform plurality. Down-weights noisy judges; needs no labels.
+    """
+
+    p_a_beats_b: float = Field(description='Fitted global probability that A beats B (logistic of the skill gap)')
+    skill_gap: float = Field(description='Fitted skill difference s_A - s_B')
+    judge_sigmas: dict[str, float] = Field(
+        default_factory=dict,
+        description='Per-judge discriminator; smaller = sharper/more reliable. Empty on single-judge fallback.',
+    )
+    winners: list[str] = Field(
+        default_factory=list,
+        description='Reliability-weighted winner per comparison, aligned with the input order',
+    )
+    a_win_rate: float | None = Field(description='Weighted A-wins over decisive comparisons; None if none decisive')
+    b_win_rate: float | None = Field(description='Weighted B-wins over decisive comparisons; None if none decisive')
+    tie_rate: float = Field(description='Weighted-tie comparisons over all comparisons')
+    inconclusive_rate: float = Field(description='Comparisons no judge decided, over all comparisons')
+    fit_warnings: list[str] = Field(default_factory=list, description='Degradations applied during the BT fit')
+
+
+_VOTE_TO_P = {'A': 1.0, 'B': 0.0, 'tie': 0.5}
+
+
+def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAggregation:
+    """Fit hard BT-sigma over a run's reconciled votes and re-derive winners.
+
+    The two "items" are the run's A and B sides; every decisive reconciled vote
+    is one comparison between them. Reconciliation has already symmetrised
+    position bias (both orderings per judge), satisfying the model's
+    commutativity requirement. Categorical votes make hard BT-sigma the natural
+    variant, which is also the paper's most robust one under inconsistency.
+    """
+    from evaluatorq.ranking import JudgedComparison, fit_bt
+
+    records = [
+        JudgedComparison(judge=v.model, item_a='A', item_b='B', p_a=_VOTE_TO_P[str(v.vote)])
+        for c in comparisons
+        for v in c.votes
+        if v.vote is not None
+    ]
+    if not records:
+        return BTSigmaAggregation(
+            p_a_beats_b=0.5,
+            skill_gap=0.0,
+            winners=['inconclusive'] * len(comparisons),
+            a_win_rate=None,
+            b_win_rate=None,
+            tie_rate=0.0,
+            inconclusive_rate=1.0 if comparisons else 0.0,
+            fit_warnings=['no decisive votes to fit on'],
+        )
+
+    fit = fit_bt(records, judge_sigma=True, hard=True)
+    # Single-judge fallback leaves sigmas empty; weight uniformly then.
+    weights = {judge: 1.0 / sigma for judge, sigma in fit.sigmas.items()}
+
+    winners: list[str] = []
+    for c in comparisons:
+        w: dict[str, float] = {'A': 0.0, 'B': 0.0, 'tie': 0.0}
+        for v in c.votes:
+            if v.vote is None:
+                continue
+            w[str(v.vote)] += weights.get(v.model, 1.0)
+        if not any(w.values()):
+            winners.append('inconclusive')
+            continue
+        top = max(w.values())
+        leaders = [k for k, val in w.items() if val == top]
+        # Mirrors plurality semantics: a unique leader wins, a split is inconclusive.
+        winners.append(leaders[0] if len(leaders) == 1 else 'inconclusive')
+
+    counts = Counter(winners)
+    decisive = counts['A'] + counts['B']
+    total = len(comparisons)
+    return BTSigmaAggregation(
+        p_a_beats_b=1.0 / (1.0 + math.exp(-(fit.skills['A'] - fit.skills['B']))),
+        skill_gap=fit.skills['A'] - fit.skills['B'],
+        judge_sigmas=fit.sigmas,
+        winners=winners,
+        a_win_rate=_rate(counts['A'], decisive),
+        b_win_rate=_rate(counts['B'], decisive),
+        tie_rate=counts['tie'] / total if total else 0.0,
+        inconclusive_rate=counts['inconclusive'] / total if total else 0.0,
+        fit_warnings=fit.warnings,
+    )
+
+
+def build_report(comparisons: Sequence[PairwiseComparison], *, aggregation: str = 'plurality') -> PairwiseReport:
+    """Roll a set of pairwise comparisons up into headline and per-judge metrics.
+
+    ``aggregation='plurality'`` (default) keeps the existing uniform plurality
+    consensus. ``aggregation='bt-sigma'`` additionally fits hard BT-sigma over
+    the run and attaches the reliability-weighted rollup (``report.bt_sigma``)
+    plus each judge's discriminator (``JudgeStats.sigma``); the headline
+    plurality rates are unchanged so the two aggregations stay comparable."""
     total = len(comparisons)
     winners = Counter(c.winner for c in comparisons)
     decisive = winners['A'] + winners['B']
@@ -165,6 +274,15 @@ def build_report(comparisons: Sequence[PairwiseComparison]) -> PairwiseReport:
         and (rate := _agreement_rate([v.vote for v in c.votes if v.vote is not None])) is not None
     ]
 
+    bt_block: BTSigmaAggregation | None = None
+    if aggregation == 'bt-sigma':
+        bt_block = bt_sigma_aggregation(comparisons)
+        for stats in judge_stats:
+            stats.sigma = bt_block.judge_sigmas.get(stats.model)
+    elif aggregation != 'plurality':
+        msg = f"unknown aggregation {aggregation!r}; expected 'plurality' or 'bt-sigma'"
+        raise ValueError(msg)
+
     return PairwiseReport(
         comparisons=total,
         a_win_rate=_rate(winners['A'], decisive),
@@ -173,6 +291,7 @@ def build_report(comparisons: Sequence[PairwiseComparison]) -> PairwiseReport:
         inconclusive_rate=winners['inconclusive'] / total if total else 0.0,
         mean_agreement=sum(agreements) / len(agreements) if agreements else None,
         per_judge=judge_stats,
+        bt_sigma=bt_block,
     )
 
 
