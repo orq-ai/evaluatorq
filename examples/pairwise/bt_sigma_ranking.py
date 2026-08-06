@@ -140,6 +140,9 @@ async def main() -> None:
     jury = llm_jury_pairwise(
         judges=list(JUDGES),
         criteria='Which answer is more scientifically accurate?',
+        # Near-deterministic judges: run-to-run sigma ORDERING replicates
+        # regardless, but zero temperature tightens the magnitudes too.
+        temperature=0.0,
     )
     pairs = [(hi, lo) for i, hi in enumerate(TIERS) for lo in TIERS[i + 1 :]]
 
