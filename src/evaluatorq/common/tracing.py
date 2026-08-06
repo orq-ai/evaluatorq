@@ -461,6 +461,71 @@ async def with_llm_span(  # noqa: RUF029
             raise
 
 
+@asynccontextmanager
+async def with_span(  # noqa: RUF029
+    name: str,
+    attributes: AttrMap | None = None,
+    *,
+    parent_context: Any | None = None,
+) -> AsyncGenerator[Span | None, None]:
+    """Execute code within a generic INTERNAL span (not an LLM call span).
+
+    The neutral counterpart to :func:`with_llm_span` for orchestration spans
+    that group work (e.g. a jury deliberation and its per-judge children).
+    ``get_tracer()``-gated, so it is a zero-cost no-op when tracing is off.
+
+    ``parent_context`` pins the span's parent explicitly, which matters when
+    the caller opens several children under one parent via ``asyncio.gather``:
+    the shared context is captured once and passed in, so parenting does not
+    depend on gather scheduling order.
+
+    Yields:
+        The active span when tracing is enabled, otherwise None.
+    """
+    tracer = get_tracer()
+    if tracer is None:
+        yield None
+        return
+
+    try:
+        from opentelemetry import context as otel_context
+        from opentelemetry.trace import SpanKind, Status, StatusCode
+    except ImportError:
+        yield None
+        return
+
+    ctx = parent_context or otel_context.get_current()
+    clean_attrs = {k: v for k, v in (attributes or {}).items() if v is not None}
+
+    with tracer.start_as_current_span(
+        name,
+        context=ctx,
+        kind=SpanKind.INTERNAL,
+        attributes=clean_attrs,
+    ) as span:
+        try:
+            yield span
+            span.set_status(Status(StatusCode.OK))
+        except BaseException as e:
+            span.set_attribute('error.type', type(e).__name__)
+            span.set_status(Status(StatusCode.ERROR, str(e)))
+            span.record_exception(e)
+            raise
+
+
+def current_otel_context() -> Any | None:
+    """Return the active OTel context, or None when OTel is unavailable.
+
+    Used to capture a parent span's context for passing to ``with_span`` /
+    ``with_llm_span`` children created concurrently (see ``parent_context``).
+    """
+    try:
+        from opentelemetry import context as otel_context
+    except ImportError:
+        return None
+    return otel_context.get_current()
+
+
 async def get_trace_context_headers() -> dict[str, str]:  # noqa: RUF029
     """Return W3C trace context headers for the current active span.
 

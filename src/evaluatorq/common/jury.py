@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from loguru import logger
 from pydantic import BaseModel
 
+from evaluatorq.common.tracing import current_otel_context, record_token_usage, set_span_attrs, with_span
 from evaluatorq.contracts import JuryResult, JuryStats, JuryVote, StrEnum, TokenUsage
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span
 
 VerdictValue = bool | float | str
 TieBreak = Callable[[list[VerdictValue]], VerdictValue | None]
@@ -263,6 +268,75 @@ async def _judge_vote(
     numeric_how: NumericAggName,
     propagate_errors: bool = False,
     semaphore: asyncio.Semaphore | None = None,
+    parent_context: object | None = None,
+) -> tuple[JuryVote, list[TokenUsage]]:
+    """Run one judge (its repetitions) inside a per-judge span, then stamp the
+    resolved ``JuryVote`` onto the span (RES-985). The span is a no-op when
+    tracing is disabled; the vote/usages are unchanged either way."""
+    start = time.monotonic()
+    async with with_span('llm.judge', parent_context=parent_context) as span:
+        vote, usages = await _compute_judge_vote(
+            model=model,
+            judge_fn=judge_fn,
+            repetitions=repetitions,
+            verdict_kind=verdict_kind,
+            tie_break=tie_break,
+            replacement=replacement,
+            numeric_how=numeric_how,
+            propagate_errors=propagate_errors,
+            semaphore=semaphore,
+        )
+        _record_judge_span(span, vote, usages, latency_ms=(time.monotonic() - start) * 1000.0)
+    return vote, usages
+
+
+def _record_judge_span(span: Span | None, vote: JuryVote, usages: list[TokenUsage], *, latency_ms: float) -> None:
+    """Set ``judge.*`` attributes on a judge span from its resolved vote.
+
+    ``judge.name`` equals the model id — jury judges are identified only by
+    model — kept as a distinct key so a future named-judge concept can diverge
+    without breaking dashboards. ``judge.verdict`` is stringified so bool /
+    float / str verdicts share one attribute type. ``judge.cost`` rides only
+    when the summed usage carries a ``cost_usd``; otherwise token counts stand
+    in, per the ticket.
+    """
+    total_usage = _sum_usage(usages)
+    set_span_attrs(
+        span,
+        {
+            'judge.name': vote.model,
+            'judge.model': vote.model,
+            'judge.verdict': None if vote.value is None else str(vote.value),
+            'judge.success': vote.success,
+            'judge.abstained': vote.abstained,
+            'judge.replacement': vote.replacement,
+            'judge.latency_ms': round(latency_ms, 3),
+        },
+    )
+    if total_usage is not None:
+        record_token_usage(
+            span,
+            prompt_tokens=total_usage.prompt_tokens,
+            completion_tokens=total_usage.completion_tokens,
+            # A summed TokenUsage keeps the unset upstream total (0); None lets
+            # record_token_usage derive it from prompt + completion.
+            total_tokens=total_usage.total_tokens or None,
+        )
+        if total_usage.cost_usd is not None:
+            set_span_attrs(span, {'judge.cost': total_usage.cost_usd})
+
+
+async def _compute_judge_vote(
+    *,
+    model: str,
+    judge_fn: Callable[[str], Awaitable[Prediction]],
+    repetitions: int,
+    verdict_kind: VerdictKind,
+    tie_break: TieBreak | None,
+    replacement: bool,
+    numeric_how: NumericAggName,
+    propagate_errors: bool = False,
+    semaphore: asyncio.Semaphore | None = None,
 ) -> tuple[JuryVote, list[TokenUsage]]:
     predictions = await asyncio.gather(*[
         _call_prediction(judge_fn, model, propagate_errors=propagate_errors, semaphore=semaphore)
@@ -375,7 +449,61 @@ async def run_jury(
     whole panel (judges x repetitions, replacements included). Pass an int for
     a run-local cap, or an existing ``asyncio.Semaphore`` to share one budget
     across several jury runs. ``None`` (default) keeps the fan-out unbounded.
+
+    The deliberation runs inside an ``llm.jury`` span with the panel's
+    aggregate attributes; each judge opens a child ``llm.judge`` span (RES-985).
     """
+    async with with_span('llm.jury') as jury_span:
+        # Captured once and threaded into each judge so per-judge spans parent
+        # to this jury span deterministically, regardless of gather scheduling.
+        jury_ctx = current_otel_context()
+        deliberation = await _run_jury_core(
+            judge_fn=judge_fn,
+            panel=panel,
+            repetitions=repetitions,
+            replacement_judges=replacement_judges,
+            min_successful_judges=min_successful_judges,
+            verdict_kind=verdict_kind,
+            tie_break=tie_break,
+            aggregator=aggregator,
+            tie_break_label=tie_break_label,
+            propagate_errors=propagate_errors,
+            max_concurrency=max_concurrency,
+            parent_context=jury_ctx,
+        )
+        j = deliberation.jury
+        set_span_attrs(
+            jury_span,
+            {
+                'jury.raw_agreement': j.raw_agreement,
+                'jury.judges_succeeded': j.judges_succeeded,
+                'jury.judges_configured': j.judges_configured,
+                'jury.tie': j.tie,
+                'jury.inconclusive': j.inconclusive,
+            },
+        )
+    return deliberation
+
+
+async def _run_jury_core(
+    *,
+    judge_fn: Callable[[str], Awaitable[Prediction]],
+    panel: Sequence[str],
+    repetitions: int = 1,
+    replacement_judges: Sequence[str] | None = None,
+    min_successful_judges: int = 1,
+    verdict_kind: VerdictKind = VerdictKind.CATEGORICAL,
+    tie_break: TieBreak | None = None,
+    aggregator: AggregatorSpec | None = None,
+    tie_break_label: str | None = None,
+    propagate_errors: bool = False,
+    max_concurrency: int | asyncio.Semaphore | None = None,
+    parent_context: object | None = None,
+) -> JuryDeliberation:
+    """Panel deliberation + aggregation (see :func:`run_jury` for semantics).
+
+    Split out so :func:`run_jury` owns only the span; ``parent_context`` is the
+    jury span's context, threaded into each judge span."""
     if aggregator is None:
         aggregator = 'mean_std' if verdict_kind is VerdictKind.NUMERIC else 'mode'
     # Per-judge repetition collapse reuses the numeric keyword when one is set,
@@ -408,6 +536,7 @@ async def run_jury(
             numeric_how=numeric_how,
             propagate_errors=propagate_errors,
             semaphore=semaphore,
+            parent_context=parent_context,
         )
         for model in resolved_panel
     ])
@@ -431,6 +560,7 @@ async def run_jury(
                 replacement=True,
                 numeric_how=numeric_how,
                 semaphore=semaphore,
+                parent_context=parent_context,
             )
             for model in stand_ins
         ])
