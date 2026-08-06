@@ -53,8 +53,9 @@ _MAX_ITER = 2000
 # identifiability projections). A gradient criterion is wrong here: the ridge
 # leaves a constant radial gradient along the scale direction that the
 # projection undoes every step, so the raw gradient never reaches zero even at
-# the constrained optimum.
-_TOL = 1e-9
+# the constrained optimum. 1e-5 is far below anything that moves a ranking or
+# a vote weight; tighter tolerances just fight Adam's decay tail for nothing.
+_TOL = 1e-5
 _ADAM_B1 = 0.9
 _ADAM_B2 = 0.999
 _ADAM_EPS = 1e-8
@@ -62,6 +63,13 @@ _ADAM_EPS = 1e-8
 # separated items (all wins one way -> infinite skill MLE) finite without
 # measurably moving well-posed solutions.
 _RIDGE = 1e-4
+# Log-normal prior on sigma (ridge on tau), deliberately stronger than _RIDGE:
+# a perfectly consistent judge's ideal sigma is 0, so its tau otherwise drifts
+# for thousands of iterations (the fit never converges) while the judge's vote
+# weight 1/sigma explodes without bound. The prior gives that drift a finite
+# equilibrium: reliability separation stays large but bounded, and ambiguous
+# magnitudes shrink toward sigma = 1.
+_TAU_RIDGE = 1e-2
 # Clamp for probabilities entering the log-likelihood.
 _P_EPS = 1e-6
 # Gradients below this are float dust, not signal. Without the floor, Adam's
@@ -188,6 +196,9 @@ def fit_bt(
                 g_t[c.judge] += -err * z  # chain rule through sigma_k = exp(tau)
         for i in items:
             g_s[i] -= _RIDGE * s[i]
+        if use_sigma:
+            for k in judges:
+                g_t[k] -= _TAU_RIDGE * tau[k]
 
         max_g = max(abs(g) for g in g_s.values())
         if use_sigma:
