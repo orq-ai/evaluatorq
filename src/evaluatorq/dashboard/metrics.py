@@ -1,6 +1,6 @@
 """Aggregate metrics for the combined dashboard landing + run lists.
 
-The landing screen needs numbers across *both* run stores (red team + sim).
+The landing screen needs numbers across all run stores (red team + sim + pairwise).
 Rather than fully validating every report (slow, and the landing only needs a
 handful of headline fields), these helpers read the cached raw JSON dicts and
 pull the aggregate fields defensively.
@@ -35,7 +35,7 @@ class RunRow:
     """One discovered run, with the fields the run lists + landing display."""
 
     id: str
-    surface: str  # 'redteam' | 'sim'
+    surface: str  # 'redteam' | 'sim' | 'pairwise'
     name: str
     when: str  # preformatted 'YYYY-MM-DD HH:MM'
     headline: str  # e.g. '128 attacks'
@@ -53,12 +53,12 @@ class Landing:
     sim_runs: int
     resistance_rate: float | None  # mean across red team runs (0..1)
     total_tokens: int
-    by_kind: list[tuple[str, int]]  # [('Red team', n), ('Agent sim', n)]
+    by_kind: list[tuple[str, int]]  # [('Red team', n), ('Agent sim', n), ('Pairwise', n)]
     severity: list[tuple[str, int]]  # [('critical', n), ...] non-zero only
-    tokens_by_kind: list[tuple[str, int]]  # [('Red team', n), ('Agent sim', n)]
+    tokens_by_kind: list[tuple[str, int]]  # [('Red team', n), ('Agent sim', n), ('Pairwise', n)]
     resistant: int  # attacks resisted (for the donut)
     vulnerable: int  # attacks that succeeded (for the donut)
-    total_cost: float = 0.0  # summed cost_usd across both stores
+    total_cost: float = 0.0  # summed cost_usd across all stores
     costed_runs: int = 0  # runs that actually record a cost — avg cost divides by this
     cost_by_kind: list[tuple[str, float]] = field(default_factory=list)  # non-zero only
     recent: list[RunRow] = field(default_factory=list)
@@ -233,7 +233,7 @@ def run_rows(roots: list[Path] | None = None) -> list[RunRow]:
 
 
 def landing(roots: list[Path] | None = None) -> Landing:
-    """Compute the Dashboard landing aggregates across both run stores."""
+    """Compute the Dashboard landing aggregates across all run stores."""
     rows = run_rows(roots)
     redteam = [r for r in rows if r.surface == 'redteam']
     sim = [r for r in rows if r.surface == 'sim']

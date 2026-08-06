@@ -118,6 +118,7 @@ def _resolve_target(
     target: str | None,
     vercel_url: str | None,
     openai_model: str | None,
+    memory_entity_id: str | None = None,
 ) -> Any:
     """Resolve exactly one target flag to an AgentTarget.
 
@@ -134,14 +135,25 @@ def _resolve_target(
         raise typer.BadParameter('Provide exactly one of: --target, --vercel-url, --openai-model')
     if len(active) > 1:
         raise typer.BadParameter(f'Only one target flag allowed; got: {", ".join(active)}')
+    if memory_entity_id is not None and not memory_entity_id.strip():
+        # A blank id would be silently dropped downstream (falsy check in the
+        # target) and reproduce the exact 400 the flag exists to prevent.
+        raise typer.BadParameter('--memory-entity cannot be blank.')
+    if memory_entity_id is not None and target is None:
+        raise typer.BadParameter('--memory-entity requires --target agent:<key> (or a bare <key>).')
 
     if target is not None:
         from evaluatorq.redteam.contracts import TargetKind
 
         kind, value = _parse_target_spec(target)
         if kind == TargetKind.AGENT:
-            return _make_sim_agent_backend().create_target(value)
+            agent_target = _make_sim_agent_backend().create_target(value)
+            if memory_entity_id is not None:
+                agent_target.memory_entity_id = memory_entity_id
+            return agent_target
         if kind == TargetKind.DEPLOYMENT:
+            if memory_entity_id is not None:
+                raise typer.BadParameter('--memory-entity requires --target agent:<key> (or a bare <key>).')
             _require_orq_api_key('--target deployment:<key>')
             from evaluatorq.simulation.adapters import from_orq_deployment
 
@@ -221,6 +233,37 @@ def _clean_cli_error_types() -> tuple[type[Exception], ...]:
     except ImportError:
         return (ValueError, RuntimeError)
     return (ValueError, RuntimeError, BackendError, CredentialError, MissingLLMCredentialsError)
+
+
+# ---------------------------------------------------------------------------
+# Remediation suggestions
+# ---------------------------------------------------------------------------
+
+
+def _maybe_generate_recommendations(results: list[Any], model: str) -> list[Any] | None:
+    """Generate LLM remediation suggestions for flagged failures.
+
+    Failures here must not fail the run — the simulation results already
+    exist; suggestions are best-effort garnish. Warn and return ``None``.
+    """
+    from evaluatorq.common.llm_client import resolve_llm_client
+    from evaluatorq.simulation.reports.recommendations import generate_recommendations
+
+    async def _gen() -> list[Any]:
+        resolved = resolve_llm_client()
+        try:
+            return await generate_recommendations(results, resolved.client, model)
+        finally:
+            if resolved.owned:
+                await resolved.client.close()
+
+    try:
+        recs = asyncio.run(_gen())
+    except Exception as exc:
+        typer.echo(f'Warning: remediation suggestion generation failed ({exc}); continuing without.', err=True)
+        return None
+    typer.echo(f'Generated remediation suggestions for {len(recs)} conversation(s).', err=True)
+    return recs or None
 
 
 # ---------------------------------------------------------------------------
@@ -474,6 +517,17 @@ def simulate(
             help=('Target to simulate: agent:<key> or deployment:<key>. Bare values default to agent:<key>.'),
         ),
     ] = None,
+    memory_entity: Annotated[
+        str | None,
+        typer.Option(
+            '--memory-entity',
+            help=(
+                'Memory entity_id sent with every agent:<key> (or bare <key>) target call, '
+                'for agents with a memory store attached. Omit to mint a fresh id per run; '
+                'pass one to reuse a specific (e.g. seeded) entity, shared across the run.'
+            ),
+        ),
+    ] = None,
     vercel_url: Annotated[
         str | None,
         typer.Option('--vercel-url', help='Vercel AI SDK endpoint URL.'),
@@ -545,6 +599,17 @@ def simulate(
     no_save: Annotated[  # noqa: FBT002
         bool,
         typer.Option('--no-save', help='Skip writing to .evaluatorq/sim-runs/.'),
+    ] = False,
+    recommendations: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option(
+            '--recommendations',
+            help=(
+                'Generate LLM remediation suggestions for failures with a '
+                'concrete cause (broken rules/criteria, poor quality metrics). '
+                'Extra LLM cost; uses --sim-model.'
+            ),
+        ),
     ] = False,
     verbose: Annotated[
         int,
@@ -648,6 +713,7 @@ def simulate(
             target=target,
             vercel_url=vercel_url,
             openai_model=openai_model,
+            memory_entity_id=memory_entity,
         )
         evaluator_names = _resolve_evaluators(evaluator)
         run = asyncio.run(
@@ -686,6 +752,9 @@ def simulate(
     _maybe_generate_executive_summary(run, enabled=executive_summary, model=sim_model)
     if hooks is not None and executive_summary:
         hooks.print_summary(results, executive_summary=run.executive_summary, experiment_url=run.experiment_url)
+
+    if recommendations:
+        run.recommendations = _maybe_generate_recommendations(results, sim_model)
 
     if report_md is not None:
         _export_report(run, report_md, fmt='md')
@@ -759,6 +828,17 @@ def run(
         typer.Option(
             '--target',
             help=('Target to simulate: agent:<key> or deployment:<key>. Bare values default to agent:<key>.'),
+        ),
+    ] = None,
+    memory_entity: Annotated[
+        str | None,
+        typer.Option(
+            '--memory-entity',
+            help=(
+                'Memory entity_id sent with every agent:<key> (or bare <key>) target call, '
+                'for agents with a memory store attached. Omit to mint a fresh id per run; '
+                'pass one to reuse a specific (e.g. seeded) entity, shared across the run.'
+            ),
         ),
     ] = None,
     vercel_url: Annotated[
@@ -837,6 +917,17 @@ def run(
     no_save: Annotated[  # noqa: FBT002
         bool,
         typer.Option('--no-save', help='Skip writing to .evaluatorq/sim-runs/.'),
+    ] = False,
+    recommendations: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option(
+            '--recommendations',
+            help=(
+                'Generate LLM remediation suggestions for failures with a '
+                'concrete cause (broken rules/criteria, poor quality metrics). '
+                'Extra LLM cost; uses --sim-model.'
+            ),
+        ),
     ] = False,
     datapoints_path: Annotated[
         Path | None,
@@ -935,6 +1026,7 @@ def run(
             target=target,
             vercel_url=vercel_url,
             openai_model=openai_model,
+            memory_entity_id=memory_entity,
         )
         evaluator_names = _resolve_evaluators(evaluator)
         run = asyncio.run(
@@ -974,6 +1066,9 @@ def run(
     _maybe_generate_executive_summary(run, enabled=executive_summary, model=sim_model)
     if hooks is not None and executive_summary:
         hooks.print_summary(results, executive_summary=run.executive_summary, experiment_url=run.experiment_url)
+
+    if recommendations:
+        run.recommendations = _maybe_generate_recommendations(results, sim_model)
 
     if report_md is not None:
         _export_report(run, report_md, fmt='md')
@@ -1217,6 +1312,151 @@ def generate(
         )
 
 
+# ---------------------------------------------------------------------------
+# from-traces  (datapoints from Orq production traces)
+# ---------------------------------------------------------------------------
+
+
+@app.command('from-traces', no_args_is_help=True)
+def from_traces(
+    output: Annotated[
+        Path,
+        typer.Option('--output', '-o', help='Path to write the generated datapoints JSONL.'),
+    ],
+    limit: Annotated[
+        int,
+        typer.Option('--limit', min=1, help='Maximum number of traces to fetch.'),
+    ] = 20,
+    lookback_hours: Annotated[
+        float | None,
+        typer.Option(
+            '--lookback-hours',
+            min=0.0,
+            help='Only fetch traces from the last N hours. Default: no time filter.',
+        ),
+    ] = None,
+    search: Annotated[
+        str,
+        typer.Option('--search', help='Free-text search applied to the trace list.'),
+    ] = '',
+    extend: Annotated[
+        int,
+        typer.Option(
+            '--extend',
+            min=0,
+            help=(
+                'Also generate N distribution-matched datapoints on top of the '
+                'direct per-trace ones (extra LLM calls). 0 disables extension.'
+            ),
+        ),
+    ] = 0,
+    agent_description: Annotated[
+        str | None,
+        typer.Option(
+            '--agent-description',
+            help=(
+                'Agent description used by --extend generation. Optional; '
+                'inferred from the traffic profile when omitted.'
+            ),
+        ),
+    ] = None,
+    sim_model: Annotated[
+        str,
+        typer.Option(
+            '--sim-model',
+            help=(
+                'Model for persona/scenario inference and extension generation. '
+                'Provider resolved from env: ORQ_API_KEY -> Orq router, else '
+                'OPENAI_API_KEY (+ OPENAI_BASE_URL).'
+            ),
+        ),
+    ] = DEFAULT_MODEL,
+    verbose: Annotated[
+        int,
+        typer.Option(
+            '--verbose',
+            '-v',
+            count=True,
+            help='Increase verbosity (-v info logs, -vv debug logs).',
+        ),
+    ] = 0,
+    quiet: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option('--quiet', '-q', help='Suppress non-error output.'),
+    ] = False,
+) -> None:
+    """Build simulation datapoints from Orq production traces.
+
+    Fetches recent traces from the Orq traces API (requires ``ORQ_API_KEY``)
+    and builds one datapoint per trace conversation: the persona and scenario
+    are inferred from the transcript, the first message is the real user's
+    opening message verbatim. Pass ``--extend N`` to additionally generate N
+    new datapoints matching the traffic distribution of the fetched traces.
+    Feed the output file to ``sim simulate --input`` to run.
+    """
+    if quiet:
+        verbose = -1
+    _configure_logging(verbose)
+
+    from evaluatorq.simulation.traces import (
+        datapoints_from_traces,
+        extend_from_traces,
+        fetch_trace_conversations,
+    )
+
+    async def _impl() -> tuple[int, int, list[Any]]:
+        start_date_ms: int | None = None
+        if lookback_hours is not None:
+            import time
+
+            start_date_ms = int((time.time() - lookback_hours * 3600) * 1000)
+        conversations = await fetch_trace_conversations(
+            limit=limit,
+            start_date_ms=start_date_ms,
+            search=search,
+        )
+        if not conversations:
+            raise RuntimeError(
+                'No traces with a usable conversation found. Widen --lookback-hours, raise --limit, or drop --search.'
+            )
+        datapoints = await datapoints_from_traces(conversations, model=sim_model)
+        num_direct = len(datapoints)
+        if extend > 0:
+            datapoints += await extend_from_traces(
+                conversations,
+                num_datapoints=extend,
+                agent_description=agent_description,
+                model=sim_model,
+            )
+        return len(conversations), num_direct, datapoints
+
+    try:
+        num_traces, num_direct, datapoints = asyncio.run(_impl())
+    except KeyboardInterrupt:
+        typer.echo('^C aborted.', err=True)
+        raise typer.Exit(130) from None
+    except asyncio.CancelledError:
+        typer.echo('^C aborted.', err=True)
+        raise typer.Exit(130) from None
+    except typer.BadParameter:
+        raise
+    except _clean_cli_error_types() as exc:
+        # ValueError covers missing ORQ_API_KEY; RuntimeError covers "no usable
+        # traces" and profile-generation failures — surface as one line.
+        _handle_cli_error(exc)
+
+    if not datapoints:
+        typer.echo('Error: no datapoints could be built from the fetched traces.', err=True)
+        raise typer.Exit(1)
+
+    _write_datapoints(datapoints, output)
+    num_extension = len(datapoints) - num_direct
+    summary = f'Built {num_direct} datapoint(s) from {num_traces} trace(s)'
+    if num_extension:
+        summary += f' + {num_extension} distribution-matched datapoint(s) (--extend)'
+    typer.echo(f'{summary} -> {output}', err=True)
+
+
 async def _generate_impl(
     *,
     agent_description: str,
@@ -1245,39 +1485,110 @@ async def _generate_impl(
 # ---------------------------------------------------------------------------
 
 
+def _load_results_for_export(input_path: Path) -> tuple[list[Any], list[Any]]:
+    """Load ``(results, stored_recommendations)`` from a results JSONL or a
+    full ``SimulationRun`` report JSON (the ``--report-output`` file)."""
+    from evaluatorq.simulation.types import SimulationResult, SimulationRun
+    from evaluatorq.simulation.utils.dataset_export import parse_jsonl
+
+    content = input_path.read_text(encoding='utf-8')
+    stripped = content.lstrip()
+    if stripped.startswith('{'):
+        try:
+            run = SimulationRun.model_validate_json(content)
+        except Exception:
+            run = None
+        if run is not None:
+            return list(run.results), list(run.recommendations or [])
+    results: list[SimulationResult] = parse_jsonl(content, cls=SimulationResult)  # pyright: ignore[reportAssignmentType]
+    return results, []
+
+
 @app.command(no_args_is_help=True)
 def export(
     input_path: Annotated[
         Path,
-        typer.Option('--input', '-i', help='Path to results JSONL file.'),
+        typer.Option(
+            '--input',
+            '-i',
+            help='Path to a results JSONL file or a SimulationRun report JSON (--report / --report-output).',
+        ),
     ],
     output: Annotated[
         Path,
-        typer.Option('--output', '-o', help='Path to write OpenResponses payload JSON.'),
+        typer.Option('--output', '-o', help='Path to write the exported file.'),
     ],
+    fmt: Annotated[
+        str,
+        typer.Option(
+            '--format',
+            help='Export format: openresponses (payload JSON), md (Markdown report), html (HTML report).',
+        ),
+    ] = 'openresponses',
+    recommendations: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option(
+            '--recommendations',
+            help=(
+                'For md/html: generate LLM remediation suggestions at export time when the '
+                'input has none stored. Extra LLM cost; uses --sim-model.'
+            ),
+        ),
+    ] = False,
+    sim_model: Annotated[
+        str,
+        typer.Option('--sim-model', help='Model for --recommendations generation.'),
+    ] = DEFAULT_MODEL,
+    target: Annotated[
+        str,
+        typer.Option('--target-label', help='Target name shown in md/html report headers.'),
+    ] = 'agent',
 ) -> None:
-    """Convert simulation results JSONL to OpenResponses payload JSON."""
+    """Export simulation results: OpenResponses payload JSON, or an HTML/Markdown report.
+
+    Markdown and HTML exports include remediation suggestions when the input
+    run JSON carries them (a run executed with ``--recommendations``), or when
+    ``--recommendations`` is passed here to generate them at export time.
+    """
     if not input_path.exists():
         raise typer.BadParameter(f'Input file not found: {input_path}')
-
-    from evaluatorq.simulation.convert import to_open_responses
-    from evaluatorq.simulation.types import SimulationResult
-    from evaluatorq.simulation.utils.dataset_export import parse_jsonl
+    if fmt not in ('openresponses', 'md', 'html'):
+        raise typer.BadParameter(f'Unknown --format {fmt!r}; use openresponses, md, or html.')
 
     try:
-        content = input_path.read_text(encoding='utf-8')
-        results: list[SimulationResult] = parse_jsonl(content, cls=SimulationResult)  # pyright: ignore[reportAssignmentType]
+        results, stored_recs = _load_results_for_export(input_path)
     except Exception as exc:
         raise typer.BadParameter(f'Failed to read {input_path}: {exc}') from exc
 
-    payloads = [to_open_responses(result) for result in results]
+    if fmt == 'openresponses':
+        from evaluatorq.simulation.convert import to_open_responses
 
+        payloads = [to_open_responses(result) for result in results]
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps([p if isinstance(p, dict) else p.model_dump(mode='json') for p in payloads], indent=2),
+            encoding='utf-8',
+        )
+        typer.echo(f'Exported {len(payloads)} result(s) to {output}')
+        return
+
+    recs = stored_recs or None
+    if recommendations and not recs:
+        recs = _maybe_generate_recommendations(results, sim_model)
+    elif recs:
+        typer.echo(f'Using {len(recs)} stored remediation suggestion(s) from the input run.', err=True)
+
+    if fmt == 'md':
+        from evaluatorq.simulation.reports import export_markdown
+
+        rendered = export_markdown(results, target=target, recommendations=recs)
+    else:
+        from evaluatorq.simulation.reports import export_html
+
+        rendered = export_html(results, target=target, recommendations=recs)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
-        json.dumps([p if isinstance(p, dict) else p.model_dump(mode='json') for p in payloads], indent=2),
-        encoding='utf-8',
-    )
-    typer.echo(f'Exported {len(payloads)} result(s) to {output}')
+    output.write_text(rendered, encoding='utf-8')
+    typer.echo(f'Exported {len(results)} result(s) to {output}')
 
 
 # ---------------------------------------------------------------------------
@@ -1710,9 +2021,19 @@ def _export_report(run: Any, target: Path, *, fmt: str) -> None:
     from evaluatorq.simulation.reports.export_md import export_markdown
 
     if fmt == 'md':
-        content = export_markdown(run.results, run_date=run.created_at, executive_summary=run.executive_summary)
+        content = export_markdown(
+            run.results,
+            run_date=run.created_at,
+            executive_summary=run.executive_summary,
+            recommendations=run.recommendations,
+        )
     else:
-        content = export_html(run.results, run_date=run.created_at, executive_summary=run.executive_summary)
+        content = export_html(
+            run.results,
+            run_date=run.created_at,
+            executive_summary=run.executive_summary,
+            recommendations=run.recommendations,
+        )
     path = _resolve_report_target(target, ext=fmt, run=run)
     path.write_text(content, encoding='utf-8')
     typer.echo(f'Report written to {path}', err=True)

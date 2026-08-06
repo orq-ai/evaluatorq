@@ -1,6 +1,6 @@
 """Surface adapter registry for the evaluatorq dashboard.
 
-Each surface (redteam, sim) gets a ``SurfaceAdapter`` dataclass that holds
+Each surface (redteam, sim, pairwise) gets a ``SurfaceAdapter`` dataclass that holds
 callables for loading, rendering body HTML, exporting full HTML, extracting a
 display name, and extracting a ``datetime`` from a parsed report object.
 
@@ -14,8 +14,7 @@ Optional export callables:
 ``ADAPTERS`` is the single registry keyed by surface kind strings matching
 ``evaluatorq.dashboard.library.sniff_kind`` return values.
 
-``SURFACE_LABELS`` maps surface keys to their human-readable display labels.
-Used by both the nav bar (``shell.py``) and the report-card list (``view.py``).
+Display labels for surface keys live in ``view.SURFACE_LABELS``.
 """
 
 from __future__ import annotations
@@ -138,6 +137,7 @@ def _sim_adapter() -> SurfaceAdapter:
             run_date=run.created_at,
             executive_summary=run.executive_summary,
             experiment_url=run.experiment_url,
+            recommendations=run.recommendations,
         ),
         export=lambda run: export_html(
             run.results,
@@ -145,9 +145,12 @@ def _sim_adapter() -> SurfaceAdapter:
             run_date=run.created_at,
             executive_summary=run.executive_summary,
             experiment_url=run.experiment_url,
+            recommendations=run.recommendations,
         ),
         name=lambda run: run.run_name,
         created_at=lambda run: run.created_at,
+        # body_from_results deliberately omits recommendations: they index into
+        # the full result list, so a filtered subset would misattribute them.
         body_from_results=lambda run, filtered: render_report_body(
             filtered,
             target=run.target_kind,
@@ -159,6 +162,7 @@ def _sim_adapter() -> SurfaceAdapter:
             target=run.target_kind,
             run_date=run.created_at,
             executive_summary=run.executive_summary,
+            recommendations=run.recommendations,
         ),
         rows=_sim_rows,
     )
@@ -230,12 +234,4 @@ ADAPTERS: dict[str, SurfaceAdapter] = {
     'redteam': _redteam_adapter(),
     'sim': _sim_adapter(),
     'pairwise': _pairwise_adapter(),
-}
-
-# Human-readable labels for each surface key.  Single source of truth used by
-# the nav bar (shell.py) and the report-card index (view.py).
-SURFACE_LABELS: dict[str, str] = {
-    'redteam': 'Red Team',
-    'sim': 'Simulation',
-    'pairwise': 'Pairwise',
 }

@@ -99,6 +99,7 @@ unavailable (no second ordering to disagree with).
 | `repetitions` | `1` | How many times each judge is asked per ordering; the judge takes its own majority first. |
 | `replacement_judges` | `None` | Stand-ins for judges that fail mechanically. Promoted per pair and run in **both** orderings, so a stand-in casts a real reconciled vote. |
 | `min_successful_judges` | `1` | Minimum decisive reconciled votes, otherwise the comparison is **inconclusive**. Must not exceed the panel size. |
+| `max_concurrency` | `None` | Cap on total in-flight judge LLM calls across all concurrently running `compare()` calls (each pair fans out judges × orderings × repetitions). Unbounded when unset. |
 
 ## Reading a comparison
 
@@ -198,6 +199,10 @@ calls itself, so you can drive the swap-and-reconcile logic with your own judge.
 `reconcile_pair()` and `pairwise_consensus()` are exposed for the same reason.
 Most callers want `llm_jury_pairwise()`; reach for `run_pairwise()` when you are
 plugging in a non-LLM judge or testing the reconciliation directly.
+
+Both `run_pairwise()` and the shared `run_jury()` accept `max_concurrency` as an
+int or an existing `asyncio.Semaphore`; pass the same semaphore to several runs
+to bound their combined fan-out with one budget.
 
 ## Where to next
 

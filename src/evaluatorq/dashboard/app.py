@@ -3,7 +3,7 @@
 ``build_app(roots)`` returns a configured FastHTML app with routes:
 
 - ``GET /``                   → combined Dashboard landing (no ``surface``), or a
-                               per-kind run list when ``?surface=redteam|sim``
+                               per-kind run list when ``?surface=redteam|sim|pairwise``
 - ``GET /settings``           → settings stub screen (matches the v1 design nav)
 - ``GET /r/{rid}``            → embedded report view in the dashboard shell
 - ``GET /r/{rid}/export``     → standalone HTML export (alias: export.html)
@@ -50,6 +50,7 @@ from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.shell import page
+from evaluatorq.dashboard.sim_compare import register_sim_compare_routes
 from evaluatorq.dashboard.sim_views import register_sim_view_routes
 from evaluatorq.dashboard.surfaces import ADAPTERS
 from evaluatorq.dashboard.view import (
@@ -189,7 +190,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     def index(req: Request) -> NotStr:
         surface = req.query_params.get('surface') or None
         if surface is None:
-            # Combined Dashboard landing — aggregates across both run stores.
+            # Combined Dashboard landing — aggregates across all run stores.
             body = landing_body(metrics.landing(roots))
             return NotStr(page('Dashboard', body, active_nav='dashboard'))
         # Agent Sim is the design's rich item-level overview; Red Team (and any
@@ -198,7 +199,12 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         label = SURFACE_LABELS.get(surface, 'Reports')
         pg, per_pg = _paging(req)
         if surface == 'sim':
-            body = sim_overview_body(metrics.sim_overview(roots, page=pg, per_page=per_pg))
+            # Compare picker options: sim runs only, excluding error-flagged runs
+            # (they route to a 404), newest-first, capped so the dropdown stays
+            # usable on large stores. library.scan reuses the mtime-keyed JSON
+            # cache metrics.sim_overview already warmed, so this is not a full re-parse.
+            sim_choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'sim' and not c.error][:100]
+            body = sim_overview_body(metrics.sim_overview(roots, page=pg, per_page=per_pg), compare_choices=sim_choices)
         elif surface == 'redteam':
             body = redteam_overview_body(metrics.redteam_overview(roots, page=pg, per_page=per_pg))
         else:
@@ -275,7 +281,12 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         # Tabbed body for the known surfaces (Streamlit-aligned); the interactive
         # panels live inside their tabs, so they are no longer appended separately.
         if surface == 'sim':
-            body_html = report_tabs.sim_report_tabs(rid, report_obj)
+            from evaluatorq.dashboard.view import sim_run_compare_control
+
+            # Same choice list as the overview picker (sim only, no error runs,
+            # capped); the control itself drops the current run from the options.
+            choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'sim' and not c.error][:100]
+            body_html = report_tabs.sim_report_tabs(rid, report_obj, compare_html=sim_run_compare_control(rid, choices))
         elif surface == 'redteam':
             body_html = report_tabs.redteam_report_tabs(rid, report_obj)
         else:
@@ -574,6 +585,11 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     # Routes: GET /r/{rid}/sim/*  — sim interactive fragment views
     # ------------------------------------------------------------------
     register_sim_view_routes(app, roots)
+
+    # ------------------------------------------------------------------
+    # Routes: GET /compare/sim*  — side-by-side sim run comparison
+    # ------------------------------------------------------------------
+    register_sim_compare_routes(app, roots)
 
     # Register static file handler LAST so its catch-all /{fname}.{ext} does not
     # intercept the download routes above. Serve under /static/ to match the page

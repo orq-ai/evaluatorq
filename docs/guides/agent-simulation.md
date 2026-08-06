@@ -52,6 +52,12 @@ and opening messages from a short description of your agent — no hand-written
     Point it at a hosted Orq agent with `target="agent:<key>"` (the agent key from
     AI Studio → Agents). The simulator and judge LLMs route through Orq by default.
 
+    Agents with a memory store attached reject calls that carry no memory scope
+    (a 400 with `memory_entity_id_required`). A fresh entity id is minted per
+    conversation automatically, so parallel conversations never share memory;
+    pass `memory_entity_id="..."` (CLI: `--memory-entity`) to run every
+    conversation against one specific, e.g. pre-seeded, entity instead.
+
     ```python
     import asyncio
 
