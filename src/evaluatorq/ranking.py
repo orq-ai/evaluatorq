@@ -59,10 +59,12 @@ _TOL = 1e-5
 _ADAM_B1 = 0.9
 _ADAM_B2 = 0.999
 _ADAM_EPS = 1e-8
-# Tiny ridge on skills: keeps disconnected comparison graphs and perfectly
-# separated items (all wins one way -> infinite skill MLE) finite without
-# measurably moving well-posed solutions.
-_RIDGE = 1e-4
+# Weak gaussian prior on skills: keeps disconnected comparison graphs and
+# perfectly separated items (all wins one way -> unbounded skill MLE, which
+# otherwise drifts to the iteration cap exactly like the sigma case below)
+# finite and quick to converge. Shrinks only the MAGNITUDE of extreme gaps;
+# orderings, and therefore rankings and weighted winners, are untouched.
+_RIDGE = 1e-2
 # Log-normal prior on sigma (ridge on tau), deliberately stronger than _RIDGE:
 # a perfectly consistent judge's ideal sigma is 0, so its tau otherwise drifts
 # for thousands of iterations (the fit never converges) while the judge's vote
