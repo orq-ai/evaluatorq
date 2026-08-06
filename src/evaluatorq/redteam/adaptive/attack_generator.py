@@ -181,14 +181,17 @@ async def adapt_prompt_to_tools(
     )
 
     try:
-        response = await llm_client.chat.completions.parse(
-            model=model,
-            messages=[{'role': 'user', 'content': prompt}],
-            response_format=ToolAnalysis,
-            temperature=cfg.attacker.temperature,
-            max_completion_tokens=cfg.attacker.max_tokens,
-            extra_body=cfg.retry_extra_body(llm_client),
-            **cfg.attacker.extra_kwargs,
+        response = await cfg.client_retry(
+            lambda: llm_client.chat.completions.parse(
+                model=model,
+                messages=[{'role': 'user', 'content': prompt}],
+                response_format=ToolAnalysis,
+                temperature=cfg.attacker.temperature,
+                max_completion_tokens=cfg.attacker.max_tokens,
+                extra_body=cfg.retry_extra_body(llm_client),
+                **cfg.attacker.extra_kwargs,
+            ),
+            label='Tool adaptation',
         )
 
         analysis = response.choices[0].message.parsed

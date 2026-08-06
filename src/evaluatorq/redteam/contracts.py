@@ -10,7 +10,7 @@ Semantic convention:
 """
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias, TypedDict, TypeVar
 
 from pydantic import (
     BaseModel,
@@ -24,11 +24,15 @@ from evaluatorq.common.target_call import classify_error_type as classify_error_
 from evaluatorq.contracts import StrEnum
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from openai import AsyncOpenAI
 
     _Client: TypeAlias = AsyncOpenAI | None
 else:
     _Client = Any
+
+_T = TypeVar('_T')
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -718,6 +722,27 @@ class LLMConfig(BaseModel):
             'retry': {'count': self.retry_count, 'on_codes': self.retry_on_codes},
             **pipeline_metadata_param(),
         }
+
+    def client_retry(self, fn: 'Callable[[], Awaitable[_T]]', *, label: str) -> 'Awaitable[_T]':
+        """Client-side exponential backoff for pipeline-internal LLM calls.
+
+        Complements :meth:`retry_extra_body`: that one asks the ORQ router to
+        retry provider errors server-side, but is a no-op on a plain OpenAI
+        client and never covers network errors (connection reset, timeout, DNS)
+        or errors returned by the router itself. This wraps the call in
+        ``common.retry.with_retry`` using the same ``retry_count`` /
+        ``retry_on_codes`` budget, so both layers follow one config. On the
+        router path the layers multiply only during sustained outages, which is
+        the same trade-off the target path already accepts.
+        """
+        from evaluatorq.common.retry import with_retry
+
+        return with_retry(
+            fn,
+            max_attempts=self.retry_count + 1,
+            retry_statuses=self.retry_on_codes,
+            label=label,
+        )
 
 
 # Module-level default used by internal pipeline components.

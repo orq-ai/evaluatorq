@@ -239,14 +239,17 @@ async def _infer_resource_capabilities(
             input_messages=infer_messages,
             attributes={'orq.redteam.llm_purpose': 'infer_resources'},
         ) as res_span:
-            response = await llm_client.chat.completions.parse(
-                model=model,
-                messages=infer_messages,
-                response_format=ResourceCapabilityInference,
-                temperature=cfg.attacker.temperature,
-                max_completion_tokens=cfg.attacker.max_tokens,
-                extra_body=cfg.retry_extra_body(llm_client),
-                **cfg.attacker.extra_kwargs,
+            response = await cfg.client_retry(
+                lambda: llm_client.chat.completions.parse(
+                    model=model,
+                    messages=infer_messages,
+                    response_format=ResourceCapabilityInference,
+                    temperature=cfg.attacker.temperature,
+                    max_completion_tokens=cfg.attacker.max_tokens,
+                    extra_body=cfg.retry_extra_body(llm_client),
+                    **cfg.attacker.extra_kwargs,
+                ),
+                label='Resource capability inference',
             )
             parsed = response.choices[0].message.parsed
             record_llm_response(
@@ -306,14 +309,17 @@ async def _classify_tools(
                 'orq.redteam.num_tools': len(agent_context.tools),
             },
         ) as cls_span:
-            response = await llm_client.chat.completions.parse(
-                model=model,
-                messages=classify_messages,
-                response_format=ToolCapabilitiesResponse,
-                temperature=cfg.attacker.temperature,
-                max_completion_tokens=cfg.attacker.max_tokens,
-                extra_body=cfg.retry_extra_body(llm_client),
-                **cfg.attacker.extra_kwargs,
+            response = await cfg.client_retry(
+                lambda: llm_client.chat.completions.parse(
+                    model=model,
+                    messages=classify_messages,
+                    response_format=ToolCapabilitiesResponse,
+                    temperature=cfg.attacker.temperature,
+                    max_completion_tokens=cfg.attacker.max_tokens,
+                    extra_body=cfg.retry_extra_body(llm_client),
+                    **cfg.attacker.extra_kwargs,
+                ),
+                label='Tool classification',
             )
             record_llm_response(
                 cls_span,

@@ -441,16 +441,21 @@ class MultiTurnOrchestrator:
             ) as llm_span,
         ):
             llm_timeout_s = self._cfg.attacker.timeout_ms / 1000.0
-            response = await asyncio.wait_for(
-                self.llm_client.chat.completions.create(
-                    model=self.model,
-                    messages=llm_messages,
-                    temperature=self._cfg.attacker.temperature,
-                    max_completion_tokens=self._cfg.attacker.max_tokens,
-                    extra_body=self._cfg.retry_extra_body(self.llm_client),
-                    **self._cfg.attacker.extra_kwargs,
+            # Timeout is per attempt: with_retry never retries asyncio.TimeoutError,
+            # so a hung call still fails exactly as before.
+            response = await self._cfg.client_retry(
+                lambda: asyncio.wait_for(
+                    self.llm_client.chat.completions.create(
+                        model=self.model,
+                        messages=llm_messages,
+                        temperature=self._cfg.attacker.temperature,
+                        max_completion_tokens=self._cfg.attacker.max_tokens,
+                        extra_body=self._cfg.retry_extra_body(self.llm_client),
+                        **self._cfg.attacker.extra_kwargs,
+                    ),
+                    timeout=llm_timeout_s,
                 ),
-                timeout=llm_timeout_s,
+                label=f'Adversarial generation for {strategy.name}',
             )
 
             usage = TokenUsage.from_completion(response)
@@ -681,16 +686,19 @@ class MultiTurnOrchestrator:
                         ):
                             if attempt > 0:
                                 set_span_attrs(adv_span, {'orq.redteam.adversarial_retry': attempt})
-                            response = await asyncio.wait_for(
-                                self.llm_client.chat.completions.create(
-                                    model=self.model,
-                                    messages=_messages,
-                                    temperature=self._cfg.attacker.temperature,
-                                    max_completion_tokens=self._cfg.attacker.max_tokens,
-                                    extra_body=self._cfg.retry_extra_body(self.llm_client),
-                                    **self._cfg.attacker.extra_kwargs,
+                            response = await self._cfg.client_retry(
+                                lambda: asyncio.wait_for(
+                                    self.llm_client.chat.completions.create(
+                                        model=self.model,
+                                        messages=_messages,
+                                        temperature=self._cfg.attacker.temperature,
+                                        max_completion_tokens=self._cfg.attacker.max_tokens,
+                                        extra_body=self._cfg.retry_extra_body(self.llm_client),
+                                        **self._cfg.attacker.extra_kwargs,
+                                    ),
+                                    timeout=_timeout,
                                 ),
-                                timeout=_timeout,
+                                label=f'Adversarial generation for {_strategy.name} turn {_turn + 1}',
                             )
                             usage = TokenUsage.from_completion(response)
                             if usage is not None:
