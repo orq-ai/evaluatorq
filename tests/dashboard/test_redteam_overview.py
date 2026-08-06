@@ -286,3 +286,45 @@ class TestSimRealCost:
         ov = metrics.sim_overview([rt, sim])
         # One costed sim at 0.006 → 0.006, not 0.003 (would be the /total bug).
         assert ov.avg_cost == pytest.approx(0.006)
+
+
+class TestZeroEvaluatedNoScore:
+    """A zero-evaluated run must show no resistance score anywhere the rate
+    renders: landing rows (covered in test_landing), the red-team overview
+    rows, and the detail KPI band."""
+
+    @pytest.fixture
+    def zero_eval_roots(self, tmp_path: Path) -> tuple[list[Path], Path]:
+        rt = tmp_path / 'runs'
+        sim = tmp_path / 'sim-runs'
+        rt.mkdir()
+        sim.mkdir()
+        report = rt / 'empty_20260731_130000.json'
+        report.write_text(
+            json.dumps(
+                _rt_payload(
+                    'Empty run',
+                    created='2026-07-31T13:00:00',
+                    # Every attack errored: evaluated_attacks == 0 and the
+                    # payload builder emits the poisoned default rate of 1.0.
+                    results=[_attack(severity='low', vulnerable=False, error=True)],
+                    cost=0.0,
+                )
+            )
+        )
+        return [rt, sim], report
+
+    def test_overview_row_has_no_score(self, zero_eval_roots: tuple[list[Path], Path]) -> None:
+        roots, _report = zero_eval_roots
+        ov = metrics.redteam_overview(roots)
+        assert len(ov.recent) == 1
+        assert ov.recent[0].score is None
+
+    def test_overview_route_never_renders_perfect_score(self, zero_eval_roots: tuple[list[Path], Path]) -> None:
+        roots, _report = zero_eval_roots
+        client = TestClient(build_app(roots=roots))
+        r = client.get('/?surface=redteam')
+        assert r.status_code == 200
+        # The score cell renders the no-score em dash, never the poisoned 1.00.
+        assert '1.00' not in r.text
+        assert '>\u2014<' in r.text

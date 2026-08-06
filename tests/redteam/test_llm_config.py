@@ -200,3 +200,22 @@ def test_openai_backend_factory_forwards_pipeline_timeout():
     backend = _create_openai_backend(llm_client=MagicMock(), target_config=None, pipeline_config=cfg)
     assert isinstance(backend, OpenAIBackend)
     assert backend._timeout_ms == 123_456
+
+
+def test_completion_params_rejects_structural_extra_kwargs():
+    """extra_kwargs tunes sampling/provider options; silently replacing
+    model/messages/response_format/extra_body would break the call it rides
+    on (e.g. dropping a required JSON response format)."""
+    from evaluatorq.contracts import LLMCallConfig
+
+    cfg = LLMCallConfig(model='m', extra_kwargs={'response_format': None, 'temperature': 1})
+    with pytest.raises(ValueError, match='structural'):
+        cfg.completion_params(model='m', messages=[])
+
+
+def test_completion_params_sampling_extra_kwargs_still_pass():
+    from evaluatorq.contracts import LLMCallConfig
+
+    cfg = LLMCallConfig(model='m', extra_kwargs={'top_p': 0.9})
+    params = cfg.completion_params(model='m', messages=[])
+    assert params['top_p'] == 0.9

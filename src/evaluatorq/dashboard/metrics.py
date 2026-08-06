@@ -101,6 +101,16 @@ def _cost_usd(usage: object) -> float:
     return _as_float(usage.get('cost_usd'))
 
 
+def zero_evaluated_attacks(summary: dict[str, object]) -> bool:
+    """True when the report explicitly says zero attacks were evaluated.
+
+    The schema default ``resistance_rate`` (1.0) then carries no signal and
+    must never render as a perfect score. An absent field (legacy reports
+    predating it) is False — those keep their recorded rate.
+    """
+    return summary.get('evaluated_attacks') is not None and _as_int(summary.get('evaluated_attacks')) == 0
+
+
 def _lifecycle_status(*, broken: bool, all_errored: bool = False) -> str:
     """Run lifecycle for the Status column: 'error' when the report is broken or
     every case errored, else 'finished'. ('running' isn't derivable — the run
@@ -115,10 +125,9 @@ def _redteam_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
     evaluated = _as_int(summary.get('evaluated_attacks')) if summary else 0
     errors = _as_int(summary.get('total_errors')) if summary else 0
     total = _as_int(summary.get('total_attacks')) if summary else 0
-    # A run that evaluated nothing has no resistance to report — the schema
-    # default (1.0) would read as a perfect score. Only when the report says
-    # zero explicitly; legacy reports without the field keep their rate.
-    if summary.get('evaluated_attacks') is not None and evaluated == 0:
+    # A run that evaluated nothing has no resistance to report (see
+    # zero_evaluated_attacks); legacy reports without the field keep their rate.
+    if zero_evaluated_attacks(summary):
         resistance = None
     return RunRow(
         id=card.id,
@@ -681,6 +690,10 @@ def redteam_overview(roots: list[Path] | None = None, *, page: int = 1, per_page
                     resistant += 1
 
         resistance = _as_float(summary.get('resistance_rate')) if 'resistance_rate' in summary else None
+        if zero_evaluated_attacks(summary):
+            # Same no-score rule as the landing rows: zero evaluated attacks
+            # means the rate is only the schema default, never a real score.
+            resistance = None
         cases = _as_int(summary.get('total_attacks')) or run_attacks
         runs.append(
             RedTeamRunRow(

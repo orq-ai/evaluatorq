@@ -199,7 +199,8 @@ def _bars(rows: list[tuple[str, float]], colors: list[str], *, total_label: str 
     total = sum(v for _, v in rows) or 1
     parts: list[str] = ['<div class="bars">']
     for i, (name, val) in enumerate(rows):
-        pct = round(val / total * 100)
+        raw = val / total * 100
+        pct = round(raw)
         # Rounding must not erase a real value ("1 run · 0%") or overstate a
         # partial one ("328 of 329 · 100%"); clamp the label and keep a visible
         # sliver of bar for any nonzero row.
@@ -209,7 +210,10 @@ def _bars(rows: list[tuple[str, float]], colors: list[str], *, total_label: str 
             pct_label = '>99%'
         else:
             pct_label = f'{pct}%'
-        width = max(pct, 1) if val else 0
+        # Width uses the unrounded share so a dominant partial bar (328/329)
+        # stays visually partial next to its '>99%' label instead of drawing
+        # full-width; the 1% floor keeps any nonzero row visible.
+        width = f'{max(raw, 1.0):.4g}' if val else '0'
         color = colors[i % len(colors)]
         parts.append(
             f'<div class="bar-row"><div class="bar-head">'

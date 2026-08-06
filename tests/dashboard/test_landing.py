@@ -314,6 +314,17 @@ class TestBarsRounding:
         assert '· 0%' in html
         assert 'width:0%' in html
 
+    def test_dominant_partial_bar_is_not_full_width(self) -> None:
+        """The width uses the unrounded share: 328/329 must not draw a
+        full-width bar next to its '>99%' label."""
+        html = view._bars([('Red team', 328), ('Agent sim', 1)], ['c1', 'c2'])
+        assert 'width:100%' not in html
+        assert 'width:99.7%' in html
+
+    def test_full_share_still_draws_full_width(self) -> None:
+        html = view._bars([('A', 5), ('B', 0)], ['c1', 'c2'])
+        assert 'width:100%' in html
+
 
 class TestZeroAttackScore:
     def test_zero_evaluated_attacks_has_no_score(self, tmp_path: Path) -> None:
