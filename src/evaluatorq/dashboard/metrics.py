@@ -1,6 +1,6 @@
 """Aggregate metrics for the combined dashboard landing + run lists.
 
-The landing screen needs numbers across *both* run stores (red team + sim).
+The landing screen needs numbers across all run stores (red team + sim + pairwise).
 Rather than fully validating every report (slow, and the landing only needs a
 handful of headline fields), these helpers read the cached raw JSON dicts and
 pull the aggregate fields defensively.
@@ -35,7 +35,7 @@ class RunRow:
     """One discovered run, with the fields the run lists + landing display."""
 
     id: str
-    surface: str  # 'redteam' | 'sim'
+    surface: str  # 'redteam' | 'sim' | 'pairwise'
     name: str
     when: str  # preformatted 'YYYY-MM-DD HH:MM'
     headline: str  # e.g. '128 attacks'
@@ -53,12 +53,13 @@ class Landing:
     sim_runs: int
     resistance_rate: float | None  # mean across red team runs (0..1)
     total_tokens: int
-    by_kind: list[tuple[str, int]]  # [('Red team', n), ('Agent sim', n)]
+    by_kind: list[tuple[str, int]]  # [('Red team', n), ('Agent sim', n), ('Pairwise', n)]
     severity: list[tuple[str, int]]  # [('critical', n), ...] non-zero only
-    tokens_by_kind: list[tuple[str, int]]  # [('Red team', n), ('Agent sim', n)]
+    tokens_by_kind: list[tuple[str, int]]  # [('Red team', n), ('Agent sim', n), ('Pairwise', n)]
     resistant: int  # attacks resisted (for the donut)
     vulnerable: int  # attacks that succeeded (for the donut)
-    total_cost: float = 0.0  # summed cost_usd across both stores
+    total_cost: float = 0.0  # summed cost_usd across all stores
+    costed_runs: int = 0  # runs that actually record a cost — avg cost divides by this
     cost_by_kind: list[tuple[str, float]] = field(default_factory=list)  # non-zero only
     recent: list[RunRow] = field(default_factory=list)
 
@@ -100,6 +101,16 @@ def _cost_usd(usage: object) -> float:
     return _as_float(usage.get('cost_usd'))
 
 
+def zero_evaluated_attacks(summary: dict[str, object]) -> bool:
+    """True when the report explicitly says zero attacks were evaluated.
+
+    The schema default ``resistance_rate`` (1.0) then carries no signal and
+    must never render as a perfect score. An absent field (legacy reports
+    predating it) is False — those keep their recorded rate.
+    """
+    return summary.get('evaluated_attacks') is not None and _as_int(summary.get('evaluated_attacks')) == 0
+
+
 def _lifecycle_status(*, broken: bool, all_errored: bool = False) -> str:
     """Run lifecycle for the Status column: 'error' when the report is broken or
     every case errored, else 'finished'. ('running' isn't derivable — the run
@@ -114,6 +125,10 @@ def _redteam_row(card: library.ReportCard, data: dict[str, object]) -> RunRow:
     evaluated = _as_int(summary.get('evaluated_attacks')) if summary else 0
     errors = _as_int(summary.get('total_errors')) if summary else 0
     total = _as_int(summary.get('total_attacks')) if summary else 0
+    # A run that evaluated nothing has no resistance to report (see
+    # zero_evaluated_attacks); legacy reports without the field keep their rate.
+    if zero_evaluated_attacks(summary):
+        resistance = None
     return RunRow(
         id=card.id,
         surface='redteam',
@@ -227,7 +242,7 @@ def run_rows(roots: list[Path] | None = None) -> list[RunRow]:
 
 
 def landing(roots: list[Path] | None = None) -> Landing:
-    """Compute the Dashboard landing aggregates across both run stores."""
+    """Compute the Dashboard landing aggregates across all run stores."""
     rows = run_rows(roots)
     redteam = [r for r in rows if r.surface == 'redteam']
     sim = [r for r in rows if r.surface == 'sim']
@@ -240,6 +255,7 @@ def landing(roots: list[Path] | None = None) -> Landing:
     sim_tokens = 0
     rt_cost = 0.0
     sim_cost = 0.0
+    costed_runs = 0
     pw_tokens = 0
     pw_cost = 0.0
     resistant = 0
@@ -260,7 +276,10 @@ def landing(roots: list[Path] | None = None) -> Landing:
                 tok = _tokens_total(summary.get('token_usage_total'))
                 rt_tokens += tok
                 total_tokens += tok
-                rt_cost += _cost_usd(summary.get('token_usage_total'))
+                run_cost = _cost_usd(summary.get('token_usage_total'))
+                rt_cost += run_cost
+                if run_cost > 0:
+                    costed_runs += 1
                 by_sev = summary.get('by_severity')
                 if isinstance(by_sev, dict):
                     for sev, entry in by_sev.items():
@@ -272,13 +291,19 @@ def landing(roots: list[Path] | None = None) -> Landing:
             tok = sum(_as_int(_result_tokens(res)) for res in _results(data))
             sim_tokens += tok
             total_tokens += tok
-            sim_cost += sum(_cost_usd(res.get('token_usage')) for res in _results(data))
+            run_cost = sum(_cost_usd(res.get('token_usage')) for res in _results(data))
+            sim_cost += run_cost
+            if run_cost > 0:
+                costed_runs += 1
         elif card.surface == 'pairwise':
             usages = [_comparison_usage(entry) for entry in _entries(data)]
             tok = sum(_tokens_total(u) for u in usages)
             pw_tokens += tok
             total_tokens += tok
-            pw_cost += sum(_cost_usd(u) for u in usages)
+            run_cost = sum(_cost_usd(u) for u in usages)
+            pw_cost += run_cost
+            if run_cost > 0:
+                costed_runs += 1
 
     severity = [(sev, severity_counts[sev]) for sev in SEVERITY_ORDER if severity_counts.get(sev)]
     # Zero-count kinds are dropped, matching tokens_by_kind / cost_by_kind: a
@@ -309,6 +334,7 @@ def landing(roots: list[Path] | None = None) -> Landing:
         resistant=max(resistant, 0),
         vulnerable=max(vulnerable, 0),
         total_cost=rt_cost + sim_cost + pw_cost,
+        costed_runs=costed_runs,
         cost_by_kind=cost_by_kind,
         recent=rows[:5],
     )
@@ -664,6 +690,10 @@ def redteam_overview(roots: list[Path] | None = None, *, page: int = 1, per_page
                     resistant += 1
 
         resistance = _as_float(summary.get('resistance_rate')) if 'resistance_rate' in summary else None
+        if zero_evaluated_attacks(summary):
+            # Same no-score rule as the landing rows: zero evaluated attacks
+            # means the rate is only the schema default, never a real score.
+            resistance = None
         cases = _as_int(summary.get('total_attacks')) or run_attacks
         runs.append(
             RedTeamRunRow(

@@ -19,6 +19,7 @@ from evaluatorq.simulation.types import (
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from evaluatorq.contracts import AgentResponse
     from evaluatorq.simulation.agents.base import BaseAgent
     from evaluatorq.types import DataPoint
 
@@ -28,7 +29,7 @@ logger = logging.getLogger(__name__)
 def wrap_simulation_agent(
     *,
     name: str = 'simulation',
-    target: Callable[[list[Message]], str | Awaitable[str]] | None = None,
+    target: Callable[[list[Message]], str | Awaitable[str] | Awaitable[AgentResponse]] | None = None,
     agent_key: str | None = None,
     max_turns: int = 10,
     model: str | None = None,

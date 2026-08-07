@@ -1,6 +1,6 @@
 """Surface adapter registry for the evaluatorq dashboard.
 
-Each surface (redteam, sim) gets a ``SurfaceAdapter`` dataclass that holds
+Each surface (redteam, sim, pairwise) gets a ``SurfaceAdapter`` dataclass that holds
 callables for loading, rendering body HTML, exporting full HTML, extracting a
 display name, and extracting a ``datetime`` from a parsed report object.
 
@@ -14,8 +14,7 @@ Optional export callables:
 ``ADAPTERS`` is the single registry keyed by surface kind strings matching
 ``evaluatorq.dashboard.library.sniff_kind`` return values.
 
-``SURFACE_LABELS`` maps surface keys to their human-readable display labels.
-Used by both the nav bar (``shell.py``) and the report-card list (``view.py``).
+Display labels for surface keys live in ``view.SURFACE_LABELS``.
 """
 
 from __future__ import annotations
@@ -235,12 +234,4 @@ ADAPTERS: dict[str, SurfaceAdapter] = {
     'redteam': _redteam_adapter(),
     'sim': _sim_adapter(),
     'pairwise': _pairwise_adapter(),
-}
-
-# Human-readable labels for each surface key.  Single source of truth used by
-# the nav bar (shell.py) and the report-card index (view.py).
-SURFACE_LABELS: dict[str, str] = {
-    'redteam': 'Red Team',
-    'sim': 'Simulation',
-    'pairwise': 'Pairwise',
 }

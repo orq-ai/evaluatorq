@@ -2126,13 +2126,13 @@ def test_run_recommendations_flag_attaches_to_saved_run(
     with (
         patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
         patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
-        patch("evaluatorq.simulation.cli._maybe_generate_recommendations") as mock_recs,
     ):
         mock_target.return_value = MagicMock()
-        mock_impl.return_value = _stub_run([_make_result()], mode="run")
         from evaluatorq.simulation.types import SimulationRecommendation
 
-        mock_recs.return_value = [SimulationRecommendation.model_validate(r) for r in fake_recs]
+        stub_run = _stub_run([_make_result()], mode="run")
+        stub_run.recommendations = [SimulationRecommendation.model_validate(r) for r in fake_recs]
+        mock_impl.return_value = stub_run
 
         result = runner.invoke(
             app,
@@ -2148,7 +2148,9 @@ def test_run_recommendations_flag_attaches_to_saved_run(
         )
 
     assert result.exit_code == 0, result.output
-    mock_recs.assert_called_once()
+    await_args = mock_impl.await_args
+    assert await_args is not None
+    assert await_args.kwargs['recommendations'] is True
     saved = json.loads(report.read_text())
     assert saved["recommendations"][0]["suggestions"] == ["Fix x."]
 
@@ -2161,7 +2163,6 @@ def test_run_without_recommendations_flag_skips_generation(
     with (
         patch("evaluatorq.simulation.cli._resolve_target") as mock_target,
         patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
-        patch("evaluatorq.simulation.cli._maybe_generate_recommendations") as mock_recs,
     ):
         mock_target.return_value = MagicMock()
         mock_impl.return_value = _stub_run([_make_result()], mode="run")
@@ -2173,4 +2174,6 @@ def test_run_without_recommendations_flag_skips_generation(
         )
 
     assert result.exit_code == 0, result.output
-    mock_recs.assert_not_called()
+    await_args = mock_impl.await_args
+    assert await_args is not None
+    assert await_args.kwargs['recommendations'] is False

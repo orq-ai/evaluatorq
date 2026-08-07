@@ -10,7 +10,8 @@ from typing_extensions import Self
 
 from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.retry import with_retry
-from evaluatorq.common.thread_context import pipeline_metadata_param, thread_body_param
+from evaluatorq.common.thread_context import pipeline_metadata, thread_body_param
+from evaluatorq.common.tracing import get_trace_context_headers
 from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, LLMCallConfig, Message
 from evaluatorq.openresponses.client import build_simulation_client
 from evaluatorq.openresponses.tracing import (
@@ -23,6 +24,20 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from openai import AsyncOpenAI
+
+
+def _raw_responses_create(client: Any) -> Any | None:
+    """Return the SDK raw Responses creator when HTTP headers are available.
+
+    The parsed OpenAI response does not expose Orq's ``x-orq-trace-*`` headers.
+    Restrict this to the SDK's own raw-response wrapper so injected mock or
+    OpenAI-compatible clients keep using their existing ``responses.create``
+    surface unchanged.
+    """
+    raw_client = getattr(client, 'with_raw_response', None)
+    if raw_client is None or not type(raw_client).__module__.startswith('openai.'):
+        return None
+    return raw_client.responses.create
 
 
 class OrqResponsesTarget(AgentTarget):
@@ -65,6 +80,19 @@ class OrqResponsesTarget(AgentTarget):
         else:
             self._client, self._client_owned = build_simulation_client(config.client, require_orq=require_orq)
 
+    @property
+    def memory_entity_id(self) -> str | None:
+        return self._memory_entity_id
+
+    @memory_entity_id.setter
+    def memory_entity_id(self, value: str | None) -> None:
+        # Assignment is how callers seed an explicit entity id (the sim layer's
+        # --memory-entity path); mark it so ``new()`` preserves it across
+        # clones. ``new()``'s re-mint writes ``_memory_entity_id`` directly and
+        # stays unseeded. Mirrors ``ORQAgentTarget``'s seeded-vs-minted split.
+        self._memory_entity_id = value
+        self._memory_entity_seeded = value is not None
+
     async def respond(self, messages: list[Message]) -> AgentResponse:
         """Stateless: send the full message list, return the response."""
         return await self._call_responses_api(
@@ -79,20 +107,26 @@ class OrqResponsesTarget(AgentTarget):
         do so. Self-owned clients are not propagated — the new instance builds
         its own from env vars, keeping connection lifetimes independent.
 
-        Per the ``AgentTarget`` contract each ``new()`` produces an independent
-        memory scope; we mint a fresh ``memory_entity_id`` if one was set.
+        An explicitly seeded ``memory_entity_id`` (constructor arg or later
+        assignment) is preserved so clones keep pointing at the seeded entity;
+        an unseeded one is re-minted per clone, keeping parallel jobs in
+        independent memory scopes. Mirrors ``ORQAgentTarget.new()``.
         """
-        fresh_memory_id = str(uuid.uuid4()) if self.memory_entity_id is not None else None
-        return OrqResponsesTarget(
+        clone = OrqResponsesTarget(
             self.config,
             instructions=self.instructions,
             tools=self.tools,
-            memory_entity_id=fresh_memory_id,
+            memory_entity_id=self.memory_entity_id if self._memory_entity_seeded else None,
             client=self._client if not self._client_owned else None,
             retry_attempts=self.retry_attempts,
             retry_statuses=self.retry_statuses,
             require_orq=self.require_orq,
         )
+        if not self._memory_entity_seeded and self.memory_entity_id is not None:
+            # Re-mint bypassing the seeding setter so grandchild clones keep
+            # re-minting instead of inheriting this one as if it were seeded.
+            clone._memory_entity_id = str(uuid.uuid4())
+        return clone
 
     async def get_agent_context(self) -> AgentContext:
         """Describe this target — the configured model is the agent key."""
@@ -137,18 +171,20 @@ class OrqResponsesTarget(AgentTarget):
                 kwargs['tools'] = self.tools
             if self.instructions is not None:
                 kwargs['instructions'] = self.instructions
-            # These extensions are Orq-router-only, so apply them only when the
-            # client actually routes through Orq — matching the gate on the other
-            # invocation paths. All ride in the request body (extra_body): the
-            # pipeline label as `metadata` (tags the trace by run type), `thread`
-            # (multi-turn grouping), and `memory` (scope for memory-tool agents,
-            # else "memory_entity_id_required").
-            if client_routes_through_orq(self._client):
-                body_extra = {**thread_body_param(), **pipeline_metadata_param()}
-                if self.memory_entity_id:
-                    body_extra['memory'] = {'entity_id': self.memory_entity_id}
-                if body_extra:
-                    kwargs['extra_body'] = {**kwargs.get('extra_body', {}), **body_extra}
+            # Metadata is a native Responses field on every endpoint. Threads are
+            # an Orq-router extension, so direct OpenAI-compatible endpoints must
+            # not receive them in ``extra_body``.
+            metadata = pipeline_metadata()
+            if metadata:
+                kwargs['metadata'] = metadata
+            routes_through_orq = client_routes_through_orq(self._client)
+            body_extra = thread_body_param() if routes_through_orq else {}
+            # Agents with memory tools reject the call outright without a memory
+            # scope ("memory_entity_id_required"), so forward ours when set.
+            if routes_through_orq and self.memory_entity_id:
+                body_extra['memory'] = {'entity_id': self.memory_entity_id}
+            if body_extra:
+                kwargs['extra_body'] = {**kwargs.get('extra_body', {}), **body_extra}
 
             async with with_llm_span(
                 model=self.config.model,
@@ -156,14 +192,39 @@ class OrqResponsesTarget(AgentTarget):
                 purpose='target',
                 max_tokens=self.config.max_tokens,
             ) as span:
+                # Propagate W3C trace context so the Orq router nests the
+                # server-side agent trace under this target-call span (same
+                # trace as the pipeline) instead of starting a loose root
+                # trace. Captured inside the span so `traceparent` points at
+                # it. Mirrors the user-simulator / judge / first-message calls.
+                trace_headers = await get_trace_context_headers()
+                if trace_headers:
+                    kwargs['extra_headers'] = {**kwargs.get('extra_headers', {}), **trace_headers}
                 record_openresponses_request(span, kwargs)
-                coro = self._client.responses.create(**kwargs)
-                response = await (asyncio.wait_for(coro, timeout=timeout_s) if timeout_s else coro)
-                # The Orq router returns the trace id in the response body under
-                # ``telemetry.trace_id`` (absent for plain OpenAI responses).
+                raw_create = _raw_responses_create(self._client)
+                if raw_create is not None:
+                    raw_coro = raw_create(**kwargs)
+                    raw_response = await (asyncio.wait_for(raw_coro, timeout=timeout_s) if timeout_s else raw_coro)
+                    response_headers = raw_response.headers
+                    response = raw_response.parse()
+                else:
+                    coro = self._client.responses.create(**kwargs)
+                    response = await (asyncio.wait_for(coro, timeout=timeout_s) if timeout_s else coro)
+                    response_headers = None
+                # Some SDK-compatible clients expose trace IDs on parsed response
+                # telemetry. The Orq SDK raw-response path instead gets the
+                # authoritative IDs from HTTP headers because its parser drops the
+                # nonstandard telemetry field.
                 telemetry = getattr(response, 'telemetry', None)
-                trace_id = getattr(telemetry, 'trace_id', None)
-                span_id = getattr(telemetry, 'span_id', None)
+                trace_id = (
+                    telemetry.get('trace_id') if isinstance(telemetry, dict) else getattr(telemetry, 'trace_id', None)
+                )
+                span_id = (
+                    telemetry.get('span_id') if isinstance(telemetry, dict) else getattr(telemetry, 'span_id', None)
+                )
+                if response_headers is not None:
+                    trace_id = response_headers.get('x-orq-trace-id') or trace_id
+                    span_id = response_headers.get('x-orq-trace-span-id') or span_id
                 record_openresponses_response(span, response)
                 if span is not None and trace_id:
                     span.set_attribute('orq.trace_id', trace_id)

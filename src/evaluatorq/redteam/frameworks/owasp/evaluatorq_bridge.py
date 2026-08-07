@@ -32,7 +32,7 @@ from evaluatorq.redteam.contracts import (
 from evaluatorq.redteam.delivery_method_registry import delivery_method_str
 from evaluatorq.redteam.exceptions import DatasetError
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category
-from evaluatorq.redteam.tracing import with_redteam_span
+from evaluatorq.redteam.tracing import annotate_current_span, set_jury_span_attrs
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Collection
@@ -218,8 +218,7 @@ def create_owasp_evaluator(
         data = params['data']
         output = params['output']
         category = data.inputs.get('category', '')
-        async with with_redteam_span(
-            'orq.redteam.security_evaluation',
+        async with annotate_current_span(
             {'orq.redteam.category': category, 'orq.redteam.model': evaluator_model},
         ) as evaluation_span:
 
@@ -314,6 +313,7 @@ def create_owasp_evaluator(
             passed = deliberation.verdict if isinstance(deliberation.verdict, bool) else None
             explanation = append_jury_summary(deliberation.explanation, deliberation.jury)
             set_span_attrs(evaluation_span, {'orq.redteam.passed': span_pass_state(passed), 'output': explanation})
+            set_jury_span_attrs(evaluation_span, deliberation.jury)
             return EvaluationResult.model_validate({
                 'value': passed if passed is not None else 'inconclusive',
                 'explanation': explanation,
@@ -326,7 +326,9 @@ def create_owasp_evaluator(
                 },
             })
 
-    return {'name': 'owasp-agentic-security', 'scorer': scorer}
+    # evaluator_type marks these LLM-judge scorers so the tracing layer emits the
+    # gen_ai.evaluation.* evaluator-span attributes (opt-in; see set_evaluation_attributes).
+    return {'name': 'owasp-agentic-security', 'scorer': scorer, 'evaluator_type': 'llm_eval'}
 
 
 _HF_MISSING_MSG = (

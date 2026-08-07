@@ -43,7 +43,7 @@ report = await red_team(target, mode="static", dataset="hf:my-org/my-attacks")
     platform — no model wiring on your side.
 
     ```bash
-    pip install "evaluatorq[redteam]"
+    uv add "evaluatorq[redteam]"
     export ORQ_API_KEY=...   # targets your Orq agent + routes the attacker LLM
     ```
 
@@ -78,7 +78,7 @@ report = await red_team(target, mode="static", dataset="hf:my-org/my-attacks")
     OpenAI using `OPENAI_API_KEY`.
 
     ```bash
-    pip install "evaluatorq[redteam]"
+    uv add "evaluatorq[redteam]"
     export OPENAI_API_KEY=sk-...   # the target model + the attacker LLM
     ```
 

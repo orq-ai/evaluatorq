@@ -3,7 +3,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 from evaluatorq.contracts import AgentResponse, TokenUsage
 
@@ -146,6 +146,11 @@ Scorer = Callable[[ScorerParameter], Awaitable[EvaluationResult | dict[str, Any]
 class Evaluator(TypedDict):
     name: str
     scorer: Scorer
+    # Optional evaluator kind (e.g. "code_eval"). When set, the tracing layer
+    # emits the flat gen_ai.evaluation.* / orq.evaluator.* attributes the Orq
+    # trace UI uses to classify + render an evaluator span. Absent for evaluators
+    # (e.g. red-team) that should keep the legacy orq.score-only span shape.
+    evaluator_type: NotRequired[str]
 
 
 class DatasetIdInput(BaseModel):

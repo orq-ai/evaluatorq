@@ -25,7 +25,7 @@ Targets — provide **exactly one**:
 | Flag | Description |
 |---|---|
 | `--target` | `agent:<key>` or `deployment:<key>`. Bare values default to `agent:<key>`. |
-| `--memory-entity` | Memory `entity_id` sent with every `agent:<key>` (or bare `<key>`) target call, for agents with a memory store attached. Omit to mint a fresh id per run; pass one to reuse a specific (e.g. seeded) entity, shared across the run. |
+| `--memory-entity` | Memory `entity_id` sent with every `agent:<key>` (or bare `<key>`) target call, for agents with a memory store attached. Omit to mint a fresh id per conversation (parallel conversations never share memory); pass one to reuse a specific (e.g. seeded) entity, shared across the run. |
 | `--vercel-url` | Vercel AI SDK HTTP endpoint URL. |
 | `--openai-model` | OpenAI-compatible model name. Provider resolved from env: `ORQ_API_KEY` → Orq AI Router; `OPENAI_API_KEY` → OpenAI-compatible. |
 
@@ -67,7 +67,7 @@ and `--dataset-id`; the latter fetches the datapoints from an Orq dataset.
 |---|---|---|
 | `--input` / `-i` | `Path \| None` | Path to datapoints JSONL file. Mutually exclusive with `--dataset-id`. |
 | `--dataset-id` | `str \| None` | Fetch datapoints from an Orq dataset instead of a local file. Requires `ORQ_API_KEY`. |
-| `--memory-entity` | `str \| None` / `None` | Memory `entity_id` sent with every `agent:<key>` (or bare `<key>`) target call, for agents with a memory store attached. Omit to mint a fresh id per run; pass one to reuse a specific (e.g. seeded) entity. |
+| `--memory-entity` | `str \| None` / `None` | Memory `entity_id` sent with every `agent:<key>` (or bare `<key>`) target call, for agents with a memory store attached. Omit to mint a fresh id per conversation; pass one to reuse a specific (e.g. seeded) entity, shared across the run. |
 | `--name` / `-n` | `str` / `sim` | Run name for the run-store entry. |
 | `--sim-model` | `str` / `openai/gpt-5.4-mini` | Model for user-simulator and judge. |
 | `--max-turns` | `int` / `10` | Maximum conversation turns. |

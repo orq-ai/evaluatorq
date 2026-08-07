@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code when working in `packages/evaluatorq-py`.
 
+## Parallel sessions
+
+Parallel agent sessions typically run in their own git worktree, so uncommitted
+changes you did not make may appear in the working tree from concurrent work.
+**Never `git stash` or `git reset`** to clean the tree — you would destroy another
+session's work. When committing, stage only the exact files your task changed.
+
 ## Quick Reference
 
 ```bash
@@ -39,6 +46,18 @@ uv run --group docs mkdocs build --strict
 # strict build does NOT catch mermaid label defects; this does.
 uv run python scripts/validate_mermaid.py
 ```
+
+When the user says **“do a test run”**, run the live trace validation for both
+pipelines using the configured agent key:
+
+```bash
+ORQ_API_KEY=... EVALUATORQ_AGENT_KEY=... \
+  uv run python scripts/live_trace_validation.py both
+```
+
+This runs 3 personas × 3 scenarios for agent simulation and a small hybrid red-team
+check, then validates the root spans and run metadata. Use `orq traces list` to
+inspect the resulting traces.
 
 ## Package Structure
 
@@ -175,6 +194,7 @@ or tag by hand on the normal path** — commit messages drive it.
 - **Commits MUST follow [Conventional Commits](https://www.conventionalcommits.org).** python-semantic-release (used only as a *version calculator* — `semantic-release version --print`) maps the commit types since the last tag to the next version:
   - `feat:` → minor; `fix:`/`perf:` → patch; `feat!:`/`fix!:`/`BREAKING CHANGE:` → major; `docs:`/`chore:`/`ci:`/`test:`/`refactor:`/`style:`/`build:`/`revert:` → no release.
 - On a release-worthy push the workflow: computes the next version, **pushes the tag `vX.Y.Z`**, builds the wheel/sdist (version derived from the tag), **publishes to PyPI via token auth** (the `PYPI_TOKEN` repo secret, passed to `pypa/gh-action-pypi-publish`), then creates a GitHub Release with PR-based auto-notes (`.github/release.yml` controls the categories — merged PRs + contributor attributions).
-- **Accidental majors are refused.** A computed `major` bump is skipped unless you re-run via **workflow_dispatch** with `force_level=major`. Use `force_level=minor`/`patch` to override the computed level (e.g. to ship breaking changes as a minor deliberately).
+- **Never write a breaking commit without explicit approval.** Do not use `feat!:`/`fix!:` or a `BREAKING CHANGE:` footer unless the user has explicitly approved a major release for that change. A single one halts **all** releases (see next bullet) until a human forces a bump — in July 2026 three `!` commits froze PyPI on `v1.10.1` for 24 days and 317 commits, and the client bug that surfaced it was already fixed in an unreleased commit. If a change is genuinely breaking, ask first; otherwise land it as `feat:`/`fix:`/`refactor:` and describe the break in the PR body.
+- **Accidental majors are refused.** A computed `major` bump is skipped unless you re-run via **workflow_dispatch** with `force_level=major`. Use `force_level=minor`/`patch` to override the computed level (e.g. to ship breaking changes as a minor deliberately). The refusal **fails the run** (`::error::` + `exit 1`) so a blocked release is visible; a genuine no-op (e.g. a `docs:`-only push, nothing to release) still exits 0 and stays green. The `!` commits stay in range until someone releases, so the block is permanent, not transient — a red Release run means act, not retry.
 - There is no committed `CHANGELOG.md`; the human-readable changelog is the GitHub Release notes. Release notes are created last and are non-blocking — a notes failure never blocks the PyPI publish.
 - PyPI publishing uses the **`PYPI_TOKEN`** repo secret (an API token). To switch to OIDC trusted publishing later, configure a **Trusted Publisher** on PyPI for this repo + `release.yml` (PyPI → project → Publishing) and delete the `with: password:` block in the publish step — `id-token: write` is already granted.

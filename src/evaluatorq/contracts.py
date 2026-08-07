@@ -122,6 +122,11 @@ DEFAULT_TARGET_TIMEOUT_MS: int = 240_000
 # ---------------------------------------------------------------------------
 
 
+# Request fields extra_kwargs must never replace: they are structural (what
+# call is being made), not tunable sampling/provider options.
+_RESERVED_COMPLETION_KEYS = frozenset({'model', 'messages', 'response_format', 'extra_body'})
+
+
 class LLMCallConfig(BaseModel):
     """Per-role LLM call configuration.
 
@@ -139,6 +144,35 @@ class LLMCallConfig(BaseModel):
     timeout_ms: int = Field(default=90_000, gt=0)
     extra_kwargs: dict[str, Any] = Field(default_factory=dict)
     client: _Client = None
+
+    def completion_params(self, **params: Any) -> dict[str, Any]:
+        """Merged kwargs for a chat-completions call: sampling fields first,
+        then call-site params, then ``extra_kwargs`` last so user keys override.
+
+        Never splat ``extra_kwargs`` next to explicit ``temperature=`` /
+        ``max_completion_tokens=`` keywords: a user routing those keys through
+        ``extra_kwargs`` (the documented pre-refactor way to tune them) turns
+        every call into ``TypeError: got multiple values for keyword argument``.
+        The override order also doubles as the escape hatch for reasoning-class
+        models that reject a lowered temperature: ``extra_kwargs={'temperature': 1}``.
+
+        Structural request fields are reserved: ``extra_kwargs`` tunes sampling
+        and provider options, and letting it silently replace ``model`` /
+        ``messages`` / ``response_format`` / ``extra_body`` would break the
+        call it rides on (e.g. dropping a required JSON response format).
+        """
+        reserved = _RESERVED_COMPLETION_KEYS & self.extra_kwargs.keys()
+        if reserved:
+            raise ValueError(
+                f'extra_kwargs cannot override structural request field(s) {sorted(reserved)}; '
+                'these are owned by the call site.'
+            )
+        return {
+            'temperature': self.temperature,
+            'max_completion_tokens': self.max_tokens,
+            **params,
+            **self.extra_kwargs,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -1047,6 +1081,21 @@ class AgentTarget(ABC):
 
     def __init__(self, memory_entity_id: str | None = None) -> None:
         self.memory_entity_id = memory_entity_id
+        # Seeded (constructor arg / plain assignment) vs auto-minted: subclasses
+        # whose ``new()`` distinguishes the two (ORQAgentTarget,
+        # OrqResponsesTarget) preserve seeded ids across clones and re-mint
+        # minted ones. ``mint_memory_entity_id`` is the non-seeding write path.
+        self._memory_entity_seeded = memory_entity_id is not None
+
+    def mint_memory_entity_id(self, value: str) -> None:
+        """Install an auto-minted memory entity id without marking it seeded.
+
+        Plain assignment to ``memory_entity_id`` counts as an explicit seed
+        (clone-preserving); backends minting a fallback scope use this instead
+        so every clone keeps re-minting its own isolated entity.
+        """
+        self.memory_entity_id = value
+        self._memory_entity_seeded = False
 
     @abstractmethod
     async def respond(self, messages: list[Message]) -> AgentResponse:

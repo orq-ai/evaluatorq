@@ -120,3 +120,82 @@ class TestNew:
         client.responses.create = AsyncMock(return_value=_make_response())
         target = OrqResponsesTarget(LLMCallConfig(model="gpt-4o"), client=client)
         assert target.new()._client is client
+
+    def test_new_preserves_constructor_seeded_memory_entity(self):
+        """A seeded id must survive cloning (the sim --memory-entity path);
+        mirrors ORQAgentTarget.new() semantics."""
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o"), client=_make_client(), memory_entity_id="seeded-entity"
+        )
+        assert target.new().memory_entity_id == "seeded-entity"
+
+    def test_new_preserves_assignment_seeded_memory_entity(self):
+        target = _make_target()
+        target.memory_entity_id = "seeded-entity"
+        assert target.new().memory_entity_id == "seeded-entity"
+
+    def test_seeded_id_survives_grandchild_clones(self):
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o"), client=_make_client(), memory_entity_id="seeded-entity"
+        )
+        assert target.new().new().memory_entity_id == "seeded-entity"
+
+    def test_unseeding_via_assignment_reverts_to_none_clones(self):
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o"), client=_make_client(), memory_entity_id="seeded-entity"
+        )
+        target.memory_entity_id = None
+        assert target.new().memory_entity_id is None
+
+
+class TestTraceContextPropagation:
+    """The target must inject W3C traceparent into the Orq router request so the
+    server-side agent trace nests under the client pipeline trace instead of
+    starting a loose root trace (RES: split simulation traces)."""
+
+    @pytest.mark.asyncio
+    async def test_respond_injects_traceparent_header(self):
+        import opentelemetry.trace as ot
+        from opentelemetry.sdk.trace import TracerProvider
+
+        client = _make_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(LLMCallConfig(model="gpt-4o"), client=client)
+
+        # An active span is required for a non-empty traceparent to be emitted.
+        provider = TracerProvider()
+        tracer = provider.get_tracer("test")
+        with tracer.start_as_current_span("parent"):
+            await target.respond([Message(role="user", content="hi")])
+
+        headers = client.responses.create.await_args_list[-1].kwargs.get("extra_headers", {})
+        assert "traceparent" in headers, "target call must propagate W3C trace context"
+
+
+class TestHybridBackendMintStaysUnseeded:
+    """The HybridAgentBackend auto-mint is not a user seed: clones must
+    re-mint it (parallel-job isolation), while a later explicit assignment
+    seeds and survives clones."""
+
+    def _hybrid_target(self, monkeypatch):
+        from evaluatorq.redteam.backends.registry import make_agent_backend
+        from evaluatorq.redteam.contracts import LLMConfig, TargetConfig
+
+        monkeypatch.setenv("ORQ_API_KEY", "test-key")
+        backend = make_agent_backend(
+            target_config=TargetConfig(system_prompt=None), pipeline_config=LLMConfig()
+        )
+        return backend.create_target("my-agent")
+
+    def test_auto_minted_id_re_mints_per_clone(self, monkeypatch):
+        target = self._hybrid_target(monkeypatch)
+        assert target.memory_entity_id is not None
+        assert target.memory_entity_id.startswith("red-team-")
+        clone = target.new()
+        assert clone.memory_entity_id is not None
+        assert clone.memory_entity_id != target.memory_entity_id
+
+    def test_explicit_seed_after_create_survives_clone(self, monkeypatch):
+        target = self._hybrid_target(monkeypatch)
+        target.memory_entity_id = "seeded-entity"
+        assert target.new().memory_entity_id == "seeded-entity"

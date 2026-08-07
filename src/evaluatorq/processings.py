@@ -257,6 +257,8 @@ async def process_evaluator(
                 score.value,
                 explanation=score.explanation,
                 pass_=score.pass_,
+                evaluator_name=evaluator_name,
+                evaluator_type=evaluator.get('evaluator_type'),
             )
 
             return EvaluatorScore(

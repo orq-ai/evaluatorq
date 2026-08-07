@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from evaluatorq.dashboard.metrics import Landing, RedTeamOverview, RunRow, SimOverview
 
 # Surface key → display label, used for run-list titles + kind badges.
-SURFACE_LABELS: dict[str, str] = {'redteam': 'Red Team', 'sim': 'Agent Sim'}
+SURFACE_LABELS: dict[str, str] = {'redteam': 'Red Team', 'sim': 'Agent Sim', 'pairwise': 'Pairwise'}
 
 # Allow-listed run-overview page sizes (first entry is the default). Shared with
 # app.py so the query parser and the size picker agree.
@@ -60,7 +60,7 @@ def head_assets() -> tuple[Script, ...]:
 
 
 # ---------------------------------------------------------------------------
-# Combined landing + run lists (the Dashboard / Red Team / Agent Sim screens)
+# Combined landing + run lists (the Dashboard / Red Team / Agent Sim / Pairwise screens)
 # ---------------------------------------------------------------------------
 
 
@@ -125,7 +125,8 @@ def _run_row(row: RunRow, *, show_badge: bool = True) -> str:
     )
 
 
-# Surface → inline glyph (lucide: shield-alert / messages-square) for the Type column.
+# Surface → inline glyph (lucide: shield-alert / messages-square / columns-2) for the Type column.
+PAIRWISE_ICON_PATH = '<path d="M4 6h6v12H4z"/><path d="M14 6h6v12h-6z"/><path d="M12 4v16"/>'
 _SURFACE_ICONS: dict[str, str] = {
     'redteam': (
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
@@ -137,6 +138,10 @@ _SURFACE_ICONS: dict[str, str] = {
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
         'stroke-linecap="round" stroke-linejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 '
         '2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>'
+    ),
+    'pairwise': (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        f'stroke-linecap="round" stroke-linejoin="round">{PAIRWISE_ICON_PATH}</svg>'
     ),
 }
 
@@ -194,13 +199,27 @@ def _bars(rows: list[tuple[str, float]], colors: list[str], *, total_label: str 
     total = sum(v for _, v in rows) or 1
     parts: list[str] = ['<div class="bars">']
     for i, (name, val) in enumerate(rows):
-        pct = round(val / total * 100)
+        raw = val / total * 100
+        pct = round(raw)
+        # Rounding must not erase a real value ("1 run · 0%") or overstate a
+        # partial one ("328 of 329 · 100%"); clamp the label and keep a visible
+        # sliver of bar for any nonzero row.
+        if val and pct == 0:
+            pct_label = '<1%'
+        elif val < total and pct == 100:
+            pct_label = '>99%'
+        else:
+            pct_label = f'{pct}%'
+        # Width uses the unrounded share so a dominant partial bar (328/329)
+        # stays visually partial next to its '>99%' label instead of drawing
+        # full-width; the 1% floor keeps any nonzero row visible.
+        width = f'{max(raw, 1.0):.4g}' if val else '0'
         color = colors[i % len(colors)]
         parts.append(
             f'<div class="bar-row"><div class="bar-head">'
             f'<span class="bar-name">{esc(name)}</span>'
-            f'<span class="bar-val">{esc(fmt.format(val))} <span class="bar-pct">· {pct}%</span></span>'
-            f'</div><div class="bar-track"><div class="bar-fill" style="width:{pct}%;background:{color}"></div></div></div>'
+            f'<span class="bar-val">{esc(fmt.format(val))} <span class="bar-pct">· {esc(pct_label)}</span></span>'
+            f'</div><div class="bar-track"><div class="bar-fill" style="width:{width}%;background:{color}"></div></div></div>'
         )
     parts.append(
         f'<div class="bars-total"><span class="t-label">{esc(total_label)}</span>'
@@ -232,16 +251,18 @@ def landing_body(data: Landing) -> str:
     if data.total_runs == 0:
         return (
             '<section class="dash-wrap"><div class="runs-empty">'
-            'No reports found. Run a red team or simulation job to generate reports.'
+            'No reports found. Run a red team, simulation, or pairwise job to generate reports.'
             '</div></section>'
         )
 
     total_tokens = sum(n for _, n in data.tokens_by_kind)
-    avg_cost = data.total_cost / data.total_runs if data.total_runs else 0.0
+    # Average over runs that record a cost — dividing by all runs makes one
+    # costed run among many uncosted ones read as "everything is nearly free".
+    avg_cost = data.total_cost / data.costed_runs if data.costed_runs else None
     band = (
         '<div class="stat-band">'
         + _stat_tile('Jobs run', str(data.total_runs))
-        + _stat_tile('Avg cost / job', _fmt_cost(avg_cost))
+        + _stat_tile('Avg cost / job', _fmt_cost(avg_cost) if avg_cost is not None else 'n/a')
         + _stat_tile('Total spend', _fmt_cost(data.total_cost))
         + _stat_tile('Total tokens', _fmt_compact(total_tokens))
         + '</div>'
@@ -596,7 +617,7 @@ def redteam_overview_body(data: RedTeamOverview) -> str:
 
 
 def runs_screen_body(rows: list[RunRow], surface: str) -> str:
-    """Render a per-kind run-list screen (Red Team / Agent Sim)."""
+    """Render a per-kind run-list screen (Red Team / Agent Sim / Pairwise)."""
     label = SURFACE_LABELS.get(surface, 'Reports')
     if not rows:
         return (

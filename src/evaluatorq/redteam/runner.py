@@ -26,7 +26,12 @@ from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.replay import REPLAY_VERSION, REPLAY_VERSION_KEY
 from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.common.target_call import call_target_with_retry, default_map_error
-from evaluatorq.common.thread_context import build_static_thread_id, conversation_thread, evaluatorq_pipeline
+from evaluatorq.common.thread_context import (
+    _evaluatorq_run_scope,
+    build_static_thread_id,
+    conversation_thread,
+    evaluatorq_pipeline,
+)
 from evaluatorq.common.tracing import AttrMap, set_span_attrs, truncate_for_span
 from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities, classify_agent_capabilities
@@ -402,7 +407,7 @@ def _coerce_run_result(result: Any) -> tuple[RedTeamReport, RedTeamRunMetrics]:
 
 @asynccontextmanager
 async def _redteam_run_lifecycle(manifest_writer: Any):  # noqa: RUF029
-    """Keep the manifest terminal state truthful while tagging all child calls."""
+    """Keep the manifest terminal state truthful for the red-team pipeline."""
     with evaluatorq_pipeline('red_teaming'):
         try:
             yield
@@ -414,6 +419,20 @@ async def _redteam_run_lifecycle(manifest_writer: Any):  # noqa: RUF029
             if manifest_writer is not None:
                 manifest_writer.fail(str(exc) or type(exc).__name__)
             raise
+
+
+@asynccontextmanager
+async def _redteam_root_scope(run_id: str, attributes: AttrMap, parent_context: Any):
+    """Open the root span and bind its run id for the red-team body.
+
+    Yields:
+        The root pipeline span.
+    """
+    async with with_redteam_span(
+        'Evaluatorq - Red Teaming', attributes, parent_context=parent_context
+    ) as pipeline_span:
+        with _evaluatorq_run_scope(run_id, pipeline_span):
+            yield pipeline_span
 
 
 # ---------------------------------------------------------------------------
@@ -872,13 +891,13 @@ async def red_team(
     }
 
     async with (  # noqa: SIM117
-        _redteam_run_lifecycle(manifest_writer),
         tracing_session(name or 'red-team', trace_type='redteam') as tracing_context,
+        _redteam_run_lifecycle(manifest_writer),
     ):
-        async with with_redteam_span(
-            'orq.redteam.pipeline',
+        async with _redteam_root_scope(
+            tracing_context.run_id,
             pipeline_attributes,
-            parent_context=tracing_context.parent_context,
+            tracing_context.parent_context,
         ) as pipeline_span:
             if resolved_mode in (Pipeline.DYNAMIC, Pipeline.HYBRID):
                 run_result = await _run_dynamic_or_hybrid(
@@ -1009,6 +1028,10 @@ async def red_team(
                             llm_client=es_client,
                             model=evaluator_model,
                             temperature=config.evaluator.temperature,
+                            # No pipeline metadata here: generate_executive_summary tags the
+                            # call itself (guarded on the client routing through Orq). Passing
+                            # it via extra_body too would win the SDK's merge and silently
+                            # discard that tag — extra_body takes precedence over named kwargs.
                             extra_body=config.retry_extra_body(es_client),
                             extra_kwargs=config.evaluator.extra_kwargs,
                         )
@@ -2495,7 +2518,9 @@ async def _run_dynamic_or_hybrid(
                 return await dynamic_evaluator['scorer'](dynamic_params)
             return await static_evaluator['scorer'](params)
 
-        evaluators: list[Any] = [{'name': 'hybrid-owasp-security', 'scorer': hybrid_scorer}]
+        evaluators: list[Any] = [
+            {'name': 'hybrid-owasp-security', 'scorer': hybrid_scorer, 'evaluator_type': 'llm_eval'}
+        ]
     else:
         evaluator = create_dynamic_evaluator(
             evaluator_model=evaluator_model,
@@ -2526,15 +2551,16 @@ async def _run_dynamic_or_hybrid(
                 # failures via a consolidated warning instead of pipeline_warnings.
                 cleanup_errors: list[str] = []
                 for pt in prepared_targets:
-                    entity_ids = pt.memory_entity_ids
-                    if entity_ids:
-                        err = await cleanup_memory_entities(pt.agent_context, entity_ids, memory_cleanup=pt.backend)
-                        if err:
-                            cleanup_errors.append(err)
+                    if pt.agent_context.memory_stores:
+                        entity_ids = pt.memory_entity_ids
+                        if entity_ids:
+                            err = await cleanup_memory_entities(pt.agent_context, entity_ids, memory_cleanup=pt.backend)
+                            if err:
+                                cleanup_errors.append(err)
                 # Also clean up AgentTarget memory entities not yet in prepared_targets
                 prepared_mem_id_lists = {id(pt.memory_entity_ids) for pt in prepared_targets}
                 for at_ctx_c, at_mem_c, at_backend_c in all_at_cleanup_info:
-                    if id(at_mem_c) not in prepared_mem_id_lists and at_mem_c:
+                    if id(at_mem_c) not in prepared_mem_id_lists and at_mem_c and at_ctx_c.memory_stores:
                         err = await cleanup_memory_entities(at_ctx_c, at_mem_c, memory_cleanup=at_backend_c)
                         if err:
                             cleanup_errors.append(err)
@@ -2752,9 +2778,9 @@ async def _run_dynamic_or_hybrid(
     finally:
         _save_report(output_dir, '03_summary_report.json', merged)
 
-    # Memory cleanup for all targets — use runtime-accumulated entity IDs
+    # Memory cleanup for targets with configured stores — use runtime-accumulated entity IDs
     for pt in prepared_targets:
-        if cleanup_memory:
+        if cleanup_memory and pt.agent_context.memory_stores:
             entity_ids = pt.memory_entity_ids
             if entity_ids:
                 await await_maybe(

@@ -1,5 +1,7 @@
-"""OrqResponsesTarget tags router requests with the pipeline label, gated on
-the client actually routing through Orq (RES response-metadata trace work)."""
+"""OrqResponsesTarget sends pipeline metadata as a native Responses field.
+
+Router-only request extensions remain gated on the client route.
+"""
 
 from __future__ import annotations
 
@@ -43,11 +45,11 @@ async def _call(base_url: str, pipeline: str | None) -> dict[str, Any]:
 @pytest.mark.asyncio
 async def test_tags_metadata_when_routed_through_orq() -> None:
     kwargs = await _call('https://my.orq.ai/v3/router', 'agent_simulation')
-    # Responses target rides the pipeline label in extra_body (router extension).
-    assert kwargs['extra_body']['metadata'] == {'evaluatorq_pipeline': 'agent_simulation'}
+    assert kwargs['metadata'] == {'evaluatorq_pipeline': 'agent_simulation'}
 
 
 @pytest.mark.asyncio
 async def test_no_metadata_for_direct_openai_client() -> None:
     kwargs = await _call('https://api.openai.com/v1', 'agent_simulation')
+    assert kwargs['metadata'] == {'evaluatorq_pipeline': 'agent_simulation'}
     assert 'extra_body' not in kwargs

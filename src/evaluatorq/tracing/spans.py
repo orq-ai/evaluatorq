@@ -24,6 +24,11 @@ if TYPE_CHECKING:
 
     from opentelemetry.trace import Span
 
+# Orq's trace ingestion drops (not truncates) any dynamic string span attribute
+# longer than this (genai_traces.go: dynamicAttributeMaxStringLength). Keep the
+# span copy of evaluator explanations at or under it so they always render.
+_SPAN_TEXT_MAX_CHARS = 512
+
 
 @dataclass
 class JobSpanOptions:
@@ -133,7 +138,10 @@ async def with_evaluation_span(  # noqa: RUF029
         from opentelemetry.trace import SpanKind, Status, StatusCode
 
         with tracer.start_as_current_span(
-            'orq.evaluation',
+            # Include the evaluator name so concurrent evaluator spans are
+            # distinguishable in the trace tree / UI (mirrors `chat {model}`)
+            # rather than N identical `orq.evaluation` rows.
+            f'orq.evaluation {options.evaluator_name}',
             kind=SpanKind.INTERNAL,
             attributes={
                 'orq.run_id': options.run_id,
@@ -159,6 +167,8 @@ def set_evaluation_attributes(
     *,
     explanation: str | None = None,
     pass_: bool | None = None,
+    evaluator_name: str | None = None,
+    evaluator_type: str | None = None,
 ) -> None:
     """
     Set evaluation result attributes on a span.
@@ -168,9 +178,27 @@ def set_evaluation_attributes(
         score: The evaluation score
         explanation: Optional explanation of the score
         pass_: Optional pass/fail status
+        evaluator_name: Name of the evaluator (used for the gen_ai.evaluation.* block)
+        evaluator_type: Opt-in evaluator kind, matching Orq's EvaluatorType enum
+            (e.g. "llm_eval", "python_eval"). When provided, the flat
+            gen_ai.evaluation.* / orq.evaluator.* attributes plus the
+            orq.evaluation.output verdict payload the Orq trace UI classifies +
+            renders evaluator spans from are additionally emitted.
+            When ``None`` (the default), only the legacy orq.score/explanation/pass
+            attributes are written, so red-team spans are unchanged.
     """
     if span is None:
         return
+
+    # The Orq trace ingestion (genai_traces.go extractTypedAttributes) DROPS any
+    # dynamic string attribute whose value exceeds 512 chars — it doesn't
+    # truncate, it skips the whole attribute. So cap the span copy of the
+    # explanation here or a long one silently vanishes from the trace UI. The
+    # full, untruncated text still reaches the uploaded experiment via the
+    # EvaluationResult (this only touches the span mirror).
+    full_explanation = explanation
+    if explanation is not None and len(explanation) > _SPAN_TEXT_MAX_CHARS:
+        explanation = explanation[: _SPAN_TEXT_MAX_CHARS - 1] + '…'
 
     span.set_attribute(
         'orq.score',
@@ -184,6 +212,51 @@ def set_evaluation_attributes(
         span.set_attribute('orq.explanation', explanation)
     if pass_ is not None:
         span.set_attribute('orq.pass', pass_)
+
+    # Additive evaluator-span emission — opt-in via evaluator_type. The Orq trace
+    # UI (ClickHouse/Go ingestion) classifies + shows evaluator detail only from
+    # these FLAT attributes; nested JSON is dropped. orq.workspace_id is injected
+    # server-side, so it is intentionally not set here.
+    if evaluator_type is None:
+        return
+    span.set_attribute('orq.span_type', 'span.evaluator')
+    span.set_attribute('orq.evaluator.type', evaluator_type)
+    if evaluator_name is not None:
+        span.set_attribute('gen_ai.evaluation.name', evaluator_name)
+        span.set_attribute('orq.evaluator.key', evaluator_name)
+
+    # orq.evaluator.output_type drives how the UI formats the score (see
+    # deriveEvaluatorResult in orquesta-web). bool is an int subclass, so it
+    # must be tested before the numeric branch.
+    if isinstance(score, bool):
+        output_type, score_value = 'boolean', float(score)
+    elif isinstance(score, (int, float)):
+        output_type, score_value = 'number', float(score)
+    else:
+        output_type, score_value = 'string', None
+    span.set_attribute('orq.evaluator.output_type', output_type)
+    if score_value is not None:
+        span.set_attribute('gen_ai.evaluation.score.value', score_value)
+    if explanation is not None:
+        span.set_attribute('gen_ai.evaluation.explanation', explanation)
+    if pass_ is not None:
+        span.set_attribute('gen_ai.evaluation.passed', pass_)
+        # Orq's own graders emit pass/fail here, not true/false.
+        label = 'pass' if pass_ else 'fail'
+        span.set_attribute('gen_ai.evaluation.score.label', label)
+        span.set_attribute('orq.evaluator.score.label', label)
+
+    # The evaluator span's "Output" panel renders orq.evaluation.output verbatim.
+    # Ingestion routes this key to blob storage rather than the 512-char-capped
+    # typed attribute maps, so the untruncated explanation belongs here.
+    verdict: dict[str, Any] = {
+        'passed': pass_,
+        'value': score.model_dump() if isinstance(score, EvaluationResultCell) else score,
+        'type': evaluator_type,
+    }
+    if full_explanation is not None:
+        verdict['reason'] = full_explanation
+    span.set_attribute('orq.evaluation.output', json.dumps(verdict, default=str))
 
 
 def set_job_name_attribute(span: Span | None, job_name: str) -> None:

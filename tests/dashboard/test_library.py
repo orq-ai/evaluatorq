@@ -70,6 +70,22 @@ def test_scan_lists_both_surfaces_and_excludes_artifacts(tmp_path):
     assert all(isinstance(c, ReportCard) for c in cards)
 
 
+def test_scan_dedupes_overlapping_roots(tmp_path):
+    """The same directory reached through two roots (repeated arg, relative +
+    absolute forms, or one arg inside another's expansion) must not
+    double-count its reports — the landing rollups (jobs, spend, costed runs)
+    read straight off this list."""
+    rt = tmp_path / 'runs'
+    rt.mkdir()
+    _write(rt / 'redteam_20260101_000000.json', _redteam_payload())
+
+    same_root_twice = scan([rt, rt])
+    assert len(same_root_twice) == 1
+
+    resolved_and_symlinkless_alias = scan([rt, tmp_path / '.' / 'runs'])
+    assert len(resolved_and_symlinkless_alias) == 1
+
+
 def test_resolve_roundtrips_and_misses_to_none(tmp_path):
     rt = tmp_path / 'runs'
     rt.mkdir()

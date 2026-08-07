@@ -34,6 +34,7 @@ from evaluatorq.redteam.contracts import (
     TurnType,
     UnifiedEvaluationResult,
 )
+from evaluatorq.common.thread_context import evaluatorq_pipeline, evaluatorq_run_id
 from evaluatorq.redteam.reports import recommendations as rec_mod
 from evaluatorq.redteam.reports.recommendations import generate_focus_area_recommendations
 
@@ -199,6 +200,25 @@ async def test_extra_body_empty_for_non_router_client(
     )
 
     assert captured['extra_body'] == {}
+
+
+@pytest.mark.asyncio
+async def test_run_metadata_is_top_level_and_preserves_router_extra_body(
+    mock_client_and_capture: tuple[Any, dict[str, Any]],
+) -> None:
+    client, captured = mock_client_and_capture
+    client.base_url = 'https://my.orq.ai/v3/router'
+
+    with evaluatorq_pipeline('red_teaming'), evaluatorq_run_id('recommendation-run'):
+        await generate_focus_area_recommendations(_empty_report(), client, model='gpt-5-mini')
+
+    assert captured['metadata'] == {
+        'evaluatorq_pipeline': 'red_teaming',
+        'evaluatorq_run_id': 'recommendation-run',
+    }
+    assert captured['extra_body'] == {
+        'retry': {'count': 3, 'on_codes': [429, 500, 502, 503, 504]}
+    }
 
 
 @pytest.mark.asyncio
