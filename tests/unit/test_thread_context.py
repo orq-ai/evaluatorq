@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -20,6 +21,7 @@ from evaluatorq.common.thread_context import (
     pipeline_metadata_param,
     thread_body_param,
 )
+from opentelemetry.trace import Span
 
 
 def test_build_thread_id_sim_and_redteam_shapes() -> None:
@@ -113,7 +115,7 @@ def test_shared_run_scope_stamps_and_restores() -> None:
     attrs: dict[str, object] = {}
     span = SimpleNamespace(set_attribute=lambda key, value: attrs.__setitem__(key, value))
 
-    with _evaluatorq_run_scope('outer', span):
+    with _evaluatorq_run_scope('outer', cast(Span, cast(object, span))):
         assert pipeline_metadata()['evaluatorq_run_id'] == 'outer'
 
     assert attrs == {'orq.evaluatorq_run_id': 'outer'}

@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import BaseModel
 
-from evaluatorq.common.thread_context import evaluatorq_pipeline, evaluatorq_run_id
+from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pipeline, evaluatorq_run_id
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.agents.base import BaseAgent
 from evaluatorq.simulation.generators.first_message_generator import FirstMessageGenerator
@@ -203,11 +203,12 @@ class TestCallResponsesPipelineMetadata:
         config = LLMCallConfig(model='gpt-4o', api='responses', client=client)
         agent = _ConcreteAgent(config)
 
-        with evaluatorq_pipeline('agent_simulation'):
+        with evaluatorq_pipeline('agent_simulation'), conversation_thread('thread-1'):
             await agent._call_llm([Message(role='user', content='hi')])
 
         _, kwargs = client.responses.create.call_args
-        assert kwargs['extra_body']['metadata'] == {'evaluatorq_pipeline': 'agent_simulation'}
+        assert kwargs['metadata'] == {'evaluatorq_pipeline': 'agent_simulation'}
+        assert kwargs['extra_body']['thread'] == {'id': 'thread-1'}
 
     async def test_no_metadata_without_bound_pipeline(self) -> None:
         client = _responses_client()
@@ -217,4 +218,17 @@ class TestCallResponsesPipelineMetadata:
         await agent._call_llm([Message(role='user', content='hi')])
 
         _, kwargs = client.responses.create.call_args
-        assert 'metadata' not in kwargs.get('extra_body', {})
+        assert 'metadata' not in kwargs
+
+    async def test_direct_openai_uses_native_metadata_without_thread(self) -> None:
+        client = _responses_client()
+        client.base_url = 'https://api.openai.com/v1'
+        config = LLMCallConfig(model='gpt-4o', api='responses', client=client)
+        agent = _ConcreteAgent(config)
+
+        with evaluatorq_pipeline('agent_simulation'), evaluatorq_run_id('run-1'), conversation_thread('thread-1'):
+            await agent._call_llm([Message(role='user', content='hi')])
+
+        _, kwargs = client.responses.create.call_args
+        assert kwargs['metadata'] == {'evaluatorq_pipeline': 'agent_simulation', 'evaluatorq_run_id': 'run-1'}
+        assert 'thread' not in kwargs.get('extra_body', {})

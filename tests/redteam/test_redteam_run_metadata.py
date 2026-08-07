@@ -21,6 +21,7 @@ side) and ``tests/redteam/test_backends.py`` (existing redteam backend fakes).
 from __future__ import annotations
 
 # ruff: noqa: S101
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -88,7 +89,7 @@ class TestOpenAIModelTargetRunMetadata:
         assert 'metadata' not in kwargs
 
 
-def _orq_response(*, pending_tool_calls: list | None = None, text: str = 'ok') -> MagicMock:
+def _orq_response(*, pending_tool_calls: list[Any] | None = None, text: str = 'ok') -> MagicMock:
     resp = MagicMock()
     resp.task_id = 'task_1'
     resp.pending_tool_calls = pending_tool_calls or []

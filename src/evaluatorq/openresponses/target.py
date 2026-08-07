@@ -8,8 +8,9 @@ from typing import TYPE_CHECKING, Any
 
 from typing_extensions import Self
 
+from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.retry import with_retry
-from evaluatorq.common.thread_context import pipeline_metadata_param, thread_body_param
+from evaluatorq.common.thread_context import pipeline_metadata, thread_body_param
 from evaluatorq.common.tracing import get_trace_context_headers
 from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, LLMCallConfig, Message
 from evaluatorq.openresponses.client import build_simulation_client
@@ -137,10 +138,13 @@ class OrqResponsesTarget(AgentTarget):
                 kwargs['tools'] = self.tools
             if self.instructions is not None:
                 kwargs['instructions'] = self.instructions
-            # Group multi-turn calls in Orq observability under one thread, and
-            # tag the request with the evaluatorq pipeline + run id so its trace is
-            # attributable to the run. Both ride in the request body.
-            body_extra = {**thread_body_param(), **pipeline_metadata_param()}
+            # Metadata is a native Responses field on every endpoint. Threads are
+            # an Orq-router extension, so direct OpenAI-compatible endpoints must
+            # not receive them in ``extra_body``.
+            metadata = pipeline_metadata()
+            if metadata:
+                kwargs['metadata'] = metadata
+            body_extra = thread_body_param() if client_routes_through_orq(self._client) else {}
             # Agents with memory tools reject the call outright without a memory
             # scope ("memory_entity_id_required"), so forward ours when set.
             if self.memory_entity_id:

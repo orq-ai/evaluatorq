@@ -21,8 +21,9 @@ from evaluatorq.common.llm_call import (
     remember_responses_reasoning_rejection,
     strip_known_rejected_responses_reasoning,
 )
+from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.retry import with_retry
-from evaluatorq.common.thread_context import pipeline_metadata_param, thread_body_param
+from evaluatorq.common.thread_context import pipeline_metadata, thread_body_param
 from evaluatorq.common.tracing import get_trace_context_headers, record_llm_input, record_llm_response
 from evaluatorq.contracts import (
     AgentResponse,
@@ -386,7 +387,12 @@ class BaseAgent(ABC):
                 call_kwargs: dict[str, Any] = dict(params)
                 if trace_headers:
                     call_kwargs['extra_headers'] = trace_headers
-                extra_body = {**thread_body_param(), **pipeline_metadata_param()}
+                # Metadata is supported natively by every Responses endpoint;
+                # thread is specific to the Orq router.
+                metadata = pipeline_metadata()
+                if metadata:
+                    call_kwargs['metadata'] = metadata
+                extra_body = thread_body_param() if client_routes_through_orq(self._client) else {}
                 if extra_body:
                     call_kwargs['extra_body'] = {**call_kwargs.get('extra_body', {}), **extra_body}
                 # Drop reasoning up front if this model already rejected it once, so

@@ -15,12 +15,12 @@ majority of LLM calls in a real run.
 from __future__ import annotations
 
 # ruff: noqa: S101
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from evaluatorq import evaluatorq
-from evaluatorq.common.reports.executive_summary import generate_executive_summary
+from evaluatorq.common.reports.executive_summary import AsyncChatCompletionsClient, generate_executive_summary
 from evaluatorq.common.thread_context import (
     evaluatorq_pipeline,
     evaluatorq_run_id,
@@ -65,7 +65,7 @@ async def test_llm_call_inside_nested_evaluatorq_carries_outer_run_id() -> None:
     via ContextVar propagation across the ``asyncio.create_task`` boundary.
     """
     requests: list[dict[str, Any]] = []
-    client = _Client(requests)
+    client = cast(AsyncChatCompletionsClient, cast(object, _Client(requests)))
 
     async def job(_data: DataPoint, _row: int):
         await generate_executive_summary('facts', llm_client=client, model='gpt-4o')
@@ -92,7 +92,7 @@ async def test_nested_evaluatorq_run_id_survives_parallel_datapoints() -> None:
     every job's task must independently see the outer-bound run id.
     """
     requests: list[dict[str, Any]] = []
-    client = _Client(requests)
+    client = cast(AsyncChatCompletionsClient, cast(object, _Client(requests)))
 
     async def job(_data: DataPoint, _row: int):
         await generate_executive_summary('facts', llm_client=client, model='gpt-4o')

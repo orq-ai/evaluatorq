@@ -14,7 +14,7 @@ from __future__ import annotations
 
 # ruff: noqa: S101
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -25,8 +25,9 @@ from opentelemetry.sdk.trace.export import (
     SpanExportResult,
 )
 
-from evaluatorq.common.thread_context import evaluatorq_pipeline, evaluatorq_run_id
+from evaluatorq.common.thread_context import evaluatorq_pipeline, evaluatorq_run_id, pipeline_metadata
 from evaluatorq.simulation.api import generate_personas, generate_scenarios
+from openai import AsyncOpenAI
 
 
 class _FakeCompletions:
@@ -87,7 +88,7 @@ async def test_generate_personas_binds_no_run_id() -> None:
     personas = await generate_personas(
         ['angry customer'],
         agent_description='support bot',
-        generation_client=_FakeClient(sink, _one_persona),  # type: ignore[arg-type]
+        generation_client=cast(AsyncOpenAI, cast(object, _FakeClient(sink, _one_persona))),
     )
 
     assert len(personas) == 1
@@ -101,7 +102,7 @@ async def test_generate_scenarios_binds_no_run_id() -> None:
     scenarios = await generate_scenarios(
         ['disputes a refund denial'],
         agent_description='support bot',
-        generation_client=_FakeClient(sink, _one_scenario),  # type: ignore[arg-type]
+        generation_client=cast(AsyncOpenAI, cast(object, _FakeClient(sink, _one_scenario))),
     )
 
     assert len(scenarios) == 1
@@ -119,7 +120,7 @@ async def test_generate_personas_inherits_an_outer_run_id() -> None:
     with evaluatorq_pipeline('agent_simulation'), evaluatorq_run_id('outer-run'):
         await generate_personas(
             ['angry customer'],
-            generation_client=_FakeClient(sink, _one_persona),  # type: ignore[arg-type]
+            generation_client=cast(AsyncOpenAI, cast(object, _FakeClient(sink, _one_persona))),
         )
 
     assert sink['metadata'] == {
@@ -135,7 +136,7 @@ async def test_generate_scenarios_inherits_an_outer_run_id() -> None:
     with evaluatorq_pipeline('agent_simulation'), evaluatorq_run_id('outer-run'):
         await generate_scenarios(
             ['disputes a refund denial'],
-            generation_client=_FakeClient(sink, _one_scenario),  # type: ignore[arg-type]
+            generation_client=cast(AsyncOpenAI, cast(object, _FakeClient(sink, _one_scenario))),
         )
 
     assert sink['metadata'] == {
@@ -276,6 +277,26 @@ async def test_generate_stamps_run_id_on_root_span(
     span = _find(span_collector, 'orq.simulation.generate')
     run_id = _attrs(span).get('orq.evaluatorq_run_id')
     assert run_id, f'expected a non-empty run id on the root span, got {run_id!r}'
+
+
+@pytest.mark.asyncio
+async def test_generate_binds_pipeline_and_run_id_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Generation calls inherit both simulation metadata keys from the root."""
+    from evaluatorq.simulation import api
+    from evaluatorq.simulation.api import generate
+
+    seen_metadata: dict[str, str] = {}
+
+    async def _fake_generate(**_kwargs: Any) -> tuple[list[Any], None, bool]:
+        seen_metadata.update(pipeline_metadata())
+        return [], None, False
+
+    monkeypatch.setattr(api, '_generate_datapoints_inner', _fake_generate)
+
+    await generate(agent_description='a helpful assistant', num_personas=1, num_scenarios=1)
+
+    assert seen_metadata['evaluatorq_pipeline'] == 'agent_simulation'
+    assert seen_metadata['evaluatorq_run_id']
 
 
 @pytest.mark.asyncio

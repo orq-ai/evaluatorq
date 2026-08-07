@@ -14,6 +14,7 @@ from evaluatorq.contracts import AgentResponse
 from evaluatorq.redteam.backends.registry import resolve_backend
 from evaluatorq.redteam.contracts import AgentContext, LLMConfig, TargetConfig
 from evaluatorq.openresponses.target import OrqResponsesTarget
+from evaluatorq.common.thread_context import conversation_thread, evaluatorq_pipeline, evaluatorq_run_id
 
 
 class TestResolveBackendOpenResponses:
@@ -211,3 +212,49 @@ class TestCallResponsesApiTokenUsage:
         result = await target._call_responses_api(responses_input="hi")
         assert isinstance(result, AgentResponse)
         assert result.usage is None
+
+    @pytest.mark.asyncio
+    async def test_direct_openai_uses_native_metadata_without_thread(self):
+        mock_response = MagicMock(
+            model='gpt-4o',
+            output=[MagicMock(type='message', content=[MagicMock(type='output_text', text='hello')])],
+            usage=None,
+            telemetry=None,
+        )
+        client = MagicMock()
+        client.base_url = 'https://api.openai.com/v1'
+        client.responses.create = AsyncMock(return_value=mock_response)
+        target = OrqResponsesTarget(
+            MagicMock(model='gpt-4o', api='responses', timeout_ms=None, max_tokens=None),
+            client=client,
+        )
+
+        with evaluatorq_pipeline('agent_simulation'), evaluatorq_run_id('run-1'), conversation_thread('thread-1'):
+            await target._call_responses_api(responses_input='hello')
+
+        _, kwargs = client.responses.create.call_args
+        assert kwargs['metadata'] == {'evaluatorq_pipeline': 'agent_simulation', 'evaluatorq_run_id': 'run-1'}
+        assert 'thread' not in kwargs.get('extra_body', {})
+
+    @pytest.mark.asyncio
+    async def test_orq_router_uses_native_metadata_and_thread_extra_body(self):
+        mock_response = MagicMock(
+            model='gpt-4o',
+            output=[MagicMock(type='message', content=[MagicMock(type='output_text', text='hello')])],
+            usage=None,
+            telemetry=None,
+        )
+        client = MagicMock()
+        client.base_url = 'https://my.orq.ai/v3/router'
+        client.responses.create = AsyncMock(return_value=mock_response)
+        target = OrqResponsesTarget(
+            MagicMock(model='gpt-4o', api='responses', timeout_ms=None, max_tokens=None),
+            client=client,
+        )
+
+        with evaluatorq_pipeline('agent_simulation'), evaluatorq_run_id('run-1'), conversation_thread('thread-1'):
+            await target._call_responses_api(responses_input='hello')
+
+        _, kwargs = client.responses.create.call_args
+        assert kwargs['metadata'] == {'evaluatorq_pipeline': 'agent_simulation', 'evaluatorq_run_id': 'run-1'}
+        assert kwargs['extra_body']['thread'] == {'id': 'thread-1'}

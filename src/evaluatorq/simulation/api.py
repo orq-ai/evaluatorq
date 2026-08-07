@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.llm_client import resolve_results_base_url
-from evaluatorq.common.thread_context import _evaluatorq_run_scope, build_thread_id
+from evaluatorq.common.thread_context import _evaluatorq_run_scope, build_thread_id, evaluatorq_pipeline
 from evaluatorq.simulation._config import SimulationConfig
 from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MAX_TURNS, DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run, build_simulation_run, fetch_agent_info, write_report
@@ -336,7 +336,7 @@ async def _simulate_run(
             # writer is retained for terminal complete/cancel/fail calls. The
             # run-id bind is what reaches every LLM call — a ContextVar set here
             # is visible to the nested evaluatorq() and copied into child tasks.
-            with _evaluatorq_run_scope(run_id, pipeline_span):
+            with _evaluatorq_run_scope(run_id, pipeline_span), evaluatorq_pipeline('agent_simulation'):
                 composed_hooks, manifest_writer = _compose_sim_hooks(
                     hooks,
                     save=save,
@@ -621,7 +621,7 @@ async def _generate_and_simulate_run(
             },
         ) as pipeline_span:
             # The raw writer is retained for terminal complete/cancel/fail calls.
-            with _evaluatorq_run_scope(run_id, pipeline_span):
+            with _evaluatorq_run_scope(run_id, pipeline_span), evaluatorq_pipeline('agent_simulation'):
                 composed_hooks, manifest_writer = _compose_sim_hooks(
                     hooks,
                     save=save,
@@ -769,7 +769,7 @@ async def generate(
                 'orq.simulation.num_scenarios': num_scenarios,
             },
         ) as pipeline_span:
-            with _evaluatorq_run_scope(run_id, pipeline_span):
+            with _evaluatorq_run_scope(run_id, pipeline_span), evaluatorq_pipeline('agent_simulation'):
                 # Bracket generation with the same GENERATE stage hooks the
                 # generate_and_simulate path uses, so the standalone command
                 # isn't silent. Empty on_stage_end meta: the CLI prints its own
