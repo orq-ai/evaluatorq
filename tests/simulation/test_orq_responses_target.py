@@ -310,6 +310,51 @@ class TestOrqResponsesTargetRespond:
             "id": "fc_1",
         }
 
+    def test_input_items_are_json_serializable(self):
+        """Every emitted item must survive json.dumps.
+
+        Multi-part content arrives as pydantic ContentPart models; leaving them
+        unserialized blows up inside the SDK's encoder before the request is even
+        sent, which is a far more confusing failure than an API error.
+        """
+        import json
+
+        from evaluatorq.contracts import FunctionCall, StrategyToolCall
+        from evaluatorq.openresponses.input_items import messages_to_responses_input
+
+        part = {"type": "input_text", "text": "looking"}
+        tool_call = StrategyToolCall(id="c1", function=FunctionCall(name="f", arguments="{}"))
+        items = messages_to_responses_input(
+            [
+                Message(role="user", content=[part]),
+                Message(role="assistant", content=[part], tool_calls=[tool_call]),
+                Message(role="tool", tool_call_id="c1", content=[part]),
+            ]
+        )
+
+        json.dumps(items)  # raises TypeError on unserialized ContentPart models
+        assert items[0]["content"] == [part]
+        assert items[1]["content"] == [part]
+        # function_call_output.output is a string field — multi-part content flattens.
+        assert items[3] == {"type": "function_call_output", "call_id": "c1", "output": "looking"}
+
+    def test_orphan_tool_result_is_dropped(self):
+        """A tool result with no tool_call_id is unreferenceable and must be dropped.
+
+        The API rejects an empty call_id ("Invalid 'input[…].call_id'"), which would
+        fail the whole turn over one malformed row.
+        """
+        from evaluatorq.openresponses.input_items import messages_to_responses_input
+
+        items = messages_to_responses_input(
+            [
+                Message(role="user", content="hi"),
+                Message(role="tool", content="orphaned result"),
+            ]
+        )
+
+        assert items == [{"role": "user", "content": "hi"}]
+
     @pytest.mark.asyncio
     async def test_respond_is_stateless_no_previous_response_id(self):
         """Consecutive respond calls never thread previous_response_id."""
