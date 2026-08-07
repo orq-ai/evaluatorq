@@ -95,6 +95,29 @@ Set `dataset_id="..."` to pull simulation datapoints from a named Orq dataset
 instead of inline personas/scenarios. Each row's `inputs` must already match a
 simulation input shape (`datapoint`, or `persona` + `scenario`).
 
+## Experiments
+
+A prior Orq experiment run can seed simulations two ways (requires `ORQ_API_KEY`):
+
+- **Direct** — set `experiment_id="..."` (optionally `experiment_run_id="..."`;
+  latest run when omitted) to replay the run's rows as datapoints. Same
+  row-shape rules as `dataset_id`; experiments uploaded by a previous
+  simulation run round-trip as-is. CLI: `eq sim simulate --experiment-id`.
+- **Extension** — `extend_from_experiment()` feeds the run's personas and
+  scenarios to the standard generators as seeds and returns *new*
+  similar-but-not-duplicate datapoints.
+
+```python
+from evaluatorq.simulation import extend_from_experiment, simulate
+
+# direct: replay the experiment's rows
+results = await simulate(evaluation_name="replay", experiment_id="ex_abc", target=...)
+
+# extension: generate fresh datapoints seeded by the run
+extra = await extend_from_experiment("ex_abc", num_personas=3, num_scenarios=5)
+results = await simulate(evaluation_name="extended", datapoints=extra, target=...)
+```
+
 ## Data sources
 
 Where cases come from, and what you can do with each. **Replay** re-runs the
@@ -108,13 +131,13 @@ personas/scenarios (extends the dataset).
 | JSONL datapoints (`--datapoints` / `load_datapoints_from_jsonl()`) | ✅ | ⚠️ manual (hand-pick seeds) |
 | Orq dataset (`dataset_id=`) | ✅ | ⚠️ manual |
 | Previous run (`previous_run="<id>"` / `--from-run`, or export to JSONL via `eq sim generate --datapoints`) | ✅ | ⚠️ manual |
-| Orq experiment | ❌ no importer | ⚠️ manual (read run rows → seed phrases) |
+| Orq experiment (`experiment_id=`) | ✅ | ✅ `extend_from_experiment()` |
 | Production traces (`datapoints_from_traces` / `eq sim from-traces`) | ✅ | ✅ `extend_from_traces()` |
 
 Legend: ✅ built-in · ⚠️ possible but manual · ❌ not supported yet.
 
-`previous_run`, `dataset_id`, `datapoints`, and `personas` + `scenarios` are
-mutually exclusive — pass exactly one source per run.
+`previous_run`, `dataset_id`, `experiment_id`, `datapoints`, and
+`personas` + `scenarios` are mutually exclusive — pass exactly one source per run.
 
 ### Replaying a previous run
 

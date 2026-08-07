@@ -56,6 +56,8 @@ class SimulationConfig(BaseModel):
     scenarios: list[Scenario] | None = None
     datapoints: list[SimulationDatapoint] | None = None
     dataset_id: str | None = None
+    experiment_id: str | None = None
+    experiment_run_id: str | None = None
     memory_entity_id: str | None = None
     """Memory ``entity_id`` sent with every ``agent:<key>`` (or bare ``<key>``)
     target call — the Responses router requires a memory scope when the target
