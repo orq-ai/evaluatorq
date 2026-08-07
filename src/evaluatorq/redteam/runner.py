@@ -2549,15 +2549,18 @@ async def _run_dynamic_or_hybrid(
                 # failures via a consolidated warning instead of pipeline_warnings.
                 cleanup_errors: list[str] = []
                 for pt in prepared_targets:
-                    entity_ids = pt.memory_entity_ids
-                    if entity_ids:
-                        err = await cleanup_memory_entities(pt.agent_context, entity_ids, memory_cleanup=pt.backend)
-                        if err:
-                            cleanup_errors.append(err)
+                    if pt.agent_context.memory_stores:
+                        entity_ids = pt.memory_entity_ids
+                        if entity_ids:
+                            err = await cleanup_memory_entities(
+                                pt.agent_context, entity_ids, memory_cleanup=pt.backend
+                            )
+                            if err:
+                                cleanup_errors.append(err)
                 # Also clean up AgentTarget memory entities not yet in prepared_targets
                 prepared_mem_id_lists = {id(pt.memory_entity_ids) for pt in prepared_targets}
                 for at_ctx_c, at_mem_c, at_backend_c in all_at_cleanup_info:
-                    if id(at_mem_c) not in prepared_mem_id_lists and at_mem_c:
+                    if id(at_mem_c) not in prepared_mem_id_lists and at_mem_c and at_ctx_c.memory_stores:
                         err = await cleanup_memory_entities(at_ctx_c, at_mem_c, memory_cleanup=at_backend_c)
                         if err:
                             cleanup_errors.append(err)
@@ -2775,9 +2778,9 @@ async def _run_dynamic_or_hybrid(
     finally:
         _save_report(output_dir, '03_summary_report.json', merged)
 
-    # Memory cleanup for all targets — use runtime-accumulated entity IDs
+    # Memory cleanup for targets with configured stores — use runtime-accumulated entity IDs
     for pt in prepared_targets:
-        if cleanup_memory:
+        if cleanup_memory and pt.agent_context.memory_stores:
             entity_ids = pt.memory_entity_ids
             if entity_ids:
                 await await_maybe(
