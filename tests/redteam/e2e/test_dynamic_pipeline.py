@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager, contextmanager
 from typing import cast
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from openai import AsyncOpenAI
 
 from evaluatorq.redteam import red_team
+from evaluatorq.redteam.contracts import PipelineStage
 from evaluatorq.tracing import TracingContext
 
 from .conftest import (
@@ -131,6 +132,12 @@ async def test_dynamic_memory_cleanup_is_noop_without_memory_stores(
 ) -> None:
     """A target without configured stores gets no cleanup backend call or span."""
     mock_backend_bundle._context.memory_stores = []  # noqa: SLF001
+    hooks = MagicMock(
+        on_stage_start=AsyncMock(),
+        on_stage_end=AsyncMock(),
+        on_confirm=AsyncMock(),
+        on_complete=AsyncMock(),
+    )
 
     with (
         _dynamic_patches(mock_backend_bundle),
@@ -144,10 +151,13 @@ async def test_dynamic_memory_cleanup_is_noop_without_memory_stores(
             cleanup_memory=True,
             parallelism=2,
             llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
+            hooks=hooks,
         )
 
     assert mock_backend_bundle.cleaned_entity_ids == []
     assert all(call.args[0] != 'orq.redteam.memory_cleanup' for call in redteam_span.call_args_list)
+    assert all(call.args[0] != PipelineStage.CLEANUP for call in hooks.on_stage_start.call_args_list)
+    assert all(call.args[0] != PipelineStage.CLEANUP for call in hooks.on_stage_end.call_args_list)
 
 
 # Covers the re-widening fix in `_run_dynamic_or_hybrid` — the expensive path, where

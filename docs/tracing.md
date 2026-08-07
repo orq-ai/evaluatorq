@@ -143,7 +143,7 @@ Red Teaming                     # root — one per red_team() call
   ├── orq.evaluation             # security evaluator result
   │     └── orq.redteam.security_evaluation
   │           └── chat (llm_purpose=evaluation)
-  └── orq.redteam.memory_cleanup # post-run agent memory entity cleanup
+  └── orq.redteam.memory_cleanup # post-run agent memory entity cleanup (only when cleanup is enabled, entities exist, and the target has configured memory stores)
 ```
 
 LLM spans (`chat ...`) carry standard GenAI attributes:
