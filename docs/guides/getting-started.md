@@ -6,8 +6,12 @@ data and a local scorer.
 ## Install
 
 ```bash
-pip install evaluatorq
+uv add evaluatorq
 ```
+
+Prefer pip? Use `python -m pip install evaluatorq`, which installs into the
+interpreter you just named rather than whichever `pip` happens to be first on
+your `PATH`.
 
 ## The mental model
 
@@ -69,7 +73,7 @@ if __name__ == "__main__":
 Run it:
 
 ```bash
-python simple_local_eval.py
+uv run simple_local_eval.py
 ```
 
 `print_results=True` renders a pass/fail table in the terminal. In this

@@ -24,10 +24,13 @@ The Orq platform is optional — it stores results and routes LLMs when
 Pick the extra for what you're doing:
 
 ```bash
-pip install "evaluatorq"               # core evaluations
-pip install "evaluatorq[simulation]"   # agent simulation
-pip install "evaluatorq[redteam]"      # red teaming
+uv add "evaluatorq"               # core evaluations
+uv add "evaluatorq[simulation]"   # agent simulation
+uv add "evaluatorq[redteam]"      # red teaming
 ```
+
+Run your scripts with `uv run my_eval.py` and the CLI with `uv run eq`, so the
+environment you installed into is the one that executes.
 
 ### Do I need an Orq account or an OpenAI key?
 
