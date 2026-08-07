@@ -10,7 +10,7 @@ import pytest
 
 from evaluatorq.contracts import AgentResponse, AgentResponseError
 from evaluatorq.llm_jury import DEFAULT_PAIRWISE_TEMPLATE, llm_jury, llm_jury_pairwise
-from evaluatorq.types import DataPoint
+from evaluatorq.types import DataPoint, EvaluationResult
 
 
 def _errored() -> AgentResponse:
@@ -27,6 +27,8 @@ async def test_pointwise_skips_judges_when_target_errored():
         'output': _errored(),
     })
 
+    # Scorer is typed EvaluationResult | dict[str, Any]; this path returns the model.
+    assert isinstance(result, EvaluationResult)
     assert result.pass_ is None
     assert result.value == 'inconclusive'
     assert 'upstream timeout' in (result.explanation or '')
