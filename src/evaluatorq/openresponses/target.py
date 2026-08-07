@@ -26,6 +26,20 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
 
+def _raw_responses_create(client: Any) -> Any | None:
+    """Return the SDK raw Responses creator when HTTP headers are available.
+
+    The parsed OpenAI response does not expose Orq's ``x-orq-trace-*`` headers.
+    Restrict this to the SDK's own raw-response wrapper so injected mock or
+    OpenAI-compatible clients keep using their existing ``responses.create``
+    surface unchanged.
+    """
+    raw_client = getattr(client, 'with_raw_response', None)
+    if raw_client is None or not type(raw_client).__module__.startswith('openai.'):
+        return None
+    return raw_client.responses.create
+
+
 class OrqResponsesTarget(AgentTarget):
     """Wraps the Orq Responses v3 API as a stateless ``AgentTarget``.
 
@@ -186,13 +200,40 @@ class OrqResponsesTarget(AgentTarget):
                 if trace_headers:
                     kwargs['extra_headers'] = {**kwargs.get('extra_headers', {}), **trace_headers}
                 record_openresponses_request(span, kwargs)
-                coro = self._client.responses.create(**kwargs)
-                response = await (asyncio.wait_for(coro, timeout=timeout_s) if timeout_s else coro)
+                raw_create = _raw_responses_create(self._client)
+                if raw_create is not None:
+                    raw_coro = raw_create(**kwargs)
+                    raw_response = await (
+                        asyncio.wait_for(raw_coro, timeout=timeout_s) if timeout_s else raw_coro
+                    )
+                    response_headers = raw_response.headers
+                    try:
+                        raw_payload = raw_response.http_response.json()
+                    except (AttributeError, TypeError, ValueError):
+                        raw_payload = None
+                    raw_telemetry = raw_payload.get('telemetry') if isinstance(raw_payload, dict) else None
+                    response = raw_response.parse()
+                else:
+                    coro = self._client.responses.create(**kwargs)
+                    response = await (asyncio.wait_for(coro, timeout=timeout_s) if timeout_s else coro)
+                    response_headers = None
+                    raw_telemetry = None
                 # The Orq router returns the trace id in the response body under
-                # ``telemetry.trace_id`` (absent for plain OpenAI responses).
+                # ``telemetry.trace_id`` (absent for plain OpenAI responses). The
+                # router also returns the same IDs in HTTP headers; those are the
+                # reliable fallback because the parsed Responses object drops them.
                 telemetry = getattr(response, 'telemetry', None)
-                trace_id = getattr(telemetry, 'trace_id', None)
-                span_id = getattr(telemetry, 'span_id', None)
+                if raw_telemetry is not None:
+                    telemetry = raw_telemetry
+                trace_id = (
+                    telemetry.get('trace_id') if isinstance(telemetry, dict) else getattr(telemetry, 'trace_id', None)
+                )
+                span_id = (
+                    telemetry.get('span_id') if isinstance(telemetry, dict) else getattr(telemetry, 'span_id', None)
+                )
+                if response_headers is not None:
+                    trace_id = response_headers.get('x-orq-trace-id') or trace_id
+                    span_id = response_headers.get('x-orq-trace-span-id') or span_id
                 record_openresponses_response(span, response)
                 if span is not None and trace_id:
                     span.set_attribute('orq.trace_id', trace_id)
