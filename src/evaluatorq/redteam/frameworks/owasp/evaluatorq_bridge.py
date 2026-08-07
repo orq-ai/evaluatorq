@@ -14,10 +14,7 @@ from pydantic import ValidationError
 from evaluatorq import DataPoint, EvaluationResult
 from evaluatorq.common.judge import JudgeError, build_eval_replacements, run_judge
 from evaluatorq.common.jury import Prediction, VerdictKind, _panel_composition_messages, append_jury_summary, run_jury
-from evaluatorq.common.output_adapters import (  # noqa: F401  (back-compat re-export)
-    _adapt_static_output,
-    _adapt_tool_call,
-)
+from evaluatorq.common.output_adapters import output_error_text, output_to_messages
 from evaluatorq.common.tracing import set_span_attrs
 from evaluatorq.contracts import JURY_RAW_OUTPUT_KEY
 from evaluatorq.redteam.backends.registry import create_async_llm_client
@@ -246,12 +243,12 @@ def create_owasp_evaluator(
             # A target-level failure ([ERROR: ...] with AgentResponseError) is not
             # content — short-circuit before the judge so a failure is never scored
             # as RESISTANT.
-            target_error = output.get('error') if isinstance(output, dict) else None
+            target_error = output.get('error') if isinstance(output, dict) else output_error_text(output)
             if target_error is not None:
                 msg = getattr(target_error, 'message', str(target_error))
                 return error_result(f'Target agent error — not scored: {msg}')
 
-            output_messages = _adapt_static_output(output)
+            output_messages = output_to_messages(output)
 
             eval_replacements = build_eval_replacements(
                 input_messages=data.inputs.get('messages', []),
