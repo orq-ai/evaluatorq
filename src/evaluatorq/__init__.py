@@ -1,5 +1,29 @@
 """EvaluatorQ Python - An evaluation framework for LLM applications."""
 
+import importlib.util
+import sys
+
+_CORE_DEPS = ('openai', 'typer')  # noqa: RUF067
+
+
+def _require_core_deps() -> None:  # noqa: RUF067
+    """Fail with an actionable message when core deps are missing.
+
+    ``openai`` and ``typer`` are hard dependencies, so a missing one almost
+    always means the installer targeted a different interpreter than the one
+    running. Naming the interpreter is the whole point of this check.
+    """
+    missing = [name for name in _CORE_DEPS if importlib.util.find_spec(name) is None]
+    if missing:
+        raise ImportError(
+            f'evaluatorq requires {", ".join(missing)}, but it is not importable from '
+            f'`{sys.executable}`. Install like so: '
+            f'`{sys.executable} -m pip install evaluatorq`'
+        )
+
+
+_require_core_deps()  # noqa: RUF067
+
 from .deployment import (
     DeploymentResponse,
     MessageDict,
