@@ -47,6 +47,18 @@ uv run --group docs mkdocs build --strict
 uv run python scripts/validate_mermaid.py
 ```
 
+When the user says **“do a test run”**, run the live trace validation for both
+pipelines using the configured agent key:
+
+```bash
+ORQ_API_KEY=... EVALUATORQ_AGENT_KEY=... \
+  uv run python scripts/live_trace_validation.py both
+```
+
+This runs 3 personas × 3 scenarios for agent simulation and a small hybrid red-team
+check, then validates the root spans and run metadata. Use `orq traces list` to
+inspect the resulting traces.
+
 ## Package Structure
 
 ```
