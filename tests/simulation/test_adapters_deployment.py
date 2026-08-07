@@ -2,6 +2,7 @@
 
 # ruff: noqa: S101
 
+import importlib
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -11,6 +12,8 @@ from evaluatorq.contracts import AgentResponse, TokenUsage
 from evaluatorq.deployment import DeploymentResponse
 from evaluatorq.simulation.adapters import from_orq_deployment
 from evaluatorq.simulation.types import Message
+
+_deployment_module = importlib.import_module('evaluatorq.deployment')
 
 
 def _messages() -> list[Message]:
@@ -22,7 +25,7 @@ async def test_from_orq_deployment_returns_agent_response_with_usage() -> None:
     usage = TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
     mock_deployment = AsyncMock(return_value=DeploymentResponse(content='hello', raw=None, usage=usage))
 
-    with patch('evaluatorq.deployment.deployment', mock_deployment):
+    with patch.object(_deployment_module, 'deployment', mock_deployment):
         callback = from_orq_deployment('some-key')
         result = await callback(_messages())
 
@@ -36,7 +39,7 @@ async def test_from_orq_deployment_returns_agent_response_with_usage() -> None:
 async def test_from_orq_deployment_tags_pipeline_and_thread() -> None:
     mock_deployment = AsyncMock(return_value=DeploymentResponse(content='hello', raw=None, usage=None))
 
-    with patch('evaluatorq.deployment.deployment', mock_deployment):
+    with patch.object(_deployment_module, 'deployment', mock_deployment):
         callback = from_orq_deployment('some-key')
         with evaluatorq_pipeline('agent_simulation'), conversation_thread('t-123'):
             await callback(_messages())
@@ -49,7 +52,7 @@ async def test_from_orq_deployment_tags_pipeline_and_thread() -> None:
 async def test_from_orq_deployment_no_metadata_without_bound_context() -> None:
     mock_deployment = AsyncMock(return_value=DeploymentResponse(content='hello', raw=None, usage=None))
 
-    with patch('evaluatorq.deployment.deployment', mock_deployment):
+    with patch.object(_deployment_module, 'deployment', mock_deployment):
         callback = from_orq_deployment('some-key')
         await callback(_messages())
 
