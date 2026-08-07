@@ -428,7 +428,9 @@ async def _redteam_root_scope(run_id: str, attributes: AttrMap, parent_context: 
     Yields:
         The root pipeline span.
     """
-    async with with_redteam_span('Evaluatorq - Red Teaming', attributes, parent_context=parent_context) as pipeline_span:
+    async with with_redteam_span(
+        'Evaluatorq - Red Teaming', attributes, parent_context=parent_context
+    ) as pipeline_span:
         with _evaluatorq_run_scope(run_id, pipeline_span):
             yield pipeline_span
 
@@ -2552,9 +2554,7 @@ async def _run_dynamic_or_hybrid(
                     if pt.agent_context.memory_stores:
                         entity_ids = pt.memory_entity_ids
                         if entity_ids:
-                            err = await cleanup_memory_entities(
-                                pt.agent_context, entity_ids, memory_cleanup=pt.backend
-                            )
+                            err = await cleanup_memory_entities(pt.agent_context, entity_ids, memory_cleanup=pt.backend)
                             if err:
                                 cleanup_errors.append(err)
                 # Also clean up AgentTarget memory entities not yet in prepared_targets

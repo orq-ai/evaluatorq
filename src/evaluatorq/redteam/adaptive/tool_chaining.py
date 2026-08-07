@@ -21,7 +21,7 @@ it before the multi-turn loop.
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from loguru import logger
 from pydantic import BaseModel, Field

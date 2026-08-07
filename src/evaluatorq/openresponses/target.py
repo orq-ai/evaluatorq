@@ -204,9 +204,7 @@ class OrqResponsesTarget(AgentTarget):
                 raw_create = _raw_responses_create(self._client)
                 if raw_create is not None:
                     raw_coro = raw_create(**kwargs)
-                    raw_response = await (
-                        asyncio.wait_for(raw_coro, timeout=timeout_s) if timeout_s else raw_coro
-                    )
+                    raw_response = await (asyncio.wait_for(raw_coro, timeout=timeout_s) if timeout_s else raw_coro)
                     response_headers = raw_response.headers
                     response = raw_response.parse()
                 else:
