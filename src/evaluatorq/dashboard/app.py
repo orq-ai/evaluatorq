@@ -3,7 +3,7 @@
 ``build_app(roots)`` returns a configured FastHTML app with routes:
 
 - ``GET /``                   → combined Dashboard landing (no ``surface``), or a
-                               per-kind run list when ``?surface=redteam|sim``
+                               per-kind run list when ``?surface=redteam|sim|pairwise``
 - ``GET /settings``           → settings stub screen (matches the v1 design nav)
 - ``GET /r/{rid}``            → embedded report view in the dashboard shell
 - ``GET /r/{rid}/export``     → standalone HTML export (alias: export.html)
@@ -190,7 +190,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     def index(req: Request) -> NotStr:
         surface = req.query_params.get('surface') or None
         if surface is None:
-            # Combined Dashboard landing — aggregates across both run stores.
+            # Combined Dashboard landing — aggregates across all run stores.
             body = landing_body(metrics.landing(roots))
             return NotStr(page('Dashboard', body, active_nav='dashboard'))
         # Agent Sim is the design's rich item-level overview; Red Team (and any

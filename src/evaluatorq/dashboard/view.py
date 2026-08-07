@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from evaluatorq.dashboard.metrics import Landing, RedTeamOverview, RunRow, SimOverview
 
 # Surface key → display label, used for run-list titles + kind badges.
-SURFACE_LABELS: dict[str, str] = {'redteam': 'Red Team', 'sim': 'Agent Sim'}
+SURFACE_LABELS: dict[str, str] = {'redteam': 'Red Team', 'sim': 'Agent Sim', 'pairwise': 'Pairwise'}
 
 # Allow-listed run-overview page sizes (first entry is the default). Shared with
 # app.py so the query parser and the size picker agree.
@@ -60,7 +60,7 @@ def head_assets() -> tuple[Script, ...]:
 
 
 # ---------------------------------------------------------------------------
-# Combined landing + run lists (the Dashboard / Red Team / Agent Sim screens)
+# Combined landing + run lists (the Dashboard / Red Team / Agent Sim / Pairwise screens)
 # ---------------------------------------------------------------------------
 
 
@@ -125,7 +125,8 @@ def _run_row(row: RunRow, *, show_badge: bool = True) -> str:
     )
 
 
-# Surface → inline glyph (lucide: shield-alert / messages-square) for the Type column.
+# Surface → inline glyph (lucide: shield-alert / messages-square / columns-2) for the Type column.
+PAIRWISE_ICON_PATH = '<path d="M4 6h6v12H4z"/><path d="M14 6h6v12h-6z"/><path d="M12 4v16"/>'
 _SURFACE_ICONS: dict[str, str] = {
     'redteam': (
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
@@ -137,6 +138,10 @@ _SURFACE_ICONS: dict[str, str] = {
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
         'stroke-linecap="round" stroke-linejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 '
         '2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>'
+    ),
+    'pairwise': (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        f'stroke-linecap="round" stroke-linejoin="round">{PAIRWISE_ICON_PATH}</svg>'
     ),
 }
 
@@ -232,7 +237,7 @@ def landing_body(data: Landing) -> str:
     if data.total_runs == 0:
         return (
             '<section class="dash-wrap"><div class="runs-empty">'
-            'No reports found. Run a red team or simulation job to generate reports.'
+            'No reports found. Run a red team, simulation, or pairwise job to generate reports.'
             '</div></section>'
         )
 
@@ -596,7 +601,7 @@ def redteam_overview_body(data: RedTeamOverview) -> str:
 
 
 def runs_screen_body(rows: list[RunRow], surface: str) -> str:
-    """Render a per-kind run-list screen (Red Team / Agent Sim)."""
+    """Render a per-kind run-list screen (Red Team / Agent Sim / Pairwise)."""
     label = SURFACE_LABELS.get(surface, 'Reports')
     if not rows:
         return (

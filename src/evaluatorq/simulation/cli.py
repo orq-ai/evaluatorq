@@ -58,7 +58,8 @@ app = typer.Typer(
         'Agent simulation pipeline.\n\n'
         '  generate  ->  simulate  ->  dashboard   freeze inputs, run them, explore\n'
         '  run                                  generate + simulate in one shot\n'
-        '  upload-dataset / --dataset-id       round-trip through an Orq dataset\n\n'
+        '  upload-dataset / --dataset-id       round-trip through an Orq dataset\n'
+        '  simulate --experiment-id            replay a prior Orq experiment run\n\n'
         'Use `eq sim COMMAND --help` for command-specific options.'
     ),
     no_args_is_help=True,
@@ -447,6 +448,8 @@ _SIMULATE_EPILOG = _examples(
     'eq sim simulate -i dp.jsonl --openai-model gpt-4o-mini',
     '# from an orq dataset instead of a local file',
     'eq sim simulate --dataset-id ds_abc --target agent:my-agent',
+    "# replay a previous orq experiment run's datapoints",
+    'eq sim simulate --experiment-id ex_abc --target agent:my-agent',
     '# replay the last saved run against a new agent version',
     'eq sim simulate --from-run latest --target agent:my-agent-v2',
 )
@@ -497,6 +500,20 @@ def simulate(
         typer.Option(
             '--dataset-id',
             help='Fetch datapoints from this Orq dataset instead of a local file. Requires ORQ_API_KEY.',
+        ),
+    ] = None,
+    experiment_id: Annotated[
+        str | None,
+        typer.Option(
+            '--experiment-id',
+            help="Fetch datapoints from this Orq experiment's rows instead of a local file. Requires ORQ_API_KEY.",
+        ),
+    ] = None,
+    experiment_run_id: Annotated[
+        str | None,
+        typer.Option(
+            '--experiment-run-id',
+            help='Specific run of --experiment-id to load. Latest run when omitted.',
         ),
     ] = None,
     from_run: Annotated[
@@ -656,12 +673,13 @@ def simulate(
         ),
     ] = True,
 ) -> None:
-    """Run simulations from a pre-built datapoints file, an Orq dataset, or a previous run.
+    """Run simulations from a pre-built datapoints file, an Orq dataset, experiment, or previous run.
 
     Inputs (provide exactly one):
 
     - --input PATH       datapoints JSONL file.
     - --dataset-id ID    Orq dataset.
+    - --experiment-id ID Orq experiment; optionally select a run with --experiment-run-id.
     - --from-run REF     replay a saved run's exact cases ("latest", file name, or run id).
 
     Targets (provide exactly one):
@@ -697,16 +715,25 @@ def simulate(
 
     sources = [
         name
-        for name, given in (('--input', datapoints), ('--dataset-id', dataset_id), ('--from-run', from_run))
+        for name, given in (
+            ('--input', datapoints),
+            ('--dataset-id', dataset_id),
+            ('--experiment-id', experiment_id),
+            ('--from-run', from_run),
+        )
         if given is not None
     ]
     if len(sources) != 1:
         got = f' (got: {", ".join(sources)})' if sources else ''
-        raise typer.BadParameter(f'Provide exactly one of --input, --dataset-id, or --from-run{got}.')
+        raise typer.BadParameter(f'Provide exactly one of --input, --dataset-id, --experiment-id, or --from-run{got}.')
+    if experiment_run_id is not None and experiment_id is None:
+        raise typer.BadParameter('--experiment-run-id requires --experiment-id.')
     if datapoints is not None and not datapoints.exists():
         raise typer.BadParameter(f'Datapoints file not found: {datapoints}')
     if dataset_id is not None:
         _require_orq_api_key('--dataset-id')
+    if experiment_id is not None:
+        _require_orq_api_key('--experiment-id')
 
     try:
         resolved_target = _resolve_target(
@@ -720,6 +747,8 @@ def simulate(
             _simulate_impl(
                 datapoints_path=datapoints,
                 dataset_id=dataset_id,
+                experiment_id=experiment_id,
+                experiment_run_id=experiment_run_id,
                 previous_run=from_run,
                 target=resolved_target,
                 sim_model=sim_model,
@@ -778,6 +807,8 @@ async def _simulate_impl(
     *,
     datapoints_path: Path | None,
     dataset_id: str | None = None,
+    experiment_id: str | None = None,
+    experiment_run_id: str | None = None,
     previous_run: str | None = None,
     target: Any,
     sim_model: str,
@@ -791,9 +822,9 @@ async def _simulate_impl(
     from evaluatorq.simulation.utils.dataset_export import load_datapoints_from_jsonl
 
     loaded = None
-    if dataset_id is None and previous_run is None:
+    if dataset_id is None and experiment_id is None and previous_run is None:
         if datapoints_path is None:  # the command guarantees exactly one source
-            raise ValueError('One of datapoints_path, dataset_id, or previous_run is required')
+            raise ValueError('One of datapoints_path, dataset_id, experiment_id, or previous_run is required')
         loaded = load_datapoints_from_jsonl(str(datapoints_path))
         if not loaded:
             raise ValueError(f'No datapoints loaded from {datapoints_path}')
@@ -801,6 +832,8 @@ async def _simulate_impl(
     return await _simulate_run(
         datapoints=loaded,
         dataset_id=dataset_id,
+        experiment_id=experiment_id,
+        experiment_run_id=experiment_run_id,
         previous_run=previous_run,
         target=target,
         sim_model=sim_model,

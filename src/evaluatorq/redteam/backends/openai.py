@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any, cast
 from loguru import logger
 
 from evaluatorq.common.llm_call import apply_pipeline_metadata
+from evaluatorq.common.llm_client import client_routes_through_orq
+from evaluatorq.common.thread_context import thread_body_param
 from evaluatorq.common.tracing import record_llm_response
 from evaluatorq.contracts import AgentTarget, Message
 from evaluatorq.redteam.backends._errors import extract_provider_error_code, extract_status_code
@@ -109,9 +111,6 @@ class OpenAIModelTarget(AgentTarget):
         # on every endpoint — this is the direct-OpenAI backend, and its traces
         # still reach Orq via OTel), and the run thread via the `thread` extra_body
         # field, which IS router-only and so stays guarded.
-        from evaluatorq.common.llm_client import client_routes_through_orq
-        from evaluatorq.common.thread_context import thread_body_param
-
         create_kwargs: dict[str, Any] = {
             'model': self.model,
             'messages': completion_messages,

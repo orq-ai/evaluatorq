@@ -388,13 +388,15 @@ FILTERS: dict[str, FilterDef] = {
 def apply_or_all(report_obj: Any, surface: str, selections: dict[str, list[str]]) -> list[Any]:
     """Return the filtered result list, defaulting to all results when unfiltered.
 
-    Empty *selections* (no active filter) or an unknown *surface* both map to
-    the full ``report_obj.results`` list, so callers never need an explicit
-    ``if not selections`` guard.
+    Empty *selections* (no active filter) map to the surface's full result list
+    via ``FilterDef.results`` (``.results`` for redteam/sim, ``.entries`` for
+    pairwise); an unknown *surface* falls back to ``report_obj.results``.  Either
+    way callers never need an explicit ``if not selections`` guard.
 
     Args:
-        report_obj: The raw report/run object (must have a ``.results`` attribute).
-        surface:    Dashboard surface key (``"redteam"`` or ``"sim"``).
+        report_obj: The raw report/run object.
+        surface:    Dashboard surface key (``"redteam"``, ``"sim"`` or
+                    ``"pairwise"``).
         selections: Dimension → selected-values mapping parsed from the request.
                     An empty dict means "all results".
 

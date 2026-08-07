@@ -1591,6 +1591,17 @@ class RedTeamReport(BaseModel):
         'shared by every attack\'s thread_id; powers the dashboard "View all run traces" '
         'deep-link. None for older reports.',
     )
+    uploaded_count: int | None = Field(
+        default=None,
+        description='Cleaned result rows sent to the Orq platform. None when the upload was skipped '
+        '(no API key) or the report predates this field; 0 when every row was stripped in cleaning.',
+    )
+    rows_created: int | None = Field(
+        default=None,
+        description='Rows the Orq platform actually registered; a value below uploaded_count explains a smaller '
+        'Explorer sample count. None when the upload failed or was skipped (uploaded_count then records the '
+        'attempt) or the report predates this field — None with a set uploaded_count means "not confirmed".',
+    )
 
     @field_validator('pipeline', mode='before')
     @classmethod

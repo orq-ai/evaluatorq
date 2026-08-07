@@ -24,8 +24,14 @@ from evaluatorq.openresponses.target import OrqResponsesTarget
 
 
 def _make_client() -> MagicMock:
-    """Return a mock AsyncOpenAI client with a stub responses.create."""
+    """Return a mock AsyncOpenAI client with a stub responses.create.
+
+    ``base_url`` points at the Orq router so router-only request extras
+    (``thread``/``memory``) are emitted only when the client routes through
+    Orq; native pipeline ``metadata`` is sent on both compatible endpoints.
+    """
     client = MagicMock()
+    client.base_url = "https://my.orq.ai/v3/router"
     client.responses = MagicMock()
     client.responses.create = AsyncMock()
     return client
@@ -316,15 +322,24 @@ class TestOrqResponsesTargetNew:
         target = _make_target(client=client, instructions="Be concise.")
         assert target.new().instructions == "Be concise."
 
-    def test_new_mints_fresh_memory_entity_id_when_set(self):
-        import uuid
-
+    def test_new_preserves_constructor_seeded_memory_entity_id(self):
+        """A constructor-passed id is a seed and survives clones (the sim
+        --memory-entity path); only auto-minted ids re-mint per clone."""
         client = _make_client()
         target = OrqResponsesTarget(
             LLMCallConfig(model="gpt-4o"),
             memory_entity_id="original-uuid-abc",
             client=client,
         )
+
+        assert target.new().memory_entity_id == "original-uuid-abc"
+
+    def test_new_re_mints_auto_minted_memory_entity_id(self):
+        import uuid
+
+        client = _make_client()
+        target = OrqResponsesTarget(LLMCallConfig(model="gpt-4o"), client=client)
+        target.mint_memory_entity_id("minted-abc")
 
         fresh = target.new()
 
@@ -405,7 +420,9 @@ class TestOrqResponsesTargetMemory:
         extra_body = client.responses.create.call_args.kwargs["extra_body"]
         assert extra_body["memory"] == {"entity_id": "ent-42"}
         assert extra_body["thread"] == {"id": "thread-xyz"}
-        assert extra_body["metadata"] == {"evaluatorq_pipeline": "agent_simulation"}
+        assert client.responses.create.call_args.kwargs["metadata"] == {
+            "evaluatorq_pipeline": "agent_simulation"
+        }
 
     @pytest.mark.asyncio
     async def test_no_memory_key_sent_when_unset(self):
