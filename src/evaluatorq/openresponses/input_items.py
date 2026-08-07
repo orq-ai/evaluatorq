@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
+
 if TYPE_CHECKING:
     from evaluatorq.contracts import ContentPart, Message
 
@@ -20,13 +22,19 @@ def _content_parts(content: list[ContentPart]) -> list[dict[str, Any]]:
     return [p.model_dump(mode='json') for p in content]
 
 
-def _as_text(content: str | list[ContentPart] | None) -> str:
-    """Flatten content to a string for fields that only accept one (tool output)."""
+def _tool_output(content: str | list[ContentPart] | None) -> str | list[dict[str, Any]]:
+    """Render tool-result content for ``function_call_output.output``.
+
+    That field takes a string *or* a list of ``input_text``/``input_image``/
+    ``input_file`` parts — exactly the three members of :data:`ContentPart` — so
+    multi-part content passes straight through instead of being flattened to
+    text. Flattening would silently discard an image or file a tool returned.
+    """
     if content is None:
         return ''
     if isinstance(content, str):
         return content
-    return ''.join(part.get('text', '') for part in _content_parts(content))
+    return _content_parts(content)
 
 
 def message_to_responses_input_items(m: Message) -> list[dict[str, Any]]:
@@ -43,10 +51,16 @@ def message_to_responses_input_items(m: Message) -> list[dict[str, Any]]:
         # A function_call_output must reference a prior function_call by a
         # non-empty call_id; the API rejects "" outright. An orphaned tool
         # result (no tool_call_id) is unreferenceable, so drop it rather than
-        # fail the whole turn on one malformed row.
+        # fail the whole turn on one malformed row — but say so, because a tool
+        # result vanishing from replayed history is otherwise invisible.
         if not m.tool_call_id:
+            logger.warning(
+                'Dropping a tool message with no tool_call_id from the Responses input: '
+                'a function_call_output cannot be sent without a call_id to reference. '
+                'The model will not see this tool result.'
+            )
             return []
-        return [{'type': 'function_call_output', 'call_id': m.tool_call_id, 'output': _as_text(m.content)}]
+        return [{'type': 'function_call_output', 'call_id': m.tool_call_id, 'output': _tool_output(m.content)}]
     if m.role == 'assistant' and m.tool_calls:
         items: list[dict[str, Any]] = []
         if m.content:

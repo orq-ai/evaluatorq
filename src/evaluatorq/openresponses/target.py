@@ -97,7 +97,7 @@ class OrqResponsesTarget(AgentTarget):
     async def respond(self, messages: list[Message]) -> AgentResponse:
         """Stateless: send the full message list, return the response."""
         return await self._call_responses_api(
-            responses_input=self._messages_to_input(messages),
+            responses_input=messages_to_responses_input(messages),
         )
 
     def new(self) -> OrqResponsesTarget:
@@ -259,16 +259,6 @@ class OrqResponsesTarget(AgentTarget):
             )
         except asyncio.TimeoutError as e:
             raise RuntimeError(f'OrqResponsesTarget timed out after {timeout_s}s (model={self.config.model})') from e
-
-    @staticmethod
-    def _messages_to_input(messages: list[Message]) -> list[dict[str, Any]]:
-        """Serialize the transcript as Responses-API input items.
-
-        Not chat-completions shape: ``role: "tool"`` and a message-level
-        ``tool_calls`` key are both invalid here, so tool turns are rendered as
-        ``function_call`` / ``function_call_output`` items instead.
-        """
-        return messages_to_responses_input(messages)
 
 
 __all__ = ['OrqResponsesTarget']

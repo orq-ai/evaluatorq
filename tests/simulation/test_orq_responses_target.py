@@ -335,8 +335,9 @@ class TestOrqResponsesTargetRespond:
         json.dumps(items)  # raises TypeError on unserialized ContentPart models
         assert items[0]["content"] == [part]
         assert items[1]["content"] == [part]
-        # function_call_output.output is a string field — multi-part content flattens.
-        assert items[3] == {"type": "function_call_output", "call_id": "c1", "output": "looking"}
+        # function_call_output.output also takes a parts list, so multi-part tool
+        # content passes through rather than being flattened (which would drop images).
+        assert items[3] == {"type": "function_call_output", "call_id": "c1", "output": [part]}
 
     def test_orphan_tool_result_is_dropped(self):
         """A tool result with no tool_call_id is unreferenceable and must be dropped.
