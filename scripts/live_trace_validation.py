@@ -144,7 +144,7 @@ async def _run_simulation(args: argparse.Namespace, tap: _TapProcessor) -> None:
         executive_summary=False,
         exit_on_failure=False,
     )
-    root = _validate_root(tap, 'Orq Agent Simulation')
+    root = _validate_root(tap, 'Evaluatorq - Agent Simulation')
     if len(results) != 9:
         raise RuntimeError(f'Expected 9 simulation results (3 x 3), got {len(results)}')
     errors = [result for result in results if result.terminated_by.value == 'error']
@@ -178,7 +178,7 @@ async def _run_redteam(args: argparse.Namespace, tap: _TapProcessor) -> None:
         cleanup_memory=True,
         verbosity=0,
     )
-    root = _validate_root(tap, 'Red Teaming')
+    root = _validate_root(tap, 'Evaluatorq - Red Teaming')
     if report.total_results <= 0:
         raise RuntimeError('Expected the hybrid red-team report to contain results')
     breakdown = report.summary.datapoint_breakdown or {}

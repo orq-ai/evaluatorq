@@ -206,11 +206,11 @@ async def test_red_team_owns_whole_pipeline_span(
 
     names = {span.name for span in span_collector.spans}
     assert names == {
-        'Red Teaming',
+        'Evaluatorq - Red Teaming',
         'orq.redteam.recommendations',
         'orq.redteam.executive_summary',
     }
-    pipeline_span = _find_span(span_collector, 'Red Teaming')
+    pipeline_span = _find_span(span_collector, 'Evaluatorq - Red Teaming')
     assert pipeline_span is not None
     observed_pipeline = _span_by_context(span_collector, _span_id(pipeline_span))
     assert observed_pipeline is not None
@@ -236,7 +236,7 @@ async def test_red_team_owns_whole_pipeline_span(
 async def test_root_span_carries_evaluatorq_run_id(
     span_collector: _CollectingExporter,
 ) -> None:
-    """The 'Red Teaming' root span carries orq.evaluatorq_run_id."""
+    """The 'Evaluatorq - Red Teaming' root span carries orq.evaluatorq_run_id."""
 
     async def _inner_runner(**kwargs: Any) -> tuple[RedTeamReport, RedTeamRunMetrics]:  # noqa: RUF029
         return _report(pipeline=Pipeline.STATIC), RedTeamRunMetrics(3, 1, 0.1)
@@ -267,7 +267,7 @@ async def test_root_span_carries_evaluatorq_run_id(
             save=SaveMode.NONE,
         )
 
-    pipeline_span = _find_span(span_collector, 'Red Teaming')
+    pipeline_span = _find_span(span_collector, 'Evaluatorq - Red Teaming')
     assert pipeline_span is not None
     attrs = _attrs(pipeline_span)
     assert attrs.get('orq.evaluatorq_run_id')  # non-empty run id present
@@ -314,7 +314,7 @@ async def test_pipeline_span_nests_under_caller_parent_context(
             save=SaveMode.NONE,
         )
 
-    pipeline_span = _find_span(span_collector, 'Red Teaming')
+    pipeline_span = _find_span(span_collector, 'Evaluatorq - Red Teaming')
     assert pipeline_span is not None
     assert pipeline_span.parent is not None
     assert pipeline_span.parent.span_id == outer_span_id[0]

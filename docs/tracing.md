@@ -125,7 +125,7 @@ Span attributes on `orq.evaluation`:
 ### Red teaming spans
 
 ```
-Red Teaming                     # root — one per red_team() call
+Evaluatorq - Red Teaming         # root — one per red_team() call
   ├── orq.redteam.context_retrieval
   ├── orq.redteam.datapoint_generation
   │     ├── orq.redteam.capability_classification
@@ -159,7 +159,7 @@ LLM spans (`chat ...`) carry standard GenAI attributes:
 | `gen_ai.output.messages` | JSON serialised output messages (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
 | `orq.llm.purpose` | Cross-domain purpose tag (e.g. `"adversarial"`, `"evaluation"`, `"target"`) |
 
-The root `Red Teaming` span additionally carries:
+The root `Evaluatorq - Red Teaming` span additionally carries:
 
 | Attribute | Value |
 |---|---|
@@ -168,7 +168,7 @@ The root `Red Teaming` span additionally carries:
 ### Simulation spans
 
 ```
-Orq Agent Simulation             # root — one per simulate() / generate_and_simulate() call
+Evaluatorq - Agent Simulation    # root — one per simulate() / generate_and_simulate() call
   ├── chat/responses {model}     # persona/scenario/first-message generation calls
   └── orq.simulation.run         # one per datapoint
         ├── orq.simulation.first_message_generation   # only when no first message was pre-generated
@@ -190,18 +190,18 @@ when invoked standalone. They do create `orq.simulation.persona_generation` /
 spans carry the active run metadata when called inside an outer simulation or
 red-team scope; standalone helpers intentionally have no synthetic run id to stamp.
 
-Span attributes on `Orq Agent Simulation` / `orq.simulation.generate`:
+Span attributes on `Evaluatorq - Agent Simulation` / `orq.simulation.generate`:
 
 | Attribute | Value | Present on |
 |---|---|---|
-| `orq.simulation.evaluation_name` | Evaluation name passed to `simulate()` / `generate_and_simulate()` | `Orq Agent Simulation` |
-| `orq.simulation.max_turns` | Configured max turns | `Orq Agent Simulation` |
-| `orq.simulation.parallelism` | Configured parallelism | `Orq Agent Simulation` |
-| `orq.simulation.mode` | `"generate_and_simulate"` or `"generate"` | `Orq Agent Simulation` (generate_and_simulate only), `orq.simulation.generate` |
-| `orq.simulation.num_personas` | Requested persona count | `Orq Agent Simulation` (generate_and_simulate only), `orq.simulation.generate` |
-| `orq.simulation.num_scenarios` | Requested scenario count | `Orq Agent Simulation` (generate_and_simulate only), `orq.simulation.generate` |
-| `orq.simulation.datapoints_count` | Resolved datapoint count | `Orq Agent Simulation` only |
-| `orq.evaluatorq_run_id` | This run's id — see [Run correlation](#run-correlation) | `Orq Agent Simulation`, `orq.simulation.generate` |
+| `orq.simulation.evaluation_name` | Evaluation name passed to `simulate()` / `generate_and_simulate()` | `Evaluatorq - Agent Simulation` |
+| `orq.simulation.max_turns` | Configured max turns | `Evaluatorq - Agent Simulation` |
+| `orq.simulation.parallelism` | Configured parallelism | `Evaluatorq - Agent Simulation` |
+| `orq.simulation.mode` | `"generate_and_simulate"` or `"generate"` | `Evaluatorq - Agent Simulation` (generate_and_simulate only), `orq.simulation.generate` |
+| `orq.simulation.num_personas` | Requested persona count | `Evaluatorq - Agent Simulation` (generate_and_simulate only), `orq.simulation.generate` |
+| `orq.simulation.num_scenarios` | Requested scenario count | `Evaluatorq - Agent Simulation` (generate_and_simulate only), `orq.simulation.generate` |
+| `orq.simulation.datapoints_count` | Resolved datapoint count | `Evaluatorq - Agent Simulation` only |
+| `orq.evaluatorq_run_id` | This run's id — see [Run correlation](#run-correlation) | `Evaluatorq - Agent Simulation`, `orq.simulation.generate` |
 
 Span attributes on `orq.simulation.run`:
 
@@ -253,7 +253,7 @@ have no synthetic root run id.
 | Surface | Key | Where |
 |---|---|---|
 | Request `metadata` on every LLM invocation | `evaluatorq_run_id` | red-team + simulation runs, including inherited nested work |
-| Root span attribute | `orq.evaluatorq_run_id` | `Red Teaming` root span; `Orq Agent Simulation` / `orq.simulation.generate` root spans |
+| Root span attribute | `orq.evaluatorq_run_id` | `Evaluatorq - Red Teaming` root span; `Evaluatorq - Agent Simulation` / `orq.simulation.generate` root spans |
 
 A companion key rides the same rail: `evaluatorq_pipeline`, whose value is
 `"red_teaming"` or `"agent_simulation"`. It identifies which surface issued the call
