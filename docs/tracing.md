@@ -32,6 +32,10 @@ uv add opentelemetry-api opentelemetry-sdk \
 uv add "evaluatorq[otel]"
 ```
 
+Prefer pip? Use `python -m pip install "evaluatorq[otel]"`, which installs into
+the interpreter you just named rather than whichever `pip` happens to be first
+on your `PATH`.
+
 If these packages are absent the SDK silently skips initialisation — no error is
 raised.
 
@@ -64,13 +68,13 @@ asyncio.run(
 To send traces to a custom OTLP endpoint instead:
 
 ```bash
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 python my_eval.py
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 uv run my_eval.py
 ```
 
 To debug tracing setup:
 
 ```bash
-ORQ_DEBUG=1 python my_eval.py
+ORQ_DEBUG=1 uv run my_eval.py
 ```
 
 This prints the resolved endpoint, auth header presence, and any initialisation

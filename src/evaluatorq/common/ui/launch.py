@@ -21,9 +21,8 @@ if TYPE_CHECKING:
 
 def _install_hint(extra: str) -> str:
     return (
-        f'Streamlit is not installed. Install the {extra} extras:\n'
-        f'  uv pip install "evaluatorq[{extra}]"\n'
-        f'  pip install "evaluatorq[{extra}]"'
+        f'Streamlit is not installed. Install the {extra} extras: '
+        f'uv add "evaluatorq[{extra}]" (or: python -m pip install "evaluatorq[{extra}]")'
     )
 
 

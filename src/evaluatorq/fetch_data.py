@@ -49,11 +49,7 @@ def setup_orq_client(api_key: str) -> 'Orq':
         return Orq(api_key=api_key, server_url=server_url)
     except ModuleNotFoundError as e:
         raise Exception(
-            """orq_ai_sdk is not installed.
-            Please install it using:
-                * pip install orq_ai_sdk.
-                * uv add orq_ai_sdk
-                * poetry add orq_ai_sdk"""
+            'orq_ai_sdk is not installed. Install with: uv add orq-ai-sdk (or: python -m pip install orq-ai-sdk)'
         ) from e
     except Exception as e:
         raise Exception(f'Error setting up Orq client: {e}')

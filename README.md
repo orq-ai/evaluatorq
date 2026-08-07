@@ -60,6 +60,10 @@ The library is deliberately lightweight: async-first, typed end-to-end, and usab
 uv add evaluatorq
 ```
 
+`uv add` installs into the current project. If you don't have one yet, `uv init`
+creates it (or `uv venv` for a bare virtualenv) — otherwise uv will tell you no
+`pyproject.toml` was found.
+
 Then run your evaluation and the CLI through the same project environment:
 
 ```bash
@@ -83,7 +87,7 @@ Poetry (`poetry add evaluatorq`, `poetry run python my_eval.py`) works the same 
 If you want to use the Orq platform integration:
 
 ```bash
-uv add "evaluatorq[orq]"
+uv add "evaluatorq[orq]"          # or the SDK on its own: uv add orq-ai-sdk
 ```
 
 For OpenTelemetry tracing (optional):
@@ -95,8 +99,10 @@ uv add "evaluatorq[otel]"
 For LangChain/LangGraph integration:
 
 ```bash
-uv add "evaluatorq[langchain]"
+uv add "evaluatorq[langchain]"    # or bring your own: uv add langchain langgraph
 ```
+
+Each extra works with pip too — `python -m pip install "evaluatorq[orq]"`.
 
 ## 🏁 Getting Started
 

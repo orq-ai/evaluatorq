@@ -76,7 +76,10 @@ def create_model_job(
         try:
             from orq_ai_sdk import Orq
         except ImportError as e:
-            msg = 'Deployment jobs require the orq-ai-sdk package. Install it with: pip install evaluatorq[orq]'
+            msg = (
+                'Deployment jobs require the orq-ai-sdk package. '
+                'Install it with: uv add "evaluatorq[orq]" (or: python -m pip install "evaluatorq[orq]")'
+            )
             raise ImportError(msg) from e
 
         api_key = os.environ.get('ORQ_API_KEY')

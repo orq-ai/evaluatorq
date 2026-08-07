@@ -21,7 +21,7 @@ agent's instructions to pass them reliably.
 Prerequisites:
     Install the agent-simulation research package (not on PyPI - install from source):
 
-        uv pip install "agent-simulation @ git+https://github.com/orq-ai/research.git#subdirectory=projects/agent-simulation"
+        uv add "agent-simulation @ git+https://github.com/orq-ai/research.git#subdirectory=projects/agent-simulation"
 
 Usage:
     # from the evaluatorq repository root
@@ -48,7 +48,7 @@ try:
 except ImportError as e:
     raise ImportError(
         'agent-simulation package not found. Install from source:\n'
-        '  uv pip install "agent-simulation @ git+https://github.com/orq-ai/research.git'
+        '  uv add "agent-simulation @ git+https://github.com/orq-ai/research.git'
         '#subdirectory=projects/agent-simulation"'
     ) from e
 

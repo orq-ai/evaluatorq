@@ -216,6 +216,9 @@ uv run eq sim generate --help
 `uv tool install` here: it builds an isolated environment that exposes the CLI
 but leaves `evaluatorq` unimportable from your own scripts.
 
+Prefer pip? `python -m pip install "evaluatorq[simulation]"` installs into the
+interpreter you just named, and `eq` lands on that environment's `PATH`.
+
 Examples:
 
 ```bash

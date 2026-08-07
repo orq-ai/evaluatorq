@@ -29,8 +29,38 @@ uv add "evaluatorq[simulation]"   # agent simulation
 uv add "evaluatorq[redteam]"      # red teaming
 ```
 
-Run your scripts with `uv run my_eval.py` and the CLI with `uv run eq`, so the
-environment you installed into is the one that executes.
+`uv add` installs into the current project — run `uv init` first if you don't
+have one. Run your scripts with `uv run my_eval.py` and the CLI with
+`uv run eq`, so the environment you installed into is the one that executes.
+
+Prefer pip? Use `python -m pip install "evaluatorq[redteam]"`, which installs
+into the interpreter you just named rather than whichever `pip` happens to be
+first on your `PATH`.
+
+### I installed evaluatorq but `import evaluatorq` fails
+
+The install went to a different interpreter than the one running your script.
+This is the single most common setup failure, and it has nothing to do with
+evaluatorq — bare `pip` and bare `python` can resolve to different environments
+(a system Python, a virtualenv you forgot to activate, a container's global
+site-packages).
+
+Confirm it by asking both sides where they live:
+
+```bash
+python -c "import sys; print(sys.executable)"   # which interpreter runs
+python -m pip show -f evaluatorq | head -3      # where the package landed
+```
+
+If the paths don't share a prefix, that's the bug. Two fixes:
+
+- **uv** — `uv add evaluatorq` then `uv run my_eval.py`. `uv run` resolves the
+  project environment before executing, so the two can't drift.
+- **pip** — always name the interpreter: `python -m pip install evaluatorq`,
+  and run with the same `python`.
+
+Avoid `uv tool install evaluatorq`: it builds an isolated environment that
+exposes the `eq` CLI but leaves `evaluatorq` unimportable from your own scripts.
 
 ### Do I need an Orq account or an OpenAI key?
 

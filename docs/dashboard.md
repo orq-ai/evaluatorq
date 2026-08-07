@@ -27,6 +27,10 @@ uv add "evaluatorq[dashboard]"
 uv add "evaluatorq[redteam,dashboard]"
 ```
 
+Prefer pip? Use `python -m pip install "evaluatorq[dashboard]"`, which installs
+into the interpreter you just named rather than whichever `pip` happens to be
+first on your `PATH`.
+
 ## Launch
 
 Launch it with `eq dashboard` (the `evaluatorq` and `eq` entry points are

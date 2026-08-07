@@ -13,7 +13,7 @@ The crew's model runs on the Orq router via ``crewai.LLM`` keyed with
 ``ORQ_API_KEY`` — no OpenAI key needed. The attacker + judge auto-route too.
 
 Prerequisites:
-    - pip install "evaluatorq[redteam,crewai]"   (CrewAI needs Python >= 3.11)
+    - uv add "evaluatorq[redteam,crewai]"   (CrewAI needs Python >= 3.11)
     - ORQ_API_KEY set (the crew's model, the attacker LLM, and the judge)
 
 Usage:

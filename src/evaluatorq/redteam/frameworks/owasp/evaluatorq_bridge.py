@@ -371,8 +371,8 @@ def create_owasp_evaluator(
 
 _HF_MISSING_MSG = (
     'Loading static datapoints from HuggingFace requires the huggingface-hub package. '
-    "Install the redteam extra: pip install 'evaluatorq[redteam]' "
-    "(or: uv pip install 'evaluatorq[redteam]'). "
+    "Install the redteam extra: uv add 'evaluatorq[redteam]' "
+    "(or: python -m pip install 'evaluatorq[redteam]'). "
     'Alternatively pass a local --dataset path, or use --mode dynamic to skip static datapoints.'
 )
 
@@ -459,7 +459,7 @@ def _fetch_all_datapoints(dataset_id: str) -> list[DataPoint]:
     except ImportError as e:
         msg = (
             'Fetching datasets from the ORQ platform requires the orq-ai-sdk package. '
-            'Install it with: pip install evaluatorq[orq]'
+            'Install it with: uv add "evaluatorq[orq]" (or: python -m pip install "evaluatorq[orq]")'
         )
         raise ImportError(msg) from e
 

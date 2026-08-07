@@ -16,6 +16,10 @@ transcripts by hand. Three LLMs are in play:
     export ORQ_API_KEY=...
     ```
 
+    Prefer pip? Use `python -m pip install "evaluatorq[simulation]"`, which
+    installs into the interpreter you just named rather than whichever `pip`
+    happens to be first on your `PATH`.
+
 === "OpenAI"
 
     Requires the simulation extra, the `openai` package, and an `OPENAI_API_KEY`:
@@ -24,6 +28,10 @@ transcripts by hand. Three LLMs are in play:
     uv add "evaluatorq[simulation]" openai
     export OPENAI_API_KEY=sk-...
     ```
+
+    Prefer pip? Use `python -m pip install "evaluatorq[simulation]" openai`,
+    which installs into the interpreter you just named rather than whichever
+    `pip` happens to be first on your `PATH`.
 
 ```mermaid
 sequenceDiagram
