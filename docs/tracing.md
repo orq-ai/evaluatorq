@@ -125,7 +125,7 @@ Span attributes on `orq.evaluation`:
 ### Red teaming spans
 
 ```
-Orq Red Team                    # root — one per red_team() call
+Red Teaming                     # root — one per red_team() call
   ├── orq.redteam.context_retrieval
   ├── orq.redteam.datapoint_generation
   │     ├── orq.redteam.capability_classification
@@ -159,7 +159,7 @@ LLM spans (`chat ...`) carry standard GenAI attributes:
 | `gen_ai.output.messages` | JSON serialised output messages (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
 | `orq.llm.purpose` | Cross-domain purpose tag (e.g. `"adversarial"`, `"evaluation"`, `"target"`) |
 
-The root `Orq Red Team` span additionally carries:
+The root `Red Teaming` span additionally carries:
 
 | Attribute | Value |
 |---|---|
@@ -253,7 +253,7 @@ have no synthetic root run id.
 | Surface | Key | Where |
 |---|---|---|
 | Request `metadata` on every LLM invocation | `evaluatorq_run_id` | red-team + simulation runs, including inherited nested work |
-| Root span attribute | `orq.evaluatorq_run_id` | `Orq Red Team` root span; `Orq Agent Simulation` / `orq.simulation.generate` root spans |
+| Root span attribute | `orq.evaluatorq_run_id` | `Red Teaming` root span; `Orq Agent Simulation` / `orq.simulation.generate` root spans |
 
 A companion key rides the same rail: `evaluatorq_pipeline`, whose value is
 `"red_teaming"` or `"agent_simulation"`. It identifies which surface issued the call

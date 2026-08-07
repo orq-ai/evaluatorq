@@ -428,7 +428,7 @@ async def _redteam_root_scope(run_id: str, attributes: AttrMap, parent_context: 
     Yields:
         The root pipeline span.
     """
-    async with with_redteam_span('Orq Red Team', attributes, parent_context=parent_context) as pipeline_span:
+    async with with_redteam_span('Red Teaming', attributes, parent_context=parent_context) as pipeline_span:
         with _evaluatorq_run_scope(run_id, pipeline_span):
             yield pipeline_span
 
