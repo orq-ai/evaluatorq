@@ -25,11 +25,11 @@ even when the above variables are present.
 Tracing depends on optional packages that are not installed by default:
 
 ```bash
-pip install opentelemetry-api opentelemetry-sdk \
+uv add opentelemetry-api opentelemetry-sdk \
     opentelemetry-exporter-otlp-proto-http \
     opentelemetry-semantic-conventions
 # or via the extras bundle:
-pip install "evaluatorq[otel]"
+uv add "evaluatorq[otel]"
 ```
 
 If these packages are absent the SDK silently skips initialisation — no error is

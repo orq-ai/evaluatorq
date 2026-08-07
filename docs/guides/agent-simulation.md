@@ -12,7 +12,7 @@ transcripts by hand. Three LLMs are in play:
     Requires the simulation extra and an `ORQ_API_KEY`:
 
     ```bash
-    pip install "evaluatorq[simulation]"
+    uv add "evaluatorq[simulation]"
     export ORQ_API_KEY=...
     ```
 
@@ -21,7 +21,7 @@ transcripts by hand. Three LLMs are in play:
     Requires the simulation extra, the `openai` package, and an `OPENAI_API_KEY`:
 
     ```bash
-    pip install "evaluatorq[simulation]" openai
+    uv add "evaluatorq[simulation]" openai
     export OPENAI_API_KEY=sk-...
     ```
 

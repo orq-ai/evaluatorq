@@ -11,14 +11,19 @@ in Python — against any agent, with the Orq AI platform as optional infrastruc
 <!-- termynal -->
 
 ```console
-$ pip install evaluatorq
+$ uv add evaluatorq
 ---> 100%
 Successfully installed evaluatorq
 ```
 
+Run your code with `uv run my_eval.py` and the CLI with `uv run eq`, so the
+environment you installed into is the one that executes. Using pip instead,
+call it as `python -m pip install evaluatorq` to pin it to the same interpreter
+you run with.
+
 !!! tip "Optional extras"
-    `pip install "evaluatorq[redteam]"` adds adversarial red teaming ·
-    `pip install "evaluatorq[simulation]"` adds multi-turn agent simulation.
+    `uv add "evaluatorq[redteam]"` adds adversarial red teaming ·
+    `uv add "evaluatorq[simulation]"` adds multi-turn agent simulation.
 
 ## What it does
 
