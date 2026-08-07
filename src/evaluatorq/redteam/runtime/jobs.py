@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq import DataPoint, Job, job
-from evaluatorq.common.llm_call import execute_chat_completion
+from evaluatorq.common.llm_call import apply_pipeline_metadata, execute_chat_completion
 from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.thread_context import build_static_thread_id, conversation_thread, thread_body_param
@@ -114,6 +114,11 @@ def create_model_job(
                             'key': deployment_key,
                             'messages': messages,
                         }
+                        # Deployment SDK calls do not go through the shared
+                        # chat-completion helper, so apply the active run
+                        # metadata explicitly. The helper preserves any
+                        # caller-supplied metadata if this path gains one.
+                        apply_pipeline_metadata(invoke_kwargs)
                         invoke_kwargs.update(thread_body_param())
                         completion = await deployment_client.deployments.invoke_async(**invoke_kwargs)
                         content = _extract_deployment_content(completion)
