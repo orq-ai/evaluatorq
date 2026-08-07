@@ -7,14 +7,14 @@ the agent's tools, memory configuration, and system prompt.
 import asyncio
 import hashlib
 import random
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from loguru import logger
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI
 from pydantic import BaseModel, Field
 
 from evaluatorq.common.content_filter import is_content_filter_error, regenerate_on_content_filter
-from evaluatorq.common.tracing import record_llm_response
+from evaluatorq.common.llm_call import execute_chat_parse
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
     OWASP_CATEGORY_NAMES,
@@ -36,9 +36,6 @@ from evaluatorq.redteam.vulnerability_registry import (
     get_primary_category,
     resolve_category_safe,
 )
-
-if TYPE_CHECKING:
-    from openai.types.chat import ChatCompletionMessageParam
 
 # Technique pool sampled per generated attack datapoint (reporting metadata only —
 # the adversarial LLM runs on the objective text and never reads this field).
@@ -193,19 +190,7 @@ async def _call_llm_for_objectives_single(
     cfg = cfg or PIPELINE_CONFIG
     try:
         prompt = prompt_template.replace('{count}', str(count))
-        gen_messages: list[ChatCompletionMessageParam] = [{'role': 'user', 'content': prompt}]
-
-        async def _generate(attempt: int) -> Any:
-            if attempt > 0:
-                logger.debug(f'Regenerating objectives for {log_label} (attempt {attempt + 1})')
-            return await llm_client.chat.completions.parse(
-                **cfg.attacker.completion_params(
-                    model=model,
-                    messages=gen_messages,
-                    response_format=GeneratedObjectives,
-                    extra_body=cfg.retry_extra_body(llm_client),
-                )
-            )
+        gen_messages: list[dict[str, Any]] = [{'role': 'user', 'content': prompt}]
 
         async with with_llm_span(
             model=model,
@@ -218,17 +203,32 @@ async def _call_llm_for_objectives_single(
                 **span_attributes,
             },
         ) as gen_span:
+
+            async def _generate(attempt: int) -> Any:
+                if attempt > 0:
+                    logger.debug(f'Regenerating objectives for {log_label} (attempt {attempt + 1})')
+                response, _ = await execute_chat_parse(
+                    client=llm_client,
+                    model=model,
+                    messages=gen_messages,
+                    span=gen_span,
+                    timeout_s=cfg.attacker.timeout_ms / 1000.0,
+                    response_model=GeneratedObjectives,
+                    temperature=cfg.attacker.temperature,
+                    max_completion_tokens=cfg.attacker.max_tokens,
+                    extra_kwargs={
+                        'extra_body': cfg.retry_extra_body(llm_client),
+                        **cfg.attacker.extra_kwargs,
+                    },
+                )
+                return response
+
             # Regenerate on a provider content-filter block, reusing the shared retry
             # budget (max_content_filter_retries) instead of a private constant.
             response = await regenerate_on_content_filter(
                 _generate,
                 max_attempts=max(1, cfg.max_content_filter_retries + 1),
                 label=f'Objective generation for {log_label}',
-            )
-            record_llm_response(
-                gen_span,
-                response,
-                output_content=getattr(response.choices[0].message, 'content', None),
             )
 
             result = response.choices[0].message.parsed

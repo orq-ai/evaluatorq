@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from evaluatorq.common.llm_call import apply_pipeline_metadata
 from evaluatorq.contracts import StrEnum
 from evaluatorq.redteam.contracts import PIPELINE_CONFIG, LLMConfig, TokenUsage
 from evaluatorq.redteam.utils import safe_substitute
@@ -147,18 +148,18 @@ class ToolChainingPlanner:
         logger.debug(f'Tool-chaining planner decomposing objective for agent={agent_name}, tools={tool_list}')
 
         cfg = self._cfg
+        call_params = cfg.attacker.completion_params(
+            model=self._model,
+            messages=[
+                {'role': 'system', 'content': _PLANNER_SYSTEM_PROMPT},
+                {'role': 'user', 'content': user_msg},
+            ],
+            response_format=_DecompositionSchema,
+            extra_body=cfg.retry_extra_body(self._client),
+        )
+        apply_pipeline_metadata(call_params)
         response = await asyncio.wait_for(
-            self._client.chat.completions.parse(
-                **cfg.attacker.completion_params(
-                    model=self._model,
-                    messages=[
-                        {'role': 'system', 'content': _PLANNER_SYSTEM_PROMPT},
-                        {'role': 'user', 'content': user_msg},
-                    ],
-                    response_format=_DecompositionSchema,
-                    extra_body=cfg.retry_extra_body(self._client),
-                )
-            ),
+            self._client.chat.completions.parse(**call_params),
             timeout=cfg.attacker.timeout_ms / 1000.0,
         )
 

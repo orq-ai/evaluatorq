@@ -11,6 +11,8 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from evaluatorq.contracts import TokenUsage
+
 __all__ = [
     'DeploymentResponse',
     'MessageDict',
@@ -52,6 +54,9 @@ class DeploymentResponse:
 
     raw: object
     """The raw response from the API"""
+
+    usage: TokenUsage | None = None
+    """Token usage extracted from the response, when available"""
 
 
 def _get_or_create_client() -> Orq:
@@ -160,8 +165,9 @@ async def deployment(
 
     # Extract content from the response
     content = _extract_content_from_response(completion)
+    usage = TokenUsage.extract(getattr(completion, 'usage', None), calls=1)
 
-    return DeploymentResponse(content=content, raw=completion)
+    return DeploymentResponse(content=content, raw=completion, usage=usage)
 
 
 def _extract_content_from_response(completion: object) -> str:

@@ -16,6 +16,8 @@ from typing import Any, Protocol
 
 from loguru import logger
 
+from evaluatorq.common.llm_call import apply_pipeline_metadata
+
 
 class _ChatCompletions(Protocol):
     async def create(self, *args: Any, **kwargs: Any) -> Any: ...
@@ -67,6 +69,29 @@ Rules:
   one sentence and stop. Do not manufacture risk."""
 
 
+# Request params for the executive-summary completion. Exposed as constants so
+# callers that trace the call (e.g. simulation's with_llm_span) report the exact
+# values sent instead of re-typing literals that could drift.
+EXECUTIVE_SUMMARY_TEMPERATURE = 0.7
+EXECUTIVE_SUMMARY_MAX_TOKENS = 400
+
+
+def _record_usage_on_current_span(response: Any) -> None:
+    """Record token usage/response attrs on whatever span the caller opened.
+
+    Best-effort: no-op if OTel is absent or no span is active. Never raises — the
+    summary must survive any tracing failure.
+    """
+    try:
+        from opentelemetry.trace import get_current_span
+
+        from evaluatorq.common.tracing import record_llm_response
+
+        record_llm_response(get_current_span(), response)
+    except Exception as exc:  # tracing must never break generation
+        logger.debug('Executive-summary usage recording skipped: {}', exc)
+
+
 def truncate_text(text: str, limit: int = 240) -> str:
     """Collapse whitespace and cap length with an ellipsis. Shared by callers."""
     text = ' '.join(text.split())
@@ -79,7 +104,7 @@ async def generate_executive_summary(
     llm_client: AsyncChatCompletionsClient,
     model: str,
     system_prompt: str = EXECUTIVE_SUMMARY_SYSTEM_PROMPT,
-    temperature: float = 0.7,
+    temperature: float = EXECUTIVE_SUMMARY_TEMPERATURE,
     extra_body: dict[str, Any] | None = None,
     extra_kwargs: dict[str, Any] | None = None,
 ) -> str | None:
@@ -97,6 +122,7 @@ async def generate_executive_summary(
             'extra_body': extra_body or {},
             **(extra_kwargs or {}),
         }
+        apply_pipeline_metadata(merged_kwargs)
         response = await llm_client.chat.completions.create(  # pyright: ignore[reportCallIssue, reportArgumentType]
             model=model,
             messages=[  # pyright: ignore[reportArgumentType]
@@ -104,9 +130,10 @@ async def generate_executive_summary(
                 {'role': 'user', 'content': facts},
             ],
             temperature=temperature,
-            max_completion_tokens=400,
+            max_completion_tokens=EXECUTIVE_SUMMARY_MAX_TOKENS,
             **merged_kwargs,
         )
+        _record_usage_on_current_span(response)
         content = response.choices[0].message.content or ''
         text = content.strip()
         return text or None

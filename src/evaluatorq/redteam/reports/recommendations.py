@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from evaluatorq.common.llm_call import apply_pipeline_metadata
 from evaluatorq.redteam.contracts import (
     OWASP_CATEGORY_NAMES,
     PIPELINE_CONFIG,
@@ -205,6 +206,7 @@ async def generate_focus_area_recommendations(
                 ),
                 **(llm_kwargs or {}),
             }
+            apply_pipeline_metadata(merged_kwargs)
             response = await llm_client.chat.completions.create(  # pyright: ignore[reportCallIssue, reportArgumentType]
                 **merged_kwargs,
             )

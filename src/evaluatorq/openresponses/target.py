@@ -10,7 +10,8 @@ from typing_extensions import Self
 
 from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.retry import with_retry
-from evaluatorq.common.thread_context import pipeline_metadata_param, thread_body_param
+from evaluatorq.common.thread_context import pipeline_metadata, thread_body_param
+from evaluatorq.common.tracing import get_trace_context_headers
 from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, LLMCallConfig, Message
 from evaluatorq.openresponses.client import build_simulation_client
 from evaluatorq.openresponses.tracing import (
@@ -23,6 +24,20 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from openai import AsyncOpenAI
+
+
+def _raw_responses_create(client: Any) -> Any | None:
+    """Return the SDK raw Responses creator when HTTP headers are available.
+
+    The parsed OpenAI response does not expose Orq's ``x-orq-trace-*`` headers.
+    Restrict this to the SDK's own raw-response wrapper so injected mock or
+    OpenAI-compatible clients keep using their existing ``responses.create``
+    surface unchanged.
+    """
+    raw_client = getattr(client, 'with_raw_response', None)
+    if raw_client is None or not type(raw_client).__module__.startswith('openai.'):
+        return None
+    return raw_client.responses.create
 
 
 class OrqResponsesTarget(AgentTarget):
@@ -156,18 +171,20 @@ class OrqResponsesTarget(AgentTarget):
                 kwargs['tools'] = self.tools
             if self.instructions is not None:
                 kwargs['instructions'] = self.instructions
-            # These extensions are Orq-router-only, so apply them only when the
-            # client actually routes through Orq — matching the gate on the other
-            # invocation paths. All ride in the request body (extra_body): the
-            # pipeline label as `metadata` (tags the trace by run type), `thread`
-            # (multi-turn grouping), and `memory` (scope for memory-tool agents,
-            # else "memory_entity_id_required").
-            if client_routes_through_orq(self._client):
-                body_extra = {**thread_body_param(), **pipeline_metadata_param()}
-                if self.memory_entity_id:
-                    body_extra['memory'] = {'entity_id': self.memory_entity_id}
-                if body_extra:
-                    kwargs['extra_body'] = {**kwargs.get('extra_body', {}), **body_extra}
+            # Metadata is a native Responses field on every endpoint. Threads are
+            # an Orq-router extension, so direct OpenAI-compatible endpoints must
+            # not receive them in ``extra_body``.
+            metadata = pipeline_metadata()
+            if metadata:
+                kwargs['metadata'] = metadata
+            routes_through_orq = client_routes_through_orq(self._client)
+            body_extra = thread_body_param() if routes_through_orq else {}
+            # Agents with memory tools reject the call outright without a memory
+            # scope ("memory_entity_id_required"), so forward ours when set.
+            if routes_through_orq and self.memory_entity_id:
+                body_extra['memory'] = {'entity_id': self.memory_entity_id}
+            if body_extra:
+                kwargs['extra_body'] = {**kwargs.get('extra_body', {}), **body_extra}
 
             async with with_llm_span(
                 model=self.config.model,
@@ -175,14 +192,39 @@ class OrqResponsesTarget(AgentTarget):
                 purpose='target',
                 max_tokens=self.config.max_tokens,
             ) as span:
+                # Propagate W3C trace context so the Orq router nests the
+                # server-side agent trace under this target-call span (same
+                # trace as the pipeline) instead of starting a loose root
+                # trace. Captured inside the span so `traceparent` points at
+                # it. Mirrors the user-simulator / judge / first-message calls.
+                trace_headers = await get_trace_context_headers()
+                if trace_headers:
+                    kwargs['extra_headers'] = {**kwargs.get('extra_headers', {}), **trace_headers}
                 record_openresponses_request(span, kwargs)
-                coro = self._client.responses.create(**kwargs)
-                response = await (asyncio.wait_for(coro, timeout=timeout_s) if timeout_s else coro)
-                # The Orq router returns the trace id in the response body under
-                # ``telemetry.trace_id`` (absent for plain OpenAI responses).
+                raw_create = _raw_responses_create(self._client)
+                if raw_create is not None:
+                    raw_coro = raw_create(**kwargs)
+                    raw_response = await (asyncio.wait_for(raw_coro, timeout=timeout_s) if timeout_s else raw_coro)
+                    response_headers = raw_response.headers
+                    response = raw_response.parse()
+                else:
+                    coro = self._client.responses.create(**kwargs)
+                    response = await (asyncio.wait_for(coro, timeout=timeout_s) if timeout_s else coro)
+                    response_headers = None
+                # Some SDK-compatible clients expose trace IDs on parsed response
+                # telemetry. The Orq SDK raw-response path instead gets the
+                # authoritative IDs from HTTP headers because its parser drops the
+                # nonstandard telemetry field.
                 telemetry = getattr(response, 'telemetry', None)
-                trace_id = getattr(telemetry, 'trace_id', None)
-                span_id = getattr(telemetry, 'span_id', None)
+                trace_id = (
+                    telemetry.get('trace_id') if isinstance(telemetry, dict) else getattr(telemetry, 'trace_id', None)
+                )
+                span_id = (
+                    telemetry.get('span_id') if isinstance(telemetry, dict) else getattr(telemetry, 'span_id', None)
+                )
+                if response_headers is not None:
+                    trace_id = response_headers.get('x-orq-trace-id') or trace_id
+                    span_id = response_headers.get('x-orq-trace-span-id') or span_id
                 record_openresponses_response(span, response)
                 if span is not None and trace_id:
                     span.set_attribute('orq.trace_id', trace_id)

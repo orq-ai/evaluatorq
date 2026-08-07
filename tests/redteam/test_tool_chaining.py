@@ -27,6 +27,7 @@ from evaluatorq.redteam.adaptive.tool_chaining import (
     _DecompositionSchema,
     format_plan_for_prompt,
 )
+from evaluatorq.common.thread_context import evaluatorq_pipeline, evaluatorq_run_id
 from evaluatorq.redteam.contracts import AgentContext, ToolInfo
 
 # ---------------------------------------------------------------------------
@@ -123,6 +124,25 @@ class TestToolChainingPlanner:
             objective="x", agent_name="Bot", agent_description="d", available_tools=["first", "second", "third"]
         )
         assert [s.tool_name for s in result.steps] == ["third", "first", "second"]
+
+    @pytest.mark.asyncio
+    async def test_decompose_sends_native_metadata_and_preserves_router_extra_body(self) -> None:
+        parse = AsyncMock(return_value=_parsed_response(_schema()))
+        client = _mock_client(parse=parse)
+        client.base_url = "https://my.orq.ai/v3/router"
+        planner = ToolChainingPlanner(client=client, model="gpt-4.1")
+
+        with evaluatorq_pipeline('red_teaming'), evaluatorq_run_id('tool-chain-run'):
+            await planner.decompose("exfiltrate user data", "CustomerBot", "desc", ["lookup_tool"])
+
+        _, kwargs = parse.call_args
+        assert kwargs['metadata'] == {
+            'evaluatorq_pipeline': 'red_teaming',
+            'evaluatorq_run_id': 'tool-chain-run',
+        }
+        assert kwargs['extra_body'] == {
+            'retry': {'count': 3, 'on_codes': [429, 500, 502, 503, 504]}
+        }
 
     @pytest.mark.asyncio
     async def test_decompose_raises_when_parsed_none(self) -> None:
@@ -336,7 +356,7 @@ def _noop_span_ctx(*a: Any, **k: Any):
 
 class TestRunAttackTokenFolding:
     @pytest.mark.asyncio
-    @patch("evaluatorq.redteam.adaptive.orchestrator.record_llm_response")
+    @patch("evaluatorq.common.llm_call.record_llm_response")
     @patch("evaluatorq.redteam.adaptive.orchestrator.with_llm_span", side_effect=_noop_span_ctx)
     @patch("evaluatorq.redteam.adaptive.orchestrator.with_redteam_span", side_effect=_noop_span_ctx)
     async def test_planner_call_counted_in_adversarial_usage(self, _rs: Any, _ls: Any, _rl: Any) -> None:
