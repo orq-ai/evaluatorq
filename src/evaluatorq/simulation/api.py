@@ -3,7 +3,7 @@
 `simulate()` and `generate_and_simulate()` route execution through the
 `evaluatorq()` framework so they inherit auto-upload, OTel tracing, results
 display, CI gating, and dataset-id support (RES-594 / RES-598). They run
-inside an ``orq.simulation.pipeline`` span and accept the unified
+inside an ``Orq Agent Simulation`` span and accept the unified
 ``AgentTarget`` target shape introduced by RES-808.
 """
 
@@ -340,7 +340,7 @@ async def _simulate_run(
 
     try:
         async with with_simulation_span(
-            'orq.simulation.pipeline',
+            'Orq Agent Simulation',
             {
                 'orq.simulation.evaluation_name': evaluation_name,
                 # max_turns is None until _simulate_core resolves it (an explicit
@@ -631,7 +631,7 @@ async def _generate_and_simulate_run(
 
     try:
         async with with_simulation_span(
-            'orq.simulation.pipeline',
+            'Orq Agent Simulation',
             {
                 'orq.simulation.evaluation_name': evaluation_name,
                 'orq.simulation.mode': 'generate_and_simulate',
@@ -1094,7 +1094,7 @@ async def _simulate_core(
     manifest_writer: ManifestWriter | None = None,
     post_run: RunPostProcessor | None = None,
 ) -> SimulationRun:
-    """Core simulation logic (runs inside the orq.simulation.pipeline span).
+    """Core simulation logic (runs inside the Orq Agent Simulation span).
 
     Resolves the target (callable, ``AgentTarget``, or ``"agent:"``/``"deployment:"`` string),
     resolves/generates the datapoints, then drives the run-level lifecycle

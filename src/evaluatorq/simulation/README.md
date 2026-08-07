@@ -194,7 +194,7 @@ eq sim simulate --input dp.jsonl --target agent:my-agent
 
 ## Tracing & PII
 
-Runs emit OTel spans under `orq.simulation.pipeline` (auto-visible in orq.ai when
+Runs emit OTel spans under `Orq Agent Simulation` (auto-visible in orq.ai when
 `ORQ_API_KEY` is set). Two shared env vars control message capture, identical to
 red teaming:
 

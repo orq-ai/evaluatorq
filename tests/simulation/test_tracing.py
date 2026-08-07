@@ -524,13 +524,13 @@ async def test_record_llm_response_chat_completions(
 async def test_nested_spans_share_trace(span_collector: _CollectingExporter):
     from evaluatorq.simulation.tracing import with_llm_span, with_simulation_span
 
-    async with with_simulation_span('orq.simulation.pipeline', None):
+    async with with_simulation_span('Orq Agent Simulation', None):
         async with with_simulation_span('orq.simulation.run', None):
             async with with_simulation_span('orq.simulation.turn', None):
                 async with with_llm_span(model='openai/gpt-4o', purpose='target'):
                     pass
 
-    pipeline = _find(span_collector, 'orq.simulation.pipeline')
+    pipeline = _find(span_collector, 'Orq Agent Simulation')
     run = _find(span_collector, 'orq.simulation.run')
     turn = _find(span_collector, 'orq.simulation.turn')
     llm = _find(span_collector, 'chat openai/gpt-4o')
@@ -635,7 +635,7 @@ async def test_end_to_end_simulation_produces_full_span_tree(
     # Wrap the run() in an outer pipeline span so the smoke output mirrors
     # what simulate() would produce.
     async with with_simulation_span(
-        'orq.simulation.pipeline',
+        'Orq Agent Simulation',
         {'orq.simulation.evaluation_name': 'smoke', 'orq.simulation.max_turns': 3},
     ):
         result = await runner.run(datapoint=dp)
@@ -646,7 +646,7 @@ async def test_end_to_end_simulation_produces_full_span_tree(
 
     names = [s.name for s in span_collector.spans]
     # Required spans
-    assert 'orq.simulation.pipeline' in names
+    assert 'Orq Agent Simulation' in names
     assert 'orq.simulation.run' in names
     assert names.count('orq.simulation.turn') == 2
     assert names.count('orq.simulation.target_call') == 2
@@ -656,7 +656,7 @@ async def test_end_to_end_simulation_produces_full_span_tree(
     assert names.count('orq.simulation.user_simulator_call') == 1
 
     # Hierarchy: each turn span is a child of run, which is a child of pipeline
-    pipeline = _find(span_collector, 'orq.simulation.pipeline')
+    pipeline = _find(span_collector, 'Orq Agent Simulation')
     run = _find(span_collector, 'orq.simulation.run')
     assert run.parent.span_id == pipeline.context.span_id  # pyright: ignore[reportOptionalMemberAccess]
 
@@ -898,11 +898,11 @@ async def test_generated_datapoint_first_message_has_simulation_span(
     scenario = Scenario(name='Billing', goal='Fix a billing issue')
     gen = FirstMessageGenerator(model='test', client=fake_client)
 
-    async with with_simulation_span('orq.simulation.pipeline', None):
+    async with with_simulation_span('Orq Agent Simulation', None):
         datapoint = await _generate_single_datapoint(gen, persona, scenario)
 
     assert datapoint.first_message == 'Hello there'
-    pipeline = _find(span_collector, 'orq.simulation.pipeline')
+    pipeline = _find(span_collector, 'Orq Agent Simulation')
     first_msg = _find(span_collector, 'orq.simulation.first_message_generation')
     llm = _find(span_collector, 'chat test')
     assert first_msg.parent.span_id == pipeline.context.span_id  # pyright: ignore[reportOptionalMemberAccess]
@@ -967,7 +967,7 @@ async def test_run_span_records_error_metadata_and_usage(
         first_message='Hello',
     )
 
-    async with with_simulation_span('orq.simulation.pipeline', None):
+    async with with_simulation_span('Orq Agent Simulation', None):
         result = await runner.run(datapoint=dp)
 
     assert result.terminated_by == TerminatedBy.error
@@ -1082,7 +1082,7 @@ async def test_target_agent_usage_aggregated_into_run_result(
         first_message='Hi',
     )
 
-    async with with_simulation_span('orq.simulation.pipeline', None):
+    async with with_simulation_span('Orq Agent Simulation', None):
         result = await runner.run(datapoint=dp)
 
     assert target.call_count >= 1
@@ -1177,7 +1177,7 @@ async def test_run_span_records_cancellation_metadata_and_usage(
     )
 
     with pytest.raises(asyncio.CancelledError):
-        async with with_simulation_span('orq.simulation.pipeline', None):
+        async with with_simulation_span('Orq Agent Simulation', None):
             await runner.run(datapoint=dp)
 
     run = _find(span_collector, 'orq.simulation.run')
@@ -1203,10 +1203,10 @@ async def test_concurrent_runs_share_pipeline_parent(
         async with with_simulation_span(name, None):
             await asyncio.sleep(0)
 
-    async with with_simulation_span('orq.simulation.pipeline', None):
+    async with with_simulation_span('Orq Agent Simulation', None):
         await asyncio.gather(_sub('orq.simulation.run'), _sub('orq.simulation.run'))
 
-    pipeline = _find(span_collector, 'orq.simulation.pipeline')
+    pipeline = _find(span_collector, 'Orq Agent Simulation')
     runs = [s for s in span_collector.spans if s.name == 'orq.simulation.run']
     assert len(runs) == 2
     for r in runs:

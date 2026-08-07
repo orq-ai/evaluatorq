@@ -196,7 +196,7 @@ async def test_simulate_stamps_run_id_on_root_span(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Drive the real ``simulate()`` end to end (inner core mocked out so no
-    actual simulation runs) and confirm the ``orq.simulation.pipeline`` root
+    actual simulation runs) and confirm the ``Orq Agent Simulation`` root
     span comes back carrying a non-empty ``orq.evaluatorq_run_id``."""
     from evaluatorq.simulation import api
     from evaluatorq.simulation.api import simulate
@@ -216,7 +216,7 @@ async def test_simulate_stamps_run_id_on_root_span(
     )
 
     assert results == []
-    span = _find(span_collector, 'orq.simulation.pipeline')
+    span = _find(span_collector, 'Orq Agent Simulation')
     run_id = _attrs(span).get('orq.evaluatorq_run_id')
     assert run_id, f'expected a non-empty run id on the root span, got {run_id!r}'
 
@@ -255,7 +255,7 @@ async def test_post_run_processor_stays_under_pipeline_root(
         post_run=post_run,
     )
 
-    root = _find(span_collector, 'orq.simulation.pipeline')
+    root = _find(span_collector, 'Orq Agent Simulation')
     recommendation = _find(span_collector, 'chat recommendation-model')
     assert recommendation.parent is not None
     assert recommendation.parent.span_id == root.context.span_id
@@ -286,7 +286,7 @@ async def test_generate_and_simulate_stamps_run_id_on_root_span(
     )
 
     assert results == []
-    span = _find(span_collector, 'orq.simulation.pipeline')
+    span = _find(span_collector, 'Orq Agent Simulation')
     run_id = _attrs(span).get('orq.evaluatorq_run_id')
     assert run_id, f'expected a non-empty run id on the root span, got {run_id!r}'
 
