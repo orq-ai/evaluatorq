@@ -207,24 +207,16 @@ class OrqResponsesTarget(AgentTarget):
                         asyncio.wait_for(raw_coro, timeout=timeout_s) if timeout_s else raw_coro
                     )
                     response_headers = raw_response.headers
-                    try:
-                        raw_payload = raw_response.http_response.json()
-                    except (AttributeError, TypeError, ValueError):
-                        raw_payload = None
-                    raw_telemetry = raw_payload.get('telemetry') if isinstance(raw_payload, dict) else None
                     response = raw_response.parse()
                 else:
                     coro = self._client.responses.create(**kwargs)
                     response = await (asyncio.wait_for(coro, timeout=timeout_s) if timeout_s else coro)
                     response_headers = None
-                    raw_telemetry = None
-                # The Orq router returns the trace id in the response body under
-                # ``telemetry.trace_id`` (absent for plain OpenAI responses). The
-                # router also returns the same IDs in HTTP headers; those are the
-                # reliable fallback because the parsed Responses object drops them.
+                # Some SDK-compatible clients expose trace IDs on parsed response
+                # telemetry. The Orq SDK raw-response path instead gets the
+                # authoritative IDs from HTTP headers because its parser drops the
+                # nonstandard telemetry field.
                 telemetry = getattr(response, 'telemetry', None)
-                if raw_telemetry is not None:
-                    telemetry = raw_telemetry
                 trace_id = (
                     telemetry.get('trace_id') if isinstance(telemetry, dict) else getattr(telemetry, 'trace_id', None)
                 )

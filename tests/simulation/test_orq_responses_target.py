@@ -108,7 +108,6 @@ def _responses_http_response(
     status_code: int = 200,
     text: str = "from headers",
     headers: dict[str, str] | None = None,
-    telemetry: dict[str, str] | None = None,
 ) -> httpx.Response:
     payload: dict[str, Any] = {
         "id": "resp-header",
@@ -127,8 +126,6 @@ def _responses_http_response(
         ],
         "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
     }
-    if telemetry is not None:
-        payload["telemetry"] = telemetry
     if status_code != 200:
         payload = {"error": {"message": "rate limited", "type": "rate_limit_error"}}
     return httpx.Response(
@@ -200,22 +197,6 @@ class TestOrqResponsesTargetRespond:
         assert result.text == "from headers"
         assert result.trace_id == "header-trace-123"
         assert result.span_id == "header-span-456"
-
-    @pytest.mark.asyncio
-    async def test_respond_captures_trace_ids_from_raw_body_telemetry(self):
-        def handler(request: httpx.Request) -> httpx.Response:
-            return _responses_http_response(
-                telemetry={"trace_id": "body-trace-123", "span_id": "body-span-456"}
-            )
-
-        client = _make_sdk_client(handler)
-        try:
-            result = await _make_target(client=client).respond(_make_messages())
-        finally:
-            await client.close()
-
-        assert result.trace_id == "body-trace-123"
-        assert result.span_id == "body-span-456"
 
     @pytest.mark.asyncio
     async def test_respond_sends_thread_param_when_conversation_active(self):
