@@ -443,12 +443,11 @@ class MultiTurnOrchestrator:
             llm_timeout_s = self._cfg.attacker.timeout_ms / 1000.0
             response = await asyncio.wait_for(
                 self.llm_client.chat.completions.create(
-                    model=self.model,
-                    messages=llm_messages,
-                    temperature=self._cfg.attacker.temperature,
-                    max_completion_tokens=self._cfg.attacker.max_tokens,
-                    extra_body=self._cfg.retry_extra_body(self.llm_client),
-                    **self._cfg.attacker.extra_kwargs,
+                    **self._cfg.attacker.completion_params(
+                        model=self.model,
+                        messages=llm_messages,
+                        extra_body=self._cfg.retry_extra_body(self.llm_client),
+                    )
                 ),
                 timeout=llm_timeout_s,
             )
@@ -683,12 +682,11 @@ class MultiTurnOrchestrator:
                                 set_span_attrs(adv_span, {'orq.redteam.adversarial_retry': attempt})
                             response = await asyncio.wait_for(
                                 self.llm_client.chat.completions.create(
-                                    model=self.model,
-                                    messages=_messages,
-                                    temperature=self._cfg.attacker.temperature,
-                                    max_completion_tokens=self._cfg.attacker.max_tokens,
-                                    extra_body=self._cfg.retry_extra_body(self.llm_client),
-                                    **self._cfg.attacker.extra_kwargs,
+                                    **self._cfg.attacker.completion_params(
+                                        model=self.model,
+                                        messages=_messages,
+                                        extra_body=self._cfg.retry_extra_body(self.llm_client),
+                                    )
                                 ),
                                 timeout=_timeout,
                             )

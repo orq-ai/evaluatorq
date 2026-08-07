@@ -240,13 +240,12 @@ async def _infer_resource_capabilities(
             attributes={'orq.redteam.llm_purpose': 'infer_resources'},
         ) as res_span:
             response = await llm_client.chat.completions.parse(
-                model=model,
-                messages=infer_messages,
-                response_format=ResourceCapabilityInference,
-                temperature=cfg.attacker.temperature,
-                max_completion_tokens=cfg.attacker.max_tokens,
-                extra_body=cfg.retry_extra_body(llm_client),
-                **cfg.attacker.extra_kwargs,
+                **cfg.attacker.completion_params(
+                    model=model,
+                    messages=infer_messages,
+                    response_format=ResourceCapabilityInference,
+                    extra_body=cfg.retry_extra_body(llm_client),
+                )
             )
             parsed = response.choices[0].message.parsed
             record_llm_response(
@@ -307,13 +306,12 @@ async def _classify_tools(
             },
         ) as cls_span:
             response = await llm_client.chat.completions.parse(
-                model=model,
-                messages=classify_messages,
-                response_format=ToolCapabilitiesResponse,
-                temperature=cfg.attacker.temperature,
-                max_completion_tokens=cfg.attacker.max_tokens,
-                extra_body=cfg.retry_extra_body(llm_client),
-                **cfg.attacker.extra_kwargs,
+                **cfg.attacker.completion_params(
+                    model=model,
+                    messages=classify_messages,
+                    response_format=ToolCapabilitiesResponse,
+                    extra_body=cfg.retry_extra_body(llm_client),
+                )
             )
             record_llm_response(
                 cls_span,

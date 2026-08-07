@@ -199,13 +199,12 @@ async def _call_llm_for_objectives_single(
             if attempt > 0:
                 logger.debug(f'Regenerating objectives for {log_label} (attempt {attempt + 1})')
             return await llm_client.chat.completions.parse(
-                model=model,
-                messages=gen_messages,
-                response_format=GeneratedObjectives,
-                temperature=cfg.attacker.temperature,
-                max_completion_tokens=cfg.attacker.max_tokens,
-                extra_body=cfg.retry_extra_body(llm_client),
-                **cfg.attacker.extra_kwargs,
+                **cfg.attacker.completion_params(
+                    model=model,
+                    messages=gen_messages,
+                    response_format=GeneratedObjectives,
+                    extra_body=cfg.retry_extra_body(llm_client),
+                )
             )
 
         async with with_llm_span(
