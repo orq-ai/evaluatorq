@@ -9,6 +9,7 @@ orq.span_type evaluator-span attributes emitted through process_evaluator.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from typing import Any
 
@@ -74,7 +75,7 @@ async def test_goal_achieved_scorer_carries_reason_and_pass() -> None:
     dp = DataPoint(inputs={})
     evaluator = _adapt_simulation_scorer('goal_achieved', get_evaluator('goal_achieved'), {id(dp): result})
 
-    assert evaluator.get('evaluator_type') == 'code_eval'
+    assert evaluator.get('evaluator_type') == 'python_eval'
     score = await evaluator['scorer']({'data': dp, 'output': {}})
     assert isinstance(score, EvaluationResult)
 
@@ -123,11 +124,11 @@ async def test_evaluation_span_emits_evaluator_attributes(span_collector: _Expor
     assert attrs['gen_ai.evaluation.name'] == 'goal_achieved'
     assert attrs['gen_ai.evaluation.score.value'] == 1.0
     assert attrs['gen_ai.evaluation.explanation'] == 'goal met'
-    assert attrs['orq.evaluator.type'] == 'code_eval'
-    assert attrs['orq.evaluator.passed'] is True
-    assert attrs['orq.evaluator.explanation'] == 'goal met'
-    assert attrs['orq.evaluator.score.value'] == 1.0
-    assert attrs['output'] == 'goal met'  # explanation in the Output panel
+    assert attrs['gen_ai.evaluation.passed'] is True
+    assert attrs['orq.evaluator.type'] == 'python_eval'
+    assert attrs['orq.evaluator.output_type'] == 'number'
+    # Verdict payload rendered by the evaluator span's Output panel.
+    assert json.loads(attrs['orq.evaluation.output'])['reason'] == 'goal met'
     # Legacy attributes preserved for back-compat.
     assert attrs['orq.explanation'] == 'goal met'
     assert attrs['orq.pass'] is True

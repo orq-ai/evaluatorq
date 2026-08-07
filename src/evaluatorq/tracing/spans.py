@@ -179,9 +179,11 @@ def set_evaluation_attributes(
         explanation: Optional explanation of the score
         pass_: Optional pass/fail status
         evaluator_name: Name of the evaluator (used for the gen_ai.evaluation.* block)
-        evaluator_type: Opt-in evaluator kind (e.g. "code_eval"). When provided,
-            the flat gen_ai.evaluation.* / orq.evaluator.* attributes the Orq trace
-            UI classifies + renders evaluator spans from are additionally emitted.
+        evaluator_type: Opt-in evaluator kind, matching Orq's EvaluatorType enum
+            (e.g. "llm_eval", "python_eval"). When provided, the flat
+            gen_ai.evaluation.* / orq.evaluator.* attributes plus the
+            orq.evaluation.output verdict payload the Orq trace UI classifies +
+            renders evaluator spans from are additionally emitted.
             When ``None`` (the default), only the legacy orq.score/explanation/pass
             attributes are written, so red-team spans are unchanged.
     """
@@ -194,6 +196,7 @@ def set_evaluation_attributes(
     # explanation here or a long one silently vanishes from the trace UI. The
     # full, untruncated text still reaches the uploaded experiment via the
     # EvaluationResult (this only touches the span mirror).
+    full_explanation = explanation
     if explanation is not None and len(explanation) > _SPAN_TEXT_MAX_CHARS:
         explanation = explanation[: _SPAN_TEXT_MAX_CHARS - 1] + '…'
 
@@ -221,21 +224,39 @@ def set_evaluation_attributes(
     if evaluator_name is not None:
         span.set_attribute('gen_ai.evaluation.name', evaluator_name)
         span.set_attribute('orq.evaluator.key', evaluator_name)
-    # bool is an int subclass — fine to cast either to a numeric score.
-    if isinstance(score, (int, float, bool)):
-        span.set_attribute('gen_ai.evaluation.score.value', float(score))
-        span.set_attribute('orq.evaluator.score.value', float(score))
+
+    # orq.evaluator.output_type drives how the UI formats the score (see
+    # deriveEvaluatorResult in orquesta-web). bool is an int subclass, so it
+    # must be tested before the numeric branch.
+    if isinstance(score, bool):
+        output_type, score_value = 'boolean', float(score)
+    elif isinstance(score, (int, float)):
+        output_type, score_value = 'number', float(score)
+    else:
+        output_type, score_value = 'string', None
+    span.set_attribute('orq.evaluator.output_type', output_type)
+    if score_value is not None:
+        span.set_attribute('gen_ai.evaluation.score.value', score_value)
     if explanation is not None:
         span.set_attribute('gen_ai.evaluation.explanation', explanation)
-        span.set_attribute('orq.evaluator.explanation', explanation)
-        # Also surface the reasoning in the span's generic Output panel — this
-        # renders today with no orquesta-web changes, unlike orq.evaluator.explanation.
-        span.set_attribute('output', explanation)
     if pass_ is not None:
-        label = str(pass_).lower()
+        span.set_attribute('gen_ai.evaluation.passed', pass_)
+        # Orq's own graders emit pass/fail here, not true/false.
+        label = 'pass' if pass_ else 'fail'
         span.set_attribute('gen_ai.evaluation.score.label', label)
         span.set_attribute('orq.evaluator.score.label', label)
-        span.set_attribute('orq.evaluator.passed', pass_)
+
+    # The evaluator span's "Output" panel renders orq.evaluation.output verbatim.
+    # Ingestion routes this key to blob storage rather than the 512-char-capped
+    # typed attribute maps, so the untruncated explanation belongs here.
+    verdict: dict[str, Any] = {
+        'passed': pass_,
+        'value': score.model_dump() if isinstance(score, EvaluationResultCell) else score,
+        'type': evaluator_type,
+    }
+    if full_explanation is not None:
+        verdict['reason'] = full_explanation
+    span.set_attribute('orq.evaluation.output', json.dumps(verdict, default=str))
 
 
 def set_job_name_attribute(span: Span | None, job_name: str) -> None:

@@ -1750,7 +1750,8 @@ def _adapt_simulation_scorer(
 
     # evaluator_type marks these as code scorers so the tracing layer emits the
     # gen_ai.evaluation.* evaluator-span attributes (opt-in; see set_evaluation_attributes).
-    return {'name': name, 'scorer': scorer, 'evaluator_type': 'code_eval'}
+    # 'python_eval' is Orq's EvaluatorType value for code scorers.
+    return {'name': name, 'scorer': scorer, 'evaluator_type': 'python_eval'}
 
 
 def _sim_evaluation_details(name: str, result: SimulationResult) -> tuple[str | None, bool | None]:

@@ -427,37 +427,56 @@ def test_set_evaluation_attributes_emits_evaluator_span_when_typed() -> None:
         explanation='why',
         pass_=True,
         evaluator_name='goal_achieved',
-        evaluator_type='code_eval',
+        evaluator_type='python_eval',
     )
     attrs = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
     assert attrs['orq.span_type'] == 'span.evaluator'
     assert attrs['gen_ai.evaluation.name'] == 'goal_achieved'
     assert attrs['gen_ai.evaluation.score.value'] == 1.0
-    assert attrs['gen_ai.evaluation.score.label'] == 'true'
+    assert attrs['gen_ai.evaluation.score.label'] == 'pass'
     assert attrs['gen_ai.evaluation.explanation'] == 'why'
+    assert attrs['gen_ai.evaluation.passed'] is True
     assert attrs['orq.evaluator.key'] == 'goal_achieved'
-    assert attrs['orq.evaluator.type'] == 'code_eval'
-    assert attrs['orq.evaluator.passed'] is True
-    # orq.evaluator.* twins (the namespace the trace-detail UI reads).
-    assert attrs['orq.evaluator.score.value'] == 1.0
-    assert attrs['orq.evaluator.score.label'] == 'true'
-    assert attrs['orq.evaluator.explanation'] == 'why'
-    assert attrs['output'] == 'why'  # surfaced in the span Output panel
+    assert attrs['orq.evaluator.type'] == 'python_eval'
+    assert attrs['orq.evaluator.output_type'] == 'number'
+    assert attrs['orq.evaluator.score.label'] == 'pass'
+    # Verdict payload — what the evaluator span's Output panel renders.
+    assert json.loads(attrs['orq.evaluation.output']) == {
+        'passed': True,
+        'value': 1.0,
+        'type': 'python_eval',
+        'reason': 'why',
+    }
+
+
+def test_set_evaluation_attributes_output_type_boolean() -> None:
+    """A bool score must report output_type 'boolean', not 'number' — bool is an
+    int subclass, so the numeric branch would otherwise swallow it."""
+    from unittest.mock import MagicMock
+    from evaluatorq.tracing.spans import set_evaluation_attributes
+
+    span = MagicMock()
+    set_evaluation_attributes(span, True, pass_=True, evaluator_name='e', evaluator_type='python_eval')
+    attrs = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
+    assert attrs['orq.evaluator.output_type'] == 'boolean'
+    assert attrs['gen_ai.evaluation.score.value'] == 1.0
 
 
 def test_set_evaluation_attributes_caps_long_explanation() -> None:
     """Explanations over 512 chars must be capped on the span — Orq's ingestion
-    drops (not truncates) dynamic string attributes longer than that."""
+    drops (not truncates) dynamic string attributes longer than that. The
+    orq.evaluation.output payload is blob-stored, so it keeps the full text."""
     from unittest.mock import MagicMock
     from evaluatorq.tracing.spans import set_evaluation_attributes
 
     long = 'x' * 600
     span = MagicMock()
-    set_evaluation_attributes(span, 0.5, explanation=long, evaluator_name='e', evaluator_type='code_eval')
+    set_evaluation_attributes(span, 0.5, explanation=long, evaluator_name='e', evaluator_type='python_eval')
     attrs = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
-    for key in ('orq.explanation', 'gen_ai.evaluation.explanation', 'orq.evaluator.explanation', 'output'):
+    for key in ('orq.explanation', 'gen_ai.evaluation.explanation'):
         assert len(attrs[key]) <= 512, key
         assert attrs[key].endswith('…')
+    assert json.loads(attrs['orq.evaluation.output'])['reason'] == long
 
 
 # ---------------------------------------------------------------------------
