@@ -13,6 +13,7 @@ from unittest.mock import patch
 import pytest
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
+from opentelemetry.trace import StatusCode
 
 from evaluatorq.common.jury import Prediction, VerdictKind, run_jury
 from evaluatorq.contracts import TokenUsage
@@ -167,6 +168,70 @@ async def test_inconclusive_jury_marks_span(span_collector) -> None:
     assert jury['jury.inconclusive'] is True
     assert jury['jury.judges_succeeded'] == 0
     assert 'jury.raw_agreement' not in jury  # None is not stamped
+
+
+@pytest.mark.asyncio
+async def test_failed_judge_span_is_error_status(span_collector) -> None:
+    exporter = span_collector
+    judge_fn = _make_judge_fn({'gpt-b': 'yes'}, fail={'gpt-a'})
+
+    await run_jury(judge_fn=judge_fn, panel=['gpt-a', 'gpt-b'])
+
+    spans = {_attrs(s)['judge.model']: s for s in _by_name(exporter, 'llm.judge')}
+    failed = spans['gpt-a']
+    assert failed.status.status_code is StatusCode.ERROR
+    assert 'gpt-a is down' in _attrs(failed)['judge.error']
+    assert _attrs(failed)['judge.repetitions_failed'] == 1
+    assert spans['gpt-b'].status.status_code is StatusCode.OK
+
+
+@pytest.mark.asyncio
+async def test_propagated_error_span_keeps_judge_identity(span_collector) -> None:
+    exporter = span_collector
+    judge_fn = _make_judge_fn({}, fail={'gpt-a'})
+
+    with pytest.raises(RuntimeError):
+        await run_jury(judge_fn=judge_fn, panel=['gpt-a'], propagate_errors=True)
+
+    judge = _by_name(exporter, 'llm.judge')[0]
+    assert _attrs(judge)['judge.model'] == 'gpt-a'
+    assert _attrs(judge)['judge.replacement'] is False
+    assert judge.status.status_code is StatusCode.ERROR
+
+
+@pytest.mark.asyncio
+async def test_judge_span_records_full_token_usage(span_collector) -> None:
+    exporter = span_collector
+
+    async def judge_fn(model: str) -> Prediction:
+        return Prediction(
+            value='yes',
+            token_usage=TokenUsage(
+                input_tokens=10, output_tokens=4, cached_tokens=6, reasoning_tokens=3, calls=1, cost_usd=0.5
+            ),
+        )
+
+    await run_jury(judge_fn=judge_fn, panel=['gpt-a'], repetitions=2)
+
+    judge = _attrs(_by_name(exporter, 'llm.judge')[0])
+    # Both repetitions roll up onto the single per-judge span.
+    assert judge['calls'] == 2
+    assert judge['gen_ai.usage.cache_read.input_tokens'] == 12
+    assert judge['gen_ai.usage.completion_tokens_details.reasoning_tokens'] == 6
+    assert judge['judge.cost'] == 1.0
+    assert judge['total_tokens'] == 28
+
+
+@pytest.mark.asyncio
+async def test_jury_span_records_failure_aggregates(span_collector) -> None:
+    exporter = span_collector
+    judge_fn = _make_judge_fn({'gpt-b': 'yes', 'stand-in': 'yes'}, fail={'gpt-a'})
+
+    await run_jury(judge_fn=judge_fn, panel=['gpt-a', 'gpt-b'], replacement_judges=['stand-in'])
+
+    jury = _attrs(_by_name(exporter, 'llm.jury')[0])
+    assert jury['jury.judges_failed'] == 1
+    assert jury['jury.replacements_used'] == 1
 
 
 @pytest.mark.asyncio

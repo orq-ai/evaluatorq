@@ -222,6 +222,21 @@ def set_span_attrs(span: Span | None, attrs: AttrMap) -> None:
             span.set_attribute(key, value)
 
 
+def set_span_error(span: Span | None, message: str) -> None:
+    """Mark a span as failed without raising. Safe no-op when span is None.
+
+    For swallowed failures — the code recovered, but the span should not read
+    as OK in a trace viewer.
+    """
+    if span is None:
+        return
+    try:
+        from opentelemetry.trace import Status, StatusCode
+    except ImportError:  # pragma: no cover - OTel always present when a span exists
+        return
+    span.set_status(Status(StatusCode.ERROR, message))
+
+
 def record_token_usage(
     span: Span | None,
     *,
@@ -505,7 +520,10 @@ async def with_span(  # noqa: RUF029
     ) as span:
         try:
             yield span
-            span.set_status(Status(StatusCode.OK))
+            # Don't clobber an ERROR the body set deliberately (set_span_error):
+            # OK is final in the OTel spec and would hide a swallowed failure.
+            if getattr(span, 'status', None) is None or span.status.status_code is not StatusCode.ERROR:
+                span.set_status(Status(StatusCode.OK))
         except BaseException as e:
             span.set_attribute('error.type', type(e).__name__)
             span.set_status(Status(StatusCode.ERROR, str(e)))

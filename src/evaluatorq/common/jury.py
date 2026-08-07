@@ -12,7 +12,13 @@ from typing import TYPE_CHECKING, Literal, cast
 from loguru import logger
 from pydantic import BaseModel
 
-from evaluatorq.common.tracing import current_otel_context, record_token_usage, set_span_attrs, with_span
+from evaluatorq.common.tracing import (
+    current_otel_context,
+    record_token_usage,
+    set_span_attrs,
+    set_span_error,
+    with_span,
+)
 from evaluatorq.contracts import JuryResult, JuryStats, JuryVote, StrEnum, TokenUsage
 
 if TYPE_CHECKING:
@@ -275,6 +281,9 @@ async def _judge_vote(
     tracing is disabled; the vote/usages are unchanged either way."""
     start = time.monotonic()
     async with with_span('llm.judge', parent_context=parent_context) as span:
+        # Identity up front so a propagate_errors=True abort still leaves a span
+        # that says which judge died.
+        set_span_attrs(span, {'judge.name': model, 'judge.model': model, 'judge.replacement': replacement})
         vote, usages = await _compute_judge_vote(
             model=model,
             judge_fn=judge_fn,
@@ -311,8 +320,13 @@ def _record_judge_span(span: Span | None, vote: JuryVote, usages: list[TokenUsag
             'judge.abstained': vote.abstained,
             'judge.replacement': vote.replacement,
             'judge.latency_ms': round(latency_ms, 3),
+            'judge.error': vote.error,
+            'judge.repetitions_failed': vote.repetitions_failed,
         },
     )
+    if not vote.success:
+        # The failure is swallowed (the panel carries on), but the span must not read as OK.
+        set_span_error(span, vote.error or f'judge {vote.model} produced no usable verdict')
     if total_usage is not None:
         record_token_usage(
             span,
@@ -321,6 +335,9 @@ def _record_judge_span(span: Span | None, vote: JuryVote, usages: list[TokenUsag
             # A summed TokenUsage keeps the unset upstream total (0); None lets
             # record_token_usage derive it from prompt + completion.
             total_tokens=total_usage.total_tokens or None,
+            calls=total_usage.calls,
+            cached_tokens=total_usage.cached_tokens or None,
+            reasoning_tokens=total_usage.reasoning_tokens or None,
         )
         if total_usage.cost_usd is not None:
             set_span_attrs(span, {'judge.cost': total_usage.cost_usd})
@@ -478,6 +495,8 @@ async def run_jury(
                 'jury.raw_agreement': j.raw_agreement,
                 'jury.judges_succeeded': j.judges_succeeded,
                 'jury.judges_configured': j.judges_configured,
+                'jury.judges_failed': j.judges_failed,
+                'jury.replacements_used': j.replacements_used,
                 'jury.tie': j.tie,
                 'jury.inconclusive': j.inconclusive,
             },
