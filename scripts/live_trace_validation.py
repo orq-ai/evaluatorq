@@ -1,29 +1,27 @@
 #!/usr/bin/env python3
-"""Repeatable live trace checks against existing agents in the research workspace.
+"""Repeatable live trace checks against existing hosted agents.
 
 The defaults intentionally use small, bounded runs:
 
 * agent simulation: 3 personas x 3 scenarios, at most 2 turns;
 * red teaming: hybrid mode, up to 3 dynamic + 3 static datapoints, at most 2 turns.
 
-The default research agent (``test-agent``) has no tools and no memory store.
-Override agent keys and models with environment variables when the research
-workspace changes. Credentials are read from ``ORQ_API_KEY`` and
-``ORQ_BASE_URL``.
+Agent keys are supplied with ``--sim-agent`` / ``--redteam-agent`` or the
+``EVALUATORQ_SIM_AGENT_KEY`` / ``EVALUATORQ_REDTEAM_AGENT_KEY`` environment
+variables. Credentials are read from ``ORQ_API_KEY`` and ``ORQ_BASE_URL``.
 
 Examples::
 
-    # Use the research profile's key without putting it in shell history.
-    env ORQ_API_KEY="$(orqi profile show-key research)" \
-        ORQ_BASE_URL=https://my.orq.ai \
-        uv run python scripts/research_trace_validation.py both
+    env ORQ_API_KEY=... \
+        EVALUATORQ_SIM_AGENT_KEY=... \
+        EVALUATORQ_REDTEAM_AGENT_KEY=... \
+        uv run python scripts/live_trace_validation.py both
 
-    uv run python scripts/research_trace_validation.py sim
-    uv run python scripts/research_trace_validation.py redteam
+    uv run python scripts/live_trace_validation.py sim --sim-agent my-agent
+    uv run python scripts/live_trace_validation.py redteam --redteam-agent my-agent
 
 The script prints the root span name, run-id attribute, and local span count.
-Use ``orqi trace list --profile research`` afterwards to inspect the same runs
-in the Orq trace UI/CLI.
+Use ``orq traces list`` afterwards to inspect the same runs in the Orq CLI.
 """
 
 from __future__ import annotations
@@ -41,8 +39,6 @@ from evaluatorq.redteam import red_team
 from evaluatorq.redteam.contracts import LLMCallConfig, LLMConfig, SaveMode
 from evaluatorq.simulation import generate_and_simulate
 
-SIM_AGENT = 'test-agent'
-REDTEAM_AGENT = 'test-agent'
 SIM_MODEL = 'openai/gpt-5.6-luna'
 REDTEAM_ATTACK_MODEL = 'alibaba/deepseek-v4-flash'
 REDTEAM_EVALUATOR_MODEL = 'openai/gpt-5.6-luna'
@@ -94,6 +90,13 @@ def _env(name: str, default: str) -> str:
     return os.getenv(name, default).strip() or default
 
 
+def _agent_key(env_name: str, argument: str | None) -> str:
+    value = os.getenv(env_name, '').strip() or os.getenv('EVALUATORQ_AGENT_KEY', '').strip() or (argument or '')
+    if not value:
+        raise RuntimeError(f'Supply an agent key with --{env_name.removeprefix("EVALUATORQ_").lower().replace("_key", "")} or {env_name}')
+    return value
+
+
 def _root_spans(tap: _TapProcessor, name: str) -> list[Any]:
     return [span for span in tap.spans if span.name == name and span.parent is None]
 
@@ -121,13 +124,13 @@ def _print_root(root: Any, result_count: int, span_count: int) -> None:
 
 
 async def _run_simulation(args: argparse.Namespace, tap: _TapProcessor) -> None:
-    agent = _env('EVALUATORQ_SIM_AGENT_KEY', args.sim_agent)
+    agent = _agent_key('EVALUATORQ_SIM_AGENT_KEY', args.sim_agent)
     model = _env('EVALUATORQ_SIM_MODEL', args.sim_model)
     results = await generate_and_simulate(
-        evaluation_name='research-trace-validation-simulation',
+        evaluation_name='live-trace-validation-simulation',
         target=f'agent:{agent}',
         agent_description=(
-            'A concise research assistant that answers questions helpfully and '
+            'A concise helpful assistant that answers questions clearly and '
             'does not take external actions.'
         ),
         num_personas=3,
@@ -151,12 +154,12 @@ async def _run_simulation(args: argparse.Namespace, tap: _TapProcessor) -> None:
 
 
 async def _run_redteam(args: argparse.Namespace, tap: _TapProcessor) -> None:
-    agent = _env('EVALUATORQ_REDTEAM_AGENT_KEY', args.redteam_agent)
+    agent = _agent_key('EVALUATORQ_REDTEAM_AGENT_KEY', args.redteam_agent)
     attack_model = _env('EVALUATORQ_REDTEAM_ATTACK_MODEL', args.redteam_attack_model)
     evaluator_model = _env('EVALUATORQ_REDTEAM_EVALUATOR_MODEL', args.redteam_evaluator_model)
     report = await red_team(
         target=f'agent:{agent}',
-        name='research-trace-validation-redteam',
+        name='live-trace-validation-redteam',
         description='Small repeatable hybrid red-team trace validation.',
         mode='hybrid',
         categories=args.redteam_categories,
@@ -221,7 +224,7 @@ async def _run(args: argparse.Namespace) -> int:
         if args.pipeline in {'redteam', 'both'}:
             print(
                 'Running red teaming: hybrid against agent '
-                f'{_env("EVALUATORQ_REDTEAM_AGENT_KEY", args.redteam_agent)!r} ...'
+                f'{_agent_key("EVALUATORQ_REDTEAM_AGENT_KEY", args.redteam_agent)!r} ...'
             )
             await _run_redteam(args, tap)
     except Exception as exc:
@@ -235,8 +238,8 @@ async def _run(args: argparse.Namespace) -> int:
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('pipeline', choices=('sim', 'redteam', 'both'), nargs='?', default='both')
-    parser.add_argument('--sim-agent', default=SIM_AGENT)
-    parser.add_argument('--redteam-agent', default=REDTEAM_AGENT)
+    parser.add_argument('--sim-agent')
+    parser.add_argument('--redteam-agent')
     parser.add_argument('--sim-model', default=SIM_MODEL)
     parser.add_argument('--redteam-attack-model', default=REDTEAM_ATTACK_MODEL)
     parser.add_argument('--redteam-evaluator-model', default=REDTEAM_EVALUATOR_MODEL)
