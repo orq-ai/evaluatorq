@@ -25,15 +25,26 @@ def output_to_text(output: Any) -> str:
             try:
                 return AgentResponse.from_openresponses(output).text
             except Exception as exc:
-                logger.debug('from_openresponses failed, falling back to json: {}', exc)
+                logger.warning('output_to_text: from_openresponses failed, falling back to json: {}', exc)
         try:
             return json.dumps(output, indent=2, default=str)
-        except Exception:
+        except Exception as exc:
+            logger.warning('output_to_text: json.dumps failed, falling back to str(): {}', exc)
             return str(output)
     try:
         return str(output)
-    except Exception:
+    except Exception as exc:
+        # Degrading to '' here reads downstream as "the agent said nothing" —
+        # always leave a trace so that is distinguishable from a real bug.
+        logger.warning('output_to_text: str() failed for {}, degrading to empty text: {}', type(output), exc)
         return ''
+
+
+def output_error_text(output: Any) -> str | None:
+    """Target-level error message carried by an Output, if any."""
+    if isinstance(output, AgentResponse) and output.error:
+        return output.error.message
+    return None
 
 
 def _adapt_tool_call(tc: Any) -> ToolCallOutputItem:
@@ -92,7 +103,8 @@ def inputs_to_messages(inputs: dict[str, Any]) -> list[dict[str, Any]]:
         return [{'role': 'user', 'content': coerce_content_text(inputs['input'])}]
     try:
         body = json.dumps(inputs, indent=2, default=str)
-    except Exception:
+    except Exception as exc:
+        logger.warning('inputs_to_messages: json.dumps failed, falling back to str(): {}', exc)
         body = str(inputs)
     return [{'role': 'user', 'content': body}]
 
@@ -107,7 +119,7 @@ def output_to_messages(output: Output) -> list[OutputMessage]:
         try:
             return list(AgentResponse.from_openresponses(output).output)
         except Exception as exc:
-            logger.debug('from_openresponses failed in output_to_messages: {}', exc)
+            logger.warning('output_to_messages: from_openresponses failed, degrading to flat text: {}', exc)
             return [TextOutputItem(text=output_to_text(output), annotations=[])]
     if isinstance(output, str):
         return [TextOutputItem(text=output, annotations=[])] if output else []

@@ -5,9 +5,10 @@ import pytest
 from evaluatorq.common.judge import JudgeOutcome, EvaluatorResponsePayload, JudgeError
 from evaluatorq.common.template_engine import render_template
 from evaluatorq.llm_jury import (
+    DEFAULT_PAIRWISE_TEMPLATE,
+    DEFAULT_TEMPLATE,
     _build_replacements,
     _default_system_prompt,
-    _default_template,
     _outcome_to_prediction,
     _to_evaluation_result,
 )
@@ -64,15 +65,23 @@ def test_default_system_prompt_categorical():
 
 
 # ---------------------------------------------------------------------------
-# _default_template
+# default templates
 # ---------------------------------------------------------------------------
 
 def test_default_template_contains_placeholders():
-    tmpl = _default_template("Is the answer correct?")
-    assert "{{criteria}}" in tmpl
-    assert "{{input.all_messages}}" in tmpl
-    assert "{{output.response}}" in tmpl
-    assert "{{input.expected_output}}" in tmpl
+    assert "{{criteria}}" in DEFAULT_TEMPLATE
+    assert "{{input.all_messages}}" in DEFAULT_TEMPLATE
+    assert "{{output.response}}" in DEFAULT_TEMPLATE
+    assert "{{input.expected_output}}" in DEFAULT_TEMPLATE
+
+
+def test_pairwise_template_substitutes_criteria_like_pointwise():
+    # Both juries reach `criteria` the same way, so a `prompt=` override behaves
+    # identically on either side.
+    assert "{{criteria}}" in DEFAULT_PAIRWISE_TEMPLATE
+    assert "{{question}}" in DEFAULT_PAIRWISE_TEMPLATE
+    assert "{{response_a.output.response}}" in DEFAULT_PAIRWISE_TEMPLATE
+    assert "{{response_b.output.response}}" in DEFAULT_PAIRWISE_TEMPLATE
 
 
 # ---------------------------------------------------------------------------

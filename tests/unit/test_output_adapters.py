@@ -1,5 +1,18 @@
-from evaluatorq.common.output_adapters import inputs_to_messages, output_to_messages, output_to_text
-from evaluatorq.contracts import AgentResponse, ReasoningOutputItem, TextOutputItem
+import json
+
+from evaluatorq.common.output_adapters import (
+    inputs_to_messages,
+    output_error_text,
+    output_to_messages,
+    output_to_text,
+)
+from evaluatorq.contracts import (
+    AgentResponse,
+    AgentResponseError,
+    ReasoningOutputItem,
+    TextOutputItem,
+    ToolCallOutputItem,
+)
 
 
 def test_output_to_text_agentresponse_returns_text():
@@ -15,7 +28,7 @@ def test_output_to_text_none_is_empty():
 
 
 def test_output_to_text_dict_non_response_json():
-    assert output_to_text({'k': 'v'}) == "{'k': 'v'}" or output_to_text({'k': 'v'}).strip().startswith('{')
+    assert json.loads(output_to_text({'k': 'v'})) == {'k': 'v'}
 
 
 def test_output_to_text_never_raises_on_weird():
@@ -72,3 +85,25 @@ def test_output_to_messages_reasoning_item_passes_through_without_raise():
     ar = AgentResponse(output=[ReasoningOutputItem(text='thinking...')])
     out = output_to_messages(ar)
     assert isinstance(out, list)  # no raise; degrades cleanly
+
+
+def test_output_to_messages_static_dict_with_tool_calls():
+    # The plain static-output shape (no `object: 'response'`) that job/DataPoint
+    # outputs commonly use — this feeds both juries.
+    out = output_to_messages({
+        'response': 'done',
+        'tool_calls': [{'id': 't1', 'name': 'search', 'arguments': '{"q": "x"}', 'result': 'hit'}],
+    })
+    assert any(isinstance(i, TextOutputItem) and i.text == 'done' for i in out)
+    assert any(isinstance(i, ToolCallOutputItem) and i.name == 'search' for i in out)
+
+
+def test_output_error_text_reads_agentresponse_error():
+    ar = AgentResponse(output=[], error=AgentResponseError(message='timeout', error_type='timeout'))
+    assert output_error_text(ar) == 'timeout'
+
+
+def test_output_error_text_none_for_healthy_outputs():
+    assert output_error_text(AgentResponse(text='fine')) is None
+    assert output_error_text('plain') is None
+    assert output_error_text(None) is None

@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import typing
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from evaluatorq.common.judge import JudgeOutcome, build_eval_replacements, build_side_replacements, run_judge
+from evaluatorq.common.judge import JudgeOutcome, build_eval_replacements, run_judge
 from evaluatorq.common.jury import (
     AggregatorSpec,
     JuryDeliberation,
@@ -19,8 +19,13 @@ from evaluatorq.common.jury import (
     validate_aggregator,
 )
 from evaluatorq.common.llm_client import resolve_llm_client
-from evaluatorq.common.output_adapters import inputs_to_messages, output_to_messages, output_to_text
-from evaluatorq.contracts import AgentResponse, LLMCallConfig
+from evaluatorq.common.output_adapters import (
+    inputs_to_messages,
+    output_error_text,
+    output_to_messages,
+    output_to_text,
+)
+from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.pairwise import PairwiseComparison, run_pairwise
 from evaluatorq.types import DataPoint, EvaluationResult, Evaluator, Output, ScorerParameter
 
@@ -66,7 +71,7 @@ def _build_verdict_model(
 
 def _build_replacements(data: DataPoint, output: Output, criteria: str) -> dict[str, Any]:
     """Build the red-team-format template substitution dict for the pointwise jury."""
-    err = output.error.message if isinstance(output, AgentResponse) and output.error else None
+    err = output_error_text(output)
     reps = build_eval_replacements(
         input_messages=inputs_to_messages(data.inputs),
         output_messages=output_to_messages(output),
@@ -102,19 +107,17 @@ def _default_system_prompt(verdict_kind: str, labels: list[str] | None, score_ra
     return f'{base} `value` must be a boolean: true if the criterion is met, false otherwise.'
 
 
-def _default_template(criteria: str) -> str:
-    """Return a default Mustache-style evaluation prompt template.
-
-    Placeholder tokens use the ``{{name}}`` convention expected by the
-    template engine (double-braces), drawn from the red-team template
-    namespace (see :func:`evaluatorq.common.judge.build_eval_replacements`).
-    """
-    return (
-        '# Criteria\n{{criteria}}\n\n'
-        '# Input\n{{input.all_messages}}\n\n'
-        '# Output\n{{output.response}}\n\n'
-        '# Expected output\n{{input.expected_output}}\n'
-    )
+# Default Mustache-style evaluation prompt template.  Placeholder tokens use the
+# ``{{name}}`` convention expected by the template engine (double-braces), drawn from
+# the red-team template namespace (see
+# :func:`evaluatorq.common.judge.build_eval_replacements`).  ``criteria`` is a
+# substituted variable here, exactly like every other name — see DEFAULT_PAIRWISE_TEMPLATE.
+DEFAULT_TEMPLATE = (
+    '# Criteria\n{{criteria}}\n\n'
+    '# Input\n{{input.all_messages}}\n\n'
+    '# Output\n{{output.response}}\n\n'
+    '# Expected output\n{{input.expected_output}}\n'
+)
 
 
 # ---------------------------------------------------------------------------
@@ -425,7 +428,7 @@ def llm_jury(
     # client= is used as-is; otherwise we resolve once on first use.
     resolved_client = client
     verdict_model = _build_verdict_model(verdict_kind=verdict_kind, labels=labels, score_range=score_range)
-    template = prompt if prompt is not None else _default_template(criteria=criteria or '')
+    template = prompt if prompt is not None else DEFAULT_TEMPLATE
     sys_prompt = (
         system_prompt
         if system_prompt is not None
@@ -439,6 +442,16 @@ def llm_jury(
             resolved_client = resolve_llm_client(config_client=None).client
         data = params['data']
         output = params['output']
+        # A target that errored produced no answer to grade. Judging it anyway would
+        # score an empty response as if the agent had genuinely replied that way.
+        target_error = output_error_text(output)
+        if target_error:
+            logger.warning('Target errored, skipping judges: {}', target_error)
+            return EvaluationResult.model_validate({
+                'value': 'inconclusive',
+                'explanation': f'Not judged: the target returned an error: {target_error}',
+                'pass': None,
+            })
         replacements = _build_replacements(data=data, output=output, criteria=criteria or '')
 
         async def judge_fn(judge_model: str) -> Prediction:
@@ -494,57 +507,30 @@ def _pairwise_system_prompt() -> str:
     )
 
 
-def _pairwise_template(criteria: str) -> str:
-    return (
-        f'# Criteria\n{criteria}\n\n'
-        '# Question\n{{question}}\n\n'
-        '# Response A\n{{response_a.output.response}}\n\n'
-        '# Response B\n{{response_b.output.response}}\n'
-    )
+# Default pairwise template. ``criteria`` is a substituted variable, matching
+# DEFAULT_TEMPLATE — a `prompt=` override reaches it the same way.
+DEFAULT_PAIRWISE_TEMPLATE = (
+    '# Criteria\n{{criteria}}\n\n'
+    '# Question\n{{question}}\n\n'
+    '# Response A\n{{response_a.output.response}}\n\n'
+    '# Response B\n{{response_b.output.response}}\n'
+)
 
 
-# A pairwise side is either a bare Output (AgentResponse/str/dict answer), or a
-# bundle `{'data': DataPoint | None, 'output': Output}` carrying the originating
-# input/expected-output alongside the answer.
-PairwiseSideInput = ScorerParameter | Output
-
-
-def _side_to_namespace(prefix: str, side: PairwiseSideInput) -> dict[str, Any]:
+def _side_to_namespace(prefix: str, side: Output) -> dict[str, Any]:
     """Build the `<prefix>.*` template namespace for one pairwise side.
 
-    A bundle (`{'data': DataPoint | None, 'output': Output}`) contributes both
-    input and output; a bare `Output` contributes output only, with an empty
-    input. The bundle discriminator is deliberately narrow — `data` must be
-    `None` or a genuine `DataPoint` — so a bare dict-shaped `Output` that
-    happens to carry `'data'`/`'output'` keys is never misread as a bundle
-    (which would otherwise raise `AttributeError` on `data.inputs`).
+    A side carries an answer only, so `<prefix>.input.*` is empty; the rest of the
+    namespace (`output.response`, `output.tools_called`, `output.messages`,
+    `output.error`) is identical to the pointwise one.
     """
-    is_bundle = (
-        isinstance(side, dict)
-        and 'output' in side
-        and 'data' in side
-        and (side['data'] is None or isinstance(side['data'], DataPoint))
-    )
-    output: Output
-    if is_bundle:
-        bundle = cast('dict[str, Any]', side)
-        data: DataPoint | None = bundle['data']
-        inputs = data.inputs if data is not None else {}
-        expected = output_to_text(data.expected_output) if data is not None else ''
-        output = bundle['output']
-        input_messages = inputs_to_messages(inputs) if data is not None else []
-    else:
-        input_messages = []
-        expected = ''
-        output = cast('Output', side)
-    err = output.error.message if isinstance(output, AgentResponse) and output.error else None
-    return build_side_replacements(
-        prefix,
-        input_messages=input_messages,
-        output_messages=output_to_messages(output),
-        expected_output=expected,
+    return build_eval_replacements(
+        prefix=prefix,
+        input_messages=[],
+        output_messages=output_to_messages(side),
+        expected_output='',
         system_instructions=None,
-        error=err,
+        error=output_error_text(side),
     )
 
 
@@ -591,7 +577,7 @@ class PairwiseComparator:
         self._verdict_model = _build_verdict_model(
             verdict_kind='categorical', labels=PAIRWISE_LABELS, score_range=(0.0, 1.0)
         )
-        self._template = template if template is not None else _pairwise_template(criteria)
+        self._template = template if template is not None else DEFAULT_PAIRWISE_TEMPLATE
 
     def _current_semaphore(self) -> asyncio.Semaphore | None:
         """The shared concurrency budget, bound to the running event loop.
@@ -611,14 +597,22 @@ class PairwiseComparator:
             self._semaphore_loop = loop
         return self._semaphore
 
-    async def compare(
-        self, *, question: str, response_a: PairwiseSideInput, response_b: PairwiseSideInput
-    ) -> PairwiseComparison:
-        """Run the panel over one A-vs-B comparison and return the reconciled verdict."""
+    async def compare(self, *, question: str, response_a: Output, response_b: Output) -> PairwiseComparison:
+        """Run the panel over one A-vs-B comparison and return the reconciled verdict.
+
+        A side that carries a target-level error is never judged — comparing against a
+        failed generation would score noise as a preference.
+        """
+        for label, side in (('A', response_a), ('B', response_b)):
+            err = output_error_text(side)
+            if err:
+                logger.warning('Pairwise side {} errored, skipping judges: {}', label, err)
+                return PairwiseComparison(winner='inconclusive')
+
         if self._client is None:
             self._client = resolve_llm_client(config_client=None).client
 
-        async def judge_fn(first: PairwiseSideInput, second: PairwiseSideInput, model: str) -> Prediction:
+        async def judge_fn(first: Output, second: Output, model: str) -> Prediction:
             replacements: dict[str, Any] = {'question': question, 'criteria': self._criteria}
             replacements.update(_side_to_namespace('response_a', first))
             replacements.update(_side_to_namespace('response_b', second))
@@ -697,7 +691,7 @@ def llm_jury_pairwise(
         # propagate_errors in step with llm_jury (judges=['m','m'] -> one judge).
         panel=deduped,
         criteria=resolved_criteria,
-        template=prompt,  # None -> built-in default via _pairwise_template
+        template=prompt,  # None -> DEFAULT_PAIRWISE_TEMPLATE
         system_prompt=system_prompt if system_prompt is not None else _pairwise_system_prompt(),
         swap=swap,
         repetitions=repetitions,

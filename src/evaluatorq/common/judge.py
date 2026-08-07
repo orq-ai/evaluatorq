@@ -23,6 +23,7 @@ from evaluatorq.contracts import (
     LLMCallConfig,
     Message,
     OutputMessage,
+    ReasoningOutputItem,
     StrEnum,
     TextOutputItem,
     TokenUsage,
@@ -102,6 +103,11 @@ def _format_output_message(item: OutputMessage) -> dict[str, Any] | None:
             ],
             'result': item.result,
         }
+    if isinstance(item, ReasoningOutputItem):
+        # Reasoning is visible in `output.messages` (full transcript) but deliberately
+        # excluded from `output.response`, which is the assistant's answer text only.
+        return {'role': 'assistant', 'content': item.text, 'type': 'reasoning'}
+    logger.warning('Dropping unrecognized OutputMessage type {} from judge namespace', type(item))
     return None
 
 
@@ -154,8 +160,8 @@ def _build_namespace(
     return nested, flat
 
 
-# Use EXPLICIT signatures on the public wrappers (not **kwargs) so basedpyright
-# checks call sites and the `error` kwarg actually reaches _build_namespace.
+# Use an EXPLICIT signature (not **kwargs) so basedpyright checks call sites and
+# the `error` kwarg actually reaches _build_namespace.
 def build_eval_replacements(
     *,
     input_messages: list[dict[str, Any]] | list[Message],
@@ -163,8 +169,14 @@ def build_eval_replacements(
     expected_output: str | None = None,
     system_instructions: str | None = None,
     error: str | None = None,
+    prefix: str = '',
 ) -> dict[str, Any]:
-    """Build the replacements dict for an Orq-format evaluator prompt."""
+    """Build the replacements dict for an Orq-format evaluator prompt.
+
+    With a non-empty ``prefix`` every key is namespaced under it — that is how the
+    pairwise jury exposes one identical namespace per side (``response_a.*`` /
+    ``response_b.*``).
+    """
     nested, flat = _build_namespace(
         input_messages=input_messages,
         output_messages=output_messages,
@@ -172,30 +184,9 @@ def build_eval_replacements(
         system_instructions=system_instructions,
         error=error,
     )
-    return {**flat, **nested}
-
-
-def build_side_replacements(
-    prefix: str,
-    *,
-    input_messages: list[dict[str, Any]] | list[Message],
-    output_messages: Sequence[OutputMessage],
-    expected_output: str | None = None,
-    system_instructions: str | None = None,
-    error: str | None = None,
-) -> dict[str, Any]:
-    """Same namespace as build_eval_replacements, every key prefixed with `<prefix>.`."""
-    nested, flat = _build_namespace(
-        input_messages=input_messages,
-        output_messages=output_messages,
-        expected_output=expected_output,
-        system_instructions=system_instructions,
-        error=error,
-    )
-    result: dict[str, Any] = {prefix: nested}
-    for k, v in flat.items():
-        result[f'{prefix}.{k}'] = v
-    return result
+    if not prefix:
+        return {**flat, **nested}
+    return {prefix: nested, **{f'{prefix}.{k}': v for k, v in flat.items()}}
 
 
 def _strip_code_fences(text: str) -> str:

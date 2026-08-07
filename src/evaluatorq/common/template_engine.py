@@ -96,6 +96,11 @@ def render_template(template: str, replacements: dict[str, Any]) -> str:
             logger.warning('Rejected template path: {!r}', key)
             return match.group(0)
         if key in _RESERVED_BARE_KEYS:
+            logger.warning(
+                'Bare reserved template key {!r} left unresolved — use a dotted path instead (e.g. {!r}).',
+                key,
+                f'{key}.<field>',
+            )
             return match.group(0)
         if key in replacements:
             return _format(replacements[key])
