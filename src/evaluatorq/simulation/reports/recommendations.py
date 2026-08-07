@@ -17,7 +17,7 @@ from loguru import logger
 from evaluatorq.common.llm_call import apply_pipeline_metadata
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.sanitize import xml_escape
-from evaluatorq.common.tracing import record_llm_input, record_llm_response
+from evaluatorq.common.tracing import get_trace_context_headers, record_llm_input, record_llm_response
 from evaluatorq.simulation.reports.sections import (
     _criteria_rows,
     _is_errored,
@@ -165,6 +165,9 @@ async def generate_recommendations(
 
             async with with_llm_span(model=model, max_tokens=800, purpose='recommendations') as span:
                 record_llm_input(span, messages)
+                trace_headers = await get_trace_context_headers()
+                if trace_headers:
+                    extra['extra_headers'] = {**(extra.get('extra_headers') or {}), **trace_headers}
                 response = await llm_client.chat.completions.create(  # pyright: ignore[reportCallIssue, reportArgumentType]
                     model=model,
                     messages=messages,  # pyright: ignore[reportArgumentType]
