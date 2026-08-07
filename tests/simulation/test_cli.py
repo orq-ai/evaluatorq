@@ -707,6 +707,7 @@ def test_simulate_success_no_save(tmp_path: Path) -> None:
                 "--input", str(dp_file),
                 "--openai-model", "gpt-4o",
                 "--no-save",
+                "--no-executive-summary",
             ],
             env={"OPENAI_API_KEY": "test-key"},
         )
@@ -798,6 +799,7 @@ def test_simulate_writes_results_file(tmp_path: Path) -> None:
                 "--openai-model", "gpt-4o",
                 "--results", str(out_file),
                 "--no-save",
+                "--no-executive-summary",
             ],
             env={"OPENAI_API_KEY": "test-key"},
         )
@@ -828,6 +830,7 @@ def test_simulate_report_writes_full_report(
                 "--openai-model", "gpt-4o",
                 "--report", str(report),
                 "--no-save",
+                "--no-executive-summary",
             ],
             env={"OPENAI_API_KEY": "test-key"},
         )
@@ -865,6 +868,7 @@ def test_run_report_and_autosave_both_written(
                 "--agent-description", "bot",
                 "--openai-model", "gpt-4o",
                 "--report", str(report),
+                "--no-executive-summary",
             ],
             env={"OPENAI_API_KEY": "test-key"},
         )
@@ -1133,6 +1137,7 @@ def test_run_target_agent_uses_context_description_when_omitted(tmp_path: Path) 
                 "run",
                 "--target", "agent:refund-agent-fixed",
                 "--no-save",
+                "--no-executive-summary",
             ],
             env={"ORQ_API_KEY": "test-key"},
         )
@@ -1167,6 +1172,7 @@ def test_run_explicit_agent_description_does_not_resolve_context(tmp_path: Path)
                 "--target", "agent:refund-agent-fixed",
                 "--agent-description", "Explicit description",
                 "--no-save",
+                "--no-executive-summary",
             ],
             env={"ORQ_API_KEY": "test-key"},
         )
@@ -1228,6 +1234,7 @@ def test_run_success_no_save(tmp_path: Path) -> None:
                 "--agent-description", "A helpful bot",
                 "--openai-model", "gpt-4o",
                 "--no-save",
+                "--no-executive-summary",
             ],
             env={"OPENAI_API_KEY": "test-key"},
         )
@@ -1256,6 +1263,7 @@ def test_run_forwards_flags(tmp_path: Path) -> None:
                 "--num-scenarios", "4",
                 "--max-turns", "6",
                 "--no-save",
+                "--no-executive-summary",
             ],
             env={"OPENAI_API_KEY": "test-key"},
         )
@@ -1336,6 +1344,7 @@ def test_run_report_md_writes_dated_file(tmp_path: Path, monkeypatch: pytest.Mon
                 "--yes",
                 "--no-save",
                 "--report-md", str(export_dir),
+                "--no-executive-summary",
             ],
             env={"OPENAI_API_KEY": "test-key"},
         )
@@ -1368,6 +1377,7 @@ def test_run_report_html_writes_dated_file(tmp_path: Path, monkeypatch: pytest.M
                 "--yes",
                 "--no-save",
                 "--report-html", str(export_dir),
+                "--no-executive-summary",
             ],
             env={"OPENAI_API_KEY": "test-key"},
         )
@@ -1400,6 +1410,7 @@ def test_run_report_md_to_explicit_file(tmp_path: Path, monkeypatch: pytest.Monk
                 "--yes",
                 "--no-save",
                 "--report-md", str(out_file),
+                "--no-executive-summary",
             ],
             env={"OPENAI_API_KEY": "test-key"},
         )
@@ -1433,6 +1444,7 @@ def test_run_report_json_to_directory_autonames(tmp_path: Path, monkeypatch: pyt
                 "--yes",
                 "--no-save",
                 "--report", str(out_dir),
+                "--no-executive-summary",
             ],
             env={"OPENAI_API_KEY": "test-key"},
         )
@@ -1466,6 +1478,7 @@ def test_simulate_report_md_writes_dated_file(tmp_path: Path, monkeypatch: pytes
                 "--yes",
                 "--no-save",
                 "--report-md", str(export_dir),
+                "--no-executive-summary",
             ],
             env={"OPENAI_API_KEY": "test-key"},
         )
@@ -1977,6 +1990,7 @@ def test_simulate_yes_exits_clean(tmp_path: Path) -> None:
                 "--openai-model", "gpt-4o",
                 "--yes",
                 "--no-save",
+                "--no-executive-summary",
             ],
             env={"ORQ_API_KEY": "", "OPENAI_API_KEY": "test-key"},
         )
@@ -2004,6 +2018,7 @@ def test_run_yes_exits_clean(tmp_path: Path) -> None:
                 "--openai-model", "gpt-4o",
                 "--yes",
                 "--no-save",
+                "--no-executive-summary",
             ],
             env={"ORQ_API_KEY": "", "OPENAI_API_KEY": "test-key"},
         )
@@ -2143,6 +2158,7 @@ def test_run_recommendations_flag_attaches_to_saved_run(
                 "--report", str(report),
                 "--recommendations",
                 "--no-save",
+                "--no-executive-summary",
             ],
             env={"OPENAI_API_KEY": "test-key"},
         )
@@ -2169,7 +2185,10 @@ def test_run_without_recommendations_flag_skips_generation(
 
         result = runner.invoke(
             app,
-            ["run", "--agent-description", "bot", "--openai-model", "gpt-4o", "--no-save"],
+            [
+                "run", "--agent-description", "bot", "--openai-model", "gpt-4o",
+                "--no-save", "--no-executive-summary",
+            ],
             env={"OPENAI_API_KEY": "test-key"},
         )
 
