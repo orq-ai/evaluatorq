@@ -438,12 +438,12 @@ def llm_jury(
 
     async def scorer(params: ScorerParameter) -> EvaluationResult:
         nonlocal resolved_client
-        if resolved_client is None:
-            resolved_client = resolve_llm_client(config_client=None).client
         data = params['data']
         output = params['output']
         # A target that errored produced no answer to grade. Judging it anyway would
         # score an empty response as if the agent had genuinely replied that way.
+        # Checked before resolving the client: skipping the judges must not require
+        # LLM credentials.
         target_error = output_error_text(output)
         if target_error:
             logger.warning('Target errored, skipping judges: {}', target_error)
@@ -452,6 +452,8 @@ def llm_jury(
                 'explanation': f'Not judged: the target returned an error: {target_error}',
                 'pass': None,
             })
+        if resolved_client is None:
+            resolved_client = resolve_llm_client(config_client=None).client
         replacements = _build_replacements(data=data, output=output, criteria=criteria or '')
 
         async def judge_fn(judge_model: str) -> Prediction:
