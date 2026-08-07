@@ -194,3 +194,36 @@ def test_serve_calls_uvicorn_run(tmp_path: Path) -> None:
     call_kwargs = mock_run.call_args
     assert call_kwargs.kwargs.get('host') == '0.0.0.0'
     assert call_kwargs.kwargs.get('port') == 9999
+
+
+def test_eq_dashboard_accepts_multiple_paths(tmp_path: Path) -> None:
+    """Multiple directory arguments are merged into one combined roots list."""
+    from evaluatorq.cli import app
+
+    a = tmp_path / 'repo-a'
+    b = tmp_path / 'repo-b'
+    a.mkdir()
+    b.mkdir()
+
+    runner = CliRunner()
+    with patch('evaluatorq.dashboard.launch.serve') as mock_serve:
+        result = runner.invoke(app, ['dashboard', str(a), str(b)])
+    assert result.exit_code == 0
+    roots = mock_serve.call_args.args[0]
+    assert a in roots
+    assert b in roots
+    assert a / '.evaluatorq' / 'runs' in roots
+    assert b / '.evaluatorq' / 'sim-runs' in roots
+
+
+def test_eq_dashboard_rejects_nonexistent_path(tmp_path: Path) -> None:
+    """A typo'd path must error, not silently become a parent root with a
+    confident Direct-report URL for a file that does not exist."""
+    from evaluatorq.cli import app
+
+    runner = CliRunner()
+    with patch('evaluatorq.dashboard.launch.serve') as mock_serve:
+        result = runner.invoke(app, ['dashboard', str(tmp_path / 'no-such-dir')])
+    assert result.exit_code != 0
+    assert 'does not exist' in result.output
+    mock_serve.assert_not_called()

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
-from evaluatorq.dashboard import metrics
+from evaluatorq.dashboard import metrics, view
 from evaluatorq.dashboard.app import build_app
 
 
@@ -242,3 +242,108 @@ class TestReportHeader:
         assert 'Red team runs' in r.text
         # Topbar Export action points at the standalone HTML export.
         assert f'/r/{rid}/export.html' in r.text
+
+
+class TestAvgCost:
+    def test_costed_runs_counted(self, roots: list[Path]) -> None:
+        data = metrics.landing(roots)
+        # Only the redteam fixture records cost_usd; the sim results carry tokens only.
+        assert data.costed_runs == 1
+        assert data.total_cost == pytest.approx(0.0048)
+
+    def test_avg_cost_averages_over_costed_runs_only(self) -> None:
+        data = metrics.Landing(
+            total_runs=3,
+            redteam_runs=2,
+            sim_runs=1,
+            resistance_rate=None,
+            total_tokens=0,
+            by_kind=[('Red team', 2), ('Agent sim', 1)],
+            severity=[],
+            tokens_by_kind=[],
+            resistant=0,
+            vulnerable=0,
+            total_cost=0.30,
+            costed_runs=1,
+            cost_by_kind=[('Agent sim', 0.30)],
+        )
+        html = view.landing_body(data)
+        # $0.30 / 1 costed run, NOT $0.30 / 3 total runs ($0.1000).
+        assert '$0.3000' in html
+        assert '$0.1000' not in html
+
+    def test_avg_cost_na_when_nothing_records_cost(self) -> None:
+        data = metrics.Landing(
+            total_runs=2,
+            redteam_runs=2,
+            sim_runs=0,
+            resistance_rate=None,
+            total_tokens=0,
+            by_kind=[('Red team', 2)],
+            severity=[],
+            tokens_by_kind=[],
+            resistant=0,
+            vulnerable=0,
+            total_cost=0.0,
+            costed_runs=0,
+            cost_by_kind=[],
+        )
+        assert 'n/a' in view.landing_body(data)
+
+
+class TestBarsRounding:
+    def test_tiny_share_shows_less_than_one_percent(self) -> None:
+        html = view._bars([('Red team', 328), ('Agent sim', 1)], ['c1', 'c2'])
+        assert '&lt;1%' in html
+        assert '· 0%' not in html
+        # the tiny row still gets a visible sliver of bar
+        assert 'width:1%' in html
+
+    def test_dominant_share_shows_more_than_99_percent(self) -> None:
+        html = view._bars([('Red team', 328), ('Agent sim', 1)], ['c1', 'c2'])
+        assert '&gt;99%' in html
+        assert '· 100%' not in html
+
+    def test_exact_shares_unchanged(self) -> None:
+        html = view._bars([('A', 3), ('B', 1)], ['c1', 'c2'])
+        assert '· 75%' in html
+        assert '· 25%' in html
+
+    def test_zero_value_row_stays_zero(self) -> None:
+        html = view._bars([('A', 5), ('B', 0)], ['c1', 'c2'])
+        assert '· 0%' in html
+        assert 'width:0%' in html
+
+    def test_dominant_partial_bar_is_not_full_width(self) -> None:
+        """The width uses the unrounded share: 328/329 must not draw a
+        full-width bar next to its '>99%' label."""
+        html = view._bars([('Red team', 328), ('Agent sim', 1)], ['c1', 'c2'])
+        assert 'width:100%' not in html
+        assert 'width:99.7%' in html
+
+    def test_full_share_still_draws_full_width(self) -> None:
+        html = view._bars([('A', 5), ('B', 0)], ['c1', 'c2'])
+        assert 'width:100%' in html
+
+
+class TestZeroAttackScore:
+    def test_zero_evaluated_attacks_has_no_score(self, tmp_path: Path) -> None:
+        rt = tmp_path / 'runs'
+        rt.mkdir()
+        (rt / 'empty_20260731_130000.json').write_text(
+            json.dumps(
+                _redteam_payload(
+                    'empty run',
+                    created='2026-07-31T13:00:00Z',
+                    resistance=1.0,
+                    vulns=0,
+                    evaluated=0,
+                    tokens=0,
+                    severity={},
+                )
+            )
+        )
+        rows = metrics.run_rows([rt])
+        assert len(rows) == 1
+        # 0 attacks evaluated: 1.00 would read as a perfect score.
+        assert rows[0].score is None

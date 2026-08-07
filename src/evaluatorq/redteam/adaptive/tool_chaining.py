@@ -148,23 +148,18 @@ class ToolChainingPlanner:
         logger.debug(f'Tool-chaining planner decomposing objective for agent={agent_name}, tools={tool_list}')
 
         cfg = self._cfg
-        merged_kwargs: dict[str, Any] = {
-            'extra_body': cfg.retry_extra_body(self._client),
-            **cfg.attacker.extra_kwargs,
-        }
-        apply_pipeline_metadata(merged_kwargs)
+        call_params = cfg.attacker.completion_params(
+            model=self._model,
+            messages=[
+                {'role': 'system', 'content': _PLANNER_SYSTEM_PROMPT},
+                {'role': 'user', 'content': user_msg},
+            ],
+            response_format=_DecompositionSchema,
+            extra_body=cfg.retry_extra_body(self._client),
+        )
+        apply_pipeline_metadata(call_params)
         response = await asyncio.wait_for(
-            self._client.chat.completions.parse(
-                model=self._model,
-                messages=[
-                    {'role': 'system', 'content': _PLANNER_SYSTEM_PROMPT},
-                    {'role': 'user', 'content': user_msg},
-                ],
-                response_format=_DecompositionSchema,
-                temperature=cfg.attacker.temperature,
-                max_completion_tokens=cfg.attacker.max_tokens,
-                **merged_kwargs,
-            ),
+            self._client.chat.completions.parse(**call_params),
             timeout=cfg.attacker.timeout_ms / 1000.0,
         )
 
