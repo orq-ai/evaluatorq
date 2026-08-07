@@ -178,3 +178,21 @@ or tag by hand on the normal path** — commit messages drive it.
 - **Accidental majors are refused.** A computed `major` bump is skipped unless you re-run via **workflow_dispatch** with `force_level=major`. Use `force_level=minor`/`patch` to override the computed level (e.g. to ship breaking changes as a minor deliberately).
 - There is no committed `CHANGELOG.md`; the human-readable changelog is the GitHub Release notes. Release notes are created last and are non-blocking — a notes failure never blocks the PyPI publish.
 - PyPI publishing uses the **`PYPI_TOKEN`** repo secret (an API token). To switch to OIDC trusted publishing later, configure a **Trusted Publisher** on PyPI for this repo + `release.yml` (PyPI → project → Publishing) and delete the `with: password:` block in the publish step — `id-token: write` is already granted.
+
+### Docs
+
+**Docs ship in the same PR as the feature.** If a change touches public surface
+(`__all__`, CLI flags or defaults, env vars, enum/registry members) or adds a
+feature, update the docs before opening the PR:
+
+1. `docs-drift` skill, scoped to the diff — finds claims the change made untrue.
+2. `docs-coverage` skill — if the change opens a new usage path (a new mode,
+   backend, surface, entry point), write the prose now rather than deferring it.
+
+The interaction surface those skills reason about — the axes, the tier rules, and
+the impossible-combination list — is
+[`.claude/skills/docs-coverage/axes.md`](.claude/skills/docs-coverage/axes.md).
+Read it when adding anything users choose between; **a new dimension means editing
+that file in the same PR**, or coverage checking silently stops seeing it.
+
+Rules live in the skills, not here. Both are under `.claude/skills/`.
