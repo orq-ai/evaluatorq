@@ -14,6 +14,7 @@ from evaluatorq.common.thread_context import pipeline_metadata, thread_body_para
 from evaluatorq.common.tracing import get_trace_context_headers
 from evaluatorq.contracts import AgentContext, AgentResponse, AgentTarget, LLMCallConfig, Message
 from evaluatorq.openresponses.client import build_simulation_client
+from evaluatorq.openresponses.input_items import messages_to_responses_input
 from evaluatorq.openresponses.tracing import (
     record_openresponses_request,
     record_openresponses_response,
@@ -261,28 +262,13 @@ class OrqResponsesTarget(AgentTarget):
 
     @staticmethod
     def _messages_to_input(messages: list[Message]) -> list[dict[str, Any]]:
-        result: list[dict[str, Any]] = []
-        for m in messages:
-            # Multi-part content (text + image/file) passes straight through to
-            # the Responses API as input content parts.
-            if isinstance(m.content, list):
-                content: Any = [p.model_dump(mode='json') for p in m.content]
-            # Assistant messages with tool_calls require content: null per
-            # OpenAI's spec; collapsing None to "" produces an invalid payload.
-            # For other roles, the API expects a string, so coerce None -> "".
-            elif m.role == 'assistant':
-                content = m.content
-            else:
-                content = m.content or ''
-            d: dict[str, Any] = {'role': m.role, 'content': content}
-            if m.tool_calls is not None:
-                d['tool_calls'] = [tc.model_dump() for tc in m.tool_calls]
-            if m.tool_call_id is not None:
-                d['tool_call_id'] = m.tool_call_id
-            if m.name is not None:
-                d['name'] = m.name
-            result.append(d)
-        return result
+        """Serialize the transcript as Responses-API input items.
+
+        Not chat-completions shape: ``role: "tool"`` and a message-level
+        ``tool_calls`` key are both invalid here, so tool turns are rendered as
+        ``function_call`` / ``function_call_output`` items instead.
+        """
+        return messages_to_responses_input(messages)
 
 
 __all__ = ['OrqResponsesTarget']

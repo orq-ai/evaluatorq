@@ -20,6 +20,7 @@ from evaluatorq.contracts import (
     ToolCallOutputItem,
     ToolInfo,
 )
+from evaluatorq.openresponses.input_items import message_to_responses_input_items
 
 
 class OpenAIAgentTarget(AgentTarget):
@@ -308,36 +309,6 @@ def _extract_function_call_output(raw: Any) -> str:
         return str(raw)
 
 
-def _message_to_responses_input_items(m: Message) -> list[dict[str, Any]]:
-    """Render a :class:`Message` as Responses-API input items.
-
-    Inverse of :meth:`OpenAIAgentTarget._build_response`: an assistant turn with
-    tool calls becomes a ``function_call`` item per call (plus a leading assistant
-    text message when content is present); a ``tool`` result becomes a
-    ``function_call_output``; anything else is a plain ``{"role", "content"}``
-    message. This preserves multi-turn tool context that a naive flatten drops,
-    matching what the SDK's ``to_input_list()`` round-trips.
-    """
-    if m.role == 'tool':
-        return [{'type': 'function_call_output', 'call_id': m.tool_call_id or '', 'output': m.content or ''}]
-    if m.role == 'assistant' and m.tool_calls:
-        items: list[dict[str, Any]] = []
-        if m.content:
-            items.append({'role': 'assistant', 'content': m.content})
-        for tc in m.tool_calls:
-            fc: dict[str, Any] = {
-                'type': 'function_call',
-                'call_id': tc.id,
-                'name': tc.function.name,
-                'arguments': tc.function.arguments,
-            }
-            # Echo the Responses-API item id (fc_*) when available so the
-            # function_call item round-trips intact across turns.
-            if tc.item_id:
-                fc['id'] = tc.item_id
-            items.append(fc)
-        return items
-    # Multi-part content passes straight through as Responses-API content parts.
-    if isinstance(m.content, list):
-        return [{'role': m.role, 'content': [p.model_dump(mode='json') for p in m.content]}]
-    return [{'role': m.role, 'content': m.content or ''}]
+# Inverse of :meth:`OpenAIAgentTarget._build_response`. Shared with
+# OrqResponsesTarget — both replay transcripts against the Responses API.
+_message_to_responses_input_items = message_to_responses_input_items
