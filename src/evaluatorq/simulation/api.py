@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     from evaluatorq.types import DataPoint, DataPointResult, Evaluator
 
     EmitDatapoints = Callable[[list[SimulationDatapoint]], None]
+    RunPostProcessor = Callable[[SimulationRun], Awaitable[None]]
 
 logger = logging.getLogger(__name__)
 
@@ -315,6 +316,7 @@ async def _simulate_run(
     save: bool = False,
     report: str | Path | None = None,
     executive_summary: bool = False,
+    post_run: RunPostProcessor | None = None,
 ) -> SimulationRun:
     """Internal counterpart of :func:`simulate` that returns the full ``SimulationRun``.
 
@@ -399,6 +401,7 @@ async def _simulate_run(
                         pipeline_span=pipeline_span,
                         run_id=run_id,
                         manifest_writer=manifest_writer,
+                        post_run=post_run,
                     )
                 except SimulationCancelledError:
                     if manifest_writer is not None:
@@ -603,6 +606,7 @@ async def _generate_and_simulate_run(
     save: bool = False,
     report: str | Path | None = None,
     executive_summary: bool = False,
+    post_run: RunPostProcessor | None = None,
 ) -> SimulationRun:
     """Internal counterpart of :func:`generate_and_simulate` returning the full ``SimulationRun``.
 
@@ -719,6 +723,7 @@ async def _generate_and_simulate_run(
                             pipeline_span=pipeline_span,
                             run_id=run_id,
                             manifest_writer=manifest_writer,
+                            post_run=post_run,
                         )
                     finally:
                         if gen_owned and gen_client is not None:
@@ -1087,6 +1092,7 @@ async def _simulate_core(
     pipeline_span: Span | None,
     run_id: str,
     manifest_writer: ManifestWriter | None = None,
+    post_run: RunPostProcessor | None = None,
 ) -> SimulationRun:
     """Core simulation logic (runs inside the orq.simulation.pipeline span).
 
@@ -1296,6 +1302,12 @@ async def _simulate_core(
                 await populate_run_executive_summary(run, enabled=True, model=model)
             except Exception:
                 logger.warning('Failed to generate executive summary (results still returned)', exc_info=True)
+
+        # CLI-only report enrichments run before persistence while the pipeline
+        # span and evaluatorq run context are still active. This keeps their LLM
+        # spans under the main simulation root and binds the same run metadata.
+        if post_run is not None:
+            await post_run(run)
 
         # Persist only when the caller opts in (save=True).
         # TODO(RES-963): inline because on_run_complete carries no run metadata and

@@ -222,6 +222,46 @@ async def test_simulate_stamps_run_id_on_root_span(
 
 
 @pytest.mark.asyncio
+async def test_post_run_processor_stays_under_pipeline_root(
+    span_collector: _CollectingExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Post-run LLM work inherits both the root span and its run metadata."""
+    from evaluatorq.simulation import api
+    from evaluatorq.simulation.api import _simulate_run
+    from evaluatorq.simulation.tracing import with_llm_span
+
+    async def fake_core(**kwargs: Any) -> Any:
+        run = MagicMock(results=[])
+        await kwargs['post_run'](run)
+        return run
+
+    monkeypatch.setattr(api, '_simulate_core', fake_core)
+
+    async def post_run(_run: Any) -> None:
+        assert pipeline_metadata() == {
+            'evaluatorq_pipeline': 'agent_simulation',
+            'evaluatorq_run_id': pipeline_metadata()['evaluatorq_run_id'],
+        }
+        async with with_llm_span(model='recommendation-model', purpose='recommendations'):
+            pass
+
+    await _simulate_run(
+        target=lambda messages: 'ok',
+        datapoints=[],
+        sim_model='test',
+        upload_results=False,
+        executive_summary=False,
+        post_run=post_run,
+    )
+
+    root = _find(span_collector, 'orq.simulation.pipeline')
+    recommendation = _find(span_collector, 'chat recommendation-model')
+    assert recommendation.parent is not None
+    assert recommendation.parent.span_id == root.context.span_id
+
+
+@pytest.mark.asyncio
 async def test_generate_and_simulate_stamps_run_id_on_root_span(
     span_collector: _CollectingExporter,
     monkeypatch: pytest.MonkeyPatch,

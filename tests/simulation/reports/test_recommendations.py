@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from evaluatorq.contracts import Message, TokenUsage
+from evaluatorq.common.thread_context import evaluatorq_pipeline, evaluatorq_run_id
 from evaluatorq.simulation.reports import export_html, export_markdown
 from evaluatorq.simulation.reports.recommendations import (
     find_triggers,
@@ -157,6 +158,20 @@ async def test_broken_rule_produces_targeted_recommendation():
     assert 'leaked internal data' in user_prompt
     # Reasoning models reject non-default temperatures; omit unless asked for.
     assert 'temperature' not in call_kwargs
+
+
+@pytest.mark.asyncio
+async def test_recommendation_call_inherits_run_metadata():
+    client = _mock_client({'suggestions': ['Fix it']})
+    result = _make_result(goal_achieved=False, rules_broken=['leaked data'])
+
+    with evaluatorq_pipeline('agent_simulation'), evaluatorq_run_id('sim-run-1'):
+        await generate_recommendations([result], client, 'test-model')
+
+    assert client.chat.completions.create.await_args.kwargs['metadata'] == {
+        'evaluatorq_pipeline': 'agent_simulation',
+        'evaluatorq_run_id': 'sim-run-1',
+    }
 
 
 @pytest.mark.asyncio
