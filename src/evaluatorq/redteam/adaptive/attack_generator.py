@@ -18,7 +18,9 @@ if TYPE_CHECKING:
 
     from evaluatorq.redteam.contracts import AgentContext, AttackStrategy
 
+from evaluatorq.common.llm_call import execute_chat_parse
 from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, PIPELINE_CONFIG, LLMConfig
+from evaluatorq.redteam.tracing import with_llm_span
 from evaluatorq.redteam.utils import safe_substitute
 
 
@@ -180,16 +182,32 @@ async def adapt_prompt_to_tools(
         },
     )
 
+    adapt_messages: list[dict[str, Any]] = [{'role': 'user', 'content': prompt}]
     try:
-        response = await llm_client.chat.completions.parse(
+        async with with_llm_span(
             model=model,
-            messages=[{'role': 'user', 'content': prompt}],
-            response_format=ToolAnalysis,
             temperature=cfg.attacker.temperature,
-            max_completion_tokens=cfg.attacker.max_tokens,
-            extra_body=cfg.retry_extra_body(llm_client),
-            **cfg.attacker.extra_kwargs,
-        )
+            max_tokens=cfg.attacker.max_tokens,
+            input_messages=adapt_messages,
+            attributes={
+                'orq.redteam.llm_purpose': 'adapt_prompt_to_tools',
+                'orq.redteam.num_tools': len(agent_context.tools),
+            },
+        ) as adapt_span:
+            response, _ = await execute_chat_parse(
+                client=llm_client,
+                model=model,
+                messages=adapt_messages,
+                span=adapt_span,
+                timeout_s=cfg.attacker.timeout_ms / 1000.0,
+                response_model=ToolAnalysis,
+                temperature=cfg.attacker.temperature,
+                max_completion_tokens=cfg.attacker.max_tokens,
+                extra_kwargs={
+                    'extra_body': cfg.retry_extra_body(llm_client),
+                    **cfg.attacker.extra_kwargs,
+                },
+            )
 
         analysis = response.choices[0].message.parsed
         if analysis is None:

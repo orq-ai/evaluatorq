@@ -3,7 +3,7 @@
 `simulate()` and `generate_and_simulate()` route execution through the
 `evaluatorq()` framework so they inherit auto-upload, OTel tracing, results
 display, CI gating, and dataset-id support (RES-594 / RES-598). They run
-inside an ``orq.simulation.pipeline`` span and accept the unified
+inside an ``Evaluatorq - Agent Simulation`` span and accept the unified
 ``AgentTarget`` target shape introduced by RES-808.
 """
 
@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.llm_client import resolve_results_base_url
-from evaluatorq.common.thread_context import build_thread_id
+from evaluatorq.common.thread_context import _evaluatorq_run_scope, build_thread_id, evaluatorq_pipeline
 from evaluatorq.simulation._config import SimulationConfig
 from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MAX_TURNS, DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run, build_simulation_run, fetch_agent_info, write_report
@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
     from evaluatorq.common.run_manifest import ManifestWriter
-    from evaluatorq.contracts import AgentTarget
+    from evaluatorq.contracts import AgentResponse, AgentTarget
     from evaluatorq.simulation.agents.base import BaseAgent
     from evaluatorq.simulation.evaluators.scorers import SimulationScorer
     from evaluatorq.simulation.generators import FirstMessageGenerator
@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     from evaluatorq.types import DataPoint, DataPointResult, Evaluator
 
     EmitDatapoints = Callable[[list[SimulationDatapoint]], None]
+    RunPostProcessor = Callable[[SimulationRun], Awaitable[None]]
 
 logger = logging.getLogger(__name__)
 
@@ -237,14 +238,14 @@ async def simulate(
             (``upload_results=True``). Leave ``None`` for local-only runs.
         orq_results_path: Optional Orq folder path (e.g. ``"MyProject/MyFolder"``).
         exit_on_failure: When ``True`` (the default), exit non-zero if any
-            datapoint or evaluator produced a failure — this is the "CI
-            gating for free" benefit of routing through ``evaluatorq()``.
-            Two paths: score-based failures (``pass_=False`` on a scorer
-            result) call ``sys.exit(1)`` via evaluatorq's own gate; dropped
-            jobs (job raised, no result cached) raise ``SimulationDroppedError``
-            from ``simulate()`` itself. Both exit non-zero when uncaught. Pass
-            ``False`` for interactive / exploratory runs where failures
-            should surface as warnings + error metadata instead.
+            datapoint was *dropped* — a job raised with no result cached —
+            by raising ``SimulationDroppedError`` from ``simulate()`` itself
+            (the "CI gating for free" benefit). Scorer verdicts (``pass_``,
+            e.g. goal not achieved) are reporting only and never exit the
+            process: an underperforming but otherwise healthy run still
+            returns its results. Pass ``False`` for interactive / exploratory
+            runs where even dropped rows should surface as warnings + error
+            metadata instead.
         save: When ``True``, persist the completed run to the local run store
             (``.evaluatorq/sim-runs/`` unless ``report`` is set). Unlike the CLI
             (which auto-saves to ``.evaluatorq/sim-runs/`` by default), the SDK
@@ -315,6 +316,7 @@ async def _simulate_run(
     save: bool = False,
     report: str | Path | None = None,
     executive_summary: bool = False,
+    post_run: RunPostProcessor | None = None,
 ) -> SimulationRun:
     """Internal counterpart of :func:`simulate` that returns the full ``SimulationRun``.
 
@@ -329,9 +331,16 @@ async def _simulate_run(
 
     await init_tracing_if_needed()
 
+    # Mint the run id + manifest at the outer entry so the same id flows to the
+    # manifest and to _simulate_core's experiment linking, and so the manifest
+    # brackets the whole run (bare simulate has only the SIMULATE stage — no
+    # GENERATE phase). Minted before the span opens so it can be stamped as a
+    # span attribute rather than set after the fact.
+    run_id = uuid.uuid4().hex
+
     try:
         async with with_simulation_span(
-            'orq.simulation.pipeline',
+            'Evaluatorq - Agent Simulation',
             {
                 'orq.simulation.evaluation_name': evaluation_name,
                 # max_turns is None until _simulate_core resolves it (an explicit
@@ -341,68 +350,67 @@ async def _simulate_run(
                 'orq.simulation.parallelism': parallelism,
             },
         ) as pipeline_span:
-            # Mint the run id + manifest at the outer entry so the same id flows
-            # to the manifest and to _simulate_core's experiment linking, and so
-            # the manifest brackets the whole run (bare simulate has only the
-            # SIMULATE stage — no GENERATE phase). Compose once; the manifest hook
-            # is registered first, and the raw writer is retained for terminal
-            # complete/cancel/fail calls.
-            run_id = uuid.uuid4().hex
-            composed_hooks, manifest_writer = _compose_sim_hooks(
-                hooks,
-                save=save,
-                run_id=run_id,
-                run_name=evaluation_name or 'sim',
-                run_output=report,
-            )
-            # Outer manifest guard (FIX 1): _simulate_core owns the terminal
-            # transition, but any failure between manifest creation and
-            # _simulate_core (e.g. building SimulationConfig) would otherwise
-            # leave the manifest stuck 'running'. Terminal calls are idempotent,
-            # so this composes safely with _simulate_core's own finalization.
-            try:
-                config = SimulationConfig(
-                    evaluation_name=evaluation_name,
-                    target=target,
-                    personas=personas,
-                    scenarios=scenarios,
-                    datapoints=datapoints,
-                    dataset_id=dataset_id,
-                    experiment_id=experiment_id,
-                    experiment_run_id=experiment_run_id,
-                    memory_entity_id=memory_entity_id,
-                    previous_run=previous_run,
-                    max_turns=max_turns,
-                    model=sim_model,
-                    evaluator_names=evaluator_names,
-                    parallelism=parallelism,
-                    user_simulator=user_simulator,
-                    judge=judge,
-                    generation_client=generation_client,
-                    upload_results=upload_results,
-                    evaluation_description=evaluation_description,
-                    orq_results_path=orq_results_path,
-                    exit_on_failure=exit_on_failure,
+            # Compose once; the manifest hook is registered first, and the raw
+            # writer is retained for terminal complete/cancel/fail calls. The
+            # run-id bind is what reaches every LLM call — a ContextVar set here
+            # is visible to the nested evaluatorq() and copied into child tasks.
+            with _evaluatorq_run_scope(run_id, pipeline_span), evaluatorq_pipeline('agent_simulation'):
+                composed_hooks, manifest_writer = _compose_sim_hooks(
+                    hooks,
                     save=save,
-                    run_output=report,
-                    executive_summary=executive_summary,
-                    hooks=composed_hooks,
-                )
-                return await _simulate_core(
-                    config=config,
-                    caller='simulate',
-                    pipeline_span=pipeline_span,
                     run_id=run_id,
-                    manifest_writer=manifest_writer,
+                    run_name=evaluation_name or 'sim',
+                    run_output=report,
                 )
-            except SimulationCancelledError:
-                if manifest_writer is not None:
-                    manifest_writer.cancel()
-                raise
-            except BaseException as exc:
-                if manifest_writer is not None:
-                    manifest_writer.fail(str(exc) or type(exc).__name__)
-                raise
+                # Outer manifest guard (FIX 1): _simulate_core owns the terminal
+                # transition, but any failure between manifest creation and
+                # _simulate_core (e.g. building SimulationConfig) would otherwise
+                # leave the manifest stuck 'running'. Terminal calls are idempotent,
+                # so this composes safely with _simulate_core's own finalization.
+                try:
+                    config = SimulationConfig(
+                        evaluation_name=evaluation_name,
+                        target=target,
+                        personas=personas,
+                        scenarios=scenarios,
+                        datapoints=datapoints,
+                        dataset_id=dataset_id,
+                        experiment_id=experiment_id,
+                        experiment_run_id=experiment_run_id,
+                        memory_entity_id=memory_entity_id,
+                        previous_run=previous_run,
+                        max_turns=max_turns,
+                        model=sim_model,
+                        evaluator_names=evaluator_names,
+                        parallelism=parallelism,
+                        user_simulator=user_simulator,
+                        judge=judge,
+                        generation_client=generation_client,
+                        upload_results=upload_results,
+                        evaluation_description=evaluation_description,
+                        orq_results_path=orq_results_path,
+                        exit_on_failure=exit_on_failure,
+                        save=save,
+                        run_output=report,
+                        executive_summary=executive_summary,
+                        hooks=composed_hooks,
+                    )
+                    return await _simulate_core(
+                        config=config,
+                        caller='simulate',
+                        pipeline_span=pipeline_span,
+                        run_id=run_id,
+                        manifest_writer=manifest_writer,
+                        post_run=post_run,
+                    )
+                except SimulationCancelledError:
+                    if manifest_writer is not None:
+                        manifest_writer.cancel()
+                    raise
+                except BaseException as exc:
+                    if manifest_writer is not None:
+                        manifest_writer.fail(str(exc) or type(exc).__name__)
+                    raise
     finally:
         await flush_tracing()
 
@@ -598,6 +606,7 @@ async def _generate_and_simulate_run(
     save: bool = False,
     report: str | Path | None = None,
     executive_summary: bool = False,
+    post_run: RunPostProcessor | None = None,
 ) -> SimulationRun:
     """Internal counterpart of :func:`generate_and_simulate` returning the full ``SimulationRun``.
 
@@ -613,9 +622,16 @@ async def _generate_and_simulate_run(
 
     await init_tracing_if_needed()
 
+    # Mint the run id + manifest at the outer entry, BEFORE the generate phase,
+    # gated on save (D3: the GENERATE stage must reach the manifest too). The SAME
+    # composed hooks thread through both the generate phase and _simulate_core, so
+    # both stages are recorded. Minted before the span opens so it can be stamped
+    # as a span attribute rather than set after the fact.
+    run_id = uuid.uuid4().hex
+
     try:
         async with with_simulation_span(
-            'orq.simulation.pipeline',
+            'Evaluatorq - Agent Simulation',
             {
                 'orq.simulation.evaluation_name': evaluation_name,
                 'orq.simulation.mode': 'generate_and_simulate',
@@ -628,101 +644,98 @@ async def _generate_and_simulate_run(
                 'orq.simulation.parallelism': parallelism,
             },
         ) as pipeline_span:
-            # Mint the run id + manifest at the outer entry, BEFORE the generate
-            # phase, gated on save (D3: the GENERATE stage must reach the manifest
-            # too). The SAME composed hooks thread through both the generate phase
-            # and _simulate_core, so both stages are recorded; the raw writer is
-            # retained for terminal complete/cancel/fail calls.
-            run_id = uuid.uuid4().hex
-            composed_hooks, manifest_writer = _compose_sim_hooks(
-                hooks,
-                save=save,
-                run_id=run_id,
-                run_name=evaluation_name or 'sim',
-                run_output=report,
-            )
-            # Outer manifest guard (FIX 1): the terminal manifest calls live in
-            # _simulate_core, but a failure in the GENERATE phase (before
-            # _simulate_core is ever reached) would otherwise leave the manifest
-            # stuck 'running'. Guard the whole generate→simulate span: a declined
-            # confirm cancels, any other failure fails. Terminal calls are
-            # idempotent (guarded by status != RUNNING), so this composes safely
-            # with _simulate_core's own finalization — whichever fires first wins.
-            try:
-                resolved_agent_description = await _resolve_generation_agent_description(
-                    agent_description=agent_description,
-                    target=target,
+            # The raw writer is retained for terminal complete/cancel/fail calls.
+            with _evaluatorq_run_scope(run_id, pipeline_span), evaluatorq_pipeline('agent_simulation'):
+                composed_hooks, manifest_writer = _compose_sim_hooks(
+                    hooks,
+                    save=save,
+                    run_id=run_id,
+                    run_name=evaluation_name or 'sim',
+                    run_output=report,
                 )
-                datapoints: list[SimulationDatapoint] = []
-                gen_client: AsyncOpenAI | None = None
-                gen_owned = False
-                # One try/finally owns the client close so it fires even if the
-                # emit_datapoints callback raises between generation and simulate.
+                # Outer manifest guard (FIX 1): the terminal manifest calls live in
+                # _simulate_core, but a failure in the GENERATE phase (before
+                # _simulate_core is ever reached) would otherwise leave the manifest
+                # stuck 'running'. Guard the whole generate→simulate span: a declined
+                # confirm cancels, any other failure fails. Terminal calls are
+                # idempotent (guarded by status != RUNNING), so this composes safely
+                # with _simulate_core's own finalization — whichever fires first wins.
                 try:
-                    await await_maybe(composed_hooks.on_stage_start(SimStage.GENERATE, {}))
+                    resolved_agent_description = await _resolve_generation_agent_description(
+                        agent_description=agent_description,
+                        target=target,
+                    )
+                    datapoints: list[SimulationDatapoint] = []
+                    gen_client: AsyncOpenAI | None = None
+                    gen_owned = False
+                    # One try/finally owns the client close so it fires even if the
+                    # emit_datapoints callback raises between generation and simulate.
                     try:
-                        datapoints, gen_client, gen_owned = await _generate_datapoints_inner(
-                            caller='generate_and_simulate',
-                            agent_description=resolved_agent_description,
-                            num_personas=num_personas,
-                            num_scenarios=num_scenarios,
+                        await await_maybe(composed_hooks.on_stage_start(SimStage.GENERATE, {}))
+                        try:
+                            datapoints, gen_client, gen_owned = await _generate_datapoints_inner(
+                                caller='generate_and_simulate',
+                                agent_description=resolved_agent_description,
+                                num_personas=num_personas,
+                                num_scenarios=num_scenarios,
+                                model=sim_model,
+                                generation_client=generation_client,
+                                hooks=composed_hooks,
+                            )
+                            if emit_datapoints is not None:
+                                emit_datapoints(datapoints)
+                        finally:
+                            # Thread the in-flight exception into the GENERATE
+                            # stage-end meta so a failed generate records the stage as
+                            # 'error', mirroring SIMULATE (§4.4). None on the success
+                            # path → 'completed'.
+                            meta: dict[str, Any] = {'num_datapoints': len(datapoints)} if datapoints else {}
+                            meta['error'] = sys.exc_info()[1]
+                            await await_maybe(composed_hooks.on_stage_end(SimStage.GENERATE, meta))
+
+                        config = SimulationConfig(
+                            evaluation_name=evaluation_name,
+                            target=target,
+                            personas=None,
+                            scenarios=None,
+                            datapoints=datapoints,
+                            dataset_id=None,
+                            memory_entity_id=memory_entity_id,
+                            max_turns=max_turns,
                             model=sim_model,
-                            generation_client=generation_client,
+                            evaluator_names=evaluator_names,
+                            parallelism=parallelism,
+                            user_simulator=user_simulator,
+                            judge=judge,
+                            generation_client=gen_client,
+                            upload_results=upload_results,
+                            evaluation_description=evaluation_description,
+                            orq_results_path=orq_results_path,
+                            exit_on_failure=exit_on_failure,
+                            save=save,
+                            run_output=report,
+                            executive_summary=executive_summary,
                             hooks=composed_hooks,
                         )
-                        if emit_datapoints is not None:
-                            emit_datapoints(datapoints)
+                        return await _simulate_core(
+                            config=config,
+                            caller='generate_and_simulate',
+                            pipeline_span=pipeline_span,
+                            run_id=run_id,
+                            manifest_writer=manifest_writer,
+                            post_run=post_run,
+                        )
                     finally:
-                        # Thread the in-flight exception into the GENERATE
-                        # stage-end meta so a failed generate records the stage as
-                        # 'error', mirroring SIMULATE (§4.4). None on the success
-                        # path → 'completed'.
-                        meta: dict[str, Any] = {'num_datapoints': len(datapoints)} if datapoints else {}
-                        meta['error'] = sys.exc_info()[1]
-                        await await_maybe(composed_hooks.on_stage_end(SimStage.GENERATE, meta))
-
-                    config = SimulationConfig(
-                        evaluation_name=evaluation_name,
-                        target=target,
-                        personas=None,
-                        scenarios=None,
-                        datapoints=datapoints,
-                        dataset_id=None,
-                        memory_entity_id=memory_entity_id,
-                        max_turns=max_turns,
-                        model=sim_model,
-                        evaluator_names=evaluator_names,
-                        parallelism=parallelism,
-                        user_simulator=user_simulator,
-                        judge=judge,
-                        generation_client=gen_client,
-                        upload_results=upload_results,
-                        evaluation_description=evaluation_description,
-                        orq_results_path=orq_results_path,
-                        exit_on_failure=exit_on_failure,
-                        save=save,
-                        run_output=report,
-                        executive_summary=executive_summary,
-                        hooks=composed_hooks,
-                    )
-                    return await _simulate_core(
-                        config=config,
-                        caller='generate_and_simulate',
-                        pipeline_span=pipeline_span,
-                        run_id=run_id,
-                        manifest_writer=manifest_writer,
-                    )
-                finally:
-                    if gen_owned and gen_client is not None:
-                        await gen_client.close()
-            except SimulationCancelledError:
-                if manifest_writer is not None:
-                    manifest_writer.cancel()
-                raise
-            except BaseException as exc:
-                if manifest_writer is not None:
-                    manifest_writer.fail(str(exc) or type(exc).__name__)
-                raise
+                        if gen_owned and gen_client is not None:
+                            await gen_client.close()
+                except SimulationCancelledError:
+                    if manifest_writer is not None:
+                        manifest_writer.cancel()
+                    raise
+                except BaseException as exc:
+                    if manifest_writer is not None:
+                        manifest_writer.fail(str(exc) or type(exc).__name__)
+                    raise
     finally:
         await flush_tracing()
 
@@ -769,6 +782,9 @@ async def generate(
 
     await init_tracing_if_needed()
 
+    # Minted before the span opens so it can be stamped as a span attribute.
+    run_id = uuid.uuid4().hex
+
     try:
         async with with_simulation_span(
             'orq.simulation.generate',
@@ -777,39 +793,40 @@ async def generate(
                 'orq.simulation.num_personas': num_personas,
                 'orq.simulation.num_scenarios': num_scenarios,
             },
-        ):
-            # Bracket generation with the same GENERATE stage hooks the
-            # generate_and_simulate path uses, so the standalone command
-            # isn't silent. Empty on_stage_end meta: the CLI prints its own
-            # "✓ Generated N datapoint(s)" line, so the count isn't doubled.
-            gen_hooks, _ = _compose_sim_hooks(
-                hooks,
-                save=False,
-                run_id='',
-                run_name='generate',
-                run_output=None,
-            )
-            await await_maybe(gen_hooks.on_stage_start(SimStage.GENERATE, {}))
-            try:
-                datapoints, gen_client, gen_owned = await _generate_datapoints_inner(
-                    caller='generate',
-                    agent_description=agent_description,
-                    num_personas=num_personas,
-                    num_scenarios=num_scenarios,
-                    model=sim_model,
-                    generation_client=generation_client,
-                    hooks=gen_hooks,
-                    persona_seeds=persona_seeds,
-                    scenario_seeds=scenario_seeds,
+        ) as pipeline_span:
+            with _evaluatorq_run_scope(run_id, pipeline_span), evaluatorq_pipeline('agent_simulation'):
+                # Bracket generation with the same GENERATE stage hooks the
+                # generate_and_simulate path uses, so the standalone command
+                # isn't silent. Empty on_stage_end meta: the CLI prints its own
+                # "✓ Generated N datapoint(s)" line, so the count isn't doubled.
+                gen_hooks, _ = _compose_sim_hooks(
+                    hooks,
+                    save=False,
+                    run_id='',
+                    run_name='generate',
+                    run_output=None,
                 )
-            finally:
-                await await_maybe(gen_hooks.on_stage_end(SimStage.GENERATE, {}))
-            # generate() has no further use for the client (unlike
-            # _generate_and_simulate_run, which keeps it open for the
-            # simulate stage), so close it here once generation is done.
-            if gen_owned:
-                await gen_client.close()
-            return datapoints
+                await await_maybe(gen_hooks.on_stage_start(SimStage.GENERATE, {}))
+                try:
+                    datapoints, gen_client, gen_owned = await _generate_datapoints_inner(
+                        caller='generate',
+                        agent_description=agent_description,
+                        num_personas=num_personas,
+                        num_scenarios=num_scenarios,
+                        model=sim_model,
+                        generation_client=generation_client,
+                        hooks=gen_hooks,
+                        persona_seeds=persona_seeds,
+                        scenario_seeds=scenario_seeds,
+                    )
+                finally:
+                    await await_maybe(gen_hooks.on_stage_end(SimStage.GENERATE, {}))
+                # generate() has no further use for the client (unlike
+                # _generate_and_simulate_run, which keeps it open for the
+                # simulate stage), so close it here once generation is done.
+                if gen_owned:
+                    await gen_client.close()
+                return datapoints
     finally:
         await flush_tracing()
 
@@ -841,6 +858,10 @@ async def generate_personas(
     if not seeds:
         raise ValueError('generate_personas requires at least one seed')
     description = agent_description or 'a general-purpose conversational assistant'
+    # No run id is bound here: this entrypoint owns no root span, so an id would
+    # be undiscoverable. The calls are still traced — PersonaGenerator.generate
+    # opens `orq.simulation.persona_generation` with a child LLM span, and on the
+    # sim paths those already nest under the run's root span.
     gen = PersonaGenerator(model=sim_model, client=generation_client)
     try:
         batches = await asyncio.gather(*[
@@ -904,6 +925,7 @@ async def generate_scenarios(
     if not seeds:
         raise ValueError('generate_scenarios requires at least one seed')
     description = agent_description or 'a general-purpose conversational assistant'
+    # No run id bound here — see the note in generate_personas.
     gen = ScenarioGenerator(model=sim_model, client=generation_client)
     try:
         batches = await asyncio.gather(*[
@@ -1070,8 +1092,9 @@ async def _simulate_core(
     pipeline_span: Span | None,
     run_id: str,
     manifest_writer: ManifestWriter | None = None,
+    post_run: RunPostProcessor | None = None,
 ) -> SimulationRun:
-    """Core simulation logic (runs inside the orq.simulation.pipeline span).
+    """Core simulation logic (runs inside the Evaluatorq - Agent Simulation span).
 
     Resolves the target (callable, ``AgentTarget``, or ``"agent:"``/``"deployment:"`` string),
     resolves/generates the datapoints, then drives the run-level lifecycle
@@ -1280,6 +1303,12 @@ async def _simulate_core(
             except Exception:
                 logger.warning('Failed to generate executive summary (results still returned)', exc_info=True)
 
+        # CLI-only report enrichments run before persistence while the pipeline
+        # span and evaluatorq run context are still active. This keeps their LLM
+        # spans under the main simulation root and binds the same run metadata.
+        if post_run is not None:
+            await post_run(run)
+
         # Persist only when the caller opts in (save=True).
         # TODO(RES-963): inline because on_run_complete carries no run metadata and
         # hooks aren't yet composable; move to a save hook once that lands.
@@ -1339,7 +1368,9 @@ def _resolve_target(
     target: str | Callable[..., Any] | AgentTarget | None,
     *,
     memory_entity_id: str | None = None,
-) -> tuple[Callable[[list[Message]], str | Awaitable[str]] | None, AgentTarget | None, str | None]:
+) -> tuple[
+    Callable[[list[Message]], str | Awaitable[str] | Awaitable[AgentResponse]] | None, AgentTarget | None, str | None
+]:
     """Resolve the simulation target into ``(callback, agent, kind_hint)`` for the runner.
 
     Accepts:
@@ -1579,7 +1610,7 @@ def _build_simulation_job_and_cache(
     *,
     job_name: str,
     sim_dp_by_id: dict[int, SimulationDatapoint],
-    target: Callable[[list[Message]], str | Awaitable[str]] | None,
+    target: Callable[[list[Message]], str | Awaitable[str] | Awaitable[AgentResponse]] | None,
     target_agent: AgentTarget | None,
     model: str,
     max_turns: int,
@@ -1711,16 +1742,56 @@ def _adapt_simulation_scorer(
             logger.exception('scorer %r raised on DataPoint id=%s', name, id(data))
             sim_result.metadata.setdefault('scorer_errors', {})[name] = repr(e)
             raise
-        return EvaluationResult(value=value)
+        # Carry the judge's reasoning through as explanation + pass_ so it lands on
+        # the evaluator trace span and the uploaded experiment. `value` is left
+        # untouched — experiment averages depend on the exact numeric score.
+        explanation, pass_ = _sim_evaluation_details(name, sim_result)
+        return EvaluationResult.model_validate({'value': value, 'explanation': explanation, 'pass': pass_})
 
-    return {'name': name, 'scorer': scorer}
+    # evaluator_type marks these as code scorers so the tracing layer emits the
+    # gen_ai.evaluation.* evaluator-span attributes (opt-in; see set_evaluation_attributes).
+    # 'python_eval' is Orq's EvaluatorType value for code scorers.
+    return {'name': name, 'scorer': scorer, 'evaluator_type': 'python_eval'}
+
+
+def _sim_evaluation_details(name: str, result: SimulationResult) -> tuple[str | None, bool | None]:
+    """Derive (explanation, pass_) for a built-in sim evaluator from the judge's reasoning.
+
+    Only the default evaluators (``goal_achieved`` / ``criteria_met``) carry a
+    reasoning surface today; others return ``(None, None)`` so their span/experiment
+    detail is unchanged.
+    """
+    if name == 'goal_achieved':
+        return (result.reason or None), result.goal_achieved
+    if name == 'criteria_met':
+        meta = result.metadata.get('criteria_meta') or []
+        if isinstance(meta, list) and meta:
+            # Tag each line with the criterion polarity. Without it, a passed
+            # 'must_not_happen' rule renders as e.g. "PASS: Agent blames the
+            # customer", which reads as if the agent passed *by* misbehaving.
+            # "[prohibited]" makes clear PASS means the behavior was avoided.
+            def _line(c: dict[str, object]) -> str:
+                verdict = 'PASS' if c.get('passed') else 'FAIL'
+                polarity = 'prohibited' if c.get('type') == 'must_not_happen' else 'required'
+                return f'{verdict} [{polarity}]: {c.get("description", c.get("id", "?"))}'
+
+            lines = [_line(c) for c in meta]
+            all_met = all(c.get('passed') for c in meta)
+            return '\n'.join(lines), all_met
+        # Fallback to the lossy criteria_results dict when criteria_meta is absent.
+        criteria_results = result.criteria_results or {}
+        if criteria_results:
+            lines = [f'{"PASS" if ok else "FAIL"}: {desc}' for desc, ok in criteria_results.items()]
+            return '\n'.join(lines), all(criteria_results.values())
+        return 'No criteria defined for this scenario.', True
+    return None, None
 
 
 async def _simulate_via_evaluatorq(
     *,
     config: SimulationConfig,
     caller: str,
-    target: Callable[[list[Message]], str | Awaitable[str]] | None,
+    target: Callable[[list[Message]], str | Awaitable[str] | Awaitable[AgentResponse]] | None,
     target_agent: AgentTarget | None,
     sim_datapoints: list[SimulationDatapoint],
     pipeline_span: Span | None,
@@ -1800,7 +1871,12 @@ async def _simulate_via_evaluatorq(
             # two concurrent rich.Live regions flicker against each other.
             print_results=False,
             _send_results=upload_results,
-            _exit_on_failure=exit_on_failure,
+            # Never let evaluatorq's score-based gate (check_pass_failures →
+            # sys.exit) fire for simulation. Now that scorers report pass_ (a
+            # judge verdict — e.g. goal not achieved), an underperforming but
+            # otherwise healthy run must NOT exit the process. exit_on_failure
+            # for sim means dropped rows only (SimulationDroppedError below).
+            _exit_on_failure=False,
             _base_url=upload_base_url,
             _experiment_url_out=experiment_url_out,
         )

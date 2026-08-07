@@ -4,7 +4,7 @@ Domain-specific span builders (with_simulation_span, with_llm_span) live here.
 Generic recording utilities are imported from evaluatorq.common.tracing.
 
 Span hierarchy:
-    orq.simulation.pipeline (root)
+    Evaluatorq - Agent Simulation (root)
       ├── orq.simulation.run (per datapoint)
       │   ├── orq.simulation.first_message_generation
       │   └── orq.simulation.turn (per turn)

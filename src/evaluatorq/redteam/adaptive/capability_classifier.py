@@ -6,13 +6,13 @@ while memory and knowledge capabilities are inferred from explicit
 agent configuration (memory tools / knowledge bases).
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from loguru import logger
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI
 from pydantic import BaseModel, Field
 
-from evaluatorq.common.tracing import record_llm_response
+from evaluatorq.common.llm_call import execute_chat_parse
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
     PIPELINE_CONFIG,
@@ -22,9 +22,6 @@ from evaluatorq.redteam.contracts import (
 )
 from evaluatorq.redteam.tracing import with_llm_span
 from evaluatorq.redteam.utils import safe_substitute
-
-if TYPE_CHECKING:
-    from openai.types.chat import ChatCompletionMessageParam
 
 
 class ToolCapabilities(BaseModel):
@@ -231,7 +228,7 @@ async def _infer_resource_capabilities(
         },
     )
     try:
-        infer_messages: list[ChatCompletionMessageParam] = [{'role': 'user', 'content': prompt}]
+        infer_messages: list[dict[str, Any]] = [{'role': 'user', 'content': prompt}]
         async with with_llm_span(
             model=model,
             temperature=cfg.attacker.temperature,
@@ -239,21 +236,21 @@ async def _infer_resource_capabilities(
             input_messages=infer_messages,
             attributes={'orq.redteam.llm_purpose': 'infer_resources'},
         ) as res_span:
-            response = await llm_client.chat.completions.parse(
+            response, _ = await execute_chat_parse(
+                client=llm_client,
                 model=model,
                 messages=infer_messages,
-                response_format=ResourceCapabilityInference,
+                span=res_span,
+                timeout_s=cfg.attacker.timeout_ms / 1000.0,
+                response_model=ResourceCapabilityInference,
                 temperature=cfg.attacker.temperature,
                 max_completion_tokens=cfg.attacker.max_tokens,
-                extra_body=cfg.retry_extra_body(llm_client),
-                **cfg.attacker.extra_kwargs,
+                extra_kwargs={
+                    'extra_body': cfg.retry_extra_body(llm_client),
+                    **cfg.attacker.extra_kwargs,
+                },
             )
             parsed = response.choices[0].message.parsed
-            record_llm_response(
-                res_span,
-                response,
-                output_content=getattr(response.choices[0].message, 'content', None),
-            )
             if parsed is None:
                 raise ValueError('Resource capability inference returned no parsed content')
             return parsed
@@ -295,7 +292,7 @@ async def _classify_tools(
     valid_values = {c.value for c in AgentCapability}
 
     try:
-        classify_messages: list[ChatCompletionMessageParam] = [{'role': 'user', 'content': prompt}]
+        classify_messages: list[dict[str, Any]] = [{'role': 'user', 'content': prompt}]
         async with with_llm_span(
             model=model,
             temperature=cfg.attacker.temperature,
@@ -306,19 +303,19 @@ async def _classify_tools(
                 'orq.redteam.num_tools': len(agent_context.tools),
             },
         ) as cls_span:
-            response = await llm_client.chat.completions.parse(
+            response, _ = await execute_chat_parse(
+                client=llm_client,
                 model=model,
                 messages=classify_messages,
-                response_format=ToolCapabilitiesResponse,
+                span=cls_span,
+                timeout_s=cfg.attacker.timeout_ms / 1000.0,
+                response_model=ToolCapabilitiesResponse,
                 temperature=cfg.attacker.temperature,
                 max_completion_tokens=cfg.attacker.max_tokens,
-                extra_body=cfg.retry_extra_body(llm_client),
-                **cfg.attacker.extra_kwargs,
-            )
-            record_llm_response(
-                cls_span,
-                response,
-                output_content=getattr(response.choices[0].message, 'content', None),
+                extra_kwargs={
+                    'extra_body': cfg.retry_extra_body(llm_client),
+                    **cfg.attacker.extra_kwargs,
+                },
             )
 
             result = response.choices[0].message.parsed

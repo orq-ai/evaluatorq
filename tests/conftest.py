@@ -33,6 +33,7 @@ def _disable_real_span_export(monkeypatch):
     in by deleting this var.
     """
     monkeypatch.setenv("ORQ_DISABLE_TRACING", "1")
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
     yield
 
 

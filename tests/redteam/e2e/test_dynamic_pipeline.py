@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager, contextmanager
 from typing import cast
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from openai import AsyncOpenAI
 
 from evaluatorq.redteam import red_team
+from evaluatorq.redteam.contracts import PipelineStage
 from evaluatorq.tracing import TracingContext
+
 from .conftest import (
     DeterministicAsyncOpenAI,
     MockBackend,
@@ -30,8 +32,13 @@ def _dynamic_patches(mock_backend_bundle: MockBackend):
 
 
 @asynccontextmanager
-async def _noop_tracing_session(*args, **kwargs):
+async def _noop_tracing_session(*args: object, **kwargs: object):  # noqa: RUF029
     yield TracingContext(run_id='test', run_name='test', enabled=False, parent_context=None, trace_type='redteam')
+
+
+@asynccontextmanager
+async def _noop_span_ctx(*args: object, **kwargs: object):  # noqa: RUF029
+    yield None
 
 
 @pytest.mark.asyncio
@@ -116,6 +123,41 @@ async def test_dynamic_memory_cleanup(
         )
 
     assert len(mock_backend_bundle.cleaned_entity_ids) > 0, 'Expected memory cleanup to be called'
+
+
+@pytest.mark.asyncio
+async def test_dynamic_memory_cleanup_is_noop_without_memory_stores(
+    mock_llm_client: DeterministicAsyncOpenAI,
+    mock_backend_bundle: MockBackend,
+) -> None:
+    """A target without configured stores gets no cleanup backend call or span."""
+    mock_backend_bundle._context.memory_stores = []  # noqa: SLF001
+    hooks = MagicMock(
+        on_stage_start=AsyncMock(),
+        on_stage_end=AsyncMock(),
+        on_confirm=AsyncMock(),
+        on_complete=AsyncMock(),
+    )
+
+    with (
+        _dynamic_patches(mock_backend_bundle),
+        patch('evaluatorq.redteam.runner.with_redteam_span', side_effect=_noop_span_ctx) as redteam_span,
+    ):
+        await red_team(
+            'agent:e2e-test-agent',
+            mode='dynamic',
+            categories=['ASI01'],
+            generate_strategies=False,
+            cleanup_memory=True,
+            parallelism=2,
+            llm_client=cast(AsyncOpenAI, cast(object, mock_llm_client)),
+            hooks=hooks,
+        )
+
+    assert mock_backend_bundle.cleaned_entity_ids == []
+    assert all(call.args[0] != 'orq.redteam.memory_cleanup' for call in redteam_span.call_args_list)
+    assert all(call.args[0] != PipelineStage.CLEANUP for call in hooks.on_stage_start.call_args_list)
+    assert all(call.args[0] != PipelineStage.CLEANUP for call in hooks.on_stage_end.call_args_list)
 
 
 # Covers the re-widening fix in `_run_dynamic_or_hybrid` — the expensive path, where

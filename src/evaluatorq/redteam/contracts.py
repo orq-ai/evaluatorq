@@ -10,7 +10,7 @@ Semantic convention:
 """
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
 from pydantic import (
     BaseModel,
@@ -19,6 +19,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from typing_extensions import NotRequired, TypedDict
 
 from evaluatorq.common.target_call import classify_error_type as classify_error_type
 from evaluatorq.contracts import StrEnum
@@ -702,22 +703,17 @@ class LLMConfig(BaseModel):
         OpenAI client just because ``ORQ_API_KEY`` is in the environment for
         tracing/result-upload.
 
-        This dict fully owns the ``metadata`` key on the request: a caller that
-        passes ``extra_body=cfg.retry_extra_body(...)`` and also wants its own
-        ``metadata`` must merge the two dicts itself.
+        Run-attribution ``metadata`` is NOT merged here: calls that route through
+        execute_chat_completion/parse get it natively
+        (llm_call.apply_pipeline_metadata); native Chat/Responses call sites use
+        top-level metadata, while Orq-agent SDK calls use pipeline_metadata_param()
+        as a top-level request kwarg.
         """
         from evaluatorq.common.llm_client import client_routes_through_orq
-        from evaluatorq.common.thread_context import pipeline_metadata_param
 
         if not client_routes_through_orq(client):
             return {}
-        # Tag every pipeline-internal call (attack/objective generation, evaluator,
-        # orchestrator, capability classifier) with the active surface so its Orq
-        # trace spans are filterable as red teaming. No-op when no pipeline is bound.
-        return {
-            'retry': {'count': self.retry_count, 'on_codes': self.retry_on_codes},
-            **pipeline_metadata_param(),
-        }
+        return {'retry': {'count': self.retry_count, 'on_codes': self.retry_on_codes}}
 
 
 # Module-level default used by internal pipeline components.
@@ -1789,6 +1785,9 @@ class EvaluatorqEvaluatorConfig(TypedDict):
 
     name: str
     scorer: Any
+    # Opt-in evaluator kind ('llm_eval' for the OWASP judge). When set, the tracing
+    # layer emits gen_ai.evaluation.* evaluator-span attributes (see set_evaluation_attributes).
+    evaluator_type: NotRequired[str]
 
 
 class ReportSnapshot(BaseModel):

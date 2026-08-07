@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq import DataPoint, Job, job
+from evaluatorq.common.llm_call import apply_pipeline_metadata, execute_chat_completion
 from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.thread_context import build_static_thread_id, conversation_thread, thread_body_param
@@ -113,6 +114,11 @@ def create_model_job(
                             'key': deployment_key,
                             'messages': messages,
                         }
+                        # Deployment SDK calls do not go through the shared
+                        # chat-completion helper, so apply the active run
+                        # metadata explicitly. The helper preserves any
+                        # caller-supplied metadata if this path gains one.
+                        apply_pipeline_metadata(invoke_kwargs)
                         invoke_kwargs.update(thread_body_param())
                         completion = await deployment_client.deployments.invoke_async(**invoke_kwargs)
                         content = _extract_deployment_content(completion)
@@ -167,16 +173,23 @@ def create_model_job(
                     input_messages=messages,
                     attributes={'orq.redteam.llm_purpose': 'target'},
                 ) as llm_span:
-                    kwargs: dict[str, Any] = {
-                        'model': model,
-                        'messages': messages,
-                        'max_tokens': max_tokens,
-                    }
+                    extra_kwargs: dict[str, Any] = {}
                     if client_routes_through_orq(client):
-                        kwargs['extra_body'] = thread_body_param()
-                    response = await client.chat.completions.create(**kwargs)  # pyright: ignore[reportArgumentType]
+                        # Run metadata is applied natively by execute_chat_completion
+                        # (llm_call.apply_pipeline_metadata); only thread grouping here.
+                        extra_kwargs['extra_body'] = thread_body_param()
+                    # ponytail: fixed 300s ceiling (was unbounded); thread a cfg
+                    # target timeout through create_model_job if per-run tuning is needed.
+                    response, _ = await execute_chat_completion(
+                        client=client,
+                        model=model,
+                        messages=messages,
+                        span=llm_span,
+                        timeout_s=300.0,
+                        max_tokens=max_tokens,
+                        extra_kwargs=extra_kwargs or None,
+                    )
                     content = response.choices[0].message.content or ''
-                    record_llm_response(llm_span, response, output_content=content)
                     output = truncate_for_span(content)
                     set_span_attrs(target_span, {'output': output, 'orq.redteam.output': output})
         if not content:

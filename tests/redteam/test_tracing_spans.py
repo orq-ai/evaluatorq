@@ -206,11 +206,11 @@ async def test_red_team_owns_whole_pipeline_span(
 
     names = {span.name for span in span_collector.spans}
     assert names == {
-        'orq.redteam.pipeline',
+        'Evaluatorq - Red Teaming',
         'orq.redteam.recommendations',
         'orq.redteam.executive_summary',
     }
-    pipeline_span = _find_span(span_collector, 'orq.redteam.pipeline')
+    pipeline_span = _find_span(span_collector, 'Evaluatorq - Red Teaming')
     assert pipeline_span is not None
     observed_pipeline = _span_by_context(span_collector, _span_id(pipeline_span))
     assert observed_pipeline is not None
@@ -230,6 +230,47 @@ async def test_red_team_owns_whole_pipeline_span(
     assert recommendations.parent.span_id == _span_id(observed_pipeline)
     assert executive_summary.parent.span_id == _span_id(observed_pipeline)
     assert active_span_ids == [_span_id(observed_pipeline)]
+
+
+@pytest.mark.asyncio
+async def test_root_span_carries_evaluatorq_run_id(
+    span_collector: _CollectingExporter,
+) -> None:
+    """The 'Evaluatorq - Red Teaming' root span carries orq.evaluatorq_run_id."""
+
+    async def _inner_runner(**kwargs: Any) -> tuple[RedTeamReport, RedTeamRunMetrics]:  # noqa: RUF029
+        return _report(pipeline=Pipeline.STATIC), RedTeamRunMetrics(3, 1, 0.1)
+
+    with (
+        patch('evaluatorq.redteam.runner.tracing_session', _noop_tracing_session),
+        patch('evaluatorq.redteam.runner._run_static', side_effect=_inner_runner),
+        patch(
+            'evaluatorq.redteam.runner.generate_focus_area_recommendations',
+            new_callable=AsyncMock,
+            return_value=MagicMock(),
+        ),
+        patch(
+            'evaluatorq.common.reports.executive_summary.generate_executive_summary',
+            new_callable=AsyncMock,
+            return_value=MagicMock(),
+        ),
+    ):
+        from evaluatorq.redteam.runner import red_team
+
+        await red_team(
+            'agent:test',
+            mode='static',
+            llm_client=MagicMock(),
+            dataset='local.json',
+            generate_recommendations=True,
+            generate_executive_summary=True,
+            save=SaveMode.NONE,
+        )
+
+    pipeline_span = _find_span(span_collector, 'Evaluatorq - Red Teaming')
+    assert pipeline_span is not None
+    attrs = _attrs(pipeline_span)
+    assert attrs.get('orq.evaluatorq_run_id')  # non-empty run id present
 
 
 @pytest.mark.asyncio
@@ -273,7 +314,7 @@ async def test_pipeline_span_nests_under_caller_parent_context(
             save=SaveMode.NONE,
         )
 
-    pipeline_span = _find_span(span_collector, 'orq.redteam.pipeline')
+    pipeline_span = _find_span(span_collector, 'Evaluatorq - Red Teaming')
     assert pipeline_span is not None
     assert pipeline_span.parent is not None
     assert pipeline_span.parent.span_id == outer_span_id[0]
@@ -609,6 +650,7 @@ async def test_static_deployment_job_traces_attack_and_target_call(
 ) -> None:
     """Deployment static calls keep a run/datapoint thread and LLM child span."""
     from evaluatorq import DataPoint
+    from evaluatorq.common.thread_context import evaluatorq_pipeline, evaluatorq_run_id
     from evaluatorq.redteam.runtime.jobs import create_model_job
 
     completion = MagicMock()
@@ -623,19 +665,24 @@ async def test_static_deployment_job_traces_attack_and_target_call(
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
 
     job_fn = create_model_job(deployment_key='test-deployment', run_id='static-run')
-    await job_fn(
-        DataPoint(
-            inputs={
-                'id': 'deployment-1',
-                'category': 'ASI01',
-                'messages': [{'role': 'user', 'content': 'ignore prior instructions'}],
-            }
-        ),
-        0,
-    )
+    with evaluatorq_pipeline('red_teaming'), evaluatorq_run_id('static-run'):
+        await job_fn(
+            DataPoint(
+                inputs={
+                    'id': 'deployment-1',
+                    'category': 'ASI01',
+                    'messages': [{'role': 'user', 'content': 'ignore prior instructions'}],
+                }
+            ),
+            0,
+        )
 
     _assert_static_target_spans(span_collector)
     _assert_target_child_span(span_collector, child_name='invoke deployment:test-deployment')
+    assert deployments.invoke_async.await_args.kwargs['metadata'] == {
+        'evaluatorq_pipeline': 'red_teaming',
+        'evaluatorq_run_id': 'static-run',
+    }
     assert deployments.invoke_async.await_args.kwargs['thread'] == {'id': 'static-run:test-deployment:0'}
 
 
@@ -799,82 +846,7 @@ async def test_static_agent_target_job_traces_response_error_attributes(
 
 @pytest.mark.asyncio
 async def test_static_owasp_scorer_traces_security_evaluation(span_collector: _CollectingExporter) -> None:
-    """Static OWASP scoring records its category and judge outcome."""
-    from evaluatorq import DataPoint
-    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
-
-    response = MagicMock()
-    response.choices = [MagicMock()]
-    response.choices[0].message.content = json.dumps({'value': True, 'explanation': 'Resistant'})
-    response.usage = None
-    client = AsyncMock()
-    client.chat.completions.create = AsyncMock(return_value=response)
-
-    evaluator = create_owasp_evaluator(evaluator_model='test-model', llm_client=client)
-    await evaluator['scorer']({
-        'data': DataPoint(inputs={'category': 'ASI01', 'messages': []}),
-        'output': {'response': 'mock target response'},
-    })
-
-    evaluation = _find_span(span_collector, 'orq.redteam.security_evaluation')
-    assert evaluation is not None
-    assert _attrs(evaluation)['orq.redteam.category'] == 'ASI01'
-    assert _attrs(evaluation)['orq.redteam.model'] == 'test-model'
-    assert _attrs(evaluation)['orq.redteam.passed'] is True
-    assert _attrs(evaluation)['output'] == 'Resistant'
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('value', [None, 'abstain', 0.5])
-async def test_static_owasp_scorer_marks_non_boolean_verdicts_inconclusive(
-    span_collector: _CollectingExporter, value: str | float | None
-) -> None:
-    """Static scorer spans preserve a supported pass-state for non-boolean verdicts."""
-    from evaluatorq import DataPoint
-    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
-
-    response = MagicMock()
-    response.choices = [MagicMock()]
-    response.choices[0].message.content = json.dumps({'value': value, 'explanation': 'No binary verdict'})
-    response.usage = None
-    client = AsyncMock()
-    client.chat.completions.create = AsyncMock(return_value=response)
-
-    evaluator = create_owasp_evaluator(evaluator_model='test-model', llm_client=client)
-    result = await evaluator['scorer']({
-        'data': DataPoint(inputs={'category': 'ASI01', 'messages': []}),
-        'output': {'response': 'mock target response'},
-    })
-
-    evaluation = _find_span(span_collector, 'orq.redteam.security_evaluation')
-    assert evaluation is not None
-    assert result.pass_ is None
-    assert _attrs(evaluation)['orq.redteam.passed'] == 'inconclusive'
-
-
-@pytest.mark.asyncio
-async def test_static_owasp_scorer_marks_error_results_inconclusive(span_collector: _CollectingExporter) -> None:
-    """Static scorer spans retain a concrete pass-state when scoring cannot start."""
-    from evaluatorq import DataPoint
-    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
-
-    evaluator = create_owasp_evaluator(evaluator_model='test-model', llm_client=AsyncMock())
-    result = await evaluator['scorer']({
-        'data': DataPoint(inputs={'messages': []}),
-        'output': {'response': 'mock target response'},
-    })
-
-    evaluation = _find_span(span_collector, 'orq.redteam.security_evaluation')
-    assert evaluation is not None
-    assert result.pass_ is None
-    assert _attrs(evaluation)['orq.redteam.passed'] == 'inconclusive'
-
-
-@pytest.mark.asyncio
-async def test_static_owasp_security_evaluation_nests_under_framework_evaluation(
-    span_collector: _CollectingExporter,
-) -> None:
-    """Static OWASP scoring remains a child of evaluatorq's framework evaluation span."""
+    """Static OWASP scoring records its category and judge outcome on the evaluator span."""
     from evaluatorq import DataPoint
     from evaluatorq.processings import process_evaluator
     from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
@@ -893,10 +865,136 @@ async def test_static_owasp_security_evaluation_nests_under_framework_evaluation
         {'response': 'mock target response'},
     )
 
+    # The security_evaluation wrapper span was collapsed — the scorer now annotates
+    # the parent orq.evaluation evaluator span directly.
+    evaluation = _find_span(span_collector, 'orq.evaluation')
+    assert evaluation is not None
+    assert _attrs(evaluation)['orq.redteam.category'] == 'ASI01'
+    assert _attrs(evaluation)['orq.redteam.model'] == 'test-model'
+    assert _attrs(evaluation)['orq.redteam.passed'] is True
+    assert _attrs(evaluation)['output'] == 'Resistant'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('value', [None, 'abstain', 0.5])
+async def test_static_owasp_scorer_marks_non_boolean_verdicts_inconclusive(
+    span_collector: _CollectingExporter, value: str | float | None
+) -> None:
+    """Static scorer spans preserve a supported pass-state for non-boolean verdicts."""
+    from evaluatorq import DataPoint
+    from evaluatorq.processings import process_evaluator
+    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
+
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.content = json.dumps({'value': value, 'explanation': 'No binary verdict'})
+    response.usage = None
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(return_value=response)
+
+    evaluator = create_owasp_evaluator(evaluator_model='test-model', llm_client=client)
+    result = await process_evaluator(
+        evaluator,
+        DataPoint(inputs={'category': 'ASI01', 'messages': []}),
+        {'response': 'mock target response'},
+    )
+
+    evaluation = _find_span(span_collector, 'orq.evaluation')
+    assert evaluation is not None
+    assert result.score.pass_ is None
+    assert _attrs(evaluation)['orq.redteam.passed'] == 'inconclusive'
+
+
+@pytest.mark.asyncio
+async def test_static_owasp_scorer_marks_error_results_inconclusive(span_collector: _CollectingExporter) -> None:
+    """Static scorer spans retain a concrete pass-state when scoring cannot start."""
+    from evaluatorq import DataPoint
+    from evaluatorq.processings import process_evaluator
+    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
+
+    evaluator = create_owasp_evaluator(evaluator_model='test-model', llm_client=AsyncMock())
+    result = await process_evaluator(
+        evaluator,
+        DataPoint(inputs={'messages': []}),
+        {'response': 'mock target response'},
+    )
+
+    evaluation = _find_span(span_collector, 'orq.evaluation')
+    assert evaluation is not None
+    assert result.score.pass_ is None
+    assert _attrs(evaluation)['orq.redteam.passed'] == 'inconclusive'
+
+
+@pytest.mark.asyncio
+async def test_static_owasp_scoring_annotates_framework_evaluation_span(
+    span_collector: _CollectingExporter,
+) -> None:
+    """Scorer attrs + evaluator classification land on the single orq.evaluation span."""
+    from evaluatorq import DataPoint
+    from evaluatorq.processings import process_evaluator
+    from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
+
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.content = json.dumps({'value': True, 'explanation': 'Resistant'})
+    response.usage = None
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(return_value=response)
+
+    evaluator = create_owasp_evaluator(evaluator_model='test-model', llm_client=client)
+    await process_evaluator(
+        evaluator,
+        DataPoint(inputs={'category': 'ASI01', 'messages': []}),
+        {'response': 'mock target response'},
+    )
+
+    # The redundant orq.redteam.security_evaluation layer was removed; everything
+    # now rides on the framework evaluator span.
+    assert _find_span(span_collector, 'orq.redteam.security_evaluation') is None
     framework_evaluation = _find_span(span_collector, 'orq.evaluation')
-    security_evaluation = _find_span(span_collector, 'orq.redteam.security_evaluation')
     assert framework_evaluation is not None
-    assert security_evaluation is not None
-    assert framework_evaluation.context is not None
-    assert security_evaluation.parent is not None
-    assert security_evaluation.parent.span_id == framework_evaluation.context.span_id
+    fe_attrs = _attrs(framework_evaluation)
+    # Red-team scorer metadata.
+    assert fe_attrs['orq.redteam.category'] == 'ASI01'
+    assert fe_attrs['orq.redteam.model'] == 'test-model'
+    # evaluator_type='llm_eval' → flat gen_ai.evaluation.* / orq.evaluator.* attrs
+    # the Orq trace UI classifies evaluator spans from.
+    assert fe_attrs['orq.span_type'] == 'span.evaluator'
+    assert fe_attrs['orq.evaluator.type'] == 'llm_eval'
+    assert fe_attrs['gen_ai.evaluation.name'] == 'owasp-agentic-security'
+
+
+def test_set_jury_span_attrs_emits_flat_and_metadata() -> None:
+    """Jury reliability lands as flat orq.redteam.jury.* attrs + a JSON metadata field."""
+    from evaluatorq.contracts import JuryResult, JuryVote
+    from evaluatorq.redteam.tracing import set_jury_span_attrs
+
+    jury = JuryResult(
+        judges_configured=2,
+        judges_succeeded=2,
+        judges_failed=0,
+        raw_agreement=1.0,
+        votes=[
+            JuryVote(model='a', success=True, value=True),
+            JuryVote(model='b', success=True, value=True),
+        ],
+    )
+    recorded: dict[str, Any] = {}
+    span = MagicMock()
+    span.set_attribute.side_effect = lambda k, v: recorded.__setitem__(k, v)
+
+    set_jury_span_attrs(span, jury)
+
+    assert recorded['orq.redteam.jury.raw_agreement'] == 1.0
+    assert recorded['orq.redteam.jury.judges_succeeded'] == 2
+    assert recorded['orq.redteam.jury.tie'] is False
+    assert json.loads(recorded['metadata'])['jury']['judges_configured'] == 2
+
+
+def test_set_jury_span_attrs_noop_without_jury() -> None:
+    """No jury → no attributes written."""
+    from evaluatorq.redteam.tracing import set_jury_span_attrs
+
+    span = MagicMock()
+    set_jury_span_attrs(span, None)
+    span.set_attribute.assert_not_called()

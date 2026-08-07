@@ -524,13 +524,13 @@ async def test_record_llm_response_chat_completions(
 async def test_nested_spans_share_trace(span_collector: _CollectingExporter):
     from evaluatorq.simulation.tracing import with_llm_span, with_simulation_span
 
-    async with with_simulation_span('orq.simulation.pipeline', None):
+    async with with_simulation_span('Evaluatorq - Agent Simulation', None):
         async with with_simulation_span('orq.simulation.run', None):
             async with with_simulation_span('orq.simulation.turn', None):
                 async with with_llm_span(model='openai/gpt-4o', purpose='target'):
                     pass
 
-    pipeline = _find(span_collector, 'orq.simulation.pipeline')
+    pipeline = _find(span_collector, 'Evaluatorq - Agent Simulation')
     run = _find(span_collector, 'orq.simulation.run')
     turn = _find(span_collector, 'orq.simulation.turn')
     llm = _find(span_collector, 'chat openai/gpt-4o')
@@ -635,7 +635,7 @@ async def test_end_to_end_simulation_produces_full_span_tree(
     # Wrap the run() in an outer pipeline span so the smoke output mirrors
     # what simulate() would produce.
     async with with_simulation_span(
-        'orq.simulation.pipeline',
+        'Evaluatorq - Agent Simulation',
         {'orq.simulation.evaluation_name': 'smoke', 'orq.simulation.max_turns': 3},
     ):
         result = await runner.run(datapoint=dp)
@@ -646,7 +646,7 @@ async def test_end_to_end_simulation_produces_full_span_tree(
 
     names = [s.name for s in span_collector.spans]
     # Required spans
-    assert 'orq.simulation.pipeline' in names
+    assert 'Evaluatorq - Agent Simulation' in names
     assert 'orq.simulation.run' in names
     assert names.count('orq.simulation.turn') == 2
     assert names.count('orq.simulation.target_call') == 2
@@ -656,7 +656,7 @@ async def test_end_to_end_simulation_produces_full_span_tree(
     assert names.count('orq.simulation.user_simulator_call') == 1
 
     # Hierarchy: each turn span is a child of run, which is a child of pipeline
-    pipeline = _find(span_collector, 'orq.simulation.pipeline')
+    pipeline = _find(span_collector, 'Evaluatorq - Agent Simulation')
     run = _find(span_collector, 'orq.simulation.run')
     assert run.parent.span_id == pipeline.context.span_id  # pyright: ignore[reportOptionalMemberAccess]
 
@@ -898,11 +898,11 @@ async def test_generated_datapoint_first_message_has_simulation_span(
     scenario = Scenario(name='Billing', goal='Fix a billing issue')
     gen = FirstMessageGenerator(model='test', client=fake_client)
 
-    async with with_simulation_span('orq.simulation.pipeline', None):
+    async with with_simulation_span('Evaluatorq - Agent Simulation', None):
         datapoint = await _generate_single_datapoint(gen, persona, scenario)
 
     assert datapoint.first_message == 'Hello there'
-    pipeline = _find(span_collector, 'orq.simulation.pipeline')
+    pipeline = _find(span_collector, 'Evaluatorq - Agent Simulation')
     first_msg = _find(span_collector, 'orq.simulation.first_message_generation')
     llm = _find(span_collector, 'chat test')
     assert first_msg.parent.span_id == pipeline.context.span_id  # pyright: ignore[reportOptionalMemberAccess]
@@ -967,7 +967,7 @@ async def test_run_span_records_error_metadata_and_usage(
         first_message='Hello',
     )
 
-    async with with_simulation_span('orq.simulation.pipeline', None):
+    async with with_simulation_span('Evaluatorq - Agent Simulation', None):
         result = await runner.run(datapoint=dp)
 
     assert result.terminated_by == TerminatedBy.error
@@ -1082,7 +1082,7 @@ async def test_target_agent_usage_aggregated_into_run_result(
         first_message='Hi',
     )
 
-    async with with_simulation_span('orq.simulation.pipeline', None):
+    async with with_simulation_span('Evaluatorq - Agent Simulation', None):
         result = await runner.run(datapoint=dp)
 
     assert target.call_count >= 1
@@ -1177,7 +1177,7 @@ async def test_run_span_records_cancellation_metadata_and_usage(
     )
 
     with pytest.raises(asyncio.CancelledError):
-        async with with_simulation_span('orq.simulation.pipeline', None):
+        async with with_simulation_span('Evaluatorq - Agent Simulation', None):
             await runner.run(datapoint=dp)
 
     run = _find(span_collector, 'orq.simulation.run')
@@ -1203,10 +1203,10 @@ async def test_concurrent_runs_share_pipeline_parent(
         async with with_simulation_span(name, None):
             await asyncio.sleep(0)
 
-    async with with_simulation_span('orq.simulation.pipeline', None):
+    async with with_simulation_span('Evaluatorq - Agent Simulation', None):
         await asyncio.gather(_sub('orq.simulation.run'), _sub('orq.simulation.run'))
 
-    pipeline = _find(span_collector, 'orq.simulation.pipeline')
+    pipeline = _find(span_collector, 'Evaluatorq - Agent Simulation')
     runs = [s for s in span_collector.spans if s.name == 'orq.simulation.run']
     assert len(runs) == 2
     for r in runs:
@@ -1242,3 +1242,69 @@ async def test_helpers_noop_when_tracing_disabled():
         # propagator may still inject something even without a tracer; just
         # assert it returns a dict
         assert isinstance(headers, dict)
+
+
+# ---------------------------------------------------------------------------
+# executive-summary LLM span
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_executive_summary_emits_llm_span(span_collector: _CollectingExporter):
+    """populate_run_executive_summary wraps its LLM call in a GenAI span."""
+    from types import SimpleNamespace
+
+    from evaluatorq.simulation.reports.executive_summary import populate_run_executive_summary
+
+    async def _create(**_kwargs: Any) -> Any:
+        msg = SimpleNamespace(content='One paragraph summary.')
+        usage = SimpleNamespace(prompt_tokens=12, completion_tokens=7, total_tokens=19)
+        return SimpleNamespace(choices=[SimpleNamespace(message=msg)], usage=usage)
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=_create)))
+    run = SimpleNamespace(
+        executive_summary=None,
+        results=[SimpleNamespace(goal_achieved=True, rules_broken=[], reason='')],
+    )
+
+    await populate_run_executive_summary(
+        run,
+        enabled=True,
+        model='openai/gpt-4o',
+        resolve_client=lambda: SimpleNamespace(client=client),
+    )
+
+    assert run.executive_summary == 'One paragraph summary.'
+    span = _find(span_collector, 'chat openai/gpt-4o')
+    a = _attrs(span)
+    assert a['orq.llm.purpose'] == 'executive_summary'
+    assert a['orq.simulation.llm_purpose'] == 'executive_summary'
+    assert a['gen_ai.request.model'] == 'openai/gpt-4o'
+    # Span reports the exact request params generate_executive_summary sends.
+    from evaluatorq.common.reports.executive_summary import (
+        EXECUTIVE_SUMMARY_MAX_TOKENS,
+        EXECUTIVE_SUMMARY_TEMPERATURE,
+    )
+
+    assert a['gen_ai.request.temperature'] == EXECUTIVE_SUMMARY_TEMPERATURE
+    assert a['gen_ai.request.max_tokens'] == EXECUTIVE_SUMMARY_MAX_TOKENS
+    # Token usage from the response lands on the span.
+    assert a['gen_ai.usage.input_tokens'] == 12
+    assert a['gen_ai.usage.output_tokens'] == 7
+    from opentelemetry.trace import StatusCode
+
+    assert span.status.status_code == StatusCode.OK
+
+
+@pytest.mark.asyncio
+async def test_executive_summary_no_span_when_disabled(span_collector: _CollectingExporter):
+    """enabled=False short-circuits before opening any span."""
+    from types import SimpleNamespace
+
+    from evaluatorq.simulation.reports.executive_summary import populate_run_executive_summary
+
+    run = SimpleNamespace(executive_summary=None, results=[])
+    await populate_run_executive_summary(run, enabled=False, model='openai/gpt-4o')
+
+    assert run.executive_summary is None
+    assert not [s for s in span_collector.spans if s.name == 'chat openai/gpt-4o']

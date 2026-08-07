@@ -194,7 +194,7 @@ eq sim simulate --input dp.jsonl --target agent:my-agent
 
 ## Tracing & PII
 
-Runs emit OTel spans under `orq.simulation.pipeline` (auto-visible in orq.ai when
+Runs emit OTel spans under `Evaluatorq - Agent Simulation` (auto-visible in orq.ai when
 `ORQ_API_KEY` is set). Two shared env vars control message capture, identical to
 red teaming:
 
@@ -207,10 +207,14 @@ The same capability is exposed as `eq sim run` / `eq sim generate`. Install and
 usage:
 
 ```bash
-uv tool install "evaluatorq[simulation]"
-eq sim run --help
-eq sim generate --help
+uv add "evaluatorq[simulation]"
+uv run eq sim run --help
+uv run eq sim generate --help
 ```
+
+`uv run evaluatorq` is the same entry point under its long name. Avoid
+`uv tool install` here: it builds an isolated environment that exposes the CLI
+but leaves `evaluatorq` unimportable from your own scripts.
 
 Examples:
 

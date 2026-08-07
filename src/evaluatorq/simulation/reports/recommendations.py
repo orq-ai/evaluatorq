@@ -14,8 +14,10 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from evaluatorq.common.llm_call import apply_pipeline_metadata
 from evaluatorq.common.messages import coerce_content_text
 from evaluatorq.common.sanitize import xml_escape
+from evaluatorq.common.tracing import get_trace_context_headers, record_llm_input, record_llm_response
 from evaluatorq.simulation.reports.sections import (
     _criteria_rows,
     _is_errored,
@@ -153,17 +155,27 @@ async def generate_recommendations(
         extra: Any = dict(llm_kwargs or {})
         if temperature is not None:
             extra['temperature'] = temperature
+        apply_pipeline_metadata(extra)
+        messages = [
+            {'role': 'system', 'content': _SYSTEM_PROMPT.format(max_suggestions=_MAX_SUGGESTIONS)},
+            {'role': 'user', 'content': _build_user_prompt(result, triggers)},
+        ]
         try:
-            response = await llm_client.chat.completions.create(  # pyright: ignore[reportCallIssue, reportArgumentType]
-                model=model,
-                messages=[  # pyright: ignore[reportArgumentType]
-                    {'role': 'system', 'content': _SYSTEM_PROMPT.format(max_suggestions=_MAX_SUGGESTIONS)},
-                    {'role': 'user', 'content': _build_user_prompt(result, triggers)},
-                ],
-                max_completion_tokens=800,
-                response_format={'type': 'json_object'},  # pyright: ignore[reportArgumentType]
-                **extra,
-            )
+            from evaluatorq.simulation.tracing import with_llm_span
+
+            async with with_llm_span(model=model, max_tokens=800, purpose='recommendations') as span:
+                record_llm_input(span, messages)
+                trace_headers = await get_trace_context_headers()
+                if trace_headers:
+                    extra['extra_headers'] = {**(extra.get('extra_headers') or {}), **trace_headers}
+                response = await llm_client.chat.completions.create(  # pyright: ignore[reportCallIssue, reportArgumentType]
+                    model=model,
+                    messages=messages,  # pyright: ignore[reportArgumentType]
+                    max_completion_tokens=800,
+                    response_format={'type': 'json_object'},  # pyright: ignore[reportArgumentType]
+                    **extra,
+                )
+                record_llm_response(span, response)
             content = response.choices[0].message.content or '{}'
             raw = json.loads(content).get('suggestions', [])
             suggestions = [str(s) for s in raw if s][:_MAX_SUGGESTIONS] if isinstance(raw, list) else []
