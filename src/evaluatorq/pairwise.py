@@ -195,6 +195,26 @@ _VOTE_TO_P = {'A': 1.0, 'B': 0.0, 'tie': 0.5}
 _MIN_VOTES_FOR_SIGMA = 5
 
 
+def _uniform_plurality_aggregation(
+    comparisons: Sequence[PairwiseComparison], warnings: list[str], *, converged: bool = True
+) -> BTSigmaAggregation:
+    winners = [c.winner for c in comparisons]
+    counts = Counter(winners)
+    decisive = counts['A'] + counts['B']
+    total = len(comparisons)
+    return BTSigmaAggregation(
+        p_a_beats_b=0.5,
+        skill_gap=0.0,
+        winners=winners,
+        a_win_rate=_rate(counts['A'], decisive),
+        b_win_rate=_rate(counts['B'], decisive),
+        tie_rate=counts['tie'] / total if total else 0.0,
+        inconclusive_rate=counts['inconclusive'] / total if total else 0.0,
+        converged=converged,
+        fit_warnings=warnings,
+    )
+
+
 def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAggregation:
     """Fit hard BT-sigma over a run's reconciled votes and re-derive winners.
 
@@ -215,6 +235,12 @@ def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAg
     ``fit_warnings`` names them.
     """
     from evaluatorq.ranking import JudgedComparison, comparisons_per_judge, fit_bt
+
+    if any(v.vote is not None and not v.completed for c in comparisons for v in c.votes):
+        return _uniform_plurality_aggregation(
+            comparisons,
+            ['single-ordering data: position-bias symmetrisation unavailable; used uniform plurality instead'],
+        )
 
     # judge -> vote -> count. Collapsing keeps the optimum identical (the
     # likelihood is additive over identical records) while the per-iteration
@@ -243,6 +269,9 @@ def bt_sigma_aggregation(comparisons: Sequence[PairwiseComparison]) -> BTSigmaAg
 
     fit = fit_bt(records, judge_sigma=True, hard=True)
     fit_warnings = list(fit.warnings)
+    if not fit.converged:
+        fit_warnings.append('non-converged fit: used uniform plurality winners instead')
+        return _uniform_plurality_aggregation(comparisons, fit_warnings, converged=False)
 
     # Two-item degeneracy guard: a unanimous judge's sigma is a closed-form
     # function of its own one-sidedness (its marginal pins the fit), so 1/sigma

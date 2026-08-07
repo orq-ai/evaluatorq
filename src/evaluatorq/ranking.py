@@ -103,6 +103,7 @@ _P_EPS = 1e-6
 # other pure noise, decided by rounding error. Stopping at the stationary
 # point keeps perfectly ambiguous data perfectly ambiguous.
 _GRAD_FLOOR = 1e-10
+_MIN_JUDGE_COMPARISONS = 3
 
 
 class JudgedComparison(BaseModel):
@@ -193,6 +194,35 @@ def fit_bt(
     items = sorted({c.item_a for c in comparisons} | {c.item_b for c in comparisons})
     judges = sorted({c.judge for c in comparisons})
     warnings: list[str] = []
+
+    judge_counts = comparisons_per_judge(comparisons)
+    sparse = sorted(judge for judge, count in judge_counts.items() if count < _MIN_JUDGE_COMPARISONS)
+    if sparse:
+        warnings.append(
+            f"judge(s) {', '.join(sparse)} have fewer than {_MIN_JUDGE_COMPARISONS} observations; "
+            'their sigma estimates are weakly supported'
+        )
+
+    adjacency: dict[str, set[str]] = defaultdict(set)
+    for c in comparisons:
+        adjacency[c.item_a].add(c.item_b)
+        adjacency[c.item_b].add(c.item_a)
+    components = 0
+    unseen = set(items)
+    while unseen:
+        components += 1
+        stack = [unseen.pop()]
+        while stack:
+            item = stack.pop()
+            for neighbor in adjacency[item]:
+                if neighbor in unseen:
+                    unseen.remove(neighbor)
+                    stack.append(neighbor)
+    if components > 1:
+        warnings.append(
+            f'comparison graph is disconnected ({components} components); '
+            'relative ranks across components are not identified'
+        )
 
     use_sigma = judge_sigma
     if judge_sigma and len(judges) < 2:

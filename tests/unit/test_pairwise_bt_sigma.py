@@ -8,9 +8,10 @@ unreliable judges.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, cast
 
 import pytest
+from pydantic import ValidationError
 
 from evaluatorq.pairwise import (
     PairwiseComparison,
@@ -23,8 +24,8 @@ from evaluatorq.pairwise import (
 _Vote = Literal["A", "B", "tie"]
 
 
-def _vote(model: str, value: _Vote | None) -> PairwiseVote:
-    return PairwiseVote(model=model, vote=value)
+def _vote(model: str, value: str | None) -> PairwiseVote:
+    return PairwiseVote(model=model, vote=cast("Literal['A', 'B', 'tie'] | None", value))
 
 
 def _comparison(votes: list[PairwiseVote]) -> PairwiseComparison:
@@ -58,6 +59,11 @@ def test_default_report_is_unchanged() -> None:
 def test_unknown_aggregation_raises() -> None:
     with pytest.raises(ValueError, match='unknown aggregation'):
         build_report(_heterogeneous_run(), aggregation='elo')
+
+
+def test_invalid_vote_is_rejected_at_the_public_model_boundary() -> None:
+    with pytest.raises(ValidationError):
+        PairwiseVote(model='judge', vote='unexpected')  # pyright: ignore[reportArgumentType]
 
 
 def test_bt_sigma_downweights_noisy_judges_and_flips_consensus() -> None:
@@ -112,6 +118,29 @@ def test_abstaining_panel_degrades_to_inconclusive() -> None:
     assert block.a_win_rate is None
     assert block.inconclusive_rate == 1.0
     assert any('no decisive votes' in w for w in block.fit_warnings)
+
+
+def test_non_converged_fit_does_not_change_plurality_winners(monkeypatch: pytest.MonkeyPatch) -> None:
+    import evaluatorq.ranking as ranking_mod
+
+    monkeypatch.setattr(ranking_mod, '_MAX_ITER', 1)
+    rows = [_comparison([_vote('a', 'A'), _vote('b', 'A')]) for _ in range(10)]
+    block = bt_sigma_aggregation(rows)
+    assert block.judge_sigmas == {}
+    assert block.winners == ['A'] * len(rows)
+    assert block.converged is False
+    assert any('non-converged fit' in warning for warning in block.fit_warnings)
+
+
+def test_single_ordering_fit_does_not_claim_reliability() -> None:
+    rows = [_comparison([_vote('a', 'A'), _vote('b', 'B')]) for _ in range(3)]
+    for row in rows:
+        for vote in row.votes:
+            vote.completed = False
+    block = bt_sigma_aggregation(rows)
+    assert block.judge_sigmas == {}
+    assert block.winners == ['inconclusive'] * len(rows)
+    assert any('single-ordering' in warning for warning in block.fit_warnings)
 
 
 def test_single_judge_run_weights_uniformly() -> None:
@@ -183,7 +212,7 @@ def test_low_vote_count_judges_are_flagged() -> None:
 
 
 def test_run_rollup_and_save_thread_aggregation(tmp_path) -> None:
-    from evaluatorq.pairwise_run import PairwiseRun, new_run
+    from evaluatorq.pairwise_run import new_run
 
     run = new_run(run_name='bt-sigma-check')
     for row in _heterogeneous_run():
@@ -202,3 +231,34 @@ def test_run_rollup_and_save_thread_aggregation(tmp_path) -> None:
     assert run.report is not None
     assert run.report.bt_sigma is not None
     assert run.rollup(aggregation='bt-sigma') is run.report
+
+    with pytest.raises(ValueError, match='unknown aggregation'):
+        run.rollup(aggregation='elo')
+
+
+def test_heterogeneous_entries_warn_about_global_sigma_scope() -> None:
+    from evaluatorq.pairwise_run import new_run
+
+    run = new_run(run_name='heterogeneous')
+    for index, row in enumerate(_heterogeneous_run()[:2]):
+        run.add(row, question=f'q-{index}', response_a=f'a-{index}', response_b=f'b-{index}')
+
+    report = run.rollup(aggregation='bt-sigma')
+    assert report.bt_sigma is not None
+    assert any('global agreement' in warning for warning in report.bt_sigma.fit_warnings)
+
+
+def test_report_sections_expose_bt_sigma_and_scope_warning(tmp_path) -> None:
+    from evaluatorq.pairwise_reports.sections import build_report_sections
+    from evaluatorq.pairwise_run import new_run
+
+    run = new_run(run_name='sections', judges=['steady', 'noisy'])
+    for index, row in enumerate(_heterogeneous_run()[:4]):
+        run.add(row, question=f'q-{index}', response_a=f'a-{index}', response_b=f'b-{index}')
+    run.save(tmp_path / 'sections.json', aggregation='bt-sigma')
+
+    consensus = build_report_sections(run)[0]
+    judges = build_report_sections(run)[1]
+    assert consensus.data['bt_sigma'] is not None
+    assert any('global agreement' in warning for warning in consensus.data['bt_sigma']['fit_warnings'])
+    assert all('sigma' in row for row in judges.data['rows'])

@@ -24,6 +24,8 @@ from pydantic import BaseModel, Field
 from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.pairwise import PairwiseComparison, PairwiseReport, build_report
 
+_PAIRWISE_AGGREGATIONS = frozenset({'plurality', 'bt-sigma'})
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -103,9 +105,11 @@ class PairwiseRun(BaseModel):
         aggregation, so asking for ``'bt-sigma'`` on a run saved with plurality
         recomputes instead of silently returning a report without the block.
         """
+        _validate_aggregation(aggregation)
         if self.report is not None and (aggregation == 'plurality' or self.report.bt_sigma is not None):
-            return self.report
-        return build_report(self.comparisons(), aggregation=aggregation)
+            return _annotate_bt_sigma_scope(self.report, self.entries)
+        report = build_report(self.comparisons(), aggregation=aggregation)
+        return _annotate_bt_sigma_scope(report, self.entries)
 
     def save(self, path: Path | str | None = None, *, aggregation: str = 'plurality') -> Path:
         """Compute the rollup and write the run to JSON.
@@ -115,7 +119,10 @@ class PairwiseRun(BaseModel):
         ``aggregation='bt-sigma'`` to persist the reliability-weighted block
         alongside the plurality headline.
         """
-        self.report = build_report(self.comparisons(), aggregation=aggregation)
+        _validate_aggregation(aggregation)
+        self.report = _annotate_bt_sigma_scope(
+            build_report(self.comparisons(), aggregation=aggregation), self.entries
+        )
         payload = self.model_dump_json(indent=2)
         if path is not None:
             target = Path(path)
@@ -169,6 +176,28 @@ def _slug(text: str) -> str:
     # The cut can land on a joining hyphen, which would leave a trailing dash
     # against the '.json' suffix.
     return clamped.rstrip('-') or 'run'
+
+
+def _validate_aggregation(aggregation: str) -> None:
+    if aggregation not in _PAIRWISE_AGGREGATIONS:
+        msg = f"unknown aggregation {aggregation!r}; expected 'plurality' or 'bt-sigma'"
+        raise ValueError(msg)
+
+
+def _annotate_bt_sigma_scope(report: PairwiseReport, entries: Sequence[PairwiseEntry]) -> PairwiseReport:
+    """Warn when a run's BT-sigma fit pools different task-level datapoints."""
+    block = report.bt_sigma
+    if block is None:
+        return report
+    input_pairs = {(entry.question, entry.response_a, entry.response_b) for entry in entries}
+    if len(input_pairs) > 1:
+        warning = (
+            f'run contains {len(input_pairs)} distinct question/response pairs; '
+            'judge sigma measures global agreement across tasks, not isolated judge variance'
+        )
+        if warning not in block.fit_warnings:
+            block.fit_warnings.append(warning)
+    return report
 
 
 def new_run(

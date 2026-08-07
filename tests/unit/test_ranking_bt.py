@@ -126,6 +126,18 @@ def test_disconnected_graph_stays_finite() -> None:
     fit = fit_bt(comparisons, judge_sigma=True)
     assert set(fit.ranking) == {'x1', 'x2', 'y1', 'y2'}
     assert all(math.isfinite(v) for v in fit.skills.values())
+    assert any('disconnected' in warning for warning in fit.warnings)
+
+
+def test_sparse_judge_coverage_is_reported() -> None:
+    comparisons = [
+        JudgedComparison(judge='sparse', item_a='a', item_b='b', p_a=1.0),
+        JudgedComparison(judge='steady', item_a='a', item_b='b', p_a=1.0),
+        JudgedComparison(judge='steady', item_a='a', item_b='b', p_a=1.0),
+        JudgedComparison(judge='steady', item_a='a', item_b='b', p_a=1.0),
+    ]
+    fit = fit_bt(comparisons, judge_sigma=True, hard=True)
+    assert any('fewer than 3 observations' in warning for warning in fit.warnings)
 
 
 def test_empty_comparisons_raise() -> None:
@@ -152,6 +164,17 @@ def test_cycle_rate_transitive_cyclic_and_undefined() -> None:
     assert cycle_rate(cyclic, 'j') == 1.0
     # Two items: no triplet exists, the diagnostic is undefined (A/B setting).
     assert cycle_rate([pref('a', 'b')], 'j') is None
+
+
+def test_cycle_rate_uses_the_majority_of_duplicate_edges() -> None:
+    comparisons = [
+        JudgedComparison(judge='j', item_a='a', item_b='b', p_a=1.0),
+        JudgedComparison(judge='j', item_a='a', item_b='b', p_a=0.0),
+        JudgedComparison(judge='j', item_a='a', item_b='b', p_a=0.0),
+        JudgedComparison(judge='j', item_a='b', item_b='c', p_a=1.0),
+        JudgedComparison(judge='j', item_a='a', item_b='c', p_a=1.0),
+    ]
+    assert cycle_rate(comparisons, 'j') == 0.0
 
 
 def test_noisier_judge_has_higher_cycle_rate_and_higher_sigma() -> None:

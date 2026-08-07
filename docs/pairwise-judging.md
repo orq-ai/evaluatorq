@@ -172,11 +172,13 @@ report.bt_sigma.a_win_rate      # weighted rollup, next to the plurality one
 
 The headline plurality rates in the report are unchanged, so the two
 aggregations stay directly comparable, and each `JudgeStats` entry gains its
-fitted `sigma`. The fit is unsupervised maximum likelihood on the votes the run
-already collected: no extra LLM calls and no training data. Identical votes
-are collapsed into weighted counts before the fit (at most three distinct
-judgements per judge in the A/B setting), so the cost stays flat no matter how
-many comparisons the run holds.
+fitted `sigma`. The fit is a regularized, unsupervised maximum-likelihood fit on
+the votes the run already collected: no extra LLM calls or training data.
+Identical votes are collapsed into weighted counts before the fit (at most
+three distinct judgements per judge in the A/B setting), so the cost stays flat
+no matter how many comparisons the run holds. The report exposes fit warnings
+and falls back to uniform plurality when the optimizer does not converge; do
+not treat a capped fit as a reliability estimate.
 
 Notes worth knowing:
 
