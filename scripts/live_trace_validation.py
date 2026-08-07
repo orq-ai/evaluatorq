@@ -3,8 +3,8 @@
 
 The defaults intentionally use small, bounded runs:
 
-* agent simulation: 3 personas x 3 scenarios, at most 2 turns;
-* red teaming: hybrid mode, up to 3 dynamic + 3 static datapoints, at most 2 turns.
+* agent simulation: 3 personas x 3 scenarios, at most 4 turns;
+* red teaming: hybrid mode, up to 3 dynamic + 3 static datapoints, at most 4 turns.
 
 Agent keys are supplied with ``--sim-agent`` / ``--redteam-agent`` or the
 ``EVALUATORQ_SIM_AGENT_KEY`` / ``EVALUATORQ_REDTEAM_AGENT_KEY`` environment
@@ -243,8 +243,8 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument('--sim-model', default=SIM_MODEL)
     parser.add_argument('--redteam-attack-model', default=REDTEAM_ATTACK_MODEL)
     parser.add_argument('--redteam-evaluator-model', default=REDTEAM_EVALUATOR_MODEL)
-    parser.add_argument('--sim-max-turns', type=int, default=2)
-    parser.add_argument('--redteam-max-turns', type=int, default=2)
+    parser.add_argument('--sim-max-turns', type=int, default=4)
+    parser.add_argument('--redteam-max-turns', type=int, default=4)
     parser.add_argument('--redteam-categories', nargs='+', default=['ASI01'])
     parser.add_argument('--no-upload', action='store_true', help='Skip simulation experiment uploads')
     return parser.parse_args(argv)
