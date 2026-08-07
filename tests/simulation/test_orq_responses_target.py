@@ -40,6 +40,12 @@ def _make_client() -> MagicMock:
     return client
 
 
+def _make_direct_client() -> MagicMock:
+    client = _make_client()
+    client.base_url = "https://api.openai.com/v1"
+    return client
+
+
 def _make_response(
     text: str = "hello",
     response_id: str = "resp-123",
@@ -456,6 +462,18 @@ class TestOrqResponsesTargetNew:
 
 
 class TestOrqResponsesTargetMemory:
+    @pytest.mark.asyncio
+    async def test_memory_entity_id_is_omitted_for_direct_client(self):
+        client = _make_direct_client()
+        client.responses.create = AsyncMock(return_value=_make_response())
+        target = OrqResponsesTarget(
+            LLMCallConfig(model="gpt-4o"), memory_entity_id="ent-42", client=client
+        )
+
+        await target.respond(_make_messages())
+
+        assert "extra_body" not in client.responses.create.call_args.kwargs
+
     @pytest.mark.asyncio
     async def test_memory_entity_id_lands_in_extra_body(self):
         client = _make_client()

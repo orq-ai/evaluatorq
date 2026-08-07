@@ -2148,7 +2148,9 @@ def test_run_recommendations_flag_attaches_to_saved_run(
         )
 
     assert result.exit_code == 0, result.output
-    assert mock_impl.await_args.kwargs['recommendations'] is True
+    await_args = mock_impl.await_args
+    assert await_args is not None
+    assert await_args.kwargs['recommendations'] is True
     saved = json.loads(report.read_text())
     assert saved["recommendations"][0]["suggestions"] == ["Fix x."]
 
@@ -2172,4 +2174,6 @@ def test_run_without_recommendations_flag_skips_generation(
         )
 
     assert result.exit_code == 0, result.output
-    assert mock_impl.await_args.kwargs['recommendations'] is False
+    await_args = mock_impl.await_args
+    assert await_args is not None
+    assert await_args.kwargs['recommendations'] is False

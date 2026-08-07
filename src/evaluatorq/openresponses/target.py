@@ -177,10 +177,11 @@ class OrqResponsesTarget(AgentTarget):
             metadata = pipeline_metadata()
             if metadata:
                 kwargs['metadata'] = metadata
-            body_extra = thread_body_param() if client_routes_through_orq(self._client) else {}
+            routes_through_orq = client_routes_through_orq(self._client)
+            body_extra = thread_body_param() if routes_through_orq else {}
             # Agents with memory tools reject the call outright without a memory
             # scope ("memory_entity_id_required"), so forward ours when set.
-            if self.memory_entity_id:
+            if routes_through_orq and self.memory_entity_id:
                 body_extra['memory'] = {'entity_id': self.memory_entity_id}
             if body_extra:
                 kwargs['extra_body'] = {**kwargs.get('extra_body', {}), **body_extra}

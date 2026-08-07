@@ -257,8 +257,13 @@ async def test_post_run_processor_stays_under_pipeline_root(
 
     root = _find(span_collector, 'Orq Agent Simulation')
     recommendation = _find(span_collector, 'chat recommendation-model')
-    assert recommendation.parent is not None
-    assert recommendation.parent.span_id == root.context.span_id
+    recommendation_parent = recommendation.parent
+    if recommendation_parent is None:
+        raise AssertionError('recommendation span has no parent')
+    root_context = root.context
+    if root_context is None:
+        raise AssertionError('root span has no context')
+    assert recommendation_parent.span_id == root_context.span_id
 
 
 @pytest.mark.asyncio
