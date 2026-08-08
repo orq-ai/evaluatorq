@@ -422,6 +422,11 @@ class SimulationRunner:
                                 exc_info=True,
                             )
                             usage = ZERO_USAGE.model_copy()
+                        # `usage=` (vs. individual scalar kwargs) also carries `usage.calls`
+                        # onto this run-level span's `gen_ai.usage.calls`. That's intended: a
+                        # per-run call count is genuine observability richness on these
+                        # aggregate spans, not an accidental leak (see record_token_usage's
+                        # `calls` sentinel, which only suppresses an *explicit* calls=0).
                         record_token_usage(run_span, usage=usage)
                         set_span_attrs(
                             run_span,
@@ -655,6 +660,9 @@ class SimulationRunner:
 
             if last_judgment and last_judgment.should_terminate:
                 final_usage = _get_total_usage()
+                # See the calls-attribution note on the error-path record_token_usage
+                # call above: the run-level `gen_ai.usage.calls` this contributes is
+                # intended, not a leak.
                 record_token_usage(run_span, usage=final_usage)
                 set_span_attrs(
                     run_span,
@@ -686,6 +694,7 @@ class SimulationRunner:
 
         # Max turns reached
         final_usage = _get_total_usage()
+        # Intended run-level `gen_ai.usage.calls` (see error-path note above).
         record_token_usage(run_span, usage=final_usage)
         set_span_attrs(
             run_span,
@@ -807,6 +816,7 @@ class SimulationRunner:
         terminated_by = TerminatedBy.timeout if error_type == 'timeout' else TerminatedBy.error
         turn_count = sum(1 for m in messages if m.role == 'assistant')
 
+        # Intended run-level `gen_ai.usage.calls` (see error-path note above).
         record_token_usage(run_span, usage=total_usage)
         set_span_attrs(
             run_span,

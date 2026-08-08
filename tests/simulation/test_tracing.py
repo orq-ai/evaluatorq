@@ -236,13 +236,18 @@ async def test_record_llm_input_truncates_long_content(
 async def test_record_token_usage_preserves_zero_prompt_tokens(
     span_collector: _CollectingExporter,
 ):
-    """Zero prompt_tokens (e.g. fully-cached request) must not fall back to
-    input_tokens. Regression guard for the falsy-or chain bug."""
+    """Zero input_tokens (e.g. fully-cached request) must not fall back to the
+    truthy `prompt_tokens` alias. Regression guard for the falsy-or chain bug:
+    `_usage_first_int` is presence-based (`('input_tokens', 'prompt_tokens', ...)`,
+    first *present* numeric wins), so it must select the present `0` over the
+    conflicting nonzero alias rather than treating `0` as "absent" and falling
+    through to `prompt_tokens=99`."""
     from evaluatorq.common.tracing import record_llm_response
     from evaluatorq.simulation.tracing import with_llm_span
 
     class _Usage:
         input_tokens = 0  # fully-cached request: zero input tokens is a real value
+        prompt_tokens = 99  # would be selected if `input_tokens or prompt_tokens`
         output_tokens = 5
         total_tokens = 5
         prompt_tokens_details = None
@@ -698,6 +703,122 @@ async def test_end_to_end_simulation_produces_full_span_tree(
     for root in children.get(None, []):
         _print(root, 0)
     print(f'=== {len(span_collector.spans)} spans total ===\n')
+
+
+@pytest.mark.asyncio
+async def test_run_span_carries_aggregate_call_count(
+    span_collector: _CollectingExporter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `orq.simulation.run` span's `gen_ai.usage.calls` is a deliberate
+    aggregate call count (record_token_usage(run_span, usage=...) at the
+    end-of-run call sites in SimulationRunner), not an accidental leak of the
+    `calls` sentinel fix. Pins the value to the true sum of judge + user
+    simulator + target call counts, so a regression that drops or
+    miscomputes it is caught here rather than only in the generic
+    record_token_usage unit tests."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+
+    from evaluatorq.contracts import TokenUsage
+    from evaluatorq.simulation.runner.simulation import SimulationRunner
+    from evaluatorq.simulation.types import CommunicationStyle, Message, Persona, Scenario, SimulationDatapoint
+
+    def _judgment(*, terminate: bool) -> MagicMock:
+        j = MagicMock()
+        j.should_terminate = terminate
+        j.goal_achieved = terminate
+        j.goal_completion_score = 1.0 if terminate else 0.5
+        j.rules_broken = []
+        j.reason = 'done' if terminate else 'keep going'
+        j.response_quality = 0.9
+        j.hallucination_risk = 0.1
+        j.tone_appropriateness = 0.9
+        j.factual_accuracy = 0.9
+        return j
+
+    # judge + user simulator each report 1 call per turn (2 turns -> 2 calls each).
+    judge = MagicMock()
+    judge.evaluate = AsyncMock(side_effect=[_judgment(terminate=False), _judgment(terminate=True)])
+    judge.get_usage = MagicMock(return_value=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, calls=2))
+
+    user_sim = MagicMock()
+    user_sim.generate_first_message = AsyncMock(return_value='Hi, I need help.')
+    user_sim.respond_async = AsyncMock(return_value='ok thanks')
+    user_sim.get_usage = MagicMock(return_value=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, calls=1))
+
+    async def target_cb(messages: list[Message]) -> str:
+        return 'agent reply'
+
+    runner = SimulationRunner(target=target_cb, model='azure/gpt-4o-mini', max_turns=3, user_simulator=user_sim, judge=judge)
+
+    persona = Persona(
+        name='Tester',
+        patience=0.5,
+        assertiveness=0.5,
+        politeness=0.5,
+        technical_level=0.5,
+        communication_style=CommunicationStyle.casual,
+        background='A test user',
+    )
+    scenario = Scenario(name='Smoke', goal='Get help')
+    dp = SimulationDatapoint(
+        id='dp-smoke',
+        persona=persona,
+        scenario=scenario,
+        user_system_prompt='sys',
+        first_message='Hi, I need help.',
+    )
+
+    result = await runner.run(datapoint=dp)
+    assert result.terminated_by.value == 'judge'
+
+    run = _find(span_collector, 'orq.simulation.run')
+    run_attrs = _attrs(run)
+    # target_cb has no usage_fn, so it contributes no usage; the run's total
+    # calls is judge.get_usage().calls + user_sim.get_usage().calls == 2 + 1 == 3.
+    assert run_attrs['gen_ai.usage.calls'] == 3
+
+
+@pytest.mark.asyncio
+async def test_pipeline_aggregate_span_carries_summed_call_count(
+    span_collector: _CollectingExporter,
+) -> None:
+    """The pipeline span built by `_simulate_via_evaluatorq` in
+    simulation/api.py aggregates every result's `token_usage` (including
+    `.calls`) via `sum((r.token_usage for r in results), Usage())` and
+    records it with `record_token_usage(pipeline_span, usage=...)`. This
+    exercises that exact aggregation + recording against real
+    `SimulationResult`/`Usage` objects and a real span, pinning
+    `gen_ai.usage.calls` to the true sum rather than an accidental leftover
+    from the `usage=` migration."""
+    from evaluatorq.common.tracing import record_token_usage
+    from evaluatorq.contracts import Usage
+    from evaluatorq.simulation.tracing import with_simulation_span
+    from evaluatorq.simulation.types import SimulationResult, TerminatedBy
+
+    def _result(calls: int) -> SimulationResult:
+        return SimulationResult(
+            messages=[],
+            terminated_by=TerminatedBy.judge,
+            reason='done',
+            goal_achieved=True,
+            goal_completion_score=1.0,
+            rules_broken=[],
+            turn_count=2,
+            token_usage=Usage(input_tokens=10, output_tokens=10, total_tokens=20, calls=calls),
+            turn_metrics=[],
+            metadata={},
+        )
+
+    results = [_result(1), _result(2), _result(3)]
+
+    async with with_simulation_span('orq.simulation.pipeline_test', None) as pipeline_span:
+        # Same expression as simulation/api.py's _simulate_via_evaluatorq.
+        record_token_usage(pipeline_span, usage=sum((r.token_usage for r in results), Usage()))
+
+    pipeline = _find(span_collector, 'orq.simulation.pipeline_test')
+    assert _attrs(pipeline)['gen_ai.usage.calls'] == 6
 
 
 @pytest.mark.asyncio

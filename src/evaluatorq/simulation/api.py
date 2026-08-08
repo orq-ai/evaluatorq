@@ -1925,6 +1925,9 @@ async def _simulate_via_evaluatorq(
         logger.warning(msg)
 
     # Aggregate token usage (including cost breakdown) onto the pipeline span.
+    # This also sets `gen_ai.usage.calls` to the summed per-datapoint call count —
+    # intended: a call count on this pipeline-level aggregate span is genuine
+    # observability richness, not an accidental leak.
     from evaluatorq.contracts import Usage
 
     record_token_usage(pipeline_span, usage=sum((r.token_usage for r in results), Usage()))
