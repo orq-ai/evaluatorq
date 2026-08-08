@@ -898,8 +898,11 @@ async def test_generated_datapoint_first_message_has_simulation_span(
     scenario = Scenario(name='Billing', goal='Fix a billing issue')
     gen = FirstMessageGenerator(model='test', client=fake_client)
 
+    # The generation phase gets ONE span for all persona x scenario pairs; the
+    # per-pair helper adds no span of its own.
     async with with_simulation_span('Evaluatorq - Agent Simulation', None):
-        datapoint = await _generate_single_datapoint(gen, persona, scenario)
+        async with with_simulation_span('orq.simulation.first_message_generation', None):
+            datapoint = await _generate_single_datapoint(gen, persona, scenario)
 
     assert datapoint.first_message == 'Hello there'
     pipeline = _find(span_collector, 'Evaluatorq - Agent Simulation')
@@ -1308,3 +1311,131 @@ async def test_executive_summary_no_span_when_disabled(span_collector: _Collecti
 
     assert run.executive_summary is None
     assert not [s for s in span_collector.spans if s.name == 'chat openai/gpt-4o']
+
+
+@pytest.mark.asyncio
+async def test_batched_first_message_generation_uses_one_span(
+    span_collector: _CollectingExporter,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The persona x scenario sweep opens ONE generation span; every pair's LLM
+    span nests under it, and the counts land on that span.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+
+    class _Choice:
+        finish_reason = 'stop'
+
+        class message:  # noqa: N801
+            content = 'Hello there'
+            role = 'assistant'
+
+    class _Usage:
+        prompt_tokens = 1
+        completion_tokens = 1
+        total_tokens = 2
+        prompt_tokens_details = None
+
+    class _Resp:
+        id = 'dp_1'
+        model = 'test'
+        usage = _Usage()
+        choices = [_Choice()]
+
+    fake_client = MagicMock()
+    fake_client.chat = MagicMock()
+    fake_client.chat.completions = MagicMock()
+    fake_client.chat.completions.create = AsyncMock(return_value=_Resp())
+
+    from evaluatorq.simulation.api import _resolve_or_generate_datapoints
+    from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario
+
+    personas = [
+        Persona(
+            name=f'P{i}',
+            patience=0.5,
+            assertiveness=0.5,
+            politeness=0.5,
+            technical_level=0.5,
+            communication_style=CommunicationStyle.casual,
+            background='A test user',
+        )
+        for i in range(2)
+    ]
+    scenarios = [Scenario(name=f'S{i}', goal='Fix it') for i in range(3)]
+
+    datapoints = await _resolve_or_generate_datapoints(
+        caller='simulate',
+        datapoints=None,
+        personas=personas,
+        scenarios=scenarios,
+        dataset_id=None,
+        model='test',
+        generation_client=fake_client,
+    )
+
+    assert len(datapoints) == 6
+    gen_spans = [s for s in span_collector.spans if s.name == 'orq.simulation.first_message_generation']
+    assert len(gen_spans) == 1
+    a = _attrs(gen_spans[0])
+    assert a['orq.simulation.pair_count'] == 6
+    assert a['orq.simulation.persona_count'] == 2
+    assert a['orq.simulation.scenario_count'] == 3
+    assert a['orq.simulation.generated_count'] == 6
+    assert a['orq.simulation.failed_count'] == 0
+
+    llm_spans = [s for s in span_collector.spans if s.name == 'chat test']
+    assert len(llm_spans) == 6
+    assert all(s.parent.span_id == gen_spans[0].context.span_id for s in llm_spans)  # pyright: ignore[reportOptionalMemberAccess]
+
+
+@pytest.mark.asyncio
+async def test_first_message_generation_span_records_failures(
+    span_collector: _CollectingExporter,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Every pair failing marks the phase span ERROR and records one event per
+    failed pair (the per-pair spans that used to carry this are gone).
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+
+    fake_client = MagicMock()
+    fake_client.chat = MagicMock()
+    fake_client.chat.completions = MagicMock()
+    fake_client.chat.completions.create = AsyncMock(side_effect=RuntimeError('boom'))
+
+    from evaluatorq.simulation.api import _resolve_or_generate_datapoints
+    from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario
+
+    persona = Persona(
+        name='P0',
+        patience=0.5,
+        assertiveness=0.5,
+        politeness=0.5,
+        technical_level=0.5,
+        communication_style=CommunicationStyle.casual,
+        background='A test user',
+    )
+    scenario = Scenario(name='S0', goal='Fix it')
+
+    with pytest.raises(RuntimeError, match='produced no datapoints'):
+        await _resolve_or_generate_datapoints(
+            caller='simulate',
+            datapoints=None,
+            personas=[persona],
+            scenarios=[scenario],
+            dataset_id=None,
+            model='test',
+            generation_client=fake_client,
+        )
+
+    gen = _find(span_collector, 'orq.simulation.first_message_generation')
+    assert gen.status.status_code.name == 'ERROR'
+    assert _attrs(gen)['orq.simulation.failed_count'] == 1
+    events = [e for e in gen.events if e.name == 'orq.simulation.first_message_generation_failed']
+    assert len(events) == 1
+    assert dict(events[0].attributes or {})['orq.simulation.persona'] == 'P0'
