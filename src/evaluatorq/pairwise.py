@@ -28,12 +28,15 @@ from evaluatorq.contracts import TokenUsage  # noqa: TC001  # runtime-needed: py
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
+    from typing import Any
 
     from evaluatorq.contracts import JuryVote
 
-    # A judge comparing two responses in the order shown: (first, second, model) -> Prediction
-    # with value in {'A', 'B', 'tie'} referring to the first or second response.
-    PairwiseJudgeFn = Callable[[str, str, str], Awaitable[Prediction]]
+    # A judge comparing two responses in the order shown: (first, second, model) -> Prediction.
+    # The first two args are opaque per-side payloads forwarded verbatim to judge_fn (a bare
+    # string, or richer caller-defined side data); value is in {'A', 'B', 'tie'} referring to
+    # the first or second response.
+    PairwiseJudgeFn = Callable[[Any, Any, str], Awaitable[Prediction]]
 
 
 def reconcile_pair(first: VerdictValue | None, second: VerdictValue | None) -> tuple[VerdictValue | None, bool]:
@@ -216,8 +219,8 @@ async def run_pairwise(
     *,
     judge_fn: PairwiseJudgeFn,
     panel: Sequence[str],
-    response_a: str,
-    response_b: str,
+    response_a: Any,
+    response_b: Any,
     swap: bool = True,
     repetitions: int = 1,
     replacement_judges: Sequence[str] | None = None,

@@ -199,7 +199,7 @@ async def test_comparator_budget_shared_across_concurrent_pairs(monkeypatch: pyt
 
     async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
         await tracker.track()
-        value = 'A' if kwargs['replacements']['response_a'] == 'GOOD' else 'B'
+        value = 'A' if kwargs['replacements']['response_a']['output']['response'] == 'GOOD' else 'B'
         return JudgeOutcome(payload=EvaluatorResponsePayload(value=value, explanation='x'))
 
     monkeypatch.setattr(llm_jury_module, 'run_judge', fake_run_judge)
@@ -228,7 +228,7 @@ def test_comparator_survives_one_asyncio_run_per_pair(monkeypatch: pytest.Monkey
 
     async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
         await asyncio.sleep(0.001)  # force the semaphore to actually block
-        value = 'A' if kwargs['replacements']['response_a'] == 'GOOD' else 'B'
+        value = 'A' if kwargs['replacements']['response_a']['output']['response'] == 'GOOD' else 'B'
         return JudgeOutcome(payload=EvaluatorResponsePayload(value=value, explanation='x'))
 
     monkeypatch.setattr(llm_jury_module, 'run_judge', fake_run_judge)
