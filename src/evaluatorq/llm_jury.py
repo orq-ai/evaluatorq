@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import typing
 from typing import Any, Literal
 
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from evaluatorq.common.judge import JudgeOutcome, run_judge
+from evaluatorq.common.judge import JudgeOutcome, build_eval_replacements, run_judge
 from evaluatorq.common.jury import (
     AggregatorSpec,
     JuryDeliberation,
@@ -20,6 +19,12 @@ from evaluatorq.common.jury import (
     validate_aggregator,
 )
 from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.common.output_adapters import (
+    inputs_to_messages,
+    output_error_text,
+    output_to_messages,
+    output_to_text,
+)
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.pairwise import PairwiseComparison, run_pairwise
 from evaluatorq.types import DataPoint, EvaluationResult, Evaluator, Output, ScorerParameter
@@ -65,28 +70,17 @@ def _build_verdict_model(
 
 
 def _build_replacements(data: DataPoint, output: Output, criteria: str) -> dict[str, Any]:
-    """Build the template variable substitution dict for an LLM jury prompt.
-
-    Handles three common ``inputs`` shapes:
-    - ``{"messages": [...]}`` — serialised as a JSON message list.
-    - ``{"input": ...}`` — single string input.
-    - anything else — JSON-dumped as-is.
-    """
-    inputs = data.inputs
-    if isinstance(inputs, dict) and 'messages' in inputs:
-        input_str = json.dumps(inputs['messages'], indent=2, default=str)
-    elif isinstance(inputs, dict) and 'input' in inputs:
-        input_str = str(inputs['input'])
-    else:
-        input_str = json.dumps(inputs, indent=2, default=str)
-
-    out_str = output if isinstance(output, str) else json.dumps(output, default=str)
-    return {
-        'input': input_str,
-        'output': out_str,
-        'expected_output': '' if data.expected_output is None else str(data.expected_output),
-        'criteria': criteria,
-    }
+    """Build the red-team-format template substitution dict for the pointwise jury."""
+    err = output_error_text(output)
+    reps = build_eval_replacements(
+        input_messages=inputs_to_messages(data.inputs),
+        output_messages=output_to_messages(output),
+        expected_output=output_to_text(data.expected_output),
+        system_instructions=None,
+        error=err,
+    )
+    reps['criteria'] = criteria
+    return reps
 
 
 def _default_system_prompt(verdict_kind: str, labels: list[str] | None, score_range: tuple[float, float]) -> str:
@@ -113,18 +107,17 @@ def _default_system_prompt(verdict_kind: str, labels: list[str] | None, score_ra
     return f'{base} `value` must be a boolean: true if the criterion is met, false otherwise.'
 
 
-def _default_template(criteria: str) -> str:
-    """Return a default Mustache-style evaluation prompt template.
-
-    Placeholder tokens use the ``{{name}}`` convention expected by the
-    template engine (double-braces).
-    """
-    return (
-        f'# Criterion\n{criteria}\n\n'
-        '# Input\n{{input}}\n\n'
-        '# Output\n{{output}}\n\n'
-        '# Expected output\n{{expected_output}}\n'
-    )
+# Default Mustache-style evaluation prompt template.  Placeholder tokens use the
+# ``{{name}}`` convention expected by the template engine (double-braces), drawn from
+# the red-team template namespace (see
+# :func:`evaluatorq.common.judge.build_eval_replacements`).  ``criteria`` is a
+# substituted variable here, exactly like every other name — see DEFAULT_PAIRWISE_TEMPLATE.
+DEFAULT_TEMPLATE = (
+    '# Criteria\n{{criteria}}\n\n'
+    '# Input\n{{input.all_messages}}\n\n'
+    '# Output\n{{output.response}}\n\n'
+    '# Expected output\n{{input.expected_output}}\n'
+)
 
 
 # ---------------------------------------------------------------------------
@@ -435,7 +428,7 @@ def llm_jury(
     # client= is used as-is; otherwise we resolve once on first use.
     resolved_client = client
     verdict_model = _build_verdict_model(verdict_kind=verdict_kind, labels=labels, score_range=score_range)
-    template = prompt if prompt is not None else _default_template(criteria=criteria or '')
+    template = prompt if prompt is not None else DEFAULT_TEMPLATE
     sys_prompt = (
         system_prompt
         if system_prompt is not None
@@ -445,10 +438,22 @@ def llm_jury(
 
     async def scorer(params: ScorerParameter) -> EvaluationResult:
         nonlocal resolved_client
-        if resolved_client is None:
-            resolved_client = resolve_llm_client(config_client=None).client
         data = params['data']
         output = params['output']
+        # A target that errored produced no answer to grade. Judging it anyway would
+        # score an empty response as if the agent had genuinely replied that way.
+        # Checked before resolving the client: skipping the judges must not require
+        # LLM credentials.
+        target_error = output_error_text(output)
+        if target_error is not None:
+            logger.warning('Target errored, skipping judges: {}', target_error)
+            return EvaluationResult.model_validate({
+                'value': 'inconclusive',
+                'explanation': f'Not judged: the target returned an error: {target_error}',
+                'pass': None,
+            })
+        if resolved_client is None:
+            resolved_client = resolve_llm_client(config_client=None).client
         replacements = _build_replacements(data=data, output=output, criteria=criteria or '')
 
         async def judge_fn(judge_model: str) -> Prediction:
@@ -504,12 +509,30 @@ def _pairwise_system_prompt() -> str:
     )
 
 
-def _pairwise_template(criteria: str) -> str:
-    return (
-        f'# Criteria\n{criteria}\n\n'
-        '# Question\n{{question}}\n\n'
-        '# Response A\n{{response_a}}\n\n'
-        '# Response B\n{{response_b}}\n'
+# Default pairwise template. ``criteria`` is a substituted variable, matching
+# DEFAULT_TEMPLATE — a `prompt=` override reaches it the same way.
+DEFAULT_PAIRWISE_TEMPLATE = (
+    '# Criteria\n{{criteria}}\n\n'
+    '# Question\n{{question}}\n\n'
+    '# Response A\n{{response_a.output.response}}\n\n'
+    '# Response B\n{{response_b.output.response}}\n'
+)
+
+
+def _side_to_namespace(prefix: str, side: Output) -> dict[str, Any]:
+    """Build the `<prefix>.*` template namespace for one pairwise side.
+
+    A side carries an answer only, so `<prefix>.input.*` is empty; the rest of the
+    namespace (`output.response`, `output.tools_called`, `output.messages`,
+    `output.error`) is identical to the pointwise one.
+    """
+    return build_eval_replacements(
+        prefix=prefix,
+        input_messages=[],
+        output_messages=output_to_messages(side),
+        expected_output='',
+        system_instructions=None,
+        error=output_error_text(side),
     )
 
 
@@ -521,6 +544,7 @@ class PairwiseComparator:
         *,
         panel: list[str],
         criteria: str,
+        template: str | None = None,
         system_prompt: str,
         swap: bool,
         repetitions: int,
@@ -535,6 +559,7 @@ class PairwiseComparator:
         max_concurrency: int | None = None,
     ) -> None:
         self._panel = panel
+        self._criteria = criteria
         self._system_prompt = system_prompt
         self._swap = swap
         self._repetitions = repetitions
@@ -554,7 +579,7 @@ class PairwiseComparator:
         self._verdict_model = _build_verdict_model(
             verdict_kind='categorical', labels=PAIRWISE_LABELS, score_range=(0.0, 1.0)
         )
-        self._template = _pairwise_template(criteria)
+        self._template = template if template is not None else DEFAULT_PAIRWISE_TEMPLATE
 
     def _current_semaphore(self) -> asyncio.Semaphore | None:
         """The shared concurrency budget, bound to the running event loop.
@@ -574,17 +599,30 @@ class PairwiseComparator:
             self._semaphore_loop = loop
         return self._semaphore
 
-    async def compare(self, *, question: str, response_a: str, response_b: str) -> PairwiseComparison:
-        """Run the panel over one A-vs-B comparison and return the reconciled verdict."""
+    async def compare(self, *, question: str, response_a: Output, response_b: Output) -> PairwiseComparison:
+        """Run the panel over one A-vs-B comparison and return the reconciled verdict.
+
+        A side that carries a target-level error is never judged — comparing against a
+        failed generation would score noise as a preference.
+        """
+        for label, side in (('A', response_a), ('B', response_b)):
+            err = output_error_text(side)
+            if err is not None:
+                logger.warning('Pairwise side {} errored, skipping judges: {}', label, err)
+                return PairwiseComparison(winner='inconclusive')
+
         if self._client is None:
             self._client = resolve_llm_client(config_client=None).client
 
-        async def judge_fn(first: str, second: str, model: str) -> Prediction:
+        async def judge_fn(first: Output, second: Output, model: str) -> Prediction:
+            replacements: dict[str, Any] = {'question': question, 'criteria': self._criteria}
+            replacements.update(_side_to_namespace('response_a', first))
+            replacements.update(_side_to_namespace('response_b', second))
             return await _run_single_judge(
                 client=self._client,
                 model=model,
                 template=self._template,
-                replacements={'question': question, 'response_a': first, 'response_b': second},
+                replacements=replacements,
                 system_prompt=self._system_prompt,
                 verdict_model=self._verdict_model,
                 structured_output=self._structured_output,
@@ -613,6 +651,7 @@ def llm_jury_pairwise(
     judges: list[str] | None = None,
     model: str | None = None,
     criteria: str | None = None,
+    prompt: str | None = None,
     system_prompt: str | None = None,
     swap: bool = True,
     repetitions: int = 1,
@@ -630,9 +669,12 @@ def llm_jury_pairwise(
 
     Judges compare two responses and pick a winner ('A'/'B'/'tie'). With ``swap``
     on (default) each judge is run in both orderings to correct for position bias
-    (see ADR-24). Panel/orchestration params mirror :func:`llm_jury`. Returns a
-    :class:`PairwiseComparator`; call ``compare`` per A/B pair, and roll many
-    comparisons up with :func:`evaluatorq.pairwise.build_report`.
+    (see ADR-24). Panel/orchestration params mirror :func:`llm_jury`. ``prompt``
+    overrides the built-in Mustache-style template (which exposes the
+    ``response_a.*``/``response_b.*`` namespace via :func:`_side_to_namespace`);
+    leave it ``None`` to use the default. Returns a :class:`PairwiseComparator`;
+    call ``compare`` per A/B pair, and roll many comparisons up with
+    :func:`evaluatorq.pairwise.build_report`.
 
     ``max_concurrency`` caps TOTAL in-flight judge LLM calls across all
     concurrently running ``compare`` calls on the returned comparator (each
@@ -644,12 +686,14 @@ def llm_jury_pairwise(
     _panel, deduped = _resolve_and_validate_panel(
         judges=judges, model=model, min_successful_judges=min_successful_judges
     )
+    resolved_criteria = criteria or DEFAULT_PAIRWISE_CRITERIA
     return PairwiseComparator(
         # Pass the deduped panel so the comparator's no-redundancy check
         # (`len(panel) == 1`) matches the panel run_jury actually runs, keeping
         # propagate_errors in step with llm_jury (judges=['m','m'] -> one judge).
         panel=deduped,
-        criteria=criteria or DEFAULT_PAIRWISE_CRITERIA,
+        criteria=resolved_criteria,
+        template=prompt,  # None -> DEFAULT_PAIRWISE_TEMPLATE
         system_prompt=system_prompt if system_prompt is not None else _pairwise_system_prompt(),
         swap=swap,
         repetitions=repetitions,

@@ -5,11 +5,11 @@ from typing import Any, ClassVar
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
 from typing_extensions import NotRequired, TypedDict
 
-from evaluatorq.contracts import TokenUsage
+from evaluatorq.contracts import AgentResponse, TokenUsage
 
 # Keep output permissive: OpenResponses payloads are dict-shaped and should
 # pass through unchanged alongside arbitrary job payloads.
-Output = str | int | float | bool | dict[str, Any] | None
+Output = str | int | float | bool | dict[str, Any] | AgentResponse | None
 """Output type alias"""
 
 
@@ -71,9 +71,10 @@ class JobResult(BaseModel):
 
     @field_serializer('output', when_used='json')
     def serialize_output(self, output: Output) -> Any:
+        if isinstance(output, AgentResponse):
+            return output.model_dump(mode='json')
         if isinstance(output, dict) and output.get('object') != 'response':
             return json.dumps(output, default=_json_default)
-
         return output
 
 

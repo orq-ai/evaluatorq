@@ -3,7 +3,7 @@
 One hand-designed 1200x630 link-unfurl card (Slack / Twitter / OpenGraph) that mirrors
 the orq.ai brand system: a warm off-white ground with the signature soft teal/cyan aurora
 glow, the monochrome Orq mark + "orq.ai" lockup, near-black display type, capability pills,
-and a `pip install` line. Uses the real self-hosted brand fonts (Kurrent display, Avio Sans
+and a `uv add` line. Uses the real self-hosted brand fonts (Kurrent display, Avio Sans
 body, Kurrent Mono code) — the same palette/type as the orq.ai site and report.css.
 
 We render a static image (not the mkdocs `social` plugin) because that plugin can only
@@ -48,7 +48,7 @@ FEATURES = [
     ("target", TEAL, INK, "Agent red-teaming"),
     ("chat", TEAL, INK, "Conversation simulation"),
 ]
-INSTALL = "pip install evaluatorq"
+INSTALL = "uv add evaluatorq"
 LEFT = 96
 
 

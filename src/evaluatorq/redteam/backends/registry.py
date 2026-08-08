@@ -50,7 +50,10 @@ def create_async_llm_client(role_config: LLMCallConfig | None = None) -> AsyncOp
             honor_openai_base_url=True,
         ).client
     except ImportError as exc:
-        msg = 'openai package is required for LLM-based attack generation. Install it with: pip install openai'
+        msg = (
+            'openai package is required for LLM-based attack generation. '
+            'Install it with: uv add openai (or: python -m pip install openai)'
+        )
         raise BackendError(msg) from exc
     except MissingLLMCredentialsError as exc:
         raise CredentialError(str(exc)) from exc

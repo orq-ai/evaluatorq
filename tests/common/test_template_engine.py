@@ -90,3 +90,32 @@ class TestSecurityWhitelist:
         assert not is_valid_template_path('')
         assert is_valid_template_path('_private')
         assert not is_valid_template_path('0')
+
+
+class TestReservedBareKeys:
+    def test_bare_reserved_keys_render_intact(self) -> None:
+        reps = {
+            'input': {'all_messages': [{'role': 'user', 'content': 'hi'}]},
+            'input.all_messages': '[...]',
+        }
+        # bare {{input}} must not dump the nested namespace dict
+        assert render_template('{{input}}', reps) == '{{input}}'
+        # dotted access still resolves normally
+        assert render_template('{{input.all_messages}}', reps) == '[...]'
+
+    def test_all_reserved_bare_keys_render_intact(self) -> None:
+        reps = {
+            'input': {'a': 1},
+            'output': {'b': 2},
+            'log': {'c': 3},
+            'response_a': {'d': 4},
+            'response_b': {'e': 5},
+        }
+        assert render_template('{{input}}', reps) == '{{input}}'
+        assert render_template('{{output}}', reps) == '{{output}}'
+        assert render_template('{{log}}', reps) == '{{log}}'
+        assert render_template('{{response_a}}', reps) == '{{response_a}}'
+        assert render_template('{{response_b}}', reps) == '{{response_b}}'
+
+    def test_non_reserved_bare_key_still_resolves(self) -> None:
+        assert render_template('{{question}}', {'question': 'Q?'}) == 'Q?'

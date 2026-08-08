@@ -57,6 +57,29 @@ jobs:
       - name: Test (unit only)
         run: uv run pytest -m 'not integration'
 
+  examples:
+    name: Examples (static)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-extras --all-groups
+
+      # Parses examples and notebooks, resolves every evaluatorq import against
+      # the installed package. No execution, no credentials, no API spend —
+      # several examples call an LLM at module level, so importing them is not
+      # free. Runtime breakage is covered by examples-weekly.yml.
+      - name: Check example imports
+        run: uv run python scripts/check_examples.py
+
   resolve-sdk-matrix:
     name: Resolve SDK matrix
     runs-on: ubuntu-latest

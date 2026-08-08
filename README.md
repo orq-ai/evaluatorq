@@ -57,38 +57,51 @@ The library is deliberately lightweight: async-first, typed end-to-end, and usab
 ## 📥 Installation
 
 ```bash
-pip install evaluatorq
-# or
 uv add evaluatorq
-# or
-poetry add evaluatorq
 ```
+
+`uv add` installs into the current project. If you don't have a project, use
+`uv pip install evaluatorq` in an existing virtual environment instead.
+
+Then run your evaluation and the CLI through the same project environment:
+
+```bash
+uv run my_eval.py
+uv run eq --help          # `uv run evaluatorq` works too
+```
+
+`uv run` resolves the project's environment before executing, so the code you
+run and the packages you installed can't drift apart. With pip, name the
+interpreter explicitly to get the same guarantee:
+
+```bash
+python -m pip install evaluatorq
+python my_eval.py
+```
+
+Poetry (`poetry add evaluatorq`, `poetry run python my_eval.py`) works the same way.
 
 ### Optional Dependencies
 
 If you want to use the Orq platform integration:
 
 ```bash
-pip install orq-ai-sdk
-# or
-pip install evaluatorq[orq]
+uv add "evaluatorq[orq]"          # or the SDK on its own: uv add orq-ai-sdk
 ```
 
 For OpenTelemetry tracing (optional):
 
 ```bash
-pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http opentelemetry-semantic-conventions
-# or
-pip install evaluatorq[otel]
+uv add "evaluatorq[otel]"
 ```
 
 For LangChain/LangGraph integration:
 
 ```bash
-pip install langchain
-# or
-pip install evaluatorq[langchain]
+uv add "evaluatorq[langchain]"    # or bring your own: uv add langchain langgraph
 ```
+
+Each extra works with pip too — `python -m pip install "evaluatorq[orq]"`.
 
 ## 🏁 Getting Started
 
@@ -671,7 +684,7 @@ Send traces to any OpenTelemetry-compatible backend:
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=https://your-collector:4318 \
 OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer token" \
-python my_eval.py
+uv run my_eval.py
 ```
 
 ### Disable Tracing
@@ -771,7 +784,7 @@ Complete examples are available in the examples folder:
 Run adversarial attacks against an LLM or agent and measure how well it resists. Attacks are generated dynamically by an attacker LLM and mapped to OWASP vulnerability categories (LLM Top 10 and Agentic Security Initiative).
 
 ```bash
-pip install evaluatorq[redteam]
+uv add "evaluatorq[redteam]"
 ```
 
 Point `red_team()` at an orq.ai agent — `"agent:<key>"` auto-selects the ORQ backend and discovers the agent's tools, memory, and system prompt:
@@ -806,7 +819,7 @@ No deployment? Red-team a raw model with `OpenAIModelTarget("openai/gpt-5.4-mini
 Stress-test an agent against *real users* before they do. A **user-simulator LLM** plays a persona pursuing a goal across a multi-turn conversation, and a **judge LLM** scores each run against your criteria. The non-adversarial counterpart to red teaming.
 
 ```bash
-pip install evaluatorq[simulation]
+uv add "evaluatorq[simulation]"
 ```
 
 Define who the user is (`Persona`) and what they want (`Scenario`), then simulate — against a hosted orq.ai agent (`target="agent:<key>"`) or a local callable:
@@ -848,7 +861,7 @@ No personas yet? `generate_and_simulate(agent_description=...)` invents personas
 
 ## 📚 API Reference
 
-### `evaluatorq(name, params?, *, data?, jobs?, evaluators?, parallelism?, print_results?, description?) -> EvaluatorqResult`
+### `evaluatorq(name, params?, *, data?, jobs?, evaluators?, parallelism?, print_results?, description?, path?) -> EvaluatorqResult`
 
 Main async function to run evaluations.
 
@@ -865,6 +878,7 @@ async def evaluatorq(
     parallelism: int = 1,
     print_results: bool = True,
     description: str | None = None,
+    path: str | None = None,
 ) -> EvaluatorqResult
 ```
 
@@ -900,7 +914,7 @@ class DataPoint(BaseModel):
     inputs: dict[str, Any]
     expected_output: Output | None = None
 
-EvaluationResultCellValue = str | float | dict[str, "str | float | dict[str, str | float]"]
+EvaluationResultCellValue = str | int | float | dict[str, "str | float | dict[str, str | float]"]
 
 class EvaluationResultCell(BaseModel):
     """Structured evaluation result with multi-dimensional metrics."""
@@ -909,7 +923,7 @@ class EvaluationResultCell(BaseModel):
 
 class EvaluationResult(BaseModel):
     """Result from an evaluator."""
-    value: str | float | bool | EvaluationResultCell
+    value: str | int | float | bool | EvaluationResultCell | dict[str, Any]
     explanation: str | None = None
     pass_: bool | None = None  # Optional pass/fail indicator for CI/CD integration
 

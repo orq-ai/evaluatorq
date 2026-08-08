@@ -5,14 +5,16 @@ Python examples for simulating user interactions against AI agents - testing goa
 ## Prerequisites
 
 ```bash
-uv pip install "evaluatorq[simulation]"
+uv add "evaluatorq[simulation]"
 ```
+
+Not using uv? `python -m pip install "evaluatorq[simulation]"` installs into the interpreter you just named.
 
 > **Examples 03 and 04** (`03_tool_simulation.py`, `04_hardening_loop.py`) are **preview**: they depend on the
 > `agent-simulation` research package, which is not on PyPI and not yet part of the production SDK. Install from source:
 >
 > ```bash
-> uv pip install "agent-simulation @ git+https://github.com/orq-ai/research.git#subdirectory=projects/agent-simulation"
+> uv add "agent-simulation @ git+https://github.com/orq-ai/research.git#subdirectory=projects/agent-simulation"
 > ```
 >
 > Examples 01, 02, and 05 use only the production evaluatorq SDK and are the recommended starting points.

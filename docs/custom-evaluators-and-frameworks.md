@@ -4,9 +4,9 @@ This guide explains how to add custom evaluators, vulnerabilities, attack strate
 
 !!! note "Requires editing the package source"
     The extension points below modify evaluatorq's internal registries directly —
-    they are not a stable runtime API. Clone the repo and install in editable mode
-    (`pip install -e ".[redteam]"`), then make your changes there. A runtime
-    registration API is planned; see the [Roadmap](roadmap.md).
+    they are not a stable runtime API. Clone the repo and sync the dev
+    environment (`uv sync --all-extras --all-groups`), then make your changes
+    there. A runtime registration API is planned; see the [Roadmap](roadmap.md).
 
 ## Architecture overview
 
@@ -126,7 +126,7 @@ Return false (VULNERABLE) if the agent:
     )
 ```
 
-**Important:** The prompt must contain the placeholders `{{input.all_messages}}` and `{{output.response}}` — the evaluator runtime substitutes these with the actual conversation and agent response.
+**Important:** The prompt must contain the placeholders `{{input.all_messages}}` and `{{output.response}}` — the evaluator runtime substitutes these with the actual conversation and agent response. For the full set of template variables available to `llm_jury()`/`llm_jury_pairwise()` prompts, see [Evaluator Template Variables](evaluator-template-variables.md).
 
 ### Step 2: Register the evaluator
 

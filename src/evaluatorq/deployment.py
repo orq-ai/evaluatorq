@@ -88,12 +88,8 @@ def _get_or_create_client() -> Orq:
         return _cached_client
     except ModuleNotFoundError as e:
         raise ImportError(
-            'The orq_ai_sdk package is not installed. To use deployment features, please install it:\n'
-            '  pip install orq-ai-sdk\n'
-            '  # or\n'
-            '  uv add orq-ai-sdk\n'
-            '  # or\n'
-            '  poetry add orq-ai-sdk'
+            'The orq_ai_sdk package is not installed. To use deployment features, install it with: '
+            'uv add orq-ai-sdk (or: python -m pip install orq-ai-sdk)'
         ) from e
     except Exception as e:
         raise RuntimeError(f'Failed to setup ORQ client: {e}') from e

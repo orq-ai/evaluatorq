@@ -9,7 +9,7 @@ The agent's model runs on the Orq router via an ``OpenAIProvider`` keyed with
 ``ORQ_API_KEY`` — no OpenAI key needed. The attacker + judge auto-route too.
 
 Prerequisites:
-    - pip install "evaluatorq[redteam,pydantic-ai]"
+    - uv add "evaluatorq[redteam,pydantic-ai]"
     - ORQ_API_KEY set (the agent's model, the attacker LLM, and the judge)
 
 Usage:

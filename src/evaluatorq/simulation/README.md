@@ -207,10 +207,17 @@ The same capability is exposed as `eq sim run` / `eq sim generate`. Install and
 usage:
 
 ```bash
-uv tool install "evaluatorq[simulation]"
-eq sim run --help
-eq sim generate --help
+uv add "evaluatorq[simulation]"
+uv run eq sim run --help
+uv run eq sim generate --help
 ```
+
+`uv run evaluatorq` is the same entry point under its long name. Avoid
+`uv tool install` here: it builds an isolated environment that exposes the CLI
+but leaves `evaluatorq` unimportable from your own scripts.
+
+Prefer pip? `python -m pip install "evaluatorq[simulation]"` installs into the
+interpreter you just named, and `eq` lands on that environment's `PATH`.
 
 Examples:
 
