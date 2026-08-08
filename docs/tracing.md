@@ -292,7 +292,8 @@ Span attributes on `orq.judge`:
 |---|---|
 | `judge.name` | Judge model ID |
 | `judge.model` | Judge model ID (same value as `judge.name`) |
-| `judge.verdict` | Stringified verdict (bool / float / str all coerce to `str`); unset when the vote has no value |
+| `judge.verdict_raw` | Stringified verdict exactly as this judge gave it, before any reconciliation (bool / float / str all coerce to `str`); unset when the vote has no value |
+| `judge.verdict_frame` | What `judge.verdict_raw`'s labels mean: `canonical` (pointwise — the label *is* the answer) or `slot` (comparative — the label denotes a position, see below) |
 | `judge.success` | Whether the judge produced a usable outcome (decisive or abstained) |
 | `judge.abstained` | Whether the judge explicitly abstained |
 | `judge.replacement` | Whether this judge stood in for a failed configured judge |
@@ -313,7 +314,7 @@ Span attributes on `orq.jury`:
 | Attribute | Value |
 |---|---|
 | `jury.verdict` | Stringified panel verdict |
-| `jury.aggregator` | Consensus rule name (`mode`, `majority`, `mean_std`, `median`, `min`, `max`, `custom`, or `pairwise_plurality` in comparative mode) |
+| `jury.aggregator` | Consensus rule name: one of the `aggregator=` keywords (`mode`, `majority`, `mean_std`, `median`, `min`, `max`), `custom` for a caller-supplied callable, or `pairwise_plurality` — see the note below |
 | `jury.min_successful_judges` | Configured quorum |
 | `jury.raw_agreement` | Modal-vote share among decisive votes; unset when inconclusive |
 | `jury.judges_configured` | Panel size |
@@ -322,6 +323,14 @@ Span attributes on `orq.jury`:
 | `jury.replacements_used` | Number of stand-in judges promoted |
 | `jury.tie` | Whether the verdict came from a tie-break |
 | `jury.inconclusive` | Whether the panel failed to reach quorum |
+
+`pairwise_plurality` is a **reported value, not an accepted argument** — you
+cannot pass it to `aggregator=`, and `validate_aggregator()` rejects it. It
+names the rule `run_pairwise()` applies internally: `pairwise_consensus()`,
+a strict plurality over *reconciled pair* votes, run after judges that flipped
+across the two orderings have already been dropped to abstentions. The six
+`aggregator=` keywords reduce raw per-judge votes instead, so labelling this
+one `mode` would name it after a function it does not call.
 
 #### Comparative (pairwise) mode
 
@@ -344,6 +353,16 @@ shape from the plain jury case:
 | `jury.flipped` | Count of judges that contradicted themselves across the two orderings (position bias) |
 | `jury.flipped_judges` | Comma-separated model names of the flipped judges |
 | `jury.swap` | Whether the comparison ran both orderings (`swap=True`, the default) or only one |
+
+**Read `judge.verdict_raw` in comparative mode with care.** `judge.verdict_frame`
+is `slot` there, meaning `A` and `B` name a *position*, not a response. A judge
+that picks the same response both times therefore says `A` in one ordering and
+`B` in the other — the two spans look like a self-contradiction and are in fact
+the opposite, a perfectly consistent judge. A judge that really does just follow
+slot order produces the same raw pair. The distinction lives on the parent:
+`reconcile_pair` un-swaps the second ordering after both have finished, and by
+then the judge spans are closed, so the canonical-frame result is only ever on
+`orq.jury` (`jury.flipped_judges` names the biased judges).
 
 `jury.flipped` counts judges that answered in both orderings but disagreed
 with themselves — that is position bias, not a failure, so a flipped judge is

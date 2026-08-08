@@ -115,16 +115,17 @@ async def test_judge_span_attributes(span_collector) -> None:
 
     decisive = by_model['gpt-a']
     assert decisive['judge.name'] == 'gpt-a'
-    assert decisive['judge.verdict'] == 'yes'
+    assert decisive['judge.verdict_raw'] == 'yes'
     assert decisive['judge.success'] is True
     assert decisive['judge.abstained'] is False
     assert decisive['judge.replacement'] is False
     assert 'judge.latency_ms' in decisive
+    assert decisive['judge.verdict_frame'] == 'canonical'  # pointwise: no slot ambiguity
 
     abstained = by_model['gpt-b']
     assert abstained['judge.success'] is True
     assert abstained['judge.abstained'] is True
-    assert 'judge.verdict' not in abstained  # None value is not stamped
+    assert 'judge.verdict_raw' not in abstained  # None value is not stamped
 
 
 @pytest.mark.asyncio
@@ -143,7 +144,7 @@ async def test_replacement_judge_span_is_flagged(span_collector) -> None:
     assert by_model['gpt-a']['judge.success'] is False
     assert by_model['gpt-a']['judge.replacement'] is False
     assert by_model['stand-in']['judge.replacement'] is True
-    assert by_model['stand-in']['judge.verdict'] == 'yes'
+    assert by_model['stand-in']['judge.verdict_raw'] == 'yes'
     # The replacement span still parents to the jury span.
     jury_span_id = _span_id(_by_name(exporter, 'orq.jury')[0])
     stand_in_span = next(s for s in _by_name(exporter, 'orq.judge') if _attrs(s)['judge.model'] == 'stand-in')
@@ -290,6 +291,16 @@ async def test_pairwise_emits_one_jury_span_for_both_orderings(span_collector) -
 
     swapped = [_attrs(s)['judge.label_swapped'] for s in judge_spans]
     assert sorted(swapped) == [False, False, True, True]
+
+    # These judges are perfectly consistent — they name 'better' both times —
+    # yet each says 'A' in one ordering and 'B' in the other, because in
+    # comparative mode the labels denote the *slot*, not the response. The
+    # frame attribute is what tells a reader not to read these as disagreement;
+    # the reconciled, canonical-frame outcome is on the parent jury span.
+    per_ordering = {_attrs(s)['judge.label_swapped']: _attrs(s) for s in judge_spans}
+    assert per_ordering[False]['judge.verdict_raw'] == 'A'
+    assert per_ordering[True]['judge.verdict_raw'] == 'B'
+    assert all(_attrs(s)['judge.verdict_frame'] == 'slot' for s in judge_spans)
 
     jury = _attrs(_by_name(exporter, 'orq.jury')[0])
     assert jury['jury.verdict'] == 'A'

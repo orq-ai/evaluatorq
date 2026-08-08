@@ -292,6 +292,13 @@ async def _judge_vote(
                 'judge.replacement': replacement,
                 # Only set in comparative mode, where the same judge votes twice.
                 'judge.label_swapped': label_swapped,
+                # Which frame judge.verdict_raw is expressed in. In comparative
+                # mode the labels mean *slot*, not response: a judge that names
+                # the same response in both orderings necessarily says 'A' once
+                # and 'B' once. Reconciliation into the canonical frame happens
+                # after both orderings finish, by which point this span is
+                # closed — see jury.flipped_judges on the parent.
+                'judge.verdict_frame': 'slot' if label_swapped is not None else 'canonical',
             },
         )
         vote, usages = await _compute_judge_vote(
@@ -313,8 +320,9 @@ def _record_judge_span(span: Span | None, vote: JuryVote, *, latency_ms: float) 
     """Set the outcome ``judge.*`` attributes on a judge span from its vote.
 
     Identity (``judge.name`` / ``judge.model`` / ``judge.replacement`` /
-    ``judge.label_swapped``) is already stamped by :func:`_judge_vote` at
-    span-open and cannot change here, so it is not re-written. ``judge.verdict``
+    ``judge.label_swapped`` / ``judge.verdict_frame``) is already stamped by
+    :func:`_judge_vote` at span-open and cannot change here, so it is not
+    re-written. ``judge.verdict_raw``
     is stringified so bool / float / str verdicts share one attribute type.
     Token usage and cost are not recorded here: they belong on the underlying
     ``chat`` spans, which the consumer rolls up.
@@ -322,7 +330,7 @@ def _record_judge_span(span: Span | None, vote: JuryVote, *, latency_ms: float) 
     set_span_attrs(
         span,
         {
-            'judge.verdict': None if vote.value is None else str(vote.value),
+            'judge.verdict_raw': None if vote.value is None else str(vote.value),
             'judge.success': vote.success,
             'judge.abstained': vote.abstained,
             'judge.latency_ms': round(latency_ms, 3),
@@ -520,7 +528,7 @@ def record_jury_span(
     than a ``JuryResult``, so it stamps its own set (see
     ``pairwise._record_pairwise_span``) using the same ``jury.*`` vocabulary and
     the same ``jury.*`` vocabulary. ``jury.verdict`` is stringified so bool /
-    float / str verdicts share one attribute type, matching ``judge.verdict``.
+    float / str verdicts share one attribute type, matching ``judge.verdict_raw``.
 
     No token usage or cost here: those are recorded once, on the underlying
     ``chat`` spans, and rolled up by the consumer.
