@@ -61,6 +61,51 @@ class TestUsageCostUsdSerialization:
         assert dumped_free['cost_usd'] == 0.0
         assert dumped_free['cost_usd'] is not None
 
+    def test_dump_contains_exact_expected_key_set(self) -> None:
+        """Verify the exact set of keys in model_dump(mode='json').
+
+        Guarantee 1: dumped Usage must emit both canonical field names AND
+        the three legacy keys (prompt_tokens, completion_tokens, cost_usd)
+        that the @model_serializer(mode='wrap') injects.
+
+        This test fails if any key is missing (new fields not injected) or
+        if unexpected keys appear (serializer behavior changed).
+        """
+        u = Usage(
+            input_tokens=100,
+            output_tokens=40,
+            total_tokens=140,
+            cached_tokens=30,
+            cache_creation_tokens=12,
+            reasoning_tokens=5,
+            input_cost=0.002,
+            output_cost=0.004,
+            total_cost=0.006,
+            calls=2,
+        )
+        dumped = u.model_dump(mode='json')
+
+        # Expected keys: all canonical fields + legacy injected keys
+        expected_keys = {
+            # Canonical field names
+            'input_tokens',
+            'output_tokens',
+            'total_tokens',
+            'cached_tokens',
+            'cache_creation_tokens',
+            'reasoning_tokens',
+            'input_cost',
+            'output_cost',
+            'total_cost',
+            'calls',
+            # Legacy keys injected by @model_serializer(mode='wrap')
+            'prompt_tokens',
+            'completion_tokens',
+            'cost_usd',
+        }
+
+        assert set(dumped.keys()) == expected_keys
+
 
 class TestUsageOldFormatDeserialization:
     """Pin that old-format saved payloads (pre-breakdown) still load.
