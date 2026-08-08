@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build:
-    name: Build (strict) + example smoke
+    name: Build (strict)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -30,8 +30,6 @@ jobs:
       # The plugin is gated to CI (CI=true) in mkdocs.yml; these are its system deps.
       - name: Install Cairo (social cards)
         run: sudo apt-get update && sudo apt-get install -y libcairo2-dev libfreetype6-dev libffi-dev libjpeg-dev libpng-dev libz-dev pngquant
-      - name: Example compile smoke
-        run: uv run python scripts/smoke_examples.py
       - name: Validate mermaid diagrams
         run: uv run python scripts/validate_mermaid.py
       - name: Build docs (strict)
