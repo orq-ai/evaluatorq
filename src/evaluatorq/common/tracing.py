@@ -522,7 +522,10 @@ async def with_span(  # noqa: RUF029
             yield span
             # Don't clobber an ERROR the body set deliberately (set_span_error):
             # OK is final in the OTel spec and would hide a swallowed failure.
-            if getattr(span, 'status', None) is None or span.status.status_code is not StatusCode.ERROR:
+            # `status` is on the SDK's Span, not the API protocol — read it
+            # defensively so a non-SDK span just takes the OK path.
+            status = getattr(span, 'status', None)
+            if getattr(status, 'status_code', None) is not StatusCode.ERROR:
                 span.set_status(Status(StatusCode.OK))
         except BaseException as e:
             span.set_attribute('error.type', type(e).__name__)
