@@ -5,8 +5,9 @@ Generic recording utilities are imported from evaluatorq.common.tracing.
 
 Span hierarchy:
     Evaluatorq - Agent Simulation (root)
+      ├── orq.simulation.first_message_generation (once, whole persona x scenario sweep)
       ├── orq.simulation.run (per datapoint)
-      │   ├── orq.simulation.first_message_generation
+      │   ├── orq.simulation.first_message_generation (only when not pre-generated)
       │   └── orq.simulation.turn (per turn)
       │       ├── orq.simulation.target_call
       │       ├── orq.simulation.judge_evaluation

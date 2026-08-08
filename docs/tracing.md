@@ -169,7 +169,9 @@ The root `Evaluatorq - Red Teaming` span additionally carries:
 
 ```
 Evaluatorq - Agent Simulation    # root — one per simulate() / generate_and_simulate() call
-  ├── chat/responses {model}     # persona/scenario/first-message generation calls
+  ├── chat/responses {model}     # persona/scenario generation calls
+  ├── orq.simulation.first_message_generation   # ONE span for the whole persona x scenario sweep
+  │     └── chat/responses {model} (x N pairs)
   └── orq.simulation.run         # one per datapoint
         ├── orq.simulation.first_message_generation   # only when no first message was pre-generated
         │     └── chat/responses {model} (orq.llm.purpose="first_message")
@@ -217,6 +219,18 @@ Span attributes on `orq.simulation.run`:
 | `orq.simulation.turn_count` | Number of turns completed |
 
 Span attributes on `orq.simulation.first_message_generation`:
+
+Under the root (one span covering the whole persona x scenario sweep):
+
+| Attribute | Value |
+|---|---|
+| `orq.simulation.model` | Model used for generation |
+| `orq.simulation.pair_count` | persona x scenario pairs attempted |
+| `orq.simulation.persona_count` / `orq.simulation.scenario_count` | Input counts |
+| `orq.simulation.generated_count` | Datapoints successfully generated |
+| `orq.simulation.failed_count` | Pairs that failed (each also gets an `orq.simulation.first_message_generation_failed` span event with persona, scenario, and error) |
+
+Under `orq.simulation.run` (only when a datapoint carried no pre-generated first message):
 
 | Attribute | Value |
 |---|---|
