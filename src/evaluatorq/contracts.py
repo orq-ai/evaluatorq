@@ -92,6 +92,22 @@ def content_to_text(content: str | list[ContentPart] | None) -> str:
     return ''.join(out)
 
 
+def tool_result_to_text(result: object) -> str:
+    """Render a tool's return value for ``ToolCallOutputItem.result``.
+
+    Tools routinely return structured data (``{"temp": 12}``), and ``result``
+    has to be text because it ends up as a tool ``Message.content``. ``str()``
+    would give the Python repr — single-quoted, ``None``/``True`` instead of
+    ``null``/``true`` — which no downstream reader can parse back, so the data
+    is there but unusable. JSON keeps it readable by both a model and a parser.
+    """
+    if isinstance(result, str):
+        return result
+    # default=str: a value JSON cannot encode degrades to its repr rather than
+    # failing the whole response over one odd tool return.
+    return json.dumps(result, default=str)
+
+
 if sys.version_info >= (3, 11):
     from enum import StrEnum
 else:
@@ -806,16 +822,21 @@ class AgentResponse(BaseModel):
         for item in _gf(response, 'output') or []:
             item_type = _gf(item, 'type')
             if item_type == 'message':
-                items.extend(
-                    TextOutputItem(
-                        type='output_text',
-                        text=_gf(part, 'text'),
-                        annotations=[],
-                        logprobs=[],
-                    )
-                    for part in _gf(item, 'content') or []
-                    if _gf(part, 'type') == 'output_text' and _gf(part, 'text')
-                )
+                for part in _gf(item, 'content') or []:
+                    part_type = _gf(part, 'type')
+                    # A message part is 'output_text' or 'refusal'. Keeping only
+                    # the former loses the refusal entirely, and an item with
+                    # nothing but a refusal then parses to empty output — which
+                    # callers report as a failed call. A refusal is a real
+                    # answer (and for red teaming, the *resistant* outcome), so
+                    # it is carried as text rather than discarded.
+                    text = _gf(part, 'text') if part_type == 'output_text' else _gf(part, 'refusal')
+                    if part_type in ('output_text', 'refusal') and text:
+                        items.append(TextOutputItem(type='output_text', text=text, annotations=[], logprobs=[]))
+                    elif part_type not in ('output_text', 'refusal'):
+                        logger.warning(
+                            'AgentResponse.from_openresponses: skipping unknown message part type={!r}', part_type
+                        )
             # 'function_call' is the standard Responses shape; the Orq router
             # instead types agent tool calls as 'orq:<tool_name>' (e.g.
             # 'orq:query_knowledge_base'). Treat both as tool calls so the
@@ -833,7 +854,7 @@ class AgentResponse(BaseModel):
                         name=str(name),
                         call_id=str(call_id),
                         arguments=raw_args if isinstance(raw_args, str) else json.dumps(raw_args),
-                        result=str(result) if result is not None else None,
+                        result=tool_result_to_text(result) if result is not None else None,
                     )
                 )
             elif item_type == 'reasoning':
@@ -1342,4 +1363,5 @@ __all__ = [
     'ToolCallOutputItem',
     'ToolInfo',
     'content_to_text',
+    'tool_result_to_text',
 ]
