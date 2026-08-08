@@ -16,6 +16,17 @@ def pct(rate: float) -> str:
     return f'{rate:.0%}'
 
 
+def fmt_cost(cost: float) -> str:
+    """Format a USD cost value, e.g. ``0.0032`` -> ``'$0.0032'``.
+
+    Callers are responsible for omitting cost display entirely when the
+    underlying value is ``None`` (provider did not report cost) — this
+    formatter only handles the known-cost case and must never be called
+    with a fabricated ``0.0``.
+    """
+    return f'${cost:,.4f}'
+
+
 def bar(rate: float, width: int = 10) -> str:
     """Render a Unicode block-character progress bar with a numeric percentage.
 

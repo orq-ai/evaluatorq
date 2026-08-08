@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
     from typing import Any
 
+from evaluatorq.common.reports import fmt_cost
 from evaluatorq.simulation.token_usage import token_value
 
 
@@ -30,7 +31,24 @@ def build_token_usage_rows(data: Mapping[str, Any]) -> list[list[str]]:
     cached = token_value(data, 'cached_tokens')
     if cached:
         rows.append(['Cached Tokens (retrieved)', f'{cached:,}'])
+    cache_creation = token_value(data, 'cache_creation_tokens')
+    if cache_creation:
+        rows.append(['Cache-Write Tokens', f'{cache_creation:,}'])
     reasoning = token_value(data, 'reasoning_tokens')
     if reasoning:
         rows.append(['Reasoning Tokens', f'{reasoning:,}'])
+
+    # Cost is only ever shown when the provider actually reported it — `None`
+    # ("unknown") must never be rendered as `$0.00`. Old saved reports predate
+    # the cost breakdown entirely, so `.get` returning None here is expected
+    # and simply omits the row rather than fabricating a value.
+    input_cost = data.get('input_cost')
+    if input_cost is not None and isinstance(input_cost, int | float) and not isinstance(input_cost, bool):
+        rows.append(['Input Cost', fmt_cost(input_cost)])
+    output_cost = data.get('output_cost')
+    if output_cost is not None and isinstance(output_cost, int | float) and not isinstance(output_cost, bool):
+        rows.append(['Output Cost', fmt_cost(output_cost)])
+    total_cost = data.get('total_cost')
+    if total_cost is not None and isinstance(total_cost, int | float) and not isinstance(total_cost, bool):
+        rows.append(['Total Cost', fmt_cost(total_cost)])
     return rows
