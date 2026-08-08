@@ -65,6 +65,9 @@ inspect the resulting traces.
 open one with `--assignee @me` — an unassigned PR has no one the board can point
 at when it stalls.
 
+Reviewers need no flag: `.github/CODEOWNERS` requests them on every PR and skips
+the author. Change that file, not the `gh` invocation, to change who reviews.
+
 ## Before pushing to a PR
 
 Run the same checks CI runs, **verbatim**, before every push:
