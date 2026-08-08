@@ -259,6 +259,101 @@ input/output recording). LLM spans nested under `judge_evaluation` and
 `user_simulator_call` carry the same GenAI attributes as the red teaming LLM spans
 above, tagged via `orq.llm.purpose`.
 
+### Judge-panel spans
+
+`llm_jury()`, `run_jury()`, and `run_pairwise()` (`src/evaluatorq/common/jury.py`,
+`src/evaluatorq/pairwise.py`) run a panel of judges under a shared span
+hierarchy:
+
+```
+orq.evaluation {evaluator}         # from the core runner, when a jury backs an evaluator
+  └── orq.jury                     # one per deliberation (or one per comparison, in pairwise mode)
+        └── orq.judge              # one per judge (x2 in comparative mode — see below)
+              └── chat {model}     # the judge's own LLM call(s), tagged orq.llm.purpose="judge"
+```
+
+The panel opens no span of its own outside `orq.jury` — it can equally be
+called standalone (not nested under `orq.evaluation`), in which case `orq.jury`
+is the root. All jury/judge spans are opened via `evaluatorq.common.tracing`'s
+`with_span()`, so — like every other span in this document — they are a no-op
+when tracing is disabled; verdicts and aggregation are unaffected either way.
+
+A judge whose call failed leaves its `orq.judge` span with OTel status `ERROR`
+(via `set_span_error`), but the failure is swallowed at the panel level — the
+jury carries on with whatever judges succeeded (or promotes a replacement) and
+the parent `orq.jury` span stays OK.
+
+Span attributes on `orq.judge`:
+
+| Attribute | Value |
+|---|---|
+| `judge.name` | Judge model ID |
+| `judge.model` | Judge model ID (same value as `judge.name`) |
+| `judge.verdict` | Stringified verdict (bool / float / str all coerce to `str`); unset when the vote has no value |
+| `judge.success` | Whether the judge produced a usable outcome (decisive or abstained) |
+| `judge.abstained` | Whether the judge explicitly abstained |
+| `judge.replacement` | Whether this judge stood in for a failed configured judge |
+| `judge.label_swapped` | Comparative (pairwise) mode only — which ordering this vote was cast in |
+| `judge.latency_ms` | Wall-clock time for this judge's repetitions |
+| `judge.error` | Error string when the judge failed (truncated per `EVALUATORQ_SPAN_MAX_TEXT_CHARS`) |
+| `judge.repetitions_failed` | Count of failed repetitions out of the judge's configured repetition count |
+| `judge.cost` | Summed cost in USD, only when the provider reported one |
+| *(token usage)* | `gen_ai.usage.*` / bare `prompt_tokens` / `completion_tokens` / `total_tokens` / `calls` / cache and reasoning token keys — the same vocabulary documented under [LLM spans](#red-teaming-spans) above, via `record_token_usage` |
+
+`judge.label_swapped` is only ever set (`True`/`False`) in comparative mode —
+in plain `run_jury()` deliberations it is absent, since each judge votes once.
+
+Span attributes on `orq.jury`:
+
+| Attribute | Value |
+|---|---|
+| `jury.verdict` | Stringified panel verdict |
+| `jury.aggregator` | Consensus rule name (`mode`, `majority`, `mean_std`, `median`, `min`, `max`, `custom`, or `pairwise_plurality` in comparative mode) |
+| `jury.min_successful_judges` | Configured quorum |
+| `jury.raw_agreement` | Modal-vote share among decisive votes; unset when inconclusive |
+| `jury.judges_configured` | Panel size |
+| `jury.judges_succeeded` | Judges that cast a decisive vote |
+| `jury.judges_failed` | Judges that failed outright |
+| `jury.replacements_used` | Number of stand-in judges promoted |
+| `jury.tie` | Whether the verdict came from a tie-break |
+| `jury.inconclusive` | Whether the panel failed to reach quorum |
+| `jury.cost` | Summed cost in USD, only when the provider reported one |
+| *(token usage)* | Same token-usage vocabulary as `orq.judge`, summed across the whole panel, via `record_token_usage` |
+
+#### Comparative (pairwise) mode
+
+`run_pairwise()` compares two responses (A vs. B) and, to control for position
+bias, runs every judge in **both** label orderings. This changes the span
+shape from the plain jury case:
+
+- **One `orq.jury` span covers the whole comparison** — both orderings drive
+  the same span rather than each minting its own; `run_pairwise` calls the
+  internal `_run_jury_core` directly (not `run_jury`) so it doesn't open a
+  second jury span per ordering.
+- **Each judge appears twice** under that one `orq.jury` span — one
+  `orq.judge` span per ordering, distinguished by `judge.label_swapped`
+  (`False` for the A/B ordering, `True` for the swapped B/A ordering).
+- The `orq.jury` span carries extra attributes only present in comparative
+  mode:
+
+| Attribute | Value |
+|---|---|
+| `jury.flipped` | Count of judges that contradicted themselves across the two orderings (position bias) |
+| `jury.flipped_judges` | Comma-separated model names of the flipped judges |
+| `jury.swap` | Whether the comparison ran both orderings (`swap=True`, the default) or only one |
+
+`jury.flipped` counts judges that answered in both orderings but disagreed
+with themselves — that is position bias, not a failure, so a flipped judge is
+deliberately excluded from `jury.judges_failed`: `judges_failed` counts only
+judges with no reconciled vote *and* no flip (i.e. one or both orderings
+raised an error). A judge can be flipped, failed, or a normal decisive vote,
+but never counted under more than one of those buckets.
+
+`orq.evaluation`, `orq.jury`, `orq.judge`, and the nested `chat {model}` LLM
+spans follow the ambient OTel context — nothing threads an explicit parent
+across the `orq.evaluation` → `orq.jury` seam, so a jury backing a custom
+evaluator's scorer nests correctly without extra plumbing.
+
 ## Run correlation
 
 Every LLM invocation issued during a `red_team()` or simulation run (`simulate()`,

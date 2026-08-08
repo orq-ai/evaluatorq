@@ -19,12 +19,13 @@ from evaluatorq.common.jury import (
     VerdictValue,
     _agreement_rate,
     _plurality_vote,
+    _run_jury_core,
     _sum_usage,
     as_semaphore,
+    record_usage_and_cost,
     resolve_panel,
-    run_jury,
 )
-from evaluatorq.common.tracing import current_otel_context, record_token_usage, set_span_attrs, with_span
+from evaluatorq.common.tracing import current_otel_context, set_span_attrs, with_span
 from evaluatorq.contracts import TokenUsage  # noqa: TC001  # runtime-needed: pydantic field type on PairwiseComparison
 
 if TYPE_CHECKING:
@@ -250,10 +251,10 @@ async def run_pairwise(
     an existing ``asyncio.Semaphore`` to share one budget across several
     comparisons. ``None`` (default) keeps the fan-out unbounded.
 
-    Tracing: the whole comparison is ONE ``llm.jury`` span (RES-985). The inner
-    ``run_jury`` calls run with ``emit_span=False`` so the orderings don't each
-    mint a jury span whose aggregates describe half a comparison; every judge
-    span hangs off this one, tagged ``judge.label_swapped``.
+    Tracing: the whole comparison is ONE ``orq.jury`` span (RES-985). Each
+    ordering drives ``_run_jury_core`` rather than ``run_jury`` so it doesn't
+    mint a second jury span whose aggregates describe half a comparison; every
+    judge span hangs off this one, tagged ``judge.label_swapped``.
     """
     # Normalized once so both orderings (and the replacement pass) draw from
     # the same budget rather than each minting their own.
@@ -261,16 +262,24 @@ async def run_pairwise(
     resolved_panel = resolve_panel(panel)
     jury_ctx: object | None = None
 
-    async def _ordering(models: Sequence[str], *, swapped: bool) -> tuple[dict[str, JuryVote], TokenUsage | None]:
+    async def _ordering(
+        models: Sequence[str], *, swapped: bool, replacement: bool
+    ) -> tuple[dict[str, JuryVote], TokenUsage | None]:
         async def _fn(model: str) -> Prediction:
             return await (
                 judge_fn(response_b, response_a, model) if swapped else judge_fn(response_a, response_b, model)
             )
 
-        # Replacements are handled here at the pair level, not inside run_jury, so
-        # a stand-in gets a fair shot in both orderings rather than being promoted
-        # independently per ordering (and then silently dropped in reconciliation).
-        deliberation = await run_jury(
+        # _run_jury_core, not run_jury: this comparison owns ONE orq.jury span
+        # across both orderings, and run_jury would open a second one per
+        # ordering. Everything below the span (fan-out, per-judge spans,
+        # repetition collapse) is identical.
+        #
+        # Replacements are handled here at the pair level, not inside the core,
+        # so a stand-in gets a fair shot in both orderings rather than being
+        # promoted independently per ordering (and then silently dropped in
+        # reconciliation).
+        deliberation = await _run_jury_core(
             judge_fn=_fn,
             panel=models,
             repetitions=repetitions,
@@ -278,23 +287,25 @@ async def run_pairwise(
             min_successful_judges=1,
             propagate_errors=propagate_errors,
             max_concurrency=semaphore,
-            emit_span=False,
             label_swapped=swapped,
             parent_context=jury_ctx,
+            replacement=replacement,
         )
         return {v.model: v for v in deliberation.jury.votes}, deliberation.token_usage
 
-    async def _both(models: Sequence[str]) -> tuple[dict[str, JuryVote], dict[str, JuryVote], list[TokenUsage]]:
+    async def _both(
+        models: Sequence[str], *, replacement: bool = False
+    ) -> tuple[dict[str, JuryVote], dict[str, JuryVote], list[TokenUsage]]:
         if not swap:
-            first_votes, first_usage = await _ordering(models, swapped=False)
+            first_votes, first_usage = await _ordering(models, swapped=False, replacement=replacement)
             return first_votes, {}, [u for u in (first_usage,) if u]
         (first_votes, first_usage), (second_votes, second_usage) = await asyncio.gather(
-            _ordering(models, swapped=False),
-            _ordering(models, swapped=True),
+            _ordering(models, swapped=False, replacement=replacement),
+            _ordering(models, swapped=True, replacement=replacement),
         )
         return first_votes, second_votes, [u for u in (first_usage, second_usage) if u]
 
-    async with with_span('llm.jury') as jury_span:
+    async with with_span('orq.jury') as jury_span:
         # Captured before any judge runs so every judge span (both orderings,
         # replacements included) parents to this one comparison-level span.
         jury_ctx = current_otel_context()
@@ -320,7 +331,7 @@ async def run_pairwise(
 
         stand_in_set = set(stand_ins)
         if stand_ins:
-            rep_first, rep_second, rep_usages = await _both(stand_ins)
+            rep_first, rep_second, rep_usages = await _both(stand_ins, replacement=True)
             first_votes.update(rep_first)
             second_votes.update(rep_second)
             usages.extend(rep_usages)
@@ -372,13 +383,20 @@ def _record_pairwise_span(
     min_successful_judges: int,
     swap: bool,
 ) -> None:
-    """Stamp the comparison-level attributes on the pairwise ``llm.jury`` span.
+    """Stamp the comparison-level attributes on the pairwise ``orq.jury`` span.
 
     Deliberately reuses the ``jury.*`` namespace so one dashboard reads both
     modes: ``jury.verdict`` is the winner, ``judges_succeeded`` counts judges
-    that cast a reconciled vote. ``jury.flipped`` is comparative-only — judges
-    that contradicted themselves across the two orderings, i.e. position bias.
+    that cast a reconciled vote. ``jury.flipped`` / ``jury.flipped_judges`` are
+    comparative-only — judges that contradicted themselves across the two
+    orderings, i.e. position bias.
+
+    ``jury.judges_failed`` counts only judges with NO reconciled vote and no
+    flip: a flipped judge answered both times, so that is position bias, not a
+    failure. Counting it as failed would give one attribute two different
+    meanings across the two modes.
     """
+    flipped = [v.model for v in comparison.votes if v.flipped]
     decisive = [v.vote for v in comparison.votes if v.vote is not None]
     set_span_attrs(
         span,
@@ -389,23 +407,16 @@ def _record_pairwise_span(
             'jury.raw_agreement': _agreement_rate(decisive),
             'jury.judges_configured': panel_size,
             'jury.judges_succeeded': len(decisive),
-            'jury.judges_failed': sum(1 for v in comparison.votes if not v.replacement and v.vote is None),
+            'jury.judges_failed': sum(
+                1 for v in comparison.votes if not v.replacement and v.vote is None and not v.flipped
+            ),
             'jury.replacements_used': sum(1 for v in comparison.votes if v.replacement),
             'jury.inconclusive': comparison.winner == 'inconclusive',
-            'jury.flipped': sum(1 for v in comparison.votes if v.flipped),
+            'jury.flipped': len(flipped),
+            # Which judges, not just how many: a per-judge attribute is impossible
+            # (a judge span closes before the other ordering reconciles against it).
+            'jury.flipped_judges': ','.join(sorted(flipped)) or None,
             'jury.swap': swap,
         },
     )
-    usage = comparison.token_usage
-    if usage is not None:
-        record_token_usage(
-            span,
-            prompt_tokens=usage.prompt_tokens,
-            completion_tokens=usage.completion_tokens,
-            total_tokens=usage.total_tokens or None,
-            calls=usage.calls,
-            cached_tokens=usage.cached_tokens or None,
-            reasoning_tokens=usage.reasoning_tokens or None,
-        )
-        if usage.cost_usd is not None:
-            set_span_attrs(span, {'jury.cost': usage.cost_usd})
+    record_usage_and_cost(span, comparison.token_usage, cost_key='jury.cost')

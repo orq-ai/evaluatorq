@@ -1,7 +1,7 @@
 """RES-985: per-judge OTEL spans + jury aggregate attributes for run_jury().
 
-Asserts the span *shape* (one ``llm.judge`` child per judge, all parented to a
-single ``llm.jury`` span) and the attribute keys/values the ticket enumerates.
+Asserts the span *shape* (one ``orq.judge`` child per judge, all parented to a
+single ``orq.jury`` span) and the attribute keys/values the ticket enumerates.
 """
 
 from __future__ import annotations
@@ -92,8 +92,8 @@ async def test_one_judge_span_per_judge_parented_to_jury(span_collector) -> None
 
     await run_jury(judge_fn=judge_fn, panel=['gpt-a', 'gpt-b', 'gpt-c'])
 
-    jury_spans = _by_name(exporter, 'llm.jury')
-    judge_spans = _by_name(exporter, 'llm.judge')
+    jury_spans = _by_name(exporter, 'orq.jury')
+    judge_spans = _by_name(exporter, 'orq.judge')
     assert len(jury_spans) == 1
     assert len(judge_spans) == 3
 
@@ -111,7 +111,7 @@ async def test_judge_span_attributes(span_collector) -> None:
 
     await run_jury(judge_fn=judge_fn, panel=['gpt-a', 'gpt-b'])
 
-    by_model = {_attrs(s)['judge.model']: _attrs(s) for s in _by_name(exporter, 'llm.judge')}
+    by_model = {_attrs(s)['judge.model']: _attrs(s) for s in _by_name(exporter, 'orq.judge')}
 
     decisive = by_model['gpt-a']
     assert decisive['judge.name'] == 'gpt-a'
@@ -140,14 +140,14 @@ async def test_replacement_judge_span_is_flagged(span_collector) -> None:
         replacement_judges=['stand-in'],
     )
 
-    by_model = {_attrs(s)['judge.model']: _attrs(s) for s in _by_name(exporter, 'llm.judge')}
+    by_model = {_attrs(s)['judge.model']: _attrs(s) for s in _by_name(exporter, 'orq.judge')}
     assert by_model['gpt-a']['judge.success'] is False
     assert by_model['gpt-a']['judge.replacement'] is False
     assert by_model['stand-in']['judge.replacement'] is True
     assert by_model['stand-in']['judge.verdict'] == 'yes'
     # The replacement span still parents to the jury span.
-    jury_span_id = _span_id(_by_name(exporter, 'llm.jury')[0])
-    stand_in_span = next(s for s in _by_name(exporter, 'llm.judge') if _attrs(s)['judge.model'] == 'stand-in')
+    jury_span_id = _span_id(_by_name(exporter, 'orq.jury')[0])
+    stand_in_span = next(s for s in _by_name(exporter, 'orq.judge') if _attrs(s)['judge.model'] == 'stand-in')
     assert stand_in_span.parent is not None
     assert stand_in_span.parent.span_id == jury_span_id
 
@@ -159,7 +159,7 @@ async def test_jury_aggregate_attributes(span_collector) -> None:
 
     await run_jury(judge_fn=judge_fn, panel=['gpt-a', 'gpt-b', 'gpt-c'])
 
-    jury = _attrs(_by_name(exporter, 'llm.jury')[0])
+    jury = _attrs(_by_name(exporter, 'orq.jury')[0])
     assert jury['jury.judges_configured'] == 3
     assert jury['jury.judges_succeeded'] == 3
     assert jury['jury.tie'] is False
@@ -176,7 +176,7 @@ async def test_inconclusive_jury_marks_span(span_collector) -> None:
 
     await run_jury(judge_fn=judge_fn, panel=['gpt-a', 'gpt-b'])
 
-    jury = _attrs(_by_name(exporter, 'llm.jury')[0])
+    jury = _attrs(_by_name(exporter, 'orq.jury')[0])
     assert jury['jury.inconclusive'] is True
     assert jury['jury.judges_succeeded'] == 0
     assert 'jury.raw_agreement' not in jury  # None is not stamped
@@ -189,7 +189,7 @@ async def test_failed_judge_span_is_error_status(span_collector) -> None:
 
     await run_jury(judge_fn=judge_fn, panel=['gpt-a', 'gpt-b'])
 
-    spans = {_attrs(s)['judge.model']: s for s in _by_name(exporter, 'llm.judge')}
+    spans = {_attrs(s)['judge.model']: s for s in _by_name(exporter, 'orq.judge')}
     failed = spans['gpt-a']
     assert failed.status.status_code is StatusCode.ERROR
     assert 'gpt-a is down' in _attrs(failed)['judge.error']
@@ -205,7 +205,7 @@ async def test_propagated_error_span_keeps_judge_identity(span_collector) -> Non
     with pytest.raises(RuntimeError):
         await run_jury(judge_fn=judge_fn, panel=['gpt-a'], propagate_errors=True)
 
-    judge = _by_name(exporter, 'llm.judge')[0]
+    judge = _by_name(exporter, 'orq.judge')[0]
     assert _attrs(judge)['judge.model'] == 'gpt-a'
     assert _attrs(judge)['judge.replacement'] is False
     assert judge.status.status_code is StatusCode.ERROR
@@ -225,7 +225,7 @@ async def test_judge_span_records_full_token_usage(span_collector) -> None:
 
     await run_jury(judge_fn=judge_fn, panel=['gpt-a'], repetitions=2)
 
-    judge = _attrs(_by_name(exporter, 'llm.judge')[0])
+    judge = _attrs(_by_name(exporter, 'orq.judge')[0])
     # Both repetitions roll up onto the single per-judge span.
     assert judge['calls'] == 2
     assert judge['gen_ai.usage.cache_read.input_tokens'] == 12
@@ -241,7 +241,7 @@ async def test_jury_span_records_failure_aggregates(span_collector) -> None:
 
     await run_jury(judge_fn=judge_fn, panel=['gpt-a', 'gpt-b'], replacement_judges=['stand-in'])
 
-    jury = _attrs(_by_name(exporter, 'llm.jury')[0])
+    jury = _attrs(_by_name(exporter, 'orq.jury')[0])
     assert jury['jury.judges_failed'] == 1
     assert jury['jury.replacements_used'] == 1
 
@@ -253,7 +253,7 @@ async def test_jury_span_records_outcome(span_collector) -> None:
 
     await run_jury(judge_fn=judge_fn, panel=['gpt-a', 'gpt-b'], aggregator='majority', min_successful_judges=2)
 
-    jury = _attrs(_by_name(exporter, 'llm.jury')[0])
+    jury = _attrs(_by_name(exporter, 'orq.jury')[0])
     assert jury['jury.verdict'] == 'yes'
     assert jury['jury.aggregator'] == 'majority'
     assert jury['jury.min_successful_judges'] == 2
@@ -264,7 +264,7 @@ async def test_jury_span_records_outcome(span_collector) -> None:
 @pytest.mark.asyncio
 async def test_pairwise_emits_one_jury_span_for_both_orderings(span_collector) -> None:
     """A comparison runs each judge twice (A/B then B/A). Those orderings must
-    NOT each open their own llm.jury span — one span per comparison, with the
+    NOT each open their own orq.jury span — one span per comparison, with the
     ordering recorded on the judge spans instead."""
     exporter = span_collector
 
@@ -278,11 +278,11 @@ async def test_pairwise_emits_one_jury_span_for_both_orderings(span_collector) -
     )
     assert comparison.winner == 'A'
 
-    assert len(_by_name(exporter, 'llm.jury')) == 1
-    judge_spans = _by_name(exporter, 'llm.judge')
+    assert len(_by_name(exporter, 'orq.jury')) == 1
+    judge_spans = _by_name(exporter, 'orq.judge')
     assert len(judge_spans) == 4  # 2 judges x 2 orderings
 
-    jury_span_id = _span_id(_by_name(exporter, 'llm.jury')[0])
+    jury_span_id = _span_id(_by_name(exporter, 'orq.jury')[0])
     for js in judge_spans:
         assert js.parent is not None
         assert js.parent.span_id == jury_span_id
@@ -290,7 +290,7 @@ async def test_pairwise_emits_one_jury_span_for_both_orderings(span_collector) -
     swapped = [_attrs(s)['judge.label_swapped'] for s in judge_spans]
     assert sorted(swapped) == [False, False, True, True]
 
-    jury = _attrs(_by_name(exporter, 'llm.jury')[0])
+    jury = _attrs(_by_name(exporter, 'orq.jury')[0])
     assert jury['jury.verdict'] == 'A'
     assert jury['jury.judges_configured'] == 2
     assert jury['jury.judges_succeeded'] == 2
@@ -309,14 +309,105 @@ async def test_pairwise_span_records_position_bias(span_collector) -> None:
     comparison = await run_pairwise(judge_fn=judge_fn, panel=['gpt-a'], response_a='x', response_b='y')
     assert comparison.winner == 'inconclusive'
 
-    jury = _attrs(_by_name(exporter, 'llm.jury')[0])
+    jury = _attrs(_by_name(exporter, 'orq.jury')[0])
     assert jury['jury.flipped'] == 1
+    assert jury['jury.flipped_judges'] == 'gpt-a'
     assert jury['jury.inconclusive'] is True
+    # A flip is position bias, NOT a failure — the judge answered both times.
+    assert jury['jury.judges_failed'] == 0
+
+
+@pytest.mark.asyncio
+async def test_pairwise_span_separates_failure_from_flip(span_collector) -> None:
+    """One judge dies mechanically, another flips, a stand-in covers. The two
+    outcomes must not collapse into the same counter."""
+    exporter = span_collector
+
+    async def judge_fn(first: str, second: str, model: str) -> Prediction:
+        if model == 'dead':
+            raise RuntimeError('dead is down')
+        if model == 'flipper':
+            return Prediction(value='A')  # always the first slot -> self-contradicts
+        return Prediction(value='A' if first == 'better' else 'B')
+
+    comparison = await run_pairwise(
+        judge_fn=judge_fn,
+        panel=['dead', 'flipper', 'steady'],
+        replacement_judges=['stand-in'],
+        response_a='better',
+        response_b='worse',
+    )
+    assert comparison.winner == 'A'
+
+    assert len(_by_name(exporter, 'orq.jury')) == 1
+    jury = _attrs(_by_name(exporter, 'orq.jury')[0])
+    assert jury['jury.judges_failed'] == 1  # 'dead' only
+    assert jury['jury.flipped'] == 1
+    assert jury['jury.flipped_judges'] == 'flipper'
+    assert jury['jury.replacements_used'] == 1
+    assert jury['jury.judges_configured'] == 3
+
+    # The stand-in ran in both orderings and parents to the same jury span.
+    stand_in_spans = [s for s in _by_name(exporter, 'orq.judge') if _attrs(s)['judge.model'] == 'stand-in']
+    assert len(stand_in_spans) == 2
+    jury_span_id = _span_id(_by_name(exporter, 'orq.jury')[0])
+    for s in stand_in_spans:
+        assert _parent_id(s) == jury_span_id
+        assert _attrs(s)['judge.replacement'] is True
+
+
+@pytest.mark.asyncio
+async def test_pairwise_propagates_errors_and_marks_the_jury_span(span_collector) -> None:
+    exporter = span_collector
+
+    async def judge_fn(first: str, second: str, model: str) -> Prediction:
+        raise RuntimeError('judge is down')
+
+    with pytest.raises(RuntimeError):
+        await run_pairwise(judge_fn=judge_fn, panel=['gpt-a'], response_a='x', response_b='y', propagate_errors=True)
+
+    jury_spans = _by_name(exporter, 'orq.jury')
+    assert len(jury_spans) == 1
+    assert jury_spans[0].status.status_code is StatusCode.ERROR
+    # The judge span still names who died.
+    judge = _by_name(exporter, 'orq.judge')[0]
+    assert _attrs(judge)['judge.model'] == 'gpt-a'
+    assert judge.status.status_code is StatusCode.ERROR
+
+
+@pytest.mark.asyncio
+async def test_judge_error_is_truncated(span_collector) -> None:
+    exporter = span_collector
+
+    async def judge_fn(model: str) -> Prediction:
+        raise RuntimeError('x' * 5000)
+
+    with patch('evaluatorq.common.tracing._default_span_max_text_chars', return_value=100):
+        await run_jury(judge_fn=judge_fn, panel=['gpt-a'])
+
+    error = _attrs(_by_name(exporter, 'orq.judge')[0])['judge.error']
+    assert len(error) == 100
+    assert error.endswith('... [truncated]')
+
+
+@pytest.mark.asyncio
+async def test_explicit_root_parent_context_is_not_swapped_for_ambient(span_collector) -> None:
+    """An empty Context is falsy (it subclasses dict). Passing one explicitly
+    must still root the span, not silently inherit whatever is ambient."""
+    exporter = span_collector
+    from opentelemetry.context import Context
+
+    async with with_span('outer'):
+        async with with_span('inner', parent_context=Context()):
+            pass
+
+    inner = _by_name(exporter, 'inner')[0]
+    assert _parent_id(inner) is None
 
 
 @pytest.mark.asyncio
 async def test_full_hierarchy_evaluation_jury_judge_llm(span_collector) -> None:
-    """The shipped tree is orq.evaluation -> llm.jury -> llm.judge -> chat {model}.
+    """The shipped tree is orq.evaluation -> orq.jury -> orq.judge -> chat {model}.
 
     The evaluation span comes from process_evaluator, so this pins the seam
     between the core runner's span and the jury's — nothing threads a parent
@@ -341,8 +432,8 @@ async def test_full_hierarchy_evaluation_jury_judge_llm(span_collector) -> None:
     assert score.error is None
 
     evaluation = next(s for s in exporter.spans if s.name.startswith('orq.evaluation'))
-    jury = _by_name(exporter, 'llm.jury')[0]
-    judge = _by_name(exporter, 'llm.judge')[0]
+    jury = _by_name(exporter, 'orq.jury')[0]
+    judge = _by_name(exporter, 'orq.judge')[0]
     chat = _by_name(exporter, 'chat gpt-a')[0]
 
     assert _parent_id(jury) == _span_id(evaluation)

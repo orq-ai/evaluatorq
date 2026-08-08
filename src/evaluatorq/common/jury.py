@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import functools
 import re
 import time
 from collections import Counter
@@ -18,6 +17,7 @@ from evaluatorq.common.tracing import (
     record_token_usage,
     set_span_attrs,
     set_span_error,
+    truncate_for_span,
     with_span,
 )
 from evaluatorq.contracts import JuryResult, JuryStats, JuryVote, StrEnum, TokenUsage
@@ -282,7 +282,7 @@ async def _judge_vote(
     resolved ``JuryVote`` onto the span (RES-985). The span is a no-op when
     tracing is disabled; the vote/usages are unchanged either way."""
     start = time.monotonic()
-    async with with_span('llm.judge', parent_context=parent_context) as span:
+    async with with_span('orq.judge', parent_context=parent_context) as span:
         # Identity up front so a propagate_errors=True abort still leaves a span
         # that says which judge died.
         set_span_attrs(
@@ -311,47 +311,31 @@ async def _judge_vote(
 
 
 def _record_judge_span(span: Span | None, vote: JuryVote, usages: list[TokenUsage], *, latency_ms: float) -> None:
-    """Set ``judge.*`` attributes on a judge span from its resolved vote.
+    """Set the outcome ``judge.*`` attributes on a judge span from its vote.
 
-    ``judge.name`` equals the model id — jury judges are identified only by
-    model — kept as a distinct key so a future named-judge concept can diverge
-    without breaking dashboards. ``judge.verdict`` is stringified so bool /
-    float / str verdicts share one attribute type. ``judge.cost`` rides only
-    when the summed usage carries a ``cost_usd``; otherwise token counts stand
-    in, per the ticket.
+    Identity (``judge.name`` / ``judge.model`` / ``judge.replacement`` /
+    ``judge.label_swapped``) is already stamped by :func:`_judge_vote` at
+    span-open and cannot change here, so it is not re-written. ``judge.verdict``
+    is stringified so bool / float / str verdicts share one attribute type.
+    ``judge.cost`` rides only when the summed usage carries a ``cost_usd``;
+    otherwise token counts stand in, per the ticket.
     """
-    total_usage = _sum_usage(usages)
     set_span_attrs(
         span,
         {
-            'judge.name': vote.model,
-            'judge.model': vote.model,
             'judge.verdict': None if vote.value is None else str(vote.value),
             'judge.success': vote.success,
             'judge.abstained': vote.abstained,
-            'judge.replacement': vote.replacement,
             'judge.latency_ms': round(latency_ms, 3),
-            'judge.error': vote.error,
+            # Provider errors are unbounded; cap like every other text attribute.
+            'judge.error': None if vote.error is None else truncate_for_span(vote.error),
             'judge.repetitions_failed': vote.repetitions_failed,
         },
     )
     if not vote.success:
         # The failure is swallowed (the panel carries on), but the span must not read as OK.
         set_span_error(span, vote.error or f'judge {vote.model} produced no usable verdict')
-    if total_usage is not None:
-        record_token_usage(
-            span,
-            prompt_tokens=total_usage.prompt_tokens,
-            completion_tokens=total_usage.completion_tokens,
-            # A summed TokenUsage keeps the unset upstream total (0); None lets
-            # record_token_usage derive it from prompt + completion.
-            total_tokens=total_usage.total_tokens or None,
-            calls=total_usage.calls,
-            cached_tokens=total_usage.cached_tokens or None,
-            reasoning_tokens=total_usage.reasoning_tokens or None,
-        )
-        if total_usage.cost_usd is not None:
-            set_span_attrs(span, {'judge.cost': total_usage.cost_usd})
+    record_usage_and_cost(span, _sum_usage(usages), cost_key='judge.cost')
 
 
 async def _compute_judge_vote(
@@ -458,9 +442,6 @@ async def run_jury(
     tie_break_label: str | None = None,
     propagate_errors: bool = False,
     max_concurrency: int | asyncio.Semaphore | None = None,
-    emit_span: bool = True,
-    label_swapped: bool | None = None,
-    parent_context: object | None = None,
 ) -> JuryDeliberation:
     """Run a generic panel of judges and aggregate their verdicts.
 
@@ -481,39 +462,32 @@ async def run_jury(
     a run-local cap, or an existing ``asyncio.Semaphore`` to share one budget
     across several jury runs. ``None`` (default) keeps the fan-out unbounded.
 
-    The deliberation runs inside an ``llm.jury`` span with the panel's
-    aggregate attributes; each judge opens a child ``llm.judge`` span, and the
+    The deliberation runs inside an ``orq.jury`` span with the panel's
+    aggregate attributes; each judge opens a child ``orq.judge`` span, and the
     judge's own LLM calls nest under that (RES-985). The full hierarchy is
-    ``orq.evaluation`` -> ``llm.jury`` -> ``llm.judge`` -> ``chat {model}``.
+    ``orq.evaluation`` -> ``orq.jury`` -> ``orq.judge`` -> ``chat {model}``.
 
-    ``emit_span=False`` skips the ``llm.jury`` span and parents the judges to
-    ``parent_context`` (or the current span). Comparative mode uses this to own
-    a single jury span across both label orderings instead of one per ordering;
-    see :func:`evaluatorq.pairwise.run_pairwise`. ``label_swapped`` is stamped
-    on each judge span in that mode and left unset otherwise.
+    Comparative mode needs one jury span across BOTH label orderings, so it
+    drives :func:`_run_jury_core` directly rather than calling this function
+    twice; see :func:`evaluatorq.pairwise.run_pairwise`.
     """
-    core = functools.partial(
-        _run_jury_core,
-        judge_fn=judge_fn,
-        panel=panel,
-        repetitions=repetitions,
-        replacement_judges=replacement_judges,
-        min_successful_judges=min_successful_judges,
-        verdict_kind=verdict_kind,
-        tie_break=tie_break,
-        aggregator=aggregator,
-        tie_break_label=tie_break_label,
-        propagate_errors=propagate_errors,
-        max_concurrency=max_concurrency,
-        label_swapped=label_swapped,
-    )
-    if not emit_span:
-        return await core(parent_context=parent_context)
-
-    async with with_span('llm.jury', parent_context=parent_context) as jury_span:
+    async with with_span('orq.jury') as jury_span:
         # Captured once and threaded into each judge so per-judge spans parent
         # to this jury span deterministically, regardless of gather scheduling.
-        deliberation = await core(parent_context=current_otel_context())
+        deliberation = await _run_jury_core(
+            judge_fn=judge_fn,
+            panel=panel,
+            repetitions=repetitions,
+            replacement_judges=replacement_judges,
+            min_successful_judges=min_successful_judges,
+            verdict_kind=verdict_kind,
+            tie_break=tie_break,
+            aggregator=aggregator,
+            tie_break_label=tie_break_label,
+            propagate_errors=propagate_errors,
+            max_concurrency=max_concurrency,
+            parent_context=current_otel_context(),
+        )
         record_jury_span(
             jury_span,
             deliberation,
@@ -534,6 +508,30 @@ def _aggregator_name(aggregator: AggregatorSpec | None, verdict_kind: VerdictKin
     return 'mean_std' if verdict_kind is VerdictKind.NUMERIC else 'mode'
 
 
+def record_usage_and_cost(span: Span | None, usage: TokenUsage | None, *, cost_key: str) -> None:
+    """Roll a summed ``TokenUsage`` onto a span, with cost under ``cost_key``.
+
+    Shared by the judge, jury and comparative jury spans so the usage vocabulary
+    can only be changed in one place. Cost rides only when the provider reported
+    one — there is no local pricing table.
+    """
+    if usage is None:
+        return
+    record_token_usage(
+        span,
+        prompt_tokens=usage.prompt_tokens,
+        completion_tokens=usage.completion_tokens,
+        # A summed TokenUsage keeps the unset upstream total (0); None lets
+        # record_token_usage derive it from prompt + completion.
+        total_tokens=usage.total_tokens or None,
+        calls=usage.calls,
+        cached_tokens=usage.cached_tokens or None,
+        reasoning_tokens=usage.reasoning_tokens or None,
+    )
+    if usage.cost_usd is not None:
+        set_span_attrs(span, {cost_key: usage.cost_usd})
+
+
 def record_jury_span(
     span: Span | None,
     deliberation: JuryDeliberation,
@@ -542,11 +540,14 @@ def record_jury_span(
     verdict_kind: VerdictKind,
     min_successful_judges: int,
 ) -> None:
-    """Stamp panel-level attributes on a jury span (RES-985).
+    """Stamp panel-level attributes on the ``orq.jury`` span (RES-985).
 
-    Shared with comparative mode, which opens its own ``llm.jury`` span around
-    both label orderings. ``jury.verdict`` is stringified so bool / float / str
-    verdicts share one attribute type, matching ``judge.verdict``.
+    Comparative mode computes its aggregates from reconciled pair votes rather
+    than a ``JuryResult``, so it stamps its own set (see
+    ``pairwise._record_pairwise_span``) using the same ``jury.*`` vocabulary and
+    the shared :func:`record_usage_and_cost`. ``jury.verdict`` is stringified so
+    bool / float / str verdicts share one attribute type, matching
+    ``judge.verdict``.
     """
     j = deliberation.jury
     set_span_attrs(
@@ -564,19 +565,7 @@ def record_jury_span(
             'jury.inconclusive': j.inconclusive,
         },
     )
-    usage = deliberation.token_usage
-    if usage is not None:
-        record_token_usage(
-            span,
-            prompt_tokens=usage.prompt_tokens,
-            completion_tokens=usage.completion_tokens,
-            total_tokens=usage.total_tokens or None,
-            calls=usage.calls,
-            cached_tokens=usage.cached_tokens or None,
-            reasoning_tokens=usage.reasoning_tokens or None,
-        )
-        if usage.cost_usd is not None:
-            set_span_attrs(span, {'jury.cost': usage.cost_usd})
+    record_usage_and_cost(span, deliberation.token_usage, cost_key='jury.cost')
 
 
 async def _run_jury_core(
@@ -594,11 +583,15 @@ async def _run_jury_core(
     max_concurrency: int | asyncio.Semaphore | None = None,
     parent_context: object | None = None,
     label_swapped: bool | None = None,
+    replacement: bool = False,
 ) -> JuryDeliberation:
     """Panel deliberation + aggregation (see :func:`run_jury` for semantics).
 
     Split out so :func:`run_jury` owns only the span; ``parent_context`` is the
-    jury span's context, threaded into each judge span."""
+    jury span's context, threaded into each judge span. ``replacement=True``
+    marks the WHOLE panel as stand-ins — comparative mode promotes replacements
+    at the pair level and runs them through a second core call, so without it
+    those judge spans would claim to be configured judges."""
     if aggregator is None:
         aggregator = 'mean_std' if verdict_kind is VerdictKind.NUMERIC else 'mode'
     # Per-judge repetition collapse reuses the numeric keyword when one is set,
@@ -627,7 +620,7 @@ async def _run_jury_core(
             repetitions=repetitions,
             verdict_kind=verdict_kind,
             tie_break=tie_break,
-            replacement=False,
+            replacement=replacement,
             numeric_how=numeric_how,
             propagate_errors=propagate_errors,
             semaphore=semaphore,
@@ -718,10 +711,14 @@ async def _run_jury_core(
             explanation = f'[TIE — {tie_label}] {explanation}'
 
     jury = JuryResult(
-        judges_configured=len(resolved_panel),
+        # replacement=True means the caller already promoted this whole panel as
+        # stand-ins (comparative mode): none of them is a configured judge, so
+        # they land in replacements_used instead. The caller derives the real
+        # panel-level aggregates itself; these keep JuryResult self-consistent.
+        judges_configured=0 if replacement else len(resolved_panel),
         judges_succeeded=len(decisive_votes),
-        judges_failed=failures,
-        replacements_used=len(stand_ins),
+        judges_failed=failures if not replacement else 0,
+        replacements_used=len(stand_ins) + (len(resolved_panel) if replacement else 0),
         tie=tie,
         inconclusive=inconclusive,
         votes=votes,

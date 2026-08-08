@@ -426,7 +426,9 @@ async def with_llm_span(  # noqa: RUF029
         yield None
         return
 
-    ctx = parent_context or otel_context.get_current()
+    # `is not None`, not truthiness: Context subclasses dict, so a legitimately
+    # empty (root) context is falsy and would be silently swapped for ambient.
+    ctx = parent_context if parent_context is not None else otel_context.get_current()
     resolved_provider = provider or _derive_provider(model)
     span_name = f'{operation} {model}'
 
@@ -509,7 +511,9 @@ async def with_span(  # noqa: RUF029
         yield None
         return
 
-    ctx = parent_context or otel_context.get_current()
+    # `is not None`, not truthiness: Context subclasses dict, so a legitimately
+    # empty (root) context is falsy and would be silently swapped for ambient.
+    ctx = parent_context if parent_context is not None else otel_context.get_current()
     clean_attrs = {k: v for k, v in (attributes or {}).items() if v is not None}
 
     with tracer.start_as_current_span(
