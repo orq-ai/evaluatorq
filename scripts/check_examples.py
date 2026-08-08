@@ -7,6 +7,10 @@ network traffic (and, with a placeholder key, minutes of retry backoff). The
 drift worth catching here is a renamed or deleted `evaluatorq` symbol, and an AST
 walk catches that for free.
 
+Every file is parsed, so this also serves as the syntax check that the old
+`scripts/smoke_examples.py` (py_compile only) used to do — it is a superset, and
+that script was removed rather than run alongside this one.
+
 What this does NOT catch: runtime breakage that only appears when an example is
 actually run. The weekly `examples-weekly.yml` workflow covers that with real
 credentials on a curated subset.
