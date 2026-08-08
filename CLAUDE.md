@@ -71,11 +71,47 @@ src/evaluatorq/
 ├── contracts.py             # Cross-subpackage shared data models (RunManifest, StageRecord, ManifestStatus, ManifestSurface, etc.)
 ├── deployment.py            # ORQ deployment integration
 ├── fetch_data.py            # Dataset fetching
+├── pairwise.py              # Pairwise comparison evaluation entry point
+├── pairwise_run.py          # Pairwise run orchestration
+├── pairwise_reports/        # Pairwise HTML report generation
+│   ├── export_html.py       # HTML report renderer
+│   └── sections.py          # Report section builders
 ├── common/                  # Cross-surface shared utilities (redteam + simulation)
-│   └── run_manifest.py      # Run-lifecycle manifest behavior (create/update/finalize RunManifest)
+│   ├── run_manifest.py      # Run-lifecycle manifest behavior (create/update/finalize RunManifest)
+│   ├── judge.py             # LLM-as-judge helper shared across surfaces
+│   ├── jury.py              # Multi-judge aggregation
+│   ├── llm_call.py          # Shared LLM invocation wrapper
+│   ├── llm_client.py        # LLM client construction
+│   ├── retry.py             # Retry/backoff helpers
+│   ├── tracing.py           # OTel span helpers shared across surfaces
+│   ├── template_engine.py   # Prompt templating
+│   ├── reports/             # Shared report rendering (console, HTML, vega charts)
+│   │   ├── console.py       # Rich console report rendering
+│   │   ├── executive_summary.py # Executive summary section builder
+│   │   ├── render.py        # HTML/MD render orchestration
+│   │   └── vega.py          # Vega-Lite chart spec builders
+│   └── ui/                  # Shared Streamlit dashboard launch helper
+│       └── launch.py        # Streamlit app launch helper
 ├── integrations/            # Third-party integrations (LangChain, etc.)
 ├── tracing/                 # OpenTelemetry tracing
 ├── openresponses/           # OpenAI Responses API integration
+├── simulation/              # Agent simulation subpackage (eq simulate) — persona/scenario-driven multi-turn agent testing
+│   ├── api.py               # Public simulate() entry point
+│   ├── cli.py                # Typer CLI for simulation
+│   ├── types.py               # Simulation data models
+│   ├── traces.py              # Trace capture/reconstruction
+│   ├── wrap_agent.py          # Agent wrapping/instrumentation helper
+│   ├── runner/                 # Simulation execution loop
+│   │   └── simulation.py       # Persona x scenario run orchestration
+│   ├── agents/                  # Simulated user + judge agents
+│   │   ├── judge.py             # Judging agent
+│   │   └── user_simulator.py    # Simulated user agent
+│   ├── generators/                # LLM-driven persona/scenario/datapoint generation
+│   ├── reports/                    # Report generation (console, HTML, MD, exec summary)
+│   ├── quality/                     # Robustness checks
+│   │   └── message_perturbation.py  # Message perturbation testing
+│   └── ui/                           # Streamlit dashboard for simulation results
+│       └── dashboard.py
 ├── dashboard/               # FastHTML web dashboard (eq dashboard — preview, in dev; ui commands still serve the Streamlit dashboards)
 │   ├── app.py               # build_app(roots) — ASGI app factory + all routes
 │   ├── _compat.py           # Starlette 1.3.x / FastHTML 0.12.x compat shim (applied on import)
@@ -86,6 +122,14 @@ src/evaluatorq/
 │   ├── filters.py           # FilterDef registry (redteam 7-dim, sim 4-dim)
 │   ├── filter_request.py    # parse_selections() — query-string filter parser
 │   ├── styles.py            # Shared CSS constants / class-name helpers
+│   ├── theme.py             # Theme tokens / light-dark styling
+│   ├── metrics.py           # Aggregate metric computation for dashboard views
+│   ├── report_kit.py        # Shared report-card component helpers
+│   ├── report_tabs.py       # Report tab navigation
+│   ├── orq_links.py         # Orq UI deep-link builders
+│   ├── orq_workspace.py     # Orq workspace slug resolution
+│   ├── trace_links.py       # Trace deep-link builders
+│   ├── sim_compare.py       # Simulation run comparison view
 │   ├── redteam_views.py     # HTMX fragment routes for 4 interactive redteam views
 │   ├── redteam_charts.py    # Interactive breakdown chart + agent heatmap fragments
 │   ├── redteam_transcripts.py # Conversation viewer + disagreement viewer fragments
@@ -101,6 +145,9 @@ src/evaluatorq/
     ├── hooks.py             # Pipeline lifecycle hooks (DefaultHooks, RichHooks)
     ├── tracing.py           # OTel span helpers
     ├── exceptions.py        # Custom exceptions
+    ├── judge.py             # LLM judge invocation for red-team evaluators
+    ├── replay.py            # Replay a prior red-team run from stored artifacts
+    ├── utils.py             # Misc red-team helpers
     ├── adaptive/            # Dynamic pipeline components
     │   ├── pipeline.py      # Datapoint generation pipeline
     │   ├── orchestrator.py  # Attack execution orchestrator
@@ -110,12 +157,15 @@ src/evaluatorq/
     │   ├── attack_generator.py    # Adversarial prompt generation
     │   ├── objective_generator.py # Attack objective generation
     │   ├── capability_classifier.py # LLM-based agent capability classification
-    │   └── agent_context.py # Agent context retrieval
+    │   ├── agent_context.py # Agent context retrieval
+    │   └── tool_chaining.py # Multi-tool attack chaining strategy support
     ├── backends/            # Target backends (ORQ agents, OpenAI models)
     │   ├── base.py          # AgentTarget protocol
     │   ├── orq.py           # ORQ agent backend
     │   ├── openai.py        # Direct OpenAI backend
-    │   └── registry.py      # Backend/client factory
+    │   ├── openresponses.py # OpenAI Responses API backend
+    │   ├── registry.py      # Backend/client factory
+    │   └── _errors.py       # Backend error normalization
     ├── frameworks/          # Framework-specific strategies and evaluators
     │   ├── owasp_asi.py     # OWASP ASI attack strategies
     │   ├── owasp_llm.py     # OWASP LLM Top 10 attack strategies
@@ -127,10 +177,17 @@ src/evaluatorq/
     │       └── evaluatorq_bridge.py # Static dataset loading + scoring
     ├── reports/             # Report generation
     │   ├── converters.py    # Result → report conversion
-    │   └── display.py       # Rich terminal display
-    └── runtime/             # Job execution
-        ├── jobs.py          # Async job runner
-        └── orq_agent_job.py # ORQ-specific job implementation
+    │   ├── display.py       # Rich terminal display
+    │   ├── executive_summary.py # Executive summary section builder
+    │   ├── export_html.py   # HTML report export
+    │   ├── export_md.py     # Markdown report export
+    │   ├── guidance.py      # Remediation guidance text
+    │   ├── recommendations.py # Recommendation generation
+    │   └── sections.py      # Report section builders
+    ├── runtime/             # Job execution
+    │   └── jobs.py          # Async job runner
+    └── ui/                  # Streamlit dashboard for red-team results
+        └── dashboard.py
 ```
 
 ## Key Patterns
@@ -158,9 +215,11 @@ src/evaluatorq/
 
 ### Dependencies
 
-- Runtime: `pydantic`, `httpx`, `rich`, `loguru`
-- Red team extra: `openai`, `typer`, `python-dotenv`, `huggingface-hub`
-- Dashboard extra: `python-fasthtml`, `uvicorn` (install as `evaluatorq[dashboard]`)
+- Runtime (required): `pydantic`, `httpx`, `rich`, `loguru`, `typer`, `openai`
+- Red team extra: `huggingface-hub`, `streamlit`, `plotly`, `watchdog`, `vl-convert-python` (install as `evaluatorq[redteam]`)
+- Simulation extra: `orq-ai-sdk`, `streamlit`, `plotly`, `watchdog`, `vl-convert-python` (install as `evaluatorq[simulation]`)
+- Dashboard extra: `python-fasthtml`, `uvicorn`, `vl-convert-python` (install as `evaluatorq[dashboard]`)
+- Other extras: `orq` (`orq-ai-sdk`), `otel` (OpenTelemetry SDK/exporter), `langchain`, `langgraph`, `openai-agents`, `pydantic-ai`, `crewai`; `all` installs every extra
 - Dev: `pytest`, `pytest-asyncio`, `basedpyright`, `ruff`
 - Package manager: `uv` (not pip)
 - Build system: `hatchling`
