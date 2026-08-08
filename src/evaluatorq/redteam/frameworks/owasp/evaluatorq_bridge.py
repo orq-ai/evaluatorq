@@ -242,10 +242,9 @@ def create_owasp_evaluator(
             # A target-level failure ([ERROR: ...] with AgentResponseError) is not
             # content — short-circuit before the judge so a failure is never scored
             # as RESISTANT.
-            target_error = output.get('error') if isinstance(output, dict) else output_error_text(output)
+            target_error = output_error_text(output)
             if target_error is not None:
-                msg = getattr(target_error, 'message', str(target_error))
-                return error_result(f'Target agent error — not scored: {msg}')
+                return error_result(f'Target agent error — not scored: {target_error}')
 
             output_messages = output_to_messages(output)
 

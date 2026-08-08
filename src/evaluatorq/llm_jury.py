@@ -445,7 +445,7 @@ def llm_jury(
         # Checked before resolving the client: skipping the judges must not require
         # LLM credentials.
         target_error = output_error_text(output)
-        if target_error:
+        if target_error is not None:
             logger.warning('Target errored, skipping judges: {}', target_error)
             return EvaluationResult.model_validate({
                 'value': 'inconclusive',
@@ -607,7 +607,7 @@ class PairwiseComparator:
         """
         for label, side in (('A', response_a), ('B', response_b)):
             err = output_error_text(side)
-            if err:
+            if err is not None:
                 logger.warning('Pairwise side {} errored, skipping judges: {}', label, err)
                 return PairwiseComparison(winner='inconclusive')
 

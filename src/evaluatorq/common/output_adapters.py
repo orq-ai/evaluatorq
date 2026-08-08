@@ -42,8 +42,19 @@ def output_to_text(output: Any) -> str:
 
 def output_error_text(output: Any) -> str | None:
     """Target-level error message carried by an Output, if any."""
-    if isinstance(output, AgentResponse) and output.error:
-        return output.error.message
+    if isinstance(output, AgentResponse):
+        # Error presence, rather than message truthiness, marks a failed target.
+        # Providers may legitimately return an empty message.
+        return output.error.message if output.error is not None else None
+    if isinstance(output, dict) and 'error' in output and output['error'] is not None:
+        error = output['error']
+        if isinstance(error, str):
+            return error
+        if isinstance(error, dict):
+            message = error.get('message')
+            return str(message) if message is not None else str(error)
+        message = getattr(error, 'message', None)
+        return str(message) if message is not None else str(error)
     return None
 
 

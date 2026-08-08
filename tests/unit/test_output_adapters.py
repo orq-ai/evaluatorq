@@ -103,6 +103,16 @@ def test_output_error_text_reads_agentresponse_error():
     assert output_error_text(ar) == 'timeout'
 
 
+def test_output_error_text_detects_empty_agentresponse_error():
+    ar = AgentResponse(output=[], error=AgentResponseError(message='', error_type='target_error'))
+    assert output_error_text(ar) == ''
+    assert output_error_text(ar) is not None
+
+
+def test_output_error_text_reads_dict_error_message():
+    assert output_error_text({'error': {'message': 'timeout'}}) == 'timeout'
+
+
 def test_output_error_text_none_for_healthy_outputs():
     assert output_error_text(AgentResponse(text='fine')) is None
     assert output_error_text('plain') is None
