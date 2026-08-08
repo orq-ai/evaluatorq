@@ -60,9 +60,8 @@ The library is deliberately lightweight: async-first, typed end-to-end, and usab
 uv add evaluatorq
 ```
 
-`uv add` installs into the current project. If you don't have one yet, `uv init`
-creates it (or `uv venv` for a bare virtualenv) — otherwise uv will tell you no
-`pyproject.toml` was found.
+`uv add` installs into the current project. If you don't have a project, use
+`uv pip install evaluatorq` in an existing virtual environment instead.
 
 Then run your evaluation and the CLI through the same project environment:
 
