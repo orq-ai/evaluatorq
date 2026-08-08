@@ -76,7 +76,6 @@ def test_token_usage_trace_accepts_canonical_detail_counts() -> None:
     attrs = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
 
     assert attrs['gen_ai.usage.cache_read.input_tokens'] == 3
-    assert attrs['gen_ai.usage.prompt_tokens_details.cached_tokens'] == 3
     assert attrs['gen_ai.usage.completion_tokens_details.reasoning_tokens'] == 2
 
 

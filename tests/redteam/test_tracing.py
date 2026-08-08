@@ -87,13 +87,9 @@ def test_record_token_usage_with_span():
     record_token_usage(mock_span, prompt_tokens=100, completion_tokens=50, total_tokens=150, calls=2)
     mock_span.set_attribute.assert_any_call("gen_ai.usage.input_tokens", 100)
     mock_span.set_attribute.assert_any_call("gen_ai.usage.output_tokens", 50)
-    mock_span.set_attribute.assert_any_call("gen_ai.usage.prompt_tokens", 100)
-    mock_span.set_attribute.assert_any_call("gen_ai.usage.completion_tokens", 50)
     mock_span.set_attribute.assert_any_call("gen_ai.usage.total_tokens", 150)
-    mock_span.set_attribute.assert_any_call("total_tokens", 150)
     # calls=2 should set both gen_ai.usage.calls and calls attributes
     mock_span.set_attribute.assert_any_call("gen_ai.usage.calls", 2)
-    mock_span.set_attribute.assert_any_call("calls", 2)
 
 
 def test_record_token_usage_calls_zero_omits_calls_attribute():
@@ -110,8 +106,8 @@ def test_record_token_usage_calls_zero_omits_calls_attribute():
     assert calls_in_attrs == [], "gen_ai.usage.calls must not be set when calls=0"
 
 
-def test_record_llm_response_sets_both_token_conventions():
-    """record_llm_response sets both OTel and OpenAI-style token attributes."""
+def test_record_llm_response_sets_canonical_token_attrs():
+    """record_llm_response sets the canonical gen_ai.usage.* token attributes."""
     from evaluatorq.common.tracing import record_llm_response
 
     mock_span = MagicMock()
@@ -137,8 +133,6 @@ def test_record_llm_response_sets_both_token_conventions():
 
     mock_span.set_attribute.assert_any_call("gen_ai.usage.input_tokens", 100)
     mock_span.set_attribute.assert_any_call("gen_ai.usage.output_tokens", 50)
-    mock_span.set_attribute.assert_any_call("gen_ai.usage.prompt_tokens", 100)
-    mock_span.set_attribute.assert_any_call("gen_ai.usage.completion_tokens", 50)
     mock_span.set_attribute.assert_any_call("gen_ai.usage.cache_read.input_tokens", 30)
     mock_span.set_attribute.assert_any_call("gen_ai.usage.completion_tokens_details.reasoning_tokens", 10)
     mock_span.set_attribute.assert_any_call("gen_ai.response.id", "resp-123")
@@ -174,7 +168,6 @@ def test_record_llm_response_total_tokens_override_branch(raw_total, expected_to
     record_llm_response(mock_span, mock_response)
 
     mock_span.set_attribute.assert_any_call("gen_ai.usage.total_tokens", expected_total)
-    mock_span.set_attribute.assert_any_call("total_tokens", expected_total)
 
 
 def test_record_llm_response_without_cached_tokens():
@@ -201,9 +194,7 @@ def test_record_llm_response_without_cached_tokens():
     record_llm_response(mock_span, mock_response)
 
     mock_span.set_attribute.assert_any_call("gen_ai.usage.input_tokens", 80)
-    mock_span.set_attribute.assert_any_call("gen_ai.usage.prompt_tokens", 80)
     mock_span.set_attribute.assert_any_call("gen_ai.usage.output_tokens", 40)
-    mock_span.set_attribute.assert_any_call("gen_ai.usage.completion_tokens", 40)
     # No cached_tokens attribute should be set
     for call in mock_span.set_attribute.call_args_list:
         assert "cached_tokens" not in str(call)

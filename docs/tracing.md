@@ -159,6 +159,9 @@ LLM spans (`chat ...`) carry standard GenAI attributes:
 | `gen_ai.request.model` | Model identifier |
 | `gen_ai.usage.input_tokens` | Prompt token count |
 | `gen_ai.usage.output_tokens` | Completion token count |
+| `gen_ai.usage.total_tokens` | Total token count |
+| `gen_ai.usage.calls` | Number of LLM calls rolled into this span (omitted when zero) |
+| `gen_ai.usage.cost_usd` | Cost in USD, only when the provider reported one |
 | `gen_ai.input.messages` | JSON serialised input messages (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
 | `gen_ai.output.messages` | JSON serialised output messages (gated by `EVALUATORQ_CAPTURE_MESSAGE_CONTENT`) |
 | `orq.llm.purpose` | Cross-domain purpose tag (e.g. `"adversarial"`, `"evaluation"`, `"target"`) |
@@ -297,8 +300,10 @@ Span attributes on `orq.judge`:
 | `judge.latency_ms` | Wall-clock time for this judge's repetitions |
 | `judge.error` | Error string when the judge failed (truncated per `EVALUATORQ_SPAN_MAX_TEXT_CHARS`) |
 | `judge.repetitions_failed` | Count of failed repetitions out of the judge's configured repetition count |
-| `judge.cost` | Summed cost in USD, only when the provider reported one |
-| *(token usage)* | `gen_ai.usage.*` / bare `prompt_tokens` / `completion_tokens` / `total_tokens` / `calls` / cache and reasoning token keys — the same vocabulary documented under [LLM spans](#red-teaming-spans) above, via `record_token_usage` |
+
+No token usage or cost here: those are recorded once, on the `chat` spans
+underneath, and rolled up by the consumer. Stamping them on every ancestor as
+well made the same tokens appear three times in one trace.
 
 `judge.label_swapped` is only ever set (`True`/`False`) in comparative mode —
 in plain `run_jury()` deliberations it is absent, since each judge votes once.
@@ -317,8 +322,6 @@ Span attributes on `orq.jury`:
 | `jury.replacements_used` | Number of stand-in judges promoted |
 | `jury.tie` | Whether the verdict came from a tie-break |
 | `jury.inconclusive` | Whether the panel failed to reach quorum |
-| `jury.cost` | Summed cost in USD, only when the provider reported one |
-| *(token usage)* | Same token-usage vocabulary as `orq.judge`, summed across the whole panel, via `record_token_usage` |
 
 #### Comparative (pairwise) mode
 

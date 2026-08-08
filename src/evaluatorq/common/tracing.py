@@ -251,8 +251,12 @@ def record_token_usage(
 ) -> None:
     """Record token usage on a span. Safe no-op when span is None.
 
-    Superset of both former redteam and simulation impls: sets OTel GenAI
-    attribute names, their aliases, bare keys, call count, and cache details.
+    One canonical attribute name per number, all under the OTel GenAI
+    ``gen_ai.usage.*`` namespace. The former ``prompt_tokens`` /
+    ``completion_tokens`` spellings and the bare (un-namespaced) keys are
+    deliberately not emitted: they carried the same values under three names
+    each, which triples attribute volume and lets two consumers disagree about
+    which key is authoritative.
     """
     if span is None:
         return
@@ -261,22 +265,12 @@ def record_token_usage(
     total = total_tokens if total_tokens is not None else prompt + completion
     span.set_attribute('gen_ai.usage.input_tokens', prompt)
     span.set_attribute('gen_ai.usage.output_tokens', completion)
-    span.set_attribute('gen_ai.usage.prompt_tokens', prompt)
-    span.set_attribute('gen_ai.usage.completion_tokens', completion)
     span.set_attribute('gen_ai.usage.total_tokens', total)
-    span.set_attribute('prompt_tokens', prompt)
-    span.set_attribute('completion_tokens', completion)
-    span.set_attribute('input_tokens', prompt)
-    span.set_attribute('output_tokens', completion)
-    span.set_attribute('total_tokens', total)
     if calls:
         span.set_attribute('gen_ai.usage.calls', calls)
-        span.set_attribute('calls', calls)
     cache_read = cached_tokens if cached_tokens is not None else cache_read_input_tokens
     if cache_read is not None:
         span.set_attribute('gen_ai.usage.cache_read.input_tokens', cache_read)
-        # Legacy attribute name emitted by the former redteam impl — kept for platform dashboard compat.
-        span.set_attribute('gen_ai.usage.prompt_tokens_details.cached_tokens', cache_read)
     if reasoning_tokens is not None:
         span.set_attribute('gen_ai.usage.completion_tokens_details.reasoning_tokens', reasoning_tokens)
     if cache_creation_input_tokens is not None:
@@ -328,6 +322,13 @@ def record_llm_response(
             cache_read_input_tokens=cache_read,
             cache_creation_input_tokens=cache_creation,
         )
+        # Cost lives only here, on the LLM call that incurred it — parents roll
+        # it up. Providers spell it three ways and many omit it entirely.
+        for cost_field in ('cost_usd', 'cost', 'total_cost'):
+            cost = _field(usage, cost_field)
+            if cost is not None:
+                span.set_attribute('gen_ai.usage.cost_usd', float(cost))
+                break
         completion_details = _field(usage, 'completion_tokens_details')
         if completion_details is None:
             completion_details = _field(usage, 'output_tokens_details')

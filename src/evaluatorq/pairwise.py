@@ -22,7 +22,6 @@ from evaluatorq.common.jury import (
     _run_jury_core,
     _sum_usage,
     as_semaphore,
-    record_usage_and_cost,
     resolve_panel,
 )
 from evaluatorq.common.tracing import current_otel_context, set_span_attrs, with_span
@@ -419,4 +418,3 @@ def _record_pairwise_span(
             'jury.swap': swap,
         },
     )
-    record_usage_and_cost(span, comparison.token_usage, cost_key='jury.cost')

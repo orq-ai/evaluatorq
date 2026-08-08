@@ -120,7 +120,6 @@ async def test_judge_span_attributes(span_collector) -> None:
     assert decisive['judge.abstained'] is False
     assert decisive['judge.replacement'] is False
     assert 'judge.latency_ms' in decisive
-    assert decisive['total_tokens'] == 5  # token usage emitted (3 in + 2 out)
 
     abstained = by_model['gpt-b']
     assert abstained['judge.success'] is True
@@ -212,7 +211,13 @@ async def test_propagated_error_span_keeps_judge_identity(span_collector) -> Non
 
 
 @pytest.mark.asyncio
-async def test_judge_span_records_full_token_usage(span_collector) -> None:
+async def test_usage_and_cost_stay_off_judge_and_jury_spans(span_collector) -> None:
+    """Usage/cost belong on the ``chat`` spans that incurred them.
+
+    Stamping them on the judge and jury spans too made the same tokens appear
+    at three levels of one trace, so anything summing across a trace
+    triple-counted. The consumer rolls up from the leaves instead.
+    """
     exporter = span_collector
 
     async def judge_fn(model: str) -> Prediction:
@@ -225,13 +230,11 @@ async def test_judge_span_records_full_token_usage(span_collector) -> None:
 
     await run_jury(judge_fn=judge_fn, panel=['gpt-a'], repetitions=2)
 
-    judge = _attrs(_by_name(exporter, 'orq.judge')[0])
-    # Both repetitions roll up onto the single per-judge span.
-    assert judge['calls'] == 2
-    assert judge['gen_ai.usage.cache_read.input_tokens'] == 12
-    assert judge['gen_ai.usage.completion_tokens_details.reasoning_tokens'] == 6
-    assert judge['judge.cost'] == 1.0
-    assert judge['total_tokens'] == 28
+    for name in ('orq.judge', 'orq.jury'):
+        attrs = _attrs(_by_name(exporter, name)[0])
+        assert not [k for k in attrs if k.startswith('gen_ai.usage.')], name
+        assert 'judge.cost' not in attrs
+        assert 'jury.cost' not in attrs
 
 
 @pytest.mark.asyncio
@@ -257,8 +260,6 @@ async def test_jury_span_records_outcome(span_collector) -> None:
     assert jury['jury.verdict'] == 'yes'
     assert jury['jury.aggregator'] == 'majority'
     assert jury['jury.min_successful_judges'] == 2
-    # Panel usage rolls up onto the jury span (2 judges x 3 in + 2 out).
-    assert jury['total_tokens'] == 10
 
 
 @pytest.mark.asyncio

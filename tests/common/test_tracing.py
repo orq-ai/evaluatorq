@@ -119,11 +119,11 @@ def test_capture_message_content_false_when_opt_out(monkeypatch: pytest.MonkeyPa
 
 
 # ---------------------------------------------------------------------------
-# record_token_usage — superset: all attrs from both impls
+# record_token_usage — one canonical gen_ai.usage.* name per number
 # ---------------------------------------------------------------------------
 
 
-def test_record_token_usage_superset_attrs() -> None:
+def test_record_token_usage_emits_canonical_genai_attrs() -> None:
     """Unified record_token_usage emits every attribute both impls used to emit."""
     from unittest.mock import MagicMock
     from evaluatorq.common.tracing import record_token_usage
@@ -136,18 +136,8 @@ def test_record_token_usage_superset_attrs() -> None:
     assert set_attrs['gen_ai.usage.input_tokens'] == 10
     assert set_attrs['gen_ai.usage.output_tokens'] == 20
     assert set_attrs['gen_ai.usage.total_tokens'] == 30
-    # Aliases (from redteam impl)
-    assert set_attrs['gen_ai.usage.prompt_tokens'] == 10
-    assert set_attrs['gen_ai.usage.completion_tokens'] == 20
-    # Bare keys (platform compat)
-    assert set_attrs['prompt_tokens'] == 10
-    assert set_attrs['completion_tokens'] == 20
-    assert set_attrs['input_tokens'] == 10
-    assert set_attrs['output_tokens'] == 20
-    assert set_attrs['total_tokens'] == 30
     # Call count (from redteam impl)
     assert set_attrs['gen_ai.usage.calls'] == 2
-    assert set_attrs['calls'] == 2
 
 
 def test_record_token_usage_cache_attrs() -> None:
@@ -172,6 +162,35 @@ def test_record_token_usage_zero_prompt_preserved() -> None:
     set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
     assert set_attrs['gen_ai.usage.input_tokens'] == 0
     assert set_attrs['gen_ai.usage.output_tokens'] == 5
+
+
+@pytest.mark.parametrize('field', ['cost_usd', 'cost', 'total_cost'])
+def test_record_llm_response_records_cost_on_the_llm_span(field: str) -> None:
+    """Cost is stamped on the LLM call that incurred it, whatever the provider calls it.
+
+    Parents (judge / jury / evaluation) deliberately do not carry cost — they
+    roll it up from here, so one dollar is only ever counted once per trace.
+    """
+    from unittest.mock import MagicMock
+
+    from evaluatorq.common.tracing import record_llm_response
+
+    resp = {'id': 'r1', 'model': 'gpt-4o', 'usage': {'input_tokens': 4, 'output_tokens': 2, field: 0.25}}
+    span = MagicMock()
+    record_llm_response(span, resp)
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert set_attrs['gen_ai.usage.cost_usd'] == 0.25
+
+
+def test_record_llm_response_omits_cost_when_provider_reports_none() -> None:
+    from unittest.mock import MagicMock
+
+    from evaluatorq.common.tracing import record_llm_response
+
+    span = MagicMock()
+    record_llm_response(span, {'id': 'r1', 'model': 'gpt-4o', 'usage': {'input_tokens': 4, 'output_tokens': 2}})
+    set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert 'gen_ai.usage.cost_usd' not in set_attrs
 
 
 # ---------------------------------------------------------------------------
@@ -213,17 +232,10 @@ def test_record_llm_response_chat_completions_attr_set() -> None:
     # Response metadata
     assert set_attrs['gen_ai.response.id'] == 'resp-123'
     assert set_attrs['gen_ai.response.model'] == 'azure/gpt-4o-mini'
-    # Token attrs (via record_token_usage — both OTel and aliases)
+    # Token attrs (via record_token_usage)
     assert set_attrs['gen_ai.usage.input_tokens'] == 7
     assert set_attrs['gen_ai.usage.output_tokens'] == 11
-    assert set_attrs['gen_ai.usage.prompt_tokens'] == 7
-    assert set_attrs['gen_ai.usage.completion_tokens'] == 11
     assert set_attrs['gen_ai.usage.total_tokens'] == 18
-    assert set_attrs['prompt_tokens'] == 7
-    assert set_attrs['completion_tokens'] == 11
-    assert set_attrs['input_tokens'] == 7
-    assert set_attrs['output_tokens'] == 11
-    assert set_attrs['total_tokens'] == 18
     # Finish reason
     assert set_attrs['gen_ai.response.finish_reasons'] == ['stop']
     # Output content (capture gate default=True)
@@ -299,9 +311,6 @@ def test_record_llm_response_responses_api_attr_set() -> None:
     # Falls back to input_tokens / output_tokens when prompt_tokens absent
     assert set_attrs['gen_ai.usage.input_tokens'] == 4
     assert set_attrs['gen_ai.usage.output_tokens'] == 2
-    # Bare aliases
-    assert set_attrs['prompt_tokens'] == 4
-    assert set_attrs['completion_tokens'] == 2
     # Finish reason from .status
     assert set_attrs['gen_ai.response.finish_reasons'] == ['completed']
     # Output content
@@ -694,8 +703,8 @@ def test_record_llm_response_extracts_cache_creation_tokens() -> None:
     assert set_attrs['gen_ai.usage.cache_creation.input_tokens'] == 99
 
 
-def test_record_token_usage_emits_legacy_cached_tokens_alias() -> None:
-    """cache_read emits both the OTel semconv key and the legacy redteam key."""
+def test_record_token_usage_emits_cache_read_tokens() -> None:
+    """cache_read lands under the OTel semconv key."""
     from unittest.mock import MagicMock
     from evaluatorq.common.tracing import record_token_usage
 
@@ -703,8 +712,6 @@ def test_record_token_usage_emits_legacy_cached_tokens_alias() -> None:
     record_token_usage(span, prompt_tokens=5, cache_read_input_tokens=12)
     set_attrs: dict[str, Any] = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
     assert set_attrs['gen_ai.usage.cache_read.input_tokens'] == 12
-    # Legacy attribute the former redteam impl wrote — kept for dashboard compat.
-    assert set_attrs['gen_ai.usage.prompt_tokens_details.cached_tokens'] == 12
 
 
 # ---------------------------------------------------------------------------

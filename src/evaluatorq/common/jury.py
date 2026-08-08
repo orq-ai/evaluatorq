@@ -14,7 +14,6 @@ from pydantic import BaseModel
 
 from evaluatorq.common.tracing import (
     current_otel_context,
-    record_token_usage,
     set_span_attrs,
     set_span_error,
     truncate_for_span,
@@ -306,19 +305,19 @@ async def _judge_vote(
             propagate_errors=propagate_errors,
             semaphore=semaphore,
         )
-        _record_judge_span(span, vote, usages, latency_ms=(time.monotonic() - start) * 1000.0)
+        _record_judge_span(span, vote, latency_ms=(time.monotonic() - start) * 1000.0)
     return vote, usages
 
 
-def _record_judge_span(span: Span | None, vote: JuryVote, usages: list[TokenUsage], *, latency_ms: float) -> None:
+def _record_judge_span(span: Span | None, vote: JuryVote, *, latency_ms: float) -> None:
     """Set the outcome ``judge.*`` attributes on a judge span from its vote.
 
     Identity (``judge.name`` / ``judge.model`` / ``judge.replacement`` /
     ``judge.label_swapped``) is already stamped by :func:`_judge_vote` at
     span-open and cannot change here, so it is not re-written. ``judge.verdict``
     is stringified so bool / float / str verdicts share one attribute type.
-    ``judge.cost`` rides only when the summed usage carries a ``cost_usd``;
-    otherwise token counts stand in, per the ticket.
+    Token usage and cost are not recorded here: they belong on the underlying
+    ``chat`` spans, which the consumer rolls up.
     """
     set_span_attrs(
         span,
@@ -335,7 +334,6 @@ def _record_judge_span(span: Span | None, vote: JuryVote, usages: list[TokenUsag
     if not vote.success:
         # The failure is swallowed (the panel carries on), but the span must not read as OK.
         set_span_error(span, vote.error or f'judge {vote.model} produced no usable verdict')
-    record_usage_and_cost(span, _sum_usage(usages), cost_key='judge.cost')
 
 
 async def _compute_judge_vote(
@@ -508,30 +506,6 @@ def _aggregator_name(aggregator: AggregatorSpec | None, verdict_kind: VerdictKin
     return 'mean_std' if verdict_kind is VerdictKind.NUMERIC else 'mode'
 
 
-def record_usage_and_cost(span: Span | None, usage: TokenUsage | None, *, cost_key: str) -> None:
-    """Roll a summed ``TokenUsage`` onto a span, with cost under ``cost_key``.
-
-    Shared by the judge, jury and comparative jury spans so the usage vocabulary
-    can only be changed in one place. Cost rides only when the provider reported
-    one — there is no local pricing table.
-    """
-    if usage is None:
-        return
-    record_token_usage(
-        span,
-        prompt_tokens=usage.prompt_tokens,
-        completion_tokens=usage.completion_tokens,
-        # A summed TokenUsage keeps the unset upstream total (0); None lets
-        # record_token_usage derive it from prompt + completion.
-        total_tokens=usage.total_tokens or None,
-        calls=usage.calls,
-        cached_tokens=usage.cached_tokens or None,
-        reasoning_tokens=usage.reasoning_tokens or None,
-    )
-    if usage.cost_usd is not None:
-        set_span_attrs(span, {cost_key: usage.cost_usd})
-
-
 def record_jury_span(
     span: Span | None,
     deliberation: JuryDeliberation,
@@ -545,9 +519,11 @@ def record_jury_span(
     Comparative mode computes its aggregates from reconciled pair votes rather
     than a ``JuryResult``, so it stamps its own set (see
     ``pairwise._record_pairwise_span``) using the same ``jury.*`` vocabulary and
-    the shared :func:`record_usage_and_cost`. ``jury.verdict`` is stringified so
-    bool / float / str verdicts share one attribute type, matching
-    ``judge.verdict``.
+    the same ``jury.*`` vocabulary. ``jury.verdict`` is stringified so bool /
+    float / str verdicts share one attribute type, matching ``judge.verdict``.
+
+    No token usage or cost here: those are recorded once, on the underlying
+    ``chat`` spans, and rolled up by the consumer.
     """
     j = deliberation.jury
     set_span_attrs(
@@ -565,7 +541,6 @@ def record_jury_span(
             'jury.inconclusive': j.inconclusive,
         },
     )
-    record_usage_and_cost(span, deliberation.token_usage, cost_key='jury.cost')
 
 
 async def _run_jury_core(
