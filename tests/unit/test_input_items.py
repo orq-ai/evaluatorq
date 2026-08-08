@@ -9,6 +9,7 @@ rather than only through a target, so a break points at the converter.
 from __future__ import annotations
 
 import json
+from typing import Literal
 
 import pytest
 
@@ -25,6 +26,10 @@ from evaluatorq.openresponses.input_items import (
 )
 
 
+# Mirrors Message.role; parametrized cases must be typed as the literal, not str.
+MessageRole = Literal["user", "assistant", "tool", "system", "developer"]
+
+
 def _tool_call(call_id: str = "call_1", name: str = "search", item_id: str | None = None) -> StrategyToolCall:
     return StrategyToolCall(
         id=call_id,
@@ -36,12 +41,12 @@ def _tool_call(call_id: str = "call_1", name: str = "search", item_id: str | Non
 
 class TestPlainMessages:
     @pytest.mark.parametrize("role", ["user", "assistant", "system", "developer"])
-    def test_string_content_roundtrips_per_role(self, role: str) -> None:
+    def test_string_content_roundtrips_per_role(self, role: MessageRole) -> None:
         items = message_to_responses_input_items(Message(role=role, content="hello"))
         assert items == [{"role": role, "content": "hello"}]
 
     @pytest.mark.parametrize("role", ["user", "assistant", "system", "developer"])
-    def test_multipart_content_roundtrips_per_role(self, role: str) -> None:
+    def test_multipart_content_roundtrips_per_role(self, role: MessageRole) -> None:
         m = Message(
             role=role,
             content=[
