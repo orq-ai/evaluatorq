@@ -59,6 +59,12 @@ This runs 3 personas × 3 scenarios for agent simulation and a small hybrid red-
 check, then validates the root spans and run metadata. Use `orq traces list` to
 inspect the resulting traces.
 
+## Opening a PR
+
+**Assign the PR to its author.** `gh pr create` leaves the assignee empty, so
+open one with `--assignee @me` — an unassigned PR has no one the board can point
+at when it stalls.
+
 ## Before pushing to a PR
 
 Run the same checks CI runs, **verbatim**, before every push:
