@@ -179,11 +179,12 @@ def _recent_runs_table(rows: list[RunRow]) -> str:
     return f'<div class="recent-runs">{"".join(row_html)}</div>'
 
 
-def _stat_tile(label: str, value: str, unit: str = '') -> str:
+def _stat_tile(label: str, value: str, unit: str = '', sub: str = '') -> str:
     unit_html = f'<span class="stat-unit">{esc(unit)}</span>' if unit else ''
+    sub_html = f'<div class="stat-sub">{esc(sub)}</div>' if sub else ''
     return (
         f'<div class="stat-tile"><div class="stat-label">{esc(label)}</div>'
-        f'<div class="stat-value">{esc(value)}{unit_html}</div></div>'
+        f'<div class="stat-value">{esc(value)}{unit_html}</div>{sub_html}</div>'
     )
 
 
@@ -258,12 +259,17 @@ def landing_body(data: Landing) -> str:
     total_tokens = sum(n for _, n in data.tokens_by_kind)
     # Average over runs that record a cost — dividing by all runs makes one
     # costed run among many uncosted ones read as "everything is nearly free".
-    avg_cost = data.total_cost / data.costed_runs if data.costed_runs else None
+    avg_cost = data.total_cost / data.costed_runs if data.total_cost is not None and data.costed_runs else None
+    # Input/output split under Total spend, only when at least one run recorded
+    # the breakdown — old reports carry only the aggregate cost_usd.
+    spend_sub = ''
+    if data.total_input_cost is not None or data.total_output_cost is not None:
+        spend_sub = f'in {_fmt_cost(data.total_input_cost)} · out {_fmt_cost(data.total_output_cost)}'
     band = (
         '<div class="stat-band">'
         + _stat_tile('Jobs run', str(data.total_runs))
-        + _stat_tile('Avg cost / job', _fmt_cost(avg_cost) if avg_cost is not None else 'n/a')
-        + _stat_tile('Total spend', _fmt_cost(data.total_cost))
+        + _stat_tile('Avg cost / job', _fmt_cost(avg_cost))
+        + _stat_tile('Total spend', _fmt_cost(data.total_cost), sub=spend_sub)
         + _stat_tile('Total tokens', _fmt_compact(total_tokens))
         + '</div>'
     )
@@ -321,9 +327,21 @@ _LIFECYCLE_PILL: dict[str, tuple[str, str]] = {
 }
 
 
-def _fmt_cost(v: float) -> str:
+def _fmt_cost(v: float | None) -> str:
     """Format a dollar amount: cents-precision for readable sums, more digits
-    for the sub-cent per-item costs typical of a single sim/attack."""
+    for the sub-cent per-item costs typical of a single sim/attack.
+
+    ``None`` means the cost was never recorded (unknown) — distinct from a
+    real ``0.0`` — and renders as an em dash, matching the report exporters'
+    "not reported" convention. This intentionally does NOT reuse
+    ``evaluatorq.common.reports.md_helpers.fmt_cost``: that formatter is fixed
+    at 4dp for markdown tables and never called with ``None`` (callers there
+    must omit the cell entirely), whereas the dashboard mixes large rollups
+    (stat tiles, KPI cards) with sub-cent per-item costs in the same views, so
+    it needs both the adaptive precision and the None-handling here.
+    """
+    if v is None:
+        return '—'
     if v >= 1:
         return f'${v:,.2f}'
     if v > 0:
@@ -544,6 +562,8 @@ def sim_overview_body(data: SimOverview, compare_choices: list[tuple[str, str]] 
     # avg tokens/sim only when no cost data is present.
     if data.avg_cost is not None:
         cost_label, cost_value = 'Avg cost/sim', _fmt_cost(data.avg_cost)
+        if data.avg_input_cost is not None or data.avg_output_cost is not None:
+            cost_value += f' (in {_fmt_cost(data.avg_input_cost)} / out {_fmt_cost(data.avg_output_cost)})'
     else:
         cost_label = 'Avg tokens/sim'
         cost_value = '—' if data.avg_tokens is None else f'{data.avg_tokens:,.0f}'
@@ -597,6 +617,9 @@ def redteam_overview_body(data: RedTeamOverview) -> str:
         if data.break_rate is None
         else ('fail' if data.break_rate >= 0.25 else 'warn' if data.break_rate > 0 else 'pass')
     )
+    spend_value = _fmt_cost(data.total_cost)
+    if data.total_input_cost is not None or data.total_output_cost is not None:
+        spend_value += f' (in {_fmt_cost(data.total_input_cost)} / out {_fmt_cost(data.total_output_cost)})'
     band = kpi_cards([
         {'label': 'Attacks run', 'value': str(data.attacks_run)},
         {'label': 'ASR', 'value': asr, 'status': asr_status},
@@ -605,7 +628,7 @@ def redteam_overview_body(data: RedTeamOverview) -> str:
             'value': str(data.critical_findings),
             'status': 'fail' if data.critical_findings else 'pass',
         },
-        {'label': 'Total spend', 'value': _fmt_cost(data.total_cost)},
+        {'label': 'Total spend', 'value': spend_value},
     ])
 
     panel = _panel(
