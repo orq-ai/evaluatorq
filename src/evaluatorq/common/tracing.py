@@ -24,6 +24,8 @@ if TYPE_CHECKING:
 
     from opentelemetry.trace import Span
 
+    from evaluatorq.contracts import Usage
+
 AttrValue = str | int | float | bool
 AttrMap = dict[str, AttrValue | None]
 
@@ -227,7 +229,7 @@ def set_span_attrs(span: Span | None, attrs: AttrMap) -> None:
 def record_token_usage(
     span: Span | None,
     *,
-    usage: Any | None = None,
+    usage: Usage | None = None,
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
     total_tokens: int | None = None,

@@ -8,14 +8,14 @@ from evaluatorq.contracts import Usage
 class TestUsageCostUsdSerialization:
     """Pin the exact contract for cost_usd key serialization.
 
-    The dashboard (src/evaluatorq/dashboard/metrics.py:519-521,664-666) reads
-    saved report JSON by dict membership and .get('cost_usd'), not by model field.
-    If the `cost_usd` key disappears, cost data silently vanishes from every report.
+    The dashboard reads saved report JSON via `_cost_usd()`
+    (src/evaluatorq/dashboard/metrics.py), which does `.get('cost_usd')` rather
+    than reading a model field. If the `cost_usd` key disappears, cost data
+    silently vanishes from every report.
 
-    Note: dashboard has a known latent bug — it converts None to 0.0 via _as_float()
-    (metrics.py:67-71), so unknown cost is currently counted as "$0.00". That bug
-    is tracked separately and belongs to a later task that owns dashboard files.
-    This test pins the serialization contract that makes the bug fixable later.
+    `cost_usd` is always emitted, even when `total_cost` is None, so a bare
+    `'cost_usd' in usage` membership check does not mean cost is known — the
+    dashboard must (and does) distinguish None from 0.0.
     """
 
     def test_cost_usd_always_in_dump(self) -> None:
