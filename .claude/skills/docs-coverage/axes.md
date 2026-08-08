@@ -19,9 +19,25 @@ feature that changed it.
 | **entry point** | `evaluatorq.__all__` + `evaluatorq.simulation.__all__` + `evaluatorq.redteam.__all__` | `evaluatorq()`, `red_team()`, `simulate()`, `generate_and_simulate()`, `wrap_simulation_agent()`, pairwise `build_report()`, `deployment()` / `invoke()` |
 | **surface** | fixed | Python API · CLI (`eq`) · dashboard (`eq dashboard` / `eq ui`) |
 | **target kind** | `_BACKEND_REGISTRY` in `redteam/backends/registry.py` + CLI `--target` prefixes | `agent:<key>`, `deployment:<key>`, direct OpenAI backend, custom `AgentTarget` / `CallableTarget` |
-| **mode** | `--mode` on `eq redteam run` | `dynamic`, `static`, `hybrid` |
+| **mode** | `--mode` on `eq redteam run`, **plus `replay`** (see below) | `dynamic`, `static`, `hybrid`, `replay` |
 | **data source** | `evaluatorq()` / `red_team()` dataset params | inline `DataPoint`s, ORQ dataset id, HuggingFace dataset, generated |
 | **evaluator kind** | `VULNERABILITY_EVALUATOR_REGISTRY`, `SIMULATION_EVALUATORS`, pairwise types | built-in scorer, LLM jury, pairwise jury, custom `Evaluator` |
+
+### `replay` is a mode value that no enum contains
+
+`--mode` accepts only `dynamic`, `static` and `hybrid` (validated as a plain
+string in `redteam/runner.py`). Replay is reached by a *different* flag,
+`--from-run`, which is explicitly **incompatible** with `--mode` — it re-runs a
+previous run's exact attacks, so only the target and models may differ.
+
+Behaviourally that makes replay a fourth mode: it is the same choice a user makes
+at the same point, expressed through another flag. Source-derived values can
+never see it, so it is hardcoded here on purpose. **Do not resolve this by adding
+`replay` to the accepted `--mode` values in code** — that would be a public
+surface change, and it contradicts the two flags being mutually exclusive.
+
+Replay exists on both `eq redteam run` and `eq sim simulate`; treat it as a mode
+value for both when building the matrix.
 
 ## Impossible or meaningless combinations
 
